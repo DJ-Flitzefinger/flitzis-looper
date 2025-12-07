@@ -1,0 +1,16 @@
+[project]
+name = "flitzis-looper"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13.9"
+dependencies = [
+    "matplotlib>=3.10.7",
+    "numpy>=2.3.5",
+    "pedalboard>=0.9.19",
+    "pyo",
+    "soundfile>=0.13.1",
+]
+
+[tool.uv.sources]
+pyo = { git = "https://github.com/openSUSE-Python/pyo.git", rev = "gcc15-build" }
