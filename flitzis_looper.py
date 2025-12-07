@@ -9,11 +9,90 @@ import sys
 import logging
 import queue
 import math
+import traceback
+from dataclasses import dataclass, field
+from typing import Dict, Any, Optional, Set, Tuple
 
 os.environ['PYO_GUI_WX'] = '0'
 
-logging.basicConfig(level=logging.ERROR)
+# ============== LOGGING SETUP ==============
+# Log-Level kann über Umgebungsvariable gesteuert werden:
+# SET LOOPER_DEBUG=1 für Debug-Modus
+log_level = logging.DEBUG if os.environ.get('LOOPER_DEBUG') else logging.WARNING
+logging.basicConfig(
+    level=log_level,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%H:%M:%S'
+)
 logger = logging.getLogger(__name__)
+
+
+# ============== SAFE CLEANUP HELPERS ==============
+def safe_stop(obj, name: str = "object") -> bool:
+    """
+    Stoppt ein pyo-Objekt sicher und loggt Fehler.
+    
+    Args:
+        obj: Das zu stoppende pyo-Objekt
+        name: Name für Logging (z.B. "master_phasor")
+    
+    Returns:
+        True wenn erfolgreich, False bei Fehler
+    """
+    if obj is None:
+        return True
+    try:
+        obj.stop()
+        return True
+    except Exception as e:
+        logger.debug(f"Could not stop {name}: {type(e).__name__}: {e}")
+        return False
+
+
+def safe_delete_file(filepath: str, name: str = "file") -> bool:
+    """
+    Löscht eine Datei sicher und loggt Fehler.
+    
+    Args:
+        filepath: Pfad zur Datei
+        name: Name für Logging
+    
+    Returns:
+        True wenn erfolgreich oder Datei nicht existiert, False bei Fehler
+    """
+    if not filepath:
+        return True
+    try:
+        if os.path.exists(filepath):
+            os.unlink(filepath)
+        return True
+    except OSError as e:
+        logger.warning(f"Could not delete {name} '{filepath}': OSError: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error deleting {name} '{filepath}': {type(e).__name__}: {e}")
+        return False
+
+
+def safe_call(func, *args, error_msg: str = "Operation failed", **kwargs) -> Tuple[bool, Any]:
+    """
+    Führt eine Funktion sicher aus und loggt Fehler.
+    
+    Args:
+        func: Die auszuführende Funktion
+        *args: Argumente für die Funktion
+        error_msg: Fehlermeldung für Logging
+        **kwargs: Keyword-Argumente für die Funktion
+    
+    Returns:
+        Tuple (success: bool, result: Any)
+    """
+    try:
+        result = func(*args, **kwargs)
+        return True, result
+    except Exception as e:
+        logger.warning(f"{error_msg}: {type(e).__name__}: {e}")
+        return False, None
 
 from pyo import *
 import soundfile as sf
@@ -28,10 +107,7 @@ LOOP_DIR = "loops"
 CONFIG_FILE = "config.json"
 os.makedirs(LOOP_DIR, exist_ok=True)
 
-dev = pa_get_default_output()
-s = Server(audio="pa", sr=48000, nchnls=2, buffersize=1024, duplex=0)
-s.setOutputDevice(dev)
-s.boot()
+s = Server(sr=44100, nchnls=2, buffersize=1024, duplex=0).boot()
 s.start()
 
 io_executor = ThreadPoolExecutor(max_workers=2)
@@ -47,38 +123,57 @@ def process_gui_queue():
                 callback()
             except queue.Empty:
                 break
+            except tk.TclError:
+                # Widget wurde zerstört während Callback wartete - ignorieren
+                pass
     except Exception as e:
-        logger.debug(f"GUI queue processing error: {e}")
+        logger.exception(f"GUI queue processing error: {e}")
     root.after(30, process_gui_queue)
 
 def schedule_gui_update(callback):
     gui_update_queue.put(callback)
 
 def _detect_bpm_worker(filepath):
+    """
+    Erkennt BPM einer Audio-Datei mittels madmom.
+    
+    Returns:
+        float: Erkannte BPM (gerundet auf 1 Dezimalstelle) oder None bei Fehler
+    """
     try:
         from madmom.features.beats import RNNBeatProcessor, DBNBeatTrackingProcessor
-        try:
-            if sys.platform != 'win32':
+        
+        # Versuche Prozess-Priorität zu senken (optional, nur auf Unix)
+        if sys.platform != 'win32':
+            try:
                 os.nice(10)
-        except OSError:
-            pass  # nice() nicht verfügbar oder keine Berechtigung
+            except OSError as e:
+                # nice() nicht verfügbar oder keine Berechtigung - kein Problem
+                logger.debug(f"Could not set process priority: {e}")
+        
         if not os.path.exists(filepath):
+            logger.warning(f"BPM detection: File not found: {filepath}")
             return None
+            
         proc = DBNBeatTrackingProcessor(fps=100, min_bpm=60, max_bpm=180)
         act = RNNBeatProcessor()(filepath)
         beats = proc(act)
+        
         if len(beats) > 1:
             intervals = np.diff(beats)
             avg_interval = np.mean(intervals)
             bpm = 60.0 / avg_interval
             if 60 <= bpm <= 200:
                 return round(bpm, 1)
+            else:
+                logger.debug(f"BPM {bpm:.1f} outside valid range 60-200")
         return None
+        
     except ImportError:
-        logger.debug("madmom not available for BPM detection")
+        logger.info("madmom not installed - BPM detection unavailable")
         return None
     except Exception as e:
-        logger.debug(f"BPM detection failed: {e}")
+        logger.warning(f"BPM detection failed for '{filepath}': {type(e).__name__}: {e}")
         return None
 
 def db_to_amp(db):
@@ -326,7 +421,7 @@ def save_config():
         with open(CONFIG_FILE, "w") as f:
             json.dump(config, f, indent=2)
     except Exception as e:
-        logger.error(f"Error saving config: {e}")
+        logger.error(f"Error saving config: {type(e).__name__}: {e}")
 
 def save_config_async():
     """OPTIMIERUNG: Debounced config save - wartet 2 Sekunden vor dem Speichern"""
@@ -346,7 +441,7 @@ def save_config_immediate():
             root.after_cancel(_save_config_timer)
             _save_config_timer = None
     except (ValueError, tk.TclError):
-        pass
+        pass  # Timer war ungültig, bereits abgelaufen, oder Fenster geschlossen
     io_executor.submit(save_config)
 
 def load_config():
@@ -392,7 +487,7 @@ def load_config():
         
         button_data = all_banks_data[current_bank.get()]
     except Exception as e:
-        logger.error(f"Error loading config: {e}")
+        logger.error(f"Error loading config: {type(e).__name__}: {e}")
 
 # ============== PYOLOOP ==============
 class PyoLoop:
@@ -487,7 +582,7 @@ class PyoLoop:
             self._is_loaded = True
             return True
         except Exception as e:
-            logger.error(f"Error loading: {e}")
+            logger.error(f"Error loading '{self.path}': {type(e).__name__}: {e}")
             return False
 
     def load_async(self, path, loop_start=0.0, loop_end=None, callback=None):
@@ -528,7 +623,7 @@ class PyoLoop:
                 
                 schedule_gui_update(finish_load)
             except Exception as e:
-                logger.debug(f"Async load failed: {e}")
+                logger.warning(f"Async load failed for '{path}': {type(e).__name__}: {e}")
                 self._loading = False
                 if callback:
                     schedule_gui_update(lambda: callback(False))
@@ -546,7 +641,7 @@ class PyoLoop:
             self._create_player()
             return self.player is not None
         except Exception as e:
-            logger.error(f"Error ensuring player: {e}")
+            logger.error(f"Error ensuring player: {type(e).__name__}: {e}")
             return False
 
     def _create_player(self):
@@ -632,7 +727,7 @@ class PyoLoop:
             
             self._create_eq_chain()
         except Exception as e:
-            logger.error(f"Error creating player: {e}")
+            logger.error(f"Error creating player for '{self.path}': {type(e).__name__}: {e}")
 
     def _create_pitched_player(self):
         """
@@ -699,7 +794,7 @@ class PyoLoop:
         except ImportError:
             logger.error("Pedalboard nicht installiert! Installiere mit: pip install pedalboard")
         except Exception as e:
-            logger.error(f"Error creating pitched player: {e}")
+            logger.error(f"Error creating pitched player: {type(e).__name__}: {e}")
 
     def _create_pitched_player_from_cache(self):
         """
@@ -715,10 +810,7 @@ class PyoLoop:
             
             # Alte pitched Objekte stoppen
             if self._pitched_player:
-                try:
-                    self._pitched_player.stop()
-                except:
-                    pass
+                safe_stop(self._pitched_player, "_pitched_player")
             
             # Temporäre Datei aus RAM-Cache erstellen (für Stereo-Unterstützung)
             import tempfile
@@ -735,10 +827,7 @@ class PyoLoop:
             self._pitched_table = SndTable(temp_path)
             
             # Temporäre Datei sofort löschen (Daten sind jetzt in SndTable)
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
+            safe_delete_file(temp_path, "temp file")
             
             table_dur = self._pitched_table.getDur()
             base_freq = 1.0 / table_dur if table_dur > 0 else 1.0
@@ -754,7 +843,7 @@ class PyoLoop:
             )
             
         except Exception as e:
-            logger.error(f"Error creating pitched player from cache: {e}")
+            logger.error(f"Error creating pitched player from cache: {type(e).__name__}: {e}")
 
     def _invalidate_pitch_cache(self):
         """Invalidiert den Pitch-Cache wenn sich relevante Parameter ändern."""
@@ -820,7 +909,7 @@ class PyoLoop:
             
             return True
         except Exception as e:
-            logger.error(f"Error pre-caching pitched audio: {e}")
+            logger.error(f"Error pre-caching pitched audio: {type(e).__name__}: {e}")
             return False
 
     def _stop_all_objects(self):
@@ -834,14 +923,17 @@ class PyoLoop:
             if obj:
                 try:
                     obj.stop()
-                except Exception:
-                    pass  # Objekt bereits gestoppt oder ungültig
+                except (AttributeError, Exception):
+                    # Erwartet: Objekt bereits gestoppt, ungültig, oder hat keine stop()-Methode
+                    # Dies ist normal bei Cleanup und kein Fehler
+                    pass
         
         if self.follower:
             try:
                 self.follower.stop()
-            except Exception:
-                pass  # Follower bereits gestoppt
+            except (AttributeError, Exception):
+                # Erwartet: Follower bereits gestoppt oder ungültig
+                pass
             self.follower = None
         
         self.player = None
@@ -965,10 +1057,7 @@ class PyoLoop:
         if self._is_playing and self.player:
             # Alten Output stoppen
             if old_output:
-                try:
-                    old_output.stop()
-                except:
-                    pass
+                safe_stop(old_output, "old_output")
             
             # EQ-Kette mit neuem stem_mute aufbauen
             self._create_eq_chain()
@@ -990,7 +1079,7 @@ class PyoLoop:
             elif self.player:
                 self.player.out()
         except Exception as e:
-            logger.error(f"Error playing: {e}")
+            logger.error(f"Error playing: {type(e).__name__}: {e}")
 
     def play_with_intro(self, intro_start):
         """
@@ -1012,7 +1101,7 @@ class PyoLoop:
             self.play()
             
         except Exception as e:
-            logger.error(f"Error playing with intro: {e}")
+            logger.error(f"Error playing with intro: {type(e).__name__}: {e}")
     
     def clear_intro(self):
         """Entfernt die Intro-Einstellung für den nächsten Play-Aufruf."""
@@ -1043,7 +1132,9 @@ class PyoLoop:
             self.table = None
             self.output = None
         except Exception as e:
-            logger.debug(f"Error during stop: {e}")
+            # Fehler beim Stop sind oft nicht kritisch (Objekte bereits gestoppt)
+            # aber sollten trotzdem sichtbar sein für Debugging
+            logger.warning(f"Error during stop: {type(e).__name__}: {e}")
 
     def set_gain(self, db):
         """Setzt die Lautstärke in dB"""
@@ -1052,7 +1143,7 @@ class PyoLoop:
             if self._pyo_initialized and self.amp:
                 self.amp.value = db_to_amp(float(db))
         except (ValueError, AttributeError) as e:
-            logger.debug(f"Error setting gain: {e}")
+            logger.warning(f"Error setting gain to {db}dB: {type(e).__name__}: {e}")
 
     def set_speed(self, value):
         """
@@ -1089,7 +1180,7 @@ class PyoLoop:
                 self._update_stems_speed(float(value))
                 
         except Exception as e:
-            logger.debug(f"Error setting speed: {e}")
+            logger.warning(f"Error setting speed to {value}: {type(e).__name__}: {e}")
     
     def _update_stems_speed(self, new_speed):
         """
@@ -1176,10 +1267,7 @@ class PyoLoop:
                     # Alte Player stoppen
                     old_player = data["stems"]["players"].get(stem)
                     if old_player:
-                        try:
-                            old_player.stop()
-                        except:
-                            pass
+                        safe_stop(old_player, "old_player")
                     
                     # Neue Table erstellen
                     temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
@@ -1203,17 +1291,11 @@ class PyoLoop:
                         data["stems"]["players"][stem] = new_player
                         data["stems"]["tables"][stem] = new_table
                     
-                    try:
-                        os.unlink(temp_path)
-                    except:
-                        pass
+                    safe_delete_file(temp_path, "temp file")
                 
                 # Main Player auch aktualisieren
                 if data["stems"].get("main_player"):
-                    try:
-                        data["stems"]["main_player"].stop()
-                    except:
-                        pass
+                    safe_stop(data["stems"]["main_player"], "data")
                 
                 # Main Audio neu pitchen
                 if self._pitched_audio_cache is not None:
@@ -1237,15 +1319,12 @@ class PyoLoop:
                         data["stems"]["main_player"] = main_player
                         data["stems"]["main_table"] = main_table
                     
-                    try:
-                        os.unlink(temp_path)
-                    except:
-                        pass
+                    safe_delete_file(temp_path, "temp file")
                 
                 data["stems"]["cached_speed"] = new_speed
                 
             except Exception as e:
-                logger.error(f"Error repitching stems: {e}")
+                logger.error(f"Error repitching stems: {type(e).__name__}: {e}")
         
         # Im Hintergrund ausführen
         io_executor.submit(do_repitch)
@@ -1269,7 +1348,7 @@ class PyoLoop:
                 self.set_speed(current_speed)
                 self.play()
             except Exception as e:
-                logger.error(f"Error updating loop points: {e}")
+                logger.error(f"Error updating loop points: {type(e).__name__}: {e}")
         else:
             self._pyo_initialized = False
             self._stop_all_objects()
@@ -1283,7 +1362,7 @@ class PyoLoop:
             try:
                 self.follower = Follower(source, freq=20)
             except Exception as e:
-                logger.debug(f"Error enabling level meter: {e}")
+                logger.warning(f"Error enabling level meter: {type(e).__name__}: {e}")
 
     def disable_level_meter(self):
         """Deaktiviert das Level-Metering"""
@@ -1344,44 +1423,29 @@ def generate_stems(button_id):
     if data["stems"]["available"]:
         # Stoppe alle Player
         if data["stems"].get("master_phasor"):
-            try:
-                data["stems"]["master_phasor"].stop()
-            except:
-                pass
+            safe_stop(data["stems"]["master_phasor"], "data")
             data["stems"]["master_phasor"] = None
         
         if data["stems"].get("main_player"):
-            try:
-                data["stems"]["main_player"].stop()
-            except:
-                pass
+            safe_stop(data["stems"]["main_player"], "data")
             data["stems"]["main_player"] = None
         data["stems"]["main_table"] = None
         
         for stem in STEM_NAMES:
             player = data["stems"]["players"].get(stem)
             if player:
-                try:
-                    player.stop()
-                except:
-                    pass
+                safe_stop(player, "player")
                 data["stems"]["players"][stem] = None
             data["stems"]["tables"][stem] = None
             data["stems"]["outputs"][stem] = None
             if data["stems"]["gains"].get(stem):
-                try:
-                    data["stems"]["gains"][stem].stop()
-                except:
-                    pass
+                safe_stop(data["stems"]["gains"][stem], "data")
                 data["stems"]["gains"][stem] = None
             data["stems"]["dry"][stem] = None
             data["stems"]["pitched"][stem] = None
         
         if data["stems"].get("main_gain"):
-            try:
-                data["stems"]["main_gain"].stop()
-            except:
-                pass
+            safe_stop(data["stems"]["main_gain"], "data")
             data["stems"]["main_gain"] = None
         
         data["stems"]["initialized"] = False
@@ -1494,7 +1558,7 @@ def generate_stems(button_id):
                 data["stems"]["generating"] = False
                 buttons[button_id].config(bg=original_bg)
                 messagebox.showerror("Stem Generation Failed", f"Error: {e}")
-                logger.error(f"Stem generation failed: {e}")
+                logger.error(f"Stem generation failed: {type(e).__name__}: {e}")
             schedule_gui_update(show_error)
     
     io_executor.submit(do_generate)
@@ -1514,10 +1578,7 @@ def delete_stems(button_id):
     
     # Master-Phasor stoppen und freigeben
     if data["stems"].get("master_phasor"):
-        try:
-            data["stems"]["master_phasor"].stop()
-        except:
-            pass
+        safe_stop(data["stems"]["master_phasor"], "data")
         data["stems"]["master_phasor"] = None
     
     # Alle Stem-Player stoppen und Referenzen explizit freigeben
@@ -1525,10 +1586,7 @@ def delete_stems(button_id):
         # Player stoppen
         player = data["stems"]["players"].get(stem)
         if player:
-            try:
-                player.stop()
-            except:
-                pass
+            safe_stop(player, "player")
             data["stems"]["players"][stem] = None
         
         # Table freigeben
@@ -1539,10 +1597,7 @@ def delete_stems(button_id):
         # Gain-Signal freigeben
         gain = data["stems"]["gains"].get(stem)
         if gain:
-            try:
-                gain.stop()
-            except:
-                pass
+            safe_stop(gain, "gain")
             data["stems"]["gains"][stem] = None
         
         # Output freigeben
@@ -1554,27 +1609,18 @@ def delete_stems(button_id):
     
     # Main-Gain freigeben
     if data["stems"].get("main_gain"):
-        try:
-            data["stems"]["main_gain"].stop()
-        except:
-            pass
+        safe_stop(data["stems"]["main_gain"], "data")
         data["stems"]["main_gain"] = None
     
     # Main Player freigeben (synchroner Original-Player)
     if data["stems"].get("main_player"):
-        try:
-            data["stems"]["main_player"].stop()
-        except:
-            pass
+        safe_stop(data["stems"]["main_player"], "data")
         data["stems"]["main_player"] = None
     data["stems"]["main_table"] = None
     
     # Master Phasor freigeben
     if data["stems"].get("master_phasor"):
-        try:
-            data["stems"]["master_phasor"].stop()
-        except:
-            pass
+        safe_stop(data["stems"]["master_phasor"], "data")
         data["stems"]["master_phasor"] = None
     
     # PyoLoop stem_mute zurücksetzen
@@ -1950,66 +1996,42 @@ def initialize_stem_players(button_id):
     # === CLEANUP: Alte Player stoppen (aber Tables behalten!) ===
     # Final Output stoppen
     if data["stems"].get("final_output"):
-        try:
-            data["stems"]["final_output"].stop()
-        except:
-            pass
+        safe_stop(data["stems"]["final_output"], "data")
         data["stems"]["final_output"] = None
     
     # EQ-Kette stoppen
     for eq_name in ["eq_low", "eq_mid", "eq_high"]:
         if data["stems"].get(eq_name):
-            try:
-                data["stems"][eq_name].stop()
-            except:
-                pass
+            safe_stop(data["stems"][eq_name], "data")
             data["stems"][eq_name] = None
     
     # Mix stoppen
     if data["stems"].get("stem_mix"):
-        try:
-            data["stems"]["stem_mix"].stop()
-        except:
-            pass
+        safe_stop(data["stems"]["stem_mix"], "data")
         data["stems"]["stem_mix"] = None
     
     # Phasor stoppen
     if data["stems"].get("master_phasor"):
-        try:
-            data["stems"]["master_phasor"].stop()
-        except:
-            pass
+        safe_stop(data["stems"]["master_phasor"], "data")
         data["stems"]["master_phasor"] = None
     
     # Player stoppen (aber Tables behalten wenn möglich!)
     if data["stems"].get("main_player"):
-        try:
-            data["stems"]["main_player"].stop()
-        except:
-            pass
+        safe_stop(data["stems"]["main_player"], "data")
         data["stems"]["main_player"] = None
     
     for stem in STEM_NAMES:
         if data["stems"]["players"].get(stem):
-            try:
-                data["stems"]["players"][stem].stop()
-            except:
-                pass
+            safe_stop(data["stems"]["players"][stem], "data")
             data["stems"]["players"][stem] = None
         
         # Gains müssen auch neu erstellt werden (da mul sich ändert)
         if data["stems"]["gains"].get(stem):
-            try:
-                data["stems"]["gains"][stem].stop()
-            except:
-                pass
+            safe_stop(data["stems"]["gains"][stem], "data")
             data["stems"]["gains"][stem] = None
     
     if data["stems"].get("main_gain"):
-        try:
-            data["stems"]["main_gain"].stop()
-        except:
-            pass
+        safe_stop(data["stems"]["main_gain"], "data")
         data["stems"]["main_gain"] = None
     
     # === TABLES ERSTELLEN (nur wenn nötig) ===
@@ -2032,10 +2054,7 @@ def initialize_stem_players(button_id):
             temp_file.close()
             sf.write(temp_path, main_audio, loop._audio_sr)
             data["stems"]["main_table"] = SndTable(temp_path)
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
+            safe_delete_file(temp_path, "temp file")
         
         # Stem Tables
         for stem in STEM_NAMES:
@@ -2058,10 +2077,7 @@ def initialize_stem_players(button_id):
             temp_file.close()
             sf.write(temp_path, audio_to_use, loop._audio_sr)
             data["stems"]["tables"][stem] = SndTable(temp_path)
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
+            safe_delete_file(temp_path, "temp file")
         
         data["stems"]["cached_speed"] = current_speed
     
@@ -2203,10 +2219,7 @@ def _initialize_stems_while_running(button_id):
             temp_file.close()
             sf.write(temp_path, main_audio, loop._audio_sr)
             data["stems"]["main_table"] = SndTable(temp_path)
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
+            safe_delete_file(temp_path, "temp file")
     
     # Stem Tables
     for stem in STEM_NAMES:
@@ -2232,10 +2245,7 @@ def _initialize_stems_while_running(button_id):
         temp_file.close()
         sf.write(temp_path, audio_to_use, loop._audio_sr)
         data["stems"]["tables"][stem] = SndTable(temp_path)
-        try:
-            os.unlink(temp_path)
-        except:
-            pass
+        safe_delete_file(temp_path, "temp file")
     
     data["stems"]["cached_speed"] = current_speed
     
@@ -2325,70 +2335,46 @@ def _cleanup_stem_players(button_id):
     
     # Output stoppen
     if data["stems"].get("final_output"):
-        try:
-            data["stems"]["final_output"].stop()
-        except:
-            pass
+        safe_stop(data["stems"]["final_output"], "data")
         data["stems"]["final_output"] = None
     
     # EQ stoppen
     for eq_name in ["eq_low", "eq_mid", "eq_high"]:
         if data["stems"].get(eq_name):
-            try:
-                data["stems"][eq_name].stop()
-            except:
-                pass
+            safe_stop(data["stems"][eq_name], "data")
             data["stems"][eq_name] = None
     
     # Mix stoppen
     if data["stems"].get("stem_mix"):
-        try:
-            data["stems"]["stem_mix"].stop()
-        except:
-            pass
+        safe_stop(data["stems"]["stem_mix"], "data")
         data["stems"]["stem_mix"] = None
     
     # Master-Phasor stoppen
     if data["stems"].get("master_phasor"):
-        try:
-            data["stems"]["master_phasor"].stop()
-        except:
-            pass
+        safe_stop(data["stems"]["master_phasor"], "data")
         data["stems"]["master_phasor"] = None
     
     # Main Player stoppen (TABLE BLEIBT!)
     if data["stems"].get("main_player"):
-        try:
-            data["stems"]["main_player"].stop()
-        except:
-            pass
+        safe_stop(data["stems"]["main_player"], "data")
         data["stems"]["main_player"] = None
     # NICHT: data["stems"]["main_table"] = None  # Table behalten!
     
     # Main Gain stoppen
     if data["stems"].get("main_gain"):
-        try:
-            data["stems"]["main_gain"].stop()
-        except:
-            pass
+        safe_stop(data["stems"]["main_gain"], "data")
         data["stems"]["main_gain"] = None
     
     # Stem Player und Gains stoppen (TABLES BLEIBEN!)
     for stem in STEM_NAMES:
         player = data["stems"]["players"].get(stem)
         if player:
-            try:
-                player.stop()
-            except:
-                pass
+            safe_stop(player, "player")
             data["stems"]["players"][stem] = None
         
         gain = data["stems"]["gains"].get(stem)
         if gain:
-            try:
-                gain.stop()
-            except:
-                pass
+            safe_stop(gain, "gain")
             data["stems"]["gains"][stem] = None
         
         # NICHT: data["stems"]["tables"][stem] = None  # Tables behalten!
@@ -2408,61 +2394,40 @@ def stop_stem_players(button_id):
     
     # Final Output stoppen (wichtig: zuerst!)
     if data["stems"].get("final_output"):
-        try:
-            data["stems"]["final_output"].stop()
-        except:
-            pass
+        safe_stop(data["stems"]["final_output"], "data")
         data["stems"]["final_output"] = None
     
     # EQ-Kette stoppen
     for eq_name in ["eq_low", "eq_mid", "eq_high"]:
         if data["stems"].get(eq_name):
-            try:
-                data["stems"][eq_name].stop()
-            except:
-                pass
+            safe_stop(data["stems"][eq_name], "data")
             data["stems"][eq_name] = None
     
     # Mix stoppen
     if data["stems"].get("stem_mix"):
-        try:
-            data["stems"]["stem_mix"].stop()
-        except:
-            pass
+        safe_stop(data["stems"]["stem_mix"], "data")
         data["stems"]["stem_mix"] = None
     
     # Master-Phasor stoppen
     if data["stems"].get("master_phasor"):
-        try:
-            data["stems"]["master_phasor"].stop()
-        except:
-            pass
+        safe_stop(data["stems"]["master_phasor"], "data")
         data["stems"]["master_phasor"] = None
     
     # Main Player stoppen (synchroner Original-Loop Player)
     if data["stems"].get("main_player"):
-        try:
-            data["stems"]["main_player"].stop()
-        except:
-            pass
+        safe_stop(data["stems"]["main_player"], "data")
         data["stems"]["main_player"] = None
     data["stems"]["main_table"] = None
     
     for stem in STEM_NAMES:
         player = data["stems"]["players"].get(stem)
         if player:
-            try:
-                player.stop()
-            except:
-                pass
+            safe_stop(player, "player")
             data["stems"]["players"][stem] = None
         
         gain = data["stems"]["gains"].get(stem)
         if gain:
-            try:
-                gain.stop()
-            except:
-                pass
+            safe_stop(gain, "gain")
             data["stems"]["gains"][stem] = None
         
         data["stems"]["tables"][stem] = None
@@ -2475,10 +2440,7 @@ def stop_stem_players(button_id):
     
     # Main-Gain stoppen
     if data["stems"].get("main_gain"):
-        try:
-            data["stems"]["main_gain"].stop()
-        except:
-            pass
+        safe_stop(data["stems"]["main_gain"], "data")
     data["stems"]["main_gain"] = None
     data["stems"]["initialized"] = False
 
@@ -2626,16 +2588,13 @@ def cleanup_stem_caches():
             for stem in STEM_NAMES:
                 player = data["stems"]["players"].get(stem)
                 if player:
-                    try:
-                        player.stop()
-                    except:
-                        pass
+                    safe_stop(player, "player")
             # Caches löschen
             data["stems"]["pitched"] = {s: None for s in STEM_NAMES}
             data["stems"]["players"] = {s: None for s in STEM_NAMES}
             data["stems"]["tables"] = {s: None for s in STEM_NAMES}
     except Exception as e:
-        logger.debug(f"Error cleaning up stem caches: {e}")
+        logger.warning(f"Error cleaning up stem caches: {type(e).__name__}: {e}")
 
 
 # ============== BANK MANAGEMENT ==============
@@ -2716,7 +2675,7 @@ def detect_bpm(filepath, callback):
             bpm = _detect_bpm_worker(filepath)
             schedule_gui_update(lambda b=bpm: callback(b))
         except Exception as e:
-            logger.debug(f"BPM detection error: {e}")
+            logger.warning(f"BPM detection error for '{filepath}': {type(e).__name__}: {e}")
             schedule_gui_update(lambda: callback(None))
     bpm_executor.submit(do_detect)
 
@@ -2726,7 +2685,7 @@ def detect_bpm_async(filepath, button_id, loop):
             bpm = _detect_bpm_worker(filepath)
             schedule_gui_update(lambda: on_bpm_result(bpm))
         except Exception as e:
-            logger.debug(f"Async BPM detection error: {e}")
+            logger.warning(f"Async BPM detection error for '{filepath}': {type(e).__name__}: {e}")
             schedule_gui_update(lambda: on_bpm_result(None))
     
     def on_bpm_result(bpm):
@@ -2742,7 +2701,7 @@ def detect_bpm_async(filepath, button_id, loop):
                         loop.loop_start = 0.0
                         loop.loop_end = auto_loop_duration
                 except (ZeroDivisionError, AttributeError) as e:
-                    logger.debug(f"Auto-loop calculation error: {e}")
+                    logger.warning(f"Auto-loop calculation error for button {button_id}: {type(e).__name__}: {e}")
             root.after(1000, lambda: update_button_label(button_id))
             root.after(1200, save_config_async)
         else:
@@ -2834,6 +2793,10 @@ def trigger_loop(button_id):
             # Wenn Stems verfügbar sind, spielen NUR die Stems das Audio!
             # Der PyoLoop wird NICHT gestartet (verhindert Dopplung)
             if stems_available:
+                # WICHTIG: PyoLoop-Objekte initialisieren (amp, speed) BEVOR sie verwendet werden!
+                # Ohne das ist loop.amp = None → ArithmeticError bei Multiplikation
+                loop._ensure_player()
+                
                 # PyoLoop stumm schalten
                 loop.set_stem_mute(Sig(0))
                 
@@ -2841,7 +2804,7 @@ def trigger_loop(button_id):
                 initialize_stem_players(button_id)
                 update_stem_gains(button_id)
                 
-                # PyoLoop nur für Timing starten (ohne Audio-Output)
+                # PyoLoop nur für Timing markieren (ohne Audio-Output)
                 # Das ist nötig für die interne Logik (loop_end, etc.)
                 loop._is_playing = True
                 
@@ -2866,7 +2829,7 @@ def trigger_loop(button_id):
             update_stem_buttons_state()
             
     except Exception as e:
-        logger.error(f"Error triggering loop {button_id}: {e}")
+        logger.error(f"Error triggering loop {button_id}: {type(e).__name__}: {e}")
 
 def stop_loop(button_id):
     """
@@ -2929,7 +2892,7 @@ def stop_loop(button_id):
                     
                     io_executor.submit(do_precache)
     except Exception as e:
-        logger.error(f"Error in stop_loop {button_id}: {e}")
+        logger.error(f"Error in stop_loop {button_id}: {type(e).__name__}: {e}")
 
 def load_loop(button_id):
     try:
@@ -2994,7 +2957,7 @@ def load_loop(button_id):
                 schedule_gui_update(lambda: buttons[button_id].config(text=f"{button_id}"))
         io_executor.submit(background_load)
     except Exception as e:
-        logger.error(f"Error loading loop: {e}")
+        logger.error(f"Error loading loop: {type(e).__name__}: {e}")
 
 def unload_loop(button_id):
     try:
@@ -3013,10 +2976,7 @@ def unload_loop(button_id):
         for stem in STEM_NAMES:
             player = button_data[button_id]["stems"]["players"].get(stem)
             if player:
-                try:
-                    player.stop()
-                except:
-                    pass
+                safe_stop(player, "player")
         
         button_data[button_id]["active"] = False
         buttons[button_id].config(bg=COLOR_BTN_INACTIVE, fg=COLOR_TEXT)
@@ -3030,7 +2990,7 @@ def unload_loop(button_id):
         update_stem_buttons_state()
         save_config_async()
     except Exception as e:
-        logger.error(f"Error unloading: {e}")
+        logger.error(f"Error unloading: {type(e).__name__}: {e}")
 
 # ============== BPM DISPLAY ==============
 # OPTIMIERUNG: Tracking ob aktive Loops vorhanden sind
@@ -3174,7 +3134,7 @@ def adjust_bpm_by_delta(delta_bpm):
         # Reset-Button Farbe IMMER am Ende aktualisieren
         update_reset_button_style()
     except Exception as e:
-        logger.error(f"Error adjusting BPM: {e}")
+        logger.error(f"Error adjusting BPM: {type(e).__name__}: {e}")
 
 def on_bpm_up_click(event):
     """
@@ -3456,7 +3416,7 @@ def set_volume(button_id):
                 existing_window.focus_force()
                 return
         except tk.TclError:
-            pass
+            pass  # Fenster wurde inzwischen geschlossen - ignorieren und neues erstellen
         del open_volume_windows[button_id]
     
     try:
@@ -3509,7 +3469,7 @@ def set_volume(button_id):
                 update_scheduled[0] = root.after(50, do_update)
                 
             except Exception as e:
-                logger.error(f"Error setting volume: {e}")
+                logger.error(f"Error setting volume: {type(e).__name__}: {e}")
 
         # Custom Label-Formatierung für den Slider (zeigt "X.X dB")
         class GainScale(tk.Scale):
@@ -3651,9 +3611,9 @@ def set_volume(button_id):
                         vu_meter.update_level(-80)
                     vol_win.after(50, update_vu_meter)
             except tk.TclError:
-                pass
+                pass  # Fenster wurde geschlossen - VU meter update abbrechen
             except Exception as e:
-                logger.error(f"Error updating VU meter: {e}")
+                logger.error(f"Error updating VU meter: {type(e).__name__}: {e}")
         
         def on_volume_window_close():
             global open_volume_windows
@@ -3675,7 +3635,7 @@ def set_volume(button_id):
         update_vu_meter()
         
     except Exception as e:
-        logger.error(f"Error opening volume control: {e}")
+        logger.error(f"Error opening volume control: {type(e).__name__}: {e}")
 
 # ============== WAVEFORM EDITOR ==============
 class WaveformEditor:
@@ -3690,7 +3650,7 @@ class WaveformEditor:
                     existing_editor.window.focus_force()
                     return
             except (tk.TclError, AttributeError):
-                pass
+                pass  # Fenster/Editor wurde inzwischen zerstört - ignorieren und neues erstellen
             del open_loop_editor_windows[button_id]
         
         self.parent = parent
@@ -3740,7 +3700,7 @@ class WaveformEditor:
             self.window.protocol("WM_DELETE_WINDOW", self.on_window_close)
             return True
         except tk.TclError as e:
-            logger.error(f"Error creating window: {e}")
+            logger.error(f"Error creating window: {type(e).__name__}: {e}")
             return False
 
     def show_loading_message(self):
@@ -4201,7 +4161,7 @@ class WaveformEditor:
             self.window.after(wait_ms, restore_loop)
             
         except Exception as e:
-            logger.error(f"Error in smart jump: {e}")
+            logger.error(f"Error in smart jump: {type(e).__name__}: {e}")
 
     def apply_loop_changes_realtime(self):
         button_data[self.button_id]["loop_start"] = self.loop_start
@@ -4306,7 +4266,7 @@ class WaveformEditor:
             plt.close(self.fig)
             self.window.destroy()
         except (tk.TclError, AttributeError):
-            pass
+            pass  # Fenster oder Figure bereits geschlossen/zerstört
 
     def apply_and_close(self):
         """Speichert die aktuellen Loop-Einstellungen und schließt das Fenster"""
@@ -4668,7 +4628,7 @@ def on_master_volume_change(val):
         volume_percent = int(volume * 100)
         volume_label.config(text=f"Master Volume {volume_percent}%")
     except Exception as e:
-        logger.error(f"Error setting master volume: {e}")
+        logger.error(f"Error setting master volume: {type(e).__name__}: {e}")
 
 master_volume_slider = tk.Scale(
     volume_frame,
@@ -4952,8 +4912,10 @@ def update_stem_buttons_state():
     # Stop-Stem Button auch aktualisieren
     try:
         update_stop_stem_button_state()
-    except:
-        pass  # Button existiert vielleicht noch nicht
+    except NameError:
+        pass  # Button existiert vielleicht noch nicht beim Startup
+    except Exception as e:
+        logger.debug(f"Could not update stop-stem button state: {e}")
 
 
 # Create button grid
@@ -5015,7 +4977,7 @@ def cleanup_pitch_caches():
             if hasattr(loop, '_invalidate_pitch_cache'):
                 loop._invalidate_pitch_cache()
     except Exception as e:
-        logger.debug(f"Error cleaning up pitch caches: {e}")
+        logger.warning(f"Error cleaning up pitch caches: {type(e).__name__}: {e}")
 
 def on_closing():
     """
@@ -5024,10 +4986,7 @@ def on_closing():
     try:
         # 1. Alle laufenden Loops stoppen
         for (bank_id, btn_id), loop in list(loaded_loops.items()):
-            try:
-                loop.stop()
-            except:
-                pass
+            safe_stop(loop, "loop")
             
             # Stem-Player stoppen
             data = all_banks_data[bank_id][btn_id]
@@ -5039,10 +4998,7 @@ def on_closing():
                     # Mix und EQ stoppen
                     for obj_name in ["stem_mix", "eq_low", "eq_mid", "eq_high"]:
                         if data["stems"].get(obj_name):
-                            try:
-                                data["stems"][obj_name].stop()
-                            except:
-                                pass
+                            safe_stop(data["stems"][obj_name], "data")
                     # Master Phasor stoppen
                     if data["stems"].get("master_phasor"):
                         data["stems"]["master_phasor"].stop()
@@ -5052,17 +5008,11 @@ def on_closing():
                     # Stem Players stoppen
                     for stem in STEM_NAMES:
                         if data["stems"]["players"].get(stem):
-                            try:
-                                data["stems"]["players"][stem].stop()
-                            except:
-                                pass
+                            safe_stop(data["stems"]["players"][stem], "data")
                         if data["stems"]["gains"].get(stem):
-                            try:
-                                data["stems"]["gains"][stem].stop()
-                            except:
-                                pass
+                            safe_stop(data["stems"]["gains"][stem], "data")
                 except Exception as e:
-                    logger.debug(f"Error stopping stems for {bank_id}/{btn_id}: {e}")
+                    logger.warning(f"Error stopping stems for {bank_id}/{btn_id}: {type(e).__name__}: {e}")
         
         # 2. Caches freigeben
         cleanup_pitch_caches()
@@ -5072,20 +5022,20 @@ def on_closing():
         save_config_immediate()
         
         # 4. pyo Server stoppen
-        try:
-            s.stop()
-        except:
-            pass
+        safe_stop(s, "s")
         
         # 5. Executors herunterfahren
         try:
             io_executor.shutdown(wait=False)
             bpm_executor.shutdown(wait=False)
-        except:
-            pass
+        except RuntimeError as e:
+            # Executor war bereits heruntergefahren
+            logger.debug(f"Executor already shut down: {e}")
+        except Exception as e:
+            logger.warning(f"Error shutting down executors: {type(e).__name__}: {e}")
         
     except Exception as e:
-        logger.error(f"Error during shutdown: {e}")
+        logger.error(f"Error during shutdown: {type(e).__name__}: {e}")
     finally:
         # 6. Fenster zerstören
         root.destroy()
