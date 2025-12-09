@@ -12,3 +12,4 @@ wheels/
 
 /loops
 /config.json
+/*.log
