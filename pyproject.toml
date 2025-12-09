@@ -6,17 +6,23 @@ readme = "README.md"
 requires-python = ">=3.13.9"
 dependencies = [
     "demucs>=4.0.1",
+    "madmom",
     "matplotlib>=3.10.7",
     "numpy>=2.3.5",
     "pedalboard>=0.9.19",
     "pyo",
+    "setuptools>=80.9.0",
     "soundfile>=0.13.1",
     "torch>=2.9.1",
     "torchaudio>=2.9.1",
 ]
 
 [tool.uv.sources]
+madmom = { git = "https://github.com/CPJKU/madmom.git" }
 pyo = { git = "https://github.com/openSUSE-Python/pyo.git", rev = "gcc15-build" }
+
+[tool.uv.extra-build-dependencies]
+madmom = ["Cython", "numpy"]
 
 [dependency-groups]
 dev = [
