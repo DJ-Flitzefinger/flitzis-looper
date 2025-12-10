@@ -12,14 +12,7 @@ import math
 
 os.environ['PYO_GUI_WX'] = '0'
 
-# ============== EXCEPTION-HANDLING SETUP ==============
-from exception_mode import (
-    load_mode_from_config, setup_exception_handling,
-    install_tk_hook, wrap_executor, OFF, WARN, DEBUG
-)
-
-MODE = load_mode_from_config("config.json", key="logging_mode", default=WARN)
-setup_exception_handling(MODE, app_name="FlitzisLooper", log_path="flitzis_looper.log")
+logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
 from pyo import *
@@ -35,18 +28,11 @@ LOOP_DIR = "loops"
 CONFIG_FILE = "config.json"
 os.makedirs(LOOP_DIR, exist_ok=True)
 
-dev_out = pa_get_default_output()
-s = Server(sr=44100, nchnls=2, buffersize=1024, duplex=0)
-s.setOutputDevice(dev_out)
-s.boot()
+s = Server(sr=44100, nchnls=2, buffersize=1024, duplex=0).boot()
 s.start()
 
 io_executor = ThreadPoolExecutor(max_workers=2)
 bpm_executor = ThreadPoolExecutor(max_workers=1)
-
-# Executors wrappen für Exception-Logging
-io_executor = wrap_executor(io_executor, "io_executor")
-bpm_executor = wrap_executor(bpm_executor, "bpm_executor")
 
 gui_update_queue = queue.Queue()
 
@@ -58,8 +44,8 @@ def process_gui_queue():
                 callback()
             except queue.Empty:
                 break
-    except Exception:
-        logger.warning("GUI queue processing error", exc_info=True)
+    except Exception as e:
+        logger.debug(f"GUI queue processing error: {e}")
     root.after(30, process_gui_queue)
 
 def schedule_gui_update(callback):
@@ -86,10 +72,10 @@ def _detect_bpm_worker(filepath):
                 return round(bpm, 1)
         return None
     except ImportError:
-        logger.warning("madmom not available for BPM detection")
+        logger.debug("madmom not available for BPM detection")
         return None
-    except Exception:
-        logger.warning("BPM detection failed", exc_info=True)
+    except Exception as e:
+        logger.debug(f"BPM detection failed: {e}")
         return None
 
 def db_to_amp(db):
@@ -111,9 +97,6 @@ root.title("Dj Flitzefinger's Scratch-Looper")
 root.geometry("960x630")
 root.resizable(False, False)
 root.configure(bg="#1e1e1e")
-
-# Tkinter-Hook für Exception-Handling installieren
-install_tk_hook(root)
 
 # Global variables
 bpm_lock_active = tk.BooleanVar(value=False)
@@ -347,8 +330,8 @@ def save_config():
                     }
         with open(CONFIG_FILE, "w") as f:
             json.dump(config, f, indent=2)
-    except Exception:
-        logger.error("Error saving config", exc_info=True)
+    except Exception as e:
+        logger.error(f"Error saving config: {e}")
 
 def save_config_async():
     """OPTIMIERUNG: Debounced config save - wartet 2 Sekunden vor dem Speichern"""
@@ -413,8 +396,8 @@ def load_config():
                             register_loaded_loop(bank_id, btn_id, loop)
         
         button_data = all_banks_data[current_bank.get()]
-    except Exception:
-        logger.error("Error loading config", exc_info=True)
+    except Exception as e:
+        logger.error(f"Error loading config: {e}")
 
 # ============== PYOLOOP ==============
 class PyoLoop:
@@ -508,8 +491,8 @@ class PyoLoop:
             
             self._is_loaded = True
             return True
-        except Exception:
-            logger.error("Error loading audio file", exc_info=True)
+        except Exception as e:
+            logger.error(f"Error loading: {e}")
             return False
 
     def load_async(self, path, loop_start=0.0, loop_end=None, callback=None):
@@ -549,8 +532,8 @@ class PyoLoop:
                         callback(True)
                 
                 schedule_gui_update(finish_load)
-            except Exception:
-                logger.warning("Async load failed", exc_info=True)
+            except Exception as e:
+                logger.debug(f"Async load failed: {e}")
                 self._loading = False
                 if callback:
                     schedule_gui_update(lambda: callback(False))
@@ -567,8 +550,8 @@ class PyoLoop:
             self._init_pyo_objects()
             self._create_player()
             return self.player is not None
-        except Exception:
-            logger.error("Error ensuring player", exc_info=True)
+        except Exception as e:
+            logger.error(f"Error ensuring player: {e}")
             return False
 
     def _create_player(self):
@@ -653,8 +636,8 @@ class PyoLoop:
                 self._create_pitched_player()
             
             self._create_eq_chain()
-        except Exception:
-            logger.error("Error creating player", exc_info=True)
+        except Exception as e:
+            logger.error(f"Error creating player: {e}")
 
     def _create_pitched_player(self):
         """
@@ -720,8 +703,8 @@ class PyoLoop:
                 
         except ImportError:
             logger.error("Pedalboard nicht installiert! Installiere mit: pip install pedalboard")
-        except Exception:
-            logger.error("Error creating pitched player", exc_info=True)
+        except Exception as e:
+            logger.error(f"Error creating pitched player: {e}")
 
     def _create_pitched_player_from_cache(self):
         """
@@ -775,8 +758,8 @@ class PyoLoop:
                 mul=self.amp * master_amp
             )
             
-        except Exception:
-            logger.error("Error creating pitched player from cache", exc_info=True)
+        except Exception as e:
+            logger.error(f"Error creating pitched player from cache: {e}")
 
     def _invalidate_pitch_cache(self):
         """Invalidiert den Pitch-Cache wenn sich relevante Parameter ändern."""
@@ -841,8 +824,8 @@ class PyoLoop:
             self._cached_speed = self._pending_speed
             
             return True
-        except Exception:
-            logger.error("Error pre-caching pitched audio", exc_info=True)
+        except Exception as e:
+            logger.error(f"Error pre-caching pitched audio: {e}")
             return False
 
     def _stop_all_objects(self):
@@ -1011,8 +994,8 @@ class PyoLoop:
                 self._pitched_player.out()
             elif self.player:
                 self.player.out()
-        except Exception:
-            logger.error("Error playing", exc_info=True)
+        except Exception as e:
+            logger.error(f"Error playing: {e}")
 
     def play_with_intro(self, intro_start):
         """
@@ -1033,8 +1016,8 @@ class PyoLoop:
             # Starten
             self.play()
             
-        except Exception:
-            logger.error("Error playing with intro", exc_info=True)
+        except Exception as e:
+            logger.error(f"Error playing with intro: {e}")
     
     def clear_intro(self):
         """Entfernt die Intro-Einstellung für den nächsten Play-Aufruf."""
@@ -1064,8 +1047,8 @@ class PyoLoop:
             self._pitched_table = None
             self.table = None
             self.output = None
-        except Exception:
-            logger.warning("Error during stop", exc_info=True)
+        except Exception as e:
+            logger.debug(f"Error during stop: {e}")
 
     def set_gain(self, db):
         """Setzt die Lautstärke in dB"""
@@ -1073,8 +1056,8 @@ class PyoLoop:
             self._pending_gain = float(db)
             if self._pyo_initialized and self.amp:
                 self.amp.value = db_to_amp(float(db))
-        except (ValueError, AttributeError):
-            logger.warning("Error setting gain", exc_info=True)
+        except (ValueError, AttributeError) as e:
+            logger.debug(f"Error setting gain: {e}")
 
     def set_speed(self, value):
         """
@@ -1110,8 +1093,8 @@ class PyoLoop:
             if old_speed != value:
                 self._update_stems_speed(float(value))
                 
-        except Exception:
-            logger.warning("Error setting speed", exc_info=True)
+        except Exception as e:
+            logger.debug(f"Error setting speed: {e}")
     
     def _update_stems_speed(self, new_speed):
         """
@@ -1266,8 +1249,8 @@ class PyoLoop:
                 
                 data["stems"]["cached_speed"] = new_speed
                 
-            except Exception:
-                logger.error("Error repitching stems", exc_info=True)
+            except Exception as e:
+                logger.error(f"Error repitching stems: {e}")
         
         # Im Hintergrund ausführen
         io_executor.submit(do_repitch)
@@ -1290,8 +1273,8 @@ class PyoLoop:
                 self.set_gain(current_gain_db)
                 self.set_speed(current_speed)
                 self.play()
-            except Exception:
-                logger.error("Error updating loop points", exc_info=True)
+            except Exception as e:
+                logger.error(f"Error updating loop points: {e}")
         else:
             self._pyo_initialized = False
             self._stop_all_objects()
@@ -1304,8 +1287,8 @@ class PyoLoop:
         if source and self.follower is None:
             try:
                 self.follower = Follower(source, freq=20)
-            except Exception:
-                logger.warning("Error enabling level meter", exc_info=True)
+            except Exception as e:
+                logger.debug(f"Error enabling level meter: {e}")
 
     def disable_level_meter(self):
         """Deaktiviert das Level-Metering"""
@@ -1516,7 +1499,7 @@ def generate_stems(button_id):
                 data["stems"]["generating"] = False
                 buttons[button_id].config(bg=original_bg)
                 messagebox.showerror("Stem Generation Failed", f"Error: {e}")
-                logger.error(f"Stem generation failed: {e}", exc_info=True)
+                logger.error(f"Stem generation failed: {e}")
             schedule_gui_update(show_error)
     
     io_executor.submit(do_generate)
@@ -1645,18 +1628,7 @@ def on_stem_toggle(stem):
     MULTI-LOOP SUPPORT: Verwendet selected_stems_button statt aktiven Loop,
     damit bei Multi-Loop jeder Track individuell gesteuert werden kann.
     """
-    global selected_stems_button
-    
-    # Verwende selected_stems_button wenn gesetzt, sonst finde aktiven Loop
-    target_button_id = selected_stems_button
-    
-    if target_button_id is None:
-        # Fallback: Finde aktiven Loop mit Stems
-        for btn_id, data in button_data.items():
-            if data["active"] and data["stems"]["available"]:
-                target_button_id = btn_id
-                break
-    
+    target_button_id = get_selected_or_active_stems_button()
     if target_button_id is None:
         return
     
@@ -1707,18 +1679,7 @@ def on_stem_momentary_activate(stem, activate=True):
     
     MULTI-LOOP SUPPORT: Verwendet selected_stems_button.
     """
-    global selected_stems_button
-    
-    # Verwende selected_stems_button wenn gesetzt
-    target_button_id = selected_stems_button
-    
-    if target_button_id is None:
-        # Fallback: Finde aktiven Loop mit Stems
-        for btn_id, data in button_data.items():
-            if data["active"] and data["stems"]["available"]:
-                target_button_id = btn_id
-                break
-    
+    target_button_id = get_selected_or_active_stems_button()
     if target_button_id is None:
         return
     
@@ -1752,18 +1713,7 @@ def on_stem_momentary_release(stem):
     Handler für Loslassen der temporären Aktivierung.
     Stellt den ursprünglichen State wieder her.
     """
-    global selected_stems_button
-    
-    # Verwende selected_stems_button wenn gesetzt
-    target_button_id = selected_stems_button
-    
-    if target_button_id is None:
-        # Fallback: Finde aktiven Loop mit Stems
-        for btn_id, data in button_data.items():
-            if data["active"] and data["stems"]["available"]:
-                target_button_id = btn_id
-                break
-    
+    target_button_id = get_selected_or_active_stems_button()
     if target_button_id is None:
         return
     
@@ -1783,18 +1733,7 @@ def on_stop_stem_toggle():
     Speichert aktuelle Stem-States und schaltet alle aus (Original spielt).
     Bei erneutem Klick werden die gespeicherten States wiederhergestellt.
     """
-    global selected_stems_button
-    
-    # Verwende selected_stems_button wenn gesetzt
-    target_button_id = selected_stems_button
-    
-    if target_button_id is None:
-        # Fallback: Finde aktiven Loop mit Stems
-        for btn_id, data in button_data.items():
-            if data["active"] and data["stems"]["available"]:
-                target_button_id = btn_id
-                break
-    
+    target_button_id = get_selected_or_active_stems_button()
     if target_button_id is None:
         return
     
@@ -1834,18 +1773,7 @@ def on_stop_stem_momentary(activate=True):
     Handler für temporäres Aktivieren des Stop-Stem (Rechtsklick gedrückt).
     Schaltet alle Stems temporär aus (Original spielt).
     """
-    global selected_stems_button
-    
-    # Verwende selected_stems_button wenn gesetzt
-    target_button_id = selected_stems_button
-    
-    if target_button_id is None:
-        # Fallback: Finde aktiven Loop mit Stems
-        for btn_id, data in button_data.items():
-            if data["active"] and data["stems"]["available"]:
-                target_button_id = btn_id
-                break
-    
+    target_button_id = get_selected_or_active_stems_button()
     if target_button_id is None:
         return
     
@@ -1877,18 +1805,7 @@ def on_stop_stem_momentary_release():
     Handler für Loslassen des Stop-Stem Buttons.
     Stellt die ursprünglichen Stem-States wieder her.
     """
-    global selected_stems_button
-    
-    # Verwende selected_stems_button wenn gesetzt
-    target_button_id = selected_stems_button
-    
-    if target_button_id is None:
-        # Fallback: Finde aktiven Loop mit Stems
-        for btn_id, data in button_data.items():
-            if data["active"] and data["stems"]["available"]:
-                target_button_id = btn_id
-                break
-    
+    target_button_id = get_selected_or_active_stems_button()
     if target_button_id is None:
         return
     
@@ -1967,6 +1884,98 @@ def update_stem_eq(button_id, low, mid, high):
         data["stems"]["eq_high"].boost = loop._get_eq_boost(high)
 
 
+def _build_stem_mix_and_eq(button_id, loop, all_players):
+    """
+    Gemeinsame Hilfsfunktion für Stem-Player:
+    - Mischt alle Stem-Player
+    - Wendet die EQ-Kette an
+    - Verknüpft Button-Gain und Master-Gain
+    - Startet den finalen Output
+    - Aktualisiert den Initialisierungsstatus und die Gains
+    """
+    data = button_data[button_id]
+    if all_players:
+        if len(all_players) == 1:
+            stem_mix = all_players[0]
+        else:
+            stem_mix = Mix(all_players, voices=len(all_players))
+
+        eq_low = EQ(stem_mix, freq=200, q=0.7,
+                    boost=loop._get_eq_boost(loop._eq_low_val), type=1)
+        eq_mid = EQ(eq_low, freq=1000, q=0.7,
+                    boost=loop._get_eq_boost(loop._eq_mid_val), type=0)
+        eq_high = EQ(eq_mid, freq=4000, q=0.7,
+                     boost=loop._get_eq_boost(loop._eq_high_val), type=2)
+
+        final_output = eq_high * loop.amp * master_amp
+        final_output.out()
+
+        data["stems"]["stem_mix"] = stem_mix
+        data["stems"]["eq_low"] = eq_low
+        data["stems"]["eq_mid"] = eq_mid
+        data["stems"]["eq_high"] = eq_high
+        data["stems"]["final_output"] = final_output
+
+    data["stems"]["initialized"] = True
+    update_stem_gains(button_id)
+
+
+def _create_main_table_from_audio(button_id, loop, main_audio):
+    """
+    Hilfsfunktion für die Erstellung der Main-Table aus einem Audio-Array.
+    Schreibt das Ergebnis nach data["stems"]["main_table"].
+    """
+    import tempfile
+    data = button_data[button_id]
+    temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+    temp_path = temp_file.name
+    temp_file.close()
+    sf.write(temp_path, main_audio, loop._audio_sr)
+    data["stems"]["main_table"] = SndTable(temp_path)
+    try:
+        os.unlink(temp_path)
+    except:
+        pass
+
+
+def _create_stem_table_from_audio(button_id, stem, audio_data, loop):
+    """
+    Hilfsfunktion für die Erstellung einer Stem-Table aus einem Audio-Array.
+    Schreibt das Ergebnis nach data["stems"]["tables"][stem].
+    """
+    import tempfile
+    data = button_data[button_id]
+    temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+    temp_path = temp_file.name
+    temp_file.close()
+    sf.write(temp_path, audio_data, loop._audio_sr)
+    data["stems"]["tables"][stem] = SndTable(temp_path)
+    try:
+        os.unlink(temp_path)
+    except:
+        pass
+
+
+
+def _select_stem_audio(button_id, stem, use_key_lock, current_speed):
+    """
+    Wählt die zu verwendenden Stem-Audiodaten (dry vs. gepitcht) abhängig von Key Lock
+    und aktueller Geschwindigkeit. Gibt None zurück, wenn kein Audio verfügbar ist.
+    """
+    data = button_data[button_id]
+
+    dry_audio = data["stems"]["dry"].get(stem)
+    if dry_audio is None:
+        return None
+
+    if use_key_lock and current_speed != 1.0:
+        if data["stems"]["pitched"].get(stem) is None:
+            _create_pitched_stem_cache(button_id, stem, current_speed)
+        return data["stems"]["pitched"].get(stem)
+
+    return dry_audio
+
+
 def initialize_stem_players(button_id):
     """
     Initialisiert alle Stem-Player UND einen synchronen Main-Player.
@@ -2033,70 +2042,8 @@ def initialize_stem_players(button_id):
                 break
     
     # === CLEANUP: Alte Player stoppen (aber Tables behalten!) ===
-    # Final Output stoppen
-    if data["stems"].get("final_output"):
-        try:
-            data["stems"]["final_output"].stop()
-        except:
-            pass
-        data["stems"]["final_output"] = None
-    
-    # EQ-Kette stoppen
-    for eq_name in ["eq_low", "eq_mid", "eq_high"]:
-        if data["stems"].get(eq_name):
-            try:
-                data["stems"][eq_name].stop()
-            except:
-                pass
-            data["stems"][eq_name] = None
-    
-    # Mix stoppen
-    if data["stems"].get("stem_mix"):
-        try:
-            data["stems"]["stem_mix"].stop()
-        except:
-            pass
-        data["stems"]["stem_mix"] = None
-    
-    # Phasor stoppen
-    if data["stems"].get("master_phasor"):
-        try:
-            data["stems"]["master_phasor"].stop()
-        except:
-            pass
-        data["stems"]["master_phasor"] = None
-    
-    # Player stoppen (aber Tables behalten wenn möglich!)
-    if data["stems"].get("main_player"):
-        try:
-            data["stems"]["main_player"].stop()
-        except:
-            pass
-        data["stems"]["main_player"] = None
-    
-    for stem in STEM_NAMES:
-        if data["stems"]["players"].get(stem):
-            try:
-                data["stems"]["players"][stem].stop()
-            except:
-                pass
-            data["stems"]["players"][stem] = None
-        
-        # Gains müssen auch neu erstellt werden (da mul sich ändert)
-        if data["stems"]["gains"].get(stem):
-            try:
-                data["stems"]["gains"][stem].stop()
-            except:
-                pass
-            data["stems"]["gains"][stem] = None
-    
-    if data["stems"].get("main_gain"):
-        try:
-            data["stems"]["main_gain"].stop()
-        except:
-            pass
-        data["stems"]["main_gain"] = None
-    
+    _cleanup_stem_players(button_id)
+
     # === TABLES ERSTELLEN (nur wenn nötig) ===
     if need_new_tables:
         # Main Table
@@ -2112,41 +2059,14 @@ def initialize_stem_players(button_id):
                     main_audio = main_audio.astype(np.float32)
         
         if main_audio is not None:
-            temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-            temp_path = temp_file.name
-            temp_file.close()
-            sf.write(temp_path, main_audio, loop._audio_sr)
-            data["stems"]["main_table"] = SndTable(temp_path)
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
+            _create_main_table_from_audio(button_id, loop, main_audio)
         
         # Stem Tables
         for stem in STEM_NAMES:
-            dry_audio = data["stems"]["dry"].get(stem)
-            if dry_audio is None:
-                continue
-            
-            if use_key_lock and current_speed != 1.0:
-                if data["stems"]["pitched"].get(stem) is None:
-                    _create_pitched_stem_cache(button_id, stem, current_speed)
-                audio_to_use = data["stems"]["pitched"].get(stem)
-            else:
-                audio_to_use = dry_audio
-            
+            audio_to_use = _select_stem_audio(button_id, stem, use_key_lock, current_speed)
             if audio_to_use is None:
                 continue
-            
-            temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-            temp_path = temp_file.name
-            temp_file.close()
-            sf.write(temp_path, audio_to_use, loop._audio_sr)
-            data["stems"]["tables"][stem] = SndTable(temp_path)
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
+            _create_stem_table_from_audio(button_id, stem, audio_to_use, loop)
         
         data["stems"]["cached_speed"] = current_speed
     
@@ -2197,38 +2117,7 @@ def initialize_stem_players(button_id):
         data["stems"]["players"][stem] = player
     
     # === MIX → EQ → GAIN → OUTPUT ===
-    if all_players:
-        # Alle Player mixen
-        if len(all_players) == 1:
-            stem_mix = all_players[0]
-        else:
-            stem_mix = Mix(all_players, voices=len(all_players))
-        
-        # EQ-Kette anwenden (gleiche Werte wie PyoLoop)
-        eq_low = EQ(stem_mix, freq=200, q=0.7, 
-                    boost=loop._get_eq_boost(loop._eq_low_val), type=1)
-        eq_mid = EQ(eq_low, freq=1000, q=0.7, 
-                    boost=loop._get_eq_boost(loop._eq_mid_val), type=0)
-        eq_high = EQ(eq_mid, freq=4000, q=0.7, 
-                    boost=loop._get_eq_boost(loop._eq_high_val), type=2)
-        
-        # Button-Gain und Master-Gain anwenden
-        final_output = eq_high * loop.amp * master_amp
-        
-        # Output starten
-        final_output.out()
-        
-        # Speichern für spätere Updates
-        data["stems"]["stem_mix"] = stem_mix
-        data["stems"]["eq_low"] = eq_low
-        data["stems"]["eq_mid"] = eq_mid
-        data["stems"]["eq_high"] = eq_high
-        data["stems"]["final_output"] = final_output
-    
-    data["stems"]["initialized"] = True
-    
-    # Initiale Gains setzen
-    update_stem_gains(button_id)
+    _build_stem_mix_and_eq(button_id, loop, all_players)
 
 
 def _initialize_stems_while_running(button_id):
@@ -2283,44 +2172,17 @@ def _initialize_stems_while_running(button_id):
                     main_audio = main_audio.astype(np.float32)
         
         if main_audio is not None:
-            temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-            temp_path = temp_file.name
-            temp_file.close()
-            sf.write(temp_path, main_audio, loop._audio_sr)
-            data["stems"]["main_table"] = SndTable(temp_path)
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
+            _create_main_table_from_audio(button_id, loop, main_audio)
     
     # Stem Tables
     for stem in STEM_NAMES:
         if data["stems"]["tables"].get(stem) is not None:
             continue
         
-        dry_audio = data["stems"]["dry"].get(stem)
-        if dry_audio is None:
-            continue
-        
-        if use_key_lock and current_speed != 1.0:
-            if data["stems"]["pitched"].get(stem) is None:
-                _create_pitched_stem_cache(button_id, stem, current_speed)
-            audio_to_use = data["stems"]["pitched"].get(stem)
-        else:
-            audio_to_use = dry_audio
-        
+        audio_to_use = _select_stem_audio(button_id, stem, use_key_lock, current_speed)
         if audio_to_use is None:
             continue
-        
-        temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-        temp_path = temp_file.name
-        temp_file.close()
-        sf.write(temp_path, audio_to_use, loop._audio_sr)
-        data["stems"]["tables"][stem] = SndTable(temp_path)
-        try:
-            os.unlink(temp_path)
-        except:
-            pass
+        _create_stem_table_from_audio(button_id, stem, audio_to_use, loop)
     
     data["stems"]["cached_speed"] = current_speed
     
@@ -2373,30 +2235,7 @@ def _initialize_stems_while_running(button_id):
         data["stems"]["players"][stem] = player
     
     # === MIX → EQ → OUTPUT ===
-    if all_players:
-        if len(all_players) == 1:
-            stem_mix = all_players[0]
-        else:
-            stem_mix = Mix(all_players, voices=len(all_players))
-        
-        eq_low = EQ(stem_mix, freq=200, q=0.7, 
-                    boost=loop._get_eq_boost(loop._eq_low_val), type=1)
-        eq_mid = EQ(eq_low, freq=1000, q=0.7, 
-                    boost=loop._get_eq_boost(loop._eq_mid_val), type=0)
-        eq_high = EQ(eq_mid, freq=4000, q=0.7, 
-                    boost=loop._get_eq_boost(loop._eq_high_val), type=2)
-        
-        final_output = eq_high * loop.amp * master_amp
-        final_output.out()
-        
-        data["stems"]["stem_mix"] = stem_mix
-        data["stems"]["eq_low"] = eq_low
-        data["stems"]["eq_mid"] = eq_mid
-        data["stems"]["eq_high"] = eq_high
-        data["stems"]["final_output"] = final_output
-    
-    data["stems"]["initialized"] = True
-    update_stem_gains(button_id)
+    _build_stem_mix_and_eq(button_id, loop, all_players)
 
 
 def _cleanup_stem_players(button_id):
@@ -2719,8 +2558,8 @@ def cleanup_stem_caches():
             data["stems"]["pitched"] = {s: None for s in STEM_NAMES}
             data["stems"]["players"] = {s: None for s in STEM_NAMES}
             data["stems"]["tables"] = {s: None for s in STEM_NAMES}
-    except Exception:
-        logger.warning("Error cleaning up stem caches", exc_info=True)
+    except Exception as e:
+        logger.debug(f"Error cleaning up stem caches: {e}")
 
 
 # ============== BANK MANAGEMENT ==============
@@ -2805,8 +2644,8 @@ def detect_bpm(filepath, callback):
         try:
             bpm = _detect_bpm_worker(filepath)
             schedule_gui_update(lambda b=bpm: callback(b))
-        except Exception:
-            logger.warning("BPM detection error", exc_info=True)
+        except Exception as e:
+            logger.debug(f"BPM detection error: {e}")
             schedule_gui_update(lambda: callback(None))
     bpm_executor.submit(do_detect)
 
@@ -2815,8 +2654,8 @@ def detect_bpm_async(filepath, button_id, loop):
         try:
             bpm = _detect_bpm_worker(filepath)
             schedule_gui_update(lambda: on_bpm_result(bpm))
-        except Exception:
-            logger.warning("Async BPM detection error", exc_info=True)
+        except Exception as e:
+            logger.debug(f"Async BPM detection error: {e}")
             schedule_gui_update(lambda: on_bpm_result(None))
     
     def on_bpm_result(bpm):
@@ -2831,8 +2670,8 @@ def detect_bpm_async(filepath, button_id, loop):
                         button_data[button_id]["loop_end"] = auto_loop_duration
                         loop.loop_start = 0.0
                         loop.loop_end = auto_loop_duration
-                except (ZeroDivisionError, AttributeError):
-                    logger.warning("Auto-loop calculation error", exc_info=True)
+                except (ZeroDivisionError, AttributeError) as e:
+                    logger.debug(f"Auto-loop calculation error: {e}")
             root.after(1000, lambda: update_button_label(button_id))
             root.after(1200, save_config_async)
         else:
@@ -2965,8 +2804,8 @@ def trigger_loop(button_id):
             # STEMS: Stem-Buttons aktualisieren
             update_stem_buttons_state()
             
-    except Exception:
-        logger.error("Error triggering loop %s", button_id, exc_info=True)
+    except Exception as e:
+        logger.error(f"Error triggering loop {button_id}: {e}")
 
 def stop_loop(button_id):
     """
@@ -3028,8 +2867,8 @@ def stop_loop(button_id):
                         schedule_gui_update(restore_color)
                     
                     io_executor.submit(do_precache)
-    except Exception:
-        logger.error("Error in stop_loop %s", button_id, exc_info=True)
+    except Exception as e:
+        logger.error(f"Error in stop_loop {button_id}: {e}")
 
 def load_loop(button_id):
     try:
@@ -3093,8 +2932,8 @@ def load_loop(button_id):
             except Exception as e:
                 schedule_gui_update(lambda: buttons[button_id].config(text=f"{button_id}"))
         io_executor.submit(background_load)
-    except Exception:
-        logger.error("Error loading loop", exc_info=True)
+    except Exception as e:
+        logger.error(f"Error loading loop: {e}")
 
 def unload_loop(button_id):
     try:
@@ -3129,8 +2968,8 @@ def unload_loop(button_id):
         buttons[button_id].config(text=f"{button_id}")
         update_stem_buttons_state()
         save_config_async()
-    except Exception:
-        logger.error("Error unloading", exc_info=True)
+    except Exception as e:
+        logger.error(f"Error unloading: {e}")
 
 # ============== BPM DISPLAY ==============
 # OPTIMIERUNG: Tracking ob aktive Loops vorhanden sind
@@ -3273,8 +3112,8 @@ def adjust_bpm_by_delta(delta_bpm):
         
         # Reset-Button Farbe IMMER am Ende aktualisieren
         update_reset_button_style()
-    except Exception:
-        logger.error("Error adjusting BPM", exc_info=True)
+    except Exception as e:
+        logger.error(f"Error adjusting BPM: {e}")
 
 def on_bpm_up_click(event):
     """
@@ -3609,7 +3448,7 @@ def set_volume(button_id):
                 update_scheduled[0] = root.after(50, do_update)
                 
             except Exception as e:
-                logger.error("Error setting volume", exc_info=True)
+                logger.error(f"Error setting volume: {e}")
 
         # Custom Label-Formatierung für den Slider (zeigt "X.X dB")
         class GainScale(tk.Scale):
@@ -3752,8 +3591,8 @@ def set_volume(button_id):
                     vol_win.after(50, update_vu_meter)
             except tk.TclError:
                 pass
-            except Exception:
-                logger.error("Error updating VU meter", exc_info=True)
+            except Exception as e:
+                logger.error(f"Error updating VU meter: {e}")
         
         def on_volume_window_close():
             global open_volume_windows
@@ -3774,8 +3613,8 @@ def set_volume(button_id):
         vol_win.protocol("WM_DELETE_WINDOW", on_volume_window_close)
         update_vu_meter()
         
-    except Exception:
-        logger.error("Error opening volume control", exc_info=True)
+    except Exception as e:
+        logger.error(f"Error opening volume control: {e}")
 
 # ============== WAVEFORM EDITOR ==============
 class WaveformEditor:
@@ -3839,8 +3678,8 @@ class WaveformEditor:
             self.window.geometry("900x650")
             self.window.protocol("WM_DELETE_WINDOW", self.on_window_close)
             return True
-        except tk.TclError:
-            logger.error("Error creating window", exc_info=True)
+        except tk.TclError as e:
+            logger.error(f"Error creating window: {e}")
             return False
 
     def show_loading_message(self):
@@ -4300,8 +4139,8 @@ class WaveformEditor:
             
             self.window.after(wait_ms, restore_loop)
             
-        except Exception:
-            logger.error("Error in smart jump", exc_info=True)
+        except Exception as e:
+            logger.error(f"Error in smart jump: {e}")
 
     def apply_loop_changes_realtime(self):
         button_data[self.button_id]["loop_start"] = self.loop_start
@@ -4767,8 +4606,8 @@ def on_master_volume_change(val):
         master_amp.value = volume
         volume_percent = int(volume * 100)
         volume_label.config(text=f"Master Volume {volume_percent}%")
-    except Exception:
-        logger.error("Error setting master volume", exc_info=True)
+    except Exception as e:
+        logger.error(f"Error setting master volume: {e}")
 
 master_volume_slider = tk.Scale(
     volume_frame,
@@ -5028,6 +4867,21 @@ def get_active_loop_with_stems():
     return None
 
 
+
+def get_selected_or_active_stems_button():
+    """Zentraler Helper für Stem-bezogene Aktionen.
+
+    Bevorzugt den explizit selektierten Button (selected_stems_button),
+    fällt sonst auf den ersten aktiven Loop mit verfügbaren Stems zurück.
+    Gibt None zurück, wenn kein solcher Button existiert.
+    """
+    global selected_stems_button
+    target_button_id = selected_stems_button
+    if target_button_id is not None:
+        return target_button_id
+    return get_active_loop_with_stems()
+
+
 def update_stem_buttons_state():
     """Aktualisiert die Stem-Button-Farben basierend auf aktuellem Zustand."""
     global selected_stems_button
@@ -5065,7 +4919,7 @@ def update_stem_buttons_state():
     # Stop-Stem Button auch aktualisieren
     try:
         update_stop_stem_button_state()
-    except Exception:
+    except:
         pass  # Button existiert vielleicht noch nicht
 
 
@@ -5219,8 +5073,8 @@ def cleanup_pitch_caches():
         for (bank_id, btn_id), loop in loaded_loops.items():
             if hasattr(loop, '_invalidate_pitch_cache'):
                 loop._invalidate_pitch_cache()
-    except Exception:
-        logger.warning("Error cleaning up pitch caches", exc_info=True)
+    except Exception as e:
+        logger.debug(f"Error cleaning up pitch caches: {e}")
 
 def on_closing():
     """
@@ -5266,8 +5120,8 @@ def on_closing():
                                 data["stems"]["gains"][stem].stop()
                             except:
                                 pass
-                except Exception:
-                    logger.warning("Error stopping stems for %s/%s", bank_id, btn_id, exc_info=True)
+                except Exception as e:
+                    logger.debug(f"Error stopping stems for {bank_id}/{btn_id}: {e}")
         
         # 2. Caches freigeben
         cleanup_pitch_caches()
@@ -5289,8 +5143,8 @@ def on_closing():
         except:
             pass
         
-    except Exception:
-        logger.error("Error during shutdown", exc_info=True)
+    except Exception as e:
+        logger.error(f"Error during shutdown: {e}")
     finally:
         # 6. Fenster zerstören
         root.destroy()
