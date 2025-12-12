@@ -25,10 +25,7 @@ pyo = { git = "https://github.com/openSUSE-Python/pyo.git", rev = "gcc15-build" 
 madmom = ["Cython", "numpy"]
 
 [dependency-groups]
-dev = [
-    "mypy>=1.19.0",
-    "ruff>=0.14.8",
-]
+dev = ["mypy>=1.19.0", "ruff>=0.14.8"]
 
 [tool.ruff]
 extend = "ruff_defaults.toml"

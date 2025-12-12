@@ -5,7 +5,7 @@ Orchestrates the application startup, shutdown, and coordinates all modules.
 
 import logging
 import tkinter as tk
-from pyo import Server, Sig
+from pyo import Server, Sig, pa_get_default_output
 
 from flitzis_looper.utils.threading import (
     io_executor, bpm_executor, start_gui_queue_processor
@@ -124,7 +124,10 @@ def main():
     matplotlib.use('TkAgg')
     
     # 1. pyo Server starten
-    s = Server(sr=44100, nchnls=2, buffersize=1024, duplex=0).boot()
+    dev_out = pa_get_default_output()
+    s = Server(sr=44100, nchnls=2, buffersize=1024, duplex=0)
+    s.setOutputDevice(dev_out)
+    s.boot()
     s.start()
     
     # 2. Tk root erstellen
