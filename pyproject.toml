@@ -3,14 +3,15 @@ name = "flitzis-looper"
 version = "7.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13.9"
+requires-python = ">=3.13.9,<3.14"
 dependencies = [
     "demucs>=4.0.1",
     "madmom",
     "matplotlib>=3.10.7",
     "numpy>=2.3.5",
     "pedalboard>=0.9.19",
-    "pyo",
+    "pyo; sys_platform == 'win32'",
+    "pyo @ git+https://github.com/openSUSE-Python/pyo.git@gcc15-build; sys_platform != 'win32'",
     "setuptools>=80.9.0",
     "soundfile>=0.13.1",
     "torch>=2.9.1",
@@ -19,7 +20,6 @@ dependencies = [
 
 [tool.uv.sources]
 madmom = { git = "https://github.com/CPJKU/madmom.git" }
-pyo = { git = "https://github.com/openSUSE-Python/pyo.git", rev = "gcc15-build" }
 
 [tool.uv.extra-build-dependencies]
 madmom = ["Cython", "numpy"]
