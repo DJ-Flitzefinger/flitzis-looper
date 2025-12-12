@@ -1,6 +1,4 @@
-"""
-Path constants and directory initialization for flitzis_looper.
-"""
+"""Path constants and directory initialization for flitzis_looper."""
 
 import os
 

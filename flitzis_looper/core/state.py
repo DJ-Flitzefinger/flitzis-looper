@@ -1,5 +1,4 @@
-"""
-Zentraler State-Manager für flitzis_looper.
+"""Zentraler State-Manager für flitzis_looper.
 Alle globalen Variablen werden hier verwaltet.
 """
 
@@ -69,13 +68,19 @@ _speed_value = None
 
 # ============== INITIALIZATION ==============
 def init_state(root):
-    """
-    Initialisiert alle State-Variablen. 
+    """Initialisiert alle State-Variablen.
     Muss NACH root-Erstellung aufgerufen werden.
     """
-    global _root, _bpm_lock_active, _key_lock_active, _multi_loop_active
-    global _master_bpm_value, _master_volume, _current_bank, _speed_value
-    
+    global \
+        _root, \
+        _bpm_lock_active, \
+        _key_lock_active, \
+        _multi_loop_active, \
+        _master_bpm_value, \
+        _master_volume, \
+        _current_bank, \
+        _speed_value
+
     _root = root
     _bpm_lock_active = tk.BooleanVar(value=False)
     _key_lock_active = tk.BooleanVar(value=False)  # Key Lock für Master Tempo
@@ -121,97 +126,96 @@ def get_default_button_data():
         "waveform_cache": None,
         # STEMS: Audio-Separation für Vocals, Melody, Bass, Drums, Instrumental
         # NUR IM RAM - wird NICHT in config.json gespeichert!
-        "stems": get_default_stems_data()
+        "stems": get_default_stems_data(),
     }
 
 
 def get_default_stems_data():
     """Gibt die Standard-Stems-Struktur zurück. Wird NUR im RAM gehalten."""
     return {
-        "available": False,           # Stems erzeugt?
-        "generating": False,          # Gerade am Generieren?
-        "states": {                   # GUI-Status/Toggles
+        "available": False,  # Stems erzeugt?
+        "generating": False,  # Gerade am Generieren?
+        "states": {  # GUI-Status/Toggles
             "vocals": False,
             "melody": False,
             "bass": False,
             "drums": False,
-            "instrumental": False     # Sonderrolle (exklusiv)
+            "instrumental": False,  # Sonderrolle (exklusiv)
         },
-        "saved_states": None,         # Gespeicherte States für Stop-Stem Button
-        "dry": {                      # un-gepitchte Arrays (numpy)
+        "saved_states": None,  # Gespeicherte States für Stop-Stem Button
+        "dry": {  # un-gepitchte Arrays (numpy)
             "vocals": None,
             "melody": None,
             "bass": None,
             "drums": None,
-            "instrumental": None
+            "instrumental": None,
         },
-        "pitched": {                  # RAM-Caches für aktuelle Speed
+        "pitched": {  # RAM-Caches für aktuelle Speed
             "vocals": None,
             "melody": None,
             "bass": None,
             "drums": None,
-            "instrumental": None
+            "instrumental": None,
         },
-        "players": {                  # pyo-Player/Tables je Stem
+        "players": {  # pyo-Player/Tables je Stem
             "vocals": None,
             "melody": None,
             "bass": None,
             "drums": None,
-            "instrumental": None
+            "instrumental": None,
         },
-        "tables": {                   # SndTables für Stems
+        "tables": {  # SndTables für Stems
             "vocals": None,
             "melody": None,
             "bass": None,
             "drums": None,
-            "instrumental": None
+            "instrumental": None,
         },
-        "gains": {                    # pyo Sig-Objekte für Gain-Kontrolle (0 oder 1)
+        "gains": {  # pyo Sig-Objekte für Gain-Kontrolle (0 oder 1)
             "vocals": None,
             "melody": None,
             "bass": None,
             "drums": None,
-            "instrumental": None
+            "instrumental": None,
         },
-        "outputs": {                  # pyo Output-Objekte (mit EQ wenn vorhanden)
+        "outputs": {  # pyo Output-Objekte (mit EQ wenn vorhanden)
             "vocals": None,
             "melody": None,
             "bass": None,
             "drums": None,
-            "instrumental": None
+            "instrumental": None,
         },
-        "main_gain": None,            # Gain für Haupt-Loop (wird 0 wenn Stems aktiv)
-        "main_player": None,          # Haupt-Loop Player via Pointer (für Sync)
-        "main_table": None,           # Haupt-Loop Table für Pointer
-        "master_phasor": None,        # Gemeinsamer Phasor für ALLE Player
-        "stem_mix": None,             # Mix aller Stem-Player
-        "eq_low": None,               # EQ für Stems
-        "eq_mid": None,               # EQ für Stems  
-        "eq_high": None,              # EQ für Stems
-        "final_output": None,         # Finaler Output (nach EQ und Gain)
-        "cached_speed": None,         # Für welche Speed wurde gecached?
-        "initialized": False,         # Wurden Stem-Player bereits erstellt?
-        "stop_active": False          # Ist Stop-Stem Button aktiv?
+        "main_gain": None,  # Gain für Haupt-Loop (wird 0 wenn Stems aktiv)
+        "main_player": None,  # Haupt-Loop Player via Pointer (für Sync)
+        "main_table": None,  # Haupt-Loop Table für Pointer
+        "master_phasor": None,  # Gemeinsamer Phasor für ALLE Player
+        "stem_mix": None,  # Mix aller Stem-Player
+        "eq_low": None,  # EQ für Stems
+        "eq_mid": None,  # EQ für Stems
+        "eq_high": None,  # EQ für Stems
+        "final_output": None,  # Finaler Output (nach EQ und Gain)
+        "cached_speed": None,  # Für welche Speed wurde gecached?
+        "initialized": False,  # Wurden Stem-Player bereits erstellt?
+        "stop_active": False,  # Ist Stop-Stem Button aktiv?
     }
 
 
 def ensure_stems_structure(data):
-    """
-    Stellt sicher dass die Stems-Struktur vollständig ist.
+    """Stellt sicher dass die Stems-Struktur vollständig ist.
     Behebt KeyErrors bei alten Daten oder nach fehlerhaftem Laden.
     """
     if "stems" not in data:
         data["stems"] = get_default_stems_data()
         return
-    
+
     stems = data["stems"]
     default = get_default_stems_data()
-    
+
     # Alle fehlenden Top-Level Keys ergänzen
     for key in default:
         if key not in stems:
             stems[key] = default[key]
-    
+
     # Alle fehlenden Stem-Namen in den Dicts ergänzen
     for dict_key in ["states", "dry", "pitched", "players", "tables", "gains", "outputs"]:
         if dict_key in stems and isinstance(stems[dict_key], dict):
@@ -260,8 +264,7 @@ def get_all_banks_data():
 
 
 def get_button_data(btn_id=None):
-    """
-    Returns button data. If btn_id is None, returns the whole dictionary.
+    """Returns button data. If btn_id is None, returns the whole dictionary.
     If btn_id is given, returns the data for that button.
     """
     if btn_id is None:
@@ -282,8 +285,7 @@ def get_stem_indicators():
 
 
 def get_loaded_loops():
-    """
-    Gibt alle geladenen Loops zurück.
+    """Gibt alle geladenen Loops zurück.
     HINWEIS: Gibt die tatsächliche Dict-Referenz zurück für Backward-Kompatibilität.
     Änderungen sollten über register_loaded_loop/unregister_loaded_loop erfolgen.
     """
@@ -316,8 +318,7 @@ def get_master_amp():
 
 # ============== DATA STRUCTURE SETTERS ==============
 def set_button_data_ref(bank_id):
-    """
-    Setzt _button_data auf die Referenz des angegebenen Banks.
+    """Setzt _button_data auf die Referenz des angegebenen Banks.
     Wird bei Bank-Wechsel verwendet.
     """
     global _button_data
@@ -346,13 +347,13 @@ def register_stem_indicator(btn_id, indicator_widget):
 
 def register_loaded_loop(bank_id, btn_id, loop):
     """Registriert einen geladenen Loop für schnelles Tracking."""
-    _loaded_loops[(bank_id, btn_id)] = loop
+    _loaded_loops[bank_id, btn_id] = loop
 
 
 def unregister_loaded_loop(bank_id, btn_id):
     """Entfernt einen Loop aus dem Tracking."""
     if (bank_id, btn_id) in _loaded_loops:
-        del _loaded_loops[(bank_id, btn_id)]
+        del _loaded_loops[bank_id, btn_id]
 
 
 def set_selected_stems_button(btn_id):
@@ -386,8 +387,7 @@ def register_open_volume_window(btn_id, window):
 
 def unregister_open_volume_window(btn_id):
     """Entfernt ein Volume-Fenster aus dem Tracking."""
-    if btn_id in _open_volume_windows:
-        del _open_volume_windows[btn_id]
+    _open_volume_windows.pop(btn_id, None)
 
 
 def register_open_loop_editor_window(btn_id, window):
@@ -397,5 +397,4 @@ def register_open_loop_editor_window(btn_id, window):
 
 def unregister_open_loop_editor_window(btn_id):
     """Entfernt ein Loop-Editor-Fenster aus dem Tracking."""
-    if btn_id in _open_loop_editor_windows:
-        del _open_loop_editor_windows[btn_id]
+    _open_loop_editor_windows.pop(btn_id, None)

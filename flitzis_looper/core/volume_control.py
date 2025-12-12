@@ -1,24 +1,30 @@
-"""
-Volume control for flitzis_looper.
+"""Volume control for flitzis_looper.
 Handles master volume and multi-loop toggle functionality.
 """
 
 import logging
 
 from flitzis_looper.core.state import (
-    COLOR_LOCK_OFF, COLOR_LOCK_ON, COLOR_TEXT, COLOR_TEXT_ACTIVE,
     COLOR_BTN_INACTIVE,
-    get_master_volume, get_master_amp, get_multi_loop_active,
-    get_all_banks_data, get_loaded_loops, get_current_bank, get_buttons
+    COLOR_LOCK_OFF,
+    COLOR_LOCK_ON,
+    COLOR_TEXT,
+    COLOR_TEXT_ACTIVE,
+    get_all_banks_data,
+    get_buttons,
+    get_current_bank,
+    get_loaded_loops,
+    get_master_amp,
+    get_master_volume,
+    get_multi_loop_active,
 )
 
 logger = logging.getLogger(__name__)
 
 
 def on_master_volume_change(val, volume_label):
-    """
-    Handler für Master-Volume-Änderungen.
-    
+    """Handler für Master-Volume-Änderungen.
+
     Args:
         val: Neuer Volume-Wert (0.0 - 1.0)
         volume_label: Label-Widget für die Prozentanzeige
@@ -26,20 +32,19 @@ def on_master_volume_change(val, volume_label):
     try:
         master_volume = get_master_volume()
         master_amp = get_master_amp()
-        
+
         volume = float(val)
         master_volume.set(volume)
         master_amp.value = volume
         volume_percent = int(volume * 100)
         volume_label.config(text=f"Master Volume {volume_percent}%")
     except Exception as e:
-        logger.error(f"Error setting master volume: {e}")
+        logger.exception("Error setting master volume: %s", e)
 
 
 def reset_master_volume(master_volume_slider):
-    """
-    Setzt das Master-Volume auf 100% zurück.
-    
+    """Setzt das Master-Volume auf 100% zurück.
+
     Args:
         master_volume_slider: Der Master-Volume-Slider-Widget
     """
@@ -47,10 +52,9 @@ def reset_master_volume(master_volume_slider):
 
 
 def toggle_multi_loop(multi_loop_btn, callbacks):
-    """
-    Toggle Multi-Loop Modus.
+    """Toggle Multi-Loop Modus.
     Wenn deaktiviert, werden alle Loops bis auf den letzten gestoppt.
-    
+
     Args:
         multi_loop_btn: Der Multi-Loop Button-Widget
         callbacks: Dict mit Callbacks:
@@ -61,9 +65,9 @@ def toggle_multi_loop(multi_loop_btn, callbacks):
     loaded_loops = get_loaded_loops()
     current_bank = get_current_bank()
     buttons = get_buttons()
-    
+
     multi_loop_active.set(not multi_loop_active.get())
-    
+
     if multi_loop_active.get():
         multi_loop_btn.config(bg=COLOR_LOCK_ON, fg=COLOR_TEXT_ACTIVE)
     else:
@@ -80,4 +84,4 @@ def toggle_multi_loop(multi_loop_btn, callbacks):
                 data["active"] = False
                 if bank_id == current_bank.get():
                     buttons[btn_id].config(bg=COLOR_BTN_INACTIVE, fg=COLOR_TEXT)
-                    callbacks['update_button_label'](btn_id)
+                    callbacks["update_button_label"](btn_id)

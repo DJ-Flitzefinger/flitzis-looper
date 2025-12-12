@@ -1,5 +1,4 @@
-"""
-Threading utilities for flitzis_looper.
+"""Threading utilities for flitzis_looper.
 Provides executors for IO and BPM operations, and GUI update queue.
 """
 
@@ -27,8 +26,7 @@ def schedule_gui_update(callback):
 
 
 def _process_gui_queue():
-    """
-    Process pending GUI updates from the queue.
+    """Process pending GUI updates from the queue.
     Called periodically via root.after().
     """
     try:
@@ -39,14 +37,13 @@ def _process_gui_queue():
             except queue.Empty:
                 break
     except Exception as e:
-        logger.debug(f"GUI queue processing error: {e}")
+        logger.debug("GUI queue processing error: %s", e)
     if _root is not None:
         _root.after(30, _process_gui_queue)
 
 
 def start_gui_queue_processor(root):
-    """
-    Start the GUI queue processor with the given root window.
+    """Start the GUI queue processor with the given root window.
     Must be called after tk.Tk() is created.
     """
     global _root

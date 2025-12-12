@@ -1,43 +1,42 @@
-"""
-BPM detection functionality for flitzis_looper.
+"""BPM detection functionality for flitzis_looper.
 Uses madmom for beat tracking and BPM detection.
 """
 
-import sys
 import os
+import sys
+
 import numpy as np
 
 from flitzis_looper.utils.logging import logger
 
 
 def _detect_bpm_worker(filepath):
-    """
-    Detects BPM from an audio file using madmom's beat tracking.
-    
+    """Detects BPM from an audio file using madmom's beat tracking.
+
     Args:
         filepath: Path to the audio file
-        
+
     Returns:
         float: Detected BPM rounded to 1 decimal, or None if detection fails
     """
     try:
         # Try to lower process priority on non-Windows systems
         try:
-            if sys.platform != 'win32':
+            if sys.platform != "win32":
                 os.nice(10)
         except OSError:
             pass  # nice() nicht verfügbar oder keine Berechtigung
-        
+
         if not os.path.exists(filepath):
             return None
-        
+
         # Import madmom here to handle ImportError gracefully
-        from madmom.features.beats import RNNBeatProcessor, DBNBeatTrackingProcessor
-        
+        from madmom.features.beats import DBNBeatTrackingProcessor, RNNBeatProcessor
+
         proc = DBNBeatTrackingProcessor(fps=100, min_bpm=60, max_bpm=180)
         act = RNNBeatProcessor()(filepath)
         beats = proc(act)
-        
+
         if len(beats) > 1:
             intervals = np.diff(beats)
             avg_interval = np.mean(intervals)
@@ -45,7 +44,7 @@ def _detect_bpm_worker(filepath):
             if 60 <= bpm <= 200:
                 return round(bpm, 1)
         return None
-        
+
     except ImportError:
         logger.debug("madmom not available for BPM detection")
         return None

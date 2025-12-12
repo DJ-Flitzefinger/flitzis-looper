@@ -1,5 +1,4 @@
-"""
-flitzis_looper - DJ Flitzefinger's Scratch-Looper
+"""flitzis_looper - DJ Flitzefinger's Scratch-Looper.
 
 A modularized Python application for loop-based music production.
 """

@@ -1,5 +1,4 @@
-"""
-pyo Audio Server initialization for flitzis_looper.
+"""pyo Audio Server initialization for flitzis_looper.
 Provides the audio server and master amplitude control.
 """
 
@@ -13,15 +12,14 @@ _master_amp = None
 
 
 def init_server(sr=44100, nchnls=2, buffersize=1024, duplex=0):
-    """
-    Initialize and start the pyo audio server.
-    
+    """Initialize and start the pyo audio server.
+
     Args:
         sr: Sample rate (default 44100)
         nchnls: Number of channels (default 2, stereo)
         buffersize: Buffer size (default 1024)
         duplex: Duplex mode (default 0, output only)
-    
+
     Returns:
         Server: The initialized and started pyo Server instance
     """
@@ -42,12 +40,11 @@ def get_server():
 
 
 def init_master_amp(initial_value=1.0):
-    """
-    Initialize the master amplitude signal.
-    
+    """Initialize the master amplitude signal.
+
     Args:
         initial_value: Initial amplitude value (default 1.0)
-        
+
     Returns:
         Sig: The master amplitude pyo Sig object
     """
@@ -62,9 +59,8 @@ def get_master_amp():
 
 
 def set_master_amp(amp_sig):
-    """
-    Set the master amplitude signal (used for backward compatibility).
-    
+    """Set the master amplitude signal (used for backward compatibility).
+
     Args:
         amp_sig: A pyo Sig object to use as master amplitude
     """
