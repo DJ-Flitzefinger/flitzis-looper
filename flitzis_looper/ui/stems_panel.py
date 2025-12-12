@@ -6,6 +6,7 @@ Enthält:
 - update_stop_stem_button_state(): Aktualisiert Stop-Stem Button
 """
 
+import contextlib
 import tkinter as tk
 
 from flitzis_looper.core.state import (
@@ -72,7 +73,7 @@ def create_stems_panel(
     Returns:
         dict: Dictionary mit Widget-Referenzen
     """
-    global _stem_buttons, _stop_stem_button
+    global _stop_stem_button
 
     root = get_root()
     button_data = get_button_data()
@@ -83,6 +84,7 @@ def create_stems_panel(
 
     def create_stem_button(parent, stem_name, label):
         """Erstellt einen runden Toggle-Button für einen Stem.
+
         - Linksklick: Toggle (permanent)
         - Rechtsklick gedrückt: Temporär aktivieren
         - Mittelklick gedrückt: Temporär deaktivieren.
@@ -116,7 +118,7 @@ def create_stems_panel(
         # Speichere temporären Zustand
         canvas._temp_state = {"right_held": False, "middle_held": False, "original_state": False}
 
-        # Linksklick: Toggle (permanent)
+        # Linksklick Toggle (permanent)
         def on_left_click(event):
             on_stem_toggle_callback(stem_name)
 
@@ -214,6 +216,7 @@ def create_stems_panel(
     # Stop-Stem Button (S) - schaltet alle Stems aus und merkt sich den Zustand
     def create_stop_stem_button(parent):
         """Erstellt den Stop-Stem Button.
+
         - Linksklick: Toggle (speichert States, alle aus / wiederherstellen)
         - Rechtsklick gedrückt: Temporär alle Stems aus.
         """
@@ -241,7 +244,7 @@ def create_stems_panel(
         # Temporärer Zustand
         canvas._temp_state = {"right_held": False}
 
-        # Linksklick: Toggle
+        # Linksklick Toggle
         def on_left_click(event):
             on_stop_stem_toggle_callback()
             update_stop_stem_button_state()
@@ -353,8 +356,6 @@ def update_stem_buttons_state():
                 canvas.itemconfig("circle", fill=COLOR_BTN_INACTIVE, outline="#555")
                 canvas.itemconfig("text", fill=COLOR_TEXT)
 
-    # Stop-Stem Button auch aktualisieren
-    try:
+    # Stop-Stem Button auch aktualisieren (existiert vielleicht noch nicht)
+    with contextlib.suppress(Exception):
         update_stop_stem_button_state()
-    except:
-        pass  # Button existiert vielleicht noch nicht

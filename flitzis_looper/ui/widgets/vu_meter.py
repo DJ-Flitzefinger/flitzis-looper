@@ -1,4 +1,5 @@
 """VUMeter Widget - Level-Anzeige mit Segmenten.
+
 Canvas-basiertes Widget für Audio-Level-Visualisierung.
 """
 

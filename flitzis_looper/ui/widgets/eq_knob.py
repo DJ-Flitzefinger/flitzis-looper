@@ -1,4 +1,5 @@
 """EQKnob Widget - Drehregler für EQ (Low/Mid/High).
+
 Canvas-basiertes Widget mit Maus-Event-Handlern.
 """
 

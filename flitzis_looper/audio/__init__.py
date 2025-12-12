@@ -1,4 +1,5 @@
 """Audio package for flitzis_looper.
+
 Contains pyo server initialization, loop player, BPM detection, and stem separation.
 """
 

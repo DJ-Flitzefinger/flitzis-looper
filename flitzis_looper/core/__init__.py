@@ -1,4 +1,5 @@
 """Core module for flitzis_looper.
+
 Contains state management, configuration, and core logic.
 """
 

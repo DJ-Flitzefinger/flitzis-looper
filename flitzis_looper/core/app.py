@@ -1,4 +1,5 @@
 """Main application module for flitzis_looper.
+
 Orchestrates the application startup, shutdown, and coordinates all modules.
 """
 
@@ -6,7 +7,9 @@ import builtins
 import contextlib
 import logging
 import tkinter as tk
+from tkinter import messagebox
 
+import matplotlib as mpl
 from pyo import Server, Sig, pa_get_default_output
 
 from flitzis_looper.audio.pitch import cleanup_stem_caches
@@ -95,14 +98,12 @@ def on_closing(s):
             s.stop()
 
         # 5. Executors herunterfahren
-        try:
+        with contextlib.suppress(Exception):
             io_executor.shutdown(wait=False)
             bpm_executor.shutdown(wait=False)
-        except:
-            pass
 
-    except Exception as e:
-        logger.exception("Error during shutdown: %s", e)
+    except Exception:
+        logger.exception("Error during shutdown")
     finally:
         # 6. Fenster zerstören
         root.destroy()
@@ -110,10 +111,9 @@ def on_closing(s):
 
 def main():
     """Hauptfunktion - startet die Anwendung.
+
     Diese Funktion orchestriert den gesamten Startup-Prozess.
     """
-    import matplotlib as mpl
-
     mpl.use("TkAgg")
 
     # 1. pyo Server starten
@@ -127,7 +127,7 @@ def main():
     root = tk.Tk()
     root.title("Dj Flitzefinger's Scratch-Looper")
     root.geometry("960x630")
-    root.resizable(False, False)
+    root.resizable(width=False, height=False)
     root.configure(bg="#1e1e1e")
 
     # 3. State initialisieren
@@ -473,7 +473,7 @@ def main():
     # Rechter Bereich neben Slider: BPM Up/Down Buttons + Reset
     reset_frame = tk.Frame(slider_reset_frame, bg=COLOR_BG, width=60, height=400)
     reset_frame.pack(side="left", padx=(5, 0))
-    reset_frame.pack_propagate(False)
+    reset_frame.pack_propagate(flag=False)
 
     # Spacer oben bis zu den Buttons (216px für korrekte 1.00 Position)
     spacer_top = tk.Frame(reset_frame, bg=COLOR_BG, height=216)
@@ -670,7 +670,7 @@ def main():
                 initialize_stem_players(active_loop)
 
             # Stem temporär aktivieren (ohne State zu ändern)
-            on_stem_momentary_activate(stem_name, True, {})
+            on_stem_momentary_activate(stem_name, activate=True, callbacks={})
 
             # Visuelles Feedback
             canvas.itemconfig("circle", fill=COLOR_BTN_ACTIVE, outline="#1a9a5a")
@@ -701,7 +701,7 @@ def main():
                 initialize_stem_players(active_loop)
 
             # Stem temporär deaktivieren (ohne State zu ändern)
-            on_stem_momentary_activate(stem_name, False, {})
+            on_stem_momentary_activate(stem_name, activate=False, callbacks={})
 
             # Visuelles Feedback
             canvas.itemconfig("circle", fill=COLOR_BTN_INACTIVE, outline="#555")
@@ -785,7 +785,7 @@ def main():
                 return
 
             canvas._temp_state["right_held"] = True
-            on_stop_stem_momentary(True, stem_callbacks)
+            on_stop_stem_momentary(activate=True, callbacks=stem_callbacks)
 
             # Visuelles Feedback
             canvas.itemconfig("circle", fill=COLOR_BTN_ACTIVE, outline="#1a9a5a")
@@ -825,8 +825,6 @@ def main():
     # ============== CONTEXT MENU ==============
     def open_context_menu(button_id, event):
         """Middle click - open context menu."""
-        from tkinter import messagebox
-
         from flitzis_looper.core.state import ensure_stems_structure
 
         ensure_stems_structure(button_data[button_id])

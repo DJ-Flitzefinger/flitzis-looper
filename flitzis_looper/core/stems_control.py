@@ -1,4 +1,5 @@
 """Stem control for flitzis_looper.
+
 Handles stem toggle, momentary activation, and stop-stem functionality.
 """
 
@@ -36,6 +37,7 @@ def get_active_loop_with_stems():
 
 def on_stem_toggle(stem, callbacks):
     """Handler für Stem-Toggle (Linksklick).
+
     Vocals, Melody, Bass, Drums sind frei kombinierbar.
     Instrumental hat Sonderrolle (exklusiv).
 
@@ -97,6 +99,7 @@ def on_stem_toggle(stem, callbacks):
 
 def on_stem_momentary_activate(stem, activate, callbacks):
     """Handler für temporäres Aktivieren/Deaktivieren eines Stems.
+
     Wird bei Rechtsklick (activate=True) / Mittelklick (activate=False) verwendet.
 
     MULTI-LOOP SUPPORT: Verwendet selected_stems_button.
@@ -145,6 +148,7 @@ def on_stem_momentary_activate(stem, activate, callbacks):
 
 def on_stem_momentary_release(stem, callbacks):
     """Handler für Loslassen der temporären Aktivierung.
+
     Stellt den ursprünglichen State wieder her.
 
     Args:
@@ -177,6 +181,7 @@ def on_stem_momentary_release(stem, callbacks):
 
 def on_stop_stem_toggle(callbacks):
     """Handler für Stop-Stem Button (Linksklick).
+
     Speichert aktuelle Stem-States und schaltet alle aus (Original spielt).
     Bei erneutem Klick werden die gespeicherten States wiederhergestellt.
 
@@ -232,6 +237,7 @@ def on_stop_stem_toggle(callbacks):
 
 def on_stop_stem_momentary(activate, callbacks):
     """Handler für temporäres Aktivieren des Stop-Stem (Rechtsklick gedrückt).
+
     Schaltet alle Stems temporär aus (Original spielt).
 
     Args:
@@ -278,6 +284,7 @@ def on_stop_stem_momentary(activate, callbacks):
 
 def on_stop_stem_momentary_release(callbacks):
     """Handler für Loslassen des Stop-Stem Buttons.
+
     Stellt die ursprünglichen Stem-States wieder her.
 
     Args:

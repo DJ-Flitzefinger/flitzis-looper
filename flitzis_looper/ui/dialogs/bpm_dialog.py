@@ -20,6 +20,7 @@ from flitzis_looper.core.state import (
 
 def set_bpm_manually(button_id, update_button_label_callback=None, save_config_async_callback=None):
     """Öffnet einen Dialog zum manuellen Setzen der BPM.
+
     Enthält sowohl ein Eingabefeld als auch einen TAP BPM Button.
 
     Args:
@@ -40,7 +41,7 @@ def set_bpm_manually(button_id, update_button_label_callback=None, save_config_a
     dialog.grab_set()
 
     # Fenstergröße fixieren und nicht veränderbar machen
-    dialog.resizable(False, False)
+    dialog.resizable(width=False, height=False)
 
     # TAP BPM Tracking Variablen
     tap_times = []
@@ -61,7 +62,7 @@ def set_bpm_manually(button_id, update_button_label_callback=None, save_config_a
 
     def validate_bpm_input(new_value):
         """Erlaubt nur Zahlen, Punkt und Komma im BPM-Eingabefeld."""
-        if new_value == "":
+        if not new_value:
             return True
         # Erlaube Zahlen, einen Punkt oder ein Komma
         for char in new_value:

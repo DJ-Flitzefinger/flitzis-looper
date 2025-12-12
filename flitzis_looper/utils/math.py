@@ -9,6 +9,7 @@ def db_to_amp(db):
 
 def speed_to_semitones(speed):
     """Berechnet die Halbtöne-Kompensation für Key Lock.
+
     Bei speed > 1: Pitch würde steigen -> negative Halbtöne zum Kompensieren
     Bei speed < 1: Pitch würde sinken -> positive Halbtöne zum Kompensieren.
     """

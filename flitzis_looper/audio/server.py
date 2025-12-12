@@ -1,4 +1,5 @@
 """pyo Audio Server initialization for flitzis_looper.
+
 Provides the audio server and master amplitude control.
 """
 
@@ -7,8 +8,8 @@ from pyo import Server, Sig
 from flitzis_looper.utils.logging import logger
 
 # Module-level server instance (initialized by init_server)
-_server = None
-_master_amp = None
+_server: Server | None = None
+_master_amp: Sig | None = None
 
 
 def init_server(sr=44100, nchnls=2, buffersize=1024, duplex=0):
@@ -28,10 +29,11 @@ def init_server(sr=44100, nchnls=2, buffersize=1024, duplex=0):
         _server = Server(sr=sr, nchnls=nchnls, buffersize=buffersize, duplex=duplex).boot()
         _server.start()
         logger.debug(f"Audio server started: sr={sr}, nchnls={nchnls}")
-        return _server
     except Exception as e:
         logger.error(f"Failed to initialize audio server: {e}")
         raise
+
+    return _server
 
 
 def get_server():

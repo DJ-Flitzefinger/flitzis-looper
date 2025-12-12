@@ -119,7 +119,7 @@ def create_toolbar(
     # Rechter Bereich neben Slider: BPM Up/Down Buttons + Reset
     reset_frame = tk.Frame(slider_reset_frame, bg=COLOR_BG, width=60, height=400)
     reset_frame.pack(side="left", padx=(5, 0))
-    reset_frame.pack_propagate(False)
+    reset_frame.pack_propagate(flag=False)
 
     # Spacer oben bis zu den Buttons (216px für korrekte 1.00 Position)
     spacer_top = tk.Frame(reset_frame, bg=COLOR_BG, height=216)
@@ -204,7 +204,7 @@ def create_toolbar(
     # BPM Entry mit Validierung (nur Zahlen, Punkt, Komma)
     def validate_bpm_entry(new_value):
         """Erlaubt nur Zahlen, Punkt und Komma im BPM-Eingabefeld."""
-        if new_value == "":
+        if not new_value:
             return True
         # Erlaube Zahlen, einen Punkt oder ein Komma
         for char in new_value:

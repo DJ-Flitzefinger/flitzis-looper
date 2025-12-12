@@ -1,4 +1,5 @@
 """Volume control for flitzis_looper.
+
 Handles master volume and multi-loop toggle functionality.
 """
 
@@ -38,8 +39,8 @@ def on_master_volume_change(val, volume_label):
         master_amp.value = volume
         volume_percent = int(volume * 100)
         volume_label.config(text=f"Master Volume {volume_percent}%")
-    except Exception as e:
-        logger.exception("Error setting master volume: %s", e)
+    except Exception:
+        logger.exception("Error setting master volume")
 
 
 def reset_master_volume(master_volume_slider):
@@ -53,6 +54,7 @@ def reset_master_volume(master_volume_slider):
 
 def toggle_multi_loop(multi_loop_btn, callbacks):
     """Toggle Multi-Loop Modus.
+
     Wenn deaktiviert, werden alle Loops bis auf den letzten gestoppt.
 
     Args:

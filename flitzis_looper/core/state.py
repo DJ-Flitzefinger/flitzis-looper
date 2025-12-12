@@ -1,4 +1,5 @@
 """Zentraler State-Manager für flitzis_looper.
+
 Alle globalen Variablen werden hier verwaltet.
 """
 
@@ -29,7 +30,7 @@ COLOR_STEM_SELECTED = "#ff4444"  # Heller Rot wenn selektiert
 COLOR_STEM_GENERATING = "#ff8800"  # Orange während Generierung
 
 # ============== PRIVATE MODULE VARIABLES ==============
-_root = None
+_root: tk.Tk | None = None
 
 # Data structures
 _all_banks_data = {}
@@ -69,6 +70,7 @@ _speed_value = None
 # ============== INITIALIZATION ==============
 def init_state(root):
     """Initialisiert alle State-Variablen.
+
     Muss NACH root-Erstellung aufgerufen werden.
     """
     global \
@@ -93,7 +95,7 @@ def init_state(root):
 
 def init_banks():
     """Initialisiert all_banks_data Struktur."""
-    global _all_banks_data, _button_data
+    global _button_data
     for bank_id in range(1, NUM_BANKS + 1):
         _all_banks_data[bank_id] = {}
         for btn_id in range(1, GRID_SIZE * GRID_SIZE + 1):
@@ -202,6 +204,7 @@ def get_default_stems_data():
 
 def ensure_stems_structure(data):
     """Stellt sicher dass die Stems-Struktur vollständig ist.
+
     Behebt KeyErrors bei alten Daten oder nach fehlerhaftem Laden.
     """
     if "stems" not in data:
@@ -265,6 +268,7 @@ def get_all_banks_data():
 
 def get_button_data(btn_id=None):
     """Returns button data. If btn_id is None, returns the whole dictionary.
+
     If btn_id is given, returns the data for that button.
     """
     if btn_id is None:
@@ -286,6 +290,7 @@ def get_stem_indicators():
 
 def get_loaded_loops():
     """Gibt alle geladenen Loops zurück.
+
     HINWEIS: Gibt die tatsächliche Dict-Referenz zurück für Backward-Kompatibilität.
     Änderungen sollten über register_loaded_loop/unregister_loaded_loop erfolgen.
     """
@@ -319,6 +324,7 @@ def get_master_amp():
 # ============== DATA STRUCTURE SETTERS ==============
 def set_button_data_ref(bank_id):
     """Setzt _button_data auf die Referenz des angegebenen Banks.
+
     Wird bei Bank-Wechsel verwendet.
     """
     global _button_data

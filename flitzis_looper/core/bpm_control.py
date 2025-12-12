@@ -1,9 +1,12 @@
 """BPM and speed control for flitzis_looper.
+
 Handles BPM display, speed changes, and lock toggle functions.
 """
 
+import contextlib
 import logging
 import tkinter as tk
+from tkinter import simpledialog
 
 from flitzis_looper.audio.bpm import _detect_bpm_worker
 from flitzis_looper.core.state import (
@@ -56,8 +59,6 @@ def detect_bpm_async(filepath, button_id, loop, callbacks):
             - update_button_label: Callback zum Aktualisieren des Button-Labels
             - save_config_async: Callback zum asynchronen Speichern der Config
     """
-    from tkinter import simpledialog
-
     root = get_root()
     button_data = get_button_data()
 
@@ -207,23 +208,20 @@ def on_speed_change(val, widgets, callbacks):
                     loop.set_speed(new_speed)
 
                 # STEMS: Bei Speed-Änderung Caches invalidieren und ggf. neu aufbauen
-                if data["stems"]["available"]:
-                    if data["stems"]["cached_speed"] != new_speed:
-                        callbacks["invalidate_stem_caches"](btn_id)
-                        # Bei aktivem Stem-Mix: Player neu erstellen
-                        if data["active"] and any(data["stems"]["states"].values()):
-                            callbacks["apply_stem_mix"](btn_id)
+                if data["stems"]["available"] and data["stems"]["cached_speed"] != new_speed:
+                    callbacks["invalidate_stem_caches"](btn_id)
+                    # Bei aktivem Stem-Mix: Player neu erstellen
+                    if data["active"] and any(data["stems"]["states"].values()):
+                        callbacks["apply_stem_mix"](btn_id)
 
             except (ValueError, ZeroDivisionError, AttributeError):
                 pass  # Ungültige Werte ignorieren
 
     update_bpm_display_once(widgets["bpm_display"])
 
-    # Reset-Button Stil aktualisieren
-    try:
+    # Reset-Button Stil aktualisieren (existiert evtl. noch nicht beim Start)
+    with contextlib.suppress(NameError, KeyError):
         widgets["update_reset_button_style"]()
-    except (NameError, KeyError):
-        pass  # Button existiert noch nicht beim Start
 
 
 def reset_pitch(widgets):
@@ -240,6 +238,7 @@ def reset_pitch(widgets):
 
 def adjust_bpm_by_delta(delta_bpm, widgets, callbacks):
     """Passt die BPM um einen festen Wert an.
+
     Nutzt die gleiche Logik wie die manuelle BPM-Eingabe.
 
     Args:
@@ -256,7 +255,7 @@ def adjust_bpm_by_delta(delta_bpm, widgets, callbacks):
     try:
         # OPTIMIERUNG: Zuerst in loaded_loops nach aktivem Loop suchen
         active_loop_bpm = None
-        for (bank_id, btn_id), loop in loaded_loops.items():
+        for bank_id, btn_id in loaded_loops:
             data = all_banks_data[bank_id][btn_id]
             if data["active"] and data["bpm"]:
                 active_loop_bpm = data["bpm"]
@@ -286,7 +285,7 @@ def adjust_bpm_by_delta(delta_bpm, widgets, callbacks):
         speed_value.set(required_speed)
 
         # OPTIMIERUNG: Nur loaded_loops aktualisieren
-        for (bank_id, btn_id), loop in loaded_loops.items():
+        for loop in loaded_loops.values():
             loop.set_speed(required_speed)
 
         # BPM-Display und Master-BPM-Feld aktualisieren
@@ -300,8 +299,8 @@ def adjust_bpm_by_delta(delta_bpm, widgets, callbacks):
 
         # Reset-Button Farbe IMMER am Ende aktualisieren
         widgets["update_reset_button_style"]()
-    except Exception as e:
-        logger.exception("Error adjusting BPM: %s", e)
+    except Exception:
+        logger.exception("Error adjusting BPM")
 
 
 def toggle_key_lock(key_lock_btn):
@@ -396,7 +395,7 @@ def update_speed_from_master_bpm(bpm_entry, widgets):
 
         # OPTIMIERUNG: Zuerst in loaded_loops nach aktivem Loop suchen
         active_loop_bpm = None
-        for (bank_id, btn_id), loop in loaded_loops.items():
+        for bank_id, btn_id in loaded_loops:
             data = all_banks_data[bank_id][btn_id]
             if data["active"] and data["bpm"]:
                 active_loop_bpm = data["bpm"]
@@ -407,7 +406,7 @@ def update_speed_from_master_bpm(bpm_entry, widgets):
             speed_value.set(required_speed)
             widgets["speed_slider"].set(max(0.5, min(2.0, required_speed)))
             # OPTIMIERUNG: Nur loaded_loops aktualisieren
-            for (bank_id, btn_id), loop in loaded_loops.items():
+            for loop in loaded_loops.values():
                 loop.set_speed(required_speed)
             widgets["update_reset_button_style"]()
 
@@ -418,6 +417,7 @@ def update_speed_from_master_bpm(bpm_entry, widgets):
 
 def validate_bpm_entry(new_value):
     """Validiert Eingaben im BPM-Eingabefeld.
+
     Erlaubt nur Zahlen, Punkt und Komma.
 
     Args:
@@ -426,7 +426,7 @@ def validate_bpm_entry(new_value):
     Returns:
         True wenn gültig, False sonst
     """
-    if new_value == "":
+    if not new_value:
         return True
     # Erlaube Zahlen, einen Punkt oder ein Komma
     for char in new_value:

@@ -1,4 +1,5 @@
 """Stem Separation for flitzis_looper.
+
 Uses demucs for high-quality audio source separation.
 
 IMPORTANT: Stems can only be generated while the loop is stopped!
@@ -13,6 +14,8 @@ from tkinter import messagebox
 import numpy as np
 import torch
 import torchaudio
+from demucs.apply import apply_model
+from demucs.pretrained import get_model
 
 from flitzis_looper.core.state import (
     STEM_NAMES,
@@ -31,6 +34,7 @@ def generate_stems(
     save_config_async_callback,
 ):
     """Generiert Stems für einen Loop im Hintergrund.
+
     Verwendet demucs für hochwertige Audio-Separation.
 
     WICHTIG: Stems können nur bei gestopptem Loop generiert werden!
@@ -115,10 +119,6 @@ def generate_stems(
 
     def do_generate():
         try:
-            # Import demucs here to avoid import errors if not installed
-            from demucs.apply import apply_model
-            from demucs.pretrained import get_model
-
             loop = data.get("pyo")
             if not loop or loop._audio_data is None:
                 msg = "Audio data not loaded"
@@ -201,25 +201,15 @@ def generate_stems(
 
             schedule_gui_update(update_gui)
 
-        except ImportError:
+        except Exception as err:
+            str_err = str(err)
 
             def show_error():
                 data["stems"]["generating"] = False
                 buttons[button_id].config(bg=original_bg)
-                messagebox.showerror(
-                    "Missing Dependencies",
-                    f"Please install required packages:\npip install demucs torch torchaudio\n\nError: {e}",
-                )
+                messagebox.showerror("Stem Generation Failed", f"Error: {str_err}")
 
-            schedule_gui_update(show_error)
-        except Exception:
-
-            def show_error():
-                data["stems"]["generating"] = False
-                buttons[button_id].config(bg=original_bg)
-                messagebox.showerror("Stem Generation Failed", f"Error: {e}")
-                logger.error(f"Stem generation failed: {e}")
-
+            logger.error(f"Stem generation failed: {err}")
             schedule_gui_update(show_error)
 
     io_executor.submit(do_generate)
@@ -232,6 +222,7 @@ def delete_stems(
     save_config_async_callback,
 ):
     """Löscht alle Stems eines Loops und gibt RAM frei.
+
     WICHTIG: Explizit alle Referenzen auf None setzen für Garbage Collection!
 
     Args:

@@ -1,4 +1,5 @@
 """Pitch Shifting and Caching for flitzis_looper stems.
+
 Handles pitch correction for stems when Key Lock is enabled.
 
 Uses pedalboard for high-quality pitch shifting.
@@ -67,6 +68,7 @@ def _create_pitched_stem_cache(button_id, stem, speed):
 
 def precache_pitched_stems_if_needed(button_id):
     """Pre-cached gepitchte Stems für latenzfreies Umschalten.
+
     Wird bei Rechtsklick-Precache aufgerufen.
 
     This allows instant switching between stems without audible artifacts

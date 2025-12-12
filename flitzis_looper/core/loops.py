@@ -1,4 +1,5 @@
 """Loop control for flitzis_looper.
+
 Handles loop triggering, stopping, loading, and unloading.
 """
 
@@ -8,6 +9,8 @@ import logging
 import os
 import shutil
 from tkinter import filedialog, messagebox
+
+from pyo import Sig
 
 from flitzis_looper.core.state import (
     COLOR_BTN_ACTIVE,
@@ -104,8 +107,6 @@ def trigger_loop(button_id, callbacks):
             - stop_stem_players: Callback zum Stoppen der Stem-Player
             - _cleanup_stem_players: Callback zum Aufräumen der Stem-Player
     """
-    from pyo import Sig
-
     button_data = get_button_data()
     buttons = get_buttons()
     all_banks_data = get_all_banks_data()
@@ -167,7 +168,8 @@ def trigger_loop(button_id, callbacks):
             # Der PyoLoop wird NICHT gestartet (verhindert Dopplung)
             if stems_available:
                 # WICHTIG: PyoLoop-Objekte (amp, speed) initialisieren BEVOR sie verwendet werden!
-                # Ohne das ist loop.amp = None → ArithmeticError bei Multiplikation in initialize_stem_players()
+                # Ohne das ist loop.amp = None → ArithmeticError bei Multiplikation
+                # in initialize_stem_players()
                 loop._ensure_player()
 
                 # PyoLoop stumm schalten
@@ -205,8 +207,8 @@ def trigger_loop(button_id, callbacks):
             # STEMS: Stem-Buttons aktualisieren
             callbacks["update_stem_buttons_state"]()
 
-    except Exception as e:
-        logger.exception("Error triggering loop %s: %s", button_id, e)
+    except Exception:
+        logger.exception("Error triggering loop %s", button_id)
 
 
 def stop_loop(button_id, callbacks):
@@ -283,8 +285,8 @@ def stop_loop(button_id, callbacks):
                     schedule_gui_update(restore_color)
 
                 io_executor.submit(do_precache)
-    except Exception as e:
-        logger.exception("Error in stop_loop %s: %s", button_id, e)
+    except Exception:
+        logger.exception("Error in stop_loop %s", button_id)
 
 
 def load_loop(button_id, callbacks):
@@ -322,10 +324,9 @@ def load_loop(button_id, callbacks):
         def background_load():
             try:
                 if old_file_path and os.path.exists(old_file_path):
-                    try:
+                    # Datei evtl. in Verwendung oder nicht löschbar
+                    with contextlib.suppress(OSError):
                         os.remove(old_file_path)
-                    except OSError:
-                        pass  # Datei in Verwendung oder nicht löschbar
                 original_name = os.path.basename(filepath)
                 dest_path = os.path.join("loops", original_name)
                 base, ext = os.path.splitext(original_name)
@@ -370,8 +371,8 @@ def load_loop(button_id, callbacks):
                 schedule_gui_update(lambda: buttons[button_id].config(text=f"{button_id}"))
 
         io_executor.submit(background_load)
-    except Exception as e:
-        logger.exception("Error loading loop: %s", e)
+    except Exception:
+        logger.exception("Error loading loop:")
 
 
 def unload_loop(button_id, callbacks):
@@ -409,13 +410,12 @@ def unload_loop(button_id, callbacks):
         button_data[button_id]["active"] = False
         buttons[button_id].config(bg=COLOR_BTN_INACTIVE, fg=COLOR_TEXT)
         if file_path and os.path.exists(file_path):
-            try:
+            # Datei evtl. in Verwendung oder nicht löschbar
+            with contextlib.suppress(OSError):
                 os.remove(file_path)
-            except OSError:
-                pass  # Datei in Verwendung oder nicht löschbar
         button_data[button_id] = get_default_button_data()
         buttons[button_id].config(text=f"{button_id}")
         callbacks["update_stem_buttons_state"]()
         callbacks["save_config_async"]()
-    except Exception as e:
-        logger.exception("Error unloading: %s", e)
+    except Exception:
+        logger.exception("Error unloading")

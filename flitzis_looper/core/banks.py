@@ -1,4 +1,5 @@
 """Bank and button management for flitzis_looper.
+
 Handles bank switching, button label updates, and stem indicators.
 """
 
@@ -126,6 +127,7 @@ def update_button_label(button_id):
 
 def update_stem_indicator(button_id):
     """Aktualisiert den Stem-Indikator (kleines S-Quadrat) für einen Button.
+
     - Ausgegraut wenn keine Stems
     - Orange während Generierung
     - Rot wenn Stems verfügbar
@@ -169,6 +171,7 @@ def update_all_stem_indicators():
 
 def select_stems_button(button_id, update_stem_buttons_state_callback=None):
     """Selektiert einen Button für die Stem-Kontrolle.
+
     Bei MULTI LOOP kann man damit zwischen verschiedenen Tracks wechseln.
 
     Args:

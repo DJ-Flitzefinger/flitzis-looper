@@ -1,4 +1,5 @@
 """Stem Player Engine for flitzis_looper.
+
 Handles stem player initialization, synchronization, and gain control.
 
 ARCHITECTURE:
@@ -11,7 +12,6 @@ ARCHITECTURE:
 
 import builtins
 import contextlib
-import os
 import tempfile
 import time
 
@@ -32,6 +32,7 @@ from flitzis_looper.utils.logging import logger
 
 def update_stem_gains(button_id):
     """Aktualisiert die Gain-Werte basierend auf den Stem-States.
+
     Verwendet SigTo für click-freie Übergänge (10ms Fade).
     """
     button_data = get_button_data()
@@ -53,6 +54,7 @@ def update_stem_gains(button_id):
 
 def update_stem_eq(button_id, low, mid, high):
     """Aktualisiert die EQ-Werte für die Stem-Player.
+
     Wird aufgerufen wenn der EQ-Regler bewegt wird.
     """
     button_data = get_button_data()
@@ -79,7 +81,8 @@ def update_stem_eq(button_id, low, mid, high):
 
 
 def _build_stem_mix_and_eq(button_id, loop, all_players):
-    """Gemeinsame Hilfsfunktion für Stem-Player:
+    """Gemeinsame Hilfsfunktion für Stem-Player.
+
     - Mischt alle Stem-Player
     - Wendet die EQ-Kette an
     - Verknüpft Button-Gain und Master-Gain
@@ -115,36 +118,36 @@ def _build_stem_mix_and_eq(button_id, loop, all_players):
 
 def _create_main_table_from_audio(button_id, loop, main_audio):
     """Hilfsfunktion für die Erstellung der Main-Table aus einem Audio-Array.
+
     Schreibt das Ergebnis nach data["stems"]["main_table"].
     """
     button_data = get_button_data()
     data = button_data[button_id]
-    temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-    temp_path = temp_file.name
-    temp_file.close()
-    sf.write(temp_path, main_audio, loop._audio_sr)
-    data["stems"]["main_table"] = SndTable(temp_path)
-    with contextlib.suppress(builtins.BaseException):
-        os.unlink(temp_path)
+    with tempfile.NamedTemporaryFile(suffix=".wav") as temp_file:
+        temp_path = temp_file.name
+        temp_file.close()
+        sf.write(temp_path, main_audio, loop._audio_sr)
+        data["stems"]["main_table"] = SndTable(temp_path)
 
 
 def _create_stem_table_from_audio(button_id, stem, audio_data, loop):
     """Hilfsfunktion für die Erstellung einer Stem-Table aus einem Audio-Array.
+
     Schreibt das Ergebnis nach data["stems"]["tables"][stem].
     """
     button_data = get_button_data()
     data = button_data[button_id]
-    temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-    temp_path = temp_file.name
-    temp_file.close()
-    sf.write(temp_path, audio_data, loop._audio_sr)
-    data["stems"]["tables"][stem] = SndTable(temp_path)
-    with contextlib.suppress(builtins.BaseException):
-        os.unlink(temp_path)
+    with tempfile.NamedTemporaryFile(suffix=".wav") as temp_file:
+        temp_path = temp_file.name
+        temp_file.close()
+        sf.write(temp_path, audio_data, loop._audio_sr)
+        data["stems"]["tables"][stem] = SndTable(temp_path)
 
 
 def _select_stem_audio(button_id, stem, use_key_lock, current_speed):
-    """Wählt die zu verwendenden Stem-Audiodaten (dry vs. gepitcht) abhängig von Key Lock
+    """Wählt Stem-Audiodaten.
+
+    Wählt die zu verwendenden Stem-Audiodaten (dry vs. gepitcht) abhängig von Key Lock
     und aktueller Geschwindigkeit. Gibt None zurück, wenn kein Audio verfügbar ist.
     """
     # Import here to avoid circular imports
@@ -167,6 +170,7 @@ def _select_stem_audio(button_id, stem, use_key_lock, current_speed):
 
 def _select_main_audio_for_stems(loop, use_key_lock, current_speed, loop_start_time, loop_end_time):
     """Wählt das Haupt-Audiosegment für Stems, abhängig von Key Lock und Geschwindigkeit.
+
     Nutzt nach Möglichkeit den gepitchten Cache, fällt sonst auf den geschnittenen
     Loop-Ausschnitt zurück. Gibt None zurück, wenn kein Audio verfügbar ist.
     """
@@ -232,9 +236,12 @@ def initialize_stem_players(button_id):
         if data["stems"]["cached_speed"] != current_speed:
             need_new_tables = True
     # Ohne Key Lock: Prüfe ob wir von Key Lock kommen (Speed hat sich effektiv geändert)
-    elif data["stems"]["cached_speed"] is not None and data["stems"]["cached_speed"] != 1.0:
-        if not use_key_lock:  # Wir sind jetzt ohne Key Lock
-            need_new_tables = True
+    elif (
+        data["stems"]["cached_speed"] is not None
+        and data["stems"]["cached_speed"] != 1.0
+        and not use_key_lock
+    ):  # Wir sind jetzt ohne Key Lock
+        need_new_tables = True
 
     # Prüfe ob Main-Table existiert
     if data["stems"].get("main_table") is None:
@@ -242,10 +249,9 @@ def initialize_stem_players(button_id):
 
     # Prüfe ob alle Stem-Tables existieren
     for stem in STEM_NAMES:
-        if data["stems"]["dry"].get(stem) is not None:
-            if data["stems"]["tables"].get(stem) is None:
-                need_new_tables = True
-                break
+        if data["stems"]["dry"].get(stem) is not None and data["stems"]["tables"].get(stem) is None:
+            need_new_tables = True
+            break
 
     # === CLEANUP: Alte Player stoppen (aber Tables behalten!) ===
     _cleanup_stem_players(button_id)
@@ -586,6 +592,7 @@ def _activate_stem_players(button_id):
 
 def _restart_stem_phasor(button_id):
     """FAST PATH für Retrigger: Aktualisiert nur die Phasor-Frequenz.
+
     Die Stems laufen "im Takt" weiter - das ist für DJ-Looper erwünscht!
 
     Bei Retrigger wird der Loop von vorne gestartet, aber die Stems
@@ -619,6 +626,7 @@ def _restart_stem_phasor(button_id):
 
 def apply_stem_mix(button_id):
     """Wendet den aktuellen Stem-Mix an.
+
     Initialisiert Stem-Player falls nötig und aktualisiert Gains.
     """
     button_data = get_button_data()

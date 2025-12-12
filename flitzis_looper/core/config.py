@@ -1,10 +1,12 @@
 """Configuration management for flitzis_looper.
+
 Handles saving and loading configuration to/from JSON file.
 """
 
 import json
 import logging
 import os
+import tkinter as tk
 
 from flitzis_looper.core.state import (
     NUM_BANKS,
@@ -26,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 def save_config():
     """Speichert die aktuelle Konfiguration in die config.json Datei.
+
     Wird typischerweise über save_config_async() aufgerufen.
     """
     try:
@@ -57,16 +60,15 @@ def save_config():
                     }
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
-    except Exception as e:
-        logger.exception("Error saving config: %s", e)
+    except Exception:
+        logger.exception("Error saving config")
 
 
 def save_config_async():
     """OPTIMIERUNG: Debounced config save - wartet 2 Sekunden vor dem Speichern.
+
     Verhindert zu häufiges Speichern bei schnellen Änderungen.
     """
-    import tkinter as tk
-
     root = get_root()
     save_config_timer = get_save_config_timer()
 
@@ -82,8 +84,6 @@ def save_config_async():
 
 def save_config_immediate():
     """Speichert sofort ohne Debouncing (für wichtige Änderungen wie beim Schließen)."""
-    import tkinter as tk
-
     root = get_root()
     save_config_timer = get_save_config_timer()
 
@@ -97,12 +97,12 @@ def save_config_immediate():
     io_executor.submit(save_config)
 
 
-def load_config(register_loaded_loop_callback, PyoLoop_class):
+def load_config(register_loaded_loop_callback, pyoloop_class):
     """Lädt die Konfiguration aus der config.json Datei.
 
     Args:
         register_loaded_loop_callback: Funktion zum Registrieren geladener Loops
-        PyoLoop_class: Die PyoLoop-Klasse zum Erstellen neuer Loop-Objekte
+        pyoloop_class: Die PyoLoop-Klasse zum Erstellen neuer Loop-Objekte
     """
     all_banks_data = get_all_banks_data()
     master_volume = get_master_volume()
@@ -136,7 +136,7 @@ def load_config(register_loaded_loop_callback, PyoLoop_class):
                         # Stems-Struktur sicherstellen (frisch, nicht aus Config)
                         ensure_stems_structure(data)
 
-                        loop = PyoLoop_class()
+                        loop = pyoloop_class()
                         if loop.load(data["file"], data["loop_start"], data["loop_end"]):
                             loop.set_gain(data["gain_db"])
                             # Apply EQ settings
@@ -152,5 +152,5 @@ def load_config(register_loaded_loop_callback, PyoLoop_class):
         # button_data auf aktuelle Bank setzen
         set_button_data_ref(current_bank.get())
 
-    except Exception as e:
-        logger.exception("Error loading config: %s", e)
+    except Exception:
+        logger.exception("Error loading config")

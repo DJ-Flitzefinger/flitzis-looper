@@ -34,13 +34,15 @@ from flitzis_looper.utils.logging import logger
 from flitzis_looper.utils.threading import io_executor, schedule_gui_update
 
 
-class WaveformEditor:
+class WaveformEditor:  # noqa: PLR0904
     """Waveform Editor Dialog für Loop-Punkte setzen und Intro-Marker."""
 
     def __init__(
         self, parent, button_id, update_button_label_callback=None, save_config_async_callback=None
     ):
-        """Args:
+        """Init function.
+
+        Args:
         parent: Tk Parent Widget (root)
         button_id: ID des zu bearbeitenden Buttons
         update_button_label_callback: Callback für Label-Updates
@@ -116,10 +118,11 @@ class WaveformEditor:
             self.window.configure(bg=COLOR_BG)
             self.window.geometry("900x650")
             self.window.protocol("WM_DELETE_WINDOW", self.on_window_close)
-            return True
         except tk.TclError as e:
             logger.error(f"Error creating window: {e}")
             return False
+
+        return True
 
     def show_loading_message(self):
         self.loading_label = tk.Label(
@@ -182,8 +185,9 @@ class WaveformEditor:
                 schedule_gui_update(
                     lambda: self.on_load_complete(audio_data, sample_rate, duration, waveform_cache)
                 )
-            except Exception:
-                schedule_gui_update(lambda: self.on_load_error(str(e)))
+            except Exception as e:
+                err_msg = str(e)
+                schedule_gui_update(lambda: self.on_load_error(err_msg))
 
         io_executor.submit(do_load)
 
@@ -419,7 +423,7 @@ class WaveformEditor:
         self.ax.set_xlim(self.zoom_start, self.zoom_end)
         self.ax.set_xlabel("Time (s)", color=COLOR_TEXT)
         self.ax.tick_params(colors=COLOR_TEXT)
-        self.ax.grid(True, alpha=0.3)
+        self.ax.grid(visible=True, alpha=0.3)
         self.fig.tight_layout()
         self.canvas.draw_idle()
 
@@ -439,7 +443,8 @@ class WaveformEditor:
                 intro_text = f" | Intro: {intro_start:.3f}s ({intro_bars:.3g} bars)"
 
         self.time_label.config(
-            text=f"Loop: {self.loop_start:.3f}s - {self.loop_end:.3f}s | Duration: {loop_dur:.3f}s | {bars:.1f} bars{intro_text}"
+            text=f"Loop: {self.loop_start:.3f}s - {self.loop_end:.3f}s | "
+            f"Duration: {loop_dur:.3f}s | {bars:.1f} bars{intro_text}"
         )
 
     def get_bpm(self):
@@ -543,12 +548,17 @@ class WaveformEditor:
         """Erhöht die Intro-Bars (Custom: 1/8 Bar Schritte, Normal: 1 Bar Schritte)."""
         button_data = get_button_data()
         current = self.intro_bars.get()
-        if self.intro_custom_mode.get():
-            # Custom: 1/8 Bar Schritte (0.125)
-            new_val = min(64, current + 0.125)
-        else:
-            # Normal: 1 Bar Schritte
-            new_val = min(64, current + 1)
+        new_val = min(
+            64,
+            current
+            + (
+                # Custom: 1/8 Bar Schritte (0.125)
+                0.125
+                if self.intro_custom_mode.get()
+                # Normal: 1 Bar Schritte
+                else 1
+            ),
+        )
         self.intro_bars.set(new_val)
         button_data[self.button_id]["intro_bars"] = new_val
         self.update_intro_display()

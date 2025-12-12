@@ -13,6 +13,7 @@ OPTIMIZATION FOR KEY LOCK (RAM-based):
 import builtins
 import contextlib
 import os
+import sys
 import tempfile
 
 import numpy as np
@@ -28,6 +29,7 @@ from flitzis_looper.utils.threading import io_executor, schedule_gui_update
 
 class PyoLoop:
     """Audio-Loop-Player mit Key Lock und EQ-Unterstützung.
+
     Verwendet Pedalboard/Rubberband für hochwertiges Pitch-Shifting.
 
     OPTIMIERUNG FÜR KEY LOCK (RAM-basiert):
@@ -116,10 +118,11 @@ class PyoLoop:
             self._audio_data, self._audio_sr = sf.read(path)
 
             self._is_loaded = True
-            return True
         except Exception as e:
             logger.error(f"Error loading: {e}")
             return False
+
+        return True
 
     def load_async(self, path, loop_start=0.0, loop_end=None, callback=None):
         """Asynchrones Laden."""
@@ -132,7 +135,7 @@ class PyoLoop:
                 self.stop()
                 if not os.path.exists(path):
                     if callback:
-                        schedule_gui_update(lambda: callback(False))
+                        schedule_gui_update(lambda: callback(success=False))
                     self._loading = False
                     return
                 self.path = path
@@ -155,14 +158,14 @@ class PyoLoop:
                     self._is_loaded = True
                     self._loading = False
                     if callback:
-                        callback(True)
+                        callback(success=True)
 
                 schedule_gui_update(finish_load)
             except Exception as e:
                 logger.debug(f"Async load failed: {e}")
                 self._loading = False
                 if callback:
-                    schedule_gui_update(lambda: callback(False))
+                    schedule_gui_update(lambda: callback(success=False))
 
         io_executor.submit(do_load)
 
@@ -175,10 +178,11 @@ class PyoLoop:
         try:
             self._init_pyo_objects()
             self._create_player()
-            return self.player is not None
         except Exception as e:
             logger.error(f"Error ensuring player: {e}")
             return False
+        else:
+            return self.player is not None
 
     def _create_player(self):
         """Erstellt den Audio-Player.
@@ -267,6 +271,7 @@ class PyoLoop:
 
     def _create_pitched_player(self):
         """Erstellt einen Player mit pitch-korrigiertem Audio.
+
         Verwendet Pedalboard/Rubberband für hohe Qualität.
 
         OPTIMIERUNG (RAM-basiert):
@@ -326,13 +331,12 @@ class PyoLoop:
             # Player aus Cache erstellen
             self._create_pitched_player_from_cache()
 
-        except ImportError:
-            logger.error("Pedalboard nicht installiert! Installiere mit: pip install pedalboard")
         except Exception as e:
             logger.error(f"Error creating pitched player: {e}")
 
     def _create_pitched_player_from_cache(self):
         """Erstellt den pitched player aus dem gecachten Audio im RAM.
+
         Diese Methode ist SCHNELL weil:
         1. Kein Pitch-Shifting nötig ist (Cache wird verwendet)
         2. Nur eine temporäre Datei geschrieben und SndTable geladen wird
@@ -352,18 +356,14 @@ class PyoLoop:
             # Temporäre Datei aus RAM-Cache erstellen (für Stereo-Unterstützung)
 
             # Schreibe in BytesIO und dann in tempfile
-            temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-            temp_path = temp_file.name
-            temp_file.close()
+            with tempfile.NamedTemporaryFile(suffix=".wav") as temp_file:
+                temp_path = temp_file.name
+                temp_file.close()
 
-            sf.write(temp_path, self._pitched_audio_cache, self._audio_sr)
+                sf.write(temp_path, self._pitched_audio_cache, self._audio_sr)
 
-            # SndTable laden (unterstützt Stereo!)
-            self._pitched_table = SndTable(temp_path)
-
-            # Temporäre Datei sofort löschen (Daten sind jetzt in SndTable)
-            with contextlib.suppress(builtins.BaseException):
-                os.unlink(temp_path)
+                # SndTable laden (unterstützt Stereo!)
+                self._pitched_table = SndTable(temp_path)
 
             table_dur = self._pitched_table.getDur()
             base_freq = 1.0 / table_dur if table_dur > 0 else 1.0
@@ -388,6 +388,7 @@ class PyoLoop:
 
     def precache_pitched_audio(self):
         """Pre-cached das pitch-shifted Audio für schnelles Triggern.
+
         Wird aufgerufen wenn auf einen gestoppten Loop mit Rechtsklick geklickt wird.
         Nur aktiv wenn Key Lock aktiviert ist.
 
@@ -441,10 +442,11 @@ class PyoLoop:
             self._pitched_audio_cache = pitched_audio.copy()
             self._cached_speed = self._pending_speed
 
-            return True
         except Exception as e:
             logger.error(f"Error pre-caching pitched audio: {e}")
             return False
+        else:
+            return True
 
     def _stop_all_objects(self):
         """Stoppt alle pyo-Objekte."""
@@ -459,16 +461,14 @@ class PyoLoop:
 
         for obj in objects_to_stop:
             if obj:
-                try:
+                # Objekt evtl. bereits gestoppt oder ungültig
+                with contextlib.suppress(Exception):
                     obj.stop()
-                except Exception:
-                    pass  # Objekt bereits gestoppt oder ungültig
 
         if self.follower:
-            try:
+            # Follower evtl. bereits gestoppt
+            with contextlib.suppress(Exception):
                 self.follower.stop()
-            except Exception:
-                pass  # Follower bereits gestoppt
             self.follower = None
 
         self.player = None
@@ -549,6 +549,7 @@ class PyoLoop:
 
     def _update_stems_key_lock(self, key_lock_enabled):
         """Aktualisiert die Stems wenn Key Lock ein- oder ausgeschaltet wird.
+
         Bei Key Lock: Gepitchte Versionen verwenden
         Ohne Key Lock: Dry Versionen verwenden.
 
@@ -580,7 +581,6 @@ class PyoLoop:
             # Stems müssen neu initialisiert werden
             # These functions are from the main application, accessed via globals
             # They will be properly modularized in Phase 4
-            import builtins
 
             # Check if functions are available in the global context
             stop_stem_players = getattr(builtins, "stop_stem_players", None)
@@ -589,8 +589,6 @@ class PyoLoop:
 
             # Try to get from __main__ if not in builtins
             if stop_stem_players is None:
-                import sys
-
                 main_module = sys.modules.get("__main__")
                 if main_module:
                     stop_stem_players = getattr(main_module, "stop_stem_players", None)
@@ -611,6 +609,7 @@ class PyoLoop:
 
     def set_stem_mute(self, mute_signal):
         """Setzt den Stem-Mute Multiplikator.
+
         Wird verwendet um den Haupt-Loop stumm zu schalten wenn Stems aktiv sind.
         mute_signal: pyo Sig oder SigTo Objekt (0=stumm, 1=normal).
         """
@@ -709,6 +708,7 @@ class PyoLoop:
 
     def set_speed(self, value):
         """Setzt die Abspielgeschwindigkeit.
+
         Aktualisiert ALLE Player: PyoLoop, Stems, Master-Phasor.
         """
         try:
@@ -745,6 +745,7 @@ class PyoLoop:
 
     def _update_stems_speed(self, new_speed):
         """Aktualisiert die Speed für alle Stem-Player.
+
         Wird von set_speed aufgerufen wenn sich die Geschwindigkeit ändert.
         """
         try:
@@ -787,6 +788,7 @@ class PyoLoop:
 
     def _schedule_stem_repitch(self, button_id, new_speed):
         """Plant das Neu-Pitchen der Stems im Hintergrund.
+
         Wird aufgerufen wenn Key Lock aktiv ist und sich die Speed ändert.
         """
         try:
@@ -836,27 +838,24 @@ class PyoLoop:
                                 old_player.stop()
 
                         # Neue Table erstellen
-                        temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-                        temp_path = temp_file.name
-                        temp_file.close()
+                        with tempfile.NamedTemporaryFile(suffix=".wav") as temp_file:
+                            temp_path = temp_file.name
+                            temp_file.close()
 
-                        sf.write(temp_path, pitched_audio, self._audio_sr)
+                            sf.write(temp_path, pitched_audio, self._audio_sr)
 
-                        new_table = SndTable(temp_path)
+                            new_table = SndTable(temp_path)
 
-                        # Neuen Player erstellen
-                        stem_gain = data["stems"]["gains"].get(stem)
-                        if stem_gain:
-                            new_player = Pointer(
-                                table=new_table, index=master_phasor, mul=stem_gain * master_amp
-                            )
-                            new_player.out()
+                            # Neuen Player erstellen
+                            stem_gain = data["stems"]["gains"].get(stem)
+                            if stem_gain:
+                                new_player = Pointer(
+                                    table=new_table, index=master_phasor, mul=stem_gain * master_amp
+                                )
+                                new_player.out()
 
-                            data["stems"]["players"][stem] = new_player
-                            data["stems"]["tables"][stem] = new_table
-
-                        with contextlib.suppress(builtins.BaseException):
-                            os.unlink(temp_path)
+                                data["stems"]["players"][stem] = new_player
+                                data["stems"]["tables"][stem] = new_table
 
                     # Main Player auch aktualisieren
                     if data["stems"].get("main_player"):
@@ -865,26 +864,25 @@ class PyoLoop:
 
                     # Main Audio neu pitchen
                     if self._pitched_audio_cache is not None:
-                        temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-                        temp_path = temp_file.name
-                        temp_file.close()
+                        with tempfile.NamedTemporaryFile(suffix=".wav") as temp_file:
+                            temp_path = temp_file.name
+                            temp_file.close()
 
-                        sf.write(temp_path, self._pitched_audio_cache, self._audio_sr)
+                            sf.write(temp_path, self._pitched_audio_cache, self._audio_sr)
 
-                        main_table = SndTable(temp_path)
-                        main_gain = data["stems"]["main_gain"]
+                            main_table = SndTable(temp_path)
+                            main_gain = data["stems"]["main_gain"]
 
-                        if main_gain:
-                            main_player = Pointer(
-                                table=main_table, index=master_phasor, mul=main_gain * master_amp
-                            )
-                            main_player.out()
+                            if main_gain:
+                                main_player = Pointer(
+                                    table=main_table,
+                                    index=master_phasor,
+                                    mul=main_gain * master_amp,
+                                )
+                                main_player.out()
 
-                            data["stems"]["main_player"] = main_player
-                            data["stems"]["main_table"] = main_table
-
-                        with contextlib.suppress(builtins.BaseException):
-                            os.unlink(temp_path)
+                                data["stems"]["main_player"] = main_player
+                                data["stems"]["main_table"] = main_table
 
                     data["stems"]["cached_speed"] = new_speed
 
@@ -933,15 +931,14 @@ class PyoLoop:
     def disable_level_meter(self):
         """Deaktiviert das Level-Metering."""
         if self.follower:
-            try:
+            # Follower evtl. bereits gestoppt
+            with contextlib.suppress(Exception):
                 self.follower.stop()
-            except Exception:
-                pass  # Follower bereits gestoppt
             self.follower = None
 
     def get_level_db(self):
         """Gibt den aktuellen Pegel in dB zurück."""
-        try:
+        with contextlib.suppress(Exception):
             source = (
                 self._pitched_player if (self._key_lock and self._pitched_player) else self.player
             )
@@ -949,6 +946,6 @@ class PyoLoop:
                 amp = self.follower.get()
                 if amp > 0.0001:
                     return 20 * np.log10(amp)
-            return -80.0
-        except Exception:
-            return -80.0  # Sicherer Fallback-Wert
+
+        # Sicherer Fallback-Wert
+        return -80.0
