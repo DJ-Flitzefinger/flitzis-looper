@@ -70,7 +70,8 @@ class LoopGridWidget(tk.Frame):
         open_context_menu = self._callbacks.get("open_context_menu")
         select_stems_button = self._callbacks.get("select_stems_button")
         update_stem_buttons_state = self._callbacks.get("update_stem_buttons_state")
-        loop_callbacks = self._callbacks.get("loop_callbacks", {})
+        loop_callbacks_obj: dict | Callable = self._callbacks.get("loop_callbacks", {})
+        loop_callbacks: dict = loop_callbacks_obj if isinstance(loop_callbacks_obj, dict) else {}
 
         for i in range(GRID_SIZE):
             for j in range(GRID_SIZE):

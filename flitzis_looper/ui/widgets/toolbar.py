@@ -76,6 +76,14 @@ class ToolbarWidget:
         self._master_volume = get_master_volume()
         self._master_bpm_value = get_master_bpm_value()
 
+        # Ensure variables are not None (should never happen in practice)
+        if self._speed_value is None:
+            raise RuntimeError("Speed value variable is not initialized")
+        if self._master_volume is None:
+            raise RuntimeError("Master volume variable is not initialized")
+        if self._master_bpm_value is None:
+            raise RuntimeError("Master BPM value variable is not initialized")
+
         self._create_right_frame()
         self._create_master_volume()
         self._create_multi_loop_button()
@@ -107,6 +115,9 @@ class ToolbarWidget:
         self._callbacks.get("on_speed_change")
         self._callbacks.get("apply_stem_mix")
         self._callbacks.get("invalidate_stem_caches")
+
+        # Assert that the variable is not None (it should never be after initialization)
+        assert self._speed_value is not None, "Speed value variable should not be None"
 
         speed_slider = tk.Scale(
             slider_reset_frame,
@@ -230,6 +241,9 @@ class ToolbarWidget:
         update_speed_from_bpm = self._callbacks.get("update_speed_from_master_bpm")
 
         bpm_validate_cmd = self._root.register(validate_bpm) if validate_bpm else None
+        # Assert that the variable is not None (it should never be after initialization)
+        assert self._master_bpm_value is not None, "Master BPM value variable should not be None"
+
         bpm_entry = tk.Entry(
             lock_frame,
             textvariable=self._master_bpm_value,
@@ -238,7 +252,7 @@ class ToolbarWidget:
             bg="#333",
             fg=COLOR_TEXT,
             validate="key" if bpm_validate_cmd else "none",
-            validatecommand=(bpm_validate_cmd, "%P") if bpm_validate_cmd else None,
+            validatecommand=(bpm_validate_cmd, "%P") if bpm_validate_cmd else (),
             insertbackground=COLOR_TEXT,
         )
         bpm_entry.pack()
@@ -279,6 +293,9 @@ class ToolbarWidget:
 
         on_volume_change = self._callbacks.get("on_master_volume_change")
         reset_volume = self._callbacks.get("reset_master_volume")
+
+        # Assert that the variable is not None (it should never be after initialization)
+        assert self._master_volume is not None, "Master volume variable should not be None"
 
         master_volume_slider = tk.Scale(
             volume_frame,
@@ -333,6 +350,8 @@ class ToolbarWidget:
         if reset_btn is None:
             return
 
+        # Assert that the variable is not None (it should never be after initialization)
+        assert self._speed_value is not None, "Speed value variable should not be None"
         current = self._speed_value.get()
         if current == 1.0 or abs(current - 1.0) < 0.001:
             reset_btn.config(
@@ -359,19 +378,31 @@ class ToolbarWidget:
     @property
     def bpm_display(self) -> tk.Label:
         """Gibt das BPM-Display-Label zurück."""
-        return self._widgets.get("bpm_display")
+        widget = self._widgets.get("bpm_display")
+        if widget is None:
+            raise RuntimeError("BPM display widget not initialized")
+        return widget
 
     @property
     def speed_slider(self) -> tk.Scale:
         """Gibt den Speed-Slider zurück."""
-        return self._widgets.get("speed_slider")
+        widget = self._widgets.get("speed_slider")
+        if widget is None:
+            raise RuntimeError("Speed slider widget not initialized")
+        return widget
 
     @property
     def reset_btn(self) -> tk.Button:
         """Gibt den Reset-Button zurück."""
-        return self._widgets.get("reset_btn")
+        widget = self._widgets.get("reset_btn")
+        if widget is None:
+            raise RuntimeError("Reset button widget not initialized")
+        return widget
 
     @property
     def master_volume_slider(self) -> tk.Scale:
         """Gibt den Master-Volume-Slider zurück."""
-        return self._widgets.get("master_volume_slider")
+        widget = self._widgets.get("master_volume_slider")
+        if widget is None:
+            raise RuntimeError("Master volume slider widget not initialized")
+        return widget

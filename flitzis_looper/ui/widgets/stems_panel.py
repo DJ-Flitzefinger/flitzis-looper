@@ -21,11 +21,19 @@ from flitzis_looper.core.state import (
 )
 
 
+class StemCanvas(tk.Canvas):
+    """Custom Canvas widget for stem buttons with temporary state tracking."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._temp_state: dict[str, bool] = {"right_held": False, "middle_held": False}
+
+
 class StemsPanelWidget(tk.Frame):
     """Widget für die Stem-Kontrolle.
 
     Attributes:
-        stem_buttons: Dict der Stem-Buttons {stem_name: tk.Canvas}
+        stem_buttons: Dict der Stem-Buttons {stem_name: StemCanvas}
         stop_stem_button: Der Stop-Stem-Button
     """
 
@@ -53,8 +61,8 @@ class StemsPanelWidget(tk.Frame):
         super().__init__(parent, bg=COLOR_BG, **kwargs)
 
         self._callbacks = callbacks
-        self._stem_buttons: dict[str, tk.Canvas] = {}
-        self._stop_stem_button: tk.Canvas | None = None
+        self._stem_buttons: dict[str, StemCanvas] = {}
+        self._stop_stem_button: StemCanvas | None = None
         self._button_data = get_button_data()
 
         self._create_stem_label()
@@ -79,7 +87,7 @@ class StemsPanelWidget(tk.Frame):
             btn.pack(side="left", padx=2)
             self._stem_buttons[stem] = btn
 
-    def _create_stem_button(self, stem_name: str, label: str) -> tk.Canvas:
+    def _create_stem_button(self, stem_name: str, label: str) -> StemCanvas:
         """Erstellt einen runden Toggle-Button für einen Stem.
 
         Args:
@@ -87,10 +95,10 @@ class StemsPanelWidget(tk.Frame):
             label: Anzeige-Label (z.B. "V")
 
         Returns:
-            Das erstellte Canvas-Widget
+            Das erstellte StemCanvas-Widget
         """
         size = 32  # Durchmesser
-        canvas = tk.Canvas(
+        canvas = StemCanvas(
             self,
             width=size,
             height=size,
@@ -120,8 +128,7 @@ class StemsPanelWidget(tk.Frame):
             tags="text",
         )
 
-        # Temporärer Zustand für Momentary-Aktionen
-        canvas._temp_state = {"right_held": False, "middle_held": False}
+        # Temporärer Zustand für Momentary-Aktionen ist bereits initialisiert in StemCanvas
 
         # Event Bindings
         canvas.bind("<Button-1>", lambda e, s=stem_name: self._on_left_click(s))
@@ -140,17 +147,19 @@ class StemsPanelWidget(tk.Frame):
     def _on_left_click(self, stem_name: str) -> None:
         """Linksklick: Toggle Stem."""
         on_stem_toggle = self._callbacks.get("on_stem_toggle")
-        stem_callbacks = self._callbacks.get("stem_callbacks", {})
+        stem_callbacks_obj: dict | Callable = self._callbacks.get("stem_callbacks", {})
+        stem_callbacks: dict = stem_callbacks_obj if isinstance(stem_callbacks_obj, dict) else {}
 
         if on_stem_toggle:
             on_stem_toggle(stem_name, stem_callbacks)
             self.update_state()
 
-    def _on_right_press(self, stem_name: str, canvas: tk.Canvas) -> None:
+    def _on_right_press(self, stem_name: str, canvas: StemCanvas) -> None:
         """Rechtsklick gedrückt: Temporär Solo."""
         get_active = self._callbacks.get("get_active_loop_with_stems")
         on_momentary = self._callbacks.get("on_stem_momentary_activate")
-        stem_callbacks = self._callbacks.get("stem_callbacks", {})
+        stem_callbacks_obj: dict | Callable = self._callbacks.get("stem_callbacks", {})
+        stem_callbacks: dict = stem_callbacks_obj if isinstance(stem_callbacks_obj, dict) else {}
 
         if get_active and get_active() is None:
             return
@@ -164,7 +173,7 @@ class StemsPanelWidget(tk.Frame):
         canvas.itemconfig("circle", fill=COLOR_BTN_ACTIVE, outline="#1a9a5a")
         canvas.itemconfig("text", fill=COLOR_TEXT_ACTIVE)
 
-    def _on_right_release(self, stem_name: str, canvas: tk.Canvas) -> None:
+    def _on_right_release(self, stem_name: str, canvas: StemCanvas) -> None:
         """Rechtsklick losgelassen: Solo aufheben."""
         if not canvas._temp_state["right_held"]:
             return
@@ -178,22 +187,27 @@ class StemsPanelWidget(tk.Frame):
 
         self.update_state()
 
-    def _on_middle_press(self, stem_name: str, canvas: tk.Canvas) -> None:
+    def _on_middle_press(self, stem_name: str, canvas: StemCanvas) -> None:
         """Mittelklick gedrückt: Temporär Mute."""
         get_active = self._callbacks.get("get_active_loop_with_stems")
-        self._callbacks.get("on_stem_momentary_activate")
-        self._callbacks.get("stem_callbacks", {})
+        on_momentary = self._callbacks.get("on_stem_momentary_activate")
+        stem_callbacks_obj: dict | Callable = self._callbacks.get("stem_callbacks", {})
+        stem_callbacks: dict = stem_callbacks_obj if isinstance(stem_callbacks_obj, dict) else {}
 
-        if get_active and get_active() is None:
+        if not get_active:
             return
 
         active_loop_id = get_active()
+        if active_loop_id is None:
+            return
         if active_loop_id is None:
             return
 
         canvas._temp_state["middle_held"] = True
 
         # Aktuellen State speichern
+        if self._button_data is None:
+            return
         data = self._button_data[active_loop_id]
         was_active = data["stems"]["states"].get(stem_name, False)
 
@@ -208,7 +222,7 @@ class StemsPanelWidget(tk.Frame):
         canvas.itemconfig("circle", fill="#2a2a2a", outline="#444")
         canvas.itemconfig("text", fill=COLOR_TEXT)
 
-    def _on_middle_release(self, stem_name: str, canvas: tk.Canvas) -> None:
+    def _on_middle_release(self, stem_name: str, canvas: StemCanvas) -> None:
         """Mittelklick losgelassen: Mute aufheben."""
         if not canvas._temp_state["middle_held"]:
             return
@@ -222,7 +236,7 @@ class StemsPanelWidget(tk.Frame):
 
         self.update_state()
 
-    def _on_enter(self, canvas: tk.Canvas) -> None:
+    def _on_enter(self, canvas: StemCanvas) -> None:
         """Mauszeiger betritt Button."""
         get_active = self._callbacks.get("get_active_loop_with_stems")
         if get_active and get_active():
@@ -233,7 +247,7 @@ class StemsPanelWidget(tk.Frame):
     def _create_stop_stem_button(self) -> None:
         """Erstellt den Stop-Stem Button."""
         size = 32
-        canvas = tk.Canvas(
+        canvas = StemCanvas(
             self,
             width=size,
             height=size,
@@ -263,9 +277,6 @@ class StemsPanelWidget(tk.Frame):
             tags="text",
         )
 
-        # Temporärer Zustand
-        canvas._temp_state = {"right_held": False}
-
         # Event Bindings
         canvas.bind("<Button-1>", lambda e: self._on_stop_left_click())
         canvas.bind("<ButtonPress-3>", lambda e: self._on_stop_right_press(canvas))
@@ -278,17 +289,19 @@ class StemsPanelWidget(tk.Frame):
     def _on_stop_left_click(self) -> None:
         """Linksklick auf Stop-Stem: Toggle."""
         on_toggle = self._callbacks.get("on_stop_stem_toggle")
-        stem_callbacks = self._callbacks.get("stem_callbacks", {})
+        stem_callbacks_obj: dict | Callable = self._callbacks.get("stem_callbacks", {})
+        stem_callbacks: dict = stem_callbacks_obj if isinstance(stem_callbacks_obj, dict) else {}
 
         if on_toggle:
             on_toggle(stem_callbacks)
             self.update_stop_state()
 
-    def _on_stop_right_press(self, canvas: tk.Canvas) -> None:
+    def _on_stop_right_press(self, canvas: StemCanvas) -> None:
         """Rechtsklick auf Stop-Stem: Temporär aktivieren."""
         get_active = self._callbacks.get("get_active_loop_with_stems")
         on_momentary = self._callbacks.get("on_stop_stem_momentary")
-        stem_callbacks = self._callbacks.get("stem_callbacks", {})
+        stem_callbacks_obj: dict | Callable = self._callbacks.get("stem_callbacks", {})
+        stem_callbacks: dict = stem_callbacks_obj if isinstance(stem_callbacks_obj, dict) else {}
 
         if get_active and get_active() is None:
             return
@@ -302,7 +315,7 @@ class StemsPanelWidget(tk.Frame):
         canvas.itemconfig("circle", fill=COLOR_BTN_ACTIVE, outline="#1a9a5a")
         canvas.itemconfig("text", fill=COLOR_TEXT_ACTIVE)
 
-    def _on_stop_right_release(self, canvas: tk.Canvas) -> None:
+    def _on_stop_right_release(self, canvas: StemCanvas) -> None:
         """Rechtsklick auf Stop-Stem losgelassen."""
         if not canvas._temp_state["right_held"]:
             return
@@ -333,9 +346,12 @@ class StemsPanelWidget(tk.Frame):
 
         # Prüfe ob target gültig ist
         if target_id is not None:
-            data = self._button_data.get(target_id)
-            if not data or not data.get("stems", {}).get("available"):
+            if self._button_data is None:
                 target_id = None
+            else:
+                data = self._button_data.get(target_id)
+                if not data or not data.get("stems", {}).get("available"):
+                    target_id = None
 
         for stem, canvas in self._stem_buttons.items():
             if target_id is None:
@@ -344,6 +360,8 @@ class StemsPanelWidget(tk.Frame):
                 canvas.itemconfig("text", fill="#666")
             else:
                 # Zeige Zustand
+                if self._button_data is None:
+                    return
                 data = self._button_data[target_id]
                 is_active = data["stems"]["states"].get(stem, False)
 
@@ -370,6 +388,8 @@ class StemsPanelWidget(tk.Frame):
             self._stop_stem_button.itemconfig("circle", fill="#2a2a2a", outline="#444")
             self._stop_stem_button.itemconfig("text", fill="#666")
         else:
+            if self._button_data is None:
+                return
             data = self._button_data[active_id]
             is_stop_active = data["stems"].get("stop_active", False)
 
@@ -383,11 +403,11 @@ class StemsPanelWidget(tk.Frame):
                 self._stop_stem_button.itemconfig("text", fill=COLOR_TEXT)
 
     @property
-    def stem_buttons(self) -> dict[str, tk.Canvas]:
+    def stem_buttons(self) -> dict[str, StemCanvas]:
         """Gibt alle Stem-Buttons zurück."""
         return self._stem_buttons
 
     @property
-    def stop_stem_button(self) -> tk.Canvas | None:
+    def stop_stem_button(self) -> StemCanvas | None:
         """Gibt den Stop-Stem-Button zurück."""
         return self._stop_stem_button
