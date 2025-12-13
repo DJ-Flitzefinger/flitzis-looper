@@ -25,7 +25,28 @@ madmom = { git = "https://github.com/CPJKU/madmom.git" }
 madmom = ["Cython", "numpy"]
 
 [dependency-groups]
-dev = ["mypy>=1.19.0", "ruff>=0.14.8"]
+dev = [
+    "mypy>=1.19.0",
+    "pytest>=9.0.2",
+    "ruff>=0.14.8",
+]
 
 [tool.ruff]
 extend = "ruff_defaults.toml"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--verbose",
+    "--tb=short",
+    "--strict-markers",
+    "--strict-config"
+]
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests",
+    "slow: Slow running tests"
+]

@@ -15,16 +15,27 @@ mypy .
 # Code style checking
 ruff check .
 
+# Run unit tests
+pytest
+
 # Run both checks (as shown in README)
 mypy .
 ruff check .
 ```
 
 ### Running Single Test
-Currently, there are no unit tests configured in the project. The existing validation consists of:
 ```bash
-mypy .
-ruff check .
+# Run all tests
+pytest
+
+# Run specific test file
+pytest tests/test_core/test_sample.py
+
+# Run tests with specific marker
+pytest -m unit
+
+# Run tests with verbose output
+pytest -v
 ```
 
 ### Formatting Code
