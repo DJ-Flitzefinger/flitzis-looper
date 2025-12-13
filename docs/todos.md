@@ -87,12 +87,16 @@ Can cause cyclic import dependencies and affects performance.
 ### 5. Testing Strategy (Medium Priority)
 
 #### Current State:
-No unit tests, integration tests, or test infrastructure
+Minimal unit tests, no integration tests, basic test infrastructure with pytest
 
-#### Needed:
+#### Progress:
+- Initial unit tests created for math utility functions (PR #1)
+- Test infrastructure verified and working with pytest
+
+#### Still Needed:
 - Unit tests for core audio processing functions
 - Integration tests for UI components
-- Test infrastructure setup with pytest
+- Expand test coverage for utility functions
 - CI/CD pipeline integration
 
 ## Implementation Approach
@@ -125,8 +129,8 @@ No unit tests, integration tests, or test infrastructure
    - Enable stricter mypy checking
 
 2. **Implement Testing Strategy**
-   - Set up pytest framework
-   - Create unit tests for core functionality
+   - Set up pytest framework (Completed)
+   - Create unit tests for core functionality (In progress - math utilities completed)
    - Add integration tests for UI components
 
 ## Expected Benefits
@@ -148,7 +152,7 @@ No unit tests, integration tests, or test infrastructure
 ### Test Categories
 1. **Unit Tests**
    - Audio processing functions
-   - Utility functions
+   - Utility functions (In progress - math utilities completed)
    - State management functions
 
 2. **Integration Tests**
@@ -167,10 +171,10 @@ No unit tests, integration tests, or test infrastructure
 
 ## Timeline
 
-| Phase | Duration | Focus | Expected Outcome |
-|-------|----------|-------|------------------|
-| Phase 1 | 1-2 days | Quick wins | 40+ issues resolved |
-| Phase 2 | 3-5 days | Structural improvements | 50+ issues resolved |
-| Phase 3 | 2-3 days | Quality & testing | Foundation for ongoing quality |
+| Phase | Duration | Focus | Expected Outcome | Status |
+|-------|----------|-------|------------------|--------|
+| Phase 1 | 1-2 days | Quick wins | 40+ issues resolved | In progress |
+| Phase 2 | 3-5 days | Structural improvements | 50+ issues resolved | Pending |
+| Phase 3 | 2-3 days | Quality & testing | Foundation for ongoing quality | Started |
 
 This plan provides a roadmap to significantly improve the code quality of flitzis-looper while establishing practices for ongoing maintenance and development.
