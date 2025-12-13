@@ -24,6 +24,7 @@ from flitzis_looper.core.state import (
     STEM_NAMES,
     ensure_stems_structure,
     get_button_data,
+    get_master_amp,
 )
 from flitzis_looper.utils.logging import logger
 
