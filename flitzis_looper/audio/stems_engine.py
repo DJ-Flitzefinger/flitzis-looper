@@ -19,12 +19,11 @@ import numpy as np
 import soundfile as sf
 from pyo import EQ, Mix, Phasor, Pointer, Sig, SigTo, SndTable
 
-from flitzis_looper.audio.server import get_master_amp
+from flitzis_looper.audio.engine import get_master_amp
 from flitzis_looper.core.state import (
     STEM_NAMES,
     ensure_stems_structure,
     get_button_data,
-    get_master_amp,
 )
 from flitzis_looper.utils.logging import logger
 

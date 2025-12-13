@@ -4,6 +4,13 @@ Contains pyo server initialization, loop player, BPM detection, and stem separat
 """
 
 from flitzis_looper.audio.bpm import _detect_bpm_worker
+from flitzis_looper.audio.engine import (
+    AudioEngine,
+    get_engine,
+    get_master_amp,
+    init_engine,
+    set_master_amp,
+)
 from flitzis_looper.audio.loop import PyoLoop
 from flitzis_looper.audio.pitch import (
     _create_pitched_stem_cache,
@@ -12,11 +19,9 @@ from flitzis_looper.audio.pitch import (
     precache_pitched_stems_if_needed,
 )
 from flitzis_looper.audio.server import (
-    get_master_amp,
     get_server,
     init_master_amp,
     init_server,
-    set_master_amp,
     shutdown_server,
 )
 from flitzis_looper.audio.stems_engine import (
@@ -42,6 +47,8 @@ from flitzis_looper.audio.stems_separation import (
 )
 
 __all__ = [
+    # Engine (NEU)
+    "AudioEngine",
     # Loop
     "PyoLoop",
     "_activate_main_loop",
@@ -63,8 +70,10 @@ __all__ = [
     "delete_stems",
     # Stems Separation
     "generate_stems",
+    "get_engine",
     "get_master_amp",
     "get_server",
+    "init_engine",
     "init_master_amp",
     # Server
     "init_server",

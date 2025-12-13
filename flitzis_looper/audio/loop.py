@@ -21,7 +21,8 @@ import soundfile as sf
 from pedalboard import PitchShift
 from pyo import EQ, Follower, Looper, Osc, Pointer, SfPlayer, Sig, SndTable
 
-from flitzis_looper.core.state import STEM_NAMES, get_button_data, get_master_amp
+from flitzis_looper.audio.engine import get_master_amp
+from flitzis_looper.core.state import STEM_NAMES, get_button_data
 from flitzis_looper.utils.logging import logger
 from flitzis_looper.utils.math import db_to_amp, speed_to_semitones
 from flitzis_looper.utils.threading import io_executor, schedule_gui_update

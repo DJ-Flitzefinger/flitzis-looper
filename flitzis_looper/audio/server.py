@@ -1,19 +1,35 @@
 """pyo Audio Server initialization for flitzis_looper.
 
+DEPRECATED: Dieses Modul ist für Backward-Kompatibilität.
+Neue Entwicklung sollte audio/engine.py verwenden.
+
 Provides the audio server and master amplitude control.
 """
 
 from pyo import Server, Sig
 
-from flitzis_looper.utils.logging import logger
+from flitzis_looper.audio.engine import (
+    get_engine,
+    get_master_amp,
+    init_engine,
+    set_master_amp,
+)
 
-# Module-level server instance (initialized by init_server)
-_server: Server | None = None
-_master_amp: Sig | None = None
+# Re-export from engine für Backward-Kompatibilität
+__all__ = [
+    "get_master_amp",
+    "get_server",
+    "init_master_amp",
+    "init_server",
+    "set_master_amp",
+    "shutdown_server",
+]
 
 
-def init_server(sr=44100, nchnls=2, buffersize=1024, duplex=0):
+def init_server(sr=44100, nchnls=2, buffersize=1024, duplex=0) -> Server:
     """Initialize and start the pyo audio server.
+
+    DEPRECATED: Verwende stattdessen AudioEngine.
 
     Args:
         sr: Sample rate (default 44100)
@@ -24,25 +40,27 @@ def init_server(sr=44100, nchnls=2, buffersize=1024, duplex=0):
     Returns:
         Server: The initialized and started pyo Server instance
     """
-    global _server
+    engine = init_engine(sr=sr, nchnls=nchnls, buffersize=buffersize, duplex=duplex)
+    engine.boot()
+    engine.start()
+    return engine.server
+
+
+def get_server() -> Server | None:
+    """Returns the audio server instance.
+
+    DEPRECATED: Verwende stattdessen get_engine().server.
+    """
     try:
-        _server = Server(sr=sr, nchnls=nchnls, buffersize=buffersize, duplex=duplex).boot()
-        _server.start()
-        logger.debug(f"Audio server started: sr={sr}, nchnls={nchnls}")
-    except Exception as e:
-        logger.error(f"Failed to initialize audio server: {e}")
-        raise
-
-    return _server
+        return get_engine().server
+    except RuntimeError:
+        return None
 
 
-def get_server():
-    """Returns the audio server instance."""
-    return _server
-
-
-def init_master_amp(initial_value=1.0):
+def init_master_amp(initial_value=1.0) -> Sig:
     """Initialize the master amplitude signal.
+
+    DEPRECATED: AudioEngine erstellt master_amp automatisch bei start().
 
     Args:
         initial_value: Initial amplitude value (default 1.0)
@@ -50,33 +68,20 @@ def init_master_amp(initial_value=1.0):
     Returns:
         Sig: The master amplitude pyo Sig object
     """
-    global _master_amp
-    _master_amp = Sig(initial_value)
-    return _master_amp
+    # AudioEngine erstellt master_amp automatisch
+    amp = get_master_amp()
+    if amp is not None:
+        amp.value = initial_value
+    return amp
 
 
-def get_master_amp():
-    """Returns the master amplitude signal."""
-    return _master_amp
+def shutdown_server() -> None:
+    """Stop and cleanup the audio server.
 
-
-def set_master_amp(amp_sig):
-    """Set the master amplitude signal (used for backward compatibility).
-
-    Args:
-        amp_sig: A pyo Sig object to use as master amplitude
+    DEPRECATED: Verwende stattdessen get_engine().shutdown().
     """
-    global _master_amp
-    _master_amp = amp_sig
-
-
-def shutdown_server():
-    """Stop and cleanup the audio server."""
-    global _server
-    if _server is not None:
-        try:
-            _server.stop()
-            logger.debug("Audio server stopped")
-        except Exception as e:
-            logger.debug(f"Error stopping server: {e}")
-        _server = None
+    try:
+        engine = get_engine()
+        engine.shutdown()
+    except RuntimeError:
+        pass
