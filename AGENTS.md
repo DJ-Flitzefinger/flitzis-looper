@@ -10,41 +10,41 @@ uv sync --frozen
 ### Running Tests
 ```bash
 # Type checking
-mypy .
+uv run mypy .
 
 # Code style checking
-ruff check .
+uv run ruff check .
 
 # Run unit tests
-pytest
+uv run pytest
 
 # Run both checks (as shown in README)
-mypy .
-ruff check .
+uv run mypy .
+uv run ruff check .
 ```
 
 ### Running Single Test
 ```bash
 # Run all tests
-pytest
+uv run pytest
 
 # Run specific test file
-pytest tests/test_core/test_sample.py
+uv run pytest tests/test_core/test_sample.py
 
 # Run tests with specific marker
-pytest -m unit
+uv run pytest -m unit
 
 # Run tests with verbose output
-pytest -v
+uv run pytest -v
 ```
 
 ### Formatting Code
 ```bash
 # Format code
-ruff format .
+uv run ruff format .
 
 # Check formatting without changes
-ruff format --check .
+uv run ruff format --check .
 ```
 
 ## Code Style Guidelines
