@@ -6,6 +6,7 @@ Orchestrates the application startup, shutdown, and coordinates all modules.
 import builtins
 import contextlib
 import logging
+import threading
 import tkinter as tk
 from tkinter import messagebox
 
@@ -93,20 +94,54 @@ def on_closing(s):
         # 3. Config speichern
         save_config_immediate()
 
-        # 4. pyo Server stoppen
-        with contextlib.suppress(builtins.BaseException):
-            s.stop()
-
-        # 5. Executors herunterfahren
+        # 4/5/6. Sauber herunterfahren ohne GUI-Freeze:
+        # - Fenster sofort ausblenden
+        # - Shutdown/Wait im Background-Thread, damit Tk nicht blockiert
         with contextlib.suppress(Exception):
-            io_executor.shutdown(wait=False)
-            bpm_executor.shutdown(wait=False)
+            root.withdraw()
+
+        def _shutdown_workers_and_close():
+            # pyo Server sauber beenden (stop() kann Warnungen erzeugen, wenn bereits gestoppt)
+            try:
+                get_is_started = getattr(s, "getIsStarted", None)
+                if callable(get_is_started):
+                    if get_is_started():
+                        s.shutdown()
+                else:
+                    s.shutdown()
+            except Exception:
+                pass
+
+            # Executors: warten, aber nicht im Tk-Thread
+            try:
+                io_executor.shutdown(wait=True, cancel_futures=True)
+            except TypeError:
+                io_executor.shutdown(wait=True)
+            except Exception:
+                pass
+
+            try:
+                bpm_executor.shutdown(wait=True, cancel_futures=True)
+            except TypeError:
+                bpm_executor.shutdown(wait=True)
+            except Exception:
+                pass
+
+            # Tk destroy wieder im Tk-Thread ausführen
+            with contextlib.suppress(Exception):
+                root.after(0, root.destroy)
+
+        threading.Thread(target=_shutdown_workers_and_close, daemon=True).start()
+        shutdown_thread_started = True
+        return
 
     except Exception:
         logger.exception("Error during shutdown")
     finally:
-        # 6. Fenster zerstören
-        root.destroy()
+        # Wenn der Background-Shutdown nicht gestartet wurde, Fenster direkt schließen.
+        if not shutdown_thread_started:
+            with contextlib.suppress(Exception):
+                root.destroy()
 
 
 def main():
