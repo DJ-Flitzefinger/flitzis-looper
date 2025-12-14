@@ -1,7 +1,23 @@
 """Core module for flitzis_looper.
 
-Contains state management, configuration, and core logic.
+Contains state management, configuration, callbacks, and core logic.
 """
+
+# Callback Registry
+from flitzis_looper.core.callbacks import (
+    CallbackRegistry,
+    call_callback,
+    get_callback,
+    get_callback_group,
+    get_registry,
+    register_callback,
+)
+
+# Config Manager
+from flitzis_looper.core.config import (
+    ConfigManager,
+    get_config_manager,
+)
 
 # Import from submodules for re-export
 from flitzis_looper.core.state import (
@@ -71,6 +87,17 @@ from flitzis_looper.core.state import (
 )
 
 __all__ = [
+    # Callback Registry
+    "CallbackRegistry",
+    "call_callback",
+    "get_callback",
+    "get_callback_group",
+    "get_registry",
+    "register_callback",
+    # Config Manager
+    "ConfigManager",
+    "get_config_manager",
+    # Colors
     "COLOR_BANK_ACTIVE",
     "COLOR_BANK_BTN",
     "COLOR_BG",

@@ -20,6 +20,7 @@ import soundfile as sf
 from pyo import EQ, Mix, Phasor, Pointer, Sig, SigTo, SndTable
 
 from flitzis_looper.audio.engine import get_master_amp
+from flitzis_looper.audio.pitch import _create_pitched_stem_cache
 from flitzis_looper.core.state import (
     STEM_NAMES,
     ensure_stems_structure,
@@ -150,9 +151,6 @@ def _select_stem_audio(button_id, stem, use_key_lock, current_speed):
     Wählt die zu verwendenden Stem-Audiodaten (dry vs. gepitcht) abhängig von Key Lock
     und aktueller Geschwindigkeit. Gibt None zurück, wenn kein Audio verfügbar ist.
     """
-    # Import here to avoid circular imports
-    from flitzis_looper.audio.pitch import _create_pitched_stem_cache
-
     button_data = get_button_data()
     data = button_data[button_id]
 

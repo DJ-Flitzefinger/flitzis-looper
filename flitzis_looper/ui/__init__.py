@@ -1,7 +1,7 @@
 """flitzis_looper.ui - UI-Module für flitzis_looper.
 
 Subpackages:
-- widgets: Wiederverwendbare UI-Widgets (EQKnob, VUMeter)
+- widgets: Wiederverwendbare UI-Widgets (EQKnob, VUMeter, LoopGridWidget, etc.)
 - dialogs: Dialog-Fenster (volume, waveform, bpm_dialog)
 
 Module:
@@ -9,8 +9,10 @@ Module:
 - loop_grid: Button-Grid für Loops
 - toolbar: BPM/Speed/Volume Controls
 - stems_panel: Stem-Buttons
+- context_menu: Kontextmenü für Loop-Buttons
 """
 
+from .context_menu import LoopContextMenu
 from .dialogs import WaveformEditor, set_bpm_manually, set_volume
 from .loop_grid import (
     create_bank_buttons,
@@ -45,7 +47,7 @@ from .toolbar import (
     update_reset_button_style,
     update_volume_label,
 )
-from .widgets import EQKnob, VUMeter
+from .widgets import EQKnob, LoopGridWidget, StemsPanelWidget, ToolbarWidget, VUMeter
 
 __all__ = [
     "WINDOW_GEOMETRY",
@@ -53,6 +55,11 @@ __all__ = [
     "WINDOW_TITLE",
     # widgets
     "EQKnob",
+    # Context Menu
+    "LoopContextMenu",
+    "LoopGridWidget",
+    "StemsPanelWidget",
+    "ToolbarWidget",
     "VUMeter",
     "WaveformEditor",
     "create_bank_buttons",

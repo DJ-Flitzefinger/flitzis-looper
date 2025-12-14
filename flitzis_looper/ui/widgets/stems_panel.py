@@ -18,6 +18,7 @@ from flitzis_looper.core.state import (
     STEM_LABELS,
     STEM_NAMES,
     get_button_data,
+    get_selected_stems_button,
 )
 
 
@@ -128,8 +129,6 @@ class StemsPanelWidget(tk.Frame):
             tags="text",
         )
 
-        # Temporärer Zustand für Momentary-Aktionen ist bereits initialisiert in StemCanvas
-
         # Event Bindings
         canvas.bind("<Button-1>", lambda e, s=stem_name: self._on_left_click(s))
         canvas.bind("<ButtonPress-3>", lambda e, s=stem_name, c=canvas: self._on_right_press(s, c))
@@ -190,9 +189,9 @@ class StemsPanelWidget(tk.Frame):
     def _on_middle_press(self, stem_name: str, canvas: StemCanvas) -> None:
         """Mittelklick gedrückt: Temporär Mute."""
         get_active = self._callbacks.get("get_active_loop_with_stems")
-        on_momentary = self._callbacks.get("on_stem_momentary_activate")
+        self._callbacks.get("on_stem_momentary_activate")
         stem_callbacks_obj: dict | Callable = self._callbacks.get("stem_callbacks", {})
-        stem_callbacks: dict = stem_callbacks_obj if isinstance(stem_callbacks_obj, dict) else {}
+        stem_callbacks_obj if isinstance(stem_callbacks_obj, dict) else {}
 
         if not get_active:
             return
@@ -200,12 +199,11 @@ class StemsPanelWidget(tk.Frame):
         active_loop_id = get_active()
         if active_loop_id is None:
             return
-        if active_loop_id is None:
-            return
 
         canvas._temp_state["middle_held"] = True
 
         # Aktuellen State speichern
+
         if self._button_data is None:
             return
         data = self._button_data[active_loop_id]
@@ -334,8 +332,6 @@ class StemsPanelWidget(tk.Frame):
 
     def update_state(self) -> None:
         """Aktualisiert alle Stem-Button-Farben basierend auf aktuellem Zustand."""
-        from flitzis_looper.core.state import get_selected_stems_button
-
         selected = get_selected_stems_button()
         get_active = self._callbacks.get("get_active_loop_with_stems")
 

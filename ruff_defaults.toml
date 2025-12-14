@@ -102,6 +102,7 @@ ignore = [
     # ruff doesn't track inheritance across files, disabling to prevent false positives
     # https://github.com/astral-sh/ruff/issues/5243#issuecomment-1860862939
     "RUF012",
+    "RUF022",
 ]
 
 pydocstyle = { convention = "google" }

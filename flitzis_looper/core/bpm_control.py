@@ -9,7 +9,12 @@ import tkinter as tk
 from tkinter import simpledialog
 
 from flitzis_looper.audio.bpm import _detect_bpm_worker
+from flitzis_looper.core.loops import get_current_original_bpm
 from flitzis_looper.core.state import (
+    COLOR_LOCK_OFF,
+    COLOR_LOCK_ON,
+    COLOR_TEXT,
+    COLOR_TEXT_ACTIVE,
     get_all_banks_data,
     get_bpm_lock_active,
     get_button_data,
@@ -187,8 +192,6 @@ def on_speed_change(val, widgets, callbacks):
     speed_value.set(value)
 
     if bpm_lock_active.get():
-        from flitzis_looper.core.loops import get_current_original_bpm
-
         current_bpm = get_current_original_bpm()
         if current_bpm > 0:
             bpm = value * current_bpm
@@ -309,13 +312,6 @@ def toggle_key_lock(key_lock_btn):
     Args:
         key_lock_btn: Der Key Lock Button-Widget
     """
-    from flitzis_looper.core.state import (
-        COLOR_LOCK_OFF,
-        COLOR_LOCK_ON,
-        COLOR_TEXT,
-        COLOR_TEXT_ACTIVE,
-    )
-
     key_lock_active = get_key_lock_active()
     loaded_loops = get_loaded_loops()
 
@@ -337,13 +333,6 @@ def toggle_bpm_lock(bpm_lock_btn):
     Args:
         bpm_lock_btn: Der BPM Lock Button-Widget
     """
-    from flitzis_looper.core.state import (
-        COLOR_LOCK_OFF,
-        COLOR_LOCK_ON,
-        COLOR_TEXT,
-        COLOR_TEXT_ACTIVE,
-    )
-
     all_banks_data = get_all_banks_data()
     loaded_loops = get_loaded_loops()
     bpm_lock_active = get_bpm_lock_active()

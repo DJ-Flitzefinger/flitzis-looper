@@ -148,7 +148,6 @@ class AudioEngine:
 
             logger.debug("AudioEngine started")
         except Exception as e:
-            logger.error(f"Failed to start AudioEngine: {e}")
             msg = f"AudioEngine start failed: {e}"
             raise RuntimeError(msg) from e
 
