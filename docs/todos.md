@@ -46,3 +46,13 @@
 ### Performance
 - Improve loop triggering speed (faster on 8 bars, slower on more bars)
 - Waveform editor snappiness
+-    - KRITISCH: Test ergab, das Verzögerung beim Triggern der PADS mit Länge der Tracks zusammenhängt
+   NICHT mit Länge des eingestellten Loop-Bereiches (Effekt multipliziert sich mit KEY LOCK und
+   STEMS). Wenn man eine editierte Version eines 4 Minuten langen Liedes in das PAD läd, welche nur
+   30 Sekunden lang ist, ist alles viel taktiler (STEMS/KEY LOCK lassen sich dann erst im Takt triggern).
+   Möglicher Lösungsansatz: Usern unterbinden Loops während der Performance einzustellen 
+   (funktioniert übrigens nicht wenn Stems aktiviert sind) und dedizierten Setup-Mode anlegen.
+   Sobald ein Loop dann eingestellt und mit "Apply" bestätigt wurde, wird der Loopbereich als eigene
+   .wav abgelegt (und jedes mal überschrieben, sobald der User den Loopbereich ändert).
+   Alternativ: Audio-Engine so überarbeiten, dass nicht bei jedem Loop-Restart die ganze Datei
+   verarbeitet werden muss.
