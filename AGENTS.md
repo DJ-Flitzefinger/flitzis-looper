@@ -54,6 +54,7 @@ uv run ruff format --check .
 - Group imports in standard order: standard library, third-party, local
 - Use explicit imports (avoid `import *`)
 - Follow isort configuration in ruff_defaults.toml
+- Imports must only appear at the top of a file.
 
 ### Formatting
 - Line length: 100 characters maximum
@@ -78,6 +79,8 @@ uv run ruff format --check .
 - Log errors appropriately with the logger
 - Prefer specific exception handling over broad except clauses
 - Use try/except blocks around external resource access
+- When logging exceptions using `logger.exception()` inside try/catch blocks, do not add the
+  exception to the out message as this is redundant.
 
 ### Docstrings
 - Follow Google Python style guide for docstrings
@@ -91,3 +94,6 @@ uv run ruff format --check .
 - Configuration is stored in JSON format
 - Use the state management system in core/state.py for global variables
 - Follow the existing patterns for UI component creation in ui/ directory
+- Generally prefer creating classes for structuring responsibilities. There are exceptions for
+  small utility functions and glue code.
+- When writing Markdown, **do not** use overly extensive formatting. Keep it simple and concise.
