@@ -133,6 +133,23 @@ Minimal unit tests, no integration tests, basic test infrastructure with pytest
    - Create unit tests for core functionality (In progress - math utilities completed)
    - Add integration tests for UI components
 
+3. **Performance**
+   - Loops trigger faster on 8 bars (slower on more bars)
+   - Wave Editor
+
+4. **Kleinere Bugfixes**
+   - db Anzeige über Gainregler fehlt
+   
+4. **New Features**
+   - Config presets
+   - BPM Fenster als sidebar (zeigt immer aktuell spielenden Loop, oder kann per kleinem EQ buttons unten links pro PAD gewsitched werden
+   - Volume normalizer)
+
+5. **Future Upgrades**
+   - MIDI integration
+   - Option menu
+   - Touch-modus selectable in options
+
 ## Expected Benefits
 
 1. **Reduced Bugs**: Proper type checking will catch errors at compile time
