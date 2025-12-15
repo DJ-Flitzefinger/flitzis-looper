@@ -16,7 +16,9 @@
 ## Chores
 
 ### Code Quality
-- Refactor complex functions (break down functions with complexity >10)
+- Refactor complex functions (break down functions with complexity >10). You can use ruff to
+  identify those.
+- Refactor responsibilities into classes (e.g. `FlitzisLooperApp` class)
 - Move function-level imports to module level
 - Replace generic exception handling with specific exception types
 - Add proper logging for caught exceptions
@@ -46,13 +48,6 @@
 ### Performance
 - Improve loop triggering speed (faster on 8 bars, slower on more bars)
 - Waveform editor snappiness
--    - KRITISCH: Test ergab, das Verzögerung beim Triggern der PADS mit Länge der Tracks zusammenhängt
-   NICHT mit Länge des eingestellten Loop-Bereiches (Effekt multipliziert sich mit KEY LOCK und
-   STEMS). Wenn man eine editierte Version eines 4 Minuten langen Liedes in das PAD läd, welche nur
-   30 Sekunden lang ist, ist alles viel taktiler (STEMS/KEY LOCK lassen sich dann erst im Takt triggern).
-   Möglicher Lösungsansatz: Usern unterbinden Loops während der Performance einzustellen 
-   (funktioniert übrigens nicht wenn Stems aktiviert sind) und dedizierten Setup-Mode anlegen.
-   Sobald ein Loop dann eingestellt und mit "Apply" bestätigt wurde, wird der Loopbereich als eigene
-   .wav abgelegt (und jedes mal überschrieben, sobald der User den Loopbereich ändert).
-   Alternativ: Audio-Engine so überarbeiten, dass nicht bei jedem Loop-Restart die ganze Datei
-   verarbeitet werden muss.
+- **CRITICAL**: Performance testing revealed that pad triggering delay correlates with track length, NOT with the set loop range length. The effect is compounded by KEY LOCK and STEMS. When loading an edited version of a 4-minute song into a PAD that's only 30 seconds long, everything feels much more responsive (STEMS/KEY LOCK can then only be triggered on beat).
+  - **Potential solution 1**: Prevent users from adjusting loops during performance (currently doesn't work with STEMS enabled) and create a dedicated setup mode. Once a loop is set and confirmed with "Apply", the loop range should be saved as a separate .wav file (overwritten each time the user changes the loop range).
+  - **Potential solution 2**: Rewrite the audio engine to avoid processing the entire file on every loop restart.
