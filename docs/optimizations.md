@@ -258,6 +258,10 @@ self.phaser = Phaser(src, spread=1.2, ...)  # Fixed value
 | Optimize EQ chain with Biquadx | ★★★★★ (Critical) | Low |
 | Consolidate master amplitude control | ★★★★☆ | Low |
 | Implement denormal protection | ★★★☆☆ | Low |
+| Optimize thread pool sizing | ★★★★☆ | Low |
+| Implement audio buffer pooling | ★★★★☆ | Medium |
+| Advanced caching for temporary objects | ★★★☆☆ | Medium |
+| Zero-copy signal processing architecture | ★★★★☆ | High |
 
 ## Implementation Priority
 
@@ -266,9 +270,26 @@ self.phaser = Phaser(src, spread=1.2, ...)  # Fixed value
 3. **High Priority**: Implement audio streaming for large files
 4. **High Priority**: Consolidate master amplitude control
 5. **Medium Priority**: Reuse DataTables with fill()
-6. **Low Priority**: Use pyo Pitch instead of pedalboard (for simple shifts)
-
+6. **Medium Priority**: Optimize thread pool sizing
+7. **Low Priority**: Use pyo Pitch instead of pedalboard (for simple shifts)
 8. **Low Priority**: Implement denormal protection
+9. **Medium Priority**: Implement audio buffer pooling
+10. **Medium Priority**: Advanced caching for temporary objects
+11. **Long-term**: Zero-copy signal processing architecture
+
+## Additional Optimizations Identified
+
+### 1. Thread Pool Sizing Optimization
+The current implementation uses only 2 worker threads in the `io_executor` (`utils/threading.py`). For stem processing with multiple tracks, increasing this to 4-8 threads could improve parallelism and reduce queuing delays during intensive operations like stem generation or pitch shifting.
+
+### 2. Audio Buffer Pooling
+Implementing a dedicated memory pool for audio buffers could reduce memory fragmentation and improve allocation times. This would be particularly beneficial for temporary objects that are frequently created and destroyed during audio processing.
+
+### 3. Advanced Caching Strategy
+Beyond DataTable caching, implement a comprehensive caching strategy for temporary objects like Pointer, Phasor, and other pyo objects that are frequently recreated during stem switching or playback changes.
+
+### 4. Zero-Copy Signal Processing Architecture
+Develop a zero-copy architecture for the entire signal processing chain to minimize data copying overhead between different audio processing stages.
 
 ## Testing Recommendations
 
@@ -278,4 +299,5 @@ self.phaser = Phaser(src, spread=1.2, ...)  # Fixed value
 4. Verify no audible artifacts after optimization
 5. Measure performance improvement using `time.time()` before/after key operations
 6. Test with denormal-prone effects (delays, reverbs) to verify denormal protection works
-```
+7. Benchmark thread pool performance with different worker counts
+8. Monitor memory fragmentation before and after buffer pooling implementation
