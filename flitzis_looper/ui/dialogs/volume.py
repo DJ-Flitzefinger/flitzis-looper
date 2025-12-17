@@ -132,9 +132,9 @@ def set_volume(button_id, update_stem_eq_callback=None, save_config_async_callba
             rel_pos = (val - slider_min) / (slider_max - slider_min)
             # Pixel-Position (mit etwas Offset für den Slider-Rand)
             x_pos = int(15 + rel_pos * (slider_length - 10))
-            db_label.place(x=x_pos, y=0, anchor="s")
+            db_label.place(x=x_pos, y=20, anchor="s")
 
-        db_label_frame = tk.Frame(controls_frame, bg=COLOR_BG, height=20, width=430)
+        db_label_frame = tk.Frame(controls_frame, bg=COLOR_BG, height=30, width=430)
         db_label_frame.pack()
         db_label_frame.pack_propagate(flag=False)
 
@@ -143,9 +143,9 @@ def set_volume(button_id, update_stem_eq_callback=None, save_config_async_callba
             text=f"{current_db:.1f} dB",
             fg=COLOR_TEXT,
             bg=COLOR_BG,
-            font=("Arial", 9),
+            font=("Arial", 9, "bold"),
         )
-        db_label.place(x=215, y=0, anchor="s")
+        db_label.place(x=215, y=20, anchor="s")
 
         # Original on_slide erweitern
         original_on_slide = on_slide
