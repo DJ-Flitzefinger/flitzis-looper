@@ -391,6 +391,11 @@ class WaveformEditor:  # noqa: PLR0904
         self.ax.plot(zoomed_time, zoomed_data, color="#00ff00", linewidth=0.5)
         self.ax.fill_between(zoomed_time, zoomed_data, alpha=0.3, color="#00ff00")
 
+        # Keep y=0 centered by enforcing symmetric y-limits around 0.
+        max_abs = float(np.max(np.abs(zoomed_data))) if len(zoomed_data) else 1.0
+        max_abs = max(max_abs, 1e-6)
+        self.ax.set_ylim(-max_abs, max_abs)
+
         # Intro-Linie und Highlight zeichnen (gelb/orange)
         intro_start = self.calculate_intro_start_position()
         if intro_start is not None:
