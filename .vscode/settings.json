@@ -16,6 +16,7 @@
         "**/.venv": true,
         "**/dist": true
     },
+    "files.eol": "\n",
     "[python]": {
         "editor.defaultFormatter": "charliermarsh.ruff",
         "editor.formatOnSave": true,
