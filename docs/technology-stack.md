@@ -7,18 +7,18 @@
 
 ## Technology Stack Table
 
-| Category | Technology | Version | Justification |
-|----------|------------|---------|---------------|
-| **Core Language** | Python | >=3.13.9 | Specified in pyproject.toml |
-| **Audio Processing** | demucs | >=4.0.1 | Music source separation |
-| **Audio Analysis** | madmom | - | Audio and music signal processing |
-| **Visualization** | matplotlib | >=3.10.7 | Audio waveform visualization |
-| **Numerical Computing** | numpy | >=2.3.5 | Audio signal processing |
-| **Audio Effects** | pedalboard | >=0.9.19 | Audio effects processing |
-| **Audio Synthesis** | pyo | - | Digital signal processing |
-| **Audio I/O** | soundfile | >=0.13.1 | Audio file reading/writing |
-| **Machine Learning** | torch | >=2.9.1 | Deep learning for audio processing |
-| **Audio Utilities** | torchaudio | >=2.9.1 | Audio-specific torch utilities |
+| Category | Technology |
+|----------|------------|
+| **Core Language** | Python |
+| **Audio Processing** | demucs |
+| **Audio Analysis** | madmom |
+| **Visualization** | matplotlib |
+| **Numerical Computing** | numpy |
+| **Audio Effects** | pedalboard |
+| **Audio Synthesis** | pyo |
+| **Audio I/O** | soundfile |
+| **Machine Learning** | torch |
+| **Audio Utilities** | torchaudio |
 
 ## Architecture Pattern
 - **Component-based desktop application** with clear separation between:

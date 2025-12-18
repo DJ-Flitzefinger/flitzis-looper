@@ -8,7 +8,7 @@ Dj Flitzefinger's Scratch-Looper is a powerful audio looping tool designed for D
 
 ## 🚀 Features
 
-- **Grid-based Loop Triggering**: 9x9 button grid for instant loop playback
+- **Grid-based Loop Triggering**: button grid for instant loop playback
 - **Stem Separation**: Isolate vocals, drums, bass, and other elements from any audio file
 - **BPM Detection & Control**: Automatic BPM detection with manual override
 - **Pitch & Speed Control**: Adjust playback speed and pitch independently
@@ -20,31 +20,16 @@ Dj Flitzefinger's Scratch-Looper is a powerful audio looping tool designed for D
 
 ### Prerequisites
 
-- Python 3.13.9+
-- liblo (system dependency)
+- Python 3.11
+- [uv](https://docs.astral.sh/uv/)
 
 ### Install from Source
 
 ```bash
-git clone https://github.com/your-repo/flitzis-looper.git
+git clone https://github.com/DJ-Flitzefinger/flitzis-looper.git
 cd flitzis-looper
-pip install -e .
+uv sync
 ```
-
-### Dependencies
-
-The project requires these Python packages:
-
-- demucs
-- madmom
-- matplotlib
-- numpy
-- pedalboard
-- pyo
-- setuptools
-- soundfile
-- torch
-- torchaudio
 
 ## 🎧 Usage
 
@@ -81,7 +66,7 @@ python -m flitzis_looper
 ### Setup
 
 ```bash
-uv sync --frozen
+uv sync
 ```
 
 ### Running Tests

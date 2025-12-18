@@ -18,6 +18,9 @@ dependencies = [
     "torchaudio>=2.9.1",
 ]
 
+[project.urls]
+Repository = "https://github.com/DJ-Flitzefinger/flitzis-looper"
+
 [tool.uv.sources]
 madmom = { git = "https://github.com/CPJKU/madmom.git" }
 

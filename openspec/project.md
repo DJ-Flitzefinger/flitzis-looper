@@ -4,17 +4,17 @@
 Dj Flitzefinger's Scratch-Looper is a professional DJ looping application for live performance and music production. It provides a grid-based interface for triggering audio loops with advanced features like stem separation, BPM control, pitch adjustment, and real-time mixing. The application is designed for DJs, producers, and live performers who need a powerful audio looping tool with sophisticated audio processing capabilities.
 
 ## Tech Stack
-- Python >=3.13.9
-- demucs >=4.0.1 (music source separation)
+- Python
+- demucs (music source separation)
 - madmom (audio and music signal processing)
-- matplotlib >=3.10.7 (audio waveform visualization)
-- numpy >=2.3.5 (numerical computing)
-- pedalboard >=0.9.19 (audio effects processing)
+- matplotlib (audio waveform visualization)
+- numpy (numerical computing)
+- pedalboard (audio effects processing)
 - pyo (digital signal processing)
-- setuptools >=80.9.0
-- soundfile >=0.13.1 (audio file I/O)
-- torch >=2.9.1 (machine learning)
-- torchaudio >=2.9.1 (audio utilities)
+- setuptools
+- soundfile (audio file I/O)
+- torch (machine learning)
+- torchaudio (audio utilities)
 - tkinter (GUI framework)
 
 ## Project Conventions
@@ -72,7 +72,7 @@ The application is designed for professional audio use cases including:
 - Professional audio looping workflows
 
 Key domain concepts include:
-- Audio loops organized in a 9x9 grid
+- Audio loops organized in a grid
 - Stem separation (vocals, drums, bass, other)
 - BPM (beats per minute) synchronization
 - Pitch and speed control
@@ -81,8 +81,7 @@ Key domain concepts include:
 - Master volume and effects processing
 
 ## Important Constraints
-- Python version requirement: >=3.13.9
-- System dependency on liblo for OSC support
+- Python version requirement: 3.11
 - Audio processing requires real-time performance considerations
 - Cross-platform compatibility (Linux, Windows, macOS)
 - Memory-efficient handling of audio buffers
@@ -97,4 +96,3 @@ Key domain concepts include:
 - pyo for digital signal processing
 - torch and torchaudio for machine learning-based audio processing
 - soundfile for audio file I/O
-- liblo system library for OSC support

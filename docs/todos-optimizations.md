@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document outlines key performance optimizations for the flitzis-looper audio engine to efficiently handle up to 50 simultaneous audio samples (1-5 minutes each) with pitch shifting and effects, following pyo's performance best practices.
+This document outlines key performance optimizations for the flitzis-looper audio engine to efficiently handle up to 50 simultaneous audio samples (1-5 minutes each) with pitch shifting and effects, following pyo's performance best practices. These optimizations are based on the current implementation and should be implemented in the codebase.
 
 ## Critical Bottleneck: Temporary File I/O
 

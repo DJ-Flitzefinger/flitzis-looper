@@ -42,7 +42,7 @@ def create_button_grid(
     open_context_menu_callback,
     select_stems_button_callback,
 ):
-    """Erstellt das 6x6 Button-Grid mit Stem-Indikatoren.
+    """Erstellt das Button-Grid mit Stem-Indikatoren.
 
     Args:
         trigger_loop_callback: Callback für Linksklick (trigger)

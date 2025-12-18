@@ -102,30 +102,8 @@ flitzis_looper/
 4. Audio modules perform DSP operations
 5. Results are returned to core and displayed in UI
 
-## Multi-Part Structure
+## Architecture Type
 This is a **monolithic application** with all components contained within a single repository. No separate client/server architecture detected.
-
-## Annotated Directory Tree
-
-```markdown
-project-root/
-├── .editorconfig          # Code style configuration
-├── .gitignore             # Git ignore patterns
-├── .python-version        # Python version specification
-├── pyproject.toml         # Python project configuration and dependencies
-├── README.md              # Project documentation (minimal)
-├── ruff_defaults.toml     # Code formatting configuration
-├── uv.lock                # Dependency lock file
-├── .bmad/                 # BMAD configuration and agents
-├── .roo/                  # Roo configuration
-├── .vscode/               # VSCode workspace configuration
-├── docs/                  # Generated documentation (this file)
-│   ├── project-scan-report.json
-│   ├── technology-stack.md
-│   ├── comprehensive-analysis.md
-│   └── source-tree-analysis.md
-└── flitzis_looper/        # Main application package
-```
 
 ## Summary
 This source tree analysis provides a comprehensive overview of the monolithic Python desktop audio application structure, with clear separation between audio processing, core logic, user interface, and utility components.
