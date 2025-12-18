@@ -1,0 +1,21 @@
+[build-system]
+requires = ["maturin>=1.10,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "flitzis-looper-rs"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+dynamic = ["version"]
+
+[dependency-groups]
+dev = [
+    "maturin[patchelf]>=1.10.2",
+    "mypy>=1.14.1",
+    "pytest>=8.3.5",
+    "ruff>=0.14.10",
+]
