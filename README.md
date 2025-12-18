@@ -110,3 +110,7 @@ Contributions are welcome! Please follow these guidelines:
 3. Implement your changes
 4. Write tests if applicable
 5. Submit a pull request
+
+## ⚖️ License
+
+[GNU General Public License](./LICENSE.txt)
