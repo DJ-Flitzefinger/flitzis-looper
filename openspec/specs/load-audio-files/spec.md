@@ -1,7 +1,7 @@
 # load-audio-files Specification
 
 ## Purpose
-TBD - created by archiving change add-audio-file-playback. Update Purpose after archive.
+To support sample-based playback by loading and decoding audio files into immutable in-memory buffers associated with sample slot IDs, without performing disk I/O or decoding in the real-time audio callback.
 ## Requirements
 ### Requirement: Load Audio File Into Sample Slot
 The system SHALL expose a Python API to load an audio file from a filesystem path into a named sample slot identified by an integer `id` in the range 0..32.

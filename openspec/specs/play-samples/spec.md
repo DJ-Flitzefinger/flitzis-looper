@@ -1,7 +1,7 @@
 # play-samples Specification
 
 ## Purpose
-TBD - created by archiving change add-audio-file-playback. Update Purpose after archive.
+To enable real-time-safe triggering and mixing of previously loaded samples by ID (with velocity) from Python, with bounded polyphony to avoid allocations in the audio callback.
 ## Requirements
 ### Requirement: Trigger Sample Playback By ID
 The system SHALL provide a Python API to trigger playback of a previously loaded sample by integer `id` in the range 0..32, with a floating-point `velocity` in the range 0.0 to 1.0.
