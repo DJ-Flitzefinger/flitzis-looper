@@ -16,6 +16,7 @@ Everything below is missing compared to `old-project`.
 ## Missing parity features (epics + user stories)
 
 ### 1) Performance UI: grid + banks + pad interactions
+- OpenSpec changes: `add-performance-ui-grid`, `add-performance-pad-interactions`
 - [ ] As a performer, I can see a **6×6 pad grid** where each pad represents a loop slot.
 - [ ] As a performer, I can switch between **multiple banks** (legacy: 6 banks) and see each bank’s pad assignments.
 - [ ] As a performer, I can **trigger/retrigger** a pad to start playback from the loop start.
