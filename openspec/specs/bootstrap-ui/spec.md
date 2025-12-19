@@ -1,7 +1,7 @@
 # bootstrap-ui Specification
 
 ## Purpose
-TBD - created by archiving change add-dearpygui-ui-shell. Update Purpose after archive.
+To define the minimal Dear PyGui UI bootstrap behavior: module entrypoint, fixed-size non-resizable viewport, full-size primary content panel, and application logic instantiation.
 ## Requirements
 ### Requirement: Python UI Entrypoint
 The system SHALL provide a Python entrypoint to start the UI from the `flitzis_looper` package.
@@ -25,13 +25,6 @@ The system SHALL render a single primary content window/panel that fills the vie
 - **WHEN** the UI is started
 - **THEN** a primary content window is present
 - **AND** the primary content window fills the viewport
-
-### Requirement: Hello World Label
-The system SHALL display a "hello world" label in the primary content window.
-
-#### Scenario: Initial UI content
-- **WHEN** the UI is started
-- **THEN** the text "hello world" is visible
 
 ### Requirement: Application Logic Instantiation
 The system SHALL instantiate an application logic object during UI startup, and the application logic SHALL instantiate `flitzis_looper_rs.AudioEngine`.
