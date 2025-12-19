@@ -1,71 +1,51 @@
-Here is a concrete breakdown of how the message passing looks from both sides.
+# Message Passing
 
-The key to high performance is that **Python never sees the ring buffer**. Python sees an `AudioEngine` object with methods. The Rust implementation of those methods converts Python arguments into a small Rust enum (`ControlMessage`) and pushes it into a lock-free SPSC queue (`rtrb`).
+Flitzi's Looper keeps the audio callback real-time safe by communicating with it through fixed-size, single-producer/single-consumer ring buffers.
+Python never touches the ring buffers directly; it calls `AudioEngine` methods which enqueue small, fixed-size control messages.
 
-## Audio Buffer Flow
+## Channels
 
-With the introduction of the AudioEngine, audio processing follows this flow:
+Two independent SPSC ring buffers are used:
 
-1. Python instantiates `AudioEngine` via PyO3 FFI
-2. `AudioEngine.run()` creates a CPAL output stream and ring buffers
-3. The CPAL audio callback runs on a real-time thread, independent of the Python GIL
-4. On each callback, the engine:
-   - drains pending `ControlMessage`s (e.g., `LoadSample`, `PlaySample`)
-   - mixes active sample voices into the output buffer
-5. CPAL streams the output buffer to the system audio device
+- Control → audio (Python thread → CPAL callback)
+  - Carries control events like “load this sample into slot X” or “trigger slot X”.
+- Audio → control (CPAL callback → Python thread)
+  - Carries small status messages polled via `receive_msg()`.
 
-## The Shared Protocol (Rust)
+Both buffers are fixed-capacity (1024 messages). When a buffer is full, pushing returns an error instead of waiting for space.
 
-The wire types live in `rust/src/messages.rs`.
+## What gets sent
 
-```rust
-use std::sync::Arc;
+Messages are intentionally small and allocation-free on the audio thread:
 
-pub(crate) struct SampleBuffer {
-    pub channels: usize,
-    pub samples: Arc<[f32]>,
-}
+- Playback triggers are referenced by `id` and `velocity` (no file paths in the callback).
+- Loading publishes decoded sample data via a shared handle; the large sample buffer is not copied just to cross the thread boundary.
+- `ping()`/`Pong` exists as a minimal end-to-end messaging check.
 
-pub enum ControlMessage {
-    Ping,
-    Stop,
-    LoadSample { id: usize, sample: SampleBuffer },
-    PlaySample { id: usize, velocity: f32 },
-}
+## Real-time safety rules
 
-#[pyclass]
-pub enum AudioMessage {
-    Pong,
-    Stopped,
-}
-```
+The CPAL callback:
 
-Notes:
-- `SampleBuffer` is immutable and shared via `Arc`, so publishing a loaded sample to the audio thread is a cheap handle copy.
-- Valid `id` range is `0..32` (i.e., `id < 32`).
-- `velocity` is clamped/validated in Python-side methods; missing samples are ignored safely by the audio thread.
+- Drains pending messages without blocking.
+- Avoids Python/GIL interaction entirely.
+- Performs no disk I/O or decoding.
+- Mixes audio using fixed-capacity data structures (`MAX_SAMPLE_SLOTS`, `MAX_VOICES`).
 
-## Python Usage
+Disk I/O and decoding happen in `load_sample(...)`, outside the callback.
 
-From Python, loading is synchronous (it may block the Python thread), but playback triggering is fast because it only pushes a small message.
+## Failure modes and guarantees
 
-```python
-import time
+- Ring buffer full: `AudioEngine` methods return an error to Python; the audio thread continues unaffected.
+- Ring buffer empty (audio → control): `receive_msg()` returns `None`.
+- Missing sample slot: triggering playback is ignored safely.
 
-from flitzis_looper_rs import AudioEngine
+## Not implemented (yet)
 
-engine = AudioEngine()
-engine.run()
+- Rich audio → Python event stream (beyond `Pong`).
+- Additional control messages (e.g., volume/transport) exposed as stable Python APIs.
 
-engine.load_sample(0, "kick.wav")
+## Related specs
 
-while True:
-    engine.play_sample(0, 1.0)
-    time.sleep(0.5)
-```
-
-## Real-Time Safety
-
-- `AudioEngine.load_sample(id, path)` performs disk I/O and decode using `symphonia` outside the audio callback.
-- The CPAL callback avoids disk I/O, heap allocations when triggering playback, and logging.
-- Polyphony and sample slots are fixed (`MAX_SAMPLE_SLOTS = 32`, `MAX_VOICES = 32`) for predictable performance.
+- `openspec/specs/ring-buffer-messaging/spec.md`
+- `openspec/specs/load-audio-files/spec.md`
+- `openspec/specs/play-samples/spec.md`
