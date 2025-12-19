@@ -4,7 +4,7 @@
 To support sample-based playback by loading and decoding audio files into immutable in-memory buffers associated with sample slot IDs, without performing disk I/O or decoding in the real-time audio callback.
 ## Requirements
 ### Requirement: Load Audio File Into Sample Slot
-The system SHALL expose a Python API to load an audio file from a filesystem path into a named sample slot identified by an integer `id` in the range 0..32.
+The system SHALL expose a Python API to load an audio file from a filesystem path into a named sample slot identified by an integer `id` in the range 0..36.
 
 #### Scenario: Load succeeds
 - **WHEN** `AudioEngine.load_sample(id, path)` is called with an existing audio file supported by `symphonia` (e.g., WAV)
@@ -12,7 +12,7 @@ The system SHALL expose a Python API to load an audio file from a filesystem pat
 - **AND** the buffer is associated with `id` for subsequent playback
 
 #### Scenario: Sample id is out of range
-- **WHEN** `AudioEngine.load_sample(id, path)` is called with `id >= 32`
+- **WHEN** `AudioEngine.load_sample(id, path)` is called with `id >= 36`
 - **THEN** the call fails with a Python exception
 - **AND** no sample slot state is modified
 

@@ -8,7 +8,7 @@ This document is intentionally **high-level**: it captures **user-visible functi
 ## Current baseline (what exists today)
 From the current codebase:
 
-- A Rust `AudioEngine` exists (CPAL-based) with a minimal Python API: load sample by `id` and trigger playback with `velocity`.
+- A Rust `AudioEngine` exists (CPAL-based) with a minimal Python API: load sample by `id`, trigger playback with `velocity`, and stop playback by `id`.
 - A Python UI entrypoint exists (`python -m flitzis_looper`) and boots a fixed-size Dear PyGui window with the performance layout (6×6 pad grid + bank selector row).
 
 Everything below tracks parity against `old-project`; unchecked items are currently missing.
@@ -16,19 +16,19 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 ## Missing parity features (epics + user stories)
 
 ### 1) Performance UI: grid + banks + pad interactions
-- OpenSpec changes: `add-performance-ui-grid`, `add-performance-pad-interactions`
+- OpenSpec changes (archived): `add-performance-ui-grid`, `add-performance-pad-interactions`
 - [x] As a performer, I can see a **6×6 pad grid** where each pad represents a loop slot.
 - [x] As a performer, I can switch between **multiple banks** (legacy: 6 banks) and see which bank is active.
 - [ ] As a performer, switching banks updates the visible pad assignments/labels for that bank.
-- [ ] As a performer, I can **trigger/retrigger** a pad to start playback from the loop start.
-- [ ] As a performer, I can **stop** a pad quickly (legacy: right-click behavior).
-- [ ] As a performer, I can open a **pad context menu** (legacy: middle-click) to access per-pad actions.
+- [x] As a performer, I can **trigger/retrigger** a pad to start playback from the loop start.
+- [x] As a performer, I can **stop** a pad quickly (legacy: right-click behavior).
+- [x] As a performer, I can open a **pad context menu** (legacy: middle-click) to access per-pad actions.
 - [x] As a performer, the theme (colors, sizes) and UI structure (layout) will closely resemble the old Tk interface.
 
 ### 2) Loop playback (not just one-shot samples)
 - [ ] As a performer, a loaded pad plays as a **loop** (continuous repeat), not a one-shot sample.
-- [ ] As a performer, triggering a currently-playing pad **restarts** it in a predictable way.
-- [ ] As a performer, I can stop playback for an individual pad.
+- [x] As a performer, triggering a currently-playing pad **restarts** it in a predictable way.
+- [x] As a performer, I can stop playback for an individual pad.
 - [ ] As a performer, I can stop all currently-playing pads.
 
 ### 3) Multi-loop mode (polyphonic looping)
