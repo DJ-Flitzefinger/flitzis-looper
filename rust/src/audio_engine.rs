@@ -110,6 +110,15 @@ impl RtMixer {
         }
     }
 
+    fn unload_sample(&mut self, id: usize) {
+        if id >= MAX_SAMPLE_SLOTS {
+            return;
+        }
+
+        self.stop_sample(id);
+        self.sample_bank[id] = None;
+    }
+
     fn render(&mut self, output: &mut [f32]) {
         output.fill(Sample::EQUILIBRIUM);
 
@@ -127,13 +136,17 @@ impl RtMixer {
                     continue;
                 };
 
-                let sample_len = voice.sample.samples.len();
-                let sample_base = voice.frame_pos * self.channels;
-
-                if sample_base + self.channels > sample_len {
+                let sample_frames = voice.sample.samples.len() / self.channels;
+                if sample_frames == 0 {
                     *voice_slot = None;
                     continue;
                 }
+
+                if voice.frame_pos >= sample_frames {
+                    voice.frame_pos = 0;
+                }
+
+                let sample_base = voice.frame_pos * self.channels;
 
                 for channel in 0..self.channels {
                     output[frame_base + channel] +=
@@ -141,8 +154,8 @@ impl RtMixer {
                 }
 
                 voice.frame_pos += 1;
-                if voice.frame_pos * self.channels >= sample_len {
-                    *voice_slot = None;
+                if voice.frame_pos >= sample_frames {
+                    voice.frame_pos = 0;
                 }
             }
         }
@@ -374,6 +387,9 @@ impl AudioEngine {
                             ControlMessage::StopSample { id } => {
                                 mixer.stop_sample(id);
                             }
+                            ControlMessage::UnloadSample { id } => {
+                                mixer.unload_sample(id);
+                            }
                             ControlMessage::Play() | ControlMessage::SetVolume(_) => {}
                         }
                     }
@@ -500,6 +516,31 @@ impl AudioEngine {
         producer_guard
             .push(ControlMessage::StopSample { id })
             .map_err(|_| PyRuntimeError::new_err("Failed to send StopSample - buffer may be full"))
+    }
+
+    /// Unload a sample slot.
+    pub fn unload_sample(&mut self, id: usize) -> PyResult<()> {
+        if id >= MAX_SAMPLE_SLOTS {
+            return Err(PyValueError::new_err(format!(
+                "id out of range (expected 0..{}, got {id})",
+                MAX_SAMPLE_SLOTS - 1
+            )));
+        }
+
+        let producer = self
+            .producer
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        producer_guard
+            .push(ControlMessage::UnloadSample { id })
+            .map_err(|_| {
+                PyRuntimeError::new_err("Failed to send UnloadSample - buffer may be full")
+            })
     }
 
     /// Send a ping message to the audio thread.
@@ -703,24 +744,58 @@ mod tests {
     }
 
     #[test]
-    fn test_mixing_renders_sample_and_finishes_voice() {
+    fn test_mixing_loops_sample_buffer() {
         let sample = SampleBuffer {
             channels: 2,
             samples: Arc::from(vec![0.5f32, -0.5f32, 0.25f32, -0.25f32].into_boxed_slice()),
         };
 
         let mut mixer = RtMixer::new(2);
-        mixer.load_sample(0, sample.clone());
+        mixer.load_sample(0, sample);
         mixer.play_sample(0, 0.5);
 
-        let mut out = vec![0.0f32; 4];
+        let mut out = vec![0.0f32; 8];
         mixer.render(&mut out);
 
         assert!((out[0] - 0.25).abs() < 1e-6);
         assert!((out[1] + 0.25).abs() < 1e-6);
         assert!((out[2] - 0.125).abs() < 1e-6);
         assert!((out[3] + 0.125).abs() < 1e-6);
+        assert!((out[4] - 0.25).abs() < 1e-6);
+        assert!((out[5] + 0.25).abs() < 1e-6);
+        assert!((out[6] - 0.125).abs() < 1e-6);
+        assert!((out[7] + 0.125).abs() < 1e-6);
 
+        let mut out2 = vec![0.0f32; 4];
+        mixer.render(&mut out2);
+        assert!((out2[0] - 0.25).abs() < 1e-6);
+        assert!((out2[1] + 0.25).abs() < 1e-6);
+        assert!((out2[2] - 0.125).abs() < 1e-6);
+        assert!((out2[3] + 0.125).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_mixing_unload_sample_stops_voices_and_clears_slot() {
+        let sample = SampleBuffer {
+            channels: 2,
+            samples: Arc::from(vec![0.5f32, -0.5f32, 0.5f32, -0.5f32].into_boxed_slice()),
+        };
+
+        let mut mixer = RtMixer::new(2);
+        mixer.load_sample(0, sample);
+        mixer.play_sample(0, 1.0);
+
+        let mut out = vec![0.0f32; 4];
+        mixer.render(&mut out);
+        assert!(out.iter().any(|&s| s.abs() > 1e-6));
+
+        mixer.unload_sample(0);
+
+        out.fill(1.0);
+        mixer.render(&mut out);
+        assert!(out.iter().all(|&s| s.abs() < 1e-6));
+
+        mixer.play_sample(0, 1.0);
         out.fill(1.0);
         mixer.render(&mut out);
         assert!(out.iter().all(|&s| s.abs() < 1e-6));

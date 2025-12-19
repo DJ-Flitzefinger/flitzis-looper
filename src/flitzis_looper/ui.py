@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any
 
 import dearpygui.dearpygui as dpg  # type: ignore[import-untyped]
@@ -8,6 +9,10 @@ VIEWPORT_WIDTH_PX = 960
 VIEWPORT_HEIGHT_PX = 630
 _PRIMARY_WINDOW_TAG = "primary_window"
 _PAD_CONTEXT_MENU_TAG = "pad_context_menu"
+_PAD_CONTEXT_MENU_ACTION_TAG = "pad_context_menu_action"
+_PAD_LOAD_DIALOG_TAG = "pad_load_dialog"
+_ERROR_DIALOG_TAG = "error_dialog"
+_ERROR_DIALOG_TEXT_TAG = "error_dialog_text"
 
 GRID_SIZE = 6
 NUM_BANKS = 6
@@ -110,6 +115,10 @@ def _build_pad_grid(app: FlitzisLooperApp, *, pad_theme: int) -> None:
     def _open_pad_context_menu(_sender: int, _app_data: Any, pad_id: int) -> None:
         dpg.hide_item(_PAD_CONTEXT_MENU_TAG)
         dpg.set_item_user_data(_PAD_CONTEXT_MENU_TAG, pad_id)
+
+        label = "Unload Audio" if app.is_sample_loaded(_sample_id(pad_id)) else "Load Audio"
+        dpg.configure_item(_PAD_CONTEXT_MENU_ACTION_TAG, label=label)
+
         dpg.set_item_pos(_PAD_CONTEXT_MENU_TAG, list(dpg.get_mouse_pos(local=False)))
         dpg.show_item(_PAD_CONTEXT_MENU_TAG)
 
@@ -194,6 +203,82 @@ def _build_performance_view(
     )
 
 
+def _hide_error_dialog(_sender: int, _app_data: Any, _user_data: Any) -> None:
+    dpg.hide_item(_ERROR_DIALOG_TAG)
+
+
+def _show_error_dialog(message: str) -> None:
+    dpg.set_value(_ERROR_DIALOG_TEXT_TAG, message)
+    dpg.show_item(_ERROR_DIALOG_TAG)
+
+
+def _file_dialog_path(app_data: Any) -> str | None:
+    if not isinstance(app_data, dict):
+        return None
+
+    file_path_name = app_data.get("file_path_name")
+    if isinstance(file_path_name, str) and file_path_name:
+        return file_path_name
+
+    selections = app_data.get("selections")
+    if isinstance(selections, dict) and selections:
+        return str(next(iter(selections.values())))
+
+    current_path = app_data.get("current_path")
+    file_name = app_data.get("file_name")
+    if isinstance(current_path, str) and isinstance(file_name, str):
+        return str(Path(current_path) / file_name)
+
+    return None
+
+
+def _on_load_audio_cancel(_sender: int, _app_data: Any, _user_data: Any) -> None:
+    dpg.hide_item(_PAD_LOAD_DIALOG_TAG)
+
+
+def _on_load_audio_selected(_sender: int, app_data: Any, user_data: Any) -> None:
+    dpg.hide_item(_PAD_LOAD_DIALOG_TAG)
+
+    if not (isinstance(user_data, tuple) and len(user_data) == 2):
+        return
+
+    app, sample_id = user_data
+    if not isinstance(app, FlitzisLooperApp) or not isinstance(sample_id, int):
+        return
+
+    file_path = _file_dialog_path(app_data)
+    if file_path is None:
+        return
+
+    try:
+        app.load_sample(sample_id, file_path)
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        _show_error_dialog(str(exc))
+
+
+def _on_pad_context_menu_action(_sender: int, _app_data: Any, user_data: Any) -> None:
+    if not isinstance(user_data, FlitzisLooperApp):
+        return
+
+    app = user_data
+    pad_id = dpg.get_item_user_data(_PAD_CONTEXT_MENU_TAG)
+    dpg.hide_item(_PAD_CONTEXT_MENU_TAG)
+
+    if not isinstance(pad_id, int):
+        return
+
+    sample_id = pad_id - 1
+    if app.is_sample_loaded(sample_id):
+        try:
+            app.unload_sample(sample_id)
+        except (RuntimeError, ValueError) as exc:
+            _show_error_dialog(str(exc))
+        return
+
+    dpg.configure_item(_PAD_LOAD_DIALOG_TAG, user_data=(app, sample_id))
+    dpg.show_item(_PAD_LOAD_DIALOG_TAG)
+
+
 def _run_dearpygui(app: FlitzisLooperApp) -> None:
     """Run the Dear PyGui event loop.
 
@@ -230,8 +315,33 @@ def _run_dearpygui(app: FlitzisLooperApp) -> None:
                 bank_inactive_theme=bank_inactive_theme,
             )
 
-        def _unload_audio_placeholder(_sender: int, _app_data: Any, _user_data: Any) -> None:
-            dpg.hide_item(_PAD_CONTEXT_MENU_TAG)
+        with dpg.window(
+            tag=_ERROR_DIALOG_TAG,
+            show=False,
+            autosize=True,
+            modal=True,
+            no_move=True,
+            no_resize=True,
+            no_saved_settings=True,
+        ):
+            dpg.add_text("", tag=_ERROR_DIALOG_TEXT_TAG, wrap=500)
+            dpg.add_spacer(height=10)
+            dpg.add_button(label="OK", callback=_hide_error_dialog)
+
+        with dpg.file_dialog(
+            tag=_PAD_LOAD_DIALOG_TAG,
+            show=False,
+            callback=_on_load_audio_selected,
+            cancel_callback=_on_load_audio_cancel,
+            directory_selector=False,
+            modal=True,
+        ):
+            dpg.add_file_extension(".wav")
+            dpg.add_file_extension(".flac")
+            dpg.add_file_extension(".mp3")
+            dpg.add_file_extension(".aif")
+            dpg.add_file_extension(".aiff")
+            dpg.add_file_extension(".ogg")
 
         with dpg.window(
             tag=_PAD_CONTEXT_MENU_TAG,
@@ -244,9 +354,10 @@ def _run_dearpygui(app: FlitzisLooperApp) -> None:
             no_saved_settings=True,
         ):
             dpg.add_button(
-                label="Unload Audio",
-                callback=_unload_audio_placeholder,
-                user_data=None,
+                label="Load Audio",
+                tag=_PAD_CONTEXT_MENU_ACTION_TAG,
+                callback=_on_pad_context_menu_action,
+                user_data=app,
             )
 
         dpg.set_primary_window(_PRIMARY_WINDOW_TAG, value=True)

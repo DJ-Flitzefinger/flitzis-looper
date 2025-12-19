@@ -60,4 +60,12 @@ pub enum ControlMessage {
     /// # Parameters
     /// * `id` - Identifier of the sample to stop
     StopSample { id: usize },
+
+    /// Unload a sample slot.
+    ///
+    /// This stops all active voices for the sample and clears the sample buffer in the slot.
+    ///
+    /// # Parameters
+    /// * `id` - Identifier of the sample slot to unload
+    UnloadSample { id: usize },
 }
