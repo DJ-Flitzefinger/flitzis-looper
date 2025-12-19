@@ -2,7 +2,7 @@ This is a robust and widely used architectural pattern for high-performance audi
 
 ## AudioEngine Architecture
 
-The Flitzis Looper now includes a minimal AudioEngine implemented in Rust using the cpal library. This engine provides low-latency audio output capabilities while maintaining separation between the Python runtime and real-time audio processing.
+The Flitzis Looper includes a AudioEngine implemented in Rust using the cpal library. This engine provides low-latency audio output capabilities while maintaining separation between the Python runtime and real-time audio processing.
 
 ```text
 +---------------------+
@@ -26,8 +26,10 @@ The Flitzis Looper now includes a minimal AudioEngine implemented in Rust using 
 The AudioEngine is responsible for:
 - Managing audio device enumeration and selection
 - Creating and maintaining low-latency audio streams
-- Providing a simple API for Python to control audio playback
-- Ensuring real-time thread safety and performance
+- Decoding short audio files on a non-real-time thread (via `symphonia`)
+- Publishing immutable sample buffers to the audio thread (shared memory handles)
+- Mixing triggered sample voices in the real-time audio callback
+- Providing a simple API for Python to control audio playback while keeping the callback real-time safe
 
 Here is the breakdown of your design questions and the idiomatic way to implement this in Rust.
 

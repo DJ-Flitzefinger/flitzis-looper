@@ -27,6 +27,14 @@ class AudioEngine:
         """Shut down the audio engine."""
         ...
 
+    def load_sample(self, id: int, path: str) -> None:
+        """Load an audio file into a sample slot."""
+        ...
+
+    def play_sample(self, id: int, velocity: float) -> None:
+        """Trigger playback of a previously loaded sample."""
+        ...
+
     def ping(self) -> None:
         """Send a ping message to the audio thread."""
         ...

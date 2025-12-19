@@ -4,6 +4,13 @@
 //! ring buffer between the Python thread and the real-time audio thread.
 
 use pyo3::prelude::*;
+use std::sync::Arc;
+
+#[derive(Debug, Clone)]
+pub(crate) struct SampleBuffer {
+    pub channels: usize,
+    pub samples: Arc<[f32]>,
+}
 
 /// Message that is emitted from the audio thread.
 #[derive(Debug, Clone)]
@@ -34,11 +41,12 @@ pub enum ControlMessage {
     /// * `volume` - Volume level (0.0 to 1.0)
     SetVolume(f32),
 
-    /// Load a sample into memory.
+    /// Publish a loaded sample into an audio-thread slot.
     ///
     /// # Parameters
-    /// * `id` - Unique identifier for the sample
-    LoadSample { id: usize },
+    /// * `id` - Unique identifier for the sample slot (0..32)
+    /// * `sample` - Pre-decoded immutable sample buffer (shared handle)
+    LoadSample { id: usize, sample: SampleBuffer },
 
     /// Play a loaded sample.
     ///
