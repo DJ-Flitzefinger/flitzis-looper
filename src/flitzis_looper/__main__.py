@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from flitzis_looper.ui import run_ui
 
 

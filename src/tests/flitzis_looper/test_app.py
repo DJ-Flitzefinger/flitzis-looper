@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from flitzis_looper.app import FlitzisLooperApp
 from flitzis_looper_rs import AudioEngine
 
