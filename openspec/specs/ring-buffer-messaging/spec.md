@@ -1,18 +1,47 @@
 # Ring Buffer Messaging Specification
 
-## Why
+## Purpose
 To enable efficient, lock-free communication between audio processing threads and control threads using a fixed-size circular buffer.
+## Requirements
+### Requirement: Lock-free Ring Buffer
+The system SHALL provide a lock-free ring buffer for inter-thread messaging between audio engine and control threads, with a maximum capacity of 1024 messages and fixed-size message structs.
 
-## What Changes
-- Implemented ring buffer for message passing
-- Added producer/consumer APIs
-- Ensured thread-safety with atomic operations
-- Added ping/pong messaging protocol using Rust enum
-- Implemented error handling for full/empty buffer conditions
-- Enforced real-time safety: no allocations, no GIL acquisition, no blocking
+#### Scenario: Single message transfer
+- **WHEN** a message is written by the producer
+- **THEN** it is readable by the consumer
+- **AND** the buffer head and tail pointers are correctly updated
+
+### Requirement: Real-time Safety
+The system SHALL ensure no heap allocations, no Python GIL acquisition, and no blocking operations during audio thread message processing.
+
+#### Scenario: Audio thread message processing
+- **WHEN** a message is received in the audio thread
+- **THEN** no heap allocations occur
+- **AND** the Python GIL is not acquired
+- **AND** no blocking operations are performed
 
 ### Requirement: Ring Buffer Integration
-The system must provide a lock-free ring buffer for inter-thread messaging between audio engine and control threads, with a maximum capacity of 1024 messages and fixed-size message structs.
+The system SHALL provide a lock-free ring buffer for inter-thread messaging between audio engine and control threads, with a maximum capacity of 1024 messages and fixed-size message structs.
+
+#### Scenario: Buffer capacity limit
+- **WHEN** the buffer is filled to its 1024-message capacity
+- **THEN** subsequent writes are rejected with an error code
+- **AND** the producer is notified without blocking
+
+### Requirement: Error Handling
+The system SHALL handle ring buffer full/empty conditions gracefully.
+
+#### Scenario: Full buffer handling
+- **WHEN** the ring buffer is full and Python attempts to send a message
+- **THEN** the message is dropped
+- **AND** an appropriate error code is returned
+- **AND** no panic occurs in the audio thread
+
+#### Scenario: Empty buffer handling
+- **WHEN** the audio thread attempts to read from an empty ring buffer
+- **THEN** no message is returned
+- **AND** the thread continues processing normally
+- **AND** no blocking occurs
 
 ## Design
 - Fixed-size buffer with head/tail pointers
