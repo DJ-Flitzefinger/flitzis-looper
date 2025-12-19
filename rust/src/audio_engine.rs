@@ -16,19 +16,21 @@ use symphonia::default::{get_codecs, get_probe};
 
 use crate::messages::{AudioMessage, ControlMessage, SampleBuffer};
 
-const MAX_SAMPLE_SLOTS: usize = 32;
+const MAX_SAMPLE_SLOTS: usize = 36;
 const MAX_VOICES: usize = 32;
 
 #[derive(Debug)]
 struct Voice {
+    sample_id: usize,
     sample: SampleBuffer,
     frame_pos: usize,
     velocity: f32,
 }
 
 impl Voice {
-    fn new(sample: SampleBuffer, velocity: f32) -> Self {
+    fn new(sample_id: usize, sample: SampleBuffer, velocity: f32) -> Self {
         Self {
+            sample_id,
             sample,
             frame_pos: 0,
             velocity,
@@ -79,7 +81,7 @@ impl RtMixer {
 
         for voice_slot in &mut self.voices {
             if voice_slot.is_none() {
-                *voice_slot = Some(Voice::new(sample, velocity));
+                *voice_slot = Some(Voice::new(id, sample, velocity));
                 return;
             }
         }
@@ -90,6 +92,21 @@ impl RtMixer {
     fn stop_all(&mut self) {
         for voice in &mut self.voices {
             *voice = None;
+        }
+    }
+
+    fn stop_sample(&mut self, id: usize) {
+        if id >= MAX_SAMPLE_SLOTS {
+            return;
+        }
+
+        for voice_slot in &mut self.voices {
+            let should_stop = voice_slot
+                .as_ref()
+                .is_some_and(|voice| voice.sample_id == id);
+            if should_stop {
+                *voice_slot = None;
+            }
         }
     }
 
@@ -354,6 +371,9 @@ impl AudioEngine {
                             ControlMessage::PlaySample { id, velocity } => {
                                 mixer.play_sample(id, velocity);
                             }
+                            ControlMessage::StopSample { id } => {
+                                mixer.stop_sample(id);
+                            }
                             ControlMessage::Play() | ControlMessage::SetVolume(_) => {}
                         }
                     }
@@ -457,6 +477,29 @@ impl AudioEngine {
         producer_guard
             .push(ControlMessage::PlaySample { id, velocity })
             .map_err(|_| PyRuntimeError::new_err("Failed to send PlaySample - buffer may be full"))
+    }
+
+    /// Stop playback of a previously triggered sample.
+    pub fn stop_sample(&mut self, id: usize) -> PyResult<()> {
+        if id >= MAX_SAMPLE_SLOTS {
+            return Err(PyValueError::new_err(format!(
+                "id out of range (expected 0..{}, got {id})",
+                MAX_SAMPLE_SLOTS - 1
+            )));
+        }
+
+        let producer = self
+            .producer
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        producer_guard
+            .push(ControlMessage::StopSample { id })
+            .map_err(|_| PyRuntimeError::new_err("Failed to send StopSample - buffer may be full"))
     }
 
     /// Send a ping message to the audio thread.
@@ -678,6 +721,33 @@ mod tests {
         assert!((out[2] - 0.125).abs() < 1e-6);
         assert!((out[3] + 0.125).abs() < 1e-6);
 
+        out.fill(1.0);
+        mixer.render(&mut out);
+        assert!(out.iter().all(|&s| s.abs() < 1e-6));
+    }
+
+    #[test]
+    fn test_mixing_stop_sample_silences_active_voices() {
+        let sample = SampleBuffer {
+            channels: 2,
+            samples: Arc::from(
+                vec![
+                    0.5f32, -0.5f32, 0.5f32, -0.5f32, 0.5f32, -0.5f32, 0.5f32, -0.5f32,
+                ]
+                .into_boxed_slice(),
+            ),
+        };
+
+        let mut mixer = RtMixer::new(2);
+        mixer.load_sample(0, sample);
+        mixer.play_sample(0, 1.0);
+        mixer.play_sample(0, 1.0);
+
+        let mut out = vec![0.0f32; 4];
+        mixer.render(&mut out);
+        assert!(out.iter().any(|&s| s.abs() > 1e-6));
+
+        mixer.stop_sample(0);
         out.fill(1.0);
         mixer.render(&mut out);
         assert!(out.iter().all(|&s| s.abs() < 1e-6));

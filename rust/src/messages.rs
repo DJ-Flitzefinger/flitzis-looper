@@ -44,7 +44,7 @@ pub enum ControlMessage {
     /// Publish a loaded sample into an audio-thread slot.
     ///
     /// # Parameters
-    /// * `id` - Unique identifier for the sample slot (0..32)
+    /// * `id` - Unique identifier for the sample slot (0..36)
     /// * `sample` - Pre-decoded immutable sample buffer (shared handle)
     LoadSample { id: usize, sample: SampleBuffer },
 
@@ -54,4 +54,10 @@ pub enum ControlMessage {
     /// * `id` - Identifier of the sample to play
     /// * `velocity` - Playback velocity (0.0 to 1.0)
     PlaySample { id: usize, velocity: f32 },
+
+    /// Stop all active voices for a sample.
+    ///
+    /// # Parameters
+    /// * `id` - Identifier of the sample to stop
+    StopSample { id: usize },
 }

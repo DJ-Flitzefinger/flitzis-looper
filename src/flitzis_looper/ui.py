@@ -7,6 +7,7 @@ from flitzis_looper.app import FlitzisLooperApp
 VIEWPORT_WIDTH_PX = 960
 VIEWPORT_HEIGHT_PX = 630
 _PRIMARY_WINDOW_TAG = "primary_window"
+_PAD_CONTEXT_MENU_TAG = "pad_context_menu"
 
 GRID_SIZE = 6
 NUM_BANKS = 6
@@ -32,6 +33,7 @@ _TEXT_ACTIVE_RGBA = (0, 0, 0, 255)
 def run_ui() -> None:
     """Start the Dear PyGui UI shell."""
     app = FlitzisLooperApp()
+    app.audio_engine.run()
     _run_dearpygui(app)
 
 
@@ -93,7 +95,24 @@ def _update_bank_button_highlight(
         dpg.bind_item_theme(_bank_tag(bank_id), theme)
 
 
-def _build_pad_grid(*, pad_theme: int) -> None:
+def _build_pad_grid(app: FlitzisLooperApp, *, pad_theme: int) -> None:
+    def _sample_id(pad_id: int) -> int:
+        return pad_id - 1
+
+    def _trigger_pad(_sender: int, _app_data: Any, pad_id: int) -> None:
+        sample_id = _sample_id(pad_id)
+        app.audio_engine.stop_sample(sample_id)
+        app.audio_engine.play_sample(sample_id, 1.0)
+
+    def _stop_pad(_sender: int, _app_data: Any, pad_id: int) -> None:
+        app.audio_engine.stop_sample(_sample_id(pad_id))
+
+    def _open_pad_context_menu(_sender: int, _app_data: Any, pad_id: int) -> None:
+        dpg.hide_item(_PAD_CONTEXT_MENU_TAG)
+        dpg.set_item_user_data(_PAD_CONTEXT_MENU_TAG, pad_id)
+        dpg.set_item_pos(_PAD_CONTEXT_MENU_TAG, list(dpg.get_mouse_pos(local=False)))
+        dpg.show_item(_PAD_CONTEXT_MENU_TAG)
+
     with dpg.table(header_row=False):
         for _ in range(GRID_SIZE):
             dpg.add_table_column(width_fixed=True)
@@ -108,8 +127,23 @@ def _build_pad_grid(*, pad_theme: int) -> None:
                         tag=tag,
                         width=_PAD_BUTTON_WIDTH_PX,
                         height=_PAD_BUTTON_HEIGHT_PX,
+                        callback=_trigger_pad,
+                        user_data=pad_id,
                     )
                     dpg.bind_item_theme(tag, pad_theme)
+
+                    with dpg.item_handler_registry() as handlers:
+                        dpg.add_item_clicked_handler(
+                            button=dpg.mvMouseButton_Right,
+                            callback=_stop_pad,
+                            user_data=pad_id,
+                        )
+                        dpg.add_item_clicked_handler(
+                            button=dpg.mvMouseButton_Middle,
+                            callback=_open_pad_context_menu,
+                            user_data=pad_id,
+                        )
+                    dpg.bind_item_handler_registry(tag, handlers)
 
 
 def _build_bank_row(
@@ -151,7 +185,7 @@ def _build_performance_view(
     bank_active_theme: int,
     bank_inactive_theme: int,
 ) -> None:
-    _build_pad_grid(pad_theme=pad_theme)
+    _build_pad_grid(app, pad_theme=pad_theme)
     dpg.add_spacer(height=10)
     _build_bank_row(
         app,
@@ -194,6 +228,25 @@ def _run_dearpygui(app: FlitzisLooperApp) -> None:
                 pad_theme=pad_theme,
                 bank_active_theme=bank_active_theme,
                 bank_inactive_theme=bank_inactive_theme,
+            )
+
+        def _unload_audio_placeholder(_sender: int, _app_data: Any, _user_data: Any) -> None:
+            dpg.hide_item(_PAD_CONTEXT_MENU_TAG)
+
+        with dpg.window(
+            tag=_PAD_CONTEXT_MENU_TAG,
+            popup=True,
+            show=False,
+            autosize=True,
+            no_title_bar=True,
+            no_move=True,
+            no_resize=True,
+            no_saved_settings=True,
+        ):
+            dpg.add_button(
+                label="Unload Audio",
+                callback=_unload_audio_placeholder,
+                user_data=None,
             )
 
         dpg.set_primary_window(_PRIMARY_WINDOW_TAG, value=True)

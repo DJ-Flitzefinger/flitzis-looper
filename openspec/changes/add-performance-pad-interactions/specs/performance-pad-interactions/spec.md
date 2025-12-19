@@ -29,7 +29,7 @@ The system SHALL open a per-pad context menu on middle-click.
 - **WHEN** the performer middle-clicks a pad
 - **THEN** a context menu for that pad is shown
 
-#### Scenario: Context menu provides a stop action
+#### Scenario: Context menu provides a unload-audio action
 - **WHEN** the pad context menu is open
-- **AND** the performer selects the "Stop" action
-- **THEN** playback for that pad stops
+- **AND** the performer selects the "Unload Audio" action
+- **THEN** nothing happens (placeholder action to be done later)
