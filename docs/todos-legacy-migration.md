@@ -30,12 +30,13 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 - [x] As a performer, a loaded pad plays as a **loop** (continuous repeat), not a one-shot sample.
 - [x] As a performer, triggering a currently-playing pad **restarts** it in a predictable way.
 - [x] As a performer, I can stop playback for an individual pad.
-- [ ] As a performer, I can stop all currently-playing pads.
+- [ ] As a performer, I can stop all currently-playing pads (UI action missing; `AudioEngine.stop_all()` exists).
 
 ### 3) Multi-loop mode (polyphonic looping)
-- [ ] As a performer, I can enable **multi-loop mode** to play multiple pads simultaneously.
-- [ ] As a performer, when multi-loop mode is disabled, triggering a pad stops other playing pads (legacy “one-at-a-time” behavior).
-- [ ] As a performer, the UI clearly indicates which pads are currently active.
+- OpenSpec changes (archived): `add-multi-loop-mode`
+- [x] As a performer, I can enable **multi-loop mode** to play multiple pads simultaneously.
+- [x] As a performer, when multi-loop mode is disabled, triggering a pad stops other playing pads (legacy “one-at-a-time” behavior).
+- [x] As a performer, the UI clearly indicates which pads are currently active.
 
 ### 4) Pad content management (load/unload)
 - OpenSpec changes (archived): `add-pad-loop-playback`
