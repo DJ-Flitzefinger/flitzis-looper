@@ -15,6 +15,8 @@ class FlitzisLooperApp:
         self.audio_engine: AudioEngine = AudioEngine()
         self.selected_bank: int = 1
         self.sample_paths: list[str | None] = [None] * NUM_PADS
+        self.multi_loop_enabled: bool = False
+        self.active_sample_ids: set[int] = set()
 
     def select_bank(self, bank_id: int) -> None:
         """Select the active performance bank.
@@ -62,8 +64,58 @@ class FlitzisLooperApp:
         """
         self._validate_sample_id(sample_id)
         self.audio_engine.stop_sample(sample_id)
+        self.active_sample_ids.discard(sample_id)
         self.audio_engine.unload_sample(sample_id)
         self.sample_paths[sample_id] = None
+
+    def set_multi_loop_enabled(self, *, enabled: bool) -> None:
+        """Enable or disable MultiLoop mode."""
+        self.multi_loop_enabled = enabled
+
+    def trigger_pad(self, sample_id: int, velocity: float = 1.0) -> None:
+        """Trigger or retrigger a pad's loop.
+
+        When MultiLoop is disabled, all other active pads are stopped first.
+
+        Args:
+            sample_id: Sample slot identifier (0..35).
+            velocity: Playback velocity (0.0..=1.0).
+        """
+        self._validate_sample_id(sample_id)
+
+        if not self.is_sample_loaded(sample_id):
+            return
+
+        if self.multi_loop_enabled:
+            self.audio_engine.stop_sample(sample_id)
+            self.active_sample_ids.discard(sample_id)
+            self.audio_engine.play_sample(sample_id, velocity)
+            self.active_sample_ids.add(sample_id)
+            return
+
+        self.audio_engine.stop_all()
+        self.active_sample_ids.clear()
+        self.audio_engine.play_sample(sample_id, velocity)
+        self.active_sample_ids.add(sample_id)
+
+    def stop_pad(self, sample_id: int) -> None:
+        """Stop a pad if it is currently active.
+
+        Args:
+            sample_id: Sample slot identifier (0..35).
+        """
+        self._validate_sample_id(sample_id)
+
+        if sample_id not in self.active_sample_ids:
+            return
+
+        self.audio_engine.stop_sample(sample_id)
+        self.active_sample_ids.discard(sample_id)
+
+    def stop_all_pads(self) -> None:
+        """Stop all currently active pads."""
+        self.audio_engine.stop_all()
+        self.active_sample_ids.clear()
 
     def _validate_sample_id(self, sample_id: int) -> None:
         if not 0 <= sample_id < NUM_PADS:

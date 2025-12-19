@@ -11,6 +11,7 @@ _PRIMARY_WINDOW_TAG = "primary_window"
 _PAD_CONTEXT_MENU_TAG = "pad_context_menu"
 _PAD_CONTEXT_MENU_ACTION_TAG = "pad_context_menu_action"
 _PAD_LOAD_DIALOG_TAG = "pad_load_dialog"
+_MULTILOOP_BUTTON_TAG = "multiloop_btn"
 _ERROR_DIALOG_TAG = "error_dialog"
 _ERROR_DIALOG_TEXT_TAG = "error_dialog_text"
 
@@ -72,6 +73,16 @@ def _create_pad_theme() -> int:
     return theme
 
 
+def _create_active_pad_theme() -> int:
+    with dpg.theme() as theme, dpg.theme_component(dpg.mvButton):
+        dpg.add_theme_color(dpg.mvThemeCol_Button, _BANK_ACTIVE_RGBA)
+        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, _BANK_HOVER_RGBA)
+        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, _BANK_ACTIVE_RGBA)
+        dpg.add_theme_color(dpg.mvThemeCol_Text, _TEXT_ACTIVE_RGBA)
+
+    return theme
+
+
 def _create_bank_theme(*, active: bool) -> int:
     if active:
         button = _BANK_ACTIVE_RGBA
@@ -100,17 +111,44 @@ def _update_bank_button_highlight(
         dpg.bind_item_theme(_bank_tag(bank_id), theme)
 
 
-def _build_pad_grid(app: FlitzisLooperApp, *, pad_theme: int) -> None:
+def _build_pad_grid(  # noqa: C901
+    app: FlitzisLooperApp,
+    *,
+    pad_theme: int,
+    active_pad_theme: int,
+) -> None:
     def _sample_id(pad_id: int) -> int:
         return pad_id - 1
 
-    def _trigger_pad(_sender: int, _app_data: Any, pad_id: int) -> None:
+    def _update_pad_theme(pad_id: int) -> None:
         sample_id = _sample_id(pad_id)
-        app.audio_engine.stop_sample(sample_id)
-        app.audio_engine.play_sample(sample_id, 1.0)
+        theme = active_pad_theme if sample_id in app.active_sample_ids else pad_theme
+        dpg.bind_item_theme(_pad_tag(pad_id), theme)
+
+    def _update_all_pad_themes() -> None:
+        for pad_id in range(1, GRID_SIZE * GRID_SIZE + 1):
+            _update_pad_theme(pad_id)
+
+    def _trigger_pad(_sender: int, _app_data: Any, pad_id: int) -> None:
+        try:
+            app.trigger_pad(_sample_id(pad_id), 1.0)
+        except (RuntimeError, ValueError) as exc:
+            _show_error_dialog(str(exc))
+            return
+
+        if app.multi_loop_enabled:
+            _update_pad_theme(pad_id)
+        else:
+            _update_all_pad_themes()
 
     def _stop_pad(_sender: int, _app_data: Any, pad_id: int) -> None:
-        app.audio_engine.stop_sample(_sample_id(pad_id))
+        try:
+            app.stop_pad(_sample_id(pad_id))
+        except (RuntimeError, ValueError) as exc:
+            _show_error_dialog(str(exc))
+            return
+
+        _update_pad_theme(pad_id)
 
     def _open_pad_context_menu(_sender: int, _app_data: Any, pad_id: int) -> None:
         dpg.hide_item(_PAD_CONTEXT_MENU_TAG)
@@ -136,12 +174,11 @@ def _build_pad_grid(app: FlitzisLooperApp, *, pad_theme: int) -> None:
                         tag=tag,
                         width=_PAD_BUTTON_WIDTH_PX,
                         height=_PAD_BUTTON_HEIGHT_PX,
-                        callback=_trigger_pad,
-                        user_data=pad_id,
                     )
-                    dpg.bind_item_theme(tag, pad_theme)
+                    _update_pad_theme(pad_id)
 
                     with dpg.item_handler_registry() as handlers:
+                        dpg.add_item_activated_handler(callback=_trigger_pad, user_data=pad_id)
                         dpg.add_item_clicked_handler(
                             button=dpg.mvMouseButton_Right,
                             callback=_stop_pad,
@@ -187,19 +224,68 @@ def _build_bank_row(
     )
 
 
+def _update_multiloop_toggle(
+    app: FlitzisLooperApp,
+    *,
+    multiloop_enabled_theme: int,
+    multiloop_disabled_theme: int,
+) -> None:
+    label = "MultiLoop: ON" if app.multi_loop_enabled else "MultiLoop: OFF"
+    theme = multiloop_enabled_theme if app.multi_loop_enabled else multiloop_disabled_theme
+    dpg.configure_item(_MULTILOOP_BUTTON_TAG, label=label)
+    dpg.bind_item_theme(_MULTILOOP_BUTTON_TAG, theme)
+
+
+def _build_multiloop_toggle(
+    app: FlitzisLooperApp,
+    *,
+    multiloop_enabled_theme: int,
+    multiloop_disabled_theme: int,
+) -> None:
+    def _on_multiloop_clicked(_sender: int, _app_data: Any, _user_data: Any) -> None:
+        app.set_multi_loop_enabled(enabled=not app.multi_loop_enabled)
+        _update_multiloop_toggle(
+            app,
+            multiloop_enabled_theme=multiloop_enabled_theme,
+            multiloop_disabled_theme=multiloop_disabled_theme,
+        )
+
+    with dpg.group(horizontal=True):
+        dpg.add_button(
+            label="MultiLoop: OFF",
+            tag=_MULTILOOP_BUTTON_TAG,
+            width=_BANK_BUTTON_WIDTH_PX,
+            height=_BANK_BUTTON_HEIGHT_PX,
+            callback=_on_multiloop_clicked,
+        )
+
+    _update_multiloop_toggle(
+        app,
+        multiloop_enabled_theme=multiloop_enabled_theme,
+        multiloop_disabled_theme=multiloop_disabled_theme,
+    )
+
+
 def _build_performance_view(
     app: FlitzisLooperApp,
     *,
     pad_theme: int,
+    active_pad_theme: int,
     bank_active_theme: int,
     bank_inactive_theme: int,
 ) -> None:
-    _build_pad_grid(app, pad_theme=pad_theme)
+    _build_pad_grid(app, pad_theme=pad_theme, active_pad_theme=active_pad_theme)
     dpg.add_spacer(height=10)
     _build_bank_row(
         app,
         bank_active_theme=bank_active_theme,
         bank_inactive_theme=bank_inactive_theme,
+    )
+    dpg.add_spacer(height=10)
+    _build_multiloop_toggle(
+        app,
+        multiloop_enabled_theme=bank_active_theme,
+        multiloop_disabled_theme=bank_inactive_theme,
     )
 
 
@@ -257,10 +343,17 @@ def _on_load_audio_selected(_sender: int, app_data: Any, user_data: Any) -> None
 
 
 def _on_pad_context_menu_action(_sender: int, _app_data: Any, user_data: Any) -> None:
-    if not isinstance(user_data, FlitzisLooperApp):
+    if not (isinstance(user_data, tuple) and len(user_data) == 3):
         return
 
-    app = user_data
+    app, pad_theme, active_pad_theme = user_data
+    if (
+        not isinstance(app, FlitzisLooperApp)
+        or not isinstance(pad_theme, int)
+        or not isinstance(active_pad_theme, int)
+    ):
+        return
+
     pad_id = dpg.get_item_user_data(_PAD_CONTEXT_MENU_TAG)
     dpg.hide_item(_PAD_CONTEXT_MENU_TAG)
 
@@ -273,6 +366,9 @@ def _on_pad_context_menu_action(_sender: int, _app_data: Any, user_data: Any) ->
             app.unload_sample(sample_id)
         except (RuntimeError, ValueError) as exc:
             _show_error_dialog(str(exc))
+        else:
+            theme = active_pad_theme if sample_id in app.active_sample_ids else pad_theme
+            dpg.bind_item_theme(_pad_tag(pad_id), theme)
         return
 
     dpg.configure_item(_PAD_LOAD_DIALOG_TAG, user_data=(app, sample_id))
@@ -295,6 +391,7 @@ def _run_dearpygui(app: FlitzisLooperApp) -> None:
 
         dpg.bind_theme(_create_base_theme())
         pad_theme = _create_pad_theme()
+        active_pad_theme = _create_active_pad_theme()
         bank_active_theme = _create_bank_theme(active=True)
         bank_inactive_theme = _create_bank_theme(active=False)
 
@@ -311,6 +408,7 @@ def _run_dearpygui(app: FlitzisLooperApp) -> None:
             _build_performance_view(
                 app,
                 pad_theme=pad_theme,
+                active_pad_theme=active_pad_theme,
                 bank_active_theme=bank_active_theme,
                 bank_inactive_theme=bank_inactive_theme,
             )
@@ -357,7 +455,7 @@ def _run_dearpygui(app: FlitzisLooperApp) -> None:
                 label="Load Audio",
                 tag=_PAD_CONTEXT_MENU_ACTION_TAG,
                 callback=_on_pad_context_menu_action,
-                user_data=app,
+                user_data=(app, pad_theme, active_pad_theme),
             )
 
         dpg.set_primary_window(_PRIMARY_WINDOW_TAG, value=True)

@@ -34,6 +34,7 @@ def test_load_and_play_sample_smoke(audio_engine: AudioEngine, tmp_path) -> None
         pytest.skip("No matching sample rate for output device")
 
     audio_engine.play_sample(0, 1.0)
+    audio_engine.stop_all()
     audio_engine.unload_sample(0)
 
 
@@ -63,3 +64,14 @@ def test_sample_slot_id_range_is_0_to_35() -> None:
 
     with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
         engine.unload_sample(35)
+
+
+def test_stop_all_requires_initialized_engine() -> None:
+    engine = AudioEngine()
+
+    with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
+        engine.stop_all()
+
+
+def test_stop_all_is_safe_when_nothing_playing(audio_engine: AudioEngine) -> None:
+    audio_engine.stop_all()

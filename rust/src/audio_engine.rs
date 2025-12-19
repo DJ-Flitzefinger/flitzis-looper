@@ -495,6 +495,22 @@ impl AudioEngine {
             .map_err(|_| PyRuntimeError::new_err("Failed to send PlaySample - buffer may be full"))
     }
 
+    /// Stop playback of all active voices.
+    pub fn stop_all(&mut self) -> PyResult<()> {
+        let producer = self
+            .producer
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        producer_guard
+            .push(ControlMessage::Stop())
+            .map_err(|_| PyRuntimeError::new_err("Failed to send Stop - buffer may be full"))
+    }
+
     /// Stop playback of a previously triggered sample.
     pub fn stop_sample(&mut self, id: usize) -> PyResult<()> {
         if id >= MAX_SAMPLE_SLOTS {
@@ -826,5 +842,36 @@ mod tests {
         out.fill(1.0);
         mixer.render(&mut out);
         assert!(out.iter().all(|&s| s.abs() < 1e-6));
+    }
+
+    #[test]
+    fn test_mixing_stop_all_silences_all_active_voices() {
+        let sample_a = SampleBuffer {
+            channels: 2,
+            samples: Arc::from(vec![0.5f32, -0.5f32, 0.5f32, -0.5f32].into_boxed_slice()),
+        };
+        let sample_b = SampleBuffer {
+            channels: 2,
+            samples: Arc::from(vec![0.25f32, -0.25f32, 0.25f32, -0.25f32].into_boxed_slice()),
+        };
+
+        let mut mixer = RtMixer::new(2);
+        mixer.load_sample(0, sample_a);
+        mixer.load_sample(1, sample_b);
+        mixer.play_sample(0, 1.0);
+        mixer.play_sample(1, 1.0);
+
+        let mut out = vec![0.0f32; 4];
+        mixer.render(&mut out);
+        assert!(out.iter().any(|&s| s.abs() > 1e-6));
+
+        mixer.stop_all();
+        out.fill(1.0);
+        mixer.render(&mut out);
+        assert!(out.iter().all(|&s| s.abs() < 1e-6));
+
+        mixer.play_sample(0, 1.0);
+        mixer.render(&mut out);
+        assert!(out.iter().any(|&s| s.abs() > 1e-6));
     }
 }

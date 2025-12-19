@@ -32,7 +32,7 @@ pub enum ControlMessage {
     /// Start the audio playback.
     Play(),
 
-    /// Stop the audio playback.
+    /// Stop all currently active voices.
     Stop(),
 
     /// Set the volume level.
