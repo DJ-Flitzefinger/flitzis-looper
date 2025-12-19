@@ -37,8 +37,6 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 - Format (only check): `cargo fmt --manifest-path rust/Cargo.toml --check`
 - Format: `cargo fmt --manifest-path rust/Cargo.toml`
 - Tests: `cargo test --manifest-path rust/Cargo.toml`
-- Docs: `cargo doc --manifest-path rust/Cargo.toml`
-  - Read crate docs, e.g. crate rtrb under `rust/target/doc/rtrb/index.html`
 
 ## Dependency Management
 
@@ -73,6 +71,7 @@ Keep this managed block so 'openspec update' can refresh the instructions.
   - Use modern Python 3.13+ type hints
   - Prefer `T | None` over `Union[T, None]`
   - Prefer `list` over `List`
+  - Don't add `from __future__ import annotations` (default for modern Python)
 - Naming: snake_case for functions/variables, PascalCase for classes
 - Error Handling
   - Use Python exceptions
@@ -91,6 +90,22 @@ Keep this managed block so 'openspec update' can refresh the instructions.
   - Validate inputs before crossing FFI boundary
 - Error Handling
   - Use anyhow and thiserror
+
+## Documentation
+Depending on the current task, consider reading specific documentation.
+
+### Project
+- User Interface: `docs/ui-toolkit.md`
+- Audio Engine: `docs/audio-engine.md`
+- Message Passing (between AudioEngine thread and core): `docs/message-passing.md`
+
+### Python
+Fetch documentation directly from the web.
+- Dear PyGui: https://raw.githubusercontent.com/hoffstadt/DearPyGui/master/docs/source/index.rst
+
+### Rust
+Find documentation for crate `CRATE` under `rust/target/doc/CRATE/index.html`. (You may need to
+generate the docs first using `cargo doc --manifest-path rust/Cargo.toml`.)
 
 ## CI/CD
 - All changes must pass lint, format, and test checks in CI
