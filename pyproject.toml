@@ -4,13 +4,16 @@ build-backend = "maturin"
 
 [project]
 name = "flitzis-looper-rs"
-requires-python = ">=3.8"
+requires-python = ">=3.14"
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dynamic = ["version"]
+dependencies = [
+    "dearpygui>=2.1.1",
+]
 
 [dependency-groups]
 dev = [
@@ -19,3 +22,11 @@ dev = [
     "pytest>=8.3.5",
     "ruff>=0.14.10",
 ]
+
+[tool.ruff]
+extend = "ruff_defaults.toml"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["src/tests"]
+norecursedirs = ["old-project"]

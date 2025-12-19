@@ -67,5 +67,5 @@ A high-performance audio looper application that enables real-time sample trigge
 - rtrb: Real-time ring buffer (Rust crate)
 - Maturin: Build system for PyO3 projects
 - WAV decoder: Custom or external (e.g., `wav` crate)
-- Python 3.8+: Required for PyO3 compatibility
+- Python 3.14+: Modern type hints
 - Dear PyGui

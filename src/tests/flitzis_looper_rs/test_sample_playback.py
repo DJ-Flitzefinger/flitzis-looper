@@ -1,11 +1,11 @@
-from __future__ import annotations
-
-from array import array
 import wave
+from array import array
+from typing import TYPE_CHECKING
 
 import pytest
 
-from flitzis_looper_rs import AudioEngine
+if TYPE_CHECKING:
+    from flitzis_looper_rs import AudioEngine
 
 
 def _write_mono_pcm16_wav(path, sample_rate_hz: int) -> None:

@@ -68,7 +68,7 @@ Keep this managed block so 'openspec update' can refresh the instructions.
   - PEP 8 standards
 - Types
   - Use type hints consistently
-  - Use modern Python 3.13+ type hints
+  - Use modern Python 3.14+ type hints
   - Prefer `T | None` over `Union[T, None]`
   - Prefer `list` over `List`
   - Don't add `from __future__ import annotations` (default for modern Python)

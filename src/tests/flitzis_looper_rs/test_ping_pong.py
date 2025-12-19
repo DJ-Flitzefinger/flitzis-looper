@@ -22,11 +22,11 @@ def test_ping_pong(audio_engine: AudioEngine):
 
 
 def test_multiple_pings(audio_engine: AudioEngine):
-    for i in range(5):
+    for _ in range(5):
         audio_engine.ping()
 
     time.sleep(0.1)
 
-    for i in range(5):
+    for _ in range(5):
         msg = wait_for_msg(audio_engine)
         assert isinstance(msg, AudioMessage.Pong)
