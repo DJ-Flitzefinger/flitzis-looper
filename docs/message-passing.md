@@ -2,6 +2,19 @@ Here is a concrete breakdown of how the message passing looks from both sides.
 
 The key to high performance here is that **Python never sees the Ring Buffer**. Python sees a standard object with methods. The Rust implementation of those methods acts as the "Producer," silently converting Python types into a raw Rust Enum and pushing it into the lock-free queue.
 
+## Audio Buffer Flow
+
+With the introduction of the AudioEngine, audio processing follows a specific flow:
+
+1. Python instantiates the AudioEngine via PyO3 FFI
+2. AudioEngine creates a cpal stream on initialization
+3. Audio callback runs on a real-time thread, independent of Python GIL
+4. AudioEngine fills buffer with silence (initial minimal implementation)
+5. cpal streams buffer to system audio device
+6. Engine maintains single output stream
+
+The current implementation uses a simple silence callback, but future extensions could implement ring buffer communication for dynamic audio content.
+
 ### 1. The Shared "Protocol" (Rust)
 
 First, we define the messages. This is pure Rust data—no Python overhead here.
