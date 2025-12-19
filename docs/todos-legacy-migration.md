@@ -26,7 +26,8 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 - [x] As a performer, the theme (colors, sizes) and UI structure (layout) will closely resemble the old Tk interface.
 
 ### 2) Loop playback (not just one-shot samples)
-- [ ] As a performer, a loaded pad plays as a **loop** (continuous repeat), not a one-shot sample.
+- OpenSpec changes (archived): `add-pad-loop-playback`
+- [x] As a performer, a loaded pad plays as a **loop** (continuous repeat), not a one-shot sample.
 - [x] As a performer, triggering a currently-playing pad **restarts** it in a predictable way.
 - [x] As a performer, I can stop playback for an individual pad.
 - [ ] As a performer, I can stop all currently-playing pads.
@@ -37,8 +38,9 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 - [ ] As a performer, the UI clearly indicates which pads are currently active.
 
 ### 4) Pad content management (load/unload)
-- [ ] As a performer, I can **load an audio file onto a pad** from the UI.
-- [ ] As a performer, I can **unload** a pad to free its slot.
+- OpenSpec changes (archived): `add-pad-loop-playback`
+- [x] As a performer, I can **load an audio file onto a pad** from the UI.
+- [x] As a performer, I can **unload** a pad to free its slot.
 - [ ] As a performer, pads show meaningful labels (e.g., file name + BPM state) instead of just an index.
 
 ### 5) BPM detection, manual BPM, and tempo workflow
