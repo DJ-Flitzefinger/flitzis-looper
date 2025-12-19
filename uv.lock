@@ -1,6 +1,10 @@
 version = 1
 revision = 3
 requires-python = ">=3.14"
+resolution-markers = [
+    "sys_platform == 'win32'",
+    "sys_platform != 'win32'",
+]
 
 [[package]]
 name = "colorama"
@@ -31,7 +35,8 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "maturin", extra = ["patchelf"] },
+    { name = "maturin" },
+    { name = "maturin", extra = ["patchelf"], marker = "sys_platform != 'win32'" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "ruff" },
@@ -42,7 +47,8 @@ requires-dist = [{ name = "dearpygui", specifier = ">=2.1.1" }]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "maturin", extras = ["patchelf"], specifier = ">=1.10.2" },
+    { name = "maturin", marker = "sys_platform == 'win32'", specifier = ">=1.10.2" },
+    { name = "maturin", extras = ["patchelf"], marker = "sys_platform != 'win32'", specifier = ">=1.10.2" },
     { name = "mypy", specifier = ">=1.14.1" },
     { name = "pytest", specifier = ">=8.3.5" },
     { name = "ruff", specifier = ">=0.14.10" },
@@ -110,7 +116,7 @@ wheels = [
 
 [package.optional-dependencies]
 patchelf = [
-    { name = "patchelf" },
+    { name = "patchelf", marker = "sys_platform != 'win32'" },
 ]
 
 [[package]]
