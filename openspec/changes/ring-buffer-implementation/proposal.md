@@ -4,15 +4,15 @@
 `ring-buffer-implementation`
 
 ## Status
-Proposed
+Implemented
 
 ## Summary
 Implement a lock-free, allocation-free ring buffer using the `rtrb` crate to enable efficient message passing between Python and Rust audio threads. This change introduces a ping/pong messaging system with comprehensive tests on both sides.
 
-## Problem Statement
+## Why
 Currently, the audio engine has minimal functionality with no communication channel between Python and the real-time audio thread. We need a high-performance message passing mechanism that adheres to real-time constraints (no allocations, no blocking) while providing a clean API for Python users.
 
-## Solution Overview
+## What Changes
 1. Integrate the `rtrb` crate for lock-free SPSC (Single Producer, Single Consumer) ring buffer communication
 2. Define a Rust enum-based message protocol for efficient wire format
 3. Implement ping/pong messaging as initial test functionality

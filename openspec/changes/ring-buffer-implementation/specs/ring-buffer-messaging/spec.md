@@ -1,7 +1,4 @@
-# Ring Buffer Messaging Specification
-
-## MODIFIED Requirements
-
+## ADDED Requirements
 ### Requirement: Ring Buffer Integration
 The system SHALL integrate the `rtrb` crate to provide lock-free message passing between Python and the audio thread.
 
@@ -17,6 +14,7 @@ The system SHALL integrate the `rtrb` crate to provide lock-free message passing
 - **AND** no blocking operations occur
 - **AND** no Python GIL is acquired
 
+## ADDED Requirements
 ### Requirement: Ping/Pong Messaging
 The system SHALL support basic ping/pong messaging between Python and the audio thread for testing communication.
 
@@ -32,6 +30,7 @@ The system SHALL support basic ping/pong messaging between Python and the audio 
 - **AND** the Pong message is pushed back to a response ring buffer
 - **AND** Python can receive the Pong message
 
+## ADDED Requirements
 ### Requirement: Message Protocol
 The system SHALL use a Rust enum as the wire format for messages passed through the ring buffer.
 
@@ -41,6 +40,7 @@ The system SHALL use a Rust enum as the wire format for messages passed through 
 - **AND** messages are passed as raw Rust memory structures
 - **AND** message size is minimized for common operations
 
+## ADDED Requirements
 ### Requirement: Error Handling
 The system SHALL handle ring buffer full/empty conditions gracefully.
 
