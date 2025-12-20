@@ -53,8 +53,10 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 - [ ] As a performer, the UI shows a clear **BPM display** while loops are active.
 
 ### 6) Global speed control + BPM lock
-- [ ] As a performer, I can adjust a global **speed control** (legacy: ~0.5× to 2.0×).
-- [ ] As a performer, I can **reset** speed to the default (1.0×).
+- OpenSpec changes (archived): `add-global-speed-control`
+- [x] As a performer, I can adjust a global **speed control** (legacy: ~0.5× to 2.0×).
+- [x] As a performer, I can **reset** speed to the default (1.0×).
+- [ ] As a performer, changing the global speed audibly changes loop playback speed (varispeed DSP).
 - [ ] As a performer, I can enable **BPM lock**, so multiple loops stay tempo-aligned to a chosen master BPM.
 - [ ] As a performer, I can set the **master BPM** explicitly.
 
