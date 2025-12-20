@@ -39,10 +39,11 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 - [x] As a performer, the UI clearly indicates which pads are currently active.
 
 ### 4) Pad content management (load/unload)
-- OpenSpec changes (archived): `add-pad-loop-playback`
+- OpenSpec changes (archived): `add-pad-loop-playback`, `update-pad-labels-with-filenames`
 - [x] As a performer, I can **load an audio file onto a pad** from the UI.
 - [x] As a performer, I can **unload** a pad to free its slot.
-- [ ] As a performer, pads show meaningful labels (e.g., file name + BPM state) instead of just an index.
+- [x] As a performer, loaded pads show the loaded audio **filename** (basename) instead of just an index.
+- [ ] As a performer, pad labels include **BPM state/indicator** (in addition to filename).
 
 ### 5) BPM detection, manual BPM, and tempo workflow
 - [ ] As a performer, I can **auto-detect BPM** for a loaded pad.
@@ -101,15 +102,6 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 - [ ] As a performer, long-running actions (e.g., BPM detection, stem generation) do not freeze the UI.
 - [ ] As a performer, triggering pads remains responsive and predictable during performance.
 - [ ] As a user, the application shuts down cleanly and reliably persists my configuration.
-
-## Optional follow-ups (mentioned in legacy TODOs, not required for strict parity)
-These appear in `old-project/docs/todos.md` as future ideas rather than baseline features:
-
-- [ ] MIDI integration
-- [ ] Options / settings menu
-- [ ] Touch-mode option
-- [ ] Config presets
-- [ ] Volume normalization
 
 ## Primary legacy sources consulted
 - `old-project/README.md`
