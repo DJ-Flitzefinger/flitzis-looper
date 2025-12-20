@@ -20,6 +20,9 @@ class FakeAudioEngine:
     def stop_all(self) -> None:
         self.calls.append(("stop_all", ()))
 
+    def set_speed(self, speed: float) -> None:
+        self.calls.append(("set_speed", (speed,)))
+
     def unload_sample(self, sample_id: int) -> None:
         self.calls.append(("unload_sample", (sample_id,)))
 
@@ -48,6 +51,40 @@ def test_multiloop_can_be_enabled_and_disabled() -> None:
 
     app.set_multi_loop_enabled(enabled=False)
     assert app.multi_loop_enabled is False
+
+
+def test_speed_defaults_to_one() -> None:
+    app = FlitzisLooperApp()
+    assert app.speed == 1.0
+
+
+def test_set_speed_updates_state_and_calls_engine() -> None:
+    app = FlitzisLooperApp()
+    fake = FakeAudioEngine()
+    app.audio_engine = cast("AudioEngine", fake)
+
+    app.set_speed(1.5)
+    app.set_speed(3.0)
+    app.set_speed(0.1)
+
+    assert fake.calls == [
+        ("set_speed", (1.5,)),
+        ("set_speed", (2.0,)),
+        ("set_speed", (0.5,)),
+    ]
+    assert app.speed == 0.5
+
+
+def test_reset_speed_sets_one_and_calls_engine() -> None:
+    app = FlitzisLooperApp()
+    fake = FakeAudioEngine()
+    app.audio_engine = cast("AudioEngine", fake)
+
+    app.set_speed(1.5)
+    app.reset_speed()
+
+    assert fake.calls == [("set_speed", (1.5,)), ("set_speed", (1.0,))]
+    assert app.speed == 1.0
 
 
 def test_trigger_unloaded_pad_has_no_effect() -> None:

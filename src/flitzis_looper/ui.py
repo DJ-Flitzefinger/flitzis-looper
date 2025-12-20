@@ -5,13 +5,17 @@ import dearpygui.dearpygui as dpg  # type: ignore[import-untyped]
 
 from flitzis_looper.app import FlitzisLooperApp, pad_label_from_sample_path
 
-VIEWPORT_WIDTH_PX = 960
+VIEWPORT_WIDTH_PX = 1010
 VIEWPORT_HEIGHT_PX = 630
 _PRIMARY_WINDOW_TAG = "primary_window"
 _PAD_CONTEXT_MENU_TAG = "pad_context_menu"
 _PAD_CONTEXT_MENU_ACTION_TAG = "pad_context_menu_action"
 _PAD_LOAD_DIALOG_TAG = "pad_load_dialog"
 _MULTILOOP_BUTTON_TAG = "multiloop_btn"
+_SPEED_SLIDER_TAG = "speed_slider"
+_SPEED_PLUS_BUTTON_TAG = "speed_plus_btn"
+_SPEED_RESET_BUTTON_TAG = "speed_reset_btn"
+_SPEED_MINUS_BUTTON_TAG = "speed_minus_btn"
 _ERROR_DIALOG_TAG = "error_dialog"
 _ERROR_DIALOG_TEXT_TAG = "error_dialog_text"
 
@@ -165,7 +169,11 @@ def _build_pad_grid(  # noqa: C901
         dpg.set_item_pos(_PAD_CONTEXT_MENU_TAG, list(dpg.get_mouse_pos(local=False)))
         dpg.show_item(_PAD_CONTEXT_MENU_TAG)
 
-    with dpg.table(header_row=False):
+    with dpg.table(
+        header_row=False,
+        no_host_extendX=True,
+        policy=dpg.mvTable_SizingFixedFit,
+    ):
         for _ in range(GRID_SIZE):
             dpg.add_table_column(width_fixed=True)
 
@@ -271,6 +279,89 @@ def _build_multiloop_toggle(
     )
 
 
+def _build_speed_controls(
+    app: FlitzisLooperApp,
+    *,
+    button_theme: int,
+    reset_button_theme: int,
+) -> None:
+    slider_height_px = _PAD_BUTTON_HEIGHT_PX * GRID_SIZE + 5 * (GRID_SIZE - 1)
+    button_height_px = _BANK_BUTTON_HEIGHT_PX
+    spacer_height_px = max(0, int((slider_height_px - 3 * button_height_px) / 2))
+
+    def _on_speed_changed(_sender: int, app_data: Any, _user_data: Any) -> None:
+        if not isinstance(app_data, (int, float)):
+            return
+
+        try:
+            app.set_speed(float(app_data))
+        except RuntimeError, ValueError:
+            return
+
+    def _adjust_speed(delta: float) -> None:
+        try:
+            app.set_speed(round(app.speed + delta, 2))
+        except RuntimeError, ValueError:
+            return
+
+        dpg.set_value(_SPEED_SLIDER_TAG, app.speed)
+
+    def _on_speed_inc(_sender: int, _app_data: Any, _user_data: Any) -> None:
+        _adjust_speed(0.05)
+
+    def _on_speed_dec(_sender: int, _app_data: Any, _user_data: Any) -> None:
+        _adjust_speed(-0.05)
+
+    def _on_speed_reset(_sender: int, _app_data: Any, _user_data: Any) -> None:
+        try:
+            app.reset_speed()
+        except (RuntimeError, ValueError) as exc:
+            _show_error_dialog(str(exc))
+            return
+
+        dpg.set_value(_SPEED_SLIDER_TAG, app.speed)
+
+    with dpg.group(horizontal=True):
+        dpg.add_slider_float(
+            label="###speed",
+            tag=_SPEED_SLIDER_TAG,
+            min_value=0.5,
+            max_value=2.0,
+            default_value=app.speed,
+            vertical=True,
+            width=24,
+            height=slider_height_px,
+            callback=_on_speed_changed,
+        )
+        with dpg.group():
+            dpg.add_button(
+                label="+",
+                tag=_SPEED_PLUS_BUTTON_TAG,
+                width=60,
+                height=button_height_px,
+                callback=_on_speed_inc,
+            )
+            dpg.bind_item_theme(_SPEED_PLUS_BUTTON_TAG, button_theme)
+            dpg.add_spacer(height=spacer_height_px)
+            dpg.add_button(
+                label="Reset",
+                tag=_SPEED_RESET_BUTTON_TAG,
+                width=60,
+                height=button_height_px,
+                callback=_on_speed_reset,
+            )
+            dpg.bind_item_theme(_SPEED_RESET_BUTTON_TAG, reset_button_theme)
+            dpg.add_spacer(height=spacer_height_px)
+            dpg.add_button(
+                label="-",
+                tag=_SPEED_MINUS_BUTTON_TAG,
+                width=60,
+                height=button_height_px,
+                callback=_on_speed_dec,
+            )
+            dpg.bind_item_theme(_SPEED_MINUS_BUTTON_TAG, button_theme)
+
+
 def _build_performance_view(
     app: FlitzisLooperApp,
     *,
@@ -279,7 +370,15 @@ def _build_performance_view(
     bank_active_theme: int,
     bank_inactive_theme: int,
 ) -> None:
-    _build_pad_grid(app, pad_theme=pad_theme, active_pad_theme=active_pad_theme)
+    with dpg.group(horizontal=True):
+        _build_pad_grid(app, pad_theme=pad_theme, active_pad_theme=active_pad_theme)
+        dpg.add_spacer(width=10)
+        _build_speed_controls(
+            app,
+            button_theme=pad_theme,
+            reset_button_theme=active_pad_theme,
+        )
+
     dpg.add_spacer(height=10)
     _build_bank_row(
         app,

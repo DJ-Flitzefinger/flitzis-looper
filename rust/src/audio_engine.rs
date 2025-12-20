@@ -40,6 +40,7 @@ impl Voice {
 
 struct RtMixer {
     channels: usize,
+    speed: f32,
     sample_bank: [Option<SampleBuffer>; MAX_SAMPLE_SLOTS],
     voices: [Option<Voice>; MAX_VOICES],
 }
@@ -48,6 +49,7 @@ impl RtMixer {
     fn new(channels: usize) -> Self {
         Self {
             channels,
+            speed: 1.0,
             sample_bank: std::array::from_fn(|_| None),
             voices: std::array::from_fn(|_| None),
         }
@@ -95,6 +97,14 @@ impl RtMixer {
         }
     }
 
+    fn set_speed(&mut self, speed: f32) {
+        if !speed.is_finite() || !(0.5..=2.0).contains(&speed) {
+            return;
+        }
+
+        self.speed = speed;
+    }
+
     fn stop_sample(&mut self, id: usize) {
         if id >= MAX_SAMPLE_SLOTS {
             return;
@@ -121,6 +131,7 @@ impl RtMixer {
 
     fn render(&mut self, output: &mut [f32]) {
         output.fill(Sample::EQUILIBRIUM);
+        let _ = self.speed;
 
         if self.channels == 0 {
             return;
@@ -390,6 +401,9 @@ impl AudioEngine {
                             ControlMessage::UnloadSample { id } => {
                                 mixer.unload_sample(id);
                             }
+                            ControlMessage::SetSpeed(speed) => {
+                                mixer.set_speed(speed);
+                            }
                             ControlMessage::Play() | ControlMessage::SetVolume(_) => {}
                         }
                     }
@@ -509,6 +523,27 @@ impl AudioEngine {
         producer_guard
             .push(ControlMessage::Stop())
             .map_err(|_| PyRuntimeError::new_err("Failed to send Stop - buffer may be full"))
+    }
+
+    /// Set the global speed multiplier.
+    pub fn set_speed(&mut self, speed: f32) -> PyResult<()> {
+        if !speed.is_finite() || !(0.5..=2.0).contains(&speed) {
+            return Err(PyValueError::new_err(
+                "speed out of range (expected 0.5..=2.0)",
+            ));
+        }
+
+        let producer = self
+            .producer
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        let _ = producer_guard.push(ControlMessage::SetSpeed(speed));
+        Ok(())
     }
 
     /// Stop playback of a previously triggered sample.

@@ -1,3 +1,4 @@
+import math
 from pathlib import Path, PureWindowsPath
 
 from flitzis_looper_rs import AudioEngine
@@ -37,6 +38,7 @@ class FlitzisLooperApp:
         self.selected_bank: int = 1
         self.sample_paths: list[str | None] = [None] * NUM_PADS
         self.multi_loop_enabled: bool = False
+        self.speed: float = 1.0
         self.active_sample_ids: set[int] = set()
 
     def select_bank(self, bank_id: int) -> None:
@@ -92,6 +94,27 @@ class FlitzisLooperApp:
     def set_multi_loop_enabled(self, *, enabled: bool) -> None:
         """Enable or disable MultiLoop mode."""
         self.multi_loop_enabled = enabled
+
+    def set_speed(self, speed: float) -> None:
+        """Set global playback speed multiplier.
+
+        Args:
+            speed: Desired speed multiplier. Values are clamped to 0.5..2.0.
+
+        Raises:
+            ValueError: If speed is not finite.
+        """
+        if not math.isfinite(speed):
+            msg = f"speed must be finite, got {speed!r}"
+            raise ValueError(msg)
+
+        clamped = min(max(speed, 0.5), 2.0)
+        self.audio_engine.set_speed(clamped)
+        self.speed = clamped
+
+    def reset_speed(self) -> None:
+        """Reset global speed back to 1.0x."""
+        self.set_speed(1.0)
 
     def trigger_pad(self, sample_id: int, velocity: float = 1.0) -> None:
         """Trigger or retrigger a pad's loop.

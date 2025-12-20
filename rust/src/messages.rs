@@ -41,7 +41,14 @@ pub enum ControlMessage {
     /// * `volume` - Volume level (0.0 to 1.0)
     SetVolume(f32),
 
+    /// Set the global speed multiplier.
+    ///
+    /// # Parameters
+    /// * `speed` - Speed multiplier (0.5 to 2.0)
+    SetSpeed(f32),
+
     /// Publish a loaded sample into an audio-thread slot.
+
     ///
     /// # Parameters
     /// * `id` - Unique identifier for the sample slot (0..36)
