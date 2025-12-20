@@ -1,6 +1,6 @@
 from typing import cast
 
-from flitzis_looper.app import FlitzisLooperApp
+from flitzis_looper.app import FlitzisLooperApp, pad_label_from_sample_path
 from flitzis_looper_rs import AudioEngine
 
 
@@ -27,6 +27,11 @@ class FakeAudioEngine:
 def test_app_constructs_audio_engine() -> None:
     app = FlitzisLooperApp()
     assert isinstance(app.audio_engine, AudioEngine)
+
+
+def test_pad_label_from_sample_path_uses_basename_only() -> None:
+    assert pad_label_from_sample_path("/music/loops/kick.wav", 1) == "kick.wav"
+    assert pad_label_from_sample_path(r"C:\\music\\loops\\snare.wav", 2) == "snare.wav"
 
 
 def test_multi_loop_defaults_disabled() -> None:

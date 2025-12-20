@@ -3,7 +3,7 @@ from typing import Any
 
 import dearpygui.dearpygui as dpg  # type: ignore[import-untyped]
 
-from flitzis_looper.app import FlitzisLooperApp
+from flitzis_looper.app import FlitzisLooperApp, pad_label_from_sample_path
 
 VIEWPORT_WIDTH_PX = 960
 VIEWPORT_HEIGHT_PX = 630
@@ -26,7 +26,8 @@ _BANK_BUTTON_HEIGHT_PX = 32
 _BG_RGBA = (30, 30, 30, 255)
 _PAD_INACTIVE_RGBA = (58, 58, 58, 255)
 _PAD_HOVER_RGBA = (85, 85, 85, 255)
-_PAD_ACTIVE_RGBA = (100, 100, 100, 255)
+_PAD_PRESSED_RGBA = (100, 100, 100, 255)
+_PAD_ACTIVE_RGBA = (46, 204, 113, 255)
 
 _BANK_INACTIVE_RGBA = (204, 119, 0, 255)
 _BANK_HOVER_RGBA = (255, 153, 0, 255)
@@ -67,7 +68,7 @@ def _create_pad_theme() -> int:
     with dpg.theme() as theme, dpg.theme_component(dpg.mvButton):
         dpg.add_theme_color(dpg.mvThemeCol_Button, _PAD_INACTIVE_RGBA)
         dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, _PAD_HOVER_RGBA)
-        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, _PAD_ACTIVE_RGBA)
+        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, _PAD_PRESSED_RGBA)
         dpg.add_theme_color(dpg.mvThemeCol_Text, _TEXT_RGBA)
 
     return theme
@@ -75,9 +76,9 @@ def _create_pad_theme() -> int:
 
 def _create_active_pad_theme() -> int:
     with dpg.theme() as theme, dpg.theme_component(dpg.mvButton):
-        dpg.add_theme_color(dpg.mvThemeCol_Button, _BANK_ACTIVE_RGBA)
-        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, _BANK_HOVER_RGBA)
-        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, _BANK_ACTIVE_RGBA)
+        dpg.add_theme_color(dpg.mvThemeCol_Button, _PAD_ACTIVE_RGBA)
+        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, _PAD_ACTIVE_RGBA)
+        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, _PAD_ACTIVE_RGBA)
         dpg.add_theme_color(dpg.mvThemeCol_Text, _TEXT_ACTIVE_RGBA)
 
     return theme
@@ -119,6 +120,10 @@ def _build_pad_grid(  # noqa: C901
 ) -> None:
     def _sample_id(pad_id: int) -> int:
         return pad_id - 1
+
+    def _pad_label(pad_id: int) -> str:
+        sample_id = _sample_id(pad_id)
+        return pad_label_from_sample_path(app.sample_paths[sample_id], pad_id)
 
     def _update_pad_theme(pad_id: int) -> None:
         sample_id = _sample_id(pad_id)
@@ -170,7 +175,7 @@ def _build_pad_grid(  # noqa: C901
                     pad_id = row * GRID_SIZE + col + 1
                     tag = _pad_tag(pad_id)
                     dpg.add_button(
-                        label=str(pad_id),
+                        label=_pad_label(pad_id),
                         tag=tag,
                         width=_PAD_BUTTON_WIDTH_PX,
                         height=_PAD_BUTTON_HEIGHT_PX,
@@ -340,6 +345,12 @@ def _on_load_audio_selected(_sender: int, app_data: Any, user_data: Any) -> None
         app.load_sample(sample_id, file_path)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         _show_error_dialog(str(exc))
+    else:
+        pad_id = sample_id + 1
+        dpg.configure_item(
+            _pad_tag(pad_id),
+            label=pad_label_from_sample_path(file_path, pad_id),
+        )
 
 
 def _on_pad_context_menu_action(_sender: int, _app_data: Any, user_data: Any) -> None:
@@ -367,8 +378,13 @@ def _on_pad_context_menu_action(_sender: int, _app_data: Any, user_data: Any) ->
         except (RuntimeError, ValueError) as exc:
             _show_error_dialog(str(exc))
         else:
+            pad_tag = _pad_tag(pad_id)
             theme = active_pad_theme if sample_id in app.active_sample_ids else pad_theme
-            dpg.bind_item_theme(_pad_tag(pad_id), theme)
+            dpg.bind_item_theme(pad_tag, theme)
+            dpg.configure_item(
+                pad_tag,
+                label=pad_label_from_sample_path(app.sample_paths[sample_id], pad_id),
+            )
         return
 
     dpg.configure_item(_PAD_LOAD_DIALOG_TAG, user_data=(app, sample_id))

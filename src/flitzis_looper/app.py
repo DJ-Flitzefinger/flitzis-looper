@@ -1,7 +1,28 @@
+from pathlib import Path, PureWindowsPath
+
 from flitzis_looper_rs import AudioEngine
 
 NUM_BANKS = 6
 NUM_PADS = 36
+
+
+def pad_label_from_sample_path(path: str | None, pad_id: int) -> str:
+    """Derive the UI label for a performance pad.
+
+    Args:
+        path: Loaded sample path, or None for empty pads.
+        pad_id: Pad number (1..36).
+
+    Returns:
+        The basename of the loaded audio file, otherwise the pad number.
+    """
+    if not path:
+        return str(pad_id)
+
+    if "\\" in path:
+        return PureWindowsPath(path).name
+
+    return Path(path).name
 
 
 class FlitzisLooperApp:
