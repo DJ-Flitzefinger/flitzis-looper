@@ -3,7 +3,7 @@ import time
 from flitzis_looper_rs import AudioEngine, AudioMessage
 
 
-def wait_for_msg(engine, timeout_ms: int = 100) -> AudioMessage | None:
+def wait_for_msg(engine: AudioEngine, timeout_ms: int = 100) -> AudioMessage | None:
     deadline = time.monotonic() + timeout_ms / 1000
 
     while time.monotonic() < deadline:
@@ -15,13 +15,13 @@ def wait_for_msg(engine, timeout_ms: int = 100) -> AudioMessage | None:
     return None
 
 
-def test_ping_pong(audio_engine: AudioEngine):
+def test_ping_pong(audio_engine: AudioEngine) -> None:
     audio_engine.ping()
     msg = wait_for_msg(audio_engine)
     assert isinstance(msg, AudioMessage.Pong)
 
 
-def test_multiple_pings(audio_engine: AudioEngine):
+def test_multiple_pings(audio_engine: AudioEngine) -> None:
     for _ in range(5):
         audio_engine.ping()
 

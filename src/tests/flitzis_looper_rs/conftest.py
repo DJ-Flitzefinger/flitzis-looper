@@ -10,12 +10,12 @@ if TYPE_CHECKING:
 
 @pytest.fixture
 def audio_engine() -> Iterable[AudioEngine]:
-    engine = AudioEngine()
-
     try:
+        engine = AudioEngine()
         engine.run()
     except RuntimeError as exc:
-        pytest.skip(f"AudioEngine unavailable: {exc}")
-
-    yield engine
-    engine.shut_down()
+        pytest.fail(f"AudioEngine unavailable: {exc}")
+    else:
+        yield engine
+    finally:
+        engine.shut_down()

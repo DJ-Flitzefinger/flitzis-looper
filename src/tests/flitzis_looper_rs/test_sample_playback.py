@@ -1,12 +1,16 @@
 import wave
 from array import array
+from typing import TYPE_CHECKING
 
 import pytest
 
 from flitzis_looper_rs import AudioEngine
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
-def _write_mono_pcm16_wav(path, sample_rate_hz: int) -> None:
+
+def _write_mono_pcm16_wav(path: Path, sample_rate_hz: int) -> None:
     samples = array("h", [8192] * 128)
 
     with wave.open(str(path), "wb") as wav:
@@ -16,7 +20,7 @@ def _write_mono_pcm16_wav(path, sample_rate_hz: int) -> None:
         wav.writeframes(samples.tobytes())
 
 
-def test_load_and_play_sample_smoke(audio_engine: AudioEngine, tmp_path) -> None:
+def test_load_and_play_sample_smoke(audio_engine: AudioEngine, tmp_path: Path) -> None:
     wav_path = tmp_path / "sample.wav"
 
     for sample_rate_hz in (48_000, 44_100):
@@ -38,32 +42,25 @@ def test_load_and_play_sample_smoke(audio_engine: AudioEngine, tmp_path) -> None
     audio_engine.unload_sample(0)
 
 
-def test_sample_slot_id_range_is_0_to_35() -> None:
-    engine = AudioEngine()
+def test_sample_slot_id_range_is_0_to_215(audio_engine: AudioEngine) -> None:
+    with pytest.raises(ValueError, match=r"id out of range"):
+        audio_engine.load_sample(216, "does-not-matter.wav")
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        engine.load_sample(36, "does-not-matter.wav")
+        audio_engine.play_sample(216, 1.0)
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        engine.play_sample(36, 1.0)
+        audio_engine.stop_sample(216)
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        engine.stop_sample(36)
+        audio_engine.unload_sample(216)
 
-    with pytest.raises(ValueError, match=r"id out of range"):
-        engine.unload_sample(36)
-
-    with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
-        engine.load_sample(35, "does-not-matter.wav")
-
-    with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
-        engine.play_sample(35, 1.0)
-
-    with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
-        engine.stop_sample(35)
-
-    with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
-        engine.unload_sample(35)
+    # Shouldn't crash
+    with pytest.raises(FileNotFoundError):
+        audio_engine.load_sample(215, "file-does-not-exist.wav")
+    audio_engine.play_sample(215, 1.0)
+    audio_engine.stop_sample(215)
+    audio_engine.unload_sample(215)
 
 
 def test_stop_all_requires_initialized_engine() -> None:
