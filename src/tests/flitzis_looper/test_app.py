@@ -46,10 +46,10 @@ def test_multi_loop_defaults_disabled() -> None:
 def test_multiloop_can_be_enabled_and_disabled() -> None:
     app = FlitzisLooperApp()
 
-    app.set_multi_loop_enabled(enabled=True)
+    app.set_multi_loop(enabled=True)
     assert app.multi_loop_enabled is True
 
-    app.set_multi_loop_enabled(enabled=False)
+    app.set_multi_loop(enabled=False)
     assert app.multi_loop_enabled is False
 
 
@@ -121,7 +121,7 @@ def test_trigger_does_not_stop_other_pads_when_multiloop_enabled() -> None:
     fake = FakeAudioEngine()
     app.audio_engine = cast("AudioEngine", fake)
 
-    app.set_multi_loop_enabled(enabled=True)
+    app.set_multi_loop(enabled=True)
     app.sample_paths[0] = "loaded"
     app.sample_paths[1] = "loaded"
     app.active_sample_ids.add(0)
@@ -137,7 +137,7 @@ def test_retrigger_in_multiloop_does_not_clear_other_active_pads() -> None:
     fake = FakeAudioEngine()
     app.audio_engine = cast("AudioEngine", fake)
 
-    app.set_multi_loop_enabled(enabled=True)
+    app.set_multi_loop(enabled=True)
     app.sample_paths[0] = "loaded"
     app.sample_paths[1] = "loaded"
     app.active_sample_ids.update({0, 1})

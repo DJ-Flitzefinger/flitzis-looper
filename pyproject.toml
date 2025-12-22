@@ -11,9 +11,7 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dynamic = ["version"]
-dependencies = [
-    "dearpygui>=2.1.1",
-]
+dependencies = ["imgui-bundle>=1.92.5"]
 
 [dependency-groups]
 dev = [
@@ -26,6 +24,9 @@ dev = [
 
 [tool.ruff]
 extend = "ruff_defaults.toml"
+
+[tool.mypy]
+strict = true
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
