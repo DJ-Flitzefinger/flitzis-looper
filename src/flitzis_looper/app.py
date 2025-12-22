@@ -1,9 +1,8 @@
 import math
 from pathlib import Path, PureWindowsPath
 
-from flitzis_looper.constants import NUM_BANKS, NUM_PADS
+from flitzis_looper.constants import NUM_BANKS, NUM_PADS, SPEED_MAX, SPEED_MIN
 from flitzis_looper.state import AppState
-from flitzis_looper.ui.constants import SPEED_MAX, SPEED_MIN
 from flitzis_looper_rs import AudioEngine
 
 

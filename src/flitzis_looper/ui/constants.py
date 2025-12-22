@@ -16,11 +16,6 @@ BANK_BUTTONS_HEIGHT = 40
 SPACING = 12
 PAD_GRID_GAP = 8
 
-# Audio
-SPEED_MIN = 0.5
-SPEED_MAX = 2.0
-SPEED_STEP = 0.01
-
 
 # Colors
 def _col(r: int, g: int, b: int, a: int = 255) -> ImVec4:

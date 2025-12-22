@@ -2,14 +2,8 @@ from typing import TYPE_CHECKING
 
 from imgui_bundle import imgui
 
-from flitzis_looper.ui.constants import (
-    DARK_RGBA,
-    SPACING,
-    SPEED_MAX,
-    SPEED_MIN,
-    SPEED_STEP,
-    TEXT_BPM_RGBA,
-)
+from flitzis_looper.constants import SPEED_MAX, SPEED_MIN, SPEED_STEP
+from flitzis_looper.ui.constants import DARK_RGBA, SPACING, TEXT_BPM_RGBA
 from flitzis_looper.ui.context import button_style, style_var
 
 if TYPE_CHECKING:
