@@ -31,6 +31,23 @@ Python interacts with a single `AudioEngine` object; the CPAL audio callback ren
 5. The CPAL callback drains pending control messages and mixes active voices into the output buffer.
 6. Optional: Python can poll `receive_msg()` for messages emitted by the audio thread (e.g., `Pong`).
 
+## Module Structure
+
+The audio engine is organized into modular components following the single responsibility principle:
+
+```
+audio_engine/
+├── mod.rs              # Main orchestration, re-exports, public API
+├── constants.rs        # Configuration constants (NUM_BANKS, GRID_SIZE, etc.)
+├── errors.rs           # Error types (SampleLoadError)
+├── voice.rs            # Voice struct and lifecycle management
+├── mixer.rs            # RtMixer implementation with real-time rendering
+├── sample_loader.rs    # Audio file decoding and channel mapping
+└── audio_stream.rs     # CPAL stream management and callback setup
+```
+
+Each module is `pub(crate)` with only `mod.rs` exposing the public API, ensuring clear encapsulation and reducing coupling between components.
+
 ## Main components
 
 - Python (control layer)
@@ -38,8 +55,14 @@ Python interacts with a single `AudioEngine` object; the CPAL audio callback ren
   - Does all potentially blocking work (disk I/O, decoding).
 
 - Rust (real-time audio layer)
-  - `rust/src/audio_engine.rs`: CPAL stream setup, real-time mixer, and the Python-facing API.
-  - `rust/src/messages.rs`: fixed-size message types shared between threads.
+  - `rust/src/audio_engine/mod.rs`: Main orchestration and Python-facing API.
+  - `rust/src/audio_engine/constants.rs`: Configuration constants and limits.
+  - `rust/src/audio_engine/errors.rs`: Audio-specific error types.
+  - `rust/src/audio_engine/voice.rs`: Voice management and lifecycle.
+  - `rust/src/audio_engine/mixer.rs`: Real-time mixer implementation.
+  - `rust/src/audio_engine/sample_loader.rs`: Audio file decoding and loading.
+  - `rust/src/audio_engine/audio_stream.rs`: CPAL stream management and callback.
+  - `rust/src/messages.rs`: Fixed-size message types shared between threads.
   - Dependencies:
     - `cpal` for the audio callback/stream.
     - `rtrb` for SPSC ring buffers.
@@ -76,10 +99,9 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 ## Not implemented (yet)
 
 - Audio device selection/configuration (the engine currently uses the default output device/config).
-- Transport-style controls (pause/stop without tearing down the stream).
-- Volume control / parameter automation (message types exist, but behavior is not wired through end-to-end).
-- More audio-thread → Python events beyond `ping`/`Pong`.
 - Resampling and broader channel-layout support; currently decoding is strict about output sample rate and only supports mono↔stereo mapping.
+- BPM detection
+- Time-stretch/pitch-shift
 
 ## Related specs
 
