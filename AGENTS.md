@@ -30,6 +30,7 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 - Format (only check): `uv run ruff format --check src`
 - Test single: `uv run pytest src/tests/foor/test_bar.py -v`
 - All tests: `uv run pytest`
+- Generate `coverage.md`: `uv run pytest --cov --cov-report markdown`
 
 ### Rust
 - Check: `cargo check --manifest-path rust/Cargo.toml`
