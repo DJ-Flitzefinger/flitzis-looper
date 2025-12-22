@@ -29,13 +29,7 @@ pub enum ControlMessage {
     /// Used for testing message passing functionality.
     Ping(),
 
-    /// Start the audio playback.
-    Play(),
-
-    /// Stop all currently active voices.
-    Stop(),
-
-    /// Set the volume level.
+    /// Set the global volume level.
     ///
     /// # Parameters
     /// * `volume` - Volume level (0.0 to 1.0)
@@ -59,14 +53,17 @@ pub enum ControlMessage {
     ///
     /// # Parameters
     /// * `id` - Identifier of the sample to play
-    /// * `velocity` - Playback velocity (0.0 to 1.0)
-    PlaySample { id: usize, velocity: f32 },
+    /// * `volume` - Playback volume (0.0 to 1.0)
+    PlaySample { id: usize, volume: f32 },
 
     /// Stop all active voices for a sample.
     ///
     /// # Parameters
     /// * `id` - Identifier of the sample to stop
     StopSample { id: usize },
+
+    /// Stop all currently active voices.
+    StopAll(),
 
     /// Unload a sample slot.
     ///

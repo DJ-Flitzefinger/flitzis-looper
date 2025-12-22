@@ -3,7 +3,9 @@ from typing import TYPE_CHECKING
 from imgui_bundle import im_file_dialog as ifd
 
 if TYPE_CHECKING:
-    from flitzis_looper.app import FlitzisLooperApp
+    from flitzis_looper.ui.context import UiContext
+
+_FILTER = "Audio file (*.wav;*.aiff;*.aif;*.flac;*.mp3;*.ogg){.wav,.aiff,.aif,.flac,.mp3}"
 
 
 def _get_key(sample_id: int) -> str:
@@ -11,19 +13,15 @@ def _get_key(sample_id: int) -> str:
 
 
 def open_file_dialog(sample_id: int) -> None:
-    ifd.FileDialog.instance().open(
-        _get_key(sample_id),
-        "Load Audio",
-        filter="Audio file (*.wav;*.aiff;*.aif;*.flac;*.mp3;*.ogg){.wav,.aiff,.aif,.flac,.mp3}",
-    )
+    ifd.FileDialog.instance().open(_get_key(sample_id), "Load Audio", filter=_FILTER)
 
 
-def check_file_dialog(app: FlitzisLooperApp, sample_id: int) -> None:
+def check_file_dialog(ctx: UiContext, sample_id: int) -> None:
     if ifd.FileDialog.instance().is_done(_get_key(sample_id)):
         try:
             if ifd.FileDialog.instance().has_result():
                 res = ifd.FileDialog.instance().get_result()
-                app.load_sample(sample_id, res.path())
+                ctx.audio.load_sample(sample_id, res.path())
         finally:
             ifd.FileDialog.instance().close()
-            app.close_file_dialog()
+            ctx.ui.close_file_dialog()

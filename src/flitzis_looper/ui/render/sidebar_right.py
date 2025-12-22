@@ -2,17 +2,17 @@ from typing import TYPE_CHECKING
 
 from imgui_bundle import imgui
 
-from flitzis_looper.constants import SPEED_MAX, SPEED_MIN, SPEED_STEP
+from flitzis_looper.constants import SPEED_MAX, SPEED_MIN
 from flitzis_looper.ui.constants import DARK_RGBA, SPACING, TEXT_BPM_RGBA
-from flitzis_looper.ui.context import button_style, style_var
+from flitzis_looper.ui.contextmanager import button_style, style_var
 
 if TYPE_CHECKING:
-    from flitzis_looper.app import FlitzisLooperApp
+    from flitzis_looper.ui.context import UiContext
     from flitzis_looper.ui.styles import ButtonStyleName
 
 
-def _bpm_display(app: FlitzisLooperApp) -> None:
-    bpm_text = "104.54"  # dummy value
+def _bpm_display(ctx: UiContext) -> None:
+    bpm_text = "104.54"  # TODO: use real value
     pos = imgui.get_cursor_screen_pos()
     avail = imgui.get_content_region_avail()
     draw_list = imgui.get_window_draw_list()
@@ -31,10 +31,10 @@ def _bpm_display(app: FlitzisLooperApp) -> None:
     imgui.dummy((avail.x, bpm_height))
 
 
-def _speed_controls(app: FlitzisLooperApp) -> None:
+def _speed_controls(ctx: UiContext) -> None:
     avail = imgui.get_content_region_avail()
 
-    _bpm_display(app)
+    _bpm_display(ctx)
 
     slider_width = 42
     slider_height = 400
@@ -43,36 +43,39 @@ def _speed_controls(app: FlitzisLooperApp) -> None:
     changed, new_value = imgui.v_slider_float(
         "##speed_slider",
         (slider_width, slider_height),
-        app.state.speed,
+        ctx.state.project.speed,
         SPEED_MIN,
         SPEED_MAX,
         format="%.2f",
     )
     if changed:
-        app.set_speed(new_value)
+        ctx.audio.set_speed(new_value)
 
     with style_var(imgui.StyleVar_.item_spacing, (0.0, SPACING / 4)):
         if imgui.button("+", (avail.x, 0)):
-            app.set_speed(app.state.speed + SPEED_STEP)
+            ctx.audio.increase_speed()
         if imgui.button("Reset", (avail.x, 0)):
-            app.reset_speed()
+            ctx.audio.reset_speed()
         if imgui.button("-", (avail.x, 0)):
-            app.set_speed(app.state.speed - SPEED_STEP)
+            ctx.audio.decrease_speed()
 
 
-def sidebar_right(app: FlitzisLooperApp) -> None:
+def sidebar_right(ctx: UiContext) -> None:
     with style_var(imgui.StyleVar_.item_spacing, (0.0, SPACING)):
-        _speed_controls(app)
+        key_lock = ctx.state.project.key_lock
+        bpm_lock = ctx.state.project.bpm_lock
+
+        _speed_controls(ctx)
 
         imgui.dummy(size=(-1, SPACING))
 
         with style_var(imgui.StyleVar_.item_spacing, (0.0, SPACING / 4)):
-            key_lock_style: ButtonStyleName = "mode-on" if app.state.key_lock else "mode-off"
+            key_lock_style: ButtonStyleName = "mode-on" if key_lock else "mode-off"
             with button_style(key_lock_style):
                 if imgui.button("KEY LOCK", (-1, 0)):
-                    app.toggle_key_lock()
+                    ctx.audio.toggle_key_lock()
 
-            bpm_lock_style: ButtonStyleName = "mode-on" if app.state.bpm_lock else "mode-off"
+            bpm_lock_style: ButtonStyleName = "mode-on" if bpm_lock else "mode-off"
             with button_style(bpm_lock_style):
                 if imgui.button("BPM LOCK", (-1, 0)):
-                    app.toggle_bpm_lock()
+                    ctx.audio.toggle_bpm_lock()

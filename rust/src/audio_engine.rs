@@ -16,32 +16,40 @@ use symphonia::default::{get_codecs, get_probe};
 
 use crate::messages::{AudioMessage, ControlMessage, SampleBuffer};
 
-const MAX_SAMPLE_SLOTS: usize = 36;
+const NUM_BANKS: usize = 6;
+const GRID_SIZE: usize = 6;
+const NUM_PADS: usize = GRID_SIZE.pow(2);
+const NUM_SAMPLES: usize = NUM_PADS * NUM_BANKS;
 const MAX_VOICES: usize = 32;
+const SPEED_MIN: f32 = 0.5;
+const SPEED_MAX: f32 = 2.0;
+const VOLUME_MIN: f32 = 0.0;
+const VOLUME_MAX: f32 = 1.0;
 
 #[derive(Debug)]
 struct Voice {
     sample_id: usize,
     sample: SampleBuffer,
     frame_pos: usize,
-    velocity: f32,
+    volume: f32,
 }
 
 impl Voice {
-    fn new(sample_id: usize, sample: SampleBuffer, velocity: f32) -> Self {
+    fn new(sample_id: usize, sample: SampleBuffer, volume: f32) -> Self {
         Self {
             sample_id,
             sample,
             frame_pos: 0,
-            velocity,
+            volume,
         }
     }
 }
 
 struct RtMixer {
     channels: usize,
+    volume: f32,
     speed: f32,
-    sample_bank: [Option<SampleBuffer>; MAX_SAMPLE_SLOTS],
+    sample_bank: [Option<SampleBuffer>; NUM_SAMPLES],
     voices: [Option<Voice>; MAX_VOICES],
 }
 
@@ -49,6 +57,7 @@ impl RtMixer {
     fn new(channels: usize) -> Self {
         Self {
             channels,
+            volume: VOLUME_MAX,
             speed: 1.0,
             sample_bank: std::array::from_fn(|_| None),
             voices: std::array::from_fn(|_| None),
@@ -56,7 +65,7 @@ impl RtMixer {
     }
 
     fn load_sample(&mut self, id: usize, sample: SampleBuffer) {
-        if id >= MAX_SAMPLE_SLOTS {
+        if id >= NUM_SAMPLES {
             return;
         }
 
@@ -67,12 +76,12 @@ impl RtMixer {
         self.sample_bank[id] = Some(sample);
     }
 
-    fn play_sample(&mut self, id: usize, velocity: f32) {
-        if id >= MAX_SAMPLE_SLOTS {
+    fn play_sample(&mut self, id: usize, volume: f32) {
+        if id >= NUM_SAMPLES {
             return;
         }
 
-        if !velocity.is_finite() || !(0.0..=1.0).contains(&velocity) {
+        if !volume.is_finite() || !(VOLUME_MIN..=VOLUME_MAX).contains(&volume) {
             return;
         }
 
@@ -83,7 +92,7 @@ impl RtMixer {
 
         for voice_slot in &mut self.voices {
             if voice_slot.is_none() {
-                *voice_slot = Some(Voice::new(id, sample, velocity));
+                *voice_slot = Some(Voice::new(id, sample, volume));
                 return;
             }
         }
@@ -97,8 +106,16 @@ impl RtMixer {
         }
     }
 
+    fn set_volume(&mut self, volume: f32) {
+        if !volume.is_finite() || !(VOLUME_MIN..=VOLUME_MAX).contains(&volume) {
+            return;
+        }
+
+        self.volume = volume;
+    }
+
     fn set_speed(&mut self, speed: f32) {
-        if !speed.is_finite() || !(0.5..=2.0).contains(&speed) {
+        if !speed.is_finite() || !(SPEED_MIN..=SPEED_MAX).contains(&speed) {
             return;
         }
 
@@ -106,7 +123,7 @@ impl RtMixer {
     }
 
     fn stop_sample(&mut self, id: usize) {
-        if id >= MAX_SAMPLE_SLOTS {
+        if id >= NUM_SAMPLES {
             return;
         }
 
@@ -121,7 +138,7 @@ impl RtMixer {
     }
 
     fn unload_sample(&mut self, id: usize) {
-        if id >= MAX_SAMPLE_SLOTS {
+        if id >= NUM_SAMPLES {
             return;
         }
 
@@ -161,7 +178,7 @@ impl RtMixer {
 
                 for channel in 0..self.channels {
                     output[frame_base + channel] +=
-                        voice.sample.samples[sample_base + channel] * voice.velocity;
+                        voice.sample.samples[sample_base + channel] * voice.volume * self.volume;
                 }
 
                 voice.frame_pos += 1;
@@ -386,17 +403,17 @@ impl AudioEngine {
                             ControlMessage::Ping() => {
                                 let _ = producer_out.push(AudioMessage::Pong());
                             }
-                            ControlMessage::Stop() => {
-                                mixer.stop_all();
-                            }
                             ControlMessage::LoadSample { id, sample } => {
                                 mixer.load_sample(id, sample);
                             }
-                            ControlMessage::PlaySample { id, velocity } => {
-                                mixer.play_sample(id, velocity);
+                            ControlMessage::PlaySample { id, volume } => {
+                                mixer.play_sample(id, volume);
                             }
                             ControlMessage::StopSample { id } => {
                                 mixer.stop_sample(id);
+                            }
+                            ControlMessage::StopAll() => {
+                                mixer.stop_all();
                             }
                             ControlMessage::UnloadSample { id } => {
                                 mixer.unload_sample(id);
@@ -404,7 +421,9 @@ impl AudioEngine {
                             ControlMessage::SetSpeed(speed) => {
                                 mixer.set_speed(speed);
                             }
-                            ControlMessage::Play() | ControlMessage::SetVolume(_) => {}
+                            ControlMessage::SetVolume(volume) => {
+                                mixer.set_volume(volume);
+                            }
                         }
                     }
 
@@ -439,10 +458,10 @@ impl AudioEngine {
 
     /// Load an audio file into a sample slot.
     pub fn load_sample(&mut self, id: usize, path: &str) -> PyResult<()> {
-        if id >= MAX_SAMPLE_SLOTS {
+        if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err(format!(
                 "id out of range (expected 0..{}, got {id})",
-                MAX_SAMPLE_SLOTS - 1
+                NUM_SAMPLES - 1
             )));
         }
 
@@ -481,18 +500,13 @@ impl AudioEngine {
     }
 
     /// Trigger playback of a previously loaded sample.
-    pub fn play_sample(&mut self, id: usize, velocity: f32) -> PyResult<()> {
-        if id >= MAX_SAMPLE_SLOTS {
-            return Err(PyValueError::new_err(format!(
-                "id out of range (expected 0..{}, got {id})",
-                MAX_SAMPLE_SLOTS - 1
-            )));
+    pub fn play_sample(&mut self, id: usize, volume: f32) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
         }
 
-        if !velocity.is_finite() || !(0.0..=1.0).contains(&velocity) {
-            return Err(PyValueError::new_err(
-                "velocity out of range (expected 0.0..=1.0)",
-            ));
+        if !volume.is_finite() || !(VOLUME_MIN..=VOLUME_MAX).contains(&volume) {
+            return Err(PyValueError::new_err("volume out of range"));
         }
 
         let producer = self
@@ -505,7 +519,7 @@ impl AudioEngine {
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
         producer_guard
-            .push(ControlMessage::PlaySample { id, velocity })
+            .push(ControlMessage::PlaySample { id, volume })
             .map_err(|_| PyRuntimeError::new_err("Failed to send PlaySample - buffer may be full"))
     }
 
@@ -521,16 +535,33 @@ impl AudioEngine {
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
         producer_guard
-            .push(ControlMessage::Stop())
+            .push(ControlMessage::StopAll())
             .map_err(|_| PyRuntimeError::new_err("Failed to send Stop - buffer may be full"))
+    }
+
+    /// Set the global volume multiplier.
+    pub fn set_volume(&mut self, volume: f32) -> PyResult<()> {
+        if !volume.is_finite() || !(VOLUME_MIN..=VOLUME_MAX).contains(&volume) {
+            return Err(PyValueError::new_err("volume out of range"));
+        }
+
+        let producer = self
+            .producer
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        let _ = producer_guard.push(ControlMessage::SetVolume(volume));
+        Ok(())
     }
 
     /// Set the global speed multiplier.
     pub fn set_speed(&mut self, speed: f32) -> PyResult<()> {
-        if !speed.is_finite() || !(0.5..=2.0).contains(&speed) {
-            return Err(PyValueError::new_err(
-                "speed out of range (expected 0.5..=2.0)",
-            ));
+        if !speed.is_finite() || !(SPEED_MIN..=SPEED_MAX).contains(&speed) {
+            return Err(PyValueError::new_err("speed out of range"));
         }
 
         let producer = self
@@ -548,10 +579,10 @@ impl AudioEngine {
 
     /// Stop playback of a previously triggered sample.
     pub fn stop_sample(&mut self, id: usize) -> PyResult<()> {
-        if id >= MAX_SAMPLE_SLOTS {
+        if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err(format!(
                 "id out of range (expected 0..{}, got {id})",
-                MAX_SAMPLE_SLOTS - 1
+                NUM_SAMPLES - 1
             )));
         }
 
@@ -571,10 +602,10 @@ impl AudioEngine {
 
     /// Unload a sample slot.
     pub fn unload_sample(&mut self, id: usize) -> PyResult<()> {
-        if id >= MAX_SAMPLE_SLOTS {
+        if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err(format!(
                 "id out of range (expected 0..{}, got {id})",
-                MAX_SAMPLE_SLOTS - 1
+                NUM_SAMPLES - 1
             )));
         }
 
