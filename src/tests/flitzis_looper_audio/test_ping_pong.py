@@ -1,6 +1,6 @@
 import time
 
-from flitzis_looper_rs import AudioEngine, AudioMessage
+from flitzis_looper_audio import AudioEngine, AudioMessage
 
 
 def wait_for_msg(engine: AudioEngine, timeout_ms: int = 100) -> AudioMessage | None:

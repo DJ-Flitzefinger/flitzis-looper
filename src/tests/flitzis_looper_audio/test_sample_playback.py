@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from flitzis_looper_rs import AudioEngine
+from flitzis_looper_audio import AudioEngine
 
 if TYPE_CHECKING:
     from pathlib import Path

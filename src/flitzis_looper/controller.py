@@ -2,7 +2,7 @@ import math
 
 from flitzis_looper.constants import SPEED_MAX, SPEED_MIN, VOLUME_MAX, VOLUME_MIN
 from flitzis_looper.models import ProjectState, SessionState, validate_sample_id
-from flitzis_looper_rs import AudioEngine
+from flitzis_looper_audio import AudioEngine
 
 
 class LooperController:

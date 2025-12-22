@@ -370,12 +370,12 @@ impl AudioEngine {
         let channels = config.channels();
 
         self.output_channels = Some(channels as usize);
-        self.output_sample_rate_hz = Some(sample_rate.0);
+        self.output_sample_rate_hz = Some(sample_rate);
 
         log::info!(
             "Starting AudioEngine... ({} ch@{} Hz)",
             channels,
-            sample_rate.0
+            sample_rate
         );
 
         // Create ring buffer for incoming messages (Python->Rust)
