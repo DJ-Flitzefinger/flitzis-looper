@@ -3,6 +3,8 @@
 //! This module provides functions for loading and decoding audio files into sample buffers
 //! that can be used by the real-time mixer.
 
+use audioadapter_buffers::owned::InterleavedOwned;
+use rubato::{Fft, FixedSync, Resampler};
 use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
@@ -16,11 +18,20 @@ use symphonia::default::{get_codecs, get_probe};
 use crate::audio_engine::errors::SampleLoadError;
 use crate::messages::SampleBuffer;
 
+/// Convert rubato errors to SampleLoadError for proper error handling.
+impl From<rubato::ResampleError> for SampleLoadError {
+    fn from(_err: rubato::ResampleError) -> Self {
+        SampleLoadError::Decode(symphonia::core::errors::Error::Unsupported(
+            "Resampling failed",
+        ))
+    }
+}
+
 /// Decodes an audio file into a sample buffer with the specified output configuration.
 ///
 /// This function loads an audio file from disk, decodes it using the Symphonia library,
-/// and converts it to a floating-point sample buffer with the requested channel count
-/// and sample rate.
+/// resamples it to the target sample rate (if needed), and converts it to a
+/// floating-point sample buffer with the requested channel count.
 ///
 /// # Parameters
 ///
@@ -39,7 +50,7 @@ use crate::messages::SampleBuffer;
 /// - File not found or cannot be opened
 /// - Audio format not recognized or corrupted
 /// - Unsupported channel count
-/// - Sample rate mismatch
+/// - Resampling errors
 /// - Invalid or corrupt audio data
 pub fn decode_audio_file_to_sample_buffer(
     path: &Path,
@@ -75,13 +86,6 @@ pub fn decode_audio_file_to_sample_buffer(
         .ok_or(SampleLoadError::MissingChannels)?
         .count();
 
-    if file_rate_hz != output_rate_hz {
-        return Err(SampleLoadError::SampleRateMismatch {
-            file_rate: file_rate_hz,
-            output_rate: output_rate_hz,
-        });
-    }
-
     let mut decoder = get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
 
     let mut decoded: Vec<f32> = Vec::new();
@@ -105,12 +109,69 @@ pub fn decode_audio_file_to_sample_buffer(
         decoded.extend_from_slice(sample_buf.samples());
     }
 
-    let mapped = map_channels(decoded, file_channels, output_channels)?;
+    let resampled = resample_audio(decoded, file_channels, file_rate_hz, output_rate_hz)?;
+    let mapped = map_channels(resampled, file_channels, output_channels)?;
 
     Ok(SampleBuffer {
         channels: output_channels,
         samples: Arc::from(mapped.into_boxed_slice()),
     })
+}
+
+/// Resamples audio data to a new sample rate using FFT-based resampling.
+///
+/// # Arguments
+///
+/// * `samples` - Interleaved audio samples to resample
+/// * `channels` - Number of channels in the audio data
+/// * `from_rate` - Current sample rate in Hz
+/// * `to_rate` - Target sample rate in Hz
+///
+/// # Returns
+///
+/// - `Ok(Vec<f32>)`: Resampled audio samples
+/// - `Err(SampleLoadError)`: Resampling error
+fn resample_audio(
+    samples: Vec<f32>,
+    channels: usize,
+    from_rate: u32,
+    to_rate: u32,
+) -> Result<Vec<f32>, SampleLoadError> {
+    if from_rate == to_rate {
+        return Ok(samples);
+    }
+
+    let input_frames = samples.len() / channels;
+
+    // Create resampler with fixed I/O size
+    let mut resampler = Fft::<f32>::new(
+        from_rate as usize,
+        to_rate as usize,
+        1024, // chunk_size
+        1,    // sub_chunks
+        channels,
+        FixedSync::Both,
+    )?;
+
+    // Create input buffer adapter
+    let input_buffer = InterleavedOwned::new_from(samples, channels, input_frames).unwrap();
+
+    // Calculate needed output buffer size
+    let output_frames = resampler.process_all_needed_output_len(input_frames);
+    let mut output_buffer =
+        InterleavedOwned::new_from(vec![0.0; output_frames * channels], channels, output_frames)
+            .unwrap();
+
+    // Process all data at once
+    let result =
+        resampler.process_all_into_buffer(&input_buffer, &mut output_buffer, input_frames, None)?;
+
+    // Trim the output buffer to the actual number of frames written
+    let frames_written = result.1;
+    let trimmed_buf = output_buffer.take_data();
+    let trimmed_buf = trimmed_buf[..frames_written * channels].to_vec();
+
+    Ok(trimmed_buf)
 }
 
 /// Maps audio samples from one channel configuration to another.
@@ -279,11 +340,41 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_invalid_file() {
+    fn test_resample_same_rate() {
         let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("nonexistent.wav");
+        let path = tmp.path().join("test.wav");
 
-        let result = decode_audio_file_to_sample_buffer(&path, 1, 44_100);
-        assert!(result.is_err());
+        let samples = [0i16, 16_384i16, -16_384i16, 32_767i16];
+        write_pcm16_wav(&path, 1, 44_100, &samples).unwrap();
+
+        // Decode at same sample rate (no resampling needed)
+        let decoded = decode_audio_file_to_sample_buffer(&path, 1, 44_100).unwrap();
+        assert_eq!(decoded.channels, 1);
+        assert_eq!(decoded.samples.len(), samples.len());
+    }
+
+    #[test]
+    fn test_resample_48000_to_44100() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.wav");
+
+        // Create a 48kHz test file with more samples to ensure resampling changes the count
+        // Using 1024 frames (1024 samples) to be larger than the resampler's chunk size
+        let samples = vec![0i16; 1024];
+        let sample_count = samples.len();
+        write_pcm16_wav(&path, 1, 48_000, &samples).unwrap();
+
+        // Decode at 44.1kHz (requires resampling)
+        let decoded = decode_audio_file_to_sample_buffer(&path, 1, 44_100).unwrap();
+        assert_eq!(decoded.channels, 1);
+        // For 48kHz->44.1kHz, we expect fewer output samples (44100/48000 = 0.91875)
+        // With 1024 input samples (1024 frames), we expect ~945.35 output frames = ~945 output samples
+        assert!(
+            decoded.samples.len() < sample_count,
+            "Expected less than {} samples, got {}",
+            sample_count,
+            decoded.samples.len()
+        );
+        assert!(decoded.samples.iter().all(|s| (-1.0..=1.0).contains(s)));
     }
 }

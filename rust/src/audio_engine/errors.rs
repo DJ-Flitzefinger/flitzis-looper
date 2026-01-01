@@ -13,6 +13,10 @@ pub enum SampleLoadError {
     #[error("failed to decode audio file: {0}")]
     Decode(#[from] symphonia::core::errors::Error),
 
+    /// Failed to create resampler.
+    #[error("failed to create resampler: {0}")]
+    ResamplerConstruction(#[from] rubato::ResamplerConstructionError),
+
     /// Audio file has no default track.
     #[error("audio file has no default track")]
     NoDefaultTrack,
@@ -34,14 +38,5 @@ pub enum SampleLoadError {
         file_channels: usize,
         /// Number of channels expected for output.
         output_channels: usize,
-    },
-
-    /// Sample rate mismatch between file and output configuration.
-    #[error("sample rate mismatch: file is {file_rate} Hz but output is {output_rate} Hz")]
-    SampleRateMismatch {
-        /// Sample rate of the source file.
-        file_rate: u32,
-        /// Expected sample rate for output.
-        output_rate: u32,
     },
 }
