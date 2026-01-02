@@ -39,6 +39,14 @@ def _default_sample_analysis() -> list[SampleAnalysis | None]:
     return [None] * NUM_SAMPLES
 
 
+def _default_manual_bpm() -> list[float | None]:
+    return [None] * NUM_SAMPLES
+
+
+def _default_manual_key() -> list[str | None]:
+    return [None] * NUM_SAMPLES
+
+
 class ProjectState(BaseModel):
     """Persistent state. Saved to disk."""
 
@@ -49,6 +57,12 @@ class ProjectState(BaseModel):
 
     sample_analysis: list[SampleAnalysis | None] = Field(default_factory=_default_sample_analysis)
     """Per-pad audio analysis results (BPM/key/beat grid) or None when unknown."""
+
+    manual_bpm: list[float | None] = Field(default_factory=_default_manual_bpm)
+    """Optional per-pad BPM override. When set, used for effective BPM display."""
+
+    manual_key: list[str | None] = Field(default_factory=_default_manual_key)
+    """Optional per-pad key override. When set, used for effective key display."""
 
     # Global Audio Settings
     multi_loop: bool = False
@@ -115,6 +129,12 @@ class SessionState(BaseModel):
     file_dialog_pad_id: int | None = None
     """Current file dialog target pad ID or None if no file dialog is open."""
 
+    tap_bpm_pad_id: int | None = None
+    """Current Tap BPM target pad. Resets tap timestamps when changed."""
+
+    tap_bpm_timestamps: list[float] = Field(default_factory=list)
+    """Recent Tap BPM timestamps in monotonic seconds."""
+
     @field_validator(
         "active_sample_ids",
         "pressed_pads",
@@ -144,9 +164,13 @@ class SessionState(BaseModel):
             validate_sample_id(sid)
         return value
 
-    @field_validator("file_dialog_pad_id", mode="after")
+    @field_validator(
+        "file_dialog_pad_id",
+        "tap_bpm_pad_id",
+        mode="after",
+    )
     @classmethod
-    def _validate_file_dialog_pad_id(cls, value: int | None) -> int | None:
+    def _validate_optional_sample_id(cls, value: int | None) -> int | None:
         if value is not None:
             validate_sample_id(value)
         return value

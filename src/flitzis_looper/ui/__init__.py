@@ -3,12 +3,12 @@ from __future__ import annotations
 
 def run_ui() -> None:
     """Start the UI shell."""
-    from imgui_bundle import hello_imgui, immapp
+    from imgui_bundle import hello_imgui, immapp  # noqa: PLC0415
 
-    from flitzis_looper.controller import LooperController
-    from flitzis_looper.ui.constants import BG_RGBA, TITLE, VIEWPORT_PX
-    from flitzis_looper.ui.context import UiContext
-    from flitzis_looper.ui.render import render_ui
+    from flitzis_looper.controller import LooperController  # noqa: PLC0415
+    from flitzis_looper.ui.constants import BG_RGBA, TITLE, VIEWPORT_PX  # noqa: PLC0415
+    from flitzis_looper.ui.context import UiContext  # noqa: PLC0415
+    from flitzis_looper.ui.render import render_ui  # noqa: PLC0415
 
     controller = LooperController()
     context = UiContext(controller)

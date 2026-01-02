@@ -51,7 +51,7 @@ def _pad_popover(ctx: UiContext, pad_id: int) -> None:
         imgui.end_popup()
 
 
-def _pad_button(ctx: UiContext, pad_id: int, size: imgui.ImVec2Like) -> None:  # noqa: PLR0914
+def _pad_button(ctx: UiContext, pad_id: int, size: imgui.ImVec2Like) -> None:  # noqa: C901, PLR0914, PLR0915
     is_loaded = ctx.state.is_pad_loaded(pad_id)
     is_loading = ctx.state.is_pad_loading(pad_id)
     is_active = ctx.state.is_pad_active(pad_id)
@@ -68,15 +68,14 @@ def _pad_button(ctx: UiContext, pad_id: int, size: imgui.ImVec2Like) -> None:  #
             percent_text = "" if loading_progress is None else f"{int(loading_progress * 100):d} %"
             status_line = " ".join([p for p in (stage, percent_text) if p])
             label = f"{filename}\n{status_line}" if filename else (status_line or "Loading…")
+        elif ctx.state.is_pad_analyzing(pad_id):
+            stage = ctx.state.pad_analysis_stage(pad_id) or "Analyzing"
+            progress = ctx.state.pad_analysis_progress(pad_id)
+            percent_text = "" if progress is None else f"{int(float(progress) * 100):d} %"
+            status_line = " ".join([p for p in (stage, percent_text) if p])
+            label = f"{filename}\n{status_line}" if filename else (status_line or "Analyzing…")
         else:
-            if ctx.state.is_pad_analyzing(pad_id):
-                stage = ctx.state.pad_analysis_stage(pad_id) or "Analyzing"
-                progress = ctx.state.pad_analysis_progress(pad_id)
-                percent_text = "" if progress is None else f"{int(float(progress) * 100):d} %"
-                status_line = " ".join([p for p in (stage, percent_text) if p])
-                label = f"{filename}\n{status_line}" if filename else (status_line or "Analyzing…")
-            else:
-                label = filename
+            label = filename
 
     id_str = f"pad_btn_{pad_id}"
 
@@ -126,9 +125,18 @@ def _pad_button(ctx: UiContext, pad_id: int, size: imgui.ImVec2Like) -> None:  #
     color = imgui.get_color_u32(TEXT_ACTIVE_RGBA if is_active else TEXT_MUTED_RGBA)
     draw_list.add_text(label_pos, color, label)
 
-    analysis = ctx.state.pad_analysis(pad_id) if is_loaded else None
-    if analysis is not None:
-        info = f"{analysis.bpm:.1f} {analysis.key}"
+    bpm = ctx.state.pad_effective_bpm(pad_id) if is_loaded else None
+    key = ctx.state.pad_effective_key(pad_id) if is_loaded else None
+
+    info = None
+    if bpm is not None:
+        info = f"{bpm:.1f}"
+        if key is not None:
+            info = f"{info} {key}"
+    elif key is not None:
+        info = key
+
+    if info is not None:
         text_size = imgui.calc_text_size(info)
         pos_max = imgui.get_item_rect_max()
         info_pos = (pos_max.x - text_size.x - 6, pos_min.y + 4)

@@ -26,9 +26,9 @@ The Tap BPM workflow SHALL:
 - Maintain a window of the most recent 5 tap timestamps for the current target pad.
 - Compute BPM from the average interval between consecutive taps in that window.
 
-#### Scenario: Two taps compute BPM
+#### Scenario: Three taps compute BPM
 - **GIVEN** a pad is the current Tap BPM target
-- **WHEN** the performer taps twice with an interval of 0.5 seconds
+- **WHEN** the performer taps three times with an interval of 0.5 seconds between taps
 - **THEN** the computed BPM is approximately 120.0
 - **AND** the pad’s manual BPM is set to that computed value
 

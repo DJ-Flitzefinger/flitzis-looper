@@ -48,8 +48,8 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 ### 5) BPM detection, manual BPM, and tempo workflow
 - [x] As a performer, I can **auto-detect BPM** for a loaded pad.
 - [x] As a performer, I can **re-detect BPM** for a pad.
-- [ ] As a performer, I can **set BPM manually** for a pad.
-- [ ] As a performer, I can set BPM via a **TAP BPM** workflow.
+- [x] As a performer, I can **set BPM manually** for a pad.
+- [x] As a performer, I can set BPM via a **TAP BPM** workflow.
 - [x] As a performer, the UI shows a clear **BPM display** while loops are active.
 
 ### 6) Global speed control + BPM lock

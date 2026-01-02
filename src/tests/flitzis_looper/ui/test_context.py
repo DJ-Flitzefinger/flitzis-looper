@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from flitzis_looper.constants import SPEED_STEP
-from flitzis_looper.models import ProjectState
+from flitzis_looper.models import BeatGrid, ProjectState, SampleAnalysis
 from flitzis_looper.ui.context import (
     AudioActions,
     ReadOnlyStateProxy,
@@ -152,6 +152,32 @@ class TestUiStateComputedProperties:
 
         assert ui_state.is_bank_selected(1) is False
 
+    def test_pad_effective_bpm_prefers_manual(self, controller: LooperController) -> None:
+        ui_state = UiState(controller)
+        controller.project.sample_analysis[0] = SampleAnalysis(
+            bpm=123.4,
+            key="C#m",
+            beat_grid=BeatGrid(beats=[0.0, 0.5], downbeats=[0.0]),
+        )
+
+        assert ui_state.pad_effective_bpm(0) == 123.4
+
+        controller.set_manual_bpm(0, 120.0)
+        assert ui_state.pad_effective_bpm(0) == 120.0
+
+    def test_pad_effective_key_prefers_manual(self, controller: LooperController) -> None:
+        ui_state = UiState(controller)
+        controller.project.sample_analysis[0] = SampleAnalysis(
+            bpm=123.4,
+            key="C#m",
+            beat_grid=BeatGrid(beats=[0.0, 0.5], downbeats=[0.0]),
+        )
+
+        assert ui_state.pad_effective_key(0) == "C#m"
+
+        controller.set_manual_key(0, "Gm")
+        assert ui_state.pad_effective_key(0) == "Gm"
+
 
 class TestAudioActions:
     """Test AudioActions delegation to controller."""
@@ -200,6 +226,35 @@ class TestAudioActions:
 
         audio_engine_mock.return_value.analyze_sample_async.assert_called_once_with(0)
         assert 0 in controller.session.analyzing_sample_ids
+
+    def test_set_and_clear_manual_bpm(self, controller: LooperController) -> None:
+        audio_actions = AudioActions(controller)
+
+        audio_actions.set_manual_bpm(0, 120.0)
+        assert controller.project.manual_bpm[0] == 120.0
+
+        audio_actions.clear_manual_bpm(0)
+        assert controller.project.manual_bpm[0] is None
+
+    def test_set_and_clear_manual_key(self, controller: LooperController) -> None:
+        audio_actions = AudioActions(controller)
+
+        audio_actions.set_manual_key(0, "Gm")
+        assert controller.project.manual_key[0] == "Gm"
+
+        audio_actions.clear_manual_key(0)
+        assert controller.project.manual_key[0] is None
+
+    def test_tap_bpm_delegates(
+        self, controller: LooperController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        audio_actions = AudioActions(controller)
+        times = iter([0.0, 0.5, 1.0])
+        monkeypatch.setattr("flitzis_looper.controller.time.monotonic", lambda: next(times))
+
+        assert audio_actions.tap_bpm(0) is None
+        assert audio_actions.tap_bpm(0) is None
+        assert audio_actions.tap_bpm(0) == pytest.approx(120.0, abs=0.01)
 
     def test_unload_sample(self, controller: LooperController, audio_engine_mock: Mock) -> None:
         """Test unload_sample delegates to controller."""

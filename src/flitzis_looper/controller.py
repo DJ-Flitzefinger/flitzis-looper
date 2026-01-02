@@ -1,4 +1,6 @@
 import math
+import time
+from itertools import pairwise
 
 from pydantic import ValidationError
 
@@ -8,6 +10,8 @@ from flitzis_looper_audio import AudioEngine
 
 
 class LooperController:  # noqa: PLR0904
+    _TAP_BPM_WINDOW_SIZE = 5
+
     def __init__(self) -> None:
         self._project = ProjectState()
         self._session = SessionState()
@@ -304,6 +308,113 @@ class LooperController:  # noqa: PLR0904
     def set_bpm_lock(self, *, enabled: bool) -> None:
         """Enable or disable BPM Lock mode."""
         self.project.bpm_lock = enabled
+
+    def set_manual_bpm(self, sample_id: int, bpm: float) -> None:
+        """Set a pad's manual BPM override.
+
+        Args:
+            sample_id: Sample slot identifier.
+            bpm: Manual BPM value.
+        """
+        validate_sample_id(sample_id)
+        self._ensure_finite(bpm)
+        if bpm <= 0:
+            msg = f"bpm must be > 0, got {bpm!r}"
+            raise ValueError(msg)
+        self._project.manual_bpm[sample_id] = float(bpm)
+
+    def clear_manual_bpm(self, sample_id: int) -> None:
+        """Clear a pad's manual BPM override."""
+        validate_sample_id(sample_id)
+        self._project.manual_bpm[sample_id] = None
+
+    def tap_bpm(self, sample_id: int) -> float | None:
+        """Register a Tap BPM event and update manual BPM.
+
+        BPM is computed from the average interval between consecutive taps in the most recent
+        window of taps.
+
+        Args:
+            sample_id: Sample slot identifier.
+
+        Returns:
+            The computed BPM when at least three taps are available, otherwise None.
+        """
+        validate_sample_id(sample_id)
+
+        now = time.monotonic()
+        if self._session.tap_bpm_pad_id != sample_id:
+            self._session.tap_bpm_pad_id = sample_id
+            self._session.tap_bpm_timestamps.clear()
+
+        timestamps = self._session.tap_bpm_timestamps
+        if timestamps and now <= timestamps[-1]:
+            return None
+
+        timestamps.append(now)
+        if len(timestamps) > self._TAP_BPM_WINDOW_SIZE:
+            del timestamps[: -self._TAP_BPM_WINDOW_SIZE]
+
+        if len(timestamps) < 3:
+            return None
+
+        intervals = [b - a for a, b in pairwise(timestamps)]
+        avg_interval = sum(intervals) / len(intervals)
+        if avg_interval <= 0:
+            return None
+
+        bpm = 60.0 / avg_interval
+        if not math.isfinite(bpm):
+            return None
+
+        self._project.manual_bpm[sample_id] = bpm
+        return bpm
+
+    def effective_bpm(self, sample_id: int) -> float | None:
+        """Return the effective BPM for a pad.
+
+        Manual BPM overrides detected BPM.
+        """
+        validate_sample_id(sample_id)
+
+        manual = self._project.manual_bpm[sample_id]
+        if manual is not None:
+            return float(manual)
+
+        analysis = self._project.sample_analysis[sample_id]
+        return analysis.bpm if analysis is not None else None
+
+    def set_manual_key(self, sample_id: int, key: str) -> None:
+        """Set a pad's manual key override.
+
+        Args:
+            sample_id: Sample slot identifier.
+            key: Manual key string (e.g., "C#m").
+        """
+        validate_sample_id(sample_id)
+        if not key:
+            msg = "key must be a non-empty string"
+            raise ValueError(msg)
+        self._project.manual_key[sample_id] = key
+
+    def clear_manual_key(self, sample_id: int) -> None:
+        """Clear a pad's manual key override."""
+        validate_sample_id(sample_id)
+        self._project.manual_key[sample_id] = None
+
+    def effective_key(self, sample_id: int) -> str | None:
+        """Return the effective key for a pad.
+
+        Manual key overrides detected key.
+        """
+        validate_sample_id(sample_id)
+
+        manual = self._project.manual_key[sample_id]
+        if manual is not None:
+            return manual
+
+        analysis = self._project.sample_analysis[sample_id]
+        return analysis.key if analysis is not None else None
 
     def shut_down(self) -> None:
         self._audio.stop_all()

@@ -163,6 +163,8 @@ class TestModelSerialization:
             key="C#m",
             beat_grid=BeatGrid(beats=[0.0, 0.5, 1.0], downbeats=[0.0]),
         )
+        project_state.manual_bpm[0] = 128.0
+        project_state.manual_key[0] = "Gm"
 
         # Serialize
         json_str = project_state.model_dump_json()
@@ -172,12 +174,16 @@ class TestModelSerialization:
         assert "multi_loop" in data
         assert "sample_paths" in data
         assert "sample_analysis" in data
+        assert "manual_bpm" in data
+        assert "manual_key" in data
         assert "speed" in data
         assert "volume" in data
         assert "selected_pad" in data
 
         assert data["sample_analysis"][0]["bpm"] == 120.0
         assert data["sample_analysis"][0]["key"] == "C#m"
+        assert data["manual_bpm"][0] == 128.0
+        assert data["manual_key"][0] == "Gm"
 
         # Deserialize
         reconstructed = ProjectState.model_validate_json(json_str)
@@ -189,6 +195,8 @@ class TestModelSerialization:
         session_state.active_sample_ids = {1, 2, 3}
         session_state.pressed_pads[0] = True
         session_state.file_dialog_pad_id = 10
+        session_state.tap_bpm_pad_id = 5
+        session_state.tap_bpm_timestamps = [1.0, 2.0]
 
         # Serialize
         json_str = session_state.model_dump_json()
@@ -198,15 +206,21 @@ class TestModelSerialization:
         assert "active_sample_ids" in data
         assert "pressed_pads" in data
         assert "file_dialog_pad_id" in data
+        assert "tap_bpm_pad_id" in data
+        assert "tap_bpm_timestamps" in data
         assert data["active_sample_ids"] == [1, 2, 3]
         assert data["pressed_pads"][0] is True
         assert data["file_dialog_pad_id"] == 10
+        assert data["tap_bpm_pad_id"] == 5
+        assert data["tap_bpm_timestamps"] == [1.0, 2.0]
 
         # Deserialize
         reconstructed = SessionState.model_validate_json(json_str)
         assert reconstructed.active_sample_ids == {1, 2, 3}
         assert reconstructed.pressed_pads[0] is True
         assert reconstructed.file_dialog_pad_id == 10
+        assert reconstructed.tap_bpm_pad_id == 5
+        assert reconstructed.tap_bpm_timestamps == [1.0, 2.0]
 
 
 def test_project_state_defaults(project_state: ProjectState) -> None:
@@ -220,6 +234,10 @@ def test_project_state_defaults(project_state: ProjectState) -> None:
     assert project_state.selected_bank == 0
     assert len(project_state.sample_paths) == NUM_SAMPLES
     assert all(path is None for path in project_state.sample_paths)
+    assert len(project_state.manual_bpm) == NUM_SAMPLES
+    assert all(bpm is None for bpm in project_state.manual_bpm)
+    assert len(project_state.manual_key) == NUM_SAMPLES
+    assert all(key is None for key in project_state.manual_key)
     assert project_state.sidebar_left_expanded is False
     assert project_state.sidebar_right_expanded is True
 
@@ -230,3 +248,5 @@ def test_session_state_defaults(session_state: SessionState) -> None:
     assert len(session_state.pressed_pads) == NUM_SAMPLES
     assert all(pressed is False for pressed in session_state.pressed_pads)
     assert session_state.file_dialog_pad_id is None
+    assert session_state.tap_bpm_pad_id is None
+    assert session_state.tap_bpm_timestamps == []

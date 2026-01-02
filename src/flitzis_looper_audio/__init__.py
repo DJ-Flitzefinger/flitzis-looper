@@ -10,9 +10,9 @@ def _unavailable_error() -> RuntimeError:
 _ext_available = True
 
 try:
-    from .flitzis_looper_audio import *  # type: ignore  # noqa: F403
-
     import sys as _sys
+
+    from .flitzis_looper_audio import *  # type: ignore[import-not-found]  # noqa: F403
 
     _mod = _sys.modules.get(f"{__name__}.flitzis_looper_audio")
     if _mod is not None:
@@ -26,10 +26,10 @@ except ImportError:
 
 if not _ext_available:
 
-    class AudioMessage:  # noqa: D101
+    class AudioMessage:
         pass
 
-    class AudioEngine:  # noqa: D101
+    class AudioEngine:
         def __init__(self) -> None:
             raise _unavailable_error()
 

@@ -29,7 +29,7 @@ class ReadOnlyStateProxy:
             raise AttributeError(msg)
 
 
-class UiState:
+class UiState:  # noqa: PLR0904
     """Read-only proxy of app state for UI rendering."""
 
     def __init__(self, controller: LooperController):
@@ -99,6 +99,22 @@ class UiState:
     def pad_analysis(self, pad_id: int) -> SampleAnalysis | None:
         """Return per-pad analysis results, if available."""
         return self.project.sample_analysis[pad_id]
+
+    def pad_manual_bpm(self, pad_id: int) -> float | None:
+        """Return per-pad manual BPM override, if set."""
+        return self.project.manual_bpm[pad_id]
+
+    def pad_effective_bpm(self, pad_id: int) -> float | None:
+        """Return the effective BPM (manual overrides detected)."""
+        return self._controller.effective_bpm(pad_id)
+
+    def pad_manual_key(self, pad_id: int) -> str | None:
+        """Return per-pad manual key override, if set."""
+        return self.project.manual_key[pad_id]
+
+    def pad_effective_key(self, pad_id: int) -> str | None:
+        """Return the effective key (manual overrides detected)."""
+        return self._controller.effective_key(pad_id)
 
     def is_pad_analyzing(self, pad_id: int) -> bool:
         """Return whether audio analysis is currently running for a pad."""
@@ -172,6 +188,26 @@ class AudioActions:
     def analyze_sample_async(self, pad_id: int) -> None:
         """Analyze a previously loaded sample asynchronously."""
         self._controller.analyze_sample_async(pad_id)
+
+    def set_manual_bpm(self, pad_id: int, bpm: float) -> None:
+        """Set manual BPM for a pad."""
+        self._controller.set_manual_bpm(pad_id, bpm)
+
+    def clear_manual_bpm(self, pad_id: int) -> None:
+        """Clear manual BPM for a pad."""
+        self._controller.clear_manual_bpm(pad_id)
+
+    def tap_bpm(self, pad_id: int) -> float | None:
+        """Register a Tap BPM event for a pad."""
+        return self._controller.tap_bpm(pad_id)
+
+    def set_manual_key(self, pad_id: int, key: str) -> None:
+        """Set manual key for a pad."""
+        self._controller.set_manual_key(pad_id, key)
+
+    def clear_manual_key(self, pad_id: int) -> None:
+        """Clear manual key for a pad."""
+        self._controller.clear_manual_key(pad_id)
 
     def poll_loader_events(self) -> None:
         """Apply pending loader events from Rust."""

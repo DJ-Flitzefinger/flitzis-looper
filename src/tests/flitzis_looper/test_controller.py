@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from flitzis_looper.constants import NUM_SAMPLES, SPEED_MAX, SPEED_MIN, VOLUME_MAX, VOLUME_MIN
+from flitzis_looper.models import BeatGrid, SampleAnalysis
 
 if TYPE_CHECKING:
     from unittest.mock import Mock
@@ -321,6 +322,87 @@ class TestModeToggles:
         controller.set_bpm_lock(enabled=False)
 
         assert controller.project.bpm_lock is False
+
+
+class TestManualBpm:
+    """Test manual BPM set/clear, Tap BPM, and effective BPM."""
+
+    def test_set_and_clear_manual_bpm(self, controller: LooperController) -> None:
+        sample_id = 0
+
+        controller.set_manual_bpm(sample_id, 120.0)
+        assert controller.project.manual_bpm[sample_id] == 120.0
+
+        controller.clear_manual_bpm(sample_id)
+        assert controller.project.manual_bpm[sample_id] is None
+
+    def test_effective_bpm_prefers_manual(self, controller: LooperController) -> None:
+        sample_id = 0
+
+        controller.project.sample_analysis[sample_id] = SampleAnalysis(
+            bpm=123.4,
+            key="C#m",
+            beat_grid=BeatGrid(beats=[0.0, 0.5], downbeats=[0.0]),
+        )
+        assert controller.effective_bpm(sample_id) == 123.4
+
+        controller.set_manual_bpm(sample_id, 120.0)
+        assert controller.effective_bpm(sample_id) == 120.0
+
+    def test_tap_bpm_three_taps(
+        self, controller: LooperController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sample_id = 0
+        times = iter([0.0, 0.5, 1.0])
+        monkeypatch.setattr("flitzis_looper.controller.time.monotonic", lambda: next(times))
+
+        assert controller.tap_bpm(sample_id) is None
+        assert controller.tap_bpm(sample_id) is None
+        bpm = controller.tap_bpm(sample_id)
+
+        assert bpm == pytest.approx(120.0, abs=0.01)
+        assert controller.project.manual_bpm[sample_id] == pytest.approx(120.0, abs=0.01)
+
+    def test_tap_bpm_uses_five_most_recent_taps(
+        self, controller: LooperController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sample_id = 0
+        times = iter([0.0, 1.0, 2.0, 3.0, 4.0, 10.0, 10.5, 11.0, 11.5, 12.0])
+        monkeypatch.setattr("flitzis_looper.controller.time.monotonic", lambda: next(times))
+
+        bpm: float | None = None
+        for _ in range(10):
+            bpm = controller.tap_bpm(sample_id)
+
+        assert bpm == pytest.approx(120.0, abs=0.01)
+        assert controller.session.tap_bpm_pad_id == sample_id
+        assert len(controller.session.tap_bpm_timestamps) == 5
+
+
+class TestManualKey:
+    """Test manual key set/clear and effective key."""
+
+    def test_set_and_clear_manual_key(self, controller: LooperController) -> None:
+        sample_id = 0
+
+        controller.set_manual_key(sample_id, "Gm")
+        assert controller.project.manual_key[sample_id] == "Gm"
+
+        controller.clear_manual_key(sample_id)
+        assert controller.project.manual_key[sample_id] is None
+
+    def test_effective_key_prefers_manual(self, controller: LooperController) -> None:
+        sample_id = 0
+
+        controller.project.sample_analysis[sample_id] = SampleAnalysis(
+            bpm=123.4,
+            key="C#m",
+            beat_grid=BeatGrid(beats=[0.0, 0.5], downbeats=[0.0]),
+        )
+        assert controller.effective_key(sample_id) == "C#m"
+
+        controller.set_manual_key(sample_id, "Gm")
+        assert controller.effective_key(sample_id) == "Gm"
 
 
 class TestErrorHandling:
