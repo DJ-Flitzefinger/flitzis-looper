@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Annotated
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
@@ -12,7 +13,7 @@ from flitzis_looper.constants import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    pass
 
 
 def _default_sample_paths() -> list[str | None]:
@@ -68,13 +69,37 @@ class SessionState(BaseModel):
     pressed_pads: list[bool] = Field(default_factory=lambda: [False] * NUM_SAMPLES)
     """Currently pressed pads."""
 
+    loading_sample_ids: set[int] = Field(default_factory=set)
+    """Pads that are currently being loaded asynchronously."""
+
+    pending_sample_paths: dict[int, str] = Field(default_factory=dict)
+    """Paths for pads with an in-flight async load."""
+
+    sample_load_progress: dict[int, float] = Field(default_factory=dict)
+    """Best-effort async load progress (0.0..=1.0)."""
+
+    sample_load_errors: dict[int, str] = Field(default_factory=dict)
+    """Last async load error message per pad."""
+
     # UI State
     file_dialog_pad_id: int | None = None
     """Current file dialog target pad ID or None if no file dialog is open."""
 
-    @field_validator("active_sample_ids", "pressed_pads", mode="after")
+    @field_validator("active_sample_ids", "pressed_pads", "loading_sample_ids", mode="after")
     @classmethod
     def _validate_sample_ids(cls, value: Iterable[int]) -> Iterable[int]:
+        for sid in value:
+            validate_sample_id(sid)
+        return value
+
+    @field_validator(
+        "pending_sample_paths",
+        "sample_load_progress",
+        "sample_load_errors",
+        mode="after",
+    )
+    @classmethod
+    def _validate_sample_id_keys(cls, value: dict[int, object]) -> dict[int, object]:
         for sid in value:
             validate_sample_id(sid)
         return value

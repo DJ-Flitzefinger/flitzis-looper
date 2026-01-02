@@ -131,6 +131,8 @@ If a UI interaction needs a slow operation (file access, decoding, heavy computa
 - Completion comes back as a new event like `SampleLoaded { … }`.
 - UI simply reflects progress based on core state.
 
+In Flitzis Looper, async sample loading follows this pattern via `AudioEngine.load_sample_async()` and per-frame polling with `AudioEngine.poll_loader_events()`.
+
 This avoids UI stalls and keeps the frame loop predictable.
 
 ## Constant redraw (and how to budget it)

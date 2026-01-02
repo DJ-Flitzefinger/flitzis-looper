@@ -18,6 +18,10 @@ if TYPE_CHECKING:
 
 
 def _pad_context_menu(ctx: UiContext, pad_id: int) -> None:
+    if ctx.state.is_pad_loading(pad_id):
+        imgui.text_disabled("Loading audio…")
+        return
+
     if ctx.state.is_pad_loaded(pad_id):
         if imgui.menu_item("Unload Audio", "", p_selected=False)[0]:
             ctx.audio.unload_sample(pad_id)
@@ -48,9 +52,17 @@ def _pad_popover(ctx: UiContext, pad_id: int) -> None:
 
 def _pad_button(ctx: UiContext, pad_id: int, size: imgui.ImVec2Like) -> None:
     is_loaded = ctx.state.is_pad_loaded(pad_id)
+    is_loading = ctx.state.is_pad_loading(pad_id)
     is_active = ctx.state.is_pad_active(pad_id)
     style_name: ButtonStyleName = "active" if is_active else "regular"
-    label = ctx.state.pad_label(pad_id) if is_loaded else ""
+
+    if is_loaded or is_loading:
+        label = ctx.state.pad_label(pad_id)
+        if is_loading:
+            label = f"{label} (loading)" if label else "Loading…"
+    else:
+        label = ""
+
     id_str = f"pad_btn_{pad_id}"
 
     with button_style(style_name):

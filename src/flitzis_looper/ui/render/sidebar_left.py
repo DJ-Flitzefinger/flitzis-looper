@@ -13,16 +13,21 @@ def sidebar_left(ctx: UiContext) -> None:
     avail = imgui.get_content_region_avail()
     pad_id = ctx.state.project.selected_pad
     is_loaded = ctx.state.is_pad_loaded(pad_id)
+    is_loading = ctx.state.is_pad_loading(pad_id)
+    load_error = ctx.state.pad_load_error(pad_id)
 
     # Filename
-    filename = ctx.state.pad_label(pad_id) if is_loaded else "- EMPTY -"
+    filename = ctx.state.pad_label(pad_id) if is_loaded or is_loading else "- EMPTY -"
     text_width = imgui.calc_text_size(filename).x
     imgui.text_colored(TEXT_MUTED_RGBA, "Track")
     imgui.same_line(max(0, avail.x - text_width))
-    if is_loaded:
+    if is_loaded or is_loading:
         imgui.text_unformatted(filename)
     else:
         imgui.text_colored(TEXT_MUTED_RGBA, filename)
+
+    if load_error:
+        imgui.text_wrapped(f"Load failed: {load_error}")
 
     with style_var(imgui.StyleVar_.item_spacing, (0.0, SPACING / 4)):
         if is_loaded:
@@ -37,5 +42,7 @@ def sidebar_left(ctx: UiContext) -> None:
             if imgui.button("Generate Stems", (-1, 0)):
                 # TODO: adjust loop
                 pass
+        elif is_loading:
+            imgui.text_colored(TEXT_MUTED_RGBA, "Loading audio…")
         elif imgui.button("Load Audio", (-1, 0)):
             ctx.ui.open_file_dialog(pad_id)

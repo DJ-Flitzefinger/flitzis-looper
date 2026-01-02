@@ -57,7 +57,10 @@ class UiState:
         """
         path = self.project.sample_paths[pad_id]
         if path is None:
-            return ""
+            pending = self._controller.pending_sample_path(pad_id)
+            if pending is None:
+                return ""
+            path = pending
 
         if "\\" in path:
             return PureWindowsPath(path).name
@@ -74,6 +77,18 @@ class UiState:
             True when the pad has a sample loaded.
         """
         return self._controller.is_sample_loaded(pad_id)
+
+    def is_pad_loading(self, pad_id: int) -> bool:
+        """Return whether a pad is currently loading."""
+        return self._controller.is_sample_loading(pad_id)
+
+    def pad_load_error(self, pad_id: int) -> str | None:
+        """Return the last async load error message for a pad."""
+        return self._controller.sample_load_error(pad_id)
+
+    def pad_load_progress(self, pad_id: int) -> float | None:
+        """Return best-effort async load progress for a pad."""
+        return self._controller.sample_load_progress(pad_id)
 
     def is_pad_active(self, pad_id: int) -> bool:
         """Return whether a pad is currently playing audio.
@@ -126,6 +141,14 @@ class AudioActions:
     def load_sample(self, pad_id: int, path: str) -> None:
         """Load an audio file to a pad."""
         self._controller.load_sample(pad_id, path)
+
+    def load_sample_async(self, pad_id: int, path: str) -> None:
+        """Load an audio file to a pad asynchronously."""
+        self._controller.load_sample_async(pad_id, path)
+
+    def poll_loader_events(self) -> None:
+        """Apply pending loader events from Rust."""
+        self._controller.poll_loader_events()
 
     def unload_sample(self, pad_id: int) -> None:
         """Unload an audio file from a pad."""

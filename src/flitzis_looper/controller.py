@@ -27,6 +27,92 @@ class LooperController:
         self._audio.load_sample(sample_id, path)
         self._project.sample_paths[sample_id] = path
 
+    def load_sample_async(self, sample_id: int, path: str) -> None:
+        """Load an audio file into a sample slot asynchronously.
+
+        The load work happens on a Rust background thread. UI code should call
+        `poll_loader_events()` each frame to apply completion/error updates.
+
+        Args:
+            sample_id: Sample slot identifier.
+            path: Path to an audio file on disk.
+        """
+        validate_sample_id(sample_id)
+        if self.is_sample_loaded(sample_id):
+            self.unload_sample(sample_id)
+
+        self._session.sample_load_errors.pop(sample_id, None)
+        self._session.sample_load_progress.pop(sample_id, None)
+        self._session.pending_sample_paths[sample_id] = path
+        self._session.loading_sample_ids.add(sample_id)
+
+        self._audio.load_sample_async(sample_id, path)
+
+    def poll_loader_events(self) -> None:
+        """Drain pending loader events from the Rust audio engine."""
+        while True:
+            event = self._audio.poll_loader_events()
+            if event is None:
+                return
+
+            event_type = event.get("type")
+            sample_id = event.get("id")
+            if not isinstance(sample_id, int):
+                continue
+
+            if event_type == "started":
+                self._session.loading_sample_ids.add(sample_id)
+                self._session.sample_load_errors.pop(sample_id, None)
+                self._session.sample_load_progress.pop(sample_id, None)
+                continue
+
+            if event_type == "progress":
+                percent = event.get("percent")
+                if isinstance(percent, (int, float)):
+                    self._session.sample_load_progress[sample_id] = float(percent)
+                continue
+
+            if event_type == "success":
+                self._session.loading_sample_ids.discard(sample_id)
+                self._session.sample_load_errors.pop(sample_id, None)
+                self._session.sample_load_progress.pop(sample_id, None)
+
+                pending = self._session.pending_sample_paths.pop(sample_id, None)
+                if pending is not None:
+                    self._project.sample_paths[sample_id] = pending
+                continue
+
+            if event_type == "error":
+                self._session.loading_sample_ids.discard(sample_id)
+                self._session.sample_load_progress.pop(sample_id, None)
+                self._session.pending_sample_paths.pop(sample_id, None)
+
+                msg = event.get("msg")
+                if isinstance(msg, str):
+                    self._session.sample_load_errors[sample_id] = msg
+                continue
+
+    def is_sample_loading(self, sample_id: int) -> bool:
+        """Return whether a sample slot is currently being loaded."""
+        validate_sample_id(sample_id)
+        return sample_id in self._session.loading_sample_ids
+
+    def pending_sample_path(self, sample_id: int) -> str | None:
+        """Return the pending path for an in-flight async load."""
+        validate_sample_id(sample_id)
+        return self._session.pending_sample_paths.get(sample_id)
+
+    def sample_load_error(self, sample_id: int) -> str | None:
+        """Return the last async load error message for a pad."""
+        validate_sample_id(sample_id)
+        return self._session.sample_load_errors.get(sample_id)
+
+    def sample_load_progress(self, sample_id: int) -> float | None:
+        """Return best-effort async load progress for a pad."""
+        validate_sample_id(sample_id)
+        value = self._session.sample_load_progress.get(sample_id)
+        return float(value) if value is not None else None
+
     def unload_sample(self, sample_id: int) -> None:
         """Stop playback and unload a sample slot.
 
@@ -35,6 +121,10 @@ class LooperController:
         """
         validate_sample_id(sample_id)
         self._session.active_sample_ids.discard(sample_id)
+        self._session.loading_sample_ids.discard(sample_id)
+        self._session.pending_sample_paths.pop(sample_id, None)
+        self._session.sample_load_progress.pop(sample_id, None)
+        self._session.sample_load_errors.pop(sample_id, None)
         self._audio.unload_sample(sample_id)
         self.project.sample_paths[sample_id] = None
 

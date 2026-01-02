@@ -73,3 +73,21 @@ pub enum ControlMessage {
     /// * `id` - Identifier of the sample slot to unload
     UnloadSample { id: usize },
 }
+
+/// Events emitted from background sample loading.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LoaderEvent {
+    /// Loading started for the given sample slot id.
+    Started { id: usize },
+
+    /// A progress update.
+    ///
+    /// Note: The current implementation may not emit granular progress updates yet.
+    Progress { id: usize, percent: f32 },
+
+    /// Loading completed successfully.
+    Success { id: usize, duration_sec: f32 },
+
+    /// Loading failed.
+    Error { id: usize, error: String },
+}

@@ -1,3 +1,4 @@
+import time
 import wave
 from array import array
 from typing import TYPE_CHECKING
@@ -72,3 +73,38 @@ def test_stop_all_requires_initialized_engine() -> None:
 
 def test_stop_all_is_safe_when_nothing_playing(audio_engine: AudioEngine) -> None:
     audio_engine.stop_all()
+
+
+def test_load_sample_async_emits_started_and_error_for_missing_file(
+    audio_engine: AudioEngine,
+) -> None:
+    audio_engine.load_sample_async(0, "file-does-not-exist.wav")
+
+    deadline = time.monotonic() + 1.0
+    seen: dict[str, dict[str, object]] = {}
+
+    while time.monotonic() < deadline and ("started" not in seen or "error" not in seen):
+        event = audio_engine.poll_loader_events()
+        if event is None:
+            time.sleep(0.01)
+            continue
+
+        event_type = event.get("type")
+        if isinstance(event_type, str):
+            seen[event_type] = event
+
+    assert "started" in seen
+    assert seen["started"].get("id") == 0
+
+    assert "error" in seen
+    assert seen["error"].get("id") == 0
+    assert isinstance(seen["error"].get("msg"), str)
+
+
+def test_poll_loader_events_returns_none_when_empty(audio_engine: AudioEngine) -> None:
+    # Ensure the queue is drained.
+    deadline = time.monotonic() + 0.2
+    while time.monotonic() < deadline and audio_engine.poll_loader_events() is not None:
+        pass
+
+    assert audio_engine.poll_loader_events() is None

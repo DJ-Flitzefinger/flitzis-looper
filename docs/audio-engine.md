@@ -52,7 +52,7 @@ Each module is `pub(crate)` with only `mod.rs` exposing the public API, ensuring
 
 - Python (control layer)
   - Owns the `AudioEngine` instance and calls its methods.
-  - Does all potentially blocking work (disk I/O, decoding).
+  - Schedules potentially blocking work (disk I/O, decoding) via the Rust engine.
 
 - Rust (real-time audio layer)
   - `rust/src/audio_engine/mod.rs`: Main orchestration and Python-facing API.
@@ -89,7 +89,9 @@ The Rust engine is exposed to Python as `AudioEngine` with:
   - `shut_down()`
 
 - Sample workflow
-  - `load_sample(id, path)` loads and decodes an audio file into a sample slot (`id < 32`).
+  - `load_sample(id, path)` loads and decodes an audio file into a sample slot.
+  - `load_sample_async(id, path)` schedules loading on a Rust background thread.
+  - `poll_loader_events()` polls for background loader events (e.g. started/success/error).
   - `play_sample(id, velocity)` triggers playback (`velocity` in `0.0..=1.0`).
 
 - Messaging utilities
@@ -99,7 +101,7 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 ## Not implemented (yet)
 
 - Audio device selection/configuration (the engine currently uses the default output device/config).
-- Resampling and broader channel-layout support; currently decoding is strict about output sample rate and only supports mono↔stereo mapping.
+- Broader channel-layout support; currently decoding only supports mono↔stereo mapping.
 - BPM detection
 - Time-stretch/pitch-shift
 
