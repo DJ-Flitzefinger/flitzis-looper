@@ -12,7 +12,8 @@ if TYPE_CHECKING:
 
 
 def _bpm_display(ctx: UiContext) -> None:
-    bpm_text = "104.54"  # TODO: use real value
+    bpm = ctx.state.global_effective_bpm()
+    bpm_text = f"{bpm:.2f}" if bpm is not None else "--"
     pos = imgui.get_cursor_screen_pos()
     avail = imgui.get_content_region_avail()
     draw_list = imgui.get_window_draw_list()
@@ -72,10 +73,10 @@ def sidebar_right(ctx: UiContext) -> None:
         with style_var(imgui.StyleVar_.item_spacing, (0.0, SPACING / 4)):
             key_lock_style: ButtonStyleName = "mode-on" if key_lock else "mode-off"
             with button_style(key_lock_style):
-                if imgui.button("KEY LOCK", (-1, 0)):
+                if imgui.button("KEY LOCK##key_lock", (-1, 0)):
                     ctx.audio.toggle_key_lock()
 
             bpm_lock_style: ButtonStyleName = "mode-on" if bpm_lock else "mode-off"
             with button_style(bpm_lock_style):
-                if imgui.button("BPM LOCK", (-1, 0)):
+                if imgui.button("BPM LOCK##bpm_lock", (-1, 0)):
                     ctx.audio.toggle_bpm_lock()

@@ -135,6 +135,15 @@ class SessionState(BaseModel):
     tap_bpm_timestamps: list[float] = Field(default_factory=list)
     """Recent Tap BPM timestamps in monotonic seconds."""
 
+    bpm_lock_anchor_pad_id: int | None = None
+    """Pad id used to anchor BPM lock master BPM calculation."""
+
+    bpm_lock_anchor_bpm: float | None = None
+    """Pad BPM value captured when BPM lock is enabled."""
+
+    master_bpm: float | None = None
+    """Current master BPM when BPM lock is enabled."""
+
     @field_validator(
         "active_sample_ids",
         "pressed_pads",
@@ -167,6 +176,7 @@ class SessionState(BaseModel):
     @field_validator(
         "file_dialog_pad_id",
         "tap_bpm_pad_id",
+        "bpm_lock_anchor_pad_id",
         mode="after",
     )
     @classmethod

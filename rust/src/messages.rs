@@ -41,6 +41,18 @@ pub enum ControlMessage {
     /// * `speed` - Speed multiplier (0.5 to 2.0)
     SetSpeed(f32),
 
+    /// Enable or disable BPM lock.
+    SetBpmLock(bool),
+
+    /// Enable or disable key lock (preserve pitch under tempo changes).
+    SetKeyLock(bool),
+
+    /// Set the current master BPM when BPM lock is enabled.
+    SetMasterBpm(f32),
+
+    /// Set per-pad BPM metadata.
+    SetPadBpm { id: usize, bpm: Option<f32> },
+
     /// Publish a loaded sample into an audio-thread slot.
 
     ///

@@ -41,6 +41,7 @@ mod constants;
 mod errors;
 mod mixer;
 mod sample_loader;
+mod stretch_processor;
 mod voice;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -689,6 +690,78 @@ impl AudioEngine {
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
         let _ = producer_guard.push(ControlMessage::SetSpeed(speed));
+        Ok(())
+    }
+
+    pub fn set_bpm_lock(&mut self, enabled: bool) -> PyResult<()> {
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        let _ = producer_guard.push(ControlMessage::SetBpmLock(enabled));
+        Ok(())
+    }
+
+    pub fn set_key_lock(&mut self, enabled: bool) -> PyResult<()> {
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        let _ = producer_guard.push(ControlMessage::SetKeyLock(enabled));
+        Ok(())
+    }
+
+    pub fn set_master_bpm(&mut self, bpm: f32) -> PyResult<()> {
+        if !bpm.is_finite() || bpm <= 0.0 {
+            return Err(PyValueError::new_err("bpm out of range"));
+        }
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        let _ = producer_guard.push(ControlMessage::SetMasterBpm(bpm));
+        Ok(())
+    }
+
+    pub fn set_pad_bpm(&mut self, id: usize, bpm: Option<f32>) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+
+        if bpm.is_some_and(|value| !value.is_finite() || value <= 0.0) {
+            return Err(PyValueError::new_err("bpm out of range"));
+        }
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        let _ = producer_guard.push(ControlMessage::SetPadBpm { id, bpm });
         Ok(())
     }
 

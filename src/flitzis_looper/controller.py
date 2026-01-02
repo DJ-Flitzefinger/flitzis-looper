@@ -232,6 +232,7 @@ class LooperController:  # noqa: PLR0904
         self._audio.unload_sample(sample_id)
         self.project.sample_paths[sample_id] = None
         self.project.sample_analysis[sample_id] = None
+        self._on_pad_bpm_changed(sample_id)
 
     def set_volume(self, volume: float) -> None:
         """Set global volume.
@@ -254,10 +255,43 @@ class LooperController:  # noqa: PLR0904
         clamped = min(max(speed, SPEED_MIN), SPEED_MAX)
         self._audio.set_speed(clamped)
         self._project.speed = clamped
+        self._recompute_master_bpm()
 
     def reset_speed(self) -> None:
         """Reset global speed back to 1.0x."""
         self.set_speed(1.0)
+
+    @staticmethod
+    def _normalize_bpm(bpm: float | None) -> float | None:
+        if bpm is None:
+            return None
+        if not math.isfinite(bpm) or bpm <= 0:
+            return None
+        return float(bpm)
+
+    def _recompute_master_bpm(self) -> None:
+        if not self.project.bpm_lock:
+            self._session.master_bpm = None
+            return
+
+        anchor_bpm = self._normalize_bpm(self._session.bpm_lock_anchor_bpm)
+        if anchor_bpm is None:
+            self._session.master_bpm = None
+            return
+
+        master_bpm = anchor_bpm * self.project.speed
+        self._session.master_bpm = master_bpm
+        self._audio.set_master_bpm(master_bpm)
+
+    def _on_pad_bpm_changed(self, sample_id: int) -> None:
+        bpm = self._normalize_bpm(self.effective_bpm(sample_id))
+        self._audio.set_pad_bpm(sample_id, bpm)
+
+        if self._session.bpm_lock_anchor_pad_id != sample_id:
+            return
+
+        self._session.bpm_lock_anchor_bpm = bpm
+        self._recompute_master_bpm()
 
     def trigger_pad(self, sample_id: int) -> None:
         """Trigger or retrigger a pad's loop.
@@ -303,11 +337,29 @@ class LooperController:  # noqa: PLR0904
 
     def set_key_lock(self, *, enabled: bool) -> None:
         """Enable or disable Key Lock mode."""
+        if enabled == self.project.key_lock:
+            return
         self.project.key_lock = enabled
+        self._audio.set_key_lock(enabled)
 
     def set_bpm_lock(self, *, enabled: bool) -> None:
         """Enable or disable BPM Lock mode."""
+        if enabled == self.project.bpm_lock:
+            return
+
         self.project.bpm_lock = enabled
+
+        if enabled:
+            anchor_pad_id = self.project.selected_pad
+            anchor_bpm = self._normalize_bpm(self.effective_bpm(anchor_pad_id))
+            self._session.bpm_lock_anchor_pad_id = anchor_pad_id
+            self._session.bpm_lock_anchor_bpm = anchor_bpm
+        else:
+            self._session.bpm_lock_anchor_pad_id = None
+            self._session.bpm_lock_anchor_bpm = None
+
+        self._audio.set_bpm_lock(enabled)
+        self._recompute_master_bpm()
 
     def set_manual_bpm(self, sample_id: int, bpm: float) -> None:
         """Set a pad's manual BPM override.
@@ -322,11 +374,13 @@ class LooperController:  # noqa: PLR0904
             msg = f"bpm must be > 0, got {bpm!r}"
             raise ValueError(msg)
         self._project.manual_bpm[sample_id] = float(bpm)
+        self._on_pad_bpm_changed(sample_id)
 
     def clear_manual_bpm(self, sample_id: int) -> None:
         """Clear a pad's manual BPM override."""
         validate_sample_id(sample_id)
         self._project.manual_bpm[sample_id] = None
+        self._on_pad_bpm_changed(sample_id)
 
     def tap_bpm(self, sample_id: int) -> float | None:
         """Register a Tap BPM event and update manual BPM.
@@ -468,6 +522,7 @@ class LooperController:  # noqa: PLR0904
             return
 
         self._project.sample_analysis[sample_id] = parsed
+        self._on_pad_bpm_changed(sample_id)
 
     # --- State Access ---
 

@@ -291,37 +291,77 @@ class TestModeToggles:
 
         assert controller.project.multi_loop is False
 
-    def test_set_key_lock_enable(self, controller: LooperController) -> None:
+    def test_set_key_lock_enable(
+        self, controller: LooperController, audio_engine_mock: Mock
+    ) -> None:
         """Test enabling key lock mode."""
         controller.project.key_lock = False
 
         controller.set_key_lock(enabled=True)
 
+        audio_engine_mock.return_value.set_key_lock.assert_called_with(True)
         assert controller.project.key_lock is True
 
-    def test_set_key_lock_disable(self, controller: LooperController) -> None:
+    def test_set_key_lock_disable(
+        self, controller: LooperController, audio_engine_mock: Mock
+    ) -> None:
         """Test disabling key lock mode."""
         controller.project.key_lock = True
 
         controller.set_key_lock(enabled=False)
 
+        audio_engine_mock.return_value.set_key_lock.assert_called_with(False)
         assert controller.project.key_lock is False
 
-    def test_set_bpm_lock_enable(self, controller: LooperController) -> None:
+    def test_set_bpm_lock_enable(
+        self, controller: LooperController, audio_engine_mock: Mock
+    ) -> None:
         """Test enabling BPM lock mode."""
         controller.project.bpm_lock = False
 
         controller.set_bpm_lock(enabled=True)
 
+        audio_engine_mock.return_value.set_bpm_lock.assert_called_with(True)
         assert controller.project.bpm_lock is True
 
-    def test_set_bpm_lock_disable(self, controller: LooperController) -> None:
+    def test_set_bpm_lock_disable(
+        self, controller: LooperController, audio_engine_mock: Mock
+    ) -> None:
         """Test disabling BPM lock mode."""
         controller.project.bpm_lock = True
 
         controller.set_bpm_lock(enabled=False)
 
+        audio_engine_mock.return_value.set_bpm_lock.assert_called_with(False)
         assert controller.project.bpm_lock is False
+
+    def test_bpm_lock_anchors_master_bpm_to_selected_pad(
+        self, controller: LooperController, audio_engine_mock: Mock
+    ) -> None:
+        controller.project.selected_pad = 1
+        controller.set_speed(1.5)
+        controller.set_manual_bpm(1, 120.0)
+
+        audio_engine_mock.return_value.reset_mock()
+
+        controller.set_bpm_lock(enabled=True)
+
+        assert controller.session.bpm_lock_anchor_pad_id == 1
+        assert controller.session.master_bpm == pytest.approx(180.0)
+
+        audio_engine_mock.return_value.set_bpm_lock.assert_called_with(True)
+        assert audio_engine_mock.return_value.set_master_bpm.call_count == 1
+        called_bpm = audio_engine_mock.return_value.set_master_bpm.call_args.args[0]
+        assert called_bpm == pytest.approx(180.0)
+
+        audio_engine_mock.return_value.reset_mock()
+
+        controller.set_speed(2.0)
+
+        assert controller.session.master_bpm == pytest.approx(240.0)
+        assert audio_engine_mock.return_value.set_master_bpm.call_count == 1
+        called_bpm = audio_engine_mock.return_value.set_master_bpm.call_args.args[0]
+        assert called_bpm == pytest.approx(240.0)
 
 
 class TestManualBpm:

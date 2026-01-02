@@ -108,6 +108,22 @@ class UiState:  # noqa: PLR0904
         """Return the effective BPM (manual overrides detected)."""
         return self._controller.effective_bpm(pad_id)
 
+    def global_effective_bpm(self) -> float | None:
+        """Return the current effective global BPM.
+
+        - When BPM lock is enabled and a master BPM has been captured, this returns that master BPM.
+        - Otherwise, this falls back to the selected pad's effective BPM scaled by the global speed.
+        """
+        if self.project.bpm_lock and self.session.master_bpm is not None:
+            return float(self.session.master_bpm)
+
+        selected = self.project.selected_pad
+        bpm = self._controller.effective_bpm(selected)
+        if bpm is None:
+            return None
+
+        return float(bpm) * float(self.project.speed)
+
     def pad_manual_key(self, pad_id: int) -> str | None:
         """Return per-pad manual key override, if set."""
         return self.project.manual_key[pad_id]

@@ -103,6 +103,18 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
                     ControlMessage::SetSpeed(speed) => {
                         mixer.set_speed(speed);
                     }
+                    ControlMessage::SetBpmLock(enabled) => {
+                        mixer.set_bpm_lock(enabled);
+                    }
+                    ControlMessage::SetKeyLock(enabled) => {
+                        mixer.set_key_lock(enabled);
+                    }
+                    ControlMessage::SetMasterBpm(bpm) => {
+                        mixer.set_master_bpm(bpm);
+                    }
+                    ControlMessage::SetPadBpm { id, bpm } => {
+                        mixer.set_pad_bpm(id, bpm);
+                    }
                     ControlMessage::SetVolume(volume) => {
                         mixer.set_volume(volume);
                     }
