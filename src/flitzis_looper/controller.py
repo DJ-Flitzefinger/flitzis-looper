@@ -1,11 +1,13 @@
 import math
 
+from pydantic import ValidationError
+
 from flitzis_looper.constants import SPEED_MAX, SPEED_MIN, VOLUME_MAX, VOLUME_MIN
-from flitzis_looper.models import ProjectState, SessionState, validate_sample_id
+from flitzis_looper.models import ProjectState, SampleAnalysis, SessionState, validate_sample_id
 from flitzis_looper_audio import AudioEngine
 
 
-class LooperController:
+class LooperController:  # noqa: PLR0904
     def __init__(self) -> None:
         self._project = ProjectState()
         self._session = SessionState()
@@ -28,16 +30,140 @@ class LooperController:
         if self.is_sample_loaded(sample_id):
             self.unload_sample(sample_id)
 
+        self._project.sample_analysis[sample_id] = None
+
         self._session.sample_load_errors.pop(sample_id, None)
         self._session.sample_load_progress.pop(sample_id, None)
         self._session.sample_load_stage.pop(sample_id, None)
+
+        self._session.analyzing_sample_ids.discard(sample_id)
+        self._session.sample_analysis_errors.pop(sample_id, None)
+        self._session.sample_analysis_progress.pop(sample_id, None)
+        self._session.sample_analysis_stage.pop(sample_id, None)
+
         self._session.pending_sample_paths[sample_id] = path
         self._session.loading_sample_ids.add(sample_id)
 
         self._audio.load_sample_async(sample_id, path)
 
+    def analyze_sample_async(self, sample_id: int) -> None:
+        """Analyze a previously loaded sample asynchronously."""
+        validate_sample_id(sample_id)
+        if self.is_sample_loading(sample_id):
+            return
+
+        self._clear_analysis_task_messages(sample_id)
+        self._session.analyzing_sample_ids.add(sample_id)
+
+        try:
+            self._audio.analyze_sample_async(sample_id)
+        except Exception as err:  # noqa: BLE001
+            self._session.analyzing_sample_ids.discard(sample_id)
+            self._session.sample_analysis_errors[sample_id] = str(err)
+
+    def _clear_analysis_task_messages(self, sample_id: int) -> None:
+        self._session.sample_analysis_errors.pop(sample_id, None)
+        self._session.sample_analysis_progress.pop(sample_id, None)
+        self._session.sample_analysis_stage.pop(sample_id, None)
+
+    def _clear_analysis_task_state(self, sample_id: int) -> None:
+        self._session.analyzing_sample_ids.discard(sample_id)
+        self._clear_analysis_task_messages(sample_id)
+
+    def _handle_loader_started(self, sample_id: int, _event: dict[str, object]) -> None:
+        self._project.sample_analysis[sample_id] = None
+
+        self._session.loading_sample_ids.add(sample_id)
+        self._session.sample_load_errors.pop(sample_id, None)
+        self._session.sample_load_progress.pop(sample_id, None)
+        self._session.sample_load_stage.pop(sample_id, None)
+
+        self._clear_analysis_task_state(sample_id)
+
+    def _handle_loader_progress(self, sample_id: int, event: dict[str, object]) -> None:
+        stage = event.get("stage")
+        if isinstance(stage, str):
+            self._session.sample_load_stage[sample_id] = stage
+
+        percent = event.get("percent")
+        if isinstance(percent, (int, float)):
+            self._session.sample_load_progress[sample_id] = float(percent)
+
+    def _handle_loader_success(self, sample_id: int, event: dict[str, object]) -> None:
+        self._session.loading_sample_ids.discard(sample_id)
+        self._session.sample_load_errors.pop(sample_id, None)
+        self._session.sample_load_progress.pop(sample_id, None)
+        self._session.sample_load_stage.pop(sample_id, None)
+
+        pending = self._session.pending_sample_paths.pop(sample_id, None)
+        if pending is not None:
+            self._project.sample_paths[sample_id] = pending
+
+        self._store_sample_analysis(sample_id, event.get("analysis"))
+        self._clear_analysis_task_state(sample_id)
+
+    def _handle_loader_error(self, sample_id: int, event: dict[str, object]) -> None:
+        self._session.loading_sample_ids.discard(sample_id)
+        self._session.sample_load_progress.pop(sample_id, None)
+        self._session.sample_load_stage.pop(sample_id, None)
+        self._session.pending_sample_paths.pop(sample_id, None)
+        self._clear_analysis_task_state(sample_id)
+
+        msg = event.get("msg")
+        if isinstance(msg, str):
+            self._session.sample_load_errors[sample_id] = msg
+
+    def _handle_task_started(self, sample_id: int, event: dict[str, object]) -> None:
+        if event.get("task") != "analysis":
+            return
+
+        self._session.analyzing_sample_ids.add(sample_id)
+        self._clear_analysis_task_messages(sample_id)
+
+    def _handle_task_progress(self, sample_id: int, event: dict[str, object]) -> None:
+        if event.get("task") != "analysis":
+            return
+
+        stage = event.get("stage")
+        if isinstance(stage, str):
+            self._session.sample_analysis_stage[sample_id] = stage
+
+        percent = event.get("percent")
+        if isinstance(percent, (int, float)):
+            self._session.sample_analysis_progress[sample_id] = float(percent)
+
+    def _handle_task_success(self, sample_id: int, event: dict[str, object]) -> None:
+        if event.get("task") != "analysis":
+            return
+
+        self._store_sample_analysis(sample_id, event.get("analysis"))
+        self._clear_analysis_task_state(sample_id)
+
+    def _handle_task_error(self, sample_id: int, event: dict[str, object]) -> None:
+        if event.get("task") != "analysis":
+            return
+
+        self._session.analyzing_sample_ids.discard(sample_id)
+        self._session.sample_analysis_progress.pop(sample_id, None)
+        self._session.sample_analysis_stage.pop(sample_id, None)
+
+        msg = event.get("msg")
+        if isinstance(msg, str):
+            self._session.sample_analysis_errors[sample_id] = msg
+
     def poll_loader_events(self) -> None:
         """Drain pending loader events from the Rust audio engine."""
+        handlers = {
+            "started": self._handle_loader_started,
+            "progress": self._handle_loader_progress,
+            "success": self._handle_loader_success,
+            "error": self._handle_loader_error,
+            "task_started": self._handle_task_started,
+            "task_progress": self._handle_task_progress,
+            "task_success": self._handle_task_success,
+            "task_error": self._handle_task_error,
+        }
+
         while True:
             event = self._audio.poll_loader_events()
             if event is None:
@@ -45,47 +171,14 @@ class LooperController:
 
             event_type = event.get("type")
             sample_id = event.get("id")
-            if not isinstance(sample_id, int):
+            if not isinstance(event_type, str) or not isinstance(sample_id, int):
                 continue
 
-            if event_type == "started":
-                self._session.loading_sample_ids.add(sample_id)
-                self._session.sample_load_errors.pop(sample_id, None)
-                self._session.sample_load_progress.pop(sample_id, None)
-                self._session.sample_load_stage.pop(sample_id, None)
+            handler = handlers.get(event_type)
+            if handler is None:
                 continue
 
-            if event_type == "progress":
-                stage = event.get("stage")
-                if isinstance(stage, str):
-                    self._session.sample_load_stage[sample_id] = stage
-
-                percent = event.get("percent")
-                if isinstance(percent, (int, float)):
-                    self._session.sample_load_progress[sample_id] = float(percent)
-                continue
-
-            if event_type == "success":
-                self._session.loading_sample_ids.discard(sample_id)
-                self._session.sample_load_errors.pop(sample_id, None)
-                self._session.sample_load_progress.pop(sample_id, None)
-                self._session.sample_load_stage.pop(sample_id, None)
-
-                pending = self._session.pending_sample_paths.pop(sample_id, None)
-                if pending is not None:
-                    self._project.sample_paths[sample_id] = pending
-                continue
-
-            if event_type == "error":
-                self._session.loading_sample_ids.discard(sample_id)
-                self._session.sample_load_progress.pop(sample_id, None)
-                self._session.sample_load_stage.pop(sample_id, None)
-                self._session.pending_sample_paths.pop(sample_id, None)
-
-                msg = event.get("msg")
-                if isinstance(msg, str):
-                    self._session.sample_load_errors[sample_id] = msg
-                continue
+            handler(sample_id, event)
 
     def is_sample_loading(self, sample_id: int) -> bool:
         """Return whether a sample slot is currently being loaded."""
@@ -126,8 +219,15 @@ class LooperController:
         self._session.sample_load_progress.pop(sample_id, None)
         self._session.sample_load_stage.pop(sample_id, None)
         self._session.sample_load_errors.pop(sample_id, None)
+
+        self._session.analyzing_sample_ids.discard(sample_id)
+        self._session.sample_analysis_errors.pop(sample_id, None)
+        self._session.sample_analysis_progress.pop(sample_id, None)
+        self._session.sample_analysis_stage.pop(sample_id, None)
+
         self._audio.unload_sample(sample_id)
         self.project.sample_paths[sample_id] = None
+        self.project.sample_analysis[sample_id] = None
 
     def set_volume(self, volume: float) -> None:
         """Set global volume.
@@ -246,6 +346,17 @@ class LooperController:
         if not math.isfinite(value):
             msg = f"value must be finite, got {value!r}"
             raise ValueError(msg)
+
+    def _store_sample_analysis(self, sample_id: int, analysis: object) -> None:
+        if not isinstance(analysis, dict):
+            return
+
+        try:
+            parsed = SampleAnalysis.model_validate(analysis)
+        except ValidationError:
+            return
+
+        self._project.sample_analysis[sample_id] = parsed
 
     # --- State Access ---
 

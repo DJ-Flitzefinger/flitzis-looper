@@ -29,13 +29,28 @@ def sidebar_left(ctx: UiContext) -> None:
     if load_error:
         imgui.text_wrapped(f"Load failed: {load_error}")
 
+    analysis = ctx.state.pad_analysis(pad_id) if is_loaded else None
+    if analysis is not None:
+        imgui.text_colored(TEXT_MUTED_RGBA, f"{analysis.bpm:.1f} BPM  {analysis.key}")
+
+    analysis_error = ctx.state.pad_analysis_error(pad_id) if is_loaded else None
+    if analysis_error:
+        imgui.text_wrapped(f"Analysis failed: {analysis_error}")
+
     with style_var(imgui.StyleVar_.item_spacing, (0.0, SPACING / 4)):
         if is_loaded:
             if imgui.button("Unload Audio", (-1, 0)):
                 ctx.audio.unload_sample(pad_id)
-            if imgui.button("Re-detect BPM", (-1, 0)):
-                # TODO: redetect BPM
-                pass
+            if ctx.state.is_pad_analyzing(pad_id):
+                imgui.text_disabled("Analyzing audio…")
+                stage = ctx.state.pad_analysis_stage(pad_id) or "Analyzing"
+                progress = ctx.state.pad_analysis_progress(pad_id)
+                percent_text = "" if progress is None else f"{int(float(progress) * 100):d} %"
+                status_line = " ".join([p for p in (stage, percent_text) if p])
+                if status_line:
+                    imgui.text_colored(TEXT_MUTED_RGBA, status_line)
+            elif imgui.button("Analyze audio", (-1, 0)):
+                ctx.audio.analyze_sample_async(pad_id)
             if imgui.button("Adjust Loop", (-1, 0)):
                 # TODO: adjust loop
                 pass

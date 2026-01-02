@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from flitzis_looper.constants import NUM_SAMPLES
-from flitzis_looper.models import ProjectState, SessionState
+from flitzis_looper.models import BeatGrid, ProjectState, SampleAnalysis, SessionState
 
 
 class TestProjectStateValidation:
@@ -158,6 +158,12 @@ class TestModelSerialization:
 
     def test_project_state_json_serialization(self, project_state: ProjectState) -> None:
         """Test that ProjectState can be serialized to and from JSON."""
+        project_state.sample_analysis[0] = SampleAnalysis(
+            bpm=120.0,
+            key="C#m",
+            beat_grid=BeatGrid(beats=[0.0, 0.5, 1.0], downbeats=[0.0]),
+        )
+
         # Serialize
         json_str = project_state.model_dump_json()
         data = json.loads(json_str)
@@ -165,9 +171,13 @@ class TestModelSerialization:
         # Verify structure
         assert "multi_loop" in data
         assert "sample_paths" in data
+        assert "sample_analysis" in data
         assert "speed" in data
         assert "volume" in data
         assert "selected_pad" in data
+
+        assert data["sample_analysis"][0]["bpm"] == 120.0
+        assert data["sample_analysis"][0]["key"] == "C#m"
 
         # Deserialize
         reconstructed = ProjectState.model_validate_json(json_str)

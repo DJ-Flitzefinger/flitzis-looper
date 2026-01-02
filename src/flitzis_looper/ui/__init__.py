@@ -1,13 +1,15 @@
-from imgui_bundle import hello_imgui, immapp
-
-from flitzis_looper.controller import LooperController
-from flitzis_looper.ui.constants import BG_RGBA, TITLE, VIEWPORT_PX
-from flitzis_looper.ui.context import UiContext
-from flitzis_looper.ui.render import render_ui
+from __future__ import annotations
 
 
 def run_ui() -> None:
-    """Start the Dear PyGui UI shell."""
+    """Start the UI shell."""
+    from imgui_bundle import hello_imgui, immapp
+
+    from flitzis_looper.controller import LooperController
+    from flitzis_looper.ui.constants import BG_RGBA, TITLE, VIEWPORT_PX
+    from flitzis_looper.ui.context import UiContext
+    from flitzis_looper.ui.render import render_ui
+
     controller = LooperController()
     context = UiContext(controller)
 

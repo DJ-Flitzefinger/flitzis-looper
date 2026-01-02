@@ -19,6 +19,7 @@ symphonia = { version = "0.5", features = ["all", "opt-simd"] }
 rubato = { version = "1.0", features = ["fft_resampler"] }
 audioadapter = "2.0"
 audioadapter-buffers = "2.0"
+stratum-dsp = "1.0.0"
 
 [dev-dependencies]
 tempfile = "3"

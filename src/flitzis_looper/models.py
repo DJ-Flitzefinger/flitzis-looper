@@ -1,5 +1,5 @@
-from collections.abc import Iterable
-from typing import TYPE_CHECKING, Annotated
+from collections.abc import Iterable  # noqa: TC003
+from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
@@ -11,9 +11,6 @@ from flitzis_looper.constants import (
     VOLUME_MAX,
     VOLUME_MIN,
 )
-
-if TYPE_CHECKING:
-    pass
 
 
 def _default_sample_paths() -> list[str | None]:
@@ -27,6 +24,21 @@ def validate_sample_id(sample_id: int) -> int:
     return sample_id
 
 
+class BeatGrid(BaseModel):
+    beats: list[float]
+    downbeats: list[float]
+
+
+class SampleAnalysis(BaseModel):
+    bpm: float
+    key: str
+    beat_grid: BeatGrid
+
+
+def _default_sample_analysis() -> list[SampleAnalysis | None]:
+    return [None] * NUM_SAMPLES
+
+
 class ProjectState(BaseModel):
     """Persistent state. Saved to disk."""
 
@@ -34,6 +46,9 @@ class ProjectState(BaseModel):
 
     sample_paths: list[str | None] = Field(default_factory=_default_sample_paths)
     """Maps pad IDs to file paths."""
+
+    sample_analysis: list[SampleAnalysis | None] = Field(default_factory=_default_sample_analysis)
+    """Per-pad audio analysis results (BPM/key/beat grid) or None when unknown."""
 
     # Global Audio Settings
     multi_loop: bool = False
@@ -84,11 +99,29 @@ class SessionState(BaseModel):
     sample_load_errors: dict[int, str] = Field(default_factory=dict)
     """Last async load error message per pad."""
 
+    analyzing_sample_ids: set[int] = Field(default_factory=set)
+    """Pads that are currently running audio analysis in the background."""
+
+    sample_analysis_progress: dict[int, float] = Field(default_factory=dict)
+    """Best-effort analysis progress (0.0..=1.0)."""
+
+    sample_analysis_stage: dict[int, str] = Field(default_factory=dict)
+    """Human-readable analysis stage per pad."""
+
+    sample_analysis_errors: dict[int, str] = Field(default_factory=dict)
+    """Last analysis error message per pad."""
+
     # UI State
     file_dialog_pad_id: int | None = None
     """Current file dialog target pad ID or None if no file dialog is open."""
 
-    @field_validator("active_sample_ids", "pressed_pads", "loading_sample_ids", mode="after")
+    @field_validator(
+        "active_sample_ids",
+        "pressed_pads",
+        "loading_sample_ids",
+        "analyzing_sample_ids",
+        mode="after",
+    )
     @classmethod
     def _validate_sample_ids(cls, value: Iterable[int]) -> Iterable[int]:
         for sid in value:
@@ -100,6 +133,9 @@ class SessionState(BaseModel):
         "sample_load_progress",
         "sample_load_stage",
         "sample_load_errors",
+        "sample_analysis_progress",
+        "sample_analysis_stage",
+        "sample_analysis_errors",
         mode="after",
     )
     @classmethod

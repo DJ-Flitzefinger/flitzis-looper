@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pathlib import Path, PureWindowsPath
 from typing import TYPE_CHECKING, Any, cast
 
@@ -7,7 +9,7 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
 
     from flitzis_looper.controller import LooperController
-    from flitzis_looper.models import ProjectState, SessionState
+    from flitzis_looper.models import ProjectState, SampleAnalysis, SessionState
 
 
 class ReadOnlyStateProxy:
@@ -94,6 +96,27 @@ class UiState:
         """Return the last reported async load stage for a pad."""
         return self._controller.sample_load_stage(pad_id)
 
+    def pad_analysis(self, pad_id: int) -> SampleAnalysis | None:
+        """Return per-pad analysis results, if available."""
+        return self.project.sample_analysis[pad_id]
+
+    def is_pad_analyzing(self, pad_id: int) -> bool:
+        """Return whether audio analysis is currently running for a pad."""
+        return pad_id in self._controller.session.analyzing_sample_ids
+
+    def pad_analysis_progress(self, pad_id: int) -> float | None:
+        """Return best-effort analysis progress for a pad."""
+        value = self._controller.session.sample_analysis_progress.get(pad_id)
+        return float(value) if value is not None else None
+
+    def pad_analysis_stage(self, pad_id: int) -> str | None:
+        """Return the last analysis stage for a pad."""
+        return self._controller.session.sample_analysis_stage.get(pad_id)
+
+    def pad_analysis_error(self, pad_id: int) -> str | None:
+        """Return the last analysis error message for a pad."""
+        return self._controller.session.sample_analysis_errors.get(pad_id)
+
     def is_pad_active(self, pad_id: int) -> bool:
         """Return whether a pad is currently playing audio.
 
@@ -145,6 +168,10 @@ class AudioActions:
     def load_sample_async(self, pad_id: int, path: str) -> None:
         """Load an audio file to a pad asynchronously."""
         self._controller.load_sample_async(pad_id, path)
+
+    def analyze_sample_async(self, pad_id: int) -> None:
+        """Analyze a previously loaded sample asynchronously."""
+        self._controller.analyze_sample_async(pad_id)
 
     def poll_loader_events(self) -> None:
         """Apply pending loader events from Rust."""

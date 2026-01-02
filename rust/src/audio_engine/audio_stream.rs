@@ -8,8 +8,7 @@
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Stream, StreamConfig};
-use env_logger::Builder;
-use log::LevelFilter;
+use env_logger::{Builder, Env};
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::sync::{Arc, Mutex};
 
@@ -27,9 +26,10 @@ pub struct AudioStreamHandle {
 
 /// Setup and configure the logger for audio operations
 pub fn setup_logger() {
-    Builder::new()
+    // Default to `info` to avoid extremely expensive debug/trace logging during analysis.
+    // Users can override via `RUST_LOG`, e.g. `RUST_LOG=debug` when troubleshooting.
+    Builder::from_env(Env::default().default_filter_or("info"))
         .format_timestamp(None)
-        .filter_level(LevelFilter::max())
         .try_init()
         .unwrap_or(()); // Ignore initialization errors
 }

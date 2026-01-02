@@ -371,3 +371,84 @@ class TestErrorHandling:
 
         # Should not attempt to play
         audio_engine_mock.return_value.play_sample.assert_not_called()
+
+
+class TestAnalysisEvents:
+    """Test controller handling of analysis task loader events."""
+
+    def test_task_started_sets_analyzing_state(
+        self, controller: LooperController, audio_engine_mock: Mock
+    ) -> None:
+        audio_engine_mock.return_value.poll_loader_events.side_effect = [
+            {"type": "task_started", "id": 0, "task": "analysis"},
+            None,
+        ]
+
+        controller.poll_loader_events()
+
+        assert 0 in controller.session.analyzing_sample_ids
+        assert 0 not in controller.session.sample_analysis_progress
+        assert 0 not in controller.session.sample_analysis_stage
+        assert 0 not in controller.session.sample_analysis_errors
+
+    def test_task_progress_updates_stage_and_percent(
+        self, controller: LooperController, audio_engine_mock: Mock
+    ) -> None:
+        audio_engine_mock.return_value.poll_loader_events.side_effect = [
+            {"type": "task_started", "id": 0, "task": "analysis"},
+            {
+                "type": "task_progress",
+                "id": 0,
+                "task": "analysis",
+                "percent": 0.25,
+                "stage": "Analyzing",
+            },
+            None,
+        ]
+
+        controller.poll_loader_events()
+
+        assert controller.session.sample_analysis_progress[0] == 0.25
+        assert controller.session.sample_analysis_stage[0] == "Analyzing"
+
+    def test_task_success_stores_analysis_and_clears_task_state(
+        self, controller: LooperController, audio_engine_mock: Mock
+    ) -> None:
+        analysis = {
+            "bpm": 120.0,
+            "key": "C#m",
+            "beat_grid": {"beats": [0.0, 0.5], "downbeats": [0.0]},
+        }
+
+        audio_engine_mock.return_value.poll_loader_events.side_effect = [
+            {"type": "task_started", "id": 0, "task": "analysis"},
+            {"type": "task_success", "id": 0, "task": "analysis", "analysis": analysis},
+            None,
+        ]
+
+        controller.poll_loader_events()
+
+        assert controller.project.sample_analysis[0] is not None
+        assert controller.project.sample_analysis[0].bpm == 120.0
+        assert controller.project.sample_analysis[0].key == "C#m"
+        assert 0 not in controller.session.analyzing_sample_ids
+        assert 0 not in controller.session.sample_analysis_progress
+        assert 0 not in controller.session.sample_analysis_stage
+        assert 0 not in controller.session.sample_analysis_errors
+
+    def test_task_error_records_error_and_clears_progress(
+        self, controller: LooperController, audio_engine_mock: Mock
+    ) -> None:
+        audio_engine_mock.return_value.poll_loader_events.side_effect = [
+            {"type": "task_started", "id": 0, "task": "analysis"},
+            {"type": "task_progress", "id": 0, "task": "analysis", "percent": 0.5},
+            {"type": "task_error", "id": 0, "task": "analysis", "msg": "bad audio"},
+            None,
+        ]
+
+        controller.poll_loader_events()
+
+        assert 0 not in controller.session.analyzing_sample_ids
+        assert 0 not in controller.session.sample_analysis_progress
+        assert 0 not in controller.session.sample_analysis_stage
+        assert controller.session.sample_analysis_errors[0] == "bad audio"

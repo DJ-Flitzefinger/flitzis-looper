@@ -17,19 +17,24 @@ use crate::audio_engine::audio_stream::{AudioStreamHandle, create_audio_stream, 
 use crate::audio_engine::constants::{NUM_SAMPLES, SPEED_MAX, SPEED_MIN, VOLUME_MAX, VOLUME_MIN};
 use crate::audio_engine::errors::SampleLoadError;
 use crate::audio_engine::sample_loader::{
-    SampleLoadProgress, SampleLoadSubtask, decode_audio_file_to_sample_buffer_with_progress,
+    SampleLoadProgress, SampleLoadSubtask, decode_audio_file_to_sample_buffer,
 };
-use crate::messages::{AudioMessage, ControlMessage, LoaderEvent};
+use crate::messages::{
+    AudioMessage, BackgroundTaskKind, BeatGridData, ControlMessage, LoaderEvent, SampleAnalysis,
+    SampleBuffer,
+};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{
-    Mutex,
+    Arc, Mutex,
     mpsc::{Receiver, Sender, TryRecvError},
 };
 use std::thread;
 use std::time::{Duration, Instant};
+use stratum_dsp::{AnalysisConfig, analyze_audio};
 
 mod audio_stream;
 mod constants;
@@ -43,6 +48,7 @@ enum LoadProgressStage {
     Decoding,
     Resampling,
     ChannelMapping,
+    Analyzing,
     Publishing,
 }
 
@@ -52,6 +58,7 @@ impl LoadProgressStage {
             Self::Decoding => "decoding",
             Self::Resampling => "resampling",
             Self::ChannelMapping => "channel mapping",
+            Self::Analyzing => "Analyzing (bpm/key/beat grid)",
             Self::Publishing => "publishing",
         }
     }
@@ -59,15 +66,19 @@ impl LoadProgressStage {
     fn range(self, resampling_required: bool) -> (f32, f32) {
         if !resampling_required {
             return match self {
-                Self::Decoding => (0.0, 1.0),
-                Self::Resampling | Self::ChannelMapping | Self::Publishing => (1.0, 1.0),
+                Self::Decoding => (0.0, 0.70),
+                Self::Resampling => (0.70, 0.70),
+                Self::ChannelMapping => (0.70, 0.80),
+                Self::Analyzing => (0.80, 0.95),
+                Self::Publishing => (0.95, 1.0),
             };
         }
 
         match self {
-            Self::Decoding => (0.0, 0.45),
-            Self::Resampling => (0.45, 0.90),
-            Self::ChannelMapping => (0.90, 0.95),
+            Self::Decoding => (0.0, 0.40),
+            Self::Resampling => (0.40, 0.80),
+            Self::ChannelMapping => (0.80, 0.85),
+            Self::Analyzing => (0.85, 0.95),
             Self::Publishing => (0.95, 1.0),
         }
     }
@@ -119,12 +130,79 @@ impl ProgressReporter {
 
         let (start, end) = stage.range(resampling_required);
         let percent = (start + (end - start) * local_percent).clamp(0.0, 1.0);
-        let stage = format!("Loading ({})", stage.stage_label());
+        let stage = match stage {
+            LoadProgressStage::Analyzing => stage.stage_label().to_string(),
+            _ => format!("Loading ({})", stage.stage_label()),
+        };
         let _ = self.tx.send(LoaderEvent::Progress {
             id: self.id,
             percent,
             stage,
         });
+    }
+}
+
+fn interleaved_to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
+    match channels {
+        0 => Vec::new(),
+        1 => samples.to_vec(),
+        _ => {
+            let mut mono = Vec::with_capacity(samples.len() / channels);
+            for frame in samples.chunks_exact(channels) {
+                let sum: f32 = frame.iter().copied().sum();
+                mono.push(sum / channels as f32);
+            }
+            mono
+        }
+    }
+}
+
+fn analyze_sample(sample: &SampleBuffer, sample_rate_hz: u32) -> Result<SampleAnalysis, String> {
+    let mono = interleaved_to_mono(&sample.samples, sample.channels);
+
+    let result = analyze_audio(&mono, sample_rate_hz, AnalysisConfig::default())
+        .map_err(|err| format!("analysis failed: {err}"))?;
+
+    Ok(SampleAnalysis {
+        bpm: result.bpm,
+        key: result.key.name(),
+        beat_grid: BeatGridData {
+            beats: result.beat_grid.beats,
+            downbeats: result.beat_grid.downbeats,
+        },
+    })
+}
+
+fn task_to_str(task: BackgroundTaskKind) -> &'static str {
+    match task {
+        BackgroundTaskKind::Analysis => "analysis",
+    }
+}
+
+struct PadLoadingGuard {
+    id: usize,
+    loading_sample_ids: Arc<Mutex<HashSet<usize>>>,
+}
+
+impl Drop for PadLoadingGuard {
+    fn drop(&mut self) {
+        if let Ok(mut set) = self.loading_sample_ids.lock() {
+            set.remove(&self.id);
+        }
+    }
+}
+
+struct PadTaskGuard {
+    id: usize,
+    task: BackgroundTaskKind,
+    active_tasks: Arc<Mutex<HashSet<(usize, BackgroundTaskKind)>>>,
+}
+
+impl Drop for PadTaskGuard {
+    fn drop(&mut self) {
+        if let Ok(mut set) = self.active_tasks.lock() {
+            set.remove(&(self.id, self.task));
+        }
     }
 }
 
@@ -135,6 +213,9 @@ pub struct AudioEngine {
     is_playing: bool,
     loader_tx: Sender<LoaderEvent>,
     loader_rx: Mutex<Receiver<LoaderEvent>>,
+    sample_cache: Arc<Mutex<Vec<Option<SampleBuffer>>>>,
+    loading_sample_ids: Arc<Mutex<HashSet<usize>>>,
+    active_tasks: Arc<Mutex<HashSet<(usize, BackgroundTaskKind)>>>,
 }
 
 #[pymethods]
@@ -149,6 +230,9 @@ impl AudioEngine {
             is_playing: false,
             loader_tx,
             loader_rx: Mutex::new(loader_rx),
+            sample_cache: Arc::new(Mutex::new(vec![None; NUM_SAMPLES])),
+            loading_sample_ids: Arc::new(Mutex::new(HashSet::new())),
+            active_tasks: Arc::new(Mutex::new(HashSet::new())),
         })
     }
 
@@ -198,13 +282,38 @@ impl AudioEngine {
         let producer = handle.producer.clone();
         let output_channels = handle.output_channels;
         let output_sample_rate = handle.output_sample_rate;
+        let sample_cache = self.sample_cache.clone();
+        let loading_sample_ids = self.loading_sample_ids.clone();
+
+        {
+            let mut set = loading_sample_ids
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("Failed to acquire loading ids lock"))?;
+            if !set.insert(id) {
+                return Err(PyValueError::new_err("sample is already loading"));
+            }
+        }
+
+        {
+            let mut cache = sample_cache
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("Failed to acquire sample cache lock"))?;
+            if let Some(slot) = cache.get_mut(id) {
+                *slot = None;
+            }
+        }
 
         thread::spawn(move || {
+            let _loading_guard = PadLoadingGuard {
+                id,
+                loading_sample_ids,
+            };
+
             let _ = loader_tx.send(LoaderEvent::Started { id });
 
             let mut progress = ProgressReporter::new(id, loader_tx.clone());
 
-            let sample = match decode_audio_file_to_sample_buffer_with_progress(
+            let sample = match decode_audio_file_to_sample_buffer(
                 Path::new(&path),
                 output_channels,
                 output_sample_rate,
@@ -235,15 +344,36 @@ impl AudioEngine {
                 }
             };
 
+            let resampling_required = progress.resampling_required.unwrap_or(true);
+
+            progress.emit(LoadProgressStage::Analyzing, 0.0, resampling_required, true);
+
+            let analysis = match analyze_sample(&sample, output_sample_rate) {
+                Ok(result) => result,
+                Err(err) => {
+                    let _ = loader_tx.send(LoaderEvent::Error { id, error: err });
+                    return;
+                }
+            };
+
+            progress.emit(LoadProgressStage::Analyzing, 1.0, resampling_required, true);
+
             progress.emit(
                 LoadProgressStage::Publishing,
                 0.0,
-                progress.resampling_required.unwrap_or(true),
+                resampling_required,
                 true,
             );
 
             let frames = sample.samples.len() / sample.channels;
             let duration_sec = frames as f32 / output_sample_rate as f32;
+
+            let sample_for_audio = sample.clone();
+            if let Ok(mut cache) = sample_cache.lock() {
+                if let Some(slot) = cache.get_mut(id) {
+                    *slot = Some(sample);
+                }
+            }
 
             let mut producer_guard = match producer.lock() {
                 Ok(guard) => guard,
@@ -257,7 +387,10 @@ impl AudioEngine {
             };
 
             if producer_guard
-                .push(ControlMessage::LoadSample { id, sample })
+                .push(ControlMessage::LoadSample {
+                    id,
+                    sample: sample_for_audio,
+                })
                 .is_err()
             {
                 let _ = loader_tx.send(LoaderEvent::Error {
@@ -270,10 +403,112 @@ impl AudioEngine {
             progress.emit(
                 LoadProgressStage::Publishing,
                 1.0,
-                progress.resampling_required.unwrap_or(true),
+                resampling_required,
                 true,
             );
-            let _ = loader_tx.send(LoaderEvent::Success { id, duration_sec });
+            let _ = loader_tx.send(LoaderEvent::Success {
+                id,
+                duration_sec,
+                analysis,
+            });
+        });
+
+        Ok(())
+    }
+
+    /// Analyze a previously loaded sample on a background thread.
+    pub fn analyze_sample_async(&self, id: usize) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err(format!(
+                "id out of range (expected 0..{}, got {id})",
+                NUM_SAMPLES - 1
+            )));
+        }
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        {
+            let loading = self
+                .loading_sample_ids
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("Failed to acquire loading ids lock"))?;
+            if loading.contains(&id) {
+                return Err(PyValueError::new_err("sample is currently loading"));
+            }
+        }
+
+        {
+            let mut tasks = self
+                .active_tasks
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("Failed to acquire active tasks lock"))?;
+            if !tasks.insert((id, BackgroundTaskKind::Analysis)) {
+                return Err(PyValueError::new_err("analysis task already running"));
+            }
+        }
+
+        let sample = {
+            let cache = self
+                .sample_cache
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("Failed to acquire sample cache lock"))?;
+            cache
+                .get(id)
+                .and_then(|slot| slot.clone())
+                .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?
+        };
+
+        let loader_tx = self.loader_tx.clone();
+        let output_sample_rate = handle.output_sample_rate;
+        let active_tasks = self.active_tasks.clone();
+
+        thread::spawn(move || {
+            let _task_guard = PadTaskGuard {
+                id,
+                task: BackgroundTaskKind::Analysis,
+                active_tasks,
+            };
+
+            let _ = loader_tx.send(LoaderEvent::TaskStarted {
+                id,
+                task: BackgroundTaskKind::Analysis,
+            });
+
+            let stage = LoadProgressStage::Analyzing.stage_label().to_string();
+            let _ = loader_tx.send(LoaderEvent::TaskProgress {
+                id,
+                task: BackgroundTaskKind::Analysis,
+                percent: 0.0,
+                stage: stage.clone(),
+            });
+
+            let analysis = match analyze_sample(&sample, output_sample_rate) {
+                Ok(result) => result,
+                Err(error) => {
+                    let _ = loader_tx.send(LoaderEvent::TaskError {
+                        id,
+                        task: BackgroundTaskKind::Analysis,
+                        error,
+                    });
+                    return;
+                }
+            };
+
+            let _ = loader_tx.send(LoaderEvent::TaskProgress {
+                id,
+                task: BackgroundTaskKind::Analysis,
+                percent: 1.0,
+                stage,
+            });
+
+            let _ = loader_tx.send(LoaderEvent::TaskSuccess {
+                id,
+                task: BackgroundTaskKind::Analysis,
+                analysis,
+            });
         });
 
         Ok(())
@@ -306,14 +541,68 @@ impl AudioEngine {
                 dict.set_item("percent", percent)?;
                 dict.set_item("stage", stage)?;
             }
-            LoaderEvent::Success { id, duration_sec } => {
+            LoaderEvent::Success {
+                id,
+                duration_sec,
+                analysis,
+            } => {
                 dict.set_item("type", "success")?;
                 dict.set_item("id", id)?;
                 dict.set_item("duration_sec", duration_sec)?;
+
+                let analysis_dict = PyDict::new(py);
+                analysis_dict.set_item("bpm", analysis.bpm)?;
+                analysis_dict.set_item("key", analysis.key)?;
+
+                let beat_grid_dict = PyDict::new(py);
+                beat_grid_dict.set_item("beats", &analysis.beat_grid.beats)?;
+                beat_grid_dict.set_item("downbeats", &analysis.beat_grid.downbeats)?;
+                analysis_dict.set_item("beat_grid", beat_grid_dict)?;
+
+                dict.set_item("analysis", analysis_dict)?;
             }
             LoaderEvent::Error { id, error } => {
                 dict.set_item("type", "error")?;
                 dict.set_item("id", id)?;
+                dict.set_item("msg", error)?;
+            }
+            LoaderEvent::TaskStarted { id, task } => {
+                dict.set_item("type", "task_started")?;
+                dict.set_item("id", id)?;
+                dict.set_item("task", task_to_str(task))?;
+            }
+            LoaderEvent::TaskProgress {
+                id,
+                task,
+                percent,
+                stage,
+            } => {
+                dict.set_item("type", "task_progress")?;
+                dict.set_item("id", id)?;
+                dict.set_item("task", task_to_str(task))?;
+                dict.set_item("percent", percent)?;
+                dict.set_item("stage", stage)?;
+            }
+            LoaderEvent::TaskSuccess { id, task, analysis } => {
+                dict.set_item("type", "task_success")?;
+                dict.set_item("id", id)?;
+                dict.set_item("task", task_to_str(task))?;
+
+                let analysis_dict = PyDict::new(py);
+                analysis_dict.set_item("bpm", analysis.bpm)?;
+                analysis_dict.set_item("key", analysis.key)?;
+
+                let beat_grid_dict = PyDict::new(py);
+                beat_grid_dict.set_item("beats", &analysis.beat_grid.beats)?;
+                beat_grid_dict.set_item("downbeats", &analysis.beat_grid.downbeats)?;
+                analysis_dict.set_item("beat_grid", beat_grid_dict)?;
+
+                dict.set_item("analysis", analysis_dict)?;
+            }
+            LoaderEvent::TaskError { id, task, error } => {
+                dict.set_item("type", "task_error")?;
+                dict.set_item("id", id)?;
+                dict.set_item("task", task_to_str(task))?;
                 dict.set_item("msg", error)?;
             }
         }
@@ -450,7 +739,23 @@ impl AudioEngine {
             .push(ControlMessage::UnloadSample { id })
             .map_err(|_| {
                 PyRuntimeError::new_err("Failed to send UnloadSample - buffer may be full")
-            })
+            })?;
+
+        if let Ok(mut cache) = self.sample_cache.lock() {
+            if let Some(slot) = cache.get_mut(id) {
+                *slot = None;
+            }
+        }
+
+        if let Ok(mut set) = self.loading_sample_ids.lock() {
+            set.remove(&id);
+        }
+
+        if let Ok(mut set) = self.active_tasks.lock() {
+            set.remove(&(id, BackgroundTaskKind::Analysis));
+        }
+
+        Ok(())
     }
 
     /// Send a ping message to the audio thread.

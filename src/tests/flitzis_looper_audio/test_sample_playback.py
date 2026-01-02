@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import time
 import wave
 from array import array
@@ -58,7 +60,7 @@ def test_load_and_play_sample_smoke(audio_engine: AudioEngine, tmp_path: Path) -
         if error_msg is not None and "sample rate mismatch" in error_msg:
             continue
 
-        raise AssertionError(f"expected sample load success, got error: {error_msg!r}")
+        pytest.fail(f"expected sample load success, got error: {error_msg!r}")
     else:
         pytest.skip("No matching sample rate for output device")
 
@@ -103,7 +105,10 @@ def test_sample_slot_id_range_is_0_to_215(audio_engine: AudioEngine) -> None:
 
 
 def test_stop_all_requires_initialized_engine() -> None:
-    engine = AudioEngine()
+    try:
+        engine = AudioEngine()
+    except RuntimeError as exc:
+        pytest.skip(f"AudioEngine unavailable: {exc}")
 
     with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
         engine.stop_all()

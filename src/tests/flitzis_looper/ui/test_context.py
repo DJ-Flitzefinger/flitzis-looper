@@ -189,6 +189,18 @@ class TestAudioActions:
         assert controller.session.pending_sample_paths[0] == "/path/to/sample.wav"
         assert controller.project.sample_paths[0] is None
 
+    def test_analyze_sample_async(
+        self, controller: LooperController, audio_engine_mock: Mock
+    ) -> None:
+        """Test analyze_sample_async delegates to controller."""
+        audio_actions = AudioActions(controller)
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
+
+        audio_actions.analyze_sample_async(0)
+
+        audio_engine_mock.return_value.analyze_sample_async.assert_called_once_with(0)
+        assert 0 in controller.session.analyzing_sample_ids
+
     def test_unload_sample(self, controller: LooperController, audio_engine_mock: Mock) -> None:
         """Test unload_sample delegates to controller."""
         audio_actions = AudioActions(controller)

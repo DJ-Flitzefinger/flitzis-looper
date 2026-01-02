@@ -74,7 +74,25 @@ pub enum ControlMessage {
     UnloadSample { id: usize },
 }
 
-/// Events emitted from background sample loading.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct BeatGridData {
+    pub beats: Vec<f32>,
+    pub downbeats: Vec<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SampleAnalysis {
+    pub bpm: f32,
+    pub key: String,
+    pub beat_grid: BeatGridData,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BackgroundTaskKind {
+    Analysis,
+}
+
+/// Events emitted from background work (loading and per-pad tasks).
 #[derive(Debug, Clone, PartialEq)]
 pub enum LoaderEvent {
     /// Loading started for the given sample slot id.
@@ -91,8 +109,37 @@ pub enum LoaderEvent {
     },
 
     /// Loading completed successfully.
-    Success { id: usize, duration_sec: f32 },
+    Success {
+        id: usize,
+        duration_sec: f32,
+        analysis: SampleAnalysis,
+    },
 
     /// Loading failed.
     Error { id: usize, error: String },
+
+    /// A per-pad background task started.
+    TaskStarted { id: usize, task: BackgroundTaskKind },
+
+    /// A per-pad task progress update.
+    TaskProgress {
+        id: usize,
+        task: BackgroundTaskKind,
+        percent: f32,
+        stage: String,
+    },
+
+    /// A per-pad task completed successfully.
+    TaskSuccess {
+        id: usize,
+        task: BackgroundTaskKind,
+        analysis: SampleAnalysis,
+    },
+
+    /// A per-pad task failed.
+    TaskError {
+        id: usize,
+        task: BackgroundTaskKind,
+        error: String,
+    },
 }

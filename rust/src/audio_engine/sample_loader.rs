@@ -62,6 +62,7 @@ impl From<rubato::ResampleError> for SampleLoadError {
 /// - `path`: Path to the audio file to load
 /// - `output_channels`: Number of output channels (1 for mono, 2 for stereo)
 /// - `output_rate_hz`: Output sample rate in Hz
+/// - `progress`: Progress callback
 ///
 /// # Returns
 ///
@@ -76,15 +77,7 @@ impl From<rubato::ResampleError> for SampleLoadError {
 /// - Unsupported channel count
 /// - Resampling errors
 /// - Invalid or corrupt audio data
-pub fn decode_audio_file_to_sample_buffer(
-    path: &Path,
-    output_channels: usize,
-    output_rate_hz: u32,
-) -> Result<SampleBuffer, SampleLoadError> {
-    decode_audio_file_to_sample_buffer_with_progress(path, output_channels, output_rate_hz, |_| {})
-}
-
-pub fn decode_audio_file_to_sample_buffer_with_progress<F>(
+pub fn decode_audio_file_to_sample_buffer<F>(
     path: &Path,
     output_channels: usize,
     output_rate_hz: u32,
@@ -440,7 +433,7 @@ mod tests {
         let samples = [0i16, 16_384i16, -16_384i16, 32_767i16];
         write_pcm16_wav(&path, 1, 44_100, &samples).unwrap();
 
-        let decoded = decode_audio_file_to_sample_buffer(&path, 1, 44_100).unwrap();
+        let decoded = decode_audio_file_to_sample_buffer(&path, 1, 44_100, |_| {}).unwrap();
         assert_eq!(decoded.channels, 1);
         assert_eq!(decoded.samples.len(), samples.len());
         assert!(decoded.samples.iter().all(|s| (-1.0..=1.0).contains(s)));
@@ -454,7 +447,7 @@ mod tests {
         let samples = [0i16, 16_384i16, -16_384i16];
         write_pcm16_wav(&path, 1, 44_100, &samples).unwrap();
 
-        let decoded = decode_audio_file_to_sample_buffer(&path, 2, 44_100).unwrap();
+        let decoded = decode_audio_file_to_sample_buffer(&path, 2, 44_100, |_| {}).unwrap();
         assert_eq!(decoded.channels, 2);
         assert_eq!(decoded.samples.len(), samples.len() * 2);
 
@@ -512,7 +505,7 @@ mod tests {
         write_pcm16_wav(&path, 1, 44_100, &samples).unwrap();
 
         // Decode at same sample rate (no resampling needed)
-        let decoded = decode_audio_file_to_sample_buffer(&path, 1, 44_100).unwrap();
+        let decoded = decode_audio_file_to_sample_buffer(&path, 1, 44_100, |_| {}).unwrap();
         assert_eq!(decoded.channels, 1);
         assert_eq!(decoded.samples.len(), samples.len());
     }
@@ -529,7 +522,7 @@ mod tests {
         write_pcm16_wav(&path, 1, 48_000, &samples).unwrap();
 
         // Decode at 44.1kHz (requires resampling)
-        let decoded = decode_audio_file_to_sample_buffer(&path, 1, 44_100).unwrap();
+        let decoded = decode_audio_file_to_sample_buffer(&path, 1, 44_100, |_| {}).unwrap();
         assert_eq!(decoded.channels, 1);
         // For 48kHz->44.1kHz, we expect fewer output samples (44100/48000 = 0.91875)
         // With 1024 input samples (1024 frames), we expect ~945.35 output frames = ~945 output samples
