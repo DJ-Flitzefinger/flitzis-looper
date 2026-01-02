@@ -27,14 +27,38 @@ def test_load_and_play_sample_smoke(audio_engine: AudioEngine, tmp_path: Path) -
     for sample_rate_hz in (48_000, 44_100):
         _write_mono_pcm16_wav(wav_path, sample_rate_hz)
 
-        try:
-            audio_engine.load_sample(0, str(wav_path))
-        except ValueError as exc:
-            if "sample rate mismatch" in str(exc):
+        audio_engine.load_sample_async(0, str(wav_path))
+
+        deadline = time.monotonic() + 2.0
+        success = False
+        error_msg: str | None = None
+
+        while time.monotonic() < deadline:
+            event = audio_engine.poll_loader_events()
+            if event is None:
+                time.sleep(0.01)
                 continue
-            raise
-        else:
+
+            if event.get("id") != 0:
+                continue
+
+            if event.get("type") == "success":
+                success = True
+                break
+
+            if event.get("type") == "error":
+                msg = event.get("msg")
+                if isinstance(msg, str):
+                    error_msg = msg
+                break
+
+        if success:
             break
+
+        if error_msg is not None and "sample rate mismatch" in error_msg:
+            continue
+
+        raise AssertionError(f"expected sample load success, got error: {error_msg!r}")
     else:
         pytest.skip("No matching sample rate for output device")
 
@@ -45,7 +69,7 @@ def test_load_and_play_sample_smoke(audio_engine: AudioEngine, tmp_path: Path) -
 
 def test_sample_slot_id_range_is_0_to_215(audio_engine: AudioEngine) -> None:
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.load_sample(216, "does-not-matter.wav")
+        audio_engine.load_sample_async(216, "does-not-matter.wav")
 
     with pytest.raises(ValueError, match=r"id out of range"):
         audio_engine.play_sample(216, 1.0)
@@ -56,9 +80,23 @@ def test_sample_slot_id_range_is_0_to_215(audio_engine: AudioEngine) -> None:
     with pytest.raises(ValueError, match=r"id out of range"):
         audio_engine.unload_sample(216)
 
+    audio_engine.load_sample_async(215, "file-does-not-exist.wav")
+
+    deadline = time.monotonic() + 1.0
+    saw_error = False
+    while time.monotonic() < deadline:
+        event = audio_engine.poll_loader_events()
+        if event is None:
+            time.sleep(0.01)
+            continue
+
+        if event.get("type") == "error" and event.get("id") == 215:
+            saw_error = True
+            break
+
+    assert saw_error
+
     # Shouldn't crash
-    with pytest.raises(FileNotFoundError):
-        audio_engine.load_sample(215, "file-does-not-exist.wav")
     audio_engine.play_sample(215, 1.0)
     audio_engine.stop_sample(215)
     audio_engine.unload_sample(215)

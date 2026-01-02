@@ -18,7 +18,7 @@ use crate::audio_engine::constants::{NUM_SAMPLES, SPEED_MAX, SPEED_MIN, VOLUME_M
 use crate::audio_engine::errors::SampleLoadError;
 use crate::audio_engine::sample_loader::decode_audio_file_to_sample_buffer;
 use crate::messages::{AudioMessage, ControlMessage, LoaderEvent};
-use pyo3::exceptions::{PyFileNotFoundError, PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::path::Path;
@@ -85,44 +85,6 @@ impl AudioEngine {
         self.stream_handle = None;
         self.is_playing = false;
         Ok(())
-    }
-
-    /// Load an audio file into a sample slot.
-    pub fn load_sample(&mut self, id: usize, path: &str) -> PyResult<()> {
-        if id >= NUM_SAMPLES {
-            return Err(PyValueError::new_err(format!(
-                "id out of range (expected 0..{}, got {id})",
-                NUM_SAMPLES - 1
-            )));
-        }
-
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
-        let sample = match decode_audio_file_to_sample_buffer(
-            Path::new(path),
-            handle.output_channels,
-            handle.output_sample_rate,
-        ) {
-            Ok(sample) => sample,
-            Err(SampleLoadError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
-                return Err(PyFileNotFoundError::new_err(path.to_string()));
-            }
-            Err(err) => {
-                return Err(PyValueError::new_err(err.to_string()));
-            }
-        };
-
-        let mut producer_guard = handle
-            .producer
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
-
-        producer_guard
-            .push(ControlMessage::LoadSample { id, sample })
-            .map_err(|_| PyRuntimeError::new_err("Failed to send LoadSample - buffer may be full"))
     }
 
     /// Load an audio file into a sample slot on a background thread.

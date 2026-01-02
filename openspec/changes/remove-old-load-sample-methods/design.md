@@ -16,13 +16,11 @@ The audio engine currently has both synchronous and asynchronous sample loading 
 ### Rust Changes
 
 1. **AudioEngine::load_sample removal**:
-   - Remove method implementation from `mod.rs` 
-   - Remove import of `sample_loader` module
-   - Remove module declaration in `mod.rs`
+   - Remove method implementation from `mod.rs`
 
-2. **sample_loader module removal**:
-   - Delete the entire `sample_loader.rs` file since it's only used by the old synchronous method
-   - Update `mod.rs` to remove references to the module
+2. **Keep `sample_loader` for decoding**:
+   - Continue using the existing `sample_loader` module for decoding/resampling work
+   - Ensure `load_sample_async` uses `sample_loader` for file decoding
 
 ### Python Changes
 

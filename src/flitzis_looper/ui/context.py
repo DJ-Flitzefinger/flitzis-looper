@@ -138,10 +138,6 @@ class AudioActions:
         """Stop audio playback for a pad."""
         self._controller.stop_pad(pad_id)
 
-    def load_sample(self, pad_id: int, path: str) -> None:
-        """Load an audio file to a pad."""
-        self._controller.load_sample(pad_id, path)
-
     def load_sample_async(self, pad_id: int, path: str) -> None:
         """Load an audio file to a pad asynchronously."""
         self._controller.load_sample_async(pad_id, path)

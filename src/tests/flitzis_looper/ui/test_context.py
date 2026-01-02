@@ -85,21 +85,21 @@ class TestUiStateComputedProperties:
     def test_pad_label_with_unix_path(self, controller: LooperController) -> None:
         """Test pad_label returns basename for Unix paths."""
         ui_state = UiState(controller)
-        controller.load_sample(0, "/home/user/samples/loop.wav")
+        controller.project.sample_paths[0] = "/home/user/samples/loop.wav"
 
         assert ui_state.pad_label(0) == "loop.wav"
 
     def test_pad_label_with_windows_path(self, controller: LooperController) -> None:
         """Test pad_label returns basename for Windows paths."""
         ui_state = UiState(controller)
-        controller.load_sample(0, r"C:\Users\user\samples\loop.wav")
+        controller.project.sample_paths[0] = r"C:\Users\user\samples\loop.wav"
 
         assert ui_state.pad_label(0) == "loop.wav"
 
     def test_is_pad_loaded_true(self, controller: LooperController) -> None:
         """Test is_pad_loaded returns True when pad has sample."""
         ui_state = UiState(controller)
-        controller.load_sample(0, "/path/to/sample.wav")
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
 
         assert ui_state.is_pad_loaded(0) is True
 
@@ -114,7 +114,7 @@ class TestUiStateComputedProperties:
     ) -> None:
         """Test is_pad_active returns True when pad is playing."""
         ui_state = UiState(controller)
-        controller.load_sample(0, "/path/to/sample.wav")
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
         controller.trigger_pad(0)
 
         assert ui_state.is_pad_active(0) is True
@@ -159,7 +159,7 @@ class TestAudioActions:
     def test_trigger_pad(self, controller: LooperController, audio_engine_mock: Mock) -> None:
         """Test trigger_pad delegates to controller."""
         audio_actions = AudioActions(controller)
-        controller.load_sample(0, "/path/to/sample.wav")
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
 
         audio_actions.trigger_pad(0)
 
@@ -169,7 +169,7 @@ class TestAudioActions:
     def test_stop_pad(self, controller: LooperController, audio_engine_mock: Mock) -> None:
         """Test stop_pad delegates to controller."""
         audio_actions = AudioActions(controller)
-        controller.load_sample(0, "/path/to/sample.wav")
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
         controller.trigger_pad(0)
 
         audio_actions.stop_pad(0)
@@ -177,19 +177,22 @@ class TestAudioActions:
         audio_engine_mock.return_value.stop_sample.assert_called_once_with(0)
         assert 0 not in controller.session.active_sample_ids
 
-    def test_load_sample(self, controller: LooperController, audio_engine_mock: Mock) -> None:
-        """Test load_sample delegates to controller."""
+    def test_load_sample_async(self, controller: LooperController, audio_engine_mock: Mock) -> None:
+        """Test load_sample_async delegates to controller."""
         audio_actions = AudioActions(controller)
 
-        audio_actions.load_sample(0, "/path/to/sample.wav")
+        audio_actions.load_sample_async(0, "/path/to/sample.wav")
 
-        audio_engine_mock.return_value.load_sample.assert_called_once_with(0, "/path/to/sample.wav")
-        assert controller.project.sample_paths[0] == "/path/to/sample.wav"
+        audio_engine_mock.return_value.load_sample_async.assert_called_once_with(
+            0, "/path/to/sample.wav"
+        )
+        assert controller.session.pending_sample_paths[0] == "/path/to/sample.wav"
+        assert controller.project.sample_paths[0] is None
 
     def test_unload_sample(self, controller: LooperController, audio_engine_mock: Mock) -> None:
         """Test unload_sample delegates to controller."""
         audio_actions = AudioActions(controller)
-        controller.load_sample(0, "/path/to/sample.wav")
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
 
         audio_actions.unload_sample(0)
 

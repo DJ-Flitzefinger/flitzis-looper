@@ -44,36 +44,40 @@ class TestControllerInitialization:
 class TestSampleManagement:
     """Test sample loading, unloading, and status checks."""
 
-    def test_load_sample(self, controller: LooperController, audio_engine_mock: Mock) -> None:
-        """Test loading a sample updates state and calls audio engine."""
+    def test_load_sample_async(self, controller: LooperController, audio_engine_mock: Mock) -> None:
+        """Test scheduling a sample load updates state and calls audio engine."""
         sample_id = 0
         path = "/path/to/sample.wav"
 
-        controller.load_sample(sample_id, path)
+        controller.load_sample_async(sample_id, path)
 
-        audio_engine_mock.return_value.load_sample.assert_called_with(sample_id, path)
-        assert controller.project.sample_paths[sample_id] == path
+        audio_engine_mock.return_value.load_sample_async.assert_called_with(sample_id, path)
+        assert controller.session.pending_sample_paths[sample_id] == path
+        assert sample_id in controller.session.loading_sample_ids
+        assert controller.project.sample_paths[sample_id] is None
 
-    def test_load_sample_unloads_existing(
+    def test_load_sample_async_unloads_existing(
         self, controller: LooperController, audio_engine_mock: Mock
     ) -> None:
-        """Test loading a sample with existing sample unloads first."""
+        """Test scheduling a load for an already-loaded slot unloads first."""
         sample_id = 0
         old_path = "/path/to/old.wav"
         new_path = "/path/to/new.wav"
 
-        controller.load_sample(sample_id, old_path)
-        controller.load_sample(sample_id, new_path)
+        controller.project.sample_paths[sample_id] = old_path
 
-        # Should call unload once when replacing
+        controller.load_sample_async(sample_id, new_path)
+
         audio_engine_mock.return_value.unload_sample.assert_called_with(sample_id)
-        assert controller.project.sample_paths[sample_id] == new_path
+        audio_engine_mock.return_value.load_sample_async.assert_called_with(sample_id, new_path)
+        assert controller.project.sample_paths[sample_id] is None
+        assert controller.session.pending_sample_paths[sample_id] == new_path
 
     def test_unload_sample(self, controller: LooperController, audio_engine_mock: Mock) -> None:
         """Test unloading a sample stops playback and clears state."""
         sample_id = 0
         path = "/path/to/sample.wav"
-        controller.load_sample(sample_id, path)
+        controller.project.sample_paths[sample_id] = path
         controller.session.active_sample_ids.add(sample_id)
 
         controller.unload_sample(sample_id)
@@ -107,7 +111,7 @@ class TestPlaybackControl:
         """Test triggering a pad in single loop mode stops other pads."""
         sample_id = 0
         path = "/path/to/sample.wav"
-        controller.load_sample(sample_id, path)
+        controller.project.sample_paths[sample_id] = path
         controller.session.active_sample_ids.add(5)  # Another active sample
         controller.project.multi_loop = False
 
@@ -126,7 +130,7 @@ class TestPlaybackControl:
         """Test triggering a pad in multi loop mode toggles playback."""
         sample_id = 0
         path = "/path/to/sample.wav"
-        controller.load_sample(sample_id, path)
+        controller.project.sample_paths[sample_id] = path
         controller.session.active_sample_ids.add(sample_id)  # Already active
         controller.project.multi_loop = True
 
@@ -151,7 +155,7 @@ class TestPlaybackControl:
         """Test stopping a specific pad."""
         sample_id = 0
         path = "/path/to/sample.wav"
-        controller.load_sample(sample_id, path)
+        controller.project.sample_paths[sample_id] = path
         controller.session.active_sample_ids.add(sample_id)
 
         controller.stop_pad(sample_id)
@@ -327,14 +331,14 @@ class TestErrorHandling:
         invalid_id = -1
 
         with pytest.raises(ValueError, match="sample_id must be"):
-            controller.load_sample(invalid_id, "/path/to/sample.wav")
+            controller.load_sample_async(invalid_id, "/path/to/sample.wav")
 
     def test_invalid_sample_id_too_high(self, controller: LooperController) -> None:
         """Test that invalid sample ID above NUM_SAMPLES raises ValueError."""
         invalid_id = NUM_SAMPLES
 
         with pytest.raises(ValueError, match="sample_id must be"):
-            controller.load_sample(invalid_id, "/path/to/sample.wav")
+            controller.load_sample_async(invalid_id, "/path/to/sample.wav")
 
     def test_non_finite_volume_nan(self, controller: LooperController) -> None:
         """Test that NaN volume raises ValueError."""

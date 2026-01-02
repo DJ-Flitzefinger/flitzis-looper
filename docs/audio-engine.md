@@ -26,7 +26,7 @@ Python interacts with a single `AudioEngine` object; the CPAL audio callback ren
 
 1. Python creates an `AudioEngine` instance and calls `run()`.
 2. `run()` initializes a CPAL output stream and two ring buffers (control→audio, audio→control).
-3. Python loads audio files into fixed sample slots using `load_sample(id, path)`.
+3. Python schedules audio loading into sample slots using `load_sample_async(id, path)` and polls `poll_loader_events()`.
 4. Python triggers playback using `play_sample(id, velocity)`.
 5. The CPAL callback drains pending control messages and mixes active voices into the output buffer.
 6. Optional: Python can poll `receive_msg()` for messages emitted by the audio thread (e.g., `Pong`).
@@ -60,7 +60,7 @@ Each module is `pub(crate)` with only `mod.rs` exposing the public API, ensuring
   - `rust/src/audio_engine/errors.rs`: Audio-specific error types.
   - `rust/src/audio_engine/voice.rs`: Voice management and lifecycle.
   - `rust/src/audio_engine/mixer.rs`: Real-time mixer implementation.
-  - `rust/src/audio_engine/sample_loader.rs`: Audio file decoding and loading.
+  - `rust/src/audio_engine/sample_loader.rs`: Audio file decoding and channel mapping.
   - `rust/src/audio_engine/audio_stream.rs`: CPAL stream management and callback.
   - `rust/src/messages.rs`: Fixed-size message types shared between threads.
   - Dependencies:
@@ -89,7 +89,6 @@ The Rust engine is exposed to Python as `AudioEngine` with:
   - `shut_down()`
 
 - Sample workflow
-  - `load_sample(id, path)` loads and decodes an audio file into a sample slot.
   - `load_sample_async(id, path)` schedules loading on a Rust background thread.
   - `poll_loader_events()` polls for background loader events (e.g. started/success/error).
   - `play_sample(id, velocity)` triggers playback (`velocity` in `0.0..=1.0`).

@@ -14,19 +14,6 @@ class LooperController:
 
     # --- Actions ---
 
-    def load_sample(self, sample_id: int, path: str) -> None:
-        """Load an audio file into a sample slot.
-
-        Args:
-            sample_id: Sample slot identifier.
-            path: Path to an audio file on disk.
-        """
-        validate_sample_id(sample_id)
-        if self.is_sample_loaded(sample_id):
-            self.unload_sample(sample_id)
-        self._audio.load_sample(sample_id, path)
-        self._project.sample_paths[sample_id] = path
-
     def load_sample_async(self, sample_id: int, path: str) -> None:
         """Load an audio file into a sample slot asynchronously.
 
