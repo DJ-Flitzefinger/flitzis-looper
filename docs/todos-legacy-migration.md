@@ -19,7 +19,7 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 - OpenSpec changes (archived): `add-performance-ui-grid`, `add-performance-pad-interactions`
 - [x] As a performer, I can see a **6×6 pad grid** where each pad represents a loop slot.
 - [x] As a performer, I can switch between **multiple banks** (legacy: 6 banks) and see which bank is active.
-- [ ] As a performer, switching banks updates the visible pad assignments/labels for that bank.
+- [x] As a performer, switching banks updates the visible pad assignments/labels for that bank.
 - [x] As a performer, I can **trigger/retrigger** a pad to start playback from the loop start.
 - [x] As a performer, I can **stop** a pad quickly (legacy: right-click behavior).
 - [x] As a performer, I can open a **pad context menu** (legacy: middle-click) to access per-pad actions.
@@ -43,14 +43,14 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 - [x] As a performer, I can **load an audio file onto a pad** from the UI.
 - [x] As a performer, I can **unload** a pad to free its slot.
 - [x] As a performer, loaded pads show the loaded audio **filename** (basename) instead of just an index.
-- [ ] As a performer, pad labels include **BPM state/indicator** (in addition to filename).
+- [x] As a performer, pad labels include **BPM state/indicator** (in addition to filename).
 
 ### 5) BPM detection, manual BPM, and tempo workflow
-- [ ] As a performer, I can **auto-detect BPM** for a loaded pad.
-- [ ] As a performer, I can **re-detect BPM** for a pad.
+- [x] As a performer, I can **auto-detect BPM** for a loaded pad.
+- [x] As a performer, I can **re-detect BPM** for a pad.
 - [ ] As a performer, I can **set BPM manually** for a pad.
 - [ ] As a performer, I can set BPM via a **TAP BPM** workflow.
-- [ ] As a performer, the UI shows a clear **BPM display** while loops are active.
+- [x] As a performer, the UI shows a clear **BPM display** while loops are active.
 
 ### 6) Global speed control + BPM lock
 - OpenSpec changes (archived): `add-global-speed-control`
@@ -76,7 +76,7 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 - [ ] As a performer, I can define an **intro region** that plays before the loop begins repeating.
 
 ### 10) Mixing controls: master + per-pad
-- [ ] As a performer, I can control **master volume**.
+- [x] As a performer, I can control **master volume**.
 - [ ] As a performer, I can adjust **per-pad gain**.
 - [ ] As a performer, I can reset master volume quickly.
 
@@ -101,8 +101,8 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 - [ ] As a user, samples that I load will be copied to `./samples` in the current working directory.
 
 ### 14) Reliability + performance expectations (behavioral)
-- [ ] As a performer, long-running actions (e.g., BPM detection, stem generation) do not freeze the UI.
-- [ ] As a performer, triggering pads remains responsive and predictable during performance.
+- [x] As a performer, long-running actions (e.g., BPM detection, stem generation) do not freeze the UI.
+- [x] As a performer, triggering pads remains responsive and predictable during performance.
 - [ ] As a user, the application shuts down cleanly and reliably persists my configuration.
 
 ## Primary legacy sources consulted
