@@ -40,9 +40,13 @@ def sidebar_left(ctx: UiContext) -> None:
                 # TODO: adjust loop
                 pass
             if imgui.button("Generate Stems", (-1, 0)):
-                # TODO: adjust loop
+                # TODO: generate stems
                 pass
         elif is_loading:
-            imgui.text_colored(TEXT_MUTED_RGBA, "Loading audio…")
+            stage = ctx.state.pad_load_stage(pad_id) or "Loading"
+            progress = ctx.state.pad_load_progress(pad_id)
+            percent_text = "" if progress is None else f"{int(float(progress) * 100):d} %"
+            status_line = " ".join([p for p in (stage, percent_text) if p])
+            imgui.text_colored(TEXT_MUTED_RGBA, status_line or "Loading…")
         elif imgui.button("Load Audio", (-1, 0)):
             ctx.ui.open_file_dialog(pad_id)

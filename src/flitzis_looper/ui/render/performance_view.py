@@ -56,17 +56,43 @@ def _pad_button(ctx: UiContext, pad_id: int, size: imgui.ImVec2Like) -> None:
     is_active = ctx.state.is_pad_active(pad_id)
     style_name: ButtonStyleName = "active" if is_active else "regular"
 
+    label = ""
+    loading_progress: float | None = None
     if is_loaded or is_loading:
-        label = ctx.state.pad_label(pad_id)
+        filename = ctx.state.pad_label(pad_id)
         if is_loading:
-            label = f"{label} (loading)" if label else "Loading…"
-    else:
-        label = ""
+            stage = ctx.state.pad_load_stage(pad_id) or "Loading"
+            progress = ctx.state.pad_load_progress(pad_id)
+            loading_progress = float(progress) if isinstance(progress, (int, float)) else None
+            percent_text = "" if loading_progress is None else f"{int(loading_progress * 100):d} %"
+            status_line = " ".join([p for p in (stage, percent_text) if p])
+            label = f"{filename}\n{status_line}" if filename else (status_line or "Loading…")
+        else:
+            label = filename
 
     id_str = f"pad_btn_{pad_id}"
 
     with button_style(style_name):
         imgui.button(f"{label}##{id_str}", size)
+
+        if is_loading and loading_progress is not None:
+            pos_min = imgui.get_item_rect_min()
+            pos_max = imgui.get_item_rect_max()
+            width = pos_max.x - pos_min.x
+            fill_x = pos_min.x + width * max(0.0, min(1.0, loading_progress))
+
+            base = imgui.get_style_color_vec4(imgui.Col_.button)
+            progress_rgba = (
+                base.x * 0.6,
+                base.y * 0.6,
+                base.z * 0.6,
+                min(base.w, 1.0) * 0.5,
+            )
+
+            draw_list = imgui.get_window_draw_list()
+            draw_list.add_rect_filled(
+                pos_min, (fill_x, pos_max.y), imgui.get_color_u32(progress_rgba)
+            )
 
         # Track pressed state
         if imgui.is_item_hovered():

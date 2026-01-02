@@ -3,8 +3,9 @@
 //! This module provides functions for loading and decoding audio files into sample buffers
 //! that can be used by the real-time mixer.
 
+use audioadapter::AdapterMut;
 use audioadapter_buffers::owned::InterleavedOwned;
-use rubato::{Fft, FixedSync, Resampler};
+use rubato::{Fft, FixedSync, Indexing, Resampler};
 use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
@@ -17,6 +18,29 @@ use symphonia::default::{get_codecs, get_probe};
 
 use crate::audio_engine::errors::SampleLoadError;
 use crate::messages::SampleBuffer;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SampleLoadSubtask {
+    Decoding,
+    Resampling,
+    ChannelMapping,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SampleLoadProgress {
+    pub subtask: SampleLoadSubtask,
+    pub resampling_required: bool,
+    /// Best-effort local subtask progress (0.0..=1.0).
+    pub percent: f32,
+}
+
+fn clamp_progress(percent: f32) -> f32 {
+    if percent.is_finite() {
+        percent.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
 
 /// Convert rubato errors to SampleLoadError for proper error handling.
 impl From<rubato::ResampleError> for SampleLoadError {
@@ -57,6 +81,18 @@ pub fn decode_audio_file_to_sample_buffer(
     output_channels: usize,
     output_rate_hz: u32,
 ) -> Result<SampleBuffer, SampleLoadError> {
+    decode_audio_file_to_sample_buffer_with_progress(path, output_channels, output_rate_hz, |_| {})
+}
+
+pub fn decode_audio_file_to_sample_buffer_with_progress<F>(
+    path: &Path,
+    output_channels: usize,
+    output_rate_hz: u32,
+    mut progress: F,
+) -> Result<SampleBuffer, SampleLoadError>
+where
+    F: FnMut(SampleLoadProgress),
+{
     let file = File::open(path)?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
@@ -88,6 +124,16 @@ pub fn decode_audio_file_to_sample_buffer(
 
     let mut decoder = get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
 
+    let resampling_required = file_rate_hz != output_rate_hz;
+
+    let total_frames = track.codec_params.n_frames;
+    let mut decoded_frames: u64 = 0;
+    progress(SampleLoadProgress {
+        subtask: SampleLoadSubtask::Decoding,
+        resampling_required,
+        percent: 0.0,
+    });
+
     let mut decoded: Vec<f32> = Vec::new();
     loop {
         let packet = match format.next_packet() {
@@ -103,14 +149,63 @@ pub fn decode_audio_file_to_sample_buffer(
         let audio_buf = decoder.decode(&packet)?;
         let spec = *audio_buf.spec();
         let duration = audio_buf.capacity() as u64;
+        let packet_frames = audio_buf.frames() as u64;
 
         let mut sample_buf = SymphoniaSampleBuffer::<f32>::new(duration, spec);
         sample_buf.copy_interleaved_ref(audio_buf);
         decoded.extend_from_slice(sample_buf.samples());
+
+        decoded_frames = decoded_frames.saturating_add(packet_frames);
+        if let Some(total_frames) = total_frames {
+            let percent = (decoded_frames as f32 / total_frames as f32).min(1.0);
+            progress(SampleLoadProgress {
+                subtask: SampleLoadSubtask::Decoding,
+                resampling_required,
+                percent: clamp_progress(percent),
+            });
+        }
     }
 
-    let resampled = resample_audio(decoded, file_channels, file_rate_hz, output_rate_hz)?;
+    progress(SampleLoadProgress {
+        subtask: SampleLoadSubtask::Decoding,
+        resampling_required,
+        percent: 1.0,
+    });
+
+    let resampled = if !resampling_required {
+        decoded
+    } else {
+        progress(SampleLoadProgress {
+            subtask: SampleLoadSubtask::Resampling,
+            resampling_required,
+            percent: 0.0,
+        });
+        resample_audio(
+            decoded,
+            file_channels,
+            file_rate_hz,
+            output_rate_hz,
+            |percent| {
+                progress(SampleLoadProgress {
+                    subtask: SampleLoadSubtask::Resampling,
+                    resampling_required,
+                    percent,
+                });
+            },
+        )?
+    };
+
+    progress(SampleLoadProgress {
+        subtask: SampleLoadSubtask::ChannelMapping,
+        resampling_required,
+        percent: 0.0,
+    });
     let mapped = map_channels(resampled, file_channels, output_channels)?;
+    progress(SampleLoadProgress {
+        subtask: SampleLoadSubtask::ChannelMapping,
+        resampling_required,
+        percent: 1.0,
+    });
 
     Ok(SampleBuffer {
         channels: output_channels,
@@ -131,45 +226,114 @@ pub fn decode_audio_file_to_sample_buffer(
 ///
 /// - `Ok(Vec<f32>)`: Resampled audio samples
 /// - `Err(SampleLoadError)`: Resampling error
-fn resample_audio(
+fn resample_audio<F>(
     samples: Vec<f32>,
     channels: usize,
     from_rate: u32,
     to_rate: u32,
-) -> Result<Vec<f32>, SampleLoadError> {
+    mut progress: F,
+) -> Result<Vec<f32>, SampleLoadError>
+where
+    F: FnMut(f32),
+{
     if from_rate == to_rate {
+        progress(1.0);
         return Ok(samples);
     }
 
     let input_frames = samples.len() / channels;
+    if input_frames == 0 {
+        progress(1.0);
+        return Ok(Vec::new());
+    }
 
-    // Create resampler with fixed I/O size
+    // Create resampler with fixed I/O size.
     let mut resampler = Fft::<f32>::new(
         from_rate as usize,
         to_rate as usize,
         1024, // chunk_size
         1,    // sub_chunks
         channels,
-        FixedSync::Both,
+        FixedSync::Input,
     )?;
 
-    // Create input buffer adapter
+    // Create input buffer adapter.
     let input_buffer = InterleavedOwned::new_from(samples, channels, input_frames).unwrap();
 
-    // Calculate needed output buffer size
-    let output_frames = resampler.process_all_needed_output_len(input_frames);
+    // Manual version of rubato's `process_all_into_buffer()` loop, so we can emit progress.
+    let expected_output_len = (resampler.resample_ratio() * input_frames as f64).ceil() as usize;
+
+    // Allocate with `output_frames_max()` (not `output_frames_next()`), because for some
+    // resampler configurations `output_frames_next()` can change after processing starts.
+    // This matches rubato's `process_all_needed_output_len()` logic but uses the maximum.
+    let output_frames = resampler
+        .output_delay()
+        .saturating_add(resampler.output_frames_max())
+        .saturating_add(expected_output_len);
+
     let mut output_buffer =
         InterleavedOwned::new_from(vec![0.0; output_frames * channels], channels, output_frames)
             .unwrap();
 
-    // Process all data at once
-    let result =
-        resampler.process_all_into_buffer(&input_buffer, &mut output_buffer, input_frames, None)?;
+    let mut indexing = Indexing {
+        input_offset: 0,
+        output_offset: 0,
+        partial_len: None,
+        active_channels_mask: None,
+    };
 
-    // Trim the output buffer to the actual number of frames written
-    let frames_written = result.1;
+    let mut frames_left = input_frames;
+    let mut output_len: usize = 0;
+    let mut frames_to_trim = resampler.output_delay();
+
+    progress(0.0);
+
+    let next_nbr_input_frames = resampler.input_frames_next();
+    while frames_left > next_nbr_input_frames {
+        let (nbr_in, nbr_out) =
+            resampler.process_into_buffer(&input_buffer, &mut output_buffer, Some(&indexing))?;
+
+        frames_left = frames_left.saturating_sub(nbr_in);
+        output_len = output_len.saturating_add(nbr_out);
+        indexing.input_offset = indexing.input_offset.saturating_add(nbr_in);
+        indexing.output_offset = indexing.output_offset.saturating_add(nbr_out);
+
+        if frames_to_trim > 0 && output_len > frames_to_trim {
+            output_buffer.copy_frames_within(frames_to_trim, 0, frames_to_trim);
+            output_len -= frames_to_trim;
+            indexing.output_offset -= frames_to_trim;
+            frames_to_trim = 0;
+        }
+
+        let consumed = input_frames.saturating_sub(frames_left);
+        let percent = consumed as f32 / input_frames as f32;
+        progress(clamp_progress(percent));
+    }
+
+    if frames_left > 0 {
+        indexing.partial_len = Some(frames_left);
+        let (_nbr_in, nbr_out) =
+            resampler.process_into_buffer(&input_buffer, &mut output_buffer, Some(&indexing))?;
+
+        output_len = output_len.saturating_add(nbr_out);
+        indexing.output_offset = indexing.output_offset.saturating_add(nbr_out);
+
+        progress(1.0);
+    }
+
+    indexing.partial_len = Some(0);
+    while output_len < expected_output_len {
+        let (_nbr_in, nbr_out) =
+            resampler.process_into_buffer(&input_buffer, &mut output_buffer, Some(&indexing))?;
+
+        output_len = output_len.saturating_add(nbr_out);
+        indexing.output_offset = indexing.output_offset.saturating_add(nbr_out);
+
+        progress(1.0);
+    }
+
     let trimmed_buf = output_buffer.take_data();
-    let trimmed_buf = trimmed_buf[..frames_written * channels].to_vec();
+    let trimmed_buf = trimmed_buf[..expected_output_len * channels].to_vec();
 
     Ok(trimmed_buf)
 }

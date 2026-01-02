@@ -82,8 +82,13 @@ pub enum LoaderEvent {
 
     /// A progress update.
     ///
-    /// Note: The current implementation may not emit granular progress updates yet.
-    Progress { id: usize, percent: f32 },
+    /// - `percent` is the best-effort *total* progress across the full load pipeline (0.0..=1.0).
+    /// - `stage` is a human-readable stage string (e.g. "Loading (decoding)").
+    Progress {
+        id: usize,
+        percent: f32,
+        stage: String,
+    },
 
     /// Loading completed successfully.
     Success { id: usize, duration_sec: f32 },

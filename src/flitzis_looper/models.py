@@ -78,6 +78,9 @@ class SessionState(BaseModel):
     sample_load_progress: dict[int, float] = Field(default_factory=dict)
     """Best-effort async load progress (0.0..=1.0)."""
 
+    sample_load_stage: dict[int, str] = Field(default_factory=dict)
+    """Human-readable async load stage per pad (e.g. "Loading (decoding)")."""
+
     sample_load_errors: dict[int, str] = Field(default_factory=dict)
     """Last async load error message per pad."""
 
@@ -95,6 +98,7 @@ class SessionState(BaseModel):
     @field_validator(
         "pending_sample_paths",
         "sample_load_progress",
+        "sample_load_stage",
         "sample_load_errors",
         mode="after",
     )

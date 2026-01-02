@@ -30,6 +30,7 @@ class LooperController:
 
         self._session.sample_load_errors.pop(sample_id, None)
         self._session.sample_load_progress.pop(sample_id, None)
+        self._session.sample_load_stage.pop(sample_id, None)
         self._session.pending_sample_paths[sample_id] = path
         self._session.loading_sample_ids.add(sample_id)
 
@@ -51,9 +52,14 @@ class LooperController:
                 self._session.loading_sample_ids.add(sample_id)
                 self._session.sample_load_errors.pop(sample_id, None)
                 self._session.sample_load_progress.pop(sample_id, None)
+                self._session.sample_load_stage.pop(sample_id, None)
                 continue
 
             if event_type == "progress":
+                stage = event.get("stage")
+                if isinstance(stage, str):
+                    self._session.sample_load_stage[sample_id] = stage
+
                 percent = event.get("percent")
                 if isinstance(percent, (int, float)):
                     self._session.sample_load_progress[sample_id] = float(percent)
@@ -63,6 +69,7 @@ class LooperController:
                 self._session.loading_sample_ids.discard(sample_id)
                 self._session.sample_load_errors.pop(sample_id, None)
                 self._session.sample_load_progress.pop(sample_id, None)
+                self._session.sample_load_stage.pop(sample_id, None)
 
                 pending = self._session.pending_sample_paths.pop(sample_id, None)
                 if pending is not None:
@@ -72,6 +79,7 @@ class LooperController:
             if event_type == "error":
                 self._session.loading_sample_ids.discard(sample_id)
                 self._session.sample_load_progress.pop(sample_id, None)
+                self._session.sample_load_stage.pop(sample_id, None)
                 self._session.pending_sample_paths.pop(sample_id, None)
 
                 msg = event.get("msg")
@@ -100,6 +108,11 @@ class LooperController:
         value = self._session.sample_load_progress.get(sample_id)
         return float(value) if value is not None else None
 
+    def sample_load_stage(self, sample_id: int) -> str | None:
+        """Return the last reported async load stage for a pad."""
+        validate_sample_id(sample_id)
+        return self._session.sample_load_stage.get(sample_id)
+
     def unload_sample(self, sample_id: int) -> None:
         """Stop playback and unload a sample slot.
 
@@ -111,6 +124,7 @@ class LooperController:
         self._session.loading_sample_ids.discard(sample_id)
         self._session.pending_sample_paths.pop(sample_id, None)
         self._session.sample_load_progress.pop(sample_id, None)
+        self._session.sample_load_stage.pop(sample_id, None)
         self._session.sample_load_errors.pop(sample_id, None)
         self._audio.unload_sample(sample_id)
         self.project.sample_paths[sample_id] = None

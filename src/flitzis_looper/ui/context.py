@@ -90,6 +90,10 @@ class UiState:
         """Return best-effort async load progress for a pad."""
         return self._controller.sample_load_progress(pad_id)
 
+    def pad_load_stage(self, pad_id: int) -> str | None:
+        """Return the last reported async load stage for a pad."""
+        return self._controller.sample_load_stage(pad_id)
+
     def is_pad_active(self, pad_id: int) -> bool:
         """Return whether a pad is currently playing audio.
 

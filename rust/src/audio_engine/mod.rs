@@ -16,7 +16,9 @@
 use crate::audio_engine::audio_stream::{AudioStreamHandle, create_audio_stream, start_stream};
 use crate::audio_engine::constants::{NUM_SAMPLES, SPEED_MAX, SPEED_MIN, VOLUME_MAX, VOLUME_MIN};
 use crate::audio_engine::errors::SampleLoadError;
-use crate::audio_engine::sample_loader::decode_audio_file_to_sample_buffer;
+use crate::audio_engine::sample_loader::{
+    SampleLoadProgress, SampleLoadSubtask, decode_audio_file_to_sample_buffer_with_progress,
+};
 use crate::messages::{AudioMessage, ControlMessage, LoaderEvent};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -27,6 +29,7 @@ use std::sync::{
     mpsc::{Receiver, Sender, TryRecvError},
 };
 use std::thread;
+use std::time::{Duration, Instant};
 
 mod audio_stream;
 mod constants;
@@ -34,6 +37,96 @@ mod errors;
 mod mixer;
 mod sample_loader;
 mod voice;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum LoadProgressStage {
+    Decoding,
+    Resampling,
+    ChannelMapping,
+    Publishing,
+}
+
+impl LoadProgressStage {
+    fn stage_label(self) -> &'static str {
+        match self {
+            Self::Decoding => "decoding",
+            Self::Resampling => "resampling",
+            Self::ChannelMapping => "channel mapping",
+            Self::Publishing => "publishing",
+        }
+    }
+
+    fn range(self, resampling_required: bool) -> (f32, f32) {
+        if !resampling_required {
+            return match self {
+                Self::Decoding => (0.0, 1.0),
+                Self::Resampling | Self::ChannelMapping | Self::Publishing => (1.0, 1.0),
+            };
+        }
+
+        match self {
+            Self::Decoding => (0.0, 0.45),
+            Self::Resampling => (0.45, 0.90),
+            Self::ChannelMapping => (0.90, 0.95),
+            Self::Publishing => (0.95, 1.0),
+        }
+    }
+}
+
+struct ProgressReporter {
+    id: usize,
+    tx: Sender<LoaderEvent>,
+    last_emit: Instant,
+    min_interval: Duration,
+    resampling_required: Option<bool>,
+}
+
+impl ProgressReporter {
+    fn new(id: usize, tx: Sender<LoaderEvent>) -> Self {
+        let min_interval = Duration::from_millis(100);
+        Self {
+            id,
+            tx,
+            last_emit: Instant::now()
+                .checked_sub(min_interval)
+                .unwrap_or_else(Instant::now),
+            min_interval,
+            resampling_required: None,
+        }
+    }
+
+    fn emit(
+        &mut self,
+        stage: LoadProgressStage,
+        local_percent: f32,
+        resampling_required: bool,
+        force: bool,
+    ) {
+        let local_percent = if local_percent.is_finite() {
+            local_percent.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
+        let now = Instant::now();
+        if !force && now.duration_since(self.last_emit) < self.min_interval {
+            return;
+        }
+        self.last_emit = now;
+
+        self.resampling_required.get_or_insert(resampling_required);
+        let resampling_required = self.resampling_required.unwrap_or(resampling_required);
+
+        let (start, end) = stage.range(resampling_required);
+        let percent = (start + (end - start) * local_percent).clamp(0.0, 1.0);
+        let stage = format!("Loading ({})", stage.stage_label());
+        let _ = self.tx.send(LoaderEvent::Progress {
+            id: self.id,
+            percent,
+            stage,
+        });
+    }
+}
 
 /// AudioEngine provides minimal audio output capabilities using cpal
 #[pyclass]
@@ -109,10 +202,21 @@ impl AudioEngine {
         thread::spawn(move || {
             let _ = loader_tx.send(LoaderEvent::Started { id });
 
-            let sample = match decode_audio_file_to_sample_buffer(
+            let mut progress = ProgressReporter::new(id, loader_tx.clone());
+
+            let sample = match decode_audio_file_to_sample_buffer_with_progress(
                 Path::new(&path),
                 output_channels,
                 output_sample_rate,
+                |update: SampleLoadProgress| {
+                    let stage = match update.subtask {
+                        SampleLoadSubtask::Decoding => LoadProgressStage::Decoding,
+                        SampleLoadSubtask::Resampling => LoadProgressStage::Resampling,
+                        SampleLoadSubtask::ChannelMapping => LoadProgressStage::ChannelMapping,
+                    };
+                    let force = update.percent <= 0.0 || update.percent >= 1.0;
+                    progress.emit(stage, update.percent, update.resampling_required, force);
+                },
             ) {
                 Ok(sample) => sample,
                 Err(SampleLoadError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -131,7 +235,12 @@ impl AudioEngine {
                 }
             };
 
-            let _ = loader_tx.send(LoaderEvent::Progress { id, percent: 0.5 });
+            progress.emit(
+                LoadProgressStage::Publishing,
+                0.0,
+                progress.resampling_required.unwrap_or(true),
+                true,
+            );
 
             let frames = sample.samples.len() / sample.channels;
             let duration_sec = frames as f32 / output_sample_rate as f32;
@@ -158,6 +267,12 @@ impl AudioEngine {
                 return;
             }
 
+            progress.emit(
+                LoadProgressStage::Publishing,
+                1.0,
+                progress.resampling_required.unwrap_or(true),
+                true,
+            );
             let _ = loader_tx.send(LoaderEvent::Success { id, duration_sec });
         });
 
@@ -185,10 +300,11 @@ impl AudioEngine {
                 dict.set_item("type", "started")?;
                 dict.set_item("id", id)?;
             }
-            LoaderEvent::Progress { id, percent } => {
+            LoaderEvent::Progress { id, percent, stage } => {
                 dict.set_item("type", "progress")?;
                 dict.set_item("id", id)?;
                 dict.set_item("percent", percent)?;
+                dict.set_item("stage", stage)?;
             }
             LoaderEvent::Success { id, duration_sec } => {
                 dict.set_item("type", "success")?;
