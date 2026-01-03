@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from imgui_bundle import imgui
 
@@ -169,14 +169,18 @@ def _pad_button(ctx: UiContext, pad_id: int, size: imgui.ImVec2Like) -> None:
     is_loaded = ctx.state.pads.is_loaded(pad_id)
     is_loading = ctx.state.pads.is_loading(pad_id)
     is_active = ctx.state.pads.is_active(pad_id)
-    style_name: ButtonStyleName = "active" if is_active else "regular"
+    is_selected = ctx.state.pads.is_selected(pad_id)
+
+    style_name = "active" if is_active else "regular"
+    if is_selected:
+        style_name += "-selected"
 
     label, loading_progress = _pad_button_label(
         ctx, pad_id, is_loaded=is_loaded, is_loading=is_loading
     )
     id_str = f"pad_btn_{pad_id}"
 
-    with button_style(style_name):
+    with button_style(cast("ButtonStyleName", style_name)):
         imgui.button(f"{label}##{id_str}", size)
 
         if is_loading and loading_progress is not None:

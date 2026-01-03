@@ -99,6 +99,9 @@ class PadSelectors:
     def is_pressed(self, pad_id: int) -> bool:
         return self._session.pressed_pads[pad_id]
 
+    def is_selected(self, pad_id: int) -> bool:
+        return self._project.selected_pad == pad_id
+
 
 class BankSelectors:
     def __init__(self, project: ProjectState):
