@@ -56,13 +56,13 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 - OpenSpec changes (archived): `add-global-speed-control`
 - [x] As a performer, I can adjust a global **speed control** (legacy: ~0.5× to 2.0×).
 - [x] As a performer, I can **reset** speed to the default (1.0×).
-- [ ] As a performer, changing the global speed audibly changes loop playback speed (varispeed DSP).
-- [ ] As a performer, I can enable **BPM lock**, so multiple loops stay tempo-aligned to a chosen master BPM.
-- [ ] As a performer, I can set the **master BPM** explicitly.
+- [x] As a performer, changing the global speed audibly changes loop playback speed (varispeed DSP).
+- [x] As a performer, I can enable **BPM lock**, so multiple loops stay tempo-aligned to a chosen master BPM.
+- [x] As a performer, I can set the **master BPM** explicitly.
 
 ### 7) Key lock (independent pitch/speed behavior)
-- [ ] As a performer, I can enable **key lock** so tempo changes do not change musical pitch.
-- [ ] As a performer, key lock can be toggled without breaking the performance workflow.
+- [x] As a performer, I can enable **key lock** so tempo changes do not change musical pitch.
+- [x] As a performer, key lock can be toggled without breaking the performance workflow.
 
 ### 8) Loop range editing (waveform editor)
 - [ ] As a performer, I can open a **waveform editor** for a pad.
