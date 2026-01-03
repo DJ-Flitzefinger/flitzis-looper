@@ -41,8 +41,8 @@ use stratum_dsp::{AnalysisConfig, analyze_audio};
 
 mod audio_stream;
 mod constants;
-mod errors;
 mod eq3;
+mod errors;
 mod mixer;
 mod sample_loader;
 mod stretch_processor;

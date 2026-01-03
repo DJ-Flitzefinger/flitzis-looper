@@ -95,7 +95,7 @@ impl RtMixer {
             master_bpm: None,
             pad_bpm: std::array::from_fn(|_| None),
             pad_gain: std::array::from_fn(|_| 1.0),
-            pad_eq: std::array::from_fn(|_| Eq3Coeffs::identity()),
+            pad_eq: std::array::from_fn(|_| coeffs_for_eq3(sample_rate_hz, 0.0, 0.0, 0.0)),
             sample_bank: std::array::from_fn(|_| None),
             voices: std::array::from_fn(|_| VoiceSlot::new(channels)),
         }
@@ -438,11 +438,16 @@ mod tests {
     #[test]
     fn test_eq3_coeffs_finite() {
         let eq = coeffs_for_eq3(44_100.0, 6.0, -3.0, 0.0);
-        for v in [
-            eq.low.b0, eq.low.b1, eq.low.b2, eq.low.a1, eq.low.a2, eq.mid.b0, eq.mid.b1, eq.mid.b2,
-            eq.mid.a1, eq.mid.a2, eq.high.b0, eq.high.b1, eq.high.b2, eq.high.a1, eq.high.a2,
-        ] {
-            assert!(v.is_finite());
+
+        for coeffs in eq.low_lp.iter().chain(eq.high_hp.iter()) {
+            for v in [coeffs.b0, coeffs.b1, coeffs.b2, coeffs.a1, coeffs.a2] {
+                assert!(v.is_finite());
+            }
+        }
+
+        for g in [eq.low_gain, eq.mid_gain, eq.high_gain] {
+            assert!(g.is_finite());
+            assert!(g >= 0.0);
         }
     }
 
@@ -458,6 +463,19 @@ mod tests {
             max_abs = max_abs.max(y.abs());
         }
         assert!(max_abs > 0.0);
+    }
+
+    #[test]
+    fn test_eq3_unity_reconstruction() {
+        let eq = coeffs_for_eq3(44_100.0, 0.0, 0.0, 0.0);
+        let mut state = Eq3State::default();
+
+        for i in 0..1024 {
+            let x = (i as f32 * 0.01).sin() * 0.75;
+            let y = eq.process(&mut state, x);
+            assert!(y.is_finite());
+            assert!((y - x).abs() < 1e-5);
+        }
     }
 
     #[test]
@@ -669,8 +687,8 @@ mod tests {
 
         mixer.render(&mut output, &mut pad_peaks);
 
-        // Sample should loop and all frames should have data
-        assert!(output.iter().all(|&s| s == 0.5));
+        // Sample should loop and all frames should have data.
+        assert!(output.iter().all(|&s| (s - 0.5).abs() < 1e-5));
     }
 
     #[test]
@@ -689,8 +707,8 @@ mod tests {
 
         mixer.render(&mut output, &mut pad_peaks);
 
-        // Output should contain mixed samples (0.3 + 0.2 = 0.5 per channel)
-        assert!(output.iter().all(|&s| (s - 0.5).abs() < f32::EPSILON));
+        // Output should contain mixed samples (0.3 + 0.2 = 0.5 per channel).
+        assert!(output.iter().all(|&s| (s - 0.5).abs() < 1e-5));
     }
 
     #[test]

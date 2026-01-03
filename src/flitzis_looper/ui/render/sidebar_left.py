@@ -125,7 +125,7 @@ def _render_key(ctx: UiContext, info: _SidebarPadInfo) -> None:
 
 def _render_loaded_gain(ctx: UiContext, pad_id: int) -> None:
     with style_var(imgui.StyleVar_.item_spacing, (0, SPACING / 2)):
-        imgui.text_colored(TEXT_MUTED_RGBA, "Gain")
+        imgui.text_colored(TEXT_MUTED_RGBA, "Gain / EQ")
         imgui.set_next_item_width(-1)
         gain_val = max(0, min(100, round(ctx.state.project.pad_gain[pad_id] * 100)))
         changed, new_gain = imgui.slider_int("##pad_gain", gain_val, 0, 100, "%d %")

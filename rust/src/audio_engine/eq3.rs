@@ -1,5 +1,12 @@
 use std::f32::consts::PI;
 
+use crate::audio_engine::constants::PAD_EQ_DB_MIN;
+
+const LOW_MID_CROSSOVER_HZ: f32 = 380.0;
+const MID_HIGH_CROSSOVER_HZ: f32 = 2_300.0;
+
+const BUTTERWORTH_Q: f32 = 0.70710677;
+
 #[derive(Clone, Copy)]
 pub struct BiquadCoeffs {
     pub b0: f32,
@@ -32,50 +39,6 @@ fn biquad_process(coeffs: BiquadCoeffs, state: &mut BiquadState, x: f32) -> f32 
     state.z1 = coeffs.b1 * x - coeffs.a1 * y + state.z2;
     state.z2 = coeffs.b2 * x - coeffs.a2 * y;
     y
-}
-
-#[derive(Clone, Copy)]
-pub struct Eq3Coeffs {
-    pub low: BiquadCoeffs,
-    pub mid: BiquadCoeffs,
-    pub high: BiquadCoeffs,
-}
-
-impl Eq3Coeffs {
-    pub fn identity() -> Self {
-        Self {
-            low: BiquadCoeffs::identity(),
-            mid: BiquadCoeffs::identity(),
-            high: BiquadCoeffs::identity(),
-        }
-    }
-
-    pub fn process(&self, state: &mut Eq3State, mut x: f32) -> f32 {
-        x = biquad_process(self.low, &mut state.low, x);
-        x = biquad_process(self.mid, &mut state.mid, x);
-        x = biquad_process(self.high, &mut state.high, x);
-        x
-    }
-}
-
-#[derive(Clone, Copy, Default)]
-pub struct Eq3State {
-    low: BiquadState,
-    mid: BiquadState,
-    high: BiquadState,
-}
-
-impl Eq3State {
-    pub fn reset(&mut self) {
-        *self = Self::default();
-    }
-}
-
-fn db_to_a(db: f32) -> f32 {
-    if !db.is_finite() {
-        return 1.0;
-    }
-    10.0_f32.powf(db / 40.0)
 }
 
 fn clamp_freq_hz(fs_hz: f32, freq_hz: f32) -> f32 {
@@ -112,64 +75,99 @@ fn normalize_biquad(b0: f32, b1: f32, b2: f32, a0: f32, a1: f32, a2: f32) -> Biq
     }
 }
 
-fn biquad_low_shelf(fs_hz: f32, freq_hz: f32, db_gain: f32) -> BiquadCoeffs {
+fn biquad_low_pass_butterworth(fs_hz: f32, freq_hz: f32) -> BiquadCoeffs {
     let freq_hz = clamp_freq_hz(fs_hz, freq_hz);
-    let a = db_to_a(db_gain);
     let w0 = 2.0 * PI * freq_hz / fs_hz;
     let cos_w0 = w0.cos();
     let sin_w0 = w0.sin();
-    let alpha = sin_w0 / 2.0 * 2.0_f32.sqrt();
+    let alpha = sin_w0 / (2.0 * BUTTERWORTH_Q);
 
-    let sqrt_a = a.sqrt();
-
-    let b0 = a * ((a + 1.0) - (a - 1.0) * cos_w0 + 2.0 * sqrt_a * alpha);
-    let b1 = 2.0 * a * ((a - 1.0) - (a + 1.0) * cos_w0);
-    let b2 = a * ((a + 1.0) - (a - 1.0) * cos_w0 - 2.0 * sqrt_a * alpha);
-    let a0 = (a + 1.0) + (a - 1.0) * cos_w0 + 2.0 * sqrt_a * alpha;
-    let a1 = -2.0 * ((a - 1.0) + (a + 1.0) * cos_w0);
-    let a2 = (a + 1.0) + (a - 1.0) * cos_w0 - 2.0 * sqrt_a * alpha;
-
-    normalize_biquad(b0, b1, b2, a0, a1, a2)
-}
-
-fn biquad_high_shelf(fs_hz: f32, freq_hz: f32, db_gain: f32) -> BiquadCoeffs {
-    let freq_hz = clamp_freq_hz(fs_hz, freq_hz);
-    let a = db_to_a(db_gain);
-    let w0 = 2.0 * PI * freq_hz / fs_hz;
-    let cos_w0 = w0.cos();
-    let sin_w0 = w0.sin();
-    let alpha = sin_w0 / 2.0 * 2.0_f32.sqrt();
-
-    let sqrt_a = a.sqrt();
-
-    let b0 = a * ((a + 1.0) + (a - 1.0) * cos_w0 + 2.0 * sqrt_a * alpha);
-    let b1 = -2.0 * a * ((a - 1.0) + (a + 1.0) * cos_w0);
-    let b2 = a * ((a + 1.0) + (a - 1.0) * cos_w0 - 2.0 * sqrt_a * alpha);
-    let a0 = (a + 1.0) - (a - 1.0) * cos_w0 + 2.0 * sqrt_a * alpha;
-    let a1 = 2.0 * ((a - 1.0) - (a + 1.0) * cos_w0);
-    let a2 = (a + 1.0) - (a - 1.0) * cos_w0 - 2.0 * sqrt_a * alpha;
-
-    normalize_biquad(b0, b1, b2, a0, a1, a2)
-}
-
-fn biquad_peaking(fs_hz: f32, freq_hz: f32, q: f32, db_gain: f32) -> BiquadCoeffs {
-    let freq_hz = clamp_freq_hz(fs_hz, freq_hz);
-    let a = db_to_a(db_gain);
-    let q = if q.is_finite() && q > 0.0 { q } else { 0.707 };
-
-    let w0 = 2.0 * PI * freq_hz / fs_hz;
-    let cos_w0 = w0.cos();
-    let sin_w0 = w0.sin();
-    let alpha = sin_w0 / (2.0 * q);
-
-    let b0 = 1.0 + alpha * a;
-    let b1 = -2.0 * cos_w0;
-    let b2 = 1.0 - alpha * a;
-    let a0 = 1.0 + alpha / a;
+    let b0 = (1.0 - cos_w0) * 0.5;
+    let b1 = 1.0 - cos_w0;
+    let b2 = (1.0 - cos_w0) * 0.5;
+    let a0 = 1.0 + alpha;
     let a1 = -2.0 * cos_w0;
-    let a2 = 1.0 - alpha / a;
+    let a2 = 1.0 - alpha;
 
     normalize_biquad(b0, b1, b2, a0, a1, a2)
+}
+
+fn biquad_high_pass_butterworth(fs_hz: f32, freq_hz: f32) -> BiquadCoeffs {
+    let freq_hz = clamp_freq_hz(fs_hz, freq_hz);
+    let w0 = 2.0 * PI * freq_hz / fs_hz;
+    let cos_w0 = w0.cos();
+    let sin_w0 = w0.sin();
+    let alpha = sin_w0 / (2.0 * BUTTERWORTH_Q);
+
+    let b0 = (1.0 + cos_w0) * 0.5;
+    let b1 = -(1.0 + cos_w0);
+    let b2 = (1.0 + cos_w0) * 0.5;
+    let a0 = 1.0 + alpha;
+    let a1 = -2.0 * cos_w0;
+    let a2 = 1.0 - alpha;
+
+    normalize_biquad(b0, b1, b2, a0, a1, a2)
+}
+
+fn db_to_linear_gain(db: f32) -> f32 {
+    if !db.is_finite() {
+        return 1.0;
+    }
+
+    if db <= PAD_EQ_DB_MIN {
+        return 0.0;
+    }
+
+    10.0_f32.powf(db / 20.0)
+}
+
+#[derive(Clone, Copy)]
+pub struct Eq3Coeffs {
+    pub low_lp: [BiquadCoeffs; 2],
+    pub high_hp: [BiquadCoeffs; 2],
+    pub low_gain: f32,
+    pub mid_gain: f32,
+    pub high_gain: f32,
+}
+
+impl Eq3Coeffs {
+    pub fn identity() -> Self {
+        Self {
+            low_lp: [BiquadCoeffs::identity(); 2],
+            high_hp: [BiquadCoeffs::identity(); 2],
+            low_gain: 1.0,
+            mid_gain: 1.0,
+            high_gain: 1.0,
+        }
+    }
+
+    pub fn process(&self, state: &mut Eq3State, x: f32) -> f32 {
+        let mut low = x;
+        for (coeffs, stage) in self.low_lp.iter().zip(state.low_lp.iter_mut()) {
+            low = biquad_process(*coeffs, stage, low);
+        }
+
+        let mut high = x;
+        for (coeffs, stage) in self.high_hp.iter().zip(state.high_hp.iter_mut()) {
+            high = biquad_process(*coeffs, stage, high);
+        }
+
+        let mid = x - low - high;
+
+        low * self.low_gain + mid * self.mid_gain + high * self.high_gain
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct Eq3State {
+    low_lp: [BiquadState; 2],
+    high_hp: [BiquadState; 2],
+}
+
+impl Eq3State {
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
 }
 
 pub fn coeffs_for_eq3(fs_hz: f32, low_db: f32, mid_db: f32, high_db: f32) -> Eq3Coeffs {
@@ -177,9 +175,14 @@ pub fn coeffs_for_eq3(fs_hz: f32, low_db: f32, mid_db: f32, high_db: f32) -> Eq3
         return Eq3Coeffs::identity();
     }
 
+    let lp = biquad_low_pass_butterworth(fs_hz, LOW_MID_CROSSOVER_HZ);
+    let hp = biquad_high_pass_butterworth(fs_hz, MID_HIGH_CROSSOVER_HZ);
+
     Eq3Coeffs {
-        low: biquad_low_shelf(fs_hz, 250.0, low_db),
-        mid: biquad_peaking(fs_hz, 1_000.0, 0.5, mid_db),
-        high: biquad_high_shelf(fs_hz, 3_000.0, high_db),
+        low_lp: [lp; 2],
+        high_hp: [hp; 2],
+        low_gain: db_to_linear_gain(low_db),
+        mid_gain: db_to_linear_gain(mid_db),
+        high_gain: db_to_linear_gain(high_db),
     }
 }

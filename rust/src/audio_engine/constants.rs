@@ -34,7 +34,9 @@ pub const PAD_GAIN_MIN: f32 = 0.0;
 pub const PAD_GAIN_MAX: f32 = 1.0;
 
 /// Minimum per-band EQ gain in dB.
-pub const PAD_EQ_DB_MIN: f32 = -12.0;
+///
+/// This represents a DJ-style "Kill" position, and is mapped to a linear gain of 0.0.
+pub const PAD_EQ_DB_MIN: f32 = -60.0;
 
 /// Maximum per-band EQ gain in dB.
-pub const PAD_EQ_DB_MAX: f32 = 12.0;
+pub const PAD_EQ_DB_MAX: f32 = 6.0;

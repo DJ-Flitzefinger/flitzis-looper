@@ -1,7 +1,7 @@
 use crate::audio_engine::constants::{SPEED_MAX, SPEED_MIN};
+use crate::audio_engine::eq3::Eq3State;
 use crate::audio_engine::stretch_processor::StretchProcessor;
 use crate::messages::SampleBuffer;
-use crate::audio_engine::eq3::Eq3State;
 
 pub struct VoiceSlot {
     pub active: bool,
