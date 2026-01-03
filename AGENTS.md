@@ -77,13 +77,14 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 - Error Handling
   - Use Python exceptions
   - Avoid silent failures
-  - Catch only those specific exceptions that are expected to be raised in the try block; Criticial: Avoid catching broad `Exception`
+  - Catch only those specific exceptions that are expected to be raised in the try block; CRITICAL: Avoid catching broad `Exception`
   - Make use of `with contextlib.suppress()`
 - Docstrings
   - Follow Google Python style guide for docstrings
   - Document all public functions, classes, and methods
   - Include parameter types and descriptions
   - Include return value descriptions for non-trivial functions
+- CRITICAL: Never silence linter issues like: BLE001, PLR0904, PLR0912, PLR0914, PLR0915, C901
 
 ### Rust
 - Rust FFI
