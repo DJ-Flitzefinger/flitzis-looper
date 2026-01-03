@@ -139,7 +139,7 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
             }
 
             // Render audio + compute per-pad peaks.
-            mixer.render_with_peaks(data, &mut pad_peaks);
+            mixer.render(data, &mut pad_peaks);
 
             let frames = data.len() / channels as usize;
             frame_clock = frame_clock.wrapping_add(frames as u64);
