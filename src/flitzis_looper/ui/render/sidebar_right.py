@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 
 def _bpm_display(ctx: UiContext) -> None:
-    bpm = ctx.state.global_effective_bpm()
+    bpm = ctx.state.global_.effective_bpm()
     bpm_text = f"{bpm:.2f}" if bpm is not None else "--"
     pos = imgui.get_cursor_screen_pos()
     avail = imgui.get_content_region_avail()
@@ -50,15 +50,15 @@ def _speed_controls(ctx: UiContext) -> None:
         format="%.2f",
     )
     if changed:
-        ctx.audio.set_speed(new_value)
+        ctx.audio.global_.set_speed(new_value)
 
     with style_var(imgui.StyleVar_.item_spacing, (0.0, SPACING / 4)):
         if imgui.button("+", (avail.x, 0)):
-            ctx.audio.increase_speed()
+            ctx.audio.global_.increase_speed()
         if imgui.button("Reset", (avail.x, 0)):
-            ctx.audio.reset_speed()
+            ctx.audio.global_.reset_speed()
         if imgui.button("-", (avail.x, 0)):
-            ctx.audio.decrease_speed()
+            ctx.audio.global_.decrease_speed()
 
 
 def sidebar_right(ctx: UiContext) -> None:
@@ -74,9 +74,9 @@ def sidebar_right(ctx: UiContext) -> None:
             key_lock_style: ButtonStyleName = "mode-on" if key_lock else "mode-off"
             with button_style(key_lock_style):
                 if imgui.button("KEY LOCK##key_lock", (-1, 0)):
-                    ctx.audio.toggle_key_lock()
+                    ctx.audio.global_.toggle_key_lock()
 
             bpm_lock_style: ButtonStyleName = "mode-on" if bpm_lock else "mode-off"
             with button_style(bpm_lock_style):
                 if imgui.button("BPM LOCK##bpm_lock", (-1, 0)):
-                    ctx.audio.toggle_bpm_lock()
+                    ctx.audio.global_.toggle_bpm_lock()

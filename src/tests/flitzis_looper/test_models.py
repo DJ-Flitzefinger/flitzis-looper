@@ -238,7 +238,7 @@ def test_project_state_defaults(project_state: ProjectState) -> None:
     assert all(bpm is None for bpm in project_state.manual_bpm)
     assert len(project_state.manual_key) == NUM_SAMPLES
     assert all(key is None for key in project_state.manual_key)
-    assert project_state.sidebar_left_expanded is False
+    assert project_state.sidebar_left_expanded is True
     assert project_state.sidebar_right_expanded is True
 
 

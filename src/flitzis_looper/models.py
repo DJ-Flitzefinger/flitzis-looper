@@ -1,6 +1,5 @@
 import math
-from collections.abc import Iterable  # noqa: TC003
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
@@ -16,6 +15,9 @@ from flitzis_looper.constants import (
     VOLUME_MAX,
     VOLUME_MIN,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 
 def _default_sample_paths() -> list[str | None]:
@@ -107,7 +109,7 @@ class ProjectState(BaseModel):
     selected_bank: int = Field(default=0, ge=0, lt=NUM_BANKS)
     """Currently selected pad bank."""
     sidebar_left_expanded: bool = True
-    """Right sidebar expaneded/collapsed state."""
+    """Left sidebar expanded/collapsed state."""
     sidebar_right_expanded: bool = True
     """Right sidebar expanded/collapsed state."""
 

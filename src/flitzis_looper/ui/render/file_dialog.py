@@ -21,7 +21,7 @@ def check_file_dialog(ctx: UiContext, sample_id: int) -> None:
         try:
             if ifd.FileDialog.instance().has_result():
                 res = ifd.FileDialog.instance().get_result()
-                ctx.audio.load_sample_async(sample_id, res.path())
+                ctx.audio.pads.load_sample_async(sample_id, res.path())
         finally:
             ifd.FileDialog.instance().close()
             ctx.ui.close_file_dialog()

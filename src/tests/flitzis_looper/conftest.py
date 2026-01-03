@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 from unittest.mock import Mock, patch
 
@@ -15,7 +13,7 @@ if TYPE_CHECKING:
 
 @pytest.fixture
 def audio_engine_mock() -> Iterator[Mock]:
-    with patch("flitzis_looper.controller.AudioEngine", autospec=True) as audio_engine:
+    with patch("flitzis_looper.controller.facade.AudioEngine", autospec=True) as audio_engine:
         yield audio_engine
 
 

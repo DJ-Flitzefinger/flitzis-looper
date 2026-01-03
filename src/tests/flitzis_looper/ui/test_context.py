@@ -7,8 +7,6 @@ Tests cover:
 - UiContext initialization and access
 """
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 import pytest
@@ -79,35 +77,35 @@ class TestUiStateComputedProperties:
         """Test pad_label returns empty string when no file is loaded."""
         ui_state = UiState(controller)
 
-        assert not ui_state.pad_label(0)
-        assert not ui_state.pad_label(100)
+        assert not ui_state.pads.label(0)
+        assert not ui_state.pads.label(100)
 
     def test_pad_label_with_unix_path(self, controller: LooperController) -> None:
         """Test pad_label returns basename for Unix paths."""
         ui_state = UiState(controller)
         controller.project.sample_paths[0] = "/home/user/samples/loop.wav"
 
-        assert ui_state.pad_label(0) == "loop.wav"
+        assert ui_state.pads.label(0) == "loop.wav"
 
     def test_pad_label_with_windows_path(self, controller: LooperController) -> None:
         """Test pad_label returns basename for Windows paths."""
         ui_state = UiState(controller)
         controller.project.sample_paths[0] = r"C:\Users\user\samples\loop.wav"
 
-        assert ui_state.pad_label(0) == "loop.wav"
+        assert ui_state.pads.label(0) == "loop.wav"
 
     def test_is_pad_loaded_true(self, controller: LooperController) -> None:
         """Test is_pad_loaded returns True when pad has sample."""
         ui_state = UiState(controller)
         controller.project.sample_paths[0] = "/path/to/sample.wav"
 
-        assert ui_state.is_pad_loaded(0) is True
+        assert ui_state.pads.is_loaded(0) is True
 
     def test_is_pad_loaded_false(self, controller: LooperController) -> None:
         """Test is_pad_loaded returns False when pad has no sample."""
         ui_state = UiState(controller)
 
-        assert ui_state.is_pad_loaded(0) is False
+        assert ui_state.pads.is_loaded(0) is False
 
     def test_is_pad_active_true(
         self, controller: LooperController, audio_engine_mock: Mock
@@ -115,42 +113,42 @@ class TestUiStateComputedProperties:
         """Test is_pad_active returns True when pad is playing."""
         ui_state = UiState(controller)
         controller.project.sample_paths[0] = "/path/to/sample.wav"
-        controller.trigger_pad(0)
+        controller.transport.trigger_pad(0)
 
-        assert ui_state.is_pad_active(0) is True
+        assert ui_state.pads.is_active(0) is True
 
     def test_is_pad_active_false(self, controller: LooperController) -> None:
         """Test is_pad_active returns False when pad is not playing."""
         ui_state = UiState(controller)
 
-        assert ui_state.is_pad_active(0) is False
+        assert ui_state.pads.is_active(0) is False
 
     def test_is_pad_pressed_true(self, controller: LooperController) -> None:
         """Test is_pad_pressed returns True when pad is pressed."""
         ui_state = UiState(controller)
         controller.session.pressed_pads[0] = True
 
-        assert ui_state.is_pad_pressed(0) is True
+        assert ui_state.pads.is_pressed(0) is True
 
     def test_is_pad_pressed_false(self, controller: LooperController) -> None:
         """Test is_pad_pressed returns False when pad is not pressed."""
         ui_state = UiState(controller)
 
-        assert ui_state.is_pad_pressed(0) is False
+        assert ui_state.pads.is_pressed(0) is False
 
     def test_is_bank_selected_true(self, controller: LooperController) -> None:
         """Test is_bank_selected returns True when bank is selected."""
         ui_state = UiState(controller)
         controller.project.selected_bank = 2
 
-        assert ui_state.is_bank_selected(2) is True
+        assert ui_state.banks.is_selected(2) is True
 
     def test_is_bank_selected_false(self, controller: LooperController) -> None:
         """Test is_bank_selected returns False when bank is not selected."""
         ui_state = UiState(controller)
         controller.project.selected_bank = 0
 
-        assert ui_state.is_bank_selected(1) is False
+        assert ui_state.banks.is_selected(1) is False
 
     def test_pad_effective_bpm_prefers_manual(self, controller: LooperController) -> None:
         ui_state = UiState(controller)
@@ -160,10 +158,10 @@ class TestUiStateComputedProperties:
             beat_grid=BeatGrid(beats=[0.0, 0.5], downbeats=[0.0]),
         )
 
-        assert ui_state.pad_effective_bpm(0) == 123.4
+        assert ui_state.pads.effective_bpm(0) == 123.4
 
-        controller.set_manual_bpm(0, 120.0)
-        assert ui_state.pad_effective_bpm(0) == 120.0
+        controller.transport.set_manual_bpm(0, 120.0)
+        assert ui_state.pads.effective_bpm(0) == 120.0
 
     def test_pad_effective_key_prefers_manual(self, controller: LooperController) -> None:
         ui_state = UiState(controller)
@@ -173,10 +171,10 @@ class TestUiStateComputedProperties:
             beat_grid=BeatGrid(beats=[0.0, 0.5], downbeats=[0.0]),
         )
 
-        assert ui_state.pad_effective_key(0) == "C#m"
+        assert ui_state.pads.effective_key(0) == "C#m"
 
-        controller.set_manual_key(0, "Gm")
-        assert ui_state.pad_effective_key(0) == "Gm"
+        controller.transport.set_manual_key(0, "Gm")
+        assert ui_state.pads.effective_key(0) == "Gm"
 
 
 class TestAudioActions:
@@ -187,7 +185,7 @@ class TestAudioActions:
         audio_actions = AudioActions(controller)
         controller.project.sample_paths[0] = "/path/to/sample.wav"
 
-        audio_actions.trigger_pad(0)
+        audio_actions.pads.trigger_pad(0)
 
         audio_engine_mock.return_value.play_sample.assert_called_once_with(0, 1.0)
         assert 0 in controller.session.active_sample_ids
@@ -196,9 +194,9 @@ class TestAudioActions:
         """Test stop_pad delegates to controller."""
         audio_actions = AudioActions(controller)
         controller.project.sample_paths[0] = "/path/to/sample.wav"
-        controller.trigger_pad(0)
+        controller.transport.trigger_pad(0)
 
-        audio_actions.stop_pad(0)
+        audio_actions.pads.stop_pad(0)
 
         audio_engine_mock.return_value.stop_sample.assert_called_once_with(0)
         assert 0 not in controller.session.active_sample_ids
@@ -207,7 +205,7 @@ class TestAudioActions:
         """Test load_sample_async delegates to controller."""
         audio_actions = AudioActions(controller)
 
-        audio_actions.load_sample_async(0, "/path/to/sample.wav")
+        audio_actions.pads.load_sample_async(0, "/path/to/sample.wav")
 
         audio_engine_mock.return_value.load_sample_async.assert_called_once_with(
             0, "/path/to/sample.wav"
@@ -222,7 +220,7 @@ class TestAudioActions:
         audio_actions = AudioActions(controller)
         controller.project.sample_paths[0] = "/path/to/sample.wav"
 
-        audio_actions.analyze_sample_async(0)
+        audio_actions.pads.analyze_sample_async(0)
 
         audio_engine_mock.return_value.analyze_sample_async.assert_called_once_with(0)
         assert 0 in controller.session.analyzing_sample_ids
@@ -230,19 +228,19 @@ class TestAudioActions:
     def test_set_and_clear_manual_bpm(self, controller: LooperController) -> None:
         audio_actions = AudioActions(controller)
 
-        audio_actions.set_manual_bpm(0, 120.0)
+        audio_actions.pads.set_manual_bpm(0, 120.0)
         assert controller.project.manual_bpm[0] == 120.0
 
-        audio_actions.clear_manual_bpm(0)
+        audio_actions.pads.clear_manual_bpm(0)
         assert controller.project.manual_bpm[0] is None
 
     def test_set_and_clear_manual_key(self, controller: LooperController) -> None:
         audio_actions = AudioActions(controller)
 
-        audio_actions.set_manual_key(0, "Gm")
+        audio_actions.pads.set_manual_key(0, "Gm")
         assert controller.project.manual_key[0] == "Gm"
 
-        audio_actions.clear_manual_key(0)
+        audio_actions.pads.clear_manual_key(0)
         assert controller.project.manual_key[0] is None
 
     def test_tap_bpm_delegates(
@@ -250,18 +248,18 @@ class TestAudioActions:
     ) -> None:
         audio_actions = AudioActions(controller)
         times = iter([0.0, 0.5, 1.0])
-        monkeypatch.setattr("flitzis_looper.controller.time.monotonic", lambda: next(times))
+        monkeypatch.setattr("flitzis_looper.controller.transport.monotonic", lambda: next(times))
 
-        assert audio_actions.tap_bpm(0) is None
-        assert audio_actions.tap_bpm(0) is None
-        assert audio_actions.tap_bpm(0) == pytest.approx(120.0, abs=0.01)
+        assert audio_actions.pads.tap_bpm(0) is None
+        assert audio_actions.pads.tap_bpm(0) is None
+        assert audio_actions.pads.tap_bpm(0) == pytest.approx(120.0, abs=0.01)
 
     def test_unload_sample(self, controller: LooperController, audio_engine_mock: Mock) -> None:
         """Test unload_sample delegates to controller."""
         audio_actions = AudioActions(controller)
         controller.project.sample_paths[0] = "/path/to/sample.wav"
 
-        audio_actions.unload_sample(0)
+        audio_actions.pads.unload_sample(0)
 
         audio_engine_mock.return_value.unload_sample.assert_called_once_with(0)
         assert controller.project.sample_paths[0] is None
@@ -270,7 +268,7 @@ class TestAudioActions:
         """Test set_volume delegates to controller."""
         audio_actions = AudioActions(controller)
 
-        audio_actions.set_volume(0.8)
+        audio_actions.global_.set_volume(0.8)
 
         audio_engine_mock.return_value.set_volume.assert_called_once()
         assert controller.project.volume == 0.8
@@ -279,7 +277,7 @@ class TestAudioActions:
         """Test set_speed delegates to controller."""
         audio_actions = AudioActions(controller)
 
-        audio_actions.set_speed(1.5)
+        audio_actions.global_.set_speed(1.5)
 
         audio_engine_mock.return_value.set_speed.assert_called_once()
         assert controller.project.speed == 1.5
@@ -289,7 +287,7 @@ class TestAudioActions:
         audio_actions = AudioActions(controller)
         controller.project.speed = 1.8
 
-        audio_actions.reset_speed()
+        audio_actions.global_.reset_speed()
 
         # reset_speed should call set_speed with 1.0
         audio_engine_mock.return_value.set_speed.assert_called()
@@ -300,7 +298,7 @@ class TestAudioActions:
         audio_actions = AudioActions(controller)
         initial_speed = controller.project.speed
 
-        audio_actions.increase_speed()
+        audio_actions.global_.increase_speed()
 
         expected_speed = initial_speed + SPEED_STEP
         audio_engine_mock.return_value.set_speed.assert_called_once()
@@ -312,7 +310,7 @@ class TestAudioActions:
         controller.project.speed = 1.5
         initial_speed = controller.project.speed
 
-        audio_actions.decrease_speed()
+        audio_actions.global_.decrease_speed()
 
         expected_speed = initial_speed - SPEED_STEP
         audio_engine_mock.return_value.set_speed.assert_called_once()
@@ -323,7 +321,7 @@ class TestAudioActions:
         audio_actions = AudioActions(controller)
         initial_state = controller.project.multi_loop
 
-        audio_actions.toggle_multi_loop()
+        audio_actions.global_.toggle_multi_loop()
 
         assert controller.project.multi_loop is not initial_state
 
@@ -332,7 +330,7 @@ class TestAudioActions:
         audio_actions = AudioActions(controller)
         initial_state = controller.project.key_lock
 
-        audio_actions.toggle_key_lock()
+        audio_actions.global_.toggle_key_lock()
 
         assert controller.project.key_lock is not initial_state
 
@@ -341,7 +339,7 @@ class TestAudioActions:
         audio_actions = AudioActions(controller)
         initial_state = controller.project.bpm_lock
 
-        audio_actions.toggle_bpm_lock()
+        audio_actions.global_.toggle_bpm_lock()
 
         assert controller.project.bpm_lock is not initial_state
 

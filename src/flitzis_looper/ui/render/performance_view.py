@@ -18,18 +18,18 @@ if TYPE_CHECKING:
 
 
 def _pad_context_menu(ctx: UiContext, pad_id: int) -> None:
-    if ctx.state.is_pad_loading(pad_id):
+    if ctx.state.pads.is_loading(pad_id):
         imgui.text_disabled("Loading audio…")
         return
 
-    if ctx.state.is_pad_loaded(pad_id):
+    if ctx.state.pads.is_loaded(pad_id):
         if imgui.menu_item("Unload Audio", "", p_selected=False)[0]:
-            ctx.audio.unload_sample(pad_id)
+            ctx.audio.pads.unload_sample(pad_id)
         imgui.separator()
-        if ctx.state.is_pad_analyzing(pad_id):
+        if ctx.state.pads.is_analyzing(pad_id):
             imgui.text_disabled("Analyze audio")
         elif imgui.menu_item("Analyze audio", "", p_selected=False)[0]:
-            ctx.audio.analyze_sample_async(pad_id)
+            ctx.audio.pads.analyze_sample_async(pad_id)
         if imgui.menu_item("Adjust Loop", "", p_selected=False)[0]:
             # TODO: adjust loop
             pass
@@ -51,105 +51,101 @@ def _pad_popover(ctx: UiContext, pad_id: int) -> None:
         imgui.end_popup()
 
 
-def _pad_button(ctx: UiContext, pad_id: int, size: imgui.ImVec2Like) -> None:  # noqa: C901, PLR0912, PLR0914, PLR0915
-    is_loaded = ctx.state.is_pad_loaded(pad_id)
-    is_loading = ctx.state.is_pad_loading(pad_id)
-    is_active = ctx.state.is_pad_active(pad_id)
-    style_name: ButtonStyleName = "active" if is_active else "regular"
+def _pad_button_label(
+    ctx: UiContext, pad_id: int, *, is_loaded: bool, is_loading: bool
+) -> tuple[str, float | None]:
+    if not (is_loaded or is_loading):
+        return "", None
 
-    label = ""
-    loading_progress: float | None = None
-    if is_loaded or is_loading:
-        filename = ctx.state.pad_label(pad_id)
-        if is_loading:
-            stage = ctx.state.pad_load_stage(pad_id) or "Loading"
-            progress = ctx.state.pad_load_progress(pad_id)
-            loading_progress = float(progress) if isinstance(progress, (int, float)) else None
-            percent_text = "" if loading_progress is None else f"{int(loading_progress * 100):d} %"
-            status_line = " ".join([p for p in (stage, percent_text) if p])
-            label = f"{filename}\n{status_line}" if filename else (status_line or "Loading…")
-        elif ctx.state.is_pad_analyzing(pad_id):
-            stage = ctx.state.pad_analysis_stage(pad_id) or "Analyzing"
-            progress = ctx.state.pad_analysis_progress(pad_id)
-            percent_text = "" if progress is None else f"{int(float(progress) * 100):d} %"
-            status_line = " ".join([p for p in (stage, percent_text) if p])
-            label = f"{filename}\n{status_line}" if filename else (status_line or "Analyzing…")
-        else:
-            label = filename
+    filename = ctx.state.pads.label(pad_id)
 
-    id_str = f"pad_btn_{pad_id}"
+    if is_loading:
+        stage = ctx.state.pads.load_stage(pad_id) or "Loading"
+        progress = ctx.state.pads.load_progress(pad_id)
+        loading_progress = float(progress) if isinstance(progress, (int, float)) else None
+        percent_text = "" if loading_progress is None else f"{int(loading_progress * 100):d} %"
+        status_line = " ".join([p for p in (stage, percent_text) if p])
+        label = f"{filename}\n{status_line}" if filename else (status_line or "Loading…")
+        return label, loading_progress
 
-    with button_style(style_name):
-        imgui.button(f"{label}##{id_str}", size)
+    if ctx.state.pads.is_analyzing(pad_id):
+        stage = ctx.state.pads.analysis_stage(pad_id) or "Analyzing"
+        progress = ctx.state.pads.analysis_progress(pad_id)
+        percent_text = "" if progress is None else f"{int(float(progress) * 100):d} %"
+        status_line = " ".join([p for p in (stage, percent_text) if p])
+        label = f"{filename}\n{status_line}" if filename else (status_line or "Analyzing…")
+        return label, None
 
-        if is_loading and loading_progress is not None:
-            pos_min = imgui.get_item_rect_min()
-            pos_max = imgui.get_item_rect_max()
-            width = pos_max.x - pos_min.x
-            fill_x = pos_min.x + width * max(0.0, min(1.0, loading_progress))
+    return filename, None
 
-            base = imgui.get_style_color_vec4(imgui.Col_.button)
-            progress_rgba = (
-                base.x * 0.6,
-                base.y * 0.6,
-                base.z * 0.6,
-                min(base.w, 1.0) * 0.5,
-            )
 
-            draw_list = imgui.get_window_draw_list()
-            draw_list.add_rect_filled(
-                pos_min, (fill_x, pos_max.y), imgui.get_color_u32(progress_rgba)
-            )
-
-        if is_loaded:
-            peak = ctx.state.pad_peak(pad_id)
-            peak = max(0.0, min(1.0, float(peak)))
-
-            pos_min = imgui.get_item_rect_min()
-            pos_max = imgui.get_item_rect_max()
-            meter_w = 6.0
-            padding = 2.0
-            x1 = pos_max.x - padding - meter_w
-            x2 = pos_max.x - padding
-            y2 = pos_max.y - padding
-            y_min = pos_min.y + padding
-            height = max(0.0, y2 - y_min)
-            y1 = y2 - height * peak
-
-            bg_rgba = (0.0, 0.0, 0.0, 0.25)
-            fg_rgba = (1.0, 0.2, 0.2, 0.9) if peak >= 1.0 else (0.2, 0.8, 0.2, 0.7)
-
-            draw_list = imgui.get_window_draw_list()
-            draw_list.add_rect_filled((x1, y_min), (x2, y2), imgui.get_color_u32(bg_rgba))
-            if peak > 0.0:
-                draw_list.add_rect_filled((x1, y1), (x2, y2), imgui.get_color_u32(fg_rgba))
-
-        # Track pressed state
-        if imgui.is_item_hovered():
-            # Play on left click
-            if imgui.is_mouse_down(imgui.MouseButton_.left):
-                if not ctx.state.is_pad_pressed(pad_id):
-                    if is_loaded:
-                        ctx.audio.trigger_pad(pad_id)
-                    ctx.ui.select_pad(pad_id)
-                ctx.ui.store_pressed_pad_state(pad_id, pressed=True)
-            else:
-                ctx.ui.store_pressed_pad_state(pad_id, pressed=False)
-
-            # Stop on right click
-            if imgui.is_mouse_down(imgui.MouseButton_.right):
-                ctx.audio.stop_pad(pad_id)
-
-    # Draw pad number
+def _pad_button_progress_overlay(progress: float) -> None:
     pos_min = imgui.get_item_rect_min()
-    label_pos = (pos_min.x + 6, pos_min.y + 4)
+    pos_max = imgui.get_item_rect_max()
+    width = pos_max.x - pos_min.x
+    fill_x = pos_min.x + width * max(0.0, min(1.0, progress))
+
+    base = imgui.get_style_color_vec4(imgui.Col_.button)
+    progress_rgba = (
+        base.x * 0.6,
+        base.y * 0.6,
+        base.z * 0.6,
+        min(base.w, 1.0) * 0.5,
+    )
+
     draw_list = imgui.get_window_draw_list()
+    draw_list.add_rect_filled(pos_min, (fill_x, pos_max.y), imgui.get_color_u32(progress_rgba))
+
+
+def _pad_button_peak_meter(peak: float) -> None:
+    peak = max(0.0, min(1.0, float(peak)))
+
+    pos_min = imgui.get_item_rect_min()
+    pos_max = imgui.get_item_rect_max()
+    meter_w = 6.0
+    padding = 2.0
+    x1 = pos_max.x - padding - meter_w
+    x2 = pos_max.x - padding
+    y2 = pos_max.y - padding
+    y_min = pos_min.y + padding
+    height = max(0.0, y2 - y_min)
+    y1 = y2 - height * peak
+
+    bg_rgba = (0.0, 0.0, 0.0, 0.25)
+    fg_rgba = (1.0, 0.2, 0.2, 0.9) if peak >= 1.0 else (0.2, 0.8, 0.2, 0.7)
+
+    draw_list = imgui.get_window_draw_list()
+    draw_list.add_rect_filled((x1, y_min), (x2, y2), imgui.get_color_u32(bg_rgba))
+    if peak > 0.0:
+        draw_list.add_rect_filled((x1, y1), (x2, y2), imgui.get_color_u32(fg_rgba))
+
+
+def _pad_button_input(ctx: UiContext, pad_id: int, *, is_loaded: bool) -> None:
+    if imgui.is_mouse_down(imgui.MouseButton_.left):
+        if not ctx.state.pads.is_pressed(pad_id):
+            if is_loaded:
+                ctx.audio.pads.trigger_pad(pad_id)
+            ctx.ui.select_pad(pad_id)
+        ctx.ui.store_pressed_pad_state(pad_id, pressed=True)
+    else:
+        ctx.ui.store_pressed_pad_state(pad_id, pressed=False)
+
+    if imgui.is_mouse_down(imgui.MouseButton_.right):
+        ctx.audio.pads.stop_pad(pad_id)
+
+
+def _pad_button_overlays(ctx: UiContext, pad_id: int, *, is_active: bool, is_loaded: bool) -> None:
+    pos_min = imgui.get_item_rect_min()
+    draw_list = imgui.get_window_draw_list()
+
+    # Pad number
+    label_pos = (pos_min.x + 6, pos_min.y + 4)
     label = f"#{pad_id + 1}"
     color = imgui.get_color_u32(TEXT_ACTIVE_RGBA if is_active else TEXT_MUTED_RGBA)
     draw_list.add_text(label_pos, color, label)
 
-    bpm = ctx.state.pad_effective_bpm(pad_id) if is_loaded else None
-    key = ctx.state.pad_effective_key(pad_id) if is_loaded else None
+    bpm = ctx.state.pads.effective_bpm(pad_id) if is_loaded else None
+    key = ctx.state.pads.effective_key(pad_id) if is_loaded else None
 
     info = None
     if bpm is not None:
@@ -159,13 +155,40 @@ def _pad_button(ctx: UiContext, pad_id: int, size: imgui.ImVec2Like) -> None:  #
     elif key is not None:
         info = key
 
-    if info is not None:
-        text_size = imgui.calc_text_size(info)
-        pos_max = imgui.get_item_rect_max()
-        info_pos = (pos_max.x - text_size.x - 6, pos_min.y + 4)
-        info_color = TEXT_ACTIVE_RGBA if is_active else TEXT_MUTED_RGBA
-        draw_list.add_text(info_pos, imgui.get_color_u32(info_color), info)
+    if info is None:
+        return
 
+    text_size = imgui.calc_text_size(info)
+    pos_max = imgui.get_item_rect_max()
+    info_pos = (pos_max.x - text_size.x - 6, pos_min.y + 4)
+    info_color = TEXT_ACTIVE_RGBA if is_active else TEXT_MUTED_RGBA
+    draw_list.add_text(info_pos, imgui.get_color_u32(info_color), info)
+
+
+def _pad_button(ctx: UiContext, pad_id: int, size: imgui.ImVec2Like) -> None:
+    is_loaded = ctx.state.pads.is_loaded(pad_id)
+    is_loading = ctx.state.pads.is_loading(pad_id)
+    is_active = ctx.state.pads.is_active(pad_id)
+    style_name: ButtonStyleName = "active" if is_active else "regular"
+
+    label, loading_progress = _pad_button_label(
+        ctx, pad_id, is_loaded=is_loaded, is_loading=is_loading
+    )
+    id_str = f"pad_btn_{pad_id}"
+
+    with button_style(style_name):
+        imgui.button(f"{label}##{id_str}", size)
+
+        if is_loading and loading_progress is not None:
+            _pad_button_progress_overlay(loading_progress)
+
+        if is_loaded:
+            _pad_button_peak_meter(ctx.state.pads.peak(pad_id))
+
+        if imgui.is_item_hovered():
+            _pad_button_input(ctx, pad_id, is_loaded=is_loaded)
+
+    _pad_button_overlays(ctx, pad_id, is_active=is_active, is_loaded=is_loaded)
     _pad_popover(ctx, pad_id)
 
 
@@ -184,13 +207,12 @@ def _render_pad_grid(ctx: UiContext) -> None:
                 _pad_button(ctx, pad_id, (pad_width, pad_height))
                 pad_id += 1
 
-            # vertical gap
             if row < GRID_SIZE - 1:
                 imgui.dummy((0, PAD_GRID_GAP))
 
 
 def _bank_button(ctx: UiContext, idx: int, width: float) -> None:
-    is_selected = ctx.state.is_bank_selected(idx)
+    is_selected = ctx.state.banks.is_selected(idx)
     style_name: ButtonStyleName = "bank-active" if is_selected else "bank"
 
     with button_style(style_name):

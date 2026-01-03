@@ -1,9 +1,6 @@
 class AudioMessage:
     def pad_peak(self) -> tuple[int, float] | None: ...
 
-    class Ping(AudioMessage):
-        def __init__(self) -> None: ...
-
     class Pong(AudioMessage):
         def __init__(self) -> None: ...
 

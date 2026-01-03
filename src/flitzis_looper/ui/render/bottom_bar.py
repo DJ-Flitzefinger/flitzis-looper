@@ -18,7 +18,7 @@ def _master_volume(ctx: UiContext) -> None:
         with item_width(240):
             changed, new_value = imgui.slider_int("##master_volume", val, 0, 100, "%d %")
             if changed:
-                ctx.audio.set_volume(new_value / 100.0)
+                ctx.audio.global_.set_volume(new_value / 100.0)
 
 
 def bottom_bar(ctx: UiContext) -> None:
@@ -28,4 +28,4 @@ def bottom_bar(ctx: UiContext) -> None:
 
     with button_style(style):
         if imgui.button("MULTI LOOP"):
-            ctx.audio.toggle_multi_loop()
+            ctx.audio.global_.toggle_multi_loop()

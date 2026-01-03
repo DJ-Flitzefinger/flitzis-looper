@@ -9,8 +9,6 @@ Tests cover:
 - Error handling (invalid IDs, non-finite values, edge cases)
 """
 
-from __future__ import annotations
-
 import math
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
@@ -59,7 +57,7 @@ class TestSampleManagement:
         sample_id = 0
         path = "/path/to/sample.wav"
 
-        controller.load_sample_async(sample_id, path)
+        controller.loader.load_sample_async(sample_id, path)
 
         audio_engine_mock.return_value.load_sample_async.assert_called_with(sample_id, path)
         assert controller.session.pending_sample_paths[sample_id] == path
@@ -76,7 +74,7 @@ class TestSampleManagement:
 
         controller.project.sample_paths[sample_id] = old_path
 
-        controller.load_sample_async(sample_id, new_path)
+        controller.loader.load_sample_async(sample_id, new_path)
 
         audio_engine_mock.return_value.unload_sample.assert_called_with(sample_id)
         audio_engine_mock.return_value.load_sample_async.assert_called_with(sample_id, new_path)
@@ -90,7 +88,7 @@ class TestSampleManagement:
         controller.project.sample_paths[sample_id] = path
         controller.session.active_sample_ids.add(sample_id)
 
-        controller.unload_sample(sample_id)
+        controller.loader.unload_sample(sample_id)
 
         audio_engine_mock.return_value.unload_sample.assert_called_with(sample_id)
         assert controller.project.sample_paths[sample_id] is None
@@ -103,13 +101,13 @@ class TestSampleManagement:
 
         controller.project.sample_paths[sample_id] = path
 
-        assert controller.is_sample_loaded(sample_id) is True
+        assert controller.transport.is_sample_loaded(sample_id) is True
 
     def test_is_sample_loaded_false(self, controller: LooperController) -> None:
         """Test is_sample_loaded returns False when sample is not loaded."""
         sample_id = 0
 
-        assert controller.is_sample_loaded(sample_id) is False
+        assert controller.transport.is_sample_loaded(sample_id) is False
 
 
 class TestPlaybackControl:
@@ -125,7 +123,7 @@ class TestPlaybackControl:
         controller.session.active_sample_ids.add(5)  # Another active sample
         controller.project.multi_loop = False
 
-        controller.trigger_pad(sample_id)
+        controller.transport.trigger_pad(sample_id)
 
         # Should stop all other pads first
         audio_engine_mock.return_value.stop_all.assert_called_once()
@@ -144,7 +142,7 @@ class TestPlaybackControl:
         controller.session.active_sample_ids.add(sample_id)  # Already active
         controller.project.multi_loop = True
 
-        controller.trigger_pad(sample_id)
+        controller.transport.trigger_pad(sample_id)
 
         # Should stop only this pad (toggle behavior)
         audio_engine_mock.return_value.stop_sample.assert_called_with(sample_id)
@@ -157,7 +155,7 @@ class TestPlaybackControl:
         """Test triggering an unloaded pad does nothing."""
         sample_id = 0
 
-        controller.trigger_pad(sample_id)
+        controller.transport.trigger_pad(sample_id)
 
         audio_engine_mock.return_value.play_sample.assert_not_called()
 
@@ -168,7 +166,7 @@ class TestPlaybackControl:
         controller.project.sample_paths[sample_id] = path
         controller.session.active_sample_ids.add(sample_id)
 
-        controller.stop_pad(sample_id)
+        controller.transport.stop_pad(sample_id)
 
         audio_engine_mock.return_value.stop_sample.assert_called_with(sample_id)
         assert sample_id not in controller.session.active_sample_ids
@@ -179,7 +177,7 @@ class TestPlaybackControl:
         """Test stopping an inactive pad does nothing."""
         sample_id = 0
 
-        controller.stop_pad(sample_id)
+        controller.transport.stop_pad(sample_id)
 
         audio_engine_mock.return_value.stop_sample.assert_not_called()
 
@@ -187,7 +185,7 @@ class TestPlaybackControl:
         """Test stopping all pads clears active samples."""
         controller.session.active_sample_ids.update({0, 1, 2})
 
-        controller.stop_all_pads()
+        controller.transport.stop_all_pads()
 
         audio_engine_mock.return_value.stop_all.assert_called_once()
         assert controller.session.active_sample_ids == set()
@@ -197,13 +195,13 @@ class TestPlaybackControl:
         sample_id = 0
         controller.session.active_sample_ids.add(sample_id)
 
-        assert controller.is_sample_active(sample_id) is True
+        assert sample_id in controller.session.active_sample_ids
 
     def test_is_sample_active_false(self, controller: LooperController) -> None:
         """Test is_sample_active returns False when sample is not playing."""
         sample_id = 0
 
-        assert controller.is_sample_active(sample_id) is False
+        assert sample_id not in controller.session.active_sample_ids
 
 
 class TestAudioParameters:
@@ -213,7 +211,7 @@ class TestAudioParameters:
         """Test setting volume within valid range."""
         volume = 0.7
 
-        controller.set_volume(volume)
+        controller.transport.set_volume(volume)
 
         audio_engine_mock.return_value.set_volume.assert_called_with(volume)
         assert controller.project.volume == volume
@@ -224,7 +222,7 @@ class TestAudioParameters:
         """Test volume is clamped to maximum."""
         volume = 2.0
 
-        controller.set_volume(volume)
+        controller.transport.set_volume(volume)
 
         audio_engine_mock.return_value.set_volume.assert_called_with(VOLUME_MAX)
         assert controller.project.volume == VOLUME_MAX
@@ -235,7 +233,7 @@ class TestAudioParameters:
         """Test volume is clamped to minimum."""
         volume = -1.0
 
-        controller.set_volume(volume)
+        controller.transport.set_volume(volume)
 
         audio_engine_mock.return_value.set_volume.assert_called_with(VOLUME_MIN)
         assert controller.project.volume == VOLUME_MIN
@@ -244,7 +242,7 @@ class TestAudioParameters:
         """Test setting speed within valid range."""
         speed = 1.5
 
-        controller.set_speed(speed)
+        controller.transport.set_speed(speed)
 
         audio_engine_mock.return_value.set_speed.assert_called_with(speed)
         assert controller.project.speed == speed
@@ -255,7 +253,7 @@ class TestAudioParameters:
         """Test speed is clamped to maximum."""
         speed = 3.0
 
-        controller.set_speed(speed)
+        controller.transport.set_speed(speed)
 
         audio_engine_mock.return_value.set_speed.assert_called_with(SPEED_MAX)
         assert controller.project.speed == SPEED_MAX
@@ -266,7 +264,7 @@ class TestAudioParameters:
         """Test speed is clamped to minimum."""
         speed = 0.3
 
-        controller.set_speed(speed)
+        controller.transport.set_speed(speed)
 
         audio_engine_mock.return_value.set_speed.assert_called_with(SPEED_MIN)
         assert controller.project.speed == SPEED_MIN
@@ -275,7 +273,7 @@ class TestAudioParameters:
         """Test resetting speed to 1.0."""
         controller.project.speed = 1.8
 
-        controller.reset_speed()
+        controller.transport.reset_speed()
 
         audio_engine_mock.return_value.set_speed.assert_called_with(1.0)
         assert controller.project.speed == 1.0
@@ -287,15 +285,15 @@ class TestPerPadMixing:
     ) -> None:
         sample_id = 0
 
-        controller.set_pad_gain(sample_id, 0.25)
+        controller.transport.set_pad_gain(sample_id, 0.25)
         audio_engine_mock.return_value.set_pad_gain.assert_called_with(sample_id, 0.25)
         assert controller.project.pad_gain[sample_id] == 0.25
 
-        controller.set_pad_gain(sample_id, -1.0)
+        controller.transport.set_pad_gain(sample_id, -1.0)
         audio_engine_mock.return_value.set_pad_gain.assert_called_with(sample_id, PAD_GAIN_MIN)
         assert controller.project.pad_gain[sample_id] == PAD_GAIN_MIN
 
-        controller.set_pad_gain(sample_id, 2.0)
+        controller.transport.set_pad_gain(sample_id, 2.0)
         audio_engine_mock.return_value.set_pad_gain.assert_called_with(sample_id, PAD_GAIN_MAX)
         assert controller.project.pad_gain[sample_id] == PAD_GAIN_MAX
 
@@ -304,13 +302,13 @@ class TestPerPadMixing:
     ) -> None:
         sample_id = 0
 
-        controller.set_pad_eq(sample_id, 1.0, -2.0, 3.0)
+        controller.transport.set_pad_eq(sample_id, 1.0, -2.0, 3.0)
         audio_engine_mock.return_value.set_pad_eq.assert_called_with(sample_id, 1.0, -2.0, 3.0)
         assert controller.project.pad_eq_low_db[sample_id] == 1.0
         assert controller.project.pad_eq_mid_db[sample_id] == -2.0
         assert controller.project.pad_eq_high_db[sample_id] == 3.0
 
-        controller.set_pad_eq(sample_id, 999.0, -999.0, 0.0)
+        controller.transport.set_pad_eq(sample_id, 999.0, -999.0, 0.0)
         audio_engine_mock.return_value.set_pad_eq.assert_called_with(
             sample_id,
             PAD_EQ_DB_MAX,
@@ -324,7 +322,7 @@ class TestPerPadMixing:
         self, controller: LooperController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         now = 123.0
-        monkeypatch.setattr("flitzis_looper.controller.time.monotonic", lambda: now)
+        monkeypatch.setattr("flitzis_looper.controller.metering.monotonic", lambda: now)
 
         msg1 = Mock()
         msg1.pad_peak.return_value = (0, 0.8)
@@ -335,7 +333,7 @@ class TestPerPadMixing:
 
         audio_engine_mock.return_value.receive_msg.side_effect = [msg1, msg2, msg3, None]
 
-        controller.poll_audio_messages()
+        controller.metering.poll_audio_messages()
 
         assert controller.session.pad_peak[0] == pytest.approx(1.0)
         assert controller.session.pad_peak_updated_at[0] == now
@@ -348,7 +346,7 @@ class TestModeToggles:
         """Test enabling multi loop mode."""
         controller.project.multi_loop = False
 
-        controller.set_multi_loop(enabled=True)
+        controller.transport.set_multi_loop(enabled=True)
 
         assert controller.project.multi_loop is True
 
@@ -356,7 +354,7 @@ class TestModeToggles:
         """Test disabling multi loop mode."""
         controller.project.multi_loop = True
 
-        controller.set_multi_loop(enabled=False)
+        controller.transport.set_multi_loop(enabled=False)
 
         assert controller.project.multi_loop is False
 
@@ -366,7 +364,7 @@ class TestModeToggles:
         """Test enabling key lock mode."""
         controller.project.key_lock = False
 
-        controller.set_key_lock(enabled=True)
+        controller.transport.set_key_lock(enabled=True)
 
         audio_engine_mock.return_value.set_key_lock.assert_called_with(enabled=True)
         assert controller.project.key_lock is True
@@ -377,7 +375,7 @@ class TestModeToggles:
         """Test disabling key lock mode."""
         controller.project.key_lock = True
 
-        controller.set_key_lock(enabled=False)
+        controller.transport.set_key_lock(enabled=False)
 
         audio_engine_mock.return_value.set_key_lock.assert_called_with(enabled=False)
         assert controller.project.key_lock is False
@@ -388,7 +386,7 @@ class TestModeToggles:
         """Test enabling BPM lock mode."""
         controller.project.bpm_lock = False
 
-        controller.set_bpm_lock(enabled=True)
+        controller.transport.set_bpm_lock(enabled=True)
 
         audio_engine_mock.return_value.set_bpm_lock.assert_called_with(enabled=True)
         assert controller.project.bpm_lock is True
@@ -399,7 +397,7 @@ class TestModeToggles:
         """Test disabling BPM lock mode."""
         controller.project.bpm_lock = True
 
-        controller.set_bpm_lock(enabled=False)
+        controller.transport.set_bpm_lock(enabled=False)
 
         audio_engine_mock.return_value.set_bpm_lock.assert_called_with(enabled=False)
         assert controller.project.bpm_lock is False
@@ -408,12 +406,12 @@ class TestModeToggles:
         self, controller: LooperController, audio_engine_mock: Mock
     ) -> None:
         controller.project.selected_pad = 1
-        controller.set_speed(1.5)
-        controller.set_manual_bpm(1, 120.0)
+        controller.transport.set_speed(1.5)
+        controller.transport.set_manual_bpm(1, 120.0)
 
         audio_engine_mock.return_value.reset_mock()
 
-        controller.set_bpm_lock(enabled=True)
+        controller.transport.set_bpm_lock(enabled=True)
 
         assert controller.session.bpm_lock_anchor_pad_id == 1
         assert controller.session.master_bpm == pytest.approx(180.0)
@@ -425,7 +423,7 @@ class TestModeToggles:
 
         audio_engine_mock.return_value.reset_mock()
 
-        controller.set_speed(2.0)
+        controller.transport.set_speed(2.0)
 
         assert controller.session.master_bpm == pytest.approx(240.0)
         assert audio_engine_mock.return_value.set_master_bpm.call_count == 1
@@ -439,10 +437,10 @@ class TestManualBpm:
     def test_set_and_clear_manual_bpm(self, controller: LooperController) -> None:
         sample_id = 0
 
-        controller.set_manual_bpm(sample_id, 120.0)
+        controller.transport.set_manual_bpm(sample_id, 120.0)
         assert controller.project.manual_bpm[sample_id] == 120.0
 
-        controller.clear_manual_bpm(sample_id)
+        controller.transport.clear_manual_bpm(sample_id)
         assert controller.project.manual_bpm[sample_id] is None
 
     def test_effective_bpm_prefers_manual(self, controller: LooperController) -> None:
@@ -453,21 +451,21 @@ class TestManualBpm:
             key="C#m",
             beat_grid=BeatGrid(beats=[0.0, 0.5], downbeats=[0.0]),
         )
-        assert controller.effective_bpm(sample_id) == 123.4
+        assert controller.transport.effective_bpm(sample_id) == 123.4
 
-        controller.set_manual_bpm(sample_id, 120.0)
-        assert controller.effective_bpm(sample_id) == 120.0
+        controller.transport.set_manual_bpm(sample_id, 120.0)
+        assert controller.transport.effective_bpm(sample_id) == 120.0
 
     def test_tap_bpm_three_taps(
         self, controller: LooperController, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         sample_id = 0
         times = iter([0.0, 0.5, 1.0])
-        monkeypatch.setattr("flitzis_looper.controller.time.monotonic", lambda: next(times))
+        monkeypatch.setattr("flitzis_looper.controller.transport.monotonic", lambda: next(times))
 
-        assert controller.tap_bpm(sample_id) is None
-        assert controller.tap_bpm(sample_id) is None
-        bpm = controller.tap_bpm(sample_id)
+        assert controller.transport.tap_bpm(sample_id) is None
+        assert controller.transport.tap_bpm(sample_id) is None
+        bpm = controller.transport.tap_bpm(sample_id)
 
         assert bpm == pytest.approx(120.0, abs=0.01)
         assert controller.project.manual_bpm[sample_id] == pytest.approx(120.0, abs=0.01)
@@ -477,11 +475,11 @@ class TestManualBpm:
     ) -> None:
         sample_id = 0
         times = iter([0.0, 1.0, 2.0, 3.0, 4.0, 10.0, 10.5, 11.0, 11.5, 12.0])
-        monkeypatch.setattr("flitzis_looper.controller.time.monotonic", lambda: next(times))
+        monkeypatch.setattr("flitzis_looper.controller.transport.monotonic", lambda: next(times))
 
         bpm: float | None = None
         for _ in range(10):
-            bpm = controller.tap_bpm(sample_id)
+            bpm = controller.transport.tap_bpm(sample_id)
 
         assert bpm == pytest.approx(120.0, abs=0.01)
         assert controller.session.tap_bpm_pad_id == sample_id
@@ -494,10 +492,10 @@ class TestManualKey:
     def test_set_and_clear_manual_key(self, controller: LooperController) -> None:
         sample_id = 0
 
-        controller.set_manual_key(sample_id, "Gm")
+        controller.transport.set_manual_key(sample_id, "Gm")
         assert controller.project.manual_key[sample_id] == "Gm"
 
-        controller.clear_manual_key(sample_id)
+        controller.transport.clear_manual_key(sample_id)
         assert controller.project.manual_key[sample_id] is None
 
     def test_effective_key_prefers_manual(self, controller: LooperController) -> None:
@@ -508,10 +506,10 @@ class TestManualKey:
             key="C#m",
             beat_grid=BeatGrid(beats=[0.0, 0.5], downbeats=[0.0]),
         )
-        assert controller.effective_key(sample_id) == "C#m"
+        assert controller.transport.effective_key(sample_id) == "C#m"
 
-        controller.set_manual_key(sample_id, "Gm")
-        assert controller.effective_key(sample_id) == "Gm"
+        controller.transport.set_manual_key(sample_id, "Gm")
+        assert controller.transport.effective_key(sample_id) == "Gm"
 
 
 class TestErrorHandling:
@@ -522,34 +520,34 @@ class TestErrorHandling:
         invalid_id = -1
 
         with pytest.raises(ValueError, match="sample_id must be"):
-            controller.load_sample_async(invalid_id, "/path/to/sample.wav")
+            controller.loader.load_sample_async(invalid_id, "/path/to/sample.wav")
 
     def test_invalid_sample_id_too_high(self, controller: LooperController) -> None:
         """Test that invalid sample ID above NUM_SAMPLES raises ValueError."""
         invalid_id = NUM_SAMPLES
 
         with pytest.raises(ValueError, match="sample_id must be"):
-            controller.load_sample_async(invalid_id, "/path/to/sample.wav")
+            controller.loader.load_sample_async(invalid_id, "/path/to/sample.wav")
 
     def test_non_finite_volume_nan(self, controller: LooperController) -> None:
         """Test that NaN volume raises ValueError."""
         with pytest.raises(ValueError, match="value must be finite"):
-            controller.set_volume(math.nan)
+            controller.transport.set_volume(math.nan)
 
     def test_non_finite_volume_inf(self, controller: LooperController) -> None:
         """Test that infinite volume raises ValueError."""
         with pytest.raises(ValueError, match="value must be finite"):
-            controller.set_volume(math.inf)
+            controller.transport.set_volume(math.inf)
 
     def test_non_finite_speed_nan(self, controller: LooperController) -> None:
         """Test that NaN speed raises ValueError."""
         with pytest.raises(ValueError, match="value must be finite"):
-            controller.set_speed(math.nan)
+            controller.transport.set_speed(math.nan)
 
     def test_non_finite_speed_inf(self, controller: LooperController) -> None:
         """Test that infinite speed raises ValueError."""
         with pytest.raises(ValueError, match="value must be finite"):
-            controller.set_speed(math.inf)
+            controller.transport.set_speed(math.inf)
 
     def test_trigger_unloaded_sample(
         self, controller: LooperController, audio_engine_mock: Mock
@@ -558,7 +556,7 @@ class TestErrorHandling:
         sample_id = 0
 
         # Should not raise error
-        controller.trigger_pad(sample_id)
+        controller.transport.trigger_pad(sample_id)
 
         # Should not attempt to play
         audio_engine_mock.return_value.play_sample.assert_not_called()
@@ -575,7 +573,7 @@ class TestAnalysisEvents:
             None,
         ]
 
-        controller.poll_loader_events()
+        controller.loader.poll_loader_events()
 
         assert 0 in controller.session.analyzing_sample_ids
         assert 0 not in controller.session.sample_analysis_progress
@@ -597,7 +595,7 @@ class TestAnalysisEvents:
             None,
         ]
 
-        controller.poll_loader_events()
+        controller.loader.poll_loader_events()
 
         assert controller.session.sample_analysis_progress[0] == 0.25
         assert controller.session.sample_analysis_stage[0] == "Analyzing"
@@ -617,7 +615,7 @@ class TestAnalysisEvents:
             None,
         ]
 
-        controller.poll_loader_events()
+        controller.loader.poll_loader_events()
 
         assert controller.project.sample_analysis[0] is not None
         assert controller.project.sample_analysis[0].bpm == 120.0
@@ -637,7 +635,7 @@ class TestAnalysisEvents:
             None,
         ]
 
-        controller.poll_loader_events()
+        controller.loader.poll_loader_events()
 
         assert 0 not in controller.session.analyzing_sample_ids
         assert 0 not in controller.session.sample_analysis_progress
