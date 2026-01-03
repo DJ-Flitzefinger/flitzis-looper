@@ -8,11 +8,13 @@
 //! [`decode_audio_file_to_sample_buffer`](crate::audio_engine::sample_loader::decode_audio_file_to_sample_buffer).
 
 use crate::audio_engine::constants::{
-    MAX_VOICES, NUM_SAMPLES, SPEED_MAX, SPEED_MIN, VOLUME_MAX, VOLUME_MIN,
+    MAX_VOICES, NUM_SAMPLES, PAD_EQ_DB_MAX, PAD_EQ_DB_MIN, PAD_GAIN_MAX, PAD_GAIN_MIN, SPEED_MAX,
+    SPEED_MIN, VOLUME_MAX, VOLUME_MIN,
 };
 use crate::audio_engine::stretch_processor::{DEFAULT_BLOCK_SAMPLES, StretchProcessor};
 use crate::messages::SampleBuffer;
 use cpal::Sample;
+use std::f32::consts::PI;
 
 fn transpose_semitones_for_tempo_ratio(tempo_ratio: f32) -> f32 {
     if !tempo_ratio.is_finite() || tempo_ratio <= 0.0 {
@@ -20,6 +22,190 @@ fn transpose_semitones_for_tempo_ratio(tempo_ratio: f32) -> f32 {
     }
 
     -12.0 * tempo_ratio.log2()
+}
+
+#[derive(Clone, Copy)]
+struct BiquadCoeffs {
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+}
+
+impl BiquadCoeffs {
+    fn identity() -> Self {
+        Self {
+            b0: 1.0,
+            b1: 0.0,
+            b2: 0.0,
+            a1: 0.0,
+            a2: 0.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct BiquadState {
+    z1: f32,
+    z2: f32,
+}
+
+fn biquad_process(coeffs: BiquadCoeffs, state: &mut BiquadState, x: f32) -> f32 {
+    let y = coeffs.b0 * x + state.z1;
+    state.z1 = coeffs.b1 * x - coeffs.a1 * y + state.z2;
+    state.z2 = coeffs.b2 * x - coeffs.a2 * y;
+    y
+}
+
+#[derive(Clone, Copy)]
+struct Eq3Coeffs {
+    low: BiquadCoeffs,
+    mid: BiquadCoeffs,
+    high: BiquadCoeffs,
+}
+
+impl Eq3Coeffs {
+    fn identity() -> Self {
+        Self {
+            low: BiquadCoeffs::identity(),
+            mid: BiquadCoeffs::identity(),
+            high: BiquadCoeffs::identity(),
+        }
+    }
+
+    fn process(&self, state: &mut Eq3State, mut x: f32) -> f32 {
+        x = biquad_process(self.low, &mut state.low, x);
+        x = biquad_process(self.mid, &mut state.mid, x);
+        x = biquad_process(self.high, &mut state.high, x);
+        x
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct Eq3State {
+    low: BiquadState,
+    mid: BiquadState,
+    high: BiquadState,
+}
+
+impl Eq3State {
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
+fn db_to_a(db: f32) -> f32 {
+    if !db.is_finite() {
+        return 1.0;
+    }
+    10.0_f32.powf(db / 40.0)
+}
+
+fn clamp_freq_hz(fs_hz: f32, freq_hz: f32) -> f32 {
+    if !fs_hz.is_finite() || fs_hz <= 0.0 {
+        return freq_hz.max(1.0);
+    }
+
+    let nyquist = fs_hz * 0.5;
+    let max_hz = (nyquist * 0.9).max(1.0);
+    freq_hz.clamp(1.0, max_hz)
+}
+
+fn normalize_biquad(b0: f32, b1: f32, b2: f32, a0: f32, a1: f32, a2: f32) -> BiquadCoeffs {
+    if !a0.is_finite() || a0.abs() < 1e-12 {
+        return BiquadCoeffs::identity();
+    }
+
+    let inv_a0 = 1.0 / a0;
+    let coeffs = BiquadCoeffs {
+        b0: b0 * inv_a0,
+        b1: b1 * inv_a0,
+        b2: b2 * inv_a0,
+        a1: a1 * inv_a0,
+        a2: a2 * inv_a0,
+    };
+
+    if [coeffs.b0, coeffs.b1, coeffs.b2, coeffs.a1, coeffs.a2]
+        .iter()
+        .all(|v| v.is_finite())
+    {
+        coeffs
+    } else {
+        BiquadCoeffs::identity()
+    }
+}
+
+fn biquad_low_shelf(fs_hz: f32, freq_hz: f32, db_gain: f32) -> BiquadCoeffs {
+    let freq_hz = clamp_freq_hz(fs_hz, freq_hz);
+    let a = db_to_a(db_gain);
+    let w0 = 2.0 * PI * freq_hz / fs_hz;
+    let cos_w0 = w0.cos();
+    let sin_w0 = w0.sin();
+    let alpha = sin_w0 / 2.0 * 2.0_f32.sqrt();
+
+    let sqrt_a = a.sqrt();
+
+    let b0 = a * ((a + 1.0) - (a - 1.0) * cos_w0 + 2.0 * sqrt_a * alpha);
+    let b1 = 2.0 * a * ((a - 1.0) - (a + 1.0) * cos_w0);
+    let b2 = a * ((a + 1.0) - (a - 1.0) * cos_w0 - 2.0 * sqrt_a * alpha);
+    let a0 = (a + 1.0) + (a - 1.0) * cos_w0 + 2.0 * sqrt_a * alpha;
+    let a1 = -2.0 * ((a - 1.0) + (a + 1.0) * cos_w0);
+    let a2 = (a + 1.0) + (a - 1.0) * cos_w0 - 2.0 * sqrt_a * alpha;
+
+    normalize_biquad(b0, b1, b2, a0, a1, a2)
+}
+
+fn biquad_high_shelf(fs_hz: f32, freq_hz: f32, db_gain: f32) -> BiquadCoeffs {
+    let freq_hz = clamp_freq_hz(fs_hz, freq_hz);
+    let a = db_to_a(db_gain);
+    let w0 = 2.0 * PI * freq_hz / fs_hz;
+    let cos_w0 = w0.cos();
+    let sin_w0 = w0.sin();
+    let alpha = sin_w0 / 2.0 * 2.0_f32.sqrt();
+
+    let sqrt_a = a.sqrt();
+
+    let b0 = a * ((a + 1.0) + (a - 1.0) * cos_w0 + 2.0 * sqrt_a * alpha);
+    let b1 = -2.0 * a * ((a - 1.0) + (a + 1.0) * cos_w0);
+    let b2 = a * ((a + 1.0) + (a - 1.0) * cos_w0 - 2.0 * sqrt_a * alpha);
+    let a0 = (a + 1.0) - (a - 1.0) * cos_w0 + 2.0 * sqrt_a * alpha;
+    let a1 = 2.0 * ((a - 1.0) - (a + 1.0) * cos_w0);
+    let a2 = (a + 1.0) - (a - 1.0) * cos_w0 - 2.0 * sqrt_a * alpha;
+
+    normalize_biquad(b0, b1, b2, a0, a1, a2)
+}
+
+fn biquad_peaking(fs_hz: f32, freq_hz: f32, q: f32, db_gain: f32) -> BiquadCoeffs {
+    let freq_hz = clamp_freq_hz(fs_hz, freq_hz);
+    let a = db_to_a(db_gain);
+    let q = if q.is_finite() && q > 0.0 { q } else { 0.707 };
+
+    let w0 = 2.0 * PI * freq_hz / fs_hz;
+    let cos_w0 = w0.cos();
+    let sin_w0 = w0.sin();
+    let alpha = sin_w0 / (2.0 * q);
+
+    let b0 = 1.0 + alpha * a;
+    let b1 = -2.0 * cos_w0;
+    let b2 = 1.0 - alpha * a;
+    let a0 = 1.0 + alpha / a;
+    let a1 = -2.0 * cos_w0;
+    let a2 = 1.0 - alpha / a;
+
+    normalize_biquad(b0, b1, b2, a0, a1, a2)
+}
+
+fn coeffs_for_eq3(fs_hz: f32, low_db: f32, mid_db: f32, high_db: f32) -> Eq3Coeffs {
+    if !fs_hz.is_finite() || fs_hz <= 0.0 {
+        return Eq3Coeffs::identity();
+    }
+
+    Eq3Coeffs {
+        low: biquad_low_shelf(fs_hz, 250.0, low_db),
+        mid: biquad_peaking(fs_hz, 1_000.0, 0.5, mid_db),
+        high: biquad_high_shelf(fs_hz, 3_000.0, high_db),
+    }
 }
 
 struct VoiceSlot {
@@ -30,6 +216,7 @@ struct VoiceSlot {
     volume: f32,
     tempo_ratio_smoothed: f32,
     stretch: StretchProcessor,
+    eq_state: Vec<Eq3State>,
 }
 
 impl VoiceSlot {
@@ -42,6 +229,7 @@ impl VoiceSlot {
             volume: 0.0,
             tempo_ratio_smoothed: 1.0,
             stretch: StretchProcessor::new(channels),
+            eq_state: vec![Eq3State::default(); channels],
         }
     }
 
@@ -58,6 +246,9 @@ impl VoiceSlot {
         self.frame_pos = 0;
         self.volume = volume;
         self.tempo_ratio_smoothed = initial_tempo_ratio;
+        for state in &mut self.eq_state {
+            state.reset();
+        }
     }
 
     fn stop(&mut self) {
@@ -66,6 +257,9 @@ impl VoiceSlot {
         self.frame_pos = 0;
         self.volume = 0.0;
         self.tempo_ratio_smoothed = 1.0;
+        for state in &mut self.eq_state {
+            state.reset();
+        }
     }
 
     fn smooth_tempo_ratio(&mut self, target: f32) -> f32 {
@@ -101,6 +295,9 @@ pub struct RtMixer {
     /// Number of output channels (1 for mono, 2 for stereo).
     channels: usize,
 
+    /// Output sample rate in Hz.
+    sample_rate_hz: f32,
+
     /// Global volume multiplier.
     volume: f32,
 
@@ -119,6 +316,12 @@ pub struct RtMixer {
     /// Effective pad BPM metadata (manual override or analysis).
     pad_bpm: [Option<f32>; NUM_SAMPLES],
 
+    /// Per-pad gain scalar (linear, 0.0..=1.0).
+    pad_gain: [f32; NUM_SAMPLES],
+
+    /// Per-pad EQ coefficients (low/mid/high).
+    pad_eq: [Eq3Coeffs; NUM_SAMPLES],
+
     /// Sample storage with NUM_SAMPLES slots.
     sample_bank: [Option<SampleBuffer>; NUM_SAMPLES],
 
@@ -136,15 +339,24 @@ impl RtMixer {
     /// # Returns
     ///
     /// A new `RtMixer` instance with empty sample bank and no active voices.
-    pub fn new(channels: usize) -> Self {
+    pub fn new(channels: usize, sample_rate_hz: f32) -> Self {
+        let sample_rate_hz = if sample_rate_hz.is_finite() && sample_rate_hz > 0.0 {
+            sample_rate_hz
+        } else {
+            44_100.0
+        };
+
         Self {
             channels,
+            sample_rate_hz,
             volume: VOLUME_MAX,
             speed: 1.0,
             bpm_lock_enabled: false,
             key_lock_enabled: false,
             master_bpm: None,
             pad_bpm: std::array::from_fn(|_| None),
+            pad_gain: std::array::from_fn(|_| 1.0),
+            pad_eq: std::array::from_fn(|_| Eq3Coeffs::identity()),
             sample_bank: std::array::from_fn(|_| None),
             voices: std::array::from_fn(|_| VoiceSlot::new(channels)),
         }
@@ -278,6 +490,34 @@ impl RtMixer {
         self.pad_bpm[id] = bpm;
     }
 
+    pub fn set_pad_gain(&mut self, id: usize, gain: f32) {
+        if id >= NUM_SAMPLES {
+            return;
+        }
+
+        if !gain.is_finite() || !(PAD_GAIN_MIN..=PAD_GAIN_MAX).contains(&gain) {
+            return;
+        }
+
+        self.pad_gain[id] = gain;
+    }
+
+    pub fn set_pad_eq(&mut self, id: usize, low_db: f32, mid_db: f32, high_db: f32) {
+        if id >= NUM_SAMPLES {
+            return;
+        }
+
+        let all = [low_db, mid_db, high_db];
+        if all
+            .iter()
+            .any(|v| !v.is_finite() || !(PAD_EQ_DB_MIN..=PAD_EQ_DB_MAX).contains(v))
+        {
+            return;
+        }
+
+        self.pad_eq[id] = coeffs_for_eq3(self.sample_rate_hz, low_db, mid_db, high_db);
+    }
+
     fn tempo_ratio_for_sample_id(&self, sample_id: usize) -> f32 {
         let mut ratio = self.speed;
 
@@ -335,7 +575,7 @@ impl RtMixer {
     /// # Parameters
     ///
     /// - `output`: Output buffer to fill with mixed audio samples
-    pub fn render(&mut self, output: &mut [f32]) {
+    fn render_inner(&mut self, output: &mut [f32], mut pad_peaks: Option<&mut [f32; NUM_SAMPLES]>) {
         output.fill(Sample::EQUILIBRIUM);
 
         if self.channels == 0 {
@@ -351,7 +591,9 @@ impl RtMixer {
         let bpm_lock_enabled = self.bpm_lock_enabled;
         let key_lock_enabled = self.key_lock_enabled;
         let master_bpm = self.master_bpm;
-        let pad_bpm = self.pad_bpm;
+        let pad_bpm = &self.pad_bpm;
+        let pad_gain = &self.pad_gain;
+        let pad_eq = &self.pad_eq;
 
         for voice in &mut self.voices {
             if !voice.active {
@@ -403,17 +645,39 @@ impl RtMixer {
             voice.stretch.set_transpose_semitones(transpose_semitones);
             voice.stretch.process(input_frames, frames);
 
+            let eq = pad_eq[voice.sample_id];
+            let pad_gain = pad_gain[voice.sample_id];
+
             let output_buffers = voice.stretch.output_buffers();
             for frame in 0..frames {
                 let out_base = frame * self.channels;
                 for channel in 0..self.channels {
-                    output[out_base + channel] +=
-                        output_buffers[channel][frame] * voice.volume * self.volume;
+                    let mut sample = output_buffers[channel][frame];
+                    if let Some(state) = voice.eq_state.get_mut(channel) {
+                        sample = eq.process(state, sample);
+                    }
+                    let mixed = sample * voice.volume * self.volume * pad_gain;
+                    output[out_base + channel] += mixed;
+                    if let Some(peaks) = pad_peaks.as_deref_mut() {
+                        let peak = mixed.abs();
+                        if peak > peaks[voice.sample_id] {
+                            peaks[voice.sample_id] = peak;
+                        }
+                    }
                 }
             }
 
             voice.frame_pos = (voice.frame_pos + input_frames) % sample_frames;
         }
+    }
+
+    pub fn render(&mut self, output: &mut [f32]) {
+        self.render_inner(output, None);
+    }
+
+    pub fn render_with_peaks(&mut self, output: &mut [f32], pad_peaks: &mut [f32; NUM_SAMPLES]) {
+        pad_peaks.fill(0.0);
+        self.render_inner(output, Some(pad_peaks));
     }
 
     /// Gets the number of channels configured for this mixer.
@@ -438,7 +702,7 @@ mod tests {
 
     #[test]
     fn test_mixer_creation() {
-        let mixer = RtMixer::new(2);
+        let mixer = RtMixer::new(2, 44_100.0);
         assert_eq!(mixer.channels(), 2);
     }
 
@@ -450,8 +714,33 @@ mod tests {
     }
 
     #[test]
+    fn test_eq3_coeffs_finite() {
+        let eq = coeffs_for_eq3(44_100.0, 6.0, -3.0, 0.0);
+        for v in [
+            eq.low.b0, eq.low.b1, eq.low.b2, eq.low.a1, eq.low.a2, eq.mid.b0, eq.mid.b1, eq.mid.b2,
+            eq.mid.a1, eq.mid.a2, eq.high.b0, eq.high.b1, eq.high.b2, eq.high.a1, eq.high.a2,
+        ] {
+            assert!(v.is_finite());
+        }
+    }
+
+    #[test]
+    fn test_eq3_processing_stable_on_impulse() {
+        let eq = coeffs_for_eq3(44_100.0, 0.0, 6.0, 0.0);
+        let mut state = Eq3State::default();
+        let mut max_abs: f32 = 0.0;
+        for i in 0..512 {
+            let x = if i == 0 { 1.0 } else { 0.0 };
+            let y = eq.process(&mut state, x);
+            assert!(y.is_finite());
+            max_abs = max_abs.max(y.abs());
+        }
+        assert!(max_abs > 0.0);
+    }
+
+    #[test]
     fn test_tempo_ratio_for_sample_id_speed_only() {
-        let mut mixer = RtMixer::new(2);
+        let mut mixer = RtMixer::new(2, 44_100.0);
         mixer.set_speed(1.25);
 
         let ratio = mixer.tempo_ratio_for_sample_id(0);
@@ -460,7 +749,7 @@ mod tests {
 
     #[test]
     fn test_tempo_ratio_for_sample_id_bpm_lock() {
-        let mut mixer = RtMixer::new(2);
+        let mut mixer = RtMixer::new(2, 44_100.0);
         mixer.set_speed(1.0);
         mixer.set_bpm_lock(true);
         mixer.set_master_bpm(120.0);
@@ -476,7 +765,7 @@ mod tests {
 
     #[test]
     fn test_load_sample() {
-        let mut mixer = RtMixer::new(2);
+        let mut mixer = RtMixer::new(2, 44_100.0);
         let sample = create_test_sample(2, 100, 0.5);
 
         mixer.load_sample(0, sample.clone());
@@ -487,7 +776,7 @@ mod tests {
 
     #[test]
     fn test_load_sample_invalid_id() {
-        let mut mixer = RtMixer::new(2);
+        let mut mixer = RtMixer::new(2, 44_100.0);
         let sample = create_test_sample(2, 100, 0.5);
 
         // Try to load at invalid ID
@@ -499,7 +788,7 @@ mod tests {
 
     #[test]
     fn test_load_sample_wrong_channels() {
-        let mut mixer = RtMixer::new(2);
+        let mut mixer = RtMixer::new(2, 44_100.0);
         let sample = create_test_sample(1, 100, 0.5);
 
         mixer.load_sample(0, sample);
@@ -510,7 +799,7 @@ mod tests {
 
     #[test]
     fn test_play_sample() {
-        let mut mixer = RtMixer::new(2);
+        let mut mixer = RtMixer::new(2, 44_100.0);
         let sample = create_test_sample(2, 100, 0.5);
         mixer.load_sample(0, sample);
 
@@ -522,7 +811,7 @@ mod tests {
 
     #[test]
     fn test_play_sample_not_loaded() {
-        let mut mixer = RtMixer::new(2);
+        let mut mixer = RtMixer::new(2, 44_100.0);
 
         // Try to play sample that wasn't loaded
         mixer.play_sample(0, 0.8);
@@ -533,7 +822,7 @@ mod tests {
 
     #[test]
     fn test_stop_all() {
-        let mut mixer = RtMixer::new(2);
+        let mut mixer = RtMixer::new(2, 44_100.0);
         let sample = create_test_sample(2, 100, 0.5);
         mixer.load_sample(0, sample);
         mixer.play_sample(0, 0.8);
@@ -549,7 +838,7 @@ mod tests {
 
     #[test]
     fn test_stop_sample() {
-        let mut mixer = RtMixer::new(2);
+        let mut mixer = RtMixer::new(2, 44_100.0);
         let sample1 = create_test_sample(2, 100, 0.5);
         let sample2 = create_test_sample(2, 100, 0.3);
         mixer.load_sample(0, sample1);
@@ -570,7 +859,7 @@ mod tests {
 
     #[test]
     fn test_unload_sample() {
-        let mut mixer = RtMixer::new(2);
+        let mut mixer = RtMixer::new(2, 44_100.0);
         let sample = create_test_sample(2, 100, 0.5);
         mixer.load_sample(0, sample);
         mixer.play_sample(0, 0.8);
@@ -588,7 +877,7 @@ mod tests {
 
     #[test]
     fn test_render_silence() {
-        let mut mixer = RtMixer::new(2);
+        let mut mixer = RtMixer::new(2, 44_100.0);
         let mut output = vec![0.0; 200]; // 100 frames of stereo
 
         mixer.render(&mut output);
@@ -599,7 +888,7 @@ mod tests {
 
     #[test]
     fn test_render_with_voice() {
-        let mut mixer = RtMixer::new(2);
+        let mut mixer = RtMixer::new(2, 44_100.0);
         let sample = create_test_sample(2, 10, 0.5);
         mixer.load_sample(0, sample);
         mixer.play_sample(0, 1.0);
@@ -620,7 +909,7 @@ mod tests {
             samples: Arc::from(samples.into_boxed_slice()),
         };
 
-        let mut mixer = RtMixer::new(1);
+        let mut mixer = RtMixer::new(1, 44_100.0);
         mixer.load_sample(0, sample.clone());
 
         mixer.set_speed(1.0);
@@ -644,7 +933,7 @@ mod tests {
 
     #[test]
     fn test_render_loop_sample() {
-        let mut mixer = RtMixer::new(1);
+        let mut mixer = RtMixer::new(1, 44_100.0);
         let sample = create_test_sample(1, 5, 0.5);
         mixer.load_sample(0, sample);
         mixer.play_sample(0, 1.0);
@@ -660,7 +949,7 @@ mod tests {
 
     #[test]
     fn test_multiple_voices_mixing() {
-        let mut mixer = RtMixer::new(2);
+        let mut mixer = RtMixer::new(2, 44_100.0);
         let sample1 = create_test_sample(2, 10, 0.3);
         let sample2 = create_test_sample(2, 10, 0.2);
         mixer.load_sample(0, sample1);
@@ -678,8 +967,23 @@ mod tests {
     }
 
     #[test]
+    fn test_pad_gain_applies_to_render() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        let sample = create_test_sample(1, 5, 0.8);
+        mixer.load_sample(0, sample);
+        mixer.set_pad_gain(0, 0.25);
+        mixer.play_sample(0, 1.0);
+
+        let mut output = vec![0.0; 20]; // 20 frames of mono
+        mixer.render(&mut output);
+
+        let expected = 0.8 * 0.25;
+        assert!(output.iter().all(|&s| (s - expected).abs() < 1e-6));
+    }
+
+    #[test]
     fn test_voice_limit() {
-        let mut mixer = RtMixer::new(1);
+        let mut mixer = RtMixer::new(1, 44_100.0);
 
         // Create MAX_VOICES + 5 samples
         for i in 0..(MAX_VOICES + 5) {

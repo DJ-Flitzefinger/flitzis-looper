@@ -4,7 +4,16 @@ from itertools import pairwise
 
 from pydantic import ValidationError
 
-from flitzis_looper.constants import SPEED_MAX, SPEED_MIN, VOLUME_MAX, VOLUME_MIN
+from flitzis_looper.constants import (
+    PAD_EQ_DB_MAX,
+    PAD_EQ_DB_MIN,
+    PAD_GAIN_MAX,
+    PAD_GAIN_MIN,
+    SPEED_MAX,
+    SPEED_MIN,
+    VOLUME_MAX,
+    VOLUME_MIN,
+)
 from flitzis_looper.models import ProjectState, SampleAnalysis, SessionState, validate_sample_id
 from flitzis_looper_audio import AudioEngine
 
@@ -184,6 +193,60 @@ class LooperController:  # noqa: PLR0904
 
             handler(sample_id, event)
 
+    _PAD_PEAK_HALF_LIFE_SEC = 0.25
+
+    def _decay_pad_peaks(self, now: float) -> None:
+        peaks = self._session.pad_peak
+        updated = self._session.pad_peak_updated_at
+        for idx, peak in enumerate(peaks):
+            if peak <= 0.0:
+                continue
+
+            last = updated[idx]
+            if last <= 0.0:
+                updated[idx] = now
+                continue
+
+            dt = now - last
+            if dt <= 0.0:
+                continue
+
+            decay = 0.5 ** (dt / self._PAD_PEAK_HALF_LIFE_SEC)
+            decayed = peak * decay
+            peaks[idx] = 0.0 if decayed < 1e-4 else decayed
+            updated[idx] = now
+
+    def poll_audio_messages(self) -> None:
+        now = time.monotonic()
+        self._decay_pad_peaks(now)
+
+        while True:
+            msg = self._audio.receive_msg()
+            if msg is None:
+                return
+
+            pad_peak = getattr(msg, "pad_peak", None)
+            if pad_peak is None:
+                continue
+
+            peak_data = pad_peak()
+            if peak_data is None:
+                continue
+
+            sample_id, peak = peak_data
+            if not isinstance(sample_id, int):
+                continue
+            if not 0 <= sample_id < len(self._session.pad_peak):
+                continue
+
+            peak = float(peak)
+            if not math.isfinite(peak):
+                continue
+
+            peak = min(max(peak, 0.0), 1.0)
+            self._session.pad_peak[sample_id] = max(self._session.pad_peak[sample_id], peak)
+            self._session.pad_peak_updated_at[sample_id] = now
+
     def is_sample_loading(self, sample_id: int) -> bool:
         """Return whether a sample slot is currently being loaded."""
         validate_sample_id(sample_id)
@@ -256,6 +319,27 @@ class LooperController:  # noqa: PLR0904
         self._audio.set_speed(clamped)
         self._project.speed = clamped
         self._recompute_master_bpm()
+
+    def set_pad_gain(self, sample_id: int, gain: float) -> None:
+        validate_sample_id(sample_id)
+        self._ensure_finite(gain)
+        clamped = min(max(gain, PAD_GAIN_MIN), PAD_GAIN_MAX)
+        self._audio.set_pad_gain(sample_id, clamped)
+        self._project.pad_gain[sample_id] = clamped
+
+    def set_pad_eq(self, sample_id: int, low_db: float, mid_db: float, high_db: float) -> None:
+        validate_sample_id(sample_id)
+        for value in (low_db, mid_db, high_db):
+            self._ensure_finite(value)
+
+        low_db = min(max(low_db, PAD_EQ_DB_MIN), PAD_EQ_DB_MAX)
+        mid_db = min(max(mid_db, PAD_EQ_DB_MIN), PAD_EQ_DB_MAX)
+        high_db = min(max(high_db, PAD_EQ_DB_MIN), PAD_EQ_DB_MAX)
+
+        self._audio.set_pad_eq(sample_id, low_db, mid_db, high_db)
+        self._project.pad_eq_low_db[sample_id] = low_db
+        self._project.pad_eq_mid_db[sample_id] = mid_db
+        self._project.pad_eq_high_db[sample_id] = high_db
 
     def reset_speed(self) -> None:
         """Reset global speed back to 1.0x."""
@@ -340,7 +424,7 @@ class LooperController:  # noqa: PLR0904
         if enabled == self.project.key_lock:
             return
         self.project.key_lock = enabled
-        self._audio.set_key_lock(enabled)
+        self._audio.set_key_lock(enabled=enabled)
 
     def set_bpm_lock(self, *, enabled: bool) -> None:
         """Enable or disable BPM Lock mode."""
@@ -358,7 +442,7 @@ class LooperController:  # noqa: PLR0904
             self._session.bpm_lock_anchor_pad_id = None
             self._session.bpm_lock_anchor_bpm = None
 
-        self._audio.set_bpm_lock(enabled)
+        self._audio.set_bpm_lock(enabled=enabled)
         self._recompute_master_bpm()
 
     def set_manual_bpm(self, sample_id: int, bpm: float) -> None:

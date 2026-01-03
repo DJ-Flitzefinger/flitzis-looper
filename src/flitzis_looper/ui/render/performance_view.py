@@ -51,7 +51,7 @@ def _pad_popover(ctx: UiContext, pad_id: int) -> None:
         imgui.end_popup()
 
 
-def _pad_button(ctx: UiContext, pad_id: int, size: imgui.ImVec2Like) -> None:  # noqa: C901, PLR0914, PLR0915
+def _pad_button(ctx: UiContext, pad_id: int, size: imgui.ImVec2Like) -> None:  # noqa: C901, PLR0912, PLR0914, PLR0915
     is_loaded = ctx.state.is_pad_loaded(pad_id)
     is_loading = ctx.state.is_pad_loading(pad_id)
     is_active = ctx.state.is_pad_active(pad_id)
@@ -100,6 +100,29 @@ def _pad_button(ctx: UiContext, pad_id: int, size: imgui.ImVec2Like) -> None:  #
             draw_list.add_rect_filled(
                 pos_min, (fill_x, pos_max.y), imgui.get_color_u32(progress_rgba)
             )
+
+        if is_loaded:
+            peak = ctx.state.pad_peak(pad_id)
+            peak = max(0.0, min(1.0, float(peak)))
+
+            pos_min = imgui.get_item_rect_min()
+            pos_max = imgui.get_item_rect_max()
+            meter_w = 6.0
+            padding = 2.0
+            x1 = pos_max.x - padding - meter_w
+            x2 = pos_max.x - padding
+            y2 = pos_max.y - padding
+            y_min = pos_min.y + padding
+            height = max(0.0, y2 - y_min)
+            y1 = y2 - height * peak
+
+            bg_rgba = (0.0, 0.0, 0.0, 0.25)
+            fg_rgba = (1.0, 0.2, 0.2, 0.9) if peak >= 1.0 else (0.2, 0.8, 0.2, 0.7)
+
+            draw_list = imgui.get_window_draw_list()
+            draw_list.add_rect_filled((x1, y_min), (x2, y2), imgui.get_color_u32(bg_rgba))
+            if peak > 0.0:
+                draw_list.add_rect_filled((x1, y1), (x2, y2), imgui.get_color_u32(fg_rgba))
 
         # Track pressed state
         if imgui.is_item_hovered():

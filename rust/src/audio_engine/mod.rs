@@ -14,7 +14,10 @@
 //! a high-level audio playback interface for Python.
 
 use crate::audio_engine::audio_stream::{AudioStreamHandle, create_audio_stream, start_stream};
-use crate::audio_engine::constants::{NUM_SAMPLES, SPEED_MAX, SPEED_MIN, VOLUME_MAX, VOLUME_MIN};
+use crate::audio_engine::constants::{
+    NUM_SAMPLES, PAD_EQ_DB_MAX, PAD_EQ_DB_MIN, PAD_GAIN_MAX, PAD_GAIN_MIN, SPEED_MAX, SPEED_MIN,
+    VOLUME_MAX, VOLUME_MIN,
+};
 use crate::audio_engine::errors::SampleLoadError;
 use crate::audio_engine::sample_loader::{
     SampleLoadProgress, SampleLoadSubtask, decode_audio_file_to_sample_buffer,
@@ -762,6 +765,67 @@ impl AudioEngine {
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
         let _ = producer_guard.push(ControlMessage::SetPadBpm { id, bpm });
+        Ok(())
+    }
+
+    pub fn set_pad_gain(&mut self, id: usize, gain: f32) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+
+        if !gain.is_finite() || !(PAD_GAIN_MIN..=PAD_GAIN_MAX).contains(&gain) {
+            return Err(PyValueError::new_err("gain out of range"));
+        }
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        let _ = producer_guard.push(ControlMessage::SetPadGain { id, gain });
+        Ok(())
+    }
+
+    pub fn set_pad_eq(
+        &mut self,
+        id: usize,
+        low_db: f32,
+        mid_db: f32,
+        high_db: f32,
+    ) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+
+        let all = [low_db, mid_db, high_db];
+        if all
+            .iter()
+            .any(|v| !v.is_finite() || !(PAD_EQ_DB_MIN..=PAD_EQ_DB_MAX).contains(v))
+        {
+            return Err(PyValueError::new_err("eq gain out of range"));
+        }
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        let _ = producer_guard.push(ControlMessage::SetPadEq {
+            id,
+            low_db,
+            mid_db,
+            high_db,
+        });
         Ok(())
     }
 

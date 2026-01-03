@@ -13,15 +13,24 @@ from __future__ import annotations
 
 import math
 from typing import TYPE_CHECKING
+from unittest.mock import Mock
 
 import pytest
 
-from flitzis_looper.constants import NUM_SAMPLES, SPEED_MAX, SPEED_MIN, VOLUME_MAX, VOLUME_MIN
+from flitzis_looper.constants import (
+    NUM_SAMPLES,
+    PAD_EQ_DB_MAX,
+    PAD_EQ_DB_MIN,
+    PAD_GAIN_MAX,
+    PAD_GAIN_MIN,
+    SPEED_MAX,
+    SPEED_MIN,
+    VOLUME_MAX,
+    VOLUME_MIN,
+)
 from flitzis_looper.models import BeatGrid, SampleAnalysis
 
 if TYPE_CHECKING:
-    from unittest.mock import Mock
-
     from flitzis_looper.controller import LooperController
 
 
@@ -272,6 +281,66 @@ class TestAudioParameters:
         assert controller.project.speed == 1.0
 
 
+class TestPerPadMixing:
+    def test_set_pad_gain_clamps_and_calls_engine(
+        self, controller: LooperController, audio_engine_mock: Mock
+    ) -> None:
+        sample_id = 0
+
+        controller.set_pad_gain(sample_id, 0.25)
+        audio_engine_mock.return_value.set_pad_gain.assert_called_with(sample_id, 0.25)
+        assert controller.project.pad_gain[sample_id] == 0.25
+
+        controller.set_pad_gain(sample_id, -1.0)
+        audio_engine_mock.return_value.set_pad_gain.assert_called_with(sample_id, PAD_GAIN_MIN)
+        assert controller.project.pad_gain[sample_id] == PAD_GAIN_MIN
+
+        controller.set_pad_gain(sample_id, 2.0)
+        audio_engine_mock.return_value.set_pad_gain.assert_called_with(sample_id, PAD_GAIN_MAX)
+        assert controller.project.pad_gain[sample_id] == PAD_GAIN_MAX
+
+    def test_set_pad_eq_clamps_and_calls_engine(
+        self, controller: LooperController, audio_engine_mock: Mock
+    ) -> None:
+        sample_id = 0
+
+        controller.set_pad_eq(sample_id, 1.0, -2.0, 3.0)
+        audio_engine_mock.return_value.set_pad_eq.assert_called_with(sample_id, 1.0, -2.0, 3.0)
+        assert controller.project.pad_eq_low_db[sample_id] == 1.0
+        assert controller.project.pad_eq_mid_db[sample_id] == -2.0
+        assert controller.project.pad_eq_high_db[sample_id] == 3.0
+
+        controller.set_pad_eq(sample_id, 999.0, -999.0, 0.0)
+        audio_engine_mock.return_value.set_pad_eq.assert_called_with(
+            sample_id,
+            PAD_EQ_DB_MAX,
+            PAD_EQ_DB_MIN,
+            0.0,
+        )
+        assert controller.project.pad_eq_low_db[sample_id] == PAD_EQ_DB_MAX
+        assert controller.project.pad_eq_mid_db[sample_id] == PAD_EQ_DB_MIN
+
+    def test_poll_audio_messages_updates_session_peak(
+        self, controller: LooperController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        now = 123.0
+        monkeypatch.setattr("flitzis_looper.controller.time.monotonic", lambda: now)
+
+        msg1 = Mock()
+        msg1.pad_peak.return_value = (0, 0.8)
+        msg2 = Mock()
+        msg2.pad_peak.return_value = (0, 1.2)
+        msg3 = Mock()
+        msg3.pad_peak.return_value = None
+
+        audio_engine_mock.return_value.receive_msg.side_effect = [msg1, msg2, msg3, None]
+
+        controller.poll_audio_messages()
+
+        assert controller.session.pad_peak[0] == pytest.approx(1.0)
+        assert controller.session.pad_peak_updated_at[0] == now
+
+
 class TestModeToggles:
     """Test mode toggle methods."""
 
@@ -299,7 +368,7 @@ class TestModeToggles:
 
         controller.set_key_lock(enabled=True)
 
-        audio_engine_mock.return_value.set_key_lock.assert_called_with(True)
+        audio_engine_mock.return_value.set_key_lock.assert_called_with(enabled=True)
         assert controller.project.key_lock is True
 
     def test_set_key_lock_disable(
@@ -310,7 +379,7 @@ class TestModeToggles:
 
         controller.set_key_lock(enabled=False)
 
-        audio_engine_mock.return_value.set_key_lock.assert_called_with(False)
+        audio_engine_mock.return_value.set_key_lock.assert_called_with(enabled=False)
         assert controller.project.key_lock is False
 
     def test_set_bpm_lock_enable(
@@ -321,7 +390,7 @@ class TestModeToggles:
 
         controller.set_bpm_lock(enabled=True)
 
-        audio_engine_mock.return_value.set_bpm_lock.assert_called_with(True)
+        audio_engine_mock.return_value.set_bpm_lock.assert_called_with(enabled=True)
         assert controller.project.bpm_lock is True
 
     def test_set_bpm_lock_disable(
@@ -332,7 +401,7 @@ class TestModeToggles:
 
         controller.set_bpm_lock(enabled=False)
 
-        audio_engine_mock.return_value.set_bpm_lock.assert_called_with(False)
+        audio_engine_mock.return_value.set_bpm_lock.assert_called_with(enabled=False)
         assert controller.project.bpm_lock is False
 
     def test_bpm_lock_anchors_master_bpm_to_selected_pad(
@@ -349,7 +418,7 @@ class TestModeToggles:
         assert controller.session.bpm_lock_anchor_pad_id == 1
         assert controller.session.master_bpm == pytest.approx(180.0)
 
-        audio_engine_mock.return_value.set_bpm_lock.assert_called_with(True)
+        audio_engine_mock.return_value.set_bpm_lock.assert_called_with(enabled=True)
         assert audio_engine_mock.return_value.set_master_bpm.call_count == 1
         called_bpm = audio_engine_mock.return_value.set_master_bpm.call_args.args[0]
         assert called_bpm == pytest.approx(180.0)

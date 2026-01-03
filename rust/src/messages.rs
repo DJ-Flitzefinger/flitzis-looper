@@ -21,6 +21,19 @@ pub enum AudioMessage {
 
     /// Indicates the audio playback is stopped.
     Stopped(),
+
+    /// Per-pad peak meter update (mono peak, post gain/EQ).
+    PadPeak { id: usize, peak: f32 },
+}
+
+#[pymethods]
+impl AudioMessage {
+    pub fn pad_peak(&self) -> Option<(usize, f32)> {
+        match self {
+            AudioMessage::PadPeak { id, peak } => Some((*id, *peak)),
+            _ => None,
+        }
+    }
 }
 
 /// Message that is emitted from the Python side.
@@ -52,6 +65,17 @@ pub enum ControlMessage {
 
     /// Set per-pad BPM metadata.
     SetPadBpm { id: usize, bpm: Option<f32> },
+
+    /// Set per-pad gain (linear scalar).
+    SetPadGain { id: usize, gain: f32 },
+
+    /// Set per-pad 3-band EQ gains in dB.
+    SetPadEq {
+        id: usize,
+        low_db: f32,
+        mid_db: f32,
+        high_db: f32,
+    },
 
     /// Publish a loaded sample into an audio-thread slot.
 

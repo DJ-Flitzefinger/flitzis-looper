@@ -149,6 +149,10 @@ class UiState:  # noqa: PLR0904
         """Return the last analysis error message for a pad."""
         return self._controller.session.sample_analysis_errors.get(pad_id)
 
+    def pad_peak(self, pad_id: int) -> float:
+        """Return cached per-pad peak level (0.0..=1.0)."""
+        return float(self.session.pad_peak[pad_id])
+
     def is_pad_active(self, pad_id: int) -> bool:
         """Return whether a pad is currently playing audio.
 
@@ -183,7 +187,7 @@ class UiState:  # noqa: PLR0904
         return self._controller.project.selected_bank == bank_id
 
 
-class AudioActions:
+class AudioActions:  # noqa: PLR0904
     """Audio-related UI actions."""
 
     def __init__(self, controller: LooperController):
@@ -229,6 +233,10 @@ class AudioActions:
         """Apply pending loader events from Rust."""
         self._controller.poll_loader_events()
 
+    def poll_audio_messages(self) -> None:
+        """Drain audio-thread messages from Rust."""
+        self._controller.poll_audio_messages()
+
     def unload_sample(self, pad_id: int) -> None:
         """Unload an audio file from a pad."""
         self._controller.unload_sample(pad_id)
@@ -240,6 +248,14 @@ class AudioActions:
     def set_speed(self, speed: float) -> None:
         """Set master speed."""
         self._controller.set_speed(speed)
+
+    def set_pad_gain(self, pad_id: int, gain: float) -> None:
+        """Set per-pad gain."""
+        self._controller.set_pad_gain(pad_id, gain)
+
+    def set_pad_eq(self, pad_id: int, low_db: float, mid_db: float, high_db: float) -> None:
+        """Set per-pad EQ (low/mid/high in dB)."""
+        self._controller.set_pad_eq(pad_id, low_db, mid_db, high_db)
 
     def reset_speed(self) -> None:
         """Reset master speed."""

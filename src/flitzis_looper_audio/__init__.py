@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import warnings
+
 
 def _unavailable_error() -> RuntimeError:
     return RuntimeError(
@@ -7,22 +9,48 @@ def _unavailable_error() -> RuntimeError:
     )
 
 
+def _warn_missing_api(name: str) -> None:
+    warnings.warn(
+        f"AudioEngine is missing '{name}'. Rebuild the extension with 'uv run maturin develop'.",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+
+
 _ext_available = True
 
+AudioEngine = None  # type: ignore[assignment]
+AudioMessage = None  # type: ignore[assignment]
+
 try:
-    import sys as _sys
-
-    from .flitzis_looper_audio import *  # type: ignore[import-not-found]  # noqa: F403
-
-    _mod = _sys.modules.get(f"{__name__}.flitzis_looper_audio")
-    if _mod is not None:
-        __doc__ = _mod.__doc__
-        if hasattr(_mod, "__all__"):
-            __all__ = _mod.__all__
+    from .flitzis_looper_audio import AudioEngine, AudioMessage  # type: ignore[import-not-found]
 except ModuleNotFoundError:
     _ext_available = False
 except ImportError:
     _ext_available = False
+
+if _ext_available and AudioEngine is not None:
+    if not hasattr(AudioEngine, "set_pad_gain"):
+
+        def set_pad_gain(self: AudioEngine, sample_id: int, gain: float) -> None:
+            _warn_missing_api("set_pad_gain")
+
+        AudioEngine.set_pad_gain = set_pad_gain  # type: ignore[method-assign]
+
+    if not hasattr(AudioEngine, "set_pad_eq"):
+
+        def set_pad_eq(
+            self: AudioEngine,
+            sample_id: int,
+            low_db: float,
+            mid_db: float,
+            high_db: float,
+        ) -> None:
+            _warn_missing_api("set_pad_eq")
+
+        AudioEngine.set_pad_eq = set_pad_eq  # type: ignore[method-assign]
+
+    __all__ = ["AudioEngine", "AudioMessage"]
 
 if not _ext_available:
 
@@ -61,6 +89,12 @@ if not _ext_available:
             raise _unavailable_error()
 
         def set_speed(self, speed: float) -> None:
+            raise _unavailable_error()
+
+        def set_pad_gain(self, sample_id: int, gain: float) -> None:
+            raise _unavailable_error()
+
+        def set_pad_eq(self, sample_id: int, low_db: float, mid_db: float, high_db: float) -> None:
             raise _unavailable_error()
 
         def unload_sample(self, sample_id: int) -> None:

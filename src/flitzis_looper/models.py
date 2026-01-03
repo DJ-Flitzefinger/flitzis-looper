@@ -1,3 +1,4 @@
+import math
 from collections.abc import Iterable  # noqa: TC003
 from typing import Annotated
 
@@ -6,6 +7,10 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validat
 from flitzis_looper.constants import (
     NUM_BANKS,
     NUM_SAMPLES,
+    PAD_EQ_DB_MAX,
+    PAD_EQ_DB_MIN,
+    PAD_GAIN_MAX,
+    PAD_GAIN_MIN,
     SPEED_MAX,
     SPEED_MIN,
     VOLUME_MAX,
@@ -47,6 +52,14 @@ def _default_manual_key() -> list[str | None]:
     return [None] * NUM_SAMPLES
 
 
+def _default_pad_gain() -> list[float]:
+    return [1.0] * NUM_SAMPLES
+
+
+def _default_pad_eq() -> list[float]:
+    return [0.0] * NUM_SAMPLES
+
+
 class ProjectState(BaseModel):
     """Persistent state. Saved to disk."""
 
@@ -63,6 +76,18 @@ class ProjectState(BaseModel):
 
     manual_key: list[str | None] = Field(default_factory=_default_manual_key)
     """Optional per-pad key override. When set, used for effective key display."""
+
+    pad_gain: list[float] = Field(default_factory=_default_pad_gain)
+    """Per-pad linear gain scalar (0.0..=1.0)."""
+
+    pad_eq_low_db: list[float] = Field(default_factory=_default_pad_eq)
+    """Per-pad EQ low band gain in dB."""
+
+    pad_eq_mid_db: list[float] = Field(default_factory=_default_pad_eq)
+    """Per-pad EQ mid band gain in dB."""
+
+    pad_eq_high_db: list[float] = Field(default_factory=_default_pad_eq)
+    """Per-pad EQ high band gain in dB."""
 
     # Global Audio Settings
     multi_loop: bool = False
@@ -81,10 +106,39 @@ class ProjectState(BaseModel):
     """The currently selected pad ID."""
     selected_bank: int = Field(default=0, ge=0, lt=NUM_BANKS)
     """Currently selected pad bank."""
-    sidebar_left_expanded: bool = False
+    sidebar_left_expanded: bool = True
     """Right sidebar expaneded/collapsed state."""
     sidebar_right_expanded: bool = True
     """Right sidebar expanded/collapsed state."""
+
+    @field_validator("pad_gain", mode="after")
+    @classmethod
+    def _validate_pad_gain(cls, value: list[float]) -> list[float]:
+        if len(value) != NUM_SAMPLES:
+            msg = f"pad_gain must have length {NUM_SAMPLES}, got {len(value)}"
+            raise ValueError(msg)
+        for gain in value:
+            if not PAD_GAIN_MIN <= gain <= PAD_GAIN_MAX:
+                msg = f"pad_gain values must be in {PAD_GAIN_MIN}..={PAD_GAIN_MAX}, got {gain}"
+                raise ValueError(msg)
+        return value
+
+    @field_validator(
+        "pad_eq_low_db",
+        "pad_eq_mid_db",
+        "pad_eq_high_db",
+        mode="after",
+    )
+    @classmethod
+    def _validate_pad_eq(cls, value: list[float]) -> list[float]:
+        if len(value) != NUM_SAMPLES:
+            msg = f"pad EQ arrays must have length {NUM_SAMPLES}, got {len(value)}"
+            raise ValueError(msg)
+        for db in value:
+            if not PAD_EQ_DB_MIN <= db <= PAD_EQ_DB_MAX:
+                msg = f"pad EQ dB values must be in {PAD_EQ_DB_MIN}..={PAD_EQ_DB_MAX}, got {db}"
+                raise ValueError(msg)
+        return value
 
 
 class SessionState(BaseModel):
@@ -97,6 +151,12 @@ class SessionState(BaseModel):
     """Pads that are currently active (playing)."""
     pressed_pads: list[bool] = Field(default_factory=lambda: [False] * NUM_SAMPLES)
     """Currently pressed pads."""
+
+    pad_peak: list[float] = Field(default_factory=lambda: [0.0] * NUM_SAMPLES)
+    """Best-effort per-pad peak level (0.0..=1.0)."""
+
+    pad_peak_updated_at: list[float] = Field(default_factory=lambda: [0.0] * NUM_SAMPLES)
+    """Monotonic timestamp of last pad peak update (seconds)."""
 
     loading_sample_ids: set[int] = Field(default_factory=set)
     """Pads that are currently being loaded asynchronously."""
@@ -143,6 +203,30 @@ class SessionState(BaseModel):
 
     master_bpm: float | None = None
     """Current master BPM when BPM lock is enabled."""
+
+    @field_validator("pad_peak", mode="after")
+    @classmethod
+    def _validate_pad_peak(cls, value: list[float]) -> list[float]:
+        if len(value) != NUM_SAMPLES:
+            msg = f"pad_peak must have length {NUM_SAMPLES}, got {len(value)}"
+            raise ValueError(msg)
+        for peak in value:
+            if not 0.0 <= peak <= 1.0:
+                msg = f"pad_peak values must be in 0.0..=1.0, got {peak}"
+                raise ValueError(msg)
+        return value
+
+    @field_validator("pad_peak_updated_at", mode="after")
+    @classmethod
+    def _validate_pad_peak_updated_at(cls, value: list[float]) -> list[float]:
+        if len(value) != NUM_SAMPLES:
+            msg = f"pad_peak_updated_at must have length {NUM_SAMPLES}, got {len(value)}"
+            raise ValueError(msg)
+        for ts in value:
+            if not math.isfinite(ts) or ts < 0.0:
+                msg = f"pad_peak_updated_at values must be finite and >= 0.0, got {ts}"
+                raise ValueError(msg)
+        return value
 
     @field_validator(
         "active_sample_ids",

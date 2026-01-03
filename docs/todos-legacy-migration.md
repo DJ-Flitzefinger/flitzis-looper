@@ -77,12 +77,12 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 
 ### 10) Mixing controls: master + per-pad
 - [x] As a performer, I can control **master volume**.
-- [ ] As a performer, I can adjust **per-pad gain**.
+- [x] As a performer, I can adjust **per-pad gain**.
 - [ ] As a performer, I can reset master volume quickly.
 
 ### 11) Per-pad EQ and metering
-- [ ] As a performer, I can adjust **per-pad 3-band EQ** (low/mid/high).
-- [ ] As a performer, I can view a per-pad **level meter** while audio is playing.
+- [x] As a performer, I can adjust **per-pad 3-band EQ** (low/mid/high).
+- [x] As a performer, I can view a per-pad **level meter** while audio is playing.
 
 ### 12) Stems: generation, indicators, and performance mixing
 - [ ] As a performer, I can **generate stems** for a pad (vocals/melody/bass/drums/instrumental).

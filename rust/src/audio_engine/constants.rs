@@ -26,3 +26,15 @@ pub const VOLUME_MIN: f32 = 0.0;
 
 /// Maximum volume level (100%).
 pub const VOLUME_MAX: f32 = 1.0;
+
+/// Minimum per-pad gain.
+pub const PAD_GAIN_MIN: f32 = 0.0;
+
+/// Maximum per-pad gain.
+pub const PAD_GAIN_MAX: f32 = 1.0;
+
+/// Minimum per-band EQ gain in dB.
+pub const PAD_EQ_DB_MIN: f32 = -12.0;
+
+/// Maximum per-band EQ gain in dB.
+pub const PAD_EQ_DB_MAX: f32 = 12.0;

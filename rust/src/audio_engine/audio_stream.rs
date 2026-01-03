@@ -12,6 +12,7 @@ use env_logger::{Builder, Env};
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::sync::{Arc, Mutex};
 
+use crate::audio_engine::constants::NUM_SAMPLES;
 use crate::audio_engine::mixer::RtMixer;
 use crate::messages::{AudioMessage, ControlMessage};
 
@@ -66,7 +67,12 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
     // Create ring buffer for outgoing messages (Rust->Python)
     let (mut producer_out, consumer_out) = RingBuffer::new(1024);
 
-    let mut mixer = RtMixer::new(channels as usize);
+    let mut mixer = RtMixer::new(channels as usize, sample_rate as f32);
+
+    let emit_interval_frames: u64 = (sample_rate as u64 / 10).max(1);
+    let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+    let mut frame_clock: u64 = 0;
+    let mut last_emit_frame = [0_u64; NUM_SAMPLES];
 
     // Create stream config
     let stream_config = StreamConfig {
@@ -115,14 +121,42 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
                     ControlMessage::SetPadBpm { id, bpm } => {
                         mixer.set_pad_bpm(id, bpm);
                     }
+                    ControlMessage::SetPadGain { id, gain } => {
+                        mixer.set_pad_gain(id, gain);
+                    }
+                    ControlMessage::SetPadEq {
+                        id,
+                        low_db,
+                        mid_db,
+                        high_db,
+                    } => {
+                        mixer.set_pad_eq(id, low_db, mid_db, high_db);
+                    }
                     ControlMessage::SetVolume(volume) => {
                         mixer.set_volume(volume);
                     }
                 }
             }
 
-            // Render audio
-            mixer.render(data);
+            // Render audio + compute per-pad peaks.
+            mixer.render_with_peaks(data, &mut pad_peaks);
+
+            let frames = data.len() / channels as usize;
+            frame_clock = frame_clock.wrapping_add(frames as u64);
+
+            for (id, peak) in pad_peaks.iter().enumerate() {
+                if *peak <= 0.0 || !peak.is_finite() {
+                    continue;
+                }
+
+                if frame_clock.wrapping_sub(last_emit_frame[id]) < emit_interval_frames {
+                    continue;
+                }
+
+                last_emit_frame[id] = frame_clock;
+                let peak = peak.clamp(0.0, 1.0);
+                let _ = producer_out.push(AudioMessage::PadPeak { id, peak });
+            }
         },
         |err| {
             log::error!("Audio stream error: {}", err);
