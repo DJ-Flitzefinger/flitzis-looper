@@ -81,6 +81,34 @@ class TestSampleManagement:
         assert controller.project.sample_paths[sample_id] is None
         assert controller.session.pending_sample_paths[sample_id] == new_path
 
+    def test_loader_success_updates_project_sample_path(
+        self, controller: LooperController, audio_engine_mock: Mock
+    ) -> None:
+        controller.session.pending_sample_paths[0] = "/path/to/original.wav"
+
+        analysis = {
+            "bpm": 120.0,
+            "key": "C#m",
+            "beat_grid": {"beats": [0.0, 0.5], "downbeats": [0.0]},
+        }
+
+        audio_engine_mock.return_value.poll_loader_events.side_effect = [
+            {
+                "type": "success",
+                "id": 0,
+                "duration_sec": 1.0,
+                "cached_path": "samples/foo.wav",
+                "analysis": analysis,
+            },
+            None,
+        ]
+
+        controller.loader.poll_loader_events()
+
+        assert controller.project.sample_paths[0] == "samples/foo.wav"
+        assert controller.project.sample_analysis[0] is not None
+        assert 0 not in controller.session.pending_sample_paths
+
     def test_unload_sample(self, controller: LooperController, audio_engine_mock: Mock) -> None:
         """Test unloading a sample stops playback and clears state."""
         sample_id = 0

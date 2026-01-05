@@ -1,7 +1,5 @@
 ## 1. Implementation
 
-Note: Audio-file caching/copying into `./samples/` is handled in the separate `load-audio-files` session (not in this implementation pass).
-
 - [x] 1.1 Add a small persistence module to load/save `ProjectState` at `samples/flitzis_looper.config.json` (atomic write).
 - [x] 1.2 Restore `ProjectState` on app startup and apply it to controller initialization.
 - [x] 1.3 Implement debounced save (max once per 10 seconds) triggered by `ProjectState` mutations.
@@ -11,6 +9,9 @@ Note: Audio-file caching/copying into `./samples/` is handled in the separate `l
   - missing expected WAV -> ignore that pad
   - wrong sample-rate WAV -> ignore that pad
 - [x] 1.7 Add/adjust tests for config serialization, restore behavior, and missing/mismatched sample handling.
+- [x] 1.8 Cache loaded audio into `./samples/` as an `f32` WAV at output sample rate and store the project-local path in `ProjectState.sample_paths`.
+- [x] 1.9 Handle cached WAV basename collisions deterministically (hash suffix) without overwriting.
+- [x] 1.10 Add/adjust tests for WAV caching, cached-path propagation, and collision handling.
 
 ## 2. Validation
 - [x] 2.1 Run `pytest` for Python suite.

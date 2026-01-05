@@ -21,6 +21,7 @@ audioadapter = "2.0"
 audioadapter-buffers = "2.0"
 stratum-dsp = "1.0.0"
 signalsmith-dsp = "0.0.2"
+blake3 = "1.5"
 
 [dev-dependencies]
 tempfile = "3"

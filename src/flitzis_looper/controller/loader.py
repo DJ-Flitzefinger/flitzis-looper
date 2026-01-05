@@ -280,8 +280,12 @@ class LoaderController:
         self._session.sample_load_stage.pop(sample_id, None)
 
         pending = self._session.pending_sample_paths.pop(sample_id, None)
-        if pending is not None and self._project.sample_paths[sample_id] != pending:
-            self._project.sample_paths[sample_id] = pending
+        cached_path = event.get("cached_path")
+
+        target_path: str | None = cached_path if isinstance(cached_path, str) else pending
+
+        if target_path is not None and self._project.sample_paths[sample_id] != target_path:
+            self._project.sample_paths[sample_id] = target_path
             self._mark_project_changed()
 
         self._store_sample_analysis(sample_id, event.get("analysis"))

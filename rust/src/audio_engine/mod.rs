@@ -20,7 +20,8 @@ use crate::audio_engine::constants::{
 };
 use crate::audio_engine::errors::SampleLoadError;
 use crate::audio_engine::sample_loader::{
-    SampleLoadProgress, SampleLoadSubtask, decode_audio_file_to_sample_buffer,
+    SampleLoadProgress, SampleLoadSubtask, cache_sample_buffer_as_project_wav,
+    decode_audio_file_to_sample_buffer,
 };
 use crate::messages::{
     AudioMessage, BackgroundTaskKind, BeatGridData, ControlMessage, LoaderEvent, SampleAnalysis,
@@ -359,6 +360,23 @@ impl AudioEngine {
 
             let resampling_required = progress.resampling_required.unwrap_or(true);
 
+            let cached_path = match cache_sample_buffer_as_project_wav(
+                Path::new("samples"),
+                Path::new(&path),
+                &sample,
+                output_sample_rate,
+            ) {
+                Ok(path) => path,
+                Err(err) => {
+                    let _ = loader_tx.send(LoaderEvent::Error {
+                        id,
+                        error: format!("Failed to write cached WAV: {err}"),
+                    });
+                    return;
+                }
+            };
+            let cached_path = cached_path.to_string_lossy().replace('\\', "/");
+
             progress.emit(LoadProgressStage::Analyzing, 0.0, resampling_required, true);
 
             let analysis = match analyze_sample(&sample, output_sample_rate) {
@@ -422,6 +440,7 @@ impl AudioEngine {
             let _ = loader_tx.send(LoaderEvent::Success {
                 id,
                 duration_sec,
+                cached_path,
                 analysis,
             });
         });
@@ -557,11 +576,13 @@ impl AudioEngine {
             LoaderEvent::Success {
                 id,
                 duration_sec,
+                cached_path,
                 analysis,
             } => {
                 dict.set_item("type", "success")?;
                 dict.set_item("id", id)?;
                 dict.set_item("duration_sec", duration_sec)?;
+                dict.set_item("cached_path", cached_path)?;
 
                 let analysis_dict = PyDict::new(py);
                 analysis_dict.set_item("bpm", analysis.bpm)?;

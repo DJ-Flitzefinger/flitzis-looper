@@ -21,46 +21,53 @@ def _write_mono_pcm16_wav(path: Path, sample_rate_hz: int) -> None:
         wav.writeframes(samples.tobytes())
 
 
-def test_load_and_play_sample_smoke(audio_engine: AudioEngine, tmp_path: Path) -> None:
+@pytest.mark.parametrize("sample_rate_hz", [48_000, 44_100])
+def test_load_and_play_sample_smoke(
+    sample_rate_hz: int,
+    audio_engine: AudioEngine,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
     wav_path = tmp_path / "sample.wav"
+    cached_path: str | None = None
+    _write_mono_pcm16_wav(wav_path, sample_rate_hz)
 
-    for sample_rate_hz in (48_000, 44_100):
-        _write_mono_pcm16_wav(wav_path, sample_rate_hz)
+    audio_engine.load_sample_async(0, str(wav_path))
 
-        audio_engine.load_sample_async(0, str(wav_path))
+    deadline = time.monotonic() + 2.0
+    error_msg: str | None = None
 
-        deadline = time.monotonic() + 2.0
-        success = False
-        error_msg: str | None = None
-
-        while time.monotonic() < deadline:
-            event = audio_engine.poll_loader_events()
-            if event is None:
-                time.sleep(0.01)
-                continue
-
-            if event.get("id") != 0:
-                continue
-
-            if event.get("type") == "success":
-                success = True
-                break
-
-            if event.get("type") == "error":
-                msg = event.get("msg")
-                if isinstance(msg, str):
-                    error_msg = msg
-                break
-
-        if success:
-            break
-
-        if error_msg is not None and "sample rate mismatch" in error_msg:
+    while time.monotonic() < deadline:
+        event = audio_engine.poll_loader_events()
+        if event is None:
+            time.sleep(0.01)
             continue
 
-        pytest.fail(f"expected sample load success, got error: {error_msg!r}")
-    else:
-        pytest.skip("No matching sample rate for output device")
+        if event.get("id") != 0:
+            continue
+
+        if event.get("type") == "success":
+            cached = event.get("cached_path")
+            if isinstance(cached, str):
+                cached_path = cached
+            break
+
+        if event.get("type") == "error":
+            msg = event.get("msg")
+            if isinstance(msg, str):
+                error_msg = msg
+            break
+
+    if error_msg is not None:
+        if "sample rate mismatch" in error_msg:
+            pytest.skip("No matching sample rate for output device")
+        else:
+            pytest.fail(f"expected sample load success, got error: {error_msg!r}")
+
+    assert cached_path is not None
+    assert (tmp_path / cached_path).is_file()
 
     audio_engine.play_sample(0, 1.0)
     audio_engine.stop_all()

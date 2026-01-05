@@ -98,7 +98,7 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 - [x] As a user, per-pad settings persist (BPM, loop points, auto-loop settings, intro settings, gain, EQ).
 - [x] As a user, global settings persist (e.g., master volume).
 - [x] As a user, startup handles missing/moved files gracefully and keeps the UI usable.
-- [ ] As a user, samples that I load will be copied to `./samples` in the current working directory.
+- [x] As a user, samples that I load will be copied to `./samples` in the current working directory.
 
 ### 14) Reliability + performance expectations (behavioral)
 - [x] As a performer, long-running actions (e.g., BPM detection, stem generation) do not freeze the UI.

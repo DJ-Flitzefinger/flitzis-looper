@@ -148,6 +148,7 @@ pub enum LoaderEvent {
     Success {
         id: usize,
         duration_sec: f32,
+        cached_path: String,
         analysis: SampleAnalysis,
     },
 
