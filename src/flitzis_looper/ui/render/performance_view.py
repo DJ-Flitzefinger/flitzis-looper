@@ -17,40 +17,6 @@ if TYPE_CHECKING:
     from flitzis_looper.ui.styles import ButtonStyleName
 
 
-def _pad_context_menu(ctx: UiContext, pad_id: int) -> None:
-    if ctx.state.pads.is_loading(pad_id):
-        imgui.text_disabled("Loading audio…")
-        return
-
-    if ctx.state.pads.is_loaded(pad_id):
-        if imgui.menu_item("Unload Audio", "", p_selected=False)[0]:
-            ctx.audio.pads.unload_sample(pad_id)
-        imgui.separator()
-        if ctx.state.pads.is_analyzing(pad_id):
-            imgui.text_disabled("Analyze audio")
-        elif imgui.menu_item("Analyze audio", "", p_selected=False)[0]:
-            ctx.audio.pads.analyze_sample_async(pad_id)
-        if imgui.menu_item("Adjust Loop", "", p_selected=False)[0]:
-            # TODO: adjust loop
-            pass
-        imgui.separator()
-        if imgui.menu_item("Generate Stems", "", p_selected=False)[0]:
-            # TODO: generate stems
-            pass
-    elif imgui.menu_item("Load Audio", "", p_selected=False)[0]:
-        ctx.ui.open_file_dialog(pad_id)
-
-
-def _pad_popover(ctx: UiContext, pad_id: int) -> None:
-    """Open popup if button is hovered and middle-clicked."""
-    popup_id = f"ctx_popup_pad_{pad_id}"
-    if imgui.is_item_hovered() and imgui.is_mouse_clicked(imgui.MouseButton_.middle):
-        imgui.open_popup(popup_id)
-    if imgui.begin_popup(popup_id):
-        _pad_context_menu(ctx, pad_id)
-        imgui.end_popup()
-
-
 def _pad_button_label(
     ctx: UiContext, pad_id: int, *, is_loaded: bool, is_loading: bool
 ) -> tuple[str, float | None]:
@@ -121,6 +87,9 @@ def _pad_button_peak_meter(peak: float) -> None:
 
 
 def _pad_button_input(ctx: UiContext, pad_id: int, *, is_loaded: bool) -> None:
+    if imgui.is_mouse_clicked(imgui.MouseButton_.middle) and not ctx.state.pads.is_selected(pad_id):
+        ctx.ui.select_pad(pad_id)
+
     if imgui.is_mouse_down(imgui.MouseButton_.left):
         if not ctx.state.pads.is_pressed(pad_id):
             if is_loaded:
@@ -193,7 +162,6 @@ def _pad_button(ctx: UiContext, pad_id: int, size: imgui.ImVec2Like) -> None:
             _pad_button_input(ctx, pad_id, is_loaded=is_loaded)
 
     _pad_button_overlays(ctx, pad_id, is_active=is_active, is_loaded=is_loaded)
-    _pad_popover(ctx, pad_id)
 
 
 def _render_pad_grid(ctx: UiContext) -> None:
