@@ -12,6 +12,7 @@ def run_ui() -> None:
     context = UiContext(controller)
 
     runner_params = hello_imgui.RunnerParams()
+    runner_params.ini_folder_type = hello_imgui.IniFolderType.app_user_config_folder
     runner_params.app_window_params.window_title = TITLE
     runner_params.imgui_window_params.menu_app_title = TITLE
     runner_params.app_window_params.window_geometry.size = VIEWPORT_PX
