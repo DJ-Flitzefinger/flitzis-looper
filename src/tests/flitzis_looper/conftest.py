@@ -7,6 +7,7 @@ from flitzis_looper.controller import LooperController
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
     from flitzis_looper.models import ProjectState, SessionState
 
@@ -18,7 +19,12 @@ def audio_engine_mock() -> Iterator[Mock]:
 
 
 @pytest.fixture
-def controller(audio_engine_mock: Mock) -> LooperController:
+def controller(
+    audio_engine_mock: Mock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> LooperController:
+    monkeypatch.chdir(tmp_path)
     return LooperController()
 
 

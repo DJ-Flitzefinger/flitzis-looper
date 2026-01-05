@@ -32,13 +32,14 @@ impl VoiceSlot {
         &mut self,
         sample_id: usize,
         sample: SampleBuffer,
+        initial_frame_pos: usize,
         volume: f32,
         initial_tempo_ratio: f32,
     ) {
         self.active = true;
         self.sample_id = sample_id;
         self.sample = Some(sample);
-        self.frame_pos = 0;
+        self.frame_pos = initial_frame_pos;
         self.volume = volume;
         self.tempo_ratio_smoothed = initial_tempo_ratio;
         for state in &mut self.eq_state {

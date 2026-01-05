@@ -24,6 +24,9 @@ pub enum AudioMessage {
 
     /// Per-pad peak meter update (mono peak, post gain/EQ).
     PadPeak { id: usize, peak: f32 },
+
+    /// Per-pad playback position in seconds (best-effort, low-rate).
+    PadPlayhead { id: usize, position_s: f32 },
 }
 
 #[pymethods]
@@ -31,6 +34,13 @@ impl AudioMessage {
     pub fn pad_peak(&self) -> Option<(usize, f32)> {
         match self {
             AudioMessage::PadPeak { id, peak } => Some((*id, *peak)),
+            _ => None,
+        }
+    }
+
+    pub fn pad_playhead(&self) -> Option<(usize, f32)> {
+        match self {
+            AudioMessage::PadPlayhead { id, position_s } => Some((*id, *position_s)),
             _ => None,
         }
     }
@@ -75,6 +85,15 @@ pub enum ControlMessage {
         low_db: f32,
         mid_db: f32,
         high_db: f32,
+    },
+
+    /// Set per-pad loop region in seconds.
+    ///
+    /// If `end_s` is None, the loop end defaults to the full sample length.
+    SetPadLoopRegion {
+        id: usize,
+        start_s: f32,
+        end_s: Option<f32>,
     },
 
     /// Publish a loaded sample into an audio-thread slot.

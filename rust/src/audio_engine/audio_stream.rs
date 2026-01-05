@@ -132,6 +132,9 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
                     } => {
                         mixer.set_pad_eq(id, low_db, mid_db, high_db);
                     }
+                    ControlMessage::SetPadLoopRegion { id, start_s, end_s } => {
+                        mixer.set_pad_loop_region(id, start_s, end_s);
+                    }
                     ControlMessage::SetVolume(volume) => {
                         mixer.set_volume(volume);
                     }
@@ -145,17 +148,22 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
             frame_clock = frame_clock.wrapping_add(frames as u64);
 
             for (id, peak) in pad_peaks.iter().enumerate() {
-                if *peak <= 0.0 || !peak.is_finite() {
-                    continue;
-                }
-
                 if frame_clock.wrapping_sub(last_emit_frame[id]) < emit_interval_frames {
                     continue;
                 }
 
                 last_emit_frame[id] = frame_clock;
-                let peak = peak.clamp(0.0, 1.0);
-                let _ = producer_out.push(AudioMessage::PadPeak { id, peak });
+
+                if *peak > 0.0 && peak.is_finite() {
+                    let peak = peak.clamp(0.0, 1.0);
+                    let _ = producer_out.push(AudioMessage::PadPeak { id, peak });
+                }
+
+                if let Some(position_s) = mixer.pad_playhead_seconds(id) {
+                    if position_s.is_finite() {
+                        let _ = producer_out.push(AudioMessage::PadPlayhead { id, position_s });
+                    }
+                }
             }
         },
         |err| {

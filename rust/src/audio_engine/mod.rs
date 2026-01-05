@@ -859,6 +859,38 @@ impl AudioEngine {
         Ok(())
     }
 
+    pub fn set_pad_loop_region(
+        &mut self,
+        id: usize,
+        start_s: f32,
+        end_s: Option<f32>,
+    ) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+
+        if !start_s.is_finite() || start_s < 0.0 {
+            return Err(PyValueError::new_err("start_s out of range"));
+        }
+
+        if end_s.is_some_and(|end_s| !end_s.is_finite() || end_s < 0.0) {
+            return Err(PyValueError::new_err("end_s out of range"));
+        }
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        let _ = producer_guard.push(ControlMessage::SetPadLoopRegion { id, start_s, end_s });
+        Ok(())
+    }
+
     /// Stop playback of a previously triggered sample.
     pub fn stop_sample(&mut self, id: usize) -> PyResult<()> {
         if id >= NUM_SAMPLES {

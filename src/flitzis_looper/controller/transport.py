@@ -47,6 +47,7 @@ class TransportController:
 
         self._apply_global_audio_settings(defaults)
         self._apply_per_pad_mixing(defaults)
+        self._apply_pad_loop_regions(defaults)
         self._apply_pad_bpm_settings()
         self._apply_bpm_lock_settings()
 
@@ -80,6 +81,17 @@ class TransportController:
                 continue
 
             self._audio.set_pad_eq(sample_id, low_db, mid_db, high_db)
+
+    def _apply_pad_loop_regions(self, defaults: ProjectState) -> None:
+        for sample_id in range(len(self._project.sample_paths)):
+            start_s = self._project.pad_loop_start_s[sample_id]
+            end_s = self._project.pad_loop_end_s[sample_id]
+            if (
+                start_s == defaults.pad_loop_start_s[sample_id]
+                and end_s == defaults.pad_loop_end_s[sample_id]
+            ):
+                continue
+            self._audio.set_pad_loop_region(sample_id, start_s, end_s)
 
     def _apply_pad_bpm_settings(self) -> None:
         for sample_id in range(len(self._project.sample_paths)):
@@ -120,6 +132,8 @@ class TransportController:
         else:
             self.stop_all_pads()
 
+        start_s, end_s = self._effective_pad_loop_region(sample_id)
+        self._audio.set_pad_loop_region(sample_id, start_s, end_s)
         self._audio.play_sample(sample_id, 1.0)
         self._session.active_sample_ids.add(sample_id)
 
@@ -136,6 +150,98 @@ class TransportController:
         """Stop all currently active pads."""
         self._audio.stop_all()
         self._session.active_sample_ids.clear()
+
+    def _reset_pad_loop_region(self, sample_id: int) -> None:
+        """Reset a pad's loop region to a computed default."""
+        validate_sample_id(sample_id)
+
+        start_s, end_s, auto = self._default_pad_loop_region(sample_id)
+        self._project.pad_loop_start_s[sample_id] = start_s
+        self._project.pad_loop_end_s[sample_id] = end_s
+        self._project.pad_loop_auto[sample_id] = auto
+        self._project.pad_loop_bars[sample_id] = 4
+        self._mark_project_changed()
+
+        if self._project.sample_paths[sample_id] is not None:
+            self._audio.set_pad_loop_region(sample_id, start_s, end_s)
+
+    def _set_pad_loop_region(
+        self,
+        sample_id: int,
+        *,
+        start_s: float,
+        end_s: float | None,
+    ) -> None:
+        """Set the loop region for a pad.
+
+        This updates persisted project state and applies the new region to the audio engine.
+        """
+        validate_sample_id(sample_id)
+        ensure_finite(start_s)
+        if end_s is not None:
+            ensure_finite(end_s)
+
+        start_s = max(0.0, float(start_s))
+        if end_s is not None:
+            end_s = max(0.0, float(end_s))
+            if end_s <= start_s:
+                end_s = None
+
+        self._project.pad_loop_start_s[sample_id] = start_s
+        self._project.pad_loop_end_s[sample_id] = end_s
+        self._mark_project_changed()
+
+        if self._project.sample_paths[sample_id] is not None:
+            self._audio.set_pad_loop_region(sample_id, start_s, end_s)
+
+    def _default_pad_loop_region(self, sample_id: int) -> tuple[float, float | None, bool]:
+        analysis = self._project.sample_analysis[sample_id]
+        start_s = 0.0
+        if analysis is not None:
+            grid = analysis.beat_grid
+            if grid.downbeats:
+                start_s = float(grid.downbeats[0])
+            elif grid.beats:
+                start_s = float(grid.beats[0])
+
+        bpm = normalize_bpm(self.effective_bpm(sample_id))
+        if bpm is None:
+            return (0.0, None, False)
+
+        beats = [] if analysis is None else [float(t) for t in analysis.beat_grid.beats]
+        start_s = self._snap_to_nearest_beat(start_s, beats)
+
+        duration_s = (4 * 4) * 60.0 / bpm
+        end_s = self._snap_to_nearest_beat(start_s + duration_s, beats)
+        return (start_s, end_s, True)
+
+    @staticmethod
+    def _snap_to_nearest_beat(target_s: float, beat_times: list[float]) -> float:
+        if not beat_times:
+            return target_s
+        return min(beat_times, key=lambda beat_s: abs(beat_s - target_s))
+
+    def _effective_pad_loop_region(self, sample_id: int) -> tuple[float, float | None]:
+        start_s = self._project.pad_loop_start_s[sample_id]
+        end_s = self._project.pad_loop_end_s[sample_id]
+
+        if not self._project.pad_loop_auto[sample_id]:
+            return (start_s, end_s)
+
+        bpm = normalize_bpm(self.effective_bpm(sample_id))
+        if bpm is None:
+            return (start_s, end_s)
+
+        analysis = self._project.sample_analysis[sample_id]
+        beats = [] if analysis is None else [float(t) for t in analysis.beat_grid.beats]
+
+        start_s = self._snap_to_nearest_beat(start_s, beats)
+
+        bars = self._project.pad_loop_bars[sample_id]
+        bars = max(1, int(bars))
+        duration_s = (bars * 4) * 60.0 / bpm
+        end_s = self._snap_to_nearest_beat(start_s + duration_s, beats)
+        return (start_s, end_s)
 
     def is_sample_loaded(self, sample_id: int) -> bool:
         """Return whether a sample slot has audio loaded."""

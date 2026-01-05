@@ -62,6 +62,22 @@ def _default_pad_eq() -> list[float]:
     return [0.0] * NUM_SAMPLES
 
 
+def _default_pad_loop_start_s() -> list[float]:
+    return [0.0] * NUM_SAMPLES
+
+
+def _default_pad_loop_end_s() -> list[float | None]:
+    return [None] * NUM_SAMPLES
+
+
+def _default_pad_loop_auto() -> list[bool]:
+    return [False] * NUM_SAMPLES
+
+
+def _default_pad_loop_bars() -> list[int]:
+    return [4] * NUM_SAMPLES
+
+
 class ProjectState(BaseModel):
     """Persistent state. Saved to disk."""
 
@@ -90,6 +106,18 @@ class ProjectState(BaseModel):
 
     pad_eq_high_db: list[float] = Field(default_factory=_default_pad_eq)
     """Per-pad EQ high band gain in dB."""
+
+    pad_loop_start_s: list[float] = Field(default_factory=_default_pad_loop_start_s)
+    """Per-pad loop region start time in seconds."""
+
+    pad_loop_end_s: list[float | None] = Field(default_factory=_default_pad_loop_end_s)
+    """Per-pad loop region end time in seconds, or None for full sample."""
+
+    pad_loop_auto: list[bool] = Field(default_factory=_default_pad_loop_auto)
+    """Per-pad auto-loop enabled state."""
+
+    pad_loop_bars: list[int] = Field(default_factory=_default_pad_loop_bars)
+    """Per-pad bar count used when auto-loop is enabled."""
 
     # Global Audio Settings
     multi_loop: bool = False
@@ -139,6 +167,52 @@ class ProjectState(BaseModel):
         for db in value:
             if not PAD_EQ_DB_MIN <= db <= PAD_EQ_DB_MAX:
                 msg = f"pad EQ dB values must be in {PAD_EQ_DB_MIN}..={PAD_EQ_DB_MAX}, got {db}"
+                raise ValueError(msg)
+        return value
+
+    @field_validator("pad_loop_start_s", mode="after")
+    @classmethod
+    def _validate_pad_loop_start_s(cls, value: list[float]) -> list[float]:
+        if len(value) != NUM_SAMPLES:
+            msg = f"pad_loop_start_s must have length {NUM_SAMPLES}, got {len(value)}"
+            raise ValueError(msg)
+        for start_s in value:
+            if not math.isfinite(start_s) or start_s < 0.0:
+                msg = f"pad_loop_start_s values must be finite and >= 0.0, got {start_s}"
+                raise ValueError(msg)
+        return value
+
+    @field_validator("pad_loop_end_s", mode="after")
+    @classmethod
+    def _validate_pad_loop_end_s(cls, value: list[float | None]) -> list[float | None]:
+        if len(value) != NUM_SAMPLES:
+            msg = f"pad_loop_end_s must have length {NUM_SAMPLES}, got {len(value)}"
+            raise ValueError(msg)
+        for end_s in value:
+            if end_s is None:
+                continue
+            if not math.isfinite(end_s) or end_s < 0.0:
+                msg = f"pad_loop_end_s values must be None or finite and >= 0.0, got {end_s}"
+                raise ValueError(msg)
+        return value
+
+    @field_validator("pad_loop_auto", mode="after")
+    @classmethod
+    def _validate_pad_loop_auto(cls, value: list[bool]) -> list[bool]:
+        if len(value) != NUM_SAMPLES:
+            msg = f"pad_loop_auto must have length {NUM_SAMPLES}, got {len(value)}"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("pad_loop_bars", mode="after")
+    @classmethod
+    def _validate_pad_loop_bars(cls, value: list[int]) -> list[int]:
+        if len(value) != NUM_SAMPLES:
+            msg = f"pad_loop_bars must have length {NUM_SAMPLES}, got {len(value)}"
+            raise ValueError(msg)
+        for bars in value:
+            if bars < 1:
+                msg = f"pad_loop_bars values must be >= 1, got {bars}"
                 raise ValueError(msg)
         return value
 

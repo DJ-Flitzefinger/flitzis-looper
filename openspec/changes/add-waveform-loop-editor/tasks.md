@@ -1,13 +1,13 @@
 ## 1. Implementation
-- [ ] 1.1 Add persisted per-pad loop settings to `ProjectState` (start/end seconds, auto-loop enabled, bar count) with safe defaults.
-- [ ] 1.2 Extend controller transport to:
-  - [ ] 1.2.1 Compute default loop region (4 bars, default onset from analysis) and reset behavior.
-  - [ ] 1.2.2 Apply loop region to playback triggers for the selected pad.
-  - [ ] 1.2.3 Support live updates while playing.
-- [ ] 1.3 Extend Rust audio engine to support looping within a per-pad region:
-  - [ ] 1.3.1 Add control message(s) for setting per-pad loop region.
-  - [ ] 1.3.2 Update voice render to wrap within [start,end).
-  - [ ] 1.3.3 Emit per-pad playback position for UI playhead display (low-rate).
+- [x] 1.1 Add persisted per-pad loop settings to `ProjectState` (start/end seconds, auto-loop enabled, bar count) with safe defaults.
+- [x] 1.2 Extend controller transport to:
+  - [x] 1.2.1 Compute default loop region (4 bars, default onset from analysis) and reset behavior.
+  - [x] 1.2.2 Apply loop region to playback triggers for the selected pad.
+  - [x] 1.2.3 Support live updates while playing.
+- [x] 1.3 Extend Rust audio engine to support looping within a per-pad region:
+  - [x] 1.3.1 Add control message(s) for setting per-pad loop region.
+  - [x] 1.3.2 Update voice render to wrap within [start,end).
+  - [x] 1.3.3 Emit per-pad playback position for UI playhead display (low-rate).
 - [ ] 1.4 Add waveform editor window in ImGui:
   - [ ] 1.4.1 Open/close state driven by sidebar **Adjust Loop** (selected pad).
   - [ ] 1.4.2 Controls: play/pause, reset, zoom, pan, auto-loop toggle + bar +/-.

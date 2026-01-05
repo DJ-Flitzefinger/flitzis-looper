@@ -61,6 +61,15 @@ pub struct RtMixer {
     /// Per-pad EQ coefficients (low/mid/high).
     pad_eq: [Eq3Coeffs; NUM_SAMPLES],
 
+    /// Per-pad loop region start frame.
+    pad_loop_start_frame: [usize; NUM_SAMPLES],
+
+    /// Per-pad loop region end frame (exclusive), or None for full sample.
+    pad_loop_end_frame: [Option<usize>; NUM_SAMPLES],
+
+    /// Best-effort per-pad playhead frame from last render.
+    pad_playhead_frame: [Option<usize>; NUM_SAMPLES],
+
     /// Sample storage with NUM_SAMPLES slots.
     sample_bank: [Option<SampleBuffer>; NUM_SAMPLES],
 
@@ -96,6 +105,9 @@ impl RtMixer {
             pad_bpm: std::array::from_fn(|_| None),
             pad_gain: std::array::from_fn(|_| 1.0),
             pad_eq: std::array::from_fn(|_| coeffs_for_eq3(sample_rate_hz, 0.0, 0.0, 0.0)),
+            pad_loop_start_frame: std::array::from_fn(|_| 0),
+            pad_loop_end_frame: std::array::from_fn(|_| None),
+            pad_playhead_frame: std::array::from_fn(|_| None),
             sample_bank: std::array::from_fn(|_| None),
             voices: std::array::from_fn(|_| VoiceSlot::new(channels)),
         }
@@ -147,9 +159,16 @@ impl RtMixer {
         let sample = sample.clone();
 
         let tempo_ratio = self.tempo_ratio_for_sample_id(id);
+
+        let sample_frames = sample.samples.len() / self.channels;
+        let mut initial_frame_pos = self.pad_loop_start_frame[id];
+        if initial_frame_pos >= sample_frames {
+            initial_frame_pos = 0;
+        }
+
         for voice_slot in &mut self.voices {
             if !voice_slot.active {
-                voice_slot.start(id, sample.clone(), velocity, tempo_ratio);
+                voice_slot.start(id, sample.clone(), initial_frame_pos, velocity, tempo_ratio);
                 return;
             }
         }
@@ -257,6 +276,46 @@ impl RtMixer {
         self.pad_eq[id] = coeffs_for_eq3(self.sample_rate_hz, low_db, mid_db, high_db);
     }
 
+    pub fn set_pad_loop_region(&mut self, id: usize, start_s: f32, end_s: Option<f32>) {
+        if id >= NUM_SAMPLES {
+            return;
+        }
+
+        if !start_s.is_finite() || start_s < 0.0 {
+            return;
+        }
+
+        let start_frame = (start_s * self.sample_rate_hz).round();
+        let start_frame = if start_frame.is_finite() && start_frame >= 0.0 {
+            start_frame as usize
+        } else {
+            0
+        };
+
+        let end_frame = end_s.and_then(|end_s| {
+            if !end_s.is_finite() || end_s < 0.0 {
+                return None;
+            }
+            let end_frame = (end_s * self.sample_rate_hz).round();
+            if !end_frame.is_finite() || end_frame < 0.0 {
+                None
+            } else {
+                Some(end_frame as usize)
+            }
+        });
+
+        self.pad_loop_start_frame[id] = start_frame;
+        self.pad_loop_end_frame[id] = end_frame;
+    }
+
+    pub fn pad_playhead_seconds(&self, id: usize) -> Option<f32> {
+        if id >= NUM_SAMPLES {
+            return None;
+        }
+        let frame = self.pad_playhead_frame[id]?;
+        Some(frame as f32 / self.sample_rate_hz)
+    }
+
     fn tempo_ratio_for_sample_id(&self, sample_id: usize) -> f32 {
         let mut ratio = self.speed;
 
@@ -318,6 +377,7 @@ impl RtMixer {
     pub fn render(&mut self, output: &mut [f32], pad_peaks: &mut [f32; NUM_SAMPLES]) {
         pad_peaks.fill(f32::EQUILIBRIUM);
         output.fill(Sample::EQUILIBRIUM);
+        self.pad_playhead_frame.fill(None);
 
         if self.channels == 0 {
             return;
@@ -374,11 +434,29 @@ impl RtMixer {
             let mut input_frames = ((frames as f32) * tempo_ratio).round() as usize;
             input_frames = input_frames.clamp(1, DEFAULT_BLOCK_SAMPLES);
 
+            let mut loop_start = self.pad_loop_start_frame[voice.sample_id].min(sample_frames);
+            let mut loop_end = self.pad_loop_end_frame[voice.sample_id].unwrap_or(sample_frames);
+            loop_end = loop_end.min(sample_frames);
+            if loop_end <= loop_start {
+                loop_start = 0;
+                loop_end = sample_frames;
+            }
+            let loop_len = loop_end - loop_start;
+            if loop_len == 0 {
+                voice.stop();
+                continue;
+            }
+
+            if voice.frame_pos < loop_start || voice.frame_pos >= loop_end {
+                voice.frame_pos = loop_start;
+            }
+            let base = voice.frame_pos - loop_start;
+
             let input_buffers = voice.stretch.input_buffers_mut(input_frames);
             for channel in 0..self.channels {
                 let buf = &mut input_buffers[channel];
                 for i in 0..input_frames {
-                    let frame = (voice.frame_pos + i) % sample_frames;
+                    let frame = loop_start + ((base + i) % loop_len);
                     buf[i] = sample.samples[frame * self.channels + channel];
                 }
             }
@@ -407,7 +485,8 @@ impl RtMixer {
                 }
             }
 
-            voice.frame_pos = (voice.frame_pos + input_frames) % sample_frames;
+            voice.frame_pos = loop_start + ((base + input_frames) % loop_len);
+            self.pad_playhead_frame[voice.sample_id] = Some(voice.frame_pos);
         }
     }
 }
