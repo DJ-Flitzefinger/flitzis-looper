@@ -252,10 +252,12 @@ class UiActions:
     def toggle_left_sidebar(self) -> None:
         new_val = not self._controller.project.sidebar_left_expanded
         self._controller.project.sidebar_left_expanded = new_val
+        self._controller.persistence.mark_dirty()
 
     def toggle_right_sidebar(self) -> None:
         new_val = not self._controller.project.sidebar_right_expanded
         self._controller.project.sidebar_right_expanded = new_val
+        self._controller.persistence.mark_dirty()
 
     def open_file_dialog(self, pad_id: int) -> None:
         self._controller.session.file_dialog_pad_id = pad_id
@@ -265,9 +267,11 @@ class UiActions:
 
     def select_pad(self, pad_id: int) -> None:
         self._controller.project.selected_pad = pad_id
+        self._controller.persistence.mark_dirty()
 
     def select_bank(self, bank_id: int) -> None:
         self._controller.project.selected_bank = bank_id
+        self._controller.persistence.mark_dirty()
 
     def store_pressed_pad_state(self, pad_id: int, *, pressed: bool) -> None:
         self._controller.session.pressed_pads[pad_id] = pressed
@@ -281,3 +285,4 @@ class UiContext:
         self.state = UiState(controller)
         self.audio = AudioActions(controller)
         self.ui = UiActions(controller)
+        self.persistence = controller.persistence

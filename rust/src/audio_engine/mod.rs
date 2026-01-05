@@ -262,6 +262,14 @@ impl AudioEngine {
         }
     }
 
+    pub fn output_sample_rate(&self) -> PyResult<u32> {
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        Ok(handle.output_sample_rate)
+    }
+
     /// Shut down the audio engine.
     pub fn shut_down(&mut self) -> PyResult<()> {
         self.stream_handle = None;

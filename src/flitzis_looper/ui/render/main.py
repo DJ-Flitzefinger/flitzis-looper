@@ -124,3 +124,5 @@ def render_ui(ctx: UiContext) -> None:
     with default_style():
         _main(ctx)
         _file_dialog(ctx)
+
+    ctx.persistence.maybe_flush()

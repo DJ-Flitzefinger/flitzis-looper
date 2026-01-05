@@ -1,8 +1,11 @@
+from contextlib import suppress
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
 from flitzis_looper.models import ProjectState, SampleAnalysis, SessionState, validate_sample_id
+from flitzis_looper.persistence import probe_wav_sample_rate
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -17,11 +20,96 @@ class LoaderController:
         session: SessionState,
         audio: AudioEngine,
         on_pad_bpm_changed: Callable[[int], None],
+        *,
+        on_project_changed: Callable[[], None] | None = None,
     ) -> None:
         self._project = project
         self._session = session
         self._audio = audio
         self._on_pad_bpm_changed = on_pad_bpm_changed
+        self._on_project_changed = on_project_changed
+
+    def _mark_project_changed(self) -> None:
+        if self._on_project_changed is not None:
+            self._on_project_changed()
+
+    def _get_output_sample_rate(self) -> int | None:
+        output_sample_rate_fn = getattr(self._audio, "output_sample_rate", None)
+        if output_sample_rate_fn is None:
+            return None
+
+        try:
+            return int(output_sample_rate_fn())
+        except RuntimeError:
+            return None
+
+    def _parse_cached_sample_path(self, path: str) -> Path | None:
+        if "\\" in path:
+            return None
+
+        rel = Path(path)
+        if rel.is_absolute() or not rel.parts or rel.parts[0] != "samples":
+            return None
+
+        return rel
+
+    def _is_cached_wav_usable(self, abs_path: Path, *, output_sample_rate: int) -> bool:
+        if not abs_path.is_file():
+            return False
+
+        file_sample_rate = probe_wav_sample_rate(abs_path)
+        return file_sample_rate is not None and file_sample_rate == output_sample_rate
+
+    def _schedule_restored_load(self, sample_id: int, rel: Path) -> bool:
+        self._session.pending_sample_paths[sample_id] = rel.as_posix()
+        self._session.loading_sample_ids.add(sample_id)
+
+        try:
+            self._audio.load_sample_async(sample_id, rel.as_posix())
+        except RuntimeError:
+            self._session.loading_sample_ids.discard(sample_id)
+            self._session.pending_sample_paths.pop(sample_id, None)
+            return False
+
+        return True
+
+    def restore_samples_from_project_state(self) -> None:
+        """Schedule async loads for cached samples referenced by `ProjectState`.
+
+        Invalid/missing/mismatched cached WAVs are ignored by clearing the pad assignment.
+        """
+        output_sample_rate = self._get_output_sample_rate()
+        if output_sample_rate is None:
+            return
+
+        changed = False
+        for sample_id, path in enumerate(self._project.sample_paths):
+            if path is None:
+                continue
+
+            rel = self._parse_cached_sample_path(path)
+            if rel is None:
+                self._clear_restored_pad(sample_id)
+                changed = True
+                continue
+
+            abs_path = Path.cwd() / rel
+            if not self._is_cached_wav_usable(abs_path, output_sample_rate=output_sample_rate):
+                self._clear_restored_pad(sample_id)
+                changed = True
+                continue
+
+            if not self._schedule_restored_load(sample_id, rel):
+                self._clear_restored_pad(sample_id)
+                changed = True
+
+        if changed:
+            self._mark_project_changed()
+
+    def _clear_restored_pad(self, sample_id: int) -> None:
+        self._project.sample_paths[sample_id] = None
+        self._project.sample_analysis[sample_id] = None
+        self._on_pad_bpm_changed(sample_id)
 
     def load_sample_async(self, sample_id: int, path: str) -> None:
         """Load an audio file into a sample slot asynchronously.
@@ -38,6 +126,7 @@ class LoaderController:
             self.unload_sample(sample_id)
 
         self._project.sample_analysis[sample_id] = None
+        self._mark_project_changed()
 
         self._session.sample_load_errors.pop(sample_id, None)
         self._session.sample_load_progress.pop(sample_id, None)
@@ -62,10 +151,23 @@ class LoaderController:
 
         self._clear_analysis_task_state(sample_id)
 
+        old_path = self._project.sample_paths[sample_id]
+
         self._audio.unload_sample(sample_id)
         self._project.sample_paths[sample_id] = None
         self._project.sample_analysis[sample_id] = None
         self._on_pad_bpm_changed(sample_id)
+        self._mark_project_changed()
+
+        if old_path is None or "\\" in old_path:
+            return
+
+        rel = Path(old_path)
+        if rel.is_absolute() or not rel.parts or rel.parts[0] != "samples":
+            return
+
+        with suppress(OSError):
+            (Path.cwd() / rel).unlink(missing_ok=True)
 
     def analyze_sample_async(self, sample_id: int) -> None:
         """Analyze a previously loaded sample asynchronously."""
@@ -151,7 +253,9 @@ class LoaderController:
         self._session.sample_analysis_stage.pop(sample_id, None)
 
     def _handle_loader_started(self, sample_id: int, _event: dict[str, object]) -> None:
-        self._project.sample_analysis[sample_id] = None
+        if self._project.sample_paths[sample_id] is None:
+            self._project.sample_analysis[sample_id] = None
+            self._mark_project_changed()
 
         self._session.loading_sample_ids.add(sample_id)
         self._session.sample_load_errors.pop(sample_id, None)
@@ -176,8 +280,9 @@ class LoaderController:
         self._session.sample_load_stage.pop(sample_id, None)
 
         pending = self._session.pending_sample_paths.pop(sample_id, None)
-        if pending is not None:
+        if pending is not None and self._project.sample_paths[sample_id] != pending:
             self._project.sample_paths[sample_id] = pending
+            self._mark_project_changed()
 
         self._store_sample_analysis(sample_id, event.get("analysis"))
         self._clear_analysis_task_state(sample_id)
@@ -188,6 +293,12 @@ class LoaderController:
         self._session.sample_load_stage.pop(sample_id, None)
         self._session.pending_sample_paths.pop(sample_id, None)
         self._clear_analysis_task_state(sample_id)
+
+        if self._project.sample_paths[sample_id] is not None:
+            self._project.sample_paths[sample_id] = None
+            self._project.sample_analysis[sample_id] = None
+            self._on_pad_bpm_changed(sample_id)
+            self._mark_project_changed()
 
         msg = event.get("msg")
         if isinstance(msg, str):
@@ -242,3 +353,4 @@ class LoaderController:
 
         self._project.sample_analysis[sample_id] = parsed
         self._on_pad_bpm_changed(sample_id)
+        self._mark_project_changed()

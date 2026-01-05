@@ -94,16 +94,16 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 - [ ] As a performer, stems remain **synchronized** with the loop.
 
 ### 13) Persistence (config/state)
-- [ ] As a user, my bank/pad assignments persist across restarts.
-- [ ] As a user, per-pad settings persist (BPM, loop points, auto-loop settings, intro settings, gain, EQ).
-- [ ] As a user, global settings persist (e.g., master volume).
-- [ ] As a user, startup handles missing/moved files gracefully and keeps the UI usable.
+- [x] As a user, my bank/pad assignments persist across restarts.
+- [x] As a user, per-pad settings persist (BPM, loop points, auto-loop settings, intro settings, gain, EQ).
+- [x] As a user, global settings persist (e.g., master volume).
+- [x] As a user, startup handles missing/moved files gracefully and keeps the UI usable.
 - [ ] As a user, samples that I load will be copied to `./samples` in the current working directory.
 
 ### 14) Reliability + performance expectations (behavioral)
 - [x] As a performer, long-running actions (e.g., BPM detection, stem generation) do not freeze the UI.
 - [x] As a performer, triggering pads remains responsive and predictable during performance.
-- [ ] As a user, the application shuts down cleanly and reliably persists my configuration.
+- [x] As a user, the application shuts down cleanly and reliably persists my configuration.
 
 ## Primary legacy sources consulted
 - `old-project/README.md`

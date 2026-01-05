@@ -17,16 +17,90 @@ from flitzis_looper.controller.validation import ensure_finite, normalize_bpm
 from flitzis_looper.models import ProjectState, SessionState, validate_sample_id
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from flitzis_looper_audio import AudioEngine
 
 
 class TransportController:
     _TAP_BPM_WINDOW_SIZE = 5
 
-    def __init__(self, project: ProjectState, session: SessionState, audio: AudioEngine) -> None:
+    def __init__(
+        self,
+        project: ProjectState,
+        session: SessionState,
+        audio: AudioEngine,
+        *,
+        on_project_changed: Callable[[], None] | None = None,
+    ) -> None:
         self._project = project
         self._session = session
         self._audio = audio
+        self._on_project_changed = on_project_changed
+
+    def _mark_project_changed(self) -> None:
+        if self._on_project_changed is not None:
+            self._on_project_changed()
+
+    def _apply_project_state_to_audio(self) -> None:
+        defaults = ProjectState()
+
+        self._apply_global_audio_settings(defaults)
+        self._apply_per_pad_mixing(defaults)
+        self._apply_pad_bpm_settings()
+        self._apply_bpm_lock_settings()
+
+    def _apply_global_audio_settings(self, defaults: ProjectState) -> None:
+        if self._project.volume != defaults.volume:
+            self._audio.set_volume(self._project.volume)
+
+        if self._project.speed != defaults.speed:
+            self._audio.set_speed(self._project.speed)
+
+        if self._project.key_lock != defaults.key_lock:
+            self._audio.set_key_lock(enabled=self._project.key_lock)
+
+        if self._project.bpm_lock != defaults.bpm_lock:
+            self._audio.set_bpm_lock(enabled=self._project.bpm_lock)
+
+    def _apply_per_pad_mixing(self, defaults: ProjectState) -> None:
+        for sample_id, gain in enumerate(self._project.pad_gain):
+            if gain != defaults.pad_gain[sample_id]:
+                self._audio.set_pad_gain(sample_id, gain)
+
+        for sample_id, low_db in enumerate(self._project.pad_eq_low_db):
+            mid_db = self._project.pad_eq_mid_db[sample_id]
+            high_db = self._project.pad_eq_high_db[sample_id]
+
+            if (
+                low_db == defaults.pad_eq_low_db[sample_id]
+                and mid_db == defaults.pad_eq_mid_db[sample_id]
+                and high_db == defaults.pad_eq_high_db[sample_id]
+            ):
+                continue
+
+            self._audio.set_pad_eq(sample_id, low_db, mid_db, high_db)
+
+    def _apply_pad_bpm_settings(self) -> None:
+        for sample_id in range(len(self._project.sample_paths)):
+            if (
+                self._project.manual_bpm[sample_id] is None
+                and self._project.sample_analysis[sample_id] is None
+            ):
+                continue
+            self._on_pad_bpm_changed(sample_id)
+
+    def _apply_bpm_lock_settings(self) -> None:
+        if self._project.bpm_lock:
+            anchor_pad_id = self._project.selected_pad
+            anchor_bpm = normalize_bpm(self.effective_bpm(anchor_pad_id))
+            self._session.bpm_lock_anchor_pad_id = anchor_pad_id
+            self._session.bpm_lock_anchor_bpm = anchor_bpm
+        else:
+            self._session.bpm_lock_anchor_pad_id = None
+            self._session.bpm_lock_anchor_bpm = None
+
+        self._recompute_master_bpm()
 
     def trigger_pad(self, sample_id: int) -> None:
         """Trigger or retrigger a pad's loop.
@@ -74,6 +148,7 @@ class TransportController:
         clamped = min(max(volume, VOLUME_MIN), VOLUME_MAX)
         self._audio.set_volume(clamped)
         self._project.volume = clamped
+        self._mark_project_changed()
 
     def set_speed(self, speed: float) -> None:
         """Set global playback speed multiplier."""
@@ -82,6 +157,7 @@ class TransportController:
         self._audio.set_speed(clamped)
         self._project.speed = clamped
         self._recompute_master_bpm()
+        self._mark_project_changed()
 
     def reset_speed(self) -> None:
         """Reset global speed back to 1.0x."""
@@ -93,6 +169,7 @@ class TransportController:
         clamped = min(max(gain, PAD_GAIN_MIN), PAD_GAIN_MAX)
         self._audio.set_pad_gain(sample_id, clamped)
         self._project.pad_gain[sample_id] = clamped
+        self._mark_project_changed()
 
     def set_pad_eq(self, sample_id: int, low_db: float, mid_db: float, high_db: float) -> None:
         validate_sample_id(sample_id)
@@ -107,10 +184,12 @@ class TransportController:
         self._project.pad_eq_low_db[sample_id] = low_db
         self._project.pad_eq_mid_db[sample_id] = mid_db
         self._project.pad_eq_high_db[sample_id] = high_db
+        self._mark_project_changed()
 
     def set_multi_loop(self, *, enabled: bool) -> None:
         """Enable or disable Multi Loop mode."""
         self._project.multi_loop = enabled
+        self._mark_project_changed()
 
     def set_key_lock(self, *, enabled: bool) -> None:
         """Enable or disable Key Lock mode."""
@@ -118,6 +197,7 @@ class TransportController:
             return
         self._project.key_lock = enabled
         self._audio.set_key_lock(enabled=enabled)
+        self._mark_project_changed()
 
     def set_bpm_lock(self, *, enabled: bool) -> None:
         """Enable or disable BPM Lock mode."""
@@ -125,6 +205,7 @@ class TransportController:
             return
 
         self._project.bpm_lock = enabled
+        self._mark_project_changed()
 
         if enabled:
             anchor_pad_id = self._project.selected_pad
@@ -147,12 +228,14 @@ class TransportController:
             raise ValueError(msg)
         self._project.manual_bpm[sample_id] = float(bpm)
         self._on_pad_bpm_changed(sample_id)
+        self._mark_project_changed()
 
     def clear_manual_bpm(self, sample_id: int) -> None:
         """Clear a pad's manual BPM override."""
         validate_sample_id(sample_id)
         self._project.manual_bpm[sample_id] = None
         self._on_pad_bpm_changed(sample_id)
+        self._mark_project_changed()
 
     def tap_bpm(self, sample_id: int) -> float | None:
         """Register a Tap BPM event and update manual BPM."""
@@ -184,6 +267,7 @@ class TransportController:
             return None
 
         self._project.manual_bpm[sample_id] = bpm
+        self._mark_project_changed()
         return bpm
 
     def effective_bpm(self, sample_id: int) -> float | None:
@@ -204,11 +288,13 @@ class TransportController:
             msg = "key must be a non-empty string"
             raise ValueError(msg)
         self._project.manual_key[sample_id] = key
+        self._mark_project_changed()
 
     def clear_manual_key(self, sample_id: int) -> None:
         """Clear a pad's manual key override."""
         validate_sample_id(sample_id)
         self._project.manual_key[sample_id] = None
+        self._mark_project_changed()
 
     def effective_key(self, sample_id: int) -> str | None:
         """Return the effective key for a pad (manual overrides detected)."""
