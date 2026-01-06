@@ -61,30 +61,30 @@ enum LoadProgressStage {
 impl LoadProgressStage {
     fn stage_label(self) -> &'static str {
         match self {
-            Self::Decoding => "decoding",
-            Self::Resampling => "resampling",
-            Self::ChannelMapping => "channel mapping",
-            Self::Analyzing => "Analyzing (bpm/key/beat grid)",
-            Self::Publishing => "publishing",
+            Self::Decoding => "Decoding…",
+            Self::Resampling => "Resampling…",
+            Self::ChannelMapping => "Mapping channels…",
+            Self::Analyzing => "Analyzing…",
+            Self::Publishing => "Publishing…",
         }
     }
 
     fn range(self, resampling_required: bool) -> (f32, f32) {
         if !resampling_required {
             return match self {
-                Self::Decoding => (0.0, 0.70),
-                Self::Resampling => (0.70, 0.70),
-                Self::ChannelMapping => (0.70, 0.80),
-                Self::Analyzing => (0.80, 0.95),
+                Self::Decoding => (0.0, 0.1),
+                Self::Resampling => (0.1, 0.1),
+                Self::ChannelMapping => (0.1, 0.15),
+                Self::Analyzing => (0.15, 0.95),
                 Self::Publishing => (0.95, 1.0),
             };
         }
 
         match self {
-            Self::Decoding => (0.0, 0.40),
-            Self::Resampling => (0.40, 0.80),
-            Self::ChannelMapping => (0.80, 0.85),
-            Self::Analyzing => (0.85, 0.95),
+            Self::Decoding => (0.0, 0.1),
+            Self::Resampling => (0.1, 0.2),
+            Self::ChannelMapping => (0.2, 0.25),
+            Self::Analyzing => (0.25, 0.95),
             Self::Publishing => (0.95, 1.0),
         }
     }
