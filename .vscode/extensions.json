@@ -1,0 +1,11 @@
+{
+    "recommendations": [
+        "charliermarsh.ruff",
+        "EditorConfig.EditorConfig",
+        "matangover.mypy",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.vscode-python-envs",
+        "rust-lang.rust-analyzer"
+    ]
+}

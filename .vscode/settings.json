@@ -1,0 +1,27 @@
+{
+    "editor.formatOnSave": true,
+    "editor.rulers": [100],
+    "python.analysis.exclude": ["**/.venv", "**/dist"],
+    "files.watcherExclude": {
+        "**/.git/objects/**": true,
+        "**/.git/subtree-cache/**": true,
+        "**/.mypy_cache": true,
+        "**/.ruff_cache": true,
+        "**/.venv": true,
+        "**/dist": true
+    },
+    "search.exclude": {
+        "**/.mypy_cache": true,
+        "**/.ruff_cache": true,
+        "**/.venv": true,
+        "**/dist": true
+    },
+    "files.eol": "\n",
+    "[python]": {
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit"
+        }
+    }
+}
