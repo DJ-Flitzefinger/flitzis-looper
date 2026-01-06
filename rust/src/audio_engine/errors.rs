@@ -17,6 +17,10 @@ pub enum SampleLoadError {
     #[error("failed to create resampler: {0}")]
     ResamplerConstruction(#[from] rubato::ResamplerConstructionError),
 
+    /// Failed to resample audio.
+    #[error("failed to resample audio: {0}")]
+    Resample(#[from] rubato::ResampleError),
+
     /// Audio file has no default track.
     #[error("audio file has no default track")]
     NoDefaultTrack,

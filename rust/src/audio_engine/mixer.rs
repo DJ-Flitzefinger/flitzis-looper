@@ -319,10 +319,10 @@ impl RtMixer {
     fn tempo_ratio_for_sample_id(&self, sample_id: usize) -> f32 {
         let mut ratio = self.speed;
 
-        if self.bpm_lock_enabled {
-            if let (Some(master_bpm), Some(pad_bpm)) = (self.master_bpm, self.pad_bpm[sample_id]) {
-                ratio = master_bpm / pad_bpm;
-            }
+        if self.bpm_lock_enabled
+            && let (Some(master_bpm), Some(pad_bpm)) = (self.master_bpm, self.pad_bpm[sample_id])
+        {
+            ratio = master_bpm / pad_bpm;
         }
 
         if !ratio.is_finite() {
@@ -413,10 +413,10 @@ impl RtMixer {
             }
 
             let mut target_tempo_ratio = speed;
-            if bpm_lock_enabled {
-                if let (Some(master_bpm), Some(pad_bpm)) = (master_bpm, pad_bpm[voice.sample_id]) {
-                    target_tempo_ratio = master_bpm / pad_bpm;
-                }
+            if bpm_lock_enabled
+                && let (Some(master_bpm), Some(pad_bpm)) = (master_bpm, pad_bpm[voice.sample_id])
+            {
+                target_tempo_ratio = master_bpm / pad_bpm;
             }
 
             if !target_tempo_ratio.is_finite() {

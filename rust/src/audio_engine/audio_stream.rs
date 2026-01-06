@@ -159,10 +159,10 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
                     let _ = producer_out.push(AudioMessage::PadPeak { id, peak });
                 }
 
-                if let Some(position_s) = mixer.pad_playhead_seconds(id) {
-                    if position_s.is_finite() {
-                        let _ = producer_out.push(AudioMessage::PadPlayhead { id, position_s });
-                    }
+                if let Some(position_s) = mixer.pad_playhead_seconds(id)
+                    && position_s.is_finite()
+                {
+                    let _ = producer_out.push(AudioMessage::PadPlayhead { id, position_s });
                 }
             }
         },

@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 from flitzis_looper.controller.loader import LoaderController
-from flitzis_looper.models import ProjectState, SessionState
+from flitzis_looper.models import BeatGrid, ProjectState, SampleAnalysis, SessionState
 from flitzis_looper.persistence import PROJECT_CONFIG_PATH, ProjectPersistence, load_project_state
 
 
@@ -77,14 +77,14 @@ def test_load_project_state_invalid_json_returns_defaults(
     assert load_project_state(PROJECT_CONFIG_PATH) == ProjectState()
 
 
-def test_restore_ignores_missing_or_mismatched_cached_wav(
+def test_restore_loads_valid_audio_files_without_reanalysis(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
     (tmp_path / "samples").mkdir(parents=True)
 
-    wav_path = tmp_path / "samples" / "bad_rate.wav"
+    wav_path = tmp_path / "samples" / "sample.wav"
     with wave.open(str(wav_path), "wb") as f:
         f.setnchannels(1)
         f.setsampwidth(2)
@@ -92,7 +92,12 @@ def test_restore_ignores_missing_or_mismatched_cached_wav(
         f.writeframes(b"\x00\x00" * 48)
 
     project = ProjectState()
-    project.sample_paths[0] = "samples/bad_rate.wav"
+    project.sample_paths[0] = "samples/sample.wav"
+    project.sample_analysis[0] = SampleAnalysis(
+        bpm=120.0,
+        key="C",
+        beat_grid=BeatGrid(beats=[0.0, 1.0], downbeats=[0.0]),
+    )
 
     session = SessionState()
 
@@ -112,11 +117,10 @@ def test_restore_ignores_missing_or_mismatched_cached_wav(
 
     loader.restore_samples_from_project_state()
 
-    assert project.sample_paths[0] is None
-    assert project.sample_analysis[0] is None
-    audio.load_sample_async.assert_not_called()
-    on_pad_bpm_changed.assert_called_with(0)
-    on_project_changed.assert_called()
+    assert project.sample_paths[0] == "samples/sample.wav"
+    assert project.sample_analysis[0] is not None
+    audio.load_sample_async.assert_called_with(0, "samples/sample.wav", run_analysis=False)
+    on_project_changed.assert_not_called()
 
     project.sample_paths[1] = "samples/missing.wav"
     loader.restore_samples_from_project_state()

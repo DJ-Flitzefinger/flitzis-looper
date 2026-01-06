@@ -59,7 +59,9 @@ class TestSampleManagement:
 
         controller.loader.load_sample_async(sample_id, path)
 
-        audio_engine_mock.return_value.load_sample_async.assert_called_with(sample_id, path)
+        audio_engine_mock.return_value.load_sample_async.assert_called_with(
+            sample_id, path, run_analysis=True
+        )
         assert controller.session.pending_sample_paths[sample_id] == path
         assert sample_id in controller.session.loading_sample_ids
         assert controller.project.sample_paths[sample_id] is None
@@ -77,7 +79,9 @@ class TestSampleManagement:
         controller.loader.load_sample_async(sample_id, new_path)
 
         audio_engine_mock.return_value.unload_sample.assert_called_with(sample_id)
-        audio_engine_mock.return_value.load_sample_async.assert_called_with(sample_id, new_path)
+        audio_engine_mock.return_value.load_sample_async.assert_called_with(
+            sample_id, new_path, run_analysis=True
+        )
         assert controller.project.sample_paths[sample_id] is None
         assert controller.session.pending_sample_paths[sample_id] == new_path
 

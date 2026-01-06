@@ -168,7 +168,7 @@ pub enum LoaderEvent {
         id: usize,
         duration_sec: f32,
         cached_path: String,
-        analysis: SampleAnalysis,
+        analysis: Option<SampleAnalysis>,
     },
 
     /// Loading failed.

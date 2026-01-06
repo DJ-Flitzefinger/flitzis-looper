@@ -20,7 +20,7 @@ use crate::audio_engine::constants::{
 };
 use crate::audio_engine::errors::SampleLoadError;
 use crate::audio_engine::sample_loader::{
-    SampleLoadProgress, SampleLoadSubtask, cache_sample_buffer_as_project_wav,
+    SampleLoadProgress, SampleLoadSubtask, cache_audio_file_for_project,
     decode_audio_file_to_sample_buffer,
 };
 use crate::messages::{
@@ -279,7 +279,17 @@ impl AudioEngine {
     }
 
     /// Load an audio file into a sample slot on a background thread.
-    pub fn load_sample_async(&self, id: usize, path: String) -> PyResult<()> {
+    ///
+    /// # Parameters
+    /// * `id` - Sample slot identifier
+    /// * `path` - Path to the audio file
+    /// * `run_analysis` - Whether to run automatic analysis after loading (default: true)
+    pub fn load_sample_async(
+        &self,
+        id: usize,
+        path: String,
+        run_analysis: Option<bool>,
+    ) -> PyResult<()> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err(format!(
                 "id out of range (expected 0..{}, got {id})",
@@ -298,6 +308,7 @@ impl AudioEngine {
         let output_sample_rate = handle.output_sample_rate;
         let sample_cache = self.sample_cache.clone();
         let loading_sample_ids = self.loading_sample_ids.clone();
+        let run_analysis = run_analysis.unwrap_or(true);
 
         {
             let mut set = loading_sample_ids
@@ -360,34 +371,35 @@ impl AudioEngine {
 
             let resampling_required = progress.resampling_required.unwrap_or(true);
 
-            let cached_path = match cache_sample_buffer_as_project_wav(
-                Path::new("samples"),
-                Path::new(&path),
-                &sample,
-                output_sample_rate,
-            ) {
-                Ok(path) => path,
-                Err(err) => {
-                    let _ = loader_tx.send(LoaderEvent::Error {
-                        id,
-                        error: format!("Failed to write cached WAV: {err}"),
-                    });
-                    return;
-                }
-            };
+            let cached_path =
+                match cache_audio_file_for_project(Path::new("samples"), Path::new(&path)) {
+                    Ok(path) => path,
+                    Err(err) => {
+                        let _ = loader_tx.send(LoaderEvent::Error {
+                            id,
+                            error: format!("Failed to cache audio file: {err}"),
+                        });
+                        return;
+                    }
+                };
             let cached_path = cached_path.to_string_lossy().replace('\\', "/");
 
-            progress.emit(LoadProgressStage::Analyzing, 0.0, resampling_required, true);
+            let analysis = if run_analysis {
+                progress.emit(LoadProgressStage::Analyzing, 0.0, resampling_required, true);
 
-            let analysis = match analyze_sample(&sample, output_sample_rate) {
-                Ok(result) => result,
-                Err(err) => {
-                    let _ = loader_tx.send(LoaderEvent::Error { id, error: err });
-                    return;
+                match analyze_sample(&sample, output_sample_rate) {
+                    Ok(result) => {
+                        progress.emit(LoadProgressStage::Analyzing, 1.0, resampling_required, true);
+                        Some(result)
+                    }
+                    Err(err) => {
+                        let _ = loader_tx.send(LoaderEvent::Error { id, error: err });
+                        return;
+                    }
                 }
+            } else {
+                None
             };
-
-            progress.emit(LoadProgressStage::Analyzing, 1.0, resampling_required, true);
 
             progress.emit(
                 LoadProgressStage::Publishing,
@@ -400,10 +412,10 @@ impl AudioEngine {
             let duration_sec = frames as f32 / output_sample_rate as f32;
 
             let sample_for_audio = sample.clone();
-            if let Ok(mut cache) = sample_cache.lock() {
-                if let Some(slot) = cache.get_mut(id) {
-                    *slot = Some(sample);
-                }
+            if let Ok(mut cache) = sample_cache.lock()
+                && let Some(slot) = cache.get_mut(id)
+            {
+                *slot = Some(sample);
             }
 
             let mut producer_guard = match producer.lock() {
@@ -584,16 +596,18 @@ impl AudioEngine {
                 dict.set_item("duration_sec", duration_sec)?;
                 dict.set_item("cached_path", cached_path)?;
 
-                let analysis_dict = PyDict::new(py);
-                analysis_dict.set_item("bpm", analysis.bpm)?;
-                analysis_dict.set_item("key", analysis.key)?;
+                if let Some(analysis) = analysis {
+                    let analysis_dict = PyDict::new(py);
+                    analysis_dict.set_item("bpm", analysis.bpm)?;
+                    analysis_dict.set_item("key", analysis.key)?;
 
-                let beat_grid_dict = PyDict::new(py);
-                beat_grid_dict.set_item("beats", &analysis.beat_grid.beats)?;
-                beat_grid_dict.set_item("downbeats", &analysis.beat_grid.downbeats)?;
-                analysis_dict.set_item("beat_grid", beat_grid_dict)?;
+                    let beat_grid_dict = PyDict::new(py);
+                    beat_grid_dict.set_item("beats", &analysis.beat_grid.beats)?;
+                    beat_grid_dict.set_item("downbeats", &analysis.beat_grid.downbeats)?;
+                    analysis_dict.set_item("beat_grid", beat_grid_dict)?;
 
-                dict.set_item("analysis", analysis_dict)?;
+                    dict.set_item("analysis", analysis_dict)?;
+                }
             }
             LoaderEvent::Error { id, error } => {
                 dict.set_item("type", "error")?;
@@ -940,10 +954,10 @@ impl AudioEngine {
                 PyRuntimeError::new_err("Failed to send UnloadSample - buffer may be full")
             })?;
 
-        if let Ok(mut cache) = self.sample_cache.lock() {
-            if let Some(slot) = cache.get_mut(id) {
-                *slot = None;
-            }
+        if let Ok(mut cache) = self.sample_cache.lock()
+            && let Some(slot) = cache.get_mut(id)
+        {
+            *slot = None;
         }
 
         if let Ok(mut set) = self.loading_sample_ids.lock() {

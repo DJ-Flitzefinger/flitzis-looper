@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from flitzis_looper.models import ProjectState, SampleAnalysis, SessionState, validate_sample_id
-from flitzis_looper.persistence import probe_wav_sample_rate
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -53,19 +52,15 @@ class LoaderController:
 
         return rel
 
-    def _is_cached_wav_usable(self, abs_path: Path, *, output_sample_rate: int) -> bool:
-        if not abs_path.is_file():
-            return False
+    def _is_cached_file_usable(self, abs_path: Path) -> bool:
+        return abs_path.is_file()
 
-        file_sample_rate = probe_wav_sample_rate(abs_path)
-        return file_sample_rate is not None and file_sample_rate == output_sample_rate
-
-    def _schedule_restored_load(self, sample_id: int, rel: Path) -> bool:
+    def _schedule_restored_load(self, sample_id: int, rel: Path, *, run_analysis: bool) -> bool:
         self._session.pending_sample_paths[sample_id] = rel.as_posix()
         self._session.loading_sample_ids.add(sample_id)
 
         try:
-            self._audio.load_sample_async(sample_id, rel.as_posix())
+            self._audio.load_sample_async(sample_id, rel.as_posix(), run_analysis=run_analysis)
         except RuntimeError:
             self._session.loading_sample_ids.discard(sample_id)
             self._session.pending_sample_paths.pop(sample_id, None)
@@ -76,7 +71,7 @@ class LoaderController:
     def restore_samples_from_project_state(self) -> None:
         """Schedule async loads for cached samples referenced by `ProjectState`.
 
-        Invalid/missing/mismatched cached WAVs are ignored by clearing the pad assignment.
+        Invalid/missing cached files are ignored by clearing the pad assignment.
         """
         output_sample_rate = self._get_output_sample_rate()
         if output_sample_rate is None:
@@ -94,12 +89,12 @@ class LoaderController:
                 continue
 
             abs_path = Path.cwd() / rel
-            if not self._is_cached_wav_usable(abs_path, output_sample_rate=output_sample_rate):
+            if not self._is_cached_file_usable(abs_path):
                 self._clear_restored_pad(sample_id)
                 changed = True
                 continue
 
-            if not self._schedule_restored_load(sample_id, rel):
+            if not self._schedule_restored_load(sample_id, rel, run_analysis=False):
                 self._clear_restored_pad(sample_id)
                 changed = True
 
@@ -137,7 +132,7 @@ class LoaderController:
         self._session.pending_sample_paths[sample_id] = path
         self._session.loading_sample_ids.add(sample_id)
 
-        self._audio.load_sample_async(sample_id, path)
+        self._audio.load_sample_async(sample_id, path, run_analysis=True)
 
     def unload_sample(self, sample_id: int) -> None:
         """Stop playback and unload a sample slot."""
@@ -288,7 +283,15 @@ class LoaderController:
             self._project.sample_paths[sample_id] = target_path
             self._mark_project_changed()
 
-        self._store_sample_analysis(sample_id, event.get("analysis"))
+        # If analysis is provided in the event (from normal loading), store it
+        analysis = event.get("analysis")
+        if analysis is not None:
+            self._store_sample_analysis(sample_id, analysis)
+        # If no analysis in event (from restoration), keep existing analysis from project state
+        elif self._project.sample_analysis[sample_id] is not None:
+            # Analysis was already restored from project state, just trigger BPM update
+            self._on_pad_bpm_changed(sample_id)
+
         self._clear_analysis_task_state(sample_id)
 
     def _handle_loader_error(self, sample_id: int, event: dict[str, object]) -> None:

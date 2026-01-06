@@ -6,21 +6,19 @@
 use audioadapter::AdapterMut;
 use audioadapter_buffers::owned::InterleavedOwned;
 use rubato::{Fft, FixedSync, Indexing, Resampler};
-use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::fs;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use blake3::Hasher;
+use crate::audio_engine::errors::SampleLoadError;
+use crate::messages::SampleBuffer;
 use symphonia::core::{
     audio::SampleBuffer as SymphoniaSampleBuffer, codecs::DecoderOptions,
     errors::Error as SymphoniaError, formats::FormatOptions, io::MediaSourceStream,
     meta::MetadataOptions, probe::Hint,
 };
 use symphonia::default::{get_codecs, get_probe};
-
-use crate::audio_engine::errors::SampleLoadError;
-use crate::messages::SampleBuffer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SampleLoadSubtask {
@@ -44,384 +42,6 @@ fn clamp_progress(percent: f32) -> f32 {
         0.0
     }
 }
-
-/// Convert rubato errors to SampleLoadError for proper error handling.
-impl From<rubato::ResampleError> for SampleLoadError {
-    fn from(_err: rubato::ResampleError) -> Self {
-        SampleLoadError::Decode(symphonia::core::errors::Error::Unsupported(
-            "Resampling failed",
-        ))
-    }
-}
-
-/// Decodes an audio file into a sample buffer with the specified output configuration.
-///
-/// This function loads an audio file from disk, decodes it using the Symphonia library,
-/// resamples it to the target sample rate (if needed), and converts it to a
-/// floating-point sample buffer with the requested channel count.
-///
-/// # Parameters
-///
-/// - `path`: Path to the audio file to load
-/// - `output_channels`: Number of output channels (1 for mono, 2 for stereo)
-/// - `output_rate_hz`: Output sample rate in Hz
-/// - `progress`: Progress callback
-///
-/// # Returns
-///
-/// - `Ok(SampleBuffer)`: Successfully decoded audio buffer
-/// - `Err(SampleLoadError)`: Error encountered during loading or decoding
-///
-/// # Errors
-///
-/// This function may return errors for various conditions:
-/// - File not found or cannot be opened
-/// - Audio format not recognized or corrupted
-/// - Unsupported channel count
-/// - Resampling errors
-/// - Invalid or corrupt audio data
-pub fn decode_audio_file_to_sample_buffer<F>(
-    path: &Path,
-    output_channels: usize,
-    output_rate_hz: u32,
-    mut progress: F,
-) -> Result<SampleBuffer, SampleLoadError>
-where
-    F: FnMut(SampleLoadProgress),
-{
-    let file = File::open(path)?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
-
-    let mut hint = Hint::new();
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        hint.with_extension(ext);
-    }
-
-    let probed = get_probe().format(
-        &hint,
-        mss,
-        &FormatOptions::default(),
-        &MetadataOptions::default(),
-    )?;
-    let mut format = probed.format;
-
-    let track = format
-        .default_track()
-        .ok_or(SampleLoadError::NoDefaultTrack)?;
-    let file_rate_hz = track
-        .codec_params
-        .sample_rate
-        .ok_or(SampleLoadError::MissingSampleRate)?;
-    let file_channels = track
-        .codec_params
-        .channels
-        .ok_or(SampleLoadError::MissingChannels)?
-        .count();
-
-    let mut decoder = get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
-
-    let resampling_required = file_rate_hz != output_rate_hz;
-
-    let total_frames = track.codec_params.n_frames;
-    let mut decoded_frames: u64 = 0;
-    progress(SampleLoadProgress {
-        subtask: SampleLoadSubtask::Decoding,
-        resampling_required,
-        percent: 0.0,
-    });
-
-    let mut decoded: Vec<f32> = Vec::new();
-    loop {
-        let packet = match format.next_packet() {
-            Ok(packet) => packet,
-            Err(SymphoniaError::IoError(err))
-                if err.kind() == std::io::ErrorKind::UnexpectedEof =>
-            {
-                break;
-            }
-            Err(err) => return Err(SampleLoadError::Decode(err)),
-        };
-
-        let audio_buf = decoder.decode(&packet)?;
-        let spec = *audio_buf.spec();
-        let duration = audio_buf.capacity() as u64;
-        let packet_frames = audio_buf.frames() as u64;
-
-        let mut sample_buf = SymphoniaSampleBuffer::<f32>::new(duration, spec);
-        sample_buf.copy_interleaved_ref(audio_buf);
-        decoded.extend_from_slice(sample_buf.samples());
-
-        decoded_frames = decoded_frames.saturating_add(packet_frames);
-        if let Some(total_frames) = total_frames {
-            let percent = (decoded_frames as f32 / total_frames as f32).min(1.0);
-            progress(SampleLoadProgress {
-                subtask: SampleLoadSubtask::Decoding,
-                resampling_required,
-                percent: clamp_progress(percent),
-            });
-        }
-    }
-
-    progress(SampleLoadProgress {
-        subtask: SampleLoadSubtask::Decoding,
-        resampling_required,
-        percent: 1.0,
-    });
-
-    let resampled = if !resampling_required {
-        decoded
-    } else {
-        progress(SampleLoadProgress {
-            subtask: SampleLoadSubtask::Resampling,
-            resampling_required,
-            percent: 0.0,
-        });
-        resample_audio(
-            decoded,
-            file_channels,
-            file_rate_hz,
-            output_rate_hz,
-            |percent| {
-                progress(SampleLoadProgress {
-                    subtask: SampleLoadSubtask::Resampling,
-                    resampling_required,
-                    percent,
-                });
-            },
-        )?
-    };
-
-    progress(SampleLoadProgress {
-        subtask: SampleLoadSubtask::ChannelMapping,
-        resampling_required,
-        percent: 0.0,
-    });
-    let mapped = map_channels(resampled, file_channels, output_channels)?;
-    progress(SampleLoadProgress {
-        subtask: SampleLoadSubtask::ChannelMapping,
-        resampling_required,
-        percent: 1.0,
-    });
-
-    Ok(SampleBuffer {
-        channels: output_channels,
-        samples: Arc::from(mapped.into_boxed_slice()),
-    })
-}
-
-fn wav_f32_header_bytes(sample: &SampleBuffer, sample_rate_hz: u32) -> std::io::Result<[u8; 44]> {
-    let channels = u16::try_from(sample.channels)
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "too many channels"))?;
-
-    let data_len_bytes =
-        sample.samples.len().checked_mul(4).ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, "sample too large")
-        })?;
-    let data_len_bytes_u32 = u32::try_from(data_len_bytes)
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "sample too large"))?;
-
-    let chunk_size = 36u32
-        .checked_add(data_len_bytes_u32)
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "sample too large"))?;
-
-    let bits_per_sample = 32u16;
-    let audio_format = 3u16; // IEEE float
-
-    let bytes_per_sample = u32::from(bits_per_sample / 8);
-    let block_align_u32 = u32::from(channels) * bytes_per_sample;
-    let block_align = u16::try_from(block_align_u32).map_err(|_| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid block align")
-    })?;
-
-    let byte_rate = sample_rate_hz.checked_mul(block_align_u32).ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid byte rate")
-    })?;
-
-    let mut header = [0u8; 44];
-    header[0..4].copy_from_slice(b"RIFF");
-    header[4..8].copy_from_slice(&chunk_size.to_le_bytes());
-    header[8..12].copy_from_slice(b"WAVE");
-
-    header[12..16].copy_from_slice(b"fmt ");
-    header[16..20].copy_from_slice(&16u32.to_le_bytes());
-    header[20..22].copy_from_slice(&audio_format.to_le_bytes());
-    header[22..24].copy_from_slice(&channels.to_le_bytes());
-    header[24..28].copy_from_slice(&sample_rate_hz.to_le_bytes());
-    header[28..32].copy_from_slice(&byte_rate.to_le_bytes());
-    header[32..34].copy_from_slice(&block_align.to_le_bytes());
-    header[34..36].copy_from_slice(&bits_per_sample.to_le_bytes());
-
-    header[36..40].copy_from_slice(b"data");
-    header[40..44].copy_from_slice(&data_len_bytes_u32.to_le_bytes());
-
-    Ok(header)
-}
-
-fn hash_wav_f32(sample: &SampleBuffer, sample_rate_hz: u32) -> std::io::Result<blake3::Hash> {
-    let header = wav_f32_header_bytes(sample, sample_rate_hz)?;
-    let mut hasher = Hasher::new();
-    hasher.update(&header);
-    for value in sample.samples.iter().copied() {
-        hasher.update(&value.to_le_bytes());
-    }
-    Ok(hasher.finalize())
-}
-
-fn hash_file(path: &Path) -> std::io::Result<blake3::Hash> {
-    let mut file = File::open(path)?;
-    let mut hasher = Hasher::new();
-
-    let mut buf = [0u8; 64 * 1024];
-    loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-
-    Ok(hasher.finalize())
-}
-
-fn atomic_write_wav_f32(
-    path: &Path,
-    sample: &SampleBuffer,
-    sample_rate_hz: u32,
-) -> std::io::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("sample.wav");
-
-    let mut attempt: u32 = 0;
-    loop {
-        let tmp_name = if attempt == 0 {
-            format!(".{file_name}.tmp")
-        } else {
-            format!(".{file_name}.tmp.{attempt}")
-        };
-        let tmp_path = parent.join(tmp_name);
-
-        let file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp_path);
-
-        let mut file = match file {
-            Ok(file) => file,
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-                attempt = attempt.saturating_add(1);
-                continue;
-            }
-            Err(err) => return Err(err),
-        };
-
-        let result = (|| {
-            let header = wav_f32_header_bytes(sample, sample_rate_hz)?;
-            file.write_all(&header)?;
-            for value in sample.samples.iter().copied() {
-                file.write_all(&value.to_le_bytes())?;
-            }
-            file.flush()?;
-            file.sync_all()?;
-            Ok(())
-        })();
-
-        match result {
-            Ok(()) => {}
-            Err(err) => {
-                let _ = fs::remove_file(&tmp_path);
-                return Err(err);
-            }
-        }
-
-        drop(file);
-
-        match fs::rename(&tmp_path, path) {
-            Ok(()) => return Ok(()),
-            Err(err) => {
-                let _ = fs::remove_file(&tmp_path);
-                return Err(err);
-            }
-        }
-    }
-}
-
-pub fn cache_sample_buffer_as_project_wav(
-    project_samples_dir: &Path,
-    source_path: &Path,
-    sample: &SampleBuffer,
-    sample_rate_hz: u32,
-) -> std::io::Result<PathBuf> {
-    fs::create_dir_all(project_samples_dir)?;
-
-    let stem = source_path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .filter(|value| !value.is_empty())
-        .unwrap_or("sample");
-
-    let base = project_samples_dir.join(format!("{stem}.wav"));
-    if base.exists() && !base.is_file() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            "target cached WAV is not a file",
-        ));
-    }
-
-    let wav_hash = hash_wav_f32(sample, sample_rate_hz)?;
-
-    let base_matches = base.is_file() && hash_file(&base).ok().is_some_and(|hash| hash == wav_hash);
-    if base_matches {
-        return Ok(base);
-    }
-
-    if base.is_file() {
-        let hash_hex = wav_hash.to_hex().to_string();
-        let mut candidate = project_samples_dir.join(format!("{stem}_{}.wav", &hash_hex[..16]));
-
-        if candidate.exists() && !candidate.is_file() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                "target cached WAV is not a file",
-            ));
-        }
-
-        if candidate.is_file() {
-            let matches = hash_file(&candidate)
-                .ok()
-                .is_some_and(|hash| hash == wav_hash);
-            if matches {
-                return Ok(candidate);
-            }
-
-            candidate = project_samples_dir.join(format!("{stem}_{hash_hex}.wav"));
-        }
-
-        if candidate.is_file() {
-            let matches = hash_file(&candidate)
-                .ok()
-                .is_some_and(|hash| hash == wav_hash);
-            if matches {
-                return Ok(candidate);
-            }
-
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                "cached WAV name collision",
-            ));
-        }
-
-        atomic_write_wav_f32(&candidate, sample, sample_rate_hz)?;
-        return Ok(candidate);
-    }
-
-    atomic_write_wav_f32(&base, sample, sample_rate_hz)?;
-    Ok(base)
-}
-
-/// Resamples audio data to a new sample rate using FFT-based resampling.
 ///
 /// # Arguments
 ///
@@ -598,6 +218,240 @@ pub fn map_channels(
     }
 }
 
+/// Decodes an audio file into a sample buffer with the specified output configuration.
+///
+/// This function loads an audio file from disk, decodes it using the Symphonia library,
+/// resamples it to the target sample rate (if needed), and converts it to a
+/// floating-point sample buffer with the requested channel count.
+///
+/// # Parameters
+///
+/// - `path`: Path to the audio file to load
+/// - `output_channels`: Number of output channels (1 for mono, 2 for stereo)
+/// - `output_rate_hz`: Output sample rate in Hz
+/// - `progress`: Progress callback
+///
+/// # Returns
+///
+/// - `Ok(SampleBuffer)`: Successfully decoded audio buffer
+/// - `Err(SampleLoadError)`: Error encountered during loading or decoding
+///
+/// # Errors
+///
+/// This function may return errors for various conditions:
+/// - File not found or cannot be opened
+/// - Audio format not recognized or corrupted
+/// - Unsupported channel count
+/// - Resampling errors
+/// - Invalid or corrupt audio data
+#[allow(unused_imports)] // Temporary until we clean up imports
+pub fn decode_audio_file_to_sample_buffer<F>(
+    path: &Path,
+    output_channels: usize,
+    output_rate_hz: u32,
+    mut progress: F,
+) -> Result<SampleBuffer, SampleLoadError>
+where
+    F: FnMut(SampleLoadProgress),
+{
+    use std::io::Write;
+
+    let file = File::open(path)?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+
+    let probed = get_probe().format(
+        &hint,
+        mss,
+        &FormatOptions::default(),
+        &MetadataOptions::default(),
+    )?;
+    let mut format = probed.format;
+
+    let track = format
+        .default_track()
+        .ok_or(SampleLoadError::NoDefaultTrack)?;
+    let file_rate_hz = track
+        .codec_params
+        .sample_rate
+        .ok_or(SampleLoadError::MissingSampleRate)?;
+    let file_channels = track
+        .codec_params
+        .channels
+        .ok_or(SampleLoadError::MissingChannels)?
+        .count();
+
+    let mut decoder = get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
+
+    let resampling_required = file_rate_hz != output_rate_hz;
+
+    let total_frames = track.codec_params.n_frames;
+    let mut decoded_frames: u64 = 0;
+    progress(SampleLoadProgress {
+        subtask: SampleLoadSubtask::Decoding,
+        resampling_required,
+        percent: 0.0,
+    });
+
+    let mut decoded: Vec<f32> = Vec::new();
+    loop {
+        let packet = match format.next_packet() {
+            Ok(packet) => packet,
+            Err(SymphoniaError::IoError(err))
+                if err.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
+                break;
+            }
+            Err(err) => return Err(SampleLoadError::Decode(err)),
+        };
+
+        let audio_buf = decoder.decode(&packet)?;
+        let spec = *audio_buf.spec();
+        let duration = audio_buf.capacity() as u64;
+        let packet_frames = audio_buf.frames() as u64;
+
+        let mut sample_buf = SymphoniaSampleBuffer::<f32>::new(duration, spec);
+        sample_buf.copy_interleaved_ref(audio_buf);
+        decoded.extend_from_slice(sample_buf.samples());
+
+        decoded_frames = decoded_frames.saturating_add(packet_frames);
+        if let Some(total_frames) = total_frames {
+            let percent = (decoded_frames as f32 / total_frames as f32).min(1.0);
+            progress(SampleLoadProgress {
+                subtask: SampleLoadSubtask::Decoding,
+                resampling_required,
+                percent: clamp_progress(percent),
+            });
+        }
+    }
+
+    progress(SampleLoadProgress {
+        subtask: SampleLoadSubtask::Decoding,
+        resampling_required,
+        percent: 1.0,
+    });
+
+    let resampled = if !resampling_required {
+        decoded
+    } else {
+        progress(SampleLoadProgress {
+            subtask: SampleLoadSubtask::Resampling,
+            resampling_required,
+            percent: 0.0,
+        });
+        resample_audio(
+            decoded,
+            file_channels,
+            file_rate_hz,
+            output_rate_hz,
+            |percent| {
+                progress(SampleLoadProgress {
+                    subtask: SampleLoadSubtask::Resampling,
+                    resampling_required,
+                    percent,
+                });
+            },
+        )?
+    };
+
+    progress(SampleLoadProgress {
+        subtask: SampleLoadSubtask::ChannelMapping,
+        resampling_required,
+        percent: 0.0,
+    });
+    let mapped = map_channels(resampled, file_channels, output_channels)?;
+    progress(SampleLoadProgress {
+        subtask: SampleLoadSubtask::ChannelMapping,
+        resampling_required,
+        percent: 1.0,
+    });
+
+    Ok(SampleBuffer {
+        channels: output_channels,
+        samples: Arc::from(mapped.into_boxed_slice()),
+    })
+}
+
+/// Generates a unique filename for caching an audio file, handling collisions
+/// by appending numeric suffixes (_0, _1, etc.).
+fn find_unique_cache_path(
+    project_samples_dir: &Path,
+    stem: &str,
+    extension: &str,
+) -> std::io::Result<PathBuf> {
+    let base = project_samples_dir.join(format!("{stem}{extension}"));
+
+    // Check if any file with this stem exists (regardless of extension)
+    let has_collision = base.exists()
+        || std::fs::read_dir(project_samples_dir)?.any(|entry| {
+            let entry = entry.unwrap();
+            let file_name = entry.file_name();
+            let file_name_str = file_name.to_string_lossy();
+            file_name_str.starts_with(&format!("{stem}_"))
+                || file_name_str == format!("{stem}{}", extension)
+                || file_name_str.starts_with(&format!("{stem}."))
+        });
+
+    if !has_collision {
+        return Ok(base);
+    }
+
+    // Try with numeric suffixes
+    for index in 0..=999 {
+        let candidate = project_samples_dir.join(format!("{stem}_{index}{extension}"));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "too many filename collisions",
+    ))
+}
+
+/// Copies an audio file to the project samples directory with collision handling.
+///
+/// # Arguments
+///
+/// * `project_samples_dir` - Directory to copy the file into
+/// * `source_path` - Path to the original audio file
+///
+/// # Returns
+///
+/// - `Ok(PathBuf)`: Path to the cached file (either existing or newly copied)
+/// - `Err(std::io::Error)`: I/O error during copy operation
+pub fn cache_audio_file_for_project(
+    project_samples_dir: &Path,
+    source_path: &Path,
+) -> std::io::Result<PathBuf> {
+    fs::create_dir_all(project_samples_dir)?;
+
+    // Extract file stem and extension from source path
+    let stem = source_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("sample");
+
+    let extension = source_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| format!(".{ext}"))
+        .unwrap_or_else(|| ".unknown".to_string());
+
+    let cache_path = find_unique_cache_path(project_samples_dir, stem, &extension)?;
+
+    // Copy the original file to the cache location
+    fs::copy(source_path, &cache_path)?;
+
+    Ok(cache_path)
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Write;
@@ -648,66 +502,147 @@ mod tests {
     }
 
     #[test]
-    fn test_cache_sample_buffer_writes_f32_wav() {
+    fn test_cache_audio_file_copies_original() {
         let tmp = tempfile::tempdir().unwrap();
         let samples_dir = tmp.path().join("samples");
+        let source_dir = tmp.path().join("source");
+        fs::create_dir_all(&source_dir).unwrap();
 
-        let sample = make_sample_buffer(1, vec![0.0, 0.5, -0.5, 1.0]);
-        let cached = cache_sample_buffer_as_project_wav(
-            &samples_dir,
-            Path::new("/somewhere/loop.flac"),
-            &sample,
-            48_000,
-        )
-        .unwrap();
+        // Create a source WAV file
+        let source_path = source_dir.join("loop.flac");
+        let samples = [0i16, 16_384i16, -16_384i16, 32_767i16];
+        write_pcm16_wav(&source_path, 1, 44_100, &samples).unwrap();
+
+        let cached = cache_audio_file_for_project(&samples_dir, &source_path).unwrap();
 
         assert!(cached.is_file());
-        assert!(cached.ends_with(Path::new("samples/loop.wav")));
+        assert!(cached.ends_with(Path::new("samples/loop.flac")));
 
-        let header = std::fs::read(&cached).unwrap();
-        assert!(header.len() >= 44);
-        assert_eq!(&header[0..4], b"RIFF");
-        assert_eq!(&header[8..12], b"WAVE");
-
-        let audio_format = u16::from_le_bytes([header[20], header[21]]);
-        let bits_per_sample = u16::from_le_bytes([header[34], header[35]]);
-        let sample_rate_hz = u32::from_le_bytes([header[24], header[25], header[26], header[27]]);
-
-        assert_eq!(audio_format, 3);
-        assert_eq!(bits_per_sample, 32);
-        assert_eq!(sample_rate_hz, 48_000);
+        // Verify the file contents are identical
+        let source_content = std::fs::read(&source_path).unwrap();
+        let cached_content = std::fs::read(&cached).unwrap();
+        assert_eq!(source_content, cached_content);
     }
 
     #[test]
-    fn test_cache_sample_buffer_handles_basename_collision() {
+    fn test_cache_audio_file_handles_collision() {
         let tmp = tempfile::tempdir().unwrap();
         let samples_dir = tmp.path().join("samples");
+        let source_dir = tmp.path().join("source");
+        fs::create_dir_all(&source_dir).unwrap();
 
-        let sample_a = make_sample_buffer(1, vec![0.1, 0.2, 0.3]);
-        let path_a = cache_sample_buffer_as_project_wav(
-            &samples_dir,
-            Path::new("/a/loop.wav"),
-            &sample_a,
-            48_000,
-        )
-        .unwrap();
-        let hash_a_before = hash_file(&path_a).unwrap();
+        // Create first source file
+        let source_path_a = source_dir.join("loop.mp3");
+        let samples_a = [0i16, 16_384i16, -16_384i16];
+        write_pcm16_wav(&source_path_a, 1, 44_100, &samples_a).unwrap();
 
-        let sample_b = make_sample_buffer(1, vec![0.9, 0.8, 0.7]);
-        let path_b = cache_sample_buffer_as_project_wav(
-            &samples_dir,
-            Path::new("/b/loop.wav"),
-            &sample_b,
-            48_000,
-        )
-        .unwrap();
+        let path_a = cache_audio_file_for_project(&samples_dir, &source_path_a).unwrap();
+        assert!(path_a.ends_with(Path::new("samples/loop.mp3")));
+
+        // Create second source file with same stem but different extension
+        let source_path_b = source_dir.join("loop.wav");
+        let samples_b = [0i16, 32_767i16, -32_767i16];
+        write_pcm16_wav(&source_path_b, 1, 44_100, &samples_b).unwrap();
+
+        let path_b = cache_audio_file_for_project(&samples_dir, &source_path_b).unwrap();
 
         assert_ne!(path_a, path_b);
         assert!(path_a.is_file());
         assert!(path_b.is_file());
+        assert!(path_b.ends_with(Path::new("samples/loop_0.wav")));
 
-        let hash_a_after = hash_file(&path_a).unwrap();
-        assert_eq!(hash_a_before, hash_a_after);
+        // Verify both files have correct content
+        let source_content_a = std::fs::read(&source_path_a).unwrap();
+        let cached_content_a = std::fs::read(&path_a).unwrap();
+        assert_eq!(source_content_a, cached_content_a);
+
+        let source_content_b = std::fs::read(&source_path_b).unwrap();
+        let cached_content_b = std::fs::read(&path_b).unwrap();
+        assert_eq!(source_content_b, cached_content_b);
+    }
+
+    #[test]
+    fn test_cache_audio_file_handles_multiple_collisions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let samples_dir = tmp.path().join("samples");
+        let source_dir = tmp.path().join("source");
+        fs::create_dir_all(&source_dir).unwrap();
+
+        // Create multiple source files with same stem
+        let paths: Vec<PathBuf> = (0..5)
+            .map(|i| {
+                let source_path = source_dir.join(format!("loop_{}.mp3", i));
+                let samples = [0i16, 1i16, 2i16, 3i16];
+                write_pcm16_wav(&source_path, 1, 44_100, &samples).unwrap();
+                source_path
+            })
+            .collect();
+
+        // Cache them all (they should all have stem "loop")
+        let cached_paths: Vec<PathBuf> = paths
+            .iter()
+            .map(|source_path| {
+                // Rename to have same stem for collision testing
+                let temp_path = source_dir.join("loop.mp3");
+                fs::copy(source_path, &temp_path).unwrap();
+                let cached = cache_audio_file_for_project(&samples_dir, &temp_path).unwrap();
+                fs::remove_file(&temp_path).unwrap();
+                cached
+            })
+            .collect();
+
+        // All should be cached successfully
+        assert_eq!(cached_paths.len(), 5);
+        for path in &cached_paths {
+            assert!(path.is_file());
+        }
+
+        // Check that they have different names
+        let mut cached_names = cached_paths
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect::<Vec<String>>();
+        cached_names.sort();
+        assert_eq!(
+            cached_names,
+            vec![
+                "loop.mp3",
+                "loop_0.mp3",
+                "loop_1.mp3",
+                "loop_2.mp3",
+                "loop_3.mp3",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_cache_audio_file_handles_too_many_collisions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let samples_dir = tmp.path().join("samples");
+        let source_dir = tmp.path().join("source");
+        fs::create_dir_all(&source_dir).unwrap();
+        fs::create_dir_all(&samples_dir).unwrap();
+
+        println!("samples_dir exists: {}", samples_dir.exists());
+
+        // Create a source file
+        let source_path = source_dir.join("loop.mp3");
+        let samples = [0i16, 16_384i16];
+        write_pcm16_wav(&source_path, 1, 44_100, &samples).unwrap();
+
+        // Create 1000 collision files
+        for i in 0..=999 {
+            let collision_path = samples_dir.join(format!("loop_{}.mp3", i));
+            write_pcm16_wav(&collision_path, 1, 44_100, &samples).unwrap();
+        }
+
+        // The next one should fail
+        let result = cache_audio_file_for_project(&samples_dir, &source_path);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
     }
 
     #[test]

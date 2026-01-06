@@ -34,7 +34,7 @@ def test_load_and_play_sample_smoke(
     cached_path: str | None = None
     _write_mono_pcm16_wav(wav_path, sample_rate_hz)
 
-    audio_engine.load_sample_async(0, str(wav_path))
+    audio_engine.load_sample_async(0, str(wav_path), run_analysis=True)
 
     deadline = time.monotonic() + 2.0
     error_msg: str | None = None
@@ -76,7 +76,7 @@ def test_load_and_play_sample_smoke(
 
 def test_sample_slot_id_range_is_0_to_215(audio_engine: AudioEngine) -> None:
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.load_sample_async(216, "does-not-matter.wav")
+        audio_engine.load_sample_async(216, "does-not-matter.wav", run_analysis=True)
 
     with pytest.raises(ValueError, match=r"id out of range"):
         audio_engine.play_sample(216, 1.0)
@@ -87,7 +87,7 @@ def test_sample_slot_id_range_is_0_to_215(audio_engine: AudioEngine) -> None:
     with pytest.raises(ValueError, match=r"id out of range"):
         audio_engine.unload_sample(216)
 
-    audio_engine.load_sample_async(215, "file-does-not-exist.wav")
+    audio_engine.load_sample_async(215, "file-does-not-exist.wav", run_analysis=True)
 
     deadline = time.monotonic() + 1.0
     saw_error = False
@@ -126,7 +126,7 @@ def test_stop_all_is_safe_when_nothing_playing(audio_engine: AudioEngine) -> Non
 def test_load_sample_async_emits_started_and_error_for_missing_file(
     audio_engine: AudioEngine,
 ) -> None:
-    audio_engine.load_sample_async(0, "file-does-not-exist.wav")
+    audio_engine.load_sample_async(0, "file-does-not-exist.wav", run_analysis=True)
 
     deadline = time.monotonic() + 1.0
     seen: dict[str, dict[str, object]] = {}
