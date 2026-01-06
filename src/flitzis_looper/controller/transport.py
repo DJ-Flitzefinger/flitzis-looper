@@ -38,9 +38,43 @@ class TransportController:
         self._audio = audio
         self._on_project_changed = on_project_changed
 
+        self.loop = PadLoopController(self)
+        self.playback = PadPlaybackController(self)
+
     def _mark_project_changed(self) -> None:
         if self._on_project_changed is not None:
             self._on_project_changed()
+
+    def _output_sample_rate_hz(self) -> int | None:
+        fn = getattr(self._audio, "output_sample_rate", None)
+        if fn is None:
+            return None
+        try:
+            return int(fn())
+        except RuntimeError:
+            return None
+        except TypeError:
+            return None
+        except ValueError:
+            return None
+
+    def _quantize_time_to_output_samples(self, time_s: float) -> float:
+        """Quantize a time to an integer output-sample boundary."""
+        sample_rate_hz = self._output_sample_rate_hz()
+        if sample_rate_hz is None or sample_rate_hz <= 0:
+            return time_s
+
+        frames = round(time_s * sample_rate_hz)
+        if not isinstance(frames, int):
+            return time_s
+        frames = max(frames, 0)
+        return frames / sample_rate_hz
+
+    def _apply_effective_pad_loop_region_to_audio(self, sample_id: int) -> None:
+        if self._project.sample_paths[sample_id] is None:
+            return
+        start_s, end_s = self._effective_pad_loop_region(sample_id)
+        self._audio.set_pad_loop_region(sample_id, start_s, end_s)
 
     def _apply_project_state_to_audio(self) -> None:
         defaults = ProjectState()
@@ -84,14 +118,19 @@ class TransportController:
 
     def _apply_pad_loop_regions(self, defaults: ProjectState) -> None:
         for sample_id in range(len(self._project.sample_paths)):
+            if self._project.sample_paths[sample_id] is None:
+                continue
+
             start_s = self._project.pad_loop_start_s[sample_id]
             end_s = self._project.pad_loop_end_s[sample_id]
             if (
                 start_s == defaults.pad_loop_start_s[sample_id]
                 and end_s == defaults.pad_loop_end_s[sample_id]
+                and not self._project.pad_loop_auto[sample_id]
             ):
                 continue
-            self._audio.set_pad_loop_region(sample_id, start_s, end_s)
+
+            self._apply_effective_pad_loop_region_to_audio(sample_id)
 
     def _apply_pad_bpm_settings(self) -> None:
         for sample_id in range(len(self._project.sample_paths)):
@@ -162,8 +201,7 @@ class TransportController:
         self._project.pad_loop_bars[sample_id] = 4
         self._mark_project_changed()
 
-        if self._project.sample_paths[sample_id] is not None:
-            self._audio.set_pad_loop_region(sample_id, start_s, end_s)
+        self._apply_effective_pad_loop_region_to_audio(sample_id)
 
     def _set_pad_loop_region(
         self,
@@ -182,8 +220,11 @@ class TransportController:
             ensure_finite(end_s)
 
         start_s = max(0.0, float(start_s))
+        start_s = self._quantize_time_to_output_samples(start_s)
+
         if end_s is not None:
             end_s = max(0.0, float(end_s))
+            end_s = self._quantize_time_to_output_samples(end_s)
             if end_s <= start_s:
                 end_s = None
 
@@ -191,28 +232,32 @@ class TransportController:
         self._project.pad_loop_end_s[sample_id] = end_s
         self._mark_project_changed()
 
-        if self._project.sample_paths[sample_id] is not None:
-            self._audio.set_pad_loop_region(sample_id, start_s, end_s)
+        self._apply_effective_pad_loop_region_to_audio(sample_id)
 
     def _default_pad_loop_region(self, sample_id: int) -> tuple[float, float | None, bool]:
         analysis = self._project.sample_analysis[sample_id]
         start_s = 0.0
+        beats: list[float] = []
+
         if analysis is not None:
             grid = analysis.beat_grid
             if grid.downbeats:
                 start_s = float(grid.downbeats[0])
             elif grid.beats:
                 start_s = float(grid.beats[0])
+            beats = [float(t) for t in grid.beats]
+
+        # Auto-loop is the default, even when BPM is unavailable.
+        start_s = self._snap_to_nearest_beat(start_s, beats)
+        start_s = self._quantize_time_to_output_samples(start_s)
 
         bpm = normalize_bpm(self.effective_bpm(sample_id))
         if bpm is None:
-            return (0.0, None, False)
-
-        beats = [] if analysis is None else [float(t) for t in analysis.beat_grid.beats]
-        start_s = self._snap_to_nearest_beat(start_s, beats)
+            return (start_s, None, True)
 
         duration_s = (4 * 4) * 60.0 / bpm
         end_s = self._snap_to_nearest_beat(start_s + duration_s, beats)
+        end_s = self._quantize_time_to_output_samples(end_s)
         return (start_s, end_s, True)
 
     @staticmethod
@@ -222,26 +267,38 @@ class TransportController:
         return min(beat_times, key=lambda beat_s: abs(beat_s - target_s))
 
     def _effective_pad_loop_region(self, sample_id: int) -> tuple[float, float | None]:
-        start_s = self._project.pad_loop_start_s[sample_id]
+        start_s = float(self._project.pad_loop_start_s[sample_id])
         end_s = self._project.pad_loop_end_s[sample_id]
-
-        if not self._project.pad_loop_auto[sample_id]:
-            return (start_s, end_s)
-
-        bpm = normalize_bpm(self.effective_bpm(sample_id))
-        if bpm is None:
-            return (start_s, end_s)
 
         analysis = self._project.sample_analysis[sample_id]
         beats = [] if analysis is None else [float(t) for t in analysis.beat_grid.beats]
 
-        start_s = self._snap_to_nearest_beat(start_s, beats)
+        if not self._project.pad_loop_auto[sample_id]:
+            start_s = self._quantize_time_to_output_samples(start_s)
+            if end_s is not None:
+                end_s = self._quantize_time_to_output_samples(float(end_s))
+                if end_s <= start_s:
+                    end_s = None
+            return (start_s, end_s)
 
-        bars = self._project.pad_loop_bars[sample_id]
-        bars = max(1, int(bars))
+        start_s = self._snap_to_nearest_beat(start_s, beats)
+        start_s = self._quantize_time_to_output_samples(start_s)
+
+        bpm = normalize_bpm(self.effective_bpm(sample_id))
+        if bpm is None:
+            if end_s is not None:
+                end_s = self._quantize_time_to_output_samples(float(end_s))
+                if end_s <= start_s:
+                    end_s = None
+            return (start_s, end_s)
+
+        bars = max(1, int(self._project.pad_loop_bars[sample_id]))
         duration_s = (bars * 4) * 60.0 / bpm
-        end_s = self._snap_to_nearest_beat(start_s + duration_s, beats)
-        return (start_s, end_s)
+        end_s_effective = self._snap_to_nearest_beat(start_s + duration_s, beats)
+        end_s_effective = self._quantize_time_to_output_samples(end_s_effective)
+        if end_s_effective <= start_s:
+            return (start_s, None)
+        return (start_s, end_s_effective)
 
     def is_sample_loaded(self, sample_id: int) -> bool:
         """Return whether a sample slot has audio loaded."""
@@ -436,3 +493,100 @@ class TransportController:
 
         self._session.bpm_lock_anchor_bpm = bpm
         self._recompute_master_bpm()
+
+
+class PadPlaybackController:
+    """Pad playback helpers that bypass multi-loop trigger semantics."""
+
+    def __init__(self, transport: TransportController) -> None:
+        self._t = transport
+
+    def play(self, sample_id: int) -> None:
+        validate_sample_id(sample_id)
+        if self._t._project.sample_paths[sample_id] is None:
+            return
+
+        self._t._apply_effective_pad_loop_region_to_audio(sample_id)
+        self._t._audio.play_sample(sample_id, 1.0)
+        self._t._session.active_sample_ids.add(sample_id)
+
+    def toggle(self, sample_id: int) -> None:
+        validate_sample_id(sample_id)
+        if sample_id in self._t._session.active_sample_ids:
+            self._t.stop_pad(sample_id)
+        else:
+            self.play(sample_id)
+
+
+class PadLoopController:
+    """Per-pad loop region manipulation."""
+
+    def __init__(self, transport: TransportController) -> None:
+        self._t = transport
+
+    def reset(self, sample_id: int) -> None:
+        self._t._reset_pad_loop_region(sample_id)
+
+    def effective_region(self, sample_id: int) -> tuple[float, float | None]:
+        validate_sample_id(sample_id)
+        return self._t._effective_pad_loop_region(sample_id)
+
+    def set_auto(self, sample_id: int, *, enabled: bool) -> None:
+        validate_sample_id(sample_id)
+        if enabled == self._t._project.pad_loop_auto[sample_id]:
+            return
+
+        self._t._project.pad_loop_auto[sample_id] = enabled
+        if enabled:
+            analysis = self._t._project.sample_analysis[sample_id]
+            beats = [] if analysis is None else [float(t) for t in analysis.beat_grid.beats]
+            start_s = float(self._t._project.pad_loop_start_s[sample_id])
+            start_s = self._t._snap_to_nearest_beat(start_s, beats)
+            start_s = self._t._quantize_time_to_output_samples(start_s)
+            self._t._project.pad_loop_start_s[sample_id] = start_s
+
+        self._t._mark_project_changed()
+        self._t._apply_effective_pad_loop_region_to_audio(sample_id)
+
+    def set_bars(self, sample_id: int, *, bars: int) -> None:
+        validate_sample_id(sample_id)
+        bars = max(1, int(bars))
+        if bars == self._t._project.pad_loop_bars[sample_id]:
+            return
+
+        self._t._project.pad_loop_bars[sample_id] = bars
+        self._t._mark_project_changed()
+        self._t._apply_effective_pad_loop_region_to_audio(sample_id)
+
+    def set_start(self, sample_id: int, start_s: float) -> None:
+        validate_sample_id(sample_id)
+        ensure_finite(start_s)
+
+        start_s = max(0.0, float(start_s))
+        analysis = self._t._project.sample_analysis[sample_id]
+        beats = [] if analysis is None else [float(t) for t in analysis.beat_grid.beats]
+        if self._t._project.pad_loop_auto[sample_id]:
+            start_s = self._t._snap_to_nearest_beat(start_s, beats)
+
+        start_s = self._t._quantize_time_to_output_samples(start_s)
+        self._t._project.pad_loop_start_s[sample_id] = start_s
+        self._t._mark_project_changed()
+        self._t._apply_effective_pad_loop_region_to_audio(sample_id)
+
+    def set_end(self, sample_id: int, end_s: float | None) -> None:
+        validate_sample_id(sample_id)
+
+        if end_s is not None:
+            ensure_finite(end_s)
+            end_s = max(0.0, float(end_s))
+            end_s = self._t._quantize_time_to_output_samples(end_s)
+
+            start_s = self._t._quantize_time_to_output_samples(
+                float(self._t._project.pad_loop_start_s[sample_id])
+            )
+            if end_s <= start_s:
+                end_s = None
+
+        self._t._project.pad_loop_end_s[sample_id] = end_s
+        self._t._mark_project_changed()
+        self._t._apply_effective_pad_loop_region_to_audio(sample_id)

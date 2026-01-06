@@ -234,6 +234,12 @@ class SessionState(BaseModel):
     pad_peak_updated_at: list[float] = Field(default_factory=lambda: [0.0] * NUM_SAMPLES)
     """Monotonic timestamp of last pad peak update (seconds)."""
 
+    pad_playhead_s: list[float] = Field(default_factory=lambda: [0.0] * NUM_SAMPLES)
+    """Best-effort per-pad playback position in seconds."""
+
+    pad_playhead_updated_at: list[float] = Field(default_factory=lambda: [0.0] * NUM_SAMPLES)
+    """Monotonic timestamp of last playhead update (seconds)."""
+
     loading_sample_ids: set[int] = Field(default_factory=set)
     """Pads that are currently being loaded asynchronously."""
 
@@ -264,6 +270,15 @@ class SessionState(BaseModel):
     # UI State
     file_dialog_pad_id: int | None = None
     """Current file dialog target pad ID or None if no file dialog is open."""
+
+    waveform_editor_open: bool = False
+    """Whether the waveform editor window is open."""
+
+    waveform_editor_pad_id: int | None = None
+    """Pad id currently being edited in the waveform editor."""
+
+    waveform_editor_view_xmin_s: float = 0.0
+    waveform_editor_view_xmax_s: float = 0.0
 
     tap_bpm_pad_id: int | None = None
     """Current Tap BPM target pad. Resets tap timestamps when changed."""
@@ -304,6 +319,30 @@ class SessionState(BaseModel):
                 raise ValueError(msg)
         return value
 
+    @field_validator("pad_playhead_s", mode="after")
+    @classmethod
+    def _validate_pad_playhead_s(cls, value: list[float]) -> list[float]:
+        if len(value) != NUM_SAMPLES:
+            msg = f"pad_playhead_s must have length {NUM_SAMPLES}, got {len(value)}"
+            raise ValueError(msg)
+        for pos_s in value:
+            if not math.isfinite(pos_s) or pos_s < 0.0:
+                msg = f"pad_playhead_s values must be finite and >= 0.0, got {pos_s}"
+                raise ValueError(msg)
+        return value
+
+    @field_validator("pad_playhead_updated_at", mode="after")
+    @classmethod
+    def _validate_pad_playhead_updated_at(cls, value: list[float]) -> list[float]:
+        if len(value) != NUM_SAMPLES:
+            msg = f"pad_playhead_updated_at must have length {NUM_SAMPLES}, got {len(value)}"
+            raise ValueError(msg)
+        for ts in value:
+            if not math.isfinite(ts) or ts < 0.0:
+                msg = f"pad_playhead_updated_at values must be finite and >= 0.0, got {ts}"
+                raise ValueError(msg)
+        return value
+
     @field_validator(
         "active_sample_ids",
         "pressed_pads",
@@ -337,6 +376,7 @@ class SessionState(BaseModel):
         "file_dialog_pad_id",
         "tap_bpm_pad_id",
         "bpm_lock_anchor_pad_id",
+        "waveform_editor_pad_id",
         mode="after",
     )
     @classmethod

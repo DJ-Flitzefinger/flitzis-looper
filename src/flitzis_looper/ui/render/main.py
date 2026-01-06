@@ -16,6 +16,7 @@ from flitzis_looper.ui.render.file_dialog import check_file_dialog, open_file_di
 from flitzis_looper.ui.render.performance_view import performance_view
 from flitzis_looper.ui.render.sidebar_left import sidebar_left
 from flitzis_looper.ui.render.sidebar_right import sidebar_right
+from flitzis_looper.ui.render.waveform_editor import waveform_editor
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -123,6 +124,7 @@ def render_ui(ctx: UiContext) -> None:
 
     with default_style():
         _main(ctx)
+        waveform_editor(ctx)
         _file_dialog(ctx)
 
     ctx.persistence.maybe_flush()

@@ -354,10 +354,13 @@ class TestPerPadMixing:
 
         msg1 = Mock()
         msg1.pad_peak.return_value = (0, 0.8)
+        msg1.pad_playhead.return_value = (0, 0.1)
         msg2 = Mock()
         msg2.pad_peak.return_value = (0, 1.2)
+        msg2.pad_playhead.return_value = (0, 0.2)
         msg3 = Mock()
         msg3.pad_peak.return_value = None
+        msg3.pad_playhead.return_value = None
 
         audio_engine_mock.return_value.receive_msg.side_effect = [msg1, msg2, msg3, None]
 
@@ -365,6 +368,8 @@ class TestPerPadMixing:
 
         assert controller.session.pad_peak[0] == pytest.approx(1.0)
         assert controller.session.pad_peak_updated_at[0] == now
+        assert controller.session.pad_playhead_s[0] == pytest.approx(0.2)
+        assert controller.session.pad_playhead_updated_at[0] == now
 
 
 class TestModeToggles:

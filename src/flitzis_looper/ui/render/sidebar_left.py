@@ -187,8 +187,8 @@ def _render_loaded_actions(ctx: UiContext, pad_id: int) -> None:
 
     if ctx.state.pads.is_analyzing(pad_id):
         imgui.text_disabled("Analyzing audio…")
-        stage = ctx.state.pads.analysis_stage(pad_id) or "Analyzing"
-        progress = ctx.state.pads.analysis_progress(pad_id)
+        stage, progress = ctx.state.pads.analysis_status(pad_id)
+        stage = stage or "Analyzing"
         percent_text = "" if progress is None else f"{int(float(progress) * 100):d} %"
         status_line = " ".join([part for part in (stage, percent_text) if part])
         if status_line:
@@ -199,8 +199,7 @@ def _render_loaded_actions(ctx: UiContext, pad_id: int) -> None:
         ctx.audio.pads.analyze_sample_async(pad_id)
 
     if imgui.button("Adjust Loop", (-1, 0)):
-        # TODO: adjust loop
-        pass
+        ctx.ui.waveform.open(pad_id)
 
     if imgui.button("Generate Stems", (-1, 0)):
         # TODO: generate stems

@@ -771,6 +771,46 @@ mod tests {
     }
 
     #[test]
+    fn test_render_respects_custom_loop_region_frames() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        let sample = create_test_sample(1, 20, 0.5);
+        mixer.load_sample(0, sample);
+        mixer.set_pad_loop_region(0, 0.2, Some(0.5));
+        mixer.play_sample(0, 1.0);
+
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        for _ in 0..20 {
+            let mut output = vec![0.0; 1];
+            mixer.render(&mut output, &mut pad_peaks);
+
+            let frame = mixer.pad_playhead_frame[0].unwrap();
+            assert!((2..5).contains(&frame));
+            let seconds = mixer.pad_playhead_seconds(0).unwrap();
+            assert!((seconds - frame as f32 / 10.0).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_render_clamps_frame_pos_to_loop_start_after_update() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        let sample = create_test_sample(1, 10, 0.5);
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.load_sample(0, sample);
+        mixer.play_sample(0, 1.0);
+
+        let mut output = vec![0.0; 5];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        mixer.set_pad_loop_region(0, 0.6, Some(0.8));
+
+        let mut output = vec![0.0; 1];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        let frame = mixer.pad_playhead_frame[0].unwrap();
+        assert!((6..8).contains(&frame));
+    }
+
+    #[test]
     fn test_multiple_voices_mixing() {
         let mut mixer = RtMixer::new(2, 44_100.0);
         let mut pad_peaks = [0.0_f32; NUM_SAMPLES];

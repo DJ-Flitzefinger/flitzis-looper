@@ -24,6 +24,7 @@ def _pad_button_label(
         return "", None
 
     filename = ctx.state.pads.label(pad_id)
+    stage: str | None
 
     if is_loading:
         stage = ctx.state.pads.load_stage(pad_id) or "Loading"
@@ -35,8 +36,8 @@ def _pad_button_label(
         return label, loading_progress
 
     if ctx.state.pads.is_analyzing(pad_id):
-        stage = ctx.state.pads.analysis_stage(pad_id) or "Analyzing"
-        progress = ctx.state.pads.analysis_progress(pad_id)
+        stage, progress = ctx.state.pads.analysis_status(pad_id)
+        stage = stage or "Analyzing"
         percent_text = "" if progress is None else f"{int(float(progress) * 100):d} %"
         status_line = " ".join([p for p in (stage, percent_text) if p])
         label = f"{filename}\n{status_line}" if filename else (status_line or "Analyzing…")

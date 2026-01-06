@@ -18,6 +18,7 @@ def run_ui() -> None:
     runner_params.app_window_params.window_geometry.size = VIEWPORT_PX
     runner_params.app_window_params.restore_previous_geometry = True
     runner_params.imgui_window_params.background_color = BG_RGBA
+    runner_params.imgui_window_params.enable_viewports = True
     runner_params.callbacks.show_gui = lambda: render_ui(context)
     runner_params.callbacks.before_exit = controller.shut_down
     add_ons_params = immapp.AddOnsParams(with_implot=True)
