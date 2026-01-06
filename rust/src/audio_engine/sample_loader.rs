@@ -494,13 +494,6 @@ mod tests {
         Ok(())
     }
 
-    fn make_sample_buffer(channels: usize, samples: Vec<f32>) -> SampleBuffer {
-        SampleBuffer {
-            channels,
-            samples: Arc::from(samples.into_boxed_slice()),
-        }
-    }
-
     #[test]
     fn test_cache_audio_file_copies_original() {
         let tmp = tempfile::tempdir().unwrap();
