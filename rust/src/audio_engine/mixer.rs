@@ -453,11 +453,10 @@ impl RtMixer {
             let base = voice.frame_pos - loop_start;
 
             let input_buffers = voice.stretch.input_buffers_mut(input_frames);
-            for channel in 0..self.channels {
-                let buf = &mut input_buffers[channel];
-                for i in 0..input_frames {
+            for (channel, buf) in input_buffers.iter_mut().enumerate().take(self.channels) {
+                for (i, sample_ref) in buf.iter_mut().enumerate().take(input_frames) {
                     let frame = loop_start + ((base + i) % loop_len);
-                    buf[i] = sample.samples[frame * self.channels + channel];
+                    *sample_ref = sample.samples[frame * self.channels + channel];
                 }
             }
 
@@ -470,8 +469,9 @@ impl RtMixer {
             let output_buffers = voice.stretch.output_buffers();
             for frame in 0..frames {
                 let out_base = frame * self.channels;
-                for channel in 0..self.channels {
-                    let mut sample = output_buffers[channel][frame];
+                for (channel, buffer) in output_buffers.iter().enumerate().take(self.channels) {
+                    let sample = buffer[frame];
+                    let mut sample = sample;
                     if let Some(state) = voice.eq_state.get_mut(channel) {
                         sample = eq.process(state, sample);
                     }
