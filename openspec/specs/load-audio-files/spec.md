@@ -3,22 +3,24 @@
 ## Purpose
 To support sample-based playback by loading, decoding, and unloading audio files as immutable in-memory buffers associated with sample slot IDs, without performing disk I/O or decoding in the real-time audio callback.
 ## Requirements
+
+### Delta: store-original-audio-files
 ### Requirement: Load Audio File Into Sample Slot
 The system SHALL expose a Python API to load an audio file from a filesystem path into a named sample slot identified by an integer `id` in the range 0..36.
 
-Before the loaded sample is considered part of the current project, the system SHALL copy the decoded audio into the project’s `./samples/` directory as a WAV file resampled to the current audio engine output sample rate.
+Before the loaded sample is considered part of the current project, the system SHALL copy the original audio file into the project's `./samples/` directory.
 
-The cached WAV encoding MUST use the same sample format as the engine’s in-memory sample buffers (currently `f32`) to minimize conversion during fast load.
+The persisted sample path stored in `ProjectState.sample_paths[id]` SHALL refer to the project-local audio file under `./samples/`.
 
-The persisted sample path stored in `ProjectState.sample_paths[id]` SHALL refer to the project-local WAV file under `./samples/`.
+If a file with the same basename already exists in `./samples/`, the system SHALL choose a non-colliding filename by appending `_0`, `_1`, etc., rather than overwriting the existing file.
 
 The decoder SHALL support loading at least: WAV, FLAC, MP3, AIFF (`.aif`/`.aiff`), and OGG.
 
 #### Scenario: Load succeeds
 - **WHEN** `AudioEngine.load_sample_async(id, path)` is called with an existing audio file in a supported format
 - **THEN** the file is decoded and resampled for playback
-- **AND** a WAV copy is written under `./samples/` using the original basename as the primary name
-- **AND** `ProjectState.sample_paths[id]` points to that project-local WAV path
+- **AND** the original audio file is copied under `./samples/` using the original basename as the primary name (with numeric suffix if needed to avoid collision)
+- **AND** `ProjectState.sample_paths[id]` points to that project-local audio file path
 
 #### Scenario: Loading replaces an already-loaded sample
 - **WHEN** a sample is already loaded into slot `id`
@@ -53,7 +55,7 @@ The system SHALL publish loaded sample buffers to the audio callback via shared 
 ### Requirement: Unload Sample Slot
 The system SHALL expose a Python API to unload a previously loaded sample from a sample slot identified by an integer `id` in the range 0..36.
 
-If `ProjectState.sample_paths[id]` refers to a project-local cached WAV under `./samples/`, the system SHALL attempt to delete that cached file when unloading the pad.
+If `ProjectState.sample_paths[id]` refers to a project-local audio file under `./samples/`, the system SHALL attempt to delete that cached file when unloading the pad.
 
 If the cached file is not present, the system MUST ignore the deletion attempt and MUST NOT crash.
 
@@ -69,13 +71,13 @@ If the cached file is not present, the system MUST ignore the deletion attempt a
 - **THEN** all currently active voices for `id` stop contributing to the audio output
 
 #### Scenario: Unload removes cached WAV file
-- **GIVEN** `ProjectState.sample_paths[id]` points to a cached WAV under `./samples/`
+- **GIVEN** `ProjectState.sample_paths[id]` points to a cached audio file under `./samples/`
 - **AND** that file exists on disk
 - **WHEN** `AudioEngine.unload_sample(id)` is called
-- **THEN** the cached WAV file is removed from `./samples/`
+- **THEN** the cached audio file is removed from `./samples/`
 
 #### Scenario: Unload ignores missing cached WAV file
-- **GIVEN** `ProjectState.sample_paths[id]` points to a cached WAV under `./samples/`
+- **GIVEN** `ProjectState.sample_paths[id]` points to a cached audio file under `./samples/`
 - **AND** that file does not exist on disk
 - **WHEN** `AudioEngine.unload_sample(id)` is called
 - **THEN** the system does not crash
@@ -108,13 +110,5 @@ The persisted beat grid SHALL use a reduced representation consisting of beat ti
 - **WHEN** a different sample is loaded into slot `id` successfully
 - **THEN** analysis results for `id` correspond to the newly loaded sample
 
-### Requirement: Project Sample Cache Avoids Silent Overwrites
-If writing a cached WAV to `./samples/` would overwrite an existing file with different content, the system SHALL choose a non-colliding filename deterministically (e.g., suffixing a stable identifier) rather than silently overwriting.
 
-#### Scenario: Basename collision is handled without data loss
-- **GIVEN** a project already contains `./samples/loop.wav`
-- **AND** the user loads a different file whose basename would also be `loop.wav`
-- **WHEN** the system writes the project-local cached WAV
-- **THEN** the system writes a distinct WAV filename under `./samples/`
-- **AND** the original `./samples/loop.wav` is not overwritten
 

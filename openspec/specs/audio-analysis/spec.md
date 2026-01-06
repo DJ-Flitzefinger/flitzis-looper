@@ -3,6 +3,8 @@
 ## Purpose
 TBD - created by archiving change add-sample-audio-analysis. Update Purpose after archive.
 ## Requirements
+
+### Delta: store-original-audio-files
 ### Requirement: Analyze Audio For BPM, Key, And Beat Grid
 The system SHALL analyze a loaded audio sample to determine its BPM, musical key, and beat grid.
 
@@ -32,6 +34,13 @@ Manual analysis SHALL enqueue an analysis-only background task and SHALL NOT re-
 #### Scenario: Automatic analysis runs on load
 - **WHEN** a sample load completes successfully for a pad
 - **THEN** the system runs analysis for that pad before considering the load operation complete
+
+#### Scenario: Analysis results are restored from project state
+- **GIVEN** a project is loaded that contains persisted analysis results for a pad
+- **AND** the corresponding sample file exists in the project's `./samples/` directory
+- **WHEN** the sample is restored during project loading
+- **THEN** the system restores the analysis results from project state without re-running analysis
+- **AND** the restored results are available immediately for UI display and other features
 
 #### Scenario: Manual analysis re-runs detection
 - **GIVEN** a pad has a loaded audio file

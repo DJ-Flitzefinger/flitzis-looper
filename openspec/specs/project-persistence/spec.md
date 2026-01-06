@@ -3,6 +3,8 @@
 ## Purpose
 TBD - created by archiving change add-portable-project-persistence. Update Purpose after archive.
 ## Requirements
+
+### Delta: store-original-audio-files
 ### Requirement: Persist And Restore ProjectState
 The system SHALL persist `ProjectState` to a JSON file at `./samples/flitzis_looper.config.json` and SHALL restore it on application start.
 
@@ -43,11 +45,11 @@ The system SHOULD attempt a best-effort final save during clean shutdown.
 - **THEN** the system writes an updated `samples/flitzis_looper.config.json`
 
 ### Requirement: Restore Ignores Missing Or Unusable Cached Samples
-When restoring a project, the system SHALL treat `ProjectState.sample_paths[*]` as references to project-local sample cache files under `./samples/`.
+When restoring a project, the system SHALL treat `ProjectState.sample_paths[*]` as references to project-local audio files under `./samples/`.
 
-If a referenced sample cache file is missing, the system SHALL ignore that pad assignment and MUST NOT crash.
+If a referenced audio file is missing, the system SHALL ignore that pad assignment and MUST NOT crash.
 
-If a referenced sample cache file exists but is not usable by the audio engine (e.g., invalid WAV), the system SHALL ignore that pad assignment and MUST NOT crash.
+If a referenced audio file exists but is not usable by the audio engine (e.g., invalid or unsupported format), the system SHALL ignore that pad assignment and MUST NOT crash.
 
 #### Scenario: Missing cached WAV does not crash
 - **GIVEN** `ProjectState.sample_paths[pad_id]` points to a file under `./samples/`
