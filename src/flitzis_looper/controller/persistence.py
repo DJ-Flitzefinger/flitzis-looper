@@ -47,58 +47,6 @@ def load_project_state(config_path: Path = PROJECT_CONFIG_PATH) -> ProjectState:
         return ProjectState()
 
 
-def probe_wav_sample_rate(path: Path) -> int | None:
-    """Return the WAV sample rate from the file header.
-
-    This performs a lightweight validation to support startup preflight checks.
-
-    Args:
-        path: Path to a WAV file.
-
-    Returns:
-        Sample rate in Hz, or None when the file is not a valid/parsable WAV.
-    """
-    data: bytes | None
-    try:
-        with path.open("rb") as f:
-            data = f.read(64 * 1024)
-    except FileNotFoundError:
-        data = None
-    except OSError:
-        data = None
-
-    if data is None or len(data) < 44:
-        return None
-
-    if data[0:4] != b"RIFF" or data[8:12] != b"WAVE":
-        return None
-
-    sample_rate: int | None = None
-    offset = 12
-    # Basic RIFF chunk scan.
-    while offset + 8 <= len(data):
-        chunk_id = data[offset : offset + 4]
-        chunk_size = int.from_bytes(data[offset + 4 : offset + 8], "little", signed=False)
-        chunk_data_start = offset + 8
-        chunk_data_end = chunk_data_start + chunk_size
-
-        if chunk_id == b"fmt ":
-            if chunk_data_end > len(data) or chunk_size < 16:
-                break
-
-            sample_rate = int.from_bytes(
-                data[chunk_data_start + 4 : chunk_data_start + 8],
-                "little",
-                signed=False,
-            )
-            break
-
-        # Chunks are word-aligned.
-        offset = chunk_data_end + (chunk_size % 2)
-
-    return sample_rate
-
-
 def _normalize_sample_paths_for_save(sample_paths: list[str | None]) -> list[str | None]:
     cwd = Path.cwd().resolve()
 

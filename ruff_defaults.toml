@@ -71,6 +71,9 @@ ignore = [
     # allow async functions with timeout parameter
     "ASYNC109",
 
+    # gives false positives
+    "B903",
+
     # Relax on missing docstrings
     "D1",
 

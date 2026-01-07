@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
+from flitzis_looper.controller.base import BaseController
 from flitzis_looper.models import ProjectState, SampleAnalysis, SessionState, validate_sample_id
 
 if TYPE_CHECKING:
@@ -12,68 +13,25 @@ if TYPE_CHECKING:
     from flitzis_looper_audio import AudioEngine
 
 
-class LoaderController:
+class LoaderController(BaseController):
     def __init__(
         self,
         project: ProjectState,
         session: SessionState,
         audio: AudioEngine,
         on_pad_bpm_changed: Callable[[int], None],
-        *,
         on_project_changed: Callable[[], None] | None = None,
     ) -> None:
-        self._project = project
-        self._session = session
-        self._audio = audio
+        super().__init__(project, session, audio, on_project_changed)
+
         self._on_pad_bpm_changed = on_pad_bpm_changed
-        self._on_project_changed = on_project_changed
-
-    def _mark_project_changed(self) -> None:
-        if self._on_project_changed is not None:
-            self._on_project_changed()
-
-    def _get_output_sample_rate(self) -> int | None:
-        output_sample_rate_fn = getattr(self._audio, "output_sample_rate", None)
-        if output_sample_rate_fn is None:
-            return None
-
-        try:
-            return int(output_sample_rate_fn())
-        except RuntimeError:
-            return None
-
-    def _parse_cached_sample_path(self, path: str) -> Path | None:
-        if "\\" in path:
-            return None
-
-        rel = Path(path)
-        if rel.is_absolute() or not rel.parts or rel.parts[0] != "samples":
-            return None
-
-        return rel
-
-    def _is_cached_file_usable(self, abs_path: Path) -> bool:
-        return abs_path.is_file()
-
-    def _schedule_restored_load(self, sample_id: int, rel: Path, *, run_analysis: bool) -> bool:
-        self._session.pending_sample_paths[sample_id] = rel.as_posix()
-        self._session.loading_sample_ids.add(sample_id)
-
-        try:
-            self._audio.load_sample_async(sample_id, rel.as_posix(), run_analysis=run_analysis)
-        except RuntimeError:
-            self._session.loading_sample_ids.discard(sample_id)
-            self._session.pending_sample_paths.pop(sample_id, None)
-            return False
-
-        return True
 
     def restore_samples_from_project_state(self) -> None:
         """Schedule async loads for cached samples referenced by `ProjectState`.
 
         Invalid/missing cached files are ignored by clearing the pad assignment.
         """
-        output_sample_rate = self._get_output_sample_rate()
+        output_sample_rate = self._output_sample_rate_hz()
         if output_sample_rate is None:
             return
 
@@ -89,7 +47,7 @@ class LoaderController:
                 continue
 
             abs_path = Path.cwd() / rel
-            if not self._is_cached_file_usable(abs_path):
+            if not abs_path.is_file():
                 self._clear_restored_pad(sample_id)
                 changed = True
                 continue
@@ -100,11 +58,6 @@ class LoaderController:
 
         if changed:
             self._mark_project_changed()
-
-    def _clear_restored_pad(self, sample_id: int) -> None:
-        self._project.sample_paths[sample_id] = None
-        self._project.sample_analysis[sample_id] = None
-        self._on_pad_bpm_changed(sample_id)
 
     def load_sample_async(self, sample_id: int, path: str) -> None:
         """Load an audio file into a sample slot asynchronously.
@@ -361,3 +314,31 @@ class LoaderController:
         self._project.sample_analysis[sample_id] = parsed
         self._on_pad_bpm_changed(sample_id)
         self._mark_project_changed()
+
+    def _clear_restored_pad(self, sample_id: int) -> None:
+        self._project.sample_paths[sample_id] = None
+        self._project.sample_analysis[sample_id] = None
+        self._on_pad_bpm_changed(sample_id)
+
+    def _parse_cached_sample_path(self, path: str) -> Path | None:
+        if "\\" in path:
+            return None
+
+        rel = Path(path)
+        if rel.is_absolute() or not rel.parts or rel.parts[0] != "samples":
+            return None
+
+        return rel
+
+    def _schedule_restored_load(self, sample_id: int, rel: Path, *, run_analysis: bool) -> bool:
+        self._session.pending_sample_paths[sample_id] = rel.as_posix()
+        self._session.loading_sample_ids.add(sample_id)
+
+        try:
+            self._audio.load_sample_async(sample_id, rel.as_posix(), run_analysis=run_analysis)
+        except RuntimeError:
+            self._session.loading_sample_ids.discard(sample_id)
+            self._session.pending_sample_paths.pop(sample_id, None)
+            return False
+
+        return True

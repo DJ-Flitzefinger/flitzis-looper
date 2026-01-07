@@ -2,9 +2,9 @@ from contextlib import suppress
 
 from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.controller.metering import MeteringController
+from flitzis_looper.controller.persistence import ProjectPersistence, load_project_state
 from flitzis_looper.controller.transport import TransportController
 from flitzis_looper.models import ProjectState, SessionState
-from flitzis_looper.persistence import ProjectPersistence, load_project_state
 from flitzis_looper_audio import AudioEngine
 
 
@@ -17,7 +17,6 @@ class LooperController:
         self._audio.run()
 
         self._persistence = ProjectPersistence(self._project)
-
         self.transport = TransportController(
             self._project,
             self._session,
@@ -28,7 +27,7 @@ class LooperController:
             self._project,
             self._session,
             self._audio,
-            self.transport._on_pad_bpm_changed,
+            on_pad_bpm_changed=self.transport._on_pad_bpm_changed,
             on_project_changed=self._persistence.mark_dirty,
         )
         self.metering = MeteringController(self._session, self._audio)

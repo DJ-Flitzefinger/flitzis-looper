@@ -4,8 +4,12 @@ from unittest.mock import Mock
 import pytest
 
 from flitzis_looper.controller.loader import LoaderController
+from flitzis_looper.controller.persistence import (
+    PROJECT_CONFIG_PATH,
+    ProjectPersistence,
+    load_project_state,
+)
 from flitzis_looper.models import BeatGrid, ProjectState, SampleAnalysis, SessionState
-from flitzis_looper.persistence import PROJECT_CONFIG_PATH, ProjectPersistence, load_project_state
 from tests.conftest import write_mono_pcm16_wav
 
 
