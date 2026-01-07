@@ -13,19 +13,20 @@
 //! The main [`AudioEngine`] struct orchestrates these components to provide
 //! a high-level audio playback interface for Python.
 
+use crate::audio_engine::analysis::analyze_sample;
 use crate::audio_engine::audio_stream::{AudioStreamHandle, create_audio_stream, start_stream};
 use crate::audio_engine::constants::{
     NUM_SAMPLES, PAD_EQ_DB_MAX, PAD_EQ_DB_MIN, PAD_GAIN_MAX, PAD_GAIN_MIN, SPEED_MAX, SPEED_MIN,
     VOLUME_MAX, VOLUME_MIN,
 };
 use crate::audio_engine::errors::SampleLoadError;
+use crate::audio_engine::progress::{LoadProgressStage, ProgressReporter};
 use crate::audio_engine::sample_loader::{
     SampleLoadProgress, SampleLoadSubtask, cache_audio_file_for_project,
     decode_audio_file_to_sample_buffer,
 };
 use crate::messages::{
-    AudioMessage, BackgroundTaskKind, BeatGridData, ControlMessage, LoaderEvent, SampleAnalysis,
-    SampleBuffer,
+    AudioMessage, BackgroundTaskKind, ControlMessage, LoaderEvent, SampleBuffer, task_to_str,
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -37,153 +38,18 @@ use std::sync::{
     mpsc::{Receiver, Sender, TryRecvError},
 };
 use std::thread;
-use std::time::{Duration, Instant};
-use stratum_dsp::{AnalysisConfig, analyze_audio};
 
+mod analysis;
 mod audio_stream;
+mod channels;
 mod constants;
 mod eq3;
 mod errors;
 mod mixer;
+mod progress;
 mod sample_loader;
 mod stretch_processor;
 mod voice_slot;
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum LoadProgressStage {
-    Decoding,
-    Resampling,
-    ChannelMapping,
-    Analyzing,
-    Publishing,
-}
-
-impl LoadProgressStage {
-    fn stage_label(self) -> &'static str {
-        match self {
-            Self::Decoding => "Decoding…",
-            Self::Resampling => "Resampling…",
-            Self::ChannelMapping => "Mapping channels…",
-            Self::Analyzing => "Analyzing…",
-            Self::Publishing => "Publishing…",
-        }
-    }
-
-    fn range(self, resampling_required: bool) -> (f32, f32) {
-        if !resampling_required {
-            return match self {
-                Self::Decoding => (0.0, 0.1),
-                Self::Resampling => (0.1, 0.1),
-                Self::ChannelMapping => (0.1, 0.15),
-                Self::Analyzing => (0.15, 0.95),
-                Self::Publishing => (0.95, 1.0),
-            };
-        }
-
-        match self {
-            Self::Decoding => (0.0, 0.1),
-            Self::Resampling => (0.1, 0.2),
-            Self::ChannelMapping => (0.2, 0.25),
-            Self::Analyzing => (0.25, 0.95),
-            Self::Publishing => (0.95, 1.0),
-        }
-    }
-}
-
-struct ProgressReporter {
-    id: usize,
-    tx: Sender<LoaderEvent>,
-    last_emit: Instant,
-    min_interval: Duration,
-    resampling_required: Option<bool>,
-}
-
-impl ProgressReporter {
-    fn new(id: usize, tx: Sender<LoaderEvent>) -> Self {
-        let min_interval = Duration::from_millis(100);
-        Self {
-            id,
-            tx,
-            last_emit: Instant::now()
-                .checked_sub(min_interval)
-                .unwrap_or_else(Instant::now),
-            min_interval,
-            resampling_required: None,
-        }
-    }
-
-    fn emit(
-        &mut self,
-        stage: LoadProgressStage,
-        local_percent: f32,
-        resampling_required: bool,
-        force: bool,
-    ) {
-        let local_percent = if local_percent.is_finite() {
-            local_percent.clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-
-        let now = Instant::now();
-        if !force && now.duration_since(self.last_emit) < self.min_interval {
-            return;
-        }
-        self.last_emit = now;
-
-        self.resampling_required.get_or_insert(resampling_required);
-        let resampling_required = self.resampling_required.unwrap_or(resampling_required);
-
-        let (start, end) = stage.range(resampling_required);
-        let percent = (start + (end - start) * local_percent).clamp(0.0, 1.0);
-        let stage = match stage {
-            LoadProgressStage::Analyzing => stage.stage_label().to_string(),
-            _ => format!("Loading ({})", stage.stage_label()),
-        };
-        let _ = self.tx.send(LoaderEvent::Progress {
-            id: self.id,
-            percent,
-            stage,
-        });
-    }
-}
-
-fn interleaved_to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
-    match channels {
-        0 => Vec::new(),
-        1 => samples.to_vec(),
-        _ => {
-            let mut mono = Vec::with_capacity(samples.len() / channels);
-            for frame in samples.chunks_exact(channels) {
-                let sum: f32 = frame.iter().copied().sum();
-                mono.push(sum / channels as f32);
-            }
-            mono
-        }
-    }
-}
-
-fn analyze_sample(sample: &SampleBuffer, sample_rate_hz: u32) -> Result<SampleAnalysis, String> {
-    let mono = interleaved_to_mono(&sample.samples, sample.channels);
-
-    let result = analyze_audio(&mono, sample_rate_hz, AnalysisConfig::default())
-        .map_err(|err| format!("analysis failed: {err}"))?;
-
-    Ok(SampleAnalysis {
-        bpm: result.bpm,
-        key: result.key.name(),
-        beat_grid: BeatGridData {
-            beats: result.beat_grid.beats,
-            downbeats: result.beat_grid.downbeats,
-        },
-    })
-}
-
-fn task_to_str(task: BackgroundTaskKind) -> &'static str {
-    match task {
-        BackgroundTaskKind::Analysis => "analysis",
-    }
-}
 
 struct PadLoadingGuard {
     id: usize,
@@ -371,9 +237,13 @@ impl AudioEngine {
 
             let resampling_required = progress.resampling_required.unwrap_or(true);
 
-            let cached_path =
+            let cached_path = if path.starts_with("samples/") {
+                // When restoring from cache (path already in samples directory), use original path without copying
+                path.clone()
+            } else {
+                // When loading a new sample (from file dialog), copy it to samples directory
                 match cache_audio_file_for_project(Path::new("samples"), Path::new(&path)) {
-                    Ok(path) => path,
+                    Ok(path) => path.to_string_lossy().to_string(),
                     Err(err) => {
                         let _ = loader_tx.send(LoaderEvent::Error {
                             id,
@@ -381,8 +251,8 @@ impl AudioEngine {
                         });
                         return;
                     }
-                };
-            let cached_path = cached_path.to_string_lossy().replace('\\', "/");
+                }
+            };
 
             let analysis = if run_analysis {
                 progress.emit(LoadProgressStage::Analyzing, 0.0, resampling_required, true);

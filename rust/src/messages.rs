@@ -19,9 +19,6 @@ pub enum AudioMessage {
     /// Response to a Ping message.
     Pong(),
 
-    /// Indicates the audio playback is stopped.
-    Stopped(),
-
     /// Per-pad peak meter update (mono peak, post gain/EQ).
     PadPeak { id: usize, peak: f32 },
 
@@ -145,6 +142,12 @@ pub(crate) struct SampleAnalysis {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BackgroundTaskKind {
     Analysis,
+}
+
+pub fn task_to_str(task: BackgroundTaskKind) -> &'static str {
+    match task {
+        BackgroundTaskKind::Analysis => "analysis",
+    }
 }
 
 /// Events emitted from background work (loading and per-pad tasks).
