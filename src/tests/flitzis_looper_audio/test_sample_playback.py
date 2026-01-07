@@ -1,38 +1,24 @@
 import time
-import wave
-from array import array
 from typing import TYPE_CHECKING
 
 import pytest
 
 from flitzis_looper_audio import AudioEngine
+from tests.conftest import write_mono_pcm16_wav
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 
-def _write_mono_pcm16_wav(path: Path, sample_rate_hz: int) -> None:
-    samples = array("h", [8192] * 128)
-
-    with wave.open(str(path), "wb") as wav:
-        wav.setnchannels(1)
-        wav.setsampwidth(2)
-        wav.setframerate(sample_rate_hz)
-        wav.writeframes(samples.tobytes())
-
-
 @pytest.mark.parametrize("sample_rate_hz", [48_000, 44_100])
 def test_load_and_play_sample_smoke(
-    sample_rate_hz: int,
-    audio_engine: AudioEngine,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    sample_rate_hz: int, audio_engine: AudioEngine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
     wav_path = tmp_path / "sample.wav"
     cached_path: str | None = None
-    _write_mono_pcm16_wav(wav_path, sample_rate_hz)
+    write_mono_pcm16_wav(wav_path, sample_rate_hz)
 
     audio_engine.load_sample_async(0, str(wav_path), run_analysis=True)
 

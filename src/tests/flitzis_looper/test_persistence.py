@@ -1,4 +1,3 @@
-import wave
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -7,6 +6,7 @@ import pytest
 from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.models import BeatGrid, ProjectState, SampleAnalysis, SessionState
 from flitzis_looper.persistence import PROJECT_CONFIG_PATH, ProjectPersistence, load_project_state
+from tests.conftest import write_mono_pcm16_wav
 
 
 def test_load_project_state_missing_returns_defaults(
@@ -26,11 +26,7 @@ def test_persistence_roundtrip_writes_atomic_json(
     samples_dir.mkdir(parents=True)
 
     wav_path = samples_dir / "foo.wav"
-    with wave.open(str(wav_path), "wb") as f:
-        f.setnchannels(1)
-        f.setsampwidth(2)
-        f.setframerate(48_000)
-        f.writeframes(b"\x00\x00" * 48)
+    write_mono_pcm16_wav(wav_path, 48_000)
 
     project = ProjectState(volume=0.5)
     project.sample_paths[0] = str(wav_path)
@@ -85,11 +81,7 @@ def test_restore_loads_valid_audio_files_without_reanalysis(
     (tmp_path / "samples").mkdir(parents=True)
 
     wav_path = tmp_path / "samples" / "sample.wav"
-    with wave.open(str(wav_path), "wb") as f:
-        f.setnchannels(1)
-        f.setsampwidth(2)
-        f.setframerate(44_100)
-        f.writeframes(b"\x00\x00" * 48)
+    write_mono_pcm16_wav(wav_path, 44_100)
 
     project = ProjectState()
     project.sample_paths[0] = "samples/sample.wav"
