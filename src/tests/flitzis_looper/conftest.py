@@ -3,7 +3,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from flitzis_looper.controller import LooperController
+from flitzis_looper.controller import AppController
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 @pytest.fixture
 def audio_engine_mock() -> Iterator[Mock]:
-    with patch("flitzis_looper.controller.facade.AudioEngine", autospec=True) as audio_engine:
+    with patch("flitzis_looper.controller.AudioEngine", autospec=True) as audio_engine:
         yield audio_engine
 
 
@@ -23,16 +23,16 @@ def controller(
     audio_engine_mock: Mock,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-) -> LooperController:
+) -> AppController:
     monkeypatch.chdir(tmp_path)
-    return LooperController()
+    return AppController()
 
 
 @pytest.fixture
-def project_state(controller: LooperController) -> ProjectState:
+def project_state(controller: AppController) -> ProjectState:
     return controller.project
 
 
 @pytest.fixture
-def session_state(controller: LooperController) -> SessionState:
+def session_state(controller: AppController) -> SessionState:
     return controller.session

@@ -162,6 +162,7 @@ class LoaderController(BaseController):
             handler(sample_id, event)
 
     def is_sample_loaded(self, sample_id: int) -> bool:
+        """Return whether a sample slot has audio loaded."""
         validate_sample_id(sample_id)
         return self._project.sample_paths[sample_id] is not None
 

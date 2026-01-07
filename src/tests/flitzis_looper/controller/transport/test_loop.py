@@ -7,11 +7,11 @@ from flitzis_looper.models import BeatGrid, SampleAnalysis
 if TYPE_CHECKING:
     from unittest.mock import Mock
 
-    from flitzis_looper.controller import LooperController
+    from flitzis_looper.controller import AppController
 
 
 def test_reset_loop_region_uses_first_downbeat_and_auto_defaults(
-    controller: LooperController,
+    controller: AppController,
     audio_engine_mock: Mock,
 ) -> None:
     audio_engine_mock.return_value.output_sample_rate.return_value = 48_000
@@ -33,7 +33,7 @@ def test_reset_loop_region_uses_first_downbeat_and_auto_defaults(
 
 
 def test_set_loop_start_snaps_when_auto_enabled(
-    controller: LooperController,
+    controller: AppController,
     audio_engine_mock: Mock,
 ) -> None:
     audio_engine_mock.return_value.output_sample_rate.return_value = 1_000
@@ -53,7 +53,7 @@ def test_set_loop_start_snaps_when_auto_enabled(
 
 
 def test_set_loop_start_does_not_snap_when_auto_disabled(
-    controller: LooperController,
+    controller: AppController,
     audio_engine_mock: Mock,
 ) -> None:
     audio_engine_mock.return_value.output_sample_rate.return_value = 100
@@ -73,7 +73,7 @@ def test_set_loop_start_does_not_snap_when_auto_disabled(
 
 
 def test_effective_loop_end_computed_from_bars(
-    controller: LooperController,
+    controller: AppController,
     audio_engine_mock: Mock,
 ) -> None:
     audio_engine_mock.return_value.output_sample_rate.return_value = 1_000
@@ -82,7 +82,7 @@ def test_effective_loop_end_computed_from_bars(
     controller.project.sample_paths[sample_id] = "samples/foo.wav"
     controller.project.pad_loop_auto[sample_id] = True
     controller.project.pad_loop_bars[sample_id] = 4
-    controller.transport.set_manual_bpm(sample_id, 120.0)
+    controller.transport.bpm.set_manual_bpm(sample_id, 120.0)
     controller.transport.loop.set_start(sample_id, 10.0)
 
     start_s, end_s = controller.transport.loop.effective_region(sample_id)

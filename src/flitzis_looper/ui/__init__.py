@@ -1,6 +1,6 @@
 from imgui_bundle import hello_imgui, immapp
 
-from flitzis_looper.controller import LooperController
+from flitzis_looper.controller import AppController
 from flitzis_looper.ui.constants import BG_RGBA, TITLE, VIEWPORT_PX
 from flitzis_looper.ui.context import UiContext
 from flitzis_looper.ui.render import render_ui
@@ -8,7 +8,7 @@ from flitzis_looper.ui.render import render_ui
 
 def run_ui() -> None:
     """Start the UI shell."""
-    controller = LooperController()
+    controller = AppController()
     context = UiContext(controller)
 
     runner_params = hello_imgui.RunnerParams()

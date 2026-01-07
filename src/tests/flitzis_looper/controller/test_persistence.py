@@ -1,24 +1,22 @@
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
 import pytest
 
 from flitzis_looper.controller.loader import LoaderController
-from flitzis_looper.controller.persistence import (
-    PROJECT_CONFIG_PATH,
-    ProjectPersistence,
-    load_project_state,
-)
+from flitzis_looper.controller.persistence import PROJECT_CONFIG_PATH, ProjectPersistence
 from flitzis_looper.models import BeatGrid, ProjectState, SampleAnalysis, SessionState
 from tests.conftest import write_mono_pcm16_wav
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def test_load_project_state_missing_returns_defaults(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    assert tmp_path == Path(tmp_path)
-    assert load_project_state() == ProjectState()
+    assert ProjectPersistence.from_config_path().project == ProjectState()
 
 
 def test_persistence_roundtrip_writes_atomic_json(
@@ -39,7 +37,7 @@ def test_persistence_roundtrip_writes_atomic_json(
     persistence.mark_dirty()
     persistence.flush(now=0.0)
 
-    loaded = load_project_state(PROJECT_CONFIG_PATH)
+    loaded = ProjectPersistence.from_config_path().project
     assert loaded.volume == pytest.approx(0.5)
     assert loaded.sample_paths[0] == "samples/foo.wav"
 
@@ -73,8 +71,9 @@ def test_load_project_state_invalid_json_returns_defaults(
     config_path = tmp_path / PROJECT_CONFIG_PATH
     config_path.parent.mkdir(parents=True)
     config_path.write_text("{not json}", encoding="utf-8")
+    loaded = ProjectPersistence.from_config_path().project
 
-    assert load_project_state(PROJECT_CONFIG_PATH) == ProjectState()
+    assert loaded == ProjectState()
 
 
 def test_restore_loads_valid_audio_files_without_reanalysis(

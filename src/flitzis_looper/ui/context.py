@@ -6,7 +6,7 @@ from flitzis_looper.constants import SPEED_STEP
 if TYPE_CHECKING:
     from pydantic import BaseModel
 
-    from flitzis_looper.controller import LooperController
+    from flitzis_looper.controller import AppController
     from flitzis_looper.models import ProjectState, SampleAnalysis, SessionState
 
 
@@ -28,7 +28,7 @@ class ReadOnlyStateProxy:
 
 
 class PadSelectors:
-    def __init__(self, controller: LooperController, project: ProjectState, session: SessionState):
+    def __init__(self, controller: AppController, project: ProjectState, session: SessionState):
         self._controller = controller
         self._project = project
         self._session = session
@@ -48,7 +48,7 @@ class PadSelectors:
         return Path(path).name
 
     def is_loaded(self, pad_id: int) -> bool:
-        return self._controller.transport.is_sample_loaded(pad_id)
+        return self._controller.loader.is_sample_loaded(pad_id)
 
     def is_loading(self, pad_id: int) -> bool:
         return self._controller.loader.is_sample_loading(pad_id)
@@ -69,13 +69,13 @@ class PadSelectors:
         return self._project.manual_bpm[pad_id]
 
     def effective_bpm(self, pad_id: int) -> float | None:
-        return self._controller.transport.effective_bpm(pad_id)
+        return self._controller.transport.bpm.effective_bpm(pad_id)
 
     def manual_key(self, pad_id: int) -> str | None:
         return self._project.manual_key[pad_id]
 
     def effective_key(self, pad_id: int) -> str | None:
-        return self._controller.transport.effective_key(pad_id)
+        return self._controller.transport.pad.effective_key(pad_id)
 
     def effective_loop_region(self, pad_id: int) -> tuple[float, float | None]:
         return self._controller.transport.loop.effective_region(pad_id)
@@ -114,7 +114,7 @@ class BankSelectors:
 
 
 class GlobalSelectors:
-    def __init__(self, controller: LooperController, project: ProjectState, session: SessionState):
+    def __init__(self, controller: AppController, project: ProjectState, session: SessionState):
         self._controller = controller
         self._project = project
         self._session = session
@@ -125,7 +125,7 @@ class GlobalSelectors:
             return float(self._session.master_bpm)
 
         selected = self._project.selected_pad
-        bpm = self._controller.transport.effective_bpm(selected)
+        bpm = self._controller.transport.bpm.effective_bpm(selected)
         if bpm is None:
             return None
 
@@ -139,7 +139,7 @@ class UiState:
     banks: BankSelectors
     global_: GlobalSelectors
 
-    def __init__(self, controller: LooperController):
+    def __init__(self, controller: AppController):
         self._controller = controller
         self._project_proxy = ReadOnlyStateProxy(controller.project)
         self._session_proxy = ReadOnlyStateProxy(controller.session)
@@ -160,14 +160,14 @@ class UiState:
 
 
 class PadAudioActions:
-    def __init__(self, controller: LooperController):
+    def __init__(self, controller: AppController):
         self._controller = controller
 
     def trigger_pad(self, pad_id: int) -> None:
-        self._controller.transport.trigger_pad(pad_id)
+        self._controller.transport.playback.trigger_pad(pad_id)
 
     def stop_pad(self, pad_id: int) -> None:
-        self._controller.transport.stop_pad(pad_id)
+        self._controller.transport.playback.stop_pad(pad_id)
 
     def play_pad(self, pad_id: int) -> None:
         self._controller.transport.playback.play(pad_id)
@@ -200,58 +200,68 @@ class PadAudioActions:
         self._controller.loader.analyze_sample_async(pad_id)
 
     def set_manual_bpm(self, pad_id: int, bpm: float) -> None:
-        self._controller.transport.set_manual_bpm(pad_id, bpm)
+        self._controller.transport.bpm.set_manual_bpm(pad_id, bpm)
 
     def clear_manual_bpm(self, pad_id: int) -> None:
-        self._controller.transport.clear_manual_bpm(pad_id)
+        self._controller.transport.bpm.clear_manual_bpm(pad_id)
 
     def tap_bpm(self, pad_id: int) -> float | None:
-        return self._controller.transport.tap_bpm(pad_id)
+        return self._controller.transport.bpm.tap_bpm(pad_id)
 
     def set_manual_key(self, pad_id: int, key: str) -> None:
-        self._controller.transport.set_manual_key(pad_id, key)
+        self._controller.transport.pad.set_manual_key(pad_id, key)
 
     def clear_manual_key(self, pad_id: int) -> None:
-        self._controller.transport.clear_manual_key(pad_id)
+        self._controller.transport.pad.clear_manual_key(pad_id)
 
     def set_pad_gain(self, pad_id: int, gain: float) -> None:
-        self._controller.transport.set_pad_gain(pad_id, gain)
+        self._controller.transport.pad.set_pad_gain(pad_id, gain)
 
     def set_pad_eq(self, pad_id: int, low_db: float, mid_db: float, high_db: float) -> None:
-        self._controller.transport.set_pad_eq(pad_id, low_db, mid_db, high_db)
+        self._controller.transport.pad.set_pad_eq(pad_id, low_db, mid_db, high_db)
 
 
 class GlobalAudioActions:
-    def __init__(self, controller: LooperController):
+    def __init__(self, controller: AppController):
         self._controller = controller
 
     def set_volume(self, volume: float) -> None:
-        self._controller.transport.set_volume(volume)
+        self._controller.transport.global_params.set_volume(volume)
 
     def set_speed(self, speed: float) -> None:
-        self._controller.transport.set_speed(speed)
+        self._controller.transport.global_params.set_speed(speed)
 
     def reset_speed(self) -> None:
-        self._controller.transport.reset_speed()
+        self._controller.transport.global_params.reset_speed()
 
     def increase_speed(self) -> None:
-        self._controller.transport.set_speed(self._controller.project.speed + SPEED_STEP)
+        self._controller.transport.global_params.set_speed(
+            self._controller.project.speed + SPEED_STEP
+        )
 
     def decrease_speed(self) -> None:
-        self._controller.transport.set_speed(self._controller.project.speed - SPEED_STEP)
+        self._controller.transport.global_params.set_speed(
+            self._controller.project.speed - SPEED_STEP
+        )
 
     def toggle_multi_loop(self) -> None:
-        self._controller.transport.set_multi_loop(enabled=not self._controller.project.multi_loop)
+        self._controller.transport.global_params.set_multi_loop(
+            enabled=not self._controller.project.multi_loop
+        )
 
     def toggle_key_lock(self) -> None:
-        self._controller.transport.set_key_lock(enabled=not self._controller.project.key_lock)
+        self._controller.transport.global_params.set_key_lock(
+            enabled=not self._controller.project.key_lock
+        )
 
     def toggle_bpm_lock(self) -> None:
-        self._controller.transport.set_bpm_lock(enabled=not self._controller.project.bpm_lock)
+        self._controller.transport.global_params.set_bpm_lock(
+            enabled=not self._controller.project.bpm_lock
+        )
 
 
 class PollActions:
-    def __init__(self, controller: LooperController):
+    def __init__(self, controller: AppController):
         self._controller = controller
 
     def poll_loader_events(self) -> None:
@@ -268,7 +278,7 @@ class AudioActions:
     global_: GlobalAudioActions
     poll: PollActions
 
-    def __init__(self, controller: LooperController):
+    def __init__(self, controller: AppController):
         self.pads = PadAudioActions(controller)
         self.global_ = GlobalAudioActions(controller)
         self.poll = PollActions(controller)
@@ -277,7 +287,7 @@ class AudioActions:
 class WaveformEditorActions:
     """Waveform editor UI state/actions."""
 
-    def __init__(self, controller: LooperController) -> None:
+    def __init__(self, controller: AppController) -> None:
         self._controller = controller
 
     def open(self, pad_id: int) -> None:
@@ -366,7 +376,7 @@ class UiActions:
 
     waveform: WaveformEditorActions
 
-    def __init__(self, controller: LooperController):
+    def __init__(self, controller: AppController):
         self._controller = controller
         self.waveform = WaveformEditorActions(controller)
 
@@ -405,7 +415,7 @@ class UiContext:
     audio: AudioActions
     ui: UiActions
 
-    def __init__(self, controller: LooperController):
+    def __init__(self, controller: AppController):
         self._controller = controller
         self.state = UiState(controller)
         self.audio = AudioActions(controller)
