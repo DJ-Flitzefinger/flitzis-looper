@@ -55,13 +55,6 @@ def _render_pad_header(ctx: UiContext, info: _SidebarPadInfo) -> None:
     if info.is_loaded or info.is_loading:
         filename = ctx.state.pads.label(info.pad_id) or "-"
         _labeled_value_row("Filename", filename, avail_x=info.avail_x)
-    else:
-        _labeled_value_row(
-            "Filename",
-            "- EMPTY -",
-            avail_x=info.avail_x,
-            value_rgba=TEXT_MUTED_RGBA,
-        )
 
     load_error = ctx.state.pads.load_error(info.pad_id)
     if load_error:
@@ -180,6 +173,8 @@ def _render_loaded_eq(ctx: UiContext, info: _SidebarPadInfo) -> None:
     if any_changed:
         ctx.audio.pads.set_pad_eq(info.pad_id, eq_values[0], eq_values[1], eq_values[2])
 
+    imgui.dummy((info.avail_x, 0.0))
+
 
 def _render_loaded_actions(ctx: UiContext, pad_id: int) -> None:
     if imgui.button("Unload Audio", (-1, 0)):
@@ -231,10 +226,12 @@ def sidebar_left(ctx: UiContext) -> None:
     )
 
     _render_pad_header(ctx, info)
-    _render_bpm(ctx, info)
-    _render_key(ctx, info)
 
     if info.is_loaded:
+        imgui.separator()
+        _render_bpm(ctx, info)
+        imgui.separator()
+        _render_key(ctx, info)
         imgui.separator()
         _render_loaded_gain(ctx, info.pad_id)
         _render_loaded_eq(ctx, info)
