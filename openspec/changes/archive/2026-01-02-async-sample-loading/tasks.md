@@ -22,7 +22,7 @@
   - Decode audio using `decode_audio_file_to_sample_buffer` (or equivalent).
   - Apply FFT resampling to the device rate.
   - Push the resulting sample to the audio ring buffer via `ControlMessage::LoadSample`.
-  - On success, send `LoaderEvent::Success { id, duration_sec }`.
+  - On success, send `LoaderEvent::Success { id, duration_s }`.
   - On any error, send `LoaderEvent::Error { id, error: e.to_string() }`.
 
 ## 5. Add poll_loader_events Method

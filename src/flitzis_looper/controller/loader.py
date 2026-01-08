@@ -103,6 +103,7 @@ class LoaderController(BaseController):
 
         self._audio.unload_sample(sample_id)
         self._project.sample_paths[sample_id] = None
+        self._project.sample_durations[sample_id] = None
         self._project.sample_analysis[sample_id] = None
         self._on_pad_bpm_changed(sample_id)
         self._mark_project_changed()
@@ -237,8 +238,13 @@ class LoaderController(BaseController):
             self._project.sample_paths[sample_id] = target_path
             self._mark_project_changed()
 
+        duration_s = event.get("duration_s")
+        if isinstance(duration_s, float):
+            self._project.sample_durations[sample_id] = duration_s
+
         # If analysis is provided in the event (from normal loading), store it
         analysis = event.get("analysis")
+
         if analysis is not None:
             self._store_sample_analysis(sample_id, analysis)
         # If no analysis in event (from restoration), keep existing analysis from project state
@@ -257,6 +263,7 @@ class LoaderController(BaseController):
 
         if self._project.sample_paths[sample_id] is not None:
             self._project.sample_paths[sample_id] = None
+            self._project.sample_durations[sample_id] = None
             self._project.sample_analysis[sample_id] = None
             self._on_pad_bpm_changed(sample_id)
             self._mark_project_changed()
@@ -318,6 +325,7 @@ class LoaderController(BaseController):
 
     def _clear_restored_pad(self, sample_id: int) -> None:
         self._project.sample_paths[sample_id] = None
+        self._project.sample_durations[sample_id] = None
         self._project.sample_analysis[sample_id] = None
         self._on_pad_bpm_changed(sample_id)
 

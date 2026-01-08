@@ -4,6 +4,7 @@ from flitzis_looper.models import validate_sample_id
 
 if TYPE_CHECKING:
     from flitzis_looper.controller.transport import TransportController
+    from flitzis_looper_audio import AudioMessage
 
 
 class PadPlaybackController:
@@ -29,15 +30,12 @@ class PadPlaybackController:
         if self._project.sample_paths[sample_id] is None:
             return
 
-        if self._project.multi_loop:
-            self.stop_pad(sample_id)
-        else:
+        if not self._project.multi_loop:
             self.stop_all_pads()
 
         start_s, end_s = self._loop.effective_region(sample_id)
         self._audio.set_pad_loop_region(sample_id, start_s, end_s)
         self._audio.play_sample(sample_id, 1.0)
-        self._session.active_sample_ids.add(sample_id)
 
     def stop_pad(self, sample_id: int) -> None:
         """Stop a pad if it is currently active."""
@@ -46,26 +44,22 @@ class PadPlaybackController:
             return
 
         self._audio.stop_sample(sample_id)
-        self._session.active_sample_ids.discard(sample_id)
 
     def stop_all_pads(self) -> None:
         """Stop all currently active pads."""
         self._audio.stop_all()
-        self._session.active_sample_ids.clear()
 
-    def play(self, sample_id: int) -> None:
-        # TODO: used only by wave editor, do we really need this to be separate from `trigger_pad`?
-        validate_sample_id(sample_id)
-        if self._transport._project.sample_paths[sample_id] is None:
+    def handle_sample_started_message(self, msg: AudioMessage.SampleStarted) -> None:
+        pad_id = msg.sample_id()
+        if pad_id is None:
             return
 
-        self._transport.loop._apply_effective_pad_loop_region_to_audio(sample_id)
-        self._transport._audio.play_sample(sample_id, 1.0)
-        self._transport._session.active_sample_ids.add(sample_id)
+        self._session.active_sample_ids.add(pad_id)
 
-    def toggle(self, sample_id: int) -> None:
-        validate_sample_id(sample_id)
-        if sample_id in self._transport._session.active_sample_ids:
-            self.stop_pad(sample_id)
-        else:
-            self.play(sample_id)
+    def handle_sample_stopped_message(self, msg: AudioMessage.SampleStopped) -> None:
+        pad_id = msg.sample_id()
+        if pad_id is None:
+            return
+
+        self._session.active_sample_ids.discard(pad_id)
+        self._session.pad_playhead_s[pad_id] = None

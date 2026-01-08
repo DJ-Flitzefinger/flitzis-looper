@@ -1,4 +1,5 @@
 from contextlib import suppress
+from typing import TYPE_CHECKING
 
 from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.controller.metering import MeteringController
@@ -6,6 +7,9 @@ from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.controller.transport import TransportController
 from flitzis_looper.models import ProjectState, SessionState
 from flitzis_looper_audio import AudioEngine
+
+if TYPE_CHECKING:
+    from flitzis_looper.controller.base import BaseController
 
 
 class AppController:
@@ -30,7 +34,9 @@ class AppController:
             on_pad_bpm_changed=self.transport.bpm.on_pad_bpm_changed,
             on_project_changed=self._persistence.mark_dirty,
         )
-        self.metering = MeteringController(self._session, self._audio)
+        self.metering = MeteringController(self._project, self._session, self._audio)
+
+        self._controllers: set[BaseController] = {self.transport, self.loader, self.metering}
 
         self.transport.apply_project_state_to_audio()
         self.loader.restore_samples_from_project_state()
@@ -41,6 +47,10 @@ class AppController:
 
         self._audio.stop_all()
         self._audio.shut_down()
+
+    def on_frame_render(self) -> None:
+        for controller in self._controllers:
+            controller.on_frame_render()
 
     @property
     def project(self) -> ProjectState:

@@ -1,7 +1,7 @@
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
-from imgui_bundle import imgui
+from imgui_bundle import imgui, implot
 
 from flitzis_looper.ui.constants import (
     BG_FRAME_ACTIVE_RGBA,
@@ -132,3 +132,33 @@ def item_width(value: float) -> Iterator[None]:
         yield
     finally:
         imgui.pop_item_width()
+
+
+@contextmanager
+def implot_style_color(idx: implot.Col, val: imgui.ImU32 | imgui.ImVec4Like) -> Iterator[None]:
+    """Push implot style color and pop on exit.
+
+    Usage:
+        with implot_style_color(implot.Col_.fill, GREEN_RGBA):
+            ...
+    """
+    implot.push_style_color(idx, val)
+    try:
+        yield
+    finally:
+        implot.pop_style_color()
+
+
+@contextmanager
+def implot_style_var(idx: implot.StyleVar, val: StyleVarValue) -> Iterator[None]:
+    """Push implot style var and pop on exit.
+
+    Usage:
+        with implot_style_var(implot.StyleVar_.fill_alpha, 0.5):
+            ...
+    """
+    implot.push_style_var(idx, val)
+    try:
+        yield
+    finally:
+        implot.pop_style_var()

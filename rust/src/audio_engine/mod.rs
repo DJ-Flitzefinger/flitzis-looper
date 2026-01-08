@@ -1,18 +1,3 @@
-//! Audio Engine Module
-//!
-//! This module provides real-time audio mixing and playback capabilities.
-//! It is organized into sub-modules, each with a specific responsibility:
-//!
-//! - [`audio_stream`]: CPAL audio stream management and real-time callback
-//! - [`constants`]: Configuration constants and limits
-//! - [`errors`]: Audio-specific error types
-//! - [`voice`]: Voice management and lifecycle
-//! - [`mixer`]: Real-time mixing engine
-//! - [`sample_loader`]: Audio file loading and decoding
-//!
-//! The main [`AudioEngine`] struct orchestrates these components to provide
-//! a high-level audio playback interface for Python.
-
 use crate::audio_engine::analysis::analyze_sample;
 use crate::audio_engine::audio_stream::{AudioStreamHandle, create_audio_stream, start_stream};
 use crate::audio_engine::constants::{
@@ -28,6 +13,7 @@ use crate::audio_engine::sample_loader::{
 use crate::messages::{
     AudioMessage, BackgroundTaskKind, ControlMessage, LoaderEvent, SampleBuffer, task_to_str,
 };
+use numpy::{PyArray1, ToPyArray};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -50,6 +36,21 @@ mod progress;
 mod sample_loader;
 mod stretch_processor;
 mod voice_slot;
+
+/// Tuple: (is_raw_mode, xs, y_min, y_max)
+///
+/// - `is_raw_mode` (bool): If True, draw a simple line using `xs` and `y_min`.
+/// - `xs`: Time values (seconds).
+/// - `y_min`: Min values (or raw samples if in raw mode).
+/// - `y_max`: Max values (or None if in raw mode).
+type WaveformResult = PyResult<
+    Option<(
+        bool,
+        Py<PyArray1<f32>>,
+        Py<PyArray1<f32>>,
+        Option<Py<PyArray1<f32>>>,
+    )>,
+>;
 
 struct PadLoadingGuard {
     id: usize,
@@ -279,7 +280,7 @@ impl AudioEngine {
             );
 
             let frames = sample.samples.len() / sample.channels;
-            let duration_sec = frames as f32 / output_sample_rate as f32;
+            let duration_s = frames as f32 / output_sample_rate as f32;
 
             let sample_for_audio = sample.clone();
             if let Ok(mut cache) = sample_cache.lock()
@@ -321,7 +322,7 @@ impl AudioEngine {
             );
             let _ = loader_tx.send(LoaderEvent::Success {
                 id,
-                duration_sec,
+                duration_s,
                 cached_path,
                 analysis,
             });
@@ -457,13 +458,13 @@ impl AudioEngine {
             }
             LoaderEvent::Success {
                 id,
-                duration_sec,
+                duration_s,
                 cached_path,
                 analysis,
             } => {
                 dict.set_item("type", "success")?;
                 dict.set_item("id", id)?;
-                dict.set_item("duration_sec", duration_sec)?;
+                dict.set_item("duration_s", duration_s)?;
                 dict.set_item("cached_path", cached_path)?;
 
                 if let Some(analysis) = analysis {
@@ -474,6 +475,7 @@ impl AudioEngine {
                     let beat_grid_dict = PyDict::new(py);
                     beat_grid_dict.set_item("beats", &analysis.beat_grid.beats)?;
                     beat_grid_dict.set_item("downbeats", &analysis.beat_grid.downbeats)?;
+                    beat_grid_dict.set_item("bars", &analysis.beat_grid.bars)?;
                     analysis_dict.set_item("beat_grid", beat_grid_dict)?;
 
                     dict.set_item("analysis", analysis_dict)?;
@@ -873,6 +875,177 @@ impl AudioEngine {
         match consumer_guard.pop() {
             Ok(msg) => Ok(Some(msg)),
             Err(_) => Ok(None),
+        }
+    }
+
+    /// Get the waveform data for a loaded sample slot.
+    ///
+    /// # Parameters
+    ///
+    /// - `sample_id`: Pad number/sample slot
+    /// - `width_px`: The bucket size (number of horizontal plot pixels)
+    /// - `start_s`: Start x value of plot (in seconds)
+    /// - `end_s`: End x value of plot (in seconds)
+    ///
+    /// # Returns
+    ///
+    /// The waveform render data for the specified region and resolution.
+    pub fn get_waveform_render_data(
+        &self,
+        py: Python,
+        sample_id: usize,
+        width_px: usize,
+        start_s: f32,
+        end_s: f32,
+    ) -> WaveformResult {
+        // Acquire data
+        let sample_arc = {
+            let cache = self
+                .sample_cache
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("Lock fail"))?;
+            cache.get(sample_id).and_then(|slot| slot.clone())
+        };
+
+        if sample_arc.is_none() {
+            return Ok(None);
+        }
+        let sample = sample_arc.unwrap();
+
+        // Retrieve sample rate
+        let sample_rate = if let Some(handle) = self.stream_handle.as_ref() {
+            handle.output_sample_rate as f32
+        } else {
+            44_100.0
+        };
+
+        let channels = sample.channels;
+        let total_frames = sample.samples.len() / channels;
+
+        // Calculate index ranges
+
+        // Map time (seconds) to indices
+        let start_idx = (start_s * sample_rate).floor() as usize;
+        let end_idx = (end_s * sample_rate).ceil() as usize;
+
+        // Clamp to buffer bounds
+        let start_idx = start_idx.clamp(0, total_frames);
+        let end_idx = end_idx.clamp(0, total_frames).max(start_idx); // Ensure no negative range
+
+        let range_len = end_idx - start_idx;
+        if range_len == 0 {
+            return Ok(None);
+        }
+
+        let raw_data = &sample.samples;
+
+        // Mode selection: raw vs envelope
+
+        // If we have fewer samples than 2x pixels, showing an aggregate
+        // loses information. Show raw samples instead.
+        if range_len < width_px * 2 {
+            // === RAW MODE ===
+
+            // Allocate vectors
+            let mut xs = Vec::with_capacity(range_len);
+            let mut ys = Vec::with_capacity(range_len);
+
+            for i in 0..range_len {
+                let frame_idx = start_idx + i;
+                let sample_idx = frame_idx * channels;
+
+                // Mixdown logic: (L+R)/2 for stereo, or just L for Mono
+                let val = if channels == 2 {
+                    (raw_data[sample_idx] + raw_data[sample_idx + 1]) * 0.5
+                } else {
+                    raw_data[sample_idx]
+                };
+
+                xs.push(frame_idx as f32 / sample_rate);
+                ys.push(val);
+            }
+
+            // Convert to numpy arrays (direct write to Python heap)
+            let xs_py = xs.to_pyarray(py).to_owned();
+            let ys_py = ys.to_pyarray(py).to_owned();
+
+            Ok(Some((true, xs_py.into(), ys_py.into(), None)))
+        } else {
+            // === ENVELOPE MODE (Aggregation) ===
+
+            // We want exactly `width_px` data points
+            let mut xs = Vec::with_capacity(width_px);
+            let mut mins = Vec::with_capacity(width_px);
+            let mut maxs = Vec::with_capacity(width_px);
+
+            // How many frames fit into one pixel column?
+            let frames_per_bucket = range_len as f32 / width_px as f32;
+
+            for i in 0..width_px {
+                // Calculate the slice for this bucket
+                let bucket_start_rel = (i as f32 * frames_per_bucket) as usize;
+                let bucket_end_rel = ((i + 1) as f32 * frames_per_bucket) as usize;
+
+                let bucket_start = start_idx + bucket_start_rel;
+                let bucket_end = (start_idx + bucket_end_rel).min(start_idx + range_len);
+
+                if bucket_start >= bucket_end {
+                    continue;
+                }
+
+                let mut min_v = f32::MAX;
+                let mut max_v = f32::MIN;
+
+                // Inner Loop: Scan the bucket
+                // Optimizations:
+                // 1. We step by `channels` to stay aligned.
+                // 2. We mixdown stereo on the fly to find true peak.
+                let mut ptr = bucket_start * channels;
+                let end_ptr = bucket_end * channels;
+
+                // Using a while loop with raw indexing is often easier for
+                // stride logic than iterators in this specific math context
+                while ptr < end_ptr {
+                    let val = if channels == 2 {
+                        (raw_data[ptr] + raw_data[ptr + 1]) * 0.5
+                    } else {
+                        raw_data[ptr]
+                    };
+
+                    if val < min_v {
+                        min_v = val;
+                    }
+                    if val > max_v {
+                        max_v = val;
+                    }
+
+                    ptr += channels;
+                }
+
+                // If min_v is still MAX, it means the loop didn't run (empty bucket)
+                if min_v == f32::MAX {
+                    min_v = 0.0;
+                    max_v = 0.0;
+                }
+
+                // The X coordinate is the time at the START of the bucket
+                let time = bucket_start as f32 / sample_rate;
+
+                xs.push(time);
+                mins.push(min_v);
+                maxs.push(max_v);
+            }
+
+            let xs_py = xs.to_pyarray(py).to_owned();
+            let mins_py = mins.to_pyarray(py).to_owned();
+            let maxs_py = maxs.to_pyarray(py).to_owned();
+
+            Ok(Some((
+                false,
+                xs_py.into(),
+                mins_py.into(),
+                Some(maxs_py.into()),
+            )))
         }
     }
 }

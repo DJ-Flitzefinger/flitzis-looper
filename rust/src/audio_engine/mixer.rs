@@ -74,7 +74,7 @@ pub struct RtMixer {
     sample_bank: [Option<SampleBuffer>; NUM_SAMPLES],
 
     /// Active voices with MAX_VOICES slots.
-    voices: [VoiceSlot; MAX_VOICES],
+    pub voices: [VoiceSlot; MAX_VOICES],
 }
 
 impl RtMixer {
@@ -144,17 +144,17 @@ impl RtMixer {
     /// - `velocity`: Playback volume (0.0 to 1.0)
     ///
     /// If no free voice slot is available, the playback request is silently dropped.
-    pub fn play_sample(&mut self, id: usize, velocity: f32) {
+    pub fn play_sample(&mut self, id: usize, velocity: f32) -> bool {
         if id >= NUM_SAMPLES {
-            return;
+            return false;
         }
 
         if !velocity.is_finite() || !(VOLUME_MIN..=VOLUME_MAX).contains(&velocity) {
-            return;
+            return false;
         }
 
         let Some(sample) = self.sample_bank[id].as_ref() else {
-            return;
+            return false;
         };
         let sample = sample.clone();
 
@@ -166,21 +166,24 @@ impl RtMixer {
             initial_frame_pos = 0;
         }
 
+        // Sample is already playing? -> reset play position
+        for voice_slot in &mut self.voices {
+            if voice_slot.active && voice_slot.sample_id == id {
+                voice_slot.restart(initial_frame_pos, velocity, tempo_ratio);
+                return true;
+            }
+        }
+
+        // Start new voice slot
         for voice_slot in &mut self.voices {
             if !voice_slot.active {
                 voice_slot.start(id, sample.clone(), initial_frame_pos, velocity, tempo_ratio);
-                return;
+                return true;
             }
         }
 
         // No free voice slot: drop deterministically.
-    }
-
-    /// Stops all active voices.
-    pub fn stop_all(&mut self) {
-        for voice in &mut self.voices {
-            voice.stop();
-        }
+        false
     }
 
     /// Sets the global volume multiplier.
@@ -303,6 +306,15 @@ impl RtMixer {
                 Some(end_frame as usize)
             }
         });
+
+        let end_frame = if let Some(mut end) = end_frame {
+            if end <= start_frame {
+                end = start_frame.saturating_add(1);
+            }
+            Some(end)
+        } else {
+            None
+        };
 
         self.pad_loop_start_frame[id] = start_frame;
         self.pad_loop_end_frame[id] = end_frame;
@@ -622,8 +634,10 @@ mod tests {
         let sample = create_test_sample(2, 100, 0.5);
         mixer.load_sample(0, sample);
 
-        mixer.play_sample(0, 0.8);
+        let result = mixer.play_sample(0, 0.8);
 
+        // Should succeed
+        assert!(result);
         // One voice should be active
         assert!(mixer.voices.iter().any(|v| v.active));
     }
@@ -633,26 +647,65 @@ mod tests {
         let mut mixer = RtMixer::new(2, 44_100.0);
 
         // Try to play sample that wasn't loaded
-        mixer.play_sample(0, 0.8);
+        let result = mixer.play_sample(0, 0.8);
 
+        // Should fail
+        assert!(!result);
         // No voice should be created
         assert!(mixer.voices.iter().all(|v| !v.active));
     }
 
     #[test]
-    fn test_stop_all() {
+    fn test_play_sample_returns_false_on_invalid_id() {
         let mut mixer = RtMixer::new(2, 44_100.0);
         let sample = create_test_sample(2, 100, 0.5);
         mixer.load_sample(0, sample);
+
+        // Try to play with invalid ID
+        let result = mixer.play_sample(NUM_SAMPLES + 10, 0.8);
+
+        // Should fail
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_play_sample_returns_false_on_invalid_velocity() {
+        let mut mixer = RtMixer::new(2, 44_100.0);
+        let sample = create_test_sample(2, 100, 0.5);
+        mixer.load_sample(0, sample);
+
+        // Try to play with invalid velocity (out of range)
+        let result = mixer.play_sample(0, 1.5);
+
+        // Should fail
+        assert!(!result);
+        assert!(mixer.voices.iter().all(|v| !v.active));
+    }
+
+    #[test]
+    fn test_play_sample_restarts_if_already_playing() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        let sample = create_test_sample(1, 100, 0.5);
+        mixer.load_sample(0, sample);
+        mixer.set_pad_loop_region(0, 0.2, None);
+
+        // Play sample - starts at loop start frame (2)
         mixer.play_sample(0, 0.8);
 
-        // Should have active voice
-        assert!(mixer.voices.iter().any(|v| v.active));
+        // Check voice started at expected position
+        let voice = mixer.voices.iter().find(|v| v.active).unwrap();
+        assert_eq!(voice.frame_pos, 2);
 
-        mixer.stop_all();
+        // Play again - should restart
+        let result = mixer.play_sample(0, 0.6);
 
-        // All voices should be stopped
-        assert!(mixer.voices.iter().all(|v| !v.active));
+        // Should succeed
+        assert!(result);
+        // Still only one voice active
+        assert_eq!(mixer.voices.iter().filter(|v| v.active).count(), 1);
+        // Position should be reset to loop start (2)
+        let voice = mixer.voices.iter().find(|v| v.active).unwrap();
+        assert_eq!(voice.frame_pos, 2);
     }
 
     #[test]
@@ -739,7 +792,9 @@ mod tests {
         let mut output_1x = vec![0.0; 20];
         mixer.render(&mut output_1x, &mut pad_peaks);
 
-        mixer.stop_all();
+        for voice in &mut mixer.voices {
+            voice.stop();
+        }
         mixer.set_speed(2.0);
         mixer.play_sample(0, 1.0);
         let mut output_2x = vec![0.0; 20];
@@ -851,12 +906,17 @@ mod tests {
         let mut mixer = RtMixer::new(1, 44_100.0);
 
         // Create MAX_VOICES + 5 samples
+        let mut success_count = 0;
         for i in 0..(MAX_VOICES + 5) {
             let sample = create_test_sample(1, 10, 0.5);
             mixer.load_sample(i, sample);
-            mixer.play_sample(i, 1.0);
+            if mixer.play_sample(i, 1.0) {
+                success_count += 1;
+            }
         }
 
+        // First MAX_VOICES should succeed
+        assert_eq!(success_count, MAX_VOICES);
         // Only MAX_VOICES voices should be active
         assert_eq!(mixer.voices.iter().filter(|v| v.active).count(), MAX_VOICES);
     }

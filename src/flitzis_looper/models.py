@@ -24,6 +24,10 @@ def _default_sample_paths() -> list[str | None]:
     return [None] * NUM_SAMPLES
 
 
+def _default_sample_durations() -> list[float | None]:
+    return [None] * NUM_SAMPLES
+
+
 def validate_sample_id(sample_id: int) -> int:
     if not 0 <= sample_id < NUM_SAMPLES:
         msg = f"sample_id must be >= 0 and < {NUM_SAMPLES}, got {sample_id}"
@@ -34,6 +38,7 @@ def validate_sample_id(sample_id: int) -> int:
 class BeatGrid(BaseModel):
     beats: list[float]
     downbeats: list[float]
+    bars: list[float]
 
 
 class SampleAnalysis(BaseModel):
@@ -85,6 +90,9 @@ class ProjectState(BaseModel):
 
     sample_paths: list[str | None] = Field(default_factory=_default_sample_paths)
     """Maps pad IDs to file paths."""
+
+    sample_durations: list[float | None] = Field(default_factory=_default_sample_durations)
+    """Maps pad IDs to sample durations (in seconds)."""
 
     sample_analysis: list[SampleAnalysis | None] = Field(default_factory=_default_sample_analysis)
     """Per-pad audio analysis results (BPM/key/beat grid) or None when unknown."""
@@ -217,6 +225,10 @@ class ProjectState(BaseModel):
         return value
 
 
+def _default_pad_playhead_s() -> list[float | None]:
+    return [None] * NUM_SAMPLES
+
+
 class SessionState(BaseModel):
     """Runtime/UI state. Recreated on app launch."""
 
@@ -234,7 +246,7 @@ class SessionState(BaseModel):
     pad_peak_updated_at: list[float] = Field(default_factory=lambda: [0.0] * NUM_SAMPLES)
     """Monotonic timestamp of last pad peak update (seconds)."""
 
-    pad_playhead_s: list[float] = Field(default_factory=lambda: [0.0] * NUM_SAMPLES)
+    pad_playhead_s: list[float | None] = Field(default_factory=_default_pad_playhead_s)
     """Best-effort per-pad playback position in seconds."""
 
     pad_playhead_updated_at: list[float] = Field(default_factory=lambda: [0.0] * NUM_SAMPLES)
@@ -276,9 +288,6 @@ class SessionState(BaseModel):
 
     waveform_editor_pad_id: int | None = None
     """Pad id currently being edited in the waveform editor."""
-
-    waveform_editor_view_xmin_s: float = 0.0
-    waveform_editor_view_xmax_s: float = 0.0
 
     tap_bpm_pad_id: int | None = None
     """Current Tap BPM target pad. Resets tap timestamps when changed."""

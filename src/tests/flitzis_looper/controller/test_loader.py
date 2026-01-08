@@ -65,7 +65,7 @@ def test_loader_success_updates_project_sample_path(
         {
             "type": "success",
             "id": 0,
-            "duration_sec": 1.0,
+            "duration_s": 1.0,
             "cached_path": "samples/foo.wav",
             "analysis": analysis,
         },
@@ -75,6 +75,7 @@ def test_loader_success_updates_project_sample_path(
     controller.loader.poll_loader_events()
 
     assert controller.project.sample_paths[0] == "samples/foo.wav"
+    assert controller.project.sample_durations[0] == 1.0
     assert controller.project.sample_analysis[0] is not None
     assert 0 not in controller.session.pending_sample_paths
 
@@ -84,12 +85,14 @@ def test_unload_sample(controller: AppController, audio_engine_mock: Mock) -> No
     sample_id = 0
     path = "/path/to/sample.wav"
     controller.project.sample_paths[sample_id] = path
+    controller.project.sample_durations[sample_id] = 1.0
     controller.session.active_sample_ids.add(sample_id)
 
     controller.loader.unload_sample(sample_id)
 
     audio_engine_mock.return_value.unload_sample.assert_called_with(sample_id)
     assert controller.project.sample_paths[sample_id] is None
+    assert controller.project.sample_durations[sample_id] is None
     assert sample_id not in controller.session.active_sample_ids
 
 
@@ -141,6 +144,7 @@ def test_restore_sample_does_not_copy_file(tmp_path: Path, monkeypatch: pytest.M
         assert len(sample_files) == 1
         assert sample_files[0].name == "test.wav"
         assert project.sample_paths[0] == "samples/test.wav"
+        assert project.sample_durations[0] == pytest.approx(0.0029, rel=1e-3)
 
     finally:
         audio.shut_down()
@@ -183,6 +187,7 @@ def test_load_new_sample_copies_file(tmp_path: Path, monkeypatch: pytest.MonkeyP
         assert len(sample_files) == 1
         assert sample_files[0].name == "test.wav"
         assert project.sample_paths[0] == "samples/test.wav"
+        assert project.sample_durations[0] == pytest.approx(0.0029, rel=1e-3)
 
     finally:
         audio.shut_down()

@@ -7,6 +7,7 @@ from flitzis_looper.controller.transport.loop import PadLoopController
 from flitzis_looper.controller.transport.pad import PadController
 from flitzis_looper.controller.transport.playback import PadPlaybackController
 from flitzis_looper.controller.transport.state import ApplyProjectState
+from flitzis_looper.controller.transport.waveform import WaveformController
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -30,6 +31,7 @@ class TransportController(BaseController):
         self.loop = PadLoopController(self)
         self.playback = PadPlaybackController(self)
         self.pad = PadController(self)
+        self.waveform = WaveformController(self)
 
     def apply_project_state_to_audio(self) -> None:
         ApplyProjectState(self).apply_project_state_to_audio()

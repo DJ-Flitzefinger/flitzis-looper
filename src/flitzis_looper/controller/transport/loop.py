@@ -81,12 +81,17 @@ class PadLoopController:
         analysis = self._project.sample_analysis[sample_id]
         beats = [] if analysis is None else [float(t) for t in analysis.beat_grid.beats]
 
+        sample_rate_hz = self._transport._output_sample_rate_hz()
+        one_sample_s = (
+            1.0 / sample_rate_hz if sample_rate_hz is not None and sample_rate_hz > 0 else 0.0001
+        )
+
         if not self._project.pad_loop_auto[sample_id]:
             start_s = self._quantize_time_to_output_samples(start_s)
             if end_s is not None:
                 end_s = self._quantize_time_to_output_samples(float(end_s))
                 if end_s <= start_s:
-                    end_s = None
+                    end_s = start_s + one_sample_s
             return (start_s, end_s)
 
         start_s = self._snap_to_nearest_beat(start_s, beats)
@@ -98,7 +103,7 @@ class PadLoopController:
             if end_s is not None:
                 end_s = self._quantize_time_to_output_samples(float(end_s))
                 if end_s <= start_s:
-                    end_s = None
+                    end_s = start_s + one_sample_s
             return (start_s, end_s)
 
         bars = max(1, int(self._project.pad_loop_bars[sample_id]))
@@ -106,7 +111,7 @@ class PadLoopController:
         end_s_effective = self._snap_to_nearest_beat(start_s + duration_s, beats)
         end_s_effective = self._quantize_time_to_output_samples(end_s_effective)
         if end_s_effective <= start_s:
-            return (start_s, None)
+            end_s_effective = start_s + one_sample_s
         return (start_s, end_s_effective)
 
     def effective_region(self, sample_id: int) -> tuple[float, float | None]:
@@ -144,14 +149,24 @@ class PadLoopController:
         validate_sample_id(sample_id)
         ensure_finite(start_s)
 
-        start_s = max(0.0, float(start_s))
+        start_s = max(0.0, start_s)
         analysis = self._transport._project.sample_analysis[sample_id]
-        beats = [] if analysis is None else [float(t) for t in analysis.beat_grid.beats]
+        beats = [] if analysis is None else analysis.beat_grid.beats
         if self._transport._project.pad_loop_auto[sample_id]:
             start_s = self._snap_to_nearest_beat(start_s, beats)
 
         start_s = self._quantize_time_to_output_samples(start_s)
         self._transport._project.pad_loop_start_s[sample_id] = start_s
+
+        end_s = self._transport._project.pad_loop_end_s[sample_id]
+        sample_rate_hz = self._transport._output_sample_rate_hz()
+        one_sample_s = (
+            1.0 / sample_rate_hz if sample_rate_hz is not None and sample_rate_hz > 0 else 0.0001
+        )
+
+        if end_s is not None and end_s <= start_s:
+            self._transport._project.pad_loop_end_s[sample_id] = start_s + one_sample_s
+
         self._transport._mark_project_changed()
         self._apply_effective_pad_loop_region_to_audio(sample_id)
 
@@ -160,14 +175,21 @@ class PadLoopController:
 
         if end_s is not None:
             ensure_finite(end_s)
-            end_s = max(0.0, float(end_s))
+            end_s = max(0.0, end_s)
             end_s = self._quantize_time_to_output_samples(end_s)
 
             start_s = self._quantize_time_to_output_samples(
                 float(self._transport._project.pad_loop_start_s[sample_id])
             )
+            sample_rate_hz = self._transport._output_sample_rate_hz()
+            one_sample_s = (
+                1.0 / sample_rate_hz
+                if sample_rate_hz is not None and sample_rate_hz > 0
+                else 0.0001
+            )
+
             if end_s <= start_s:
-                end_s = None
+                end_s = start_s + one_sample_s
 
         self._transport._project.pad_loop_end_s[sample_id] = end_s
         self._transport._mark_project_changed()

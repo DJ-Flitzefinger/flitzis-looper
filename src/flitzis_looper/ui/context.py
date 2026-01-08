@@ -2,12 +2,14 @@ from pathlib import Path, PureWindowsPath
 from typing import TYPE_CHECKING, Any, cast
 
 from flitzis_looper.constants import SPEED_STEP
+from flitzis_looper_audio import AudioMessage
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
 
     from flitzis_looper.controller import AppController
     from flitzis_looper.models import ProjectState, SampleAnalysis, SessionState
+    from flitzis_looper_audio import WaveFormRenderData
 
 
 class ReadOnlyStateProxy:
@@ -169,12 +171,6 @@ class PadAudioActions:
     def stop_pad(self, pad_id: int) -> None:
         self._controller.transport.playback.stop_pad(pad_id)
 
-    def play_pad(self, pad_id: int) -> None:
-        self._controller.transport.playback.play(pad_id)
-
-    def toggle_pad_playback(self, pad_id: int) -> None:
-        self._controller.transport.playback.toggle(pad_id)
-
     def reset_pad_loop_region(self, pad_id: int) -> None:
         self._controller.transport.loop.reset(pad_id)
 
@@ -264,11 +260,30 @@ class PollActions:
     def __init__(self, controller: AppController):
         self._controller = controller
 
-    def poll_loader_events(self) -> None:
+    def poll(self) -> None:
+        self._poll_loader_events()
+        self._poll_audio_messages()
+
+    def _poll_loader_events(self) -> None:
         self._controller.loader.poll_loader_events()
 
-    def poll_audio_messages(self) -> None:
-        self._controller.metering.poll_audio_messages()
+    def _poll_audio_messages(self) -> None:
+        while True:
+            msg = self._controller._audio.receive_msg()
+            if msg is None:
+                return
+
+            if isinstance(msg, AudioMessage.PadPeak):
+                self._controller.metering.handle_pad_peak_message(msg)
+
+            if isinstance(msg, AudioMessage.PadPlayhead):
+                self._controller.metering.handle_pad_playhead_message(msg)
+
+            if isinstance(msg, AudioMessage.SampleStarted):
+                self._controller.transport.playback.handle_sample_started_message(msg)
+
+            if isinstance(msg, AudioMessage.SampleStopped):
+                self._controller.transport.playback.handle_sample_stopped_message(msg)
 
 
 class AudioActions:
@@ -287,6 +302,13 @@ class AudioActions:
 class WaveformEditorActions:
     """Waveform editor UI state/actions."""
 
+    # Cache render data
+    _last_pad_id: int | None = None
+    _last_width_px: int | None = None
+    _last_start_s: float | None = None
+    _last_end_s: float | None = None
+    _last_waveform_value: WaveFormRenderData | None = None
+
     def __init__(self, controller: AppController) -> None:
         self._controller = controller
 
@@ -295,80 +317,28 @@ class WaveformEditorActions:
         session.waveform_editor_open = True
         session.waveform_editor_pad_id = pad_id
 
-        start_s, end_s = self._controller.transport.loop.effective_region(pad_id)
-        xmin = max(0.0, float(start_s) - 1.0)
-        xmax = float(start_s) + 9.0 if end_s is None else float(end_s) + 1.0
-        if xmax <= xmin:
-            xmax = xmin + 1.0
-
-        session.waveform_editor_view_xmin_s = xmin
-        session.waveform_editor_view_xmax_s = xmax
-
     def close(self) -> None:
         session = self._controller.session
         session.waveform_editor_open = False
         session.waveform_editor_pad_id = None
 
-    def set_view(self, xmin_s: float, xmax_s: float) -> None:
-        session = self._controller.session
-        session.waveform_editor_view_xmin_s = float(xmin_s)
-        session.waveform_editor_view_xmax_s = float(xmax_s)
-
-    def zoom(self, *, zoom_in: bool) -> None:
-        session = self._controller.session
-        xmin = float(session.waveform_editor_view_xmin_s)
-        xmax = float(session.waveform_editor_view_xmax_s)
-        if not (xmax > xmin):
-            xmin = 0.0
-            xmax = 8.0
-
-        center = (xmin + xmax) * 0.5
-        duration = (xmax - xmin) * (0.5 if zoom_in else 2.0)
-        duration = max(0.001, duration)
-
-        self.set_view(center - duration * 0.5, center + duration * 0.5)
-
-    def pan(self, *, left: bool) -> None:
-        session = self._controller.session
-        xmin = float(session.waveform_editor_view_xmin_s)
-        xmax = float(session.waveform_editor_view_xmax_s)
-        if not (xmax > xmin):
-            xmin = 0.0
-            xmax = 8.0
-
-        delta = (xmax - xmin) * 0.2
-        if left:
-            delta = -delta
-
-        self.set_view(xmin + delta, xmax + delta)
-
-    def zoom_wheel(self, wheel: float, mouse_x_s: float | None) -> None:
-        session = self._controller.session
-        xmin = float(session.waveform_editor_view_xmin_s)
-        xmax = float(session.waveform_editor_view_xmax_s)
-        if not (xmax > xmin):
-            xmin = 0.0
-            xmax = 8.0
-
-        zoom = 0.9**wheel
-        new_duration = max(0.001, (xmax - xmin) * zoom)
-        anchor = (xmin + xmax) * 0.5 if mouse_x_s is None else float(mouse_x_s)
-        left_ratio = 0.5 if mouse_x_s is None else (anchor - xmin) / (xmax - xmin)
-        left_ratio = min(max(left_ratio, 0.0), 1.0)
-
-        new_xmin = anchor - new_duration * left_ratio
-        new_xmax = new_xmin + new_duration
-        self.set_view(new_xmin, new_xmax)
-
-    def pan_drag(self, dx_px: float, width_px: float) -> None:
-        session = self._controller.session
-        xmin = float(session.waveform_editor_view_xmin_s)
-        xmax = float(session.waveform_editor_view_xmax_s)
-        if not (xmax > xmin) or width_px <= 0:
-            return
-
-        delta_s = -(dx_px / width_px) * (xmax - xmin)
-        self.set_view(xmin + delta_s, xmax + delta_s)
+    def get_render_data(
+        self, pad_id: int, width_px: int, start_s: float, end_s: float
+    ) -> WaveFormRenderData | None:
+        if (
+            self._last_pad_id != pad_id
+            or self._last_width_px != width_px
+            or self._last_start_s != start_s
+            or self._last_end_s != end_s
+        ):
+            self._last_pad_id = pad_id
+            self._last_width_px = width_px
+            self._last_start_s = start_s
+            self._last_end_s = end_s
+            self._last_waveform_value = self._controller.transport.waveform.get_render_data(
+                pad_id, width_px, start_s, end_s
+            )
+        return self._last_waveform_value
 
 
 class UiActions:
@@ -421,3 +391,6 @@ class UiContext:
         self.audio = AudioActions(controller)
         self.ui = UiActions(controller)
         self.persistence = controller.persistence
+
+    def on_frame_render(self) -> None:
+        self._controller.on_frame_render()

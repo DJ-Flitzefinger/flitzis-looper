@@ -1,6 +1,6 @@
 use crate::{
     audio_engine::channels::map_channels,
-    messages::{BeatGridData, SampleAnalysis, SampleBuffer},
+    messages::{SampleAnalysis, SampleBuffer},
 };
 use stratum_dsp::{AnalysisConfig, analyze_audio};
 
@@ -15,12 +15,11 @@ pub fn analyze_sample(
     let result = analyze_audio(&mono, sample_rate_hz, AnalysisConfig::default())
         .map_err(|err| format!("analysis failed: {err}"))?;
 
+    println!("Analysis grid_stability={}", result.grid_stability);
+
     Ok(SampleAnalysis {
         bpm: result.bpm,
         key: result.key.name(),
-        beat_grid: BeatGridData {
-            beats: result.beat_grid.beats,
-            downbeats: result.beat_grid.downbeats,
-        },
+        beat_grid: result.beat_grid,
     })
 }

@@ -58,6 +58,12 @@ impl VoiceSlot {
         }
     }
 
+    pub fn restart(&mut self, initial_frame_pos: usize, volume: f32, initial_tempo_ratio: f32) {
+        self.frame_pos = initial_frame_pos;
+        self.volume = volume;
+        self.tempo_ratio_smoothed = initial_tempo_ratio;
+    }
+
     pub fn smooth_tempo_ratio(&mut self, target: f32) -> f32 {
         if !target.is_finite() {
             return self.tempo_ratio_smoothed;

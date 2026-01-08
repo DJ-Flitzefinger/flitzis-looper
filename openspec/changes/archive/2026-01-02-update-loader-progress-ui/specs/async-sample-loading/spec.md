@@ -2,7 +2,7 @@
 ### Requirement: LoaderEvent Communication
 The system **SHALL** define a `LoaderEvent` enum to communicate loading status from Rust to Python, including at least:
 - `Started { id: usize }`
-- `Success { id: usize, duration_sec: f32 }`
+- `Success { id: usize, duration_s: f32 }`
 - `Error { id: usize, error: String }`
 - `Progress { id: usize, percent: f32, stage: String }`
 
@@ -36,7 +36,7 @@ The returned dictionary **SHALL** contain at least:
 
 Additionally:
 - For `type == "progress"`: `percent` (float 0.0..=1.0) and `stage` (string)
-- For `type == "success"`: `duration_sec`
+- For `type == "success"`: `duration_s`
 - For `type == "error"`: `msg`
 
 #### Scenario: UI polls and receives progress event

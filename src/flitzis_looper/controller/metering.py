@@ -1,72 +1,53 @@
 import math
 from time import monotonic
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
+
+from flitzis_looper.controller.base import BaseController
 
 if TYPE_CHECKING:
-    from flitzis_looper.models import SessionState
+    from flitzis_looper.models import ProjectState, SessionState
+    from flitzis_looper_audio import AudioEngine, AudioMessage
 
 
-class MeteringController:
+class MeteringController(BaseController):
     _PAD_PEAK_HALF_LIFE_SEC = 0.25
 
-    def __init__(self, session: SessionState, audio: Any) -> None:
-        self._session = session
-        self._audio = audio
+    def __init__(self, project: ProjectState, session: SessionState, audio: AudioEngine) -> None:
+        super().__init__(project, session, audio)
 
-    def poll_audio_messages(self) -> None:
+        self._on_frame_render_callbacks.append(self._decay_pad_peaks)
+
+    def handle_pad_peak_message(self, msg: AudioMessage.PadPeak) -> None:
         now = monotonic()
-        self._decay_pad_peaks(now)
 
-        while True:
-            msg = self._audio.receive_msg()
-            if msg is None:
-                return
-
-            self._handle_pad_peak_message(msg, now)
-            self._handle_pad_playhead_message(msg, now)
-
-    def _handle_pad_peak_message(self, msg: Any, now: float) -> None:
-        pad_peak_fn = getattr(msg, "pad_peak", None)
-        if pad_peak_fn is None:
+        sample_id = msg.sample_id()
+        if sample_id is None or not 0 <= sample_id < len(self._session.pad_peak):
             return
 
-        peak_data = pad_peak_fn()
-        if peak_data is None:
-            return
-
-        sample_id, peak = peak_data
-        if not isinstance(sample_id, int) or not 0 <= sample_id < len(self._session.pad_peak):
-            return
-
-        peak = float(peak)
-        if not math.isfinite(peak):
+        peak = msg.pad_peak()
+        if peak is None or not math.isfinite(peak):
             return
 
         peak = min(max(peak, 0.0), 1.0)
         self._session.pad_peak[sample_id] = max(self._session.pad_peak[sample_id], peak)
         self._session.pad_peak_updated_at[sample_id] = now
 
-    def _handle_pad_playhead_message(self, msg: Any, now: float) -> None:
-        pad_playhead_fn = getattr(msg, "pad_playhead", None)
-        if pad_playhead_fn is None:
+    def handle_pad_playhead_message(self, msg: AudioMessage.PadPlayhead) -> None:
+        now = monotonic()
+
+        sample_id = msg.sample_id()
+        if sample_id is None or not 0 <= sample_id < len(self._session.pad_peak):
             return
 
-        playhead_data = pad_playhead_fn()
-        if playhead_data is None:
-            return
-
-        sample_id, position_s = playhead_data
-        if not isinstance(sample_id, int) or not 0 <= sample_id < len(self._session.pad_playhead_s):
-            return
-
-        position_s = float(position_s)
-        if not math.isfinite(position_s) or position_s < 0.0:
+        position_s = msg.pad_playhead()
+        if position_s is None or not math.isfinite(position_s) or position_s < 0.0:
             return
 
         self._session.pad_playhead_s[sample_id] = position_s
         self._session.pad_playhead_updated_at[sample_id] = now
 
-    def _decay_pad_peaks(self, now: float) -> None:
+    def _decay_pad_peaks(self) -> None:
+        now = monotonic()
         peaks = self._session.pad_peak
         updated = self._session.pad_peak_updated_at
         for idx, peak in enumerate(peaks):

@@ -5,6 +5,7 @@
 
 use pyo3::prelude::*;
 use std::sync::Arc;
+use stratum_dsp::BeatGrid;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SampleBuffer {
@@ -19,6 +20,12 @@ pub enum AudioMessage {
     /// Response to a Ping message.
     Pong(),
 
+    /// Sample playback started
+    SampleStarted { id: usize },
+
+    /// Sample playback stopped
+    SampleStopped { id: usize },
+
     /// Per-pad peak meter update (mono peak, post gain/EQ).
     PadPeak { id: usize, peak: f32 },
 
@@ -28,16 +35,26 @@ pub enum AudioMessage {
 
 #[pymethods]
 impl AudioMessage {
-    pub fn pad_peak(&self) -> Option<(usize, f32)> {
+    pub fn sample_id(&self) -> Option<usize> {
         match self {
-            AudioMessage::PadPeak { id, peak } => Some((*id, *peak)),
+            AudioMessage::SampleStarted { id } => Some(*id),
+            AudioMessage::SampleStopped { id } => Some(*id),
+            AudioMessage::PadPeak { id, peak: _ } => Some(*id),
+            AudioMessage::PadPlayhead { id, position_s: _ } => Some(*id),
             _ => None,
         }
     }
 
-    pub fn pad_playhead(&self) -> Option<(usize, f32)> {
+    pub fn pad_peak(&self) -> Option<f32> {
         match self {
-            AudioMessage::PadPlayhead { id, position_s } => Some((*id, *position_s)),
+            AudioMessage::PadPeak { id: _, peak } => Some(*peak),
+            _ => None,
+        }
+    }
+
+    pub fn pad_playhead(&self) -> Option<f32> {
+        match self {
+            AudioMessage::PadPlayhead { id: _, position_s } => Some(*position_s),
             _ => None,
         }
     }
@@ -126,17 +143,11 @@ pub enum ControlMessage {
     UnloadSample { id: usize },
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct BeatGridData {
-    pub beats: Vec<f32>,
-    pub downbeats: Vec<f32>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) struct SampleAnalysis {
     pub bpm: f32,
     pub key: String,
-    pub beat_grid: BeatGridData,
+    pub beat_grid: BeatGrid,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -151,7 +162,7 @@ pub fn task_to_str(task: BackgroundTaskKind) -> &'static str {
 }
 
 /// Events emitted from background work (loading and per-pad tasks).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum LoaderEvent {
     /// Loading started for the given sample slot id.
     Started { id: usize },
@@ -169,7 +180,7 @@ pub enum LoaderEvent {
     /// Loading completed successfully.
     Success {
         id: usize,
-        duration_sec: f32,
+        duration_s: f32,
         cached_path: String,
         analysis: Option<SampleAnalysis>,
     },

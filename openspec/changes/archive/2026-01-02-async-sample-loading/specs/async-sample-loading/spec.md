@@ -9,7 +9,7 @@ The system **SHALL** provide a non‑blocking API `load_sample_async(id: usize, 
 ### Requirement: LoaderEvent Communication
 The system **SHALL** define a `LoaderEvent` enum to communicate loading status from Rust to Python, including at least:
 - `Started { id: usize }`
-- `Success { id: usize, duration_sec: f32 }`
+- `Success { id: usize, duration_s: f32 }`
 - `Error { id: usize, error: String }`
 - `Progress { id: usize, percent: f32 }` (future‑proof)  
 #### Scenario: Event sent on load start
@@ -20,7 +20,7 @@ The system **SHALL** define a `LoaderEvent` enum to communicate loading status f
 `AudioEngine` **SHALL** expose a thread‑safe method `poll_loader_events() -> Optional[Dict]` that retrieves pending `LoaderEvent` messages without blocking the Python UI thread. The returned dictionary must contain at least:
 - `type`: one of "started", "success", "error"
 - `id`: the sample identifier
-- `duration_sec` (on success)
+- `duration_s` (on success)
 - `msg` (on error)  
 #### Scenario: UI polls and receives success event
 - **WHEN** Python calls `audio_engine.poll_loader_events()`

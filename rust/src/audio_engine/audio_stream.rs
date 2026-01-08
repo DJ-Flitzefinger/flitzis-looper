@@ -95,13 +95,25 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
                         mixer.load_sample(id, sample);
                     }
                     ControlMessage::PlaySample { id, volume } => {
-                        mixer.play_sample(id, volume);
+                        if mixer.play_sample(id, volume) {
+                            let _ = producer_out.push(AudioMessage::SampleStarted { id });
+                        } else {
+                            let _ = producer_out.push(AudioMessage::SampleStopped { id });
+                        }
                     }
                     ControlMessage::StopSample { id } => {
                         mixer.stop_sample(id);
+                        let _ = producer_out.push(AudioMessage::SampleStopped { id });
                     }
                     ControlMessage::StopAll() => {
-                        mixer.stop_all();
+                        for voice in &mut mixer.voices {
+                            if voice.active {
+                                voice.stop();
+                                let _ = producer_out.push(AudioMessage::SampleStopped {
+                                    id: voice.sample_id,
+                                });
+                            }
+                        }
                     }
                     ControlMessage::UnloadSample { id } => {
                         mixer.unload_sample(id);

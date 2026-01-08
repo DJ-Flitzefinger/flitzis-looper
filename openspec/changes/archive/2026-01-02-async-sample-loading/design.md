@@ -17,7 +17,7 @@ The goal is to eliminate UI freezes caused by synchronous sample loading by offl
    - Sends `LoaderEvent::Started { id }`.
    - Performs file read → decode → resample.
    - Pushes resulting sample to the audio ring buffer via `AudioStreamHandle`.
-   - Sends `LoaderEvent::Success { id, duration_sec }` or `LoaderEvent::Error { id, error }`.
+   - Sends `LoaderEvent::Success { id, duration_s }` or `LoaderEvent::Error { id, error }`.
 4. Python periodically calls `AudioEngine.poll_loader_events()` to retrieve pending events and update UI widgets.
 
 ## 4. Thread Safety Considerations

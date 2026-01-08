@@ -119,8 +119,8 @@ def _file_dialog(ctx: UiContext) -> None:
 
 def render_ui(ctx: UiContext) -> None:
     """Main application render entrypoint."""
-    ctx.audio.poll.poll_loader_events()
-    ctx.audio.poll.poll_audio_messages()
+    ctx.on_frame_render()
+    ctx.audio.poll.poll()
 
     with default_style():
         _main(ctx)

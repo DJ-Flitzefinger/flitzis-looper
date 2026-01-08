@@ -19,6 +19,11 @@ class BaseController:
         self._session = session
         self._audio = audio
         self._on_project_changed = on_project_changed
+        self._on_frame_render_callbacks: list[Callable[[], None]] = []
+
+    def on_frame_render(self) -> None:
+        for cb in self._on_frame_render_callbacks:
+            cb()
 
     def _output_sample_rate_hz(self) -> int | None:
         fn = getattr(self._audio, "output_sample_rate", None)
