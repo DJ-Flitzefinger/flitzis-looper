@@ -330,13 +330,15 @@ class SessionState(BaseModel):
 
     @field_validator("pad_playhead_s", mode="after")
     @classmethod
-    def _validate_pad_playhead_s(cls, value: list[float]) -> list[float]:
+    def _validate_pad_playhead_s(cls, value: list[float | None]) -> list[float | None]:
         if len(value) != NUM_SAMPLES:
             msg = f"pad_playhead_s must have length {NUM_SAMPLES}, got {len(value)}"
             raise ValueError(msg)
         for pos_s in value:
+            if pos_s is None:
+                continue
             if not math.isfinite(pos_s) or pos_s < 0.0:
-                msg = f"pad_playhead_s values must be finite and >= 0.0, got {pos_s}"
+                msg = f"pad_playhead_s values must be None or finite and >= 0.0, got {pos_s}"
                 raise ValueError(msg)
         return value
 

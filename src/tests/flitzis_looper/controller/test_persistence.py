@@ -91,7 +91,7 @@ def test_restore_loads_valid_audio_files_without_reanalysis(
     project.sample_analysis[0] = SampleAnalysis(
         bpm=120.0,
         key="C",
-        beat_grid=BeatGrid(beats=[0.0, 1.0], downbeats=[0.0]),
+        beat_grid=BeatGrid(beats=[0.0, 1.0], downbeats=[0.0], bars=[0.0]),
     )
 
     session = SessionState()

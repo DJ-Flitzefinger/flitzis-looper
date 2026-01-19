@@ -8,6 +8,7 @@ Tests cover:
 """
 
 from typing import TYPE_CHECKING
+from unittest.mock import Mock
 
 import pytest
 
@@ -22,8 +23,6 @@ from flitzis_looper.ui.context import (
 )
 
 if TYPE_CHECKING:
-    from unittest.mock import Mock
-
     from flitzis_looper.controller import AppController
 
 
@@ -112,6 +111,10 @@ class TestUiStateComputedProperties:
         ui_state = UiState(controller)
         controller.project.sample_paths[0] = "/path/to/sample.wav"
         controller.transport.playback.trigger_pad(0)
+        # Simulate the audio message that would update state
+        msg = Mock()
+        msg.sample_id.return_value = 0
+        controller.transport.playback.handle_sample_started_message(msg)
 
         assert ui_state.pads.is_active(0) is True
 
@@ -153,7 +156,7 @@ class TestUiStateComputedProperties:
         controller.project.sample_analysis[0] = SampleAnalysis(
             bpm=123.4,
             key="C#m",
-            beat_grid=BeatGrid(beats=[0.0, 0.5], downbeats=[0.0]),
+            beat_grid=BeatGrid(beats=[0.0, 0.5], downbeats=[0.0], bars=[0.0]),
         )
 
         assert ui_state.pads.effective_bpm(0) == 123.4
@@ -166,7 +169,7 @@ class TestUiStateComputedProperties:
         controller.project.sample_analysis[0] = SampleAnalysis(
             bpm=123.4,
             key="C#m",
-            beat_grid=BeatGrid(beats=[0.0, 0.5], downbeats=[0.0]),
+            beat_grid=BeatGrid(beats=[0.0, 0.5], downbeats=[0.0], bars=[0.0]),
         )
 
         assert ui_state.pads.effective_key(0) == "C#m"
@@ -186,6 +189,10 @@ class TestAudioActions:
         audio_actions.pads.trigger_pad(0)
 
         audio_engine_mock.return_value.play_sample.assert_called_once_with(0, 1.0)
+        # Simulate the audio message that would update state
+        msg = Mock()
+        msg.sample_id.return_value = 0
+        controller.transport.playback.handle_sample_started_message(msg)
         assert 0 in controller.session.active_sample_ids
 
     def test_stop_pad(self, controller: AppController, audio_engine_mock: Mock) -> None:
@@ -193,10 +200,18 @@ class TestAudioActions:
         audio_actions = AudioActions(controller)
         controller.project.sample_paths[0] = "/path/to/sample.wav"
         controller.transport.playback.trigger_pad(0)
+        # Simulate the audio message that would update state
+        msg = Mock()
+        msg.sample_id.return_value = 0
+        controller.transport.playback.handle_sample_started_message(msg)
 
         audio_actions.pads.stop_pad(0)
 
         audio_engine_mock.return_value.stop_sample.assert_called_once_with(0)
+        # Simulate the audio message that would update state
+        msg2 = Mock()
+        msg2.sample_id.return_value = 0
+        controller.transport.playback.handle_sample_stopped_message(msg2)
         assert 0 not in controller.session.active_sample_ids
 
     def test_load_sample_async(self, controller: AppController, audio_engine_mock: Mock) -> None:

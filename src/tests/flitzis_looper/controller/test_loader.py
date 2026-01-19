@@ -58,7 +58,7 @@ def test_loader_success_updates_project_sample_path(
     analysis = {
         "bpm": 120.0,
         "key": "C#m",
-        "beat_grid": {"beats": [0.0, 0.5], "downbeats": [0.0]},
+        "beat_grid": {"beats": [0.0, 0.5], "downbeats": [0.0], "bars": [0.0]},
     }
 
     audio_engine_mock.return_value.poll_loader_events.side_effect = [
@@ -252,7 +252,7 @@ def test_task_success_stores_analysis_and_clears_task_state(
     analysis = {
         "bpm": 120.0,
         "key": "C#m",
-        "beat_grid": {"beats": [0.0, 0.5], "downbeats": [0.0]},
+        "beat_grid": {"beats": [0.0, 0.5], "downbeats": [0.0], "bars": [0.0]},
     }
 
     audio_engine_mock.return_value.poll_loader_events.side_effect = [

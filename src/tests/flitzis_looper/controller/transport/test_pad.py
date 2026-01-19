@@ -57,18 +57,24 @@ def test_poll_audio_messages_updates_session_peak(
     monkeypatch.setattr("flitzis_looper.controller.metering.monotonic", lambda: now)
 
     msg1 = Mock()
-    msg1.pad_peak.return_value = (0, 0.8)
-    msg1.pad_playhead.return_value = (0, 0.1)
+    msg1.sample_id.return_value = 0
+    msg1.pad_peak.return_value = 0.8
+    msg1.pad_playhead.return_value = 0.1
     msg2 = Mock()
-    msg2.pad_peak.return_value = (0, 1.2)
-    msg2.pad_playhead.return_value = (0, 0.2)
+    msg2.sample_id.return_value = 0
+    msg2.pad_peak.return_value = 1.2
+    msg2.pad_playhead.return_value = 0.2
     msg3 = Mock()
+    msg3.sample_id.return_value = 0
     msg3.pad_peak.return_value = None
     msg3.pad_playhead.return_value = None
 
-    audio_engine_mock.return_value.receive_msg.side_effect = [msg1, msg2, msg3, None]
-
-    controller.metering.poll_audio_messages()
+    controller.metering.handle_pad_peak_message(msg1)
+    controller.metering.handle_pad_playhead_message(msg1)
+    controller.metering.handle_pad_peak_message(msg2)
+    controller.metering.handle_pad_playhead_message(msg2)
+    controller.metering.handle_pad_peak_message(msg3)
+    controller.metering.handle_pad_playhead_message(msg3)
 
     assert controller.session.pad_peak[0] == pytest.approx(1.0)
     assert controller.session.pad_peak_updated_at[0] == now
@@ -92,7 +98,7 @@ def test_effective_key_prefers_manual(controller: AppController) -> None:
     controller.project.sample_analysis[sample_id] = SampleAnalysis(
         bpm=123.4,
         key="C#m",
-        beat_grid=BeatGrid(beats=[0.0, 0.5], downbeats=[0.0]),
+        beat_grid=BeatGrid(beats=[0.0, 0.5], downbeats=[0.0], bars=[0.0]),
     )
     assert controller.transport.pad.effective_key(sample_id) == "C#m"
 

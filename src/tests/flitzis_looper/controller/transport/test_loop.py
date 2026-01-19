@@ -21,7 +21,7 @@ def test_reset_loop_region_uses_first_downbeat_and_auto_defaults(
     controller.project.sample_analysis[sample_id] = SampleAnalysis(
         bpm=120.0,
         key="C",
-        beat_grid=BeatGrid(beats=[10.0, 18.0], downbeats=[10.0]),
+        beat_grid=BeatGrid(beats=[10.0, 18.0], downbeats=[10.0], bars=[10.0]),
     )
 
     controller.transport.loop.reset(sample_id)
@@ -43,7 +43,7 @@ def test_set_loop_start_snaps_when_auto_enabled(
     controller.project.sample_analysis[sample_id] = SampleAnalysis(
         bpm=120.0,
         key="C",
-        beat_grid=BeatGrid(beats=[1.0, 2.0], downbeats=[0.0]),
+        beat_grid=BeatGrid(beats=[1.0, 2.0], downbeats=[0.0], bars=[0.0]),
     )
 
     controller.transport.loop.set_auto(sample_id, enabled=True)
@@ -63,7 +63,7 @@ def test_set_loop_start_does_not_snap_when_auto_disabled(
     controller.project.sample_analysis[sample_id] = SampleAnalysis(
         bpm=120.0,
         key="C",
-        beat_grid=BeatGrid(beats=[1.0, 2.0], downbeats=[0.0]),
+        beat_grid=BeatGrid(beats=[1.0, 2.0], downbeats=[0.0], bars=[0.0]),
     )
 
     controller.transport.loop.set_auto(sample_id, enabled=False)

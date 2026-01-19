@@ -161,7 +161,7 @@ class TestModelSerialization:
         project_state.sample_analysis[0] = SampleAnalysis(
             bpm=120.0,
             key="C#m",
-            beat_grid=BeatGrid(beats=[0.0, 0.5, 1.0], downbeats=[0.0]),
+            beat_grid=BeatGrid(beats=[0.0, 0.5, 1.0], downbeats=[0.0], bars=[0.0]),
         )
         project_state.manual_bpm[0] = 128.0
         project_state.manual_key[0] = "Gm"

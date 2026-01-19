@@ -24,7 +24,7 @@ def test_effective_bpm_prefers_manual(controller: AppController) -> None:
     controller.project.sample_analysis[sample_id] = SampleAnalysis(
         bpm=123.4,
         key="C#m",
-        beat_grid=BeatGrid(beats=[0.0, 0.5], downbeats=[0.0]),
+        beat_grid=BeatGrid(beats=[0.0, 0.5], downbeats=[0.0], bars=[0.0]),
     )
     assert controller.transport.bpm.effective_bpm(sample_id) == 123.4
 

@@ -22,4 +22,4 @@
 ## 2. Validation
 - [x] 2.1 Run Python checks: `ruff`, `mypy`, `pytest`.
 - [x] 2.2 Run Rust checks: `cargo test` (and `cargo fmt`/`cargo clippy` if available in repo workflow).
-- [ ] 2.3 Manual smoke: run app, load a loop, open waveform editor, adjust loop live, verify playhead/markers.
+- [x] 2.3 Manual smoke: run app, load a loop, open waveform editor, adjust loop live, verify playhead/markers.
