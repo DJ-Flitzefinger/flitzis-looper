@@ -17,6 +17,7 @@
         "**/dist": true
     },
     "files.eol": "\n",
+    "rust-analyzer.check.command": "clippy",
     "[python]": {
         "editor.defaultFormatter": "charliermarsh.ruff",
         "editor.formatOnSave": true,
