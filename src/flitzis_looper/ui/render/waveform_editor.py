@@ -75,7 +75,11 @@ def _render_loop_controls(ctx: UiContext, pad_id: int) -> None:
 
 
 def _plot_overlay_loop_region(
-    ctx: UiContext, pad_id: int, start_s: float, draw_list: imgui.ImDrawList
+    ctx: UiContext,
+    pad_id: int,
+    start_s: float,
+    draw_list: imgui.ImDrawList,
+    sample_duration_s: float,
 ) -> None:
     loop_start_s, loop_end_s = ctx.state.pads.effective_loop_region(pad_id)
     playhead_s = ctx.state.session.pad_playhead_s[pad_id]
@@ -87,14 +91,18 @@ def _plot_overlay_loop_region(
             LOOP_START_DRAG_LINE_ID, loop_start_s, PLOT_REGION_RGBA
         )
         if start_dragging:
-            ctx.audio.pads.set_pad_loop_start(pad_id, start_x)
+            new_start = max(0.0, start_x)
+            new_start = min(new_start, loop_end_s)
+            ctx.audio.pads.set_pad_loop_start(pad_id, new_start)
 
         # End line
         end_dragging, end_x, _, _, _ = implot.drag_line_x(
             LOOP_END_DRAG_LINE_ID, loop_end_s, PLOT_REGION_RGBA
         )
         if end_dragging:
-            ctx.audio.pads.set_pad_loop_end(pad_id, end_x)
+            new_end = min(sample_duration_s, end_x)
+            new_end = max(new_end, loop_start_s)
+            ctx.audio.pads.set_pad_loop_end(pad_id, new_end)
 
         # Region background
         p1 = implot.plot_to_pixels(loop_start_s, 1.0)
@@ -138,6 +146,52 @@ def _beats(beats: list[float], draw_list: imgui.ImDrawList) -> None:
         p1 = implot.plot_to_pixels(beat_x, 1.0)
         p2 = implot.plot_to_pixels(beat_x, -1.0)
         draw_list.add_line(p1, p2, imgui.get_color_u32(PLOT_PLAYHEAD_RGBA))
+
+
+def _handle_clicks(ctx: UiContext, pad_id: int, sample_duration_s: float) -> None:
+    is_plot_hovered = implot.is_plot_hovered()
+
+    if not is_plot_hovered:
+        return
+
+    left_released = imgui.is_mouse_released(imgui.MouseButton_.left)
+    right_released = imgui.is_mouse_released(imgui.MouseButton_.right)
+
+    if not (left_released or right_released):
+        return
+
+    auto_enabled = ctx.state.project.pad_loop_auto[pad_id]
+    if auto_enabled and right_released:
+        return
+
+    mouse_pos = imgui.get_mouse_pos()
+    mouse_plot_pos = implot.pixels_to_plot(mouse_pos.x, mouse_pos.y)
+    click_x = mouse_plot_pos.x
+
+    if left_released:
+        drag_delta = imgui.get_mouse_drag_delta(imgui.MouseButton_.left)
+        if abs(drag_delta.x) > 1 or abs(drag_delta.y) > 1:
+            imgui.reset_mouse_drag_delta(imgui.MouseButton_.left)
+            return
+
+        loop_start_s, loop_end_s = ctx.state.pads.effective_loop_region(pad_id)
+        new_start = max(0.0, click_x)
+        if loop_end_s is not None:
+            new_start = min(new_start, loop_end_s)
+        ctx.audio.pads.set_pad_loop_start(pad_id, new_start)
+        imgui.reset_mouse_drag_delta(imgui.MouseButton_.left)
+
+    if right_released:
+        drag_delta = imgui.get_mouse_drag_delta(imgui.MouseButton_.right)
+        if abs(drag_delta.x) > 1 or abs(drag_delta.y) > 1:
+            imgui.reset_mouse_drag_delta(imgui.MouseButton_.right)
+            return
+
+        loop_start_s, loop_end_s = ctx.state.pads.effective_loop_region(pad_id)
+        new_end = min(sample_duration_s, click_x)
+        new_end = max(new_end, loop_start_s)
+        ctx.audio.pads.set_pad_loop_end(pad_id, new_end)
+        imgui.reset_mouse_drag_delta(imgui.MouseButton_.right)
 
 
 def _render_plot(ctx: UiContext, pad_id: int) -> None:
@@ -185,7 +239,8 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
             )
         else:
             _plot_shaded(xs, y1, cast("np.ndarray", y2))
-        _plot_overlay_loop_region(ctx, pad_id, start_s, draw_list)
+        _plot_overlay_loop_region(ctx, pad_id, start_s, draw_list, sample_duration_s)
+        _handle_clicks(ctx, pad_id, sample_duration_s)
 
         analysis = ctx.state.project.sample_analysis[pad_id]
         if analysis and len(analysis.beat_grid.beats) > 0:

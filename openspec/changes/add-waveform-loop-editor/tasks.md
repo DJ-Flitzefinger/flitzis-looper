@@ -11,7 +11,7 @@
 - [x] 1.4 Add waveform editor window in ImGui:
   - [x] 1.4.1 Open/close state driven by sidebar **Adjust Loop** (selected pad).
   - [x] 1.4.2 Controls: play/pause, reset, zoom, pan, auto-loop toggle + bar +/-.
-  - [x] 1.4.3 Mouse: wheel zoom; middle-drag pan; left click set loop start; right click set loop end (only when auto-loop off).
+  - [x] 1.4.3 Mouse: wheel zoom; middle-drag pan; left click set loop start; right click set loop end (only when auto-loop off); click action suppressed when dragging/panning/zooming.
   - [x] 1.4.4 Visuals: waveform (mono), loop region shaded light yellow, start line blue, end line red, playhead marker.
   - [x] 1.4.5 Render waveform with ImPlot (from `imgui_bundle`) using a cached envelope at normal zoom.
   - [x] 1.4.6 At extreme zoom, render individual samples and allow sample-accurate marker placement.
