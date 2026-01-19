@@ -1,4 +1,9 @@
-## ADDED Requirements
+# loop-region Specification
+
+## Purpose
+To define per-pad loop region settings (start/end times, auto-loop on/off, bar count) and default behaviors (beat snapping, reset, sample-accurate markers) for precise loop editing in the waveform editor.
+
+## Requirements
 
 ### Requirement: Per-pad loop region settings
 The system SHALL maintain per-pad loop region settings consisting of:

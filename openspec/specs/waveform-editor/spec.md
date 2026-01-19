@@ -1,4 +1,9 @@
-## ADDED Requirements
+# waveform-editor Specification
+
+## Purpose
+To define the waveform editor UI window that allows performers to adjust per-pad loop start/end precisely, using audio-derived onsets and musical bar lengths, without stopping playback.
+
+## Requirements
 
 ### Requirement: Waveform editor window for selected pad
 The system SHALL provide a waveform editor as a separate ImGui window inside the main application window.

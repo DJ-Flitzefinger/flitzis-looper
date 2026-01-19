@@ -4,7 +4,6 @@
 TBD - created by archiving change add-portable-project-persistence. Update Purpose after archive.
 ## Requirements
 
-### Delta: store-original-audio-files
 ### Requirement: Persist And Restore ProjectState
 The system SHALL persist `ProjectState` to a JSON file at `./samples/flitzis_looper.config.json` and SHALL restore it on application start.
 
