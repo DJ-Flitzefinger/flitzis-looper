@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -7,9 +7,6 @@ from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.controller.persistence import PROJECT_CONFIG_PATH, ProjectPersistence
 from flitzis_looper.models import BeatGrid, ProjectState, SampleAnalysis, SessionState
 from tests.conftest import write_mono_pcm16_wav
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def test_load_project_state_missing_returns_defaults(
@@ -120,3 +117,186 @@ def test_restore_loads_valid_audio_files_without_reanalysis(
     project.sample_paths[1] = "samples/missing.wav"
     loader.restore_samples_from_project_state()
     assert project.sample_paths[1] is None
+
+
+def test_atomic_write_failure_cleanup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    project = ProjectState(volume=0.5)
+    persistence = ProjectPersistence(project)
+    persistence.mark_dirty()
+
+    fsync_error = OSError("fsync failed")
+
+    def fsync_failing_side_effect(*args: object) -> int:
+        raise fsync_error
+
+    monkeypatch.setattr("os.fsync", fsync_failing_side_effect)
+
+    with pytest.raises(OSError, match="fsync failed"):
+        persistence.flush(now=0.0)
+
+    assert not persistence.config_path.exists()
+    tmp_files = list(persistence.config_path.parent.glob(".flitzis_looper.config.json.*.tmp"))
+    assert len(tmp_files) == 0
+
+
+def test_normalize_path_absolute(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    samples_dir = tmp_path / "samples"
+    samples_dir.mkdir(parents=True)
+
+    wav_path = samples_dir / "foo.wav"
+    write_mono_pcm16_wav(wav_path, 48_000)
+
+    project = ProjectState(volume=0.5)
+    project.sample_paths[0] = str(wav_path.resolve())
+
+    persistence = ProjectPersistence(project)
+    persistence.mark_dirty()
+    persistence.flush(now=0.0)
+
+    loaded = ProjectPersistence.from_config_path().project
+    assert loaded.sample_paths[0] == "samples/foo.wav"
+
+
+def test_normalize_path_relative(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    samples_dir = tmp_path / "samples"
+    samples_dir.mkdir(parents=True)
+
+    wav_path = samples_dir / "bar.wav"
+    write_mono_pcm16_wav(wav_path, 48_000)
+
+    project = ProjectState(volume=0.5)
+    project.sample_paths[0] = "samples/bar.wav"
+
+    persistence = ProjectPersistence(project)
+    persistence.mark_dirty()
+    persistence.flush(now=0.0)
+
+    loaded = ProjectPersistence.from_config_path().project
+    assert loaded.sample_paths[0] == "samples/bar.wav"
+
+
+def test_normalize_path_outside_samples(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    samples_dir = tmp_path / "samples"
+    samples_dir.mkdir(parents=True)
+
+    wav_path = samples_dir / "foo.wav"
+    write_mono_pcm16_wav(wav_path, 48_000)
+
+    external_path = tmp_path / "external" / "sample.wav"
+    external_path.parent.mkdir(parents=True)
+    write_mono_pcm16_wav(external_path, 48_000)
+
+    project = ProjectState(volume=0.5)
+    project.sample_paths[0] = str(wav_path)
+    project.sample_paths[1] = str(external_path.resolve())
+
+    persistence = ProjectPersistence(project)
+    persistence.mark_dirty()
+    persistence.flush(now=0.0)
+
+    loaded = ProjectPersistence.from_config_path().project
+    assert loaded.sample_paths[0] == "samples/foo.wav"
+    assert loaded.sample_paths[1] is not None
+    assert "sample.wav" in loaded.sample_paths[1]
+
+
+def test_flush_without_dirty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    project = ProjectState(volume=0.5)
+    persistence = ProjectPersistence(project)
+
+    assert persistence._dirty is False
+
+    persistence.flush(now=0.0)
+
+    assert PROJECT_CONFIG_PATH.exists()
+    assert persistence._dirty is False
+    assert persistence._last_write_monotonic == 0.0
+
+
+def test_maybe_flush_not_dirty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    project = ProjectState(volume=0.5)
+    persistence = ProjectPersistence(project)
+
+    assert persistence.maybe_flush(now=0.0) is False
+    assert not PROJECT_CONFIG_PATH.exists()
+
+
+def test_complex_project_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    samples_dir = tmp_path / "samples"
+    samples_dir.mkdir(parents=True)
+
+    wav_path = samples_dir / "foo.wav"
+    write_mono_pcm16_wav(wav_path, 48_000)
+
+    project = ProjectState(
+        volume=0.75,
+        key_lock=True,
+        bpm_lock=True,
+        speed=1.25,
+    )
+    project.sample_paths[0] = str(wav_path)
+
+    persistence = ProjectPersistence(project)
+    persistence.mark_dirty()
+    persistence.flush(now=0.0)
+
+    loaded = ProjectPersistence.from_config_path().project
+    assert loaded.volume == pytest.approx(0.75)
+    assert loaded.key_lock is True
+    assert loaded.bpm_lock is True
+    assert loaded.speed == pytest.approx(1.25)
+    assert loaded.sample_paths[0] == "samples/foo.wav"
+
+
+def test_windows_paths_preserved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    samples_dir = tmp_path / "samples"
+    samples_dir.mkdir(parents=True)
+
+    wav_path = samples_dir / "foo.wav"
+    write_mono_pcm16_wav(wav_path, 48_000)
+
+    project = ProjectState(volume=0.5)
+    project.sample_paths[0] = "C:\\Users\\test\\Music\\sample.wav"
+    project.sample_paths[1] = str(wav_path)
+
+    persistence = ProjectPersistence(project)
+    persistence.mark_dirty()
+    persistence.flush(now=0.0)
+
+    loaded = ProjectPersistence.from_config_path().project
+    assert loaded.sample_paths[0] == "C:\\Users\\test\\Music\\sample.wav"
+    assert loaded.sample_paths[1] == "samples/foo.wav"
+
+
+def test_config_path_creation_os_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    project = ProjectState(volume=0.5)
+    persistence = ProjectPersistence(project)
+    persistence.mark_dirty()
+
+    mkdir_error = OSError("mkdir failed")
+
+    def mkdir_failing_side_effect(*args: object, **kwargs: object) -> None:
+        raise mkdir_error
+
+    monkeypatch.setattr(Path, "mkdir", mkdir_failing_side_effect)
+
+    with pytest.raises(OSError, match="mkdir failed"):
+        persistence.flush(now=0.0)

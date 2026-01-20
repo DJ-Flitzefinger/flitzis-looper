@@ -10,22 +10,13 @@ if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
 
 
+@pytest.mark.parametrize(("gain", "exp"), [(0.25, 0.25), (-1.0, PAD_GAIN_MIN), (2.0, PAD_GAIN_MAX)])
 def test_set_pad_gain_clamps_and_calls_engine(
-    controller: AppController, audio_engine_mock: Mock
+    controller: AppController, audio_engine_mock: Mock, gain: float, exp: float
 ) -> None:
-    sample_id = 0
-
-    controller.transport.pad.set_pad_gain(sample_id, 0.25)
-    audio_engine_mock.return_value.set_pad_gain.assert_called_with(sample_id, 0.25)
-    assert controller.project.pad_gain[sample_id] == 0.25
-
-    controller.transport.pad.set_pad_gain(sample_id, -1.0)
-    audio_engine_mock.return_value.set_pad_gain.assert_called_with(sample_id, PAD_GAIN_MIN)
-    assert controller.project.pad_gain[sample_id] == PAD_GAIN_MIN
-
-    controller.transport.pad.set_pad_gain(sample_id, 2.0)
-    audio_engine_mock.return_value.set_pad_gain.assert_called_with(sample_id, PAD_GAIN_MAX)
-    assert controller.project.pad_gain[sample_id] == PAD_GAIN_MAX
+    controller.transport.pad.set_pad_gain(0, gain)
+    audio_engine_mock.set_pad_gain.assert_called_with(0, exp)
+    assert controller.project.pad_gain[0] == exp
 
 
 def test_set_pad_eq_clamps_and_calls_engine(
@@ -34,13 +25,13 @@ def test_set_pad_eq_clamps_and_calls_engine(
     sample_id = 0
 
     controller.transport.pad.set_pad_eq(sample_id, 1.0, -2.0, 3.0)
-    audio_engine_mock.return_value.set_pad_eq.assert_called_with(sample_id, 1.0, -2.0, 3.0)
+    audio_engine_mock.set_pad_eq.assert_called_with(sample_id, 1.0, -2.0, 3.0)
     assert controller.project.pad_eq_low_db[sample_id] == 1.0
     assert controller.project.pad_eq_mid_db[sample_id] == -2.0
     assert controller.project.pad_eq_high_db[sample_id] == 3.0
 
     controller.transport.pad.set_pad_eq(sample_id, 999.0, -999.0, 0.0)
-    audio_engine_mock.return_value.set_pad_eq.assert_called_with(
+    audio_engine_mock.set_pad_eq.assert_called_with(
         sample_id,
         PAD_EQ_DB_MAX,
         PAD_EQ_DB_MIN,
@@ -104,3 +95,30 @@ def test_effective_key_prefers_manual(controller: AppController) -> None:
 
     controller.transport.pad.set_manual_key(sample_id, "Gm")
     assert controller.transport.pad.effective_key(sample_id) == "Gm"
+
+
+def test_set_manual_key_empty_raises(controller: AppController) -> None:
+    sample_id = 0
+
+    with pytest.raises(ValueError, match="key must be a non-empty string"):
+        controller.transport.pad.set_manual_key(sample_id, "")
+
+
+@pytest.mark.parametrize("gain", ["nan", "inf", "-inf"])
+def test_set_pad_gain_non_finite_raises(controller: AppController, gain: str) -> None:
+    with pytest.raises(ValueError, match="value must be finite"):
+        controller.transport.pad.set_pad_gain(0, float(gain))
+
+
+@pytest.mark.parametrize("db", ["nan", "inf", "-inf"])
+def test_set_pad_eq_non_finite_raises(controller: AppController, db: str) -> None:
+    sample_id = 0
+
+    with pytest.raises(ValueError, match="value must be finite"):
+        controller.transport.pad.set_pad_eq(sample_id, float(db), 0.0, 0.0)
+
+    with pytest.raises(ValueError, match="value must be finite"):
+        controller.transport.pad.set_pad_eq(sample_id, 0.0, float(db), 0.0)
+
+    with pytest.raises(ValueError, match="value must be finite"):
+        controller.transport.pad.set_pad_eq(sample_id, 0.0, 0.0, float(db))

@@ -188,7 +188,7 @@ class TestAudioActions:
 
         audio_actions.pads.trigger_pad(0)
 
-        audio_engine_mock.return_value.play_sample.assert_called_once_with(0, 1.0)
+        audio_engine_mock.play_sample.assert_called_once_with(0, 1.0)
         # Simulate the audio message that would update state
         msg = Mock()
         msg.sample_id.return_value = 0
@@ -207,7 +207,7 @@ class TestAudioActions:
 
         audio_actions.pads.stop_pad(0)
 
-        audio_engine_mock.return_value.stop_sample.assert_called_once_with(0)
+        audio_engine_mock.stop_sample.assert_called_once_with(0)
         # Simulate the audio message that would update state
         msg2 = Mock()
         msg2.sample_id.return_value = 0
@@ -220,7 +220,7 @@ class TestAudioActions:
 
         audio_actions.pads.load_sample_async(0, "/path/to/sample.wav")
 
-        audio_engine_mock.return_value.load_sample_async.assert_called_once_with(
+        audio_engine_mock.load_sample_async.assert_called_once_with(
             0, "/path/to/sample.wav", run_analysis=True
         )
         assert controller.session.pending_sample_paths[0] == "/path/to/sample.wav"
@@ -233,7 +233,7 @@ class TestAudioActions:
 
         audio_actions.pads.analyze_sample_async(0)
 
-        audio_engine_mock.return_value.analyze_sample_async.assert_called_once_with(0)
+        audio_engine_mock.analyze_sample_async.assert_called_once_with(0)
         assert 0 in controller.session.analyzing_sample_ids
 
     def test_set_and_clear_manual_bpm(self, controller: AppController) -> None:
@@ -273,7 +273,7 @@ class TestAudioActions:
 
         audio_actions.pads.unload_sample(0)
 
-        audio_engine_mock.return_value.unload_sample.assert_called_once_with(0)
+        audio_engine_mock.unload_sample.assert_called_once_with(0)
         assert controller.project.sample_paths[0] is None
 
     def test_set_volume(self, controller: AppController, audio_engine_mock: Mock) -> None:
@@ -282,7 +282,7 @@ class TestAudioActions:
 
         audio_actions.global_.set_volume(0.8)
 
-        audio_engine_mock.return_value.set_volume.assert_called_once()
+        audio_engine_mock.set_volume.assert_called_once()
         assert controller.project.volume == 0.8
 
     def test_set_speed(self, controller: AppController, audio_engine_mock: Mock) -> None:
@@ -291,7 +291,7 @@ class TestAudioActions:
 
         audio_actions.global_.set_speed(1.5)
 
-        audio_engine_mock.return_value.set_speed.assert_called_once()
+        audio_engine_mock.set_speed.assert_called_once()
         assert controller.project.speed == 1.5
 
     def test_reset_speed(self, controller: AppController, audio_engine_mock: Mock) -> None:
@@ -302,7 +302,7 @@ class TestAudioActions:
         audio_actions.global_.reset_speed()
 
         # reset_speed should call set_speed with 1.0
-        audio_engine_mock.return_value.set_speed.assert_called()
+        audio_engine_mock.set_speed.assert_called()
         assert controller.project.speed == 1.0
 
     def test_increase_speed(self, controller: AppController, audio_engine_mock: Mock) -> None:
@@ -313,7 +313,7 @@ class TestAudioActions:
         audio_actions.global_.increase_speed()
 
         expected_speed = initial_speed + SPEED_STEP
-        audio_engine_mock.return_value.set_speed.assert_called_once()
+        audio_engine_mock.set_speed.assert_called_once()
         assert controller.project.speed == expected_speed
 
     def test_decrease_speed(self, controller: AppController, audio_engine_mock: Mock) -> None:
@@ -325,7 +325,7 @@ class TestAudioActions:
         audio_actions.global_.decrease_speed()
 
         expected_speed = initial_speed - SPEED_STEP
-        audio_engine_mock.return_value.set_speed.assert_called_once()
+        audio_engine_mock.set_speed.assert_called_once()
         assert controller.project.speed == expected_speed
 
     def test_toggle_multi_loop(self, controller: AppController) -> None:

@@ -17,7 +17,7 @@ def test_set_volume_normal(controller: AppController, audio_engine_mock: Mock) -
 
     controller.transport.global_params.set_volume(volume)
 
-    audio_engine_mock.return_value.set_volume.assert_called_with(volume)
+    audio_engine_mock.set_volume.assert_called_with(volume)
     assert controller.project.volume == volume
 
 
@@ -27,7 +27,7 @@ def test_set_volume_clamps_max(controller: AppController, audio_engine_mock: Moc
 
     controller.transport.global_params.set_volume(volume)
 
-    audio_engine_mock.return_value.set_volume.assert_called_with(VOLUME_MAX)
+    audio_engine_mock.set_volume.assert_called_with(VOLUME_MAX)
     assert controller.project.volume == VOLUME_MAX
 
 
@@ -37,7 +37,7 @@ def test_set_volume_clamps_min(controller: AppController, audio_engine_mock: Moc
 
     controller.transport.global_params.set_volume(volume)
 
-    audio_engine_mock.return_value.set_volume.assert_called_with(VOLUME_MIN)
+    audio_engine_mock.set_volume.assert_called_with(VOLUME_MIN)
     assert controller.project.volume == VOLUME_MIN
 
 
@@ -47,7 +47,7 @@ def test_set_speed_normal(controller: AppController, audio_engine_mock: Mock) ->
 
     controller.transport.global_params.set_speed(speed)
 
-    audio_engine_mock.return_value.set_speed.assert_called_with(speed)
+    audio_engine_mock.set_speed.assert_called_with(speed)
     assert controller.project.speed == speed
 
 
@@ -57,7 +57,7 @@ def test_set_speed_clamps_max(controller: AppController, audio_engine_mock: Mock
 
     controller.transport.global_params.set_speed(speed)
 
-    audio_engine_mock.return_value.set_speed.assert_called_with(SPEED_MAX)
+    audio_engine_mock.set_speed.assert_called_with(SPEED_MAX)
     assert controller.project.speed == SPEED_MAX
 
 
@@ -67,7 +67,7 @@ def test_set_speed_clamps_min(controller: AppController, audio_engine_mock: Mock
 
     controller.transport.global_params.set_speed(speed)
 
-    audio_engine_mock.return_value.set_speed.assert_called_with(SPEED_MIN)
+    audio_engine_mock.set_speed.assert_called_with(SPEED_MIN)
     assert controller.project.speed == SPEED_MIN
 
 
@@ -77,7 +77,7 @@ def test_reset_speed(controller: AppController, audio_engine_mock: Mock) -> None
 
     controller.transport.global_params.reset_speed()
 
-    audio_engine_mock.return_value.set_speed.assert_called_with(1.0)
+    audio_engine_mock.set_speed.assert_called_with(1.0)
     assert controller.project.speed == 1.0
 
 
@@ -105,7 +105,7 @@ def test_set_key_lock_enable(controller: AppController, audio_engine_mock: Mock)
 
     controller.transport.global_params.set_key_lock(enabled=True)
 
-    audio_engine_mock.return_value.set_key_lock.assert_called_with(enabled=True)
+    audio_engine_mock.set_key_lock.assert_called_with(enabled=True)
     assert controller.project.key_lock is True
 
 
@@ -115,7 +115,7 @@ def test_set_key_lock_disable(controller: AppController, audio_engine_mock: Mock
 
     controller.transport.global_params.set_key_lock(enabled=False)
 
-    audio_engine_mock.return_value.set_key_lock.assert_called_with(enabled=False)
+    audio_engine_mock.set_key_lock.assert_called_with(enabled=False)
     assert controller.project.key_lock is False
 
 
@@ -125,7 +125,7 @@ def test_set_bpm_lock_enable(controller: AppController, audio_engine_mock: Mock)
 
     controller.transport.global_params.set_bpm_lock(enabled=True)
 
-    audio_engine_mock.return_value.set_bpm_lock.assert_called_with(enabled=True)
+    audio_engine_mock.set_bpm_lock.assert_called_with(enabled=True)
     assert controller.project.bpm_lock is True
 
 
@@ -135,7 +135,7 @@ def test_set_bpm_lock_disable(controller: AppController, audio_engine_mock: Mock
 
     controller.transport.global_params.set_bpm_lock(enabled=False)
 
-    audio_engine_mock.return_value.set_bpm_lock.assert_called_with(enabled=False)
+    audio_engine_mock.set_bpm_lock.assert_called_with(enabled=False)
     assert controller.project.bpm_lock is False
 
 
@@ -146,25 +146,25 @@ def test_bpm_lock_anchors_master_bpm_to_selected_pad(
     controller.transport.global_params.set_speed(1.5)
     controller.transport.bpm.set_manual_bpm(1, 120.0)
 
-    audio_engine_mock.return_value.reset_mock()
+    audio_engine_mock.reset_mock()
 
     controller.transport.global_params.set_bpm_lock(enabled=True)
 
     assert controller.session.bpm_lock_anchor_pad_id == 1
     assert controller.session.master_bpm == pytest.approx(180.0)
 
-    audio_engine_mock.return_value.set_bpm_lock.assert_called_with(enabled=True)
-    assert audio_engine_mock.return_value.set_master_bpm.call_count == 1
-    called_bpm = audio_engine_mock.return_value.set_master_bpm.call_args.args[0]
+    audio_engine_mock.set_bpm_lock.assert_called_with(enabled=True)
+    assert audio_engine_mock.set_master_bpm.call_count == 1
+    called_bpm = audio_engine_mock.set_master_bpm.call_args.args[0]
     assert called_bpm == pytest.approx(180.0)
 
-    audio_engine_mock.return_value.reset_mock()
+    audio_engine_mock.reset_mock()
 
     controller.transport.global_params.set_speed(2.0)
 
     assert controller.session.master_bpm == pytest.approx(240.0)
-    assert audio_engine_mock.return_value.set_master_bpm.call_count == 1
-    called_bpm = audio_engine_mock.return_value.set_master_bpm.call_args.args[0]
+    assert audio_engine_mock.set_master_bpm.call_count == 1
+    called_bpm = audio_engine_mock.set_master_bpm.call_args.args[0]
     assert called_bpm == pytest.approx(240.0)
 
 
@@ -186,3 +186,67 @@ def test_non_finite_speed_nan(controller: AppController) -> None:
 def test_non_finite_speed_inf(controller: AppController) -> None:
     with pytest.raises(ValueError, match="value must be finite"):
         controller.transport.global_params.set_speed(math.inf)
+
+
+def test_set_key_lock_no_op(controller: AppController, audio_engine_mock: Mock) -> None:
+    controller.project.key_lock = True
+    controller.project.selected_pad = 1
+    controller.transport.bpm.set_manual_bpm(1, 120.0)
+
+    audio_engine_mock.reset_mock()
+
+    controller.transport.global_params.set_key_lock(enabled=True)
+
+    assert controller.project.key_lock is True
+    audio_engine_mock.set_key_lock.assert_not_called()
+
+
+def test_set_bpm_lock_no_op(controller: AppController, audio_engine_mock: Mock) -> None:
+    controller.project.bpm_lock = True
+    controller.project.selected_pad = 1
+    controller.transport.bpm.set_manual_bpm(1, 120.0)
+
+    audio_engine_mock.reset_mock()
+
+    controller.transport.global_params.set_bpm_lock(enabled=True)
+
+    assert controller.project.bpm_lock is True
+    audio_engine_mock.set_bpm_lock.assert_not_called()
+
+
+def test_set_bpm_lock_none_effective_bpm(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.project.selected_pad = 1
+    controller.project.sample_paths[1] = "samples/foo.wav"
+
+    controller.transport.global_params.set_bpm_lock(enabled=True)
+
+    assert controller.session.bpm_lock_anchor_pad_id == 1
+    assert controller.session.bpm_lock_anchor_bpm is None
+
+
+def test_set_bpm_lock_non_finite_effective_bpm(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.project.selected_pad = 1
+    controller.project.sample_paths[1] = "samples/foo.wav"
+
+    controller.transport.global_params.set_bpm_lock(enabled=True)
+
+    assert controller.session.bpm_lock_anchor_pad_id == 1
+    assert controller.session.bpm_lock_anchor_bpm is None
+
+
+def test_set_bpm_lock_disable_clears_anchor(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.project.bpm_lock = True
+    controller.project.selected_pad = 1
+    controller.session.bpm_lock_anchor_pad_id = 1
+    controller.session.bpm_lock_anchor_bpm = 120.0
+
+    controller.transport.global_params.set_bpm_lock(enabled=False)
+
+    assert controller.session.bpm_lock_anchor_pad_id is None
+    assert controller.session.bpm_lock_anchor_bpm is None

@@ -1,5 +1,5 @@
 from typing import TYPE_CHECKING
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -8,14 +8,15 @@ from flitzis_looper.controller import AppController
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
+    from unittest.mock import Mock
 
     from flitzis_looper.models import ProjectState, SessionState
 
 
 @pytest.fixture
 def audio_engine_mock() -> Iterator[Mock]:
-    with patch("flitzis_looper.controller.AudioEngine", autospec=True) as audio_engine:
-        yield audio_engine
+    with patch("flitzis_looper.controller.app.AudioEngine", autospec=True) as audio_engine:
+        yield audio_engine.return_value
 
 
 @pytest.fixture
@@ -25,6 +26,7 @@ def controller(
     monkeypatch: pytest.MonkeyPatch,
 ) -> AppController:
     monkeypatch.chdir(tmp_path)
+
     return AppController()
 
 
