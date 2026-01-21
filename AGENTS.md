@@ -85,6 +85,11 @@ Keep this managed block so 'openspec update' can refresh the instructions.
   - Include parameter types and descriptions
   - Include return value descriptions for non-trivial functions
 - CRITICAL: Never silence linter issues like: BLE001, PLR0904, PLR0912, PLR0914, PLR0915, C901
+- Keep `__init__.py` free of logic; only re-exports and metadata.
+- Tests
+  - Tests live under `tests/`, mirroring the package tree.
+  - Name tests `test_*.py`; never place tests in `__init__.py`.
+  - AVOID: Coverage-driven tests without behavior
 
 ### Rust
 - Rust FFI
