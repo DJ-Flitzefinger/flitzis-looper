@@ -35,4 +35,4 @@ testpaths = ["src/tests"]
 norecursedirs = ["old-project"]
 
 [tool.coverage.run]
-omit = ["src/tests/*"]
+omit = ["src/tests/*", "src/flitzis_looper/ui/render/*"]
