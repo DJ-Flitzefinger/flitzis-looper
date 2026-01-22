@@ -1,4 +1,4 @@
-use signalsmith_dsp::stretch::SignalsmithStretch;
+use cute_dsp::stretch::SignalsmithStretch;
 
 /// Default block size passed to Signalsmith Stretch.
 ///

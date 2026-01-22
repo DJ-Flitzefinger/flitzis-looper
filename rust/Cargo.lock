@@ -269,6 +269,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
+name = "cute-dsp"
+version = "0.0.40"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa2e868183f0c42012be6765ac90874c3ac0821c7832a04deb2f1414512066c2"
+dependencies = [
+ "num-complex",
+ "num-traits",
+]
+
+[[package]]
 name = "dasp_sample"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -357,13 +367,13 @@ dependencies = [
  "audioadapter",
  "audioadapter-buffers",
  "cpal",
+ "cute-dsp",
  "env_logger",
  "log",
  "numpy",
  "pyo3",
  "rtrb",
  "rubato",
- "signalsmith-dsp",
  "stratum-dsp",
  "symphonia",
  "tempfile",
@@ -1059,16 +1069,6 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
-]
-
-[[package]]
-name = "signalsmith-dsp"
-version = "0.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a322ba0b39da1a1915137c5e88cb7bd738891c35c5ba15bfde5cdc3ffd52bf43"
-dependencies = [
- "num-complex",
- "num-traits",
 ]
 
 [[package]]
