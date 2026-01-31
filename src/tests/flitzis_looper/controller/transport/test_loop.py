@@ -93,6 +93,31 @@ def test_effective_loop_end_computed_from_bars(
     assert end_s == pytest.approx(18.0)
 
 
+def test_effective_loop_end_uses_effective_bpm_not_beat_grid(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+
+    sample_id = 0
+    controller.project.sample_paths[sample_id] = "samples/foo.wav"
+    controller.project.sample_analysis[sample_id] = SampleAnalysis(
+        bpm=90.0,
+        key="C",
+        beat_grid=BeatGrid(beats=[10.0, 18.0002], downbeats=[10.0], bars=[10.0]),
+    )
+    controller.project.pad_loop_auto[sample_id] = True
+    controller.project.pad_loop_bars[sample_id] = 4
+    controller.transport.bpm.set_manual_bpm(sample_id, 120.0)
+
+    controller.transport.loop.set_start(sample_id, 10.0)
+
+    start_s, end_s = controller.transport.loop.effective_region(sample_id)
+
+    assert start_s == pytest.approx(10.0)
+    assert end_s == pytest.approx(18.0)
+
+
 def test_reset_no_analysis(controller: AppController, audio_engine_mock: Mock) -> None:
     audio_engine_mock.output_sample_rate.return_value = 48_000
 

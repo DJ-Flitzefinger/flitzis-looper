@@ -44,7 +44,7 @@ class PadLoopController:
 
         # Auto-loop is the default, even when BPM is unavailable.
         start_s = self._snap_to_nearest_beat(start_s, beats)
-        start_s = self._quantize_time_to_output_samples(start_s)
+        start_s = self._quantize_time_to_cached_samples(start_s)
 
         effective_bpm = self._transport.bpm.effective_bpm(sample_id)
         bpm = normalize_bpm(effective_bpm)
@@ -52,8 +52,8 @@ class PadLoopController:
             return (start_s, None, True)
 
         duration_s = (4 * 4) * 60.0 / bpm
-        end_s = self._snap_to_nearest_beat(start_s + duration_s, beats)
-        end_s = self._quantize_time_to_output_samples(end_s)
+        end_s = start_s + duration_s
+        end_s = self._quantize_time_to_cached_samples(end_s)
         return (start_s, end_s, True)
 
     def _apply_effective_pad_loop_region_to_audio(self, sample_id: int) -> None:
@@ -62,8 +62,8 @@ class PadLoopController:
         start_s, end_s = self._effective_pad_loop_region(sample_id)
         self._audio.set_pad_loop_region(sample_id, start_s, end_s)
 
-    def _quantize_time_to_output_samples(self, time_s: float) -> float:
-        """Quantize a time to an integer output-sample boundary."""
+    def _quantize_time_to_cached_samples(self, time_s: float) -> float:
+        """Quantize a time to an integer sample index at the cached WAV sample rate."""
         sample_rate_hz = self._transport._output_sample_rate_hz()
         if sample_rate_hz is None or sample_rate_hz <= 0:
             return time_s
@@ -87,29 +87,29 @@ class PadLoopController:
         )
 
         if not self._project.pad_loop_auto[sample_id]:
-            start_s = self._quantize_time_to_output_samples(start_s)
+            start_s = self._quantize_time_to_cached_samples(start_s)
             if end_s is not None:
-                end_s = self._quantize_time_to_output_samples(float(end_s))
+                end_s = self._quantize_time_to_cached_samples(float(end_s))
                 if end_s <= start_s:
                     end_s = start_s + one_sample_s
             return (start_s, end_s)
 
         start_s = self._snap_to_nearest_beat(start_s, beats)
-        start_s = self._quantize_time_to_output_samples(start_s)
+        start_s = self._quantize_time_to_cached_samples(start_s)
 
         effective_bpm = self._bpm.effective_bpm(sample_id)
         bpm = normalize_bpm(effective_bpm)
         if bpm is None:
             if end_s is not None:
-                end_s = self._quantize_time_to_output_samples(float(end_s))
+                end_s = self._quantize_time_to_cached_samples(float(end_s))
                 if end_s <= start_s:
                     end_s = start_s + one_sample_s
             return (start_s, end_s)
 
         bars = max(1, int(self._project.pad_loop_bars[sample_id]))
         duration_s = (bars * 4) * 60.0 / bpm
-        end_s_effective = self._snap_to_nearest_beat(start_s + duration_s, beats)
-        end_s_effective = self._quantize_time_to_output_samples(end_s_effective)
+        end_s_effective = start_s + duration_s
+        end_s_effective = self._quantize_time_to_cached_samples(end_s_effective)
         if end_s_effective <= start_s:
             end_s_effective = start_s + one_sample_s
         return (start_s, end_s_effective)
@@ -129,7 +129,7 @@ class PadLoopController:
             beats = [] if analysis is None else [float(t) for t in analysis.beat_grid.beats]
             start_s = float(self._transport._project.pad_loop_start_s[sample_id])
             start_s = self._snap_to_nearest_beat(start_s, beats)
-            start_s = self._quantize_time_to_output_samples(start_s)
+            start_s = self._quantize_time_to_cached_samples(start_s)
             self._transport._project.pad_loop_start_s[sample_id] = start_s
 
         self._transport._mark_project_changed()
@@ -155,7 +155,7 @@ class PadLoopController:
         if self._transport._project.pad_loop_auto[sample_id]:
             start_s = self._snap_to_nearest_beat(start_s, beats)
 
-        start_s = self._quantize_time_to_output_samples(start_s)
+        start_s = self._quantize_time_to_cached_samples(start_s)
         self._transport._project.pad_loop_start_s[sample_id] = start_s
 
         end_s = self._transport._project.pad_loop_end_s[sample_id]
@@ -176,9 +176,9 @@ class PadLoopController:
         if end_s is not None:
             ensure_finite(end_s)
             end_s = max(0.0, end_s)
-            end_s = self._quantize_time_to_output_samples(end_s)
+            end_s = self._quantize_time_to_cached_samples(end_s)
 
-            start_s = self._quantize_time_to_output_samples(
+            start_s = self._quantize_time_to_cached_samples(
                 float(self._transport._project.pad_loop_start_s[sample_id])
             )
             sample_rate_hz = self._transport._output_sample_rate_hz()
