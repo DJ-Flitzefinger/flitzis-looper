@@ -126,11 +126,6 @@ class ProjectPersistence:
                 normalized.append(None)
                 continue
 
-            # Avoid mangling Windows paths in cross-platform configs.
-            if "\\" in value:
-                normalized.append(value)
-                continue
-
             path = Path(value)
             try:
                 abs_path = path if path.is_absolute() else (cwd / path)

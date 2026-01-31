@@ -233,6 +233,8 @@ class LoaderController(BaseController):
         cached_path = event.get("cached_path")
 
         target_path: str | None = cached_path if isinstance(cached_path, str) else pending
+        if isinstance(target_path, str):
+            target_path = self._normalize_project_path(target_path)
 
         if target_path is not None and self._project.sample_paths[sample_id] != target_path:
             self._project.sample_paths[sample_id] = target_path
@@ -329,9 +331,24 @@ class LoaderController(BaseController):
         self._project.sample_analysis[sample_id] = None
         self._on_pad_bpm_changed(sample_id)
 
+    @staticmethod
+    def _normalize_project_path(value: str) -> str:
+        cwd = Path.cwd().resolve()
+
+        path = Path(value)
+        try:
+            abs_path = path if path.is_absolute() else (cwd / path)
+            rel = abs_path.resolve().relative_to(cwd)
+        except OSError:
+            return value
+        except ValueError:
+            return value
+
+        return rel.as_posix()
+
     def _parse_cached_sample_path(self, path: str) -> Path | None:
-        if "\\" in path:
-            return None
+        # Accept both separators in persisted configs (Windows may emit backslashes).
+        path = path.replace("\\", "/")
 
         rel = Path(path)
         if rel.is_absolute() or not rel.parts or rel.parts[0] != "samples":

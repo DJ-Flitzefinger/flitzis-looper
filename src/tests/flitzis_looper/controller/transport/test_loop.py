@@ -34,44 +34,119 @@ def test_reset_loop_region_uses_first_downbeat_and_auto_defaults(
     assert controller.project.pad_loop_end_s[sample_id] == pytest.approx(18.0)
 
 
-def test_set_loop_start_snaps_when_auto_enabled(
+def test_set_loop_start_snaps_to_64th_grid_and_quantizes_to_samples_when_auto_enabled(
     controller: AppController,
     audio_engine_mock: Mock,
 ) -> None:
-    audio_engine_mock.output_sample_rate.return_value = 1_000
+    # Spec scenario: BPM=120 -> grid step is 0.03125s (1/32).
+    audio_engine_mock.output_sample_rate.return_value = 48_000
 
     sample_id = 0
     controller.project.sample_paths[sample_id] = "samples/foo.wav"
     controller.project.sample_analysis[sample_id] = SampleAnalysis(
         bpm=120.0,
         key="C",
-        beat_grid=BeatGrid(beats=[1.0, 2.0], downbeats=[0.0], bars=[0.0]),
+        beat_grid=BeatGrid(beats=[10.0], downbeats=[10.0], bars=[10.0]),
     )
 
     controller.transport.loop.set_auto(sample_id, enabled=True)
-    controller.transport.loop.set_start(sample_id, 1.04)
+    controller.transport.loop.set_start(sample_id, 10.031)
 
-    assert controller.project.pad_loop_start_s[sample_id] == pytest.approx(1.0)
+    start_s = controller.project.pad_loop_start_s[sample_id]
+    assert start_s == 10.03125
+    assert start_s * 48_000 == 481_500
+
+
+def test_set_loop_end_snaps_to_64th_grid_and_quantizes_to_samples_when_auto_enabled(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    # Spec scenario: BPM=120, anchor=10.0s.
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+
+    sample_id = 0
+    controller.project.sample_paths[sample_id] = "samples/foo.wav"
+    controller.project.sample_analysis[sample_id] = SampleAnalysis(
+        bpm=120.0,
+        key="C",
+        beat_grid=BeatGrid(beats=[10.0], downbeats=[10.0], bars=[10.0]),
+    )
+
+    controller.transport.loop.set_auto(sample_id, enabled=True)
+    controller.transport.loop.set_start(sample_id, 10.0)
+    controller.transport.loop.set_end(sample_id, 10.062)
+
+    end_s = controller.project.pad_loop_end_s[sample_id]
+    assert end_s is not None
+    assert end_s == 10.0625
+    assert end_s * 48_000 == 483_000
 
 
 def test_set_loop_start_does_not_snap_when_auto_disabled(
     controller: AppController,
     audio_engine_mock: Mock,
 ) -> None:
-    audio_engine_mock.output_sample_rate.return_value = 100
+    audio_engine_mock.output_sample_rate.return_value = 128
 
     sample_id = 0
     controller.project.sample_paths[sample_id] = "samples/foo.wav"
     controller.project.sample_analysis[sample_id] = SampleAnalysis(
         bpm=120.0,
         key="C",
-        beat_grid=BeatGrid(beats=[1.0, 2.0], downbeats=[0.0], bars=[0.0]),
+        beat_grid=BeatGrid(beats=[0.0], downbeats=[1.0 / 128.0], bars=[0.0]),
     )
 
     controller.transport.loop.set_auto(sample_id, enabled=False)
-    controller.transport.loop.set_start(sample_id, 1.04)
+    controller.transport.loop.set_start(sample_id, 1.0 / 32.0)
 
-    assert controller.project.pad_loop_start_s[sample_id] == pytest.approx(1.04)
+    start_s = controller.project.pad_loop_start_s[sample_id]
+    assert start_s == 1.0 / 32.0
+    assert start_s * 128 == 4
+
+
+def test_set_loop_start_snaps_using_default_onset_anchor_when_auto_enabled(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 128
+
+    sample_id = 0
+    controller.project.sample_paths[sample_id] = "samples/foo.wav"
+    controller.project.sample_analysis[sample_id] = SampleAnalysis(
+        bpm=120.0,
+        key="C",
+        beat_grid=BeatGrid(beats=[0.0], downbeats=[1.0 / 128.0], bars=[0.0]),
+    )
+
+    controller.transport.loop.set_auto(sample_id, enabled=True)
+    controller.transport.loop.set_start(sample_id, 1.0 / 32.0)
+
+    start_s = controller.project.pad_loop_start_s[sample_id]
+    assert start_s == 5.0 / 128.0
+    assert start_s * 128 == 5
+
+
+def test_snapping_uses_effective_bpm_manual_override_over_analysis(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+
+    sample_id = 0
+    controller.project.sample_paths[sample_id] = "samples/foo.wav"
+    controller.project.sample_analysis[sample_id] = SampleAnalysis(
+        bpm=60.0,
+        key="C",
+        beat_grid=BeatGrid(beats=[0.0], downbeats=[0.0], bars=[0.0]),
+    )
+    controller.transport.bpm.set_manual_bpm(sample_id, 120.0)
+
+    controller.transport.loop.set_auto(sample_id, enabled=True)
+    controller.transport.loop.set_start(sample_id, 0.04)
+
+    start_s = controller.project.pad_loop_start_s[sample_id]
+    assert start_s == 0.03125
+    assert start_s * 48_000 == 1_500
 
 
 def test_effective_loop_end_computed_from_bars(
@@ -168,21 +243,25 @@ def test_reset_quantizes_to_samples(controller: AppController, audio_engine_mock
 
 
 def test_set_auto_enable_snaps_start(controller: AppController, audio_engine_mock: Mock) -> None:
-    audio_engine_mock.output_sample_rate.return_value = 1_000
+    audio_engine_mock.output_sample_rate.return_value = 48_000
 
     sample_id = 0
     controller.project.sample_paths[sample_id] = "samples/foo.wav"
     controller.project.sample_analysis[sample_id] = SampleAnalysis(
         bpm=120.0,
         key="C",
-        beat_grid=BeatGrid(beats=[0.0, 1.0], downbeats=[0.0], bars=[0.0]),
+        beat_grid=BeatGrid(beats=[0.0], downbeats=[0.0], bars=[0.0]),
     )
-    controller.project.pad_loop_start_s[sample_id] = 0.7
+    controller.project.pad_loop_start_s[sample_id] = 0.04
+    controller.project.pad_loop_auto[sample_id] = False
 
     controller.transport.loop.set_auto(sample_id, enabled=True)
 
     assert controller.project.pad_loop_auto[sample_id] is True
-    assert controller.project.pad_loop_start_s[sample_id] == pytest.approx(1.0)
+
+    start_s = controller.project.pad_loop_start_s[sample_id]
+    assert start_s == 0.03125
+    assert start_s * 48_000 == 1_500
 
 
 def test_set_auto_disable_no_change(controller: AppController, audio_engine_mock: Mock) -> None:
@@ -401,22 +480,21 @@ def test_effective_region_auto_no_beats(controller: AppController, audio_engine_
     assert end_s == pytest.approx(8.0)
 
 
-def test_snap_to_nearest_beat_empty(controller: AppController) -> None:
-    target_s = 5.0
-    beats: list[float] = []
-
-    result = PadLoopController._snap_to_nearest_beat(target_s, beats)
-
-    assert result == pytest.approx(5.0)
+def test_grid_step_sec_for_120_bpm_is_one_over_32() -> None:
+    assert PadLoopController._grid_step_sec(120.0) == 1.0 / 32.0
 
 
-def test_snap_to_nearest_beat_with_beats(controller: AppController) -> None:
-    target_s = 1.5
-    beats = [1.0, 2.0, 3.0]
+def test_snap_to_nearest_grid_point_rounds_to_nearest_step_with_anchor() -> None:
+    step_s = 1.0 / 32.0
+    anchor_s = 1.0 / 128.0
 
-    result = PadLoopController._snap_to_nearest_beat(target_s, beats)
+    # (target - anchor) / step = 0.75 -> rounds to 1 step
+    target_s = 1.0 / 32.0
+    snapped = PadLoopController._snap_to_nearest_grid_point(
+        target_s, anchor_s=anchor_s, step_s=step_s
+    )
 
-    assert result == pytest.approx(1.0)
+    assert snapped == 5.0 / 128.0
 
 
 def test_quantize_time_none_sample_rate(controller: AppController, audio_engine_mock: Mock) -> None:
