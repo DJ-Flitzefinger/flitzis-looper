@@ -1,12 +1,12 @@
 ## 1. Spec Delta
-- [ ] 1.1 Add delta spec for waveform-editor grid behavior (zoom-dependent subdivisions + styling)
-- [ ] 1.2 Validate change with `openspec validate waveform-editor-musical-grid --strict`
+- [x] 1.1 Add delta spec for waveform-editor grid behavior (zoom-dependent subdivisions + styling)
+- [x] 1.2 Validate change with `openspec validate waveform-editor-musical-grid --strict`
 
 ## 2. Implementation (later step)
-- [ ] 2.1 Implement drawing changes (single musical grid; remove/disable old non-musical grid)
+- [x] 2.1 Implement drawing changes (single musical grid; remove/disable old non-musical grid)
 
 ## 3. Tests / QA
-- [ ] 3.1 Add tests if applicable (or document manual QA steps if UI-only)
+- [x] 3.1 Add tests if applicable (or document manual QA steps if UI-only)
 
 ## 4. Manual QA
 - [ ] 4.1 Default zoom: bar lines only; every 4 bars drawn stronger

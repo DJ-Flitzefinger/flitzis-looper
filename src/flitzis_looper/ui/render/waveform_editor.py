@@ -1,6 +1,7 @@
+import math
 from typing import TYPE_CHECKING, cast
 
-from imgui_bundle import imgui, imgui_ctx, implot
+from imgui_bundle import ImVec4, imgui, imgui_ctx, implot
 
 from flitzis_looper.ui.constants import (
     PLOT_FILL_RGBA,
@@ -146,11 +147,106 @@ def _plot_shaded(
         implot.plot_shaded("wave", xs, y_min, y_max)
 
 
-def _beats(beats: list[float], draw_list: imgui.ImDrawList) -> None:
-    for beat_x in beats:
-        p1 = implot.plot_to_pixels(beat_x, 1.0)
-        p2 = implot.plot_to_pixels(beat_x, -1.0)
-        draw_list.add_line(p1, p2, imgui.get_color_u32(PLOT_PLAYHEAD_RGBA))
+_GRID_MIN_MINOR_STEP_PX = 12.0
+_GRID_OFFSET_SEC = 0.0
+
+
+def _grid_anchor_sec(ctx: "UiContext", pad_id: int) -> float:
+    """Match loop-region snapping's grid anchor (default onset + offset)."""
+    analysis = ctx.state.project.sample_analysis[pad_id]
+    if analysis is None:
+        return _GRID_OFFSET_SEC
+
+    grid = analysis.beat_grid
+    if grid.downbeats:
+        return float(grid.downbeats[0]) + _GRID_OFFSET_SEC
+    if grid.beats:
+        return float(grid.beats[0]) + _GRID_OFFSET_SEC
+    return _GRID_OFFSET_SEC
+
+
+def _select_minor_step_64ths(beat_sec: float, *, px_per_sec: float) -> int:
+    """Choose the finest readable subdivision in 1/64-note units."""
+    grid_64th_sec = beat_sec / 16.0
+
+    # Finest -> coarsest candidates, all aligned to the 1/64-note snapping grid.
+    candidates_64ths = [
+        1,  # 1/16 beat (1/64-note)
+        2,  # 1/8 beat (1/32-note)
+        4,  # 1/4 beat (1/16-note)
+        8,  # 1/2 beat (1/8-note)
+        16,  # 1 beat
+        64,  # 1 bar (4 beats)
+        256,  # 4 bars (16 beats)
+    ]
+
+    for step_64ths in candidates_64ths:
+        step_px = step_64ths * grid_64th_sec * px_per_sec
+        if step_px >= _GRID_MIN_MINOR_STEP_PX:
+            return step_64ths
+
+    return 256
+
+
+def _plot_musical_grid(
+    ctx: "UiContext",
+    pad_id: int,
+    draw_list: imgui.ImDrawList,
+    *,
+    start_s: float,
+    end_s: float,
+    sample_duration_s: float,
+) -> None:
+    bpm = ctx.state.pads.effective_bpm(pad_id)
+    if bpm is None or not math.isfinite(bpm) or bpm <= 0.0:
+        return
+
+    beat_sec = 60.0 / float(bpm)
+    grid_anchor_sec = _grid_anchor_sec(ctx, pad_id)
+
+    # Determine zoom scale (px/sec) from the active plot.
+    px_start = implot.plot_to_pixels(start_s, 0.0)
+    px_end = implot.plot_to_pixels(end_s, 0.0)
+    range_px = abs(px_end.x - px_start.x)
+    range_sec = end_s - start_s
+    if range_sec <= 0.0 or range_px <= 0.0:
+        return
+
+    px_per_sec = range_px / range_sec
+
+    minor_step_64ths = _select_minor_step_64ths(beat_sec, px_per_sec=px_per_sec)
+    grid_64th_sec = beat_sec / 16.0
+    minor_step_sec = grid_64th_sec * minor_step_64ths
+    if minor_step_sec <= 0.0:
+        return
+
+    # Major emphasis rules (see delta spec).
+    if minor_step_64ths == 64:
+        major_every = 4  # minor=1 bar, major=4 bars
+    elif minor_step_64ths == 16:
+        major_every = 4  # minor=1 beat, major=1 bar
+    elif minor_step_64ths < 16:
+        major_every = 16 // minor_step_64ths  # minor<1 beat, major=1 beat
+    else:
+        major_every = 1  # minor=4 bars, all visible lines are major
+
+    minor_rgba = ImVec4(TEXT_MUTED_RGBA.x, TEXT_MUTED_RGBA.y, TEXT_MUTED_RGBA.z, 0.08)
+    major_rgba = ImVec4(TEXT_MUTED_RGBA.x, TEXT_MUTED_RGBA.y, TEXT_MUTED_RGBA.z, 0.18)
+    minor_col = imgui.get_color_u32(minor_rgba)
+    major_col = imgui.get_color_u32(major_rgba)
+
+    n_start = math.floor((start_s - grid_anchor_sec) / minor_step_sec)
+    n_end = math.ceil((end_s - grid_anchor_sec) / minor_step_sec)
+
+    for n in range(int(n_start), int(n_end) + 1):
+        t = grid_anchor_sec + n * minor_step_sec
+        if t < 0.0 or t > sample_duration_s:
+            continue
+
+        p1 = implot.plot_to_pixels(t, 1.0)
+        p2 = implot.plot_to_pixels(t, -1.0)
+        col = major_col if (n % major_every == 0) else minor_col
+        draw_list.add_line(p1, p2, col)
 
 
 def _handle_clicks(ctx: UiContext, pad_id: int, sample_duration_s: float) -> None:
@@ -214,7 +310,12 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
     ):
         return
 
-    implot.setup_axis(implot.ImAxis_.y1, None, implot.AxisFlags_.no_highlight)
+    axis_no_grid = getattr(implot.AxisFlags_, "no_grid_lines", 0)
+    y_flags = implot.AxisFlags_.no_highlight | axis_no_grid
+    implot.setup_axis(implot.ImAxis_.y1, None, y_flags)
+    if axis_no_grid:
+        implot.setup_axis(implot.ImAxis_.x1, None, axis_no_grid)
+
     implot.setup_axis_limits_constraints(implot.ImAxis_.x1, 0.0, sample_duration_s)
     implot.setup_axis_limits(implot.ImAxis_.x1, 0.0, sample_duration_s, imgui.Cond_.once)
     implot.setup_axis_limits(implot.ImAxis_.y1, -1.0, 1.0, imgui.Cond_.always)
@@ -248,9 +349,14 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
         _plot_overlay_loop_region(ctx, pad_id, start_s, draw_list, sample_duration_s)
         _handle_clicks(ctx, pad_id, sample_duration_s)
 
-        analysis = ctx.state.project.sample_analysis[pad_id]
-        if analysis and len(analysis.beat_grid.beats) > 0:
-            _beats(analysis.beat_grid.bars, draw_list)
+        _plot_musical_grid(
+            ctx,
+            pad_id,
+            draw_list,
+            start_s=start_s,
+            end_s=end_s,
+            sample_duration_s=sample_duration_s,
+        )
 
     implot.end_plot()
 
