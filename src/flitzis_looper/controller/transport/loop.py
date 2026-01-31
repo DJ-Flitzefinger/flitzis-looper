@@ -51,7 +51,8 @@ class PadLoopController:
         start_s, end_s = self._effective_pad_loop_region(sample_id)
         self._audio.set_pad_loop_region(sample_id, start_s, end_s)
 
-    _GRID_OFFSET_SEC = 0.0
+    def _grid_offset_samples(self, sample_id: int) -> int:
+        return int(self._project.pad_grid_offset_samples[sample_id])
 
     def _default_onset_sec(self, sample_id: int) -> float:
         analysis = self._project.sample_analysis[sample_id]
@@ -65,8 +66,72 @@ class PadLoopController:
             return float(grid.beats[0])
         return 0.0
 
+    def _default_onset_sample(self, sample_id: int, *, sample_rate_hz: int) -> int:
+        onset_sec = self._default_onset_sec(sample_id)
+        frames = round(onset_sec * sample_rate_hz)
+        if not isinstance(frames, int):
+            return 0
+        return max(frames, 0)
+
+    def _bar_samples_for_grid_offset_clamp(self, sample_id: int) -> int | None:
+        bpm = normalize_bpm(self._transport.bpm.effective_bpm(sample_id))
+        if bpm is None:
+            return None
+
+        sample_rate_hz = self._transport._output_sample_rate_hz()
+        if sample_rate_hz is None or sample_rate_hz <= 0:
+            return None
+
+        beat_sec = 60.0 / bpm
+        bar_sec = beat_sec * 4.0
+        return max(0, round(bar_sec * sample_rate_hz))
+
+    def _clamp_grid_offset_samples(self, sample_id: int, value: int) -> int:
+        bar_samples = self._bar_samples_for_grid_offset_clamp(sample_id)
+        if bar_samples is None:
+            return int(value)
+
+        return max(-bar_samples, min(bar_samples, int(value)))
+
+    def reclamp_grid_offset_samples(self, sample_id: int) -> bool:
+        """Re-clamp the stored grid offset when effective BPM changes."""
+        validate_sample_id(sample_id)
+
+        current = int(self._project.pad_grid_offset_samples[sample_id])
+        clamped = self._clamp_grid_offset_samples(sample_id, current)
+        if clamped == current:
+            return False
+
+        self._project.pad_grid_offset_samples[sample_id] = clamped
+        self._transport._mark_project_changed()
+        return True
+
+    def set_grid_offset_samples(self, sample_id: int, grid_offset_samples: int) -> None:
+        validate_sample_id(sample_id)
+
+        grid_offset_samples = int(grid_offset_samples)
+        grid_offset_samples = self._clamp_grid_offset_samples(sample_id, grid_offset_samples)
+
+        if grid_offset_samples == self._project.pad_grid_offset_samples[sample_id]:
+            return
+
+        self._project.pad_grid_offset_samples[sample_id] = grid_offset_samples
+        self._transport._mark_project_changed()
+
+    def grid_anchor_sec(self, sample_id: int) -> float:
+        """Grid anchor time in seconds (default onset + per-pad sample offset)."""
+        validate_sample_id(sample_id)
+        return self._grid_anchor_sec(sample_id)
+
     def _grid_anchor_sec(self, sample_id: int) -> float:
-        return self._default_onset_sec(sample_id) + self._GRID_OFFSET_SEC
+        sample_rate_hz = self._transport._output_sample_rate_hz()
+        if sample_rate_hz is None or sample_rate_hz <= 0:
+            # Without a sample rate, we can't express a sample offset in seconds.
+            return self._default_onset_sec(sample_id)
+
+        onset_sample = self._default_onset_sample(sample_id, sample_rate_hz=sample_rate_hz)
+        anchor_sample = onset_sample + self._grid_offset_samples(sample_id)
+        return anchor_sample / sample_rate_hz
 
     @staticmethod
     def _grid_step_sec(bpm: float) -> float:

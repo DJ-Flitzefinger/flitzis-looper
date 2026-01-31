@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -282,6 +283,42 @@ def test_windows_paths_preserved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     loaded = ProjectPersistence.from_config_path().project
     assert loaded.sample_paths[0] == "C:\\Users\\test\\Music\\sample.wav"
     assert loaded.sample_paths[1] == "samples/foo.wav"
+
+
+def test_missing_grid_offset_samples_loads_as_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    project = ProjectState(volume=0.5)
+    data = project.model_dump(mode="json")
+    data.pop("pad_grid_offset_samples", None)
+
+    config_path = tmp_path / PROJECT_CONFIG_PATH
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+
+    loaded = ProjectPersistence.from_config_path().project
+    assert loaded.volume == pytest.approx(0.5)
+    assert loaded.pad_grid_offset_samples[0] == 0
+
+
+def test_grid_offset_samples_persisted_per_pad(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    project = ProjectState(volume=0.5)
+    project.pad_grid_offset_samples[0] = 123
+    project.pad_grid_offset_samples[1] = -456
+
+    persistence = ProjectPersistence(project)
+    persistence.mark_dirty()
+    persistence.flush(now=0.0)
+
+    loaded = ProjectPersistence.from_config_path().project
+    assert loaded.pad_grid_offset_samples[0] == 123
+    assert loaded.pad_grid_offset_samples[1] == -456
 
 
 def test_config_path_creation_os_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

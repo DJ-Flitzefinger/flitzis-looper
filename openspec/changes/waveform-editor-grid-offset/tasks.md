@@ -1,14 +1,14 @@
 ## 1. Spec Delta
-- [ ] 1.1 Add delta specs (waveform-editor, loop-region, project-persistence).
-- [ ] 1.2 Validate change with `openspec validate waveform-editor-grid-offset --strict`
+- [x] 1.1 Add delta specs (waveform-editor, loop-region, project-persistence).
+- [x] 1.2 Validate change with `openspec validate waveform-editor-grid-offset --strict`
 
 ## 2. Implementation
-- [ ] 2.1 Implement UI control and storage (per pad).
-- [ ] 2.2 Apply offset to the snapping/grid anchor.
-- [ ] 2.3 Clamp behavior (+/- 1 bar).
+- [x] 2.1 Implement UI control and storage (per pad).
+- [x] 2.2 Apply offset to the snapping/grid anchor.
+- [x] 2.3 Clamp behavior (+/- 1 bar).
 
 ## 3. Tests / QA
-- [ ] 3.1 Add tests where feasible.
+- [x] 3.1 Add tests where feasible.
 - [ ] 3.2 Manual QA checklist.
 
 ## 4. Manual QA

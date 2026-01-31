@@ -83,6 +83,10 @@ def _default_pad_loop_bars() -> list[int]:
     return [4] * NUM_SAMPLES
 
 
+def _default_pad_grid_offset_samples() -> list[int]:
+    return [0] * NUM_SAMPLES
+
+
 class ProjectState(BaseModel):
     """Persistent state. Saved to disk."""
 
@@ -126,6 +130,9 @@ class ProjectState(BaseModel):
 
     pad_loop_bars: list[int] = Field(default_factory=_default_pad_loop_bars)
     """Per-pad bar count used when auto-loop is enabled."""
+
+    pad_grid_offset_samples: list[int] = Field(default_factory=_default_pad_grid_offset_samples)
+    """Per-pad sample offset applied to the musical grid anchor."""
 
     # Global Audio Settings
     multi_loop: bool = False
@@ -222,6 +229,14 @@ class ProjectState(BaseModel):
             if bars < 1:
                 msg = f"pad_loop_bars values must be >= 1, got {bars}"
                 raise ValueError(msg)
+        return value
+
+    @field_validator("pad_grid_offset_samples", mode="after")
+    @classmethod
+    def _validate_pad_grid_offset_samples(cls, value: list[int]) -> list[int]:
+        if len(value) != NUM_SAMPLES:
+            msg = f"pad_grid_offset_samples must have length {NUM_SAMPLES}, got {len(value)}"
+            raise ValueError(msg)
         return value
 
 

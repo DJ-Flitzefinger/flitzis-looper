@@ -101,6 +101,9 @@ class BpmController:
         bpm = normalize_bpm(self.effective_bpm(sample_id))
         self._audio.set_pad_bpm(sample_id, bpm)
 
+        # Grid offset clamp depends on effective BPM, so re-clamp on changes.
+        self._transport.loop.reclamp_grid_offset_samples(sample_id)
+
         if self._session.bpm_lock_anchor_pad_id != sample_id:
             return
 

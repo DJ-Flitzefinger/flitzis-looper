@@ -126,6 +126,59 @@ def test_set_loop_start_snaps_using_default_onset_anchor_when_auto_enabled(
     assert start_s * 128 == 5
 
 
+def test_set_loop_start_snaps_using_shifted_anchor_and_is_sample_accurate(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+
+    sample_id = 0
+    controller.project.sample_paths[sample_id] = "samples/foo.wav"
+    controller.project.sample_analysis[sample_id] = SampleAnalysis(
+        bpm=120.0,
+        key="C",
+        beat_grid=BeatGrid(beats=[10.0], downbeats=[10.0], bars=[10.0]),
+    )
+    controller.project.pad_grid_offset_samples[sample_id] = 1
+
+    controller.transport.loop.set_auto(sample_id, enabled=True)
+    controller.transport.loop.set_start(sample_id, 10.0)
+
+    start_s = controller.project.pad_loop_start_s[sample_id]
+    assert start_s == pytest.approx(480_001 / 48_000)
+    assert round(start_s * 48_000) == 480_001
+
+
+def test_set_grid_offset_samples_clamps_to_one_bar_worth_of_samples(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+
+    sample_id = 0
+    controller.transport.bpm.set_manual_bpm(sample_id, 120.0)
+
+    controller.transport.loop.set_grid_offset_samples(sample_id, 100_000)
+
+    assert controller.project.pad_grid_offset_samples[sample_id] == 96_000
+
+
+def test_effective_bpm_change_reclamps_grid_offset_samples(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+
+    sample_id = 0
+    controller.transport.bpm.set_manual_bpm(sample_id, 120.0)
+    controller.transport.loop.set_grid_offset_samples(sample_id, 96_000)
+    assert controller.project.pad_grid_offset_samples[sample_id] == 96_000
+
+    controller.transport.bpm.set_manual_bpm(sample_id, 240.0)
+
+    assert controller.project.pad_grid_offset_samples[sample_id] == 48_000
+
+
 def test_snapping_uses_effective_bpm_manual_override_over_analysis(
     controller: AppController,
     audio_engine_mock: Mock,

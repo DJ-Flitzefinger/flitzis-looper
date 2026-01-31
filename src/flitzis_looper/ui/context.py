@@ -185,6 +185,9 @@ class PadAudioActions:
     def set_pad_loop_end(self, pad_id: int, end_s: float | None) -> None:
         self._controller.transport.loop.set_end(pad_id, end_s)
 
+    def set_pad_grid_offset_samples(self, pad_id: int, grid_offset_samples: int) -> None:
+        self._controller.transport.loop.set_grid_offset_samples(pad_id, grid_offset_samples)
+
     def load_sample_async(self, pad_id: int, path: str) -> None:
         self._controller.loader.load_sample_async(pad_id, path)
 

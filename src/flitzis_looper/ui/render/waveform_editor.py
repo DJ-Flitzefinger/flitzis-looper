@@ -1,4 +1,5 @@
 import math
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from imgui_bundle import ImVec4, imgui, imgui_ctx, implot
@@ -24,6 +25,17 @@ BTN_SIZE = (88, 0)
 
 LOOP_START_DRAG_LINE_ID = 0
 LOOP_END_DRAG_LINE_ID = 1
+
+
+@dataclass(slots=True)
+class _GridOffsetDragState:
+    pad_id: int | None = None
+    button: int | None = None
+    accum_x: float = 0.0
+
+
+_GRID_OFFSET_PX_PER_STEP = 2.0
+_GRID_OFFSET_DRAG = _GridOffsetDragState()
 
 
 def _render_controls(ctx: UiContext, pad_id: int) -> None:
@@ -61,6 +73,7 @@ def _render_loop_controls(ctx: UiContext, pad_id: int) -> None:
     imgui.same_line(spacing=SPACING)
     if bpm is None and new_auto:
         imgui.text_colored(TEXT_MUTED_RGBA, f"Bars: {bars} (BPM unavailable)")
+        _render_grid_offset_control(ctx, pad_id)
         return
 
     imgui.text_colored(TEXT_MUTED_RGBA, "Bars")
@@ -74,6 +87,55 @@ def _render_loop_controls(ctx: UiContext, pad_id: int) -> None:
     imgui.same_line(spacing=SPACING / 2)
     if imgui.button("+", (24, 0)):
         ctx.audio.pads.set_pad_loop_bars(pad_id, bars=bars + 1)
+
+    _render_grid_offset_control(ctx, pad_id)
+
+
+def _render_grid_offset_control(ctx: UiContext, pad_id: int) -> None:
+    offset = int(ctx.state.project.pad_grid_offset_samples[pad_id])
+    offset_text = "0" if offset == 0 else f"{offset:+d}"
+
+    imgui.same_line(spacing=SPACING)
+    imgui.text_colored(TEXT_MUTED_RGBA, "Grid Offset")
+    imgui.same_line(spacing=SPACING / 2)
+
+    imgui.button(f"{offset_text} smp##grid_offset_samples", BTN_SIZE)
+    hovered = imgui.is_item_hovered()
+
+    if hovered and imgui.is_mouse_clicked(imgui.MouseButton_.left):
+        _GRID_OFFSET_DRAG.pad_id = pad_id
+        _GRID_OFFSET_DRAG.button = imgui.MouseButton_.left
+        _GRID_OFFSET_DRAG.accum_x = 0.0
+
+    if hovered and imgui.is_mouse_clicked(imgui.MouseButton_.right):
+        _GRID_OFFSET_DRAG.pad_id = pad_id
+        _GRID_OFFSET_DRAG.button = imgui.MouseButton_.right
+        _GRID_OFFSET_DRAG.accum_x = 0.0
+
+    if _GRID_OFFSET_DRAG.pad_id != pad_id or _GRID_OFFSET_DRAG.button is None:
+        return
+
+    button = _GRID_OFFSET_DRAG.button
+    if not imgui.is_mouse_down(button):
+        _GRID_OFFSET_DRAG.pad_id = None
+        _GRID_OFFSET_DRAG.button = None
+        _GRID_OFFSET_DRAG.accum_x = 0.0
+        return
+
+    step = 1 if button == imgui.MouseButton_.left else 10
+    _GRID_OFFSET_DRAG.accum_x += imgui.get_io().mouse_delta.x
+
+    steps = 0
+    if _GRID_OFFSET_DRAG.accum_x >= _GRID_OFFSET_PX_PER_STEP:
+        steps = int(_GRID_OFFSET_DRAG.accum_x / _GRID_OFFSET_PX_PER_STEP)
+    elif _GRID_OFFSET_DRAG.accum_x <= -_GRID_OFFSET_PX_PER_STEP:
+        steps = -int(abs(_GRID_OFFSET_DRAG.accum_x) / _GRID_OFFSET_PX_PER_STEP)
+
+    if steps == 0:
+        return
+
+    ctx.audio.pads.set_pad_grid_offset_samples(pad_id, offset + steps * step)
+    _GRID_OFFSET_DRAG.accum_x -= steps * _GRID_OFFSET_PX_PER_STEP
 
 
 def _plot_overlay_loop_region(
@@ -148,21 +210,11 @@ def _plot_shaded(
 
 
 _GRID_MIN_MINOR_STEP_PX = 12.0
-_GRID_OFFSET_SEC = 0.0
 
 
-def _grid_anchor_sec(ctx: "UiContext", pad_id: int) -> float:
+def _grid_anchor_sec(ctx: UiContext, pad_id: int) -> float:
     """Match loop-region snapping's grid anchor (default onset + offset)."""
-    analysis = ctx.state.project.sample_analysis[pad_id]
-    if analysis is None:
-        return _GRID_OFFSET_SEC
-
-    grid = analysis.beat_grid
-    if grid.downbeats:
-        return float(grid.downbeats[0]) + _GRID_OFFSET_SEC
-    if grid.beats:
-        return float(grid.beats[0]) + _GRID_OFFSET_SEC
-    return _GRID_OFFSET_SEC
+    return ctx._controller.transport.loop.grid_anchor_sec(pad_id)
 
 
 def _select_minor_step_64ths(beat_sec: float, *, px_per_sec: float) -> int:
@@ -188,53 +240,53 @@ def _select_minor_step_64ths(beat_sec: float, *, px_per_sec: float) -> int:
     return 256
 
 
-def _plot_musical_grid(
-    ctx: "UiContext",
-    pad_id: int,
-    draw_list: imgui.ImDrawList,
-    *,
-    start_s: float,
-    end_s: float,
-    sample_duration_s: float,
-) -> None:
-    bpm = ctx.state.pads.effective_bpm(pad_id)
-    if bpm is None or not math.isfinite(bpm) or bpm <= 0.0:
-        return
-
-    beat_sec = 60.0 / float(bpm)
-    grid_anchor_sec = _grid_anchor_sec(ctx, pad_id)
-
-    # Determine zoom scale (px/sec) from the active plot.
+def _plot_px_per_sec(*, start_s: float, end_s: float) -> float | None:
     px_start = implot.plot_to_pixels(start_s, 0.0)
     px_end = implot.plot_to_pixels(end_s, 0.0)
     range_px = abs(px_end.x - px_start.x)
     range_sec = end_s - start_s
     if range_sec <= 0.0 or range_px <= 0.0:
-        return
+        return None
+    return range_px / range_sec
 
-    px_per_sec = range_px / range_sec
 
+def _grid_render_params(
+    beat_sec: float, *, px_per_sec: float
+) -> tuple[float, int, int, int] | None:
     minor_step_64ths = _select_minor_step_64ths(beat_sec, px_per_sec=px_per_sec)
-    grid_64th_sec = beat_sec / 16.0
-    minor_step_sec = grid_64th_sec * minor_step_64ths
+    minor_step_sec = (beat_sec / 16.0) * minor_step_64ths
     if minor_step_sec <= 0.0:
-        return
+        return None
 
     # Major emphasis rules (see delta spec).
-    if minor_step_64ths == 64:
-        major_every = 4  # minor=1 bar, major=4 bars
-    elif minor_step_64ths == 16:
-        major_every = 4  # minor=1 beat, major=1 bar
+    if minor_step_64ths in {64, 16}:
+        major_every = 4  # minor=1 bar or 1 beat; major emphasizes 4x
     elif minor_step_64ths < 16:
         major_every = 16 // minor_step_64ths  # minor<1 beat, major=1 beat
     else:
-        major_every = 1  # minor=4 bars, all visible lines are major
+        major_every = 1  # minor>=4 bars, all visible lines are major
 
-    minor_rgba = ImVec4(TEXT_MUTED_RGBA.x, TEXT_MUTED_RGBA.y, TEXT_MUTED_RGBA.z, 0.08)
-    major_rgba = ImVec4(TEXT_MUTED_RGBA.x, TEXT_MUTED_RGBA.y, TEXT_MUTED_RGBA.z, 0.18)
+    base = TEXT_MUTED_RGBA
+    minor_rgba = ImVec4(base.x, base.y, base.z, 0.08)
+    major_rgba = ImVec4(base.x, base.y, base.z, 0.18)
     minor_col = imgui.get_color_u32(minor_rgba)
     major_col = imgui.get_color_u32(major_rgba)
 
+    return (minor_step_sec, major_every, minor_col, major_col)
+
+
+def _draw_musical_grid_lines(
+    draw_list: imgui.ImDrawList,
+    *,
+    start_s: float,
+    end_s: float,
+    sample_duration_s: float,
+    grid_anchor_sec: float,
+    minor_step_sec: float,
+    major_every: int,
+    minor_col: int,
+    major_col: int,
+) -> None:
     n_start = math.floor((start_s - grid_anchor_sec) / minor_step_sec)
     n_end = math.ceil((end_s - grid_anchor_sec) / minor_step_sec)
 
@@ -247,6 +299,42 @@ def _plot_musical_grid(
         p2 = implot.plot_to_pixels(t, -1.0)
         col = major_col if (n % major_every == 0) else minor_col
         draw_list.add_line(p1, p2, col)
+
+
+def _plot_musical_grid(
+    ctx: UiContext,
+    pad_id: int,
+    draw_list: imgui.ImDrawList,
+    *,
+    start_s: float,
+    end_s: float,
+    sample_duration_s: float,
+) -> None:
+    bpm = ctx.state.pads.effective_bpm(pad_id)
+    if bpm is None or not math.isfinite(bpm) or bpm <= 0.0:
+        return
+
+    px_per_sec = _plot_px_per_sec(start_s=start_s, end_s=end_s)
+    if px_per_sec is None:
+        return
+
+    params = _grid_render_params(60.0 / float(bpm), px_per_sec=px_per_sec)
+    if params is None:
+        return
+
+    minor_step_sec, major_every, minor_col, major_col = params
+
+    _draw_musical_grid_lines(
+        draw_list,
+        start_s=start_s,
+        end_s=end_s,
+        sample_duration_s=sample_duration_s,
+        grid_anchor_sec=_grid_anchor_sec(ctx, pad_id),
+        minor_step_sec=minor_step_sec,
+        major_every=major_every,
+        minor_col=minor_col,
+        major_col=major_col,
+    )
 
 
 def _handle_clicks(ctx: UiContext, pad_id: int, sample_duration_s: float) -> None:
