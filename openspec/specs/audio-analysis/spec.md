@@ -4,7 +4,6 @@
 TBD - created by archiving change add-sample-audio-analysis. Update Purpose after archive.
 ## Requirements
 
-### Delta: store-original-audio-files
 ### Requirement: Analyze Audio For BPM, Key, And Beat Grid
 The system SHALL analyze a loaded audio sample to determine its BPM, musical key, and beat grid.
 

@@ -18,7 +18,7 @@
 - [x] 3.4 Add tests that assert exact sample indices for snapped markers (no approximate float comparisons)
 
 ## 4. Manual QA
-- [ ] 4.1 Auto-loop enabled: click near multiple grid points; verify markers land on nearest 1/64
-- [ ] 4.2 Auto-loop disabled: click at arbitrary times; verify markers do not snap
-- [ ] 4.3 Extreme zoom: verify sample-accurate marker placement still works
-- [ ] 4.4 No BPM available: verify snapping behavior matches the spec
+- [x] 4.1 Auto-loop enabled: click near multiple grid points; verify markers land on nearest 1/64
+- [x] 4.2 Auto-loop disabled: click at arbitrary times; verify markers do not snap
+- [x] 4.3 Extreme zoom: verify sample-accurate marker placement still works
+- [x] 4.4 No BPM available: verify snapping behavior matches the spec

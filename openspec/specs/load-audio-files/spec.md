@@ -4,7 +4,6 @@
 To support sample-based playback by loading, decoding, and unloading audio files as immutable in-memory buffers associated with sample slot IDs, without performing disk I/O or decoding in the real-time audio callback.
 ## Requirements
 
-### Delta: store-original-audio-files
 ### Requirement: Load Audio File Into Sample Slot
 The system SHALL expose a Python API to load an audio file from a filesystem path into a named sample slot identified by an integer `id` in the range 0..36.
 
