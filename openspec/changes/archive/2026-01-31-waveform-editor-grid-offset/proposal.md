@@ -3,6 +3,14 @@
 ## Summary
 Add a per-pad Grid Offset control in the waveform editor to shift the musical grid (and snapping anchor) left/right by a sample-accurate offset.
 
+## Why
+Some loops are recorded slightly off the intended downbeat. A per-pad grid anchor offset lets users align the rendered musical grid and snapping to the actual audio transient without changing the underlying audio or grid resolution.
+
+## What Changes
+- Add a per-pad Grid Offset control in the waveform editor.
+- Apply the offset to the musical grid anchor used for both grid rendering and snapping.
+- Persist the offset per pad in project save/load.
+
 ## Scope
 - UI control
 - Applying the offset to the grid anchor (snapping + grid rendering alignment)
