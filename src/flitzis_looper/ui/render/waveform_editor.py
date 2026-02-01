@@ -16,6 +16,8 @@ from flitzis_looper.ui.constants import (
 from flitzis_looper.ui.contextmanager import implot_style_color, implot_style_var
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import numpy as np
     from numpy.typing import NDArray
 
@@ -38,15 +40,148 @@ _GRID_OFFSET_PX_PER_STEP = 2.0
 _GRID_OFFSET_DRAG = _GridOffsetDragState()
 
 
-def _render_controls(ctx: UiContext, pad_id: int) -> None:
-    is_active = ctx.state.pads.is_active(pad_id)
-    play_label = "Pause" if is_active else "Play"
+def _icon_button(
+    label: str,
+    size: tuple[float, float],
+    draw_icon: Callable[[imgui.ImDrawList, imgui.ImVec2, imgui.ImVec2, int], None],
+) -> bool:
+    """Render an icon-only button.
 
-    if imgui.button(play_label, BTN_SIZE):
-        if is_active:
-            ctx.audio.pads.stop_pad(pad_id)
-        else:
-            ctx.audio.pads.trigger_pad(pad_id)
+    Returns True on mouse-down (press), not release.
+    """
+    imgui.button(label, size)
+
+    pressed = imgui.is_item_hovered() and imgui.is_mouse_clicked(imgui.MouseButton_.left)
+
+    draw_list = imgui.get_window_draw_list()
+    pos_min = imgui.get_item_rect_min()
+    pos_max = imgui.get_item_rect_max()
+    col = imgui.get_color_u32(imgui.get_style_color_vec4(imgui.Col_.text))
+    draw_icon(draw_list, pos_min, pos_max, col)
+
+    return pressed
+
+
+def _draw_pause_icon(
+    draw_list: imgui.ImDrawList, pos_min: imgui.ImVec2, pos_max: imgui.ImVec2, col: int
+) -> None:
+    w = pos_max.x - pos_min.x
+    h = pos_max.y - pos_min.y
+    pad = max(1.0, min(w, h) * 0.25)
+
+    icon_w = max(0.0, w - 2 * pad)
+    bar_w = max(1.0, icon_w * 0.28)
+    gap = max(1.0, icon_w * 0.18)
+
+    cx = (pos_min.x + pos_max.x) * 0.5
+    y1 = pos_min.y + pad
+    y2 = pos_max.y - pad
+
+    x1 = cx - gap * 0.5 - bar_w
+    x2 = cx - gap * 0.5
+    x3 = cx + gap * 0.5
+    x4 = cx + gap * 0.5 + bar_w
+
+    draw_list.add_rect_filled((x1, y1), (x2, y2), col)
+    draw_list.add_rect_filled((x3, y1), (x4, y2), col)
+
+
+def _draw_stop_icon(
+    draw_list: imgui.ImDrawList, pos_min: imgui.ImVec2, pos_max: imgui.ImVec2, col: int
+) -> None:
+    w = pos_max.x - pos_min.x
+    h = pos_max.y - pos_min.y
+    pad = max(1.0, min(w, h) * 0.28)
+
+    x1 = pos_min.x + pad
+    y1 = pos_min.y + pad
+    x2 = pos_max.x - pad
+    y2 = pos_max.y - pad
+
+    draw_list.add_rect_filled((x1, y1), (x2, y2), col)
+
+
+def _draw_triangle_icon(
+    draw_list: imgui.ImDrawList,
+    pos_min: imgui.ImVec2,
+    pos_max: imgui.ImVec2,
+    col: int,
+    *,
+    direction: int,
+) -> None:
+    w = pos_max.x - pos_min.x
+    h = pos_max.y - pos_min.y
+    pad = max(1.0, min(w, h) * 0.25)
+
+    x1 = pos_min.x + pad
+    x2 = pos_max.x - pad
+    y1 = pos_min.y + pad
+    y2 = pos_max.y - pad
+    cy = (y1 + y2) * 0.5
+
+    if direction < 0:
+        p1 = (x2, y1)
+        p2 = (x2, y2)
+        p3 = (x1, cy)
+    else:
+        p1 = (x1, y1)
+        p2 = (x1, y2)
+        p3 = (x2, cy)
+
+    draw_list.add_triangle_filled(p1, p2, p3, col)
+
+
+def _render_view_jump_button(
+    ctx: UiContext,
+    label: str,
+    direction: int,
+    jump_func: Callable[[], tuple[float, float] | None],
+) -> None:
+    btn_wh = float(imgui.get_frame_height())
+    btn_size = (btn_wh, btn_wh)
+
+    if _icon_button(
+        label,
+        btn_size,
+        lambda dl, mn, mx, c: _draw_triangle_icon(dl, mn, mx, c, direction=direction),
+    ):
+        limits = jump_func()
+        if limits is not None:
+            implot.set_next_axis_limits(implot.ImAxis_.x1, limits[0], limits[1], imgui.Cond_.always)
+
+
+def _render_controls(ctx: UiContext, pad_id: int) -> None:
+    btn_wh = float(imgui.get_frame_height())
+    btn_size = (btn_wh, btn_wh)
+
+    if _icon_button("##wf_pause", btn_size, _draw_pause_icon):
+        ctx.ui.waveform.pause_selected_pad_on_press()
+
+    imgui.same_line(spacing=SPACING)
+    if _icon_button(
+        "##wf_play", btn_size, lambda dl, mn, mx, c: _draw_triangle_icon(dl, mn, mx, c, direction=1)
+    ):
+        ctx.ui.waveform.play_restart_selected_pad_on_press()
+
+    imgui.same_line(spacing=SPACING)
+    if _icon_button("##wf_stop", btn_size, _draw_stop_icon):
+        ctx.ui.waveform.stop_and_reset_selected_pad_on_press()
+
+    imgui.same_line(spacing=SPACING)
+    _render_view_jump_button(
+        ctx,
+        "##wf_view_jump_start",
+        -1,
+        ctx.ui.waveform.view_jump_start_selected_pad_on_press,
+    )
+
+    imgui.same_line(spacing=SPACING)
+    _render_view_jump_button(
+        ctx,
+        "##wf_view_jump_end",
+        1,
+        ctx.ui.waveform.view_jump_end_selected_pad_on_press,
+    )
 
     imgui.same_line(spacing=SPACING)
     if imgui.button("Reset Loop", BTN_SIZE):
@@ -413,6 +548,7 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
     plot_limits = implot.get_plot_limits()
     start_s = max(0.0, plot_limits.x.min)
     end_s = plot_limits.x.max
+    ctx.ui.waveform.record_view_range(pad_id, start_s, end_s)
 
     # Get plot resolution
     plot_width_px = int(imgui.get_content_region_avail().x)

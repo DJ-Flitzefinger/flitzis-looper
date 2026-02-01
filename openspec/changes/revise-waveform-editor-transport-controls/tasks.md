@@ -1,10 +1,10 @@
-- [ ] Update waveform-editor delta spec for the corrected transport + view-navigation semantics
-- [ ] Implement waveform editor UI: add five icon-only geometric buttons; remove old Play/Pause UI button while keeping logic
-- [ ] Ensure all five buttons execute their action on mouse-down (press), not release
-- [ ] Implement Play as a trigger that always restarts from loop start each press (even if already playing)
-- [ ] Implement Pause as a trigger for selected pad only
-- [ ] Implement Stop as a trigger for selected pad only: stop playback AND reset playhead to loop start
-- [ ] Implement View-Jump-Start / View-Jump-End as view-only navigation (pan/scroll), not affecting playback state
-- [ ] Update/add tests covering: selected-pad-only behavior, trigger-on-press semantics, play restarts, stop+reset, and view-only navigation not altering playback state
-- [ ] Run the full test suite and fix any regressions
-- [ ] Mark all tasks as completed
+- [x] Update waveform-editor delta spec for the corrected transport + view-navigation semantics
+- [x] Implement waveform editor UI: add five icon-only geometric buttons; remove old Play/Pause UI button while keeping logic
+- [x] Ensure all five buttons execute their action on mouse-down (press), not release
+- [x] Implement Play as a trigger that always restarts from loop start each press (even if already playing)
+- [x] Implement Pause as a trigger for selected pad only
+- [x] Implement Stop as a trigger for selected pad only: stop playback AND reset playhead to loop start
+- [x] Implement View-Jump-Start / View-Jump-End as view-only navigation (pan/scroll), not affecting playback state
+- [x] Update/add tests covering: selected-pad-only behavior, trigger-on-press semantics, play restarts, stop+reset, and view-only navigation not altering playback state
+- [x] Run the full test suite and fix any regressions
+- [x] Mark all tasks as completed

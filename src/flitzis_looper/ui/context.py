@@ -314,6 +314,12 @@ class WaveformEditorActions:
     def __init__(self, controller: AppController) -> None:
         self._controller = controller
 
+        # Per-pad view state for the waveform editor plot (seconds).
+        self._pad_view_ranges: dict[int, tuple[float, float]] = {}
+
+    def _selected_pad_id(self) -> int | None:
+        return self._controller.session.waveform_editor_pad_id
+
     def open(self, pad_id: int) -> None:
         session = self._controller.session
         session.waveform_editor_open = True
@@ -323,6 +329,103 @@ class WaveformEditorActions:
         session = self._controller.session
         session.waveform_editor_open = False
         session.waveform_editor_pad_id = None
+
+    def play_restart_selected_pad_on_press(self) -> None:
+        """Restart playback for the selected pad (waveform editor)."""
+        pad_id = self._selected_pad_id()
+        if pad_id is None:
+            return
+
+        if self._controller.project.sample_paths[pad_id] is None:
+            return
+
+        loop_start_s, _ = self._controller.transport.loop.effective_region(pad_id)
+
+        # Update playhead immediately; audio messages will refine it.
+        self._controller.session.pad_playhead_s[pad_id] = loop_start_s
+
+        # Trigger without stopping other pads (ignores multi_loop setting).
+        self._controller.transport.playback.trigger_pad_keep_others(pad_id)
+
+    def pause_selected_pad_on_press(self) -> None:
+        """Pause playback for the selected pad.
+
+        If no true pause exists, this is implemented as stop without resetting
+        the playhead.
+        """
+        pad_id = self._selected_pad_id()
+        if pad_id is None:
+            return
+
+        if pad_id not in self._controller.session.active_sample_ids:
+            return
+
+        self._controller.transport.playback.stop_pad(pad_id)
+
+    def stop_and_reset_selected_pad_on_press(self) -> None:
+        """Stop playback and reset playhead to loop start (selected pad)."""
+        pad_id = self._selected_pad_id()
+        if pad_id is None:
+            return
+
+        loop_start_s, _ = self._controller.transport.loop.effective_region(pad_id)
+        self._controller.transport.playback.stop_pad(pad_id)
+        self._controller.session.pad_playhead_s[pad_id] = loop_start_s
+
+    def record_view_range(self, pad_id: int, start_s: float, end_s: float) -> None:
+        """Record the plot's current visible X-range for a pad."""
+        self._pad_view_ranges[int(pad_id)] = (float(start_s), float(end_s))
+
+    def _current_view_width_s(self, pad_id: int, *, sample_duration_s: float) -> float:
+        if sample_duration_s <= 0.0:
+            return 0.0
+
+        current = self._pad_view_ranges.get(pad_id)
+        if current is None:
+            return float(sample_duration_s)
+
+        start_s, end_s = current
+        width = max(0.0, float(end_s) - float(start_s))
+        if width <= 0.0:
+            return float(sample_duration_s)
+
+        return min(width, float(sample_duration_s))
+
+    def view_jump_start_selected_pad_on_press(self) -> tuple[float, float] | None:
+        """Jump the waveform editor view to the start (selected pad)."""
+        pad_id = self._selected_pad_id()
+        if pad_id is None:
+            return None
+
+        dur_s = self._controller.project.sample_durations[pad_id]
+        if dur_s is None:
+            return None
+
+        dur_s = float(dur_s)
+        width_s = self._current_view_width_s(pad_id, sample_duration_s=dur_s)
+        start_s = 0.0
+        end_s = min(dur_s, start_s + width_s)
+
+        self._pad_view_ranges[pad_id] = (start_s, end_s)
+        return (start_s, end_s)
+
+    def view_jump_end_selected_pad_on_press(self) -> tuple[float, float] | None:
+        """Jump the waveform editor view to the end (selected pad)."""
+        pad_id = self._selected_pad_id()
+        if pad_id is None:
+            return None
+
+        dur_s = self._controller.project.sample_durations[pad_id]
+        if dur_s is None:
+            return None
+
+        dur_s = float(dur_s)
+        width_s = self._current_view_width_s(pad_id, sample_duration_s=dur_s)
+        end_s = dur_s
+        start_s = max(0.0, end_s - width_s)
+
+        self._pad_view_ranges[pad_id] = (start_s, end_s)
+        return (start_s, end_s)
 
     def get_render_data(
         self, pad_id: int, width_px: int, start_s: float, end_s: float

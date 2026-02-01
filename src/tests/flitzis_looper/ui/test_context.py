@@ -452,3 +452,125 @@ class TestUiContext:
 
         # Should be able to access UI actions
         assert ui_context.ui is not None
+
+
+def _open_waveform_editor(controller: AppController, pad_id: int) -> UiContext:
+    controller.session.waveform_editor_open = True
+    controller.session.waveform_editor_pad_id = pad_id
+    return UiContext(controller)
+
+
+class TestWaveformEditorTransportControls:
+    """Test waveform editor transport control actions."""
+
+    def test_play_restart_selected_pad_on_press_does_not_stop_other_pads_and_restarts_from_start(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
+        controller.project.sample_paths[1] = "/path/to/other.wav"
+        controller.project.multi_loop = False  # Would normally stop others.
+
+        controller.project.pad_loop_start_s[0] = 2.0
+        controller.project.pad_loop_end_s[0] = 5.0
+
+        controller.session.active_sample_ids.update({0, 1})
+        controller.session.pad_playhead_s[0] = 4.2
+
+        ctx.ui.waveform.play_restart_selected_pad_on_press()
+
+        audio_engine_mock.stop_all.assert_not_called()
+        audio_engine_mock.play_sample.assert_called_once_with(0, 1.0)
+        audio_engine_mock.set_pad_loop_region.assert_called_once_with(0, 2.0, 5.0)
+        assert controller.session.pad_playhead_s[0] == pytest.approx(2.0)
+
+        # Restart is a trigger: pressing again retriggers from loop start.
+        ctx.ui.waveform.play_restart_selected_pad_on_press()
+        assert audio_engine_mock.play_sample.call_count == 2
+        assert audio_engine_mock.set_pad_loop_region.call_count == 2
+        assert controller.session.pad_playhead_s[0] == pytest.approx(2.0)
+
+    def test_stop_and_reset_selected_pad_on_press_stops_only_selected_and_resets_playhead(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
+        controller.project.sample_paths[1] = "/path/to/other.wav"
+
+        controller.project.pad_loop_start_s[0] = 3.0
+        controller.project.pad_loop_end_s[0] = 9.0
+
+        controller.session.active_sample_ids.update({0, 1})
+        controller.session.pad_playhead_s[0] = 7.0
+        controller.session.pad_playhead_s[1] = 1.5
+
+        ctx.ui.waveform.stop_and_reset_selected_pad_on_press()
+
+        audio_engine_mock.stop_all.assert_not_called()
+        audio_engine_mock.stop_sample.assert_called_once_with(0)
+        assert controller.session.pad_playhead_s[0] == pytest.approx(3.0)
+        assert controller.session.pad_playhead_s[1] == pytest.approx(1.5)
+
+        # Simulate audio message: stop should not clear playhead.
+        msg = Mock()
+        msg.sample_id.return_value = 0
+        controller.transport.playback.handle_sample_stopped_message(msg)
+
+        assert 0 not in controller.session.active_sample_ids
+        assert 1 in controller.session.active_sample_ids
+        assert controller.session.pad_playhead_s[0] == pytest.approx(3.0)
+
+    def test_pause_selected_pad_on_press_stops_only_selected_and_keeps_playhead(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
+        controller.project.sample_paths[1] = "/path/to/other.wav"
+
+        controller.session.active_sample_ids.update({0, 1})
+        controller.session.pad_playhead_s[0] = 8.0
+        controller.session.pad_playhead_s[1] = 0.5
+
+        ctx.ui.waveform.pause_selected_pad_on_press()
+
+        audio_engine_mock.stop_all.assert_not_called()
+        audio_engine_mock.stop_sample.assert_called_once_with(0)
+        assert controller.session.pad_playhead_s[0] == pytest.approx(8.0)
+        assert controller.session.pad_playhead_s[1] == pytest.approx(0.5)
+
+        # Simulate audio message: pause should not clear playhead.
+        msg = Mock()
+        msg.sample_id.return_value = 0
+        controller.transport.playback.handle_sample_stopped_message(msg)
+
+        assert 0 not in controller.session.active_sample_ids
+        assert 1 in controller.session.active_sample_ids
+        assert controller.session.pad_playhead_s[0] == pytest.approx(8.0)
+
+    def test_view_jump_start_and_end_update_view_range_without_playback_changes(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+
+        controller.project.sample_durations[0] = 100.0
+        controller.session.active_sample_ids.update({0, 1})
+        controller.session.pad_playhead_s[0] = 12.0
+
+        ctx.ui.waveform.record_view_range(0, 10.0, 30.0)  # width=20s
+
+        audio_engine_mock.reset_mock()
+
+        limits = ctx.ui.waveform.view_jump_start_selected_pad_on_press()
+        assert limits == pytest.approx((0.0, 20.0))
+        assert controller.session.active_sample_ids == {0, 1}
+        assert controller.session.pad_playhead_s[0] == pytest.approx(12.0)
+        assert audio_engine_mock.method_calls == []
+
+        limits = ctx.ui.waveform.view_jump_end_selected_pad_on_press()
+        assert limits == pytest.approx((80.0, 100.0))
+        assert controller.session.active_sample_ids == {0, 1}
+        assert controller.session.pad_playhead_s[0] == pytest.approx(12.0)
+        assert audio_engine_mock.method_calls == []

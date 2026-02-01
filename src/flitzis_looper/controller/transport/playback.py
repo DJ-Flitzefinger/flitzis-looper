@@ -37,6 +37,21 @@ class PadPlaybackController:
         self._audio.set_pad_loop_region(sample_id, start_s, end_s)
         self._audio.play_sample(sample_id, 1.0)
 
+    def trigger_pad_keep_others(self, sample_id: int) -> None:
+        """Trigger or retrigger a pad's loop without stopping other pads.
+
+        This is intended for workflows like the waveform editor where starting
+        playback must not affect other currently-playing pads.
+        """
+        validate_sample_id(sample_id)
+
+        if self._project.sample_paths[sample_id] is None:
+            return
+
+        start_s, end_s = self._loop.effective_region(sample_id)
+        self._audio.set_pad_loop_region(sample_id, start_s, end_s)
+        self._audio.play_sample(sample_id, 1.0)
+
     def stop_pad(self, sample_id: int) -> None:
         """Stop a pad if it is currently active."""
         validate_sample_id(sample_id)
@@ -62,4 +77,3 @@ class PadPlaybackController:
             return
 
         self._session.active_sample_ids.discard(pad_id)
-        self._session.pad_playhead_s[pad_id] = None
