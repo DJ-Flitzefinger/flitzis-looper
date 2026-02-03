@@ -64,6 +64,35 @@ class PadPlaybackController:
         """Stop all currently active pads."""
         self._audio.stop_all()
 
+    def pause_pad(self, sample_id: int) -> None:
+        """Pause a pad if it is currently playing.
+
+        The pad remains active but its voice is silenced.
+        """
+        validate_sample_id(sample_id)
+        if sample_id not in self._session.active_sample_ids:
+            return
+        if sample_id in self._session.paused_sample_ids:
+            return  # Already paused
+
+        self._audio.pause_sample(sample_id)
+        self._session.paused_sample_ids.add(sample_id)
+
+    def resume_pad(self, sample_id: int) -> None:
+        """Resume a paused pad.
+
+        If the pad was paused, its voice continues from the saved position.
+        If the pad was not paused, this has no effect.
+        """
+        validate_sample_id(sample_id)
+        if sample_id not in self._session.active_sample_ids:
+            return
+        if sample_id not in self._session.paused_sample_ids:
+            return  # Not paused
+
+        self._audio.resume_sample(sample_id)
+        self._session.paused_sample_ids.discard(sample_id)
+
     def handle_sample_started_message(self, msg: AudioMessage.SampleStarted) -> None:
         pad_id = msg.sample_id()
         if pad_id is None:
@@ -77,3 +106,4 @@ class PadPlaybackController:
             return
 
         self._session.active_sample_ids.discard(pad_id)
+        self._session.paused_sample_ids.discard(pad_id)

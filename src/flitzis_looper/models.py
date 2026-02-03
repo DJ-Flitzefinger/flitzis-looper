@@ -252,6 +252,10 @@ class SessionState(BaseModel):
     # Audio Runtime
     active_sample_ids: set[int] = Field(default_factory=set)
     """Pads that are currently active (playing)."""
+
+    paused_sample_ids: set[int] = Field(default_factory=set)
+    """Pads that are currently paused (active but temporarily silenced)."""
+
     pressed_pads: list[bool] = Field(default_factory=lambda: [False] * NUM_SAMPLES)
     """Currently pressed pads."""
 
@@ -371,6 +375,7 @@ class SessionState(BaseModel):
 
     @field_validator(
         "active_sample_ids",
+        "paused_sample_ids",
         "pressed_pads",
         "loading_sample_ids",
         "analyzing_sample_ids",

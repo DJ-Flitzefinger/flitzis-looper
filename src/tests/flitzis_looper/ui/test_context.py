@@ -513,16 +513,17 @@ class TestWaveformEditorTransportControls:
         assert controller.session.pad_playhead_s[0] == pytest.approx(3.0)
         assert controller.session.pad_playhead_s[1] == pytest.approx(1.5)
 
-        # Simulate audio message: stop should not clear playhead.
+        # Simulate audio message: stop should clear active and paused.
         msg = Mock()
         msg.sample_id.return_value = 0
         controller.transport.playback.handle_sample_stopped_message(msg)
 
         assert 0 not in controller.session.active_sample_ids
+        assert 0 not in controller.session.paused_sample_ids
         assert 1 in controller.session.active_sample_ids
         assert controller.session.pad_playhead_s[0] == pytest.approx(3.0)
 
-    def test_pause_selected_pad_on_press_stops_only_selected_and_keeps_playhead(
+    def test_pause_selected_pad_on_press_pauses_and_keeps_playhead(
         self, controller: AppController, audio_engine_mock: Mock
     ) -> None:
         ctx = _open_waveform_editor(controller, 0)
@@ -534,21 +535,39 @@ class TestWaveformEditorTransportControls:
         controller.session.pad_playhead_s[0] = 8.0
         controller.session.pad_playhead_s[1] = 0.5
 
+        # Initially not paused
+        assert 0 not in controller.session.paused_sample_ids
+
         ctx.ui.waveform.pause_selected_pad_on_press()
 
         audio_engine_mock.stop_all.assert_not_called()
-        audio_engine_mock.stop_sample.assert_called_once_with(0)
+        audio_engine_mock.stop_sample.assert_not_called()
+        audio_engine_mock.pause_sample.assert_called_once_with(0)
         assert controller.session.pad_playhead_s[0] == pytest.approx(8.0)
         assert controller.session.pad_playhead_s[1] == pytest.approx(0.5)
+        assert 0 in controller.session.paused_sample_ids
+        assert 1 not in controller.session.paused_sample_ids
 
-        # Simulate audio message: pause should not clear playhead.
-        msg = Mock()
-        msg.sample_id.return_value = 0
-        controller.transport.playback.handle_sample_stopped_message(msg)
+        # Simulate no audio message change for pause (paused state managed by UI)
 
-        assert 0 not in controller.session.active_sample_ids
-        assert 1 in controller.session.active_sample_ids
-        assert controller.session.pad_playhead_s[0] == pytest.approx(8.0)
+    def test_resume_selected_pad_after_pause(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
+
+        controller.session.active_sample_ids.add(0)
+        controller.session.paused_sample_ids.add(0)  # Simulate already paused via previous pause
+        controller.session.pad_playhead_s[0] = 8.0
+
+        # Resume
+        ctx.ui.waveform.pause_selected_pad_on_press()
+
+        audio_engine_mock.resume_sample.assert_called_once_with(0)
+        assert 0 not in controller.session.paused_sample_ids
+        # Pause flag cleared, active remains
+        assert 0 in controller.session.active_sample_ids
 
     def test_view_jump_start_and_end_update_view_range_without_playback_changes(
         self, controller: AppController, audio_engine_mock: Mock

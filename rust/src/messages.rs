@@ -134,6 +134,18 @@ pub enum ControlMessage {
     /// Stop all currently active voices.
     StopAll(),
 
+    /// Pause playback of a sample without resetting position.
+    ///
+    /// If the sample is playing, its voice becomes silent but retains its
+    /// current playback position. If the sample is not playing, this has no effect.
+    PauseSample { id: usize },
+
+    /// Resume playback of a paused sample from its saved position.
+    ///
+    /// If the sample was paused, playback continues from that point.
+    /// If the sample was not paused, this has no effect.
+    ResumeSample { id: usize },
+
     /// Unload a sample slot.
     ///
     /// This stops all active voices for the sample and clears the sample buffer in the slot.

@@ -12,6 +12,7 @@ pub struct VoiceSlot {
     tempo_ratio_smoothed: f32,
     pub stretch: StretchProcessor,
     pub eq_state: Vec<Eq3State>,
+    pub paused: bool,
 }
 
 impl VoiceSlot {
@@ -25,6 +26,7 @@ impl VoiceSlot {
             tempo_ratio_smoothed: 1.0,
             stretch: StretchProcessor::new(channels),
             eq_state: vec![Eq3State::default(); channels],
+            paused: false,
         }
     }
 
@@ -42,6 +44,7 @@ impl VoiceSlot {
         self.frame_pos = initial_frame_pos;
         self.volume = volume;
         self.tempo_ratio_smoothed = initial_tempo_ratio;
+        self.paused = false;
         for state in &mut self.eq_state {
             state.reset();
         }
@@ -53,6 +56,7 @@ impl VoiceSlot {
         self.frame_pos = 0;
         self.volume = 0.0;
         self.tempo_ratio_smoothed = 1.0;
+        self.paused = false;
         for state in &mut self.eq_state {
             state.reset();
         }
@@ -62,6 +66,7 @@ impl VoiceSlot {
         self.frame_pos = initial_frame_pos;
         self.volume = volume;
         self.tempo_ratio_smoothed = initial_tempo_ratio;
+        self.paused = false;
     }
 
     pub fn smooth_tempo_ratio(&mut self, target: f32) -> f32 {
@@ -85,5 +90,15 @@ impl VoiceSlot {
 
     pub fn is_playing_sample(&self, sample_id: usize) -> bool {
         self.active && self.sample_id == sample_id
+    }
+
+    /// Pause playback: set the paused flag. Does not change frame_pos.
+    pub fn pause(&mut self) {
+        self.paused = true;
+    }
+
+    /// Resume playback: clear the paused flag.
+    pub fn resume(&mut self) {
+        self.paused = false;
     }
 }

@@ -801,6 +801,62 @@ impl AudioEngine {
             .map_err(|_| PyRuntimeError::new_err("Failed to send StopSample - buffer may be full"))
     }
 
+    /// Pause playback of a sample without resetting its position.
+    ///
+    /// If the sample is playing, it becomes silent but retains its current
+    /// playback position. If the sample is not playing, this has no effect.
+    pub fn pause_sample(&mut self, id: usize) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err(format!(
+                "id out of range (expected 0..{}, got {id})",
+                NUM_SAMPLES - 1
+            )));
+        }
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        producer_guard
+            .push(ControlMessage::PauseSample { id })
+            .map_err(|_| PyRuntimeError::new_err("Failed to send PauseSample - buffer may be full"))
+    }
+
+    /// Resume playback of a paused sample from its saved position.
+    ///
+    /// If the sample was paused, playback continues. If the sample was not
+    /// paused, this has no effect.
+    pub fn resume_sample(&mut self, id: usize) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err(format!(
+                "id out of range (expected 0..{}, got {id})",
+                NUM_SAMPLES - 1
+            )));
+        }
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        producer_guard
+            .push(ControlMessage::ResumeSample { id })
+            .map_err(|_| {
+                PyRuntimeError::new_err("Failed to send ResumeSample - buffer may be full")
+            })
+    }
+
     /// Unload a sample slot.
     pub fn unload_sample(&mut self, id: usize) -> PyResult<()> {
         if id >= NUM_SAMPLES {

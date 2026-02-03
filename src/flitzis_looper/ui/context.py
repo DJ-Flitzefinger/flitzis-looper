@@ -348,10 +348,10 @@ class WaveformEditorActions:
         self._controller.transport.playback.trigger_pad_keep_others(pad_id)
 
     def pause_selected_pad_on_press(self) -> None:
-        """Pause playback for the selected pad.
+        """Toggle pause/resume for the selected pad.
 
-        If no true pause exists, this is implemented as stop without resetting
-        the playhead.
+        If the pad is playing, pause it (stop mixing but keep position).
+        If the pad is paused, resume it.
         """
         pad_id = self._selected_pad_id()
         if pad_id is None:
@@ -360,7 +360,10 @@ class WaveformEditorActions:
         if pad_id not in self._controller.session.active_sample_ids:
             return
 
-        self._controller.transport.playback.stop_pad(pad_id)
+        if pad_id in self._controller.session.paused_sample_ids:
+            self._controller.transport.playback.resume_pad(pad_id)
+        else:
+            self._controller.transport.playback.pause_pad(pad_id)
 
     def stop_and_reset_selected_pad_on_press(self) -> None:
         """Stop playback and reset playhead to loop start (selected pad)."""

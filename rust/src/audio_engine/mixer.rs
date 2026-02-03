@@ -361,6 +361,38 @@ impl RtMixer {
         }
     }
 
+    /// Pause playback of a specific sample without resetting position.
+    ///
+    /// If the sample is playing, its voice becomes silent but retains its
+    /// current playback position. If the sample is not playing, this has no effect.
+    pub fn pause_sample(&mut self, id: usize) {
+        if id >= NUM_SAMPLES {
+            return;
+        }
+
+        for voice_slot in &mut self.voices {
+            if voice_slot.is_playing_sample(id) {
+                voice_slot.pause();
+            }
+        }
+    }
+
+    /// Resume playback of a paused sample from its saved position.
+    ///
+    /// If the sample was paused, playback continues from that point.
+    /// If the sample was not paused, this has no effect.
+    pub fn resume_sample(&mut self, id: usize) {
+        if id >= NUM_SAMPLES {
+            return;
+        }
+
+        for voice_slot in &mut self.voices {
+            if voice_slot.is_playing_sample(id) {
+                voice_slot.resume();
+            }
+        }
+    }
+
     /// Unloads a sample from the sample bank.
     ///
     /// This stops all voices playing the sample and removes it from the bank.
@@ -413,91 +445,109 @@ impl RtMixer {
                 continue;
             }
 
+            let is_paused = voice.paused;
+
             let Some(sample) = voice.sample.clone() else {
                 voice.stop();
                 continue;
             };
 
-            let sample_frames = sample.samples.len() / self.channels;
-            if sample_frames == 0 {
-                voice.stop();
-                continue;
-            }
+            if !is_paused {
+                let sample_frames = sample.samples.len() / self.channels;
+                if sample_frames == 0 {
+                    voice.stop();
+                    continue;
+                }
 
-            let mut target_tempo_ratio = speed;
-            if bpm_lock_enabled
-                && let (Some(master_bpm), Some(pad_bpm)) = (master_bpm, pad_bpm[voice.sample_id])
-            {
-                target_tempo_ratio = master_bpm / pad_bpm;
-            }
+                let mut target_tempo_ratio = speed;
+                if bpm_lock_enabled
+                    && let (Some(master_bpm), Some(pad_bpm)) =
+                        (master_bpm, pad_bpm[voice.sample_id])
+                {
+                    target_tempo_ratio = master_bpm / pad_bpm;
+                }
 
-            if !target_tempo_ratio.is_finite() {
-                target_tempo_ratio = 1.0;
-            }
-            target_tempo_ratio = target_tempo_ratio.clamp(SPEED_MIN, SPEED_MAX);
+                if !target_tempo_ratio.is_finite() {
+                    target_tempo_ratio = 1.0;
+                }
+                target_tempo_ratio = target_tempo_ratio.clamp(SPEED_MIN, SPEED_MAX);
 
-            let tempo_ratio = voice.smooth_tempo_ratio(target_tempo_ratio);
-            let transpose_semitones = if key_lock_enabled {
-                transpose_semitones_for_tempo_ratio(tempo_ratio)
+                let tempo_ratio = voice.smooth_tempo_ratio(target_tempo_ratio);
+                let transpose_semitones = if key_lock_enabled {
+                    transpose_semitones_for_tempo_ratio(tempo_ratio)
+                } else {
+                    0.0
+                };
+
+                let mut input_frames = ((frames as f32) * tempo_ratio).round() as usize;
+                input_frames = input_frames.clamp(1, DEFAULT_BLOCK_SAMPLES);
+
+                let mut loop_start = self.pad_loop_start_frame[voice.sample_id].min(sample_frames);
+                let mut loop_end =
+                    self.pad_loop_end_frame[voice.sample_id].unwrap_or(sample_frames);
+                loop_end = loop_end.min(sample_frames);
+                if loop_end <= loop_start {
+                    loop_start = 0;
+                    loop_end = sample_frames;
+                }
+                let loop_len = loop_end - loop_start;
+                if loop_len == 0 {
+                    voice.stop();
+                    continue;
+                }
+
+                if voice.frame_pos < loop_start || voice.frame_pos >= loop_end {
+                    voice.frame_pos = loop_start;
+                }
+                let base = voice.frame_pos - loop_start;
+
+                let input_buffers = voice.stretch.input_buffers_mut(input_frames);
+                for (channel, buf) in input_buffers.iter_mut().enumerate().take(self.channels) {
+                    for (i, sample_ref) in buf.iter_mut().enumerate().take(input_frames) {
+                        let frame = loop_start + ((base + i) % loop_len);
+                        *sample_ref = sample.samples[frame * self.channels + channel];
+                    }
+                }
+
+                voice.stretch.set_transpose_semitones(transpose_semitones);
+                voice.stretch.process(input_frames, frames);
+
+                let eq = pad_eq[voice.sample_id];
+                let pad_gain = pad_gain[voice.sample_id];
+
+                let output_buffers = voice.stretch.output_buffers();
+                for frame in 0..frames {
+                    let out_base = frame * self.channels;
+                    for (channel, buffer) in output_buffers.iter().enumerate().take(self.channels) {
+                        let sample = buffer[frame];
+                        let mut sample = sample;
+                        if let Some(state) = voice.eq_state.get_mut(channel) {
+                            sample = eq.process(state, sample);
+                        }
+                        let mixed = sample * voice.volume * self.volume * pad_gain;
+                        output[out_base + channel] += mixed;
+
+                        let peak = mixed.abs();
+                        if peak > pad_peaks[voice.sample_id] {
+                            pad_peaks[voice.sample_id] = peak;
+                        }
+                    }
+                }
+
+                voice.frame_pos = loop_start + ((base + input_frames) % loop_len);
             } else {
-                0.0
-            };
+                let sample_frames = sample.samples.len() / self.channels;
+                let loop_start = self.pad_loop_start_frame[voice.sample_id].min(sample_frames);
 
-            let mut input_frames = ((frames as f32) * tempo_ratio).round() as usize;
-            input_frames = input_frames.clamp(1, DEFAULT_BLOCK_SAMPLES);
-
-            let mut loop_start = self.pad_loop_start_frame[voice.sample_id].min(sample_frames);
-            let mut loop_end = self.pad_loop_end_frame[voice.sample_id].unwrap_or(sample_frames);
-            loop_end = loop_end.min(sample_frames);
-            if loop_end <= loop_start {
-                loop_start = 0;
-                loop_end = sample_frames;
-            }
-            let loop_len = loop_end - loop_start;
-            if loop_len == 0 {
-                voice.stop();
-                continue;
-            }
-
-            if voice.frame_pos < loop_start || voice.frame_pos >= loop_end {
-                voice.frame_pos = loop_start;
-            }
-            let base = voice.frame_pos - loop_start;
-
-            let input_buffers = voice.stretch.input_buffers_mut(input_frames);
-            for (channel, buf) in input_buffers.iter_mut().enumerate().take(self.channels) {
-                for (i, sample_ref) in buf.iter_mut().enumerate().take(input_frames) {
-                    let frame = loop_start + ((base + i) % loop_len);
-                    *sample_ref = sample.samples[frame * self.channels + channel];
+                let mut loop_end =
+                    self.pad_loop_end_frame[voice.sample_id].unwrap_or(sample_frames);
+                loop_end = loop_end.min(sample_frames);
+                if loop_end <= loop_start {
+                    // Invalid loop; but voice is paused; skip.
+                } else if voice.frame_pos < loop_start || voice.frame_pos >= loop_end {
+                    voice.frame_pos = loop_start;
                 }
             }
-
-            voice.stretch.set_transpose_semitones(transpose_semitones);
-            voice.stretch.process(input_frames, frames);
-
-            let eq = pad_eq[voice.sample_id];
-            let pad_gain = pad_gain[voice.sample_id];
-
-            let output_buffers = voice.stretch.output_buffers();
-            for frame in 0..frames {
-                let out_base = frame * self.channels;
-                for (channel, buffer) in output_buffers.iter().enumerate().take(self.channels) {
-                    let sample = buffer[frame];
-                    let mut sample = sample;
-                    if let Some(state) = voice.eq_state.get_mut(channel) {
-                        sample = eq.process(state, sample);
-                    }
-                    let mixed = sample * voice.volume * self.volume * pad_gain;
-                    output[out_base + channel] += mixed;
-
-                    let peak = mixed.abs();
-                    if peak > pad_peaks[voice.sample_id] {
-                        pad_peaks[voice.sample_id] = peak;
-                    }
-                }
-            }
-
-            voice.frame_pos = loop_start + ((base + input_frames) % loop_len);
             self.pad_playhead_frame[voice.sample_id] = Some(voice.frame_pos);
         }
     }
@@ -919,5 +969,112 @@ mod tests {
         assert_eq!(success_count, MAX_VOICES);
         // Only MAX_VOICES voices should be active
         assert_eq!(mixer.voices.iter().filter(|v| v.active).count(), MAX_VOICES);
+    }
+
+    #[test]
+    fn test_pause_sample() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        let sample = create_test_sample(1, 100, 0.5);
+        mixer.load_sample(0, sample);
+        mixer.play_sample(0, 1.0);
+
+        // Should have active voice
+        let voice = mixer
+            .voices
+            .iter()
+            .find(|v| v.active && v.sample_id == 0)
+            .unwrap();
+        assert!(!voice.paused);
+        let frame_before = voice.frame_pos;
+
+        mixer.pause_sample(0);
+
+        let voice = mixer
+            .voices
+            .iter()
+            .find(|v| v.active && v.sample_id == 0)
+            .unwrap();
+        assert!(voice.paused);
+        // frame_pos should be unchanged after pause
+        assert_eq!(voice.frame_pos, frame_before);
+    }
+
+    #[test]
+    fn test_resume_sample() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        let sample = create_test_sample(1, 100, 0.5);
+        mixer.load_sample(0, sample);
+        mixer.play_sample(0, 1.0);
+
+        // Pause first
+        mixer.pause_sample(0);
+        let frame_before_resume = mixer
+            .voices
+            .iter()
+            .find(|v| v.active && v.sample_id == 0)
+            .unwrap()
+            .frame_pos;
+
+        mixer.resume_sample(0);
+
+        let voice = mixer
+            .voices
+            .iter()
+            .find(|v| v.active && v.sample_id == 0)
+            .unwrap();
+        assert!(!voice.paused);
+        // frame_pos should be same as before resume
+        assert_eq!(voice.frame_pos, frame_before_resume);
+    }
+
+    #[test]
+    fn test_pause_and_resume_affects_mixing() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        let sample = create_test_sample(1, 100, 0.5); // 100 frames
+        mixer.load_sample(0, sample);
+        mixer.play_sample(0, 1.0);
+
+        let mut output = vec![0.0; 20];
+        let mut peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut peaks);
+
+        // After render, output should have non-zero values
+        assert!(output.iter().any(|&x| x != 0.0));
+        let frame_after_first_render = mixer
+            .voices
+            .iter()
+            .find(|v| v.active && v.sample_id == 0)
+            .unwrap()
+            .frame_pos;
+        assert_eq!(frame_after_first_render, 20); // advanced 20 frames
+
+        // Pause, then render again: output should be silence (since paused)
+        mixer.pause_sample(0);
+        let mut output2 = vec![0.0; 20];
+        mixer.render(&mut output2, &mut peaks);
+        // Output should be all zeros (silence)
+        assert!(output2.iter().all(|&x| x == 0.0));
+        // frame_pos should not have advanced
+        let frame_after_pause = mixer
+            .voices
+            .iter()
+            .find(|v| v.active && v.sample_id == 0)
+            .unwrap()
+            .frame_pos;
+        assert_eq!(frame_after_pause, frame_after_first_render);
+
+        // Resume and render again: should produce output again
+        mixer.resume_sample(0);
+        let mut output3 = vec![0.0; 20];
+        mixer.render(&mut output3, &mut peaks);
+        assert!(output3.iter().any(|&x| x != 0.0));
+        // frame_pos should have advanced by another 20
+        let frame_after_resume = mixer
+            .voices
+            .iter()
+            .find(|v| v.active && v.sample_id == 0)
+            .unwrap()
+            .frame_pos;
+        assert_eq!(frame_after_resume, frame_after_pause + 20);
     }
 }

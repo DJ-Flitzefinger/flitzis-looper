@@ -147,6 +147,12 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
                     ControlMessage::SetPadLoopRegion { id, start_s, end_s } => {
                         mixer.set_pad_loop_region(id, start_s, end_s);
                     }
+                    ControlMessage::PauseSample { id } => {
+                        mixer.pause_sample(id);
+                    }
+                    ControlMessage::ResumeSample { id } => {
+                        mixer.resume_sample(id);
+                    }
                     ControlMessage::SetVolume(volume) => {
                         mixer.set_volume(volume);
                     }
