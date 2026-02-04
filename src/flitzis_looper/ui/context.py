@@ -1,32 +1,31 @@
 from pathlib import Path, PureWindowsPath
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, TypeVar, cast
+
+from pydantic import BaseModel
 
 from flitzis_looper.constants import SPEED_STEP
 from flitzis_looper_audio import AudioMessage
 
 if TYPE_CHECKING:
-    from pydantic import BaseModel
-
     from flitzis_looper.controller import AppController
     from flitzis_looper.models import ProjectState, SampleAnalysis, SessionState
     from flitzis_looper_audio import WaveFormRenderData
 
+T = TypeVar("T", bound=BaseModel)
 
-class ReadOnlyStateProxy:
+
+class ReadOnlyStateProxy[T]:
     """Wraps a Pydantic model and prevents attribute assignment."""
 
-    def __init__(self, model: BaseModel):
-        self._model = model
+    def __init__(self, model: T):
+        super().__setattr__("_model", model)
 
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> object:
         return getattr(self._model, name)
 
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name == "_model":
-            super().__setattr__(name, value)
-        else:
-            msg = f"State is read-only. Use controller actions to mutate '{name}'."
-            raise AttributeError(msg)
+    def __setattr__(self, name: str, value: object) -> None:
+        msg = f"State is read-only. Use controller actions to mutate '{name}'."
+        raise AttributeError(msg)
 
 
 class PadSelectors:

@@ -7,7 +7,7 @@ Tests cover:
 - UiContext initialization and access
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from unittest.mock import Mock
 
 import pytest
@@ -58,7 +58,7 @@ class TestReadOnlyStateProxy:
     def test_read_only_proxy_nested_attributes(self) -> None:
         """Test that read-only proxy works with nested attributes."""
         project = ProjectState()
-        proxy = ReadOnlyStateProxy(project)
+        proxy = cast("ProjectState", ReadOnlyStateProxy(project))
 
         # Should be able to read nested attributes
         assert len(proxy.sample_paths) == 216

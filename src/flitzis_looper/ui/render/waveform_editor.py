@@ -15,6 +15,7 @@ from flitzis_looper.ui.contextmanager import implot_style_color, implot_style_va
 
 if TYPE_CHECKING:
     import numpy as np
+    from numpy.typing import NDArray
 
     from flitzis_looper.ui.context import UiContext
 
@@ -120,7 +121,9 @@ def _plot_overlay_loop_region(
         implot.tag_x(start_s, (0, 0, 0, 0), " ")
 
 
-def _plot_line(xs: np.ndarray, ys: np.ndarray, *, show_sample_markers: bool) -> None:
+def _plot_line(
+    xs: NDArray[np.float32], ys: NDArray[np.float32], *, show_sample_markers: bool
+) -> None:
     with implot_style_color(implot.Col_.line, PLOT_FILL_RGBA):
         if show_sample_markers:
             implot.set_next_marker_style(implot.Marker_.circle)
@@ -133,7 +136,9 @@ def _plot_line(xs: np.ndarray, ys: np.ndarray, *, show_sample_markers: bool) -> 
             implot.plot_line("wave", xs, ys)
 
 
-def _plot_shaded(xs: np.ndarray, y_min: np.ndarray, y_max: np.ndarray) -> None:
+def _plot_shaded(
+    xs: NDArray[np.float32], y_min: NDArray[np.float32], y_max: NDArray[np.float32]
+) -> None:
     with (
         implot_style_color(implot.Col_.fill, PLOT_FILL_RGBA),
         implot_style_var(implot.StyleVar_.fill_alpha, 0.85),
@@ -238,7 +243,8 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
                 show_sample_markers=len(xs) < plot_width_px / 6,  # Show on extreme zoom
             )
         else:
-            _plot_shaded(xs, y1, cast("np.ndarray", y2))
+            typed_y2 = cast("NDArray[np.float32]", y2)  # y2 is set in this branch
+            _plot_shaded(xs, y1, typed_y2)
         _plot_overlay_loop_region(ctx, pad_id, start_s, draw_list, sample_duration_s)
         _handle_clicks(ctx, pad_id, sample_duration_s)
 
