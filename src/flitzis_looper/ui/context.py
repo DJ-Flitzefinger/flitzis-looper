@@ -7,6 +7,8 @@ from flitzis_looper.constants import SPEED_STEP
 from flitzis_looper_audio import AudioMessage
 
 if TYPE_CHECKING:
+    from imgui_bundle import imgui
+
     from flitzis_looper.controller import AppController
     from flitzis_looper.models import ProjectState, SampleAnalysis, SessionState
     from flitzis_looper_audio import WaveFormRenderData
@@ -492,6 +494,8 @@ class UiContext:
     state: UiState
     audio: AudioActions
     ui: UiActions
+
+    bold_font: imgui.ImFont
 
     def __init__(self, controller: AppController):
         self._controller = controller

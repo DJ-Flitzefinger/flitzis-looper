@@ -21,6 +21,17 @@ def run_ui() -> None:
     runner_params.imgui_window_params.enable_viewports = True
     runner_params.callbacks.show_gui = lambda: render_ui(context)
     runner_params.callbacks.before_exit = controller.shut_down
+    runner_params.callbacks.load_additional_fonts = lambda: load_fonts(context)
     add_ons_params = immapp.AddOnsParams(with_implot=True)
 
     immapp.run(runner_params, add_ons_params)
+
+
+def load_fonts(ctx: UiContext) -> None:
+    font_awesome6 = hello_imgui.DefaultIconFont.font_awesome6
+    hello_imgui.get_runner_params().callbacks.default_icon_font = font_awesome6
+    hello_imgui.imgui_default_settings.load_default_font_with_font_awesome_icons()
+
+    font_loading_params_bold = hello_imgui.FontLoadingParams()
+    font_filename_bold = "fonts/Roboto/Roboto-Bold.ttf"
+    ctx.bold_font = hello_imgui.load_font(font_filename_bold, 16.0, font_loading_params_bold)
