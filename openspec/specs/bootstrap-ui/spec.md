@@ -1,7 +1,7 @@
 # bootstrap-ui Specification
 
 ## Purpose
-To define the minimal Dear PyGui UI bootstrap behavior: module entrypoint, fixed-size non-resizable viewport, full-size primary content panel, and application logic instantiation.
+To define the minimal Dear ImGui Bundle UI bootstrap behavior: module entrypoint, resizable viewport, full-size primary content panel, and application logic instantiation.
 ## Requirements
 ### Requirement: Python UI Entrypoint
 The system SHALL provide a Python entrypoint to start the UI from the `flitzis_looper` package.
@@ -11,12 +11,12 @@ The system SHALL provide a Python entrypoint to start the UI from the `flitzis_l
 - **THEN** the UI starts without raising an exception
 
 ### Requirement: Fixed-Size Application Window
-The system SHALL create a Dear PyGui application window with a fixed size of 960x630 pixels and prevent user resizing.
+The system SHALL create a Dear ImGui Bundle application window with a fixed size of 960x630 pixels and prevent user resizing.
 
 #### Scenario: Window starts at fixed size
 - **WHEN** the UI is started
 - **THEN** the viewport is created with width 960 and height 630
-- **AND** the viewport is not user-resizable
+- **AND** the viewport is user-resizable
 
 ### Requirement: Full-Size Primary Content Panel
 The system SHALL render a single primary content window/panel that fills the viewport.

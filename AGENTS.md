@@ -89,7 +89,7 @@ Depending on the current task, consider reading specific documentation.
 
 ### Python
 Fetch documentation directly from the web.
-- Dear PyGui: https://raw.githubusercontent.com/hoffstadt/DearPyGui/master/docs/source/index.rst
+- Dear ImGui Bundle (imgui-bundle): https://pthom.github.io/imgui_bundle/core-libs/imgui/
 
 ### Rust
 Find documentation for crate `CRATE` under `rust/target/doc/CRATE/index.html`. (You may need to
