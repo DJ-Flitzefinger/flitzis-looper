@@ -1,0 +1,21 @@
+schema: spec-driven
+
+context: |
+  Tech stack: Rust (CPAL, rtrb, PyO3) for real-time audio DSP; Python 3.14+ with Dear ImGui Bundle for UI.
+  Architecture: Hybrid Rust/Python with lock-free SPSC ring buffer for zero-latency audio thread communication.
+  Critical constraint: Audio thread must never allocate, block, or hold GIL; all file I/O on Python thread.
+  Conventions: Rust fmt; Python Ruff (line-length=100, Google docstrings); 4-space indent; Conventional Commits.
+  Testing: Rust unit tests; pytest integration; mypy type checking; real-time safety via code review.
+  Building/package manager: Maturin (build system), uv (Python package manager).
+
+rules:
+  spec:
+    - Focus on audio thread safety and zero-allocation guarantees
+  proposal:
+    - Include non-goals section
+    - Address GIL avoidance and real-time constraints explicitly
+  tasks:
+    - Write deterministic, non-interactive steps; no manual prompts.
+    - Flag any audio-thread allocations or blocking operations as blockers
+  change:
+    - Update spec if behavior changes
