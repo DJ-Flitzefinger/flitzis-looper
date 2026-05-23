@@ -16,10 +16,10 @@
 - [x] 3.5 Treat any audio-thread allocation or blocking operation as a blocker before merge.
 
 ## 4. Playback Integration
-- [ ] 4.1 Preserve default immediate `play_sample` behavior when trigger quantization is disabled.
+- [x] 4.1 Preserve default immediate `play_sample` behavior when trigger quantization is disabled.
 - [ ] 4.2 Add quantized pad trigger routing for at least next-beat and next-bar scheduling.
 - [ ] 4.3 Ensure MultiLoop disabled stop/start transitions execute atomically at one scheduled frame.
-- [ ] 4.4 Add Rust mixer/audio-stream tests proving scheduled starts occur at the intended frame offset.
+- [x] 4.4 Add Rust mixer/audio-stream tests proving scheduled starts occur at the intended frame offset.
 - [ ] 4.5 Add Python controller tests only when Python-facing quantization controls are introduced.
 
 ## 5. Beatgrid And Downbeat Integration

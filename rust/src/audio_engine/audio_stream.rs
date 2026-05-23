@@ -14,6 +14,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::audio_engine::constants::NUM_SAMPLES;
 use crate::audio_engine::mixer::RtMixer;
+use crate::audio_engine::scheduler::{
+    FixedCapacityScheduler, ScheduledCommand, TransportScheduler,
+};
 use crate::audio_engine::transport::TransportTimeline;
 use crate::messages::{AudioMessage, ControlMessage};
 
@@ -34,6 +37,183 @@ pub fn setup_logger() {
         .format_timestamp(None)
         .try_init()
         .unwrap_or(()); // Ignore initialization errors
+}
+
+trait AudioMessageSink {
+    fn push_audio_message(&mut self, message: AudioMessage);
+}
+
+impl AudioMessageSink for Producer<AudioMessage> {
+    fn push_audio_message(&mut self, message: AudioMessage) {
+        let _ = self.push(message);
+    }
+}
+
+fn schedule_immediate_command<const CAPACITY: usize, S: AudioMessageSink>(
+    scheduler: &mut FixedCapacityScheduler<CAPACITY>,
+    callback_start_frame: u64,
+    command: ScheduledCommand,
+    mixer: &mut RtMixer,
+    audio_messages: &mut S,
+) {
+    if scheduler.schedule(callback_start_frame, command).is_ok() {
+        drain_scheduler_due_at_callback_start(
+            scheduler,
+            callback_start_frame,
+            mixer,
+            audio_messages,
+        );
+    } else {
+        execute_scheduled_command(mixer, command, audio_messages);
+    }
+}
+
+fn drain_scheduler_due_at_callback_start<const CAPACITY: usize, S: AudioMessageSink>(
+    scheduler: &mut FixedCapacityScheduler<CAPACITY>,
+    callback_start_frame: u64,
+    mixer: &mut RtMixer,
+    audio_messages: &mut S,
+) {
+    while let Some(event) = scheduler.pop_due_at_callback_start(callback_start_frame) {
+        execute_scheduled_command(mixer, event.command, audio_messages);
+    }
+}
+
+fn execute_scheduled_command<S: AudioMessageSink>(
+    mixer: &mut RtMixer,
+    command: ScheduledCommand,
+    audio_messages: &mut S,
+) {
+    match command {
+        ScheduledCommand::PlaySample { id, volume } => {
+            if mixer.play_sample(id, volume) {
+                audio_messages.push_audio_message(AudioMessage::SampleStarted { id });
+            } else {
+                audio_messages.push_audio_message(AudioMessage::SampleStopped { id });
+            }
+        }
+        ScheduledCommand::StopSample { id } => {
+            mixer.stop_sample(id);
+            audio_messages.push_audio_message(AudioMessage::SampleStopped { id });
+        }
+        ScheduledCommand::StopAll => {
+            stop_all_samples(mixer, audio_messages);
+        }
+    }
+}
+
+fn stop_all_samples<S: AudioMessageSink>(mixer: &mut RtMixer, audio_messages: &mut S) {
+    for voice in &mut mixer.voices {
+        if voice.active {
+            voice.stop();
+            audio_messages.push_audio_message(AudioMessage::SampleStopped {
+                id: voice.sample_id,
+            });
+        }
+    }
+}
+
+fn render_scheduled_audio<const CAPACITY: usize, S: AudioMessageSink>(
+    mixer: &mut RtMixer,
+    scheduler: &mut FixedCapacityScheduler<CAPACITY>,
+    output: &mut [f32],
+    pad_peaks: &mut [f32; NUM_SAMPLES],
+    callback_start_frame: u64,
+    channels: usize,
+    audio_messages: &mut S,
+) {
+    output.fill(0.0);
+    pad_peaks.fill(0.0);
+
+    drain_scheduler_due_at_callback_start(scheduler, callback_start_frame, mixer, audio_messages);
+
+    if channels == 0 {
+        return;
+    }
+
+    let frames = output.len() / channels;
+    if frames == 0 {
+        return;
+    }
+
+    let callback_end_frame = callback_start_frame.saturating_add(frames as u64);
+    let mut rendered_until_frame = callback_start_frame;
+    let mut segment_peaks = [0.0_f32; NUM_SAMPLES];
+
+    while rendered_until_frame < callback_end_frame {
+        let Some(next_target_frame) = scheduler.peek_next_target_frame() else {
+            render_mixer_segment(
+                mixer,
+                output,
+                pad_peaks,
+                &mut segment_peaks,
+                callback_start_frame,
+                rendered_until_frame,
+                callback_end_frame,
+                channels,
+            );
+            break;
+        };
+
+        if next_target_frame >= callback_end_frame {
+            render_mixer_segment(
+                mixer,
+                output,
+                pad_peaks,
+                &mut segment_peaks,
+                callback_start_frame,
+                rendered_until_frame,
+                callback_end_frame,
+                channels,
+            );
+            break;
+        }
+
+        if next_target_frame > rendered_until_frame {
+            render_mixer_segment(
+                mixer,
+                output,
+                pad_peaks,
+                &mut segment_peaks,
+                callback_start_frame,
+                rendered_until_frame,
+                next_target_frame,
+                channels,
+            );
+            rendered_until_frame = next_target_frame;
+        }
+
+        while let Some(event) = scheduler.pop_due_through(callback_start_frame, rendered_until_frame)
+        {
+            execute_scheduled_command(mixer, event.command, audio_messages);
+        }
+    }
+}
+
+fn render_mixer_segment(
+    mixer: &mut RtMixer,
+    output: &mut [f32],
+    pad_peaks: &mut [f32; NUM_SAMPLES],
+    segment_peaks: &mut [f32; NUM_SAMPLES],
+    callback_start_frame: u64,
+    segment_start_frame: u64,
+    segment_end_frame: u64,
+    channels: usize,
+) {
+    if segment_end_frame <= segment_start_frame {
+        return;
+    }
+
+    let start_frame = (segment_start_frame - callback_start_frame) as usize;
+    let end_frame = (segment_end_frame - callback_start_frame) as usize;
+    let start = start_frame * channels;
+    let end = end_frame * channels;
+
+    mixer.render(&mut output[start..end], segment_peaks);
+
+    for (peak, segment_peak) in pad_peaks.iter_mut().zip(segment_peaks.iter()) {
+        *peak = (*peak).max(*segment_peak);
+    }
 }
 
 /// Create and configure the audio stream
@@ -71,6 +251,7 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
 
     let mut mixer = RtMixer::new(channels as usize, sample_rate_hz as f32);
     let mut transport = TransportTimeline::new(sample_rate_hz);
+    let mut scheduler = TransportScheduler::new();
 
     let emit_interval_frames: u64 = (sample_rate_hz as u64 / 10).max(1);
     let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
@@ -87,35 +268,43 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
     let stream = device.build_output_stream(
         &stream_config,
         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+            let buffer_start_frame = transport.output_frame();
+
             // Process incoming messages in real-time
             while let Ok(message) = consumer_in.pop() {
                 match message {
                     ControlMessage::Ping() => {
-                        let _ = producer_out.push(AudioMessage::Pong());
+                        producer_out.push_audio_message(AudioMessage::Pong());
                     }
                     ControlMessage::LoadSample { id, sample } => {
                         mixer.load_sample(id, sample);
                     }
                     ControlMessage::PlaySample { id, volume } => {
-                        if mixer.play_sample(id, volume) {
-                            let _ = producer_out.push(AudioMessage::SampleStarted { id });
-                        } else {
-                            let _ = producer_out.push(AudioMessage::SampleStopped { id });
-                        }
+                        schedule_immediate_command(
+                            &mut scheduler,
+                            buffer_start_frame,
+                            ScheduledCommand::PlaySample { id, volume },
+                            &mut mixer,
+                            &mut producer_out,
+                        );
                     }
                     ControlMessage::StopSample { id } => {
-                        mixer.stop_sample(id);
-                        let _ = producer_out.push(AudioMessage::SampleStopped { id });
+                        schedule_immediate_command(
+                            &mut scheduler,
+                            buffer_start_frame,
+                            ScheduledCommand::StopSample { id },
+                            &mut mixer,
+                            &mut producer_out,
+                        );
                     }
                     ControlMessage::StopAll() => {
-                        for voice in &mut mixer.voices {
-                            if voice.active {
-                                voice.stop();
-                                let _ = producer_out.push(AudioMessage::SampleStopped {
-                                    id: voice.sample_id,
-                                });
-                            }
-                        }
+                        schedule_immediate_command(
+                            &mut scheduler,
+                            buffer_start_frame,
+                            ScheduledCommand::StopAll,
+                            &mut mixer,
+                            &mut producer_out,
+                        );
                     }
                     ControlMessage::UnloadSample { id } => {
                         mixer.unload_sample(id);
@@ -166,7 +355,15 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
             }
 
             // Render audio + compute per-pad peaks.
-            mixer.render(data, &mut pad_peaks);
+            render_scheduled_audio(
+                &mut mixer,
+                &mut scheduler,
+                data,
+                &mut pad_peaks,
+                buffer_start_frame,
+                channels as usize,
+                &mut producer_out,
+            );
 
             let frames = data.len() / channels as usize;
             transport.advance_by_rendered_frames(frames);
@@ -215,6 +412,36 @@ pub fn start_stream(stream: &Stream) -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::messages::SampleBuffer;
+    use std::sync::Arc;
+
+    impl AudioMessageSink for Vec<AudioMessage> {
+        fn push_audio_message(&mut self, message: AudioMessage) {
+            self.push(message);
+        }
+    }
+
+    fn create_test_sample(channels: usize, frames: usize, value: f32) -> SampleBuffer {
+        let samples = vec![value; channels * frames];
+        SampleBuffer {
+            channels,
+            samples: Arc::from(samples.into_boxed_slice()),
+        }
+    }
+
+    fn assert_started(messages: &[AudioMessage], index: usize, expected_id: usize) {
+        assert!(matches!(
+            messages.get(index),
+            Some(AudioMessage::SampleStarted { id }) if *id == expected_id
+        ));
+    }
+
+    fn assert_stopped(messages: &[AudioMessage], index: usize, expected_id: usize) {
+        assert!(matches!(
+            messages.get(index),
+            Some(AudioMessage::SampleStopped { id }) if *id == expected_id
+        ));
+    }
 
     #[test]
     fn test_logger_setup() {
@@ -243,5 +470,133 @@ mod tests {
                 // Expected in many test environments
             }
         }
+    }
+
+    #[test]
+    fn immediate_command_uses_current_frame_scheduler_path() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 32, 0.5));
+        let mut scheduler = FixedCapacityScheduler::<8>::new();
+        let mut messages = Vec::new();
+
+        schedule_immediate_command(
+            &mut scheduler,
+            12,
+            ScheduledCommand::PlaySample { id: 0, volume: 1.0 },
+            &mut mixer,
+            &mut messages,
+        );
+
+        assert!(scheduler.is_empty());
+        assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 0));
+        assert_started(&messages, 0, 0);
+    }
+
+    #[test]
+    fn immediate_command_falls_back_when_scheduler_is_full() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 32, 0.5));
+        let mut scheduler = FixedCapacityScheduler::<0>::new();
+        let mut messages = Vec::new();
+
+        schedule_immediate_command(
+            &mut scheduler,
+            12,
+            ScheduledCommand::PlaySample { id: 0, volume: 1.0 },
+            &mut mixer,
+            &mut messages,
+        );
+
+        assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 0));
+        assert_started(&messages, 0, 0);
+    }
+
+    #[test]
+    fn scheduled_start_inside_buffer_renders_at_target_offset() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 32, 0.5));
+        let mut scheduler = FixedCapacityScheduler::<8>::new();
+        scheduler
+            .schedule(4, ScheduledCommand::PlaySample { id: 0, volume: 1.0 })
+            .unwrap();
+        let mut output = vec![0.0; 8];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        let mut messages = Vec::new();
+
+        render_scheduled_audio(
+            &mut mixer,
+            &mut scheduler,
+            &mut output,
+            &mut pad_peaks,
+            0,
+            1,
+            &mut messages,
+        );
+
+        assert!(output[..4].iter().all(|sample| *sample == 0.0));
+        assert!(output[4..].iter().all(|sample| (*sample - 0.5).abs() < 1e-5));
+        assert!((pad_peaks[0] - 0.5).abs() < 1e-5);
+        assert_started(&messages, 0, 0);
+    }
+
+    #[test]
+    fn scheduled_stop_inside_buffer_silences_after_target_offset() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 32, 0.5));
+        mixer.play_sample(0, 1.0);
+        let mut scheduler = FixedCapacityScheduler::<8>::new();
+        scheduler
+            .schedule(4, ScheduledCommand::StopSample { id: 0 })
+            .unwrap();
+        let mut output = vec![0.0; 8];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        let mut messages = Vec::new();
+
+        render_scheduled_audio(
+            &mut mixer,
+            &mut scheduler,
+            &mut output,
+            &mut pad_peaks,
+            0,
+            1,
+            &mut messages,
+        );
+
+        assert!(output[..4].iter().all(|sample| (*sample - 0.5).abs() < 1e-5));
+        assert!(output[4..].iter().all(|sample| *sample == 0.0));
+        assert!((pad_peaks[0] - 0.5).abs() < 1e-5);
+        assert_stopped(&messages, 0, 0);
+    }
+
+    #[test]
+    fn same_frame_stop_all_and_start_preserve_stable_order() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 32, 0.8));
+        mixer.load_sample(1, create_test_sample(1, 32, 0.25));
+        mixer.play_sample(0, 1.0);
+        let mut scheduler = FixedCapacityScheduler::<8>::new();
+        scheduler.schedule(0, ScheduledCommand::StopAll).unwrap();
+        scheduler
+            .schedule(0, ScheduledCommand::PlaySample { id: 1, volume: 1.0 })
+            .unwrap();
+        let mut output = vec![0.0; 4];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        let mut messages = Vec::new();
+
+        render_scheduled_audio(
+            &mut mixer,
+            &mut scheduler,
+            &mut output,
+            &mut pad_peaks,
+            0,
+            1,
+            &mut messages,
+        );
+
+        assert!(mixer.voices.iter().all(|voice| !voice.active || voice.sample_id != 0));
+        assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 1));
+        assert!(output.iter().all(|sample| (*sample - 0.25).abs() < 1e-5));
+        assert_stopped(&messages, 0, 0);
+        assert_started(&messages, 1, 1);
     }
 }
