@@ -9,11 +9,11 @@
 - [x] 2.4 Add deterministic Rust unit tests for frame advancement, BPM-to-frame conversion, beat phase, bar phase, and boundary behavior.
 
 ## 3. Fixed-Capacity Scheduler
-- [ ] 3.1 Add a fixed-capacity scheduler for absolute output-frame events.
-- [ ] 3.2 Preserve stable ordering for events with the same target frame.
-- [ ] 3.3 Define and test late-event behavior.
-- [ ] 3.4 Define and test scheduler-full rejection without event eviction, blocking, panic, or allocation.
-- [ ] 3.5 Treat any audio-thread allocation or blocking operation as a blocker before merge.
+- [x] 3.1 Add a fixed-capacity scheduler for absolute output-frame events.
+- [x] 3.2 Preserve stable ordering for events with the same target frame.
+- [x] 3.3 Define and test late-event behavior.
+- [x] 3.4 Define and test scheduler-full rejection without event eviction, blocking, panic, or allocation.
+- [x] 3.5 Treat any audio-thread allocation or blocking operation as a blocker before merge.
 
 ## 4. Playback Integration
 - [ ] 4.1 Preserve default immediate `play_sample` behavior when trigger quantization is disabled.
@@ -30,5 +30,5 @@
 
 ## 6. Validation
 - [ ] 6.1 Run `openspec validate add-rust-transport-timeline --strict`.
-- [ ] 6.2 Run Rust checks/tests with `uv --no-cache run --no-sync cargo ...`.
-- [ ] 6.3 Run Python tests/lint/type checks when Python API or controller code changes.
+- [x] 6.2 Run Rust checks/tests with `uv --no-cache run --no-sync cargo ...`.
+- [x] 6.3 Run Python tests/lint/type checks when Python API or controller code changes.

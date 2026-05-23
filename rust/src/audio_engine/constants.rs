@@ -15,6 +15,9 @@ pub const NUM_SAMPLES: usize = NUM_PADS * NUM_BANKS;
 /// Maximum number of voices that can be active simultaneously.
 pub const MAX_VOICES: usize = 32;
 
+/// Maximum number of accepted absolute-frame scheduler events.
+pub const MAX_SCHEDULED_EVENTS: usize = 1024;
+
 /// Minimum playback speed multiplier (50%).
 pub const SPEED_MIN: f32 = 0.5;
 

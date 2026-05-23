@@ -34,6 +34,7 @@ mod errors;
 mod mixer;
 mod progress;
 mod sample_loader;
+mod scheduler;
 mod stretch_processor;
 mod transport;
 mod voice_slot;

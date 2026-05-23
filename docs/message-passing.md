@@ -44,8 +44,9 @@ Disk I/O and decoding happen in `load_sample(...)`, outside the callback.
 
 The Gen3 transport work is specified in
 `openspec/changes/add-rust-transport-timeline/`. The initial output-frame transport timeline
-now exists inside the audio callback, and the planned scheduler/message extensions keep the
-existing SPSC ring-buffer architecture.
+now exists inside the audio callback. The fixed-capacity scheduler helper now exists with
+unit-tested ordering and rejection semantics, while callback ownership and message routing
+remain planned. The design keeps the existing SPSC ring-buffer architecture.
 
 Planned transport and scheduler messages must remain fixed-size and bounded. Python/control
 code will request transport changes or quantized triggers through the existing
@@ -63,7 +64,7 @@ Two failure points are distinct:
 ## Not implemented (yet)
 
 - Rich audio → Python event stream (beyond `Pong`).
-- Fixed-capacity quantized scheduler and scheduler-specific control messages.
+- Callback routing for quantized triggers and scheduler-specific control messages.
 
 ## Related specs
 
