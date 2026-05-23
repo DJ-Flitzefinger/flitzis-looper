@@ -62,12 +62,13 @@ Python/control code requests transport or trigger-quantization changes through t
 control-to-audio path; the audio callback owns the Rust transport timeline, per-pad timing
 metadata state, trigger quantization mode, and fixed-capacity scheduler.
 
-The active `add-phase-aware-playback-sync` change keeps the same messaging rule. The first helper
-slice adds Rust-side transport target-frame phase calculation and mixer initial-frame phase math
-without adding new messages. Any future BPM-lock phase-anchor request must be a fixed-size control
-message, such as a selected pad id. The audio thread must derive transport phase from already-owned
-mixer and transport state; Python must not send full beat-grid vectors, file paths, heap-owned data,
-or direct scheduler/transport pointers.
+The active `add-phase-aware-playback-sync` change keeps the same messaging rule. Quantized
+scheduled playback now stores a fixed-size optional target bar phase inside the audio-thread
+scheduler command, derived from the scheduled output frame. That descriptor is not a new
+Python-to-Rust ring-buffer message. Any future BPM-lock phase-anchor request must be a fixed-size
+control message, such as a selected pad id. The audio thread must derive transport phase from
+already-owned mixer and transport state; Python must not send full beat-grid vectors, file paths,
+heap-owned data, or direct scheduler/transport pointers.
 
 Two failure points are distinct:
 
@@ -89,3 +90,4 @@ Two failure points are distinct:
 - `openspec/specs/load-audio-files/spec.md`
 - `openspec/specs/play-samples/spec.md`
 - `openspec/changes/add-rust-transport-timeline/`
+- `openspec/changes/add-phase-aware-playback-sync/`

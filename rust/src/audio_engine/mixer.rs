@@ -234,6 +234,24 @@ impl RtMixer {
     ///
     /// If no free voice slot is available, the playback request is silently dropped.
     pub fn play_sample(&mut self, id: usize, velocity: f32) -> bool {
+        self.play_sample_with_phase(id, velocity, None)
+    }
+
+    pub(crate) fn play_sample_phase_aligned(
+        &mut self,
+        id: usize,
+        velocity: f32,
+        target_bar_phase_beats: f64,
+    ) -> bool {
+        self.play_sample_with_phase(id, velocity, Some(target_bar_phase_beats))
+    }
+
+    fn play_sample_with_phase(
+        &mut self,
+        id: usize,
+        velocity: f32,
+        target_bar_phase_beats: Option<f64>,
+    ) -> bool {
         if !self.can_play_sample(id, velocity) {
             return false;
         }
@@ -246,7 +264,9 @@ impl RtMixer {
         let tempo_ratio = self.tempo_ratio_for_sample_id(id);
 
         let sample_frames = sample.samples.len() / self.channels;
-        let initial_frame_pos = self.effective_loop_start_frame(id, sample_frames);
+        let initial_frame_pos = target_bar_phase_beats
+            .map(|phase| self.phase_aligned_initial_sample_frame(id, sample_frames, phase))
+            .unwrap_or_else(|| self.effective_loop_start_frame(id, sample_frames));
 
         // Sample is already playing? -> reset play position
         for voice_slot in &mut self.voices {
@@ -759,6 +779,14 @@ mod tests {
         }
     }
 
+    fn active_voice_frame(mixer: &RtMixer, id: usize) -> Option<usize> {
+        mixer
+            .voices
+            .iter()
+            .find(|voice| voice.active && voice.sample_id == id)
+            .map(|voice| voice.frame_pos)
+    }
+
     #[test]
     fn test_transpose_semitones_for_tempo_ratio() {
         assert!((transpose_semitones_for_tempo_ratio(1.0) - 0.0).abs() < 1e-6);
@@ -988,6 +1016,41 @@ mod tests {
         let frame = mixer.phase_aligned_initial_sample_frame(0, 20, 2.0);
 
         assert_eq!(frame, 0);
+    }
+
+    #[test]
+    fn test_play_sample_phase_aligned_starts_voice_at_phase_frame() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_test_sample(1, 64, 0.5));
+        mixer.set_pad_bpm(0, Some(60.0));
+        mixer.set_pad_timing_metadata(
+            0,
+            PadTimingMetadata {
+                phase_anchor_s: 0.3,
+            },
+        );
+
+        assert!(mixer.play_sample_phase_aligned(0, 1.0, 2.0));
+
+        assert_eq!(active_voice_frame(&mixer, 0), Some(23));
+    }
+
+    #[test]
+    fn test_play_sample_keeps_immediate_loop_start_with_phase_metadata() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_test_sample(1, 64, 0.5));
+        mixer.set_pad_loop_region(0, 0.7, Some(5.0));
+        mixer.set_pad_bpm(0, Some(60.0));
+        mixer.set_pad_timing_metadata(
+            0,
+            PadTimingMetadata {
+                phase_anchor_s: 2.0,
+            },
+        );
+
+        assert!(mixer.play_sample(0, 1.0));
+
+        assert_eq!(active_voice_frame(&mixer, 0), Some(7));
     }
 
     #[test]

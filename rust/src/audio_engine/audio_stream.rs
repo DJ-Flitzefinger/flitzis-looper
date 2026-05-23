@@ -78,7 +78,11 @@ fn schedule_play_sample_command<const CAPACITY: usize, S: AudioMessageSink>(
     mixer: &mut RtMixer,
     audio_messages: &mut S,
 ) {
-    let command = ScheduledCommand::PlaySample { id, volume };
+    let command = ScheduledCommand::PlaySample {
+        id,
+        volume,
+        target_bar_phase_beats: None,
+    };
 
     let Some(target_frame) = quantized_target_frame(transport, trigger_quantization) else {
         schedule_immediate_command(
@@ -89,6 +93,12 @@ fn schedule_play_sample_command<const CAPACITY: usize, S: AudioMessageSink>(
             audio_messages,
         );
         return;
+    };
+
+    let command = ScheduledCommand::PlaySample {
+        id,
+        volume,
+        target_bar_phase_beats: transport.bar_phase_beats_at_frame(target_frame),
     };
 
     if scheduler.schedule(target_frame, command).is_ok() {
@@ -111,7 +121,11 @@ fn schedule_exclusive_play_sample_command<const CAPACITY: usize, S: AudioMessage
     mixer: &mut RtMixer,
     audio_messages: &mut S,
 ) {
-    let command = ScheduledCommand::StopAllThenPlaySample { id, volume };
+    let command = ScheduledCommand::StopAllThenPlaySample {
+        id,
+        volume,
+        target_bar_phase_beats: None,
+    };
 
     let Some(target_frame) = quantized_target_frame(transport, trigger_quantization) else {
         schedule_immediate_command(
@@ -122,6 +136,12 @@ fn schedule_exclusive_play_sample_command<const CAPACITY: usize, S: AudioMessage
             audio_messages,
         );
         return;
+    };
+
+    let command = ScheduledCommand::StopAllThenPlaySample {
+        id,
+        volume,
+        target_bar_phase_beats: transport.bar_phase_beats_at_frame(target_frame),
     };
 
     if scheduler.schedule(target_frame, command).is_ok() {
@@ -162,20 +182,40 @@ fn execute_scheduled_command<S: AudioMessageSink>(
     audio_messages: &mut S,
 ) {
     match command {
-        ScheduledCommand::PlaySample { id, volume } => {
-            if mixer.play_sample(id, volume) {
+        ScheduledCommand::PlaySample {
+            id,
+            volume,
+            target_bar_phase_beats,
+        } => {
+            let started = if let Some(phase) = target_bar_phase_beats {
+                mixer.play_sample_phase_aligned(id, volume, phase)
+            } else {
+                mixer.play_sample(id, volume)
+            };
+
+            if started {
                 audio_messages.push_audio_message(AudioMessage::SampleStarted { id });
             } else {
                 audio_messages.push_audio_message(AudioMessage::SampleStopped { id });
             }
         }
-        ScheduledCommand::StopAllThenPlaySample { id, volume } => {
+        ScheduledCommand::StopAllThenPlaySample {
+            id,
+            volume,
+            target_bar_phase_beats,
+        } => {
             if !mixer.can_play_sample(id, volume) {
                 return;
             }
 
             stop_all_samples(mixer, audio_messages);
-            if mixer.play_sample(id, volume) {
+            let started = if let Some(phase) = target_bar_phase_beats {
+                mixer.play_sample_phase_aligned(id, volume, phase)
+            } else {
+                mixer.play_sample(id, volume)
+            };
+
+            if started {
                 audio_messages.push_audio_message(AudioMessage::SampleStarted { id });
             }
         }
@@ -522,7 +562,7 @@ pub fn start_stream(stream: &Stream) -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::messages::SampleBuffer;
+    use crate::messages::{PadTimingMetadata, SampleBuffer};
     use std::sync::Arc;
 
     impl AudioMessageSink for Vec<AudioMessage> {
@@ -551,6 +591,14 @@ mod tests {
             messages.get(index),
             Some(AudioMessage::SampleStopped { id }) if *id == expected_id
         ));
+    }
+
+    fn active_voice_frame(mixer: &RtMixer, id: usize) -> Option<usize> {
+        mixer
+            .voices
+            .iter()
+            .find(|voice| voice.active && voice.sample_id == id)
+            .map(|voice| voice.frame_pos)
     }
 
     #[test]
@@ -592,13 +640,18 @@ mod tests {
         schedule_immediate_command(
             &mut scheduler,
             12,
-            ScheduledCommand::PlaySample { id: 0, volume: 1.0 },
+            ScheduledCommand::PlaySample {
+                id: 0,
+                volume: 1.0,
+                target_bar_phase_beats: None,
+            },
             &mut mixer,
             &mut messages,
         );
 
         assert!(scheduler.is_empty());
         assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 0));
+        assert_eq!(active_voice_frame(&mixer, 0), Some(0));
         assert_started(&messages, 0, 0);
     }
 
@@ -612,7 +665,11 @@ mod tests {
         schedule_immediate_command(
             &mut scheduler,
             12,
-            ScheduledCommand::PlaySample { id: 0, volume: 1.0 },
+            ScheduledCommand::PlaySample {
+                id: 0,
+                volume: 1.0,
+                target_bar_phase_beats: None,
+            },
             &mut mixer,
             &mut messages,
         );
@@ -662,6 +719,82 @@ mod tests {
 
         assert!(output[..5].iter().all(|sample| *sample == 0.0));
         assert!(output[5..].iter().all(|sample| (*sample - 0.5).abs() < 1e-5));
+        assert_started(&messages, 0, 0);
+    }
+
+    #[test]
+    fn quantized_play_uses_phase_aligned_initial_frame_at_target_frame() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_test_sample(1, 64, 0.5));
+        mixer.set_pad_bpm(0, Some(60.0));
+        mixer.set_pad_timing_metadata(
+            0,
+            PadTimingMetadata {
+                phase_anchor_s: 0.0,
+            },
+        );
+        let mut transport = TransportTimeline::new(10);
+        assert!(transport.set_master_bpm(60.0));
+        transport.advance_by_rendered_frames(5);
+        let callback_start_frame = transport.output_frame();
+        let mut scheduler = FixedCapacityScheduler::<8>::new();
+        let mut messages = Vec::new();
+
+        schedule_play_sample_command(
+            &mut scheduler,
+            callback_start_frame,
+            TriggerQuantization::NextBeat,
+            &transport,
+            0,
+            1.0,
+            &mut mixer,
+            &mut messages,
+        );
+
+        assert_eq!(scheduler.peek_next_target_frame(), Some(10));
+
+        let mut output = vec![0.0; 10];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+
+        render_scheduled_audio(
+            &mut mixer,
+            &mut scheduler,
+            &mut output,
+            &mut pad_peaks,
+            callback_start_frame,
+            1,
+            &mut messages,
+        );
+
+        assert_eq!(active_voice_frame(&mixer, 0), Some(15));
+        assert_started(&messages, 0, 0);
+    }
+
+    #[test]
+    fn quantized_play_without_pad_metadata_falls_back_to_loop_start() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_test_sample(1, 64, 0.5));
+        mixer.set_pad_loop_region(0, 0.7, Some(5.0));
+        let mut transport = TransportTimeline::new(10);
+        assert!(transport.set_master_bpm(60.0));
+        transport.advance_by_rendered_frames(10);
+        let callback_start_frame = transport.output_frame();
+        let mut scheduler = FixedCapacityScheduler::<8>::new();
+        let mut messages = Vec::new();
+
+        schedule_play_sample_command(
+            &mut scheduler,
+            callback_start_frame,
+            TriggerQuantization::NextBeat,
+            &transport,
+            0,
+            1.0,
+            &mut mixer,
+            &mut messages,
+        );
+
+        assert!(scheduler.is_empty());
+        assert_eq!(active_voice_frame(&mixer, 0), Some(7));
         assert_started(&messages, 0, 0);
     }
 
@@ -777,6 +910,13 @@ mod tests {
         let mut mixer = RtMixer::new(1, 10.0);
         mixer.load_sample(0, create_test_sample(1, 32, 0.5));
         mixer.load_sample(1, create_test_sample(1, 32, 0.25));
+        mixer.set_pad_bpm(1, Some(60.0));
+        mixer.set_pad_timing_metadata(
+            1,
+            PadTimingMetadata {
+                phase_anchor_s: 2.0,
+            },
+        );
         assert!(mixer.play_sample(0, 1.0));
         let transport = TransportTimeline::new(10);
         let mut scheduler = FixedCapacityScheduler::<8>::new();
@@ -796,6 +936,45 @@ mod tests {
         assert!(scheduler.is_empty());
         assert!(mixer.voices.iter().all(|voice| !voice.active || voice.sample_id != 0));
         assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 1));
+        assert_eq!(active_voice_frame(&mixer, 1), Some(0));
+        assert_stopped(&messages, 0, 0);
+        assert_started(&messages, 1, 1);
+    }
+
+    #[test]
+    fn quantized_exclusive_play_uses_phase_aligned_initial_frame() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_test_sample(1, 64, 0.5));
+        mixer.load_sample(1, create_test_sample(1, 64, 0.25));
+        mixer.set_pad_bpm(1, Some(60.0));
+        mixer.set_pad_timing_metadata(
+            1,
+            PadTimingMetadata {
+                phase_anchor_s: 2.0,
+            },
+        );
+        assert!(mixer.play_sample(0, 1.0));
+        let mut transport = TransportTimeline::new(10);
+        assert!(transport.set_master_bpm(60.0));
+        transport.advance_by_rendered_frames(40);
+        let callback_start_frame = transport.output_frame();
+        let mut scheduler = FixedCapacityScheduler::<8>::new();
+        let mut messages = Vec::new();
+
+        schedule_exclusive_play_sample_command(
+            &mut scheduler,
+            callback_start_frame,
+            TriggerQuantization::NextBar,
+            &transport,
+            1,
+            1.0,
+            &mut mixer,
+            &mut messages,
+        );
+
+        assert!(scheduler.is_empty());
+        assert!(mixer.voices.iter().all(|voice| !voice.active || voice.sample_id != 0));
+        assert_eq!(active_voice_frame(&mixer, 1), Some(20));
         assert_stopped(&messages, 0, 0);
         assert_started(&messages, 1, 1);
     }
@@ -911,7 +1090,14 @@ mod tests {
         mixer.load_sample(0, create_test_sample(1, 32, 0.5));
         let mut scheduler = FixedCapacityScheduler::<8>::new();
         scheduler
-            .schedule(4, ScheduledCommand::PlaySample { id: 0, volume: 1.0 })
+            .schedule(
+                4,
+                ScheduledCommand::PlaySample {
+                    id: 0,
+                    volume: 1.0,
+                    target_bar_phase_beats: None,
+                },
+            )
             .unwrap();
         let mut output = vec![0.0; 8];
         let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
@@ -971,7 +1157,14 @@ mod tests {
         let mut scheduler = FixedCapacityScheduler::<8>::new();
         scheduler.schedule(0, ScheduledCommand::StopAll).unwrap();
         scheduler
-            .schedule(0, ScheduledCommand::PlaySample { id: 1, volume: 1.0 })
+            .schedule(
+                0,
+                ScheduledCommand::PlaySample {
+                    id: 1,
+                    volume: 1.0,
+                    target_bar_phase_beats: None,
+                },
+            )
             .unwrap();
         let mut output = vec![0.0; 4];
         let mut pad_peaks = [0.0_f32; NUM_SAMPLES];

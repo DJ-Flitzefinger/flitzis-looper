@@ -9,11 +9,11 @@
 - [x] 2.4 Treat any audio-thread allocation, logging, disk I/O, blocking operation, or Python/GIL access as a blocker before merge.
 
 ## 3. Phase-Aware Quantized Playback
-- [ ] 3.1 Pass scheduled event target frames into playback command execution or store an equivalent fixed-size phase descriptor.
-- [ ] 3.2 Apply phase-aware initial frames for quantized `PlaySample` starts and retriggers.
-- [ ] 3.3 Apply phase-aware initial frames for quantized `PlaySampleExclusive` stop-all-then-play transitions.
-- [ ] 3.4 Preserve immediate trigger behavior when trigger quantization is disabled.
-- [ ] 3.5 Preserve scheduler-full rejection without evicting events or partially changing playback.
+- [x] 3.1 Pass scheduled event target frames into playback command execution or store an equivalent fixed-size phase descriptor.
+- [x] 3.2 Apply phase-aware initial frames for quantized `PlaySample` starts and retriggers.
+- [x] 3.3 Apply phase-aware initial frames for quantized `PlaySampleExclusive` stop-all-then-play transitions.
+- [x] 3.4 Preserve immediate trigger behavior when trigger quantization is disabled.
+- [x] 3.5 Preserve scheduler-full rejection without evicting events or partially changing playback.
 
 ## 4. BPM-Lock Transport Phase Anchor
 - [ ] 4.1 Add a fixed-size control message for requesting transport phase anchoring from a selected pad.

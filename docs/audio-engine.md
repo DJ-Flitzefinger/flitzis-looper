@@ -126,11 +126,17 @@ Implemented first slice:
   one-at-a-time playback. With quantization enabled, Rust schedules the stop-all operation and
   requested pad start as one atomic `StopAllThenPlaySample` event at the same absolute output
   frame; scheduler-full rejection leaves current playback unchanged.
-- The first helper slice for `add-phase-aware-playback-sync` is in place:
+- The first playback slice for `add-phase-aware-playback-sync` is in place:
   `TransportTimeline` can compute bar phase for arbitrary scheduled target frames without
   advancing the transport clock, and `RtMixer` can compute a phase-aligned initial sample frame
-  from pad BPM, a bounded phase anchor, active loop bounds, and target bar phase. This helper is
-  covered by deterministic Rust tests but is not yet wired into scheduled playback execution.
+  from pad BPM, a bounded phase anchor, active loop bounds, and target bar phase.
+- Quantized scheduled `PlaySample` and `PlaySampleExclusive` events now carry an optional
+  fixed-size target bar phase computed from the scheduled output frame. When the descriptor is
+  present, Rust starts or retriggers the pad at the phase-aligned sample frame; missing pad
+  metadata falls back to the existing effective loop start.
+- Immediate playback commands carry no phase descriptor, so `play_sample` and
+  `play_sample_exclusive` keep the existing prompt loop-start behavior when trigger quantization
+  is disabled.
 
 The planned direction is:
 
@@ -152,8 +158,8 @@ that are not currently playing; the audio callback may only mix already prepared
 The active Gen3 phase-aware sync slice is `openspec/changes/add-phase-aware-playback-sync/`. It
 defines how quantized starts will use the Rust transport phase plus bounded per-pad timing anchors
 to choose the initial pad sample frame, and how BPM lock can anchor the transport downbeat from a
-selected playing pad. Helper-level Rust implementation has started, but scheduled playback and
-BPM-lock phase anchoring are not wired yet; current runtime behavior remains as described above.
+selected playing pad. Phase-aware scheduled playback is wired for quantized starts and exclusive
+transitions; BPM-lock phase anchoring is not wired yet.
 
 ## Current Python API surface
 
@@ -174,8 +180,8 @@ The Rust engine is exposed to Python as `AudioEngine` with:
     modes are `"immediate"`, `"next_beat"`, and `"next_bar"`; UI/controller controls are not
     wired yet.
   - `set_pad_timing_metadata(id, phase_anchor_s)` publishes a finite non-negative per-pad phase
-    anchor derived from analysis metadata. It is stored in Rust state for later phase-aware
-    playback work; full beat-grid vectors are not sent to the callback.
+    anchor derived from analysis metadata. It is stored in Rust state for phase-aware quantized
+    playback; full beat-grid vectors are not sent to the callback.
 
 - Messaging utilities
   - `ping()` sends a ping to the audio thread.
@@ -186,7 +192,7 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 - Audio device selection/configuration (the engine currently uses the default output device/config).
 - Broader channel-layout support; currently decoding only supports mono↔stereo mapping.
 - UI/controller controls for trigger quantization.
-- Phase-aware beat/bar/downbeat playback alignment.
+- BPM-lock transport phase anchoring from a selected playing pad.
 - Real-time stem separation is intentionally out of scope.
 
 ## Related specs
@@ -196,3 +202,4 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 - `openspec/specs/load-audio-files/spec.md`
 - `openspec/specs/play-samples/spec.md`
 - `openspec/changes/add-rust-transport-timeline/`
+- `openspec/changes/add-phase-aware-playback-sync/`
