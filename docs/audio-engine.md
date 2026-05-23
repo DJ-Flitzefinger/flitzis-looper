@@ -28,7 +28,7 @@ Python interacts with a single `AudioEngine` object; the CPAL audio callback ren
 2. `run()` initializes a CPAL output stream and two ring buffers (control→audio, audio→control).
 3. Python schedules audio loading into sample slots using `load_sample_async(id, path)` and polls `poll_loader_events()`.
 4. Python triggers playback using `play_sample(id, velocity)`.
-5. The CPAL callback drains pending control messages, routes play/stop commands through the Rust scheduler, mixes active voices into the output buffer, and advances the Rust transport timeline by rendered output frames.
+5. The CPAL callback drains pending control messages, updates bounded per-pad timing metadata, routes play/stop commands through the Rust scheduler, mixes active voices into the output buffer, and advances the Rust transport timeline by rendered output frames.
 6. Optional: Python can poll `receive_msg()` for messages emitted by the audio thread (e.g., `Pong`).
 
 ## Module Structure
@@ -113,6 +113,10 @@ Implemented first slice:
 - `AudioEngine.set_trigger_quantization("immediate" | "next_beat" | "next_bar")` publishes a
   fixed-size trigger-quantization mode update to the audio thread. The default remains
   immediate.
+- `AudioEngine.set_pad_timing_metadata(id, phase_anchor_s)` publishes bounded per-pad
+  beatgrid/downbeat timing metadata prepared outside the audio callback. The Python controller
+  derives `phase_anchor_s` using the existing loop-region fallback order: first finite
+  non-negative downbeat, then first finite non-negative beat, then `0.0`.
 - When trigger quantization is set to next beat or next bar and master BPM is available, Rust
   computes the target frame from `TransportTimeline` and schedules `PlaySample` at that absolute
   output frame. If master BPM is unavailable, the request falls back to immediate playback.
@@ -130,7 +134,8 @@ The planned direction is:
 - Rust stores master BPM and derives beat/bar phase from the audio-thread sample-frame clock.
 - Quantized pad triggers use a fixed-capacity scheduler owned by the audio thread.
 - Existing immediate trigger behavior remains the default when trigger quantization is disabled.
-- Beatgrid and downbeat metadata is prepared outside the audio callback, then published as bounded timing metadata for Rust playback timing.
+- Beatgrid and downbeat metadata is prepared outside the audio callback, then published as
+  bounded per-pad timing metadata for Rust playback timing.
 
 The audio callback must remain real-time safe for this work. It must not perform disk I/O,
 Python/GIL access, blocking waits or locks, logging, heavy allocations, neural network
@@ -157,6 +162,9 @@ The Rust engine is exposed to Python as `AudioEngine` with:
   - `set_trigger_quantization(mode)` sets low-level Rust trigger quantization mode. Supported
     modes are `"immediate"`, `"next_beat"`, and `"next_bar"`; UI/controller controls are not
     wired yet.
+  - `set_pad_timing_metadata(id, phase_anchor_s)` publishes a finite non-negative per-pad phase
+    anchor derived from analysis metadata. It is stored in Rust state for later phase-aware
+    playback work; full beat-grid vectors are not sent to the callback.
 
 - Messaging utilities
   - `ping()` sends a ping to the audio thread.

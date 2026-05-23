@@ -278,6 +278,25 @@ def test_reset_no_beats(controller: AppController, audio_engine_mock: Mock) -> N
     assert controller.project.pad_loop_bars[sample_id] == 4
 
 
+def test_reset_uses_beat_when_downbeat_anchor_is_invalid(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+
+    sample_id = 0
+    controller.project.sample_paths[sample_id] = "samples/foo.wav"
+    controller.project.sample_analysis[sample_id] = SampleAnalysis(
+        bpm=120.0,
+        key="C",
+        beat_grid=BeatGrid(beats=[2.0], downbeats=[float("nan")], bars=[]),
+    )
+
+    controller.transport.loop.reset(sample_id)
+
+    assert controller.project.pad_loop_start_s[sample_id] == pytest.approx(2.0)
+
+
 def test_reset_quantizes_to_samples(controller: AppController, audio_engine_mock: Mock) -> None:
     audio_engine_mock.output_sample_rate.return_value = 48_000
 

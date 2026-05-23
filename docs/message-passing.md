@@ -20,6 +20,7 @@ Messages are intentionally small and allocation-free on the audio thread:
 
 - Playback triggers are referenced by `id` and `velocity` (no file paths in the callback).
 - Loading publishes decoded sample data via a shared handle; the large sample buffer is not copied just to cross the thread boundary.
+- Beatgrid/downbeat publication sends one bounded per-pad timing anchor, not full beat-grid vectors.
 - `ping()`/`Pong` exists as a minimal end-to-end messaging check.
 
 ## Real-time safety rules
@@ -50,15 +51,16 @@ now exists inside the audio callback. The fixed-capacity scheduler helper now ex
 unit-tested ordering and rejection semantics, and the callback owns a scheduler for
 current-frame `PlaySample`, `StopSample`, and `StopAll` routing. Rust-side trigger
 quantization now accepts `immediate`, `next_beat`, and `next_bar` mode updates through the
-existing control-to-audio ring buffer. MultiLoop-disabled playback uses a single fixed-size
-`PlaySampleExclusive` request, which the audio thread turns into one stop-all-then-play
-scheduled command when quantization is enabled. The design keeps the existing SPSC ring-buffer
-architecture.
+existing control-to-audio ring buffer. Per-pad beatgrid/downbeat timing metadata is published as
+one fixed-size `SetPadTimingMetadata` request containing a finite non-negative phase anchor
+prepared outside the callback. MultiLoop-disabled playback uses a single fixed-size
+`PlaySampleExclusive` request, which the audio thread turns into one stop-all-then-play scheduled
+command when quantization is enabled. The design keeps the existing SPSC ring-buffer architecture.
 
 Transport and quantized scheduler messages must remain fixed-size and bounded.
 Python/control code requests transport or trigger-quantization changes through the existing
-control-to-audio path; the audio callback owns the Rust transport timeline, trigger
-quantization mode, and fixed-capacity scheduler.
+control-to-audio path; the audio callback owns the Rust transport timeline, per-pad timing
+metadata state, trigger quantization mode, and fixed-capacity scheduler.
 
 Two failure points are distinct:
 

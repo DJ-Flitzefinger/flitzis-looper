@@ -432,6 +432,9 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
                     ControlMessage::SetPadBpm { id, bpm } => {
                         mixer.set_pad_bpm(id, bpm);
                     }
+                    ControlMessage::SetPadTimingMetadata { id, metadata } => {
+                        mixer.set_pad_timing_metadata(id, metadata);
+                    }
                     ControlMessage::SetPadGain { id, gain } => {
                         mixer.set_pad_gain(id, gain);
                     }

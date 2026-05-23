@@ -23,10 +23,10 @@
 - [ ] 4.5 Add Python controller tests only when Python-facing quantization controls are introduced.
 
 ## 5. Beatgrid And Downbeat Integration
-- [ ] 5.1 Publish bounded per-pad timing metadata to Rust using the existing message-passing architecture.
-- [ ] 5.2 Use first downbeat, first beat, then zero as the onset fallback for pad phase metadata.
-- [ ] 5.3 Ensure beatgrid/downbeat processing, validation, and allocation remain outside the audio callback.
-- [ ] 5.4 Add tests for missing metadata and invalid metadata fallback behavior.
+- [x] 5.1 Publish bounded per-pad timing metadata to Rust using the existing message-passing architecture.
+- [x] 5.2 Use first downbeat, first beat, then zero as the onset fallback for pad phase metadata.
+- [x] 5.3 Ensure beatgrid/downbeat processing, validation, and allocation remain outside the audio callback.
+- [x] 5.4 Add tests for missing metadata and invalid metadata fallback behavior.
 
 ## 6. Validation
 - [ ] 6.1 Run `openspec validate add-rust-transport-timeline --strict`.

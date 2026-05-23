@@ -11,8 +11,8 @@ use crate::audio_engine::sample_loader::{
     decode_audio_file_to_sample_buffer,
 };
 use crate::messages::{
-    AudioMessage, BackgroundTaskKind, ControlMessage, LoaderEvent, SampleBuffer,
-    TriggerQuantization, task_to_str,
+    AudioMessage, BackgroundTaskKind, ControlMessage, LoaderEvent, PadTimingMetadata,
+    SampleBuffer, TriggerQuantization, task_to_str,
 };
 use numpy::{PyArray1, ToPyArray};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -720,6 +720,32 @@ impl AudioEngine {
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
         let _ = producer_guard.push(ControlMessage::SetPadBpm { id, bpm });
+        Ok(())
+    }
+
+    pub fn set_pad_timing_metadata(&mut self, id: usize, phase_anchor_s: f32) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+
+        if !phase_anchor_s.is_finite() || phase_anchor_s < 0.0 {
+            return Err(PyValueError::new_err("phase_anchor_s out of range"));
+        }
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        let _ = producer_guard.push(ControlMessage::SetPadTimingMetadata {
+            id,
+            metadata: PadTimingMetadata { phase_anchor_s },
+        });
         Ok(())
     }
 

@@ -149,6 +149,25 @@ def test_set_trigger_quantization_requires_initialized_engine() -> None:
         engine.set_trigger_quantization("next_beat")
 
 
+def test_set_pad_timing_metadata_accepts_finite_anchor(audio_engine: AudioEngine) -> None:
+    audio_engine.set_pad_timing_metadata(0, 1.25)
+
+
+def test_set_pad_timing_metadata_rejects_invalid_anchor(audio_engine: AudioEngine) -> None:
+    with pytest.raises(ValueError, match=r"phase_anchor_s out of range"):
+        audio_engine.set_pad_timing_metadata(0, float("nan"))
+
+    with pytest.raises(ValueError, match=r"phase_anchor_s out of range"):
+        audio_engine.set_pad_timing_metadata(0, -1.0)
+
+
+def test_set_pad_timing_metadata_requires_initialized_engine() -> None:
+    engine = AudioEngine()
+
+    with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
+        engine.set_pad_timing_metadata(0, 1.25)
+
+
 def test_load_sample_async_emits_started_and_error_for_missing_file(
     audio_engine: AudioEngine,
 ) -> None:

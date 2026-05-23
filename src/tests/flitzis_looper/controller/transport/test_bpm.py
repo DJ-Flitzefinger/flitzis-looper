@@ -171,6 +171,52 @@ def test_on_pad_bpm_changed_updates_audio(
     controller.transport.bpm.on_pad_bpm_changed(sample_id)
 
     audio_engine_mock.set_pad_bpm.assert_called_with(sample_id, 120.0)
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(sample_id, 0.0)
+
+
+def test_on_pad_bpm_changed_publishes_downbeat_timing_metadata(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    sample_id = 0
+    controller.project.sample_analysis[sample_id] = SampleAnalysis(
+        bpm=120.0,
+        key="C",
+        beat_grid=BeatGrid(beats=[1.0], downbeats=[2.0], bars=[2.0]),
+    )
+
+    controller.transport.bpm.on_pad_bpm_changed(sample_id)
+
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(sample_id, 2.0)
+
+
+def test_on_pad_bpm_changed_publishes_beat_fallback_timing_metadata(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    sample_id = 0
+    controller.project.sample_analysis[sample_id] = SampleAnalysis(
+        bpm=120.0,
+        key="C",
+        beat_grid=BeatGrid(beats=[1.0], downbeats=[], bars=[]),
+    )
+
+    controller.transport.bpm.on_pad_bpm_changed(sample_id)
+
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(sample_id, 1.0)
+
+
+def test_on_pad_bpm_changed_publishes_zero_for_invalid_timing_metadata(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    sample_id = 0
+    controller.project.sample_analysis[sample_id] = SampleAnalysis(
+        bpm=120.0,
+        key="C",
+        beat_grid=BeatGrid(beats=[float("inf")], downbeats=[float("nan")], bars=[]),
+    )
+
+    controller.transport.bpm.on_pad_bpm_changed(sample_id)
+
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(sample_id, 0.0)
 
 
 def test_on_pad_bpm_changed_updates_master_bpm(

@@ -68,6 +68,12 @@ pub enum TriggerQuantization {
     NextBar,
 }
 
+/// Bounded per-pad timing metadata prepared outside the audio callback.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PadTimingMetadata {
+    pub phase_anchor_s: f32,
+}
+
 /// Message that is emitted from the Python side.
 #[derive(Debug, Clone)]
 pub enum ControlMessage {
@@ -97,6 +103,12 @@ pub enum ControlMessage {
 
     /// Set per-pad BPM metadata.
     SetPadBpm { id: usize, bpm: Option<f32> },
+
+    /// Set bounded per-pad beatgrid/downbeat timing metadata.
+    SetPadTimingMetadata {
+        id: usize,
+        metadata: PadTimingMetadata,
+    },
 
     /// Set per-pad gain (linear scalar).
     SetPadGain { id: usize, gain: f32 },
@@ -265,6 +277,24 @@ mod tests {
         assert!(matches!(
             message,
             ControlMessage::PlaySampleExclusive { id: 3, volume } if volume == 0.75
+        ));
+    }
+
+    #[test]
+    fn pad_timing_metadata_message_carries_fixed_size_anchor() {
+        let message = ControlMessage::SetPadTimingMetadata {
+            id: 3,
+            metadata: PadTimingMetadata {
+                phase_anchor_s: 1.25,
+            },
+        };
+
+        assert!(matches!(
+            message,
+            ControlMessage::SetPadTimingMetadata {
+                id: 3,
+                metadata: PadTimingMetadata { phase_anchor_s }
+            } if phase_anchor_s == 1.25
         ));
     }
 }

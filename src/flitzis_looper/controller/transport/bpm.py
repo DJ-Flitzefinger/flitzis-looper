@@ -3,6 +3,7 @@ from itertools import pairwise
 from time import monotonic
 from typing import TYPE_CHECKING
 
+from flitzis_looper.controller.timing_metadata import timing_anchor_sec_from_analysis
 from flitzis_looper.controller.validation import ensure_finite, normalize_bpm
 from flitzis_looper.models import validate_sample_id
 
@@ -100,6 +101,8 @@ class BpmController:
     def on_pad_bpm_changed(self, sample_id: int) -> None:
         bpm = normalize_bpm(self.effective_bpm(sample_id))
         self._audio.set_pad_bpm(sample_id, bpm)
+        phase_anchor_s = timing_anchor_sec_from_analysis(self._project.sample_analysis[sample_id])
+        self._audio.set_pad_timing_metadata(sample_id, phase_anchor_s)
 
         # Grid offset clamp depends on effective BPM, so re-clamp on changes.
         self._transport.loop.reclamp_grid_offset_samples(sample_id)

@@ -170,6 +170,9 @@ loop-region defaults:
 2. otherwise first beat when available,
 3. otherwise zero seconds.
 
+Only finite non-negative anchors SHALL be published to the audio thread. Invalid, missing, or
+negative metadata SHALL fall back before publication or be clamped to zero by Rust-side validation.
+
 #### Scenario: Downbeat metadata anchors pad phase
 - **GIVEN** a pad has analysis metadata with at least one downbeat
 - **WHEN** bounded timing metadata is published to Rust
@@ -180,6 +183,12 @@ loop-region defaults:
 - **WHEN** bounded timing metadata is prepared
 - **THEN** the first beat is used when available
 - **AND** zero seconds is used when neither beats nor downbeats are available
+
+#### Scenario: Full beat-grid vectors are not published to the callback
+- **GIVEN** a pad has a large beat-grid vector
+- **WHEN** playback timing metadata is published to Rust
+- **THEN** the control message contains bounded timing fields only
+- **AND** the audio callback does not allocate or iterate the beat-grid vector
 
 ### Requirement: Audio Callback Real-Time Safety Is Preserved
 The transport timeline, scheduler, quantized triggering, and beatgrid integration SHALL

@@ -72,6 +72,10 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 - [ ] As a performer, loops can align to downbeat/beatgrid metadata produced by analysis.
 - [x] As a developer, the audio callback keeps using fixed-capacity real-time-safe data structures for scheduling.
 
+Current Gen3 state: bounded per-pad timing anchors derived from analysis downbeats/beats are
+published to Rust audio-thread state. Phase-aware use of those anchors for playback alignment is
+still pending.
+
 ### 8) Loop range editing (waveform editor)
 - [ ] As a performer, I can open a **waveform editor** for a pad.
 - [ ] As a performer, I can set **loop start** and **loop end** points.

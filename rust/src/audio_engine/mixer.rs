@@ -14,7 +14,7 @@ use crate::audio_engine::constants::{
 use crate::audio_engine::eq3::{Eq3Coeffs, coeffs_for_eq3};
 use crate::audio_engine::stretch_processor::DEFAULT_BLOCK_SAMPLES;
 use crate::audio_engine::voice_slot::VoiceSlot;
-use crate::messages::SampleBuffer;
+use crate::messages::{PadTimingMetadata, SampleBuffer};
 use cpal::Sample;
 
 fn transpose_semitones_for_tempo_ratio(tempo_ratio: f32) -> f32 {
@@ -54,6 +54,9 @@ pub struct RtMixer {
 
     /// Effective pad BPM metadata (manual override or analysis).
     pad_bpm: [Option<f32>; NUM_SAMPLES],
+
+    /// Per-pad musical phase anchor derived from bounded beatgrid/downbeat metadata.
+    pad_phase_anchor_frame: [usize; NUM_SAMPLES],
 
     /// Per-pad gain scalar (linear, 0.0..=1.0).
     pad_gain: [f32; NUM_SAMPLES],
@@ -103,6 +106,7 @@ impl RtMixer {
             key_lock_enabled: false,
             master_bpm: None,
             pad_bpm: std::array::from_fn(|_| None),
+            pad_phase_anchor_frame: std::array::from_fn(|_| 0),
             pad_gain: std::array::from_fn(|_| 1.0),
             pad_eq: std::array::from_fn(|_| coeffs_for_eq3(sample_rate_hz, 0.0, 0.0, 0.0)),
             pad_loop_start_frame: std::array::from_fn(|_| 0),
@@ -252,6 +256,42 @@ impl RtMixer {
         });
 
         self.pad_bpm[id] = bpm;
+    }
+
+    pub fn set_pad_timing_metadata(&mut self, id: usize, metadata: PadTimingMetadata) {
+        if id >= NUM_SAMPLES {
+            return;
+        }
+
+        self.pad_phase_anchor_frame[id] =
+            self.timing_anchor_frame_from_seconds(metadata.phase_anchor_s);
+    }
+
+    #[cfg(test)]
+    fn pad_phase_anchor_frame(&self, id: usize) -> Option<usize> {
+        if id >= NUM_SAMPLES {
+            return None;
+        }
+
+        Some(self.pad_phase_anchor_frame[id])
+    }
+
+    fn timing_anchor_frame_from_seconds(&self, phase_anchor_s: f32) -> usize {
+        if !phase_anchor_s.is_finite() || phase_anchor_s < 0.0 {
+            return 0;
+        }
+
+        let frame = phase_anchor_s as f64 * self.sample_rate_hz as f64;
+        if !frame.is_finite() || frame < 0.0 {
+            return 0;
+        }
+
+        let max = usize::MAX as f64;
+        if frame >= max {
+            return usize::MAX;
+        }
+
+        frame.round() as usize
     }
 
     pub fn set_pad_gain(&mut self, id: usize, gain: f32) {
@@ -410,6 +450,7 @@ impl RtMixer {
 
         self.stop_sample(id);
         self.sample_bank[id] = None;
+        self.pad_phase_anchor_frame[id] = 0;
     }
 
     /// Renders audio frames to the output buffer.
@@ -645,6 +686,67 @@ mod tests {
         mixer.set_pad_bpm(0, None);
         let ratio = mixer.tempo_ratio_for_sample_id(0);
         assert!((ratio - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_pad_timing_metadata_stores_sample_accurate_anchor_frame() {
+        let mut mixer = RtMixer::new(1, 10.0);
+
+        mixer.set_pad_timing_metadata(
+            0,
+            PadTimingMetadata {
+                phase_anchor_s: 1.2,
+            },
+        );
+
+        assert_eq!(mixer.pad_phase_anchor_frame(0), Some(12));
+    }
+
+    #[test]
+    fn test_pad_timing_metadata_invalid_values_fall_back_to_zero() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.set_pad_timing_metadata(
+            0,
+            PadTimingMetadata {
+                phase_anchor_s: 1.2,
+            },
+        );
+
+        for phase_anchor_s in [f32::NAN, f32::INFINITY, -1.0] {
+            mixer.set_pad_timing_metadata(0, PadTimingMetadata { phase_anchor_s });
+            assert_eq!(mixer.pad_phase_anchor_frame(0), Some(0));
+        }
+    }
+
+    #[test]
+    fn test_pad_timing_metadata_invalid_id_is_ignored() {
+        let mut mixer = RtMixer::new(1, 10.0);
+
+        mixer.set_pad_timing_metadata(
+            NUM_SAMPLES + 1,
+            PadTimingMetadata {
+                phase_anchor_s: 1.2,
+            },
+        );
+
+        assert_eq!(mixer.pad_phase_anchor_frame(0), Some(0));
+        assert_eq!(mixer.pad_phase_anchor_frame(NUM_SAMPLES + 1), None);
+    }
+
+    #[test]
+    fn test_unload_sample_clears_pad_timing_metadata() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_test_sample(1, 100, 0.5));
+        mixer.set_pad_timing_metadata(
+            0,
+            PadTimingMetadata {
+                phase_anchor_s: 1.2,
+            },
+        );
+
+        mixer.unload_sample(0);
+
+        assert_eq!(mixer.pad_phase_anchor_frame(0), Some(0));
     }
 
     #[test]

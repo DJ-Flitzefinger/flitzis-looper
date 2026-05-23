@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING
 
+from flitzis_looper.controller.timing_metadata import timing_anchor_sec_from_analysis
 from flitzis_looper.controller.validation import ensure_finite, normalize_bpm
 from flitzis_looper.models import validate_sample_id
 
@@ -55,16 +56,7 @@ class PadLoopController:
         return int(self._project.pad_grid_offset_samples[sample_id])
 
     def _default_onset_sec(self, sample_id: int) -> float:
-        analysis = self._project.sample_analysis[sample_id]
-        if analysis is None:
-            return 0.0
-
-        grid = analysis.beat_grid
-        if grid.downbeats:
-            return float(grid.downbeats[0])
-        if grid.beats:
-            return float(grid.beats[0])
-        return 0.0
+        return timing_anchor_sec_from_analysis(self._project.sample_analysis[sample_id])
 
     def _default_onset_sample(self, sample_id: int, *, sample_rate_hz: int) -> int:
         onset_sec = self._default_onset_sec(sample_id)
