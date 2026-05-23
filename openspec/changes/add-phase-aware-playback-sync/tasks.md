@@ -3,10 +3,10 @@
 - [x] 1.2 Update relevant planning documentation without implementing production feature code.
 
 ## 2. Rust Phase Helpers
-- [ ] 2.1 Add deterministic transport helper tests for bar phase at arbitrary target output frames.
-- [ ] 2.2 Add mixer helper tests for computing a phase-aligned initial sample frame from pad BPM, phase anchor, and active loop region.
-- [ ] 2.3 Ensure missing or invalid pad BPM/anchor/loop metadata falls back to the existing loop-start frame.
-- [ ] 2.4 Treat any audio-thread allocation, logging, disk I/O, blocking operation, or Python/GIL access as a blocker before merge.
+- [x] 2.1 Add deterministic transport helper tests for bar phase at arbitrary target output frames.
+- [x] 2.2 Add mixer helper tests for computing a phase-aligned initial sample frame from pad BPM, phase anchor, and active loop region.
+- [x] 2.3 Ensure missing or invalid pad BPM/anchor/loop metadata falls back to the existing loop-start frame.
+- [x] 2.4 Treat any audio-thread allocation, logging, disk I/O, blocking operation, or Python/GIL access as a blocker before merge.
 
 ## 3. Phase-Aware Quantized Playback
 - [ ] 3.1 Pass scheduled event target frames into playback command execution or store an equivalent fixed-size phase descriptor.
@@ -24,5 +24,5 @@
 
 ## 5. Validation
 - [ ] 5.1 Run `openspec validate add-phase-aware-playback-sync --strict`.
-- [ ] 5.2 Run focused Rust tests for transport/mixer/audio-stream phase behavior.
-- [ ] 5.3 Run full uv-managed Rust and Python validation before implementation is considered complete.
+- [x] 5.2 Run focused Rust tests for transport/mixer/audio-stream phase behavior.
+- [x] 5.3 Run full uv-managed Rust and Python validation before implementation is considered complete.

@@ -126,6 +126,11 @@ Implemented first slice:
   one-at-a-time playback. With quantization enabled, Rust schedules the stop-all operation and
   requested pad start as one atomic `StopAllThenPlaySample` event at the same absolute output
   frame; scheduler-full rejection leaves current playback unchanged.
+- The first helper slice for `add-phase-aware-playback-sync` is in place:
+  `TransportTimeline` can compute bar phase for arbitrary scheduled target frames without
+  advancing the transport clock, and `RtMixer` can compute a phase-aligned initial sample frame
+  from pad BPM, a bounded phase anchor, active loop bounds, and target bar phase. This helper is
+  covered by deterministic Rust tests but is not yet wired into scheduled playback execution.
 
 The planned direction is:
 
@@ -144,11 +149,11 @@ inference, real-time stem separation, or long-running work.
 Later Gen3 stem work must be offline/cache-based. Stem generation is only allowed for pads
 that are not currently playing; the audio callback may only mix already prepared audio data.
 
-The next Gen3 planning slice is `openspec/changes/add-phase-aware-playback-sync/`. It defines
-how quantized starts will use the Rust transport phase plus bounded per-pad timing anchors to
-choose the initial pad sample frame, and how BPM lock can anchor the transport downbeat from a
-selected playing pad. That change is specification-only until implementation tasks begin; current
-runtime behavior remains as described above.
+The active Gen3 phase-aware sync slice is `openspec/changes/add-phase-aware-playback-sync/`. It
+defines how quantized starts will use the Rust transport phase plus bounded per-pad timing anchors
+to choose the initial pad sample frame, and how BPM lock can anchor the transport downbeat from a
+selected playing pad. Helper-level Rust implementation has started, but scheduled playback and
+BPM-lock phase anchoring are not wired yet; current runtime behavior remains as described above.
 
 ## Current Python API surface
 

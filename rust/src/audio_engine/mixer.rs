@@ -17,12 +17,90 @@ use crate::audio_engine::voice_slot::VoiceSlot;
 use crate::messages::{PadTimingMetadata, SampleBuffer};
 use cpal::Sample;
 
+const BEATS_PER_BAR_4_4: f64 = 4.0;
+const BAR_PHASE_EPSILON: f64 = 1.0e-9;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FrameRange {
+    start: usize,
+    end: usize,
+}
+
+impl FrameRange {
+    fn len(self) -> usize {
+        self.end.saturating_sub(self.start)
+    }
+}
+
 fn transpose_semitones_for_tempo_ratio(tempo_ratio: f32) -> f32 {
     if !tempo_ratio.is_finite() || tempo_ratio <= 0.0 {
         return 0.0;
     }
 
     -12.0 * tempo_ratio.log2()
+}
+
+fn phase_aligned_initial_frame(
+    sample_rate_hz: f32,
+    pad_bpm: Option<f32>,
+    phase_anchor_frame: Option<usize>,
+    target_bar_phase_beats: f64,
+    loop_region: Option<FrameRange>,
+    fallback_frame: usize,
+) -> usize {
+    let Some(region) = loop_region.filter(|region| region.end > region.start) else {
+        return fallback_frame;
+    };
+    let Some(anchor_frame) = phase_anchor_frame else {
+        return fallback_frame;
+    };
+    let Some(pad_bpm) = pad_bpm.filter(|bpm| bpm.is_finite() && *bpm > 0.0) else {
+        return fallback_frame;
+    };
+    let Some(target_bar_phase_beats) = normalize_bar_phase_beats(target_bar_phase_beats) else {
+        return fallback_frame;
+    };
+    if !sample_rate_hz.is_finite() || sample_rate_hz <= 0.0 {
+        return fallback_frame;
+    }
+
+    let frames_per_beat = sample_rate_hz as f64 * 60.0 / pad_bpm as f64;
+    if !frames_per_beat.is_finite() || frames_per_beat <= 0.0 {
+        return fallback_frame;
+    }
+
+    let desired_frame = anchor_frame as f64 + target_bar_phase_beats * frames_per_beat;
+    wrap_frame_into_region(desired_frame, region).unwrap_or(fallback_frame)
+}
+
+fn normalize_bar_phase_beats(phase: f64) -> Option<f64> {
+    if !phase.is_finite() {
+        return None;
+    }
+
+    let phase = phase.rem_euclid(BEATS_PER_BAR_4_4);
+    if phase <= BAR_PHASE_EPSILON || (BEATS_PER_BAR_4_4 - phase) <= BAR_PHASE_EPSILON {
+        Some(0.0)
+    } else {
+        Some(phase)
+    }
+}
+
+fn wrap_frame_into_region(frame: f64, region: FrameRange) -> Option<usize> {
+    if !frame.is_finite() || region.end <= region.start {
+        return None;
+    }
+
+    let len = region.len() as f64;
+    if !len.is_finite() || len <= 0.0 {
+        return None;
+    }
+
+    let relative = (frame - region.start as f64).rem_euclid(len);
+    let rounded = relative.round();
+    let offset = if rounded >= len { 0 } else { rounded as usize };
+
+    Some(region.start + offset)
 }
 
 /// Real-time mixer that handles sample loading and voice management.
@@ -168,10 +246,7 @@ impl RtMixer {
         let tempo_ratio = self.tempo_ratio_for_sample_id(id);
 
         let sample_frames = sample.samples.len() / self.channels;
-        let mut initial_frame_pos = self.pad_loop_start_frame[id];
-        if initial_frame_pos >= sample_frames {
-            initial_frame_pos = 0;
-        }
+        let initial_frame_pos = self.effective_loop_start_frame(id, sample_frames);
 
         // Sample is already playing? -> reset play position
         for voice_slot in &mut self.voices {
@@ -267,6 +342,31 @@ impl RtMixer {
             self.timing_anchor_frame_from_seconds(metadata.phase_anchor_s);
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn phase_aligned_initial_sample_frame(
+        &self,
+        id: usize,
+        sample_frames: usize,
+        target_bar_phase_beats: f64,
+    ) -> usize {
+        if id >= NUM_SAMPLES {
+            return 0;
+        }
+
+        let fallback_frame = self.effective_loop_start_frame(id, sample_frames);
+        let phase_anchor_frame =
+            Some(self.pad_phase_anchor_frame[id]).filter(|frame| *frame < sample_frames);
+
+        phase_aligned_initial_frame(
+            self.sample_rate_hz,
+            self.pad_bpm[id],
+            phase_anchor_frame,
+            target_bar_phase_beats,
+            self.phase_alignment_loop_region(id, sample_frames),
+            fallback_frame,
+        )
+    }
+
     #[cfg(test)]
     fn pad_phase_anchor_frame(&self, id: usize) -> Option<usize> {
         if id >= NUM_SAMPLES {
@@ -292,6 +392,52 @@ impl RtMixer {
         }
 
         frame.round() as usize
+    }
+
+    fn effective_loop_start_frame(&self, id: usize, sample_frames: usize) -> usize {
+        self.effective_loop_region(id, sample_frames)
+            .map(|region| region.start)
+            .unwrap_or(0)
+    }
+
+    fn effective_loop_region(&self, id: usize, sample_frames: usize) -> Option<FrameRange> {
+        if id >= NUM_SAMPLES || sample_frames == 0 {
+            return None;
+        }
+
+        let start = self.pad_loop_start_frame[id].min(sample_frames);
+        let end = self.pad_loop_end_frame[id]
+            .unwrap_or(sample_frames)
+            .min(sample_frames);
+
+        if end <= start {
+            Some(FrameRange {
+                start: 0,
+                end: sample_frames,
+            })
+        } else {
+            Some(FrameRange { start, end })
+        }
+    }
+
+    fn phase_alignment_loop_region(&self, id: usize, sample_frames: usize) -> Option<FrameRange> {
+        if id >= NUM_SAMPLES || sample_frames == 0 {
+            return None;
+        }
+
+        let start = self.pad_loop_start_frame[id];
+        if start >= sample_frames {
+            return None;
+        }
+
+        let end = self.pad_loop_end_frame[id]
+            .unwrap_or(sample_frames)
+            .min(sample_frames);
+        if end <= start {
+            return None;
+        }
+
+        Some(FrameRange { start, end })
     }
 
     pub fn set_pad_gain(&mut self, id: usize, gain: f32) {
@@ -747,6 +893,101 @@ mod tests {
         mixer.unload_sample(0);
 
         assert_eq!(mixer.pad_phase_anchor_frame(0), Some(0));
+    }
+
+    #[test]
+    fn test_phase_aligned_initial_frame_uses_pad_bpm_and_anchor() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.set_pad_bpm(0, Some(60.0));
+        mixer.set_pad_timing_metadata(
+            0,
+            PadTimingMetadata {
+                phase_anchor_s: 0.3,
+            },
+        );
+
+        let frame = mixer.phase_aligned_initial_sample_frame(0, 64, 2.0);
+
+        assert_eq!(frame, 23);
+    }
+
+    #[test]
+    fn test_phase_aligned_initial_frame_uses_active_loop_region() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.set_pad_bpm(0, Some(60.0));
+        mixer.set_pad_timing_metadata(
+            0,
+            PadTimingMetadata {
+                phase_anchor_s: 1.0,
+            },
+        );
+        mixer.set_pad_loop_region(0, 1.0, Some(5.0));
+
+        let frame = mixer.phase_aligned_initial_sample_frame(0, 64, 2.0);
+
+        assert_eq!(frame, 30);
+    }
+
+    #[test]
+    fn test_phase_aligned_initial_frame_wraps_into_loop_region() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.set_pad_bpm(0, Some(60.0));
+        mixer.set_pad_timing_metadata(
+            0,
+            PadTimingMetadata {
+                phase_anchor_s: 1.0,
+            },
+        );
+        mixer.set_pad_loop_region(0, 1.0, Some(3.0));
+
+        let frame = mixer.phase_aligned_initial_sample_frame(0, 64, 3.0);
+
+        assert_eq!(frame, 20);
+    }
+
+    #[test]
+    fn test_phase_aligned_initial_frame_falls_back_without_pad_bpm() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.set_pad_timing_metadata(
+            0,
+            PadTimingMetadata {
+                phase_anchor_s: 0.3,
+            },
+        );
+        mixer.set_pad_loop_region(0, 0.7, Some(2.0));
+
+        let frame = mixer.phase_aligned_initial_sample_frame(0, 64, 2.0);
+
+        assert_eq!(frame, 7);
+    }
+
+    #[test]
+    fn test_phase_aligned_initial_frame_falls_back_for_invalid_anchor() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.set_pad_bpm(0, Some(60.0));
+        mixer.set_pad_loop_region(0, 0.5, Some(2.0));
+        mixer.pad_phase_anchor_frame[0] = 50;
+
+        let frame = mixer.phase_aligned_initial_sample_frame(0, 20, 2.0);
+
+        assert_eq!(frame, 5);
+    }
+
+    #[test]
+    fn test_phase_aligned_initial_frame_falls_back_for_invalid_loop_region() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.set_pad_bpm(0, Some(60.0));
+        mixer.set_pad_timing_metadata(
+            0,
+            PadTimingMetadata {
+                phase_anchor_s: 0.3,
+            },
+        );
+        mixer.set_pad_loop_region(0, 5.0, Some(6.0));
+
+        let frame = mixer.phase_aligned_initial_sample_frame(0, 20, 2.0);
+
+        assert_eq!(frame, 0);
     }
 
     #[test]

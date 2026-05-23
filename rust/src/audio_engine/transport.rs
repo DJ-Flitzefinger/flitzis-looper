@@ -97,7 +97,11 @@ impl TransportTimeline {
     }
 
     pub(crate) fn beat_position(&self) -> Option<f64> {
-        Some(self.relative_frames_from_downbeat() / self.frames_per_beat()?)
+        self.beat_position_at_frame(self.output_frame)
+    }
+
+    pub(crate) fn beat_position_at_frame(&self, output_frame: u64) -> Option<f64> {
+        Some(self.relative_frames_from_downbeat_at_frame(output_frame) / self.frames_per_beat()?)
     }
 
     pub(crate) fn beat_phase(&self) -> Option<f64> {
@@ -105,8 +109,12 @@ impl TransportTimeline {
     }
 
     pub(crate) fn bar_phase_beats(&self) -> Option<f64> {
+        self.bar_phase_beats_at_frame(self.output_frame)
+    }
+
+    pub(crate) fn bar_phase_beats_at_frame(&self, output_frame: u64) -> Option<f64> {
         Some(normalize_phase(
-            self.beat_position()?,
+            self.beat_position_at_frame(output_frame)?,
             self.beats_per_bar as f64,
         ))
     }
@@ -150,7 +158,11 @@ impl TransportTimeline {
     }
 
     fn relative_frames_from_downbeat(&self) -> f64 {
-        self.output_frame as f64 - self.downbeat_frame as f64
+        self.relative_frames_from_downbeat_at_frame(self.output_frame)
+    }
+
+    fn relative_frames_from_downbeat_at_frame(&self, output_frame: u64) -> f64 {
+        output_frame as f64 - self.downbeat_frame as f64
     }
 }
 
@@ -282,6 +294,30 @@ mod tests {
     }
 
     #[test]
+    fn bar_phase_can_be_derived_for_arbitrary_target_frame() {
+        let transport = transport_at(123);
+
+        assert_eq!(transport.bar_phase_beats_at_frame(48_000), Some(2.0));
+        assert_eq!(transport.output_frame(), 123);
+    }
+
+    #[test]
+    fn target_frame_phase_respects_downbeat_anchor() {
+        let mut transport = transport_at(0);
+        transport.set_downbeat_frame(1_000);
+
+        assert_eq!(transport.bar_phase_beats_at_frame(49_000), Some(2.0));
+    }
+
+    #[test]
+    fn target_frame_phase_wraps_before_downbeat_anchor() {
+        let mut transport = transport_at(0);
+        transport.set_downbeat_frame(96_000);
+
+        assert_eq!(transport.bar_phase_beats_at_frame(72_000), Some(3.0));
+    }
+
+    #[test]
     fn fractional_beat_phase_is_reported() {
         let transport = transport_at(36_000);
 
@@ -354,6 +390,7 @@ mod tests {
         let transport = TransportTimeline::new(48_000);
 
         assert_eq!(transport.beat_position(), None);
+        assert_eq!(transport.bar_phase_beats_at_frame(48_000), None);
         assert_eq!(transport.bar_phase_beats(), None);
         assert_eq!(transport.next_beat_frame(), None);
         assert_eq!(transport.next_bar_frame(), None);

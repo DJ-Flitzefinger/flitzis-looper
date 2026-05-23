@@ -76,7 +76,8 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 Current Gen3 state: bounded per-pad timing anchors derived from analysis downbeats/beats are
 published to Rust audio-thread state. The phase-aware sync OpenSpec change now defines how those
 anchors should be used for quantized start-frame selection and BPM-lock transport downbeat
-anchoring; implementation is still pending.
+anchoring. Helper-level Rust code can compute target-frame bar phase and phase-aligned initial
+sample frames, but scheduled playback and BPM-lock phase anchoring are not wired yet.
 
 ### 8) Loop range editing (waveform editor)
 - [ ] As a performer, I can open a **waveform editor** for a pad.
