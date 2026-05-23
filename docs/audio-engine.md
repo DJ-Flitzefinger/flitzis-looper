@@ -144,6 +144,12 @@ inference, real-time stem separation, or long-running work.
 Later Gen3 stem work must be offline/cache-based. Stem generation is only allowed for pads
 that are not currently playing; the audio callback may only mix already prepared audio data.
 
+The next Gen3 planning slice is `openspec/changes/add-phase-aware-playback-sync/`. It defines
+how quantized starts will use the Rust transport phase plus bounded per-pad timing anchors to
+choose the initial pad sample frame, and how BPM lock can anchor the transport downbeat from a
+selected playing pad. That change is specification-only until implementation tasks begin; current
+runtime behavior remains as described above.
+
 ## Current Python API surface
 
 The Rust engine is exposed to Python as `AudioEngine` with:

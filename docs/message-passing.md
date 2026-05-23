@@ -62,6 +62,11 @@ Python/control code requests transport or trigger-quantization changes through t
 control-to-audio path; the audio callback owns the Rust transport timeline, per-pad timing
 metadata state, trigger quantization mode, and fixed-capacity scheduler.
 
+The planned `add-phase-aware-playback-sync` change keeps the same messaging rule. Any BPM-lock
+phase-anchor request must be a fixed-size control message, such as a selected pad id. The audio
+thread must derive transport phase from already-owned mixer and transport state; Python must not
+send full beat-grid vectors, file paths, heap-owned data, or direct scheduler/transport pointers.
+
 Two failure points are distinct:
 
 - Control ring buffer full: the request never reaches the audio callback and follows the
@@ -74,6 +79,7 @@ Two failure points are distinct:
 
 - Rich audio → Python event stream (beyond `Pong`).
 - UI/controller trigger-quantization controls.
+- Phase-aware transport anchoring from BPM-lock source pads.
 
 ## Related specs
 
