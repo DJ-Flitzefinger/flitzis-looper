@@ -18,13 +18,13 @@
 - [x] 3.6 Write deterministic aligned stem cache artifacts outside the audio callback without Rust publication or mixer changes.
 
 ## 4. Prepared Stem Publication
-- [ ] 4.1 Validate generated stem buffers for sample rate, channel layout, frame origin, and usable length before publication.
-- [ ] 4.2 Publish prepared immutable stem buffers to Rust by fixed-size control message and shared buffer handles.
-- [ ] 4.3 Reject stale generation results if the pad started playing or the source version changed before publication.
-- [ ] 4.4 Add Rust/Python tests for fixed-size publication, ring-buffer-full failure, and stale-generation rejection.
+- [x] 4.1 Validate generated stem buffers for sample rate, channel layout, frame origin, and usable length before publication.
+- [x] 4.2 Publish prepared immutable stem buffers to Rust by fixed-size control message and shared buffer handles.
+- [x] 4.3 Reject stale generation results if the pad started playing or the source version changed before publication.
+- [x] 4.4 Add Rust/Python tests for fixed-size publication, ring-buffer-full failure, and stale-generation rejection.
 
 ## 5. Prepared Stem Mixing
-- [ ] 5.1 Add fixed per-pad/per-stem storage in Rust audio-thread state.
+- [x] 5.1 Add fixed per-pad/per-stem storage in Rust audio-thread state.
 - [ ] 5.2 Mix prepared stems using the same voice playhead, loop region, transport timing, BPM-lock, and key-lock behavior as full-mix playback.
 - [ ] 5.3 Fall back to full-mix playback when stems are missing, stale, incomplete, or disabled.
 - [ ] 5.4 Treat any audio-thread disk I/O, Python/GIL access, logging, blocking operation, heap allocation, neural inference, or long-running work as a blocker.

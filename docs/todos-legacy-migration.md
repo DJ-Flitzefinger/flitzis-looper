@@ -117,7 +117,9 @@ that are not currently playing. The audio callback must never run stem separatio
 network inference, or disk I/O; it may only mix already prepared audio buffers. The active
 planning slice now has the first cache metadata/source-version model and background-task gating
 in place. A deterministic non-neural cache writer now creates aligned placeholder WAV artifacts
-outside the audio callback, but production source separation, stem publication, mixer support, and
+outside the audio callback. Prepared stem-buffer validation/publication now sends fixed-size Rust
+control messages with shared immutable handles for inactive current pads, and the callback stores
+accepted handles in bounded state. Production source separation, stem rendering/mix controls, and
 performer-facing stem UI controls remain later slices.
 
 ### 13) Persistence (config/state)

@@ -177,8 +177,12 @@ progress and writes deterministic project-local WAV cache artifacts outside the 
 This initial cache writer is non-neural: `instrumental.wav` contains the aligned full mix, while
 `vocals.wav`, `melody.wav`, `bass.wav`, and `drums.wav` are aligned silence placeholders. It proves
 the cache layout, background I/O, and availability validation without implementing production
-source separation. Rust stem publication, UI controls, and mixer changes are still intentionally
-absent.
+source separation. `AudioEngine.publish_prepared_stems(id, source_version, cache_dir)` now
+validates those cached WAV artifacts against the currently loaded full-mix buffer outside the audio
+callback, then publishes shared immutable prepared-stem handles to Rust through a fixed-size control
+message. The audio callback accepts the handles only for loaded inactive pads and stores them in
+bounded per-pad/per-stem state. Stem rendering, performer-facing UI controls, and production source
+separation are still intentionally absent.
 
 The active Gen3 phase-aware sync slice is `openspec/changes/add-phase-aware-playback-sync/`. It
 defines how quantized starts will use the Rust transport phase plus bounded per-pad timing anchors
@@ -220,8 +224,9 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 - Broader channel-layout support; currently decoding only supports mono↔stereo mapping.
 - Real-time stem separation is intentionally out of scope.
 - Offline stem cache identity, request gating, and deterministic cache artifact writing are
-  implemented. Production source separation, prepared stem-buffer publication, and stem mixing are
-  planned in `openspec/changes/add-offline-stem-cache/` but not implemented.
+  implemented. Prepared stem-buffer validation/publication is implemented, but production source
+  separation, stem mixing, and performer-facing controls are planned in
+  `openspec/changes/add-offline-stem-cache/` and not implemented.
 
 ## Related specs
 

@@ -420,6 +420,9 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
                     ControlMessage::LoadSample { id, sample } => {
                         mixer.load_sample(id, sample);
                     }
+                    ControlMessage::PublishPreparedStems { id, stems } => {
+                        mixer.publish_prepared_stems(id, stems);
+                    }
                     ControlMessage::PlaySample { id, volume } => {
                         schedule_play_sample_command(
                             &mut scheduler,

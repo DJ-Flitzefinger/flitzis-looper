@@ -381,9 +381,16 @@ class LoaderController(BaseController):
             )
             return
 
-        if not entry.available:
-            self._project.stem_cache[sample_id] = entry.model_copy(update={"available": True})
-            self._mark_project_changed()
+        try:
+            self._audio.publish_prepared_stems(sample_id, source_version, entry.cache_dir)
+        except (RuntimeError, ValueError) as err:
+            self._session.stem_generation_errors[sample_id] = (
+                f"Stem generation completed but publication failed: {err}"
+            )
+        else:
+            if not entry.available:
+                self._project.stem_cache[sample_id] = entry.model_copy(update={"available": True})
+                self._mark_project_changed()
 
     def _source_version_for_pad(self, sample_id: int) -> str | None:
         sample_path = self._project.sample_paths[sample_id]

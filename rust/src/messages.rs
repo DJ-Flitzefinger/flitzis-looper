@@ -7,10 +7,22 @@ use pyo3::prelude::*;
 use std::sync::Arc;
 use stratum_dsp::BeatGrid;
 
+pub(crate) const STEM_BUFFER_COUNT: usize = 5;
+
 #[derive(Debug, Clone)]
 pub(crate) struct SampleBuffer {
     pub channels: usize,
     pub samples: Arc<[f32]>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedStemSet {
+    pub source_version_hash: u64,
+    pub sample_rate_hz: u32,
+    pub channels: usize,
+    pub frame_count: usize,
+    pub available_mask: u8,
+    pub stems: [SampleBuffer; STEM_BUFFER_COUNT],
 }
 
 /// Message that is emitted from the audio thread.
@@ -143,6 +155,12 @@ pub enum ControlMessage {
     /// * `id` - Unique identifier for the sample slot (0..36)
     /// * `sample` - Pre-decoded immutable sample buffer (shared handle)
     LoadSample { id: usize, sample: SampleBuffer },
+
+    /// Publish validated prepared stems into an audio-thread slot.
+    ///
+    /// The message carries bounded metadata plus shared immutable buffer handles. It must not
+    /// contain file paths, Python objects, or copied full audio payloads.
+    PublishPreparedStems { id: usize, stems: PreparedStemSet },
 
     /// Play a loaded sample.
     ///
@@ -322,5 +340,59 @@ mod tests {
             task_to_str(BackgroundTaskKind::StemGeneration),
             "stem_generation"
         );
+    }
+
+    #[test]
+    fn prepared_stem_publication_message_carries_fixed_size_handles() {
+        let buffer = SampleBuffer {
+            channels: 1,
+            samples: Arc::from([0.0_f32, 0.0].as_slice()),
+        };
+        let stems = PreparedStemSet {
+            source_version_hash: 42,
+            sample_rate_hz: 44_100,
+            channels: 1,
+            frame_count: 2,
+            available_mask: 0b1_1111,
+            stems: std::array::from_fn(|_| buffer.clone()),
+        };
+        let message = ControlMessage::PublishPreparedStems { id: 3, stems };
+
+        assert!(matches!(
+            message,
+            ControlMessage::PublishPreparedStems {
+                id: 3,
+                stems: PreparedStemSet {
+                    source_version_hash: 42,
+                    sample_rate_hz: 44_100,
+                    channels: 1,
+                    frame_count: 2,
+                    available_mask: 0b1_1111,
+                    stems: _
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn prepared_stem_publication_reports_ring_buffer_full() {
+        let buffer = SampleBuffer {
+            channels: 1,
+            samples: Arc::from([0.0_f32, 0.0].as_slice()),
+        };
+        let stems = PreparedStemSet {
+            source_version_hash: 42,
+            sample_rate_hz: 44_100,
+            channels: 1,
+            frame_count: 2,
+            available_mask: 0b1_1111,
+            stems: std::array::from_fn(|_| buffer.clone()),
+        };
+        let (mut producer, _consumer) = rtrb::RingBuffer::<ControlMessage>::new(1);
+        producer.push(ControlMessage::Ping()).unwrap();
+
+        let result = producer.push(ControlMessage::PublishPreparedStems { id: 3, stems });
+
+        assert!(result.is_err());
     }
 }

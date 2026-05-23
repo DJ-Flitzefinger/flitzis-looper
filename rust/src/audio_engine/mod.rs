@@ -10,7 +10,9 @@ use crate::audio_engine::sample_loader::{
     SampleLoadProgress, SampleLoadSubtask, cache_audio_file_for_project,
     decode_audio_file_to_sample_buffer,
 };
-use crate::audio_engine::stem_cache::{project_stem_cache_dir, write_deterministic_stem_artifacts};
+use crate::audio_engine::stem_cache::{
+    prepare_stem_buffers_from_cache, project_stem_cache_dir, write_deterministic_stem_artifacts,
+};
 use crate::messages::{
     AudioMessage, BackgroundTaskKind, ControlMessage, LoaderEvent, PadTimingMetadata, SampleBuffer,
     TriggerQuantization, task_to_str,
@@ -451,8 +453,7 @@ impl AudioEngine {
     /// Schedule offline stem generation on a background thread.
     ///
     /// This API currently provides source-version-aware task gating and deterministic cache
-    /// artifact writing. Neural inference and prepared stem publication are intentionally not
-    /// implemented here yet.
+    /// artifact writing. Neural inference is intentionally not implemented here yet.
     pub fn generate_stems_async(
         &self,
         id: usize,
@@ -564,6 +565,62 @@ impl AudioEngine {
         });
 
         Ok(())
+    }
+
+    /// Validate cached stem artifacts and publish prepared handles to the audio thread.
+    pub fn publish_prepared_stems(
+        &self,
+        id: usize,
+        source_version: String,
+        cache_dir: String,
+    ) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err(format!(
+                "id out of range (expected 0..{}, got {id})",
+                NUM_SAMPLES - 1
+            )));
+        }
+
+        if source_version.trim().is_empty() {
+            return Err(PyValueError::new_err("source_version must not be empty"));
+        }
+
+        project_stem_cache_dir(&cache_dir).map_err(PyValueError::new_err)?;
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let sample = {
+            let cache = self
+                .sample_cache
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("Failed to acquire sample cache lock"))?;
+            cache
+                .get(id)
+                .and_then(|slot| slot.clone())
+                .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?
+        };
+
+        let stems = prepare_stem_buffers_from_cache(
+            &source_version,
+            &sample,
+            handle.output_sample_rate,
+            &cache_dir,
+        )
+        .map_err(PyValueError::new_err)?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        producer_guard
+            .push(ControlMessage::PublishPreparedStems { id, stems })
+            .map_err(|_| {
+                PyRuntimeError::new_err("Failed to send PublishPreparedStems - buffer may be full")
+            })
     }
 
     /// Poll for pending background loader events.

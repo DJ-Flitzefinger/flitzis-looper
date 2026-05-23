@@ -101,6 +101,9 @@ def test_sample_slot_id_range_is_0_to_215(audio_engine: AudioEngine) -> None:
         audio_engine.generate_stems_async(216, "source", "samples/stems/cache")
 
     with pytest.raises(ValueError, match=r"id out of range"):
+        audio_engine.publish_prepared_stems(216, "source", "samples/stems/cache")
+
+    with pytest.raises(ValueError, match=r"id out of range"):
         audio_engine.stop_sample(216)
 
     with pytest.raises(ValueError, match=r"id out of range"):
@@ -213,6 +216,13 @@ def test_generate_stems_async_requires_initialized_engine() -> None:
         engine.generate_stems_async(0, "source", "samples/stems/cache")
 
 
+def test_publish_prepared_stems_requires_initialized_engine() -> None:
+    engine = AudioEngine()
+
+    with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
+        engine.publish_prepared_stems(0, "source", "samples/stems/cache")
+
+
 def test_generate_stems_async_rejects_empty_source_version(audio_engine: AudioEngine) -> None:
     with pytest.raises(ValueError, match=r"source_version"):
         audio_engine.generate_stems_async(0, "", "samples/stems/cache")
@@ -221,6 +231,11 @@ def test_generate_stems_async_rejects_empty_source_version(audio_engine: AudioEn
 def test_generate_stems_async_rejects_invalid_cache_dir(audio_engine: AudioEngine) -> None:
     with pytest.raises(ValueError, match=r"stem cache directory"):
         audio_engine.generate_stems_async(0, "source", "../samples/stems/cache")
+
+
+def test_publish_prepared_stems_rejects_invalid_cache_dir(audio_engine: AudioEngine) -> None:
+    with pytest.raises(ValueError, match=r"stem cache directory"):
+        audio_engine.publish_prepared_stems(0, "source", "../samples/stems/cache")
 
 
 def test_generate_stems_async_writes_project_cache_artifacts(
@@ -244,6 +259,29 @@ def test_generate_stems_async_writes_project_cache_artifacts(
             assert wav.getframerate() == audio_engine.output_sample_rate()
             assert wav.getnframes() == 128
             assert wav.getnchannels() >= 1
+
+    audio_engine.publish_prepared_stems(0, "source-version", cache_dir)
+
+
+def test_publish_prepared_stems_rejects_misaligned_cache_artifacts(
+    audio_engine: AudioEngine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    wav_path = tmp_path / "sample.wav"
+    output_rate = audio_engine.output_sample_rate()
+    write_mono_pcm16_wav(wav_path, output_rate)
+
+    audio_engine.load_sample_async(0, str(wav_path), run_analysis=False)
+    _wait_for_loader_event(audio_engine, 0, "success")
+
+    cache_dir = tmp_path / "samples" / "stems" / "cache"
+    cache_dir.mkdir(parents=True)
+    for stem_name in ("vocals", "melody", "bass", "drums", "instrumental"):
+        rate = output_rate + 1 if stem_name == "vocals" else output_rate
+        write_mono_pcm16_wav(cache_dir / f"{stem_name}.wav", rate)
+
+    with pytest.raises(ValueError, match=r"sample rate mismatch"):
+        audio_engine.publish_prepared_stems(0, "source-version", "samples/stems/cache")
 
 
 def test_load_sample_async_emits_started_and_error_for_missing_file(

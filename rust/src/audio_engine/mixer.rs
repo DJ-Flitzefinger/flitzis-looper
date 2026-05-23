@@ -14,7 +14,7 @@ use crate::audio_engine::constants::{
 use crate::audio_engine::eq3::{Eq3Coeffs, coeffs_for_eq3};
 use crate::audio_engine::stretch_processor::DEFAULT_BLOCK_SAMPLES;
 use crate::audio_engine::voice_slot::VoiceSlot;
-use crate::messages::{PadTimingMetadata, SampleBuffer};
+use crate::messages::{PadTimingMetadata, PreparedStemSet, STEM_BUFFER_COUNT, SampleBuffer};
 use cpal::Sample;
 
 const BEATS_PER_BAR_4_4: f64 = 4.0;
@@ -154,6 +154,9 @@ pub struct RtMixer {
     /// Sample storage with NUM_SAMPLES slots.
     sample_bank: [Option<SampleBuffer>; NUM_SAMPLES],
 
+    /// Prepared stem storage with NUM_SAMPLES slots.
+    prepared_stems: Box<[Option<PreparedStemSet>; NUM_SAMPLES]>,
+
     /// Active voices with MAX_VOICES slots.
     pub voices: [VoiceSlot; MAX_VOICES],
 }
@@ -191,6 +194,7 @@ impl RtMixer {
             pad_loop_end_frame: std::array::from_fn(|_| None),
             pad_playhead_frame: std::array::from_fn(|_| None),
             sample_bank: std::array::from_fn(|_| None),
+            prepared_stems: Box::new(std::array::from_fn(|_| None)),
             voices: std::array::from_fn(|_| VoiceSlot::new(channels)),
         }
     }
@@ -216,6 +220,56 @@ impl RtMixer {
         }
 
         self.sample_bank[id] = Some(sample);
+        self.prepared_stems[id] = None;
+    }
+
+    pub(crate) fn publish_prepared_stems(&mut self, id: usize, stems: PreparedStemSet) -> bool {
+        if !self.can_accept_prepared_stems(id, &stems) {
+            return false;
+        }
+
+        self.prepared_stems[id] = Some(stems);
+        true
+    }
+
+    fn can_accept_prepared_stems(&self, id: usize, stems: &PreparedStemSet) -> bool {
+        if id >= NUM_SAMPLES || self.channels == 0 || self.sample_is_active(id) {
+            return false;
+        }
+
+        let Some(sample) = self.sample_bank[id].as_ref() else {
+            return false;
+        };
+
+        let sample_rate_hz = self.sample_rate_hz.round();
+        if !sample_rate_hz.is_finite()
+            || sample_rate_hz <= 0.0
+            || stems.sample_rate_hz != sample_rate_hz as u32
+        {
+            return false;
+        }
+
+        if stems.channels != self.channels
+            || stems.available_mask != ((1_u16 << STEM_BUFFER_COUNT) - 1) as u8
+            || stems.source_version_hash == 0
+        {
+            return false;
+        }
+
+        let sample_frames = sample.samples.len() / self.channels;
+        if sample_frames == 0 || stems.frame_count != sample_frames {
+            return false;
+        }
+
+        stems.stems.iter().all(|stem| {
+            stem.channels == self.channels && stem.samples.len() == sample.samples.len()
+        })
+    }
+
+    fn sample_is_active(&self, id: usize) -> bool {
+        self.voices
+            .iter()
+            .any(|voice| voice.active && voice.sample_id == id)
     }
 
     pub(crate) fn can_play_sample(&self, id: usize, velocity: f32) -> bool {
@@ -650,6 +704,7 @@ impl RtMixer {
 
         self.stop_sample(id);
         self.sample_bank[id] = None;
+        self.prepared_stems[id] = None;
         self.pad_phase_anchor_frame[id] = 0;
     }
 
@@ -819,6 +874,22 @@ mod tests {
             .iter()
             .find(|voice| voice.active && voice.sample_id == id)
             .map(|voice| voice.frame_pos)
+    }
+
+    fn create_test_prepared_stems(
+        channels: usize,
+        sample_rate_hz: u32,
+        frames: usize,
+    ) -> PreparedStemSet {
+        let buffer = create_test_sample(channels, frames, 0.25);
+        PreparedStemSet {
+            source_version_hash: 42,
+            sample_rate_hz,
+            channels,
+            frame_count: frames,
+            available_mask: ((1_u16 << STEM_BUFFER_COUNT) - 1) as u8,
+            stems: std::array::from_fn(|_| buffer.clone()),
+        }
     }
 
     #[test]
@@ -1147,6 +1218,55 @@ mod tests {
 
         // Sample should be loaded
         assert!(mixer.sample_bank[0].is_some());
+    }
+
+    #[test]
+    fn test_load_sample_clears_prepared_stems() {
+        let mut mixer = RtMixer::new(2, 44_100.0);
+        mixer.load_sample(0, create_test_sample(2, 100, 0.5));
+        assert!(mixer.publish_prepared_stems(0, create_test_prepared_stems(2, 44_100, 100)));
+
+        mixer.load_sample(0, create_test_sample(2, 100, 0.25));
+
+        assert!(mixer.prepared_stems[0].is_none());
+    }
+
+    #[test]
+    fn test_publish_prepared_stems_accepts_stopped_loaded_pad() {
+        let mut mixer = RtMixer::new(2, 44_100.0);
+        mixer.load_sample(0, create_test_sample(2, 100, 0.5));
+
+        assert!(mixer.publish_prepared_stems(0, create_test_prepared_stems(2, 44_100, 100)));
+
+        assert_eq!(
+            mixer.prepared_stems[0]
+                .as_ref()
+                .map(|stems| stems.source_version_hash),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn test_publish_prepared_stems_rejects_active_pad() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 100, 0.5));
+        assert!(mixer.play_sample(0, 1.0));
+
+        assert!(!mixer.publish_prepared_stems(0, create_test_prepared_stems(1, 44_100, 100)));
+
+        assert!(mixer.prepared_stems[0].is_none());
+    }
+
+    #[test]
+    fn test_publish_prepared_stems_rejects_mismatched_layout() {
+        let mut mixer = RtMixer::new(2, 44_100.0);
+        mixer.load_sample(0, create_test_sample(2, 100, 0.5));
+
+        assert!(!mixer.publish_prepared_stems(0, create_test_prepared_stems(1, 44_100, 100)));
+        assert!(!mixer.publish_prepared_stems(0, create_test_prepared_stems(2, 48_000, 100)));
+        assert!(!mixer.publish_prepared_stems(0, create_test_prepared_stems(2, 44_100, 99)));
+
+        assert!(mixer.prepared_stems[0].is_none());
     }
 
     #[test]

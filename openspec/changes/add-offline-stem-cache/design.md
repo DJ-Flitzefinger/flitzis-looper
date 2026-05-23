@@ -93,6 +93,20 @@ silence placeholders. This proves cache identity, artifact layout, background di
 completion validation, and safe stale-result handling without publishing buffers to the
 audio callback or exposing performer-facing stem controls.
 
+### Prepared Publication Slice
+After generation completes, Python revalidates the source version, the current pad playback
+state, and complete cache files before requesting Rust publication. Rust then validates the
+cached WAV artifacts outside the audio callback against the currently loaded full-mix buffer:
+sample rate, channel layout, zero-offset frame origin by cache convention, non-empty usable
+length, and exact frame count must match before any handle is published.
+
+The publication request sends one fixed-size control message containing bounded metadata and
+shared immutable buffer handles. The audio callback accepts the handles into bounded
+per-pad/per-stem storage only when the pad is still loaded and inactive; otherwise it rejects the
+publication without touching full-mix playback. Rendering remains unchanged in this slice:
+prepared stems are stored for a later mixer slice, but voices still play the existing full-mix
+buffer until stem mix controls and stem rendering are explicitly implemented.
+
 ### Publication To Rust
 Prepared stem buffers are published to Rust only after background generation and validation
 complete. The control-to-audio message should contain bounded scalar metadata and shared

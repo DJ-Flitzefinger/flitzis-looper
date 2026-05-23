@@ -95,11 +95,19 @@ loading, analyzing, duplicate, or missing-source pads. Rust models `stem_generat
 background task kind and reports started/progress/success/error events through
 `poll_loader_events()`. The current task writes deterministic aligned WAV cache artifacts under
 `samples/stems/<source-version-hash>/` outside the audio callback: `instrumental.wav` contains the
-full mix, while the other expected stem files are silence placeholders. It does not publish stem
-buffers or send any stem publication message to the audio callback.
+full mix, while the other expected stem files are silence placeholders.
 
-The audio callback may eventually accept already prepared stem handles into bounded audio-thread
-state and mix them with the same voice playhead and loop timing as full-mix playback. It must not
+After a successful generation task, Python revalidates the source version, inactive pad state, and
+complete cache files before calling `AudioEngine.publish_prepared_stems(...)`. Rust validates the
+cached WAV artifacts outside the callback for sample rate, channel layout, frame origin by cache
+convention, and frame length, then sends one `PublishPreparedStems` control message containing
+bounded metadata plus shared immutable buffer handles. If the control ring buffer is full, the
+publication request fails outside the callback and full-mix playback is unchanged. If the message
+reaches the callback after the pad has become active or stale, the callback rejects the publication
+without touching full-mix playback.
+
+The audio callback can now accept already prepared stem handles into bounded audio-thread state,
+but rendering still uses the full-mix buffer until a later stem-mixing slice. The callback must not
 generate stems, read cache files, decode audio, run neural inference, allocate stem buffers, log,
 block, or acquire the Python GIL.
 
