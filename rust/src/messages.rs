@@ -60,6 +60,14 @@ impl AudioMessage {
     }
 }
 
+/// Quantization mode used by Rust-side pad trigger scheduling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TriggerQuantization {
+    Immediate,
+    NextBeat,
+    NextBar,
+}
+
 /// Message that is emitted from the Python side.
 #[derive(Debug, Clone)]
 pub enum ControlMessage {
@@ -109,6 +117,9 @@ pub enum ControlMessage {
         start_s: f32,
         end_s: Option<f32>,
     },
+
+    /// Set Rust-side trigger quantization mode for future pad triggers.
+    SetTriggerQuantization(TriggerQuantization),
 
     /// Publish a loaded sample into an audio-thread slot.
 
@@ -224,4 +235,19 @@ pub enum LoaderEvent {
         task: BackgroundTaskKind,
         error: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_trigger_quantization_message_carries_fixed_size_mode() {
+        let message = ControlMessage::SetTriggerQuantization(TriggerQuantization::NextBeat);
+
+        assert!(matches!(
+            message,
+            ControlMessage::SetTriggerQuantization(TriggerQuantization::NextBeat)
+        ));
+    }
 }

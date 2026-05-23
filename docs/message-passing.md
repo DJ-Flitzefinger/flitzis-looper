@@ -48,13 +48,15 @@ The Gen3 transport work is specified in
 `openspec/changes/add-rust-transport-timeline/`. The initial output-frame transport timeline
 now exists inside the audio callback. The fixed-capacity scheduler helper now exists with
 unit-tested ordering and rejection semantics, and the callback owns a scheduler for
-current-frame `PlaySample`, `StopSample`, and `StopAll` routing. The design keeps the
-existing SPSC ring-buffer architecture.
+current-frame `PlaySample`, `StopSample`, and `StopAll` routing. Rust-side trigger
+quantization now accepts `immediate`, `next_beat`, and `next_bar` mode updates through the
+existing control-to-audio ring buffer. The design keeps the existing SPSC ring-buffer
+architecture.
 
-Planned transport and quantized scheduler messages must remain fixed-size and bounded.
-Python/control code will request transport changes or quantized triggers through the
-existing control-to-audio path; the audio callback owns the Rust transport timeline and the
-fixed-capacity scheduler.
+Transport and quantized scheduler messages must remain fixed-size and bounded.
+Python/control code requests transport or trigger-quantization changes through the existing
+control-to-audio path; the audio callback owns the Rust transport timeline, trigger
+quantization mode, and fixed-capacity scheduler.
 
 Two failure points are distinct:
 
@@ -67,7 +69,8 @@ Two failure points are distinct:
 ## Not implemented (yet)
 
 - Rich audio → Python event stream (beyond `Pong`).
-- Callback routing for quantized triggers and scheduler-specific control messages.
+- UI/controller trigger-quantization controls.
+- Atomic scheduled stop-all/start transitions for MultiLoop-disabled quantized playback.
 
 ## Related specs
 

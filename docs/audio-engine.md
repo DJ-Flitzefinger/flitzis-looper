@@ -110,6 +110,14 @@ Implemented first slice:
   `play_sample` behavior.
 - Scheduled events inside an output buffer split rendering at the target frame so starts and
   stops occur at the intended sample-frame offset.
+- `AudioEngine.set_trigger_quantization("immediate" | "next_beat" | "next_bar")` publishes a
+  fixed-size trigger-quantization mode update to the audio thread. The default remains
+  immediate.
+- When trigger quantization is set to next beat or next bar and master BPM is available, Rust
+  computes the target frame from `TransportTimeline` and schedules `PlaySample` at that absolute
+  output frame. If master BPM is unavailable, the request falls back to immediate playback.
+- Scheduler-full quantized play requests are rejected without evicting existing scheduled events
+  or changing currently playing pads.
 
 The planned direction is:
 
@@ -140,6 +148,9 @@ The Rust engine is exposed to Python as `AudioEngine` with:
   - `load_sample_async(id, path)` schedules loading on a Rust background thread.
   - `poll_loader_events()` polls for background loader events (e.g. started/success/error).
   - `play_sample(id, velocity)` triggers playback (`velocity` in `0.0..=1.0`).
+  - `set_trigger_quantization(mode)` sets low-level Rust trigger quantization mode. Supported
+    modes are `"immediate"`, `"next_beat"`, and `"next_bar"`; UI/controller controls are not
+    wired yet.
 
 - Messaging utilities
   - `ping()` sends a ping to the audio thread.
@@ -149,7 +160,8 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 
 - Audio device selection/configuration (the engine currently uses the default output device/config).
 - Broader channel-layout support; currently decoding only supports mono↔stereo mapping.
-- Quantized pad trigger routing through the scheduler.
+- UI/controller controls for trigger quantization.
+- Atomic quantized stop-all/start transitions for MultiLoop-disabled playback.
 - Phase-aware beat/bar/downbeat playback alignment.
 - Real-time stem separation is intentionally out of scope.
 

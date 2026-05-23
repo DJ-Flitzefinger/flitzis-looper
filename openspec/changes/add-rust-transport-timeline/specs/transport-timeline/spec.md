@@ -133,6 +133,10 @@ When quantization is disabled, existing immediate trigger behavior SHALL be pres
 quantization is enabled, Rust SHALL compute the target output frame from the current
 transport state and insert the trigger into the fixed-capacity scheduler.
 
+The default trigger quantization mode SHALL be disabled/immediate. Control code MAY update
+the mode through a fixed-size control message. UI/controller controls MAY be added
+separately, but the audio thread SHALL own the effective mode used for scheduling.
+
 #### Scenario: Quantization disabled preserves immediate start
 - **GIVEN** trigger quantization is disabled
 - **AND** a sample is loaded into a pad
@@ -144,6 +148,12 @@ transport state and insert the trigger into the fixed-capacity scheduler.
 - **AND** trigger quantization is set to next bar
 - **WHEN** a loaded pad is triggered between bar boundaries
 - **THEN** Rust schedules the pad start for the next bar boundary's absolute output frame
+
+#### Scenario: Next-beat trigger starts at a beat boundary
+- **GIVEN** master BPM and downbeat anchor are available
+- **AND** trigger quantization is set to next beat
+- **WHEN** a loaded pad is triggered between beat boundaries
+- **THEN** Rust schedules the pad start for the next beat boundary's absolute output frame
 
 ### Requirement: Beatgrid And Downbeat Metadata Integrates With Transport
 The system SHALL integrate pad beatgrid and downbeat metadata with Rust playback timing by

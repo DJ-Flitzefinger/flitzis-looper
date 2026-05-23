@@ -11,7 +11,8 @@ use crate::audio_engine::sample_loader::{
     decode_audio_file_to_sample_buffer,
 };
 use crate::messages::{
-    AudioMessage, BackgroundTaskKind, ControlMessage, LoaderEvent, SampleBuffer, task_to_str,
+    AudioMessage, BackgroundTaskKind, ControlMessage, LoaderEvent, SampleBuffer,
+    TriggerQuantization, task_to_str,
 };
 use numpy::{PyArray1, ToPyArray};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -53,6 +54,15 @@ type WaveformResult = PyResult<
         Option<Py<PyArray1<f32>>>,
     )>,
 >;
+
+fn parse_trigger_quantization(mode: &str) -> Option<TriggerQuantization> {
+    match mode {
+        "immediate" | "disabled" | "off" => Some(TriggerQuantization::Immediate),
+        "next_beat" | "next-beat" | "beat" => Some(TriggerQuantization::NextBeat),
+        "next_bar" | "next-bar" | "bar" => Some(TriggerQuantization::NextBar),
+        _ => None,
+    }
+}
 
 struct PadLoadingGuard {
     id: usize,
@@ -777,6 +787,32 @@ impl AudioEngine {
 
         let _ = producer_guard.push(ControlMessage::SetPadLoopRegion { id, start_s, end_s });
         Ok(())
+    }
+
+    pub fn set_trigger_quantization(&mut self, mode: &str) -> PyResult<()> {
+        let mode = parse_trigger_quantization(mode).ok_or_else(|| {
+            PyValueError::new_err(
+                "trigger quantization mode must be immediate, next_beat, or next_bar",
+            )
+        })?;
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        producer_guard
+            .push(ControlMessage::SetTriggerQuantization(mode))
+            .map_err(|_| {
+                PyRuntimeError::new_err(
+                    "Failed to send SetTriggerQuantization - buffer may be full",
+                )
+            })
     }
 
     /// Stop playback of a previously triggered sample.

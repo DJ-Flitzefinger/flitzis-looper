@@ -109,6 +109,35 @@ def test_stop_all_is_safe_when_nothing_playing(audio_engine: AudioEngine) -> Non
     audio_engine.stop_all()
 
 
+def test_set_trigger_quantization_accepts_supported_modes(audio_engine: AudioEngine) -> None:
+    modes = (
+        "immediate",
+        "disabled",
+        "off",
+        "next_beat",
+        "next-beat",
+        "beat",
+        "next_bar",
+        "next-bar",
+        "bar",
+    )
+
+    for mode in modes:
+        audio_engine.set_trigger_quantization(mode)
+
+
+def test_set_trigger_quantization_rejects_invalid_mode(audio_engine: AudioEngine) -> None:
+    with pytest.raises(ValueError, match=r"trigger quantization mode"):
+        audio_engine.set_trigger_quantization("half_note")
+
+
+def test_set_trigger_quantization_requires_initialized_engine() -> None:
+    engine = AudioEngine()
+
+    with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
+        engine.set_trigger_quantization("next_beat")
+
+
 def test_load_sample_async_emits_started_and_error_for_missing_file(
     audio_engine: AudioEngine,
 ) -> None:
