@@ -4,7 +4,12 @@ import pytest
 
 from flitzis_looper.constants import NUM_SAMPLES
 from flitzis_looper.controller.loader import LoaderController
-from flitzis_looper.models import ProjectState, SessionState, StemCacheEntry
+from flitzis_looper.controller.stems import (
+    cache_dir_for_source_version,
+    expected_stem_files,
+    source_version_for_sample_path,
+)
+from flitzis_looper.models import STEM_KINDS, ProjectState, SessionState, StemCacheEntry
 from flitzis_looper_audio import AudioEngine
 from tests.conftest import write_mono_pcm16_wav
 
@@ -320,6 +325,122 @@ def test_stem_task_events_update_generation_state(
     assert 0 not in controller.session.stem_generation_progress
     assert 0 not in controller.session.stem_generation_stage
     assert controller.session.stem_generation_errors[0] == "not implemented"
+
+
+def test_stem_task_success_marks_complete_current_cache_available(
+    controller: AppController, audio_engine_mock: Mock, tmp_path: Path
+) -> None:
+    samples_dir = tmp_path / "samples"
+    samples_dir.mkdir()
+    sample_path = samples_dir / "loop.wav"
+    write_mono_pcm16_wav(sample_path, 44_100)
+    controller.project.sample_paths[0] = "samples/loop.wav"
+
+    source_version = source_version_for_sample_path("samples/loop.wav")
+    assert source_version is not None
+    cache_dir = cache_dir_for_source_version(source_version)
+    stems_dir = tmp_path / cache_dir
+    stems_dir.mkdir(parents=True)
+    for kind in STEM_KINDS:
+        (stems_dir / f"{kind}.wav").write_bytes(b"stem")
+
+    controller.project.stem_cache[0] = StemCacheEntry(
+        source_version=source_version,
+        cache_dir=cache_dir,
+        stems=expected_stem_files(cache_dir),
+        available=False,
+    )
+    controller.session.stem_generating_sample_ids.add(0)
+    controller.session.stem_generation_source_versions[0] = source_version
+    controller.session.stem_generation_progress[0] = 0.5
+    controller.session.stem_generation_stage[0] = "Writing stem cache"
+    audio_engine_mock.poll_loader_events.side_effect = [
+        {"type": "task_success", "id": 0, "task": "stem_generation"},
+        None,
+    ]
+
+    controller.loader.poll_loader_events()
+
+    entry = controller.project.stem_cache[0]
+    assert entry is not None
+    assert entry.available is True
+    assert 0 not in controller.session.stem_generating_sample_ids
+    assert 0 not in controller.session.stem_generation_source_versions
+    assert 0 not in controller.session.stem_generation_progress
+    assert 0 not in controller.session.stem_generation_stage
+
+
+def test_stem_task_success_keeps_cache_unavailable_when_pad_started(
+    controller: AppController, audio_engine_mock: Mock, tmp_path: Path
+) -> None:
+    samples_dir = tmp_path / "samples"
+    samples_dir.mkdir()
+    sample_path = samples_dir / "loop.wav"
+    write_mono_pcm16_wav(sample_path, 44_100)
+    controller.project.sample_paths[0] = "samples/loop.wav"
+
+    source_version = source_version_for_sample_path("samples/loop.wav")
+    assert source_version is not None
+    cache_dir = cache_dir_for_source_version(source_version)
+    stems_dir = tmp_path / cache_dir
+    stems_dir.mkdir(parents=True)
+    for kind in STEM_KINDS:
+        (stems_dir / f"{kind}.wav").write_bytes(b"stem")
+
+    controller.project.stem_cache[0] = StemCacheEntry(
+        source_version=source_version,
+        cache_dir=cache_dir,
+        stems=expected_stem_files(cache_dir),
+        available=False,
+    )
+    controller.session.stem_generating_sample_ids.add(0)
+    controller.session.stem_generation_source_versions[0] = source_version
+    controller.session.active_sample_ids.add(0)
+    audio_engine_mock.poll_loader_events.side_effect = [
+        {"type": "task_success", "id": 0, "task": "stem_generation"},
+        None,
+    ]
+
+    controller.loader.poll_loader_events()
+
+    entry = controller.project.stem_cache[0]
+    assert entry is not None
+    assert entry.available is False
+    assert 0 not in controller.session.stem_generating_sample_ids
+
+
+def test_stem_task_success_clears_stale_source_version(
+    controller: AppController, audio_engine_mock: Mock, tmp_path: Path
+) -> None:
+    samples_dir = tmp_path / "samples"
+    samples_dir.mkdir()
+    old_path = samples_dir / "old.wav"
+    new_path = samples_dir / "new.wav"
+    write_mono_pcm16_wav(old_path, 44_100)
+    write_mono_pcm16_wav(new_path, 44_100)
+    controller.project.sample_paths[0] = "samples/old.wav"
+
+    old_version = source_version_for_sample_path("samples/old.wav")
+    assert old_version is not None
+    cache_dir = cache_dir_for_source_version(old_version)
+    controller.project.stem_cache[0] = StemCacheEntry(
+        source_version=old_version,
+        cache_dir=cache_dir,
+        stems=expected_stem_files(cache_dir),
+        available=False,
+    )
+    controller.session.stem_generating_sample_ids.add(0)
+    controller.session.stem_generation_source_versions[0] = old_version
+    controller.project.sample_paths[0] = "samples/new.wav"
+    audio_engine_mock.poll_loader_events.side_effect = [
+        {"type": "task_success", "id": 0, "task": "stem_generation"},
+        None,
+    ]
+
+    controller.loader.poll_loader_events()
+
+    assert controller.project.stem_cache[0] is None
+    assert 0 not in controller.session.stem_generating_sample_ids
 
 
 def test_stale_stem_task_error_is_ignored(

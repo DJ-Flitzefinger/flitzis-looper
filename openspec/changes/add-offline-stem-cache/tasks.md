@@ -15,6 +15,7 @@
 - [x] 3.3 Ensure neural inference, disk I/O, temporary files, and heavy allocation run only outside the audio callback.
 - [x] 3.4 Report progress and errors without freezing the UI.
 - [x] 3.5 Add Python/controller tests for task gating, progress, failure, and stale-source behavior.
+- [x] 3.6 Write deterministic aligned stem cache artifacts outside the audio callback without Rust publication or mixer changes.
 
 ## 4. Prepared Stem Publication
 - [ ] 4.1 Validate generated stem buffers for sample rate, channel layout, frame origin, and usable length before publication.

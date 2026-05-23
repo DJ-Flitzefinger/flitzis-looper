@@ -10,6 +10,7 @@ use crate::audio_engine::sample_loader::{
     SampleLoadProgress, SampleLoadSubtask, cache_audio_file_for_project,
     decode_audio_file_to_sample_buffer,
 };
+use crate::audio_engine::stem_cache::{project_stem_cache_dir, write_deterministic_stem_artifacts};
 use crate::messages::{
     AudioMessage, BackgroundTaskKind, ControlMessage, LoaderEvent, PadTimingMetadata, SampleBuffer,
     TriggerQuantization, task_to_str,
@@ -36,6 +37,7 @@ mod mixer;
 mod progress;
 mod sample_loader;
 mod scheduler;
+mod stem_cache;
 mod stretch_processor;
 mod transport;
 mod voice_slot;
@@ -439,7 +441,7 @@ impl AudioEngine {
             let _ = loader_tx.send(LoaderEvent::TaskSuccess {
                 id,
                 task: BackgroundTaskKind::Analysis,
-                analysis,
+                analysis: Some(analysis),
             });
         });
 
@@ -448,9 +450,15 @@ impl AudioEngine {
 
     /// Schedule offline stem generation on a background thread.
     ///
-    /// This API currently provides source-version-aware task gating and progress/error events.
-    /// Neural inference and prepared stem publication are intentionally not implemented here yet.
-    pub fn generate_stems_async(&self, id: usize, source_version: String) -> PyResult<()> {
+    /// This API currently provides source-version-aware task gating and deterministic cache
+    /// artifact writing. Neural inference and prepared stem publication are intentionally not
+    /// implemented here yet.
+    pub fn generate_stems_async(
+        &self,
+        id: usize,
+        source_version: String,
+        cache_dir: String,
+    ) -> PyResult<()> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err(format!(
                 "id out of range (expected 0..{}, got {id})",
@@ -462,9 +470,13 @@ impl AudioEngine {
             return Err(PyValueError::new_err("source_version must not be empty"));
         }
 
-        self.stream_handle
+        project_stem_cache_dir(&cache_dir).map_err(PyValueError::new_err)?;
+
+        let handle = self
+            .stream_handle
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        let output_sample_rate = handle.output_sample_rate;
 
         {
             let loading = self
@@ -476,15 +488,16 @@ impl AudioEngine {
             }
         }
 
-        {
+        let sample = {
             let cache = self
                 .sample_cache
                 .lock()
                 .map_err(|_| PyRuntimeError::new_err("Failed to acquire sample cache lock"))?;
-            if cache.get(id).and_then(|slot| slot.as_ref()).is_none() {
-                return Err(PyValueError::new_err("sample is not loaded"));
-            }
-        }
+            cache
+                .get(id)
+                .and_then(|slot| slot.clone())
+                .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?
+        };
 
         {
             let mut tasks = self
@@ -516,14 +529,38 @@ impl AudioEngine {
                 id,
                 task: BackgroundTaskKind::StemGeneration,
                 percent: 0.0,
-                stage: "Generating stems…".to_string(),
+                stage: "Generating stems".to_string(),
             });
 
-            let _ = loader_tx.send(LoaderEvent::TaskError {
-                id,
-                task: BackgroundTaskKind::StemGeneration,
-                error: "Stem generation is not implemented yet".to_string(),
-            });
+            let result =
+                write_deterministic_stem_artifacts(&sample, output_sample_rate, &cache_dir, {
+                    let loader_tx = loader_tx.clone();
+                    move |percent, stage| {
+                        let _ = loader_tx.send(LoaderEvent::TaskProgress {
+                            id,
+                            task: BackgroundTaskKind::StemGeneration,
+                            percent,
+                            stage: stage.to_string(),
+                        });
+                    }
+                });
+
+            match result {
+                Ok(()) => {
+                    let _ = loader_tx.send(LoaderEvent::TaskSuccess {
+                        id,
+                        task: BackgroundTaskKind::StemGeneration,
+                        analysis: None,
+                    });
+                }
+                Err(error) => {
+                    let _ = loader_tx.send(LoaderEvent::TaskError {
+                        id,
+                        task: BackgroundTaskKind::StemGeneration,
+                        error,
+                    });
+                }
+            }
         });
 
         Ok(())
@@ -608,16 +645,19 @@ impl AudioEngine {
                 dict.set_item("id", id)?;
                 dict.set_item("task", task_to_str(task))?;
 
-                let analysis_dict = PyDict::new(py);
-                analysis_dict.set_item("bpm", analysis.bpm)?;
-                analysis_dict.set_item("key", analysis.key)?;
+                if let Some(analysis) = analysis {
+                    let analysis_dict = PyDict::new(py);
+                    analysis_dict.set_item("bpm", analysis.bpm)?;
+                    analysis_dict.set_item("key", analysis.key)?;
 
-                let beat_grid_dict = PyDict::new(py);
-                beat_grid_dict.set_item("beats", &analysis.beat_grid.beats)?;
-                beat_grid_dict.set_item("downbeats", &analysis.beat_grid.downbeats)?;
-                analysis_dict.set_item("beat_grid", beat_grid_dict)?;
+                    let beat_grid_dict = PyDict::new(py);
+                    beat_grid_dict.set_item("beats", &analysis.beat_grid.beats)?;
+                    beat_grid_dict.set_item("downbeats", &analysis.beat_grid.downbeats)?;
+                    beat_grid_dict.set_item("bars", &analysis.beat_grid.bars)?;
+                    analysis_dict.set_item("beat_grid", beat_grid_dict)?;
 
-                dict.set_item("analysis", analysis_dict)?;
+                    dict.set_item("analysis", analysis_dict)?;
+                }
             }
             LoaderEvent::TaskError { id, task, error } => {
                 dict.set_item("type", "task_error")?;

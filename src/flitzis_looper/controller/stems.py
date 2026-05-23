@@ -82,15 +82,15 @@ class StemController(BaseController):
 
         self._session.stem_generating_sample_ids.add(sample_id)
         self._session.stem_generation_source_versions[sample_id] = source_version
+        cache_dir = cache_dir_for_source_version(source_version)
 
         try:
-            self._audio.generate_stems_async(sample_id, source_version)
+            self._audio.generate_stems_async(sample_id, source_version, cache_dir)
         except (RuntimeError, ValueError) as err:
             self._clear_stem_generation_state(sample_id)
             self._session.stem_generation_errors[sample_id] = str(err)
             return False
 
-        cache_dir = cache_dir_for_source_version(source_version)
         self._project.stem_cache[sample_id] = StemCacheEntry(
             source_version=source_version,
             cache_dir=cache_dir,

@@ -88,13 +88,15 @@ inactive pads only. Future stem publication must send fixed-size descriptors and
 audio-buffer handles through the existing control-to-audio ring buffer; messages must not contain
 file paths, Python objects, unbounded metadata vectors, or copied full stem payloads.
 
-The current first implementation slice adds only control-plane gating and task status. Python
+The current implementation keeps stem cache work in control-plane/background code. Python
 computes a source-version token outside the callback and calls
-`AudioEngine.generate_stems_async(id, source_version)` only after rejecting active, loading,
-analyzing, duplicate, or missing-source pads. Rust models `stem_generation` as a per-pad
-background task kind and reports started/progress/error events through `poll_loader_events()`.
-The current task intentionally reports that stem generation is not implemented yet; it does not
-publish stem buffers or send any stem publication message to the audio callback.
+`AudioEngine.generate_stems_async(id, source_version, cache_dir)` only after rejecting active,
+loading, analyzing, duplicate, or missing-source pads. Rust models `stem_generation` as a per-pad
+background task kind and reports started/progress/success/error events through
+`poll_loader_events()`. The current task writes deterministic aligned WAV cache artifacts under
+`samples/stems/<source-version-hash>/` outside the audio callback: `instrumental.wav` contains the
+full mix, while the other expected stem files are silence placeholders. It does not publish stem
+buffers or send any stem publication message to the audio callback.
 
 The audio callback may eventually accept already prepared stem handles into bounded audio-thread
 state and mix them with the same voice playhead and loop timing as full-mix playback. It must not

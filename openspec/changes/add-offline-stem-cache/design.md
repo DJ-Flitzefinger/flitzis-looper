@@ -79,6 +79,20 @@ the old source version and must not leave stale stems eligible for playback.
 Cache cleanup can be best-effort outside the audio callback. Missing cache files must not
 crash project load, sample unload, or playback.
 
+### Initial Artifact Writer
+The first implementation writes deterministic project-local WAV artifacts under the
+existing `samples/stems/<source-version-hash>/` cache directory. The task runs on a Rust
+background thread from the already decoded and resampled `SampleBuffer`, so every written
+artifact uses the mixer output sample rate, the mixer channel layout, the same frame origin,
+and the same frame length as the loaded full-mix buffer.
+
+This writer intentionally does not choose or run a neural separation model. Until a
+production source-separation slice is specified, `instrumental.wav` contains the aligned
+full mix and `vocals.wav`, `melody.wav`, `bass.wav`, and `drums.wav` contain aligned
+silence placeholders. This proves cache identity, artifact layout, background disk I/O,
+completion validation, and safe stale-result handling without publishing buffers to the
+audio callback or exposing performer-facing stem controls.
+
 ### Publication To Rust
 Prepared stem buffers are published to Rust only after background generation and validation
 complete. The control-to-audio message should contain bounded scalar metadata and shared
@@ -116,8 +130,6 @@ full-mix playback behavior.
   provide.
 
 ## Open Questions
-- Exact stem artifact directory layout under the project.
-- Exact source-version token used to validate cached stems.
 - Whether stem generation is implemented in Rust, Python, or an external worker process.
 - Whether availability/progress events reuse `LoaderEvent` or introduce a separate
   background-task event API.

@@ -250,7 +250,7 @@ pub enum LoaderEvent {
     TaskSuccess {
         id: usize,
         task: BackgroundTaskKind,
-        analysis: SampleAnalysis,
+        analysis: Option<SampleAnalysis>,
     },
 
     /// A per-pad task failed.

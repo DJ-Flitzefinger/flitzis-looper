@@ -1,4 +1,5 @@
 import time
+import wave
 from typing import TYPE_CHECKING
 
 import pytest
@@ -8,6 +9,29 @@ from tests.conftest import write_mono_pcm16_wav
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def _wait_for_loader_event(
+    audio_engine: AudioEngine,
+    sample_id: int,
+    event_type: str,
+    *,
+    task: str | None = None,
+) -> dict[str, object]:
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        event = audio_engine.poll_loader_events()
+        if event is None:
+            time.sleep(0.01)
+            continue
+
+        if event.get("id") != sample_id or event.get("type") != event_type:
+            continue
+        if task is not None and event.get("task") != task:
+            continue
+        return event
+
+    pytest.fail(f"timed out waiting for {event_type!r} event")
 
 
 @pytest.mark.parametrize("sample_rate_hz", [48_000, 44_100])
@@ -74,7 +98,7 @@ def test_sample_slot_id_range_is_0_to_215(audio_engine: AudioEngine) -> None:
         audio_engine.anchor_transport_phase_from_pad(216)
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.generate_stems_async(216, "source")
+        audio_engine.generate_stems_async(216, "source", "samples/stems/cache")
 
     with pytest.raises(ValueError, match=r"id out of range"):
         audio_engine.stop_sample(216)
@@ -186,12 +210,40 @@ def test_generate_stems_async_requires_initialized_engine() -> None:
     engine = AudioEngine()
 
     with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
-        engine.generate_stems_async(0, "source")
+        engine.generate_stems_async(0, "source", "samples/stems/cache")
 
 
 def test_generate_stems_async_rejects_empty_source_version(audio_engine: AudioEngine) -> None:
     with pytest.raises(ValueError, match=r"source_version"):
-        audio_engine.generate_stems_async(0, "")
+        audio_engine.generate_stems_async(0, "", "samples/stems/cache")
+
+
+def test_generate_stems_async_rejects_invalid_cache_dir(audio_engine: AudioEngine) -> None:
+    with pytest.raises(ValueError, match=r"stem cache directory"):
+        audio_engine.generate_stems_async(0, "source", "../samples/stems/cache")
+
+
+def test_generate_stems_async_writes_project_cache_artifacts(
+    audio_engine: AudioEngine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    wav_path = tmp_path / "sample.wav"
+    write_mono_pcm16_wav(wav_path, audio_engine.output_sample_rate())
+
+    audio_engine.load_sample_async(0, str(wav_path), run_analysis=False)
+    _wait_for_loader_event(audio_engine, 0, "success")
+
+    cache_dir = "samples/stems/cache"
+    audio_engine.generate_stems_async(0, "source-version", cache_dir)
+    _wait_for_loader_event(audio_engine, 0, "task_success", task="stem_generation")
+
+    for stem_name in ("vocals", "melody", "bass", "drums", "instrumental"):
+        path = tmp_path / cache_dir / f"{stem_name}.wav"
+        assert path.is_file()
+        with wave.open(str(path), "rb") as wav:
+            assert wav.getframerate() == audio_engine.output_sample_rate()
+            assert wav.getnframes() == 128
+            assert wav.getnchannels() >= 1
 
 
 def test_load_sample_async_emits_started_and_error_for_missing_file(

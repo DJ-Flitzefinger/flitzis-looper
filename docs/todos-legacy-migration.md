@@ -116,8 +116,9 @@ Gen3 constraint: stem generation must be offline/cache-based and only available 
 that are not currently playing. The audio callback must never run stem separation, neural
 network inference, or disk I/O; it may only mix already prepared audio buffers. The active
 planning slice now has the first cache metadata/source-version model and background-task gating
-in place, but actual stem generation, stem publication, mixer support, and performer-facing stem
-UI controls remain later slices.
+in place. A deterministic non-neural cache writer now creates aligned placeholder WAV artifacts
+outside the audio callback, but production source separation, stem publication, mixer support, and
+performer-facing stem UI controls remain later slices.
 
 ### 13) Persistence (config/state)
 - [x] As a user, my bank/pad assignments persist across restarts.

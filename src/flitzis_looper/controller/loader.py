@@ -5,11 +5,19 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from flitzis_looper.controller.base import BaseController
-from flitzis_looper.models import ProjectState, SampleAnalysis, SessionState, validate_sample_id
+from flitzis_looper.controller.stems import source_version_for_sample_path
+from flitzis_looper.models import (
+    STEM_KINDS,
+    ProjectState,
+    SampleAnalysis,
+    SessionState,
+    validate_sample_id,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from flitzis_looper.models import StemCacheEntry
     from flitzis_looper_audio import AudioEngine
 
 
@@ -336,8 +344,7 @@ class LoaderController(BaseController):
     def _handle_task_success(self, sample_id: int, event: dict[str, object]) -> None:
         task = event.get("task")
         if task == "stem_generation":
-            if sample_id in self._session.stem_generating_sample_ids:
-                self._clear_stem_generation_state(sample_id)
+            self._handle_stem_generation_success(sample_id)
             return
 
         if task != "analysis":
@@ -345,6 +352,53 @@ class LoaderController(BaseController):
 
         self._store_sample_analysis(sample_id, event.get("analysis"))
         self._clear_analysis_task_state(sample_id)
+
+    def _handle_stem_generation_success(self, sample_id: int) -> None:
+        if sample_id not in self._session.stem_generating_sample_ids:
+            return
+
+        source_version = self._session.stem_generation_source_versions.get(sample_id)
+        self._clear_stem_generation_state(sample_id)
+        if source_version is None:
+            return
+
+        entry = self._project.stem_cache[sample_id]
+        if entry is None or entry.source_version != source_version:
+            return
+
+        current_source_version = self._source_version_for_pad(sample_id)
+        if current_source_version != source_version:
+            self._project.stem_cache[sample_id] = None
+            self._mark_project_changed()
+            return
+
+        if sample_id in self._session.active_sample_ids:
+            return
+
+        if not self._stem_cache_files_available(entry):
+            self._session.stem_generation_errors[sample_id] = (
+                "Stem generation completed but cache files are incomplete"
+            )
+            return
+
+        if not entry.available:
+            self._project.stem_cache[sample_id] = entry.model_copy(update={"available": True})
+            self._mark_project_changed()
+
+    def _source_version_for_pad(self, sample_id: int) -> str | None:
+        sample_path = self._project.sample_paths[sample_id]
+        if sample_path is None:
+            return None
+        return source_version_for_sample_path(sample_path)
+
+    def _stem_cache_files_available(self, entry: StemCacheEntry) -> bool:
+        for kind in STEM_KINDS:
+            path = entry.stems.path_for(kind)
+            if path is None:
+                return False
+            if not (Path.cwd() / Path(path)).is_file():
+                return False
+        return True
 
     def _handle_task_error(self, sample_id: int, event: dict[str, object]) -> None:
         task = event.get("task")

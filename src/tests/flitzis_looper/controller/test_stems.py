@@ -62,11 +62,13 @@ def test_generate_stems_async_schedules_stopped_loaded_pad(
 
     assert scheduled is True
     version = controller.session.stem_generation_source_versions[0]
-    audio_engine_mock.generate_stems_async.assert_called_once_with(0, version)
+    cache_dir = cache_dir_for_source_version(version)
+    audio_engine_mock.generate_stems_async.assert_called_once_with(0, version, cache_dir)
     assert 0 in controller.session.stem_generating_sample_ids
     entry = controller.project.stem_cache[0]
     assert entry is not None
     assert entry.source_version == version
+    assert entry.cache_dir == cache_dir
     assert entry.available is False
 
 
