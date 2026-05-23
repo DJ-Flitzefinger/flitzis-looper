@@ -106,10 +106,12 @@ publication request fails outside the callback and full-mix playback is unchange
 reaches the callback after the pad has become active or stale, the callback rejects the publication
 without touching full-mix playback.
 
-The audio callback can now accept already prepared stem handles into bounded audio-thread state,
-but rendering still uses the full-mix buffer until a later stem-mixing slice. The callback must not
-generate stems, read cache files, decode audio, run neural inference, allocate stem buffers, log,
-block, or acquire the Python GIL.
+The audio callback can now accept already prepared stem handles into bounded audio-thread state.
+When a complete prepared set is present, the mixer can fill the existing per-voice stretch input
+from the summed stem handles at the same loop-relative frame positions used by full-mix playback.
+If the set is missing, stale, incomplete, rejected, or fails bounded render-shape checks, rendering
+falls back to the loaded full-mix buffer. The callback must not generate stems, read cache files,
+decode audio, run neural inference, allocate stem buffers, log, block, or acquire the Python GIL.
 
 ## Not implemented (yet)
 

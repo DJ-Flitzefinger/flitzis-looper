@@ -103,6 +103,70 @@ fn wrap_frame_into_region(frame: f64, region: FrameRange) -> Option<usize> {
     Some(region.start + offset)
 }
 
+fn full_stem_available_mask() -> u8 {
+    ((1_u16 << STEM_BUFFER_COUNT) - 1) as u8
+}
+
+fn prepared_stem_set_matches_sample(
+    stems: &PreparedStemSet,
+    sample: &SampleBuffer,
+    channels: usize,
+    sample_rate_hz: f32,
+    sample_frames: usize,
+) -> bool {
+    if channels == 0 || sample_frames == 0 || sample.samples.len() != sample_frames * channels {
+        return false;
+    }
+
+    let rounded_sample_rate_hz = sample_rate_hz.round();
+    if !rounded_sample_rate_hz.is_finite()
+        || rounded_sample_rate_hz <= 0.0
+        || stems.sample_rate_hz != rounded_sample_rate_hz as u32
+    {
+        return false;
+    }
+
+    if stems.channels != channels
+        || stems.frame_count != sample_frames
+        || stems.available_mask != full_stem_available_mask()
+        || stems.source_version_hash == 0
+    {
+        return false;
+    }
+
+    stems
+        .stems
+        .iter()
+        .all(|stem| stem.channels == channels && stem.samples.len() == sample.samples.len())
+}
+
+fn prepared_stem_set_for_render<'a>(
+    stems: Option<&'a PreparedStemSet>,
+    sample: &SampleBuffer,
+    channels: usize,
+    sample_rate_hz: f32,
+    sample_frames: usize,
+) -> Option<&'a PreparedStemSet> {
+    stems.filter(|stems| {
+        prepared_stem_set_matches_sample(stems, sample, channels, sample_rate_hz, sample_frames)
+    })
+}
+
+fn render_source_sample(
+    sample: &SampleBuffer,
+    stems: Option<&PreparedStemSet>,
+    frame: usize,
+    channels: usize,
+    channel: usize,
+) -> f32 {
+    let index = frame * channels + channel;
+    if let Some(stems) = stems {
+        stems.stems.iter().map(|stem| stem.samples[index]).sum()
+    } else {
+        sample.samples[index]
+    }
+}
+
 /// Real-time mixer that handles sample loading and voice management.
 ///
 /// The mixer maintains a sample bank with preloaded audio samples and manages
@@ -241,29 +305,14 @@ impl RtMixer {
             return false;
         };
 
-        let sample_rate_hz = self.sample_rate_hz.round();
-        if !sample_rate_hz.is_finite()
-            || sample_rate_hz <= 0.0
-            || stems.sample_rate_hz != sample_rate_hz as u32
-        {
-            return false;
-        }
-
-        if stems.channels != self.channels
-            || stems.available_mask != ((1_u16 << STEM_BUFFER_COUNT) - 1) as u8
-            || stems.source_version_hash == 0
-        {
-            return false;
-        }
-
         let sample_frames = sample.samples.len() / self.channels;
-        if sample_frames == 0 || stems.frame_count != sample_frames {
-            return false;
-        }
-
-        stems.stems.iter().all(|stem| {
-            stem.channels == self.channels && stem.samples.len() == sample.samples.len()
-        })
+        prepared_stem_set_matches_sample(
+            stems,
+            sample,
+            self.channels,
+            self.sample_rate_hz,
+            sample_frames,
+        )
     }
 
     fn sample_is_active(&self, id: usize) -> bool {
@@ -738,6 +787,7 @@ impl RtMixer {
         let pad_bpm = &self.pad_bpm;
         let pad_gain = &self.pad_gain;
         let pad_eq = &self.pad_eq;
+        let prepared_stem_slots = &self.prepared_stems;
 
         for voice in &mut self.voices {
             if !voice.active {
@@ -757,6 +807,13 @@ impl RtMixer {
                     voice.stop();
                     continue;
                 }
+                let prepared_stem_set = prepared_stem_set_for_render(
+                    prepared_stem_slots[voice.sample_id].as_ref(),
+                    &sample,
+                    self.channels,
+                    self.sample_rate_hz,
+                    sample_frames,
+                );
 
                 let mut target_tempo_ratio = speed;
                 if bpm_lock_enabled
@@ -804,7 +861,13 @@ impl RtMixer {
                 for (channel, buf) in input_buffers.iter_mut().enumerate().take(self.channels) {
                     for (i, sample_ref) in buf.iter_mut().enumerate().take(input_frames) {
                         let frame = loop_start + ((base + i) % loop_len);
-                        *sample_ref = sample.samples[frame * self.channels + channel];
+                        *sample_ref = render_source_sample(
+                            &sample,
+                            prepared_stem_set,
+                            frame,
+                            self.channels,
+                            channel,
+                        );
                     }
                 }
 
@@ -887,8 +950,24 @@ mod tests {
             sample_rate_hz,
             channels,
             frame_count: frames,
-            available_mask: ((1_u16 << STEM_BUFFER_COUNT) - 1) as u8,
+            available_mask: full_stem_available_mask(),
             stems: std::array::from_fn(|_| buffer.clone()),
+        }
+    }
+
+    fn create_test_prepared_stems_with_values(
+        channels: usize,
+        sample_rate_hz: u32,
+        frames: usize,
+        values: [f32; STEM_BUFFER_COUNT],
+    ) -> PreparedStemSet {
+        PreparedStemSet {
+            source_version_hash: 42,
+            sample_rate_hz,
+            channels,
+            frame_count: frames,
+            available_mask: full_stem_available_mask(),
+            stems: values.map(|value| create_test_sample(channels, frames, value)),
         }
     }
 
@@ -1267,6 +1346,103 @@ mod tests {
         assert!(!mixer.publish_prepared_stems(0, create_test_prepared_stems(2, 44_100, 99)));
 
         assert!(mixer.prepared_stems[0].is_none());
+    }
+
+    #[test]
+    fn test_render_uses_prepared_stems_when_available() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 20, 0.9));
+        let stems =
+            create_test_prepared_stems_with_values(1, 44_100, 20, [0.1, 0.2, 0.05, 0.0, 0.15]);
+        assert!(mixer.publish_prepared_stems(0, stems));
+        assert!(mixer.play_sample(0, 1.0));
+
+        let mut output = vec![0.0; 20];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert!(output.iter().all(|&sample| (sample - 0.5).abs() < 1e-5));
+        assert!((pad_peaks[0] - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_render_falls_back_to_full_mix_for_incomplete_prepared_stems() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 20, 0.4));
+
+        let mut stems =
+            create_test_prepared_stems_with_values(1, 44_100, 20, [0.9, 0.0, 0.0, 0.0, 0.0]);
+        stems.available_mask = 0;
+        mixer.prepared_stems[0] = Some(stems);
+        assert!(mixer.play_sample(0, 1.0));
+
+        let mut output = vec![0.0; 20];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert!(output.iter().all(|&sample| (sample - 0.4).abs() < 1e-5));
+        assert!((pad_peaks[0] - 0.4).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_prepared_stem_render_source_uses_loop_relative_frame_positions() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        let full_mix = SampleBuffer {
+            channels: 1,
+            samples: Arc::from(vec![100.0; 6].into_boxed_slice()),
+        };
+        let stem_values: [[f32; 6]; STEM_BUFFER_COUNT] = [
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            [10.0, 20.0, 30.0, 40.0, 50.0, 60.0],
+            [0.0; 6],
+            [0.0; 6],
+            [0.0; 6],
+        ];
+        let stems = PreparedStemSet {
+            source_version_hash: 42,
+            sample_rate_hz: 10,
+            channels: 1,
+            frame_count: 6,
+            available_mask: full_stem_available_mask(),
+            stems: std::array::from_fn(|index| SampleBuffer {
+                channels: 1,
+                samples: Arc::from(stem_values[index].to_vec().into_boxed_slice()),
+            }),
+        };
+        mixer.load_sample(0, full_mix.clone());
+        mixer.set_pad_loop_region(0, 0.2, Some(0.5));
+
+        let prepared_stems =
+            prepared_stem_set_for_render(Some(&stems), &full_mix, 1, 10.0, 6).unwrap();
+        let region = mixer.effective_loop_region(0, 6).unwrap();
+        let mixed: Vec<f32> = (0..4)
+            .map(|i| {
+                let frame = region.start + (i % region.len());
+                render_source_sample(&full_mix, Some(prepared_stems), frame, 1, 0)
+            })
+            .collect();
+
+        assert_eq!(mixed, vec![33.0, 44.0, 55.0, 33.0]);
+    }
+
+    #[test]
+    fn test_prepared_stem_rendering_shares_bpm_lock_playhead_timing() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 100, 0.2));
+        let stems =
+            create_test_prepared_stems_with_values(1, 44_100, 100, [0.1, 0.05, 0.0, 0.0, 0.05]);
+        assert!(mixer.publish_prepared_stems(0, stems,));
+        mixer.set_bpm_lock(true);
+        mixer.set_master_bpm(120.0);
+        mixer.set_pad_bpm(0, Some(60.0));
+        assert!(mixer.play_sample(0, 1.0));
+
+        let mut output = vec![0.0; 20];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert_eq!(active_voice_frame(&mixer, 0), Some(40));
+        assert!(output.iter().any(|&sample| sample != 0.0));
     }
 
     #[test]

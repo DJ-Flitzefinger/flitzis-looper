@@ -181,7 +181,10 @@ source separation. `AudioEngine.publish_prepared_stems(id, source_version, cache
 validates those cached WAV artifacts against the currently loaded full-mix buffer outside the audio
 callback, then publishes shared immutable prepared-stem handles to Rust through a fixed-size control
 message. The audio callback accepts the handles only for loaded inactive pads and stores them in
-bounded per-pad/per-stem state. Stem rendering, performer-facing UI controls, and production source
+bounded per-pad/per-stem state. When a complete prepared set is present, the mixer can render those
+stem handles through the same voice playhead, loop-region, BPM-lock, key-lock, EQ/gain, metering,
+and playhead-update path used by full-mix playback. Missing, stale, incomplete, or rejected stems
+fall back to the loaded full-mix buffer. Performer-facing stem controls and production source
 separation are still intentionally absent.
 
 The active Gen3 phase-aware sync slice is `openspec/changes/add-phase-aware-playback-sync/`. It
@@ -224,9 +227,9 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 - Broader channel-layout support; currently decoding only supports mono↔stereo mapping.
 - Real-time stem separation is intentionally out of scope.
 - Offline stem cache identity, request gating, and deterministic cache artifact writing are
-  implemented. Prepared stem-buffer validation/publication is implemented, but production source
-  separation, stem mixing, and performer-facing controls are planned in
-  `openspec/changes/add-offline-stem-cache/` and not implemented.
+  implemented. Prepared stem-buffer validation/publication and prepared-stem rendering fallback
+  infrastructure are implemented, but production source separation and performer-facing controls
+  are planned in `openspec/changes/add-offline-stem-cache/` and not implemented.
 
 ## Related specs
 

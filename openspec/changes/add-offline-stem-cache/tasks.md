@@ -25,10 +25,10 @@
 
 ## 5. Prepared Stem Mixing
 - [x] 5.1 Add fixed per-pad/per-stem storage in Rust audio-thread state.
-- [ ] 5.2 Mix prepared stems using the same voice playhead, loop region, transport timing, BPM-lock, and key-lock behavior as full-mix playback.
-- [ ] 5.3 Fall back to full-mix playback when stems are missing, stale, incomplete, or disabled.
-- [ ] 5.4 Treat any audio-thread disk I/O, Python/GIL access, logging, blocking operation, heap allocation, neural inference, or long-running work as a blocker.
-- [ ] 5.5 Add deterministic Rust mixer tests for synchronization, fallback, and real-time-safe state transitions.
+- [x] 5.2 Mix prepared stems using the same voice playhead, loop region, transport timing, BPM-lock, and key-lock behavior as full-mix playback.
+- [x] 5.3 Fall back to full-mix playback when stems are missing, stale, incomplete, or disabled.
+- [x] 5.4 Treat any audio-thread disk I/O, Python/GIL access, logging, blocking operation, heap allocation, neural inference, or long-running work as a blocker.
+- [x] 5.5 Add deterministic Rust mixer tests for synchronization, fallback, and real-time-safe state transitions.
 
 ## 6. Future UI And Persistence Follow-up
 - [ ] 6.1 Design performer-facing stem availability indicators and controls in a separate OpenSpec slice.

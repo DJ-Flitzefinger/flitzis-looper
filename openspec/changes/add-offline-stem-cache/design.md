@@ -103,9 +103,20 @@ length, and exact frame count must match before any handle is published.
 The publication request sends one fixed-size control message containing bounded metadata and
 shared immutable buffer handles. The audio callback accepts the handles into bounded
 per-pad/per-stem storage only when the pad is still loaded and inactive; otherwise it rejects the
-publication without touching full-mix playback. Rendering remains unchanged in this slice:
-prepared stems are stored for a later mixer slice, but voices still play the existing full-mix
-buffer until stem mix controls and stem rendering are explicitly implemented.
+publication without touching full-mix playback.
+
+### Prepared Stem Mixing Slice
+The mixer can now use accepted prepared stem sets as the render source for a pad voice. When a
+valid complete set is present, the audio callback fills the existing per-voice stretch input
+buffers by summing the bounded prepared stem handles at the same frame/channel positions that the
+full-mix buffer would have used. This keeps loop regions, transport-scheduled start frames,
+BPM-lock tempo ratio handling, key-lock stretch processing, EQ/gain, peak metering, and playhead
+updates on the same path as full-mix playback.
+
+When prepared stems are unavailable, stale, incomplete, rejected, or fail bounded render-shape
+checks, rendering falls back to the loaded full-mix `SampleBuffer`. This slice adds no performer
+UI, no stem mute/solo/toggle state, no production source-separation model, and no audio-callback
+disk I/O, Python/GIL access, logging, blocking waits, neural inference, or stem-buffer allocation.
 
 ### Publication To Rust
 Prepared stem buffers are published to Rust only after background generation and validation

@@ -119,8 +119,10 @@ planning slice now has the first cache metadata/source-version model and backgro
 in place. A deterministic non-neural cache writer now creates aligned placeholder WAV artifacts
 outside the audio callback. Prepared stem-buffer validation/publication now sends fixed-size Rust
 control messages with shared immutable handles for inactive current pads, and the callback stores
-accepted handles in bounded state. Production source separation, stem rendering/mix controls, and
-performer-facing stem UI controls remain later slices.
+accepted handles in bounded state. The mixer can render complete prepared stem sets through the
+same voice playhead and loop path as full-mix playback, with full-mix fallback for missing or
+invalid stem data. Production source separation, stem mix controls, and performer-facing stem UI
+controls remain later slices.
 
 ### 13) Persistence (config/state)
 - [x] As a user, my bank/pad assignments persist across restarts.
