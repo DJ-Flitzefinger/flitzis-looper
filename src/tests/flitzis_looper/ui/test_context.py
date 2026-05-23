@@ -355,6 +355,16 @@ class TestAudioActions:
 
         assert controller.project.bpm_lock is not initial_state
 
+    def test_set_trigger_quantization(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        audio_actions = AudioActions(controller)
+
+        audio_actions.global_.set_trigger_quantization("next_beat")
+
+        assert controller.project.trigger_quantization == "next_beat"
+        audio_engine_mock.set_trigger_quantization.assert_called_once_with("next_beat")
+
 
 class TestUiActions:
     """Test UiActions state mutations."""

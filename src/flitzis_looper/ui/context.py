@@ -10,7 +10,12 @@ if TYPE_CHECKING:
     from imgui_bundle import imgui
 
     from flitzis_looper.controller import AppController
-    from flitzis_looper.models import ProjectState, SampleAnalysis, SessionState
+    from flitzis_looper.models import (
+        ProjectState,
+        SampleAnalysis,
+        SessionState,
+        TriggerQuantizationMode,
+    )
     from flitzis_looper_audio import WaveFormRenderData
 
 T = TypeVar("T", bound=BaseModel)
@@ -258,6 +263,9 @@ class GlobalAudioActions:
         self._controller.transport.global_params.set_bpm_lock(
             enabled=not self._controller.project.bpm_lock
         )
+
+    def set_trigger_quantization(self, mode: TriggerQuantizationMode) -> None:
+        self._controller.transport.global_params.set_trigger_quantization(mode)
 
 
 class PollActions:

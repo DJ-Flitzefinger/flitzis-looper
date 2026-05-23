@@ -1,5 +1,5 @@
 import math
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
@@ -18,6 +18,8 @@ from flitzis_looper.constants import (
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+type TriggerQuantizationMode = Literal["immediate", "next_beat", "next_bar"]
 
 
 def _default_sample_paths() -> list[str | None]:
@@ -141,6 +143,8 @@ class ProjectState(BaseModel):
     """Key lock state."""
     bpm_lock: bool = False
     """BPM lock state."""
+    trigger_quantization: TriggerQuantizationMode = "immediate"
+    """Global pad trigger quantization mode."""
     volume: float = Field(default=1.0, ge=VOLUME_MIN, le=VOLUME_MAX)
     """Global volume."""
     speed: float = Field(default=1.0, ge=SPEED_MIN, le=SPEED_MAX)

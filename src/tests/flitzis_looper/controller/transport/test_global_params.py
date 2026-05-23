@@ -1,11 +1,13 @@
 import math
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
+from pydantic import ValidationError
 
 from flitzis_looper.constants import SPEED_MAX, SPEED_MIN, VOLUME_MAX, VOLUME_MIN
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from unittest.mock import Mock
 
     from flitzis_looper.controller import AppController
@@ -252,3 +254,37 @@ def test_set_bpm_lock_disable_clears_anchor(
 
     assert controller.session.bpm_lock_anchor_pad_id is None
     assert controller.session.bpm_lock_anchor_bpm is None
+
+
+def test_set_trigger_quantization_updates_project_and_audio(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.transport.global_params.set_trigger_quantization("next_bar")
+
+    assert controller.project.trigger_quantization == "next_bar"
+    audio_engine_mock.set_trigger_quantization.assert_called_once_with("next_bar")
+
+
+def test_set_trigger_quantization_no_op_for_current_mode(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.project.trigger_quantization = "next_beat"
+
+    controller.transport.global_params.set_trigger_quantization("next_beat")
+
+    audio_engine_mock.set_trigger_quantization.assert_not_called()
+
+
+def test_set_trigger_quantization_rejects_invalid_mode(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    set_trigger_quantization = cast(
+        "Callable[[str], None]",
+        controller.transport.global_params.set_trigger_quantization,
+    )
+
+    with pytest.raises(ValidationError):
+        set_trigger_quantization("half_note")
+
+    assert controller.project.trigger_quantization == "immediate"
+    audio_engine_mock.set_trigger_quantization.assert_not_called()

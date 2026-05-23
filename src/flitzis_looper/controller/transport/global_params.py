@@ -5,6 +5,7 @@ from flitzis_looper.controller.validation import ensure_finite, normalize_bpm
 
 if TYPE_CHECKING:
     from flitzis_looper.controller.transport import TransportController
+    from flitzis_looper.models import TriggerQuantizationMode
 
 
 class GlobalParametersController:
@@ -49,6 +50,15 @@ class GlobalParametersController:
 
         self._audio.set_bpm_lock(enabled=enabled)
         self._bpm.recompute_master_bpm()
+
+    def set_trigger_quantization(self, mode: TriggerQuantizationMode) -> None:
+        """Set global trigger quantization mode."""
+        if mode == self._project.trigger_quantization:
+            return
+
+        self._project.trigger_quantization = mode
+        self._audio.set_trigger_quantization(mode)
+        self._transport._mark_project_changed()
 
     def set_volume(self, volume: float) -> None:
         """Set global volume."""

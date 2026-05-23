@@ -247,6 +247,7 @@ def test_complex_project_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         volume=0.75,
         key_lock=True,
         bpm_lock=True,
+        trigger_quantization="next_bar",
         speed=1.25,
     )
     project.sample_paths[0] = str(wav_path)
@@ -259,6 +260,7 @@ def test_complex_project_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert loaded.volume == pytest.approx(0.75)
     assert loaded.key_lock is True
     assert loaded.bpm_lock is True
+    assert loaded.trigger_quantization == "next_bar"
     assert loaded.speed == pytest.approx(1.25)
     assert loaded.sample_paths[0] == "samples/foo.wav"
 

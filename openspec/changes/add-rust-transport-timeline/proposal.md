@@ -27,11 +27,11 @@ This change defines the first Gen3 audio-timing contract before feature code is 
 
 ## Impact
 - Affected specs: `transport-timeline` (new), `play-samples`, `multi-loop-mode`,
-  `ring-buffer-messaging`, `audio-analysis`.
+  `ring-buffer-messaging`, `audio-analysis`, `performance-ui`.
 - Affected docs: `docs/audio-engine.md`, `docs/message-passing.md`,
   `docs/todos-legacy-migration.md`.
 - Later affected code: Rust audio stream, mixer, message enum, new transport/scheduler
-  modules, and Python transport controls when quantization is exposed.
+  modules, and Python transport/UI controls when quantization is exposed.
 
 ## Non-Goals
 - No production Rust or Python feature implementation in this planning step.

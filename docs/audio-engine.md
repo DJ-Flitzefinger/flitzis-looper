@@ -183,8 +183,8 @@ The Rust engine is exposed to Python as `AudioEngine` with:
   - `play_sample_exclusive(id, velocity)` stops all active voices and starts the requested loaded
     sample as one audio-thread command. The controller uses this for MultiLoop-disabled playback.
   - `set_trigger_quantization(mode)` sets low-level Rust trigger quantization mode. Supported
-    modes are `"immediate"`, `"next_beat"`, and `"next_bar"`; UI/controller controls are not
-    wired yet.
+    modes are `"immediate"`, `"next_beat"`, and `"next_bar"`. The Python controller persists the
+    selected global mode and the performance UI exposes those three supported modes.
   - `set_pad_timing_metadata(id, phase_anchor_s)` publishes a finite non-negative per-pad phase
     anchor derived from analysis metadata. It is stored in Rust state for phase-aware quantized
     playback; full beat-grid vectors are not sent to the callback.
@@ -199,7 +199,6 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 
 - Audio device selection/configuration (the engine currently uses the default output device/config).
 - Broader channel-layout support; currently decoding only supports mono↔stereo mapping.
-- UI/controller controls for trigger quantization.
 - Real-time stem separation is intentionally out of scope.
 
 ## Related specs

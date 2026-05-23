@@ -20,7 +20,7 @@
 - [x] 4.2 Add quantized pad trigger routing for at least next-beat and next-bar scheduling.
 - [x] 4.3 Ensure MultiLoop disabled stop/start transitions execute atomically at one scheduled frame.
 - [x] 4.4 Add Rust mixer/audio-stream tests proving scheduled starts occur at the intended frame offset.
-- [ ] 4.5 Add Python controller tests only when Python-facing quantization controls are introduced.
+- [x] 4.5 Add Python controller tests only when Python-facing quantization controls are introduced.
 
 ## 5. Beatgrid And Downbeat Integration
 - [x] 5.1 Publish bounded per-pad timing metadata to Rust using the existing message-passing architecture.

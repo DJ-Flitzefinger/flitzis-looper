@@ -178,6 +178,7 @@ class TestModelSerialization:
         assert "manual_key" in data
         assert "speed" in data
         assert "volume" in data
+        assert "trigger_quantization" in data
         assert "selected_pad" in data
 
         assert data["sample_analysis"][0]["bpm"] == 120.0
@@ -228,6 +229,7 @@ def test_project_state_defaults(project_state: ProjectState) -> None:
     assert project_state.multi_loop is False
     assert project_state.key_lock is False
     assert project_state.bpm_lock is False
+    assert project_state.trigger_quantization == "immediate"
     assert project_state.speed == 1.0
     assert project_state.volume == 1.0
     assert project_state.selected_pad == 0
@@ -240,6 +242,17 @@ def test_project_state_defaults(project_state: ProjectState) -> None:
     assert all(key is None for key in project_state.manual_key)
     assert project_state.sidebar_left_expanded is True
     assert project_state.sidebar_right_expanded is True
+
+
+def test_trigger_quantization_mode_validation(project_state: ProjectState) -> None:
+    project_state.trigger_quantization = "next_beat"
+    assert project_state.trigger_quantization == "next_beat"
+
+    project_state.trigger_quantization = "next_bar"
+    assert project_state.trigger_quantization == "next_bar"
+
+    with pytest.raises(ValidationError):
+        ProjectState.model_validate({"trigger_quantization": "half_note"})
 
 
 def test_session_state_defaults(session_state: SessionState) -> None:

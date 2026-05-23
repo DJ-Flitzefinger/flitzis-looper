@@ -61,6 +61,8 @@ Transport and quantized scheduler messages must remain fixed-size and bounded.
 Python/control code requests transport or trigger-quantization changes through the existing
 control-to-audio path; the audio callback owns the Rust transport timeline, per-pad timing
 metadata state, trigger quantization mode, and fixed-capacity scheduler.
+The performance UI exposes the current supported trigger modes through controller actions that
+publish only fixed-size `SetTriggerQuantization` messages.
 
 The active `add-phase-aware-playback-sync` change keeps the same messaging rule. Quantized
 scheduled playback now stores a fixed-size optional target bar phase inside the audio-thread
@@ -81,7 +83,6 @@ Two failure points are distinct:
 ## Not implemented (yet)
 
 - Rich audio → Python event stream (beyond `Pong`).
-- UI/controller trigger-quantization controls.
 
 ## Related specs
 

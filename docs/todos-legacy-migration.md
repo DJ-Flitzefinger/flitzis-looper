@@ -67,10 +67,10 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 ### 7a) Gen3 transport timeline and quantized scheduling
 - OpenSpec change (active): `add-rust-transport-timeline`
 - OpenSpec change (active): `add-phase-aware-playback-sync`
-- [ ] As a performer, pad starts can be quantized to a Rust-owned global beat/bar timeline.
+- [x] As a performer, pad starts can be quantized to a Rust-owned global beat/bar timeline.
 - [x] As a performer, immediate pad triggering remains available when quantization is disabled.
 - [x] As a performer, quantized one-at-a-time pad switches stop the old pad and start the new pad on the same scheduled output frame.
-- [ ] As a performer, loops can align to downbeat/beatgrid metadata produced by analysis.
+- [x] As a performer, loops can align to downbeat/beatgrid metadata produced by analysis.
 - [x] As a developer, the audio callback keeps using fixed-capacity real-time-safe data structures for scheduling.
 
 Current Gen3 state: bounded per-pad timing anchors derived from analysis downbeats/beats are
@@ -79,7 +79,8 @@ transport target-frame bar phase plus those anchors to choose phase-aware initia
 normal starts, retriggers, and MultiLoop-disabled exclusive transitions. BPM-lock now publishes a
 fixed-size selected-pad phase-anchor request after a valid master BPM is set; Rust anchors the
 transport downbeat from that active pad when BPM/timing metadata is available and otherwise keeps
-existing tempo matching. UI/controller trigger-quantization controls are not wired yet.
+existing tempo matching. UI/controller trigger-quantization controls now expose immediate,
+next-beat, and next-bar triggering through fixed-size Rust mode updates.
 
 ### 8) Loop range editing (waveform editor)
 - [ ] As a performer, I can open a **waveform editor** for a pad.
