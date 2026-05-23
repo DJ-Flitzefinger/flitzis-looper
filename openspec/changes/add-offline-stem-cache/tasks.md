@@ -31,8 +31,8 @@
 - [x] 5.5 Add deterministic Rust mixer tests for synchronization, fallback, and real-time-safe state transitions.
 
 ## 6. Future UI And Persistence Follow-up
-- [ ] 6.1 Design performer-facing stem availability indicators and controls in a separate OpenSpec slice.
-- [ ] 6.2 Design project persistence for stem cache metadata after the cache identity is implemented.
+- [x] 6.1 Design performer-facing stem availability indicators and controls in a separate OpenSpec slice (`add-stem-performance-controls`).
+- [x] 6.2 Design project persistence for stem cache metadata after the cache identity is implemented (`add-stem-performance-controls`).
 
 ## 7. Validation
 - [x] 7.1 Run official OpenSpec validation for this change before implementation is considered complete.

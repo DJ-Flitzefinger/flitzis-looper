@@ -113,6 +113,12 @@ If the set is missing, stale, incomplete, rejected, or fails bounded render-shap
 falls back to the loaded full-mix buffer. The callback must not generate stems, read cache files,
 decode audio, run neural inference, allocate stem buffers, log, block, or acquire the Python GIL.
 
+The follow-up `openspec/changes/add-stem-performance-controls/` planning slice defines future
+performer stem mix controls. Those controls must publish only fixed-size bounded state such as pad
+id, source-version token/hash, full-mix/all-stems mode, and per-stem masks. The messages must not
+carry file paths, Python objects, unbounded metadata, or copied audio payloads. Ring-buffer-full or
+stale-source failures must leave current full-mix or stem playback unchanged.
+
 ## Not implemented (yet)
 
 - Rich audio → Python event stream (beyond `Pong`).

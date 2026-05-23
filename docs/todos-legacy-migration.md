@@ -104,6 +104,7 @@ next-beat, and next-bar triggering through fixed-size Rust mode updates.
 
 ### 12) Stems: generation, indicators, and performance mixing
 - OpenSpec change (active): `add-offline-stem-cache`
+- OpenSpec change (active): `add-stem-performance-controls`
 - [ ] As a performer, I can **generate stems** for a pad (vocals/melody/bass/drums/instrumental).
 - [ ] As a performer, the UI indicates **stem availability** per pad and gives feedback while stems are generating.
 - [ ] As a performer, I can **toggle stems** on/off during playback.
@@ -121,8 +122,11 @@ outside the audio callback. Prepared stem-buffer validation/publication now send
 control messages with shared immutable handles for inactive current pads, and the callback stores
 accepted handles in bounded state. The mixer can render complete prepared stem sets through the
 same voice playhead and loop path as full-mix playback, with full-mix fallback for missing or
-invalid stem data. Production source separation, stem mix controls, and performer-facing stem UI
-controls remain later slices.
+invalid stem data. The follow-up performer-controls planning slice now defines selected-pad
+availability indicators, Generate Stems entry points, explicit full-mix versus all-stems mode,
+future bounded per-stem mute/solo/toggle controls, persistence expectations, and fixed-size
+audio-thread mix-control messages. Production source separation and the actual stem UI/controller
+implementation remain later slices.
 
 ### 13) Persistence (config/state)
 - [x] As a user, my bank/pad assignments persist across restarts.

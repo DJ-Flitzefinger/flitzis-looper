@@ -167,6 +167,13 @@ fixed-size publication of prepared immutable stem buffers, and future real-time-
 using the same voice playhead and loop timing as full-mix playback. It does not implement neural
 inference, stem UI, or mixer stem toggles.
 
+The performer-facing stem control planning slice is
+`openspec/changes/add-stem-performance-controls/`. It defines stem availability indicators,
+selected-pad generation entry points, explicit full-mix versus all-stems mode selection, future
+per-stem mute/solo/toggle controls, persistence expectations, and fixed-size audio-thread stem mix
+control messages. This planning slice does not implement UI controls, production source
+separation, neural model integration, or new mixer control behavior.
+
 The current stem implementation defines Python-side project metadata for a
 project-local `samples/stems/<source-version-hash>/` cache layout, using a source-version token
 derived from the cached source path plus file metadata. The controller rejects stem generation
@@ -229,7 +236,8 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 - Offline stem cache identity, request gating, and deterministic cache artifact writing are
   implemented. Prepared stem-buffer validation/publication and prepared-stem rendering fallback
   infrastructure are implemented, but production source separation and performer-facing controls
-  are planned in `openspec/changes/add-offline-stem-cache/` and not implemented.
+  are planned in `openspec/changes/add-offline-stem-cache/` and
+  `openspec/changes/add-stem-performance-controls/` and not implemented.
 
 ## Related specs
 
