@@ -165,6 +165,18 @@ fn quantized_target_frame(
     }
 }
 
+fn anchor_transport_phase_from_pad(
+    mixer: &RtMixer,
+    transport: &mut TransportTimeline,
+    id: usize,
+) -> bool {
+    let Some(bar_phase_beats) = mixer.active_pad_bar_phase_beats(id) else {
+        return false;
+    };
+
+    transport.anchor_downbeat_to_bar_phase(bar_phase_beats)
+}
+
 fn drain_scheduler_due_at_callback_start<const CAPACITY: usize, S: AudioMessageSink>(
     scheduler: &mut FixedCapacityScheduler<CAPACITY>,
     callback_start_frame: u64,
@@ -474,6 +486,9 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
                     }
                     ControlMessage::SetPadTimingMetadata { id, metadata } => {
                         mixer.set_pad_timing_metadata(id, metadata);
+                    }
+                    ControlMessage::AnchorTransportPhaseFromPad { id } => {
+                        anchor_transport_phase_from_pad(&mixer, &mut transport, id);
                     }
                     ControlMessage::SetPadGain { id, gain } => {
                         mixer.set_pad_gain(id, gain);
@@ -898,6 +913,60 @@ mod tests {
                 .any(|voice| voice.active && voice.sample_id == 0)
         );
         assert_started(&messages, 0, 0);
+    }
+
+    #[test]
+    fn bpm_lock_phase_anchor_updates_transport_downbeat_from_active_pad() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_test_sample(1, 64, 0.5));
+        mixer.set_pad_bpm(0, Some(60.0));
+        mixer.set_pad_timing_metadata(
+            0,
+            PadTimingMetadata {
+                phase_anchor_s: 0.5,
+            },
+        );
+        assert!(mixer.play_sample(0, 1.0));
+
+        let mut output = vec![0.0; 30];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        let mut transport = TransportTimeline::new(10);
+        assert!(transport.set_master_bpm(60.0));
+        transport.advance_by_rendered_frames(100);
+
+        assert!(anchor_transport_phase_from_pad(&mixer, &mut transport, 0));
+
+        assert_eq!(transport.downbeat_frame(), 75);
+        assert_eq!(transport.bar_phase_beats(), Some(2.5));
+    }
+
+    #[test]
+    fn bpm_lock_phase_anchor_keeps_transport_downbeat_when_anchor_is_inactive() {
+        let mixer = RtMixer::new(1, 10.0);
+        let mut transport = TransportTimeline::new(10);
+        assert!(transport.set_master_bpm(60.0));
+        transport.set_downbeat_frame(12);
+        transport.advance_by_rendered_frames(100);
+
+        assert!(!anchor_transport_phase_from_pad(&mixer, &mut transport, 0));
+
+        assert_eq!(transport.downbeat_frame(), 12);
+    }
+
+    #[test]
+    fn bpm_lock_phase_anchor_keeps_transport_downbeat_without_master_bpm() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_test_sample(1, 64, 0.5));
+        mixer.set_pad_bpm(0, Some(60.0));
+        assert!(mixer.play_sample(0, 1.0));
+        let mut transport = TransportTimeline::new(10);
+        transport.set_downbeat_frame(12);
+
+        assert!(!anchor_transport_phase_from_pad(&mixer, &mut transport, 0));
+
+        assert_eq!(transport.downbeat_frame(), 12);
     }
 
     #[test]

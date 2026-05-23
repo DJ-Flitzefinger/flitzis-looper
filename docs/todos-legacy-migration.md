@@ -76,8 +76,10 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 Current Gen3 state: bounded per-pad timing anchors derived from analysis downbeats/beats are
 published to Rust audio-thread state. Low-level quantized scheduled playback now uses the Rust
 transport target-frame bar phase plus those anchors to choose phase-aware initial sample frames for
-normal starts, retriggers, and MultiLoop-disabled exclusive transitions. BPM-lock phase anchoring
-and UI/controller trigger-quantization controls are not wired yet.
+normal starts, retriggers, and MultiLoop-disabled exclusive transitions. BPM-lock now publishes a
+fixed-size selected-pad phase-anchor request after a valid master BPM is set; Rust anchors the
+transport downbeat from that active pad when BPM/timing metadata is available and otherwise keeps
+existing tempo matching. UI/controller trigger-quantization controls are not wired yet.
 
 ### 8) Loop range editing (waveform editor)
 - [ ] As a performer, I can open a **waveform editor** for a pad.

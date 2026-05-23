@@ -97,6 +97,14 @@ class BpmController:
         master_bpm = anchor_bpm * self._project.speed
         self._session.master_bpm = master_bpm
         self._audio.set_master_bpm(master_bpm)
+        self._request_transport_phase_anchor()
+
+    def _request_transport_phase_anchor(self) -> None:
+        anchor_pad_id = self._session.bpm_lock_anchor_pad_id
+        if anchor_pad_id is None:
+            return
+
+        self._audio.anchor_transport_phase_from_pad(anchor_pad_id)
 
     def on_pad_bpm_changed(self, sample_id: int) -> None:
         bpm = normalize_bpm(self.effective_bpm(sample_id))

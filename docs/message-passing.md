@@ -65,10 +65,10 @@ metadata state, trigger quantization mode, and fixed-capacity scheduler.
 The active `add-phase-aware-playback-sync` change keeps the same messaging rule. Quantized
 scheduled playback now stores a fixed-size optional target bar phase inside the audio-thread
 scheduler command, derived from the scheduled output frame. That descriptor is not a new
-Python-to-Rust ring-buffer message. Any future BPM-lock phase-anchor request must be a fixed-size
-control message, such as a selected pad id. The audio thread must derive transport phase from
-already-owned mixer and transport state; Python must not send full beat-grid vectors, file paths,
-heap-owned data, or direct scheduler/transport pointers.
+Python-to-Rust ring-buffer message. BPM-lock phase anchoring uses a fixed-size
+`AnchorTransportPhaseFromPad { id }` control message. The audio thread derives transport phase
+from already-owned mixer and transport state; Python must not send full beat-grid vectors, file
+paths, heap-owned data, or direct scheduler/transport pointers.
 
 Two failure points are distinct:
 
@@ -82,7 +82,6 @@ Two failure points are distinct:
 
 - Rich audio → Python event stream (beyond `Pong`).
 - UI/controller trigger-quantization controls.
-- Phase-aware transport anchoring from BPM-lock source pads.
 
 ## Related specs
 

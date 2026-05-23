@@ -16,11 +16,11 @@
 - [x] 3.5 Preserve scheduler-full rejection without evicting events or partially changing playback.
 
 ## 4. BPM-Lock Transport Phase Anchor
-- [ ] 4.1 Add a fixed-size control message for requesting transport phase anchoring from a selected pad.
-- [ ] 4.2 Publish the request from Python/controller code when BPM lock is enabled or the anchor pad changes.
-- [ ] 4.3 In Rust, set the transport downbeat anchor from the active anchor pad when valid phase data is available.
-- [ ] 4.4 Fall back to existing BPM-lock tempo matching when the anchor pad is inactive or lacks valid metadata.
-- [ ] 4.5 Add deterministic Rust tests for active-anchor success and missing-anchor fallback.
+- [x] 4.1 Add a fixed-size control message for requesting transport phase anchoring from a selected pad.
+- [x] 4.2 Publish the request from Python/controller code when BPM lock is enabled or the anchor pad changes.
+- [x] 4.3 In Rust, set the transport downbeat anchor from the active anchor pad when valid phase data is available.
+- [x] 4.4 Fall back to existing BPM-lock tempo matching when the anchor pad is inactive or lacks valid metadata.
+- [x] 4.5 Add deterministic Rust tests for active-anchor success and missing-anchor fallback.
 
 ## 5. Validation
 - [x] 5.1 Run `openspec validate add-phase-aware-playback-sync --strict`.

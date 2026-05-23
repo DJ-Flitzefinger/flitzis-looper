@@ -749,6 +749,25 @@ impl AudioEngine {
         Ok(())
     }
 
+    pub fn anchor_transport_phase_from_pad(&mut self, id: usize) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        let _ = producer_guard.push(ControlMessage::AnchorTransportPhaseFromPad { id });
+        Ok(())
+    }
+
     pub fn set_pad_gain(&mut self, id: usize, gain: f32) -> PyResult<()> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));

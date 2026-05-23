@@ -137,6 +137,12 @@ Implemented first slice:
 - Immediate playback commands carry no phase descriptor, so `play_sample` and
   `play_sample_exclusive` keep the existing prompt loop-start behavior when trigger quantization
   is disabled.
+- `AudioEngine.anchor_transport_phase_from_pad(id)` publishes a fixed-size BPM-lock phase-anchor
+  request. When the selected pad is active and has valid BPM/timing metadata, the audio thread
+  derives the pad's current bar phase from mixer state and moves the Rust transport downbeat anchor
+  to the matching phase. If the pad is inactive, paused, missing BPM/timing metadata, or master BPM
+  is unavailable, the transport downbeat is left unchanged and existing BPM-ratio tempo matching
+  continues.
 
 The planned direction is:
 
@@ -159,7 +165,7 @@ The active Gen3 phase-aware sync slice is `openspec/changes/add-phase-aware-play
 defines how quantized starts will use the Rust transport phase plus bounded per-pad timing anchors
 to choose the initial pad sample frame, and how BPM lock can anchor the transport downbeat from a
 selected playing pad. Phase-aware scheduled playback is wired for quantized starts and exclusive
-transitions; BPM-lock phase anchoring is not wired yet.
+transitions; BPM-lock phase anchoring is wired for selected active pads.
 
 ## Current Python API surface
 
@@ -182,6 +188,8 @@ The Rust engine is exposed to Python as `AudioEngine` with:
   - `set_pad_timing_metadata(id, phase_anchor_s)` publishes a finite non-negative per-pad phase
     anchor derived from analysis metadata. It is stored in Rust state for phase-aware quantized
     playback; full beat-grid vectors are not sent to the callback.
+  - `anchor_transport_phase_from_pad(id)` requests BPM-lock transport downbeat anchoring from the
+    selected playing pad using only audio-thread-owned transport and mixer state.
 
 - Messaging utilities
   - `ping()` sends a ping to the audio thread.
@@ -192,7 +200,6 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 - Audio device selection/configuration (the engine currently uses the default output device/config).
 - Broader channel-layout support; currently decoding only supports mono↔stereo mapping.
 - UI/controller controls for trigger quantization.
-- BPM-lock transport phase anchoring from a selected playing pad.
 - Real-time stem separation is intentionally out of scope.
 
 ## Related specs

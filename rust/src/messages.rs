@@ -110,6 +110,9 @@ pub enum ControlMessage {
         metadata: PadTimingMetadata,
     },
 
+    /// Request transport downbeat anchoring from a selected playing pad.
+    AnchorTransportPhaseFromPad { id: usize },
+
     /// Set per-pad gain (linear scalar).
     SetPadGain { id: usize, gain: f32 },
 
@@ -298,6 +301,16 @@ mod tests {
                 id: 3,
                 metadata: PadTimingMetadata { phase_anchor_s }
             } if phase_anchor_s == 1.25
+        ));
+    }
+
+    #[test]
+    fn anchor_transport_phase_message_carries_fixed_size_pad_id() {
+        let message = ControlMessage::AnchorTransportPhaseFromPad { id: 3 };
+
+        assert!(matches!(
+            message,
+            ControlMessage::AnchorTransportPhaseFromPad { id: 3 }
         ));
     }
 }

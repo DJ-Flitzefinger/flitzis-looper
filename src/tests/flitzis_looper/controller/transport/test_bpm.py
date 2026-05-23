@@ -133,16 +133,21 @@ def test_tap_bpm_very_slow_tempo(
     assert controller.project.manual_bpm[sample_id] == pytest.approx(0.6, abs=0.01)
 
 
-def test_recompute_master_bpm_unlocked(controller: AppController) -> None:
+def test_recompute_master_bpm_unlocked(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
     controller.project.bpm_lock = False
     controller.session.master_bpm = 120.0
 
     controller.transport.bpm.recompute_master_bpm()
 
     assert controller.session.master_bpm is None
+    audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
 
 
-def test_recompute_master_bpm_none_anchor(controller: AppController) -> None:
+def test_recompute_master_bpm_none_anchor(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
     controller.project.bpm_lock = True
     controller.session.bpm_lock_anchor_bpm = None
     controller.session.master_bpm = 120.0
@@ -150,9 +155,12 @@ def test_recompute_master_bpm_none_anchor(controller: AppController) -> None:
     controller.transport.bpm.recompute_master_bpm()
 
     assert controller.session.master_bpm is None
+    audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
 
 
-def test_recompute_master_bpm_non_finite_anchor(controller: AppController) -> None:
+def test_recompute_master_bpm_non_finite_anchor(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
     controller.project.bpm_lock = True
     controller.session.bpm_lock_anchor_bpm = float("nan")
     controller.session.master_bpm = 120.0
@@ -160,6 +168,7 @@ def test_recompute_master_bpm_non_finite_anchor(controller: AppController) -> No
     controller.transport.bpm.recompute_master_bpm()
 
     assert controller.session.master_bpm is None
+    audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
 
 
 def test_on_pad_bpm_changed_updates_audio(
@@ -233,6 +242,7 @@ def test_on_pad_bpm_changed_updates_master_bpm(
 
     audio_engine_mock.set_pad_bpm.assert_called_with(sample_id, 120.0)
     audio_engine_mock.set_master_bpm.assert_called_with(120.0)
+    audio_engine_mock.anchor_transport_phase_from_pad.assert_called_once_with(sample_id)
 
 
 def test_on_pad_bpm_changed_not_anchor(controller: AppController, audio_engine_mock: Mock) -> None:
@@ -248,3 +258,4 @@ def test_on_pad_bpm_changed_not_anchor(controller: AppController, audio_engine_m
 
     audio_engine_mock.set_pad_bpm.assert_called_with(sample_id, 120.0)
     audio_engine_mock.set_master_bpm.assert_not_called()
+    audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()

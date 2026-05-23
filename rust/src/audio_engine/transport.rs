@@ -66,6 +66,39 @@ impl TransportTimeline {
         self.downbeat_frame = frame;
     }
 
+    pub(crate) fn anchor_downbeat_to_bar_phase(&mut self, bar_phase_beats: f64) -> bool {
+        let Some(frames_per_beat) = self.frames_per_beat() else {
+            return false;
+        };
+        let Some(frames_per_bar) = self.frames_per_bar() else {
+            return false;
+        };
+        let bar_phase_beats = normalize_phase(bar_phase_beats, self.beats_per_bar as f64);
+
+        if !frames_per_beat.is_finite()
+            || frames_per_beat <= 0.0
+            || !frames_per_bar.is_finite()
+            || frames_per_bar <= 0.0
+        {
+            return false;
+        }
+
+        let mut downbeat_frame = self.output_frame as f64 - bar_phase_beats * frames_per_beat;
+
+        if downbeat_frame < 0.0 {
+            let bars_to_add = (-downbeat_frame / frames_per_bar).ceil();
+            downbeat_frame += bars_to_add * frames_per_bar;
+        }
+
+        if !downbeat_frame.is_finite() || downbeat_frame < 0.0 || downbeat_frame >= u64::MAX as f64
+        {
+            return false;
+        }
+
+        self.downbeat_frame = downbeat_frame.round() as u64;
+        true
+    }
+
     pub(crate) fn set_master_bpm(&mut self, bpm: f32) -> bool {
         if !is_valid_bpm(bpm) {
             return false;
@@ -315,6 +348,34 @@ mod tests {
         transport.set_downbeat_frame(96_000);
 
         assert_eq!(transport.bar_phase_beats_at_frame(72_000), Some(3.0));
+    }
+
+    #[test]
+    fn downbeat_anchor_can_be_set_from_current_bar_phase() {
+        let mut transport = transport_at(60_000);
+
+        assert!(transport.anchor_downbeat_to_bar_phase(2.5));
+
+        assert_eq!(transport.downbeat_frame(), 0);
+        assert_eq!(transport.bar_phase_beats(), Some(2.5));
+    }
+
+    #[test]
+    fn downbeat_anchor_wraps_forward_when_equivalent_anchor_is_before_zero() {
+        let mut transport = transport_at(12_000);
+
+        assert!(transport.anchor_downbeat_to_bar_phase(1.0));
+
+        assert_eq!(transport.downbeat_frame(), 84_000);
+        assert_eq!(transport.bar_phase_beats(), Some(1.0));
+    }
+
+    #[test]
+    fn downbeat_anchor_requires_master_bpm() {
+        let mut transport = TransportTimeline::new(48_000);
+
+        assert!(!transport.anchor_downbeat_to_bar_phase(1.0));
+        assert_eq!(transport.downbeat_frame(), 0);
     }
 
     #[test]

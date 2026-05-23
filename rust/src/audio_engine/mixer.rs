@@ -537,6 +537,40 @@ impl RtMixer {
         Some(frame as f32 / self.sample_rate_hz)
     }
 
+    pub(crate) fn active_pad_bar_phase_beats(&self, id: usize) -> Option<f64> {
+        if id >= NUM_SAMPLES || self.channels == 0 {
+            return None;
+        }
+
+        let pad_bpm = self.pad_bpm[id].filter(|bpm| bpm.is_finite() && *bpm > 0.0)?;
+        if !self.sample_rate_hz.is_finite() || self.sample_rate_hz <= 0.0 {
+            return None;
+        }
+
+        let voice = self
+            .voices
+            .iter()
+            .find(|voice| voice.active && !voice.paused && voice.sample_id == id)?;
+        let sample = voice.sample.as_ref()?;
+        let sample_frames = sample.samples.len() / self.channels;
+        if sample_frames == 0 || voice.frame_pos >= sample_frames {
+            return None;
+        }
+
+        let anchor_frame = self.pad_phase_anchor_frame[id];
+        if anchor_frame >= sample_frames {
+            return None;
+        }
+
+        let frames_per_beat = self.sample_rate_hz as f64 * 60.0 / pad_bpm as f64;
+        if !frames_per_beat.is_finite() || frames_per_beat <= 0.0 {
+            return None;
+        }
+
+        let pad_phase_beats = (voice.frame_pos as f64 - anchor_frame as f64) / frames_per_beat;
+        normalize_bar_phase_beats(pad_phase_beats)
+    }
+
     fn tempo_ratio_for_sample_id(&self, sample_id: usize) -> f32 {
         let mut ratio = self.speed;
 
@@ -1051,6 +1085,57 @@ mod tests {
         assert!(mixer.play_sample(0, 1.0));
 
         assert_eq!(active_voice_frame(&mixer, 0), Some(7));
+    }
+
+    #[test]
+    fn test_active_pad_bar_phase_uses_current_voice_frame() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_test_sample(1, 64, 0.5));
+        mixer.set_pad_bpm(0, Some(60.0));
+        mixer.set_pad_timing_metadata(
+            0,
+            PadTimingMetadata {
+                phase_anchor_s: 0.5,
+            },
+        );
+        assert!(mixer.play_sample(0, 1.0));
+
+        let mut output = vec![0.0; 30];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert_eq!(active_voice_frame(&mixer, 0), Some(30));
+        assert_eq!(mixer.active_pad_bar_phase_beats(0), Some(2.5));
+    }
+
+    #[test]
+    fn test_active_pad_bar_phase_wraps_before_anchor() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_test_sample(1, 64, 0.5));
+        mixer.set_pad_bpm(0, Some(60.0));
+        mixer.set_pad_timing_metadata(
+            0,
+            PadTimingMetadata {
+                phase_anchor_s: 2.0,
+            },
+        );
+        assert!(mixer.play_sample(0, 1.0));
+
+        assert_eq!(mixer.active_pad_bar_phase_beats(0), Some(2.0));
+    }
+
+    #[test]
+    fn test_active_pad_bar_phase_requires_playing_pad_bpm_and_valid_anchor() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_test_sample(1, 20, 0.5));
+
+        assert_eq!(mixer.active_pad_bar_phase_beats(0), None);
+        assert!(mixer.play_sample(0, 1.0));
+        assert_eq!(mixer.active_pad_bar_phase_beats(0), None);
+
+        mixer.set_pad_bpm(0, Some(60.0));
+        mixer.pad_phase_anchor_frame[0] = 20;
+        assert_eq!(mixer.active_pad_bar_phase_beats(0), None);
     }
 
     #[test]
