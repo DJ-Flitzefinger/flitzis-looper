@@ -27,6 +27,7 @@ Messages are intentionally small and allocation-free on the audio thread:
 The CPAL callback:
 
 - Drains pending messages without blocking.
+- Owns and advances the Rust transport timeline by rendered output sample frames.
 - Avoids Python/GIL interaction entirely.
 - Performs no disk I/O or decoding.
 - Mixes audio using fixed-capacity data structures (`MAX_SAMPLE_SLOTS`, `MAX_VOICES`).
@@ -41,9 +42,10 @@ Disk I/O and decoding happen in `load_sample(...)`, outside the callback.
 
 ## Gen3 transport and scheduler messages
 
-The planned Gen3 transport work is specified in
-`openspec/changes/add-rust-transport-timeline/`. It keeps the existing SPSC ring-buffer
-architecture.
+The Gen3 transport work is specified in
+`openspec/changes/add-rust-transport-timeline/`. The initial output-frame transport timeline
+now exists inside the audio callback, and the planned scheduler/message extensions keep the
+existing SPSC ring-buffer architecture.
 
 Planned transport and scheduler messages must remain fixed-size and bounded. Python/control
 code will request transport changes or quantized triggers through the existing
@@ -61,7 +63,7 @@ Two failure points are distinct:
 ## Not implemented (yet)
 
 - Rich audio → Python event stream (beyond `Pong`).
-- Rust-owned transport timeline and fixed-capacity quantized scheduler.
+- Fixed-capacity quantized scheduler and scheduler-specific control messages.
 
 ## Related specs
 

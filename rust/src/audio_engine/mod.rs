@@ -35,6 +35,7 @@ mod mixer;
 mod progress;
 mod sample_loader;
 mod stretch_processor;
+mod transport;
 mod voice_slot;
 
 /// Tuple: (is_raw_mode, xs, y_min, y_max)

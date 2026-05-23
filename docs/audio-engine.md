@@ -28,7 +28,7 @@ Python interacts with a single `AudioEngine` object; the CPAL audio callback ren
 2. `run()` initializes a CPAL output stream and two ring buffers (control→audio, audio→control).
 3. Python schedules audio loading into sample slots using `load_sample_async(id, path)` and polls `poll_loader_events()`.
 4. Python triggers playback using `play_sample(id, velocity)`.
-5. The CPAL callback drains pending control messages and mixes active voices into the output buffer.
+5. The CPAL callback drains pending control messages, advances the Rust transport timeline by rendered output frames, and mixes active voices into the output buffer.
 6. Optional: Python can poll `receive_msg()` for messages emitted by the audio thread (e.g., `Pong`).
 
 ## Module Structure
@@ -48,6 +48,8 @@ audio_engine/
 
 Each module is `pub(crate)` with only `mod.rs` exposing the public API, ensuring clear encapsulation and reducing coupling between components.
 
+The Gen3 transport helper lives in `rust/src/audio_engine/transport.rs`.
+
 ## Main components
 
 - Python (control layer)
@@ -60,6 +62,7 @@ Each module is `pub(crate)` with only `mod.rs` exposing the public API, ensuring
   - `rust/src/audio_engine/errors.rs`: Audio-specific error types.
   - `rust/src/audio_engine/voice.rs`: Voice management and lifecycle.
   - `rust/src/audio_engine/mixer.rs`: Real-time mixer implementation.
+  - `rust/src/audio_engine/transport.rs`: Audio-thread-owned output-frame clock and musical phase helpers.
   - `rust/src/audio_engine/sample_loader.rs`: Audio file decoding and channel mapping.
   - `rust/src/audio_engine/audio_stream.rs`: CPAL stream management and callback.
   - `rust/src/messages.rs`: Fixed-size message types shared between threads.
@@ -82,7 +85,17 @@ The project deliberately separates non-real-time work from the real-time audio c
 ## Gen3 transport timeline plan
 
 The first Gen3 behavior change is specified in
-`openspec/changes/add-rust-transport-timeline/`. It is not implemented yet.
+`openspec/changes/add-rust-transport-timeline/`. The initial transport timeline module now
+exists and is owned by the audio callback; scheduler and quantized playback integration are
+still pending.
+
+Implemented first slice:
+
+- `TransportTimeline` stores the absolute output-frame clock and output sample rate.
+- The CPAL callback advances the transport by the number of rendered output frames.
+- Rust validates optional master BPM and derives beat/bar phase for 4/4 timing.
+- Deterministic Rust unit tests cover frame advancement, BPM conversion, phase, grid
+  boundary calculations, and invalid BPM fallback.
 
 The planned direction is:
 
@@ -122,8 +135,8 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 
 - Audio device selection/configuration (the engine currently uses the default output device/config).
 - Broader channel-layout support; currently decoding only supports mono↔stereo mapping.
-- Rust-owned global transport timeline.
 - Fixed-capacity quantized scheduler.
+- Quantized pad trigger routing through the scheduler.
 - Phase-aware beat/bar/downbeat playback alignment.
 - Real-time stem separation is intentionally out of scope.
 

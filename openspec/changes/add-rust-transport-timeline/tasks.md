@@ -3,10 +3,10 @@
 - [x] 1.2 Update relevant planning documentation without implementing production feature code.
 
 ## 2. Transport Timeline
-- [ ] 2.1 Add a Rust transport timeline module owned by the audio thread.
-- [ ] 2.2 Track an absolute `u64` output sample-frame clock advanced by rendered frames.
-- [ ] 2.3 Store validated master BPM and derive beat/bar phase in 4/4.
-- [ ] 2.4 Add deterministic Rust unit tests for frame advancement, BPM-to-frame conversion, beat phase, bar phase, and boundary behavior.
+- [x] 2.1 Add a Rust transport timeline module owned by the audio thread.
+- [x] 2.2 Track an absolute `u64` output sample-frame clock advanced by rendered frames.
+- [x] 2.3 Store validated master BPM and derive beat/bar phase in 4/4.
+- [x] 2.4 Add deterministic Rust unit tests for frame advancement, BPM-to-frame conversion, beat phase, bar phase, and boundary behavior.
 
 ## 3. Fixed-Capacity Scheduler
 - [ ] 3.1 Add a fixed-capacity scheduler for absolute output-frame events.

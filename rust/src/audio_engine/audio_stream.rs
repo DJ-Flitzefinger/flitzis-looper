@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::audio_engine::constants::NUM_SAMPLES;
 use crate::audio_engine::mixer::RtMixer;
+use crate::audio_engine::transport::TransportTimeline;
 use crate::messages::{AudioMessage, ControlMessage};
 
 /// Handle to the audio stream with associated message channels
@@ -53,12 +54,13 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
 
     let config = device.default_output_config()?;
     let sample_rate = config.sample_rate();
+    let sample_rate_hz = sample_rate;
     let channels = config.channels();
 
     log::info!(
         "Starting AudioEngine... ({} ch@{} Hz)",
         channels,
-        sample_rate
+        sample_rate_hz
     );
 
     // Create ring buffer for incoming messages (Python->Rust)
@@ -67,11 +69,11 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
     // Create ring buffer for outgoing messages (Rust->Python)
     let (mut producer_out, consumer_out) = RingBuffer::new(1024);
 
-    let mut mixer = RtMixer::new(channels as usize, sample_rate as f32);
+    let mut mixer = RtMixer::new(channels as usize, sample_rate_hz as f32);
+    let mut transport = TransportTimeline::new(sample_rate_hz);
 
-    let emit_interval_frames: u64 = (sample_rate as u64 / 10).max(1);
+    let emit_interval_frames: u64 = (sample_rate_hz as u64 / 10).max(1);
     let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
-    let mut frame_clock: u64 = 0;
     let mut last_emit_frame = [0_u64; NUM_SAMPLES];
 
     // Create stream config
@@ -123,11 +125,15 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
                     }
                     ControlMessage::SetBpmLock(enabled) => {
                         mixer.set_bpm_lock(enabled);
+                        if !enabled {
+                            transport.clear_master_bpm();
+                        }
                     }
                     ControlMessage::SetKeyLock(enabled) => {
                         mixer.set_key_lock(enabled);
                     }
                     ControlMessage::SetMasterBpm(bpm) => {
+                        transport.set_master_bpm(bpm);
                         mixer.set_master_bpm(bpm);
                     }
                     ControlMessage::SetPadBpm { id, bpm } => {
@@ -163,7 +169,8 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
             mixer.render(data, &mut pad_peaks);
 
             let frames = data.len() / channels as usize;
-            frame_clock = frame_clock.wrapping_add(frames as u64);
+            transport.advance_by_rendered_frames(frames);
+            let frame_clock = transport.output_frame();
 
             for (id, peak) in pad_peaks.iter().enumerate() {
                 if frame_clock.wrapping_sub(last_emit_frame[id]) < emit_interval_frames {
@@ -195,7 +202,7 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
         producer: Arc::new(Mutex::new(producer_in)),
         consumer: Arc::new(Mutex::new(consumer_out)),
         output_channels: channels as usize,
-        output_sample_rate: sample_rate,
+        output_sample_rate: sample_rate_hz,
     })
 }
 
