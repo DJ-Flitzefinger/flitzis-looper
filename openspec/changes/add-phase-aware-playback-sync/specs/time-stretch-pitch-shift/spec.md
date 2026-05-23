@@ -1,9 +1,12 @@
 ## ADDED Requirements
 
 ### Requirement: BPM Lock Establishes Shared Phase For Future Quantized Starts
+The system SHALL allow BPM lock to establish shared transport phase for future quantized
+starts when a valid active anchor pad is available.
+
 When BPM lock is enabled and the selected anchor pad is active with valid BPM and phase
-metadata, the system SHALL allow Rust to align the transport downbeat to the anchor pad's
-current musical phase.
+metadata, Rust SHALL align the transport downbeat to the anchor pad's current musical
+phase.
 
 The initial phase-aware BPM-lock behavior SHALL NOT continuously slip, warp, or retrigger
 already playing non-anchor voices. Existing BPM-ratio tempo matching SHALL remain the active

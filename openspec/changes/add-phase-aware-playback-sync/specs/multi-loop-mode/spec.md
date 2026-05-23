@@ -1,9 +1,11 @@
 ## ADDED Requirements
 
 ### Requirement: Phase-Aware Single-Loop Transitions Remain Atomic
-When MultiLoop mode is disabled, trigger quantization is enabled, and a loaded pad is
-triggered, the system SHALL keep the stop-all operation and the phase-aware pad start as one
-atomic scheduled transition at one absolute output frame.
+The system SHALL keep phase-aware single-loop transitions atomic when MultiLoop mode is
+disabled and trigger quantization is enabled.
+
+When a loaded pad is triggered, the system SHALL keep the stop-all operation and the
+phase-aware pad start as one atomic scheduled transition at one absolute output frame.
 
 If the scheduler cannot accept the transition, currently playing pads SHALL remain
 unchanged. If the target pad cannot play, currently playing pads SHALL remain unchanged.

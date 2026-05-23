@@ -27,9 +27,11 @@ using the Rust-owned timeline.
 ## ADDED Requirements
 
 ### Requirement: Quantized Single-Loop Transitions Are Atomic
-When MultiLoop mode is disabled and trigger quantization is enabled, triggering a loaded pad
-SHALL schedule the stop-other-pads operation and the requested pad start as one atomic
-transition at the same absolute output frame.
+The system SHALL keep quantized single-loop transitions atomic when MultiLoop mode is
+disabled and trigger quantization is enabled.
+
+Triggering a loaded pad SHALL schedule the stop-other-pads operation and the requested pad
+start as one atomic transition at the same absolute output frame.
 
 If the scheduler cannot accept that transition, the system SHALL leave currently playing
 pads unchanged.

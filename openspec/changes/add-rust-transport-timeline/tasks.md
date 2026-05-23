@@ -29,6 +29,6 @@
 - [x] 5.4 Add tests for missing metadata and invalid metadata fallback behavior.
 
 ## 6. Validation
-- [ ] 6.1 Run `openspec validate add-rust-transport-timeline --strict`.
+- [x] 6.1 Run `openspec validate add-rust-transport-timeline --strict`.
 - [x] 6.2 Run Rust checks/tests with `uv --no-cache run --no-sync cargo ...`.
 - [x] 6.3 Run Python tests/lint/type checks when Python API or controller code changes.

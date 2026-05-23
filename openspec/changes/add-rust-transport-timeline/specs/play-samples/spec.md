@@ -23,9 +23,8 @@ behavior unless the user has explicitly enabled quantized triggering through fut
 - **AND** the audio callback continues without panic or blocking
 
 ### Requirement: Quantized Trigger Failure Does Not Partially Change Playback
-When a quantized trigger request cannot be accepted by the fixed-capacity scheduler, the
-system SHALL reject the requested scheduled transition without applying partial playback
-changes.
+The system SHALL reject a quantized trigger request without applying partial playback
+changes when the fixed-capacity scheduler cannot accept the request.
 
 For transitions that would stop one or more currently playing pads and start another pad at
 a quantized boundary, scheduler rejection SHALL leave currently playing pads unchanged.

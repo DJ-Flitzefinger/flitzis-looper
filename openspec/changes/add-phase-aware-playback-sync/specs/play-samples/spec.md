@@ -1,10 +1,12 @@
 ## ADDED Requirements
 
 ### Requirement: Quantized Starts Use Pad Phase Metadata When Available
+The system SHALL use bounded pad phase metadata to choose the initial sample frame for
+quantized starts when valid metadata is available.
+
 When trigger quantization is enabled and a loaded pad is scheduled to start or restart at a
 transport beat/bar boundary, Rust SHALL use the scheduled target output frame plus bounded
-per-pad timing metadata to choose the pad's initial sample frame when valid metadata is
-available.
+per-pad timing metadata to choose the pad's initial sample frame.
 
 Rust SHALL compute the phase-aware initial sample frame from:
 
@@ -38,7 +40,10 @@ loop-start frame.
 - **THEN** Rust starts or restarts the pad at the existing effective loop-start frame
 
 ### Requirement: Immediate Starts Remain Unchanged
-When trigger quantization is disabled, `AudioEngine.play_sample(id, velocity)` and
+The system SHALL preserve existing immediate loop-start behavior when trigger quantization
+is disabled.
+
+`AudioEngine.play_sample(id, velocity)` and
 `AudioEngine.play_sample_exclusive(id, velocity)` SHALL preserve the existing immediate
 loop-start behavior.
 

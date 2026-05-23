@@ -23,6 +23,6 @@
 - [ ] 4.5 Add deterministic Rust tests for active-anchor success and missing-anchor fallback.
 
 ## 5. Validation
-- [ ] 5.1 Run `openspec validate add-phase-aware-playback-sync --strict`.
+- [x] 5.1 Run `openspec validate add-phase-aware-playback-sync --strict`.
 - [x] 5.2 Run focused Rust tests for transport/mixer/audio-stream phase behavior.
 - [x] 5.3 Run full uv-managed Rust and Python validation before implementation is considered complete.
