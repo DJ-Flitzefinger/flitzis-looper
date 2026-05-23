@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.controller.metering import MeteringController
 from flitzis_looper.controller.persistence import ProjectPersistence
+from flitzis_looper.controller.stems import StemController
 from flitzis_looper.controller.transport import TransportController
 from flitzis_looper.models import ProjectState, SessionState
 from flitzis_looper_audio import AudioEngine
@@ -35,10 +36,22 @@ class AppController:
             on_project_changed=self._persistence.mark_dirty,
         )
         self.metering = MeteringController(self._project, self._session, self._audio)
+        self.stems = StemController(
+            self._project,
+            self._session,
+            self._audio,
+            on_project_changed=self._persistence.mark_dirty,
+        )
 
-        self._controllers: set[BaseController] = {self.transport, self.loader, self.metering}
+        self._controllers: set[BaseController] = {
+            self.transport,
+            self.loader,
+            self.metering,
+            self.stems,
+        }
 
         self.transport.apply_project_state_to_audio()
+        self.stems.restore_stem_cache_from_project_state()
         self.loader.restore_samples_from_project_state()
 
     def shut_down(self) -> None:

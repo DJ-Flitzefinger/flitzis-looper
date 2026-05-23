@@ -74,6 +74,9 @@ def test_sample_slot_id_range_is_0_to_215(audio_engine: AudioEngine) -> None:
         audio_engine.anchor_transport_phase_from_pad(216)
 
     with pytest.raises(ValueError, match=r"id out of range"):
+        audio_engine.generate_stems_async(216, "source")
+
+    with pytest.raises(ValueError, match=r"id out of range"):
         audio_engine.stop_sample(216)
 
     with pytest.raises(ValueError, match=r"id out of range"):
@@ -177,6 +180,18 @@ def test_anchor_transport_phase_from_pad_requires_initialized_engine() -> None:
 
     with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
         engine.anchor_transport_phase_from_pad(0)
+
+
+def test_generate_stems_async_requires_initialized_engine() -> None:
+    engine = AudioEngine()
+
+    with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
+        engine.generate_stems_async(0, "source")
+
+
+def test_generate_stems_async_rejects_empty_source_version(audio_engine: AudioEngine) -> None:
+    with pytest.raises(ValueError, match=r"source_version"):
+        audio_engine.generate_stems_async(0, "")
 
 
 def test_load_sample_async_emits_started_and_error_for_missing_file(

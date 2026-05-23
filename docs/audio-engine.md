@@ -167,6 +167,15 @@ fixed-size publication of prepared immutable stem buffers, and future real-time-
 using the same voice playhead and loop timing as full-mix playback. It does not implement neural
 inference, stem UI, or mixer stem toggles.
 
+The first stem implementation slice now defines Python-side project metadata for a
+project-local `samples/stems/<source-version-hash>/` cache layout, using a source-version token
+derived from the cached source path plus file metadata. The controller rejects stem generation
+requests for pads that are playing, loading, analyzing, already generating stems, missing a loaded
+source, or missing the cached source file. The low-level Rust API exposes a gated
+`generate_stems_async(id, source_version)` background task that reports loader-style progress and a
+clear "not implemented yet" error; neural inference, artifact writing, Rust stem publication, UI
+controls, and mixer changes are still intentionally absent.
+
 The active Gen3 phase-aware sync slice is `openspec/changes/add-phase-aware-playback-sync/`. It
 defines how quantized starts will use the Rust transport phase plus bounded per-pad timing anchors
 to choose the initial pad sample frame, and how BPM lock can anchor the transport downbeat from a
@@ -206,7 +215,8 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 - Audio device selection/configuration (the engine currently uses the default output device/config).
 - Broader channel-layout support; currently decoding only supports mono↔stereo mapping.
 - Real-time stem separation is intentionally out of scope.
-- Offline stem cache generation, prepared stem-buffer publication, and stem mixing are planned in
+- Offline stem cache identity and request gating are implemented. Actual stem generation,
+  prepared stem-buffer publication, and stem mixing are planned in
   `openspec/changes/add-offline-stem-cache/` but not implemented.
 
 ## Related specs

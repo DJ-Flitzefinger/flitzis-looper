@@ -115,8 +115,9 @@ next-beat, and next-bar triggering through fixed-size Rust mode updates.
 Gen3 constraint: stem generation must be offline/cache-based and only available for pads
 that are not currently playing. The audio callback must never run stem separation, neural
 network inference, or disk I/O; it may only mix already prepared audio buffers. The active
-planning slice defines cache/publication/mixing constraints first; performer-facing stem UI
-controls are a later OpenSpec slice.
+planning slice now has the first cache metadata/source-version model and background-task gating
+in place, but actual stem generation, stem publication, mixer support, and performer-facing stem
+UI controls remain later slices.
 
 ### 13) Persistence (config/state)
 - [x] As a user, my bank/pad assignments persist across restarts.

@@ -20,6 +20,9 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
 type TriggerQuantizationMode = Literal["immediate", "next_beat", "next_bar"]
+type StemKind = Literal["vocals", "melody", "bass", "drums", "instrumental"]
+
+STEM_KINDS: tuple[StemKind, ...] = ("vocals", "melody", "bass", "drums", "instrumental")
 
 
 def _default_sample_paths() -> list[str | None]:
@@ -49,7 +52,53 @@ class SampleAnalysis(BaseModel):
     beat_grid: BeatGrid
 
 
+class StemFileSet(BaseModel):
+    vocals: str | None = None
+    melody: str | None = None
+    bass: str | None = None
+    drums: str | None = None
+    instrumental: str | None = None
+
+    def path_for(self, kind: StemKind) -> str | None:
+        """Return the cache path for a known stem kind."""
+        match kind:
+            case "vocals":
+                return self.vocals
+            case "melody":
+                return self.melody
+            case "bass":
+                return self.bass
+            case "drums":
+                return self.drums
+            case "instrumental":
+                return self.instrumental
+
+    def with_kind(self, kind: StemKind, path: str | None) -> StemFileSet:
+        """Return a copy with one stem path changed."""
+        return self.model_copy(update={kind: path})
+
+
+class StemCacheEntry(BaseModel):
+    """Project-local cache metadata for one pad source version."""
+
+    source_version: str = Field(min_length=1)
+    """Deterministic project-local source version token."""
+
+    cache_dir: str = Field(min_length=1)
+    """Project-relative cache directory for this stem set."""
+
+    stems: StemFileSet = Field(default_factory=StemFileSet)
+    """Expected per-stem artifact paths."""
+
+    available: bool = False
+    """Whether all expected cache artifacts are present and eligible for playback."""
+
+
 def _default_sample_analysis() -> list[SampleAnalysis | None]:
+    return [None] * NUM_SAMPLES
+
+
+def _default_stem_cache() -> list[StemCacheEntry | None]:
     return [None] * NUM_SAMPLES
 
 
@@ -102,6 +151,9 @@ class ProjectState(BaseModel):
 
     sample_analysis: list[SampleAnalysis | None] = Field(default_factory=_default_sample_analysis)
     """Per-pad audio analysis results (BPM/key/beat grid) or None when unknown."""
+
+    stem_cache: list[StemCacheEntry | None] = Field(default_factory=_default_stem_cache)
+    """Per-pad project-local stem cache metadata or None when unavailable."""
 
     manual_bpm: list[float | None] = Field(default_factory=_default_manual_bpm)
     """Optional per-pad BPM override. When set, used for effective BPM display."""
@@ -235,6 +287,16 @@ class ProjectState(BaseModel):
                 raise ValueError(msg)
         return value
 
+    @field_validator("stem_cache", mode="after")
+    @classmethod
+    def _validate_stem_cache(
+        cls, value: list[StemCacheEntry | None]
+    ) -> list[StemCacheEntry | None]:
+        if len(value) != NUM_SAMPLES:
+            msg = f"stem_cache must have length {NUM_SAMPLES}, got {len(value)}"
+            raise ValueError(msg)
+        return value
+
     @field_validator("pad_grid_offset_samples", mode="after")
     @classmethod
     def _validate_pad_grid_offset_samples(cls, value: list[int]) -> list[int]:
@@ -301,6 +363,21 @@ class SessionState(BaseModel):
 
     sample_analysis_errors: dict[int, str] = Field(default_factory=dict)
     """Last analysis error message per pad."""
+
+    stem_generating_sample_ids: set[int] = Field(default_factory=set)
+    """Pads that are currently running offline stem generation in the background."""
+
+    stem_generation_source_versions: dict[int, str] = Field(default_factory=dict)
+    """Source-version token captured when each stem generation task was scheduled."""
+
+    stem_generation_progress: dict[int, float] = Field(default_factory=dict)
+    """Best-effort stem generation progress (0.0..=1.0)."""
+
+    stem_generation_stage: dict[int, str] = Field(default_factory=dict)
+    """Human-readable stem generation stage per pad."""
+
+    stem_generation_errors: dict[int, str] = Field(default_factory=dict)
+    """Last stem generation error message per pad."""
 
     # UI State
     file_dialog_pad_id: int | None = None
@@ -383,6 +460,7 @@ class SessionState(BaseModel):
         "pressed_pads",
         "loading_sample_ids",
         "analyzing_sample_ids",
+        "stem_generating_sample_ids",
         mode="after",
     )
     @classmethod
@@ -399,6 +477,10 @@ class SessionState(BaseModel):
         "sample_analysis_progress",
         "sample_analysis_stage",
         "sample_analysis_errors",
+        "stem_generation_source_versions",
+        "stem_generation_progress",
+        "stem_generation_stage",
+        "stem_generation_errors",
         mode="after",
     )
     @classmethod

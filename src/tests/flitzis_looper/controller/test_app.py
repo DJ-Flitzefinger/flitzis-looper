@@ -16,6 +16,7 @@ def test_controller_initializes_states(controller: AppController) -> None:
     assert controller.transport is not None
     assert controller.loader is not None
     assert controller.metering is not None
+    assert controller.stems is not None
     assert len(controller.project.sample_paths) == NUM_SAMPLES
 
 
@@ -85,14 +86,16 @@ def test_controller_on_frame_render_calls_all_controllers(
         patch.object(controller.transport, "on_frame_render") as mock_transport,
         patch.object(controller.loader, "on_frame_render") as mock_loader,
         patch.object(controller.metering, "on_frame_render") as mock_metering,
+        patch.object(controller.stems, "on_frame_render") as mock_stems,
     ):
         controller.on_frame_render()
 
         mock_transport.assert_called_once()
         mock_loader.assert_called_once()
         mock_metering.assert_called_once()
+        mock_stems.assert_called_once()
 
 
 def test_controller_registers_controllers(controller: AppController) -> None:
     """Test AppController registers all controllers for on_frame_render."""
-    assert len(controller._controllers) == 3
+    assert len(controller._controllers) == 4

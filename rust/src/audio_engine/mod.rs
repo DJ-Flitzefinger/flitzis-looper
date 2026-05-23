@@ -91,6 +91,10 @@ impl Drop for PadTaskGuard {
     }
 }
 
+fn has_active_task_for_id(tasks: &HashSet<(usize, BackgroundTaskKind)>, id: usize) -> bool {
+    tasks.iter().any(|(task_id, _)| *task_id == id)
+}
+
 /// AudioEngine provides minimal audio output capabilities using cpal
 #[pyclass]
 pub struct AudioEngine {
@@ -372,9 +376,10 @@ impl AudioEngine {
                 .active_tasks
                 .lock()
                 .map_err(|_| PyRuntimeError::new_err("Failed to acquire active tasks lock"))?;
-            if !tasks.insert((id, BackgroundTaskKind::Analysis)) {
-                return Err(PyValueError::new_err("analysis task already running"));
+            if has_active_task_for_id(&tasks, id) {
+                return Err(PyValueError::new_err("sample task already running"));
             }
+            tasks.insert((id, BackgroundTaskKind::Analysis));
         }
 
         let sample = {
@@ -435,6 +440,89 @@ impl AudioEngine {
                 id,
                 task: BackgroundTaskKind::Analysis,
                 analysis,
+            });
+        });
+
+        Ok(())
+    }
+
+    /// Schedule offline stem generation on a background thread.
+    ///
+    /// This API currently provides source-version-aware task gating and progress/error events.
+    /// Neural inference and prepared stem publication are intentionally not implemented here yet.
+    pub fn generate_stems_async(&self, id: usize, source_version: String) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err(format!(
+                "id out of range (expected 0..{}, got {id})",
+                NUM_SAMPLES - 1
+            )));
+        }
+
+        if source_version.trim().is_empty() {
+            return Err(PyValueError::new_err("source_version must not be empty"));
+        }
+
+        self.stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        {
+            let loading = self
+                .loading_sample_ids
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("Failed to acquire loading ids lock"))?;
+            if loading.contains(&id) {
+                return Err(PyValueError::new_err("sample is currently loading"));
+            }
+        }
+
+        {
+            let cache = self
+                .sample_cache
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("Failed to acquire sample cache lock"))?;
+            if cache.get(id).and_then(|slot| slot.as_ref()).is_none() {
+                return Err(PyValueError::new_err("sample is not loaded"));
+            }
+        }
+
+        {
+            let mut tasks = self
+                .active_tasks
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("Failed to acquire active tasks lock"))?;
+            if has_active_task_for_id(&tasks, id) {
+                return Err(PyValueError::new_err("sample task already running"));
+            }
+            tasks.insert((id, BackgroundTaskKind::StemGeneration));
+        }
+
+        let loader_tx = self.loader_tx.clone();
+        let active_tasks = self.active_tasks.clone();
+
+        thread::spawn(move || {
+            let _task_guard = PadTaskGuard {
+                id,
+                task: BackgroundTaskKind::StemGeneration,
+                active_tasks,
+            };
+
+            let _ = loader_tx.send(LoaderEvent::TaskStarted {
+                id,
+                task: BackgroundTaskKind::StemGeneration,
+            });
+
+            let _ = loader_tx.send(LoaderEvent::TaskProgress {
+                id,
+                task: BackgroundTaskKind::StemGeneration,
+                percent: 0.0,
+                stage: "Generating stems…".to_string(),
+            });
+
+            let _ = loader_tx.send(LoaderEvent::TaskError {
+                id,
+                task: BackgroundTaskKind::StemGeneration,
+                error: "Stem generation is not implemented yet".to_string(),
             });
         });
 
@@ -1003,7 +1091,7 @@ impl AudioEngine {
         }
 
         if let Ok(mut set) = self.active_tasks.lock() {
-            set.remove(&(id, BackgroundTaskKind::Analysis));
+            set.retain(|(task_id, _)| *task_id != id);
         }
 
         Ok(())

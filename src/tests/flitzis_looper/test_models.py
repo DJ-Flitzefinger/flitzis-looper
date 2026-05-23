@@ -6,7 +6,15 @@ import pytest
 from pydantic import ValidationError
 
 from flitzis_looper.constants import NUM_SAMPLES
-from flitzis_looper.models import BeatGrid, ProjectState, SampleAnalysis, SessionState
+from flitzis_looper.models import (
+    STEM_KINDS,
+    BeatGrid,
+    ProjectState,
+    SampleAnalysis,
+    SessionState,
+    StemCacheEntry,
+    StemFileSet,
+)
 
 
 class TestProjectStateValidation:
@@ -174,6 +182,7 @@ class TestModelSerialization:
         assert "multi_loop" in data
         assert "sample_paths" in data
         assert "sample_analysis" in data
+        assert "stem_cache" in data
         assert "manual_bpm" in data
         assert "manual_key" in data
         assert "speed" in data
@@ -236,6 +245,8 @@ def test_project_state_defaults(project_state: ProjectState) -> None:
     assert project_state.selected_bank == 0
     assert len(project_state.sample_paths) == NUM_SAMPLES
     assert all(path is None for path in project_state.sample_paths)
+    assert len(project_state.stem_cache) == NUM_SAMPLES
+    assert all(entry is None for entry in project_state.stem_cache)
     assert len(project_state.manual_bpm) == NUM_SAMPLES
     assert all(bpm is None for bpm in project_state.manual_bpm)
     assert len(project_state.manual_key) == NUM_SAMPLES
@@ -255,6 +266,33 @@ def test_trigger_quantization_mode_validation(project_state: ProjectState) -> No
         ProjectState.model_validate({"trigger_quantization": "half_note"})
 
 
+def test_stem_cache_entry_represents_expected_kinds() -> None:
+    files = StemFileSet(
+        vocals="samples/stems/a/vocals.wav",
+        melody="samples/stems/a/melody.wav",
+        bass="samples/stems/a/bass.wav",
+        drums="samples/stems/a/drums.wav",
+        instrumental="samples/stems/a/instrumental.wav",
+    )
+    entry = StemCacheEntry(
+        source_version="samples/foo.wav|10|20",
+        cache_dir="samples/stems/a",
+        stems=files,
+        available=True,
+    )
+
+    assert tuple(STEM_KINDS) == ("vocals", "melody", "bass", "drums", "instrumental")
+    for kind in STEM_KINDS:
+        path = entry.stems.path_for(kind)
+        assert path is not None
+        assert path.endswith(f"{kind}.wav")
+
+
+def test_stem_cache_validation_requires_per_pad_length() -> None:
+    with pytest.raises(ValidationError, match="stem_cache must have length"):
+        ProjectState(stem_cache=[])
+
+
 def test_session_state_defaults(session_state: SessionState) -> None:
     """Test SessionState default values."""
     assert len(session_state.active_sample_ids) == 0
@@ -263,3 +301,8 @@ def test_session_state_defaults(session_state: SessionState) -> None:
     assert session_state.file_dialog_pad_id is None
     assert session_state.tap_bpm_pad_id is None
     assert session_state.tap_bpm_timestamps == []
+    assert session_state.stem_generating_sample_ids == set()
+    assert session_state.stem_generation_source_versions == {}
+    assert session_state.stem_generation_progress == {}
+    assert session_state.stem_generation_stage == {}
+    assert session_state.stem_generation_errors == {}

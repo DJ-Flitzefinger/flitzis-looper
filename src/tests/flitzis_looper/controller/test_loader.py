@@ -4,7 +4,7 @@ import pytest
 
 from flitzis_looper.constants import NUM_SAMPLES
 from flitzis_looper.controller.loader import LoaderController
-from flitzis_looper.models import ProjectState, SessionState
+from flitzis_looper.models import ProjectState, SessionState, StemCacheEntry
 from flitzis_looper_audio import AudioEngine
 from tests.conftest import write_mono_pcm16_wav
 
@@ -37,12 +37,17 @@ def test_load_sample_async_unloads_existing(
     new_path = "/path/to/new.wav"
 
     controller.project.sample_paths[sample_id] = old_path
+    controller.project.stem_cache[sample_id] = StemCacheEntry(
+        source_version="old",
+        cache_dir="samples/stems/old",
+    )
 
     controller.loader.load_sample_async(sample_id, new_path)
 
     audio_engine_mock.unload_sample.assert_called_with(sample_id)
     audio_engine_mock.load_sample_async.assert_called_with(sample_id, new_path, run_analysis=True)
     assert controller.project.sample_paths[sample_id] is None
+    assert controller.project.stem_cache[sample_id] is None
     assert controller.session.pending_sample_paths[sample_id] == new_path
 
 
@@ -82,14 +87,21 @@ def test_unload_sample(controller: AppController, audio_engine_mock: Mock) -> No
     path = "/path/to/sample.wav"
     controller.project.sample_paths[sample_id] = path
     controller.project.sample_durations[sample_id] = 1.0
+    controller.project.stem_cache[sample_id] = StemCacheEntry(
+        source_version="old",
+        cache_dir="samples/stems/old",
+    )
     controller.session.active_sample_ids.add(sample_id)
+    controller.session.stem_generating_sample_ids.add(sample_id)
 
     controller.loader.unload_sample(sample_id)
 
     audio_engine_mock.unload_sample.assert_called_with(sample_id)
     assert controller.project.sample_paths[sample_id] is None
     assert controller.project.sample_durations[sample_id] is None
+    assert controller.project.stem_cache[sample_id] is None
     assert sample_id not in controller.session.active_sample_ids
+    assert sample_id not in controller.session.stem_generating_sample_ids
 
 
 def test_is_sample_loaded_true(controller: AppController) -> None:
@@ -284,6 +296,43 @@ def test_task_error_records_error_and_clears_progress(
     assert 0 not in controller.session.sample_analysis_progress
     assert 0 not in controller.session.sample_analysis_stage
     assert controller.session.sample_analysis_errors[0] == "bad audio"
+
+
+def test_stem_task_events_update_generation_state(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    audio_engine_mock.poll_loader_events.side_effect = [
+        {"type": "task_started", "id": 0, "task": "stem_generation"},
+        {
+            "type": "task_progress",
+            "id": 0,
+            "task": "stem_generation",
+            "percent": 0.25,
+            "stage": "Generating stems",
+        },
+        {"type": "task_error", "id": 0, "task": "stem_generation", "msg": "not implemented"},
+        None,
+    ]
+
+    controller.loader.poll_loader_events()
+
+    assert 0 not in controller.session.stem_generating_sample_ids
+    assert 0 not in controller.session.stem_generation_progress
+    assert 0 not in controller.session.stem_generation_stage
+    assert controller.session.stem_generation_errors[0] == "not implemented"
+
+
+def test_stale_stem_task_error_is_ignored(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    audio_engine_mock.poll_loader_events.side_effect = [
+        {"type": "task_error", "id": 0, "task": "stem_generation", "msg": "late"},
+        None,
+    ]
+
+    controller.loader.poll_loader_events()
+
+    assert 0 not in controller.session.stem_generation_errors
 
 
 def test_load_sample_async_already_loading(

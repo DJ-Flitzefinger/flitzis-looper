@@ -4,17 +4,17 @@
 - [x] 1.3 Run `openspec validate add-offline-stem-cache --strict`.
 
 ## 2. Stem Cache Model
-- [ ] 2.1 Define a project-local stem cache layout and source-version identity.
-- [ ] 2.2 Represent the expected stem kinds: vocals, melody, bass, drums, and instrumental.
-- [ ] 2.3 Mark cached stems unavailable when the source pad is unloaded or replaced.
-- [ ] 2.4 Treat stale cache use for a replaced pad as a blocker before merge.
+- [x] 2.1 Define a project-local stem cache layout and source-version identity.
+- [x] 2.2 Represent the expected stem kinds: vocals, melody, bass, drums, and instrumental.
+- [x] 2.3 Mark cached stems unavailable when the source pad is unloaded or replaced.
+- [x] 2.4 Treat stale cache use for a replaced pad as a blocker before merge.
 
 ## 3. Background Stem Generation
-- [ ] 3.1 Add a manual per-pad background stem generation task.
-- [ ] 3.2 Reject or defer generation when the pad is currently playing, loading, unloading, or running a conflicting task.
-- [ ] 3.3 Ensure neural inference, disk I/O, temporary files, and heavy allocation run only outside the audio callback.
-- [ ] 3.4 Report progress and errors without freezing the UI.
-- [ ] 3.5 Add Python/controller tests for task gating, progress, failure, and stale-source behavior.
+- [x] 3.1 Add a manual per-pad background stem generation task.
+- [x] 3.2 Reject or defer generation when the pad is currently playing, loading, unloading, or running a conflicting task.
+- [x] 3.3 Ensure neural inference, disk I/O, temporary files, and heavy allocation run only outside the audio callback.
+- [x] 3.4 Report progress and errors without freezing the UI.
+- [x] 3.5 Add Python/controller tests for task gating, progress, failure, and stale-source behavior.
 
 ## 4. Prepared Stem Publication
 - [ ] 4.1 Validate generated stem buffers for sample rate, channel layout, frame origin, and usable length before publication.
@@ -35,5 +35,5 @@
 
 ## 7. Validation
 - [x] 7.1 Run official OpenSpec validation for this change before implementation is considered complete.
-- [ ] 7.2 Run focused Rust and Python tests for any implementation slice that changes code.
-- [ ] 7.3 Run full uv-managed Rust/Python validation before merging production stem behavior.
+- [x] 7.2 Run focused Rust and Python tests for any implementation slice that changes code.
+- [x] 7.3 Run full uv-managed Rust/Python validation before merging production stem behavior.

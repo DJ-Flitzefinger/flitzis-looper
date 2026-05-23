@@ -198,11 +198,13 @@ pub(crate) struct SampleAnalysis {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BackgroundTaskKind {
     Analysis,
+    StemGeneration,
 }
 
 pub fn task_to_str(task: BackgroundTaskKind) -> &'static str {
     match task {
         BackgroundTaskKind::Analysis => "analysis",
+        BackgroundTaskKind::StemGeneration => "stem_generation",
     }
 }
 
@@ -312,5 +314,13 @@ mod tests {
             message,
             ControlMessage::AnchorTransportPhaseFromPad { id: 3 }
         ));
+    }
+
+    #[test]
+    fn stem_generation_task_has_stable_event_name() {
+        assert_eq!(
+            task_to_str(BackgroundTaskKind::StemGeneration),
+            "stem_generation"
+        );
     }
 }

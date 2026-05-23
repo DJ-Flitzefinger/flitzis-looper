@@ -74,6 +74,7 @@ class LoaderController(BaseController):
             self.unload_sample(sample_id)
 
         self._project.sample_analysis[sample_id] = None
+        self._clear_stem_cache(sample_id)
         self._mark_project_changed()
 
         self._session.sample_load_errors.pop(sample_id, None)
@@ -81,6 +82,7 @@ class LoaderController(BaseController):
         self._session.sample_load_stage.pop(sample_id, None)
 
         self._clear_analysis_task_state(sample_id)
+        self._clear_stem_generation_state(sample_id)
 
         self._session.pending_sample_paths[sample_id] = path
         self._session.loading_sample_ids.add(sample_id)
@@ -98,6 +100,7 @@ class LoaderController(BaseController):
         self._session.sample_load_errors.pop(sample_id, None)
 
         self._clear_analysis_task_state(sample_id)
+        self._clear_stem_generation_state(sample_id)
 
         old_path = self._project.sample_paths[sample_id]
 
@@ -105,6 +108,7 @@ class LoaderController(BaseController):
         self._project.sample_paths[sample_id] = None
         self._project.sample_durations[sample_id] = None
         self._project.sample_analysis[sample_id] = None
+        self._clear_stem_cache(sample_id)
         self._on_pad_bpm_changed(sample_id)
         self._mark_project_changed()
 
@@ -202,9 +206,23 @@ class LoaderController(BaseController):
         self._session.sample_analysis_progress.pop(sample_id, None)
         self._session.sample_analysis_stage.pop(sample_id, None)
 
+    def _clear_stem_generation_state(self, sample_id: int) -> None:
+        self._session.stem_generating_sample_ids.discard(sample_id)
+        self._session.stem_generation_source_versions.pop(sample_id, None)
+        self._clear_stem_generation_messages(sample_id)
+
+    def _clear_stem_generation_messages(self, sample_id: int) -> None:
+        self._session.stem_generation_errors.pop(sample_id, None)
+        self._session.stem_generation_progress.pop(sample_id, None)
+        self._session.stem_generation_stage.pop(sample_id, None)
+
+    def _clear_stem_cache(self, sample_id: int) -> None:
+        self._project.stem_cache[sample_id] = None
+
     def _handle_loader_started(self, sample_id: int, _event: dict[str, object]) -> None:
         if self._project.sample_paths[sample_id] is None:
             self._project.sample_analysis[sample_id] = None
+            self._clear_stem_cache(sample_id)
             self._mark_project_changed()
 
         self._session.loading_sample_ids.add(sample_id)
@@ -238,6 +256,7 @@ class LoaderController(BaseController):
 
         if target_path is not None and self._project.sample_paths[sample_id] != target_path:
             self._project.sample_paths[sample_id] = target_path
+            self._clear_stem_cache(sample_id)
             self._mark_project_changed()
 
         duration_s = event.get("duration_s")
@@ -267,6 +286,7 @@ class LoaderController(BaseController):
             self._project.sample_paths[sample_id] = None
             self._project.sample_durations[sample_id] = None
             self._project.sample_analysis[sample_id] = None
+            self._clear_stem_cache(sample_id)
             self._on_pad_bpm_changed(sample_id)
             self._mark_project_changed()
 
@@ -275,14 +295,34 @@ class LoaderController(BaseController):
             self._session.sample_load_errors[sample_id] = msg
 
     def _handle_task_started(self, sample_id: int, event: dict[str, object]) -> None:
-        if event.get("task") != "analysis":
+        task = event.get("task")
+        if task == "stem_generation":
+            self._session.stem_generating_sample_ids.add(sample_id)
+            self._clear_stem_generation_messages(sample_id)
+            return
+
+        if task != "analysis":
             return
 
         self._session.analyzing_sample_ids.add(sample_id)
         self._clear_analysis_task_messages(sample_id)
 
     def _handle_task_progress(self, sample_id: int, event: dict[str, object]) -> None:
-        if event.get("task") != "analysis":
+        task = event.get("task")
+        if task == "stem_generation":
+            if sample_id not in self._session.stem_generating_sample_ids:
+                return
+
+            stage = event.get("stage")
+            if isinstance(stage, str):
+                self._session.stem_generation_stage[sample_id] = stage
+
+            percent = event.get("percent")
+            if isinstance(percent, (int, float)):
+                self._session.stem_generation_progress[sample_id] = float(percent)
+            return
+
+        if task != "analysis":
             return
 
         stage = event.get("stage")
@@ -294,14 +334,35 @@ class LoaderController(BaseController):
             self._session.sample_analysis_progress[sample_id] = float(percent)
 
     def _handle_task_success(self, sample_id: int, event: dict[str, object]) -> None:
-        if event.get("task") != "analysis":
+        task = event.get("task")
+        if task == "stem_generation":
+            if sample_id in self._session.stem_generating_sample_ids:
+                self._clear_stem_generation_state(sample_id)
+            return
+
+        if task != "analysis":
             return
 
         self._store_sample_analysis(sample_id, event.get("analysis"))
         self._clear_analysis_task_state(sample_id)
 
     def _handle_task_error(self, sample_id: int, event: dict[str, object]) -> None:
-        if event.get("task") != "analysis":
+        task = event.get("task")
+        if task == "stem_generation":
+            if sample_id not in self._session.stem_generating_sample_ids:
+                return
+
+            self._session.stem_generating_sample_ids.discard(sample_id)
+            self._session.stem_generation_source_versions.pop(sample_id, None)
+            self._session.stem_generation_progress.pop(sample_id, None)
+            self._session.stem_generation_stage.pop(sample_id, None)
+
+            msg = event.get("msg")
+            if isinstance(msg, str):
+                self._session.stem_generation_errors[sample_id] = msg
+            return
+
+        if task != "analysis":
             return
 
         self._session.analyzing_sample_ids.discard(sample_id)
@@ -329,6 +390,7 @@ class LoaderController(BaseController):
         self._project.sample_paths[sample_id] = None
         self._project.sample_durations[sample_id] = None
         self._project.sample_analysis[sample_id] = None
+        self._clear_stem_cache(sample_id)
         self._on_pad_bpm_changed(sample_id)
 
     @staticmethod
