@@ -161,6 +161,12 @@ inference, real-time stem separation, or long-running work.
 Later Gen3 stem work must be offline/cache-based. Stem generation is only allowed for pads
 that are not currently playing; the audio callback may only mix already prepared audio data.
 
+The active Gen3 stem planning slice is `openspec/changes/add-offline-stem-cache/`. It defines
+offline/background stem generation, project-local stem cache identity, inactive-pad gating,
+fixed-size publication of prepared immutable stem buffers, and future real-time-safe stem mixing
+using the same voice playhead and loop timing as full-mix playback. It does not implement neural
+inference, stem UI, or mixer stem toggles.
+
 The active Gen3 phase-aware sync slice is `openspec/changes/add-phase-aware-playback-sync/`. It
 defines how quantized starts will use the Rust transport phase plus bounded per-pad timing anchors
 to choose the initial pad sample frame, and how BPM lock can anchor the transport downbeat from a
@@ -200,6 +206,8 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 - Audio device selection/configuration (the engine currently uses the default output device/config).
 - Broader channel-layout support; currently decoding only supports mono↔stereo mapping.
 - Real-time stem separation is intentionally out of scope.
+- Offline stem cache generation, prepared stem-buffer publication, and stem mixing are planned in
+  `openspec/changes/add-offline-stem-cache/` but not implemented.
 
 ## Related specs
 
@@ -209,3 +217,4 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 - `openspec/specs/play-samples/spec.md`
 - `openspec/changes/add-rust-transport-timeline/`
 - `openspec/changes/add-phase-aware-playback-sync/`
+- `openspec/changes/add-offline-stem-cache/`

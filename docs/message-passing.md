@@ -80,6 +80,19 @@ Two failure points are distinct:
   rejects it without evicting existing events, stopping currently playing pads, blocking,
   allocating, logging, touching disk, or acquiring the Python GIL.
 
+## Gen3 offline stem-cache messages
+
+The Gen3 stem-cache planning work is specified in
+`openspec/changes/add-offline-stem-cache/`. Stem generation is offline/background work for
+inactive pads only. Future stem publication must send fixed-size descriptors and immutable
+audio-buffer handles through the existing control-to-audio ring buffer; messages must not contain
+file paths, Python objects, unbounded metadata vectors, or copied full stem payloads.
+
+The audio callback may eventually accept already prepared stem handles into bounded audio-thread
+state and mix them with the same voice playhead and loop timing as full-mix playback. It must not
+generate stems, read cache files, decode audio, run neural inference, allocate stem buffers, log,
+block, or acquire the Python GIL.
+
 ## Not implemented (yet)
 
 - Rich audio → Python event stream (beyond `Pong`).
@@ -91,3 +104,4 @@ Two failure points are distinct:
 - `openspec/specs/play-samples/spec.md`
 - `openspec/changes/add-rust-transport-timeline/`
 - `openspec/changes/add-phase-aware-playback-sync/`
+- `openspec/changes/add-offline-stem-cache/`
