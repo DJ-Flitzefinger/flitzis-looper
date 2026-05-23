@@ -22,7 +22,9 @@ pub(crate) enum ScheduledCommand {
         volume: f32,
         target_bar_phase_beats: Option<f64>,
     },
-    StopSample { id: usize },
+    StopSample {
+        id: usize,
+    },
     StopAll,
 }
 
@@ -107,7 +109,9 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
     }
 
     pub(crate) fn peek_next_target_frame(&self) -> Option<u64> {
-        self.events.first().and_then(|event| event.map(|event| event.target_frame))
+        self.events
+            .first()
+            .and_then(|event| event.map(|event| event.target_frame))
     }
 
     pub(crate) fn pop_due_at_callback_start(
@@ -215,7 +219,10 @@ mod tests {
         scheduler.schedule(10, play(1)).unwrap();
         scheduler.schedule(20, play(2)).unwrap();
 
-        assert_eq!(drain_commands(&mut scheduler, 30), vec![play(1), play(2), play(3)]);
+        assert_eq!(
+            drain_commands(&mut scheduler, 30),
+            vec![play(1), play(2), play(3)]
+        );
         assert!(scheduler.is_empty());
     }
 
@@ -224,7 +231,9 @@ mod tests {
         let mut scheduler = FixedCapacityScheduler::<8>::new();
 
         scheduler.schedule(10, play(1)).unwrap();
-        scheduler.schedule(10, ScheduledCommand::StopSample { id: 2 }).unwrap();
+        scheduler
+            .schedule(10, ScheduledCommand::StopSample { id: 2 })
+            .unwrap();
         scheduler.schedule(10, ScheduledCommand::StopAll).unwrap();
         scheduler
             .schedule(

@@ -272,7 +272,10 @@ mod tests {
 
     #[test]
     fn play_sample_exclusive_message_carries_fixed_size_trigger() {
-        let message = ControlMessage::PlaySampleExclusive { id: 3, volume: 0.75 };
+        let message = ControlMessage::PlaySampleExclusive {
+            id: 3,
+            volume: 0.75,
+        };
 
         assert!(matches!(
             message,

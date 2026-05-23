@@ -11,8 +11,8 @@ use crate::audio_engine::sample_loader::{
     decode_audio_file_to_sample_buffer,
 };
 use crate::messages::{
-    AudioMessage, BackgroundTaskKind, ControlMessage, LoaderEvent, PadTimingMetadata,
-    SampleBuffer, TriggerQuantization, task_to_str,
+    AudioMessage, BackgroundTaskKind, ControlMessage, LoaderEvent, PadTimingMetadata, SampleBuffer,
+    TriggerQuantization, task_to_str,
 };
 use numpy::{PyArray1, ToPyArray};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};

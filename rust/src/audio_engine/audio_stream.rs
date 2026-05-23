@@ -650,7 +650,12 @@ mod tests {
         );
 
         assert!(scheduler.is_empty());
-        assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 0));
+        assert!(
+            mixer
+                .voices
+                .iter()
+                .any(|voice| voice.active && voice.sample_id == 0)
+        );
         assert_eq!(active_voice_frame(&mixer, 0), Some(0));
         assert_started(&messages, 0, 0);
     }
@@ -674,7 +679,12 @@ mod tests {
             &mut messages,
         );
 
-        assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 0));
+        assert!(
+            mixer
+                .voices
+                .iter()
+                .any(|voice| voice.active && voice.sample_id == 0)
+        );
         assert_started(&messages, 0, 0);
     }
 
@@ -718,7 +728,11 @@ mod tests {
         );
 
         assert!(output[..5].iter().all(|sample| *sample == 0.0));
-        assert!(output[5..].iter().all(|sample| (*sample - 0.5).abs() < 1e-5));
+        assert!(
+            output[5..]
+                .iter()
+                .all(|sample| (*sample - 0.5).abs() < 1e-5)
+        );
         assert_started(&messages, 0, 0);
     }
 
@@ -848,7 +862,12 @@ mod tests {
         );
 
         assert!(scheduler.is_empty());
-        assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 0));
+        assert!(
+            mixer
+                .voices
+                .iter()
+                .any(|voice| voice.active && voice.sample_id == 0)
+        );
         assert_started(&messages, 0, 0);
     }
 
@@ -872,7 +891,12 @@ mod tests {
         );
 
         assert!(scheduler.is_empty());
-        assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 0));
+        assert!(
+            mixer
+                .voices
+                .iter()
+                .any(|voice| voice.active && voice.sample_id == 0)
+        );
         assert_started(&messages, 0, 0);
     }
 
@@ -900,8 +924,18 @@ mod tests {
             &mut messages,
         );
 
-        assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 0));
-        assert!(mixer.voices.iter().all(|voice| !voice.active || voice.sample_id != 1));
+        assert!(
+            mixer
+                .voices
+                .iter()
+                .any(|voice| voice.active && voice.sample_id == 0)
+        );
+        assert!(
+            mixer
+                .voices
+                .iter()
+                .all(|voice| !voice.active || voice.sample_id != 1)
+        );
         assert!(messages.is_empty());
     }
 
@@ -934,8 +968,18 @@ mod tests {
         );
 
         assert!(scheduler.is_empty());
-        assert!(mixer.voices.iter().all(|voice| !voice.active || voice.sample_id != 0));
-        assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 1));
+        assert!(
+            mixer
+                .voices
+                .iter()
+                .all(|voice| !voice.active || voice.sample_id != 0)
+        );
+        assert!(
+            mixer
+                .voices
+                .iter()
+                .any(|voice| voice.active && voice.sample_id == 1)
+        );
         assert_eq!(active_voice_frame(&mixer, 1), Some(0));
         assert_stopped(&messages, 0, 0);
         assert_started(&messages, 1, 1);
@@ -973,7 +1017,12 @@ mod tests {
         );
 
         assert!(scheduler.is_empty());
-        assert!(mixer.voices.iter().all(|voice| !voice.active || voice.sample_id != 0));
+        assert!(
+            mixer
+                .voices
+                .iter()
+                .all(|voice| !voice.active || voice.sample_id != 0)
+        );
         assert_eq!(active_voice_frame(&mixer, 1), Some(20));
         assert_stopped(&messages, 0, 0);
         assert_started(&messages, 1, 1);
@@ -1004,8 +1053,18 @@ mod tests {
         );
 
         assert_eq!(scheduler.peek_next_target_frame(), Some(10));
-        assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 0));
-        assert!(mixer.voices.iter().all(|voice| !voice.active || voice.sample_id != 1));
+        assert!(
+            mixer
+                .voices
+                .iter()
+                .any(|voice| voice.active && voice.sample_id == 0)
+        );
+        assert!(
+            mixer
+                .voices
+                .iter()
+                .all(|voice| !voice.active || voice.sample_id != 1)
+        );
         assert!(messages.is_empty());
 
         let mut output = vec![0.0; 10];
@@ -1021,10 +1080,28 @@ mod tests {
             &mut messages,
         );
 
-        assert!(output[..5].iter().all(|sample| (*sample - 0.5).abs() < 1e-5));
-        assert!(output[5..].iter().all(|sample| (*sample - 0.25).abs() < 1e-5));
-        assert!(mixer.voices.iter().all(|voice| !voice.active || voice.sample_id != 0));
-        assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 1));
+        assert!(
+            output[..5]
+                .iter()
+                .all(|sample| (*sample - 0.5).abs() < 1e-5)
+        );
+        assert!(
+            output[5..]
+                .iter()
+                .all(|sample| (*sample - 0.25).abs() < 1e-5)
+        );
+        assert!(
+            mixer
+                .voices
+                .iter()
+                .all(|voice| !voice.active || voice.sample_id != 0)
+        );
+        assert!(
+            mixer
+                .voices
+                .iter()
+                .any(|voice| voice.active && voice.sample_id == 1)
+        );
         assert_stopped(&messages, 0, 0);
         assert_started(&messages, 1, 1);
     }
@@ -1053,8 +1130,18 @@ mod tests {
             &mut messages,
         );
 
-        assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 0));
-        assert!(mixer.voices.iter().all(|voice| !voice.active || voice.sample_id != 1));
+        assert!(
+            mixer
+                .voices
+                .iter()
+                .any(|voice| voice.active && voice.sample_id == 0)
+        );
+        assert!(
+            mixer
+                .voices
+                .iter()
+                .all(|voice| !voice.active || voice.sample_id != 1)
+        );
         assert!(messages.is_empty());
     }
 
@@ -1079,8 +1166,18 @@ mod tests {
         );
 
         assert!(scheduler.is_empty());
-        assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 0));
-        assert!(mixer.voices.iter().all(|voice| !voice.active || voice.sample_id != 1));
+        assert!(
+            mixer
+                .voices
+                .iter()
+                .any(|voice| voice.active && voice.sample_id == 0)
+        );
+        assert!(
+            mixer
+                .voices
+                .iter()
+                .all(|voice| !voice.active || voice.sample_id != 1)
+        );
         assert!(messages.is_empty());
     }
 
@@ -1114,7 +1211,11 @@ mod tests {
         );
 
         assert!(output[..4].iter().all(|sample| *sample == 0.0));
-        assert!(output[4..].iter().all(|sample| (*sample - 0.5).abs() < 1e-5));
+        assert!(
+            output[4..]
+                .iter()
+                .all(|sample| (*sample - 0.5).abs() < 1e-5)
+        );
         assert!((pad_peaks[0] - 0.5).abs() < 1e-5);
         assert_started(&messages, 0, 0);
     }
@@ -1142,7 +1243,11 @@ mod tests {
             &mut messages,
         );
 
-        assert!(output[..4].iter().all(|sample| (*sample - 0.5).abs() < 1e-5));
+        assert!(
+            output[..4]
+                .iter()
+                .all(|sample| (*sample - 0.5).abs() < 1e-5)
+        );
         assert!(output[4..].iter().all(|sample| *sample == 0.0));
         assert!((pad_peaks[0] - 0.5).abs() < 1e-5);
         assert_stopped(&messages, 0, 0);
@@ -1180,8 +1285,18 @@ mod tests {
             &mut messages,
         );
 
-        assert!(mixer.voices.iter().all(|voice| !voice.active || voice.sample_id != 0));
-        assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 1));
+        assert!(
+            mixer
+                .voices
+                .iter()
+                .all(|voice| !voice.active || voice.sample_id != 0)
+        );
+        assert!(
+            mixer
+                .voices
+                .iter()
+                .any(|voice| voice.active && voice.sample_id == 1)
+        );
         assert!(output.iter().all(|sample| (*sample - 0.25).abs() < 1e-5));
         assert_stopped(&messages, 0, 0);
         assert_started(&messages, 1, 1);
