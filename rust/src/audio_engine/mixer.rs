@@ -136,6 +136,13 @@ impl RtMixer {
         self.sample_bank[id] = Some(sample);
     }
 
+    pub(crate) fn can_play_sample(&self, id: usize, velocity: f32) -> bool {
+        id < NUM_SAMPLES
+            && velocity.is_finite()
+            && (VOLUME_MIN..=VOLUME_MAX).contains(&velocity)
+            && self.sample_bank[id].is_some()
+    }
+
     /// Starts playback of a loaded sample.
     ///
     /// # Parameters
@@ -145,11 +152,7 @@ impl RtMixer {
     ///
     /// If no free voice slot is available, the playback request is silently dropped.
     pub fn play_sample(&mut self, id: usize, velocity: f32) -> bool {
-        if id >= NUM_SAMPLES {
-            return false;
-        }
-
-        if !velocity.is_finite() || !(VOLUME_MIN..=VOLUME_MAX).contains(&velocity) {
+        if !self.can_play_sample(id, velocity) {
             return false;
         }
 

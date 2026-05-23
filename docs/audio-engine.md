@@ -118,6 +118,10 @@ Implemented first slice:
   output frame. If master BPM is unavailable, the request falls back to immediate playback.
 - Scheduler-full quantized play requests are rejected without evicting existing scheduled events
   or changing currently playing pads.
+- `AudioEngine.play_sample_exclusive(id, velocity)` publishes one fixed-size command for
+  one-at-a-time playback. With quantization enabled, Rust schedules the stop-all operation and
+  requested pad start as one atomic `StopAllThenPlaySample` event at the same absolute output
+  frame; scheduler-full rejection leaves current playback unchanged.
 
 The planned direction is:
 
@@ -148,6 +152,8 @@ The Rust engine is exposed to Python as `AudioEngine` with:
   - `load_sample_async(id, path)` schedules loading on a Rust background thread.
   - `poll_loader_events()` polls for background loader events (e.g. started/success/error).
   - `play_sample(id, velocity)` triggers playback (`velocity` in `0.0..=1.0`).
+  - `play_sample_exclusive(id, velocity)` stops all active voices and starts the requested loaded
+    sample as one audio-thread command. The controller uses this for MultiLoop-disabled playback.
   - `set_trigger_quantization(mode)` sets low-level Rust trigger quantization mode. Supported
     modes are `"immediate"`, `"next_beat"`, and `"next_bar"`; UI/controller controls are not
     wired yet.
@@ -161,7 +167,6 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 - Audio device selection/configuration (the engine currently uses the default output device/config).
 - Broader channel-layout support; currently decoding only supports mono↔stereo mapping.
 - UI/controller controls for trigger quantization.
-- Atomic quantized stop-all/start transitions for MultiLoop-disabled playback.
 - Phase-aware beat/bar/downbeat playback alignment.
 - Real-time stem separation is intentionally out of scope.
 

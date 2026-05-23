@@ -101,6 +101,39 @@ fn schedule_play_sample_command<const CAPACITY: usize, S: AudioMessageSink>(
     }
 }
 
+fn schedule_exclusive_play_sample_command<const CAPACITY: usize, S: AudioMessageSink>(
+    scheduler: &mut FixedCapacityScheduler<CAPACITY>,
+    callback_start_frame: u64,
+    trigger_quantization: TriggerQuantization,
+    transport: &TransportTimeline,
+    id: usize,
+    volume: f32,
+    mixer: &mut RtMixer,
+    audio_messages: &mut S,
+) {
+    let command = ScheduledCommand::StopAllThenPlaySample { id, volume };
+
+    let Some(target_frame) = quantized_target_frame(transport, trigger_quantization) else {
+        schedule_immediate_command(
+            scheduler,
+            callback_start_frame,
+            command,
+            mixer,
+            audio_messages,
+        );
+        return;
+    };
+
+    if scheduler.schedule(target_frame, command).is_ok() {
+        drain_scheduler_due_at_callback_start(
+            scheduler,
+            callback_start_frame,
+            mixer,
+            audio_messages,
+        );
+    }
+}
+
 fn quantized_target_frame(
     transport: &TransportTimeline,
     trigger_quantization: TriggerQuantization,
@@ -134,6 +167,16 @@ fn execute_scheduled_command<S: AudioMessageSink>(
                 audio_messages.push_audio_message(AudioMessage::SampleStarted { id });
             } else {
                 audio_messages.push_audio_message(AudioMessage::SampleStopped { id });
+            }
+        }
+        ScheduledCommand::StopAllThenPlaySample { id, volume } => {
+            if !mixer.can_play_sample(id, volume) {
+                return;
+            }
+
+            stop_all_samples(mixer, audio_messages);
+            if mixer.play_sample(id, volume) {
+                audio_messages.push_audio_message(AudioMessage::SampleStarted { id });
             }
         }
         ScheduledCommand::StopSample { id } => {
@@ -327,6 +370,18 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
                     }
                     ControlMessage::PlaySample { id, volume } => {
                         schedule_play_sample_command(
+                            &mut scheduler,
+                            buffer_start_frame,
+                            trigger_quantization,
+                            &transport,
+                            id,
+                            volume,
+                            &mut mixer,
+                            &mut producer_out,
+                        );
+                    }
+                    ControlMessage::PlaySampleExclusive { id, volume } => {
+                        schedule_exclusive_play_sample_command(
                             &mut scheduler,
                             buffer_start_frame,
                             trigger_quantization,
@@ -709,6 +764,139 @@ mod tests {
             &mut messages,
         );
 
+        assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 0));
+        assert!(mixer.voices.iter().all(|voice| !voice.active || voice.sample_id != 1));
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn immediate_exclusive_play_stops_all_then_starts_at_current_frame() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_test_sample(1, 32, 0.5));
+        mixer.load_sample(1, create_test_sample(1, 32, 0.25));
+        assert!(mixer.play_sample(0, 1.0));
+        let transport = TransportTimeline::new(10);
+        let mut scheduler = FixedCapacityScheduler::<8>::new();
+        let mut messages = Vec::new();
+
+        schedule_exclusive_play_sample_command(
+            &mut scheduler,
+            transport.output_frame(),
+            TriggerQuantization::Immediate,
+            &transport,
+            1,
+            1.0,
+            &mut mixer,
+            &mut messages,
+        );
+
+        assert!(scheduler.is_empty());
+        assert!(mixer.voices.iter().all(|voice| !voice.active || voice.sample_id != 0));
+        assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 1));
+        assert_stopped(&messages, 0, 0);
+        assert_started(&messages, 1, 1);
+    }
+
+    #[test]
+    fn quantized_exclusive_play_switches_pads_at_target_offset() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_test_sample(1, 32, 0.5));
+        mixer.load_sample(1, create_test_sample(1, 32, 0.25));
+        assert!(mixer.play_sample(0, 1.0));
+        let mut transport = TransportTimeline::new(10);
+        assert!(transport.set_master_bpm(60.0));
+        transport.advance_by_rendered_frames(5);
+        let callback_start_frame = transport.output_frame();
+        let mut scheduler = FixedCapacityScheduler::<8>::new();
+        let mut messages = Vec::new();
+
+        schedule_exclusive_play_sample_command(
+            &mut scheduler,
+            callback_start_frame,
+            TriggerQuantization::NextBeat,
+            &transport,
+            1,
+            1.0,
+            &mut mixer,
+            &mut messages,
+        );
+
+        assert_eq!(scheduler.peek_next_target_frame(), Some(10));
+        assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 0));
+        assert!(mixer.voices.iter().all(|voice| !voice.active || voice.sample_id != 1));
+        assert!(messages.is_empty());
+
+        let mut output = vec![0.0; 10];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+
+        render_scheduled_audio(
+            &mut mixer,
+            &mut scheduler,
+            &mut output,
+            &mut pad_peaks,
+            callback_start_frame,
+            1,
+            &mut messages,
+        );
+
+        assert!(output[..5].iter().all(|sample| (*sample - 0.5).abs() < 1e-5));
+        assert!(output[5..].iter().all(|sample| (*sample - 0.25).abs() < 1e-5));
+        assert!(mixer.voices.iter().all(|voice| !voice.active || voice.sample_id != 0));
+        assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 1));
+        assert_stopped(&messages, 0, 0);
+        assert_started(&messages, 1, 1);
+    }
+
+    #[test]
+    fn scheduler_full_quantized_exclusive_play_leaves_current_playback_unchanged() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_test_sample(1, 32, 0.5));
+        mixer.load_sample(1, create_test_sample(1, 32, 0.25));
+        assert!(mixer.play_sample(0, 1.0));
+        let mut transport = TransportTimeline::new(10);
+        assert!(transport.set_master_bpm(60.0));
+        transport.advance_by_rendered_frames(5);
+        let callback_start_frame = transport.output_frame();
+        let mut scheduler = FixedCapacityScheduler::<0>::new();
+        let mut messages = Vec::new();
+
+        schedule_exclusive_play_sample_command(
+            &mut scheduler,
+            callback_start_frame,
+            TriggerQuantization::NextBeat,
+            &transport,
+            1,
+            1.0,
+            &mut mixer,
+            &mut messages,
+        );
+
+        assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 0));
+        assert!(mixer.voices.iter().all(|voice| !voice.active || voice.sample_id != 1));
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn exclusive_play_rejects_missing_target_without_stopping_current_playback() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_test_sample(1, 32, 0.5));
+        assert!(mixer.play_sample(0, 1.0));
+        let transport = TransportTimeline::new(10);
+        let mut scheduler = FixedCapacityScheduler::<8>::new();
+        let mut messages = Vec::new();
+
+        schedule_exclusive_play_sample_command(
+            &mut scheduler,
+            transport.output_frame(),
+            TriggerQuantization::Immediate,
+            &transport,
+            1,
+            1.0,
+            &mut mixer,
+            &mut messages,
+        );
+
+        assert!(scheduler.is_empty());
         assert!(mixer.voices.iter().any(|voice| voice.active && voice.sample_id == 0));
         assert!(mixer.voices.iter().all(|voice| !voice.active || voice.sample_id != 1));
         assert!(messages.is_empty());

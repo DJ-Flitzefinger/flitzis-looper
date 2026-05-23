@@ -38,3 +38,27 @@ a quantized boundary, scheduler rejection SHALL leave currently playing pads unc
 - **THEN** the pad 2 start is rejected
 - **AND** pad 1 remains playing
 - **AND** no partial stop/start transition is applied
+
+### Requirement: Exclusive Sample Trigger API
+The system SHALL provide a Python API `AudioEngine.play_sample_exclusive(id, velocity)` that
+requests one audio-thread command to stop all active voices and start the requested loaded
+sample.
+
+When trigger quantization is disabled, `AudioEngine.play_sample_exclusive(id, velocity)`
+SHALL preserve the existing one-at-a-time behavior of stopping currently active voices and
+starting the requested sample promptly.
+
+When trigger quantization is enabled, Rust SHALL schedule the stop-all operation and the
+requested sample start as one fixed-size scheduled command at one absolute output frame.
+
+#### Scenario: Exclusive trigger is one fixed-size request
+- **WHEN** Python/control code requests exclusive playback for a loaded pad
+- **THEN** the request is sent to the audio thread as one fixed-size control message
+- **AND** the audio thread represents the stop-all-then-play transition as one scheduled command
+
+#### Scenario: Exclusive trigger does not stop pads when the target cannot play
+- **GIVEN** pad 1 is currently playing
+- **AND** pad 2 has no loaded sample
+- **WHEN** exclusive playback is requested for pad 2
+- **THEN** pad 1 remains playing
+- **AND** no partial stop/start transition is applied

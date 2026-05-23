@@ -136,6 +136,13 @@ pub enum ControlMessage {
     /// * `volume` - Playback volume (0.0 to 1.0)
     PlaySample { id: usize, volume: f32 },
 
+    /// Stop all active voices, then play a loaded sample as one audio-thread command.
+    ///
+    /// # Parameters
+    /// * `id` - Identifier of the sample to play
+    /// * `volume` - Playback volume (0.0 to 1.0)
+    PlaySampleExclusive { id: usize, volume: f32 },
+
     /// Stop all active voices for a sample.
     ///
     /// # Parameters
@@ -248,6 +255,16 @@ mod tests {
         assert!(matches!(
             message,
             ControlMessage::SetTriggerQuantization(TriggerQuantization::NextBeat)
+        ));
+    }
+
+    #[test]
+    fn play_sample_exclusive_message_carries_fixed_size_trigger() {
+        let message = ControlMessage::PlaySampleExclusive { id: 3, volume: 0.75 };
+
+        assert!(matches!(
+            message,
+            ControlMessage::PlaySampleExclusive { id: 3, volume } if volume == 0.75
         ));
     }
 }

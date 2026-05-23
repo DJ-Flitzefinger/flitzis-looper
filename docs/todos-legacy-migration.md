@@ -68,7 +68,7 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 - OpenSpec change (active): `add-rust-transport-timeline`
 - [ ] As a performer, pad starts can be quantized to a Rust-owned global beat/bar timeline.
 - [x] As a performer, immediate pad triggering remains available when quantization is disabled.
-- [ ] As a performer, quantized one-at-a-time pad switches stop the old pad and start the new pad on the same scheduled output frame.
+- [x] As a performer, quantized one-at-a-time pad switches stop the old pad and start the new pad on the same scheduled output frame.
 - [ ] As a performer, loops can align to downbeat/beatgrid metadata produced by analysis.
 - [x] As a developer, the audio callback keeps using fixed-capacity real-time-safe data structures for scheduling.
 

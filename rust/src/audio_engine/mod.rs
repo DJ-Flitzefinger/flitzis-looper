@@ -567,6 +567,33 @@ impl AudioEngine {
             .map_err(|_| PyRuntimeError::new_err("Failed to send PlaySample - buffer may be full"))
     }
 
+    /// Stop all active voices and play a sample as one audio-thread command.
+    pub fn play_sample_exclusive(&mut self, id: usize, volume: f32) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+
+        if !volume.is_finite() || !(VOLUME_MIN..=VOLUME_MAX).contains(&volume) {
+            return Err(PyValueError::new_err("volume out of range"));
+        }
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        producer_guard
+            .push(ControlMessage::PlaySampleExclusive { id, volume })
+            .map_err(|_| {
+                PyRuntimeError::new_err("Failed to send PlaySampleExclusive - buffer may be full")
+            })
+    }
+
     /// Stop playback of all active voices.
     pub fn stop_all(&mut self) -> PyResult<()> {
         let handle = self

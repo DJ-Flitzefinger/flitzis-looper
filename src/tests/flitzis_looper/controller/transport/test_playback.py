@@ -8,7 +8,7 @@ if TYPE_CHECKING:
 
 
 def test_trigger_pad_single_loop(controller: AppController, audio_engine_mock: Mock) -> None:
-    """Test triggering a pad in single loop mode stops other pads."""
+    """Test triggering a pad in single loop mode uses the exclusive audio command."""
     sample_id = 0
     path = "/path/to/sample.wav"
     controller.project.sample_paths[sample_id] = path
@@ -17,10 +17,9 @@ def test_trigger_pad_single_loop(controller: AppController, audio_engine_mock: M
 
     controller.transport.playback.trigger_pad(sample_id)
 
-    # Should stop all other pads first
-    audio_engine_mock.stop_all.assert_called_once()
-    # Then play the triggered pad
-    audio_engine_mock.play_sample.assert_called_with(sample_id, 1.0)
+    audio_engine_mock.stop_all.assert_not_called()
+    audio_engine_mock.play_sample.assert_not_called()
+    audio_engine_mock.play_sample_exclusive.assert_called_once_with(sample_id, 1.0)
     # Simulate the audio message that would update state for the new pad
     msg = Mock()
     msg.sample_id.return_value = sample_id
@@ -56,6 +55,7 @@ def test_trigger_pad_not_loaded(controller: AppController, audio_engine_mock: Mo
     controller.transport.playback.trigger_pad(sample_id)
 
     audio_engine_mock.play_sample.assert_not_called()
+    audio_engine_mock.play_sample_exclusive.assert_not_called()
 
 
 def test_stop_pad(controller: AppController, audio_engine_mock: Mock) -> None:
@@ -121,6 +121,7 @@ def test_trigger_unloaded_sample_does_not_raise(
 
     # Should not attempt to play
     audio_engine_mock.play_sample.assert_not_called()
+    audio_engine_mock.play_sample_exclusive.assert_not_called()
 
 
 def test_trigger_pad_applies_loop_region(
@@ -146,7 +147,7 @@ def test_trigger_pad_plays_with_gain(controller: AppController, audio_engine_moc
 
     controller.transport.playback.trigger_pad(sample_id)
 
-    audio_engine_mock.play_sample.assert_called_with(sample_id, 1.0)
+    audio_engine_mock.play_sample_exclusive.assert_called_with(sample_id, 1.0)
 
 
 def test_play_separate_method(controller: AppController, audio_engine_mock: Mock) -> None:

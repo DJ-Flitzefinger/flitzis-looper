@@ -50,7 +50,9 @@ now exists inside the audio callback. The fixed-capacity scheduler helper now ex
 unit-tested ordering and rejection semantics, and the callback owns a scheduler for
 current-frame `PlaySample`, `StopSample`, and `StopAll` routing. Rust-side trigger
 quantization now accepts `immediate`, `next_beat`, and `next_bar` mode updates through the
-existing control-to-audio ring buffer. The design keeps the existing SPSC ring-buffer
+existing control-to-audio ring buffer. MultiLoop-disabled playback uses a single fixed-size
+`PlaySampleExclusive` request, which the audio thread turns into one stop-all-then-play
+scheduled command when quantization is enabled. The design keeps the existing SPSC ring-buffer
 architecture.
 
 Transport and quantized scheduler messages must remain fixed-size and bounded.
@@ -70,7 +72,6 @@ Two failure points are distinct:
 
 - Rich audio → Python event stream (beyond `Pong`).
 - UI/controller trigger-quantization controls.
-- Atomic scheduled stop-all/start transitions for MultiLoop-disabled quantized playback.
 
 ## Related specs
 

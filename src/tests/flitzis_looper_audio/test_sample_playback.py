@@ -68,6 +68,9 @@ def test_sample_slot_id_range_is_0_to_215(audio_engine: AudioEngine) -> None:
         audio_engine.play_sample(216, 1.0)
 
     with pytest.raises(ValueError, match=r"id out of range"):
+        audio_engine.play_sample_exclusive(216, 1.0)
+
+    with pytest.raises(ValueError, match=r"id out of range"):
         audio_engine.stop_sample(216)
 
     with pytest.raises(ValueError, match=r"id out of range"):
@@ -91,6 +94,7 @@ def test_sample_slot_id_range_is_0_to_215(audio_engine: AudioEngine) -> None:
 
     # Shouldn't crash
     audio_engine.play_sample(215, 1.0)
+    audio_engine.play_sample_exclusive(215, 1.0)
     audio_engine.stop_sample(215)
     audio_engine.unload_sample(215)
 
@@ -103,6 +107,13 @@ def test_stop_all_requires_initialized_engine() -> None:
 
     with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
         engine.stop_all()
+
+
+def test_play_sample_exclusive_requires_initialized_engine() -> None:
+    engine = AudioEngine()
+
+    with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
+        engine.play_sample_exclusive(0, 1.0)
 
 
 def test_stop_all_is_safe_when_nothing_playing(audio_engine: AudioEngine) -> None:

@@ -30,11 +30,13 @@ class PadPlaybackController:
         if self._project.sample_paths[sample_id] is None:
             return
 
-        if not self._project.multi_loop:
-            self.stop_all_pads()
-
         start_s, end_s = self._loop.effective_region(sample_id)
         self._audio.set_pad_loop_region(sample_id, start_s, end_s)
+
+        if not self._project.multi_loop:
+            self._audio.play_sample_exclusive(sample_id, 1.0)
+            return
+
         self._audio.play_sample(sample_id, 1.0)
 
     def trigger_pad_keep_others(self, sample_id: int) -> None:

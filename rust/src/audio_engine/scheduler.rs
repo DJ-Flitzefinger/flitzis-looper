@@ -13,6 +13,7 @@ pub(crate) type TransportScheduler = FixedCapacityScheduler<MAX_SCHEDULED_EVENTS
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum ScheduledCommand {
     PlaySample { id: usize, volume: f32 },
+    StopAllThenPlaySample { id: usize, volume: f32 },
     StopSample { id: usize },
     StopAll,
 }
@@ -213,6 +214,12 @@ mod tests {
         scheduler.schedule(10, play(1)).unwrap();
         scheduler.schedule(10, ScheduledCommand::StopSample { id: 2 }).unwrap();
         scheduler.schedule(10, ScheduledCommand::StopAll).unwrap();
+        scheduler
+            .schedule(
+                10,
+                ScheduledCommand::StopAllThenPlaySample { id: 3, volume: 1.0 },
+            )
+            .unwrap();
 
         assert_eq!(
             drain_commands(&mut scheduler, 10),
@@ -220,6 +227,7 @@ mod tests {
                 play(1),
                 ScheduledCommand::StopSample { id: 2 },
                 ScheduledCommand::StopAll,
+                ScheduledCommand::StopAllThenPlaySample { id: 3, volume: 1.0 },
             ]
         );
     }

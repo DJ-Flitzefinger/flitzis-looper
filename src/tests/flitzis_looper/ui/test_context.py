@@ -188,7 +188,7 @@ class TestAudioActions:
 
         audio_actions.pads.trigger_pad(0)
 
-        audio_engine_mock.play_sample.assert_called_once_with(0, 1.0)
+        audio_engine_mock.play_sample_exclusive.assert_called_once_with(0, 1.0)
         # Simulate the audio message that would update state
         msg = Mock()
         msg.sample_id.return_value = 0
