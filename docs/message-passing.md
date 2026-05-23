@@ -39,13 +39,33 @@ Disk I/O and decoding happen in `load_sample(...)`, outside the callback.
 - Ring buffer empty (audio → control): `receive_msg()` returns `None`.
 - Missing sample slot: triggering playback is ignored safely.
 
+## Gen3 transport and scheduler messages
+
+The planned Gen3 transport work is specified in
+`openspec/changes/add-rust-transport-timeline/`. It keeps the existing SPSC ring-buffer
+architecture.
+
+Planned transport and scheduler messages must remain fixed-size and bounded. Python/control
+code will request transport changes or quantized triggers through the existing
+control-to-audio path; the audio callback will own the Rust transport timeline and the
+fixed-capacity scheduler.
+
+Two failure points are distinct:
+
+- Control ring buffer full: the request never reaches the audio callback and follows the
+  existing Python-facing error/drop behavior.
+- Scheduler full: the request reached the audio callback, but the fixed-capacity scheduler
+  rejects it without evicting existing events, stopping currently playing pads, blocking,
+  allocating, logging, touching disk, or acquiring the Python GIL.
+
 ## Not implemented (yet)
 
 - Rich audio → Python event stream (beyond `Pong`).
-- Additional control messages (e.g., volume/transport) exposed as stable Python APIs.
+- Rust-owned transport timeline and fixed-capacity quantized scheduler.
 
 ## Related specs
 
 - `openspec/specs/ring-buffer-messaging/spec.md`
 - `openspec/specs/load-audio-files/spec.md`
 - `openspec/specs/play-samples/spec.md`
+- `openspec/changes/add-rust-transport-timeline/`

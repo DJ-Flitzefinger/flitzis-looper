@@ -79,6 +79,27 @@ The project deliberately separates non-real-time work from the real-time audio c
   - `MAX_VOICES` fixed polyphony; additional triggers are dropped deterministically.
 - Sample decoding happens outside the callback. Decoded sample data is published to the audio thread via a shared handle (no full-buffer copies just for cross-thread transfer).
 
+## Gen3 transport timeline plan
+
+The first Gen3 behavior change is specified in
+`openspec/changes/add-rust-transport-timeline/`. It is not implemented yet.
+
+The planned direction is:
+
+- Rust owns the global transport timeline and advances it by rendered output sample frames.
+- Scheduled playback events target absolute output-frame positions.
+- Rust stores master BPM and derives beat/bar phase from the audio-thread sample-frame clock.
+- Quantized pad triggers use a fixed-capacity scheduler owned by the audio thread.
+- Existing immediate trigger behavior remains the default when trigger quantization is disabled.
+- Beatgrid and downbeat metadata is prepared outside the audio callback, then published as bounded timing metadata for Rust playback timing.
+
+The audio callback must remain real-time safe for this work. It must not perform disk I/O,
+Python/GIL access, blocking waits or locks, logging, heavy allocations, neural network
+inference, real-time stem separation, or long-running work.
+
+Later Gen3 stem work must be offline/cache-based. Stem generation is only allowed for pads
+that are not currently playing; the audio callback may only mix already prepared audio data.
+
 ## Current Python API surface
 
 The Rust engine is exposed to Python as `AudioEngine` with:
@@ -101,8 +122,10 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 
 - Audio device selection/configuration (the engine currently uses the default output device/config).
 - Broader channel-layout support; currently decoding only supports mono↔stereo mapping.
-- BPM detection
-- Time-stretch/pitch-shift
+- Rust-owned global transport timeline.
+- Fixed-capacity quantized scheduler.
+- Phase-aware beat/bar/downbeat playback alignment.
+- Real-time stem separation is intentionally out of scope.
 
 ## Related specs
 
@@ -110,3 +133,4 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 - `openspec/specs/ring-buffer-messaging/spec.md`
 - `openspec/specs/load-audio-files/spec.md`
 - `openspec/specs/play-samples/spec.md`
+- `openspec/changes/add-rust-transport-timeline/`

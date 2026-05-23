@@ -64,6 +64,14 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 - [x] As a performer, I can enable **key lock** so tempo changes do not change musical pitch.
 - [x] As a performer, key lock can be toggled without breaking the performance workflow.
 
+### 7a) Gen3 transport timeline and quantized scheduling
+- OpenSpec change (active): `add-rust-transport-timeline`
+- [ ] As a performer, pad starts can be quantized to a Rust-owned global beat/bar timeline.
+- [ ] As a performer, immediate pad triggering remains available when quantization is disabled.
+- [ ] As a performer, quantized one-at-a-time pad switches stop the old pad and start the new pad on the same scheduled output frame.
+- [ ] As a performer, loops can align to downbeat/beatgrid metadata produced by analysis.
+- [ ] As a developer, the audio callback keeps using fixed-capacity real-time-safe data structures for scheduling.
+
 ### 8) Loop range editing (waveform editor)
 - [ ] As a performer, I can open a **waveform editor** for a pad.
 - [ ] As a performer, I can set **loop start** and **loop end** points.
@@ -92,6 +100,10 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 - [ ] As a performer, I can quickly revert to the full mix (“stop stems” behavior).
 - [ ] As a performer, when multiple loops are active, I can choose which pad’s stems I’m controlling.
 - [ ] As a performer, stems remain **synchronized** with the loop.
+
+Gen3 constraint: stem generation must be offline/cache-based and only available for pads
+that are not currently playing. The audio callback must never run stem separation, neural
+network inference, or disk I/O; it may only mix already prepared audio buffers.
 
 ### 13) Persistence (config/state)
 - [x] As a user, my bank/pad assignments persist across restarts.
