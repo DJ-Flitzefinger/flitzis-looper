@@ -5,16 +5,29 @@ from imgui_bundle import imgui
 from flitzis_looper.constants import GRID_SIZE, NUM_BANKS, NUM_PADS
 from flitzis_looper.ui.constants import (
     BANK_BUTTONS_HEIGHT,
+    BANK_PRESSED_RGBA,
+    CONTROL_RGBA,
+    MODE_OFF_RGBA,
+    MODE_ON_RGBA,
     PAD_GRID_GAP,
     SPACING,
     TEXT_ACTIVE_RGBA,
     TEXT_MUTED_RGBA,
+    TEXT_RGBA,
 )
 from flitzis_looper.ui.contextmanager import button_style, style_var
 
 if TYPE_CHECKING:
+    from flitzis_looper.models import StemGridIndicatorState
     from flitzis_looper.ui.context import UiContext
     from flitzis_looper.ui.styles import ButtonStyleName
+
+STEM_GRID_INDICATORS: dict[str, tuple[str, imgui.ImVec4Like, imgui.ImVec4Like, str]] = {
+    "available": ("ST", MODE_ON_RGBA, TEXT_ACTIVE_RGBA, "Stems available"),
+    "generating": ("...", BANK_PRESSED_RGBA, TEXT_ACTIVE_RGBA, "Generating stems"),
+    "blocked": ("BLK", CONTROL_RGBA, TEXT_RGBA, "Stem generation blocked"),
+    "error": ("!", MODE_OFF_RGBA, TEXT_RGBA, "Stem generation error"),
+}
 
 
 def _pad_button_label(
@@ -87,6 +100,42 @@ def _pad_button_peak_meter(peak: float) -> None:
         draw_list.add_rect_filled((x1, y1), (x2, y2), imgui.get_color_u32(fg_rgba))
 
 
+def stem_grid_indicator_label(state: StemGridIndicatorState | None) -> str | None:
+    """Return the compact pad-grid indicator label for tests and rendering."""
+    if state is None:
+        return None
+    return STEM_GRID_INDICATORS[state][0]
+
+
+def _pad_button_stem_indicator(ctx: UiContext, pad_id: int) -> None:
+    state = ctx.state.stems.stem_grid_indicator_state(pad_id)
+    if state is None:
+        return
+
+    label, bg_rgba, text_rgba, tooltip = STEM_GRID_INDICATORS[state]
+    pos_min = imgui.get_item_rect_min()
+    pos_max = imgui.get_item_rect_max()
+    text_size = imgui.calc_text_size(label)
+    padding = (5.0, 2.0)
+    margin = 5.0
+
+    x1 = pos_min.x + margin
+    y2 = pos_max.y - margin
+    x2 = x1 + text_size.x + padding[0] * 2.0
+    y1 = y2 - text_size.y - padding[1] * 2.0
+
+    draw_list = imgui.get_window_draw_list()
+    draw_list.add_rect_filled((x1, y1), (x2, y2), imgui.get_color_u32(bg_rgba))
+    draw_list.add_text(
+        (x1 + padding[0], y1 + padding[1]),
+        imgui.get_color_u32(text_rgba),
+        label,
+    )
+
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(tooltip)
+
+
 def _pad_button_input(ctx: UiContext, pad_id: int, *, is_loaded: bool) -> None:
     if imgui.is_mouse_clicked(imgui.MouseButton_.middle):
         ctx.ui.select_pad(pad_id)
@@ -127,6 +176,8 @@ def _pad_button_overlays(ctx: UiContext, pad_id: int, *, is_active: bool, is_loa
             info = f"{info} {key}"
     elif key is not None:
         info = key
+
+    _pad_button_stem_indicator(ctx, pad_id)
 
     if info is None:
         return

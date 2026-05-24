@@ -11,6 +11,9 @@ from flitzis_looper.models import (
     STEM_COMPONENT_MASK,
     STEM_INSTRUMENTAL_PRESET_MASK,
     STEM_KINDS,
+    STEM_MASK_BASS,
+    STEM_MASK_DRUMS,
+    STEM_MASK_MELODY,
     STEM_MASK_VOCALS,
     StemCacheEntry,
 )
@@ -138,6 +141,35 @@ def test_stem_generation_block_reason_reports_non_io_gate(
     assert blocker == "Cannot generate stems while the pad is playing"
 
 
+def test_stem_grid_indicator_state_uses_session_and_project_snapshots(
+    controller: AppController, tmp_path: Path
+) -> None:
+    assert controller.stems.stem_grid_indicator_state(0) is None
+
+    _load_project_sample(controller, tmp_path)
+    controller.session.active_sample_ids.add(0)
+    assert controller.stems.stem_grid_indicator_state(0) == "blocked"
+
+    controller.session.stem_generation_errors[0] = "failed"
+    assert controller.stems.stem_grid_indicator_state(0) == "error"
+
+    controller.session.stem_generation_errors.pop(0)
+    controller.session.active_sample_ids.clear()
+    controller.session.stem_generating_sample_ids.add(0)
+    assert controller.stems.stem_grid_indicator_state(0) == "generating"
+
+    controller.session.stem_generating_sample_ids.clear()
+    version = source_version_for_sample_path(controller.project.sample_paths[0] or "")
+    assert version is not None
+    controller.project.stem_cache[0] = StemCacheEntry(
+        source_version=version,
+        cache_dir=cache_dir_for_source_version(version),
+        stems=expected_stem_files(cache_dir_for_source_version(version)),
+        available=True,
+    )
+    assert controller.stems.stem_grid_indicator_state(0) == "available"
+
+
 def test_generate_stems_async_runtime_error_clears_running_state(
     controller: AppController, audio_engine_mock: Mock, tmp_path: Path
 ) -> None:
@@ -232,6 +264,7 @@ def test_invalidate_stem_cache_clears_cache_and_generation_state(
     controller.session.stem_generation_stage[0] = "Generating"
     controller.session.stem_generation_errors[0] = "old"
     controller.session.pad_stem_enabled_mask[0] = STEM_MASK_VOCALS
+    controller.session.pad_stem_last_custom_mask[0] = STEM_MASK_VOCALS
     controller.session.pad_stem_mask_display_mode[0] = "custom"
 
     controller.stems.invalidate_stem_cache(0)
@@ -243,6 +276,7 @@ def test_invalidate_stem_cache_clears_cache_and_generation_state(
     assert 0 not in controller.session.stem_generation_stage
     assert 0 not in controller.session.stem_generation_errors
     assert controller.session.pad_stem_enabled_mask[0] == STEM_COMPONENT_MASK
+    assert controller.session.pad_stem_last_custom_mask[0] == STEM_COMPONENT_MASK
     assert controller.session.pad_stem_mask_display_mode[0] == "all"
 
 
@@ -250,6 +284,7 @@ def test_stem_mix_mode_defaults_to_full_mix(controller: AppController) -> None:
     assert controller.stems.stem_mix_mode(0) == "full_mix"
     assert controller.stems.stems_available(0) is False
     assert controller.stems.stem_enabled_mask(0) == STEM_COMPONENT_MASK
+    assert controller.session.pad_stem_last_custom_mask[0] == STEM_COMPONENT_MASK
     assert controller.stems.stem_mask_display_mode(0) == "all"
     assert controller.stems.stem_mask_controls_enabled(0) is False
 
@@ -356,8 +391,59 @@ def test_set_stem_enabled_mask_does_not_publish_without_available_cache(
 
     assert updated is True
     assert controller.session.pad_stem_enabled_mask[0] == STEM_MASK_VOCALS
+    assert controller.session.pad_stem_last_custom_mask[0] == STEM_MASK_VOCALS
     assert controller.session.pad_stem_mask_display_mode[0] == "custom"
     audio_engine_mock.set_stem_enabled_mask.assert_not_called()
+
+
+def test_set_stem_enabled_mask_remembers_custom_mask_across_presets(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    custom_mask = STEM_MASK_VOCALS | STEM_MASK_BASS
+
+    assert controller.stems.set_stem_enabled_mask(0, custom_mask, "custom") is True
+    assert controller.session.pad_stem_last_custom_mask[0] == custom_mask
+
+    assert (
+        controller.stems.set_stem_enabled_mask(
+            0,
+            STEM_INSTRUMENTAL_PRESET_MASK,
+            "instrumental",
+        )
+        is True
+    )
+    assert controller.stems.stem_enabled_mask(0) == STEM_INSTRUMENTAL_PRESET_MASK
+    assert controller.stems.stem_mask_display_mode(0) == "instrumental"
+    assert controller.session.pad_stem_last_custom_mask[0] == custom_mask
+
+    assert controller.stems.set_stem_enabled_mask(0, STEM_COMPONENT_MASK, "all") is True
+    assert controller.stems.stem_enabled_mask(0) == STEM_COMPONENT_MASK
+    assert controller.stems.stem_mask_display_mode(0) == "all"
+    assert controller.session.pad_stem_last_custom_mask[0] == custom_mask
+
+    assert controller.stems.set_stem_enabled_mask(0, custom_mask, "custom") is True
+    assert controller.stems.stem_enabled_mask(0) == custom_mask
+    assert controller.stems.stem_mask_display_mode(0) == "custom"
+    assert controller.session.pad_stem_last_custom_mask[0] == custom_mask
+    audio_engine_mock.set_stem_enabled_mask.assert_not_called()
+
+
+def test_set_stem_enabled_mask_updates_remembered_mask_when_leaving_custom(
+    controller: AppController,
+) -> None:
+    custom_mask = STEM_MASK_DRUMS | STEM_MASK_MELODY
+    controller.session.pad_stem_enabled_mask[0] = custom_mask
+    controller.session.pad_stem_last_custom_mask[0] = STEM_MASK_VOCALS
+    controller.session.pad_stem_mask_display_mode[0] = "custom"
+
+    updated = controller.stems.set_stem_enabled_mask(
+        0,
+        STEM_INSTRUMENTAL_PRESET_MASK,
+        "instrumental",
+    )
+
+    assert updated is True
+    assert controller.session.pad_stem_last_custom_mask[0] == custom_mask
 
 
 def test_set_stem_enabled_mask_rejects_invalid_mask(

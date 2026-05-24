@@ -330,6 +330,8 @@ def test_session_state_defaults(session_state: SessionState) -> None:
     assert session_state.stem_generation_errors == {}
     assert len(session_state.pad_stem_enabled_mask) == NUM_SAMPLES
     assert all(mask == STEM_COMPONENT_MASK for mask in session_state.pad_stem_enabled_mask)
+    assert len(session_state.pad_stem_last_custom_mask) == NUM_SAMPLES
+    assert all(mask == STEM_COMPONENT_MASK for mask in session_state.pad_stem_last_custom_mask)
     assert len(session_state.pad_stem_mask_display_mode) == NUM_SAMPLES
     assert all(mode == "all" for mode in session_state.pad_stem_mask_display_mode)
 
@@ -345,6 +347,15 @@ def test_stem_enabled_mask_validation(session_state: SessionState) -> None:
 
     with pytest.raises(ValidationError, match="component masks"):
         SessionState(pad_stem_enabled_mask=[1 << 4] * NUM_SAMPLES)
+
+    session_state.pad_stem_last_custom_mask[0] = STEM_INSTRUMENTAL_PRESET_MASK
+    assert session_state.pad_stem_last_custom_mask[0] == STEM_INSTRUMENTAL_PRESET_MASK
+
+    with pytest.raises(ValidationError, match="pad_stem_last_custom_mask"):
+        SessionState(pad_stem_last_custom_mask=[])
+
+    with pytest.raises(ValidationError, match="component masks"):
+        SessionState(pad_stem_last_custom_mask=[1 << 4] * NUM_SAMPLES)
 
 
 def test_stem_mask_display_mode_validation(session_state: SessionState) -> None:

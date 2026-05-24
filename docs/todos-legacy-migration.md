@@ -106,7 +106,7 @@ next-beat, and next-bar triggering through fixed-size Rust mode updates.
 - OpenSpec change (active): `add-offline-stem-cache`
 - OpenSpec change (active): `add-stem-performance-controls`
 - [ ] As a performer, I can **generate stems** for a pad (vocals/melody/bass/drums/instrumental).
-- [ ] As a performer, the UI indicates **stem availability** per pad and gives feedback while stems are generating.
+- [x] As a performer, the UI indicates **stem availability** per pad and gives feedback while stems are generating.
 - [ ] As a performer, I can **toggle stems** on/off during playback.
 - [ ] As a performer, I can **momentarily solo/mute** stems for performance gestures.
 - [ ] As a performer, I can quickly revert to the full mix (“stop stems” behavior).
@@ -129,8 +129,13 @@ the selected all-stems mode. The selected-pad sidebar now shows stem status, rou
 through controller/background-task gating, and exposes full-mix/all-stems mode selection. The
 bottom bar now adds selected-pad `V`/`D`/`M`/`B`/`I`/`A` mask buttons where `I` means Drums +
 Melody + Bass and `A` means Vocals + Drums + Melody + Bass, without using `instrumental.wav` as a
-direct preset layer. Pad-grid stem indicators, momentary per-stem solo/mute controls, and
-production source separation remain future work.
+direct preset layer. Component clicks from `I` or `A` enter custom mode with only the clicked
+component active, and custom masks matching the preset combinations do not light `I` or `A`
+implicitly. `I` and `A` share one exclusive preset group that remembers the last `V`/`D`/`M`/`B`
+component state; switching between presets preserves that state, and clicking the active preset
+again restores it. The pad grid now shows compact stem status indicators from existing
+controller/session snapshots without render-loop file I/O. Momentary per-stem solo/mute controls
+and production source separation remain future work.
 
 ### 13) Persistence (config/state)
 - [x] As a user, my bank/pad assignments persist across restarts.

@@ -198,10 +198,15 @@ messages, and prepared stems are used only when `all_stems` is selected and the 
 set matches the requested source-version hash. Missing, stale, incomplete, rejected, or disabled
 stems fall back to the loaded full-mix buffer. The next performer-control slice added a selected-pad
 bottom-bar `V`/`D`/`M`/`B`/`I`/`A` mask control: `V`, `D`, `M`, and `B` toggle component stems,
-`I` selects Drums + Melody + Bass, and `A` selects Vocals + Drums + Melody + Bass. The cached
-`instrumental.wav` artifact is not used as the `I` preset or as an extra layer in `A`. Pad-grid
-stem indicators, momentary solo/mute gestures, and production source separation are still
-intentionally absent.
+`I` selects Drums + Melody + Bass, and `A` selects Vocals + Drums + Melody + Bass. Component clicks
+from `I` or `A` enter custom mode with only the clicked component active, while custom masks that
+match a preset remain custom until the performer explicitly clicks that preset. `I` and `A` share
+one exclusive preset group: entering a preset remembers the last `V`/`D`/`M`/`B` component mask,
+switching between presets preserves that remembered mask, and clicking the active preset again
+returns to it. The cached `instrumental.wav` artifact is not used as the `I` preset or as an extra
+layer in `A`. The pad grid now renders compact stem status badges for available, generating,
+blocked, and error states from controller/session snapshots only. Momentary solo/mute gestures and
+production source separation are still intentionally absent.
 
 The active Gen3 phase-aware sync slice is `openspec/changes/add-phase-aware-playback-sync/`. It
 defines how quantized starts will use the Rust transport phase plus bounded per-pad timing anchors
@@ -244,11 +249,11 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 - Real-time stem separation is intentionally out of scope.
 - Offline stem cache identity, request gating, deterministic cache artifact writing, prepared
   stem-buffer validation/publication, prepared-stem rendering fallback infrastructure, durable
-  full-mix/all-stems mode plumbing, selected-pad stem status, Generate Stems button wiring, and
-  selected-pad full-mix/all-stems controls, and bottom-bar selected-pad per-stem mask controls are
-  implemented. Production source
-  separation, pad-grid stem indicators, and momentary per-stem solo/mute controls are planned in
-  `openspec/changes/add-stem-performance-controls/` and not implemented.
+  full-mix/all-stems mode plumbing, selected-pad stem status, Generate Stems button wiring,
+  selected-pad full-mix/all-stems controls, bottom-bar selected-pad per-stem mask controls, and
+  pad-grid stem indicators are implemented. Production source separation and momentary per-stem
+  solo/mute controls are planned in `openspec/changes/add-stem-performance-controls/` and not
+  implemented.
 
 ## Related specs
 

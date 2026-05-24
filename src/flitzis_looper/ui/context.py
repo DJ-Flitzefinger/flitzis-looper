@@ -14,6 +14,7 @@ if TYPE_CHECKING:
         ProjectState,
         SampleAnalysis,
         SessionState,
+        StemGridIndicatorState,
         StemMaskDisplayMode,
         StemMixMode,
         TriggerQuantizationMode,
@@ -116,8 +117,9 @@ class PadSelectors:
 
 
 class StemSelectors:
-    def __init__(self, controller: AppController):
+    def __init__(self, controller: AppController, session: SessionState):
         self._controller = controller
+        self._session = session
 
     def stems_available(self, pad_id: int) -> bool:
         return self._controller.stems.stems_available(pad_id)
@@ -128,11 +130,17 @@ class StemSelectors:
     def stem_enabled_mask(self, pad_id: int) -> int:
         return self._controller.stems.stem_enabled_mask(pad_id)
 
+    def stem_last_custom_mask(self, pad_id: int) -> int:
+        return int(self._session.pad_stem_last_custom_mask[pad_id])
+
     def stem_mask_display_mode(self, pad_id: int) -> StemMaskDisplayMode:
         return self._controller.stems.stem_mask_display_mode(pad_id)
 
     def stem_mask_controls_enabled(self, pad_id: int) -> bool:
         return self._controller.stems.stem_mask_controls_enabled(pad_id)
+
+    def stem_grid_indicator_state(self, pad_id: int) -> StemGridIndicatorState | None:
+        return self._controller.stems.stem_grid_indicator_state(pad_id)
 
     def stem_generation_error(self, pad_id: int) -> str | None:
         return self._controller.stems.stem_generation_error(pad_id)
@@ -193,7 +201,7 @@ class UiState:
         project = cast("ProjectState", self._project_proxy)
         session = cast("SessionState", self._session_proxy)
         self.pads = PadSelectors(controller, project, session)
-        self.stems = StemSelectors(controller)
+        self.stems = StemSelectors(controller, session)
         self.banks = BankSelectors(project)
         self.global_ = GlobalSelectors(controller, project, session)
 

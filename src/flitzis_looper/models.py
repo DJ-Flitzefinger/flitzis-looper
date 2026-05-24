@@ -23,6 +23,7 @@ type TriggerQuantizationMode = Literal["immediate", "next_beat", "next_bar"]
 type StemMixMode = Literal["full_mix", "all_stems"]
 type StemMaskDisplayMode = Literal["custom", "instrumental", "all"]
 type StemKind = Literal["vocals", "melody", "bass", "drums", "instrumental"]
+type StemGridIndicatorState = Literal["available", "generating", "blocked", "error"]
 
 STEM_KINDS: tuple[StemKind, ...] = ("vocals", "melody", "bass", "drums", "instrumental")
 STEM_MIX_MODES: tuple[StemMixMode, ...] = ("full_mix", "all_stems")
@@ -340,6 +341,10 @@ def _default_pad_stem_enabled_mask() -> list[int]:
     return [STEM_COMPONENT_MASK] * NUM_SAMPLES
 
 
+def _default_pad_stem_last_custom_mask() -> list[int]:
+    return [STEM_COMPONENT_MASK] * NUM_SAMPLES
+
+
 def _default_pad_stem_mask_display_mode() -> list[StemMaskDisplayMode]:
     return ["all"] * NUM_SAMPLES
 
@@ -415,6 +420,11 @@ class SessionState(BaseModel):
 
     pad_stem_enabled_mask: list[int] = Field(default_factory=_default_pad_stem_enabled_mask)
     """Session-only per-pad component-stem mask used when all-stems mode is active."""
+
+    pad_stem_last_custom_mask: list[int] = Field(
+        default_factory=_default_pad_stem_last_custom_mask
+    )
+    """Session-only remembered component mask restored when a stem preset is toggled off."""
 
     pad_stem_mask_display_mode: list[StemMaskDisplayMode] = Field(
         default_factory=_default_pad_stem_mask_display_mode
@@ -511,15 +521,15 @@ class SessionState(BaseModel):
             validate_sample_id(sid)
         return value
 
-    @field_validator("pad_stem_enabled_mask", mode="after")
+    @field_validator("pad_stem_enabled_mask", "pad_stem_last_custom_mask", mode="after")
     @classmethod
     def _validate_pad_stem_enabled_mask(cls, value: list[int]) -> list[int]:
         if len(value) != NUM_SAMPLES:
-            msg = f"pad_stem_enabled_mask must have length {NUM_SAMPLES}, got {len(value)}"
+            msg = f"stem mask arrays must have length {NUM_SAMPLES}, got {len(value)}"
             raise ValueError(msg)
         for mask in value:
             if mask < 0 or mask & ~STEM_COMPONENT_MASK:
-                msg = f"pad_stem_enabled_mask values must be component masks, got {mask}"
+                msg = f"stem mask values must be component masks, got {mask}"
                 raise ValueError(msg)
         return value
 

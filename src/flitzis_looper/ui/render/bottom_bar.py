@@ -84,6 +84,23 @@ def stem_button_is_active(
     return current_mask & button_mask != 0
 
 
+def stem_button_target_state(
+    button_mask: int,
+    current_mask: int,
+    last_custom_mask: int,
+    display_mode: StemMaskDisplayMode,
+    target_display_mode: StemMaskDisplayMode,
+) -> tuple[int, StemMaskDisplayMode]:
+    """Return the mask/display state produced by a stem button click."""
+    if target_display_mode != "custom":
+        if display_mode == target_display_mode:
+            return last_custom_mask, "custom"
+        return button_mask, target_display_mode
+    if display_mode != "custom":
+        return button_mask, "custom"
+    return current_mask ^ button_mask, "custom"
+
+
 def _stem_mask_button(
     ctx: UiContext,
     pad_id: int,
@@ -91,6 +108,7 @@ def _stem_mask_button(
     button_mask: int,
     display_mode: StemMaskDisplayMode,
     current_mask: int,
+    last_custom_mask: int,
     target_display_mode: StemMaskDisplayMode,
 ) -> None:
     style: ButtonStyleName = (
@@ -100,15 +118,20 @@ def _stem_mask_button(
     )
     with button_style(style):
         if imgui.button(f"{label}##stem_mask_{label}", (32, 32)):
-            target_mask = (
-                current_mask ^ button_mask if target_display_mode == "custom" else button_mask
+            target_mask, next_display_mode = stem_button_target_state(
+                button_mask,
+                current_mask,
+                last_custom_mask,
+                display_mode,
+                target_display_mode,
             )
-            ctx.audio.stems.set_stem_enabled_mask(pad_id, target_mask, target_display_mode)
+            ctx.audio.stems.set_stem_enabled_mask(pad_id, target_mask, next_display_mode)
 
 
 def _stem_mask_controls(ctx: UiContext) -> None:
     pad_id = ctx.state.project.selected_pad
     current_mask = ctx.state.stems.stem_enabled_mask(pad_id)
+    last_custom_mask = ctx.state.stems.stem_last_custom_mask(pad_id)
     display_mode = ctx.state.stems.stem_mask_display_mode(pad_id)
     enabled = ctx.state.stems.stem_mask_controls_enabled(pad_id)
 
@@ -119,7 +142,16 @@ def _stem_mask_controls(ctx: UiContext) -> None:
         style_var(imgui.StyleVar_.frame_rounding, 16.0),
     ):
         for label, mask in STEM_COMPONENT_BUTTONS:
-            _stem_mask_button(ctx, pad_id, label, mask, display_mode, current_mask, "custom")
+            _stem_mask_button(
+                ctx,
+                pad_id,
+                label,
+                mask,
+                display_mode,
+                current_mask,
+                last_custom_mask,
+                "custom",
+            )
             imgui.same_line(spacing=SPACING / 4)
 
         for idx, (label, mask, target_display_mode) in enumerate(STEM_PRESET_BUTTONS):
@@ -130,6 +162,7 @@ def _stem_mask_controls(ctx: UiContext) -> None:
                 mask,
                 display_mode,
                 current_mask,
+                last_custom_mask,
                 target_display_mode,
             )
             if idx < len(STEM_PRESET_BUTTONS) - 1:

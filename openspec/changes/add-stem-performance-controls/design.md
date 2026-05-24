@@ -7,9 +7,9 @@ audio-thread storage, and prepared-stem rendering fallback through the existing 
 The remaining user-facing gap is the visible performance control surface. Current code has
 controller state for generation progress and cache availability, durable per-pad
 full-mix/all-stems mode plumbing, bounded Rust mix-mode control state, selected-pad sidebar
-stem status rendering, Generate Stems button wiring through the controller, and selected-pad
-full-mix/all-stems mode controls. The next slice adds bottom-bar selected-pad per-stem mask
-controls. Pad-grid indicators remain later work.
+stem status rendering, Generate Stems button wiring through the controller, selected-pad
+full-mix/all-stems mode controls, bottom-bar selected-pad per-stem mask controls, and compact
+pad-grid stem indicators.
 
 ## Goals
 - Give performers clear stem availability, progress, blocked, and error feedback.
@@ -23,8 +23,7 @@ controls. Pad-grid indicators remain later work.
 - Keep all audio-thread stem control changes bounded, fixed-size, and real-time safe.
 
 ## Non-Goals
-- Implementing pad-grid stem indicators or per-stem mute/solo/toggle controls in the current
-  implementation slice.
+- Implementing per-stem mute/solo/toggle controls in the current implementation slice.
 - Running or choosing a production source-separation model.
 - Changing the existing prepared-stem cache writer or replacing placeholder artifacts.
 - Performing cache validation, file reads, decoding, generation, or inference in the audio
@@ -46,7 +45,8 @@ The control layer derives a small per-pad stem status from existing project/sess
 - `error`: the last generation or publication attempt failed outside the audio callback.
 
 The UI renders this state from snapshots. It must not inspect cache directories or compute
-source-version identity during rendering.
+source-version identity during rendering. The pad grid renders compact badges from that same
+in-memory status, while detailed status text remains in the selected-pad sidebar.
 
 ### Generation Entry Point
 The selected-pad sidebar owns the first explicit generation action. Activating "Generate
@@ -87,6 +87,15 @@ The control order is:
 presets backed by the same bounded enabled-stem mask. `I` maps to Drums + Melody + Bass and mutes
 Vocals. `A` maps to Vocals + Drums + Melody + Bass. The `I` button does not mean "play only the
 cached `instrumental.wav` file", and `A` does not add `instrumental.wav` as a fifth audible layer.
+Preset display state is explicit. Clicking `V`, `D`, `M`, or `B` while `I` or `A` is active leaves
+the preset display state, enters custom mode, and starts a new custom mask containing only the
+clicked component stem. Once in custom mode, component buttons toggle freely; custom masks that
+match Drums + Melody + Bass or Vocals + Drums + Melody + Bass do not automatically reactivate `I`
+or `A`. `I` and `A` form one exclusive preset group; `V`, `D`, `M`, and `B` form the component
+group. Clicking `I` or `A` from custom mode remembers the current component mask before entering
+the preset group. Switching between `I` and `A` preserves that remembered component mask. Clicking
+the currently active preset again deactivates the preset group and restores the remembered
+component mask in custom mode.
 
 The button cluster is active only when the selected pad is in all-stems mode and has a current
 available prepared stem set. If stems are unavailable or the pad is in full-mix mode, the buttons
@@ -105,7 +114,8 @@ marking stems available. Missing cache files, stale source versions, or rejected
 must not prevent startup or playback.
 
 Transient generation progress, last errors, blocked reasons, and momentary performance
-gestures, including bottom-bar per-stem enabled masks, remain session state and are not persisted.
+gestures, including bottom-bar per-stem enabled masks and remembered component masks, remain
+session state and are not persisted.
 
 ### Audio-Thread Contract
 Stem mix controls must update Rust through fixed-size messages such as pad id, source-version

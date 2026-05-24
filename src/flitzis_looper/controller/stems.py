@@ -10,6 +10,7 @@ from flitzis_looper.models import (
     STEM_MIX_MODES,
     StemCacheEntry,
     StemFileSet,
+    StemGridIndicatorState,
     StemMaskDisplayMode,
     StemMixMode,
     validate_sample_id,
@@ -143,6 +144,7 @@ class StemController(BaseController):
             self._project.stem_cache[sample_id] = None
             self._mark_project_changed()
         self._session.pad_stem_enabled_mask[sample_id] = STEM_COMPONENT_MASK
+        self._session.pad_stem_last_custom_mask[sample_id] = STEM_COMPONENT_MASK
         self._session.pad_stem_mask_display_mode[sample_id] = "all"
 
     def stem_mix_mode(self, sample_id: int) -> StemMixMode:
@@ -172,6 +174,21 @@ class StemController(BaseController):
         if self._project.pad_stem_mix_mode[sample_id] != "all_stems":
             return False
         return self.stems_available(sample_id)
+
+    def stem_grid_indicator_state(self, sample_id: int) -> StemGridIndicatorState | None:
+        """Return the compact stem status shown on a performance pad."""
+        validate_sample_id(sample_id)
+        if self._session.stem_generation_errors.get(sample_id):
+            return "error"
+        if sample_id in self._session.stem_generating_sample_ids:
+            return "generating"
+        if self.stems_available(sample_id):
+            return "available"
+        if self._project.sample_paths[sample_id] is not None and self._stem_generation_blocker(
+            sample_id
+        ):
+            return "blocked"
+        return None
 
     def set_stem_mix_mode(self, sample_id: int, mode: StemMixMode) -> bool:
         """Set the durable full-mix/all-stems mode for a pad."""
@@ -218,9 +235,17 @@ class StemController(BaseController):
             msg = "stem mask display mode must be custom, instrumental, or all"
             raise ValueError(msg)
 
+        current_display_mode = self._session.pad_stem_mask_display_mode[sample_id]
+        if display_mode == "custom":
+            self._session.pad_stem_last_custom_mask[sample_id] = enabled_stem_mask
+        elif current_display_mode == "custom":
+            self._session.pad_stem_last_custom_mask[sample_id] = (
+                self._session.pad_stem_enabled_mask[sample_id]
+            )
+
         if (
             enabled_stem_mask == self._session.pad_stem_enabled_mask[sample_id]
-            and display_mode == self._session.pad_stem_mask_display_mode[sample_id]
+            and display_mode == current_display_mode
         ):
             return True
 

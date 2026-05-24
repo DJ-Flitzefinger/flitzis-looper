@@ -82,6 +82,14 @@ freely combinable component toggles. `I` SHALL select the instrumental preset Dr
 and mute Vocals. `A` SHALL select the all-stems preset Vocals + Drums + Melody + Bass. `I` SHALL
 NOT mean playing only `instrumental.wav`, and `A` SHALL NOT add `instrumental.wav` as a fifth
 audible layer.
+The system SHALL treat `I` and `A` as explicit preset display states rather than inferred aliases
+for matching custom masks. Activating `V`, `D`, `M`, or `B` from either preset SHALL leave preset
+display mode, enter custom display mode, and set the custom mask to only the clicked component stem.
+The system SHALL treat `I` and `A` as one exclusive preset group and `V`, `D`, `M`, and `B` as a
+separate component group. Activating a preset SHALL remember the last component-group custom mask,
+switching between `I` and `A` SHALL preserve that remembered component mask, and clicking the
+currently active preset again SHALL deactivate the preset group and restore the remembered
+component mask.
 
 #### Scenario: Selected pad controls are disabled without prepared stem playback
 - **GIVEN** the selected pad is in full-mix mode
@@ -102,3 +110,47 @@ audible layer.
 - **WHEN** the performer selects `I`
 - **THEN** only the `I` button appears active
 - **AND** the underlying enabled-stem mask enables Drums, Melody, and Bass while Vocals remains disabled
+
+#### Scenario: Component click leaves all-stems preset for custom mode
+- **GIVEN** the selected pad has a current prepared stem set
+- **AND** the selected pad is in all-stems mode
+- **AND** the `A` preset display state is active
+- **WHEN** the performer clicks `M`
+- **THEN** the selected pad enters custom display mode
+- **AND** only the Melody component appears active
+- **AND** the `A` preset appears inactive
+
+#### Scenario: Component click leaves instrumental preset for custom mode
+- **GIVEN** the selected pad has a current prepared stem set
+- **AND** the selected pad is in all-stems mode
+- **AND** the `I` preset display state is active
+- **WHEN** the performer clicks `V`
+- **THEN** the selected pad enters custom display mode
+- **AND** only the Vocals component appears active
+- **AND** the `I` preset appears inactive
+
+#### Scenario: Custom masks do not auto-select matching presets
+- **GIVEN** the selected pad has a current prepared stem set
+- **AND** the selected pad is in all-stems mode
+- **WHEN** the custom component mask matches Drums + Melody + Bass or Vocals + Drums + Melody + Bass
+- **THEN** the component buttons reflect the custom mask
+- **AND** the `I` and `A` preset buttons remain inactive until explicitly clicked
+
+#### Scenario: Preset deactivation restores remembered components
+- **GIVEN** the selected pad has a current prepared stem set
+- **AND** the selected pad is in all-stems mode
+- **AND** the custom component mask enables Vocals and Bass
+- **WHEN** the performer clicks `I`
+- **AND** the performer clicks `I` again
+- **THEN** the selected pad returns to custom display mode
+- **AND** only Vocals and Bass appear active
+
+#### Scenario: Preset switching preserves remembered components
+- **GIVEN** the selected pad has a current prepared stem set
+- **AND** the selected pad is in all-stems mode
+- **AND** the custom component mask enables Drums and Melody
+- **WHEN** the performer clicks `I`
+- **AND** the performer switches between `I` and `A` one or more times
+- **AND** the performer clicks the currently active preset again
+- **THEN** the selected pad returns to custom display mode
+- **AND** only Drums and Melody appear active

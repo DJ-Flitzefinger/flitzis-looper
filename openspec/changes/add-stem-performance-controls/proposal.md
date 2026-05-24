@@ -30,7 +30,7 @@ behavior that the real-time audio path cannot safely provide.
   `play-samples`, `ring-buffer-messaging`, and `background-tasks`.
 - Affected docs: `docs/audio-engine.md`, `docs/message-passing.md`,
   `docs/todos-legacy-migration.md`.
-- Later affected code: `ProjectState`, UI selectors/actions, selected-pad sidebar, pad-grid
+- Affected code: `ProjectState`, UI selectors/actions, selected-pad sidebar, pad-grid
   indicators, stem controller actions, Rust control messages, bounded mixer stem mix state,
   and focused Rust/Python tests.
 

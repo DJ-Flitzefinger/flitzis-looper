@@ -8,6 +8,7 @@ from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.controller.persistence import PROJECT_CONFIG_PATH, ProjectPersistence
 from flitzis_looper.models import (
     STEM_INSTRUMENTAL_PRESET_MASK,
+    STEM_MASK_VOCALS,
     BeatGrid,
     ProjectState,
     SampleAnalysis,
@@ -377,6 +378,7 @@ def test_transient_stem_generation_state_is_not_persisted(
     session.stem_generation_stage[0] = "Writing stem cache"
     session.stem_generation_errors[0] = "old error"
     session.pad_stem_enabled_mask[0] = STEM_INSTRUMENTAL_PRESET_MASK
+    session.pad_stem_last_custom_mask[0] = STEM_MASK_VOCALS
     session.pad_stem_mask_display_mode[0] = "instrumental"
 
     persistence = ProjectPersistence(project)
@@ -389,6 +391,7 @@ def test_transient_stem_generation_state_is_not_persisted(
     assert "stem_generation_stage" not in data
     assert "stem_generation_errors" not in data
     assert "pad_stem_enabled_mask" not in data
+    assert "pad_stem_last_custom_mask" not in data
     assert "pad_stem_mask_display_mode" not in data
 
 

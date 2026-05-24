@@ -115,20 +115,25 @@ bounded render-shape checks, rendering falls back to the loaded full-mix buffer.
 not generate stems, read cache files, decode audio, run neural inference, allocate stem buffers,
 log, block, or acquire the Python GIL.
 
-The selected-pad sidebar now renders stem availability/progress/error state from controller
-snapshots, routes Generate Stems through `StemController.generate_stems_async(...)`, and routes
-full-mix/all-stems changes through `StemController.set_stem_mix_mode(...)`. Rendering does not
-inspect cache directories, read files, decode audio, run inference, or call the low-level Rust
-background task APIs directly.
+The selected-pad sidebar and compact pad-grid badges now render stem availability, progress,
+blocked, and error state from controller snapshots, route Generate Stems through
+`StemController.generate_stems_async(...)`, and route full-mix/all-stems changes through
+`StemController.set_stem_mix_mode(...)`. Rendering does not inspect cache directories, read files,
+decode audio, run inference, or call the low-level Rust background task APIs directly.
 
 The follow-up `openspec/changes/add-stem-performance-controls/` planning slice defines performer
 stem controls and future momentary solo/mute gestures. The bottom-bar selected-pad stem mask slice publishes
 only fixed-size bounded state: pad id, source-version hash, and an enabled component-stem mask.
 `V`, `D`, `M`, and `B` toggle component stems, while `I` maps to Drums + Melody + Bass and `A`
-maps to Vocals + Drums + Melody + Bass. Neither preset asks the audio callback to read or select
-the cached `instrumental.wav` artifact directly. The messages must not carry file paths, Python
-objects, unbounded metadata, or copied audio payloads. Ring-buffer-full or stale-source failures
-must leave current full-mix or stem playback unchanged.
+maps to Vocals + Drums + Melody + Bass. UI preset display state remains explicit: component clicks
+from `I` or `A` publish a custom mask containing only the clicked component, and matching custom
+masks do not implicitly publish preset display state. The UI keeps a session-only remembered
+component mask for the `V`/`D`/`M`/`B` group; switching between `I` and `A` does not overwrite that
+remembered mask, and deactivating the active preset publishes it back as a custom component mask.
+Neither preset asks the audio callback to read or select the cached `instrumental.wav` artifact
+directly. The messages must not carry file paths, Python objects, unbounded metadata, or copied
+audio payloads. Ring-buffer-full or stale-source failures must leave current full-mix or stem
+playback unchanged.
 
 ## Not implemented (yet)
 

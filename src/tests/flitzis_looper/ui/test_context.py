@@ -198,6 +198,7 @@ class TestUiStateComputedProperties:
         controller.session.stem_generation_errors[0] = "failed"
         controller.session.stem_generating_sample_ids.add(0)
         controller.session.pad_stem_enabled_mask[0] = STEM_INSTRUMENTAL_PRESET_MASK
+        controller.session.pad_stem_last_custom_mask[0] = STEM_INSTRUMENTAL_PRESET_MASK
         controller.session.pad_stem_mask_display_mode[0] = "instrumental"
         controller.project.sample_paths[0] = "samples/foo.wav"
         controller.session.active_sample_ids.add(0)
@@ -205,8 +206,10 @@ class TestUiStateComputedProperties:
         assert ui_state.stems.stem_mix_mode(0) == "all_stems"
         assert ui_state.stems.stems_available(0) is True
         assert ui_state.stems.stem_enabled_mask(0) == STEM_INSTRUMENTAL_PRESET_MASK
+        assert ui_state.stems.stem_last_custom_mask(0) == STEM_INSTRUMENTAL_PRESET_MASK
         assert ui_state.stems.stem_mask_display_mode(0) == "instrumental"
         assert ui_state.stems.stem_mask_controls_enabled(0) is True
+        assert ui_state.stems.stem_grid_indicator_state(0) == "error"
         assert ui_state.stems.is_stem_generation_running(0) is True
         assert ui_state.stems.stem_generation_block_reason(0) == (
             "Cannot generate stems while the pad is playing"

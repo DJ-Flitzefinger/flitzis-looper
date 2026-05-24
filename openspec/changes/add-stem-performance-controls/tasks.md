@@ -7,10 +7,12 @@
 - [x] 2.1 Add UI selectors for per-pad stem availability, generation progress, generation errors, and durable stem mix mode.
 - [x] 2.2 Route the selected-pad "Generate Stems" action through the stem controller and existing inactive-pad gating.
 - [x] 2.3 Render selected-sidebar stem availability, generation progress, blocked state, and error indicators without file I/O or blocking work in the render loop.
-- [ ] 2.4 Render pad-grid stem availability indicators without file I/O or blocking work in the render loop.
+- [x] 2.4 Render pad-grid stem availability indicators without file I/O or blocking work in the render loop.
 - [x] 2.5 Add a selected-pad full-mix/all-stems mode control.
 - [x] 2.6 Add selected-pad bottom-bar per-stem toggle/preset entry points.
 - [x] 2.7 Add Python tests for selectors, controller actions, blocked/generating/error states, and UI action wiring.
+- [x] 2.8 Correct bottom-bar `I`/`A` preset-to-custom component-button transitions.
+- [x] 2.9 Add remembered component-group restoration when toggling active `I`/`A` presets off.
 
 ## 3. Future Persistence Implementation
 - [x] 3.1 Persist per-pad durable stem mix mode with a full-mix default for new and older projects.
