@@ -182,6 +182,15 @@ def test_set_trigger_quantization_accepts_supported_modes(audio_engine: AudioEng
         "next_bar",
         "next-bar",
         "bar",
+        "1/64",
+        "1_64",
+        "grid_1_32",
+        "1/16",
+        "1_16",
+        "1_8",
+        "1_4",
+        "1_2",
+        "1_bar",
     )
 
     for mode in modes:

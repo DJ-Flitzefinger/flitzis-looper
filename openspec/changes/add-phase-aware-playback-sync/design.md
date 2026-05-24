@@ -4,7 +4,7 @@ The active `add-rust-transport-timeline` change introduced the first Gen3 timing
 - an audio-thread-owned output-frame transport timeline,
 - validated master BPM and 4/4 beat/bar phase helpers,
 - a fixed-capacity scheduler for absolute output-frame events,
-- low-level next-beat and next-bar trigger quantization,
+- low-level grid-step trigger quantization,
 - atomic exclusive stop-all-then-play transitions,
 - bounded per-pad phase anchors derived from analysis metadata.
 
@@ -63,7 +63,7 @@ vectors or beat-detection work in the callback.
 When trigger quantization is disabled, `play_sample` and `play_sample_exclusive` retain the
 current behavior: they start promptly at the effective loop start.
 
-When trigger quantization is set to next beat or next bar:
+When trigger quantization is enabled with a selected grid step:
 
 1. The audio thread computes the absolute output-frame target from the transport timeline.
 2. The fixed-capacity scheduler stores the target and fixed-size command payload.
@@ -140,6 +140,6 @@ Any implementation that needs audio-thread allocation or blocking is a blocker.
 - Whether a future UI should expose "phase-aware quantization" separately from trigger
   quantization, or whether quantized starts should always become phase-aware when metadata is
   valid.
-- Whether pad phase should use bar phase only or support future subdivisions beyond beat/bar.
+- Whether pad phase should remain based on bar phase only for all current grid subdivisions.
 - Whether an audio-to-control diagnostic is useful when BPM-lock phase anchoring cannot be
   established from the selected pad.

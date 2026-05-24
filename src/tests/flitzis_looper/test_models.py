@@ -15,6 +15,7 @@ from flitzis_looper.constants import (
     NUM_SAMPLES,
 )
 from flitzis_looper.models import (
+    DEFAULT_TRIGGER_QUANTIZATION_STEP,
     STEM_COMPONENT_MASK,
     STEM_INSTRUMENTAL_PRESET_MASK,
     STEM_KINDS,
@@ -203,7 +204,8 @@ class TestModelSerialization:
         assert "manual_key" in data
         assert "speed" in data
         assert "volume" in data
-        assert "trigger_quantization" in data
+        assert "trigger_quantization_enabled" in data
+        assert "trigger_quantization_step" in data
         assert "demucs_shifts" in data
         assert "demucs_overlap" in data
         assert "input_mapping_enabled" in data
@@ -257,7 +259,8 @@ def test_project_state_defaults(project_state: ProjectState) -> None:
     assert project_state.multi_loop is False
     assert project_state.key_lock is False
     assert project_state.bpm_lock is False
-    assert project_state.trigger_quantization == "immediate"
+    assert project_state.trigger_quantization_enabled is False
+    assert project_state.trigger_quantization_step == DEFAULT_TRIGGER_QUANTIZATION_STEP
     assert project_state.demucs_shifts == DEFAULT_DEMUCS_SHIFTS
     assert project_state.demucs_overlap == DEFAULT_DEMUCS_OVERLAP
     assert project_state.input_mapping_enabled is False
@@ -279,15 +282,30 @@ def test_project_state_defaults(project_state: ProjectState) -> None:
     assert project_state.sidebar_right_expanded is True
 
 
-def test_trigger_quantization_mode_validation(project_state: ProjectState) -> None:
-    project_state.trigger_quantization = "next_beat"
-    assert project_state.trigger_quantization == "next_beat"
+def test_trigger_quantization_settings_validation(project_state: ProjectState) -> None:
+    project_state.trigger_quantization_enabled = True
+    assert project_state.trigger_quantization_enabled is True
 
-    project_state.trigger_quantization = "next_bar"
-    assert project_state.trigger_quantization == "next_bar"
+    project_state.trigger_quantization_step = "1_64"
+    assert project_state.trigger_quantization_step == "1_64"
+
+    project_state.trigger_quantization_step = "1_bar"
+    assert project_state.trigger_quantization_step == "1_bar"
 
     with pytest.raises(ValidationError):
-        ProjectState.model_validate({"trigger_quantization": "half_note"})
+        ProjectState.model_validate({"trigger_quantization_step": "half_note"})
+
+
+def test_legacy_trigger_quantization_mode_migrates_to_new_fields() -> None:
+    project = ProjectState.model_validate({"trigger_quantization": "next_bar"})
+
+    assert project.trigger_quantization_enabled is True
+    assert project.trigger_quantization_step == "1_bar"
+
+    project = ProjectState.model_validate({"trigger_quantization": "immediate"})
+
+    assert project.trigger_quantization_enabled is False
+    assert project.trigger_quantization_step == DEFAULT_TRIGGER_QUANTIZATION_STEP
 
 
 def test_demucs_quality_settings_validation(project_state: ProjectState) -> None:

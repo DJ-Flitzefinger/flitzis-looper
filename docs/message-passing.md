@@ -81,8 +81,9 @@ The Gen3 transport work is specified in
 now exists inside the audio callback. The fixed-capacity scheduler helper now exists with
 unit-tested ordering and rejection semantics, and the callback owns a scheduler for
 current-frame `PlaySample`, `StopSample`, and `StopAll` routing. Rust-side trigger
-quantization now accepts `immediate`, `next_beat`, and `next_bar` mode updates through the
-existing control-to-audio ring buffer. Per-pad beatgrid/downbeat timing metadata is published as
+quantization now accepts `immediate` plus fixed grid-step updates from `1_64` through `1_bar`
+through the existing control-to-audio ring buffer. Legacy `next_beat` and `next_bar` aliases
+remain accepted by the Python-facing API for older callers. Per-pad beatgrid/downbeat timing metadata is published as
 one fixed-size `SetPadTimingMetadata` request containing a finite non-negative phase anchor
 prepared outside the callback. MultiLoop-disabled playback uses a single fixed-size
 `PlaySampleExclusive` request, which the audio thread turns into one stop-all-then-play scheduled
@@ -92,8 +93,9 @@ Transport and quantized scheduler messages must remain fixed-size and bounded.
 Python/control code requests transport or trigger-quantization changes through the existing
 control-to-audio path; the audio callback owns the Rust transport timeline, per-pad timing
 metadata state, trigger quantization mode, and fixed-capacity scheduler.
-The performance UI exposes the current supported trigger modes through controller actions that
-publish only fixed-size `SetTriggerQuantization` messages.
+The performance UI exposes trigger quantization as a bottom-bar `Q` toggle and a Settings-page
+grid selector. The control layer publishes only fixed-size `SetTriggerQuantization` messages:
+`immediate` when `Q` is disabled, or the selected grid step when `Q` is enabled.
 
 The active `add-phase-aware-playback-sync` change keeps the same messaging rule. Quantized
 scheduled playback now stores a fixed-size optional target bar phase inside the audio-thread

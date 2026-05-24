@@ -86,7 +86,7 @@ back to full mix until a valid prepared set is available again.
 
 ### Bottom-Bar Per-Stem Mask Controls
 The first performance mask UI is a compact bottom-bar cluster immediately to the right of the
-trigger-quantization `BAR` button. It targets the currently selected red-outlined pad, not
+trigger-quantization `Q` button. It targets the currently selected red-outlined pad, not
 necessarily the currently playing pad. Right-click pad stops and middle-click pad selection both
 update that selected target.
 

@@ -398,15 +398,15 @@ class TestAudioActions:  # noqa: PLR0904
 
         assert controller.project.bpm_lock is not initial_state
 
-    def test_set_trigger_quantization(
+    def test_toggle_trigger_quantization(
         self, controller: AppController, audio_engine_mock: Mock
     ) -> None:
         audio_actions = AudioActions(controller)
 
-        audio_actions.global_.set_trigger_quantization("next_beat")
+        audio_actions.global_.toggle_trigger_quantization()
 
-        assert controller.project.trigger_quantization == "next_beat"
-        audio_engine_mock.set_trigger_quantization.assert_called_once_with("next_beat")
+        assert controller.project.trigger_quantization_enabled is True
+        audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_16")
 
     def test_set_stem_mix_mode(
         self, controller: AppController, audio_engine_mock: Mock
@@ -567,6 +567,16 @@ class TestSettingsActions:
 
         assert controller.session.stem_generating_sample_ids == set()
         assert controller.session.stem_generation_source_versions == {}
+
+    def test_set_trigger_quantization_step_delegates_to_global_params(
+        self, controller: AppController
+    ) -> None:
+        settings_actions = SettingsActions(controller)
+
+        settings_actions.set_trigger_quantization_step("1_64")
+
+        assert controller.project.trigger_quantization_step == "1_64"
+        assert controller.persistence._dirty is True
 
 
 class TestUiContext:

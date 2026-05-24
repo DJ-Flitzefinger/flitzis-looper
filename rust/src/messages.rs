@@ -82,8 +82,7 @@ impl AudioMessage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TriggerQuantization {
     Immediate,
-    NextBeat,
-    NextBar,
+    Grid { step_64ths: u16 },
 }
 
 /// Per-pad stem render source selection.
@@ -318,11 +317,12 @@ mod tests {
 
     #[test]
     fn set_trigger_quantization_message_carries_fixed_size_mode() {
-        let message = ControlMessage::SetTriggerQuantization(TriggerQuantization::NextBeat);
+        let message =
+            ControlMessage::SetTriggerQuantization(TriggerQuantization::Grid { step_64ths: 4 });
 
         assert!(matches!(
             message,
-            ControlMessage::SetTriggerQuantization(TriggerQuantization::NextBeat)
+            ControlMessage::SetTriggerQuantization(TriggerQuantization::Grid { step_64ths: 4 })
         ));
     }
 

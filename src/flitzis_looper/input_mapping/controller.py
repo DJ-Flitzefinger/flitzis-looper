@@ -18,9 +18,9 @@ from flitzis_looper.input_mapping.storage import (
 from flitzis_looper.models import (
     STEM_MASK_DISPLAY_MODES,
     STEM_MIX_MODES,
+    TRIGGER_QUANTIZATION_STEPS,
     StemMaskDisplayMode,
     StemMixMode,
-    TriggerQuantizationMode,
     validate_sample_id,
 )
 
@@ -212,6 +212,7 @@ class InputMappingController(BaseController):
             "global.multi_loop.toggle": self._toggle_multi_loop,
             "global.key_lock.toggle": self._toggle_key_lock,
             "global.bpm_lock.toggle": self._toggle_bpm_lock,
+            "global.trigger_quantization.toggle": self._toggle_trigger_quantization,
             "global.stop_all": self._app.transport.playback.stop_all_pads,
             "global.speed.increase": self._increase_speed,
             "global.speed.decrease": self._decrease_speed,
@@ -317,6 +318,9 @@ class InputMappingController(BaseController):
             enabled=not self._app.project.bpm_lock
         )
 
+    def _toggle_trigger_quantization(self) -> None:
+        self._app.transport.global_params.toggle_trigger_quantization()
+
     def _increase_speed(self) -> None:
         self._app.transport.global_params.set_speed(self._app.project.speed + 0.01)
 
@@ -391,11 +395,10 @@ class InputMappingController(BaseController):
 
     def _execute_trigger_quantization(self, key: str) -> bool:
         mode = key.removeprefix("global.trigger_quantization:")
-        if mode not in {"immediate", "next_beat", "next_bar"}:
+        valid_modes = {"immediate", "next_beat", "next_bar", *TRIGGER_QUANTIZATION_STEPS}
+        if mode not in valid_modes:
             return False
-        self._app.transport.global_params.set_trigger_quantization(
-            cast("TriggerQuantizationMode", mode)
-        )
+        self._app.transport.global_params.set_trigger_quantization(mode)
         return True
 
     def _execute_stem_mix(self, key: str) -> bool:

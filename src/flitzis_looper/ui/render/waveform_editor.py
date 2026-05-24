@@ -10,6 +10,7 @@ from flitzis_looper.ui.constants import (
     PLOT_PLAYHEAD_RGBA,
     PLOT_REGION_FILL_RGBA,
     PLOT_REGION_RGBA,
+    PLOT_ZERO_LINE_RGBA,
     SPACING,
     TEXT_MUTED_RGBA,
     TEXT_RGBA,
@@ -386,6 +387,12 @@ def _draw_musical_grid_lines(
         draw_list.add_line(p1, p2, col)
 
 
+def _draw_zero_line(draw_list: imgui.ImDrawList, start_s: float, end_s: float) -> None:
+    p1 = implot.plot_to_pixels(start_s, 0.0)
+    p2 = implot.plot_to_pixels(end_s, 0.0)
+    draw_list.add_line(p1, p2, imgui.get_color_u32(PLOT_ZERO_LINE_RGBA))
+
+
 def _plot_musical_grid(
     ctx: UiContext, pad_id: int, draw_list: imgui.ImDrawList, start_s: float, end_s: float
 ) -> None:
@@ -499,10 +506,10 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
 
     # Call Rust for data (fast aggregation, cached)
     data = ctx.ui.waveform.get_render_data(pad_id, plot_width_px, start_s, end_s)
+    draw_list = implot.get_plot_draw_list()
+    _draw_zero_line(draw_list, start_s, end_s)
 
     if data is not None:
-        draw_list = implot.get_plot_draw_list()
-
         is_raw, xs, y1, y2 = data
         if is_raw:
             show_sample_markers = len(xs) < plot_width_px / 6  # On extreme zoom

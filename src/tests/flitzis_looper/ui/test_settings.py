@@ -1,5 +1,6 @@
 from imgui_bundle import icons_fontawesome_6
 
+from flitzis_looper.models import TRIGGER_QUANTIZATION_STEP_LABELS, TRIGGER_QUANTIZATION_STEPS
 from flitzis_looper.ui.render.bottom_bar import settings_button_local_pos
 from flitzis_looper.ui.render.settings import (
     SETTINGS_TOGGLE_BUTTON_SIZE,
@@ -26,6 +27,12 @@ def test_settings_toggle_uses_x_when_open() -> None:
 def test_settings_overlay_replaces_main_surface_id() -> None:
     assert settings_surface_child_id(settings_open=False) == "looper_main"
     assert settings_surface_child_id(settings_open=True) == "settings_overlay"
+
+
+def test_settings_quantize_grid_options_cover_loop_editor_grid() -> None:
+    assert TRIGGER_QUANTIZATION_STEPS[0] == "1_64"
+    assert TRIGGER_QUANTIZATION_STEP_LABELS["1_16"] == "1/16"
+    assert TRIGGER_QUANTIZATION_STEPS[-1] == "1_bar"
 
 
 def test_settings_button_position_right_aligns_inside_bottom_bar() -> None:

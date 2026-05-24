@@ -1,9 +1,9 @@
 ## MODIFIED Requirements
 
 ### Requirement: Loop Onset Is Determined by Trigger Time
-When trigger quantization is disabled, the system SHALL start loops immediately when a pad
-trigger action occurs. Loop onset SHALL be determined by the user's trigger timing, matching
-the existing non-quantized behavior.
+The system SHALL start loops immediately when trigger quantization is disabled and a pad trigger
+action occurs. Loop onset SHALL be determined by the user's trigger timing, matching the existing
+non-quantized behavior.
 
 When trigger quantization is enabled, the user's trigger timing SHALL create a trigger
 request, and Rust SHALL align the actual loop onset to the selected transport grid boundary
@@ -19,7 +19,7 @@ using the Rust-owned timeline.
 
 #### Scenario: Quantized onsets align to the selected grid
 - **WHEN** MultiLoop mode is enabled
-- **AND** trigger quantization is set to next bar
+- **AND** trigger quantization is enabled with grid step `1 Bar`
 - **AND** pad 1 and pad 2 are triggered before the same next bar boundary
 - **THEN** Rust schedules both pad starts at that next bar boundary
 - **AND** both starts are targeted by absolute output-frame positions
@@ -38,7 +38,7 @@ pads unchanged.
 
 #### Scenario: Quantized one-at-a-time switch happens at one frame
 - **WHEN** MultiLoop mode is disabled
-- **AND** trigger quantization is set to next bar
+- **AND** trigger quantization is enabled with grid step `1 Bar`
 - **AND** pad 1 is active
 - **AND** the performer triggers loaded pad 2
 - **THEN** Rust schedules pad 1 to stop and pad 2 to start at the same next-bar output frame

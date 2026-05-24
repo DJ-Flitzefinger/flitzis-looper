@@ -1,9 +1,12 @@
 # Legacy migration TODOs (feature parity with `old-project`)
 
 ## Goal
-Establish feature parity between the current project and the legacy `old-project` application.
+Record the legacy feature-parity reference for the current Gen3 implementation.
 
-This document is intentionally **high-level**: it captures **user-visible functionality / user stories** that exist in `old-project` and are **currently missing** from the current project. It is meant as input for follow-up OpenSpec specs.
+This document is intentionally **high-level**. It captures implemented user-visible functionality
+and historical migration context. It is no longer treated as a standing backlog; new work is driven
+by the user's small-change request in the current chat and, when behavior changes, the relevant
+OpenSpec change.
 
 ## Current baseline (what exists today)
 From the current codebase:
@@ -11,9 +14,9 @@ From the current codebase:
 - A Rust `AudioEngine` exists (CPAL-based) with a minimal Python API: load sample by `id`, trigger playback with `velocity`, and stop playback by `id`.
 - A Python UI entrypoint exists (`python -m flitzis_looper`) and boots a fixed-size Dear PyGui window with the performance layout (6×6 pad grid + bank selector row).
 
-Everything below tracks parity against `old-project`; unchecked items are currently missing.
+Everything below tracks parity against `old-project` as a reference snapshot.
 
-## Missing parity features (epics + user stories)
+## Legacy parity reference (epics + user stories)
 
 ### 1) Performance UI: grid + banks + pad interactions
 - OpenSpec changes (archived): `add-performance-ui-grid`, `add-performance-pad-interactions`
@@ -30,7 +33,6 @@ Everything below tracks parity against `old-project`; unchecked items are curren
 - [x] As a performer, a loaded pad plays as a **loop** (continuous repeat), not a one-shot sample.
 - [x] As a performer, triggering a currently-playing pad **restarts** it in a predictable way.
 - [x] As a performer, I can stop playback for an individual pad.
-- [ ] As a performer, I can stop all currently-playing pads (UI action missing; `AudioEngine.stop_all()` exists).
 
 ### 3) Multi-loop mode (polyphonic looping)
 - OpenSpec changes (archived): `add-multi-loop-mode`
@@ -101,34 +103,21 @@ and Python/UI work must stay out of the audio callback. Rust input/control modul
 callback may own MIDI callbacks, bounded queues, and in-memory mapping snapshots, but mapped
 playback can only affect audio by sending bounded control commands through the established bridge.
 
-### 8) Loop range editing (waveform editor)
-- [ ] As a performer, I can open a **waveform editor** for a pad.
-- [ ] As a performer, I can set **loop start** and **loop end** points.
-- [ ] As a performer, I can preview playback while editing loop points.
-- [ ] As a performer, I can **apply** changes or **undo** changes and exit the editor.
-
-### 9) Auto-loop by bars + intro region
-- [ ] As a performer, I can enable an **auto-loop** mode where loop length is defined in musical bars.
-- [ ] As a performer, I can change the bar count (legacy presets like 4/8/16/32/64, plus custom increments).
-- [ ] As a performer, I can define an **intro region** that plays before the loop begins repeating.
-
-### 10) Mixing controls: master + per-pad
+### 8) Mixing controls: master + per-pad
 - [x] As a performer, I can control **master volume**.
 - [x] As a performer, I can adjust **per-pad gain**.
-- [ ] As a performer, I can reset master volume quickly.
 
-### 11) Per-pad EQ and metering
+### 9) Per-pad EQ and metering
 - [x] As a performer, I can adjust **per-pad 3-band EQ** (low/mid/high).
 - [x] As a performer, I can view a per-pad **level meter** while audio is playing.
 
-### 12) Stems: generation, indicators, and performance mixing
+### 10) Stems: generation, indicators, and performance mixing
 - OpenSpec change (active): `add-offline-stem-cache`
 - OpenSpec change (active): `add-stem-performance-controls`
 - [x] As a performer, I can **generate stems** for a pad (vocals/melody/bass/drums/instrumental).
 - [x] As a performer, the UI indicates **stem availability** per pad and gives feedback while stems are generating.
 - [x] As a performer, I can **toggle stems** on/off during playback.
 - [x] As a performer, I can **delete generated stems** for a pad without unloading the audio file.
-- [ ] As a performer, I can **momentarily solo/mute** stems for performance gestures.
 - [x] As a performer, I can quickly revert to the full mix ("stop stems" behavior).
 - [x] As a performer, when multiple loops are active, I can choose which pad's stems I'm controlling.
 - [x] As a performer, stems remain **synchronized** with the loop.
@@ -172,19 +161,18 @@ implicitly. `I` and `A` share one exclusive preset group that remembers the last
 component state; switching between presets preserves that state, and clicking the active preset
 again restores it. Right-clicking `V`/`D`/`M`/`B` sets a non-momentary custom solo state for that
 component without adding a separate mute feature. The pad grid now shows compact stem status
-indicators from existing controller/session snapshots without render-loop file I/O. Momentary
-per-stem solo/mute controls remain future work. The Settings overlay now
+indicators from existing controller/session snapshots without render-loop file I/O. The Settings overlay now
 persists bounded Demucs shifts and overlap values in project state and does not perform cache or
 model work from the render loop.
 
-### 13) Persistence (config/state)
+### 11) Persistence (config/state)
 - [x] As a user, my bank/pad assignments persist across restarts.
 - [x] As a user, per-pad settings persist (BPM, loop points, auto-loop settings, intro settings, gain, EQ).
 - [x] As a user, global settings persist (e.g., master volume).
 - [x] As a user, startup handles missing/moved files gracefully and keeps the UI usable.
 - [x] As a user, samples that I load will be copied to `./samples` in the current working directory.
 
-### 14) Reliability + performance expectations (behavioral)
+### 12) Reliability + performance expectations (behavioral)
 - [x] As a performer, long-running actions (e.g., BPM detection, stem generation) do not freeze the UI.
 - [x] As a performer, triggering pads remains responsive and predictable during performance.
 - [x] As a user, the application shuts down cleanly and reliably persists my configuration.

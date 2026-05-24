@@ -56,6 +56,10 @@ class LooperAction(BaseModel):
         return cls(key="global.bpm_lock.toggle", label="Toggle BPM Lock")
 
     @classmethod
+    def toggle_trigger_quantization(cls) -> LooperAction:
+        return cls(key="global.trigger_quantization.toggle", label="Toggle Trigger Quantize")
+
+    @classmethod
     def stop_all(cls) -> LooperAction:
         return cls(key="global.stop_all", label="Stop all", source="direct")
 

@@ -19,15 +19,13 @@ from flitzis_looper.ui.render.settings import (
 )
 
 if TYPE_CHECKING:
-    from flitzis_looper.models import TriggerQuantizationMode
     from flitzis_looper.ui.context import UiContext
     from flitzis_looper.ui.styles import ButtonStyleName
 
-TRIGGER_QUANTIZATION_OPTIONS: tuple[tuple[TriggerQuantizationMode, str], ...] = (
-    ("immediate", "IMMEDIATE"),
-    ("next_beat", "BEAT"),
-    ("next_bar", "BAR"),
-)
+MODE_BUTTON_HEIGHT = 24.0
+MODE_BUTTON_WIDTH = 36.0
+MULTI_LOOP_BUTTON_WIDTH = 88.0
+STEM_BUTTON_SIZE = 32.0
 STEM_COMPONENT_BUTTONS = (
     ("V", STEM_MASK_VOCALS),
     ("D", STEM_MASK_DRUMS),
@@ -53,6 +51,10 @@ def settings_button_local_pos(
     return (x, y)
 
 
+def _set_cursor_y_for_button(*, center_y: float, height: float) -> None:
+    imgui.set_cursor_pos_y(max(0.0, center_y - height / 2.0))
+
+
 def _master_volume(ctx: UiContext) -> None:
     with style_var(imgui.StyleVar_.item_spacing, (0, SPACING / 2)):
         val = max(0, min(100, round(ctx.state.project.volume * 100)))
@@ -64,32 +66,37 @@ def _master_volume(ctx: UiContext) -> None:
                 ctx.audio.global_.set_volume(new_value / 100.0)
 
 
-def _trigger_quantization(ctx: UiContext) -> None:
-    imgui.text_unformatted("Trigger Quantize")
-    imgui.same_line(spacing=SPACING / 2)
-    with style_var(imgui.StyleVar_.item_spacing, (0.0, SPACING / 4)):
-        for idx, (mode, label) in enumerate(TRIGGER_QUANTIZATION_OPTIONS):
-            if idx > 0:
-                imgui.same_line(spacing=0.0)
-
-            style: ButtonStyleName = (
-                "mode-on" if ctx.state.project.trigger_quantization == mode else "mode-off"
-            )
-            with button_style(style):
-                if imgui.button(f"{label}##trigger_quantization_{mode}", (96, 0)):
-                    ctx.audio.global_.set_trigger_quantization(mode)
+def trigger_quantization_button_style(*, enabled: bool) -> ButtonStyleName:
+    """Return the bottom-bar Q button style for tests and rendering."""
+    return "mode-on" if enabled else "mode-off"
 
 
-def _learn_control(ctx: UiContext) -> None:
+def _trigger_quantization_toggle(ctx: UiContext, center_y: float) -> None:
+    style = trigger_quantization_button_style(
+        enabled=ctx.state.project.trigger_quantization_enabled
+    )
+    _set_cursor_y_for_button(center_y=center_y, height=MODE_BUTTON_HEIGHT)
+    with button_style(style):
+        if imgui.button(
+            "Q##trigger_quantization_toggle",
+            (MODE_BUTTON_WIDTH, MODE_BUTTON_HEIGHT),
+        ):
+            ctx.audio.global_.toggle_trigger_quantization()
+
+    if imgui.is_item_hovered():
+        imgui.set_tooltip("Trigger Quantize")
+
+
+def _learn_control(ctx: UiContext, center_y: float) -> None:
     enabled = ctx.state.project.input_mapping_enabled
     active = ctx.state.session.input_learn_active
     pending = ctx.state.session.input_learn_pending_binding_key is not None
     style: ButtonStyleName = "mode-on" if active or pending else "mode-off"
 
-    imgui.same_line(spacing=SPACING)
+    _set_cursor_y_for_button(center_y=center_y, height=MODE_BUTTON_HEIGHT)
     imgui.begin_disabled(disabled=not enabled)
     with button_style(style):
-        if imgui.button("L##input_mapping_learn", (36, 0)):
+        if imgui.button("L##input_mapping_learn", (MODE_BUTTON_WIDTH, MODE_BUTTON_HEIGHT)):
             ctx.input.toggle_learn()
     imgui.end_disabled()
 
@@ -161,7 +168,10 @@ def _stem_mask_button(
         else "mode-off"
     )
     with button_style(style):
-        clicked = imgui.button(f"{label}##stem_mask_{label}", (32, 32))
+        clicked = imgui.button(
+            f"{label}##stem_mask_{label}",
+            (STEM_BUTTON_SIZE, STEM_BUTTON_SIZE),
+        )
         right_clicked = (
             target_display_mode == "custom"
             and imgui.is_item_hovered()
@@ -181,14 +191,14 @@ def _stem_mask_button(
             ctx.audio.stems.set_stem_enabled_mask(pad_id, target_mask, next_display_mode)
 
 
-def _stem_mask_controls(ctx: UiContext) -> None:
+def _stem_mask_controls(ctx: UiContext, center_y: float) -> None:
     pad_id = ctx.state.project.selected_pad
     current_mask = ctx.state.stems.stem_enabled_mask(pad_id)
     last_custom_mask = ctx.state.stems.stem_last_custom_mask(pad_id)
     display_mode = ctx.state.stems.stem_mask_display_mode(pad_id)
     enabled = ctx.state.stems.stem_mask_controls_enabled(pad_id)
 
-    imgui.same_line(spacing=SPACING / 2)
+    _set_cursor_y_for_button(center_y=center_y, height=STEM_BUTTON_SIZE)
     imgui.begin_disabled(disabled=not enabled)
     with (
         style_var(imgui.StyleVar_.item_spacing, (SPACING / 4, 0.0)),
@@ -223,26 +233,30 @@ def _stem_mask_controls(ctx: UiContext) -> None:
     imgui.end_disabled()
 
 
-def _bottom_bar_controls(ctx: UiContext) -> None:
+def _bottom_bar_controls(ctx: UiContext, center_y: float) -> None:
     _master_volume(ctx)
-    imgui.same_line(spacing=SPACING)
+    imgui.same_line(spacing=SPACING * 1.25)
+    _set_cursor_y_for_button(center_y=center_y, height=MODE_BUTTON_HEIGHT)
     style: ButtonStyleName = "mode-on" if ctx.state.project.multi_loop else "mode-off"
 
     with button_style(style):
-        if imgui.button("MULTI LOOP"):
+        if imgui.button("MULTI LOOP", (MULTI_LOOP_BUTTON_WIDTH, MODE_BUTTON_HEIGHT)):
             ctx.audio.global_.toggle_multi_loop()
 
-    _learn_control(ctx)
-    imgui.same_line(spacing=SPACING)
-    _trigger_quantization(ctx)
-    _stem_mask_controls(ctx)
+    imgui.same_line(spacing=SPACING / 2)
+    _learn_control(ctx, center_y)
+    imgui.same_line(spacing=SPACING / 2)
+    _trigger_quantization_toggle(ctx, center_y)
+    imgui.same_line(spacing=SPACING * 1.25)
+    _stem_mask_controls(ctx, center_y)
 
 
 def bottom_bar(ctx: UiContext) -> None:
     avail = imgui.get_content_region_avail()
     start_pos = imgui.get_cursor_pos()
+    center_y = start_pos.y + max(0.0, avail.y / 2.0)
 
-    _bottom_bar_controls(ctx)
+    _bottom_bar_controls(ctx, center_y)
 
     imgui.set_cursor_pos(
         settings_button_local_pos(

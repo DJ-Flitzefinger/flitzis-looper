@@ -7,13 +7,39 @@
 
 const DEFAULT_SAMPLE_RATE_HZ: u32 = 44_100;
 const BEATS_PER_BAR_4_4: u32 = 4;
+pub(crate) const GRID_64THS_PER_BEAT: u16 = 16;
+pub(crate) const GRID_64THS_PER_BAR: u16 = GRID_64THS_PER_BEAT * BEATS_PER_BAR_4_4 as u16;
 const PHASE_EPSILON: f64 = 1.0e-9;
 const GRID_EPSILON_FRAMES: f64 = 1.0e-6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum QuantizeGrid {
-    Beat,
-    Bar,
+pub(crate) struct QuantizeGrid {
+    step_64ths: u16,
+}
+
+impl QuantizeGrid {
+    pub(crate) fn from_step_64ths(step_64ths: u16) -> Option<Self> {
+        if step_64ths == 0 || step_64ths > GRID_64THS_PER_BAR {
+            return None;
+        }
+        Some(Self { step_64ths })
+    }
+
+    pub(crate) fn beat() -> Self {
+        Self {
+            step_64ths: GRID_64THS_PER_BEAT,
+        }
+    }
+
+    pub(crate) fn bar() -> Self {
+        Self {
+            step_64ths: GRID_64THS_PER_BAR,
+        }
+    }
+
+    pub(crate) fn step_64ths(&self) -> u16 {
+        self.step_64ths
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -158,18 +184,16 @@ impl TransportTimeline {
     }
 
     pub(crate) fn next_beat_frame(&self) -> Option<u64> {
-        self.next_grid_frame(QuantizeGrid::Beat)
+        self.next_grid_frame(QuantizeGrid::beat())
     }
 
     pub(crate) fn next_bar_frame(&self) -> Option<u64> {
-        self.next_grid_frame(QuantizeGrid::Bar)
+        self.next_grid_frame(QuantizeGrid::bar())
     }
 
     pub(crate) fn next_grid_frame(&self, grid: QuantizeGrid) -> Option<u64> {
-        let frames_per_grid = match grid {
-            QuantizeGrid::Beat => self.frames_per_beat()?,
-            QuantizeGrid::Bar => self.frames_per_bar()?,
-        };
+        let frames_per_grid =
+            self.frames_per_beat()? * grid.step_64ths() as f64 / GRID_64THS_PER_BEAT as f64;
 
         if !frames_per_grid.is_finite() || frames_per_grid <= 0.0 {
             return None;
@@ -442,8 +466,27 @@ mod tests {
         let mut transport = transport_at(1_001);
         transport.set_downbeat_frame(1_000);
 
-        assert_eq!(transport.next_grid_frame(QuantizeGrid::Beat), Some(25_000));
-        assert_eq!(transport.next_grid_frame(QuantizeGrid::Bar), Some(97_000));
+        assert_eq!(
+            transport.next_grid_frame(QuantizeGrid::beat()),
+            Some(25_000)
+        );
+        assert_eq!(transport.next_grid_frame(QuantizeGrid::bar()), Some(97_000));
+    }
+
+    #[test]
+    fn next_grid_frame_supports_loop_editor_64th_note_subdivisions() {
+        let transport = transport_at(6_001);
+        let sixteenth_note = QuantizeGrid::from_step_64ths(4).unwrap();
+        let sixty_fourth_note = QuantizeGrid::from_step_64ths(1).unwrap();
+
+        assert_eq!(transport.next_grid_frame(sixteenth_note), Some(12_000));
+        assert_eq!(transport.next_grid_frame(sixty_fourth_note), Some(7_500));
+    }
+
+    #[test]
+    fn invalid_quantize_grid_step_is_rejected() {
+        assert_eq!(QuantizeGrid::from_step_64ths(0), None);
+        assert_eq!(QuantizeGrid::from_step_64ths(GRID_64THS_PER_BAR + 1), None);
     }
 
     #[test]

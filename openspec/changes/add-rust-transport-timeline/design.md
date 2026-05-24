@@ -82,8 +82,8 @@ During a callback:
 
 1. Drain control messages without blocking.
 2. Convert immediate commands into `target_frame = buffer_start_frame`.
-3. Convert quantized trigger requests into the next beat/bar grid target computed by the
-   Rust transport.
+3. Convert quantized trigger requests into the next selected transport grid target computed by
+   the Rust transport.
 4. Execute events due at or before `buffer_start_frame` before rendering the first frame.
 5. Execute events that fall inside the current output buffer at their exact frame offset.
    This may require rendering the buffer in bounded sub-ranges between event offsets.
@@ -97,14 +97,23 @@ diagnostic path exists.
 Default pad triggering remains immediate. Quantization is opt-in through future Python/UI
 controls and fixed-size control messages.
 
-The initial quantization model must support at least:
+The quantization model must support:
 
 - disabled/immediate,
-- next beat,
-- next bar.
+- `1/64`,
+- `1/32`,
+- `1/16`,
+- `1/8`,
+- `1/4`,
+- `1/2`,
+- `1 Bar`.
 
-When quantization is enabled, Rust computes the target frame from the current transport
-state. A trigger exactly on a grid boundary may execute at the current output frame.
+The default persisted grid step is `1/16`, while new projects still default the effective
+enabled state to disabled/immediate. The minimum `1/64` step uses the same one-sixteenth-of-a-beat
+unit as the loop editor's finest musical grid and snapping step.
+
+When quantization is enabled, Rust computes the target frame from the current transport state and
+selected grid step. A trigger exactly on a grid boundary may execute at the current output frame.
 Otherwise it targets the next matching grid boundary.
 
 For MultiLoop disabled, the stop-other-pads action and the requested pad start must be one
@@ -165,6 +174,5 @@ control messages, the transport timeline, and the scheduler.
 ## Open Questions
 - Exact scheduler capacity. Start with a named constant and tests; 1024 is consistent with
   existing ring-buffer capacity, but a smaller capacity may be enough if justified.
-- Exact Python API for quantization mode and interval.
 - Whether scheduler-full diagnostics should be a new `AudioMessage` variant or only internal
   counters/state.

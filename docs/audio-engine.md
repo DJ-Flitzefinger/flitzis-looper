@@ -123,16 +123,22 @@ Implemented first slice:
   `play_sample` behavior.
 - Scheduled events inside an output buffer split rendering at the target frame so starts and
   stops occur at the intended sample-frame offset.
-- `AudioEngine.set_trigger_quantization("immediate" | "next_beat" | "next_bar")` publishes a
-  fixed-size trigger-quantization mode update to the audio thread. The default remains
-  immediate.
+- `AudioEngine.set_trigger_quantization(mode)` publishes a fixed-size trigger-quantization
+  update to the audio thread. The controller uses `"immediate"` while trigger quantization is
+  disabled and grid-step strings from `"1_64"` through `"1_bar"` while it is enabled. The
+  persisted Settings default is `"1_16"`, but new projects keep the bottom-bar `Q` toggle
+  disabled so playback remains immediate by default. Legacy `"next_beat"` and `"next_bar"`
+  inputs remain accepted as compatibility aliases for `"1_4"` and `"1_bar"`.
 - `AudioEngine.set_pad_timing_metadata(id, phase_anchor_s)` publishes bounded per-pad
   beatgrid/downbeat timing metadata prepared outside the audio callback. The Python controller
   derives `phase_anchor_s` using the existing loop-region fallback order: first finite
   non-negative downbeat, then first finite non-negative beat, then `0.0`.
-- When trigger quantization is set to next beat or next bar and master BPM is available, Rust
-  computes the target frame from `TransportTimeline` and schedules `PlaySample` at that absolute
-  output frame. If master BPM is unavailable, the request falls back to immediate playback.
+- When trigger quantization is enabled and master BPM is available, Rust computes the target frame
+  from `TransportTimeline`, the downbeat anchor, and the selected grid step, then schedules
+  `PlaySample` at that absolute output frame. Supported steps are `"1_64"`, `"1_32"`, `"1_16"`,
+  `"1_8"`, `"1_4"`, `"1_2"`, and `"1_bar"`. The minimum `"1_64"` step matches the loop editor's
+  finest 1/64-note grid basis. If master BPM is unavailable, the request falls back to immediate
+  playback.
 - Scheduler-full quantized play requests are rejected without evicting existing scheduled events
   or changing currently playing pads.
 - `AudioEngine.play_sample_exclusive(id, velocity)` publishes one fixed-size command for
@@ -311,8 +317,11 @@ The Rust engine is exposed to Python as `AudioEngine` with:
   - `play_sample_exclusive(id, velocity)` stops all active voices and starts the requested loaded
     sample as one audio-thread command. The controller uses this for MultiLoop-disabled playback.
   - `set_trigger_quantization(mode)` sets low-level Rust trigger quantization mode. Supported
-    modes are `"immediate"`, `"next_beat"`, and `"next_bar"`. The Python controller persists the
-    selected global mode and the performance UI exposes those three supported modes.
+    modes are `"immediate"` plus grid steps `"1_64"`, `"1_32"`, `"1_16"`, `"1_8"`, `"1_4"`,
+    `"1_2"`, and `"1_bar"`. Legacy `"next_beat"` and `"next_bar"` aliases remain accepted.
+    The Python controller persists `trigger_quantization_enabled` separately from
+    `trigger_quantization_step`; the bottom-bar `Q` toggle enables/disables quantization and the
+    Settings page selects the grid step.
   - `set_pad_timing_metadata(id, phase_anchor_s)` publishes a finite non-negative per-pad phase
     anchor derived from analysis metadata. It is stored in Rust state for phase-aware quantized
     playback; full beat-grid vectors are not sent to the callback.

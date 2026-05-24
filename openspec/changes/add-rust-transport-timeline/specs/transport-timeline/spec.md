@@ -120,22 +120,24 @@ of rejecting the new request.
 - **AND** the audio callback performs no blocking operation, heap allocation, logging, disk I/O, neural inference, or GIL access
 
 ### Requirement: Quantized Pad Triggers Use The Rust Transport
-The system SHALL support opt-in quantized pad triggers that use Rust transport beat and bar
-phase to choose an absolute output-frame target.
+The system SHALL support opt-in quantized pad triggers that use the Rust transport timeline and a
+fixed musical grid step to choose an absolute output-frame target.
 
-The initial quantization intervals SHALL include:
-
-- disabled/immediate,
-- next beat,
-- next bar.
+The supported trigger quantization states SHALL include disabled/immediate plus fixed grid
+subdivisions from `1/64` through `1 Bar`: `1/64`, `1/32`, `1/16`, `1/8`, `1/4`, `1/2`, and
+`1 Bar`. These grid steps SHALL use the same 1/64-note unit basis as the loop editor musical
+grid, where `1/64` is one sixteenth of a beat in 4/4 and `1 Bar` is four beats.
 
 When quantization is disabled, existing immediate trigger behavior SHALL be preserved. When
-quantization is enabled, Rust SHALL compute the target output frame from the current
-transport state and insert the trigger into the fixed-capacity scheduler.
+quantization is enabled, Rust SHALL compute the target output frame from the current transport
+state, the downbeat anchor, and the selected grid step, then insert the trigger into the
+fixed-capacity scheduler.
 
-The default trigger quantization mode SHALL be disabled/immediate. Control code MAY update
-the mode through a fixed-size control message. UI/controller controls MAY be added
-separately, but the audio thread SHALL own the effective mode used for scheduling.
+The default trigger quantization enabled state SHALL be disabled. The default persisted grid step
+SHALL be `1/16` and SHALL only affect scheduling after quantization is enabled. Control code MAY
+update the effective audio-thread mode through a fixed-size control message. UI/controller
+controls MAY be added separately, but the audio thread SHALL own the effective mode used for
+scheduling.
 
 #### Scenario: Quantization disabled preserves immediate start
 - **GIVEN** trigger quantization is disabled
@@ -143,17 +145,25 @@ separately, but the audio thread SHALL own the effective mode used for schedulin
 - **WHEN** Python/control code requests pad playback
 - **THEN** Rust starts or restarts the pad at the current callback position using existing immediate semantics
 
-#### Scenario: Next-bar trigger starts at a bar boundary
+#### Scenario: One-bar trigger starts at a bar boundary
 - **GIVEN** master BPM and downbeat anchor are available
-- **AND** trigger quantization is set to next bar
+- **AND** trigger quantization is enabled with grid step `1 Bar`
 - **WHEN** a loaded pad is triggered between bar boundaries
 - **THEN** Rust schedules the pad start for the next bar boundary's absolute output frame
 
-#### Scenario: Next-beat trigger starts at a beat boundary
+#### Scenario: One-sixteenth trigger starts at the selected subdivision boundary
 - **GIVEN** master BPM and downbeat anchor are available
-- **AND** trigger quantization is set to next beat
-- **WHEN** a loaded pad is triggered between beat boundaries
-- **THEN** Rust schedules the pad start for the next beat boundary's absolute output frame
+- **AND** trigger quantization is enabled with grid step `1/16`
+- **WHEN** a loaded pad is triggered between 1/16-note boundaries
+- **THEN** Rust schedules the pad start for the next 1/16-note boundary's absolute output frame
+
+#### Scenario: Minimum grid matches the loop editor grid basis
+- **GIVEN** master BPM and downbeat anchor are available
+- **AND** trigger quantization is enabled with grid step `1/64`
+- **WHEN** a loaded pad is triggered between 1/64-note boundaries
+- **THEN** Rust schedules the pad start for the next 1/64-note boundary's absolute output frame
+- **AND** that subdivision uses the same one-sixteenth-of-a-beat basis as the loop editor's
+  finest musical grid and snapping step
 
 ### Requirement: Beatgrid And Downbeat Metadata Integrates With Transport
 The system SHALL integrate pad beatgrid and downbeat metadata with Rust playback timing by

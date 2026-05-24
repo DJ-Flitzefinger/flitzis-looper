@@ -1,7 +1,14 @@
 import math
 from typing import TYPE_CHECKING, Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from flitzis_looper.constants import (
     DEFAULT_DEMUCS_OVERLAP,
@@ -25,11 +32,48 @@ from flitzis_looper.constants import (
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-type TriggerQuantizationMode = Literal["immediate", "next_beat", "next_bar"]
+type TriggerQuantizationMode = Literal["immediate", "enabled", "next_beat", "next_bar"]
+type TriggerQuantizationStep = Literal[
+    "1_64",
+    "1_32",
+    "1_16",
+    "1_8",
+    "1_4",
+    "1_2",
+    "1_bar",
+]
 type StemMixMode = Literal["full_mix", "all_stems"]
 type StemMaskDisplayMode = Literal["custom", "instrumental", "all"]
 type StemKind = Literal["vocals", "melody", "bass", "drums", "instrumental"]
 type StemGridIndicatorState = Literal["available", "generating", "blocked", "error"]
+
+TRIGGER_QUANTIZATION_STEPS: tuple[TriggerQuantizationStep, ...] = (
+    "1_64",
+    "1_32",
+    "1_16",
+    "1_8",
+    "1_4",
+    "1_2",
+    "1_bar",
+)
+TRIGGER_QUANTIZATION_STEP_LABELS: dict[TriggerQuantizationStep, str] = {
+    "1_64": "1/64",
+    "1_32": "1/32",
+    "1_16": "1/16",
+    "1_8": "1/8",
+    "1_4": "1/4",
+    "1_2": "1/2",
+    "1_bar": "1 Bar",
+}
+DEFAULT_TRIGGER_QUANTIZATION_STEP: TriggerQuantizationStep = "1_16"
+LEGACY_TRIGGER_QUANTIZATION_TO_STEP: dict[str, TriggerQuantizationStep] = {
+    "next_beat": "1_4",
+    "next-beat": "1_4",
+    "beat": "1_4",
+    "next_bar": "1_bar",
+    "next-bar": "1_bar",
+    "bar": "1_bar",
+}
 
 STEM_KINDS: tuple[StemKind, ...] = ("vocals", "melody", "bass", "drums", "instrumental")
 STEM_MIX_MODES: tuple[StemMixMode, ...] = ("full_mix", "all_stems")
@@ -165,6 +209,33 @@ class ProjectState(BaseModel):
 
     model_config = ConfigDict(validate_assignment=True)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_trigger_quantization(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+
+        data = dict(value)
+        legacy = data.pop("trigger_quantization", None)
+        if not isinstance(legacy, str):
+            return data
+
+        if "trigger_quantization_enabled" not in data:
+            data["trigger_quantization_enabled"] = legacy not in {
+                "immediate",
+                "disabled",
+                "off",
+            }
+
+        if "trigger_quantization_step" not in data:
+            step = LEGACY_TRIGGER_QUANTIZATION_TO_STEP.get(legacy)
+            if step is not None:
+                data["trigger_quantization_step"] = step
+            elif data.get("trigger_quantization_enabled") is True:
+                data["trigger_quantization_step"] = legacy
+
+        return data
+
     sample_paths: list[str | None] = Field(default_factory=_default_sample_paths)
     """Maps pad IDs to file paths."""
 
@@ -220,8 +291,10 @@ class ProjectState(BaseModel):
     """Key lock state."""
     bpm_lock: bool = False
     """BPM lock state."""
-    trigger_quantization: TriggerQuantizationMode = "immediate"
-    """Global pad trigger quantization mode."""
+    trigger_quantization_enabled: bool = False
+    """Whether global pad trigger quantization is enabled."""
+    trigger_quantization_step: TriggerQuantizationStep = DEFAULT_TRIGGER_QUANTIZATION_STEP
+    """Global pad trigger quantization grid step."""
     input_mapping_enabled: bool = False
     """Enable performer MIDI/keyboard input mappings."""
     demucs_shifts: int = Field(

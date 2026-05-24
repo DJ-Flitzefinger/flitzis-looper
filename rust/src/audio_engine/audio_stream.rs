@@ -160,8 +160,9 @@ fn quantized_target_frame(
 ) -> Option<u64> {
     match trigger_quantization {
         TriggerQuantization::Immediate => None,
-        TriggerQuantization::NextBeat => transport.next_grid_frame(QuantizeGrid::Beat),
-        TriggerQuantization::NextBar => transport.next_grid_frame(QuantizeGrid::Bar),
+        TriggerQuantization::Grid { step_64ths } => {
+            transport.next_grid_frame(QuantizeGrid::from_step_64ths(step_64ths)?)
+        }
     }
 }
 
@@ -734,7 +735,7 @@ mod tests {
         schedule_play_sample_command(
             &mut scheduler,
             callback_start_frame,
-            TriggerQuantization::NextBeat,
+            TriggerQuantization::Grid { step_64ths: 16 },
             &transport,
             0,
             1.0,
@@ -769,6 +770,33 @@ mod tests {
     }
 
     #[test]
+    fn quantized_play_schedules_selected_subdivision_frame() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_test_sample(1, 32, 0.5));
+        let mut transport = TransportTimeline::new(10);
+        assert!(transport.set_master_bpm(60.0));
+        transport.advance_by_rendered_frames(6);
+        let callback_start_frame = transport.output_frame();
+        let mut scheduler = FixedCapacityScheduler::<8>::new();
+        let mut messages = Vec::new();
+
+        schedule_play_sample_command(
+            &mut scheduler,
+            callback_start_frame,
+            TriggerQuantization::Grid { step_64ths: 4 },
+            &transport,
+            0,
+            1.0,
+            &mut mixer,
+            &mut messages,
+        );
+
+        assert_eq!(scheduler.peek_next_target_frame(), Some(8));
+        assert!(mixer.voices.iter().all(|voice| !voice.active));
+        assert!(messages.is_empty());
+    }
+
+    #[test]
     fn quantized_play_uses_phase_aligned_initial_frame_at_target_frame() {
         let mut mixer = RtMixer::new(1, 10.0);
         mixer.load_sample(0, create_test_sample(1, 64, 0.5));
@@ -789,7 +817,7 @@ mod tests {
         schedule_play_sample_command(
             &mut scheduler,
             callback_start_frame,
-            TriggerQuantization::NextBeat,
+            TriggerQuantization::Grid { step_64ths: 16 },
             &transport,
             0,
             1.0,
@@ -831,7 +859,7 @@ mod tests {
         schedule_play_sample_command(
             &mut scheduler,
             callback_start_frame,
-            TriggerQuantization::NextBeat,
+            TriggerQuantization::Grid { step_64ths: 16 },
             &transport,
             0,
             1.0,
@@ -858,7 +886,7 @@ mod tests {
         schedule_play_sample_command(
             &mut scheduler,
             callback_start_frame,
-            TriggerQuantization::NextBar,
+            TriggerQuantization::Grid { step_64ths: 64 },
             &transport,
             0,
             1.0,
@@ -885,7 +913,7 @@ mod tests {
         schedule_play_sample_command(
             &mut scheduler,
             callback_start_frame,
-            TriggerQuantization::NextBeat,
+            TriggerQuantization::Grid { step_64ths: 16 },
             &transport,
             0,
             1.0,
@@ -914,7 +942,7 @@ mod tests {
         schedule_play_sample_command(
             &mut scheduler,
             transport.output_frame(),
-            TriggerQuantization::NextBeat,
+            TriggerQuantization::Grid { step_64ths: 16 },
             &transport,
             0,
             1.0,
@@ -1002,7 +1030,7 @@ mod tests {
         schedule_play_sample_command(
             &mut scheduler,
             callback_start_frame,
-            TriggerQuantization::NextBeat,
+            TriggerQuantization::Grid { step_64ths: 16 },
             &transport,
             1,
             1.0,
@@ -1094,7 +1122,7 @@ mod tests {
         schedule_exclusive_play_sample_command(
             &mut scheduler,
             callback_start_frame,
-            TriggerQuantization::NextBar,
+            TriggerQuantization::Grid { step_64ths: 64 },
             &transport,
             1,
             1.0,
@@ -1130,7 +1158,7 @@ mod tests {
         schedule_exclusive_play_sample_command(
             &mut scheduler,
             callback_start_frame,
-            TriggerQuantization::NextBeat,
+            TriggerQuantization::Grid { step_64ths: 16 },
             &transport,
             1,
             1.0,
@@ -1208,7 +1236,7 @@ mod tests {
         schedule_exclusive_play_sample_command(
             &mut scheduler,
             callback_start_frame,
-            TriggerQuantization::NextBeat,
+            TriggerQuantization::Grid { step_64ths: 16 },
             &transport,
             1,
             1.0,

@@ -19,6 +19,7 @@ if TYPE_CHECKING:
         StemMaskDisplayMode,
         StemMixMode,
         TriggerQuantizationMode,
+        TriggerQuantizationStep,
     )
     from flitzis_looper_audio import WaveFormRenderData
 
@@ -399,6 +400,12 @@ class GlobalAudioActions:
             lambda: self._controller.transport.global_params.set_trigger_quantization(mode),
         )
 
+    def toggle_trigger_quantization(self) -> None:
+        self._controller.input_mapping.perform_learnable_action(
+            LooperAction.toggle_trigger_quantization(),
+            self._controller.transport.global_params.toggle_trigger_quantization,
+        )
+
 
 class PollActions:
     def __init__(self, controller: AppController):
@@ -661,6 +668,9 @@ class SettingsActions:
 
     def set_demucs_quality(self, *, shifts: int, overlap: float) -> None:
         self._controller.settings.set_demucs_quality(shifts=shifts, overlap=overlap)
+
+    def set_trigger_quantization_step(self, step: TriggerQuantizationStep) -> None:
+        self._controller.transport.global_params.set_trigger_quantization_step(step)
 
     def set_input_mapping_enabled(self, *, enabled: bool) -> None:
         self._controller.input_mapping.set_enabled(enabled=enabled)

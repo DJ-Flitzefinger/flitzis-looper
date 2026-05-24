@@ -8,6 +8,10 @@ from flitzis_looper.constants import (
     MIN_DEMUCS_OVERLAP,
     MIN_DEMUCS_SHIFTS,
 )
+from flitzis_looper.models import (
+    TRIGGER_QUANTIZATION_STEP_LABELS,
+    TRIGGER_QUANTIZATION_STEPS,
+)
 from flitzis_looper.ui.constants import SPACING, TEXT_MUTED_RGBA
 from flitzis_looper.ui.contextmanager import button_style, item_width, style_var
 
@@ -58,6 +62,9 @@ def settings_overlay(ctx: UiContext) -> None:
         imgui.text_colored(TEXT_MUTED_RGBA, "Input Mapping")
         _input_mapping_controls(ctx)
         imgui.separator()
+        imgui.text_colored(TEXT_MUTED_RGBA, "Trigger Quantize")
+        _trigger_quantization_controls(ctx)
+        imgui.separator()
         imgui.text_colored(TEXT_MUTED_RGBA, "Stem Quality")
         _demucs_quality_controls(ctx)
 
@@ -77,6 +84,23 @@ def _input_mapping_controls(ctx: UiContext) -> None:
 
     if ctx.state.session.input_mapping_error:
         imgui.text_wrapped(ctx.state.session.input_mapping_error)
+
+
+def _trigger_quantization_controls(ctx: UiContext) -> None:
+    step = ctx.state.project.trigger_quantization_step
+    preview = TRIGGER_QUANTIZATION_STEP_LABELS[step]
+
+    with item_width(240):
+        if imgui.begin_combo("Quantize Grid", preview):
+            for option in TRIGGER_QUANTIZATION_STEPS:
+                selected = option == step
+                label = TRIGGER_QUANTIZATION_STEP_LABELS[option]
+                if imgui.selectable(f"{label}##trigger_quantization_step_{option}", selected)[0]:
+                    ctx.ui.settings.set_trigger_quantization_step(option)
+                    ctx.persistence.flush_if_dirty()
+                if selected:
+                    imgui.set_item_default_focus()
+            imgui.end_combo()
 
 
 def _demucs_quality_controls(ctx: UiContext) -> None:

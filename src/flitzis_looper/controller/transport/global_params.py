@@ -1,11 +1,15 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from flitzis_looper.constants import SPEED_MAX, SPEED_MIN, VOLUME_MAX, VOLUME_MIN
 from flitzis_looper.controller.validation import ensure_finite, normalize_bpm
+from flitzis_looper.models import (
+    LEGACY_TRIGGER_QUANTIZATION_TO_STEP,
+    TRIGGER_QUANTIZATION_STEPS,
+)
 
 if TYPE_CHECKING:
     from flitzis_looper.controller.transport import TransportController
-    from flitzis_looper.models import TriggerQuantizationMode
+    from flitzis_looper.models import TriggerQuantizationMode, TriggerQuantizationStep
 
 
 class GlobalParametersController:
@@ -51,13 +55,66 @@ class GlobalParametersController:
         self._audio.set_bpm_lock(enabled=enabled)
         self._bpm.recompute_master_bpm()
 
-    def set_trigger_quantization(self, mode: TriggerQuantizationMode) -> None:
-        """Set global trigger quantization mode."""
-        if mode == self._project.trigger_quantization:
+    def _audio_trigger_quantization_mode(self) -> str:
+        if not self._project.trigger_quantization_enabled:
+            return "immediate"
+        return self._project.trigger_quantization_step
+
+    def _publish_trigger_quantization(self) -> None:
+        self._audio.set_trigger_quantization(self._audio_trigger_quantization_mode())
+
+    def set_trigger_quantization_enabled(self, *, enabled: bool) -> None:
+        """Enable or disable global trigger quantization."""
+        if enabled == self._project.trigger_quantization_enabled:
             return
 
-        self._project.trigger_quantization = mode
-        self._audio.set_trigger_quantization(mode)
+        self._project.trigger_quantization_enabled = enabled
+        self._publish_trigger_quantization()
+        self._transport._mark_project_changed()
+
+    def toggle_trigger_quantization(self) -> None:
+        """Toggle global trigger quantization on or off."""
+        self.set_trigger_quantization_enabled(
+            enabled=not self._project.trigger_quantization_enabled
+        )
+
+    def set_trigger_quantization_step(self, step: TriggerQuantizationStep) -> None:
+        """Set the global trigger quantization grid step."""
+        if step == self._project.trigger_quantization_step:
+            return
+
+        self._project.trigger_quantization_step = step
+        if self._project.trigger_quantization_enabled:
+            self._publish_trigger_quantization()
+        self._transport._mark_project_changed()
+
+    def set_trigger_quantization(self, mode: TriggerQuantizationMode | str) -> None:
+        """Set global trigger quantization from legacy mode strings."""
+        if mode in {"immediate", "disabled", "off"}:
+            self.set_trigger_quantization_enabled(enabled=False)
+            return
+
+        if mode == "enabled":
+            self.set_trigger_quantization_enabled(enabled=True)
+            return
+
+        step = LEGACY_TRIGGER_QUANTIZATION_TO_STEP.get(str(mode))
+        if step is None:
+            if mode not in TRIGGER_QUANTIZATION_STEPS:
+                msg = "trigger quantization mode is unsupported"
+                raise ValueError(msg)
+            step = cast("TriggerQuantizationStep", mode)
+
+        changed = (
+            not self._project.trigger_quantization_enabled
+            or step != self._project.trigger_quantization_step
+        )
+        if not changed:
+            return
+
+        self._project.trigger_quantization_step = step
+        self._project.trigger_quantization_enabled = True
+        self._publish_trigger_quantization()
         self._transport._mark_project_changed()
 
     def set_volume(self, volume: float) -> None:

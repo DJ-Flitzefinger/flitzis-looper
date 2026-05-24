@@ -279,7 +279,8 @@ def test_complex_project_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         volume=0.75,
         key_lock=True,
         bpm_lock=True,
-        trigger_quantization="next_bar",
+        trigger_quantization_enabled=True,
+        trigger_quantization_step="1_bar",
         input_mapping_enabled=True,
         speed=1.25,
     )
@@ -295,10 +296,31 @@ def test_complex_project_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert loaded.demucs_overlap == pytest.approx(0.25)
     assert loaded.key_lock is True
     assert loaded.bpm_lock is True
-    assert loaded.trigger_quantization == "next_bar"
+    assert loaded.trigger_quantization_enabled is True
+    assert loaded.trigger_quantization_step == "1_bar"
     assert loaded.input_mapping_enabled is True
     assert loaded.speed == pytest.approx(1.25)
     assert loaded.sample_paths[0] == "samples/foo.wav"
+
+
+def test_legacy_trigger_quantization_loads_as_enabled_grid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    project = ProjectState(volume=0.5)
+    data = project.model_dump(mode="json")
+    data.pop("trigger_quantization_enabled", None)
+    data.pop("trigger_quantization_step", None)
+    data["trigger_quantization"] = "next_beat"
+
+    config_path = tmp_path / PROJECT_CONFIG_PATH
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+
+    loaded = ProjectPersistence.from_config_path().project
+    assert loaded.trigger_quantization_enabled is True
+    assert loaded.trigger_quantization_step == "1_4"
 
 
 def test_windows_paths_preserved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
