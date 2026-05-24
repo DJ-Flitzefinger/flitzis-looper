@@ -14,9 +14,9 @@ behavior that the real-time audio path cannot safely provide.
   blocked, and error states.
 - Define selected-pad action entry points for generating stems, selecting full mix versus all
   prepared stems, and future per-stem mute/solo/toggle controls.
-- Define project persistence expectations for stem cache metadata and durable stem mix
-  preferences while keeping momentary performance gestures transient.
-- Require all audio-thread stem mix state changes to use bounded fixed-size control messages.
+- Define and implement project persistence expectations for stem cache metadata and durable
+  full-mix/all-stems stem mix preferences while keeping momentary performance gestures transient.
+- Require audio-thread stem mix state changes to use bounded fixed-size control messages.
 - Preserve full-mix playback as the safe fallback whenever stems are unavailable, stale,
   incomplete, rejected, or disabled.
 - Keep real-time stem separation, neural model inference, disk I/O, logging, blocking,
@@ -32,10 +32,11 @@ behavior that the real-time audio path cannot safely provide.
   and focused Rust/Python tests.
 
 ## Non-Goals
-- No production Rust, Python, or UI implementation in this planning slice.
+- No complete performer-facing UI implementation in the first implementation slice.
 - No neural source-separation model selection, dependency installation, model download, or
   production stem quality change.
 - No real-time stem separation.
+- No per-stem mute, solo, or toggle implementation in the first implementation slice.
 - No disk I/O, decoding, neural inference, logging, blocking, heap allocation, long-running
   work, or Python/GIL access in the audio callback.
 - No replacement of the existing `rtrb` ring-buffer message-passing architecture.

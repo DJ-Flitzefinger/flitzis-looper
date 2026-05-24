@@ -3,7 +3,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from flitzis_looper.controller.base import BaseController
-from flitzis_looper.models import STEM_KINDS, StemCacheEntry, StemFileSet, validate_sample_id
+from flitzis_looper.models import (
+    STEM_KINDS,
+    STEM_MIX_MODES,
+    StemCacheEntry,
+    StemFileSet,
+    StemMixMode,
+    validate_sample_id,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -132,6 +139,66 @@ class StemController(BaseController):
         if self._project.stem_cache[sample_id] is not None:
             self._project.stem_cache[sample_id] = None
             self._mark_project_changed()
+
+    def stem_mix_mode(self, sample_id: int) -> StemMixMode:
+        """Return the durable stem mix preference for a pad."""
+        validate_sample_id(sample_id)
+        return self._project.pad_stem_mix_mode[sample_id]
+
+    def stems_available(self, sample_id: int) -> bool:
+        """Return whether current stem cache metadata is available for UI controls."""
+        validate_sample_id(sample_id)
+        entry = self._project.stem_cache[sample_id]
+        return entry is not None and entry.available
+
+    def set_stem_mix_mode(self, sample_id: int, mode: StemMixMode) -> bool:
+        """Set the durable full-mix/all-stems mode for a pad."""
+        validate_sample_id(sample_id)
+        if mode not in STEM_MIX_MODES:
+            msg = "stem mix mode must be full_mix or all_stems"
+            raise ValueError(msg)
+
+        if mode == "full_mix":
+            if mode == self._project.pad_stem_mix_mode[sample_id]:
+                return True
+
+            try:
+                self._audio.set_stem_mix_mode(sample_id, mode)
+            except (RuntimeError, ValueError) as err:
+                self._session.stem_generation_errors[sample_id] = f"Stem mix update failed: {err}"
+                return False
+
+            self._project.pad_stem_mix_mode[sample_id] = mode
+            self._mark_project_changed()
+            return True
+
+        if mode != self._project.pad_stem_mix_mode[sample_id]:
+            self._project.pad_stem_mix_mode[sample_id] = mode
+            self._mark_project_changed()
+
+        return self.publish_stem_mix_mode_if_available(sample_id)
+
+    def publish_stem_mix_mode_if_available(self, sample_id: int) -> bool:
+        """Publish all-stems mode to Rust when current prepared stems are available."""
+        validate_sample_id(sample_id)
+        if self._project.pad_stem_mix_mode[sample_id] != "all_stems":
+            return True
+
+        entry = self._project.stem_cache[sample_id]
+        if entry is None or not entry.available:
+            return True
+
+        source_version = self.source_version_for_pad(sample_id)
+        if source_version is None or source_version != entry.source_version:
+            return True
+
+        try:
+            self._audio.set_stem_mix_mode(sample_id, "all_stems", source_version)
+        except (RuntimeError, ValueError) as err:
+            self._session.stem_generation_errors[sample_id] = f"Stem mix update failed: {err}"
+            return False
+
+        return True
 
     def source_version_for_pad(self, sample_id: int) -> str | None:
         """Return the current loaded source-version token for a pad."""

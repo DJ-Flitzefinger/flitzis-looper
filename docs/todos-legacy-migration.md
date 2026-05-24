@@ -122,11 +122,12 @@ outside the audio callback. Prepared stem-buffer validation/publication now send
 control messages with shared immutable handles for inactive current pads, and the callback stores
 accepted handles in bounded state. The mixer can render complete prepared stem sets through the
 same voice playhead and loop path as full-mix playback, with full-mix fallback for missing or
-invalid stem data. The follow-up performer-controls planning slice now defines selected-pad
-availability indicators, Generate Stems entry points, explicit full-mix versus all-stems mode,
-future bounded per-stem mute/solo/toggle controls, persistence expectations, and fixed-size
-audio-thread mix-control messages. Production source separation and the actual stem UI/controller
-implementation remain later slices.
+invalid stem data. Durable per-pad full-mix/all-stems mode plumbing now exists: project
+persistence defaults to full mix, the controller can publish all-stems mode for a current prepared
+source version, and Rust renders prepared stems only when the accepted source-version hash matches
+the selected all-stems mode. The follow-up performer-controls work still needs selected-pad
+availability indicators, Generate Stems entry points, visible mode controls, future bounded
+per-stem mute/solo/toggle controls, and production source separation.
 
 ### 13) Persistence (config/state)
 - [x] As a user, my bank/pad assignments persist across restarts.

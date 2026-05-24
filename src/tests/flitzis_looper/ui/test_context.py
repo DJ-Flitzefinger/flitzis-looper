@@ -13,7 +13,7 @@ from unittest.mock import Mock
 import pytest
 
 from flitzis_looper.constants import SPEED_STEP
-from flitzis_looper.models import BeatGrid, ProjectState, SampleAnalysis
+from flitzis_looper.models import BeatGrid, ProjectState, SampleAnalysis, StemCacheEntry
 from flitzis_looper.ui.context import (
     AudioActions,
     ReadOnlyStateProxy,
@@ -176,6 +176,25 @@ class TestUiStateComputedProperties:
 
         controller.transport.pad.set_manual_key(0, "Gm")
         assert ui_state.pads.effective_key(0) == "Gm"
+
+    def test_pad_stem_selectors_delegate_to_stem_controller(
+        self, controller: AppController
+    ) -> None:
+        ui_state = UiState(controller)
+        controller.project.pad_stem_mix_mode[0] = "all_stems"
+        controller.project.stem_cache[0] = StemCacheEntry(
+            source_version="samples/foo.wav|10|20",
+            cache_dir="samples/stems/cache",
+            available=True,
+        )
+        controller.session.stem_generation_stage[0] = "Writing stem cache"
+        controller.session.stem_generation_progress[0] = 0.5
+        controller.session.stem_generation_errors[0] = "failed"
+
+        assert ui_state.stems.stem_mix_mode(0) == "all_stems"
+        assert ui_state.stems.stems_available(0) is True
+        assert ui_state.stems.stem_generation_status(0) == ("Writing stem cache", 0.5)
+        assert ui_state.stems.stem_generation_error(0) == "failed"
 
 
 class TestAudioActions:
@@ -364,6 +383,17 @@ class TestAudioActions:
 
         assert controller.project.trigger_quantization == "next_beat"
         audio_engine_mock.set_trigger_quantization.assert_called_once_with("next_beat")
+
+    def test_set_stem_mix_mode(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        audio_actions = AudioActions(controller)
+        controller.project.pad_stem_mix_mode[0] = "all_stems"
+
+        audio_actions.stems.set_stem_mix_mode(0, "full_mix")
+
+        assert controller.project.pad_stem_mix_mode[0] == "full_mix"
+        audio_engine_mock.set_stem_mix_mode.assert_called_once_with(0, "full_mix")
 
 
 class TestUiActions:

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -11,6 +11,7 @@ from flitzis_looper.models import STEM_KINDS, StemCacheEntry
 from tests.conftest import write_mono_pcm16_wav
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
     from unittest.mock import Mock
 
@@ -222,3 +223,107 @@ def test_invalidate_stem_cache_clears_cache_and_generation_state(
     assert 0 not in controller.session.stem_generation_progress
     assert 0 not in controller.session.stem_generation_stage
     assert 0 not in controller.session.stem_generation_errors
+
+
+def test_stem_mix_mode_defaults_to_full_mix(controller: AppController) -> None:
+    assert controller.stems.stem_mix_mode(0) == "full_mix"
+    assert controller.stems.stems_available(0) is False
+
+
+def test_set_stem_mix_mode_full_mix_updates_project_and_audio(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.project.pad_stem_mix_mode[0] = "all_stems"
+
+    updated = controller.stems.set_stem_mix_mode(0, "full_mix")
+
+    assert updated is True
+    assert controller.project.pad_stem_mix_mode[0] == "full_mix"
+    audio_engine_mock.set_stem_mix_mode.assert_called_once_with(0, "full_mix")
+
+
+def test_set_stem_mix_mode_all_stems_persists_without_available_cache(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    updated = controller.stems.set_stem_mix_mode(0, "all_stems")
+
+    assert updated is True
+    assert controller.project.pad_stem_mix_mode[0] == "all_stems"
+    audio_engine_mock.set_stem_mix_mode.assert_not_called()
+
+
+def test_set_stem_mix_mode_all_stems_publishes_current_available_cache(
+    controller: AppController, audio_engine_mock: Mock, tmp_path: Path
+) -> None:
+    project_path = _load_project_sample(controller, tmp_path)
+    version = source_version_for_sample_path(project_path)
+    assert version is not None
+
+    cache_dir = cache_dir_for_source_version(version)
+    controller.project.stem_cache[0] = StemCacheEntry(
+        source_version=version,
+        cache_dir=cache_dir,
+        stems=expected_stem_files(cache_dir),
+        available=True,
+    )
+
+    updated = controller.stems.set_stem_mix_mode(0, "all_stems")
+
+    assert updated is True
+    assert controller.project.pad_stem_mix_mode[0] == "all_stems"
+    audio_engine_mock.set_stem_mix_mode.assert_called_once_with(0, "all_stems", version)
+
+
+def test_set_stem_mix_mode_all_stems_does_not_publish_stale_cache(
+    controller: AppController, audio_engine_mock: Mock, tmp_path: Path
+) -> None:
+    _load_project_sample(controller, tmp_path)
+    controller.project.stem_cache[0] = StemCacheEntry(
+        source_version="samples/old.wav|1|2",
+        cache_dir="samples/stems/cache",
+        available=True,
+    )
+
+    updated = controller.stems.set_stem_mix_mode(0, "all_stems")
+
+    assert updated is True
+    assert controller.project.pad_stem_mix_mode[0] == "all_stems"
+    audio_engine_mock.set_stem_mix_mode.assert_not_called()
+
+
+def test_set_stem_mix_mode_rejects_invalid_mode(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    set_stem_mix_mode = cast(
+        "Callable[[int, str], bool]",
+        controller.stems.set_stem_mix_mode,
+    )
+
+    with pytest.raises(ValueError, match="stem mix mode"):
+        set_stem_mix_mode(0, "half_stems")
+
+    assert controller.project.pad_stem_mix_mode[0] == "full_mix"
+    audio_engine_mock.set_stem_mix_mode.assert_not_called()
+
+
+def test_publish_stem_mix_mode_records_audio_error(
+    controller: AppController, audio_engine_mock: Mock, tmp_path: Path
+) -> None:
+    project_path = _load_project_sample(controller, tmp_path)
+    version = source_version_for_sample_path(project_path)
+    assert version is not None
+
+    cache_dir = cache_dir_for_source_version(version)
+    controller.project.pad_stem_mix_mode[0] = "all_stems"
+    controller.project.stem_cache[0] = StemCacheEntry(
+        source_version=version,
+        cache_dir=cache_dir,
+        stems=expected_stem_files(cache_dir),
+        available=True,
+    )
+    audio_engine_mock.set_stem_mix_mode.side_effect = RuntimeError("buffer may be full")
+
+    published = controller.stems.publish_stem_mix_mode_if_available(0)
+
+    assert published is False
+    assert "Stem mix update failed" in controller.session.stem_generation_errors[0]

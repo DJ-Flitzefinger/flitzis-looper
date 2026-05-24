@@ -20,9 +20,11 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
 type TriggerQuantizationMode = Literal["immediate", "next_beat", "next_bar"]
+type StemMixMode = Literal["full_mix", "all_stems"]
 type StemKind = Literal["vocals", "melody", "bass", "drums", "instrumental"]
 
 STEM_KINDS: tuple[StemKind, ...] = ("vocals", "melody", "bass", "drums", "instrumental")
+STEM_MIX_MODES: tuple[StemMixMode, ...] = ("full_mix", "all_stems")
 
 
 def _default_sample_paths() -> list[str | None]:
@@ -102,6 +104,10 @@ def _default_stem_cache() -> list[StemCacheEntry | None]:
     return [None] * NUM_SAMPLES
 
 
+def _default_pad_stem_mix_mode() -> list[StemMixMode]:
+    return ["full_mix"] * NUM_SAMPLES
+
+
 def _default_manual_bpm() -> list[float | None]:
     return [None] * NUM_SAMPLES
 
@@ -154,6 +160,9 @@ class ProjectState(BaseModel):
 
     stem_cache: list[StemCacheEntry | None] = Field(default_factory=_default_stem_cache)
     """Per-pad project-local stem cache metadata or None when unavailable."""
+
+    pad_stem_mix_mode: list[StemMixMode] = Field(default_factory=_default_pad_stem_mix_mode)
+    """Per-pad durable stem mix preference."""
 
     manual_bpm: list[float | None] = Field(default_factory=_default_manual_bpm)
     """Optional per-pad BPM override. When set, used for effective BPM display."""
@@ -294,6 +303,14 @@ class ProjectState(BaseModel):
     ) -> list[StemCacheEntry | None]:
         if len(value) != NUM_SAMPLES:
             msg = f"stem_cache must have length {NUM_SAMPLES}, got {len(value)}"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("pad_stem_mix_mode", mode="after")
+    @classmethod
+    def _validate_pad_stem_mix_mode(cls, value: list[StemMixMode]) -> list[StemMixMode]:
+        if len(value) != NUM_SAMPLES:
+            msg = f"pad_stem_mix_mode must have length {NUM_SAMPLES}, got {len(value)}"
             raise ValueError(msg)
         return value
 

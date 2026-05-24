@@ -14,7 +14,9 @@ use crate::audio_engine::constants::{
 use crate::audio_engine::eq3::{Eq3Coeffs, coeffs_for_eq3};
 use crate::audio_engine::stretch_processor::DEFAULT_BLOCK_SAMPLES;
 use crate::audio_engine::voice_slot::VoiceSlot;
-use crate::messages::{PadTimingMetadata, PreparedStemSet, STEM_BUFFER_COUNT, SampleBuffer};
+use crate::messages::{
+    PadTimingMetadata, PreparedStemSet, STEM_BUFFER_COUNT, SampleBuffer, StemMixMode,
+};
 use cpal::Sample;
 
 const BEATS_PER_BAR_4_4: f64 = 4.0;
@@ -221,6 +223,12 @@ pub struct RtMixer {
     /// Prepared stem storage with NUM_SAMPLES slots.
     prepared_stems: Box<[Option<PreparedStemSet>; NUM_SAMPLES]>,
 
+    /// Per-pad stem render source selection.
+    stem_mix_mode: [StemMixMode; NUM_SAMPLES],
+
+    /// Source-version hash accepted for all-stems mode per pad.
+    stem_mix_source_version_hash: [u64; NUM_SAMPLES],
+
     /// Active voices with MAX_VOICES slots.
     pub voices: [VoiceSlot; MAX_VOICES],
 }
@@ -259,6 +267,8 @@ impl RtMixer {
             pad_playhead_frame: std::array::from_fn(|_| None),
             sample_bank: std::array::from_fn(|_| None),
             prepared_stems: Box::new(std::array::from_fn(|_| None)),
+            stem_mix_mode: std::array::from_fn(|_| StemMixMode::FullMix),
+            stem_mix_source_version_hash: std::array::from_fn(|_| 0),
             voices: std::array::from_fn(|_| VoiceSlot::new(channels)),
         }
     }
@@ -294,6 +304,37 @@ impl RtMixer {
 
         self.prepared_stems[id] = Some(stems);
         true
+    }
+
+    pub(crate) fn set_stem_mix_mode(
+        &mut self,
+        id: usize,
+        mode: StemMixMode,
+        source_version_hash: u64,
+    ) -> bool {
+        if id >= NUM_SAMPLES {
+            return false;
+        }
+
+        match mode {
+            StemMixMode::FullMix => {
+                self.stem_mix_mode[id] = StemMixMode::FullMix;
+                self.stem_mix_source_version_hash[id] = 0;
+                true
+            }
+            StemMixMode::AllStems => {
+                let Some(stems) = self.prepared_stems[id].as_ref() else {
+                    return false;
+                };
+                if source_version_hash == 0 || stems.source_version_hash != source_version_hash {
+                    return false;
+                }
+
+                self.stem_mix_mode[id] = StemMixMode::AllStems;
+                self.stem_mix_source_version_hash[id] = source_version_hash;
+                true
+            }
+        }
     }
 
     fn can_accept_prepared_stems(&self, id: usize, stems: &PreparedStemSet) -> bool {
@@ -788,6 +829,8 @@ impl RtMixer {
         let pad_gain = &self.pad_gain;
         let pad_eq = &self.pad_eq;
         let prepared_stem_slots = &self.prepared_stems;
+        let stem_mix_mode = &self.stem_mix_mode;
+        let stem_mix_source_version_hash = &self.stem_mix_source_version_hash;
 
         for voice in &mut self.voices {
             if !voice.active {
@@ -807,13 +850,20 @@ impl RtMixer {
                     voice.stop();
                     continue;
                 }
-                let prepared_stem_set = prepared_stem_set_for_render(
-                    prepared_stem_slots[voice.sample_id].as_ref(),
-                    &sample,
-                    self.channels,
-                    self.sample_rate_hz,
-                    sample_frames,
-                );
+                let prepared_stem_set = if stem_mix_mode[voice.sample_id] == StemMixMode::AllStems {
+                    prepared_stem_set_for_render(
+                        prepared_stem_slots[voice.sample_id].as_ref(),
+                        &sample,
+                        self.channels,
+                        self.sample_rate_hz,
+                        sample_frames,
+                    )
+                    .filter(|stems| {
+                        stems.source_version_hash == stem_mix_source_version_hash[voice.sample_id]
+                    })
+                } else {
+                    None
+                };
 
                 let mut target_tempo_ratio = speed;
                 if bpm_lock_enabled
@@ -1349,7 +1399,37 @@ mod tests {
     }
 
     #[test]
-    fn test_render_uses_prepared_stems_when_available() {
+    fn test_set_stem_mix_mode_requires_matching_prepared_source() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 20, 0.9));
+
+        assert!(!mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
+        assert_eq!(mixer.stem_mix_mode[0], StemMixMode::FullMix);
+
+        assert!(mixer.publish_prepared_stems(0, create_test_prepared_stems(1, 44_100, 20)));
+        assert!(!mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 7));
+        assert_eq!(mixer.stem_mix_mode[0], StemMixMode::FullMix);
+
+        assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
+        assert_eq!(mixer.stem_mix_mode[0], StemMixMode::AllStems);
+        assert_eq!(mixer.stem_mix_source_version_hash[0], 42);
+    }
+
+    #[test]
+    fn test_set_stem_mix_mode_reverts_to_full_mix_without_prepared_stems() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 20, 0.9));
+        assert!(mixer.publish_prepared_stems(0, create_test_prepared_stems(1, 44_100, 20)));
+        assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
+
+        assert!(mixer.set_stem_mix_mode(0, StemMixMode::FullMix, 0));
+
+        assert_eq!(mixer.stem_mix_mode[0], StemMixMode::FullMix);
+        assert_eq!(mixer.stem_mix_source_version_hash[0], 0);
+    }
+
+    #[test]
+    fn test_render_uses_full_mix_by_default_when_prepared_stems_are_available() {
         let mut mixer = RtMixer::new(1, 44_100.0);
         mixer.load_sample(0, create_test_sample(1, 20, 0.9));
         let stems =
@@ -1361,8 +1441,49 @@ mod tests {
         let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
         mixer.render(&mut output, &mut pad_peaks);
 
+        assert!(output.iter().all(|&sample| (sample - 0.9).abs() < 1e-5));
+        assert!((pad_peaks[0] - 0.9).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_render_uses_prepared_stems_in_all_stems_mode() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 20, 0.9));
+        let stems =
+            create_test_prepared_stems_with_values(1, 44_100, 20, [0.1, 0.2, 0.05, 0.0, 0.15]);
+        assert!(mixer.publish_prepared_stems(0, stems));
+        assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
+        assert!(mixer.play_sample(0, 1.0));
+
+        let mut output = vec![0.0; 20];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+
         assert!(output.iter().all(|&sample| (sample - 0.5).abs() < 1e-5));
         assert!((pad_peaks[0] - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_switching_to_all_stems_preserves_voice_playhead() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 20, 0.9));
+        let stems =
+            create_test_prepared_stems_with_values(1, 44_100, 20, [0.1, 0.2, 0.05, 0.0, 0.15]);
+        assert!(mixer.publish_prepared_stems(0, stems));
+        assert!(mixer.play_sample(0, 1.0));
+
+        let mut output = vec![0.0; 5];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+        assert_eq!(active_voice_frame(&mixer, 0), Some(5));
+        assert!(output.iter().all(|&sample| (sample - 0.9).abs() < 1e-5));
+
+        assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
+        let mut output = vec![0.0; 5];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert_eq!(active_voice_frame(&mixer, 0), Some(10));
+        assert!(output.iter().all(|&sample| (sample - 0.5).abs() < 1e-5));
     }
 
     #[test]
@@ -1374,6 +1495,7 @@ mod tests {
             create_test_prepared_stems_with_values(1, 44_100, 20, [0.9, 0.0, 0.0, 0.0, 0.0]);
         stems.available_mask = 0;
         mixer.prepared_stems[0] = Some(stems);
+        assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
         assert!(mixer.play_sample(0, 1.0));
 
         let mut output = vec![0.0; 20];
@@ -1432,6 +1554,7 @@ mod tests {
         let stems =
             create_test_prepared_stems_with_values(1, 44_100, 100, [0.1, 0.05, 0.0, 0.0, 0.05]);
         assert!(mixer.publish_prepared_stems(0, stems,));
+        assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
         mixer.set_bpm_lock(true);
         mixer.set_master_bpm(120.0);
         mixer.set_pad_bpm(0, Some(60.0));

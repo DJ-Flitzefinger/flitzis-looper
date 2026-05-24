@@ -80,6 +80,13 @@ pub enum TriggerQuantization {
     NextBar,
 }
 
+/// Per-pad stem render source selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StemMixMode {
+    FullMix,
+    AllStems,
+}
+
 /// Bounded per-pad timing metadata prepared outside the audio callback.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct PadTimingMetadata {
@@ -161,6 +168,16 @@ pub enum ControlMessage {
     /// The message carries bounded metadata plus shared immutable buffer handles. It must not
     /// contain file paths, Python objects, or copied full audio payloads.
     PublishPreparedStems { id: usize, stems: PreparedStemSet },
+
+    /// Select whether a pad renders from the full mix or all prepared stems.
+    ///
+    /// The source-version hash is used by all-stems mode to reject stale updates. Full-mix mode
+    /// ignores the hash and always remains available.
+    SetStemMixMode {
+        id: usize,
+        mode: StemMixMode,
+        source_version_hash: u64,
+    },
 
     /// Play a loaded sample.
     ///
@@ -394,5 +411,23 @@ mod tests {
         let result = producer.push(ControlMessage::PublishPreparedStems { id: 3, stems });
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn stem_mix_mode_message_carries_bounded_state() {
+        let message = ControlMessage::SetStemMixMode {
+            id: 3,
+            mode: StemMixMode::AllStems,
+            source_version_hash: 42,
+        };
+
+        assert!(matches!(
+            message,
+            ControlMessage::SetStemMixMode {
+                id: 3,
+                mode: StemMixMode::AllStems,
+                source_version_hash: 42
+            }
+        ));
     }
 }

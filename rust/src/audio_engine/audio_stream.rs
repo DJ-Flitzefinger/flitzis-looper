@@ -423,6 +423,13 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
                     ControlMessage::PublishPreparedStems { id, stems } => {
                         mixer.publish_prepared_stems(id, stems);
                     }
+                    ControlMessage::SetStemMixMode {
+                        id,
+                        mode,
+                        source_version_hash,
+                    } => {
+                        mixer.set_stem_mix_mode(id, mode, source_version_hash);
+                    }
                     ControlMessage::PlaySample { id, volume } => {
                         schedule_play_sample_command(
                             &mut scheduler,

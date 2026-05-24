@@ -104,6 +104,9 @@ def test_sample_slot_id_range_is_0_to_215(audio_engine: AudioEngine) -> None:
         audio_engine.publish_prepared_stems(216, "source", "samples/stems/cache")
 
     with pytest.raises(ValueError, match=r"id out of range"):
+        audio_engine.set_stem_mix_mode(216, "full_mix")
+
+    with pytest.raises(ValueError, match=r"id out of range"):
         audio_engine.stop_sample(216)
 
     with pytest.raises(ValueError, match=r"id out of range"):
@@ -181,6 +184,30 @@ def test_set_trigger_quantization_requires_initialized_engine() -> None:
 
     with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
         engine.set_trigger_quantization("next_beat")
+
+
+def test_set_stem_mix_mode_accepts_supported_modes(audio_engine: AudioEngine) -> None:
+    audio_engine.set_stem_mix_mode(0, "full_mix")
+    audio_engine.set_stem_mix_mode(0, "all_stems", "source-version")
+
+
+def test_set_stem_mix_mode_rejects_invalid_mode(audio_engine: AudioEngine) -> None:
+    with pytest.raises(ValueError, match=r"stem mix mode"):
+        audio_engine.set_stem_mix_mode(0, "half_stems")
+
+
+def test_set_stem_mix_mode_all_stems_requires_source_version(
+    audio_engine: AudioEngine,
+) -> None:
+    with pytest.raises(ValueError, match=r"source_version"):
+        audio_engine.set_stem_mix_mode(0, "all_stems")
+
+
+def test_set_stem_mix_mode_requires_initialized_engine() -> None:
+    engine = AudioEngine()
+
+    with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
+        engine.set_stem_mix_mode(0, "full_mix")
 
 
 def test_set_pad_timing_metadata_accepts_finite_anchor(audio_engine: AudioEngine) -> None:

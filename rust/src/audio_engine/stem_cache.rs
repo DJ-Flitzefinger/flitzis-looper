@@ -165,7 +165,7 @@ fn prepare_stem_buffers_from_cache_at_project_root(
     })
 }
 
-fn source_version_hash(source_version: &str) -> u64 {
+pub(crate) fn source_version_hash(source_version: &str) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     for byte in source_version.as_bytes() {
         hash ^= u64::from(*byte);

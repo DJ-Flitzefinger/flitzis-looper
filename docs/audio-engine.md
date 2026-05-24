@@ -188,11 +188,14 @@ source separation. `AudioEngine.publish_prepared_stems(id, source_version, cache
 validates those cached WAV artifacts against the currently loaded full-mix buffer outside the audio
 callback, then publishes shared immutable prepared-stem handles to Rust through a fixed-size control
 message. The audio callback accepts the handles only for loaded inactive pads and stores them in
-bounded per-pad/per-stem state. When a complete prepared set is present, the mixer can render those
-stem handles through the same voice playhead, loop-region, BPM-lock, key-lock, EQ/gain, metering,
-and playhead-update path used by full-mix playback. Missing, stale, incomplete, or rejected stems
-fall back to the loaded full-mix buffer. Performer-facing stem controls and production source
-separation are still intentionally absent.
+bounded per-pad/per-stem state. The first performer-control implementation slice adds a durable
+per-pad `full_mix`/`all_stems` preference with `full_mix` as the default for new and older
+projects. Rust stores that preference as bounded audio-thread state updated by fixed-size control
+messages, and prepared stems are used only when `all_stems` is selected and the accepted prepared
+set matches the requested source-version hash. Missing, stale, incomplete, rejected, or disabled
+stems fall back to the loaded full-mix buffer. Performer-facing stem indicators, Generate Stems
+button wiring, per-stem mute/solo/toggle controls, and production source separation are still
+intentionally absent.
 
 The active Gen3 phase-aware sync slice is `openspec/changes/add-phase-aware-playback-sync/`. It
 defines how quantized starts will use the Rust transport phase plus bounded per-pad timing anchors
@@ -235,8 +238,9 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 - Real-time stem separation is intentionally out of scope.
 - Offline stem cache identity, request gating, and deterministic cache artifact writing are
   implemented. Prepared stem-buffer validation/publication and prepared-stem rendering fallback
-  infrastructure are implemented, but production source separation and performer-facing controls
-  are planned in `openspec/changes/add-offline-stem-cache/` and
+  infrastructure are implemented. Durable full-mix/all-stems mode plumbing is implemented, but
+  production source separation, performer-facing stem indicators, Generate Stems button wiring, and
+  per-stem mute/solo/toggle controls are planned in
   `openspec/changes/add-stem-performance-controls/` and not implemented.
 
 ## Related specs

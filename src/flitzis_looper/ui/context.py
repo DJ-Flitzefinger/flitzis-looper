@@ -14,6 +14,7 @@ if TYPE_CHECKING:
         ProjectState,
         SampleAnalysis,
         SessionState,
+        StemMixMode,
         TriggerQuantizationMode,
     )
     from flitzis_looper_audio import WaveFormRenderData
@@ -113,6 +114,26 @@ class PadSelectors:
         return self._project.selected_pad == pad_id
 
 
+class StemSelectors:
+    def __init__(self, controller: AppController):
+        self._controller = controller
+
+    def stems_available(self, pad_id: int) -> bool:
+        return self._controller.stems.stems_available(pad_id)
+
+    def stem_mix_mode(self, pad_id: int) -> StemMixMode:
+        return self._controller.stems.stem_mix_mode(pad_id)
+
+    def stem_generation_error(self, pad_id: int) -> str | None:
+        return self._controller.stems.stem_generation_error(pad_id)
+
+    def stem_generation_status(self, pad_id: int) -> tuple[str | None, float | None]:
+        return (
+            self._controller.stems.stem_generation_stage(pad_id),
+            self._controller.stems.stem_generation_progress(pad_id),
+        )
+
+
 class BankSelectors:
     def __init__(self, project: ProjectState):
         self._project = project
@@ -144,6 +165,7 @@ class UiState:
     """Read-only proxy of app state for UI rendering."""
 
     pads: PadSelectors
+    stems: StemSelectors
     banks: BankSelectors
     global_: GlobalSelectors
 
@@ -155,6 +177,7 @@ class UiState:
         project = cast("ProjectState", self._project_proxy)
         session = cast("SessionState", self._session_proxy)
         self.pads = PadSelectors(controller, project, session)
+        self.stems = StemSelectors(controller)
         self.banks = BankSelectors(project)
         self.global_ = GlobalSelectors(controller, project, session)
 
@@ -224,6 +247,17 @@ class PadAudioActions:
 
     def set_pad_eq(self, pad_id: int, low_db: float, mid_db: float, high_db: float) -> None:
         self._controller.transport.pad.set_pad_eq(pad_id, low_db, mid_db, high_db)
+
+
+class StemAudioActions:
+    def __init__(self, controller: AppController):
+        self._controller = controller
+
+    def generate_stems_async(self, pad_id: int) -> None:
+        self._controller.stems.generate_stems_async(pad_id)
+
+    def set_stem_mix_mode(self, pad_id: int, mode: StemMixMode) -> None:
+        self._controller.stems.set_stem_mix_mode(pad_id, mode)
 
 
 class GlobalAudioActions:
@@ -302,11 +336,13 @@ class AudioActions:
     """Audio-related UI actions."""
 
     pads: PadAudioActions
+    stems: StemAudioActions
     global_: GlobalAudioActions
     poll: PollActions
 
     def __init__(self, controller: AppController):
         self.pads = PadAudioActions(controller)
+        self.stems = StemAudioActions(controller)
         self.global_ = GlobalAudioActions(controller)
         self.poll = PollActions(controller)
 

@@ -391,6 +391,18 @@ class LoaderController(BaseController):
             if not entry.available:
                 self._project.stem_cache[sample_id] = entry.model_copy(update={"available": True})
                 self._mark_project_changed()
+            self._publish_all_stems_mode_if_preferred(sample_id, source_version)
+
+    def _publish_all_stems_mode_if_preferred(self, sample_id: int, source_version: str) -> None:
+        if self._project.pad_stem_mix_mode[sample_id] != "all_stems":
+            return
+
+        try:
+            self._audio.set_stem_mix_mode(sample_id, "all_stems", source_version)
+        except (RuntimeError, ValueError) as err:
+            self._session.stem_generation_errors[sample_id] = (
+                f"Stem generation completed but mix update failed: {err}"
+            )
 
     def _source_version_for_pad(self, sample_id: int) -> str | None:
         sample_path = self._project.sample_paths[sample_id]

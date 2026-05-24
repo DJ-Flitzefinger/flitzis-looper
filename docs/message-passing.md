@@ -107,17 +107,19 @@ reaches the callback after the pad has become active or stale, the callback reje
 without touching full-mix playback.
 
 The audio callback can now accept already prepared stem handles into bounded audio-thread state.
-When a complete prepared set is present, the mixer can fill the existing per-voice stretch input
-from the summed stem handles at the same loop-relative frame positions used by full-mix playback.
-If the set is missing, stale, incomplete, rejected, or fails bounded render-shape checks, rendering
-falls back to the loaded full-mix buffer. The callback must not generate stems, read cache files,
-decode audio, run neural inference, allocate stem buffers, log, block, or acquire the Python GIL.
+It also accepts a fixed-size `SetStemMixMode` update containing only the pad id, a
+full-mix/all-stems mode, and a source-version hash. New and older projects default to full mix, so
+prepared stems are not rendered until the control layer selects all-stems mode for the matching
+prepared source version. If the set is missing, stale, incomplete, rejected, disabled, or fails
+bounded render-shape checks, rendering falls back to the loaded full-mix buffer. The callback must
+not generate stems, read cache files, decode audio, run neural inference, allocate stem buffers,
+log, block, or acquire the Python GIL.
 
-The follow-up `openspec/changes/add-stem-performance-controls/` planning slice defines future
-performer stem mix controls. Those controls must publish only fixed-size bounded state such as pad
-id, source-version token/hash, full-mix/all-stems mode, and per-stem masks. The messages must not
-carry file paths, Python objects, unbounded metadata, or copied audio payloads. Ring-buffer-full or
-stale-source failures must leave current full-mix or stem playback unchanged.
+The follow-up `openspec/changes/add-stem-performance-controls/` planning slice still defines future
+per-stem mute, solo, and toggle controls. Those controls must publish only fixed-size bounded state
+such as enabled stem masks and solo/mute masks. The messages must not carry file paths, Python
+objects, unbounded metadata, or copied audio payloads. Ring-buffer-full or stale-source failures
+must leave current full-mix or stem playback unchanged.
 
 ## Not implemented (yet)
 

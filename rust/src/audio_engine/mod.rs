@@ -11,11 +11,12 @@ use crate::audio_engine::sample_loader::{
     decode_audio_file_to_sample_buffer,
 };
 use crate::audio_engine::stem_cache::{
-    prepare_stem_buffers_from_cache, project_stem_cache_dir, write_deterministic_stem_artifacts,
+    prepare_stem_buffers_from_cache, project_stem_cache_dir, source_version_hash,
+    write_deterministic_stem_artifacts,
 };
 use crate::messages::{
     AudioMessage, BackgroundTaskKind, ControlMessage, LoaderEvent, PadTimingMetadata, SampleBuffer,
-    TriggerQuantization, task_to_str,
+    StemMixMode, TriggerQuantization, task_to_str,
 };
 use numpy::{PyArray1, ToPyArray};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -64,6 +65,14 @@ fn parse_trigger_quantization(mode: &str) -> Option<TriggerQuantization> {
         "immediate" | "disabled" | "off" => Some(TriggerQuantization::Immediate),
         "next_beat" | "next-beat" | "beat" => Some(TriggerQuantization::NextBeat),
         "next_bar" | "next-bar" | "bar" => Some(TriggerQuantization::NextBar),
+        _ => None,
+    }
+}
+
+fn parse_stem_mix_mode(mode: &str) -> Option<StemMixMode> {
+    match mode {
+        "full_mix" | "full-mix" | "fullmix" => Some(StemMixMode::FullMix),
+        "all_stems" | "all-stems" | "stems" => Some(StemMixMode::AllStems),
         _ => None,
     }
 }
@@ -620,6 +629,55 @@ impl AudioEngine {
             .push(ControlMessage::PublishPreparedStems { id, stems })
             .map_err(|_| {
                 PyRuntimeError::new_err("Failed to send PublishPreparedStems - buffer may be full")
+            })
+    }
+
+    /// Select whether a pad renders from the loaded full mix or all prepared stems.
+    #[pyo3(signature = (id, mode, source_version = None))]
+    pub fn set_stem_mix_mode(
+        &mut self,
+        id: usize,
+        mode: &str,
+        source_version: Option<String>,
+    ) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+
+        let mode = parse_stem_mix_mode(mode)
+            .ok_or_else(|| PyValueError::new_err("stem mix mode must be full_mix or all_stems"))?;
+
+        let source_version_hash = match mode {
+            StemMixMode::FullMix => 0,
+            StemMixMode::AllStems => {
+                let source_version = source_version
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| {
+                        PyValueError::new_err("source_version must not be empty for all_stems mode")
+                    })?;
+                source_version_hash(source_version)
+            }
+        };
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        producer_guard
+            .push(ControlMessage::SetStemMixMode {
+                id,
+                mode,
+                source_version_hash,
+            })
+            .map_err(|_| {
+                PyRuntimeError::new_err("Failed to send SetStemMixMode - buffer may be full")
             })
     }
 

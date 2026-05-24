@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from flitzis_looper.constants import NUM_SAMPLES
 from flitzis_looper.models import (
     STEM_KINDS,
+    STEM_MIX_MODES,
     BeatGrid,
     ProjectState,
     SampleAnalysis,
@@ -183,6 +184,7 @@ class TestModelSerialization:
         assert "sample_paths" in data
         assert "sample_analysis" in data
         assert "stem_cache" in data
+        assert "pad_stem_mix_mode" in data
         assert "manual_bpm" in data
         assert "manual_key" in data
         assert "speed" in data
@@ -247,6 +249,8 @@ def test_project_state_defaults(project_state: ProjectState) -> None:
     assert all(path is None for path in project_state.sample_paths)
     assert len(project_state.stem_cache) == NUM_SAMPLES
     assert all(entry is None for entry in project_state.stem_cache)
+    assert len(project_state.pad_stem_mix_mode) == NUM_SAMPLES
+    assert all(mode == "full_mix" for mode in project_state.pad_stem_mix_mode)
     assert len(project_state.manual_bpm) == NUM_SAMPLES
     assert all(bpm is None for bpm in project_state.manual_bpm)
     assert len(project_state.manual_key) == NUM_SAMPLES
@@ -264,6 +268,18 @@ def test_trigger_quantization_mode_validation(project_state: ProjectState) -> No
 
     with pytest.raises(ValidationError):
         ProjectState.model_validate({"trigger_quantization": "half_note"})
+
+
+def test_stem_mix_mode_validation(project_state: ProjectState) -> None:
+    project_state.pad_stem_mix_mode[0] = "all_stems"
+    assert project_state.pad_stem_mix_mode[0] == "all_stems"
+    assert tuple(STEM_MIX_MODES) == ("full_mix", "all_stems")
+
+    with pytest.raises(ValidationError):
+        ProjectState.model_validate({"pad_stem_mix_mode": ["half_stems"] * NUM_SAMPLES})
+
+    with pytest.raises(ValidationError, match="pad_stem_mix_mode must have length"):
+        ProjectState(pad_stem_mix_mode=[])
 
 
 def test_stem_cache_entry_represents_expected_kinds() -> None:

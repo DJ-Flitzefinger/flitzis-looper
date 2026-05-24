@@ -305,6 +305,25 @@ def test_missing_grid_offset_samples_loads_as_zero(
     assert loaded.pad_grid_offset_samples[0] == 0
 
 
+def test_missing_pad_stem_mix_mode_loads_as_full_mix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    project = ProjectState(volume=0.5)
+    data = project.model_dump(mode="json")
+    data.pop("pad_stem_mix_mode", None)
+
+    config_path = tmp_path / PROJECT_CONFIG_PATH
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+
+    loaded = ProjectPersistence.from_config_path().project
+    assert loaded.volume == pytest.approx(0.5)
+    assert loaded.pad_stem_mix_mode[0] == "full_mix"
+    assert all(mode == "full_mix" for mode in loaded.pad_stem_mix_mode)
+
+
 def test_grid_offset_samples_persisted_per_pad(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -321,6 +340,46 @@ def test_grid_offset_samples_persisted_per_pad(
     loaded = ProjectPersistence.from_config_path().project
     assert loaded.pad_grid_offset_samples[0] == 123
     assert loaded.pad_grid_offset_samples[1] == -456
+
+
+def test_pad_stem_mix_mode_persisted_per_pad(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    project = ProjectState(volume=0.5)
+    project.pad_stem_mix_mode[0] = "all_stems"
+
+    persistence = ProjectPersistence(project)
+    persistence.mark_dirty()
+    persistence.flush(now=0.0)
+
+    loaded = ProjectPersistence.from_config_path().project
+    assert loaded.pad_stem_mix_mode[0] == "all_stems"
+    assert loaded.pad_stem_mix_mode[1] == "full_mix"
+
+
+def test_transient_stem_generation_state_is_not_persisted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    project = ProjectState(volume=0.5)
+    session = SessionState()
+    session.stem_generating_sample_ids.add(0)
+    session.stem_generation_progress[0] = 0.5
+    session.stem_generation_stage[0] = "Writing stem cache"
+    session.stem_generation_errors[0] = "old error"
+
+    persistence = ProjectPersistence(project)
+    persistence.mark_dirty()
+    persistence.flush(now=0.0)
+
+    data = json.loads(PROJECT_CONFIG_PATH.read_text(encoding="utf-8"))
+    assert "stem_generating_sample_ids" not in data
+    assert "stem_generation_progress" not in data
+    assert "stem_generation_stage" not in data
+    assert "stem_generation_errors" not in data
 
 
 def test_config_path_creation_os_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
