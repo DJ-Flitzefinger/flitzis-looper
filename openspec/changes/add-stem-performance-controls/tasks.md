@@ -13,12 +13,20 @@
 - [x] 2.7 Add Python tests for selectors, controller actions, blocked/generating/error states, and UI action wiring.
 - [x] 2.8 Correct bottom-bar `I`/`A` preset-to-custom component-button transitions.
 - [x] 2.9 Add remembered component-group restoration when toggling active `I`/`A` presets off.
+- [x] 2.10 Add a bottom-right Settings overlay toggle with gear/close icon behavior.
+- [x] 2.11 Add Settings page controls for bounded Demucs shifts and overlap values.
+- [x] 2.12 Ensure Settings rendering uses controller/project state only and does not inspect cache files or invoke generation.
+- [x] 2.13 Align the Settings toggle with the center bottom bar and keep the close action reliable.
+- [x] 2.14 Add a selected-pad Delete Stems action under Generate Stems.
+- [x] 2.15 Disable full-mix/all-stems selection when the selected pad has no current prepared stems.
+- [x] 2.16 Add non-momentary right-click solo setting for `V`/`D`/`M`/`B`.
 
 ## 3. Future Persistence Implementation
 - [x] 3.1 Persist per-pad durable stem mix mode with a full-mix default for new and older projects.
 - [x] 3.2 Restore persisted stem cache metadata only after current-source and complete-cache revalidation.
 - [x] 3.3 Keep generation progress, last errors, blocked reasons, and momentary mute/solo gestures out of persisted project state.
 - [x] 3.4 Add model and persistence tests for defaults, round-trip behavior, stale cache fallback, and older project loading.
+- [x] 3.5 Persist Demucs stem-generation quality settings with defaults for older projects.
 
 ## 4. Future Audio-Thread Control Implementation
 - [x] 4.1 Add fixed-size Rust control messages for full-mix/all-stems stem mix mode.

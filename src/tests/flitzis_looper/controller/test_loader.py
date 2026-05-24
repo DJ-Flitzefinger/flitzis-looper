@@ -5,7 +5,7 @@ import pytest
 from flitzis_looper.constants import NUM_SAMPLES
 from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.controller.stems import (
-    cache_dir_for_source_version,
+    cache_dir_for_sample_id,
     expected_stem_files,
     source_version_for_sample_path,
 )
@@ -344,7 +344,7 @@ def test_stem_task_success_marks_complete_current_cache_available(
 
     source_version = source_version_for_sample_path("samples/loop.wav")
     assert source_version is not None
-    cache_dir = cache_dir_for_source_version(source_version)
+    cache_dir = cache_dir_for_sample_id(0)
     stems_dir = tmp_path / cache_dir
     stems_dir.mkdir(parents=True)
     for kind in STEM_KINDS:
@@ -391,7 +391,7 @@ def test_stem_task_success_applies_all_stems_preference_after_publication(
 
     source_version = source_version_for_sample_path("samples/loop.wav")
     assert source_version is not None
-    cache_dir = cache_dir_for_source_version(source_version)
+    cache_dir = cache_dir_for_sample_id(0)
     stems_dir = tmp_path / cache_dir
     stems_dir.mkdir(parents=True)
     for kind in STEM_KINDS:
@@ -430,7 +430,7 @@ def test_stem_task_success_keeps_cache_unavailable_when_pad_started(
 
     source_version = source_version_for_sample_path("samples/loop.wav")
     assert source_version is not None
-    cache_dir = cache_dir_for_source_version(source_version)
+    cache_dir = cache_dir_for_sample_id(0)
     stems_dir = tmp_path / cache_dir
     stems_dir.mkdir(parents=True)
     for kind in STEM_KINDS:
@@ -472,7 +472,7 @@ def test_stem_task_success_clears_stale_source_version(
 
     old_version = source_version_for_sample_path("samples/old.wav")
     assert old_version is not None
-    cache_dir = cache_dir_for_source_version(old_version)
+    cache_dir = cache_dir_for_sample_id(0)
     controller.project.stem_cache[0] = StemCacheEntry(
         source_version=old_version,
         cache_dir=cache_dir,
@@ -505,7 +505,7 @@ def test_stem_task_success_keeps_cache_unavailable_when_publication_fails(
 
     source_version = source_version_for_sample_path("samples/loop.wav")
     assert source_version is not None
-    cache_dir = cache_dir_for_source_version(source_version)
+    cache_dir = cache_dir_for_sample_id(0)
     stems_dir = tmp_path / cache_dir
     stems_dir.mkdir(parents=True)
     for kind in STEM_KINDS:
@@ -748,6 +748,30 @@ def test_unload_sample_deletes_cached_file(
     controller.loader.unload_sample(0)
 
     assert not cached_file.exists()
+
+
+def test_unload_sample_deletes_stem_cache_dir(
+    tmp_path: Path, controller: AppController, audio_engine_mock: Mock
+) -> None:
+    """Test unloading a sample deletes the pad stem cache directory."""
+    cache_dir = cache_dir_for_sample_id(0)
+    stems_dir = tmp_path / cache_dir
+    stems_dir.mkdir(parents=True)
+    for kind in STEM_KINDS:
+        (stems_dir / f"{kind}.wav").write_bytes(b"stem")
+
+    controller.project.sample_paths[0] = "samples/test.wav"
+    controller.project.stem_cache[0] = StemCacheEntry(
+        source_version="samples/test.wav|10|20",
+        cache_dir=cache_dir,
+        stems=expected_stem_files(cache_dir),
+        available=True,
+    )
+
+    controller.loader.unload_sample(0)
+
+    assert not stems_dir.exists()
+    assert controller.project.stem_cache[0] is None
 
 
 def test_unload_sample_outside_samples_dir(

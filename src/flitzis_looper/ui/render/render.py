@@ -14,6 +14,7 @@ from flitzis_looper.ui.contextmanager import default_style, style_var
 from flitzis_looper.ui.render.bottom_bar import bottom_bar
 from flitzis_looper.ui.render.file_dialog import check_file_dialog, open_file_dialog
 from flitzis_looper.ui.render.performance_view import performance_view
+from flitzis_looper.ui.render.settings import settings_overlay, settings_surface_child_id
 from flitzis_looper.ui.render.sidebar_left import sidebar_left
 from flitzis_looper.ui.render.sidebar_right import sidebar_right
 from flitzis_looper.ui.render.waveform_editor import waveform_editor
@@ -53,16 +54,22 @@ def _sidebar(
 
 def _center_area(ctx: UiContext) -> None:
     avail = imgui.get_content_region_avail()
+    surface_height = max(0.0, avail.y - BOTTOM_BAR_HEIGHT - SPACING)
 
-    with style_var(imgui.StyleVar_.item_spacing, (0, SPACING * 2)):
+    with style_var(imgui.StyleVar_.item_spacing, (0.0, 0.0)):
         imgui.begin_child(
-            "performance_view",
-            (-1, avail.y - BOTTOM_BAR_HEIGHT - SPACING),
+            settings_surface_child_id(settings_open=ctx.state.session.settings_open),
+            (-1, surface_height),
         )
-        performance_view(ctx)
+        if ctx.state.session.settings_open:
+            settings_overlay(ctx)
+        else:
+            performance_view(ctx)
         imgui.end_child()
 
-        imgui.begin_child("bottom_bar", (-1, -1))
+        imgui.dummy((0.0, SPACING))
+
+        imgui.begin_child("bottom_bar", (-1, BOTTOM_BAR_HEIGHT))
         bottom_bar(ctx)
         imgui.end_child()
 
@@ -124,7 +131,8 @@ def render_ui(ctx: UiContext) -> None:
 
     with default_style():
         _main(ctx)
-        waveform_editor(ctx)
-        _file_dialog(ctx)
+        if not ctx.state.session.settings_open:
+            waveform_editor(ctx)
+            _file_dialog(ctx)
 
     ctx.persistence.maybe_flush()

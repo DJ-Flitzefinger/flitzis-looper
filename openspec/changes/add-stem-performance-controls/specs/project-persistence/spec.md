@@ -54,3 +54,31 @@ durable.
 - **WHEN** project state is saved
 - **THEN** the enabled-stem mask is not written as a durable project setting
 - **AND** the durable full-mix/all-stems mode preference remains independent
+
+### Requirement: Persist Demucs Stem Quality Settings
+The system SHALL persist global Demucs stem-generation quality settings in project state.
+
+New and older projects SHALL default Demucs shifts to 10 and Demucs overlap to 0.5. Persisted
+quality settings SHALL be validated against the app-supported ranges before they can be used for
+generation: shifts from 1 through 20 and overlap from 0.25 through 0.95. Project-level changes
+SHALL be written through the existing `samples/flitzis_looper.config.json` persistence path
+without requiring a separate Apply action.
+
+#### Scenario: Demucs quality settings round-trip
+- **GIVEN** a project is saved with Demucs shifts set to 4
+- **AND** Demucs overlap set to 0.25
+- **WHEN** the project is loaded again
+- **THEN** the same Demucs quality settings are restored
+
+#### Scenario: Demucs quality changes persist without apply
+- **GIVEN** the Settings page is open
+- **WHEN** the performer changes Demucs shifts or Demucs overlap within the supported range
+- **THEN** the project state is persisted to `samples/flitzis_looper.config.json` through the
+  existing project persistence path
+- **AND** no separate Apply action is required
+
+#### Scenario: Older project defaults quality settings
+- **GIVEN** a project file was created before Demucs quality settings existed
+- **WHEN** the project is loaded
+- **THEN** Demucs shifts defaults to 10
+- **AND** Demucs overlap defaults to 0.5

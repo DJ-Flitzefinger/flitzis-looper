@@ -48,13 +48,35 @@ generation directly, bypass the controller, or run stem work in the render loop.
 - **THEN** the request is rejected or disabled through controller state
 - **AND** no stem generation work runs in the audio callback
 
+### Requirement: Selected-Pad Stem Deletion Action
+The system SHALL provide a selected-pad Delete Stems action next to the Generate Stems action.
+
+The Delete Stems action SHALL route through the controller layer, SHALL remove only the selected
+pad's tracked project-local stem cache artifacts, SHALL clear the selected pad's stem cache
+metadata, and SHALL leave the loaded full-mix audio available. UI rendering SHALL decide whether
+to enable the action from controller/session snapshots and SHALL NOT inspect cache directories.
+
+#### Scenario: Delete action removes selected pad stems
+- **GIVEN** the selected pad has tracked cached stems
+- **WHEN** the performer activates Delete Stems
+- **THEN** the UI emits a controller action for that selected pad
+- **AND** the selected pad returns to full-mix playback with no available stems
+
+#### Scenario: Delete action is disabled without tracked stems
+- **GIVEN** the selected pad has no tracked stem cache metadata
+- **WHEN** the performance UI is rendered
+- **THEN** the Delete Stems action is disabled
+- **AND** rendering does not inspect cache directories, read files, decode audio, or run inference
+
 ### Requirement: Stem Mix Controls
 The system SHALL provide selected-pad controls for choosing full-mix playback or all prepared
 stems when a current prepared stem set is available.
 
-New projects SHALL default to full-mix playback. Selecting all-stems mode SHALL request
-prepared-stem playback for the selected pad when valid stems are available and SHALL fall back
-to full mix when stems are unavailable, stale, incomplete, rejected, or disabled.
+New projects SHALL default to full-mix playback. The full-mix/all-stems selection buttons SHALL
+be disabled when the selected pad has no current prepared stem set. Selecting all-stems mode
+SHALL request prepared-stem playback for the selected pad only when valid stems are available and
+SHALL fall back to full mix when stems are unavailable, stale, incomplete, rejected, deleted, or
+disabled.
 
 #### Scenario: New projects default to full mix
 - **WHEN** the application starts with a new project
@@ -66,6 +88,12 @@ to full mix when stems are unavailable, stale, incomplete, rejected, or disabled
 - **WHEN** the performer selects all-stems mode
 - **THEN** the project stem mix preference for that pad becomes all-stems
 - **AND** the control layer sends a bounded stem mix update to the Rust audio engine
+
+#### Scenario: Mix mode buttons are disabled without stems
+- **GIVEN** the selected pad has no current prepared stem set
+- **WHEN** the selected-pad sidebar is rendered
+- **THEN** the full-mix and all-stems buttons are disabled
+- **AND** the UI does not persist an all-stems preference for that pad
 
 #### Scenario: Revert to full mix
 - **GIVEN** the selected pad is configured for all-stems mode
@@ -90,6 +118,8 @@ separate component group. Activating a preset SHALL remember the last component-
 switching between `I` and `A` SHALL preserve that remembered component mask, and clicking the
 currently active preset again SHALL deactivate the preset group and restore the remembered
 component mask.
+Right-clicking `V`, `D`, `M`, or `B` SHALL set a non-momentary custom solo state for that component
+stem without adding a separate mute feature.
 
 #### Scenario: Selected pad controls are disabled without prepared stem playback
 - **GIVEN** the selected pad is in full-mix mode
@@ -129,6 +159,14 @@ component mask.
 - **AND** only the Vocals component appears active
 - **AND** the `I` preset appears inactive
 
+#### Scenario: Component right-click sets non-momentary solo
+- **GIVEN** the selected pad has a current prepared stem set
+- **AND** the selected pad is in all-stems mode
+- **WHEN** the performer right-clicks `D`
+- **THEN** the selected pad enters custom display mode
+- **AND** only the Drums component appears active
+- **AND** the state persists until the performer changes the component or preset buttons again
+
 #### Scenario: Custom masks do not auto-select matching presets
 - **GIVEN** the selected pad has a current prepared stem set
 - **AND** the selected pad is in all-stems mode
@@ -154,3 +192,42 @@ component mask.
 - **AND** the performer clicks the currently active preset again
 - **THEN** the selected pad returns to custom display mode
 - **AND** only Drums and Melody appear active
+
+### Requirement: Settings Overlay
+The system SHALL provide a bottom-right Settings toggle that replaces the main Looper display
+area with a Settings page while open.
+
+The closed state SHALL show a gear icon at the right edge of the center bottom bar, aligned with
+the right edge of the bank-button row. The open state SHALL show an `X` close icon in the same
+bottom-right location and SHALL return to the normal Looper display when activated. The first
+Settings page controls SHALL configure bounded Demucs stem-generation quality values: shifts from
+1 through 20, default 10, and overlap from 0.25 through 0.95, default 0.5. Rendering the Settings
+page SHALL use project/session state and controller actions only; it
+SHALL NOT inspect cache directories, compute source versions, read files, decode audio, invoke
+Demucs, download models, or call low-level Rust background-task APIs from the render loop.
+
+#### Scenario: Gear opens Settings
+- **GIVEN** the normal Looper display is visible
+- **WHEN** the performer activates the bottom-right gear icon
+- **THEN** the Settings page replaces the main Looper display area
+- **AND** the bottom-right toggle changes to an `X` close icon
+- **AND** the toggle remains right-aligned with the bank-button row
+
+#### Scenario: Close returns to Looper
+- **GIVEN** the Settings page is open
+- **WHEN** the performer activates the bottom-right `X` close icon
+- **THEN** the normal Looper display area is rendered again
+- **AND** the Settings page no longer covers the main Looper display area
+- **AND** the toggle remains right-aligned with the bank-button row
+
+#### Scenario: Stem quality controls update project settings
+- **GIVEN** the Settings page is open
+- **WHEN** the performer sets Demucs shifts to 4
+- **AND** the performer sets Demucs overlap to 0.25
+- **THEN** those bounded quality values are stored in project state
+- **AND** the next Generate Stems request uses those values in its backend request
+
+#### Scenario: Settings render loop stays non-blocking
+- **GIVEN** the Settings page is open
+- **WHEN** the UI renders a frame
+- **THEN** rendering does not inspect cache directories, compute source versions, read files, decode audio, invoke Demucs, download models, or call low-level Rust background-task APIs

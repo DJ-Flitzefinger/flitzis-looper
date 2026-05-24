@@ -174,13 +174,14 @@ per-stem mute/solo/toggle controls, persistence expectations, and fixed-size aud
 control messages. This planning slice does not implement UI controls, production source
 separation, neural model integration, or new mixer control behavior.
 
-The current stem implementation defines Python-side project metadata for a
-project-local `samples/stems/<source-version-hash>/` cache layout, using a source-version token
-derived from the cached source path plus file metadata. The controller rejects stem generation
-requests for pads that are playing, loading, analyzing, already generating stems, missing a loaded
-source, or missing the cached source file. The selected-pad sidebar now renders controller/session
-stem status, routes Generate Stems through that controller gating, and exposes the durable
-full-mix/all-stems mode control without inspecting cache directories in the render loop.
+The current stem implementation defines Python-side project metadata for a pad-scoped
+project-local `samples/stems/#<pad-number>/` cache layout, using a source-version token derived
+from the cached source path plus file metadata. The controller rejects stem generation requests
+for pads that are playing, loading, analyzing, already generating stems, missing a loaded source,
+or missing the cached source file. The selected-pad sidebar now renders controller/session stem
+status, routes Generate Stems and Delete Stems through controller actions, and exposes the durable
+full-mix/all-stems mode control without inspecting cache directories in the render loop. Unload
+Audio deletes the tracked pad stem cache outside the audio callback.
 
 Production stem generation now runs through a replaceable Python-side backend boundary. The first
 backend adapter invokes Demucs from a background worker, with Torch/Demucs work kept out of app
@@ -205,9 +206,9 @@ to the Demucs subprocess environment. Because the installed Torchaudio save path
 the backend also checks TorchCodec before invoking Demucs and reports `TorchCodec unavailable` if
 its native libraries cannot load.
 The first production backend uses high-quality Demucs defaults of `--shifts 10` and
-`--overlap 0.5`. Those values are bounded request parameters (`shifts` 0 through 20 and
-`overlap` 0.0 through 0.95), so a future settings UI can supply validated replacements without
-changing the file/artifact backend contract.
+`--overlap 0.5`. Those values are bounded request parameters (`shifts` 1 through 20 and
+`overlap` 0.25 through 0.95). The Settings page persists validated replacements in project state,
+and `StemController.generate_stems_async(...)` copies them into the file/artifact backend request.
 `AudioEngine.publish_prepared_stems(id, source_version, cache_dir)` validates those cached WAV
 artifacts against the currently loaded full-mix buffer outside the audio callback, then publishes
 shared immutable prepared-stem handles to Rust through a fixed-size control message.
@@ -239,8 +240,10 @@ switching between presets preserves that remembered mask, and clicking the activ
 returns to it. The cached `instrumental.wav` artifact is not used as the `I` preset or as an extra
 layer in `A`. The pad grid now renders compact stem status badges for available, generating,
 blocked, and error states from controller/session snapshots only. Production source separation is
-now provided by the background Demucs backend; component right-click solo remains a separate
-planned UI slice.
+now provided by the background Demucs backend. A bottom-right Settings overlay exposes Demucs
+shifts and overlap controls, stores them as project settings, and leaves stem generation, model
+lookup, and cache work on the existing background path. Right-clicking `V`, `D`, `M`, or `B`
+sets a non-momentary custom solo state for that component without adding a separate mute feature.
 
 The active Gen3 phase-aware sync slice is `openspec/changes/add-phase-aware-playback-sync/`. It
 defines how quantized starts will use the Rust transport phase plus bounded per-pad timing anchors
@@ -286,8 +289,10 @@ The Rust engine is exposed to Python as `AudioEngine` with:
   full-mix/all-stems mode plumbing, selected-pad stem status, Generate Stems button wiring,
   selected-pad full-mix/all-stems controls, bottom-bar selected-pad per-stem mask controls, and
   pad-grid stem indicators are implemented. Production Demucs source separation is implemented
-  behind a replaceable backend boundary. Component right-click solo remains planned separately;
-  no separate stem mute feature is planned for the current Gen3 direction.
+  behind a replaceable backend boundary, and the Settings overlay now exposes the bounded Demucs
+  quality parameters. The selected-pad Delete Stems action, automatic stem deletion on Unload
+  Audio, and component right-click solo setter are implemented; no separate stem mute feature is
+  planned for the current Gen3 direction.
 
 ## Related specs
 

@@ -7,15 +7,17 @@ from pathlib import Path
 
 import pytest
 
-from flitzis_looper.controller.stem_generation import (
+from flitzis_looper.constants import (
     DEFAULT_DEMUCS_OVERLAP,
     DEFAULT_DEMUCS_SHIFTS,
-    FFMPEG_DIR_ENV_VAR,
-    FFMPEG_UNAVAILABLE_MESSAGE,
     MAX_DEMUCS_OVERLAP,
     MAX_DEMUCS_SHIFTS,
     MIN_DEMUCS_OVERLAP,
     MIN_DEMUCS_SHIFTS,
+)
+from flitzis_looper.controller.stem_generation import (
+    FFMPEG_DIR_ENV_VAR,
+    FFMPEG_UNAVAILABLE_MESSAGE,
     NO_MODEL_INSTALLED_MESSAGE,
     TORCHCODEC_UNAVAILABLE_MESSAGE,
     AudioShape,

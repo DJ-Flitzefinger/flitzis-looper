@@ -71,17 +71,20 @@ artifacts outside the callback, but publication/replacement of audio-thread stem
 must be rejected or deferred until the pad is stopped and the source version still matches.
 
 ### Cache Lifecycle
-Generated stem artifacts are project-local cache data, not production source files. Loading
-a project may discover existing valid cached stems and mark them available without
-regenerating. Replacing or unloading a pad must mark that pad's stem cache unavailable for
-the old source version and must not leave stale stems eligible for playback.
+Generated stem artifacts are project-local cache data, not production source files. The cache
+directory is pad-scoped (`samples/stems/#1/` through `samples/stems/#216/`) while source-version
+metadata still determines whether files are eligible for the currently loaded source. Loading a
+project may discover existing valid cached stems and mark them available without regenerating.
+Replacing or unloading a pad must mark that pad's stem cache unavailable for the old source
+version and must not leave stale stems eligible for playback. Unloading a pad or explicitly
+deleting stems removes the tracked pad cache directory outside the audio callback.
 
 Cache cleanup can be best-effort outside the audio callback. Missing cache files must not
 crash project load, sample unload, or playback.
 
 ### Initial Artifact Writer
 The first implementation writes deterministic project-local WAV artifacts under the
-existing `samples/stems/<source-version-hash>/` cache directory. The task runs on a Rust
+pad-scoped `samples/stems/#<pad-number>/` cache directory. The task runs on a Rust
 background thread from the already decoded and resampled `SampleBuffer`, so every written
 artifact uses the mixer output sample rate, the mixer channel layout, the same frame origin,
 and the same frame length as the loaded full-mix buffer.
@@ -154,7 +157,7 @@ same project-local cache layout and Rust publication path:
    source version, target cache directory, target sample rate/channel count/frame count, model
    cache directory, and device policy.
 4. The backend writes `vocals.wav`, `melody.wav`, `bass.wav`, `drums.wav`, and `instrumental.wav`
-   under `samples/stems/<source-version-hash>/`.
+   under `samples/stems/#<pad-number>/`.
 5. Python reuses the existing completion path: current-source and inactive-pad checks, complete
    cache-file checks, then `AudioEngine.publish_prepared_stems(...)`.
 
@@ -183,10 +186,10 @@ unavailable` when that dependency is not usable.
 
 The adapter uses high-quality Demucs defaults for the first production implementation:
 `--shifts 10` and `--overlap 0.5`. These are stored on the backend request as bounded quality
-parameters rather than hard-coded UI behavior, so a future settings surface can supply validated
+parameters rather than hard-coded backend behavior, so the Settings page can supply validated
 replacement values without changing the backend boundary. App-supported settings are `shifts`
-from 0 through 20 and `overlap` from 0.0 through 0.95; invalid values are rejected before Demucs
-starts.
+from 1 through 20 and `overlap` from 0.25 through 0.95; invalid values are rejected in controller
+state before Demucs starts.
 
 The adapter postprocesses Demucs output before publication. If Demucs output differs from the
 loaded full-mix buffer, the backend resamples, adapts channels, trims, or pads final cache WAVs so

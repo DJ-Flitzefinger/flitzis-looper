@@ -2,8 +2,9 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from flitzis_looper.constants import DEFAULT_DEMUCS_OVERLAP, DEFAULT_DEMUCS_SHIFTS
 from flitzis_looper.controller.stems import (
-    cache_dir_for_source_version,
+    cache_dir_for_sample_id,
     expected_stem_files,
     source_version_for_sample_path,
 )
@@ -51,10 +52,10 @@ def test_source_version_uses_project_path_size_and_mtime(tmp_path: Path) -> None
     assert version.startswith("samples/loop.wav|")
 
 
-def test_cache_dir_for_source_version_is_project_local() -> None:
-    cache_dir = cache_dir_for_source_version("samples/loop.wav|10|20")
+def test_cache_dir_for_sample_id_uses_pad_label() -> None:
+    cache_dir = cache_dir_for_sample_id(0)
 
-    assert cache_dir.startswith("samples/stems/")
+    assert cache_dir == "samples/stems/#1"
     assert "\\" not in cache_dir
 
 
@@ -77,7 +78,7 @@ def test_generate_stems_async_schedules_stopped_loaded_pad(
 
     assert scheduled is True
     version = controller.session.stem_generation_source_versions[0]
-    cache_dir = cache_dir_for_source_version(version)
+    cache_dir = cache_dir_for_sample_id(0)
     audio_engine_mock.generate_stems_async.assert_not_called()
     assert len(stem_backend.requests) == 1
     assert stem_backend.requests[0].sample_id == 0
@@ -89,6 +90,44 @@ def test_generate_stems_async_schedules_stopped_loaded_pad(
     assert entry.source_version == version
     assert entry.cache_dir == cache_dir
     assert entry.available is False
+    assert stem_backend.requests[0].demucs_shifts == DEFAULT_DEMUCS_SHIFTS
+    assert stem_backend.requests[0].demucs_overlap == pytest.approx(DEFAULT_DEMUCS_OVERLAP)
+
+
+def test_generate_stems_async_uses_configured_demucs_quality(
+    controller: AppController,
+    stem_backend: FakeStemGenerationBackend,
+    tmp_path: Path,
+) -> None:
+    _load_project_sample(controller, tmp_path)
+    controller.settings.set_demucs_quality(shifts=4, overlap=0.25)
+
+    assert controller.stems.generate_stems_async(0) is True
+
+    assert stem_backend.requests[0].demucs_shifts == 4
+    assert stem_backend.requests[0].demucs_overlap == pytest.approx(0.25)
+
+
+@pytest.mark.parametrize(
+    ("shifts", "overlap", "expected"),
+    [
+        (-1, 0.5, "demucs shifts"),
+        (21, 0.5, "demucs shifts"),
+        (10, -0.1, "demucs overlap"),
+        (10, 1.0, "demucs overlap"),
+    ],
+)
+def test_set_demucs_quality_rejects_invalid_values(
+    controller: AppController,
+    shifts: int,
+    overlap: float,
+    expected: str,
+) -> None:
+    with pytest.raises(ValueError, match=expected):
+        controller.settings.set_demucs_quality(shifts=shifts, overlap=overlap)
+
+    assert controller.project.demucs_shifts == DEFAULT_DEMUCS_SHIFTS
+    assert controller.project.demucs_overlap == pytest.approx(DEFAULT_DEMUCS_OVERLAP)
 
 
 @pytest.mark.parametrize(
@@ -172,8 +211,8 @@ def test_stem_grid_indicator_state_uses_session_and_project_snapshots(
     assert version is not None
     controller.project.stem_cache[0] = StemCacheEntry(
         source_version=version,
-        cache_dir=cache_dir_for_source_version(version),
-        stems=expected_stem_files(cache_dir_for_source_version(version)),
+        cache_dir=cache_dir_for_sample_id(0),
+        stems=expected_stem_files(cache_dir_for_sample_id(0)),
         available=True,
     )
     assert controller.stems.stem_grid_indicator_state(0) == "available"
@@ -208,7 +247,7 @@ def test_stem_backend_success_publishes_prepared_stems(
 
     version = source_version_for_sample_path("samples/loop.wav")
     assert version is not None
-    cache_dir = cache_dir_for_source_version(version)
+    cache_dir = cache_dir_for_sample_id(0)
     entry = controller.project.stem_cache[0]
     assert entry is not None
     assert entry.available is True
@@ -223,7 +262,7 @@ def test_restore_stem_cache_marks_missing_files_unavailable(
     version = source_version_for_sample_path(project_path)
     assert version is not None
 
-    cache_dir = cache_dir_for_source_version(version)
+    cache_dir = cache_dir_for_sample_id(0)
     controller.project.stem_cache[0] = StemCacheEntry(
         source_version=version,
         cache_dir=cache_dir,
@@ -245,7 +284,7 @@ def test_restore_stem_cache_keeps_complete_current_cache(
     version = source_version_for_sample_path(project_path)
     assert version is not None
 
-    cache_dir = cache_dir_for_source_version(version)
+    cache_dir = cache_dir_for_sample_id(0)
     stems_dir = tmp_path / cache_dir
     stems_dir.mkdir(parents=True)
     for kind in STEM_KINDS:
@@ -273,7 +312,7 @@ def test_restore_stem_cache_clears_stale_source_version(
     assert old_version is not None
     controller.project.stem_cache[0] = StemCacheEntry(
         source_version=old_version,
-        cache_dir=cache_dir_for_source_version(old_version),
+        cache_dir=cache_dir_for_sample_id(0),
     )
 
     _load_project_sample(controller, tmp_path, "loop-b.wav")
@@ -312,6 +351,43 @@ def test_invalidate_stem_cache_clears_cache_and_generation_state(
     assert controller.session.pad_stem_mask_display_mode[0] == "all"
 
 
+def test_delete_stems_removes_pad_cache_and_resets_mix_state(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    tmp_path: Path,
+) -> None:
+    cache_dir = cache_dir_for_sample_id(0)
+    stems_dir = tmp_path / cache_dir
+    stems_dir.mkdir(parents=True)
+    for kind in STEM_KINDS:
+        (stems_dir / f"{kind}.wav").write_bytes(b"stem")
+
+    controller.project.stem_cache[0] = StemCacheEntry(
+        source_version="samples/loop.wav|10|20",
+        cache_dir=cache_dir,
+        stems=expected_stem_files(cache_dir),
+        available=True,
+    )
+    controller.project.pad_stem_mix_mode[0] = "all_stems"
+    controller.session.stem_generating_sample_ids.add(0)
+    controller.session.pad_stem_enabled_mask[0] = STEM_MASK_VOCALS
+    controller.session.pad_stem_last_custom_mask[0] = STEM_MASK_VOCALS
+    controller.session.pad_stem_mask_display_mode[0] = "custom"
+
+    deleted = controller.stems.delete_stems(0)
+
+    assert deleted is True
+    assert not stems_dir.exists()
+    assert controller.project.stem_cache[0] is None
+    assert controller.project.pad_stem_mix_mode[0] == "full_mix"
+    assert controller.stems.has_stem_cache(0) is False
+    assert 0 not in controller.session.stem_generating_sample_ids
+    assert controller.session.pad_stem_enabled_mask[0] == STEM_COMPONENT_MASK
+    assert controller.session.pad_stem_last_custom_mask[0] == STEM_COMPONENT_MASK
+    assert controller.session.pad_stem_mask_display_mode[0] == "all"
+    audio_engine_mock.set_stem_mix_mode.assert_called_once_with(0, "full_mix")
+
+
 def test_stem_mix_mode_defaults_to_full_mix(controller: AppController) -> None:
     assert controller.stems.stem_mix_mode(0) == "full_mix"
     assert controller.stems.stems_available(0) is False
@@ -333,13 +409,13 @@ def test_set_stem_mix_mode_full_mix_updates_project_and_audio(
     audio_engine_mock.set_stem_mix_mode.assert_called_once_with(0, "full_mix")
 
 
-def test_set_stem_mix_mode_all_stems_persists_without_available_cache(
+def test_set_stem_mix_mode_all_stems_rejects_without_available_cache(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     updated = controller.stems.set_stem_mix_mode(0, "all_stems")
 
-    assert updated is True
-    assert controller.project.pad_stem_mix_mode[0] == "all_stems"
+    assert updated is False
+    assert controller.project.pad_stem_mix_mode[0] == "full_mix"
     audio_engine_mock.set_stem_mix_mode.assert_not_called()
     audio_engine_mock.set_stem_enabled_mask.assert_not_called()
 
@@ -351,7 +427,7 @@ def test_set_stem_mix_mode_all_stems_publishes_current_available_cache(
     version = source_version_for_sample_path(project_path)
     assert version is not None
 
-    cache_dir = cache_dir_for_source_version(version)
+    cache_dir = cache_dir_for_sample_id(0)
     controller.project.stem_cache[0] = StemCacheEntry(
         source_version=version,
         cache_dir=cache_dir,
@@ -377,8 +453,8 @@ def test_stem_mask_controls_require_available_all_stems(
     assert version is not None
     controller.project.stem_cache[0] = StemCacheEntry(
         source_version=version,
-        cache_dir=cache_dir_for_source_version(version),
-        stems=expected_stem_files(cache_dir_for_source_version(version)),
+        cache_dir=cache_dir_for_sample_id(0),
+        stems=expected_stem_files(cache_dir_for_sample_id(0)),
         available=True,
     )
 
@@ -395,7 +471,7 @@ def test_set_stem_enabled_mask_updates_session_and_audio(
     project_path = _load_project_sample(controller, tmp_path)
     version = source_version_for_sample_path(project_path)
     assert version is not None
-    cache_dir = cache_dir_for_source_version(version)
+    cache_dir = cache_dir_for_sample_id(0)
     controller.project.pad_stem_mix_mode[0] = "all_stems"
     controller.project.stem_cache[0] = StemCacheEntry(
         source_version=version,
@@ -493,7 +569,7 @@ def test_set_stem_enabled_mask_records_audio_error(
     project_path = _load_project_sample(controller, tmp_path)
     version = source_version_for_sample_path(project_path)
     assert version is not None
-    cache_dir = cache_dir_for_source_version(version)
+    cache_dir = cache_dir_for_sample_id(0)
     controller.project.pad_stem_mix_mode[0] = "all_stems"
     controller.project.stem_cache[0] = StemCacheEntry(
         source_version=version,
@@ -509,7 +585,7 @@ def test_set_stem_enabled_mask_records_audio_error(
     assert "Stem mask update failed" in controller.session.stem_generation_errors[0]
 
 
-def test_set_stem_mix_mode_all_stems_does_not_publish_stale_cache(
+def test_set_stem_mix_mode_all_stems_rejects_stale_cache(
     controller: AppController, audio_engine_mock: Mock, tmp_path: Path
 ) -> None:
     _load_project_sample(controller, tmp_path)
@@ -521,8 +597,8 @@ def test_set_stem_mix_mode_all_stems_does_not_publish_stale_cache(
 
     updated = controller.stems.set_stem_mix_mode(0, "all_stems")
 
-    assert updated is True
-    assert controller.project.pad_stem_mix_mode[0] == "all_stems"
+    assert updated is False
+    assert controller.project.pad_stem_mix_mode[0] == "full_mix"
     audio_engine_mock.set_stem_mix_mode.assert_not_called()
 
 
@@ -548,7 +624,7 @@ def test_publish_stem_mix_mode_records_audio_error(
     version = source_version_for_sample_path(project_path)
     assert version is not None
 
-    cache_dir = cache_dir_for_source_version(version)
+    cache_dir = cache_dir_for_sample_id(0)
     controller.project.pad_stem_mix_mode[0] = "all_stems"
     controller.project.stem_cache[0] = StemCacheEntry(
         source_version=version,

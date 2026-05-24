@@ -13,6 +13,10 @@ from flitzis_looper.models import (
 )
 from flitzis_looper.ui.constants import SPACING
 from flitzis_looper.ui.contextmanager import button_style, item_width, style_var
+from flitzis_looper.ui.render.settings import (
+    SETTINGS_TOGGLE_BUTTON_SIZE,
+    settings_toggle_button,
+)
 
 if TYPE_CHECKING:
     from flitzis_looper.models import TriggerQuantizationMode
@@ -34,6 +38,19 @@ STEM_PRESET_BUTTONS: tuple[tuple[str, int, StemMaskDisplayMode], ...] = (
     ("I", STEM_INSTRUMENTAL_PRESET_MASK, "instrumental"),
     ("A", STEM_COMPONENT_MASK, "all"),
 )
+
+
+def settings_button_local_pos(
+    *,
+    cursor_x: float,
+    cursor_y: float,
+    available_width: float,
+    available_height: float,
+) -> tuple[float, float]:
+    """Return the local bottom-bar cursor position for the Settings toggle."""
+    x = cursor_x + max(0.0, available_width - SETTINGS_TOGGLE_BUTTON_SIZE)
+    y = cursor_y + max(0.0, (available_height - SETTINGS_TOGGLE_BUTTON_SIZE) / 2.0)
+    return (x, y)
 
 
 def _master_volume(ctx: UiContext) -> None:
@@ -101,6 +118,11 @@ def stem_button_target_state(
     return current_mask ^ button_mask, "custom"
 
 
+def stem_button_solo_state(button_mask: int) -> tuple[int, StemMaskDisplayMode]:
+    """Return the mask/display state produced by a component stem right-click."""
+    return button_mask, "custom"
+
+
 def _stem_mask_button(
     ctx: UiContext,
     pad_id: int,
@@ -117,7 +139,13 @@ def _stem_mask_button(
         else "mode-off"
     )
     with button_style(style):
-        if imgui.button(f"{label}##stem_mask_{label}", (32, 32)):
+        clicked = imgui.button(f"{label}##stem_mask_{label}", (32, 32))
+        right_clicked = (
+            target_display_mode == "custom"
+            and imgui.is_item_hovered()
+            and imgui.is_mouse_clicked(imgui.MouseButton_.right)
+        )
+        if clicked:
             target_mask, next_display_mode = stem_button_target_state(
                 button_mask,
                 current_mask,
@@ -125,6 +153,9 @@ def _stem_mask_button(
                 display_mode,
                 target_display_mode,
             )
+            ctx.audio.stems.set_stem_enabled_mask(pad_id, target_mask, next_display_mode)
+        elif right_clicked:
+            target_mask, next_display_mode = stem_button_solo_state(button_mask)
             ctx.audio.stems.set_stem_enabled_mask(pad_id, target_mask, next_display_mode)
 
 
@@ -170,7 +201,7 @@ def _stem_mask_controls(ctx: UiContext) -> None:
     imgui.end_disabled()
 
 
-def bottom_bar(ctx: UiContext) -> None:
+def _bottom_bar_controls(ctx: UiContext) -> None:
     _master_volume(ctx)
     imgui.same_line(spacing=SPACING)
     style: ButtonStyleName = "mode-on" if ctx.state.project.multi_loop else "mode-off"
@@ -182,3 +213,20 @@ def bottom_bar(ctx: UiContext) -> None:
     imgui.same_line(spacing=SPACING)
     _trigger_quantization(ctx)
     _stem_mask_controls(ctx)
+
+
+def bottom_bar(ctx: UiContext) -> None:
+    avail = imgui.get_content_region_avail()
+    start_pos = imgui.get_cursor_pos()
+
+    _bottom_bar_controls(ctx)
+
+    imgui.set_cursor_pos(
+        settings_button_local_pos(
+            cursor_x=start_pos.x,
+            cursor_y=start_pos.y,
+            available_width=avail.x,
+            available_height=avail.y,
+        )
+    )
+    settings_toggle_button(ctx)

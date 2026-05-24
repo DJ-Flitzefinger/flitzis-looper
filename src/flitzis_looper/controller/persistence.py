@@ -54,6 +54,14 @@ class ProjectPersistence:
         self.flush(now=now)
         return True
 
+    def flush_if_dirty(self, *, now: float | None = None) -> bool:
+        """Write config immediately when there are pending project changes."""
+        if not self._dirty:
+            return False
+
+        self.flush(now=now)
+        return True
+
     def flush(self, *, now: float | None = None) -> None:
         """Write config to disk (atomic)."""
         now = monotonic() if now is None else now

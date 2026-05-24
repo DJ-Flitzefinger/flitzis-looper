@@ -5,7 +5,15 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from flitzis_looper.constants import NUM_SAMPLES
+from flitzis_looper.constants import (
+    DEFAULT_DEMUCS_OVERLAP,
+    DEFAULT_DEMUCS_SHIFTS,
+    MAX_DEMUCS_OVERLAP,
+    MAX_DEMUCS_SHIFTS,
+    MIN_DEMUCS_OVERLAP,
+    MIN_DEMUCS_SHIFTS,
+    NUM_SAMPLES,
+)
 from flitzis_looper.models import (
     STEM_COMPONENT_MASK,
     STEM_INSTRUMENTAL_PRESET_MASK,
@@ -196,6 +204,8 @@ class TestModelSerialization:
         assert "speed" in data
         assert "volume" in data
         assert "trigger_quantization" in data
+        assert "demucs_shifts" in data
+        assert "demucs_overlap" in data
         assert "selected_pad" in data
 
         assert data["sample_analysis"][0]["bpm"] == 120.0
@@ -247,6 +257,8 @@ def test_project_state_defaults(project_state: ProjectState) -> None:
     assert project_state.key_lock is False
     assert project_state.bpm_lock is False
     assert project_state.trigger_quantization == "immediate"
+    assert project_state.demucs_shifts == DEFAULT_DEMUCS_SHIFTS
+    assert project_state.demucs_overlap == DEFAULT_DEMUCS_OVERLAP
     assert project_state.speed == 1.0
     assert project_state.volume == 1.0
     assert project_state.selected_pad == 0
@@ -274,6 +286,35 @@ def test_trigger_quantization_mode_validation(project_state: ProjectState) -> No
 
     with pytest.raises(ValidationError):
         ProjectState.model_validate({"trigger_quantization": "half_note"})
+
+
+def test_demucs_quality_settings_validation(project_state: ProjectState) -> None:
+    project_state.demucs_shifts = MIN_DEMUCS_SHIFTS
+    assert project_state.demucs_shifts == MIN_DEMUCS_SHIFTS
+
+    project_state.demucs_shifts = MAX_DEMUCS_SHIFTS
+    assert project_state.demucs_shifts == MAX_DEMUCS_SHIFTS
+
+    project_state.demucs_overlap = MIN_DEMUCS_OVERLAP
+    assert project_state.demucs_overlap == MIN_DEMUCS_OVERLAP
+
+    project_state.demucs_overlap = MAX_DEMUCS_OVERLAP
+    assert project_state.demucs_overlap == MAX_DEMUCS_OVERLAP
+
+    with pytest.raises(ValidationError, match="demucs_shifts"):
+        ProjectState(demucs_shifts=MIN_DEMUCS_SHIFTS - 1)
+
+    with pytest.raises(ValidationError, match="demucs_shifts"):
+        ProjectState(demucs_shifts=MAX_DEMUCS_SHIFTS + 1)
+
+    with pytest.raises(ValidationError, match="demucs_overlap"):
+        ProjectState(demucs_overlap=MIN_DEMUCS_OVERLAP - 0.01)
+
+    with pytest.raises(ValidationError, match="demucs_overlap"):
+        ProjectState(demucs_overlap=MAX_DEMUCS_OVERLAP + 0.01)
+
+    with pytest.raises(ValidationError, match="demucs_overlap"):
+        ProjectState(demucs_overlap=float("nan"))
 
 
 def test_stem_mix_mode_validation(project_state: ProjectState) -> None:
@@ -321,6 +362,7 @@ def test_session_state_defaults(session_state: SessionState) -> None:
     assert len(session_state.pressed_pads) == NUM_SAMPLES
     assert all(pressed is False for pressed in session_state.pressed_pads)
     assert session_state.file_dialog_pad_id is None
+    assert session_state.settings_open is False
     assert session_state.tap_bpm_pad_id is None
     assert session_state.tap_bpm_timestamps == []
     assert session_state.stem_generating_sample_ids == set()

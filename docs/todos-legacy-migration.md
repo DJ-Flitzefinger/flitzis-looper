@@ -108,6 +108,7 @@ next-beat, and next-bar triggering through fixed-size Rust mode updates.
 - [x] As a performer, I can **generate stems** for a pad (vocals/melody/bass/drums/instrumental).
 - [x] As a performer, the UI indicates **stem availability** per pad and gives feedback while stems are generating.
 - [x] As a performer, I can **toggle stems** on/off during playback.
+- [x] As a performer, I can **delete generated stems** for a pad without unloading the audio file.
 - [ ] As a performer, I can **momentarily solo/mute** stems for performance gestures.
 - [x] As a performer, I can quickly revert to the full mix ("stop stems" behavior).
 - [x] As a performer, when multiple loops are active, I can choose which pad's stems I'm controlling.
@@ -127,8 +128,10 @@ download from the Generate Stems UI; if the expected checkpoint is missing, it r
 reported as `FFmpeg/ffprobe unavailable`. TorchCodec is required by the current Torchaudio output
 path and is preflighted as `TorchCodec unavailable` when native libraries cannot load. CUDA/GPU use
 is optional and falls back to CPU from the background worker. The default Demucs quality settings
-are `--shifts 10` and `--overlap 0.5`; they are bounded request parameters so the planned Settings
-page can expose validated values later. FFmpeg lookup uses the process `PATH`, an explicit
+are `--shifts 10` and `--overlap 0.5`; they are bounded request parameters exposed by the
+bottom-right Settings overlay with supported ranges of shifts 1 through 20 and overlap 0.25
+through 0.95, then copied into the next backend generation request. FFmpeg lookup uses the process
+`PATH`, an explicit
 `FLITZIS_FFMPEG_DIR`, or local WinGet `Gyan.FFmpeg*` package installs before reporting FFmpeg
 unavailable.
 Prepared stem-buffer validation/publication now sends fixed-size Rust control messages with shared
@@ -139,17 +142,21 @@ full-mix/all-stems mode plumbing now exists: project
 persistence defaults to full mix, the controller can publish all-stems mode for a current prepared
 source version, and Rust renders prepared stems only when the accepted source-version hash matches
 the selected all-stems mode. The selected-pad sidebar now shows stem status, routes Generate Stems
-through controller/background-task gating, and exposes full-mix/all-stems mode selection. The
+through controller/background-task gating, exposes full-mix/all-stems mode selection only when
+current prepared stems exist, and adds Delete Stems directly under Generate Stems. Unload Audio
+also deletes the tracked pad stem cache. The
 bottom bar now adds selected-pad `V`/`D`/`M`/`B`/`I`/`A` mask buttons where `I` means Drums +
 Melody + Bass and `A` means Vocals + Drums + Melody + Bass, without using `instrumental.wav` as a
 direct preset layer. Component clicks from `I` or `A` enter custom mode with only the clicked
 component active, and custom masks matching the preset combinations do not light `I` or `A`
 implicitly. `I` and `A` share one exclusive preset group that remembers the last `V`/`D`/`M`/`B`
 component state; switching between presets preserves that state, and clicking the active preset
-again restores it. The pad grid now shows compact stem status indicators from existing
-controller/session snapshots without render-loop file I/O. Momentary per-stem solo/mute controls
-remain future work; the next scoped performer-control gap is the separately planned right-click
-solo setter for `V`/`D`/`M`/`B`, without adding a separate mute feature.
+again restores it. Right-clicking `V`/`D`/`M`/`B` sets a non-momentary custom solo state for that
+component without adding a separate mute feature. The pad grid now shows compact stem status
+indicators from existing controller/session snapshots without render-loop file I/O. Momentary
+per-stem solo/mute controls remain future work. The Settings overlay now
+persists bounded Demucs shifts and overlap values in project state and does not perform cache or
+model work from the render loop.
 
 ### 13) Persistence (config/state)
 - [x] As a user, my bank/pad assignments persist across restarts.

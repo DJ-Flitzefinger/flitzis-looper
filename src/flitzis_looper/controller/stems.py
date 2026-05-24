@@ -1,4 +1,4 @@
-import hashlib
+import shutil
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -76,10 +76,47 @@ def source_version_for_sample_path(
     return f"{normalized_path}|{stat.st_size}|{stat.st_mtime_ns}"
 
 
-def cache_dir_for_source_version(source_version: str) -> str:
-    """Return the project-relative stem cache directory for a source-version token."""
-    digest = hashlib.sha256(source_version.encode("utf-8")).hexdigest()[:16]
-    return (STEM_CACHE_ROOT / digest).as_posix()
+def cache_dir_for_sample_id(sample_id: int) -> str:
+    """Return the project-relative stem cache directory for a pad."""
+    validate_sample_id(sample_id)
+    return (STEM_CACHE_ROOT / f"#{sample_id + 1}").as_posix()
+
+
+def _safe_stem_cache_dir_path(cache_dir: str) -> Path | None:
+    rel = Path(cache_dir)
+    if rel.is_absolute():
+        return None
+
+    root = (Path.cwd() / STEM_CACHE_ROOT).resolve(strict=False)
+    target = (Path.cwd() / rel).resolve(strict=False)
+
+    try:
+        target.relative_to(root)
+    except ValueError:
+        return None
+
+    if target == root:
+        return None
+
+    return target
+
+
+def delete_stem_cache_dirs(sample_id: int, *cache_dirs: str | None) -> bool:
+    """Delete known project-local stem cache directories for a pad."""
+    validate_sample_id(sample_id)
+    deleted = False
+    seen: set[Path] = set()
+    for cache_dir in (*cache_dirs, cache_dir_for_sample_id(sample_id)):
+        if cache_dir is None:
+            continue
+        target = _safe_stem_cache_dir_path(cache_dir)
+        if target is None or target in seen:
+            continue
+        seen.add(target)
+        if target.exists():
+            shutil.rmtree(target)
+            deleted = True
+    return deleted
 
 
 def expected_stem_files(cache_dir: str) -> StemFileSet:
@@ -90,7 +127,7 @@ def expected_stem_files(cache_dir: str) -> StemFileSet:
     return files
 
 
-class StemController(BaseController):
+class StemController(BaseController):  # noqa: PLR0904
     """Manage offline stem cache metadata and generation task gating."""
 
     def __init__(
@@ -131,7 +168,7 @@ class StemController(BaseController):
 
         self._session.stem_generating_sample_ids.add(sample_id)
         self._session.stem_generation_source_versions[sample_id] = source_version
-        cache_dir = cache_dir_for_source_version(source_version)
+        cache_dir = cache_dir_for_sample_id(sample_id)
         target_shape = self._target_shape_for_pad(sample_id)
         if target_shape is None:
             self._clear_stem_generation_state(sample_id)
@@ -160,6 +197,8 @@ class StemController(BaseController):
             target_shape=target_shape,
             model_cache_dir=default_demucs_model_cache_dir(project_root=Path.cwd()),
             device_policy="auto",
+            demucs_shifts=self._project.demucs_shifts,
+            demucs_overlap=self._project.demucs_overlap,
         )
 
         self._project.stem_cache[sample_id] = StemCacheEntry(
@@ -180,8 +219,15 @@ class StemController(BaseController):
                 continue
 
             source_version = self.source_version_for_pad(sample_id)
-            if source_version is None or source_version != entry.source_version:
+            expected_cache_dir = cache_dir_for_sample_id(sample_id)
+            if (
+                source_version is None
+                or source_version != entry.source_version
+                or entry.cache_dir != expected_cache_dir
+            ):
                 self._project.stem_cache[sample_id] = None
+                if self._project.pad_stem_mix_mode[sample_id] != "full_mix":
+                    self._project.pad_stem_mix_mode[sample_id] = "full_mix"
                 changed = True
                 continue
 
@@ -201,12 +247,16 @@ class StemController(BaseController):
         self._clear_stem_generation_state(sample_id)
         self._clear_stem_generation_messages(sample_id)
 
+        changed = False
         if self._project.stem_cache[sample_id] is not None:
             self._project.stem_cache[sample_id] = None
+            changed = True
+        if self._project.pad_stem_mix_mode[sample_id] != "full_mix":
+            self._project.pad_stem_mix_mode[sample_id] = "full_mix"
+            changed = True
+        if changed:
             self._mark_project_changed()
-        self._session.pad_stem_enabled_mask[sample_id] = STEM_COMPONENT_MASK
-        self._session.pad_stem_last_custom_mask[sample_id] = STEM_COMPONENT_MASK
-        self._session.pad_stem_mask_display_mode[sample_id] = "all"
+        self._reset_stem_mask_state(sample_id)
 
     def stem_mix_mode(self, sample_id: int) -> StemMixMode:
         """Return the durable stem mix preference for a pad."""
@@ -218,6 +268,11 @@ class StemController(BaseController):
         validate_sample_id(sample_id)
         entry = self._project.stem_cache[sample_id]
         return entry is not None and entry.available
+
+    def has_stem_cache(self, sample_id: int) -> bool:
+        """Return whether a pad has any tracked stem cache metadata."""
+        validate_sample_id(sample_id)
+        return self._project.stem_cache[sample_id] is not None
 
     def stem_enabled_mask(self, sample_id: int) -> int:
         """Return the session-only enabled component-stem mask for a pad."""
@@ -272,6 +327,16 @@ class StemController(BaseController):
             self._mark_project_changed()
             return True
 
+        entry = self._project.stem_cache[sample_id]
+        source_version = self.source_version_for_pad(sample_id)
+        if (
+            entry is None
+            or not entry.available
+            or source_version is None
+            or source_version != entry.source_version
+        ):
+            return False
+
         if mode != self._project.pad_stem_mix_mode[sample_id]:
             self._project.pad_stem_mix_mode[sample_id] = mode
             self._mark_project_changed()
@@ -280,6 +345,48 @@ class StemController(BaseController):
             return False
 
         return self.publish_stem_enabled_mask_if_available(sample_id)
+
+    def delete_stems(self, sample_id: int) -> bool:
+        """Delete cached stems for a pad and return to full-mix playback."""
+        validate_sample_id(sample_id)
+        self._clear_stem_generation_state(sample_id)
+        self._clear_stem_generation_messages(sample_id)
+
+        entry = self._project.stem_cache[sample_id]
+        if self._project.pad_stem_mix_mode[sample_id] != "full_mix":
+            try:
+                self._audio.set_stem_mix_mode(sample_id, "full_mix")
+            except (RuntimeError, ValueError) as err:
+                self._session.stem_generation_errors[sample_id] = (
+                    f"Stem mix update failed: {err}"
+                )
+                return False
+
+        try:
+            files_deleted = delete_stem_cache_dirs(
+                sample_id,
+                entry.cache_dir if entry is not None else None,
+            )
+        except OSError as err:
+            self._session.stem_generation_errors[sample_id] = (
+                f"Stem cache delete failed: {err}"
+            )
+            return False
+
+        changed = False
+        if entry is not None:
+            self._project.stem_cache[sample_id] = None
+            changed = True
+        if self._project.pad_stem_mix_mode[sample_id] != "full_mix":
+            self._project.pad_stem_mix_mode[sample_id] = "full_mix"
+            changed = True
+
+        self._reset_stem_mask_state(sample_id)
+
+        if changed:
+            self._mark_project_changed()
+
+        return changed or files_deleted
 
     def set_stem_enabled_mask(
         self,
@@ -528,6 +635,11 @@ class StemController(BaseController):
         self._session.stem_generation_diagnostics.pop(sample_id, None)
         self._session.stem_generation_progress.pop(sample_id, None)
         self._session.stem_generation_stage.pop(sample_id, None)
+
+    def _reset_stem_mask_state(self, sample_id: int) -> None:
+        self._session.pad_stem_enabled_mask[sample_id] = STEM_COMPONENT_MASK
+        self._session.pad_stem_last_custom_mask[sample_id] = STEM_COMPONENT_MASK
+        self._session.pad_stem_mask_display_mode[sample_id] = "all"
 
     def _target_shape_for_pad(self, sample_id: int) -> AudioShape | None:
         fn = getattr(self._audio, "loaded_sample_shape", None)

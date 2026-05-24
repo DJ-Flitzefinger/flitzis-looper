@@ -98,8 +98,9 @@ diagnostics for non-audio-thread surfaces.
 
 The first production adapter invokes Demucs outside Rust and outside the CPAL callback. It maps
 Demucs `other.wav` to project `melody.wav`, derives `instrumental.wav` from the final aligned
-drums, bass, and melody artifacts, and writes the same `samples/stems/<source-version-hash>/`
-cache files used by the existing prepared-publication path. User-facing setup commands are in
+drums, bass, and melody artifacts, and writes the same pad-scoped
+`samples/stems/#<pad-number>/` cache files used by the existing prepared-publication path.
+User-facing setup commands are in
 `docs/stem-generation-setup.md`. Torch/Demucs are not imported during app startup. Model lookup
 uses Demucs' standard Torch Hub checkpoint cache outside the repository and outside project
 samples. If the expected `htdemucs` checkpoint is missing, the backend reports `no Model
@@ -112,8 +113,9 @@ resolved directory is prepended to the Demucs subprocess `PATH`. It also probes 
 Torchaudio uses it for output writing in the current environment; native-library failures produce
 `TorchCodec unavailable` before Demucs starts.
 The Demucs request also carries bounded quality parameters. The first production defaults are
-`--shifts 10` and `--overlap 0.5`, with app-supported settings ranges of `shifts` 0 through 20
-and `overlap` 0.0 through 0.95 for a future settings surface.
+`--shifts 10` and `--overlap 0.5`, with app-supported settings ranges of `shifts` 1 through 20
+and `overlap` 0.25 through 0.95. The Settings page writes validated values to project state, and
+the controller copies those values into the backend request before the background task starts.
 
 Rust still exposes `AudioEngine.generate_stems_async(id, source_version, cache_dir)` as a
 deterministic engine-level cache writer used by low-level validation; it is not the production
@@ -142,8 +144,11 @@ log, block, or acquire the Python GIL.
 The selected-pad sidebar and compact pad-grid badges now render stem availability, progress,
 blocked, and error state from controller snapshots, route Generate Stems through
 `StemController.generate_stems_async(...)`, and route full-mix/all-stems changes through
-`StemController.set_stem_mix_mode(...)`. Rendering does not inspect cache directories, read files,
-decode audio, run inference, or call the low-level Rust background task APIs directly.
+`StemController.set_stem_mix_mode(...)`. It also routes Delete Stems through
+`StemController.delete_stems(...)`; Unload Audio uses the same controller path to delete tracked
+pad stem cache artifacts outside the audio callback. Rendering does not inspect cache
+directories, read files, decode audio, run inference, or call the low-level Rust background task
+APIs directly.
 
 The follow-up `openspec/changes/add-stem-performance-controls/` planning slice defines performer
 stem controls and future momentary solo/mute gestures. The bottom-bar selected-pad stem mask slice publishes
@@ -155,9 +160,16 @@ masks do not implicitly publish preset display state. The UI keeps a session-onl
 component mask for the `V`/`D`/`M`/`B` group; switching between `I` and `A` does not overwrite that
 remembered mask, and deactivating the active preset publishes it back as a custom component mask.
 Neither preset asks the audio callback to read or select the cached `instrumental.wav` artifact
-directly. The messages must not carry file paths, Python objects, unbounded metadata, or copied
-audio payloads. Ring-buffer-full or stale-source failures must leave current full-mix or stem
-playback unchanged.
+directly. Right-clicking `V`, `D`, `M`, or `B` publishes a custom mask containing only that
+component and keeps that state until the performer changes the buttons again. The messages must
+not carry file paths, Python objects, unbounded metadata, or copied audio payloads.
+Ring-buffer-full or stale-source failures must leave current full-mix or stem playback unchanged.
+
+The Settings overlay is a UI/control-plane surface only. Opening it, closing it, or changing
+Demucs shifts/overlap does not send any new Rust control message and does not call stem generation
+from the render loop. The configured values affect the next
+`StemController.generate_stems_async(...)` request, which still uses the same inactive-pad gating
+and background backend path.
 
 ## Not implemented (yet)
 

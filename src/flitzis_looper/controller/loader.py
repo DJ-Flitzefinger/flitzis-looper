@@ -34,6 +34,7 @@ class LoaderController(BaseController):
         | None = None,
         on_stem_generation_success: Callable[[int], None] | None = None,
         on_stem_generation_error: Callable[[int, str], None] | None = None,
+        on_stems_deleted: Callable[[int], bool] | None = None,
     ) -> None:
         super().__init__(project, session, audio, on_project_changed)
 
@@ -42,6 +43,7 @@ class LoaderController(BaseController):
         self._on_stem_generation_progress = on_stem_generation_progress
         self._on_stem_generation_success = on_stem_generation_success
         self._on_stem_generation_error = on_stem_generation_error
+        self._on_stems_deleted = on_stems_deleted
 
     def restore_samples_from_project_state(self) -> None:
         """Schedule async loads for cached samples referenced by `ProjectState`.
@@ -120,12 +122,15 @@ class LoaderController(BaseController):
         self._clear_stem_generation_state(sample_id)
 
         old_path = self._project.sample_paths[sample_id]
+        if self._on_stems_deleted is not None:
+            self._on_stems_deleted(sample_id)
+        else:
+            self._clear_stem_cache(sample_id)
 
         self._audio.unload_sample(sample_id)
         self._project.sample_paths[sample_id] = None
         self._project.sample_durations[sample_id] = None
         self._project.sample_analysis[sample_id] = None
-        self._clear_stem_cache(sample_id)
         self._on_pad_bpm_changed(sample_id)
         self._mark_project_changed()
 

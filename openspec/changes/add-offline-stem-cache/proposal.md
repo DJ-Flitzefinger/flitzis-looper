@@ -11,7 +11,7 @@ offline/background work, cached per pad/sample version, and only already prepare
 stem buffers may be published for future Rust mixing.
 
 ## What Changes
-- Define a stem cache model for vocals, melody, bass, drums, and instrumental buffers.
+- Define a pad-scoped stem cache model for vocals, melody, bass, drums, and instrumental buffers.
 - Require stem generation to run outside the audio callback as a background/offline task.
 - Require generation and stem replacement to be blocked or deferred for pads that are
   currently playing.
@@ -31,7 +31,9 @@ stem buffers may be published for future Rust mixing.
 - Require usable TorchCodec support for the current Torchaudio output path, with a short
   `TorchCodec unavailable` error before Demucs starts if native libraries cannot load.
 - Use high-quality Demucs defaults of `--shifts 10` and `--overlap 0.5`, modeled as bounded
-  request parameters for a future settings surface.
+  request parameters that can be replaced by validated Settings page values.
+- Delete tracked pad stem cache artifacts on pad unload or explicit stem deletion outside the
+  audio callback.
 - Attempt CUDA only from a background worker and fall back to CPU when the CUDA path fails.
 - Keep the existing fixed-size ring-buffer message-passing architecture.
 - Keep real-time stem separation, neural network inference, disk I/O, logging, blocking,

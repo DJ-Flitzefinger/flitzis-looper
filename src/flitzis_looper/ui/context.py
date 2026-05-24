@@ -124,6 +124,9 @@ class StemSelectors:
     def stems_available(self, pad_id: int) -> bool:
         return self._controller.stems.stems_available(pad_id)
 
+    def has_stem_cache(self, pad_id: int) -> bool:
+        return self._controller.stems.has_stem_cache(pad_id)
+
     def stem_mix_mode(self, pad_id: int) -> StemMixMode:
         return self._controller.stems.stem_mix_mode(pad_id)
 
@@ -279,6 +282,9 @@ class StemAudioActions:
 
     def generate_stems_async(self, pad_id: int) -> None:
         self._controller.stems.generate_stems_async(pad_id)
+
+    def delete_stems(self, pad_id: int) -> None:
+        self._controller.stems.delete_stems(pad_id)
 
     def set_stem_mix_mode(self, pad_id: int, mode: StemMixMode) -> None:
         self._controller.stems.set_stem_mix_mode(pad_id, mode)
@@ -530,10 +536,12 @@ class WaveformEditorActions:
 class UiActions:
     """UI-related actions."""
 
+    settings: SettingsActions
     waveform: WaveformEditorActions
 
     def __init__(self, controller: AppController):
         self._controller = controller
+        self.settings = SettingsActions(controller)
         self.waveform = WaveformEditorActions(controller)
 
     def toggle_left_sidebar(self) -> None:
@@ -562,6 +570,25 @@ class UiActions:
 
     def store_pressed_pad_state(self, pad_id: int, *, pressed: bool) -> None:
         self._controller.session.pressed_pads[pad_id] = pressed
+
+
+class SettingsActions:
+    """Settings overlay UI state/actions."""
+
+    def __init__(self, controller: AppController) -> None:
+        self._controller = controller
+
+    def open(self) -> None:
+        self._controller.session.settings_open = True
+
+    def close(self) -> None:
+        self._controller.session.settings_open = False
+
+    def toggle(self) -> None:
+        self._controller.session.settings_open = not self._controller.session.settings_open
+
+    def set_demucs_quality(self, *, shifts: int, overlap: float) -> None:
+        self._controller.settings.set_demucs_quality(shifts=shifts, overlap=overlap)
 
 
 class UiContext:

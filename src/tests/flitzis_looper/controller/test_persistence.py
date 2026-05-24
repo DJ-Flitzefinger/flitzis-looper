@@ -4,6 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from flitzis_looper.constants import DEFAULT_DEMUCS_OVERLAP, DEFAULT_DEMUCS_SHIFTS
 from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.controller.persistence import PROJECT_CONFIG_PATH, ProjectPersistence
 from flitzis_looper.models import (
@@ -241,6 +242,27 @@ def test_maybe_flush_not_dirty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert not PROJECT_CONFIG_PATH.exists()
 
 
+def test_flush_if_dirty_writes_immediately(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    project = ProjectState(volume=0.5)
+    persistence = ProjectPersistence(project)
+
+    assert persistence.flush_if_dirty(now=0.0) is False
+    assert not PROJECT_CONFIG_PATH.exists()
+
+    project.demucs_shifts = 4
+    persistence.mark_dirty()
+    assert persistence.flush_if_dirty(now=1.0) is True
+
+    loaded = ProjectPersistence.from_config_path().project
+    assert loaded.demucs_shifts == 4
+    assert persistence._dirty is False
+    assert persistence._last_write_monotonic == 1.0
+
+
 def test_complex_project_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
 
@@ -251,6 +273,8 @@ def test_complex_project_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     write_mono_pcm16_wav(wav_path, 48_000)
 
     project = ProjectState(
+        demucs_shifts=4,
+        demucs_overlap=0.25,
         volume=0.75,
         key_lock=True,
         bpm_lock=True,
@@ -265,6 +289,8 @@ def test_complex_project_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
     loaded = ProjectPersistence.from_config_path().project
     assert loaded.volume == pytest.approx(0.75)
+    assert loaded.demucs_shifts == 4
+    assert loaded.demucs_overlap == pytest.approx(0.25)
     assert loaded.key_lock is True
     assert loaded.bpm_lock is True
     assert loaded.trigger_quantization == "next_bar"
@@ -329,6 +355,25 @@ def test_missing_pad_stem_mix_mode_loads_as_full_mix(
     assert loaded.volume == pytest.approx(0.5)
     assert loaded.pad_stem_mix_mode[0] == "full_mix"
     assert all(mode == "full_mix" for mode in loaded.pad_stem_mix_mode)
+
+
+def test_missing_demucs_quality_settings_load_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    project = ProjectState(volume=0.5)
+    data = project.model_dump(mode="json")
+    data.pop("demucs_shifts", None)
+    data.pop("demucs_overlap", None)
+
+    config_path = tmp_path / PROJECT_CONFIG_PATH
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+
+    loaded = ProjectPersistence.from_config_path().project
+    assert loaded.demucs_shifts == DEFAULT_DEMUCS_SHIFTS
+    assert loaded.demucs_overlap == pytest.approx(DEFAULT_DEMUCS_OVERLAP)
 
 
 def test_grid_offset_samples_persisted_per_pad(

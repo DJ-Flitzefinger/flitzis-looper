@@ -8,6 +8,7 @@ from flitzis_looper.models import (
 )
 from flitzis_looper.ui.render.bottom_bar import (
     stem_button_is_active,
+    stem_button_solo_state,
     stem_button_target_state,
 )
 
@@ -58,6 +59,13 @@ def test_component_click_from_instrumental_preset_starts_custom_single_component
     )
 
     assert target_mask == STEM_MASK_VOCALS
+    assert display_mode == "custom"
+
+
+def test_component_right_click_sets_non_momentary_solo() -> None:
+    target_mask, display_mode = stem_button_solo_state(STEM_MASK_DRUMS)
+
+    assert target_mask == STEM_MASK_DRUMS
     assert display_mode == "custom"
 
 

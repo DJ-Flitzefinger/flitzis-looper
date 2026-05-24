@@ -61,6 +61,35 @@ version.
 - **THEN** the pad remains usable with full-mix playback
 - **AND** missing stem files do not crash load, unload, or playback
 
+### Requirement: Stem Cache Is Pad-Scoped And Deletable
+The system SHALL store generated project stem artifacts in a pad-scoped cache directory named
+after the pad label under `samples/stems/`.
+
+Pad 1 SHALL use `samples/stems/#1/`, pad 2 SHALL use `samples/stems/#2/`, and the same
+numbering pattern SHALL continue through pad 216. Deleting stems SHALL remove only the target
+pad's project-local stem cache directory and SHALL clear the pad's tracked stem cache metadata.
+Unloading a pad SHALL delete its tracked cached stem artifacts before the pad becomes available
+for a different source. Deletion SHALL NOT run inside the audio callback.
+
+#### Scenario: Generated stems use the pad label directory
+- **GIVEN** pad `#1` has loaded source audio
+- **AND** the pad is not currently playing
+- **WHEN** the performer requests stem generation
+- **THEN** the background stem backend writes the generated cache artifacts under `samples/stems/#1/`
+- **AND** the tracked source version remains the current source version for pad `#1`
+
+#### Scenario: Unload removes pad stems
+- **GIVEN** pad `#1` has tracked cached stem artifacts under `samples/stems/#1/`
+- **WHEN** the performer unloads audio from pad `#1`
+- **THEN** the system deletes `samples/stems/#1/` outside the audio callback
+- **AND** pad `#1` no longer exposes those stems as available
+
+#### Scenario: Manual stem deletion preserves full-mix playback
+- **GIVEN** pad `#1` has loaded full-mix audio and cached stems
+- **WHEN** the performer deletes stems for pad `#1`
+- **THEN** the system deletes only pad `#1` stem cache artifacts outside the audio callback
+- **AND** pad `#1` remains playable through its full-mix buffer
+
 ### Requirement: Prepared Stem Buffers Are Aligned For Playback
 The system SHALL prepare immutable stem buffers that are aligned with the pad's full-mix
 buffer before they are eligible for audio-thread publication.
@@ -200,22 +229,31 @@ playback of only `instrumental.wav`.
 The system SHALL run the default Demucs backend with bounded quality parameters outside the audio
 callback.
 
-The default Demucs backend SHALL pass `--shifts 10` and `--overlap 0.5` unless a future control
-surface provides validated replacement values. The control layer SHALL reject Demucs quality
-parameters outside the app-supported range before invoking Demucs. The app-supported range SHALL
-be `shifts` from 0 through 20 and `overlap` from 0.0 through 0.95.
+The default Demucs backend SHALL pass `--shifts 10` and `--overlap 0.5` unless the Settings page
+provides validated replacement values. The control layer SHALL persist the configured values in
+project state and SHALL reject Demucs quality parameters outside the app-supported range before
+invoking Demucs. The app-supported range SHALL be `shifts` from 1 through 20 and `overlap` from
+0.25 through 0.95.
 
 #### Scenario: Default high-quality parameters are used
 - **GIVEN** the required Demucs model, FFmpeg tools, and TorchCodec support are available
-- **AND** no future settings override has supplied alternate quality parameters
+- **AND** no Settings page override has supplied alternate quality parameters
 - **WHEN** the performer requests stem generation
 - **THEN** the background backend invokes Demucs with `--shifts 10`
 - **AND** the background backend invokes Demucs with `--overlap 0.5`
 
-#### Scenario: Invalid future settings are rejected before Demucs runs
-- **GIVEN** a future settings surface supplies a Demucs overlap value of 1.0
+#### Scenario: Settings quality values are used
+- **GIVEN** the performer configures Demucs shifts to 4
+- **AND** the performer configures Demucs overlap to 0.25
 - **WHEN** the performer requests stem generation
-- **THEN** the backend rejects the request outside the audio callback
+- **THEN** the background backend invokes Demucs with `--shifts 4`
+- **AND** the background backend invokes Demucs with `--overlap 0.25`
+
+#### Scenario: Invalid settings are rejected before Demucs runs
+- **GIVEN** the Settings page supplies an unsupported Demucs quality value such as shifts `0`,
+  overlap `0.0`, or overlap `1.0`
+- **WHEN** the performer requests stem generation
+- **THEN** the control layer rejects the request outside the audio callback
 - **AND** Demucs is not invoked
 - **AND** the pad remains playable with full-mix playback
 

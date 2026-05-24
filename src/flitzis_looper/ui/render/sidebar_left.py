@@ -219,6 +219,7 @@ def _render_stem_status(ctx: UiContext, info: _SidebarPadInfo) -> None:
 
 def _render_stem_mix_mode(ctx: UiContext, info: _SidebarPadInfo) -> None:
     current_mode = ctx.state.stems.stem_mix_mode(info.pad_id)
+    has_stems = ctx.state.stems.stems_available(info.pad_id)
     button_width = max(72.0, info.avail_x / len(_STEM_MIX_OPTIONS))
 
     imgui.text_colored(TEXT_MUTED_RGBA, "Stem Mix")
@@ -229,10 +230,12 @@ def _render_stem_mix_mode(ctx: UiContext, info: _SidebarPadInfo) -> None:
 
             style_name: ButtonStyleName = "mode-on" if current_mode == mode else "mode-off"
             with button_style(style_name):
+                imgui.begin_disabled(disabled=not has_stems)
                 if imgui.button(f"{label}##stem_mix_{mode}", (button_width, 0)):
                     ctx.audio.stems.set_stem_mix_mode(info.pad_id, mode)
+                imgui.end_disabled()
 
-    if current_mode == "all_stems" and not ctx.state.stems.stems_available(info.pad_id):
+    if current_mode == "all_stems" and not has_stems:
         imgui.text_colored(TEXT_MUTED_RGBA, "All stems pending current cache")
 
 
@@ -247,6 +250,14 @@ def _render_generate_stems(ctx: UiContext, pad_id: int) -> None:
 
     if clicked:
         ctx.audio.stems.generate_stems_async(pad_id)
+
+    delete_disabled = is_running or not ctx.state.stems.has_stem_cache(pad_id)
+    imgui.begin_disabled(disabled=delete_disabled)
+    delete_clicked = imgui.button("Delete Stems", (-1, 0))
+    imgui.end_disabled()
+
+    if delete_clicked:
+        ctx.audio.stems.delete_stems(pad_id)
 
     if blocker is not None and not is_running:
         imgui.text_colored(TEXT_MUTED_RGBA, blocker)

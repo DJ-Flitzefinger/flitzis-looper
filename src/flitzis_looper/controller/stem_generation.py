@@ -11,6 +11,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
+from flitzis_looper.constants import (
+    DEFAULT_DEMUCS_OVERLAP,
+    DEFAULT_DEMUCS_SHIFTS,
+    MAX_DEMUCS_OVERLAP,
+    MAX_DEMUCS_SHIFTS,
+    MIN_DEMUCS_OVERLAP,
+    MIN_DEMUCS_SHIFTS,
+)
 from flitzis_looper.models import STEM_KINDS
 
 type StemDevicePolicy = Literal["auto", "cpu"]
@@ -30,12 +38,6 @@ NO_MODEL_INSTALLED_MESSAGE = "no Model installed"
 FFMPEG_UNAVAILABLE_MESSAGE = "FFmpeg/ffprobe unavailable"
 TORCHCODEC_UNAVAILABLE_MESSAGE = "TorchCodec unavailable"
 FFMPEG_DIR_ENV_VAR = "FLITZIS_FFMPEG_DIR"
-DEFAULT_DEMUCS_SHIFTS = 10
-MIN_DEMUCS_SHIFTS = 0
-MAX_DEMUCS_SHIFTS = 20
-DEFAULT_DEMUCS_OVERLAP = 0.5
-MIN_DEMUCS_OVERLAP = 0.0
-MAX_DEMUCS_OVERLAP = 0.95
 
 
 @dataclass(frozen=True, slots=True)

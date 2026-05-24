@@ -4,6 +4,12 @@ from typing import TYPE_CHECKING, Annotated, Literal
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
 from flitzis_looper.constants import (
+    DEFAULT_DEMUCS_OVERLAP,
+    DEFAULT_DEMUCS_SHIFTS,
+    MAX_DEMUCS_OVERLAP,
+    MAX_DEMUCS_SHIFTS,
+    MIN_DEMUCS_OVERLAP,
+    MIN_DEMUCS_SHIFTS,
     NUM_BANKS,
     NUM_SAMPLES,
     PAD_EQ_DB_MAX,
@@ -216,6 +222,18 @@ class ProjectState(BaseModel):
     """BPM lock state."""
     trigger_quantization: TriggerQuantizationMode = "immediate"
     """Global pad trigger quantization mode."""
+    demucs_shifts: int = Field(
+        default=DEFAULT_DEMUCS_SHIFTS,
+        ge=MIN_DEMUCS_SHIFTS,
+        le=MAX_DEMUCS_SHIFTS,
+    )
+    """Global Demucs stem-generation shifts setting."""
+    demucs_overlap: float = Field(
+        default=DEFAULT_DEMUCS_OVERLAP,
+        ge=MIN_DEMUCS_OVERLAP,
+        le=MAX_DEMUCS_OVERLAP,
+    )
+    """Global Demucs stem-generation overlap setting."""
     volume: float = Field(default=1.0, ge=VOLUME_MIN, le=VOLUME_MAX)
     """Global volume."""
     speed: float = Field(default=1.0, ge=SPEED_MIN, le=SPEED_MAX)
@@ -321,6 +339,14 @@ class ProjectState(BaseModel):
     def _validate_pad_stem_mix_mode(cls, value: list[StemMixMode]) -> list[StemMixMode]:
         if len(value) != NUM_SAMPLES:
             msg = f"pad_stem_mix_mode must have length {NUM_SAMPLES}, got {len(value)}"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("demucs_overlap", mode="after")
+    @classmethod
+    def _validate_demucs_overlap(cls, value: float) -> float:
+        if not math.isfinite(value):
+            msg = "demucs_overlap must be finite"
             raise ValueError(msg)
         return value
 
@@ -443,6 +469,9 @@ class SessionState(BaseModel):
 
     waveform_editor_pad_id: int | None = None
     """Pad id currently being edited in the waveform editor."""
+
+    settings_open: bool = False
+    """Whether the Settings overlay is open."""
 
     tap_bpm_pad_id: int | None = None
     """Current Tap BPM target pad. Resets tap timestamps when changed."""

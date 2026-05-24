@@ -23,6 +23,7 @@ from flitzis_looper.models import (
 from flitzis_looper.ui.context import (
     AudioActions,
     ReadOnlyStateProxy,
+    SettingsActions,
     UiActions,
     UiContext,
     UiState,
@@ -205,6 +206,7 @@ class TestUiStateComputedProperties:
 
         assert ui_state.stems.stem_mix_mode(0) == "all_stems"
         assert ui_state.stems.stems_available(0) is True
+        assert ui_state.stems.has_stem_cache(0) is True
         assert ui_state.stems.stem_enabled_mask(0) == STEM_INSTRUMENTAL_PRESET_MASK
         assert ui_state.stems.stem_last_custom_mask(0) == STEM_INSTRUMENTAL_PRESET_MASK
         assert ui_state.stems.stem_mask_display_mode(0) == "instrumental"
@@ -218,7 +220,7 @@ class TestUiStateComputedProperties:
         assert ui_state.stems.stem_generation_error(0) == "failed"
 
 
-class TestAudioActions:
+class TestAudioActions:  # noqa: PLR0904
     """Test AudioActions delegation to controller."""
 
     def test_trigger_pad(self, controller: AppController, audio_engine_mock: Mock) -> None:
@@ -442,6 +444,17 @@ class TestAudioActions:
 
         generate_stems_async.assert_called_once_with(0)
 
+    def test_delete_stems(
+        self, controller: AppController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        audio_actions = AudioActions(controller)
+        delete_stems = Mock(return_value=True)
+        monkeypatch.setattr(controller.stems, "delete_stems", delete_stems)
+
+        audio_actions.stems.delete_stems(0)
+
+        delete_stems.assert_called_once_with(0)
+
 
 class TestUiActions:
     """Test UiActions state mutations."""
@@ -515,6 +528,46 @@ class TestUiActions:
         assert controller.session.pressed_pads[5] is False
 
 
+class TestSettingsActions:
+    """Test Settings overlay state and quality actions."""
+
+    def test_open_close_toggle_settings_overlay(self, controller: AppController) -> None:
+        settings_actions = SettingsActions(controller)
+
+        settings_actions.open()
+        assert controller.session.settings_open is True
+
+        settings_actions.toggle()
+        assert controller.session.settings_open is False
+
+        settings_actions.toggle()
+        assert controller.session.settings_open is True
+
+        settings_actions.close()
+        assert controller.session.settings_open is False
+
+    def test_set_demucs_quality_delegates_to_stem_controller(
+        self, controller: AppController
+    ) -> None:
+        settings_actions = SettingsActions(controller)
+
+        settings_actions.set_demucs_quality(shifts=4, overlap=0.25)
+
+        assert controller.project.demucs_shifts == 4
+        assert controller.project.demucs_overlap == pytest.approx(0.25)
+        assert controller.persistence._dirty is True
+
+    def test_set_demucs_quality_does_not_start_stem_generation(
+        self, controller: AppController
+    ) -> None:
+        settings_actions = SettingsActions(controller)
+
+        settings_actions.set_demucs_quality(shifts=6, overlap=0.4)
+
+        assert controller.session.stem_generating_sample_ids == set()
+        assert controller.session.stem_generation_source_versions == {}
+
+
 class TestUiContext:
     """Test UiContext initialization and access."""
 
@@ -526,6 +579,7 @@ class TestUiContext:
         assert isinstance(ui_context.state, UiState)
         assert isinstance(ui_context.audio, AudioActions)
         assert isinstance(ui_context.ui, UiActions)
+        assert isinstance(ui_context.ui.settings, SettingsActions)
 
     def test_ui_context_provides_access_to_components(self, controller: AppController) -> None:
         """Test UiContext provides access to all UI components."""

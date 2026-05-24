@@ -13,11 +13,13 @@ behavior that the real-time audio path cannot safely provide.
 - Define performance UI stem availability indicators for unavailable, generating, available,
   blocked, and error states.
 - Define selected-pad action entry points for generating stems, selecting full mix versus all
-  prepared stems, and bottom-bar per-stem mask controls.
+  prepared stems, deleting cached stems, and bottom-bar per-stem mask controls.
 - Implement a selected-pad bottom-bar `V`, `D`, `M`, `B`, `I`, `A` control cluster where `I`
   means the instrumental preset Drums + Melody + Bass and `A` means Vocals + Drums + Melody + Bass.
+- Add a bottom-right Settings overlay with persistent bounded Demucs shifts and overlap controls.
 - Define and implement project persistence expectations for stem cache metadata and durable
-  full-mix/all-stems stem mix preferences while keeping momentary performance gestures transient.
+  full-mix/all-stems stem mix preferences and Demucs quality settings while keeping momentary
+  performance gestures transient.
 - Require audio-thread stem mix state changes to use bounded fixed-size control messages,
   including per-pad enabled-stem masks.
 - Preserve full-mix playback as the safe fallback whenever stems are unavailable, stale,
@@ -31,13 +33,14 @@ behavior that the real-time audio path cannot safely provide.
 - Affected docs: `docs/audio-engine.md`, `docs/message-passing.md`,
   `docs/todos-legacy-migration.md`.
 - Affected code: `ProjectState`, UI selectors/actions, selected-pad sidebar, pad-grid
-  indicators, stem controller actions, Rust control messages, bounded mixer stem mix state,
-  and focused Rust/Python tests.
+  indicators, Settings overlay rendering/actions, stem controller actions, Rust control messages,
+  bounded mixer stem mix state, and focused Rust/Python tests.
 
 ## Non-Goals
-- No complete performer-facing UI implementation in the first implementation slice.
+- No separate stem mute feature in this slice; component right-click is limited to a
+  non-momentary solo setter for `V`/`D`/`M`/`B`.
 - No neural source-separation model selection, dependency installation, model download, or
-  production stem quality change.
+  backend rewrite from the Settings page.
 - No real-time stem separation.
 - No direct use of the cached `instrumental.wav` artifact as the `I` button or as an additional
   fifth audible layer for the `A` button.

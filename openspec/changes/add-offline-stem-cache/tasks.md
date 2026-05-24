@@ -8,6 +8,8 @@
 - [x] 2.2 Represent the expected stem kinds: vocals, melody, bass, drums, and instrumental.
 - [x] 2.3 Mark cached stems unavailable when the source pad is unloaded or replaced.
 - [x] 2.4 Treat stale cache use for a replaced pad as a blocker before merge.
+- [x] 2.5 Store generated project stem artifacts in pad-scoped `samples/stems/#<pad>/` directories.
+- [x] 2.6 Delete tracked pad stem cache artifacts when a pad is unloaded.
 
 ## 3. Background Stem Generation
 - [x] 3.1 Add a manual per-pad background stem generation task.
@@ -52,5 +54,6 @@
 - [x] 8.10 Require the default `htdemucs` checkpoint to be preinstalled and return `no Model installed` without invoking Demucs when it is missing.
 - [x] 8.11 Declare TorchCodec as a runtime dependency for Demucs/Torchaudio WAV output and preflight `ffprobe`/`ffmpeg` before invoking Demucs.
 - [x] 8.12 Run Demucs with high-quality defaults `--shifts 10` and `--overlap 0.5`.
-- [x] 8.13 Model Demucs quality settings as bounded request parameters for a future settings surface.
+- [x] 8.13 Model Demucs quality settings as bounded request parameters for Settings page control.
 - [x] 8.14 Resolve FFmpeg tools from `PATH`, `FLITZIS_FFMPEG_DIR`, or local WinGet `Gyan.FFmpeg*` installs before preflight.
+- [x] 8.15 Feed validated Settings page Demucs quality values into the backend request before generation starts.
