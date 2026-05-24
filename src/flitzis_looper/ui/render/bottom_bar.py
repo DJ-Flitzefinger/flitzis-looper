@@ -80,6 +80,28 @@ def _trigger_quantization(ctx: UiContext) -> None:
                     ctx.audio.global_.set_trigger_quantization(mode)
 
 
+def _learn_control(ctx: UiContext) -> None:
+    enabled = ctx.state.project.input_mapping_enabled
+    active = ctx.state.session.input_learn_active
+    pending = ctx.state.session.input_learn_pending_binding_key is not None
+    style: ButtonStyleName = "mode-on" if active or pending else "mode-off"
+
+    imgui.same_line(spacing=SPACING)
+    imgui.begin_disabled(disabled=not enabled)
+    with button_style(style):
+        if imgui.button("L##input_mapping_learn", (36, 0)):
+            ctx.input.toggle_learn()
+    imgui.end_disabled()
+
+    if imgui.is_item_hovered():
+        if pending:
+            imgui.set_tooltip("Delete mapping for captured input")
+        elif active:
+            imgui.set_tooltip("Cancel Learn")
+        else:
+            imgui.set_tooltip("Learn input mapping")
+
+
 def _stem_preset_is_active(mask: int, display_mode: StemMaskDisplayMode) -> bool:
     return (display_mode == "instrumental" and mask == STEM_INSTRUMENTAL_PRESET_MASK) or (
         display_mode == "all" and mask == STEM_COMPONENT_MASK
@@ -210,6 +232,7 @@ def _bottom_bar_controls(ctx: UiContext) -> None:
         if imgui.button("MULTI LOOP"):
             ctx.audio.global_.toggle_multi_loop()
 
+    _learn_control(ctx)
     imgui.same_line(spacing=SPACING)
     _trigger_quantization(ctx)
     _stem_mask_controls(ctx)

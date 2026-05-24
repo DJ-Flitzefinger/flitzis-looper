@@ -297,7 +297,7 @@ def _render_loaded_actions(ctx: UiContext, pad_id: int) -> None:
         ctx.audio.pads.analyze_sample_async(pad_id)
 
     if imgui.button("Adjust Loop", (-1, 0)):
-        ctx.ui.waveform.open(pad_id)
+        ctx.ui.open_waveform_editor(pad_id)
 
     imgui.separator()
     _render_stem_controls(

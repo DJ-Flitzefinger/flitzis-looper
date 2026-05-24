@@ -206,6 +206,7 @@ class TestModelSerialization:
         assert "trigger_quantization" in data
         assert "demucs_shifts" in data
         assert "demucs_overlap" in data
+        assert "input_mapping_enabled" in data
         assert "selected_pad" in data
 
         assert data["sample_analysis"][0]["bpm"] == 120.0
@@ -259,6 +260,7 @@ def test_project_state_defaults(project_state: ProjectState) -> None:
     assert project_state.trigger_quantization == "immediate"
     assert project_state.demucs_shifts == DEFAULT_DEMUCS_SHIFTS
     assert project_state.demucs_overlap == DEFAULT_DEMUCS_OVERLAP
+    assert project_state.input_mapping_enabled is False
     assert project_state.speed == 1.0
     assert project_state.volume == 1.0
     assert project_state.selected_pad == 0
@@ -376,6 +378,10 @@ def test_session_state_defaults(session_state: SessionState) -> None:
     assert all(mask == STEM_COMPONENT_MASK for mask in session_state.pad_stem_last_custom_mask)
     assert len(session_state.pad_stem_mask_display_mode) == NUM_SAMPLES
     assert all(mode == "all" for mode in session_state.pad_stem_mask_display_mode)
+    assert session_state.input_learn_active is False
+    assert session_state.input_learn_pending_source is None
+    assert session_state.input_learn_pending_binding_key is None
+    assert session_state.input_mapping_error is None
 
 
 def test_stem_enabled_mask_validation(session_state: SessionState) -> None:

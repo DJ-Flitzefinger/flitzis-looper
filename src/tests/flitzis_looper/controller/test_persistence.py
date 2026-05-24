@@ -36,7 +36,7 @@ def test_persistence_roundtrip_writes_atomic_json(
     wav_path = samples_dir / "foo.wav"
     write_mono_pcm16_wav(wav_path, 48_000)
 
-    project = ProjectState(volume=0.5)
+    project = ProjectState(volume=0.5, input_mapping_enabled=True)
     project.sample_paths[0] = str(wav_path)
 
     persistence = ProjectPersistence(project)
@@ -45,6 +45,7 @@ def test_persistence_roundtrip_writes_atomic_json(
 
     loaded = ProjectPersistence.from_config_path().project
     assert loaded.volume == pytest.approx(0.5)
+    assert loaded.input_mapping_enabled is True
     assert loaded.sample_paths[0] == "samples/foo.wav"
 
 
@@ -279,6 +280,7 @@ def test_complex_project_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         key_lock=True,
         bpm_lock=True,
         trigger_quantization="next_bar",
+        input_mapping_enabled=True,
         speed=1.25,
     )
     project.sample_paths[0] = str(wav_path)
@@ -294,6 +296,7 @@ def test_complex_project_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert loaded.key_lock is True
     assert loaded.bpm_lock is True
     assert loaded.trigger_quantization == "next_bar"
+    assert loaded.input_mapping_enabled is True
     assert loaded.speed == pytest.approx(1.25)
     assert loaded.sample_paths[0] == "samples/foo.wav"
 

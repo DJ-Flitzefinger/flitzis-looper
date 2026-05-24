@@ -28,8 +28,11 @@ Python interacts with a single `AudioEngine` object; the CPAL audio callback ren
 2. `run()` initializes a CPAL output stream and two ring buffers (control→audio, audio→control).
 3. Python schedules audio loading into sample slots using `load_sample_async(id, path)` and polls `poll_loader_events()`.
 4. Python triggers playback using `play_sample(id, velocity)`.
-5. The CPAL callback drains pending control messages, updates bounded per-pad timing metadata, routes play/stop commands through the Rust scheduler, mixes active voices into the output buffer, and advances the Rust transport timeline by rendered output frames.
-6. Optional: Python can poll `receive_msg()` for messages emitted by the audio thread (e.g., `Pong`).
+5. Optional MIDI input mapping is captured by a Rust input layer outside the audio callback,
+   timestamped immediately, normalized, resolved from an in-memory mapping snapshot, and then
+   bridged to the existing bounded control-command path where possible.
+6. The CPAL callback drains pending control messages, updates bounded per-pad timing metadata, routes play/stop commands through the Rust scheduler, mixes active voices into the output buffer, and advances the Rust transport timeline by rendered output frames.
+7. Optional: Python can poll `receive_msg()` for messages emitted by the audio thread (e.g., `Pong`).
 
 ## Module Structure
 
@@ -52,6 +55,10 @@ The Gen3 transport helper lives in `rust/src/audio_engine/transport.rs`; the fix
 absolute-frame scheduler helper lives in `rust/src/audio_engine/scheduler.rs` and is owned by the
 CPAL callback.
 
+The low-jitter input mapping helper lives in `rust/src/audio_engine/input_mapping.rs`. It owns
+MIDI capture, timestamping, filtering, in-memory mapping lookup, and dispatch bridging outside the
+CPAL callback.
+
 ## Main components
 
 - Python (control layer)
@@ -64,6 +71,8 @@ CPAL callback.
   - `rust/src/audio_engine/errors.rs`: Audio-specific error types.
   - `rust/src/audio_engine/voice.rs`: Voice management and lifecycle.
   - `rust/src/audio_engine/mixer.rs`: Real-time mixer implementation.
+  - `rust/src/audio_engine/input_mapping.rs`: MIDI capture, timestamping, filtering, in-memory
+    mapping lookup, and dispatch bridging outside the audio callback.
   - `rust/src/audio_engine/transport.rs`: Audio-thread-owned output-frame clock and musical phase helpers.
   - `rust/src/audio_engine/scheduler.rs`: Fixed-capacity absolute output-frame scheduler for playback events.
   - `rust/src/audio_engine/sample_loader.rs`: Audio file decoding and channel mapping.
@@ -71,6 +80,7 @@ CPAL callback.
   - `rust/src/messages.rs`: Fixed-size message types shared between threads.
   - Dependencies:
     - `cpal` for the audio callback/stream.
+    - `midir` for MIDI input callbacks outside the audio callback.
     - `rtrb` for SPSC ring buffers.
     - `symphonia` for decoding audio files.
 
@@ -80,6 +90,9 @@ The project deliberately separates non-real-time work from the real-time audio c
 
 - The audio callback MUST avoid blocking, disk I/O, heap allocations, logging, and Python/GIL interaction.
 - Inter-thread communication uses fixed-capacity ring buffers (1024 messages).
+- MIDI input ports, keyboard input, mapping JSON files, and Learn UI state are outside the audio
+  callback. Rust input/control modules may own MIDI callbacks and bounded queues, but they may
+  only affect playback by sending bounded control messages through the established control path.
 - Sample playback is designed for predictable performance:
   - `MAX_SAMPLE_SLOTS` fixed sample slots addressed by `id` (`0..n`).
   - `MAX_VOICES` fixed polyphony; additional triggers are dropped deterministically.
@@ -251,6 +264,37 @@ to choose the initial pad sample frame, and how BPM lock can anchor the transpor
 selected playing pad. Phase-aware scheduled playback is wired for quantized starts and exclusive
 transitions; BPM-lock phase anchoring is wired for selected active pads.
 
+## Gen3 low-jitter input mapping
+
+The active low-jitter input mapping slice is
+`openspec/changes/add-low-jitter-input-mapping/`. It keeps Python in charge of Settings, Learn
+state, keyboard focus rules, and mapping-file edits, while moving the MIDI hot path into Rust
+outside the CPAL callback.
+
+Implemented first slice:
+
+- The `L` Learn workflow is preserved: `L -> input -> learnable action` saves a mapping, and
+  `L -> input -> L` deletes that input's existing mapping.
+- Keyboard mappings retain key-plus-modifier bindings, do not execute while text input is
+  focused, and remain the responsiveness reference for mapped dispatch.
+- MIDI Note On velocity greater than zero and Control Change are normalized to stable binding
+  keys such as `midi:note:1:60` and `midi:cc:1:7`.
+- Note On velocity zero, Active Sensing, MIDI Clock, SysEx, Program Change, Pitch Bend,
+  Aftertouch, and MPE-style messages are ignored for version 1.
+- Incoming MIDI events are stamped with a monotonic timestamp immediately in the Rust MIDI
+  callback and placed onto a bounded channel without Python, JSON, UI updates, or logging.
+- Normal mapped MIDI playback resolves against an in-memory snapshot published by Python after
+  Learn/save/delete/clear-all changes. The hot path does not read or write JSON.
+- Direct audio-safe actions such as pad trigger, pad stop, and stop-all are bridged to the
+  existing bounded control-command path. Other mapped actions are reported to Python for
+  controller-owned execution outside the hot path.
+- The Settings page exposes Input Mapping ON/OFF plus Delete all Keyboard Mappings and Delete
+  all MIDI Mappings.
+
+The Rust MIDI input layer is not part of the audio callback. The audio callback must never handle
+MIDI ports, keyboard polling, Learn state, mapping JSON, Python/GIL access, blocking locks,
+logging, neural inference, or unbounded work.
+
 ## Current Python API surface
 
 The Rust engine is exposed to Python as `AudioEngine` with:
@@ -274,6 +318,16 @@ The Rust engine is exposed to Python as `AudioEngine` with:
     playback; full beat-grid vectors are not sent to the callback.
   - `anchor_transport_phase_from_pad(id)` requests BPM-lock transport downbeat anchoring from the
     selected playing pad using only audio-thread-owned transport and mixer state.
+  - `set_input_mapping_enabled(enabled)` turns the Rust input layer's mapping resolution on or off.
+  - `set_input_mapping_snapshot(mappings)` publishes `(binding_key, action_key)` MIDI mappings to
+    Rust for in-memory lookup.
+  - `set_input_runtime_state(multi_loop, loaded, loop_starts, loop_ends)` publishes the bounded
+    pad runtime state needed for direct Rust dispatch.
+  - `start_midi_input()` opens available MIDI input ports through the Rust input layer.
+  - `stop_midi_input()` closes those MIDI input connections.
+  - `poll_input_events()` polls normalized MIDI input events for Learn UI and diagnostics.
+  - `inject_midi_input_for_test(message)` injects a MIDI message into the same normalization path
+    for hardware-free bridge tests.
 
 - Messaging utilities
   - `ping()` sends a ping to the audio thread.
@@ -303,3 +357,4 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 - `openspec/changes/add-rust-transport-timeline/`
 - `openspec/changes/add-phase-aware-playback-sync/`
 - `openspec/changes/add-offline-stem-cache/`
+- `openspec/changes/add-low-jitter-input-mapping/`

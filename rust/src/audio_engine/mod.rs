@@ -5,6 +5,7 @@ use crate::audio_engine::constants::{
     VOLUME_MAX, VOLUME_MIN,
 };
 use crate::audio_engine::errors::SampleLoadError;
+use crate::audio_engine::input_mapping::InputRuntime;
 use crate::audio_engine::progress::{LoadProgressStage, ProgressReporter};
 use crate::audio_engine::sample_loader::{
     SampleLoadProgress, SampleLoadSubtask, cache_audio_file_for_project,
@@ -36,6 +37,7 @@ mod channels;
 mod constants;
 mod eq3;
 mod errors;
+mod input_mapping;
 mod mixer;
 mod progress;
 mod sample_loader;
@@ -118,6 +120,7 @@ pub struct AudioEngine {
     sample_cache: Arc<Mutex<Vec<Option<SampleBuffer>>>>,
     loading_sample_ids: Arc<Mutex<HashSet<usize>>>,
     active_tasks: Arc<Mutex<HashSet<(usize, BackgroundTaskKind)>>>,
+    input_runtime: Option<InputRuntime>,
 }
 
 #[pymethods]
@@ -135,6 +138,7 @@ impl AudioEngine {
             sample_cache: Arc::new(Mutex::new(vec![None; NUM_SAMPLES])),
             loading_sample_ids: Arc::new(Mutex::new(HashSet::new())),
             active_tasks: Arc::new(Mutex::new(HashSet::new())),
+            input_runtime: None,
         })
     }
 
@@ -149,6 +153,7 @@ impl AudioEngine {
                 start_stream(&handle.stream).map_err(|e| {
                     PyRuntimeError::new_err(format!("Failed to start audio stream: {e}"))
                 })?;
+                self.input_runtime = Some(InputRuntime::new(handle.producer.clone()));
                 self.stream_handle = Some(handle);
                 self.is_playing = true;
                 Ok(())
@@ -197,9 +202,69 @@ impl AudioEngine {
 
     /// Shut down the audio engine.
     pub fn shut_down(&mut self) -> PyResult<()> {
+        self.input_runtime = None;
         self.stream_handle = None;
         self.is_playing = false;
         Ok(())
+    }
+
+    pub fn set_input_mapping_enabled(&self, enabled: bool) -> PyResult<()> {
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        runtime.set_enabled(enabled);
+        Ok(())
+    }
+
+    pub fn set_input_mapping_snapshot(&self, mappings: Vec<(String, String)>) -> PyResult<()> {
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        runtime.replace_mappings(mappings);
+        Ok(())
+    }
+
+    pub fn set_input_runtime_state(
+        &self,
+        multi_loop: bool,
+        loaded: Vec<bool>,
+        loop_starts: Vec<f32>,
+        loop_ends: Vec<Option<f32>>,
+    ) -> PyResult<()> {
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        runtime
+            .set_runtime_state(multi_loop, loaded, loop_starts, loop_ends)
+            .map_err(PyValueError::new_err)
+    }
+
+    pub fn start_midi_input(&self) -> PyResult<usize> {
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        runtime.start_midi_input().map_err(PyRuntimeError::new_err)
+    }
+
+    pub fn stop_midi_input(&self) -> PyResult<()> {
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        runtime.stop_midi_input();
+        Ok(())
+    }
+
+    pub fn inject_midi_input_for_test(&self, message: Vec<u8>) -> PyResult<bool> {
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        Ok(runtime.inject_midi_message(&message))
     }
 
     /// Load an audio file into a sample slot on a background thread.
@@ -851,6 +916,32 @@ impl AudioEngine {
                 dict.set_item("task", task_to_str(task))?;
                 dict.set_item("msg", error)?;
             }
+        }
+
+        Ok(Some(dict.into_any().unbind()))
+    }
+
+    /// Poll for pending normalized input mapping events.
+    ///
+    /// Returns `None` when no input events are available.
+    pub fn poll_input_events(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let Some(event) = runtime.poll_event() else {
+            return Ok(None);
+        };
+
+        let dict = PyDict::new(py);
+        dict.set_item("source", "midi")?;
+        dict.set_item("binding_key", event.binding_key)?;
+        dict.set_item("received_at_ns", event.received_at_ns)?;
+        dict.set_item("dispatched", event.dispatched)?;
+        dict.set_item("direct", event.direct)?;
+        if let Some(action_key) = event.action_key {
+            dict.set_item("action_key", action_key)?;
         }
 
         Ok(Some(dict.into_any().unbind()))

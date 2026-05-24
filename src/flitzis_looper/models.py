@@ -222,6 +222,8 @@ class ProjectState(BaseModel):
     """BPM lock state."""
     trigger_quantization: TriggerQuantizationMode = "immediate"
     """Global pad trigger quantization mode."""
+    input_mapping_enabled: bool = False
+    """Enable performer MIDI/keyboard input mappings."""
     demucs_shifts: int = Field(
         default=DEFAULT_DEMUCS_SHIFTS,
         ge=MIN_DEMUCS_SHIFTS,
@@ -472,6 +474,18 @@ class SessionState(BaseModel):
 
     settings_open: bool = False
     """Whether the Settings overlay is open."""
+
+    input_learn_active: bool = False
+    """Whether input mapping Learn mode is waiting for an input/action."""
+
+    input_learn_pending_source: str | None = None
+    """Pending Learn input source (`midi` or `keyboard`) captured before action selection."""
+
+    input_learn_pending_binding_key: str | None = None
+    """Stable pending input binding key captured by Learn mode."""
+
+    input_mapping_error: str | None = None
+    """Last non-fatal input mapping runtime error for UI diagnostics."""
 
     tap_bpm_pad_id: int | None = None
     """Current Tap BPM target pad. Resets tap timestamps when changed."""

@@ -7,6 +7,7 @@ from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.controller.settings import SettingsController
 from flitzis_looper.controller.stems import StemController, StemTaskRunner
 from flitzis_looper.controller.transport import TransportController
+from flitzis_looper.input_mapping import InputMappingController
 from flitzis_looper.models import ProjectState, SessionState
 from flitzis_looper_audio import AudioEngine
 
@@ -61,17 +62,23 @@ class AppController:
             on_stems_deleted=self.stems.delete_stems,
         )
         self.metering = MeteringController(self._project, self._session, self._audio)
+        self.input_mapping = InputMappingController(
+            self,
+            on_project_changed=self._persistence.mark_dirty,
+        )
 
         self._controllers: set[BaseController] = {
             self.transport,
             self.loader,
             self.metering,
             self.stems,
+            self.input_mapping,
         }
 
         self.transport.apply_project_state_to_audio()
         self.stems.restore_stem_cache_from_project_state()
         self.loader.restore_samples_from_project_state()
+        self.input_mapping.apply_project_state_to_input_runtime()
 
     def shut_down(self) -> None:
         with suppress(OSError):

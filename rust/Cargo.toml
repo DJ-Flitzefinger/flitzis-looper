@@ -15,6 +15,7 @@ thiserror = "2.0"
 rtrb = "0.3.2"
 log = "0.4.29"
 env_logger = "0.11.8"
+midir = "0.10"
 symphonia = { version = "0.5", features = ["all", "opt-simd"] }
 rubato = { version = "1.0", features = ["fft_resampler"] }
 audioadapter = "2.0"

@@ -14,6 +14,10 @@ Two independent SPSC ring buffers are used:
 
 Both buffers are fixed-capacity (1024 messages). When a buffer is full, pushing returns an error instead of waiting for space.
 
+The Rust input-mapping layer also uses bounded non-audio callback queues for MIDI events and
+diagnostic/Learn events. Those queues are outside the CPAL callback. A mapped MIDI trigger can
+only affect audio by sending a bounded control message through the existing control-to-audio path.
+
 ## What gets sent
 
 Messages are intentionally small and allocation-free on the audio thread:
@@ -21,6 +25,9 @@ Messages are intentionally small and allocation-free on the audio thread:
 - Playback triggers are referenced by `id` and `velocity` (no file paths in the callback).
 - Loading publishes decoded sample data via a shared handle; the large sample buffer is not copied just to cross the thread boundary.
 - Beatgrid/downbeat publication sends one bounded per-pad timing anchor, not full beat-grid vectors.
+- Input mapping publishes stable binding/action keys across the Python/Rust boundary, then uses
+  in-memory snapshots for normal MIDI lookup. Mapping JSON is not read or written in the audio
+  callback or MIDI hot path.
 - `ping()`/`Pong` exists as a minimal end-to-end messaging check.
 
 ## Real-time safety rules
@@ -33,6 +40,8 @@ The CPAL callback:
   quantized events.
 - Avoids Python/GIL interaction entirely.
 - Performs no disk I/O or decoding.
+- Does not own MIDI ports, poll keyboards, read mapping JSON, update Learn state, or call input
+  mapping UI/controller code.
 - Mixes audio using fixed-capacity data structures (`MAX_SAMPLE_SLOTS`, `MAX_VOICES`).
 
 Disk I/O and decoding happen in `load_sample(...)`, outside the callback.
@@ -42,6 +51,28 @@ Disk I/O and decoding happen in `load_sample(...)`, outside the callback.
 - Ring buffer full: `AudioEngine` methods return an error to Python; the audio thread continues unaffected.
 - Ring buffer empty (audio → control): `receive_msg()` returns `None`.
 - Missing sample slot: triggering playback is ignored safely.
+
+## Low-jitter input mapping messages
+
+The low-jitter input mapping work is specified in
+`openspec/changes/add-low-jitter-input-mapping/`. MIDI capture is intentionally separated from the
+CPAL callback:
+
+- The MIDI backend callback timestamps each supported message with a monotonic timestamp as soon
+  as practical.
+- The MIDI callback normalizes only Note On velocity greater than zero and Control Change for
+  version 1. It drops Note On velocity zero, Active Sensing, MIDI Clock, SysEx, Program Change,
+  Pitch Bend, Aftertouch, and MPE-style messages.
+- Normalized MIDI input is sent through a bounded queue to a Rust dispatcher thread.
+- The dispatcher resolves the latest in-memory mapping snapshot. It does not read JSON.
+- Direct audio-safe mappings, such as pad trigger, pad stop, and stop-all, are bridged through the
+  existing bounded control-to-audio ring buffer.
+- Controller-owned mappings are reported back to Python as small event dictionaries containing
+  source, binding key, monotonic timestamp, action key, and dispatch flags.
+
+This path must not simulate mouse clicks, call Python from the audio callback, route MIDI directly
+into callback functions, block the callback, log from the callback, or allocate unbounded audio
+thread state.
 
 ## Gen3 transport and scheduler messages
 
@@ -183,3 +214,4 @@ and background backend path.
 - `openspec/changes/add-rust-transport-timeline/`
 - `openspec/changes/add-phase-aware-playback-sync/`
 - `openspec/changes/add-offline-stem-cache/`
+- `openspec/changes/add-low-jitter-input-mapping/`

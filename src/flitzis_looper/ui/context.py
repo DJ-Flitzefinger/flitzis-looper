@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, TypeVar, cast
 from pydantic import BaseModel
 
 from flitzis_looper.constants import SPEED_STEP
+from flitzis_looper.input_mapping import KeyboardBinding, LooperAction
 from flitzis_looper_audio import AudioMessage
 
 if TYPE_CHECKING:
@@ -222,10 +223,16 @@ class PadAudioActions:
         self._controller = controller
 
     def trigger_pad(self, pad_id: int) -> None:
-        self._controller.transport.playback.trigger_pad(pad_id)
+        self._controller.input_mapping.perform_learnable_action(
+            LooperAction.trigger_pad(pad_id),
+            lambda: self._controller.transport.playback.trigger_pad(pad_id),
+        )
 
     def stop_pad(self, pad_id: int) -> None:
-        self._controller.transport.playback.stop_pad(pad_id)
+        self._controller.input_mapping.perform_learnable_action(
+            LooperAction.stop_pad(pad_id),
+            lambda: self._controller.transport.playback.stop_pad(pad_id),
+        )
 
     def reset_pad_loop_region(self, pad_id: int) -> None:
         self._controller.transport.loop.reset(pad_id)
@@ -249,10 +256,16 @@ class PadAudioActions:
         self._controller.loader.load_sample_async(pad_id, path)
 
     def unload_sample(self, pad_id: int) -> None:
-        self._controller.loader.unload_sample(pad_id)
+        self._controller.input_mapping.perform_learnable_action(
+            LooperAction.unload_pad(pad_id),
+            lambda: self._controller.loader.unload_sample(pad_id),
+        )
 
     def analyze_sample_async(self, pad_id: int) -> None:
-        self._controller.loader.analyze_sample_async(pad_id)
+        self._controller.input_mapping.perform_learnable_action(
+            LooperAction.analyze_pad(pad_id),
+            lambda: self._controller.loader.analyze_sample_async(pad_id),
+        )
 
     def set_manual_bpm(self, pad_id: int, bpm: float) -> None:
         self._controller.transport.bpm.set_manual_bpm(pad_id, bpm)
@@ -281,13 +294,31 @@ class StemAudioActions:
         self._controller = controller
 
     def generate_stems_async(self, pad_id: int) -> None:
-        self._controller.stems.generate_stems_async(pad_id)
+        def execute() -> None:
+            self._controller.stems.generate_stems_async(pad_id)
+
+        self._controller.input_mapping.perform_learnable_action(
+            LooperAction.generate_stems(pad_id),
+            execute,
+        )
 
     def delete_stems(self, pad_id: int) -> None:
-        self._controller.stems.delete_stems(pad_id)
+        def execute() -> None:
+            self._controller.stems.delete_stems(pad_id)
+
+        self._controller.input_mapping.perform_learnable_action(
+            LooperAction.delete_stems(pad_id),
+            execute,
+        )
 
     def set_stem_mix_mode(self, pad_id: int, mode: StemMixMode) -> None:
-        self._controller.stems.set_stem_mix_mode(pad_id, mode)
+        def execute() -> None:
+            self._controller.stems.set_stem_mix_mode(pad_id, mode)
+
+        self._controller.input_mapping.perform_learnable_action(
+            LooperAction.stem_mix(pad_id, mode),
+            execute,
+        )
 
     def set_stem_enabled_mask(
         self,
@@ -295,7 +326,15 @@ class StemAudioActions:
         enabled_stem_mask: int,
         display_mode: StemMaskDisplayMode = "custom",
     ) -> None:
-        self._controller.stems.set_stem_enabled_mask(pad_id, enabled_stem_mask, display_mode)
+        def execute() -> None:
+            self._controller.stems.set_stem_enabled_mask(
+                pad_id, enabled_stem_mask, display_mode
+            )
+
+        self._controller.input_mapping.perform_learnable_action(
+            LooperAction.stem_mask(pad_id, enabled_stem_mask, display_mode),
+            execute,
+        )
 
 
 class GlobalAudioActions:
@@ -309,35 +348,56 @@ class GlobalAudioActions:
         self._controller.transport.global_params.set_speed(speed)
 
     def reset_speed(self) -> None:
-        self._controller.transport.global_params.reset_speed()
+        self._controller.input_mapping.perform_learnable_action(
+            LooperAction.reset_speed(),
+            self._controller.transport.global_params.reset_speed,
+        )
 
     def increase_speed(self) -> None:
-        self._controller.transport.global_params.set_speed(
-            self._controller.project.speed + SPEED_STEP
+        self._controller.input_mapping.perform_learnable_action(
+            LooperAction.speed_delta("increase"),
+            lambda: self._controller.transport.global_params.set_speed(
+                self._controller.project.speed + SPEED_STEP
+            ),
         )
 
     def decrease_speed(self) -> None:
-        self._controller.transport.global_params.set_speed(
-            self._controller.project.speed - SPEED_STEP
+        self._controller.input_mapping.perform_learnable_action(
+            LooperAction.speed_delta("decrease"),
+            lambda: self._controller.transport.global_params.set_speed(
+                self._controller.project.speed - SPEED_STEP
+            ),
         )
 
     def toggle_multi_loop(self) -> None:
-        self._controller.transport.global_params.set_multi_loop(
-            enabled=not self._controller.project.multi_loop
+        self._controller.input_mapping.perform_learnable_action(
+            LooperAction.toggle_multi_loop(),
+            lambda: self._controller.transport.global_params.set_multi_loop(
+                enabled=not self._controller.project.multi_loop
+            ),
         )
 
     def toggle_key_lock(self) -> None:
-        self._controller.transport.global_params.set_key_lock(
-            enabled=not self._controller.project.key_lock
+        self._controller.input_mapping.perform_learnable_action(
+            LooperAction.toggle_key_lock(),
+            lambda: self._controller.transport.global_params.set_key_lock(
+                enabled=not self._controller.project.key_lock
+            ),
         )
 
     def toggle_bpm_lock(self) -> None:
-        self._controller.transport.global_params.set_bpm_lock(
-            enabled=not self._controller.project.bpm_lock
+        self._controller.input_mapping.perform_learnable_action(
+            LooperAction.toggle_bpm_lock(),
+            lambda: self._controller.transport.global_params.set_bpm_lock(
+                enabled=not self._controller.project.bpm_lock
+            ),
         )
 
     def set_trigger_quantization(self, mode: TriggerQuantizationMode) -> None:
-        self._controller.transport.global_params.set_trigger_quantization(mode)
+        self._controller.input_mapping.perform_learnable_action(
+            LooperAction.trigger_quantization(mode),
+            lambda: self._controller.transport.global_params.set_trigger_quantization(mode),
+        )
 
 
 class PollActions:
@@ -560,16 +620,28 @@ class UiActions:
     def close_file_dialog(self) -> None:
         self._controller.session.file_dialog_pad_id = None
 
+    def open_waveform_editor(self, pad_id: int) -> None:
+        self._controller.input_mapping.perform_learnable_action(
+            LooperAction.adjust_loop(pad_id),
+            lambda: self.waveform.open(pad_id),
+        )
+
     def select_pad(self, pad_id: int) -> None:
         self._controller.project.selected_pad = pad_id
         self._controller.persistence.mark_dirty()
 
     def select_bank(self, bank_id: int) -> None:
-        self._controller.project.selected_bank = bank_id
-        self._controller.persistence.mark_dirty()
+        self._controller.input_mapping.perform_learnable_action(
+            LooperAction.select_bank(bank_id),
+            lambda: self._select_bank(bank_id),
+        )
 
     def store_pressed_pad_state(self, pad_id: int, *, pressed: bool) -> None:
         self._controller.session.pressed_pads[pad_id] = pressed
+
+    def _select_bank(self, bank_id: int) -> None:
+        self._controller.project.selected_bank = bank_id
+        self._controller.persistence.mark_dirty()
 
 
 class SettingsActions:
@@ -590,6 +662,47 @@ class SettingsActions:
     def set_demucs_quality(self, *, shifts: int, overlap: float) -> None:
         self._controller.settings.set_demucs_quality(shifts=shifts, overlap=overlap)
 
+    def set_input_mapping_enabled(self, *, enabled: bool) -> None:
+        self._controller.input_mapping.set_enabled(enabled=enabled)
+
+    def delete_all_keyboard_mappings(self) -> None:
+        self._controller.input_mapping.delete_all_keyboard_mappings()
+
+    def delete_all_midi_mappings(self) -> None:
+        self._controller.input_mapping.delete_all_midi_mappings()
+
+
+class InputMappingActions:
+    """Input mapping UI actions."""
+
+    def __init__(self, controller: AppController) -> None:
+        self._controller = controller
+
+    def toggle_learn(self) -> None:
+        self._controller.input_mapping.toggle_learn()
+
+    def capture_keyboard(
+        self,
+        key_name: str,
+        *,
+        ctrl: bool = False,
+        alt: bool = False,
+        shift: bool = False,
+        super_: bool = False,
+        text_input_focused: bool = False,
+    ) -> bool:
+        binding = KeyboardBinding(
+            key_name=key_name,
+            ctrl=ctrl,
+            alt=alt,
+            shift=shift,
+            super=super_,
+        )
+        return self._controller.input_mapping.capture_keyboard_input(
+            binding,
+            text_input_focused=text_input_focused,
+        )
+
 
 class UiContext:
     """The public interface for the UI layer."""
@@ -597,6 +710,7 @@ class UiContext:
     state: UiState
     audio: AudioActions
     ui: UiActions
+    input: InputMappingActions
 
     bold_font: imgui.ImFont
 
@@ -605,6 +719,7 @@ class UiContext:
         self.state = UiState(controller)
         self.audio = AudioActions(controller)
         self.ui = UiActions(controller)
+        self.input = InputMappingActions(controller)
         self.persistence = controller.persistence
 
     def on_frame_render(self) -> None:

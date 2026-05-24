@@ -34,6 +34,17 @@ def _wait_for_loader_event(
     pytest.fail(f"timed out waiting for {event_type!r} event")
 
 
+def _wait_for_input_event(audio_engine: AudioEngine) -> dict[str, object]:
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        event = audio_engine.poll_input_events()
+        if event is not None:
+            return event
+        time.sleep(0.01)
+
+    pytest.fail("timed out waiting for input event")
+
+
 @pytest.mark.parametrize("sample_rate_hz", [48_000, 44_100])
 def test_load_and_play_sample_smoke(
     sample_rate_hz: int, audio_engine: AudioEngine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -187,6 +198,26 @@ def test_set_trigger_quantization_requires_initialized_engine() -> None:
 
     with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
         engine.set_trigger_quantization("next_beat")
+
+
+def test_injected_midi_input_reports_normalized_mapping_event(
+    audio_engine: AudioEngine,
+) -> None:
+    audio_engine.set_input_mapping_enabled(True)
+    audio_engine.set_input_mapping_snapshot([("midi:note:1:60", "ui.select_bank:2")])
+
+    assert audio_engine.inject_midi_input_for_test([0x90, 60, 100]) is True
+    event = _wait_for_input_event(audio_engine)
+
+    assert event["source"] == "midi"
+    assert event["binding_key"] == "midi:note:1:60"
+    assert event["action_key"] == "ui.select_bank:2"
+    assert event["direct"] is False
+    assert event["dispatched"] is True
+    assert isinstance(event["received_at_ns"], int)
+
+    assert audio_engine.inject_midi_input_for_test([0x90, 60, 0]) is False
+    assert audio_engine.poll_input_events() is None
 
 
 def test_set_stem_mix_mode_accepts_supported_modes(audio_engine: AudioEngine) -> None:

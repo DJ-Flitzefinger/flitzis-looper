@@ -82,6 +82,25 @@ transport downbeat from that active pad when BPM/timing metadata is available an
 existing tempo matching. UI/controller trigger-quantization controls now expose immediate,
 next-beat, and next-bar triggering through fixed-size Rust mode updates.
 
+### 7b) Low-jitter input mapping and Learn
+- OpenSpec change (active): `add-low-jitter-input-mapping`
+- [x] As a performer, I can enable or disable Input Mapping from Settings.
+- [x] As a performer, I can use `L -> input -> learnable action` to save keyboard and MIDI mappings.
+- [x] As a performer, I can use `L -> input -> L` to delete that input's existing mapping.
+- [x] As a performer, keyboard mappings keep their responsive key-plus-modifier behavior and do
+  not fire while typing in text inputs.
+- [x] As a performer, MIDI Note On and Control Change mappings are captured in Rust outside the
+  audio callback, timestamped immediately, filtered, and resolved from in-memory mappings.
+- [x] As a developer, normal mapped playback no longer reads JSON or simulates mouse clicks in the
+  hot path.
+- [x] As a performer, I can delete all Keyboard mappings or all MIDI mappings from Settings while
+  preserving the mapping-file schema defaults.
+
+Gen3 constraint: MIDI ports, input mapping lookup, Learn state, keyboard polling, mapping JSON,
+and Python/UI work must stay out of the audio callback. Rust input/control modules outside the
+callback may own MIDI callbacks, bounded queues, and in-memory mapping snapshots, but mapped
+playback can only affect audio by sending bounded control commands through the established bridge.
+
 ### 8) Loop range editing (waveform editor)
 - [ ] As a performer, I can open a **waveform editor** for a pad.
 - [ ] As a performer, I can set **loop start** and **loop end** points.

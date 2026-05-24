@@ -22,6 +22,7 @@ from flitzis_looper.models import (
 )
 from flitzis_looper.ui.context import (
     AudioActions,
+    InputMappingActions,
     ReadOnlyStateProxy,
     SettingsActions,
     UiActions,
@@ -580,6 +581,7 @@ class TestUiContext:
         assert isinstance(ui_context.audio, AudioActions)
         assert isinstance(ui_context.ui, UiActions)
         assert isinstance(ui_context.ui.settings, SettingsActions)
+        assert isinstance(ui_context.input, InputMappingActions)
 
     def test_ui_context_provides_access_to_components(self, controller: AppController) -> None:
         """Test UiContext provides access to all UI components."""

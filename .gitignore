@@ -2,6 +2,7 @@
 
 # Local runtime sample cache/config generated while using the app
 samples/
+config/input/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

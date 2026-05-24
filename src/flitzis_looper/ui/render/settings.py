@@ -55,8 +55,28 @@ def settings_overlay(ctx: UiContext) -> None:
     with style_var(imgui.StyleVar_.item_spacing, (SPACING, SPACING)):
         imgui.text_unformatted("Settings")
         imgui.separator()
+        imgui.text_colored(TEXT_MUTED_RGBA, "Input Mapping")
+        _input_mapping_controls(ctx)
+        imgui.separator()
         imgui.text_colored(TEXT_MUTED_RGBA, "Stem Quality")
         _demucs_quality_controls(ctx)
+
+
+def _input_mapping_controls(ctx: UiContext) -> None:
+    enabled = bool(ctx.state.project.input_mapping_enabled)
+    changed, new_enabled = imgui.checkbox("Input Mapping", enabled)
+    if changed:
+        ctx.ui.settings.set_input_mapping_enabled(enabled=bool(new_enabled))
+        ctx.persistence.flush_if_dirty()
+
+    with style_var(imgui.StyleVar_.item_spacing, (0.0, SPACING / 4)):
+        if imgui.button("Delete all Keyboard Mappings", (-1, 0)):
+            ctx.ui.settings.delete_all_keyboard_mappings()
+        if imgui.button("Delete all MIDI Mappings", (-1, 0)):
+            ctx.ui.settings.delete_all_midi_mappings()
+
+    if ctx.state.session.input_mapping_error:
+        imgui.text_wrapped(ctx.state.session.input_mapping_error)
 
 
 def _demucs_quality_controls(ctx: UiContext) -> None:

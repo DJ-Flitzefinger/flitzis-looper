@@ -24,6 +24,64 @@ if TYPE_CHECKING:
 
     from flitzis_looper.ui.context import UiContext
 
+KEYBOARD_INPUT_KEYS = (
+    ("A", imgui.Key.a),
+    ("B", imgui.Key.b),
+    ("C", imgui.Key.c),
+    ("D", imgui.Key.d),
+    ("E", imgui.Key.e),
+    ("F", imgui.Key.f),
+    ("G", imgui.Key.g),
+    ("H", imgui.Key.h),
+    ("I", imgui.Key.i),
+    ("J", imgui.Key.j),
+    ("K", imgui.Key.k),
+    ("L", imgui.Key.l),
+    ("M", imgui.Key.m),
+    ("N", imgui.Key.n),
+    ("O", imgui.Key.o),
+    ("P", imgui.Key.p),
+    ("Q", imgui.Key.q),
+    ("R", imgui.Key.r),
+    ("S", imgui.Key.s),
+    ("T", imgui.Key.t),
+    ("U", imgui.Key.u),
+    ("V", imgui.Key.v),
+    ("W", imgui.Key.w),
+    ("X", imgui.Key.x),
+    ("Y", imgui.Key.y),
+    ("Z", imgui.Key.z),
+    ("0", imgui.Key._0),
+    ("1", imgui.Key._1),
+    ("2", imgui.Key._2),
+    ("3", imgui.Key._3),
+    ("4", imgui.Key._4),
+    ("5", imgui.Key._5),
+    ("6", imgui.Key._6),
+    ("7", imgui.Key._7),
+    ("8", imgui.Key._8),
+    ("9", imgui.Key._9),
+    ("SPACE", imgui.Key.space),
+    ("ENTER", imgui.Key.enter),
+    ("ESCAPE", imgui.Key.escape),
+    ("LEFT", imgui.Key.left_arrow),
+    ("RIGHT", imgui.Key.right_arrow),
+    ("UP", imgui.Key.up_arrow),
+    ("DOWN", imgui.Key.down_arrow),
+    ("F1", imgui.Key.f1),
+    ("F2", imgui.Key.f2),
+    ("F3", imgui.Key.f3),
+    ("F4", imgui.Key.f4),
+    ("F5", imgui.Key.f5),
+    ("F6", imgui.Key.f6),
+    ("F7", imgui.Key.f7),
+    ("F8", imgui.Key.f8),
+    ("F9", imgui.Key.f9),
+    ("F10", imgui.Key.f10),
+    ("F11", imgui.Key.f11),
+    ("F12", imgui.Key.f12),
+)
+
 
 @contextmanager
 def _sidebar(
@@ -124,9 +182,33 @@ def _file_dialog(ctx: UiContext) -> None:
         check_file_dialog(ctx, pad_id)
 
 
+def _poll_keyboard_input(ctx: UiContext) -> None:
+    if not ctx.state.project.input_mapping_enabled:
+        return
+
+    io = imgui.get_io()
+    text_input_focused = bool(getattr(io, "want_text_input", False)) or imgui.is_any_item_active()
+    ctrl = imgui.is_key_down(imgui.Key.mod_ctrl)
+    alt = imgui.is_key_down(imgui.Key.mod_alt)
+    shift = imgui.is_key_down(imgui.Key.mod_shift)
+    super_ = imgui.is_key_down(imgui.Key.mod_super)
+
+    for key_name, key in KEYBOARD_INPUT_KEYS:
+        if imgui.is_key_pressed(key, repeat=False) and ctx.input.capture_keyboard(
+            key_name,
+            ctrl=ctrl,
+            alt=alt,
+            shift=shift,
+            super_=super_,
+            text_input_focused=text_input_focused,
+        ):
+            break
+
+
 def render_ui(ctx: UiContext) -> None:
     """Main application render entrypoint."""
     ctx.on_frame_render()
+    _poll_keyboard_input(ctx)
     ctx.audio.poll.poll()
 
     with default_style():
