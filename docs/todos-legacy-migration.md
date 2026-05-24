@@ -81,8 +81,9 @@ transport target-frame bar phase plus those anchors to choose phase-aware initia
 normal starts, retriggers, and MultiLoop-disabled exclusive transitions. BPM-lock now publishes a
 fixed-size selected-pad phase-anchor request after a valid master BPM is set; Rust anchors the
 transport downbeat from that active pad when BPM/timing metadata is available and otherwise keeps
-existing tempo matching. UI/controller trigger-quantization controls now expose immediate,
-next-beat, and next-bar triggering through fixed-size Rust mode updates.
+existing tempo matching. UI/controller trigger-quantization controls now expose a bottom-bar `Q`
+toggle plus Settings grid choices for `1/16`, `1/32`, and `1/64`; legacy beat/bar modes migrate to
+`1/16`.
 
 ### 7b) Low-jitter input mapping and Learn
 - OpenSpec change (active): `add-low-jitter-input-mapping`

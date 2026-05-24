@@ -14,9 +14,9 @@ mask buttons, and Settings toggle SHALL share a consistent horizontal alignment 
 visually grouped by function.
 
 The Settings page SHALL expose the persisted trigger quantization grid as fixed musical steps:
-`1/64`, `1/32`, `1/16`, `1/8`, `1/4`, `1/2`, and `1 Bar`. The default grid step SHALL be `1/16`,
-and the minimum `1/64` step SHALL match the loop editor's finest musical grid line spacing when
-the loop editor is zoomed far enough to show that grid.
+`1/16`, `1/32`, and `1/64`. The default grid step SHALL be `1/16`, and the minimum `1/64` step
+SHALL match the loop editor's finest musical grid line spacing when the loop editor is zoomed far
+enough to show that grid.
 
 The UI SHALL NOT bypass controller actions, send full beat-grid metadata, touch audio-thread
 state directly, perform disk I/O in the audio callback, acquire the Python GIL in the audio
@@ -38,13 +38,13 @@ callback, or introduce unbounded audio-thread work.
 
 #### Scenario: Changing the Settings grid while disabled is persisted
 - **GIVEN** trigger quantization is disabled
-- **WHEN** the performer changes the Settings page trigger quantization grid to `1 Bar`
-- **THEN** the project stores `trigger_quantization_step = "1_bar"`
+- **WHEN** the performer changes the Settings page trigger quantization grid to `1/32`
+- **THEN** the project stores `trigger_quantization_step = "1_32"`
 - **AND** the control layer does not send an audio-thread trigger quantization update until
   trigger quantization is enabled
 
 #### Scenario: Legacy quantization mode is restored as a grid
 - **GIVEN** a saved project has legacy trigger quantization mode `next_beat`
 - **WHEN** the project is loaded
-- **THEN** the project stores trigger quantization as enabled with grid step `1_4`
-- **AND** the control layer applies `1_4` to the Rust audio engine
+- **THEN** the project stores trigger quantization as enabled with grid step `1_16`
+- **AND** the control layer applies `1_16` to the Rust audio engine

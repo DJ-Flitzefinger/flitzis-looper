@@ -30,9 +30,9 @@ def test_settings_overlay_replaces_main_surface_id() -> None:
 
 
 def test_settings_quantize_grid_options_cover_loop_editor_grid() -> None:
-    assert TRIGGER_QUANTIZATION_STEPS[0] == "1_64"
+    assert TRIGGER_QUANTIZATION_STEPS == ("1_16", "1_32", "1_64")
     assert TRIGGER_QUANTIZATION_STEP_LABELS["1_16"] == "1/16"
-    assert TRIGGER_QUANTIZATION_STEPS[-1] == "1_bar"
+    assert TRIGGER_QUANTIZATION_STEP_LABELS["1_64"] == "1/64"
 
 
 def test_settings_button_position_right_aligns_inside_bottom_bar() -> None:

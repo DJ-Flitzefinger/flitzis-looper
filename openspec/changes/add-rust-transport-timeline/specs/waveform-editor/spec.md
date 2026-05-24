@@ -15,11 +15,15 @@ musical grid overlays without changing playback, loop marker, or audio-thread be
 
 ### Requirement: Waveform Grid Shares The Trigger Quantization Basis
 The waveform editor SHALL render its musical grid and loop snapping on the same 1/64-note unit
-basis used by trigger quantization.
+basis used by trigger quantization and Rust pad phase metadata.
 
 The finest loop editor musical grid line spacing SHALL be one sixteenth of a beat in 4/4. This is
 the same subdivision exposed as the minimum `1/64` trigger quantization grid step, while the
 default trigger quantization Settings value remains `1/16`.
+
+The waveform editor grid anchor SHALL be the same per-pad timing anchor published to Rust for
+phase-aware quantized playback. Adjusting the per-pad Grid Offset SHALL update this published
+timing anchor so the visible loop-editor grid and Rust pad phase stay aligned.
 
 #### Scenario: Finest loop editor line spacing matches minimum quantization
 - **GIVEN** an effective BPM is available
@@ -27,3 +31,10 @@ default trigger quantization Settings value remains `1/16`.
 - **WHEN** the waveform editor renders the musical grid
 - **THEN** adjacent finest grid lines are spaced one sixteenth of a beat apart
 - **AND** the `1/64` trigger quantization grid uses the same subdivision interval
+
+#### Scenario: Grid offset updates Rust pad phase metadata
+- **GIVEN** a loaded pad has an effective BPM
+- **WHEN** the performer adjusts the waveform editor Grid Offset
+- **THEN** the waveform editor grid lines move by that sample offset
+- **AND** the control layer publishes the shifted grid anchor as the pad timing metadata used by
+  Rust quantized playback

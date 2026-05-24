@@ -72,10 +72,7 @@ fn parse_trigger_quantization(mode: &str) -> Option<TriggerQuantization> {
         "1_64" => Some(1),
         "1_32" => Some(2),
         "1_16" => Some(4),
-        "1_8" => Some(8),
-        "1_4" | "next_beat" | "beat" => Some(16),
-        "1_2" => Some(32),
-        "1_bar" | "next_bar" | "bar" => Some(64),
+        "next_beat" | "beat" | "next_bar" | "bar" => Some(4),
         _ => None,
     };
 
@@ -1283,7 +1280,7 @@ impl AudioEngine {
     pub fn set_trigger_quantization(&mut self, mode: &str) -> PyResult<()> {
         let mode = parse_trigger_quantization(mode).ok_or_else(|| {
             PyValueError::new_err(
-                "trigger quantization mode must be immediate or a grid from 1/64 through 1_bar",
+                "trigger quantization mode must be immediate or one of 1/16, 1/32, 1/64",
             )
         })?;
 

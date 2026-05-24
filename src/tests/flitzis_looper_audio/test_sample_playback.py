@@ -187,10 +187,6 @@ def test_set_trigger_quantization_accepts_supported_modes(audio_engine: AudioEng
         "grid_1_32",
         "1/16",
         "1_16",
-        "1_8",
-        "1_4",
-        "1_2",
-        "1_bar",
     )
 
     for mode in modes:
@@ -200,6 +196,9 @@ def test_set_trigger_quantization_accepts_supported_modes(audio_engine: AudioEng
 def test_set_trigger_quantization_rejects_invalid_mode(audio_engine: AudioEngine) -> None:
     with pytest.raises(ValueError, match=r"trigger quantization mode"):
         audio_engine.set_trigger_quantization("half_note")
+
+    with pytest.raises(ValueError, match=r"trigger quantization mode"):
+        audio_engine.set_trigger_quantization("1_bar")
 
 
 def test_set_trigger_quantization_requires_initialized_engine() -> None:

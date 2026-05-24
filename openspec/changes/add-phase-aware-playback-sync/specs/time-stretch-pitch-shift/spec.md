@@ -17,8 +17,8 @@ restarts.
 - **GIVEN** BPM lock is enabled from an active anchor pad
 - **AND** Rust successfully anchors the transport downbeat to that pad's phase
 - **AND** trigger quantization is enabled
-- **WHEN** another loaded pad is triggered with grid step `1 Bar`
-- **THEN** Rust schedules the start at the transport bar boundary derived from the anchor pad's phase
+- **WHEN** another loaded pad is triggered with grid step `1/16`
+- **THEN** Rust schedules the start at the selected transport grid boundary derived from the anchor pad's phase
 - **AND** the new pad starts at a phase-aware initial sample frame when its metadata is valid
 
 #### Scenario: Existing active pads are not time-slipped by phase anchoring

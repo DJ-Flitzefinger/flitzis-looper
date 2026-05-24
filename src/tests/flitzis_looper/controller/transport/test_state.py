@@ -41,7 +41,7 @@ def test_apply_global_audio_settings_only_when_changed(
     transport_controller._project.key_lock = True
     transport_controller._project.bpm_lock = False
     transport_controller._project.trigger_quantization_enabled = True
-    transport_controller._project.trigger_quantization_step = "1_4"
+    transport_controller._project.trigger_quantization_step = "1_32"
 
     defaults = ProjectState()
     apply_project_state._apply_global_audio_settings(defaults)
@@ -50,7 +50,7 @@ def test_apply_global_audio_settings_only_when_changed(
     audio_engine_mock.set_speed.assert_called_once()
     audio_engine_mock.set_key_lock.assert_called_once()
     audio_engine_mock.set_bpm_lock.assert_not_called()
-    audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_4")
+    audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_32")
 
 
 def test_apply_global_audio_settings_calls_all_methods(
@@ -64,7 +64,7 @@ def test_apply_global_audio_settings_calls_all_methods(
     transport_controller._project.key_lock = True
     transport_controller._project.bpm_lock = True
     transport_controller._project.trigger_quantization_enabled = True
-    transport_controller._project.trigger_quantization_step = "1_bar"
+    transport_controller._project.trigger_quantization_step = "1_64"
 
     defaults = ProjectState()
     apply_project_state._apply_global_audio_settings(defaults)
@@ -73,7 +73,7 @@ def test_apply_global_audio_settings_calls_all_methods(
     audio_engine_mock.set_speed.assert_called_once()
     audio_engine_mock.set_key_lock.assert_called_once()
     audio_engine_mock.set_bpm_lock.assert_called_once()
-    audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_bar")
+    audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_64")
 
 
 def test_apply_per_pad_mixing_only_when_changed(
@@ -282,7 +282,7 @@ def test_apply_project_state_with_modified_state(
     transport_controller._project.key_lock = True
     transport_controller._project.bpm_lock = True
     transport_controller._project.trigger_quantization_enabled = True
-    transport_controller._project.trigger_quantization_step = "1_4"
+    transport_controller._project.trigger_quantization_step = "1_32"
     transport_controller._project.sample_paths[0] = "/path/to/sample.wav"
     transport_controller._project.pad_gain[0] = 0.9
     transport_controller._project.pad_loop_start_s[0] = 1.0
@@ -305,4 +305,4 @@ def test_apply_project_state_with_modified_state(
         audio_engine_mock.set_speed.assert_called_once()
         audio_engine_mock.set_key_lock.assert_called_once()
         audio_engine_mock.set_bpm_lock.assert_called_once()
-        audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_4")
+        audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_32")

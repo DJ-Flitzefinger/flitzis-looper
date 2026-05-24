@@ -12,7 +12,7 @@ unchanged. If the target pad cannot play, currently playing pads SHALL remain un
 
 #### Scenario: Quantized phase-aware switch happens at one frame
 - **WHEN** MultiLoop mode is disabled
-- **AND** trigger quantization is enabled with grid step `1 Bar`
+- **AND** trigger quantization is enabled with grid step `1/16`
 - **AND** pad 1 is active
 - **AND** loaded pad 2 has valid BPM and phase-anchor metadata
 - **WHEN** the performer triggers pad 2

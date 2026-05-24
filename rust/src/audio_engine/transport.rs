@@ -93,6 +93,14 @@ impl TransportTimeline {
     }
 
     pub(crate) fn anchor_downbeat_to_bar_phase(&mut self, bar_phase_beats: f64) -> bool {
+        self.anchor_downbeat_to_bar_phase_at_frame(bar_phase_beats, self.output_frame)
+    }
+
+    pub(crate) fn anchor_downbeat_to_bar_phase_at_frame(
+        &mut self,
+        bar_phase_beats: f64,
+        output_frame: u64,
+    ) -> bool {
         let Some(frames_per_beat) = self.frames_per_beat() else {
             return false;
         };
@@ -109,7 +117,7 @@ impl TransportTimeline {
             return false;
         }
 
-        let mut downbeat_frame = self.output_frame as f64 - bar_phase_beats * frames_per_beat;
+        let mut downbeat_frame = output_frame as f64 - bar_phase_beats * frames_per_beat;
 
         if downbeat_frame < 0.0 {
             let bars_to_add = (-downbeat_frame / frames_per_bar).ceil();
@@ -123,6 +131,29 @@ impl TransportTimeline {
 
         self.downbeat_frame = downbeat_frame.round() as u64;
         true
+    }
+
+    pub(crate) fn set_master_bpm_and_anchor_bar_phase_at_frame(
+        &mut self,
+        bpm: f32,
+        bar_phase_beats: f64,
+        output_frame: u64,
+    ) -> bool {
+        if !is_valid_bpm(bpm) {
+            return false;
+        }
+
+        let previous_bpm = self.master_bpm;
+        let previous_downbeat = self.downbeat_frame;
+        self.master_bpm = Some(bpm);
+
+        if self.anchor_downbeat_to_bar_phase_at_frame(bar_phase_beats, output_frame) {
+            return true;
+        }
+
+        self.master_bpm = previous_bpm;
+        self.downbeat_frame = previous_downbeat;
+        false
     }
 
     pub(crate) fn set_master_bpm(&mut self, bpm: f32) -> bool {
@@ -214,6 +245,20 @@ impl TransportTimeline {
         Some(frame_at_or_after(target_frame, self.output_frame))
     }
 
+    pub(crate) fn nearest_grid_frame(&self, grid: QuantizeGrid) -> Option<u64> {
+        let frames_per_grid =
+            self.frames_per_beat()? * grid.step_64ths() as f64 / GRID_64THS_PER_BEAT as f64;
+
+        if !frames_per_grid.is_finite() || frames_per_grid <= 0.0 {
+            return None;
+        }
+
+        let relative_frames = self.relative_frames_from_downbeat();
+        let target_grid = (relative_frames / frames_per_grid).round();
+        let target_frame = self.downbeat_frame as f64 + target_grid * frames_per_grid;
+        frame_from_f64(target_frame)
+    }
+
     fn relative_frames_from_downbeat(&self) -> f64 {
         self.relative_frames_from_downbeat_at_frame(self.output_frame)
     }
@@ -250,6 +295,14 @@ fn frame_at_or_after(target_frame: f64, current_frame: u64) -> u64 {
     }
 
     (target_frame.ceil() as u64).max(current_frame)
+}
+
+fn frame_from_f64(target_frame: f64) -> Option<u64> {
+    if !target_frame.is_finite() || target_frame < 0.0 || target_frame >= u64::MAX as f64 {
+        return None;
+    }
+
+    Some(target_frame.round() as u64)
 }
 
 #[cfg(test)]
@@ -481,6 +534,33 @@ mod tests {
 
         assert_eq!(transport.next_grid_frame(sixteenth_note), Some(12_000));
         assert_eq!(transport.next_grid_frame(sixty_fourth_note), Some(7_500));
+    }
+
+    #[test]
+    fn nearest_grid_frame_targets_previous_boundary_when_closer() {
+        let transport = transport_at(6_001);
+        let sixteenth_note = QuantizeGrid::from_step_64ths(4).unwrap();
+
+        assert_eq!(transport.nearest_grid_frame(sixteenth_note), Some(6_000));
+    }
+
+    #[test]
+    fn nearest_grid_frame_targets_future_boundary_when_closer() {
+        let transport = transport_at(9_001);
+        let sixteenth_note = QuantizeGrid::from_step_64ths(4).unwrap();
+
+        assert_eq!(transport.nearest_grid_frame(sixteenth_note), Some(12_000));
+    }
+
+    #[test]
+    fn master_bpm_anchor_can_use_arbitrary_output_frame() {
+        let mut transport = TransportTimeline::new(48_000);
+
+        assert!(transport.set_master_bpm_and_anchor_bar_phase_at_frame(60.0, 2.5, 60_000));
+
+        assert_eq!(transport.master_bpm(), Some(60.0));
+        assert_eq!(transport.downbeat_frame(), 132_000);
+        assert_eq!(transport.bar_phase_beats_at_frame(60_000), Some(2.5));
     }
 
     #[test]

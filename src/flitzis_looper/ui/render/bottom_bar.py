@@ -26,6 +26,10 @@ MODE_BUTTON_HEIGHT = 24.0
 MODE_BUTTON_WIDTH = 36.0
 MULTI_LOOP_BUTTON_WIDTH = 88.0
 STEM_BUTTON_SIZE = 32.0
+MODE_BUTTON_GAP = SPACING * 0.75
+CONTROL_GROUP_GAP = SPACING * 1.75
+STEM_BUTTON_GAP = SPACING * 0.5
+STEM_PRESET_GAP = SPACING * 0.75
 STEM_COMPONENT_BUTTONS = (
     ("V", STEM_MASK_VOCALS),
     ("D", STEM_MASK_DRUMS),
@@ -201,10 +205,10 @@ def _stem_mask_controls(ctx: UiContext, center_y: float) -> None:
     _set_cursor_y_for_button(center_y=center_y, height=STEM_BUTTON_SIZE)
     imgui.begin_disabled(disabled=not enabled)
     with (
-        style_var(imgui.StyleVar_.item_spacing, (SPACING / 4, 0.0)),
+        style_var(imgui.StyleVar_.item_spacing, (STEM_BUTTON_GAP, 0.0)),
         style_var(imgui.StyleVar_.frame_rounding, 16.0),
     ):
-        for label, mask in STEM_COMPONENT_BUTTONS:
+        for idx, (label, mask) in enumerate(STEM_COMPONENT_BUTTONS):
             _stem_mask_button(
                 ctx,
                 pad_id,
@@ -215,7 +219,10 @@ def _stem_mask_controls(ctx: UiContext, center_y: float) -> None:
                 last_custom_mask,
                 "custom",
             )
-            imgui.same_line(spacing=SPACING / 4)
+            spacing = (
+                STEM_BUTTON_GAP if idx < len(STEM_COMPONENT_BUTTONS) - 1 else STEM_PRESET_GAP
+            )
+            imgui.same_line(spacing=spacing)
 
         for idx, (label, mask, target_display_mode) in enumerate(STEM_PRESET_BUTTONS):
             _stem_mask_button(
@@ -229,13 +236,13 @@ def _stem_mask_controls(ctx: UiContext, center_y: float) -> None:
                 target_display_mode,
             )
             if idx < len(STEM_PRESET_BUTTONS) - 1:
-                imgui.same_line(spacing=SPACING / 4)
+                imgui.same_line(spacing=STEM_BUTTON_GAP)
     imgui.end_disabled()
 
 
 def _bottom_bar_controls(ctx: UiContext, center_y: float) -> None:
     _master_volume(ctx)
-    imgui.same_line(spacing=SPACING * 1.25)
+    imgui.same_line(spacing=CONTROL_GROUP_GAP)
     _set_cursor_y_for_button(center_y=center_y, height=MODE_BUTTON_HEIGHT)
     style: ButtonStyleName = "mode-on" if ctx.state.project.multi_loop else "mode-off"
 
@@ -243,11 +250,11 @@ def _bottom_bar_controls(ctx: UiContext, center_y: float) -> None:
         if imgui.button("MULTI LOOP", (MULTI_LOOP_BUTTON_WIDTH, MODE_BUTTON_HEIGHT)):
             ctx.audio.global_.toggle_multi_loop()
 
-    imgui.same_line(spacing=SPACING / 2)
+    imgui.same_line(spacing=MODE_BUTTON_GAP)
     _learn_control(ctx, center_y)
-    imgui.same_line(spacing=SPACING / 2)
+    imgui.same_line(spacing=MODE_BUTTON_GAP)
     _trigger_quantization_toggle(ctx, center_y)
-    imgui.same_line(spacing=SPACING * 1.25)
+    imgui.same_line(spacing=CONTROL_GROUP_GAP)
     _stem_mask_controls(ctx, center_y)
 
 

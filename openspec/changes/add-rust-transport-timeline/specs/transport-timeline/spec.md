@@ -121,17 +121,18 @@ of rejecting the new request.
 
 ### Requirement: Quantized Pad Triggers Use The Rust Transport
 The system SHALL support opt-in quantized pad triggers that use the Rust transport timeline and a
-fixed musical grid step to choose an absolute output-frame target.
+fixed musical grid step to choose a nearest-grid launch phase.
 
 The supported trigger quantization states SHALL include disabled/immediate plus fixed grid
-subdivisions from `1/64` through `1 Bar`: `1/64`, `1/32`, `1/16`, `1/8`, `1/4`, `1/2`, and
-`1 Bar`. These grid steps SHALL use the same 1/64-note unit basis as the loop editor musical
-grid, where `1/64` is one sixteenth of a beat in 4/4 and `1 Bar` is four beats.
+subdivisions `1/16`, `1/32`, and `1/64`. These grid steps SHALL use the same 1/64-note unit basis
+as the loop editor musical grid, where `1/64` is one sixteenth of a beat in 4/4.
 
 When quantization is disabled, existing immediate trigger behavior SHALL be preserved. When
-quantization is enabled, Rust SHALL compute the target output frame from the current transport
-state, the downbeat anchor, and the selected grid step, then insert the trigger into the
-fixed-capacity scheduler.
+quantization is enabled, Rust SHALL compute the nearest selected-grid boundary from the current
+transport state, the downbeat anchor, and the selected grid step. If the boundary is in the future,
+Rust SHALL schedule the trigger at that output frame. If the boundary is in the past, Rust SHALL
+execute the trigger at the current callback position and advance the pad's initial sample frame by
+the late output-frame offset so the audible loop phase matches that nearest grid boundary.
 
 The default trigger quantization enabled state SHALL be disabled. The default persisted grid step
 SHALL be `1/16` and SHALL only affect scheduling after quantization is enabled. Control code MAY
@@ -139,29 +140,36 @@ update the effective audio-thread mode through a fixed-size control message. UI/
 controls MAY be added separately, but the audio thread SHALL own the effective mode used for
 scheduling.
 
+The Rust transport SHALL establish or refresh its masterclock from active pad timing metadata when
+needed for quantized triggering. The first active pad with valid BPM and timing metadata SHALL be
+allowed to establish the masterclock; later quantized triggers SHALL align to that Rust-owned
+masterclock rather than to Python UI timing.
+
 #### Scenario: Quantization disabled preserves immediate start
 - **GIVEN** trigger quantization is disabled
 - **AND** a sample is loaded into a pad
 - **WHEN** Python/control code requests pad playback
 - **THEN** Rust starts or restarts the pad at the current callback position using existing immediate semantics
 
-#### Scenario: One-bar trigger starts at a bar boundary
-- **GIVEN** master BPM and downbeat anchor are available
-- **AND** trigger quantization is enabled with grid step `1 Bar`
-- **WHEN** a loaded pad is triggered between bar boundaries
-- **THEN** Rust schedules the pad start for the next bar boundary's absolute output frame
-
-#### Scenario: One-sixteenth trigger starts at the selected subdivision boundary
+#### Scenario: One-sixteenth trigger starts at the future selected subdivision boundary
 - **GIVEN** master BPM and downbeat anchor are available
 - **AND** trigger quantization is enabled with grid step `1/16`
-- **WHEN** a loaded pad is triggered between 1/16-note boundaries
+- **WHEN** a loaded pad is triggered closer to the next 1/16-note boundary than the previous one
 - **THEN** Rust schedules the pad start for the next 1/16-note boundary's absolute output frame
+
+#### Scenario: Late human trigger catches up to the nearest grid phase
+- **GIVEN** master BPM and downbeat anchor are available
+- **AND** trigger quantization is enabled with grid step `1/16`
+- **WHEN** a loaded pad is triggered closer to the previous 1/16-note boundary than the next one
+- **THEN** Rust starts the pad at the current callback position
+- **AND** the pad's initial sample frame is advanced by the output-frame distance from that
+  previous 1/16-note boundary to the current callback position
 
 #### Scenario: Minimum grid matches the loop editor grid basis
 - **GIVEN** master BPM and downbeat anchor are available
 - **AND** trigger quantization is enabled with grid step `1/64`
 - **WHEN** a loaded pad is triggered between 1/64-note boundaries
-- **THEN** Rust schedules the pad start for the next 1/64-note boundary's absolute output frame
+- **THEN** Rust targets the nearest 1/64-note boundary's phase
 - **AND** that subdivision uses the same one-sixteenth-of-a-beat basis as the loop editor's
   finest musical grid and snapping step
 

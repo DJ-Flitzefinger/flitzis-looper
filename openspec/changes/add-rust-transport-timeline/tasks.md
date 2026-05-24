@@ -17,7 +17,7 @@
 
 ## 4. Playback Integration
 - [x] 4.1 Preserve default immediate `play_sample` behavior when trigger quantization is disabled.
-- [x] 4.2 Add quantized pad trigger routing for fixed grid scheduling from `1/64` through `1 Bar`.
+- [x] 4.2 Add quantized pad trigger routing for fixed grid scheduling at `1/16`, `1/32`, and `1/64`.
 - [x] 4.3 Ensure MultiLoop disabled stop/start transitions execute atomically at one scheduled frame.
 - [x] 4.4 Add Rust mixer/audio-stream tests proving scheduled starts occur at the intended frame offset.
 - [x] 4.5 Add Python controller tests only when Python-facing quantization controls are introduced.
@@ -35,7 +35,7 @@
 
 ## 7. Settings-Based Quantization Update
 - [x] 7.1 Replace the performance-view trigger quantization mode segment with a bottom-bar `Q` toggle.
-- [x] 7.2 Move trigger quantization grid selection to Settings with `1/64` through `1 Bar` options and `1/16` default.
+- [x] 7.2 Move trigger quantization grid selection to Settings with `1/16`, `1/32`, and `1/64` options and `1/16` default.
 - [x] 7.3 Keep quantized scheduling on the Rust transport grid and preserve audio callback real-time safety.
 - [x] 7.4 Persist and migrate trigger quantization settings.
 - [x] 7.5 Align the bottom-bar mode, stem, and Settings controls on a consistent horizontal line.

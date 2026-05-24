@@ -28,6 +28,7 @@ class PadLoopController:
         self._project.pad_loop_bars[sample_id] = 4
         self._transport._mark_project_changed()
 
+        self.apply_grid_anchor_to_audio(sample_id)
         self._apply_effective_pad_loop_region_to_audio(sample_id)
 
     def _default_pad_loop_region(self, sample_id: int) -> tuple[float, float | None, bool]:
@@ -51,6 +52,11 @@ class PadLoopController:
             return
         start_s, end_s = self._effective_pad_loop_region(sample_id)
         self._audio.set_pad_loop_region(sample_id, start_s, end_s)
+
+    def apply_grid_anchor_to_audio(self, sample_id: int) -> None:
+        """Publish the same per-pad grid anchor used by the waveform editor."""
+        validate_sample_id(sample_id)
+        self._audio.set_pad_timing_metadata(sample_id, self._grid_anchor_sec(sample_id))
 
     def _grid_offset_samples(self, sample_id: int) -> int:
         return int(self._project.pad_grid_offset_samples[sample_id])
@@ -96,6 +102,8 @@ class PadLoopController:
 
         self._project.pad_grid_offset_samples[sample_id] = clamped
         self._transport._mark_project_changed()
+        self.apply_grid_anchor_to_audio(sample_id)
+        self._apply_effective_pad_loop_region_to_audio(sample_id)
         return True
 
     def set_grid_offset_samples(self, sample_id: int, grid_offset_samples: int) -> None:
@@ -109,6 +117,8 @@ class PadLoopController:
 
         self._project.pad_grid_offset_samples[sample_id] = grid_offset_samples
         self._transport._mark_project_changed()
+        self.apply_grid_anchor_to_audio(sample_id)
+        self._apply_effective_pad_loop_region_to_audio(sample_id)
 
     def grid_anchor_sec(self, sample_id: int) -> float:
         """Grid anchor time in seconds (default onset + per-pad sample offset)."""

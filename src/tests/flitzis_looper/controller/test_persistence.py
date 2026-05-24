@@ -280,7 +280,7 @@ def test_complex_project_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         key_lock=True,
         bpm_lock=True,
         trigger_quantization_enabled=True,
-        trigger_quantization_step="1_bar",
+        trigger_quantization_step="1_64",
         input_mapping_enabled=True,
         speed=1.25,
     )
@@ -297,7 +297,7 @@ def test_complex_project_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert loaded.key_lock is True
     assert loaded.bpm_lock is True
     assert loaded.trigger_quantization_enabled is True
-    assert loaded.trigger_quantization_step == "1_bar"
+    assert loaded.trigger_quantization_step == "1_64"
     assert loaded.input_mapping_enabled is True
     assert loaded.speed == pytest.approx(1.25)
     assert loaded.sample_paths[0] == "samples/foo.wav"
@@ -320,7 +320,7 @@ def test_legacy_trigger_quantization_loads_as_enabled_grid(
 
     loaded = ProjectPersistence.from_config_path().project
     assert loaded.trigger_quantization_enabled is True
-    assert loaded.trigger_quantization_step == "1_4"
+    assert loaded.trigger_quantization_step == "1_16"
 
 
 def test_windows_paths_preserved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

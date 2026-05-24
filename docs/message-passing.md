@@ -81,11 +81,12 @@ The Gen3 transport work is specified in
 now exists inside the audio callback. The fixed-capacity scheduler helper now exists with
 unit-tested ordering and rejection semantics, and the callback owns a scheduler for
 current-frame `PlaySample`, `StopSample`, and `StopAll` routing. Rust-side trigger
-quantization now accepts `immediate` plus fixed grid-step updates from `1_64` through `1_bar`
+quantization now accepts `immediate` plus fixed grid-step updates `1_16`, `1_32`, and `1_64`
 through the existing control-to-audio ring buffer. Legacy `next_beat` and `next_bar` aliases
-remain accepted by the Python-facing API for older callers. Per-pad beatgrid/downbeat timing metadata is published as
-one fixed-size `SetPadTimingMetadata` request containing a finite non-negative phase anchor
-prepared outside the callback. MultiLoop-disabled playback uses a single fixed-size
+remain accepted by the Python-facing API for older callers and map to `1_16`.
+Per-pad beatgrid/downbeat timing metadata is published as one fixed-size
+`SetPadTimingMetadata` request containing the same finite non-negative phase anchor used by the
+waveform editor grid and prepared outside the callback. MultiLoop-disabled playback uses a single fixed-size
 `PlaySampleExclusive` request, which the audio thread turns into one stop-all-then-play scheduled
 command when quantization is enabled. The design keeps the existing SPSC ring-buffer architecture.
 

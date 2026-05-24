@@ -19,9 +19,9 @@ using the Rust-owned timeline.
 
 #### Scenario: Quantized onsets align to the selected grid
 - **WHEN** MultiLoop mode is enabled
-- **AND** trigger quantization is enabled with grid step `1 Bar`
-- **AND** pad 1 and pad 2 are triggered before the same next bar boundary
-- **THEN** Rust schedules both pad starts at that next bar boundary
+- **AND** trigger quantization is enabled with grid step `1/16`
+- **AND** pad 1 and pad 2 are triggered closer to the same `1/16` boundary than to any other boundary
+- **THEN** Rust targets both pad starts at that `1/16` boundary
 - **AND** both starts are targeted by absolute output-frame positions
 
 ## ADDED Requirements
@@ -38,10 +38,10 @@ pads unchanged.
 
 #### Scenario: Quantized one-at-a-time switch happens at one frame
 - **WHEN** MultiLoop mode is disabled
-- **AND** trigger quantization is enabled with grid step `1 Bar`
+- **AND** trigger quantization is enabled with grid step `1/16`
 - **AND** pad 1 is active
 - **AND** the performer triggers loaded pad 2
-- **THEN** Rust schedules pad 1 to stop and pad 2 to start at the same next-bar output frame
+- **THEN** Rust schedules pad 1 to stop and pad 2 to start at the same selected-grid output frame
 
 #### Scenario: Rejected quantized switch does not stop the active pad
 - **WHEN** MultiLoop mode is disabled

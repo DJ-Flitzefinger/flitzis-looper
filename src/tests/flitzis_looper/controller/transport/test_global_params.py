@@ -267,13 +267,13 @@ def test_enable_trigger_quantization_updates_project_and_audio(
 def test_set_trigger_quantization_step_updates_audio_only_when_enabled(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
-    controller.transport.global_params.set_trigger_quantization_step("1_bar")
+    controller.transport.global_params.set_trigger_quantization_step("1_32")
 
-    assert controller.project.trigger_quantization_step == "1_bar"
+    assert controller.project.trigger_quantization_step == "1_32"
     audio_engine_mock.set_trigger_quantization.assert_not_called()
 
     controller.transport.global_params.set_trigger_quantization_enabled(enabled=True)
-    audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_bar")
+    audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_32")
 
     audio_engine_mock.reset_mock()
     controller.transport.global_params.set_trigger_quantization_step("1_64")
@@ -286,15 +286,15 @@ def test_legacy_set_trigger_quantization_maps_to_new_state(
     controller.transport.global_params.set_trigger_quantization("next_bar")
 
     assert controller.project.trigger_quantization_enabled is True
-    assert controller.project.trigger_quantization_step == "1_bar"
-    audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_bar")
+    assert controller.project.trigger_quantization_step == "1_16"
+    audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_16")
 
 
 def test_set_trigger_quantization_no_op_for_current_enabled_grid(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     controller.project.trigger_quantization_enabled = True
-    controller.project.trigger_quantization_step = "1_4"
+    controller.project.trigger_quantization_step = "1_16"
 
     controller.transport.global_params.set_trigger_quantization("next_beat")
 

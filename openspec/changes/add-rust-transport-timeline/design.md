@@ -82,16 +82,16 @@ During a callback:
 
 1. Drain control messages without blocking.
 2. Convert immediate commands into `target_frame = buffer_start_frame`.
-3. Convert quantized trigger requests into the next selected transport grid target computed by
+3. Convert quantized trigger requests into the nearest selected transport grid target computed by
    the Rust transport.
 4. Execute events due at or before `buffer_start_frame` before rendering the first frame.
 5. Execute events that fall inside the current output buffer at their exact frame offset.
    This may require rendering the buffer in bounded sub-ranges between event offsets.
 6. Leave future events in the scheduler for later callbacks.
 
-Late events are not allowed to block or rewind time. If `target_frame < buffer_start_frame`,
-they execute at `buffer_start_frame` and should be counted as late for diagnostics if a
-diagnostic path exists.
+Late events are not allowed to block or rewind output time. If `target_frame < buffer_start_frame`,
+they execute at `buffer_start_frame` and phase-aware pad starts advance their initial sample frame
+by the late output-frame offset so the musical phase still matches the selected grid.
 
 ### Quantized Pad Triggers
 Default pad triggering remains immediate. Quantization is opt-in through future Python/UI
@@ -100,13 +100,9 @@ controls and fixed-size control messages.
 The quantization model must support:
 
 - disabled/immediate,
-- `1/64`,
-- `1/32`,
 - `1/16`,
-- `1/8`,
-- `1/4`,
-- `1/2`,
-- `1 Bar`.
+- `1/32`,
+- `1/64`.
 
 The default persisted grid step is `1/16`, while new projects still default the effective
 enabled state to disabled/immediate. The minimum `1/64` step uses the same one-sixteenth-of-a-beat
@@ -114,7 +110,12 @@ unit as the loop editor's finest musical grid and snapping step.
 
 When quantization is enabled, Rust computes the target frame from the current transport state and
 selected grid step. A trigger exactly on a grid boundary may execute at the current output frame.
-Otherwise it targets the next matching grid boundary.
+Otherwise it targets the nearest matching grid boundary. Future targets are scheduled for that
+absolute output frame; past targets execute immediately with phase catch-up.
+
+Rust may establish the masterclock from an active pad's bounded BPM and phase-anchor metadata when
+no explicit BPM-lock master is available. The same per-pad grid anchor that the loop editor draws
+and snaps against is published to Rust as the pad phase anchor.
 
 For MultiLoop disabled, the stop-other-pads action and the requested pad start must be one
 scheduled transition at the same target frame. If that transition cannot be scheduled, the

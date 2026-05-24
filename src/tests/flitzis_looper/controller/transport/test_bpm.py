@@ -198,6 +198,23 @@ def test_on_pad_bpm_changed_publishes_downbeat_timing_metadata(
     audio_engine_mock.set_pad_timing_metadata.assert_called_with(sample_id, 2.0)
 
 
+def test_on_pad_bpm_changed_publishes_shifted_grid_anchor(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    sample_id = 0
+    controller.project.pad_grid_offset_samples[sample_id] = 480
+    controller.project.sample_analysis[sample_id] = SampleAnalysis(
+        bpm=120.0,
+        key="C",
+        beat_grid=BeatGrid(beats=[1.0], downbeats=[2.0], bars=[2.0]),
+    )
+
+    controller.transport.bpm.on_pad_bpm_changed(sample_id)
+
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(sample_id, 2.01)
+
+
 def test_on_pad_bpm_changed_publishes_beat_fallback_timing_metadata(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:

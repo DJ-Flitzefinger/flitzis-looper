@@ -23,6 +23,12 @@ use cpal::Sample;
 const BEATS_PER_BAR_4_4: f64 = 4.0;
 const BAR_PHASE_EPSILON: f64 = 1.0e-9;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct TransportClockSource {
+    pub(crate) bpm: f32,
+    pub(crate) bar_phase_beats: f64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FrameRange {
     start: usize,
@@ -48,6 +54,7 @@ fn phase_aligned_initial_frame(
     pad_bpm: Option<f32>,
     phase_anchor_frame: Option<usize>,
     target_bar_phase_beats: f64,
+    catch_up_sample_frames: f64,
     loop_region: Option<FrameRange>,
     fallback_frame: usize,
 ) -> usize {
@@ -72,7 +79,13 @@ fn phase_aligned_initial_frame(
         return fallback_frame;
     }
 
-    let desired_frame = anchor_frame as f64 + target_bar_phase_beats * frames_per_beat;
+    let catch_up_sample_frames = if catch_up_sample_frames.is_finite() {
+        catch_up_sample_frames.max(0.0)
+    } else {
+        0.0
+    };
+    let desired_frame =
+        anchor_frame as f64 + target_bar_phase_beats * frames_per_beat + catch_up_sample_frames;
     wrap_frame_into_region(desired_frame, region).unwrap_or(fallback_frame)
 }
 
@@ -424,20 +437,35 @@ impl RtMixer {
         self.play_sample_with_phase(id, velocity, None)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn play_sample_phase_aligned(
         &mut self,
         id: usize,
         velocity: f32,
         target_bar_phase_beats: f64,
     ) -> bool {
-        self.play_sample_with_phase(id, velocity, Some(target_bar_phase_beats))
+        self.play_sample_with_phase(id, velocity, Some((target_bar_phase_beats, 0)))
+    }
+
+    pub(crate) fn play_sample_phase_aligned_with_catch_up(
+        &mut self,
+        id: usize,
+        velocity: f32,
+        target_bar_phase_beats: f64,
+        catch_up_output_frames: u64,
+    ) -> bool {
+        self.play_sample_with_phase(
+            id,
+            velocity,
+            Some((target_bar_phase_beats, catch_up_output_frames)),
+        )
     }
 
     fn play_sample_with_phase(
         &mut self,
         id: usize,
         velocity: f32,
-        target_bar_phase_beats: Option<f64>,
+        target_bar_phase_beats: Option<(f64, u64)>,
     ) -> bool {
         if !self.can_play_sample(id, velocity) {
             return false;
@@ -452,7 +480,14 @@ impl RtMixer {
 
         let sample_frames = sample.samples.len() / self.channels;
         let initial_frame_pos = target_bar_phase_beats
-            .map(|phase| self.phase_aligned_initial_sample_frame(id, sample_frames, phase))
+            .map(|(phase, catch_up_frames)| {
+                self.phase_aligned_initial_sample_frame_with_catch_up(
+                    id,
+                    sample_frames,
+                    phase,
+                    catch_up_frames,
+                )
+            })
             .unwrap_or_else(|| self.effective_loop_start_frame(id, sample_frames));
 
         // Sample is already playing? -> reset play position
@@ -556,6 +591,21 @@ impl RtMixer {
         sample_frames: usize,
         target_bar_phase_beats: f64,
     ) -> usize {
+        self.phase_aligned_initial_sample_frame_with_catch_up(
+            id,
+            sample_frames,
+            target_bar_phase_beats,
+            0,
+        )
+    }
+
+    pub(crate) fn phase_aligned_initial_sample_frame_with_catch_up(
+        &self,
+        id: usize,
+        sample_frames: usize,
+        target_bar_phase_beats: f64,
+        catch_up_output_frames: u64,
+    ) -> usize {
         if id >= NUM_SAMPLES {
             return 0;
         }
@@ -563,12 +613,15 @@ impl RtMixer {
         let fallback_frame = self.effective_loop_start_frame(id, sample_frames);
         let phase_anchor_frame =
             Some(self.pad_phase_anchor_frame[id]).filter(|frame| *frame < sample_frames);
+        let catch_up_sample_frames =
+            catch_up_output_frames as f64 * self.tempo_ratio_for_sample_id(id) as f64;
 
         phase_aligned_initial_frame(
             self.sample_rate_hz,
             self.pad_bpm[id],
             phase_anchor_frame,
             target_bar_phase_beats,
+            catch_up_sample_frames,
             self.phase_alignment_loop_region(id, sample_frames),
             fallback_frame,
         )
@@ -729,18 +782,68 @@ impl RtMixer {
             return None;
         }
 
-        let pad_bpm = self.pad_bpm[id].filter(|bpm| bpm.is_finite() && *bpm > 0.0)?;
-        if !self.sample_rate_hz.is_finite() || self.sample_rate_hz <= 0.0 {
-            return None;
-        }
-
         let voice = self
             .voices
             .iter()
             .find(|voice| voice.active && !voice.paused && voice.sample_id == id)?;
         let sample = voice.sample.as_ref()?;
         let sample_frames = sample.samples.len() / self.channels;
-        if sample_frames == 0 || voice.frame_pos >= sample_frames {
+
+        self.pad_bar_phase_beats_at_frame(id, sample_frames, voice.frame_pos)
+    }
+
+    pub(crate) fn active_transport_clock_source(&self) -> Option<TransportClockSource> {
+        let voice = self
+            .voices
+            .iter()
+            .find(|voice| voice.active && !voice.paused)?;
+        let sample = voice.sample.as_ref()?;
+        if self.channels == 0 {
+            return None;
+        }
+        let sample_frames = sample.samples.len() / self.channels;
+        let bpm = self.output_bpm_for_sample_id(voice.sample_id)?;
+        let bar_phase_beats =
+            self.pad_bar_phase_beats_at_frame(voice.sample_id, sample_frames, voice.frame_pos)?;
+
+        Some(TransportClockSource {
+            bpm,
+            bar_phase_beats,
+        })
+    }
+
+    pub(crate) fn output_bpm_for_sample_id(&self, id: usize) -> Option<f32> {
+        if id >= NUM_SAMPLES {
+            return None;
+        }
+
+        let pad_bpm = self.pad_bpm[id].filter(|bpm| bpm.is_finite() && *bpm > 0.0)?;
+        let bpm = pad_bpm * self.tempo_ratio_for_sample_id(id);
+        if bpm.is_finite() && bpm > 0.0 {
+            Some(bpm)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn has_active_voice(&self) -> bool {
+        self.voices
+            .iter()
+            .any(|voice| voice.active && !voice.paused)
+    }
+
+    fn pad_bar_phase_beats_at_frame(
+        &self,
+        id: usize,
+        sample_frames: usize,
+        frame_pos: usize,
+    ) -> Option<f64> {
+        if id >= NUM_SAMPLES || sample_frames == 0 || frame_pos >= sample_frames {
+            return None;
+        }
+
+        let pad_bpm = self.pad_bpm[id].filter(|bpm| bpm.is_finite() && *bpm > 0.0)?;
+        if !self.sample_rate_hz.is_finite() || self.sample_rate_hz <= 0.0 {
             return None;
         }
 
@@ -754,7 +857,7 @@ impl RtMixer {
             return None;
         }
 
-        let pad_phase_beats = (voice.frame_pos as f64 - anchor_frame as f64) / frames_per_beat;
+        let pad_phase_beats = (frame_pos as f64 - anchor_frame as f64) / frames_per_beat;
         normalize_bar_phase_beats(pad_phase_beats)
     }
 

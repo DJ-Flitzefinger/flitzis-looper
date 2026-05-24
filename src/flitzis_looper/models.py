@@ -32,15 +32,19 @@ from flitzis_looper.constants import (
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-type TriggerQuantizationMode = Literal["immediate", "enabled", "next_beat", "next_bar"]
+type TriggerQuantizationMode = Literal[
+    "immediate",
+    "enabled",
+    "next_beat",
+    "next_bar",
+    "1_16",
+    "1_32",
+    "1_64",
+]
 type TriggerQuantizationStep = Literal[
     "1_64",
     "1_32",
     "1_16",
-    "1_8",
-    "1_4",
-    "1_2",
-    "1_bar",
 ]
 type StemMixMode = Literal["full_mix", "all_stems"]
 type StemMaskDisplayMode = Literal["custom", "instrumental", "all"]
@@ -48,31 +52,32 @@ type StemKind = Literal["vocals", "melody", "bass", "drums", "instrumental"]
 type StemGridIndicatorState = Literal["available", "generating", "blocked", "error"]
 
 TRIGGER_QUANTIZATION_STEPS: tuple[TriggerQuantizationStep, ...] = (
-    "1_64",
-    "1_32",
     "1_16",
-    "1_8",
-    "1_4",
-    "1_2",
-    "1_bar",
+    "1_32",
+    "1_64",
 )
 TRIGGER_QUANTIZATION_STEP_LABELS: dict[TriggerQuantizationStep, str] = {
     "1_64": "1/64",
     "1_32": "1/32",
     "1_16": "1/16",
-    "1_8": "1/8",
-    "1_4": "1/4",
-    "1_2": "1/2",
-    "1_bar": "1 Bar",
 }
 DEFAULT_TRIGGER_QUANTIZATION_STEP: TriggerQuantizationStep = "1_16"
 LEGACY_TRIGGER_QUANTIZATION_TO_STEP: dict[str, TriggerQuantizationStep] = {
-    "next_beat": "1_4",
-    "next-beat": "1_4",
-    "beat": "1_4",
-    "next_bar": "1_bar",
-    "next-bar": "1_bar",
-    "bar": "1_bar",
+    "next_beat": "1_16",
+    "next-beat": "1_16",
+    "beat": "1_16",
+    "next_bar": "1_16",
+    "next-bar": "1_16",
+    "bar": "1_16",
+    "1_8": "1_16",
+    "1/8": "1_16",
+    "1_4": "1_16",
+    "1/4": "1_16",
+    "1_2": "1_16",
+    "1/2": "1_16",
+    "1_bar": "1_16",
+    "1-bar": "1_16",
+    "bar_1": "1_16",
 }
 
 STEM_KINDS: tuple[StemKind, ...] = ("vocals", "melody", "bass", "drums", "instrumental")
@@ -217,22 +222,24 @@ class ProjectState(BaseModel):
 
         data = dict(value)
         legacy = data.pop("trigger_quantization", None)
-        if not isinstance(legacy, str):
-            return data
-
-        if "trigger_quantization_enabled" not in data:
+        if isinstance(legacy, str) and "trigger_quantization_enabled" not in data:
             data["trigger_quantization_enabled"] = legacy not in {
                 "immediate",
                 "disabled",
                 "off",
             }
 
-        if "trigger_quantization_step" not in data:
+        if isinstance(legacy, str) and "trigger_quantization_step" not in data:
             step = LEGACY_TRIGGER_QUANTIZATION_TO_STEP.get(legacy)
             if step is not None:
                 data["trigger_quantization_step"] = step
             elif data.get("trigger_quantization_enabled") is True:
                 data["trigger_quantization_step"] = legacy
+
+        if isinstance(data.get("trigger_quantization_step"), str):
+            step = LEGACY_TRIGGER_QUANTIZATION_TO_STEP.get(data["trigger_quantization_step"])
+            if step is not None:
+                data["trigger_quantization_step"] = step
 
         return data
 

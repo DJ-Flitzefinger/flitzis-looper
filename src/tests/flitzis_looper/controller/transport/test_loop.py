@@ -163,6 +163,26 @@ def test_set_grid_offset_samples_clamps_to_one_bar_worth_of_samples(
     assert controller.project.pad_grid_offset_samples[sample_id] == 96_000
 
 
+def test_set_grid_offset_samples_publishes_shifted_grid_anchor(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+
+    sample_id = 0
+    controller.project.sample_paths[sample_id] = "samples/foo.wav"
+    controller.project.sample_analysis[sample_id] = SampleAnalysis(
+        bpm=120.0,
+        key="C",
+        beat_grid=BeatGrid(beats=[10.0], downbeats=[10.0], bars=[10.0]),
+    )
+
+    controller.transport.loop.set_grid_offset_samples(sample_id, 240)
+
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(sample_id, 10.005)
+    audio_engine_mock.set_pad_loop_region.assert_called()
+
+
 def test_effective_bpm_change_reclamps_grid_offset_samples(
     controller: AppController,
     audio_engine_mock: Mock,

@@ -507,7 +507,6 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
     # Call Rust for data (fast aggregation, cached)
     data = ctx.ui.waveform.get_render_data(pad_id, plot_width_px, start_s, end_s)
     draw_list = implot.get_plot_draw_list()
-    _draw_zero_line(draw_list, start_s, end_s)
 
     if data is not None:
         is_raw, xs, y1, y2 = data
@@ -521,6 +520,8 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
         _handle_clicks(ctx, pad_id, sample_duration_s)
 
         _plot_musical_grid(ctx, pad_id, draw_list, start_s, end_s)
+
+    _draw_zero_line(draw_list, start_s, end_s)
 
     implot.end_plot()
 

@@ -289,8 +289,8 @@ def test_trigger_quantization_settings_validation(project_state: ProjectState) -
     project_state.trigger_quantization_step = "1_64"
     assert project_state.trigger_quantization_step == "1_64"
 
-    project_state.trigger_quantization_step = "1_bar"
-    assert project_state.trigger_quantization_step == "1_bar"
+    project_state.trigger_quantization_step = "1_32"
+    assert project_state.trigger_quantization_step == "1_32"
 
     with pytest.raises(ValidationError):
         ProjectState.model_validate({"trigger_quantization_step": "half_note"})
@@ -300,12 +300,16 @@ def test_legacy_trigger_quantization_mode_migrates_to_new_fields() -> None:
     project = ProjectState.model_validate({"trigger_quantization": "next_bar"})
 
     assert project.trigger_quantization_enabled is True
-    assert project.trigger_quantization_step == "1_bar"
+    assert project.trigger_quantization_step == "1_16"
 
     project = ProjectState.model_validate({"trigger_quantization": "immediate"})
 
     assert project.trigger_quantization_enabled is False
     assert project.trigger_quantization_step == DEFAULT_TRIGGER_QUANTIZATION_STEP
+
+    project = ProjectState.model_validate({"trigger_quantization_step": "1_bar"})
+
+    assert project.trigger_quantization_step == "1_16"
 
 
 def test_demucs_quality_settings_validation(project_state: ProjectState) -> None:
