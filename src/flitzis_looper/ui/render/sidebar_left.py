@@ -5,10 +5,12 @@ from imgui_bundle import imgui, imgui_knobs
 
 from flitzis_looper.constants import PAD_EQ_DB_MAX, PAD_EQ_DB_MIN
 from flitzis_looper.ui.constants import SPACING, TEXT_MUTED_RGBA, TEXT_RGBA
-from flitzis_looper.ui.contextmanager import style_var
+from flitzis_looper.ui.contextmanager import button_style, style_var
 
 if TYPE_CHECKING:
+    from flitzis_looper.models import StemMixMode
     from flitzis_looper.ui.context import UiContext
+    from flitzis_looper.ui.styles import ButtonStyleName
 
 
 _KEYS = (
@@ -26,6 +28,10 @@ _KEYS = (
     "B",
 )
 _KEY_OPTIONS = [*_KEYS, *(f"{key}m" for key in _KEYS)]
+_STEM_MIX_OPTIONS: tuple[tuple[StemMixMode, str], ...] = (
+    ("full_mix", "FULL MIX"),
+    ("all_stems", "ALL STEMS"),
+)
 
 
 @dataclass(frozen=True)
@@ -176,6 +182,82 @@ def _render_loaded_eq(ctx: UiContext, info: _SidebarPadInfo) -> None:
     imgui.dummy((info.avail_x, 0.0))
 
 
+def _stem_progress_text(ctx: UiContext, pad_id: int) -> str:
+    stage, progress = ctx.state.stems.stem_generation_status(pad_id)
+    stage = stage or "Generating stems"
+    percent_text = "" if progress is None else f"{int(float(progress) * 100):d} %"
+    return " ".join([part for part in (stage, percent_text) if part])
+
+
+def _render_stem_status(ctx: UiContext, info: _SidebarPadInfo) -> None:
+    if ctx.state.stems.is_stem_generation_running(info.pad_id):
+        _labeled_value_row(
+            "Stems",
+            _stem_progress_text(ctx, info.pad_id),
+            avail_x=info.avail_x,
+        )
+        return
+
+    error = ctx.state.stems.stem_generation_error(info.pad_id)
+    if error:
+        _labeled_value_row("Stems", "Error", avail_x=info.avail_x)
+        imgui.text_wrapped(error)
+        return
+
+    if ctx.state.stems.stems_available(info.pad_id):
+        _labeled_value_row("Stems", "Available", avail_x=info.avail_x)
+        return
+
+    blocker = ctx.state.stems.stem_generation_block_reason(info.pad_id)
+    if blocker is not None:
+        _labeled_value_row("Stems", "Blocked", avail_x=info.avail_x)
+        imgui.text_wrapped(blocker)
+        return
+
+    _labeled_value_row("Stems", "Unavailable", avail_x=info.avail_x)
+
+
+def _render_stem_mix_mode(ctx: UiContext, info: _SidebarPadInfo) -> None:
+    current_mode = ctx.state.stems.stem_mix_mode(info.pad_id)
+    button_width = max(72.0, info.avail_x / len(_STEM_MIX_OPTIONS))
+
+    imgui.text_colored(TEXT_MUTED_RGBA, "Stem Mix")
+    with style_var(imgui.StyleVar_.item_spacing, (0.0, SPACING / 4)):
+        for idx, (mode, label) in enumerate(_STEM_MIX_OPTIONS):
+            if idx > 0:
+                imgui.same_line(spacing=0.0)
+
+            style_name: ButtonStyleName = "mode-on" if current_mode == mode else "mode-off"
+            with button_style(style_name):
+                if imgui.button(f"{label}##stem_mix_{mode}", (button_width, 0)):
+                    ctx.audio.stems.set_stem_mix_mode(info.pad_id, mode)
+
+    if current_mode == "all_stems" and not ctx.state.stems.stems_available(info.pad_id):
+        imgui.text_colored(TEXT_MUTED_RGBA, "All stems pending current cache")
+
+
+def _render_generate_stems(ctx: UiContext, pad_id: int) -> None:
+    blocker = ctx.state.stems.stem_generation_block_reason(pad_id)
+    is_running = ctx.state.stems.is_stem_generation_running(pad_id)
+    disabled = blocker is not None
+
+    imgui.begin_disabled(disabled=disabled)
+    clicked = imgui.button("Generate Stems", (-1, 0))
+    imgui.end_disabled()
+
+    if clicked:
+        ctx.audio.stems.generate_stems_async(pad_id)
+
+    if blocker is not None and not is_running:
+        imgui.text_colored(TEXT_MUTED_RGBA, blocker)
+
+
+def _render_stem_controls(ctx: UiContext, info: _SidebarPadInfo) -> None:
+    _render_stem_status(ctx, info)
+    _render_generate_stems(ctx, info.pad_id)
+    _render_stem_mix_mode(ctx, info)
+
+
 def _render_loaded_actions(ctx: UiContext, pad_id: int) -> None:
     if imgui.button("Unload Audio", (-1, 0)):
         ctx.audio.pads.unload_sample(pad_id)
@@ -188,6 +270,16 @@ def _render_loaded_actions(ctx: UiContext, pad_id: int) -> None:
         status_line = " ".join([part for part in (stage, percent_text) if part])
         if status_line:
             imgui.text_colored(TEXT_MUTED_RGBA, status_line)
+        imgui.separator()
+        _render_stem_controls(
+            ctx,
+            _SidebarPadInfo(
+                pad_id=pad_id,
+                avail_x=imgui.get_content_region_avail().x,
+                is_loaded=True,
+                is_loading=False,
+            ),
+        )
         return
 
     if imgui.button("Analyze audio", (-1, 0)):
@@ -196,9 +288,16 @@ def _render_loaded_actions(ctx: UiContext, pad_id: int) -> None:
     if imgui.button("Adjust Loop", (-1, 0)):
         ctx.ui.waveform.open(pad_id)
 
-    if imgui.button("Generate Stems", (-1, 0)):
-        # TODO: generate stems
-        pass
+    imgui.separator()
+    _render_stem_controls(
+        ctx,
+        _SidebarPadInfo(
+            pad_id=pad_id,
+            avail_x=imgui.get_content_region_avail().x,
+            is_loaded=True,
+            is_loading=False,
+        ),
+    )
 
 
 def _render_loading_status(ctx: UiContext, pad_id: int) -> None:

@@ -5,10 +5,10 @@ the callback, publication by fixed-size control message and shared immutable han
 audio-thread storage, and prepared-stem rendering fallback through the existing voice path.
 
 The remaining user-facing gap is the visible performance control surface. Current code has
-controller state for generation progress and cache availability plus a placeholder "Generate
-Stems" button. The first implementation slice adds durable per-pad full-mix/all-stems mode
-plumbing and bounded Rust mix-mode control state, but selected-pad indicators, Generate Stems
-button wiring, visible mode controls, and per-stem controls remain later work.
+controller state for generation progress and cache availability, durable per-pad
+full-mix/all-stems mode plumbing, bounded Rust mix-mode control state, selected-pad sidebar
+stem status rendering, Generate Stems button wiring through the controller, and selected-pad
+full-mix/all-stems mode controls. Pad-grid indicators and per-stem controls remain later work.
 
 ## Goals
 - Give performers clear stem availability, progress, blocked, and error feedback.
@@ -22,8 +22,8 @@ button wiring, visible mode controls, and per-stem controls remain later work.
 - Keep all audio-thread stem control changes bounded, fixed-size, and real-time safe.
 
 ## Non-Goals
-- Implementing the full visible stem UI, Generate Stems button wiring, or per-stem mute/solo/toggle
-  controls in the first implementation slice.
+- Implementing pad-grid stem indicators or per-stem mute/solo/toggle controls in the current
+  implementation slice.
 - Running or choosing a production source-separation model.
 - Changing the existing prepared-stem cache writer or replacing placeholder artifacts.
 - Performing cache validation, file reads, decoding, generation, or inference in the audio

@@ -115,6 +115,12 @@ bounded render-shape checks, rendering falls back to the loaded full-mix buffer.
 not generate stems, read cache files, decode audio, run neural inference, allocate stem buffers,
 log, block, or acquire the Python GIL.
 
+The selected-pad sidebar now renders stem availability/progress/error state from controller
+snapshots, routes Generate Stems through `StemController.generate_stems_async(...)`, and routes
+full-mix/all-stems changes through `StemController.set_stem_mix_mode(...)`. Rendering does not
+inspect cache directories, read files, decode audio, run inference, or call the low-level Rust
+background task APIs directly.
+
 The follow-up `openspec/changes/add-stem-performance-controls/` planning slice still defines future
 per-stem mute, solo, and toggle controls. Those controls must publish only fixed-size bounded state
 such as enabled stem masks and solo/mute masks. The messages must not carry file paths, Python

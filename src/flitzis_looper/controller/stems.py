@@ -75,7 +75,7 @@ class StemController(BaseController):
         validate_sample_id(sample_id)
         self._clear_stem_generation_messages(sample_id)
 
-        blocker = self._stem_generation_blocker(sample_id)
+        blocker = self.stem_generation_block_reason(sample_id)
         if blocker is not None:
             self._session.stem_generation_errors[sample_id] = blocker
             return False
@@ -228,6 +228,11 @@ class StemController(BaseController):
         """Return the last reported stem generation stage for a pad."""
         validate_sample_id(sample_id)
         return self._session.stem_generation_stage.get(sample_id)
+
+    def stem_generation_block_reason(self, sample_id: int) -> str | None:
+        """Return the current non-I/O blocker for performer stem generation."""
+        validate_sample_id(sample_id)
+        return self._stem_generation_blocker(sample_id)
 
     def _stem_generation_blocker(self, sample_id: int) -> str | None:
         if self._project.sample_paths[sample_id] is None:

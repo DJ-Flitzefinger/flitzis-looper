@@ -121,6 +121,17 @@ def test_generate_stems_async_rejects_missing_source_file(
     assert "source file is missing" in controller.session.stem_generation_errors[0]
 
 
+def test_stem_generation_block_reason_reports_non_io_gate(
+    controller: AppController, tmp_path: Path
+) -> None:
+    _load_project_sample(controller, tmp_path)
+    controller.session.active_sample_ids.add(0)
+
+    blocker = controller.stems.stem_generation_block_reason(0)
+
+    assert blocker == "Cannot generate stems while the pad is playing"
+
+
 def test_generate_stems_async_runtime_error_clears_running_state(
     controller: AppController, audio_engine_mock: Mock, tmp_path: Path
 ) -> None:

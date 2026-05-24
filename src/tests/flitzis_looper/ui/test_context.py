@@ -190,9 +190,16 @@ class TestUiStateComputedProperties:
         controller.session.stem_generation_stage[0] = "Writing stem cache"
         controller.session.stem_generation_progress[0] = 0.5
         controller.session.stem_generation_errors[0] = "failed"
+        controller.session.stem_generating_sample_ids.add(0)
+        controller.project.sample_paths[0] = "samples/foo.wav"
+        controller.session.active_sample_ids.add(0)
 
         assert ui_state.stems.stem_mix_mode(0) == "all_stems"
         assert ui_state.stems.stems_available(0) is True
+        assert ui_state.stems.is_stem_generation_running(0) is True
+        assert ui_state.stems.stem_generation_block_reason(0) == (
+            "Cannot generate stems while the pad is playing"
+        )
         assert ui_state.stems.stem_generation_status(0) == ("Writing stem cache", 0.5)
         assert ui_state.stems.stem_generation_error(0) == "failed"
 
@@ -394,6 +401,17 @@ class TestAudioActions:
 
         assert controller.project.pad_stem_mix_mode[0] == "full_mix"
         audio_engine_mock.set_stem_mix_mode.assert_called_once_with(0, "full_mix")
+
+    def test_generate_stems_async(
+        self, controller: AppController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        audio_actions = AudioActions(controller)
+        generate_stems_async = Mock(return_value=True)
+        monkeypatch.setattr(controller.stems, "generate_stems_async", generate_stems_async)
+
+        audio_actions.stems.generate_stems_async(0)
+
+        generate_stems_async.assert_called_once_with(0)
 
 
 class TestUiActions:

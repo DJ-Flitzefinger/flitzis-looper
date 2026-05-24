@@ -125,9 +125,10 @@ same voice playhead and loop path as full-mix playback, with full-mix fallback f
 invalid stem data. Durable per-pad full-mix/all-stems mode plumbing now exists: project
 persistence defaults to full mix, the controller can publish all-stems mode for a current prepared
 source version, and Rust renders prepared stems only when the accepted source-version hash matches
-the selected all-stems mode. The follow-up performer-controls work still needs selected-pad
-availability indicators, Generate Stems entry points, visible mode controls, future bounded
-per-stem mute/solo/toggle controls, and production source separation.
+the selected all-stems mode. The selected-pad sidebar now shows stem status, routes Generate Stems
+through controller/background-task gating, and exposes full-mix/all-stems mode selection. The
+follow-up performer-controls work still needs pad-grid stem indicators, future bounded per-stem
+mute/solo/toggle controls, and production source separation.
 
 ### 13) Persistence (config/state)
 - [x] As a user, my bank/pad assignments persist across restarts.

@@ -178,9 +178,12 @@ The current stem implementation defines Python-side project metadata for a
 project-local `samples/stems/<source-version-hash>/` cache layout, using a source-version token
 derived from the cached source path plus file metadata. The controller rejects stem generation
 requests for pads that are playing, loading, analyzing, already generating stems, missing a loaded
-source, or missing the cached source file. The low-level Rust API exposes a gated
-`generate_stems_async(id, source_version, cache_dir)` background task that reports loader-style
-progress and writes deterministic project-local WAV cache artifacts outside the audio callback.
+source, or missing the cached source file. The selected-pad sidebar now renders controller/session
+stem status, routes Generate Stems through that controller gating, and exposes the durable
+full-mix/all-stems mode control without inspecting cache directories in the render loop. The
+low-level Rust API exposes a gated `generate_stems_async(id, source_version, cache_dir)`
+background task that reports loader-style progress and writes deterministic project-local WAV
+cache artifacts outside the audio callback.
 This initial cache writer is non-neural: `instrumental.wav` contains the aligned full mix, while
 `vocals.wav`, `melody.wav`, `bass.wav`, and `drums.wav` are aligned silence placeholders. It proves
 the cache layout, background I/O, and availability validation without implementing production
@@ -193,9 +196,8 @@ per-pad `full_mix`/`all_stems` preference with `full_mix` as the default for new
 projects. Rust stores that preference as bounded audio-thread state updated by fixed-size control
 messages, and prepared stems are used only when `all_stems` is selected and the accepted prepared
 set matches the requested source-version hash. Missing, stale, incomplete, rejected, or disabled
-stems fall back to the loaded full-mix buffer. Performer-facing stem indicators, Generate Stems
-button wiring, per-stem mute/solo/toggle controls, and production source separation are still
-intentionally absent.
+stems fall back to the loaded full-mix buffer. Pad-grid stem indicators, per-stem
+mute/solo/toggle controls, and production source separation are still intentionally absent.
 
 The active Gen3 phase-aware sync slice is `openspec/changes/add-phase-aware-playback-sync/`. It
 defines how quantized starts will use the Rust transport phase plus bounded per-pad timing anchors
@@ -236,11 +238,11 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 - Audio device selection/configuration (the engine currently uses the default output device/config).
 - Broader channel-layout support; currently decoding only supports mono↔stereo mapping.
 - Real-time stem separation is intentionally out of scope.
-- Offline stem cache identity, request gating, and deterministic cache artifact writing are
-  implemented. Prepared stem-buffer validation/publication and prepared-stem rendering fallback
-  infrastructure are implemented. Durable full-mix/all-stems mode plumbing is implemented, but
-  production source separation, performer-facing stem indicators, Generate Stems button wiring, and
-  per-stem mute/solo/toggle controls are planned in
+- Offline stem cache identity, request gating, deterministic cache artifact writing, prepared
+  stem-buffer validation/publication, prepared-stem rendering fallback infrastructure, durable
+  full-mix/all-stems mode plumbing, selected-pad stem status, Generate Stems button wiring, and
+  selected-pad full-mix/all-stems controls are implemented. Production source separation,
+  pad-grid stem indicators, and per-stem mute/solo/toggle controls are planned in
   `openspec/changes/add-stem-performance-controls/` and not implemented.
 
 ## Related specs
