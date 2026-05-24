@@ -183,6 +183,36 @@ def test_set_grid_offset_samples_publishes_shifted_grid_anchor(
     audio_engine_mock.set_pad_loop_region.assert_called()
 
 
+def test_apply_grid_anchor_to_audio_clamps_negative_anchor(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+
+    sample_id = 0
+    controller.project.sample_paths[sample_id] = "samples/foo.wav"
+    controller.project.pad_grid_offset_samples[sample_id] = -1
+
+    controller.transport.loop.apply_grid_anchor_to_audio(sample_id)
+
+    audio_engine_mock.set_pad_timing_metadata.assert_called_once_with(sample_id, 0.0)
+
+
+def test_apply_grid_anchor_to_audio_skips_unloaded_pad(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+
+    sample_id = 0
+    controller.project.sample_paths[sample_id] = None
+    controller.project.pad_grid_offset_samples[sample_id] = -1
+
+    controller.transport.loop.apply_grid_anchor_to_audio(sample_id)
+
+    audio_engine_mock.set_pad_timing_metadata.assert_not_called()
+
+
 def test_effective_bpm_change_reclamps_grid_offset_samples(
     controller: AppController,
     audio_engine_mock: Mock,

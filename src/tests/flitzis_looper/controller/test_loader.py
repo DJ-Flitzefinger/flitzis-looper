@@ -115,6 +115,25 @@ def test_unload_sample(controller: AppController, audio_engine_mock: Mock) -> No
     assert sample_id not in controller.session.stem_generating_sample_ids
 
 
+def test_unload_sample_with_negative_grid_offset_does_not_publish_invalid_timing_metadata(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    """Regression: unloaded pads must not publish stale negative grid anchors to Rust."""
+    audio_engine_mock.output_sample_rate.return_value = 44_100
+    audio_engine_mock.set_pad_timing_metadata.side_effect = ValueError(
+        "phase_anchor_s out of range"
+    )
+    sample_id = 0
+    controller.project.sample_paths[sample_id] = "samples/loop.wav"
+    controller.project.pad_grid_offset_samples[sample_id] = -1
+
+    controller.loader.unload_sample(sample_id)
+
+    audio_engine_mock.unload_sample.assert_called_once_with(sample_id)
+    audio_engine_mock.set_pad_bpm.assert_called_with(sample_id, None)
+    audio_engine_mock.set_pad_timing_metadata.assert_not_called()
+
+
 def test_is_sample_loaded_true(controller: AppController) -> None:
     """Test is_sample_loaded returns True when sample is loaded."""
     sample_id = 0

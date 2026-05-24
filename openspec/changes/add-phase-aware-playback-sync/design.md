@@ -12,11 +12,18 @@ Those anchors are stored in Rust, but they are not yet used to choose a pad's in
 playback frame. BPM lock also remains tempo-ratio based: it changes playback speed using
 master BPM and pad BPM metadata, but it does not align downbeats.
 
+The corrected trigger-quantization architecture keeps normal pad starts loop-start based.
+Transport phase helpers and explicit phase-anchor requests remain useful for controlled sync
+operations, but quantized human triggers must not seek into the source loop to catch up to a
+gridline.
+
 ## Goals
-- Make quantized pad starts phase-aware when pad BPM and timing anchors are available.
+- Keep quantized pad starts attached to the permanent Rust transport for output timing.
+- Preserve the source-side loop-start invariant for every newly triggered pad.
 - Keep non-quantized/immediate triggering behavior unchanged.
 - Use bounded per-pad timing anchors already published to Rust.
-- Anchor the Rust transport downbeat from the selected BPM-lock source pad when possible.
+- Allow explicit sync requests to anchor the Rust transport downbeat from a selected active pad
+  when possible.
 - Preserve one scheduled frame for MultiLoop-disabled stop-all/start transitions.
 - Keep all audio callback work bounded and real-time safe.
 
@@ -26,6 +33,8 @@ master BPM and pad BPM metadata, but it does not align downbeats.
 - New UI controls for trigger quantization.
 - Full beat-grid vector processing in the audio callback.
 - Stem generation or stem mixing.
+- Late-click catch-up by seeking into the middle or end of a newly triggered source loop.
+- Implicit masterclock selection from the first-started, oldest active, or currently playing pad.
 
 ## Proposed Design
 
@@ -37,7 +46,7 @@ Rust already has two pieces of phase state:
 - Pad phase: effective pad BPM and one bounded `phase_anchor_frame` derived from the first
   downbeat, first beat, or zero.
 
-For phase-aware starts, Rust computes the target transport phase at the scheduled output
+For explicit sync features, Rust can compute the target transport phase at an arbitrary output
 frame. With 4/4 behavior this is a value in beats within the bar:
 
 ```text
@@ -51,10 +60,9 @@ pad_frames_per_beat = output_sample_rate * 60 / pad_bpm
 desired_sample_frame = phase_anchor_frame + target_bar_phase_beats * pad_frames_per_beat
 ```
 
-The desired frame is then wrapped into the active loop region. If the configured loop region
-is invalid or unavailable, the full sample region is used. If pad BPM is missing, invalid, or
-the loop/sample region cannot produce a valid frame, playback falls back to the existing
-loop-start behavior.
+This calculation is retained as a bounded helper for explicit sync behavior and diagnostics. It is
+not applied to normal quantized pad triggers in the corrected architecture. Newly triggered pads
+start from the effective loop start, and quantization chooses only the output frame.
 
 This model uses one bounded anchor and BPM metadata. It does not require full beat-grid
 vectors or beat-detection work in the callback.
@@ -67,16 +75,15 @@ When trigger quantization is enabled with a selected grid step:
 
 1. The audio thread computes the absolute output-frame target from the transport timeline.
 2. The fixed-capacity scheduler stores the target and fixed-size command payload.
-3. At execution time, Rust starts or restarts the pad at the phase-aligned sample frame for
-   that target output frame when valid metadata is available.
-4. If metadata is unavailable, Rust starts at the existing effective loop start.
+3. At execution time, Rust starts or restarts the pad at the existing effective loop start.
 
-The scheduled event target frame must be available to the execution path. The implementation
-can pass the scheduler event's `target_frame` into command execution or store a bounded
-precomputed phase descriptor in the scheduled command. Either approach must remain fixed-size.
+The scheduled event does not need to carry a source-frame phase descriptor for normal triggers.
+If a future OpenSpec change reintroduces source-frame phase alignment as an explicit mode, that
+mode must preserve fixed-size scheduling and must not become an implicit side effect of enabling
+basic trigger quantization.
 
 ### MultiLoop-Disabled Atomic Transitions
-For MultiLoop disabled playback, the stop-all and phase-aware pad start remain one atomic
+For MultiLoop disabled playback, the stop-all and loop-start pad start remain one atomic
 scheduled command at one output frame. If the scheduler rejects that command, currently
 playing pads remain unchanged.
 
@@ -84,9 +91,10 @@ The target pad must still be validated before stopping active voices. A missing 
 target pad must not stop the current pad.
 
 ### BPM Lock Transport Phase Anchor
-When BPM lock is enabled, Python already tracks the selected anchor pad and derives master
-BPM from that pad's effective BPM and global speed. This change adds a fixed-size request
-that lets the audio thread anchor transport phase from that selected pad when possible.
+When BPM lock is enabled, Python tracks the selected anchor pad and derives a mixer master BPM
+for tempo-ratio matching. The permanent transport masterclock is not redefined by that recompute.
+A fixed-size request can explicitly ask the audio thread to anchor transport phase from a selected
+pad when possible.
 
 The audio thread can anchor transport downbeat from a playing anchor pad when all are valid:
 
@@ -110,7 +118,8 @@ the equivalent downbeat anchor is representable. The resulting transport phase i
 for future quantized scheduling.
 
 If the anchor pad is not playing or lacks valid timing data, BPM lock continues to provide
-tempo-ratio matching without changing the transport downbeat anchor.
+tempo-ratio matching without changing the transport downbeat anchor. Starting, stopping, pausing,
+retriggering, or unloading pads does not implicitly invoke this anchor path.
 
 ### Real-Time Safety
 The audio callback must continue to avoid:
@@ -128,18 +137,17 @@ All calculations are scalar arithmetic over fixed-size mixer, transport, and sch
 Any implementation that needs audio-thread allocation or blocking is a blocker.
 
 ## Risks And Trade-offs
-- Phase-aware starts can surprise users when a custom loop region does not begin on the pad
-  anchor. Wrapping the desired frame into the active loop region preserves the chosen region
-  while still aligning musical phase.
+- Source-frame phase alignment can surprise users when a custom loop region does not begin on the
+  pad anchor. The corrected trigger path therefore preserves loop-start starts and limits
+  phase-anchor behavior to explicit sync paths.
 - BPM-lock anchoring from a currently playing pad is best-effort. If the anchor pad is not
   active, the engine should keep tempo matching rather than inventing phase.
 - Active non-anchor pads may remain phase-offset until retriggered. Continuous correction is
   deliberately deferred to avoid a larger DSP change.
 
 ## Open Questions
-- Whether a future UI should expose "phase-aware quantization" separately from trigger
-  quantization, or whether quantized starts should always become phase-aware when metadata is
-  valid.
+- Whether a future UI should expose source-frame phase alignment separately from trigger
+  quantization, with clear behavior and tests.
 - Whether pad phase should remain based on bar phase only for all current grid subdivisions.
 - Whether an audio-to-control diagnostic is useful when BPM-lock phase anchoring cannot be
   established from the selected pad.

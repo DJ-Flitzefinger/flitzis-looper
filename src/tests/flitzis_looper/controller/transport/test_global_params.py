@@ -157,7 +157,7 @@ def test_bpm_lock_anchors_master_bpm_to_selected_pad(
     assert audio_engine_mock.set_master_bpm.call_count == 1
     called_bpm = audio_engine_mock.set_master_bpm.call_args.args[0]
     assert called_bpm == pytest.approx(180.0)
-    audio_engine_mock.anchor_transport_phase_from_pad.assert_called_once_with(1)
+    audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
 
     audio_engine_mock.reset_mock()
 
@@ -167,7 +167,7 @@ def test_bpm_lock_anchors_master_bpm_to_selected_pad(
     assert audio_engine_mock.set_master_bpm.call_count == 1
     called_bpm = audio_engine_mock.set_master_bpm.call_args.args[0]
     assert called_bpm == pytest.approx(240.0)
-    audio_engine_mock.anchor_transport_phase_from_pad.assert_called_once_with(1)
+    audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
 
 
 def test_non_finite_volume_nan(controller: AppController) -> None:

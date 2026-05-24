@@ -108,9 +108,10 @@ playback integration.
 
 Implemented first slice:
 
-- `TransportTimeline` stores the absolute output-frame clock and output sample rate.
+- `TransportTimeline` stores the absolute output-frame clock, output sample rate, default
+  transport master BPM, and downbeat anchor.
 - The CPAL callback advances the transport by the number of rendered output frames.
-- Rust validates optional master BPM and derives beat/bar phase for 4/4 timing.
+- Rust validates transport master BPM and derives beat/bar phase for 4/4 timing.
 - Deterministic Rust unit tests cover frame advancement, BPM conversion, phase, grid
   boundary calculations, and invalid BPM fallback.
 - `FixedCapacityScheduler` stores accepted events in bounded array storage, orders by
@@ -133,33 +134,28 @@ Implemented first slice:
   beatgrid/downbeat timing metadata prepared outside the audio callback. The Python controller
   derives `phase_anchor_s` from the same `grid_anchor_sec` that the waveform editor draws and
   snaps against: first finite non-negative downbeat, then first finite non-negative beat, then
-  `0.0`, plus the per-pad grid offset in samples.
-- When trigger quantization is enabled, Rust computes the nearest selected-grid target frame from
-  `TransportTimeline`, the downbeat anchor, and the selected grid step, then schedules `PlaySample`
-  at that absolute output frame. Future targets execute at the scheduled frame; past targets
-  execute at the current callback start and phase-aware starts advance their initial sample frame
-  by the late output-frame offset. If no master BPM is set, Rust may establish the masterclock from
-  an active pad's BPM and phase metadata; without either source, the request falls back to
-  immediate playback.
+  `0.0`, plus the per-pad grid offset in samples. Unloaded pads do not publish stale grid anchors
+  to Rust, and published anchors are bounded to non-negative seconds before crossing the native API.
+- When trigger quantization is enabled, Rust computes the current or next future selected-grid
+  target frame from the permanent `TransportTimeline`, the downbeat anchor, and the selected grid
+  step, then schedules `PlaySample` at that absolute output frame. Quantization only changes when
+  the pad becomes audible in output time; every newly triggered pad starts from its effective Loop
+  Editor loop start, or sample start when no loop region exists. Rust does not compensate late
+  clicks by starting inside the loop and does not establish the masterclock from active pads.
 - Scheduler-full quantized play requests are rejected without evicting existing scheduled events
   or changing currently playing pads.
 - `AudioEngine.play_sample_exclusive(id, velocity)` publishes one fixed-size command for
   one-at-a-time playback. With quantization enabled, Rust schedules the stop-all operation and
   requested pad start as one atomic `StopAllThenPlaySample` event at the same absolute output
   frame; scheduler-full rejection leaves current playback unchanged.
-- The first playback slice for `add-phase-aware-playback-sync` is in place:
-  `TransportTimeline` can compute bar phase for arbitrary scheduled target frames without
-  advancing the transport clock, and `RtMixer` can compute a phase-aligned initial sample frame
-  from pad BPM, a bounded phase anchor, active loop bounds, and target bar phase.
-- Quantized scheduled `PlaySample` and `PlaySampleExclusive` events now carry an optional
-  fixed-size target bar phase computed from the scheduled output frame. When the descriptor is
-  present, Rust starts or retriggers the pad at the phase-aligned sample frame and applies
-  late-trigger catch-up when the selected nearest grid boundary is already in the past; missing pad
-  metadata falls back to the existing effective loop start.
+- The corrected `add-phase-aware-playback-sync` slice keeps `TransportTimeline` target-frame phase
+  helpers and `RtMixer` phase helper coverage available for explicit sync behavior, but normal
+  quantized `PlaySample` and `PlaySampleExclusive` events no longer carry a source-frame phase
+  descriptor and no longer seek into the source loop.
 - Immediate playback commands carry no phase descriptor, so `play_sample` and
   `play_sample_exclusive` keep the existing prompt loop-start behavior when trigger quantization
   is disabled.
-- `AudioEngine.anchor_transport_phase_from_pad(id)` publishes a fixed-size BPM-lock phase-anchor
+- `AudioEngine.anchor_transport_phase_from_pad(id)` publishes a fixed-size explicit phase-anchor
   request. When the selected pad is active and has valid BPM/timing metadata, the audio thread
   derives the pad's current bar phase from mixer state and moves the Rust transport downbeat anchor
   to the matching phase while setting the transport BPM from the active pad output tempo when
@@ -169,10 +165,14 @@ Implemented first slice:
 The planned direction is:
 
 - Rust owns the global transport timeline and advances it by rendered output sample frames.
+- The global transport timeline runs independently of active pad count and trigger quantization
+  state.
 - Scheduled playback events target absolute output-frame positions.
-- Rust stores master BPM and derives beat/bar phase from the audio-thread sample-frame clock.
+- Rust stores transport master BPM and derives beat/bar phase from the audio-thread sample-frame
+  clock.
 - Quantized pad triggers use a fixed-capacity scheduler owned by the audio thread.
 - Existing immediate trigger behavior remains the default when trigger quantization is disabled.
+- Quantized pad triggers preserve source-side loop starts and manual musical offsets between pads.
 - Beatgrid and downbeat metadata is prepared outside the audio callback, then published as
   bounded per-pad timing metadata for Rust playback timing.
 
@@ -267,11 +267,10 @@ shifts and overlap controls, stores them as project settings, and leaves stem ge
 lookup, and cache work on the existing background path. Right-clicking `V`, `D`, `M`, or `B`
 sets a non-momentary custom solo state for that component without adding a separate mute feature.
 
-The active Gen3 phase-aware sync slice is `openspec/changes/add-phase-aware-playback-sync/`. It
-defines how quantized starts will use the Rust transport phase plus bounded per-pad timing anchors
-to choose the initial pad sample frame, and how BPM lock can anchor the transport downbeat from a
-selected playing pad. Phase-aware scheduled playback is wired for quantized starts and exclusive
-transitions; BPM-lock phase anchoring is wired for selected active pads.
+The active Gen3 phase-aware sync slice is `openspec/changes/add-phase-aware-playback-sync/`. It now
+keeps normal quantized starts loop-start based while preserving bounded transport/pad phase helpers
+for explicit sync behavior. BPM-lock tempo matching remains separate from the permanent transport
+masterclock unless an explicit `anchor_transport_phase_from_pad` request is sent.
 
 ## Gen3 low-jitter input mapping
 
@@ -326,9 +325,9 @@ The Rust engine is exposed to Python as `AudioEngine` with:
     `trigger_quantization_step`; the bottom-bar `Q` toggle enables/disables quantization and the
     Settings page selects the grid step.
   - `set_pad_timing_metadata(id, phase_anchor_s)` publishes a finite non-negative per-pad phase
-    anchor derived from analysis metadata. It is stored in Rust state for phase-aware quantized
-    playback; full beat-grid vectors are not sent to the callback.
-  - `anchor_transport_phase_from_pad(id)` requests BPM-lock transport downbeat anchoring from the
+    anchor derived from analysis metadata. It is stored in Rust state for pad timing metadata and
+    explicit sync behavior; full beat-grid vectors are not sent to the callback.
+  - `anchor_transport_phase_from_pad(id)` explicitly requests transport downbeat anchoring from a
     selected playing pad using only audio-thread-owned transport and mixer state.
   - `set_input_mapping_enabled(enabled)` turns the Rust input layer's mapping resolution on or off.
   - `set_input_mapping_snapshot(mappings)` publishes `(binding_key, action_key)` MIDI mappings to

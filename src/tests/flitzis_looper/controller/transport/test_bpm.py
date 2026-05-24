@@ -175,6 +175,7 @@ def test_on_pad_bpm_changed_updates_audio(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     sample_id = 0
+    controller.project.sample_paths[sample_id] = "samples/foo.wav"
     controller.project.manual_bpm[sample_id] = 120.0
 
     controller.transport.bpm.on_pad_bpm_changed(sample_id)
@@ -183,10 +184,27 @@ def test_on_pad_bpm_changed_updates_audio(
     audio_engine_mock.set_pad_timing_metadata.assert_called_with(sample_id, 0.0)
 
 
+def test_on_pad_bpm_changed_skips_unloaded_pad_timing_metadata(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 44_100
+    audio_engine_mock.set_pad_timing_metadata.side_effect = ValueError(
+        "phase_anchor_s out of range"
+    )
+    sample_id = 0
+    controller.project.pad_grid_offset_samples[sample_id] = -1
+
+    controller.transport.bpm.on_pad_bpm_changed(sample_id)
+
+    audio_engine_mock.set_pad_bpm.assert_called_with(sample_id, None)
+    audio_engine_mock.set_pad_timing_metadata.assert_not_called()
+
+
 def test_on_pad_bpm_changed_publishes_downbeat_timing_metadata(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     sample_id = 0
+    controller.project.sample_paths[sample_id] = "samples/foo.wav"
     controller.project.sample_analysis[sample_id] = SampleAnalysis(
         bpm=120.0,
         key="C",
@@ -203,6 +221,7 @@ def test_on_pad_bpm_changed_publishes_shifted_grid_anchor(
 ) -> None:
     audio_engine_mock.output_sample_rate.return_value = 48_000
     sample_id = 0
+    controller.project.sample_paths[sample_id] = "samples/foo.wav"
     controller.project.pad_grid_offset_samples[sample_id] = 480
     controller.project.sample_analysis[sample_id] = SampleAnalysis(
         bpm=120.0,
@@ -219,6 +238,7 @@ def test_on_pad_bpm_changed_publishes_beat_fallback_timing_metadata(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     sample_id = 0
+    controller.project.sample_paths[sample_id] = "samples/foo.wav"
     controller.project.sample_analysis[sample_id] = SampleAnalysis(
         bpm=120.0,
         key="C",
@@ -234,6 +254,7 @@ def test_on_pad_bpm_changed_publishes_zero_for_invalid_timing_metadata(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     sample_id = 0
+    controller.project.sample_paths[sample_id] = "samples/foo.wav"
     controller.project.sample_analysis[sample_id] = SampleAnalysis(
         bpm=120.0,
         key="C",
@@ -259,7 +280,7 @@ def test_on_pad_bpm_changed_updates_master_bpm(
 
     audio_engine_mock.set_pad_bpm.assert_called_with(sample_id, 120.0)
     audio_engine_mock.set_master_bpm.assert_called_with(120.0)
-    audio_engine_mock.anchor_transport_phase_from_pad.assert_called_once_with(sample_id)
+    audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
 
 
 def test_on_pad_bpm_changed_not_anchor(controller: AppController, audio_engine_mock: Mock) -> None:

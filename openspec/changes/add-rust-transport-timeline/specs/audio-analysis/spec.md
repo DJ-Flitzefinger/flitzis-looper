@@ -22,6 +22,13 @@ audio callback.
 - **THEN** the published phase anchor is `0.0` seconds
 - **AND** the audio callback updates fixed-size state without panic, allocation, blocking, disk I/O, or GIL access
 
+#### Scenario: Unloaded pad does not publish stale timing metadata
+- **GIVEN** a pad has been unloaded
+- **AND** the pad has a persisted negative grid offset from earlier editing
+- **WHEN** controller code clears the pad BPM and analysis state
+- **THEN** the control layer does not publish a stale negative pad timing anchor to Rust
+- **AND** unload completes without raising an audio-engine timing metadata validation error
+
 #### Scenario: Persisted analysis can restore timing metadata
 - **GIVEN** a project restores persisted analysis results for a pad
 - **WHEN** the pad is restored to the audio engine

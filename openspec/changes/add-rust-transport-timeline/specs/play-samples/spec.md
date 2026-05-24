@@ -22,6 +22,31 @@ behavior unless the user has explicitly enabled quantized triggering through fut
 - **THEN** the trigger is ignored or dropped safely
 - **AND** the audio callback continues without panic or blocking
 
+### Requirement: Quantized Triggers Preserve Source Loop Start
+The system SHALL start every newly triggered quantized pad from that pad's effective loop
+start source frame.
+
+Quantized trigger scheduling SHALL only change the absolute output frame where the pad becomes
+audible. It SHALL NOT change the initial source frame, seek into the middle of the loop, seek near
+the loop end, or apply late-click catch-up inside the source loop.
+
+If a loop region is configured for the pad, the effective loop start SHALL be the configured loop
+start. If no loop region is configured, the effective loop start SHALL be sample frame zero.
+
+#### Scenario: Quantized play starts from configured loop start
+- **GIVEN** trigger quantization is enabled
+- **AND** a loaded pad has a configured loop region starting at source frame 9,600
+- **WHEN** the pad trigger is scheduled on the next transport grid boundary
+- **THEN** the pad becomes audible at that output frame
+- **AND** playback starts from source frame 9,600
+
+#### Scenario: Late click does not seek into the loop
+- **GIVEN** trigger quantization is enabled
+- **AND** the human trigger arrives after the nearest previous grid boundary
+- **WHEN** Rust schedules the trigger
+- **THEN** Rust targets the next future grid boundary
+- **AND** the initial source frame remains the effective loop start
+
 ### Requirement: Quantized Trigger Failure Does Not Partially Change Playback
 The system SHALL reject a quantized trigger request without applying partial playback
 changes when the fixed-capacity scheduler cannot accept the request.

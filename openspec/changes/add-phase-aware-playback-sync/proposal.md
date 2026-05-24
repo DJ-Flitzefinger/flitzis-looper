@@ -5,21 +5,20 @@ Gen3 now has the building blocks for musical timing: a Rust-owned transport cloc
 fixed-capacity scheduler, quantized trigger routing, atomic exclusive playback transitions,
 and bounded per-pad timing anchors derived from beatgrid/downbeat analysis.
 
-The remaining gap is phase. Quantized starts currently land on the Rust transport grid, but
-the pad still starts at its normal loop start. BPM lock currently tempo-matches pads by BPM
-ratio, but it does not establish a shared downbeat/bar phase. That means loops can be tempo
-matched while still sounding offset from one another.
+The remaining gap is controlled phase behavior. Quantized starts land on the Rust transport grid
+and must continue to start from the pad's effective loop start. BPM lock tempo-matches pads by BPM
+ratio, but transport downbeat alignment must be an explicit sync operation rather than a side
+effect of whichever pad happens to be playing.
 
-This change defines the next narrow Gen3 behavior contract before implementation: use the
-Rust transport timeline plus per-pad timing anchors to align quantized starts and BPM-lock
-transport phase without adding heavy work to the audio callback.
+This change defines the next narrow Gen3 behavior contract before implementation: keep normal
+quantized starts loop-start based, keep bounded phase helpers available for explicit sync, and
+avoid adding heavy work to the audio callback.
 
 ## What Changes
-- Define phase-aware quantized pad start and retrigger behavior.
-- Define how Rust computes an initial pad sample frame from transport phase, pad BPM, active
-  loop region, and the bounded per-pad phase anchor.
-- Define how BPM lock can anchor the Rust transport downbeat to a selected playing pad using
-  a fixed-size control request.
+- Define that normal quantized pad starts and retriggers preserve the effective loop-start source frame.
+- Define bounded Rust phase helpers without applying them implicitly to normal trigger source frames.
+- Define how an explicit sync request can anchor the Rust transport downbeat to a selected playing
+  pad using a fixed-size control request.
 - Preserve immediate-trigger behavior when trigger quantization is disabled.
 - Preserve scheduler-full rejection semantics and atomic MultiLoop-disabled transitions.
 - Keep full beat-grid vectors, beat detection, disk I/O, Python/GIL access, allocation, and
@@ -31,8 +30,8 @@ transport phase without adding heavy work to the audio callback.
 - Affected docs: `docs/audio-engine.md`, `docs/message-passing.md`,
   `docs/todos-legacy-migration.md`.
 - Later affected code: Rust transport, mixer, scheduler/audio-stream execution path,
-  message enum, and focused Rust tests. Python/controller changes are limited to publishing
-  a fixed-size BPM-lock phase-anchor request when the anchor pad changes.
+  message enum, and focused Rust tests. Python/controller changes are limited to keeping
+  BPM-lock tempo matching separate from explicit transport phase anchoring.
 
 ## Non-Goals
 - No production Rust or Python implementation in this planning slice.

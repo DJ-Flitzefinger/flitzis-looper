@@ -7,7 +7,7 @@ not establish a global musical timeline that other Gen3 behavior can share.
 The next Gen3 features need a single Rust authority for:
 
 - output sample-frame time,
-- master BPM,
+- transport master BPM,
 - beat and bar phase,
 - downbeat alignment,
 - quantized pad starts/restarts,
@@ -15,13 +15,17 @@ The next Gen3 features need a single Rust authority for:
 
 Python should remain the UI/control layer. It may request transport changes and display
 state, but it must not own sample-accurate audio-thread timing.
+Pads also must not own the masterclock: stopping the first-started or oldest active pad must
+not reselect or invalidate the transport phase used by later quantized triggers.
 
 ## Goals
 - Add a Rust-owned transport timeline advanced only by the audio callback's rendered output
   frames.
+- Keep that transport timeline running from audio stream initialization, independent of active
+  pad count and independent of trigger quantization state.
 - Represent scheduler targets as absolute output-frame positions.
 - Preserve existing `play_sample(id, velocity)` behavior by default.
-- Make quantized pad triggers opt-in and deterministic.
+- Make quantized pad triggers opt-in and deterministic while preserving source-side loop starts.
 - Keep all audio callback work real-time safe: no blocking, no GIL, no disk I/O, no logging,
   no heap allocation, no neural inference, and no long-running work.
 - Keep inter-thread communication compatible with the existing fixed-capacity `rtrb` model.
@@ -56,7 +60,8 @@ Add a Rust transport state object owned by the audio thread. It should hold at l
 
 - `output_frame: u64`, the absolute sample-frame clock for rendered output frames.
 - `sample_rate_hz`, copied from the CPAL stream configuration.
-- `master_bpm: Option<f32>`, validated as finite and positive.
+- `master_bpm: Option<f32>`, validated as finite and positive and initialized to a finite default
+  so the masterclock exists before any pad is triggered.
 - `beats_per_bar: u32`, initially fixed at 4 for 4/4 behavior.
 - `downbeat_frame: u64`, the absolute output-frame anchor for bar phase.
 
@@ -66,6 +71,11 @@ frames, the transport advances to `output_frame + frames`.
 Beat and bar phase are derived from `output_frame`, `sample_rate_hz`, `master_bpm`, and
 `downbeat_frame`. If no valid master BPM exists, musical quantization is unavailable and
 immediate playback remains available.
+
+Pad playback is a client of this transport, not its owner. Pad starts, stops, pauses, retriggers,
+unloads, pad BPM changes, and pad timing-metadata publication do not move `output_frame`,
+`master_bpm`, or `downbeat_frame`. Transport BPM/phase changes require an explicit transport or
+sync operation.
 
 ### Absolute Output-Frame Scheduler
 Add a fixed-capacity scheduler owned by the audio thread. A scheduled event contains:
@@ -82,7 +92,7 @@ During a callback:
 
 1. Drain control messages without blocking.
 2. Convert immediate commands into `target_frame = buffer_start_frame`.
-3. Convert quantized trigger requests into the nearest selected transport grid target computed by
+3. Convert quantized trigger requests into the current or next future selected transport grid target computed by
    the Rust transport.
 4. Execute events due at or before `buffer_start_frame` before rendering the first frame.
 5. Execute events that fall inside the current output buffer at their exact frame offset.
@@ -90,8 +100,9 @@ During a callback:
 6. Leave future events in the scheduler for later callbacks.
 
 Late events are not allowed to block or rewind output time. If `target_frame < buffer_start_frame`,
-they execute at `buffer_start_frame` and phase-aware pad starts advance their initial sample frame
-by the late output-frame offset so the musical phase still matches the selected grid.
+they execute at `buffer_start_frame`. Quantized trigger target selection avoids choosing past grid
+boundaries; a click that missed the nearest previous gridline waits for the next future gridline
+instead of seeking into the source loop.
 
 ### Quantized Pad Triggers
 Default pad triggering remains immediate. Quantization is opt-in through future Python/UI
@@ -108,14 +119,19 @@ The default persisted grid step is `1/16`, while new projects still default the 
 enabled state to disabled/immediate. The minimum `1/64` step uses the same one-sixteenth-of-a-beat
 unit as the loop editor's finest musical grid and snapping step.
 
-When quantization is enabled, Rust computes the target frame from the current transport state and
+When quantization is enabled, Rust computes the target frame from the permanent transport state and
 selected grid step. A trigger exactly on a grid boundary may execute at the current output frame.
-Otherwise it targets the nearest matching grid boundary. Future targets are scheduled for that
-absolute output frame; past targets execute immediately with phase catch-up.
+Otherwise it targets the next future matching grid boundary. Quantization only changes output
+start time; the requested pad starts from its effective Loop Editor loop start, or sample start
+when no loop region exists. The old late-click catch-up behavior that starts inside the loop is
+out of scope for this corrected architecture.
 
-Rust may establish the masterclock from an active pad's bounded BPM and phase-anchor metadata when
-no explicit BPM-lock master is available. The same per-pad grid anchor that the loop editor draws
-and snaps against is published to Rust as the pad phase anchor.
+Rust must not establish the masterclock from the first active pad or refresh it from whichever pad
+is oldest/currently active as a side effect of quantized triggering. The same per-pad grid anchor
+that the loop editor draws and snaps against is still published to Rust as pad timing metadata, but
+that metadata does not redefine the permanent transport. Manual musical offsets are preserved:
+triggering a second pad two bars later schedules that second pad two bars later on the global grid
+rather than forcing it to the first pad's first beat or bar.
 
 For MultiLoop disabled, the stop-other-pads action and the requested pad start must be one
 scheduled transition at the same target frame. If that transition cannot be scheduled, the

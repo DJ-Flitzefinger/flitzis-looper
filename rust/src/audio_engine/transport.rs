@@ -6,6 +6,7 @@
 #![allow(dead_code)]
 
 const DEFAULT_SAMPLE_RATE_HZ: u32 = 44_100;
+const DEFAULT_MASTER_BPM: f32 = 120.0;
 const BEATS_PER_BAR_4_4: u32 = 4;
 pub(crate) const GRID_64THS_PER_BEAT: u16 = 16;
 pub(crate) const GRID_64THS_PER_BAR: u16 = GRID_64THS_PER_BEAT * BEATS_PER_BAR_4_4 as u16;
@@ -62,7 +63,7 @@ impl TransportTimeline {
         Self {
             output_frame: 0,
             sample_rate_hz,
-            master_bpm: None,
+            master_bpm: Some(DEFAULT_MASTER_BPM),
             beats_per_bar: BEATS_PER_BAR_4_4,
             downbeat_frame: 0,
         }
@@ -232,31 +233,17 @@ impl TransportTimeline {
 
         let relative_frames = self.relative_frames_from_downbeat();
         let grid_position = relative_frames / frames_per_grid;
-        let nearest_grid = grid_position.round();
-        let distance_frames = (grid_position - nearest_grid).abs() * frames_per_grid;
+        let rounded_grid = grid_position.round();
+        let distance_frames = (grid_position - rounded_grid).abs() * frames_per_grid;
 
         let target_grid = if distance_frames <= GRID_EPSILON_FRAMES {
-            nearest_grid
+            rounded_grid
         } else {
             grid_position.floor() + 1.0
         };
 
         let target_frame = self.downbeat_frame as f64 + target_grid * frames_per_grid;
         Some(frame_at_or_after(target_frame, self.output_frame))
-    }
-
-    pub(crate) fn nearest_grid_frame(&self, grid: QuantizeGrid) -> Option<u64> {
-        let frames_per_grid =
-            self.frames_per_beat()? * grid.step_64ths() as f64 / GRID_64THS_PER_BEAT as f64;
-
-        if !frames_per_grid.is_finite() || frames_per_grid <= 0.0 {
-            return None;
-        }
-
-        let relative_frames = self.relative_frames_from_downbeat();
-        let target_grid = (relative_frames / frames_per_grid).round();
-        let target_frame = self.downbeat_frame as f64 + target_grid * frames_per_grid;
-        frame_from_f64(target_frame)
     }
 
     fn relative_frames_from_downbeat(&self) -> f64 {
@@ -297,14 +284,6 @@ fn frame_at_or_after(target_frame: f64, current_frame: u64) -> u64 {
     (target_frame.ceil() as u64).max(current_frame)
 }
 
-fn frame_from_f64(target_frame: f64) -> Option<u64> {
-    if !target_frame.is_finite() || target_frame < 0.0 || target_frame >= u64::MAX as f64 {
-        return None;
-    }
-
-    Some(target_frame.round() as u64)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,7 +301,7 @@ mod tests {
 
         assert_eq!(transport.output_frame(), 0);
         assert_eq!(transport.sample_rate_hz(), 48_000);
-        assert_eq!(transport.master_bpm(), None);
+        assert_eq!(transport.master_bpm(), Some(DEFAULT_MASTER_BPM));
         assert_eq!(transport.beats_per_bar(), 4);
         assert_eq!(transport.downbeat_frame(), 0);
     }
@@ -383,6 +362,19 @@ mod tests {
         assert_eq!(transport.master_bpm(), None);
         assert_eq!(transport.frames_per_beat(), None);
         assert_eq!(transport.next_beat_frame(), None);
+    }
+
+    #[test]
+    fn default_masterclock_advances_without_pad_playback() {
+        let mut transport = TransportTimeline::new(48_000);
+
+        transport.advance_by_rendered_frames(512);
+        transport.advance_by_rendered_frames(512);
+
+        assert_eq!(transport.output_frame(), 1_024);
+        assert_eq!(transport.master_bpm(), Some(DEFAULT_MASTER_BPM));
+        assert_eq!(transport.downbeat_frame(), 0);
+        assert_eq!(transport.beat_position(), Some(1_024.0 / 24_000.0));
     }
 
     #[test]
@@ -450,6 +442,7 @@ mod tests {
     #[test]
     fn downbeat_anchor_requires_master_bpm() {
         let mut transport = TransportTimeline::new(48_000);
+        transport.clear_master_bpm();
 
         assert!(!transport.anchor_downbeat_to_bar_phase(1.0));
         assert_eq!(transport.downbeat_frame(), 0);
@@ -537,19 +530,11 @@ mod tests {
     }
 
     #[test]
-    fn nearest_grid_frame_targets_previous_boundary_when_closer() {
+    fn next_grid_frame_uses_future_boundary_when_previous_is_closer() {
         let transport = transport_at(6_001);
         let sixteenth_note = QuantizeGrid::from_step_64ths(4).unwrap();
 
-        assert_eq!(transport.nearest_grid_frame(sixteenth_note), Some(6_000));
-    }
-
-    #[test]
-    fn nearest_grid_frame_targets_future_boundary_when_closer() {
-        let transport = transport_at(9_001);
-        let sixteenth_note = QuantizeGrid::from_step_64ths(4).unwrap();
-
-        assert_eq!(transport.nearest_grid_frame(sixteenth_note), Some(12_000));
+        assert_eq!(transport.next_grid_frame(sixteenth_note), Some(12_000));
     }
 
     #[test]
@@ -571,7 +556,8 @@ mod tests {
 
     #[test]
     fn missing_master_bpm_disables_quantized_grid_targets() {
-        let transport = TransportTimeline::new(48_000);
+        let mut transport = TransportTimeline::new(48_000);
+        transport.clear_master_bpm();
 
         assert_eq!(transport.beat_position(), None);
         assert_eq!(transport.bar_phase_beats_at_frame(48_000), None);

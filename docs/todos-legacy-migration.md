@@ -72,18 +72,18 @@ Everything below tracks parity against `old-project` as a reference snapshot.
 - [x] As a performer, pad starts can be quantized to a Rust-owned global beat/bar timeline.
 - [x] As a performer, immediate pad triggering remains available when quantization is disabled.
 - [x] As a performer, quantized one-at-a-time pad switches stop the old pad and start the new pad on the same scheduled output frame.
-- [x] As a performer, loops can align to downbeat/beatgrid metadata produced by analysis.
+- [x] As a performer, quantized triggers preserve the pad's effective Loop Editor loop start while snapping the output start time.
+- [x] As a performer, manually later pad triggers preserve their global offset instead of being forced to another pad's first beat or bar.
 - [x] As a developer, the audio callback keeps using fixed-capacity real-time-safe data structures for scheduling.
 
 Current Gen3 state: bounded per-pad timing anchors derived from analysis downbeats/beats are
-published to Rust audio-thread state. Low-level quantized scheduled playback now uses the Rust
-transport target-frame bar phase plus those anchors to choose phase-aware initial sample frames for
-normal starts, retriggers, and MultiLoop-disabled exclusive transitions. BPM-lock now publishes a
-fixed-size selected-pad phase-anchor request after a valid master BPM is set; Rust anchors the
-transport downbeat from that active pad when BPM/timing metadata is available and otherwise keeps
-existing tempo matching. UI/controller trigger-quantization controls now expose a bottom-bar `Q`
-toggle plus Settings grid choices for `1/16`, `1/32`, and `1/64`; legacy beat/bar modes migrate to
-`1/16`.
+published to Rust audio-thread state and remain aligned with the waveform editor grid anchor.
+Low-level quantized scheduled playback uses the permanent Rust transport to choose the current or
+next future grid output frame, but every newly triggered pad starts from its effective loop start.
+BPM-lock tempo matching no longer redefines the permanent transport masterclock as a side effect;
+transport phase anchoring is an explicit sync request. UI/controller trigger-quantization controls
+now expose a bottom-bar `Q` toggle plus Settings grid choices for `1/16`, `1/32`, and `1/64`;
+legacy beat/bar modes migrate to `1/16`.
 
 ### 7b) Low-jitter input mapping and Learn
 - OpenSpec change (active): `add-low-jitter-input-mapping`

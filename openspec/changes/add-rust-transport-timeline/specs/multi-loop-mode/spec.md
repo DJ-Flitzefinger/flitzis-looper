@@ -7,7 +7,11 @@ non-quantized behavior.
 
 When trigger quantization is enabled, the user's trigger timing SHALL create a trigger
 request, and Rust SHALL align the actual loop onset to the selected transport grid boundary
-using the Rust-owned timeline.
+using the permanent Rust-owned timeline.
+
+Quantized MultiLoop playback SHALL preserve manual musical offsets between pads. A later trigger
+SHALL attach to the shared global transport at its own selected-grid output frame, not be
+phase-forced to the first beat, first bar, oldest active pad, or first-started pad.
 
 #### Scenario: Non-quantized onsets remain independent
 - **WHEN** MultiLoop mode is enabled
@@ -20,9 +24,25 @@ using the Rust-owned timeline.
 #### Scenario: Quantized onsets align to the selected grid
 - **WHEN** MultiLoop mode is enabled
 - **AND** trigger quantization is enabled with grid step `1/16`
-- **AND** pad 1 and pad 2 are triggered closer to the same `1/16` boundary than to any other boundary
-- **THEN** Rust targets both pad starts at that `1/16` boundary
+- **AND** pad 1 and pad 2 are triggered before different future `1/16` boundaries
+- **THEN** Rust targets each pad start at its own selected `1/16` boundary
 - **AND** both starts are targeted by absolute output-frame positions
+
+#### Scenario: Two-bar offset is preserved
+- **WHEN** MultiLoop mode is enabled
+- **AND** trigger quantization is enabled with grid step `1/16`
+- **AND** pad 1 is triggered on the global grid
+- **AND** pad 2 is intentionally triggered two bars later on the global grid
+- **THEN** pad 2 starts two bars after pad 1 in output time
+- **AND** Rust does not force pad 2 to share pad 1's first-beat or first-bar phase
+
+#### Scenario: Stopping first-started pad preserves future quantization
+- **WHEN** MultiLoop mode is enabled
+- **AND** trigger quantization is enabled
+- **AND** pads 1, 2, 3, 4, and 5 are active on the global transport
+- **AND** the performer stops pad 1 while pads 2 through 5 keep playing
+- **THEN** the permanent Rust transport phase remains unchanged
+- **AND** a later pad trigger quantizes against the same global transport grid
 
 ## ADDED Requirements
 

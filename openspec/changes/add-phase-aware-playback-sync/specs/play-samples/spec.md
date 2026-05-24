@@ -1,46 +1,36 @@
 ## ADDED Requirements
 
-### Requirement: Quantized Starts Use Pad Phase Metadata When Available
-The system SHALL use bounded pad phase metadata to choose the initial sample frame for
-quantized starts when valid metadata is available.
+### Requirement: Quantized Starts Preserve Effective Loop Start
+The system SHALL preserve the effective loop-start source frame for all newly triggered
+quantized starts.
 
 When trigger quantization is enabled and a loaded pad is scheduled to start or restart at a
-transport grid boundary, Rust SHALL use the targeted grid output frame plus bounded per-pad
-timing metadata to choose the pad's initial sample frame.
+transport grid boundary, Rust SHALL use the selected output frame only to decide when the pad
+becomes audible. Rust SHALL NOT use transport phase, pad BPM, pad timing metadata, or late-click
+catch-up to choose a different initial source frame for normal pad triggers.
 
-Rust SHALL compute the phase-aware initial sample frame from:
+If valid pad timing metadata is available, it SHALL remain available for loop-editor grid
+anchoring and explicit future sync operations, but it SHALL NOT make a newly triggered pad start
+from the middle or end of its loop.
 
-- scheduled target output frame,
-- transport master BPM and bar phase,
-- pad effective BPM,
-- pad phase anchor,
-- active loop region or full sample region.
-
-If the nearest targeted grid output frame is before the actual execution frame, Rust SHALL advance
-the phase-aware initial sample frame by the late output-frame offset, scaled by the pad's current
-playback tempo ratio, before wrapping it into the active loop region.
-
-If valid phase data is unavailable, Rust SHALL start or restart at the existing effective
-loop-start frame.
-
-#### Scenario: Quantized one-sixteenth start begins at the pad phase anchor
+#### Scenario: Quantized one-sixteenth start begins at loop start
 - **GIVEN** trigger quantization is enabled with grid step `1/16`
-- **AND** a loaded pad has valid BPM and phase-anchor metadata
-- **AND** the targeted grid output frame is a transport bar boundary
-- **WHEN** the scheduled event executes
-- **THEN** Rust starts or restarts the pad at the frame corresponding to the pad's bar-phase anchor within the active loop region
+- **AND** a loaded pad has valid BPM and timing-anchor metadata
+- **AND** the pad has a configured loop start
+- **WHEN** the scheduled event executes at the selected transport grid boundary
+- **THEN** Rust starts or restarts the pad at the configured loop-start source frame
+- **AND** Rust does not start at a phase-derived source frame inside the loop
 
-#### Scenario: Quantized late subdivision start catches up
+#### Scenario: Quantized late subdivision start waits instead of catching up
 - **GIVEN** trigger quantization is enabled with grid step `1/16`
-- **AND** the targeted grid output frame is 240 frames before the actual execution frame
-- **AND** a loaded pad has valid BPM and phase-anchor metadata
-- **WHEN** the scheduled event executes
-- **THEN** Rust starts or restarts the pad at the phase-aware initial sample frame plus 240 output
-  frames scaled by the pad's current playback tempo ratio
+- **AND** the human trigger arrives after the nearest previous grid boundary
+- **WHEN** Rust schedules the pad start
+- **THEN** Rust targets the next future selected-grid boundary
+- **AND** the pad starts from the effective loop start at that future output frame
 
-#### Scenario: Missing pad metadata falls back to loop start
+#### Scenario: Missing pad metadata still starts at loop start
 - **GIVEN** trigger quantization is enabled
-- **AND** a loaded pad lacks valid effective BPM or phase-anchor metadata
+- **AND** a loaded pad lacks valid effective BPM or timing-anchor metadata
 - **WHEN** the scheduled event executes
 - **THEN** Rust starts or restarts the pad at the existing effective loop-start frame
 
@@ -52,12 +42,12 @@ is disabled.
 `AudioEngine.play_sample_exclusive(id, velocity)` SHALL preserve the existing immediate
 loop-start behavior.
 
-Phase-aware start-frame calculation SHALL NOT be applied to immediate triggers unless a
+Phase-aware source-frame calculation SHALL NOT be applied to immediate triggers unless a
 future OpenSpec change explicitly requests that behavior.
 
 #### Scenario: Immediate trigger starts at loop start
 - **GIVEN** trigger quantization is disabled
-- **AND** a loaded pad has valid phase-anchor metadata
+- **AND** a loaded pad has valid timing-anchor metadata
 - **WHEN** Python/control code requests playback
 - **THEN** Rust starts or restarts playback promptly at the existing effective loop-start frame
 - **AND** no transport beat/bar boundary wait is introduced

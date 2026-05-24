@@ -98,13 +98,13 @@ The performance UI exposes trigger quantization as a bottom-bar `Q` toggle and a
 grid selector. The control layer publishes only fixed-size `SetTriggerQuantization` messages:
 `immediate` when `Q` is disabled, or the selected grid step when `Q` is enabled.
 
-The active `add-phase-aware-playback-sync` change keeps the same messaging rule. Quantized
-scheduled playback now stores a fixed-size optional target bar phase inside the audio-thread
-scheduler command, derived from the scheduled output frame. That descriptor is not a new
-Python-to-Rust ring-buffer message. BPM-lock phase anchoring uses a fixed-size
-`AnchorTransportPhaseFromPad { id }` control message. The audio thread derives transport phase
-from already-owned mixer and transport state; Python must not send full beat-grid vectors, file
-paths, heap-owned data, or direct scheduler/transport pointers.
+The corrected `add-phase-aware-playback-sync` change keeps the same messaging rule. Quantized
+scheduled playback stores only the fixed-size command needed to start at the selected output frame;
+normal triggers do not carry a target-bar-phase descriptor and do not seek inside the source loop.
+Explicit transport phase anchoring uses a fixed-size `AnchorTransportPhaseFromPad { id }` control
+message. The audio thread derives transport phase from already-owned mixer and transport state;
+Python must not send full beat-grid vectors, file paths, heap-owned data, or direct
+scheduler/transport pointers.
 
 Two failure points are distinct:
 

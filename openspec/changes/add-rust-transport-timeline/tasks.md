@@ -40,3 +40,12 @@
 - [x] 7.4 Persist and migrate trigger quantization settings.
 - [x] 7.5 Align the bottom-bar mode, stem, and Settings controls on a consistent horizontal line.
 - [x] 7.6 Render the waveform editor zero-amplitude reference line.
+
+## 8. Permanent Masterclock Repair
+- [x] 8.1 Keep the Rust transport timeline running from audio stream initialization, independent of active pad playback.
+- [x] 8.2 Stop deriving or refreshing the masterclock from the first-started, oldest active, or currently playing pad during normal quantized triggers.
+- [x] 8.3 Change quantized trigger selection to the current or next future global transport grid boundary.
+- [x] 8.4 Preserve the effective loop-start source frame for quantized `PlaySample` and `PlaySampleExclusive` starts.
+- [x] 8.5 Remove late-click catch-up behavior that starts newly triggered pads inside the loop.
+- [x] 8.6 Add MultiLoop regression coverage for stopping any active pad while other pads keep playing.
+- [x] 8.7 Re-run strict OpenSpec validation and the full uv-managed Rust/Python validation sequence.
