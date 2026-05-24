@@ -11,7 +11,14 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dynamic = ["version"]
-dependencies = ["imgui-bundle>=1.92.5", "pydantic>=2.12.5"]
+dependencies = [
+    "demucs>=4.0.1,<5",
+    "imgui-bundle>=1.92.5",
+    "pydantic>=2.12.5",
+    "torch>=2.12,<3",
+    "torchaudio>=2.11,<3",
+    "torchcodec>=0.9",
+]
 
 [dependency-groups]
 dev = [

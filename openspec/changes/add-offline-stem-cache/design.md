@@ -23,7 +23,7 @@ already been prepared and published into audio-thread-owned bounded state.
 ## Non-Goals
 - Implementing stem generation, model inference, or cache file formats in this planning
   slice.
-- Choosing a specific separation model or downloading model weights.
+- Automatically downloading model weights from the Looper UI.
 - Adding performer-facing stem controls or UI indicators in this change.
 - Changing transport quantization, phase-aware playback, loop-region behavior, or BPM-lock
   behavior.
@@ -86,12 +86,11 @@ background thread from the already decoded and resampled `SampleBuffer`, so ever
 artifact uses the mixer output sample rate, the mixer channel layout, the same frame origin,
 and the same frame length as the loaded full-mix buffer.
 
-This writer intentionally does not choose or run a neural separation model. Until a
-production source-separation slice is specified, `instrumental.wav` contains the aligned
-full mix and `vocals.wav`, `melody.wav`, `bass.wav`, and `drums.wav` contain aligned
-silence placeholders. This proves cache identity, artifact layout, background disk I/O,
-completion validation, and safe stale-result handling without publishing buffers to the
-audio callback or exposing performer-facing stem controls.
+This writer intentionally does not choose or run a neural separation model. It remains useful for
+low-level engine validation: `instrumental.wav` contains the aligned full mix and `vocals.wav`,
+`melody.wav`, `bass.wav`, and `drums.wav` contain aligned silence placeholders. Production source
+separation is provided by the later Demucs backend slice, which writes the same cache contract from
+Python-side background code before using the same prepared-publication path.
 
 ### Prepared Publication Slice
 After generation completes, Python revalidates the source version, the current pad playback
@@ -142,6 +141,68 @@ stem files.
 
 When stems are unavailable, stale, incomplete, or disabled, the engine must preserve current
 full-mix playback behavior.
+
+### Production Demucs Backend Slice
+The first production source-separation backend is Demucs, but it is isolated behind a
+replaceable Python control-plane backend boundary. The durable integration contract remains the
+same project-local cache layout and Rust publication path:
+
+1. Python validates that the pad is loaded, inactive, and not already running a conflicting task.
+2. Python captures the current source version and loaded sample shape from Rust outside the audio
+   callback.
+3. A background worker runs the configured stem-generation backend with source path, pad id,
+   source version, target cache directory, target sample rate/channel count/frame count, model
+   cache directory, and device policy.
+4. The backend writes `vocals.wav`, `melody.wav`, `bass.wav`, `drums.wav`, and `instrumental.wav`
+   under `samples/stems/<source-version-hash>/`.
+5. Python reuses the existing completion path: current-source and inactive-pad checks, complete
+   cache-file checks, then `AudioEngine.publish_prepared_stems(...)`.
+
+The Demucs adapter runs outside Rust and outside the CPAL callback. It invokes Demucs lazily on
+the background generation path, so app startup and unrelated tests do not import Torch or Demucs.
+The adapter maps Demucs `other.wav` to project `melody.wav`, and writes `instrumental.wav` by
+summing the final aligned `drums + bass + melody` artifacts. The cached `instrumental.wav`
+remains a cache artifact; performer-facing `I` still means the explicit Drums + Melody + Bass
+preset and does not select only `instrumental.wav`.
+
+Demucs is declared as an application runtime dependency. The model weights are not vendored and
+are not stored in project samples. The Looper does not start model download from the UI; the user
+must install the selected Demucs model before using Generate Stems. If the expected checkpoint is
+missing, the backend returns the short error `no Model installed` and does not invoke Demucs. If
+the active Python environment has not been synced and `python -m demucs` is unavailable, that is
+reported as a normal background generation error and does not affect full-mix playback.
+Because Demucs uses external `ffprobe` and `ffmpeg` executables for audio probing/decoding, the
+backend checks those tools before invoking Demucs and returns `FFmpeg/ffprobe unavailable` when
+Windows cannot execute them.
+Tool lookup first honors the process `PATH`, then an explicit `FLITZIS_FFMPEG_DIR` directory,
+then local WinGet `Gyan.FFmpeg*` package installs. When a directory is resolved, it is prepended
+to the Demucs subprocess `PATH` so Demucs and TorchAudio see the same tools that were preflighted.
+The current Torchaudio output path also requires TorchCodec for saving WAVs, so the backend checks
+TorchCodec import/native-library loading before invoking Demucs and returns `TorchCodec
+unavailable` when that dependency is not usable.
+
+The adapter uses high-quality Demucs defaults for the first production implementation:
+`--shifts 10` and `--overlap 0.5`. These are stored on the backend request as bounded quality
+parameters rather than hard-coded UI behavior, so a future settings surface can supply validated
+replacement values without changing the backend boundary. App-supported settings are `shifts`
+from 0 through 20 and `overlap` from 0.0 through 0.95; invalid values are rejected before Demucs
+starts.
+
+The adapter postprocesses Demucs output before publication. If Demucs output differs from the
+loaded full-mix buffer, the backend resamples, adapts channels, trims, or pads final cache WAVs so
+Rust's prepared-stem validator sees the same sample rate, channel count, frame origin, and exact
+frame count as the loaded full mix.
+
+Model caches are kept out of the repository and out of project samples. The backend uses Demucs'
+standard Torch Hub checkpoint directory. On Windows this is
+`C:\Users\<YOUR_NAME>\.cache\torch\hub\checkpoints`; for the default `htdemucs` model the expected
+checkpoint is `955717e8-8726e21a.th`. The backend configures `TORCH_HOME` only to keep Demucs on
+that standard cache path. The default device policy is `auto`: use CUDA only when Torch reports it
+is available, then retry once on CPU if the CUDA run fails.
+
+This slice does not add real-time separation, model training or fine-tuning, new stem UI states,
+component right-click solo behavior, or any audio-callback disk I/O, Python/GIL access, logging,
+blocking waits, heap allocation, neural inference, or long-running work.
 
 ## Risks And Trade-offs
 - Stem cache identity needs to be stable enough to avoid stale playback but cheap enough to

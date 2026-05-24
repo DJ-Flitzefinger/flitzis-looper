@@ -89,13 +89,37 @@ audio-buffer handles through the existing control-to-audio ring buffer; messages
 file paths, Python objects, unbounded metadata vectors, or copied full stem payloads.
 
 The current implementation keeps stem cache work in control-plane/background code. Python
-computes a source-version token outside the callback and calls
-`AudioEngine.generate_stems_async(id, source_version, cache_dir)` only after rejecting active,
-loading, analyzing, duplicate, or missing-source pads. Rust models `stem_generation` as a per-pad
-background task kind and reports started/progress/success/error events through
-`poll_loader_events()`. The current task writes deterministic aligned WAV cache artifacts under
-`samples/stems/<source-version-hash>/` outside the audio callback: `instrumental.wav` contains the
-full mix, while the other expected stem files are silence placeholders.
+computes a source-version token outside the callback and starts a Python-side background
+stem-generation backend only after rejecting active, loading, analyzing, duplicate, or
+missing-source pads. The production backend boundary is file/artifact based: the request contains
+the source path, pad id, source version, project-local target cache directory, loaded sample shape,
+model cache directory, and device policy; the result contains only small backend/model/device
+diagnostics for non-audio-thread surfaces.
+
+The first production adapter invokes Demucs outside Rust and outside the CPAL callback. It maps
+Demucs `other.wav` to project `melody.wav`, derives `instrumental.wav` from the final aligned
+drums, bass, and melody artifacts, and writes the same `samples/stems/<source-version-hash>/`
+cache files used by the existing prepared-publication path. User-facing setup commands are in
+`docs/stem-generation-setup.md`. Torch/Demucs are not imported during app startup. Model lookup
+uses Demucs' standard Torch Hub checkpoint cache outside the repository and outside project
+samples. If the expected `htdemucs` checkpoint is missing, the backend reports `no Model
+installed` before invoking Demucs. With the default `auto` device policy, CUDA is attempted only
+when Torch reports it is available, and a CUDA failure retries the same background request on CPU.
+The backend also probes `ffprobe` and `ffmpeg` before invoking Demucs; inaccessible or missing
+executables produce the short error `FFmpeg/ffprobe unavailable`. Lookup uses the inherited
+process `PATH`, `FLITZIS_FFMPEG_DIR`, or local WinGet `Gyan.FFmpeg*` package installs, and the
+resolved directory is prepended to the Demucs subprocess `PATH`. It also probes TorchCodec because
+Torchaudio uses it for output writing in the current environment; native-library failures produce
+`TorchCodec unavailable` before Demucs starts.
+The Demucs request also carries bounded quality parameters. The first production defaults are
+`--shifts 10` and `--overlap 0.5`, with app-supported settings ranges of `shifts` 0 through 20
+and `overlap` 0.0 through 0.95 for a future settings surface.
+
+Rust still exposes `AudioEngine.generate_stems_async(id, source_version, cache_dir)` as a
+deterministic engine-level cache writer used by low-level validation; it is not the production
+Demucs path. Both paths keep generation, model download, disk I/O, decoding, and heavy allocation
+outside the audio callback; the production UI path no longer starts model download and expects the
+model to be installed ahead of time.
 
 After a successful generation task, Python revalidates the source version, inactive pad state, and
 complete cache files before calling `AudioEngine.publish_prepared_stems(...)`. Rust validates the

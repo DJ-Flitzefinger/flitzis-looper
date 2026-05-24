@@ -167,6 +167,34 @@ impl AudioEngine {
         Ok(handle.output_sample_rate)
     }
 
+    pub fn loaded_sample_shape(&self, id: usize) -> PyResult<(u32, usize, usize)> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err(format!(
+                "id out of range (expected 0..{}, got {id})",
+                NUM_SAMPLES - 1
+            )));
+        }
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let sample = {
+            let cache = self
+                .sample_cache
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("Failed to acquire sample cache lock"))?;
+            cache
+                .get(id)
+                .and_then(|slot| slot.clone())
+                .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?
+        };
+
+        let frames = sample.samples.len() / sample.channels;
+        Ok((handle.output_sample_rate, sample.channels, frames))
+    }
+
     /// Shut down the audio engine.
     pub fn shut_down(&mut self) -> PyResult<()> {
         self.stream_handle = None;

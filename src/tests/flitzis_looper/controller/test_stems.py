@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from unittest.mock import Mock
 
     from flitzis_looper.controller import AppController
+    from tests.flitzis_looper.conftest import FakeStemGenerationBackend
 
 
 def _load_project_sample(controller: AppController, tmp_path: Path, name: str = "loop.wav") -> str:
@@ -34,6 +35,7 @@ def _load_project_sample(controller: AppController, tmp_path: Path, name: str = 
     write_mono_pcm16_wav(sample_path, 44_100)
     project_path = f"samples/{name}"
     controller.project.sample_paths[0] = project_path
+    controller.project.sample_durations[0] = 128 / 44_100
     return project_path
 
 
@@ -64,7 +66,10 @@ def test_expected_stem_files_include_all_supported_kinds() -> None:
 
 
 def test_generate_stems_async_schedules_stopped_loaded_pad(
-    controller: AppController, audio_engine_mock: Mock, tmp_path: Path
+    controller: AppController,
+    audio_engine_mock: Mock,
+    stem_backend: FakeStemGenerationBackend,
+    tmp_path: Path,
 ) -> None:
     _load_project_sample(controller, tmp_path)
 
@@ -73,7 +78,11 @@ def test_generate_stems_async_schedules_stopped_loaded_pad(
     assert scheduled is True
     version = controller.session.stem_generation_source_versions[0]
     cache_dir = cache_dir_for_source_version(version)
-    audio_engine_mock.generate_stems_async.assert_called_once_with(0, version, cache_dir)
+    audio_engine_mock.generate_stems_async.assert_not_called()
+    assert len(stem_backend.requests) == 1
+    assert stem_backend.requests[0].sample_id == 0
+    assert stem_backend.requests[0].source_version == version
+    assert stem_backend.requests[0].cache_dir == tmp_path / cache_dir
     assert 0 in controller.session.stem_generating_sample_ids
     entry = controller.project.stem_cache[0]
     assert entry is not None
@@ -170,18 +179,41 @@ def test_stem_grid_indicator_state_uses_session_and_project_snapshots(
     assert controller.stems.stem_grid_indicator_state(0) == "available"
 
 
-def test_generate_stems_async_runtime_error_clears_running_state(
+def test_generate_stems_async_backend_error_clears_running_state(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    stem_backend: FakeStemGenerationBackend,
+    tmp_path: Path,
+) -> None:
+    _load_project_sample(controller, tmp_path)
+    stem_backend.error = RuntimeError("Demucs unavailable")
+
+    scheduled = controller.stems.generate_stems_async(0)
+    controller.stems.on_frame_render()
+
+    assert scheduled is True
+    assert 0 not in controller.session.stem_generating_sample_ids
+    assert 0 not in controller.session.stem_generation_source_versions
+    assert controller.session.stem_generation_errors[0] == "Demucs unavailable"
+    audio_engine_mock.publish_prepared_stems.assert_not_called()
+
+
+def test_stem_backend_success_publishes_prepared_stems(
     controller: AppController, audio_engine_mock: Mock, tmp_path: Path
 ) -> None:
     _load_project_sample(controller, tmp_path)
-    audio_engine_mock.generate_stems_async.side_effect = RuntimeError("engine busy")
 
-    scheduled = controller.stems.generate_stems_async(0)
+    assert controller.stems.generate_stems_async(0) is True
+    controller.stems.on_frame_render()
 
-    assert scheduled is False
+    version = source_version_for_sample_path("samples/loop.wav")
+    assert version is not None
+    cache_dir = cache_dir_for_source_version(version)
+    entry = controller.project.stem_cache[0]
+    assert entry is not None
+    assert entry.available is True
+    audio_engine_mock.publish_prepared_stems.assert_called_once_with(0, version, cache_dir)
     assert 0 not in controller.session.stem_generating_sample_ids
-    assert 0 not in controller.session.stem_generation_source_versions
-    assert controller.session.stem_generation_errors[0] == "engine busy"
 
 
 def test_restore_stem_cache_marks_missing_files_unavailable(

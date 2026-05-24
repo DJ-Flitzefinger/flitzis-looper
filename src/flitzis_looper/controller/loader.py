@@ -29,10 +29,19 @@ class LoaderController(BaseController):
         audio: AudioEngine,
         on_pad_bpm_changed: Callable[[int], None],
         on_project_changed: Callable[[], None] | None = None,
+        on_stem_generation_started: Callable[[int], None] | None = None,
+        on_stem_generation_progress: Callable[[int, float | None, str | None], None]
+        | None = None,
+        on_stem_generation_success: Callable[[int], None] | None = None,
+        on_stem_generation_error: Callable[[int, str], None] | None = None,
     ) -> None:
         super().__init__(project, session, audio, on_project_changed)
 
         self._on_pad_bpm_changed = on_pad_bpm_changed
+        self._on_stem_generation_started = on_stem_generation_started
+        self._on_stem_generation_progress = on_stem_generation_progress
+        self._on_stem_generation_success = on_stem_generation_success
+        self._on_stem_generation_error = on_stem_generation_error
 
     def restore_samples_from_project_state(self) -> None:
         """Schedule async loads for cached samples referenced by `ProjectState`.
@@ -221,6 +230,7 @@ class LoaderController(BaseController):
 
     def _clear_stem_generation_messages(self, sample_id: int) -> None:
         self._session.stem_generation_errors.pop(sample_id, None)
+        self._session.stem_generation_diagnostics.pop(sample_id, None)
         self._session.stem_generation_progress.pop(sample_id, None)
         self._session.stem_generation_stage.pop(sample_id, None)
 
@@ -305,6 +315,10 @@ class LoaderController(BaseController):
     def _handle_task_started(self, sample_id: int, event: dict[str, object]) -> None:
         task = event.get("task")
         if task == "stem_generation":
+            if self._on_stem_generation_started is not None:
+                self._on_stem_generation_started(sample_id)
+                return
+
             self._session.stem_generating_sample_ids.add(sample_id)
             self._clear_stem_generation_messages(sample_id)
             return
@@ -318,6 +332,16 @@ class LoaderController(BaseController):
     def _handle_task_progress(self, sample_id: int, event: dict[str, object]) -> None:
         task = event.get("task")
         if task == "stem_generation":
+            if self._on_stem_generation_progress is not None:
+                percent = event.get("percent")
+                stage = event.get("stage")
+                self._on_stem_generation_progress(
+                    sample_id,
+                    float(percent) if isinstance(percent, (int, float)) else None,
+                    stage if isinstance(stage, str) else None,
+                )
+                return
+
             if sample_id not in self._session.stem_generating_sample_ids:
                 return
 
@@ -344,6 +368,10 @@ class LoaderController(BaseController):
     def _handle_task_success(self, sample_id: int, event: dict[str, object]) -> None:
         task = event.get("task")
         if task == "stem_generation":
+            if self._on_stem_generation_success is not None:
+                self._on_stem_generation_success(sample_id)
+                return
+
             self._handle_stem_generation_success(sample_id)
             return
 
@@ -427,6 +455,12 @@ class LoaderController(BaseController):
     def _handle_task_error(self, sample_id: int, event: dict[str, object]) -> None:
         task = event.get("task")
         if task == "stem_generation":
+            if self._on_stem_generation_error is not None:
+                msg = event.get("msg")
+                if isinstance(msg, str):
+                    self._on_stem_generation_error(sample_id, msg)
+                return
+
             if sample_id not in self._session.stem_generating_sample_ids:
                 return
 

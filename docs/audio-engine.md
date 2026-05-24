@@ -180,17 +180,50 @@ derived from the cached source path plus file metadata. The controller rejects s
 requests for pads that are playing, loading, analyzing, already generating stems, missing a loaded
 source, or missing the cached source file. The selected-pad sidebar now renders controller/session
 stem status, routes Generate Stems through that controller gating, and exposes the durable
-full-mix/all-stems mode control without inspecting cache directories in the render loop. The
-low-level Rust API exposes a gated `generate_stems_async(id, source_version, cache_dir)`
-background task that reports loader-style progress and writes deterministic project-local WAV
-cache artifacts outside the audio callback.
-This initial cache writer is non-neural: `instrumental.wav` contains the aligned full mix, while
-`vocals.wav`, `melody.wav`, `bass.wav`, and `drums.wav` are aligned silence placeholders. It proves
-the cache layout, background I/O, and availability validation without implementing production
-source separation. `AudioEngine.publish_prepared_stems(id, source_version, cache_dir)` now
-validates those cached WAV artifacts against the currently loaded full-mix buffer outside the audio
-callback, then publishes shared immutable prepared-stem handles to Rust through a fixed-size control
-message. The audio callback accepts the handles only for loaded inactive pads and stores them in
+full-mix/all-stems mode control without inspecting cache directories in the render loop.
+
+Production stem generation now runs through a replaceable Python-side backend boundary. The first
+backend adapter invokes Demucs from a background worker, with Torch/Demucs work kept out of app
+startup and out of Rust. The backend request carries the source path, pad id, source version,
+project-local cache directory, loaded sample shape, model cache directory, and device policy. The
+Demucs adapter maps `other.wav` to project `melody.wav`, derives `instrumental.wav` by summing the
+final aligned drums, bass, and melody artifacts, and postprocesses final cache WAV files so they
+match the loaded full-mix sample rate, channel count, and frame count before Rust publication.
+User-facing setup commands for FFmpeg and the Demucs model are documented in
+`docs/stem-generation-setup.md`.
+Demucs is declared as a runtime dependency of the application so a freshly synced environment can
+start the backend. Model download is intentionally not started from the Looper UI: the performer
+must install the Demucs model ahead of time, and the backend reports the short error
+`no Model installed` when the expected local checkpoint is missing. If the active Python
+environment is not synced or is otherwise missing Demucs/Torch, generation reports a normal
+background-task error and full-mix playback remains available.
+Demucs also requires working `ffprobe` and `ffmpeg` executables for audio probing/decoding. The
+backend checks those tools before invoking Demucs and reports `FFmpeg/ffprobe unavailable` when
+Windows cannot run them. Tool lookup uses the process `PATH`, an explicit `FLITZIS_FFMPEG_DIR`
+directory, or a local WinGet `Gyan.FFmpeg*` package install, and prepends the resolved directory
+to the Demucs subprocess environment. Because the installed Torchaudio save path uses TorchCodec,
+the backend also checks TorchCodec before invoking Demucs and reports `TorchCodec unavailable` if
+its native libraries cannot load.
+The first production backend uses high-quality Demucs defaults of `--shifts 10` and
+`--overlap 0.5`. Those values are bounded request parameters (`shifts` 0 through 20 and
+`overlap` 0.0 through 0.95), so a future settings UI can supply validated replacements without
+changing the file/artifact backend contract.
+`AudioEngine.publish_prepared_stems(id, source_version, cache_dir)` validates those cached WAV
+artifacts against the currently loaded full-mix buffer outside the audio callback, then publishes
+shared immutable prepared-stem handles to Rust through a fixed-size control message.
+
+Demucs model files are kept in the standard Torch Hub checkpoint cache, outside the repository and
+outside project samples. On Windows this is
+`C:\Users\<YOUR_NAME>\.cache\torch\hub\checkpoints`; the default `htdemucs` checkpoint expected by
+the Looper is `955717e8-8726e21a.th`. GPU acceleration is optional. CPU separation is supported
+but slower. Windows GPU acceleration requires an NVIDIA GPU, a compatible/current NVIDIA driver,
+and a CUDA-enabled PyTorch/Torchaudio build; the separate CUDA Toolkit is not expected for normal
+packaged PyTorch use. If the CUDA path fails, the background worker retries on CPU when CPU
+processing can proceed.
+
+The low-level Rust API still exposes a deterministic `generate_stems_async(id, source_version,
+cache_dir)` cache writer for engine-level validation. It is not the production separation path.
+The audio callback accepts prepared handles only for loaded inactive pads and stores them in
 bounded per-pad/per-stem state. The first performer-control implementation slice adds a durable
 per-pad `full_mix`/`all_stems` preference with `full_mix` as the default for new and older
 projects. Rust stores that preference as bounded audio-thread state updated by fixed-size control
@@ -205,8 +238,9 @@ one exclusive preset group: entering a preset remembers the last `V`/`D`/`M`/`B`
 switching between presets preserves that remembered mask, and clicking the active preset again
 returns to it. The cached `instrumental.wav` artifact is not used as the `I` preset or as an extra
 layer in `A`. The pad grid now renders compact stem status badges for available, generating,
-blocked, and error states from controller/session snapshots only. Momentary solo/mute gestures and
-production source separation are still intentionally absent.
+blocked, and error states from controller/session snapshots only. Production source separation is
+now provided by the background Demucs backend; component right-click solo remains a separate
+planned UI slice.
 
 The active Gen3 phase-aware sync slice is `openspec/changes/add-phase-aware-playback-sync/`. It
 defines how quantized starts will use the Rust transport phase plus bounded per-pad timing anchors
@@ -251,9 +285,9 @@ The Rust engine is exposed to Python as `AudioEngine` with:
   stem-buffer validation/publication, prepared-stem rendering fallback infrastructure, durable
   full-mix/all-stems mode plumbing, selected-pad stem status, Generate Stems button wiring,
   selected-pad full-mix/all-stems controls, bottom-bar selected-pad per-stem mask controls, and
-  pad-grid stem indicators are implemented. Production source separation and momentary per-stem
-  solo/mute controls are planned in `openspec/changes/add-stem-performance-controls/` and not
-  implemented.
+  pad-grid stem indicators are implemented. Production Demucs source separation is implemented
+  behind a replaceable backend boundary. Component right-click solo remains planned separately;
+  no separate stem mute feature is planned for the current Gen3 direction.
 
 ## Related specs
 

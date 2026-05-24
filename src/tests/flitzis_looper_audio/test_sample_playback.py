@@ -269,6 +269,13 @@ def test_generate_stems_async_requires_initialized_engine() -> None:
         engine.generate_stems_async(0, "source", "samples/stems/cache")
 
 
+def test_loaded_sample_shape_requires_initialized_engine() -> None:
+    engine = AudioEngine()
+
+    with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
+        engine.loaded_sample_shape(0)
+
+
 def test_publish_prepared_stems_requires_initialized_engine() -> None:
     engine = AudioEngine()
 
@@ -300,6 +307,11 @@ def test_generate_stems_async_writes_project_cache_artifacts(
 
     audio_engine.load_sample_async(0, str(wav_path), run_analysis=False)
     _wait_for_loader_event(audio_engine, 0, "success")
+
+    sample_rate, channels, frame_count = audio_engine.loaded_sample_shape(0)
+    assert sample_rate == audio_engine.output_sample_rate()
+    assert channels >= 1
+    assert frame_count == 128
 
     cache_dir = "samples/stems/cache"
     audio_engine.generate_stems_async(0, "source-version", cache_dir)

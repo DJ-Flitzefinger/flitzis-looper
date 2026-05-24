@@ -418,6 +418,9 @@ class SessionState(BaseModel):
     stem_generation_errors: dict[int, str] = Field(default_factory=dict)
     """Last stem generation error message per pad."""
 
+    stem_generation_diagnostics: dict[int, str] = Field(default_factory=dict)
+    """Last non-error stem generation diagnostic per pad."""
+
     pad_stem_enabled_mask: list[int] = Field(default_factory=_default_pad_stem_enabled_mask)
     """Session-only per-pad component-stem mask used when all-stems mode is active."""
 
@@ -555,6 +558,7 @@ class SessionState(BaseModel):
         "stem_generation_progress",
         "stem_generation_stage",
         "stem_generation_errors",
+        "stem_generation_diagnostics",
         mode="after",
     )
     @classmethod

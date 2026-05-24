@@ -105,24 +105,37 @@ next-beat, and next-bar triggering through fixed-size Rust mode updates.
 ### 12) Stems: generation, indicators, and performance mixing
 - OpenSpec change (active): `add-offline-stem-cache`
 - OpenSpec change (active): `add-stem-performance-controls`
-- [ ] As a performer, I can **generate stems** for a pad (vocals/melody/bass/drums/instrumental).
+- [x] As a performer, I can **generate stems** for a pad (vocals/melody/bass/drums/instrumental).
 - [x] As a performer, the UI indicates **stem availability** per pad and gives feedback while stems are generating.
-- [ ] As a performer, I can **toggle stems** on/off during playback.
+- [x] As a performer, I can **toggle stems** on/off during playback.
 - [ ] As a performer, I can **momentarily solo/mute** stems for performance gestures.
-- [ ] As a performer, I can quickly revert to the full mix (“stop stems” behavior).
-- [ ] As a performer, when multiple loops are active, I can choose which pad’s stems I’m controlling.
-- [ ] As a performer, stems remain **synchronized** with the loop.
+- [x] As a performer, I can quickly revert to the full mix ("stop stems" behavior).
+- [x] As a performer, when multiple loops are active, I can choose which pad's stems I'm controlling.
+- [x] As a performer, stems remain **synchronized** with the loop.
 
 Gen3 constraint: stem generation must be offline/cache-based and only available for pads
 that are not currently playing. The audio callback must never run stem separation, neural
 network inference, or disk I/O; it may only mix already prepared audio buffers. The active
 planning slice now has the first cache metadata/source-version model and background-task gating
-in place. A deterministic non-neural cache writer now creates aligned placeholder WAV artifacts
-outside the audio callback. Prepared stem-buffer validation/publication now sends fixed-size Rust
-control messages with shared immutable handles for inactive current pads, and the callback stores
-accepted handles in bounded state. The mixer can render complete prepared stem sets through the
-same voice playhead and loop path as full-mix playback, with full-mix fallback for missing or
-invalid stem data. Durable per-pad full-mix/all-stems mode plumbing now exists: project
+in place. Production stem generation now uses a replaceable Python-side backend boundary with
+Demucs as the first adapter. Demucs runs only on the background generation path, maps `other.wav`
+to project `melody.wav`, derives `instrumental.wav` from aligned non-vocal stems, aligns final WAV
+artifacts to the loaded full-mix shape, and stores model files outside the repository and outside
+project samples in Demucs' standard Torch Hub checkpoint cache. The Looper does not start model
+download from the Generate Stems UI; if the expected checkpoint is missing, it reports
+`no Model installed`. Demucs also requires working `ffprobe` and `ffmpeg`; inaccessible tools are
+reported as `FFmpeg/ffprobe unavailable`. TorchCodec is required by the current Torchaudio output
+path and is preflighted as `TorchCodec unavailable` when native libraries cannot load. CUDA/GPU use
+is optional and falls back to CPU from the background worker. The default Demucs quality settings
+are `--shifts 10` and `--overlap 0.5`; they are bounded request parameters so the planned Settings
+page can expose validated values later. FFmpeg lookup uses the process `PATH`, an explicit
+`FLITZIS_FFMPEG_DIR`, or local WinGet `Gyan.FFmpeg*` package installs before reporting FFmpeg
+unavailable.
+Prepared stem-buffer validation/publication now sends fixed-size Rust control messages with shared
+immutable handles for inactive current pads, and the callback stores accepted handles in bounded
+state. The mixer can render complete prepared stem sets through the same voice playhead and loop
+path as full-mix playback, with full-mix fallback for missing or invalid stem data. Durable per-pad
+full-mix/all-stems mode plumbing now exists: project
 persistence defaults to full mix, the controller can publish all-stems mode for a current prepared
 source version, and Rust renders prepared stems only when the accepted source-version hash matches
 the selected all-stems mode. The selected-pad sidebar now shows stem status, routes Generate Stems
@@ -135,7 +148,8 @@ implicitly. `I` and `A` share one exclusive preset group that remembers the last
 component state; switching between presets preserves that state, and clicking the active preset
 again restores it. The pad grid now shows compact stem status indicators from existing
 controller/session snapshots without render-loop file I/O. Momentary per-stem solo/mute controls
-and production source separation remain future work.
+remain future work; the next scoped performer-control gap is the separately planned right-click
+solo setter for `V`/`D`/`M`/`B`, without adding a separate mute feature.
 
 ### 13) Persistence (config/state)
 - [x] As a user, my bank/pad assignments persist across restarts.

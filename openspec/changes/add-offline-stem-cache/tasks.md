@@ -38,3 +38,19 @@
 - [x] 7.1 Run official OpenSpec validation for this change before implementation is considered complete.
 - [x] 7.2 Run focused Rust and Python tests for any implementation slice that changes code.
 - [x] 7.3 Run full uv-managed Rust/Python validation before merging production stem behavior.
+
+## 8. Production Demucs Backend
+- [x] 8.1 Introduce a replaceable stem-generation backend boundary before Demucs-specific logic.
+- [x] 8.2 Add a Demucs backend adapter that runs outside Rust and imports/runs neural dependencies only on the background generation path.
+- [x] 8.3 Use Demucs' standard Torch Hub checkpoint directory outside the repository and outside `samples/`.
+- [x] 8.4 Implement the default `auto` device policy with CUDA detection and CPU fallback.
+- [x] 8.5 Map Demucs `other.wav` to project `melody.wav` and derive `instrumental.wav` from aligned non-vocal stems.
+- [x] 8.6 Postprocess backend outputs so final cache WAVs match the loaded full-mix sample rate, channel count, and frame count.
+- [x] 8.7 Add fake-backend and monkeypatched tests that avoid model downloads and neural inference.
+- [x] 8.8 Keep component right-click solo, model training/fine-tuning, and new visible download UI out of this slice.
+- [x] 8.9 Declare Demucs as an application runtime dependency so model installation state is checked separately from package installation.
+- [x] 8.10 Require the default `htdemucs` checkpoint to be preinstalled and return `no Model installed` without invoking Demucs when it is missing.
+- [x] 8.11 Declare TorchCodec as a runtime dependency for Demucs/Torchaudio WAV output and preflight `ffprobe`/`ffmpeg` before invoking Demucs.
+- [x] 8.12 Run Demucs with high-quality defaults `--shifts 10` and `--overlap 0.5`.
+- [x] 8.13 Model Demucs quality settings as bounded request parameters for a future settings surface.
+- [x] 8.14 Resolve FFmpeg tools from `PATH`, `FLITZIS_FFMPEG_DIR`, or local WinGet `Gyan.FFmpeg*` installs before preflight.
