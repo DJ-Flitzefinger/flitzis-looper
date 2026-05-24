@@ -196,8 +196,12 @@ per-pad `full_mix`/`all_stems` preference with `full_mix` as the default for new
 projects. Rust stores that preference as bounded audio-thread state updated by fixed-size control
 messages, and prepared stems are used only when `all_stems` is selected and the accepted prepared
 set matches the requested source-version hash. Missing, stale, incomplete, rejected, or disabled
-stems fall back to the loaded full-mix buffer. Pad-grid stem indicators, per-stem
-mute/solo/toggle controls, and production source separation are still intentionally absent.
+stems fall back to the loaded full-mix buffer. The next performer-control slice added a selected-pad
+bottom-bar `V`/`D`/`M`/`B`/`I`/`A` mask control: `V`, `D`, `M`, and `B` toggle component stems,
+`I` selects Drums + Melody + Bass, and `A` selects Vocals + Drums + Melody + Bass. The cached
+`instrumental.wav` artifact is not used as the `I` preset or as an extra layer in `A`. Pad-grid
+stem indicators, momentary solo/mute gestures, and production source separation are still
+intentionally absent.
 
 The active Gen3 phase-aware sync slice is `openspec/changes/add-phase-aware-playback-sync/`. It
 defines how quantized starts will use the Rust transport phase plus bounded per-pad timing anchors
@@ -241,8 +245,9 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 - Offline stem cache identity, request gating, deterministic cache artifact writing, prepared
   stem-buffer validation/publication, prepared-stem rendering fallback infrastructure, durable
   full-mix/all-stems mode plumbing, selected-pad stem status, Generate Stems button wiring, and
-  selected-pad full-mix/all-stems controls are implemented. Production source separation,
-  pad-grid stem indicators, and per-stem mute/solo/toggle controls are planned in
+  selected-pad full-mix/all-stems controls, and bottom-bar selected-pad per-stem mask controls are
+  implemented. Production source
+  separation, pad-grid stem indicators, and momentary per-stem solo/mute controls are planned in
   `openspec/changes/add-stem-performance-controls/` and not implemented.
 
 ## Related specs

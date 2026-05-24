@@ -72,3 +72,33 @@ to full mix when stems are unavailable, stale, incomplete, rejected, or disabled
 - **WHEN** the performer selects full-mix mode
 - **THEN** the project stem mix preference for that pad becomes full-mix
 - **AND** the pad uses the loaded full-mix buffer without requiring stem cache deletion
+
+### Requirement: Bottom-Bar Per-Stem Mask Controls
+The system SHALL render bottom-bar selected-pad stem mask controls as six compact buttons ordered
+`V`, `D`, `M`, `B`, `I`, and `A`.
+
+The buttons SHALL target the currently selected red-outlined pad. `V`, `D`, `M`, and `B` SHALL be
+freely combinable component toggles. `I` SHALL select the instrumental preset Drums + Melody + Bass
+and mute Vocals. `A` SHALL select the all-stems preset Vocals + Drums + Melody + Bass. `I` SHALL
+NOT mean playing only `instrumental.wav`, and `A` SHALL NOT add `instrumental.wav` as a fifth
+audible layer.
+
+#### Scenario: Selected pad controls are disabled without prepared stem playback
+- **GIVEN** the selected pad is in full-mix mode
+- **WHEN** the performance bottom bar is rendered
+- **THEN** the `V`, `D`, `M`, `B`, `I`, and `A` buttons are disabled
+- **AND** rendering does not inspect cache directories, compute source versions, read files, decode audio, run inference, or call low-level Rust background task APIs
+
+#### Scenario: Component toggles update the selected pad
+- **GIVEN** the selected pad has a current prepared stem set
+- **AND** the selected pad is in all-stems mode
+- **WHEN** the performer toggles `V`, `D`, `M`, or `B`
+- **THEN** the selected pad's bounded enabled-stem mask is updated through controller actions
+- **AND** currently playing voices are not stopped, retriggered, time-slipped, or moved to a different loop position by the toggle
+
+#### Scenario: Preset buttons display exclusive state
+- **GIVEN** the selected pad has a current prepared stem set
+- **AND** the selected pad is in all-stems mode
+- **WHEN** the performer selects `I`
+- **THEN** only the `I` button appears active
+- **AND** the underlying enabled-stem mask enables Drums, Melody, and Bass while Vocals remains disabled

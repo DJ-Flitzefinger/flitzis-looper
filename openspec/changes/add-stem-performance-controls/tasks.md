@@ -9,7 +9,7 @@
 - [x] 2.3 Render selected-sidebar stem availability, generation progress, blocked state, and error indicators without file I/O or blocking work in the render loop.
 - [ ] 2.4 Render pad-grid stem availability indicators without file I/O or blocking work in the render loop.
 - [x] 2.5 Add a selected-pad full-mix/all-stems mode control.
-- [ ] 2.6 Add future-ready per-stem mute/solo/toggle entry points.
+- [x] 2.6 Add selected-pad bottom-bar per-stem toggle/preset entry points.
 - [x] 2.7 Add Python tests for selectors, controller actions, blocked/generating/error states, and UI action wiring.
 
 ## 3. Future Persistence Implementation
@@ -24,7 +24,7 @@
 - [x] 4.3 Apply full-mix/all-stems mode without changing pad voice timing, loop-region behavior, BPM-lock, key-lock, or full-mix fallback.
 - [x] 4.4 Treat audio-thread disk I/O, Python/GIL access, logging, blocking, heap allocation, neural inference, or long-running work as blockers.
 - [x] 4.5 Add deterministic Rust tests for full-mix/all-stems switching, fallback, and real-time-safe state transitions.
-- [ ] 4.6 Add bounded per-stem mask messages/state/tests when mute, solo, and toggle controls are implemented.
+- [x] 4.6 Add bounded per-stem mask messages/state/tests for selected-pad toggle/preset controls.
 
 ## 5. Validation
 - [x] 5.1 Run official OpenSpec validation for this change before implementation is considered complete.

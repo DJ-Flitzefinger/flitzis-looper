@@ -29,8 +29,9 @@ The system SHALL persist durable per-pad stem mix preferences separately from tr
 generation and performance gesture state.
 
 New and older projects SHALL default each pad's stem mix preference to full-mix playback.
-Momentary solo, momentary mute, generation progress, blocked reasons, and last error messages
-SHALL remain session-only unless a later OpenSpec change explicitly makes them durable.
+Momentary solo, momentary mute, per-stem enabled masks, generation progress, blocked reasons, and
+last error messages SHALL remain session-only unless a later OpenSpec change explicitly makes them
+durable.
 
 #### Scenario: Stem mix preference round-trips
 - **GIVEN** a project is saved with pad A configured for all-stems mode
@@ -47,3 +48,9 @@ SHALL remain session-only unless a later OpenSpec change explicitly makes them d
 - **GIVEN** stem generation is running for a pad
 - **WHEN** project state is saved
 - **THEN** generation progress, blocked reasons, and transient error text are not written as durable project settings
+
+#### Scenario: Runtime stem mask is not persisted
+- **GIVEN** the performer changes the selected-pad stem mask during a session
+- **WHEN** project state is saved
+- **THEN** the enabled-stem mask is not written as a durable project setting
+- **AND** the durable full-mix/all-stems mode preference remains independent

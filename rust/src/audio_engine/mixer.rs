@@ -15,7 +15,8 @@ use crate::audio_engine::eq3::{Eq3Coeffs, coeffs_for_eq3};
 use crate::audio_engine::stretch_processor::DEFAULT_BLOCK_SAMPLES;
 use crate::audio_engine::voice_slot::VoiceSlot;
 use crate::messages::{
-    PadTimingMetadata, PreparedStemSet, STEM_BUFFER_COUNT, SampleBuffer, StemMixMode,
+    PadTimingMetadata, PreparedStemSet, STEM_BUFFER_COUNT, STEM_COMPONENT_MASK, SampleBuffer,
+    StemMixMode,
 };
 use cpal::Sample;
 
@@ -109,6 +110,14 @@ fn full_stem_available_mask() -> u8 {
     ((1_u16 << STEM_BUFFER_COUNT) - 1) as u8
 }
 
+fn stem_index_mask(index: usize) -> u8 {
+    if index >= u8::BITS as usize {
+        return 0;
+    }
+
+    1_u8 << index
+}
+
 fn prepared_stem_set_matches_sample(
     stems: &PreparedStemSet,
     sample: &SampleBuffer,
@@ -157,13 +166,21 @@ fn prepared_stem_set_for_render<'a>(
 fn render_source_sample(
     sample: &SampleBuffer,
     stems: Option<&PreparedStemSet>,
+    enabled_stem_mask: u8,
     frame: usize,
     channels: usize,
     channel: usize,
 ) -> f32 {
     let index = frame * channels + channel;
     if let Some(stems) = stems {
-        stems.stems.iter().map(|stem| stem.samples[index]).sum()
+        let enabled_stem_mask = enabled_stem_mask & STEM_COMPONENT_MASK;
+        stems
+            .stems
+            .iter()
+            .enumerate()
+            .filter(|(stem_index, _)| enabled_stem_mask & stem_index_mask(*stem_index) != 0)
+            .map(|(_, stem)| stem.samples[index])
+            .sum()
     } else {
         sample.samples[index]
     }
@@ -229,6 +246,9 @@ pub struct RtMixer {
     /// Source-version hash accepted for all-stems mode per pad.
     stem_mix_source_version_hash: [u64; NUM_SAMPLES],
 
+    /// Per-pad enabled component-stem mask used when all-stems mode is active.
+    stem_enabled_mask: [u8; NUM_SAMPLES],
+
     /// Active voices with MAX_VOICES slots.
     pub voices: [VoiceSlot; MAX_VOICES],
 }
@@ -269,6 +289,7 @@ impl RtMixer {
             prepared_stems: Box::new(std::array::from_fn(|_| None)),
             stem_mix_mode: std::array::from_fn(|_| StemMixMode::FullMix),
             stem_mix_source_version_hash: std::array::from_fn(|_| 0),
+            stem_enabled_mask: std::array::from_fn(|_| STEM_COMPONENT_MASK),
             voices: std::array::from_fn(|_| VoiceSlot::new(channels)),
         }
     }
@@ -295,6 +316,7 @@ impl RtMixer {
 
         self.sample_bank[id] = Some(sample);
         self.prepared_stems[id] = None;
+        self.stem_enabled_mask[id] = STEM_COMPONENT_MASK;
     }
 
     pub(crate) fn publish_prepared_stems(&mut self, id: usize, stems: PreparedStemSet) -> bool {
@@ -335,6 +357,27 @@ impl RtMixer {
                 true
             }
         }
+    }
+
+    pub(crate) fn set_stem_enabled_mask(
+        &mut self,
+        id: usize,
+        enabled_stem_mask: u8,
+        source_version_hash: u64,
+    ) -> bool {
+        if id >= NUM_SAMPLES || enabled_stem_mask & !STEM_COMPONENT_MASK != 0 {
+            return false;
+        }
+
+        let Some(stems) = self.prepared_stems[id].as_ref() else {
+            return false;
+        };
+        if source_version_hash == 0 || stems.source_version_hash != source_version_hash {
+            return false;
+        }
+
+        self.stem_enabled_mask[id] = enabled_stem_mask;
+        true
     }
 
     fn can_accept_prepared_stems(&self, id: usize, stems: &PreparedStemSet) -> bool {
@@ -795,6 +838,7 @@ impl RtMixer {
         self.stop_sample(id);
         self.sample_bank[id] = None;
         self.prepared_stems[id] = None;
+        self.stem_enabled_mask[id] = STEM_COMPONENT_MASK;
         self.pad_phase_anchor_frame[id] = 0;
     }
 
@@ -831,6 +875,7 @@ impl RtMixer {
         let prepared_stem_slots = &self.prepared_stems;
         let stem_mix_mode = &self.stem_mix_mode;
         let stem_mix_source_version_hash = &self.stem_mix_source_version_hash;
+        let stem_enabled_mask = &self.stem_enabled_mask;
 
         for voice in &mut self.voices {
             if !voice.active {
@@ -914,6 +959,7 @@ impl RtMixer {
                         *sample_ref = render_source_sample(
                             &sample,
                             prepared_stem_set,
+                            stem_enabled_mask[voice.sample_id],
                             frame,
                             self.channels,
                             channel,
@@ -970,6 +1016,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::audio_engine::eq3::Eq3State;
+    use crate::messages::{STEM_MASK_BASS, STEM_MASK_DRUMS, STEM_MASK_MELODY, STEM_MASK_VOCALS};
 
     use super::*;
 
@@ -1429,6 +1476,26 @@ mod tests {
     }
 
     #[test]
+    fn test_set_stem_enabled_mask_requires_matching_prepared_source() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 20, 0.9));
+
+        assert!(!mixer.set_stem_enabled_mask(0, STEM_MASK_VOCALS, 42));
+        assert_eq!(mixer.stem_enabled_mask[0], STEM_COMPONENT_MASK);
+
+        assert!(mixer.publish_prepared_stems(0, create_test_prepared_stems(1, 44_100, 20)));
+        assert!(!mixer.set_stem_enabled_mask(0, STEM_MASK_VOCALS, 7));
+        assert!(!mixer.set_stem_enabled_mask(0, STEM_MASK_VOCALS | stem_index_mask(4), 42));
+        assert_eq!(mixer.stem_enabled_mask[0], STEM_COMPONENT_MASK);
+
+        assert!(mixer.set_stem_enabled_mask(0, STEM_MASK_VOCALS | STEM_MASK_DRUMS, 42));
+        assert_eq!(
+            mixer.stem_enabled_mask[0],
+            STEM_MASK_VOCALS | STEM_MASK_DRUMS
+        );
+    }
+
+    #[test]
     fn test_render_uses_full_mix_by_default_when_prepared_stems_are_available() {
         let mut mixer = RtMixer::new(1, 44_100.0);
         mixer.load_sample(0, create_test_sample(1, 20, 0.9));
@@ -1459,8 +1526,50 @@ mod tests {
         let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
         mixer.render(&mut output, &mut pad_peaks);
 
-        assert!(output.iter().all(|&sample| (sample - 0.5).abs() < 1e-5));
-        assert!((pad_peaks[0] - 0.5).abs() < 1e-5);
+        assert!(output.iter().all(|&sample| (sample - 0.35).abs() < 1e-5));
+        assert!((pad_peaks[0] - 0.35).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_render_uses_enabled_stem_mask_in_all_stems_mode() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 20, 0.9));
+        let stems =
+            create_test_prepared_stems_with_values(1, 44_100, 20, [0.1, 0.2, 0.05, 0.4, 0.15]);
+        assert!(mixer.publish_prepared_stems(0, stems));
+        assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
+        assert!(mixer.set_stem_enabled_mask(
+            0,
+            STEM_MASK_DRUMS | STEM_MASK_MELODY | STEM_MASK_BASS,
+            42
+        ));
+        assert!(mixer.play_sample(0, 1.0));
+
+        let mut output = vec![0.0; 20];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert!(output.iter().all(|&sample| (sample - 0.65).abs() < 1e-5));
+        assert!((pad_peaks[0] - 0.65).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_all_stems_mask_does_not_add_instrumental_artifact() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 20, 0.9));
+        let stems =
+            create_test_prepared_stems_with_values(1, 44_100, 20, [0.1, 0.2, 0.05, 0.4, 0.8]);
+        assert!(mixer.publish_prepared_stems(0, stems));
+        assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
+        assert!(mixer.set_stem_enabled_mask(0, STEM_COMPONENT_MASK, 42));
+        assert!(mixer.play_sample(0, 1.0));
+
+        let mut output = vec![0.0; 20];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert!(output.iter().all(|&sample| (sample - 0.75).abs() < 1e-5));
+        assert!((pad_peaks[0] - 0.75).abs() < 1e-5);
     }
 
     #[test]
@@ -1483,7 +1592,7 @@ mod tests {
         mixer.render(&mut output, &mut pad_peaks);
 
         assert_eq!(active_voice_frame(&mixer, 0), Some(10));
-        assert!(output.iter().all(|&sample| (sample - 0.5).abs() < 1e-5));
+        assert!(output.iter().all(|&sample| (sample - 0.35).abs() < 1e-5));
     }
 
     #[test]
@@ -1540,7 +1649,14 @@ mod tests {
         let mixed: Vec<f32> = (0..4)
             .map(|i| {
                 let frame = region.start + (i % region.len());
-                render_source_sample(&full_mix, Some(prepared_stems), frame, 1, 0)
+                render_source_sample(
+                    &full_mix,
+                    Some(prepared_stems),
+                    STEM_COMPONENT_MASK,
+                    frame,
+                    1,
+                    0,
+                )
             })
             .collect();
 

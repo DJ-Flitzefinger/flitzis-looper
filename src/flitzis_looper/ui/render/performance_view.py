@@ -88,7 +88,7 @@ def _pad_button_peak_meter(peak: float) -> None:
 
 
 def _pad_button_input(ctx: UiContext, pad_id: int, *, is_loaded: bool) -> None:
-    if imgui.is_mouse_clicked(imgui.MouseButton_.middle) and not ctx.state.pads.is_selected(pad_id):
+    if imgui.is_mouse_clicked(imgui.MouseButton_.middle):
         ctx.ui.select_pad(pad_id)
 
     if imgui.is_mouse_down(imgui.MouseButton_.left):
@@ -99,6 +99,9 @@ def _pad_button_input(ctx: UiContext, pad_id: int, *, is_loaded: bool) -> None:
         ctx.ui.store_pressed_pad_state(pad_id, pressed=True)
     else:
         ctx.ui.store_pressed_pad_state(pad_id, pressed=False)
+
+    if imgui.is_mouse_clicked(imgui.MouseButton_.right):
+        ctx.ui.select_pad(pad_id)
 
     if imgui.is_mouse_down(imgui.MouseButton_.right):
         ctx.audio.pads.stop_pad(pad_id)

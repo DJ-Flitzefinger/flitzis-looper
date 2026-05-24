@@ -7,7 +7,13 @@ from pydantic import ValidationError
 
 from flitzis_looper.constants import NUM_SAMPLES
 from flitzis_looper.models import (
+    STEM_COMPONENT_MASK,
+    STEM_INSTRUMENTAL_PRESET_MASK,
     STEM_KINDS,
+    STEM_MASK_BASS,
+    STEM_MASK_DISPLAY_MODES,
+    STEM_MASK_DRUMS,
+    STEM_MASK_MELODY,
     STEM_MIX_MODES,
     BeatGrid,
     ProjectState,
@@ -322,3 +328,32 @@ def test_session_state_defaults(session_state: SessionState) -> None:
     assert session_state.stem_generation_progress == {}
     assert session_state.stem_generation_stage == {}
     assert session_state.stem_generation_errors == {}
+    assert len(session_state.pad_stem_enabled_mask) == NUM_SAMPLES
+    assert all(mask == STEM_COMPONENT_MASK for mask in session_state.pad_stem_enabled_mask)
+    assert len(session_state.pad_stem_mask_display_mode) == NUM_SAMPLES
+    assert all(mode == "all" for mode in session_state.pad_stem_mask_display_mode)
+
+
+def test_stem_enabled_mask_validation(session_state: SessionState) -> None:
+    session_state.pad_stem_enabled_mask[0] = STEM_INSTRUMENTAL_PRESET_MASK
+    assert session_state.pad_stem_enabled_mask[0] == (
+        STEM_MASK_DRUMS | STEM_MASK_MELODY | STEM_MASK_BASS
+    )
+
+    with pytest.raises(ValidationError, match="pad_stem_enabled_mask"):
+        SessionState(pad_stem_enabled_mask=[])
+
+    with pytest.raises(ValidationError, match="component masks"):
+        SessionState(pad_stem_enabled_mask=[1 << 4] * NUM_SAMPLES)
+
+
+def test_stem_mask_display_mode_validation(session_state: SessionState) -> None:
+    session_state.pad_stem_mask_display_mode[0] = "instrumental"
+    assert session_state.pad_stem_mask_display_mode[0] == "instrumental"
+    assert tuple(STEM_MASK_DISPLAY_MODES) == ("custom", "instrumental", "all")
+
+    with pytest.raises(ValidationError, match="pad_stem_mask_display_mode"):
+        SessionState(pad_stem_mask_display_mode=[])
+
+    with pytest.raises(ValidationError):
+        SessionState.model_validate({"pad_stem_mask_display_mode": ["preset"] * NUM_SAMPLES})

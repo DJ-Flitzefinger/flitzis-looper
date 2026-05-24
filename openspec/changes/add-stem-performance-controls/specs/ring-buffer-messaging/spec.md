@@ -15,10 +15,16 @@ file paths, Python objects, unbounded metadata vectors, or copied stem audio pay
 - **AND** the audio thread does not receive file paths or full stem audio payloads
 
 #### Scenario: Future per-stem mask update is bounded
-- **GIVEN** a future per-stem mute or solo control changes for a pad
+- **GIVEN** a per-stem mask control changes for a pad
 - **WHEN** the control layer publishes the update to Rust
 - **THEN** the message represents the state as bounded masks over known stem kinds
 - **AND** the update does not allocate, block, log, touch disk, run inference, or acquire the Python GIL in the audio callback
+
+#### Scenario: Bottom-bar preset update is bounded
+- **GIVEN** the performer selects the selected-pad `I` or `A` preset
+- **WHEN** the control layer publishes the update to Rust
+- **THEN** the control-to-audio message carries pad id, source-version hash, and an enabled-stem mask only
+- **AND** the message does not contain file paths, Python objects, unbounded metadata, or copied stem audio payloads
 
 ### Requirement: Stem Mix Message Failure Preserves Playback
 The system SHALL preserve current playback when a stem mix control message cannot be

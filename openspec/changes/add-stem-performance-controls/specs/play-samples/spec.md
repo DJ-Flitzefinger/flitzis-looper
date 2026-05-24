@@ -14,9 +14,9 @@ and playhead update path as full-mix playback.
 - **THEN** playback continues from the same voice playhead position
 - **AND** loop-region, BPM-lock, key-lock, EQ/gain, metering, and playhead reporting continue on the same timing path
 
-#### Scenario: Future per-stem toggle keeps synchronized playback
+#### Scenario: Per-stem toggle keeps synchronized playback
 - **GIVEN** a pad is playing in all-stems mode
-- **WHEN** the performer toggles a future per-stem control
+- **WHEN** the performer toggles a selected-pad per-stem control
 - **THEN** enabled stems are read from the same loop-relative sample position
 - **AND** the pad is not retriggered or time-slipped by the toggle itself
 

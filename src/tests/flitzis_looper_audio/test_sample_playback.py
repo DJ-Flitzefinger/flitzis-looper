@@ -107,6 +107,9 @@ def test_sample_slot_id_range_is_0_to_215(audio_engine: AudioEngine) -> None:
         audio_engine.set_stem_mix_mode(216, "full_mix")
 
     with pytest.raises(ValueError, match=r"id out of range"):
+        audio_engine.set_stem_enabled_mask(216, 1, "source")
+
+    with pytest.raises(ValueError, match=r"id out of range"):
         audio_engine.stop_sample(216)
 
     with pytest.raises(ValueError, match=r"id out of range"):
@@ -208,6 +211,29 @@ def test_set_stem_mix_mode_requires_initialized_engine() -> None:
 
     with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
         engine.set_stem_mix_mode(0, "full_mix")
+
+
+def test_set_stem_enabled_mask_accepts_component_mask(audio_engine: AudioEngine) -> None:
+    audio_engine.set_stem_enabled_mask(0, 0b1111, "source-version")
+
+
+def test_set_stem_enabled_mask_rejects_unsupported_mask(audio_engine: AudioEngine) -> None:
+    with pytest.raises(ValueError, match=r"stem enabled mask"):
+        audio_engine.set_stem_enabled_mask(0, 0b1_0000, "source-version")
+
+
+def test_set_stem_enabled_mask_rejects_empty_source_version(
+    audio_engine: AudioEngine,
+) -> None:
+    with pytest.raises(ValueError, match=r"source_version"):
+        audio_engine.set_stem_enabled_mask(0, 0b1111, "")
+
+
+def test_set_stem_enabled_mask_requires_initialized_engine() -> None:
+    engine = AudioEngine()
+
+    with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
+        engine.set_stem_enabled_mask(0, 0b1111, "source-version")
 
 
 def test_set_pad_timing_metadata_accepts_finite_anchor(audio_engine: AudioEngine) -> None:

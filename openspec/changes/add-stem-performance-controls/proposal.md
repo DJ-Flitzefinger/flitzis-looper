@@ -13,10 +13,13 @@ behavior that the real-time audio path cannot safely provide.
 - Define performance UI stem availability indicators for unavailable, generating, available,
   blocked, and error states.
 - Define selected-pad action entry points for generating stems, selecting full mix versus all
-  prepared stems, and future per-stem mute/solo/toggle controls.
+  prepared stems, and bottom-bar per-stem mask controls.
+- Implement a selected-pad bottom-bar `V`, `D`, `M`, `B`, `I`, `A` control cluster where `I`
+  means the instrumental preset Drums + Melody + Bass and `A` means Vocals + Drums + Melody + Bass.
 - Define and implement project persistence expectations for stem cache metadata and durable
   full-mix/all-stems stem mix preferences while keeping momentary performance gestures transient.
-- Require audio-thread stem mix state changes to use bounded fixed-size control messages.
+- Require audio-thread stem mix state changes to use bounded fixed-size control messages,
+  including per-pad enabled-stem masks.
 - Preserve full-mix playback as the safe fallback whenever stems are unavailable, stale,
   incomplete, rejected, or disabled.
 - Keep real-time stem separation, neural model inference, disk I/O, logging, blocking,
@@ -36,7 +39,9 @@ behavior that the real-time audio path cannot safely provide.
 - No neural source-separation model selection, dependency installation, model download, or
   production stem quality change.
 - No real-time stem separation.
-- No per-stem mute, solo, or toggle implementation in the first implementation slice.
+- No direct use of the cached `instrumental.wav` artifact as the `I` button or as an additional
+  fifth audible layer for the `A` button.
+- No durable persistence of per-stem mask gestures in this slice.
 - No disk I/O, decoding, neural inference, logging, blocking, heap allocation, long-running
   work, or Python/GIL access in the audio callback.
 - No replacement of the existing `rtrb` ring-buffer message-passing architecture.

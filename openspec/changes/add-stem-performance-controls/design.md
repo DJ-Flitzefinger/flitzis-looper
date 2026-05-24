@@ -8,15 +8,16 @@ The remaining user-facing gap is the visible performance control surface. Curren
 controller state for generation progress and cache availability, durable per-pad
 full-mix/all-stems mode plumbing, bounded Rust mix-mode control state, selected-pad sidebar
 stem status rendering, Generate Stems button wiring through the controller, and selected-pad
-full-mix/all-stems mode controls. Pad-grid indicators and per-stem controls remain later work.
+full-mix/all-stems mode controls. The next slice adds bottom-bar selected-pad per-stem mask
+controls. Pad-grid indicators remain later work.
 
 ## Goals
 - Give performers clear stem availability, progress, blocked, and error feedback.
 - Route stem generation from the UI through controller actions and existing background-task
   gating.
 - Make full-mix playback and prepared-stem playback explicit performer choices.
-- Define future per-stem mute, solo, toggle, and revert-to-full-mix controls without
-  implementing them in this planning slice.
+- Define and implement compact selected-pad per-stem toggle and preset controls for prepared-stem
+  playback.
 - Persist durable stem cache metadata and durable per-pad stem mix preferences.
 - Keep momentary performance gestures transient unless a later change explicitly persists them.
 - Keep all audio-thread stem control changes bounded, fixed-size, and real-time safe.
@@ -67,18 +68,35 @@ performer opts into stem playback. If a persisted `all_stems` preference is rest
 cache is stale, missing, incomplete, or rejected, the control layer shows the mismatch and the
 audio path falls back to full mix until a valid prepared set is available again.
 
-### Future Per-Stem Controls
-Future mute, solo, and toggle controls should be represented as bounded per-pad bitmasks over
-the known stem kinds: vocals, melody, bass, drums, and instrumental. A momentary solo/mute is a
-runtime gesture and should remain session-only unless a later spec explicitly makes it durable.
+### Bottom-Bar Per-Stem Mask Controls
+The first performance mask UI is a compact bottom-bar cluster immediately to the right of the
+trigger-quantization `BAR` button. It targets the currently selected red-outlined pad, not
+necessarily the currently playing pad. Right-click pad stops and middle-click pad selection both
+update that selected target.
 
-The first UI should not require a complex mixer panel. A selected-pad stem section can provide:
+The control order is:
 
-- generation action and progress/error text,
-- availability indicator,
-- `Full Mix` versus `All Stems` mode selector,
-- disabled placeholder or future-ready controls for per-stem mute/solo/toggle when a prepared
-  set is unavailable.
+- `V`: Vocals,
+- `D`: Drums,
+- `M`: Melody,
+- `B`: Bass,
+- `I`: Instrumental preset,
+- `A`: All Stems preset.
+
+`V`, `D`, `M`, and `B` are freely combinable runtime toggles. `I` and `A` are exclusive display
+presets backed by the same bounded enabled-stem mask. `I` maps to Drums + Melody + Bass and mutes
+Vocals. `A` maps to Vocals + Drums + Melody + Bass. The `I` button does not mean "play only the
+cached `instrumental.wav` file", and `A` does not add `instrumental.wav` as a fifth audible layer.
+
+The button cluster is active only when the selected pad is in all-stems mode and has a current
+available prepared stem set. If stems are unavailable or the pad is in full-mix mode, the buttons
+are greyed out and non-clickable. Rendering derives this from controller/session snapshots only;
+it does not inspect cache directories, compute source-version identity, read files, decode audio,
+run inference, or call low-level Rust background task APIs.
+
+The per-stem enabled mask is session-only in this slice. Project persistence still stores stem
+cache metadata and durable full-mix/all-stems mode only. A later OpenSpec change can make mask
+preferences durable if needed.
 
 ### Persistence
 Project persistence stores source-version cache metadata and durable stem mix preferences.
@@ -87,12 +105,12 @@ marking stems available. Missing cache files, stale source versions, or rejected
 must not prevent startup or playback.
 
 Transient generation progress, last errors, blocked reasons, and momentary performance
-gestures remain session state and are not persisted.
+gestures, including bottom-bar per-stem enabled masks, remain session state and are not persisted.
 
 ### Audio-Thread Contract
 Stem mix controls must update Rust through fixed-size messages such as pad id, source-version
-hash/token, mix mode, enabled stem mask, and solo/mute masks. Messages must not contain file
-paths, Python objects, unbounded vectors, or audio payload copies.
+hash/token, mix mode, and enabled stem mask. Messages must not contain file paths, Python objects,
+unbounded vectors, or audio payload copies.
 
 The audio callback may update bounded audio-thread stem mix state and read already accepted
 prepared buffers. It must not generate stems, read cache files, decode, run neural inference,
@@ -107,8 +125,8 @@ log, block, allocate stem buffers, acquire the Python GIL, or perform long-runni
   degrade visibly and safely to full-mix playback.
 
 ## Open Questions
-- Whether per-stem mute/solo/toggle controls should live only in the selected-pad sidebar or
-  also in a compact performance panel.
 - Whether all-stems mode should auto-enable immediately after successful generation or remain a
   separate performer action.
 - Whether a later production separation model should revise the supported stem-kind set.
+- Whether momentary solo/mute gestures should reuse the bottom-bar cluster or add a separate
+  performer modifier gesture.

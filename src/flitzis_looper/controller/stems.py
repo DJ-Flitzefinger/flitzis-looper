@@ -4,10 +4,13 @@ from typing import TYPE_CHECKING
 
 from flitzis_looper.controller.base import BaseController
 from flitzis_looper.models import (
+    STEM_COMPONENT_MASK,
     STEM_KINDS,
+    STEM_MASK_DISPLAY_MODES,
     STEM_MIX_MODES,
     StemCacheEntry,
     StemFileSet,
+    StemMaskDisplayMode,
     StemMixMode,
     validate_sample_id,
 )
@@ -139,6 +142,8 @@ class StemController(BaseController):
         if self._project.stem_cache[sample_id] is not None:
             self._project.stem_cache[sample_id] = None
             self._mark_project_changed()
+        self._session.pad_stem_enabled_mask[sample_id] = STEM_COMPONENT_MASK
+        self._session.pad_stem_mask_display_mode[sample_id] = "all"
 
     def stem_mix_mode(self, sample_id: int) -> StemMixMode:
         """Return the durable stem mix preference for a pad."""
@@ -150,6 +155,23 @@ class StemController(BaseController):
         validate_sample_id(sample_id)
         entry = self._project.stem_cache[sample_id]
         return entry is not None and entry.available
+
+    def stem_enabled_mask(self, sample_id: int) -> int:
+        """Return the session-only enabled component-stem mask for a pad."""
+        validate_sample_id(sample_id)
+        return int(self._session.pad_stem_enabled_mask[sample_id])
+
+    def stem_mask_display_mode(self, sample_id: int) -> StemMaskDisplayMode:
+        """Return the session-only bottom-bar stem mask display mode."""
+        validate_sample_id(sample_id)
+        return self._session.pad_stem_mask_display_mode[sample_id]
+
+    def stem_mask_controls_enabled(self, sample_id: int) -> bool:
+        """Return whether selected-pad per-stem mask controls should be interactive."""
+        validate_sample_id(sample_id)
+        if self._project.pad_stem_mix_mode[sample_id] != "all_stems":
+            return False
+        return self.stems_available(sample_id)
 
     def set_stem_mix_mode(self, sample_id: int, mode: StemMixMode) -> bool:
         """Set the durable full-mix/all-stems mode for a pad."""
@@ -176,7 +198,35 @@ class StemController(BaseController):
             self._project.pad_stem_mix_mode[sample_id] = mode
             self._mark_project_changed()
 
-        return self.publish_stem_mix_mode_if_available(sample_id)
+        if not self.publish_stem_mix_mode_if_available(sample_id):
+            return False
+
+        return self.publish_stem_enabled_mask_if_available(sample_id)
+
+    def set_stem_enabled_mask(
+        self,
+        sample_id: int,
+        enabled_stem_mask: int,
+        display_mode: StemMaskDisplayMode = "custom",
+    ) -> bool:
+        """Set the session-only enabled component-stem mask for a pad."""
+        validate_sample_id(sample_id)
+        if enabled_stem_mask < 0 or enabled_stem_mask & ~STEM_COMPONENT_MASK:
+            msg = "stem enabled mask must contain only component stems"
+            raise ValueError(msg)
+        if display_mode not in STEM_MASK_DISPLAY_MODES:
+            msg = "stem mask display mode must be custom, instrumental, or all"
+            raise ValueError(msg)
+
+        if (
+            enabled_stem_mask == self._session.pad_stem_enabled_mask[sample_id]
+            and display_mode == self._session.pad_stem_mask_display_mode[sample_id]
+        ):
+            return True
+
+        self._session.pad_stem_enabled_mask[sample_id] = enabled_stem_mask
+        self._session.pad_stem_mask_display_mode[sample_id] = display_mode
+        return self.publish_stem_enabled_mask_if_available(sample_id)
 
     def publish_stem_mix_mode_if_available(self, sample_id: int) -> bool:
         """Publish all-stems mode to Rust when current prepared stems are available."""
@@ -196,6 +246,32 @@ class StemController(BaseController):
             self._audio.set_stem_mix_mode(sample_id, "all_stems", source_version)
         except (RuntimeError, ValueError) as err:
             self._session.stem_generation_errors[sample_id] = f"Stem mix update failed: {err}"
+            return False
+
+        return True
+
+    def publish_stem_enabled_mask_if_available(self, sample_id: int) -> bool:
+        """Publish the session stem mask to Rust when current prepared stems are available."""
+        validate_sample_id(sample_id)
+        if self._project.pad_stem_mix_mode[sample_id] != "all_stems":
+            return True
+
+        entry = self._project.stem_cache[sample_id]
+        if entry is None or not entry.available:
+            return True
+
+        source_version = self.source_version_for_pad(sample_id)
+        if source_version is None or source_version != entry.source_version:
+            return True
+
+        try:
+            self._audio.set_stem_enabled_mask(
+                sample_id,
+                self._session.pad_stem_enabled_mask[sample_id],
+                source_version,
+            )
+        except (RuntimeError, ValueError) as err:
+            self._session.stem_generation_errors[sample_id] = f"Stem mask update failed: {err}"
             return False
 
         return True

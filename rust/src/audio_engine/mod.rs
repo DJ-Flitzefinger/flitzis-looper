@@ -15,8 +15,8 @@ use crate::audio_engine::stem_cache::{
     write_deterministic_stem_artifacts,
 };
 use crate::messages::{
-    AudioMessage, BackgroundTaskKind, ControlMessage, LoaderEvent, PadTimingMetadata, SampleBuffer,
-    StemMixMode, TriggerQuantization, task_to_str,
+    AudioMessage, BackgroundTaskKind, ControlMessage, LoaderEvent, PadTimingMetadata,
+    STEM_COMPONENT_MASK, SampleBuffer, StemMixMode, TriggerQuantization, task_to_str,
 };
 use numpy::{PyArray1, ToPyArray};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -678,6 +678,49 @@ impl AudioEngine {
             })
             .map_err(|_| {
                 PyRuntimeError::new_err("Failed to send SetStemMixMode - buffer may be full")
+            })
+    }
+
+    /// Select which prepared component stems are enabled for all-stems playback.
+    pub fn set_stem_enabled_mask(
+        &mut self,
+        id: usize,
+        enabled_stem_mask: u8,
+        source_version: String,
+    ) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+
+        if enabled_stem_mask & !STEM_COMPONENT_MASK != 0 {
+            return Err(PyValueError::new_err(
+                "stem enabled mask contains unsupported stems",
+            ));
+        }
+
+        if source_version.trim().is_empty() {
+            return Err(PyValueError::new_err("source_version must not be empty"));
+        }
+
+        let source_version_hash = source_version_hash(&source_version);
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        producer_guard
+            .push(ControlMessage::SetStemEnabledMask {
+                id,
+                enabled_stem_mask,
+                source_version_hash,
+            })
+            .map_err(|_| {
+                PyRuntimeError::new_err("Failed to send SetStemEnabledMask - buffer may be full")
             })
     }
 

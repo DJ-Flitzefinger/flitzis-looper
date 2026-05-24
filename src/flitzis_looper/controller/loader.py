@@ -399,6 +399,11 @@ class LoaderController(BaseController):
 
         try:
             self._audio.set_stem_mix_mode(sample_id, "all_stems", source_version)
+            self._audio.set_stem_enabled_mask(
+                sample_id,
+                self._session.pad_stem_enabled_mask[sample_id],
+                source_version,
+            )
         except (RuntimeError, ValueError) as err:
             self._session.stem_generation_errors[sample_id] = (
                 f"Stem generation completed but mix update failed: {err}"

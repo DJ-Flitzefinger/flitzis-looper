@@ -43,16 +43,24 @@ set is unavailable, stale, incomplete, failed, rejected, or disabled.
 - **AND** the performer can regenerate stems without affecting current playback
 
 ### Requirement: Per-Stem Controls Use Bounded Known Stem Kinds
-The system SHALL limit future per-stem mute, solo, and toggle controls to the known bounded
-stem kinds: vocals, melody, bass, drums, and instrumental.
+The system SHALL limit per-stem performance controls to bounded masks over known stem kinds and
+component-stem presets.
 
 Per-stem control state SHALL be represented as bounded masks or scalar modes, not unbounded
-lists or file paths. The audio callback SHALL NOT generate stems, read cache files, decode
-audio, allocate stem buffers, run neural inference, log, block, or acquire the Python GIL in
-response to per-stem controls.
+lists or file paths. The bottom-bar `I` preset SHALL mean Drums + Melody + Bass, not the
+cached `instrumental.wav` artifact. The `A` preset SHALL mean Vocals + Drums + Melody + Bass and
+SHALL NOT add `instrumental.wav` as a fifth audible layer. The audio callback SHALL NOT generate
+stems, read cache files, decode audio, allocate stem buffers, run neural inference, log, block, or
+acquire the Python GIL in response to per-stem controls.
 
-#### Scenario: Future stem toggle updates bounded state only
+#### Scenario: Stem toggle updates bounded state only
 - **GIVEN** a pad has a current prepared stem set already published to Rust
-- **WHEN** the performer toggles a future vocals stem control
+- **WHEN** the performer toggles the selected-pad vocals stem control
 - **THEN** the control update is represented as bounded state for the known stem kinds
 - **AND** no stem generation, file I/O, decoding, inference, logging, blocking, heap allocation, or Python/GIL access runs in the audio callback
+
+#### Scenario: Instrumental preset avoids direct instrumental artifact rendering
+- **GIVEN** a pad is in all-stems mode with a current prepared stem set
+- **WHEN** the performer selects the `I` preset
+- **THEN** the runtime enabled-stem mask enables Drums, Melody, and Bass
+- **AND** the audio callback does not select only the cached `instrumental.wav` artifact

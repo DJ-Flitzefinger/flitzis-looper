@@ -121,9 +121,12 @@ full-mix/all-stems changes through `StemController.set_stem_mix_mode(...)`. Rend
 inspect cache directories, read files, decode audio, run inference, or call the low-level Rust
 background task APIs directly.
 
-The follow-up `openspec/changes/add-stem-performance-controls/` planning slice still defines future
-per-stem mute, solo, and toggle controls. Those controls must publish only fixed-size bounded state
-such as enabled stem masks and solo/mute masks. The messages must not carry file paths, Python
+The follow-up `openspec/changes/add-stem-performance-controls/` planning slice defines performer
+stem controls and future momentary solo/mute gestures. The bottom-bar selected-pad stem mask slice publishes
+only fixed-size bounded state: pad id, source-version hash, and an enabled component-stem mask.
+`V`, `D`, `M`, and `B` toggle component stems, while `I` maps to Drums + Melody + Bass and `A`
+maps to Vocals + Drums + Melody + Bass. Neither preset asks the audio callback to read or select
+the cached `instrumental.wav` artifact directly. The messages must not carry file paths, Python
 objects, unbounded metadata, or copied audio payloads. Ring-buffer-full or stale-source failures
 must leave current full-mix or stem playback unchanged.
 

@@ -8,6 +8,12 @@ use std::sync::Arc;
 use stratum_dsp::BeatGrid;
 
 pub(crate) const STEM_BUFFER_COUNT: usize = 5;
+pub(crate) const STEM_MASK_VOCALS: u8 = 1 << 0;
+pub(crate) const STEM_MASK_MELODY: u8 = 1 << 1;
+pub(crate) const STEM_MASK_BASS: u8 = 1 << 2;
+pub(crate) const STEM_MASK_DRUMS: u8 = 1 << 3;
+pub(crate) const STEM_COMPONENT_MASK: u8 =
+    STEM_MASK_VOCALS | STEM_MASK_MELODY | STEM_MASK_BASS | STEM_MASK_DRUMS;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SampleBuffer {
@@ -176,6 +182,16 @@ pub enum ControlMessage {
     SetStemMixMode {
         id: usize,
         mode: StemMixMode,
+        source_version_hash: u64,
+    },
+
+    /// Select which prepared component stems are enabled for an all-stems pad.
+    ///
+    /// The mask uses known stem-kind bits and is source-version guarded. It must not contain file
+    /// paths, Python objects, or copied full audio payloads.
+    SetStemEnabledMask {
+        id: usize,
+        enabled_stem_mask: u8,
         source_version_hash: u64,
     },
 
@@ -428,6 +444,24 @@ mod tests {
                 mode: StemMixMode::AllStems,
                 source_version_hash: 42
             }
+        ));
+    }
+
+    #[test]
+    fn stem_enabled_mask_message_carries_bounded_state() {
+        let message = ControlMessage::SetStemEnabledMask {
+            id: 3,
+            enabled_stem_mask: STEM_MASK_VOCALS | STEM_MASK_DRUMS,
+            source_version_hash: 42,
+        };
+
+        assert!(matches!(
+            message,
+            ControlMessage::SetStemEnabledMask {
+                id: 3,
+                enabled_stem_mask,
+                source_version_hash: 42
+            } if enabled_stem_mask == (STEM_MASK_VOCALS | STEM_MASK_DRUMS)
         ));
     }
 }

@@ -14,6 +14,7 @@ if TYPE_CHECKING:
         ProjectState,
         SampleAnalysis,
         SessionState,
+        StemMaskDisplayMode,
         StemMixMode,
         TriggerQuantizationMode,
     )
@@ -123,6 +124,15 @@ class StemSelectors:
 
     def stem_mix_mode(self, pad_id: int) -> StemMixMode:
         return self._controller.stems.stem_mix_mode(pad_id)
+
+    def stem_enabled_mask(self, pad_id: int) -> int:
+        return self._controller.stems.stem_enabled_mask(pad_id)
+
+    def stem_mask_display_mode(self, pad_id: int) -> StemMaskDisplayMode:
+        return self._controller.stems.stem_mask_display_mode(pad_id)
+
+    def stem_mask_controls_enabled(self, pad_id: int) -> bool:
+        return self._controller.stems.stem_mask_controls_enabled(pad_id)
 
     def stem_generation_error(self, pad_id: int) -> str | None:
         return self._controller.stems.stem_generation_error(pad_id)
@@ -264,6 +274,14 @@ class StemAudioActions:
 
     def set_stem_mix_mode(self, pad_id: int, mode: StemMixMode) -> None:
         self._controller.stems.set_stem_mix_mode(pad_id, mode)
+
+    def set_stem_enabled_mask(
+        self,
+        pad_id: int,
+        enabled_stem_mask: int,
+        display_mode: StemMaskDisplayMode = "custom",
+    ) -> None:
+        self._controller.stems.set_stem_enabled_mask(pad_id, enabled_stem_mask, display_mode)
 
 
 class GlobalAudioActions:

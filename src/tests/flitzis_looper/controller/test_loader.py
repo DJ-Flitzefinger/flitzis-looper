@@ -9,7 +9,13 @@ from flitzis_looper.controller.stems import (
     expected_stem_files,
     source_version_for_sample_path,
 )
-from flitzis_looper.models import STEM_KINDS, ProjectState, SessionState, StemCacheEntry
+from flitzis_looper.models import (
+    STEM_COMPONENT_MASK,
+    STEM_KINDS,
+    ProjectState,
+    SessionState,
+    StemCacheEntry,
+)
 from flitzis_looper_audio import AudioEngine
 from tests.conftest import write_mono_pcm16_wav
 
@@ -366,6 +372,7 @@ def test_stem_task_success_marks_complete_current_cache_available(
     assert entry.available is True
     audio_engine_mock.publish_prepared_stems.assert_called_once_with(0, source_version, cache_dir)
     audio_engine_mock.set_stem_mix_mode.assert_not_called()
+    audio_engine_mock.set_stem_enabled_mask.assert_not_called()
     assert 0 not in controller.session.stem_generating_sample_ids
     assert 0 not in controller.session.stem_generation_source_versions
     assert 0 not in controller.session.stem_generation_progress
@@ -407,6 +414,9 @@ def test_stem_task_success_applies_all_stems_preference_after_publication(
 
     audio_engine_mock.publish_prepared_stems.assert_called_once_with(0, source_version, cache_dir)
     audio_engine_mock.set_stem_mix_mode.assert_called_once_with(0, "all_stems", source_version)
+    audio_engine_mock.set_stem_enabled_mask.assert_called_once_with(
+        0, STEM_COMPONENT_MASK, source_version
+    )
 
 
 def test_stem_task_success_keeps_cache_unavailable_when_pad_started(

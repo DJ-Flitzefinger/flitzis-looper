@@ -127,8 +127,10 @@ persistence defaults to full mix, the controller can publish all-stems mode for 
 source version, and Rust renders prepared stems only when the accepted source-version hash matches
 the selected all-stems mode. The selected-pad sidebar now shows stem status, routes Generate Stems
 through controller/background-task gating, and exposes full-mix/all-stems mode selection. The
-follow-up performer-controls work still needs pad-grid stem indicators, future bounded per-stem
-mute/solo/toggle controls, and production source separation.
+bottom bar now adds selected-pad `V`/`D`/`M`/`B`/`I`/`A` mask buttons where `I` means Drums +
+Melody + Bass and `A` means Vocals + Drums + Melody + Bass, without using `instrumental.wav` as a
+direct preset layer. Pad-grid stem indicators, momentary per-stem solo/mute controls, and
+production source separation remain future work.
 
 ### 13) Persistence (config/state)
 - [x] As a user, my bank/pad assignments persist across restarts.
