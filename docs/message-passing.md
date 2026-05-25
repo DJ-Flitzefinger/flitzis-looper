@@ -123,6 +123,13 @@ CPAL callback:
   changes when a BPM reference exists, then convert those targets back to the existing bounded
   speed multiplier before sending audio control messages.
 
+Stage 7 records the future DSP parameter policy in
+`docs/input-mapping-dsp-parameter-policy.md`: mapped keyboard, MIDI Note, MIDI CC, and NRPN
+controls may produce stable action keys and bounded controller-owned targets, but accepted
+continuous DSP targets must use the bounded parameter path and Rust-side smoothing before sample
+processing. Future DSP mappings must not use direct MIDI-to-callback execution, carry plugin
+handles, or rely on callback-local state.
+
 This path must not simulate mouse clicks, call Python from the audio callback, route MIDI directly
 into callback functions, block the callback, log from the callback, or allocate unbounded audio
 thread state.

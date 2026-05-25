@@ -455,6 +455,19 @@ Remaining architecture points:
 - Future MIDI CC/NRPN mappings to DSP parameters should use coalescing plus smoothing rather than
   enqueueing every hardware tick as an immediate callback update.
 
+Stage 7 result:
+
+- `docs/input-mapping-dsp-parameter-policy.md` records the mapping policy for future DSP
+  parameters without changing current MIDI behavior.
+- Keyboard and MIDI Note mappings may keep bounded set-value semantics for explicit targets.
+- MIDI CC and NRPN mappings should produce stable relative-step action keys and bounded
+  controller-owned target changes before any accepted target reaches Rust.
+- Accepted continuous DSP targets should use the bounded parameter path, callback-side coalescing,
+  and Rust-owned smoothing before sample processing.
+- Direct Rust dispatch remains limited to discrete audio-safe command transactions; future DSP
+  mappings must not carry plugin handles, callback-local pointers, Python objects, file paths, or
+  unbounded metadata.
+
 ## Current EQ Implementation
 
 The current EQ is not merely UI-level; it affects audio in Rust:
@@ -758,6 +771,9 @@ Result:
 
 ### Analysis Stage 7: MIDI/Keyboard Under Future DSP Parameters
 
+Status: completed by `docs/input-mapping-dsp-parameter-policy.md` and the Stage 7
+`add-low-jitter-input-mapping` clarification.
+
 Files:
 
 - `rust/src/audio_engine/input_mapping.rs`
@@ -774,6 +790,15 @@ Questions:
 Expected output:
 
 - MIDI/DSP parameter mapping policy without changing current working MIDI behavior.
+
+Result:
+
+- future DSP parameter mappings are documented as stable action keys plus bounded controller-owned
+  target derivation,
+- accepted continuous targets are documented to use the bounded parameter path and Rust-side
+  smoothing,
+- direct Rust MIDI dispatch remains command-only for existing discrete audio-safe transactions,
+- stale runtime snapshots are documented as inappropriate for future live DSP truth.
 
 ### Analysis Stage 8: DSP/FX And EQ Replacement Architecture
 
@@ -1060,15 +1085,15 @@ Acceptance:
 
 ## Next Recommended Step
 
-Stage 6 has completed the loop/source-position/prepared-stem alignment clarification.
+Stage 7 has completed the MIDI/keyboard future DSP-parameter mapping clarification.
 
-The next recommended step is Analysis Stage 7:
+The next recommended step is click-free transition preparation before DSP foundation:
 
 ```text
-Review MIDI/keyboard architecture only for future DSP parameter safety, keeping current working
-MIDI behavior intact and treating MIDI latency/jitter as solved unless a new issue appears.
+Prepare a bounded Rust transition helper for click-free stem mode/mask transitions, without
+implementing a visible effect, EQ replacement, plugin hosting, or broad DSP foundation.
 ```
 
-Do not implement the new EQ or any other DSP effect before the MIDI/DSP-parameter review,
-click-free transition preparation, and DSP foundation stages are complete, unless a future user
-request explicitly supersedes this plan with an OpenSpec-backed change.
+Do not implement the new EQ or any other DSP effect before click-free transition preparation and
+the DSP foundation stages are complete, unless a future user request explicitly supersedes this
+plan with an OpenSpec-backed change.

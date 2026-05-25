@@ -785,4 +785,23 @@ mod tests {
             matches!(action, InputAction::Python { action_key } if action_key == "ui.select_bank:2")
         );
     }
+
+    #[test]
+    fn future_dsp_parameter_actions_do_not_use_direct_dispatch() {
+        let (producer, mut consumer) = RingBuffer::<ControlMessage>::new(8);
+        let producer = Arc::new(Mutex::new(producer));
+        let state = Arc::new(Mutex::new(RuntimeState::default()));
+        let action = parse_input_action("dsp.pad.parameter.delta:0:filter.cutoff");
+
+        let result = dispatch_action(&action, &state, &producer);
+
+        assert_eq!(
+            result,
+            DispatchResult {
+                dispatched: true,
+                direct: false
+            }
+        );
+        assert!(consumer.pop().is_err());
+    }
 }

@@ -18,6 +18,7 @@
   continuous-control mappings.
 - [x] Support common MIDI encoder increment/decrement encodings such as `1`/`127` and `65`/`63`.
 - [x] Normalize NRPN increment/decrement encoder messages to stable learnable MIDI bindings.
+- [x] Record Stage 7 future DSP parameter mapping policy without changing current MIDI behavior.
 - [x] Update official docs.
 - [x] Update local Codex state notes.
 

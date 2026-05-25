@@ -426,6 +426,12 @@ The Rust MIDI input layer is not part of the audio callback. The audio callback 
 MIDI ports, keyboard polling, Learn state, mapping JSON, Python/GIL access, blocking locks,
 logging, neural inference, or unbounded work.
 
+Stage 7 adds the future DSP-parameter mapping policy in
+`docs/input-mapping-dsp-parameter-policy.md`. The current MIDI behavior stays unchanged: direct
+Rust dispatch remains for existing discrete audio-safe commands, while future mapped DSP knobs
+should resolve to stable action keys, bounded controller-owned targets, the bounded Rust parameter
+path, and audio-side smoothing before sample processing.
+
 ## Current Python API surface
 
 The Rust engine is exposed to Python as `AudioEngine` with:

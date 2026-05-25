@@ -47,6 +47,14 @@ Mappings use stable string keys at the boundary:
 - Keyboard binding: `keyboard:<key>:<ctrl><alt><shift><super>`
 - Action: stable LooperAction key, for example `pad.trigger:0` or `ui.select_bank:2`
 
+Future DSP parameter mappings should keep the same boundary. Keyboard and MIDI Note mappings may
+store bounded set-value action keys. MIDI CC and NRPN increment/decrement mappings should store
+relative-step action keys that the Python/controller layer converts to bounded parameter targets
+outside the audio callback. Accepted future DSP targets should cross into Rust through the bounded
+parameter path, be coalesced by parameter identity, and be smoothed on the audio side before sample
+processing. Mapping files must not contain plugin handles, callback-local pointers, Python objects,
+or unbounded DSP metadata.
+
 ## Real-time Safety
 Rust input/control modules are allowed outside the audio callback. They may own MIDI ports,
 bounded channels, mapping snapshots, and dispatcher threads. The audio callback must not own or

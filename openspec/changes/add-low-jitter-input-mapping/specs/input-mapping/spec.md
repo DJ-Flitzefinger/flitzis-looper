@@ -244,3 +244,29 @@ testable without physical MIDI hardware through injected MIDI messages.
 - **WHEN** a test injects Note On channel 1 note 60 velocity 100 through the bridge
 - **THEN** Rust normalizes and queues the same event shape used by real MIDI input
 - **AND** Python can poll the event without physical MIDI hardware
+
+### Requirement: Future DSP Parameter Mappings Stay Bounded
+The system SHALL route future mapped DSP parameter changes through typed bounded parameter
+semantics instead of direct MIDI-to-callback execution.
+
+MIDI CC and NRPN mappings for future EQ/FX controls SHALL resolve to stable action keys and
+controller-owned bounded target changes before any accepted continuous target reaches Rust. The
+accepted target SHALL use the bounded parameter path and SHALL apply audio-side smoothing before
+sample processing. Direct Rust input dispatch SHALL remain limited to discrete audio-safe command
+transactions unless a future OpenSpec-backed DSP parameter update explicitly adds a fixed-size
+parameter message path. Future DSP mapping keys SHALL NOT carry plugin handles, Python objects,
+file paths, callback-local pointers, or unbounded metadata.
+
+#### Scenario: Future MIDI DSP knob does not call the audio callback directly
+- **GIVEN** a future MIDI CC mapping targets a filter cutoff or isolator band
+- **WHEN** the performer turns the mapped control
+- **THEN** the input layer resolves a stable action key outside the audio callback
+- **AND** the controller derives a bounded target value outside the audio callback
+- **AND** Rust receives any accepted audio target through the bounded parameter path
+- **AND** the audio side smooths the target before sample processing
+
+#### Scenario: Direct dispatch remains command-only for existing mappings
+- **GIVEN** a mapped MIDI input targets pad trigger, pad stop, or stop all
+- **WHEN** the Rust dispatcher can enqueue the complete bounded command transaction
+- **THEN** direct dispatch may use the ordered command path
+- **AND** future DSP parameter mappings do not reuse that direct command-only shortcut
