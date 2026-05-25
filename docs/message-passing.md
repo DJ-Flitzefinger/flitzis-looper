@@ -13,8 +13,9 @@ audio-thread state. The Stage 4 ownership slice records durable Python intent ve
 audio state and moves audio telemetry dispatch into the controller layer. Future DSP/FX
 parameters should use this parameter path and keep smoothing on the Rust audio side. The Stage 8
 foundation plan in `docs/dsp-fx-foundation-plan.md` and
-`openspec/changes/prepare-dsp-fx-foundation/` keeps the first DSP slice neutral and requires typed
-fixed-size parameter identities for later DSP targets.
+`openspec/changes/prepare-dsp-fx-foundation/` keeps the first DSP slice neutral; the initial Rust
+implementation now provides typed fixed-size parameter identities and smoothing helpers for later
+DSP targets without exposing new Python controls or messages.
 
 ## Channels
 
@@ -46,6 +47,10 @@ Messages are intentionally small and allocation-free on the audio thread:
 - Speed, master BPM, per-pad BPM, per-pad gain, per-pad EQ, and master volume use fixed-size
   parameter messages. The callback coalesces drained messages by parameter identity and applies
   only the latest drained value for each identity.
+- Future DSP parameters are not exposed yet. The internal Rust foundation already has typed
+  fixed-size DSP parameter identities and Rust-owned smoothing state so a later OpenSpec-backed
+  behavior change can add accepted targets without carrying strings, file paths, plugin handles,
+  Python objects, or dynamic metadata into the callback.
 - BPM Lock, Key Lock mode, and Key Lock parameter/settings updates remain ordered fixed-size
   control messages. Key Lock updates do not carry plugin handles, file paths, heap-owned DSP
   state, or audio payloads.
@@ -134,8 +139,8 @@ processing. Future DSP mappings must not use direct MIDI-to-callback execution, 
 handles, or rely on callback-local state.
 
 Stage 8 adds `openspec/changes/prepare-dsp-fx-foundation/` as the foundation boundary for those
-future parameters. The first implementation slice should add only neutral Rust-owned DSP state and
-smoothing helpers; it should not add a visible effect, EQ replacement, plugin host, or new UI
+future parameters. The first implementation slice adds only neutral Rust-owned DSP state and
+smoothing helpers; it does not add a visible effect, EQ replacement, plugin host, or new UI
 control.
 
 This path must not simulate mouse clicks, call Python from the audio callback, route MIDI directly

@@ -125,7 +125,9 @@ still need cleanup before DSP/FX work:
 - audio-to-control telemetry dispatch is controller-owned rather than UI-context-owned,
 - accepted active stem mode/mask changes now use a bounded Rust-owned source-selection ramp,
 - Stage 8 now records the neutral DSP/FX foundation plan in
-  `docs/dsp-fx-foundation-plan.md` and `openspec/changes/prepare-dsp-fx-foundation/`,
+  `docs/dsp-fx-foundation-plan.md` and `openspec/changes/prepare-dsp-fx-foundation/`, and the
+  first neutral Rust foundation slice adds `audio_engine::dsp` plus a fixed-size per-pad chain
+  host without changing public controls or output,
 - current EQ is hardwired into the mixer rather than modeled as a DSP node,
 - future parameter smoothing is specified for the foundation but not implemented yet.
 
@@ -578,16 +580,14 @@ hosting in this phase.
 
 Initial DSP foundation scope:
 
-- Define a small internal DSP node interface for fixed-channel block processing.
-- Preallocate node state and scratch buffers outside realtime rendering.
-- Apply realtime-safe parameter updates through typed parameter IDs/slots.
-- Add parameter smoothing for gain-like and continuous controls.
-- Handle sample-rate changes through explicit `prepare(...)` or rebuild outside hot rendering.
-- Keep denormal/NaN guards local to DSP nodes.
-- Add deterministic unit tests for neutral pass-through, bounded output, parameter clamping,
-  smoothing behavior, sample-rate reconfiguration, and no callback allocation by construction.
-- Keep the first implementation slice neutral: no new performer-facing control, no output change,
-  and no replacement of the current hardwired EQ.
+- `rust/src/audio_engine/dsp.rs` defines the small internal neutral node/chain boundary.
+- `RtMixer` owns one fixed-size neutral per-pad chain prepared during mixer construction.
+- Typed fixed-size parameter IDs/slots and Rust-owned normalized smoothing helpers exist for
+  later accepted DSP parameters.
+- The first implementation slice remains neutral: no new performer-facing control, no output
+  change, and no replacement of the current hardwired EQ.
+- Deterministic unit tests cover neutral pass-through, bounded output, parameter
+  clamping/rejection, smoothing behavior, prepare/reset behavior, and fixed-size state.
 
 Possible node shape:
 

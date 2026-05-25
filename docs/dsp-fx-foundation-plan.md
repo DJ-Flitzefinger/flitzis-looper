@@ -2,8 +2,9 @@
 
 Date: 2026-05-26
 
-Status: Stage 8 architecture planning. This document does not implement a new EQ, visible
-DSP/FX effect, plugin host, real-time stem separation, live loop-edit crossfade, or broad rewrite.
+Status: Stage 8 architecture planning plus the first neutral Rust foundation slice. This document
+does not implement a new EQ, visible DSP/FX effect, plugin host, real-time stem separation, live
+loop-edit crossfade, or broad rewrite.
 
 ## Purpose
 
@@ -79,17 +80,18 @@ performer-facing DSP behavior is added.
 
 ## First Implementation Slice
 
-The next executable task should add an internal Rust DSP foundation with no visible effect:
+The first executable task added an internal Rust DSP foundation with no visible effect:
 
-- add an `audio_engine::dsp` module or equivalent narrow module boundary,
-- define fixed-size internal parameter identifiers and node/chain state,
-- define a neutral no-op or test-only node that can be hosted by a per-pad chain,
-- preallocate any node state and scratch storage in mixer/voice construction or explicit prepare
-  paths, not during callback rendering,
-- add Rust-owned smoothing primitives for continuous DSP parameters,
-- keep public Python UI/API behavior unchanged,
-- keep existing per-pad EQ controls and DSP output unchanged,
-- add focused Rust tests for neutral pass-through, smoothing target progression, parameter
+- `rust/src/audio_engine/dsp.rs` defines the narrow module boundary,
+- fixed-size internal parameter identifiers and node/chain state are represented by typed Rust
+  enums/structs with no strings, pointers, plugin handles, Python objects, or dynamic metadata,
+- a neutral no-op node is hosted by a per-pad chain,
+- node state is stored in fixed-size per-pad mixer-owned chain state and prepared during mixer
+  construction, not allocated during callback rendering,
+- Rust-owned smoothing primitives exist for future normalized continuous DSP parameters,
+- public Python UI/API behavior is unchanged,
+- existing per-pad EQ controls and DSP output remain unchanged,
+- focused Rust tests cover neutral pass-through, smoothing target progression, parameter
   clamping/rejection, reset/prepare behavior, and bounded fixed-size state.
 
 The initial foundation should not add a visible filter, delay, reverb, phaser, flanger, isolator,
@@ -148,9 +150,10 @@ For the Stage 8 planning slice:
 - run official strict OpenSpec validation for `prepare-dsp-fx-foundation`,
 - run `git diff --check`.
 
-For the later neutral foundation implementation:
+For the neutral foundation implementation:
 
-- run focused Rust DSP/mixer tests through `uv run cargo test --manifest-path rust/Cargo.toml`,
+- run focused Rust DSP/mixer tests through
+  `uv --no-cache run cargo test --manifest-path rust/Cargo.toml`,
 - run `uv run cargo check --manifest-path rust/Cargo.toml`,
 - run Python tests only if UI/controller/API behavior changes,
 - run the broader uv-managed sequence if behavior, bridge contracts, or shared audio state change.

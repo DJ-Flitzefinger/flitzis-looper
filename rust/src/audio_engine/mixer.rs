@@ -14,6 +14,7 @@ use crate::audio_engine::constants::{
     MAX_VOICES, NUM_SAMPLES, PAD_EQ_DB_MAX, PAD_EQ_DB_MIN, PAD_GAIN_MAX, PAD_GAIN_MIN, SPEED_MAX,
     SPEED_MIN, VOLUME_MAX, VOLUME_MIN,
 };
+use crate::audio_engine::dsp::PerPadDspChain;
 use crate::audio_engine::eq3::{Eq3Coeffs, coeffs_for_eq3};
 use crate::audio_engine::stretch_processor::DEFAULT_BLOCK_SAMPLES;
 use crate::audio_engine::voice_slot::VoiceSlot;
@@ -350,6 +351,9 @@ pub struct RtMixer {
     /// Per-pad EQ coefficients (low/mid/high).
     pad_eq: [Eq3Coeffs; NUM_SAMPLES],
 
+    /// Neutral per-pad DSP/FX chain host for future internal nodes.
+    pad_dsp_chains: [PerPadDspChain; NUM_SAMPLES],
+
     /// Per-pad loop region start frame.
     pad_loop_start_frame: [usize; NUM_SAMPLES],
 
@@ -411,6 +415,9 @@ impl RtMixer {
             pad_phase_anchor_frame: std::array::from_fn(|_| 0),
             pad_gain: std::array::from_fn(|_| 1.0),
             pad_eq: std::array::from_fn(|_| coeffs_for_eq3(sample_rate_hz, 0.0, 0.0, 0.0)),
+            pad_dsp_chains: std::array::from_fn(|id| {
+                PerPadDspChain::new(id, sample_rate_hz, DEFAULT_BLOCK_SAMPLES, channels)
+            }),
             pad_loop_start_frame: std::array::from_fn(|_| 0),
             pad_loop_end_frame: std::array::from_fn(|_| None),
             pad_playhead_frame: std::array::from_fn(|_| None),
@@ -1219,6 +1226,7 @@ impl RtMixer {
         let pad_bpm = &self.pad_bpm;
         let pad_gain = &self.pad_gain;
         let pad_eq = &self.pad_eq;
+        let pad_dsp_chains = &mut self.pad_dsp_chains;
         let pad_loop_start_frame = &self.pad_loop_start_frame;
         let pad_loop_end_frame = &self.pad_loop_end_frame;
         let pad_playhead_frame = &mut self.pad_playhead_frame;
@@ -1343,13 +1351,15 @@ impl RtMixer {
 
                 let eq = pad_eq[voice.sample_id];
                 let pad_gain = pad_gain[voice.sample_id];
+                let pad_dsp_chain = &mut pad_dsp_chains[voice.sample_id];
 
                 let output_buffers = voice.stretch.output_buffers();
                 for frame in 0..frames {
                     let out_base = frame * channels;
+                    pad_dsp_chain.begin_frame();
                     for (channel, buffer) in output_buffers.iter().enumerate().take(channels) {
                         let sample = buffer[frame];
-                        let mut sample = sample;
+                        let mut sample = pad_dsp_chain.process_sample(sample);
                         if let Some(state) = voice.eq_state.get_mut(channel) {
                             sample = eq.process(state, sample);
                         }
@@ -2506,6 +2516,46 @@ mod tests {
 
         // Output should contain sample data
         assert!(output.iter().any(|&s| s != 0.0));
+    }
+
+    #[test]
+    fn test_neutral_pad_dsp_chain_preserves_mixer_output() {
+        let mut mixer = RtMixer::new(2, 44_100.0);
+        let samples = vec![0.10, -0.20, 0.30, -0.40, -0.50, 0.60, 0.70, -0.80];
+        let sample = SampleBuffer {
+            channels: 2,
+            samples: Arc::from(samples.clone().into_boxed_slice()),
+        };
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+
+        mixer.load_sample(0, sample);
+        assert!(mixer.play_sample(0, 1.0));
+
+        let mut output = vec![0.0; samples.len()];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        for (actual, expected) in output.iter().zip(samples.iter()) {
+            assert!((*actual - *expected).abs() < 1e-5);
+        }
+        assert_eq!(
+            mixer.pad_dsp_chains[0].prepared_state(),
+            (44_100.0, DEFAULT_BLOCK_SAMPLES, 2)
+        );
+    }
+
+    #[test]
+    fn test_neutral_pad_dsp_chain_keeps_existing_eq_behavior_active() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 128, 0.5));
+        mixer.set_pad_eq(0, PAD_EQ_DB_MIN, PAD_EQ_DB_MIN, PAD_EQ_DB_MIN);
+        assert!(mixer.play_sample(0, 1.0));
+
+        let mut output = vec![0.0; 128];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert!(output.iter().all(|sample| sample.abs() < 1e-6));
+        assert!(pad_peaks[0] < 1e-6);
     }
 
     #[test]

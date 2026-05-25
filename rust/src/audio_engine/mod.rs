@@ -42,6 +42,7 @@ mod audio_stream;
 mod buffer_retirement;
 mod channels;
 mod constants;
+mod dsp;
 mod eq3;
 mod errors;
 mod input_mapping;

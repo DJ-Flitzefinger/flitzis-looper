@@ -12,8 +12,9 @@ state-ownership, and clock-preparation stages are complete or explicitly superse
 OpenSpec-backed request. The current state ownership boundary is recorded in
 `docs/audio-state-ownership.md`. The Stage 6 loop/source-position/stem alignment model is recorded
 in `docs/audio-loop-source-stem-alignment.md`. The Stage 8 DSP/FX foundation plan is recorded in
-`docs/dsp-fx-foundation-plan.md` and `openspec/changes/prepare-dsp-fx-foundation/`; it prepares a
-neutral internal Rust foundation before any later EQ replacement or visible effect.
+`docs/dsp-fx-foundation-plan.md` and `openspec/changes/prepare-dsp-fx-foundation/`; the first
+implementation slice now adds a neutral internal Rust per-pad DSP chain foundation before any
+later EQ replacement or visible effect.
 
 Do not interpret audio safety as "Rust must not be touched". The protected boundary is the CPAL
 audio callback and realtime hot path. New Rust modules outside that boundary are allowed and
@@ -49,8 +50,9 @@ encouraged when they improve correctness, latency, maintainability, or realtime 
    bridged to the existing bounded control-command path where possible.
 6. The CPAL callback drains ordered command messages, coalesces separately queued parameter
    messages, updates bounded audio state, routes play/stop commands through the Rust scheduler,
-   mixes active voices into the output buffer, and advances the Rust transport timeline by
-   rendered output frames.
+   renders source playback through the neutral per-pad DSP chain and existing EQ/gain path, mixes
+   active voices into the output buffer, and advances the Rust transport timeline by rendered
+   output frames.
 7. Python controllers poll loader and audio runtime events; audio telemetry dispatch is owned by
    `AppController.poll_runtime_events()`, which updates `SessionState` projections for pad peaks,
    playheads, and active/stopped pads.
@@ -64,6 +66,7 @@ The audio engine is organized into modular components following the single respo
 audio_engine/
 ├── mod.rs              # Main orchestration, re-exports, public API
 ├── constants.rs        # Configuration constants (NUM_BANKS, GRID_SIZE, etc.)
+├── dsp.rs              # Internal neutral DSP chain, typed parameter IDs, smoothing helpers
 ├── errors.rs           # Error types (SampleLoadError)
 ├── voice.rs            # Voice struct and lifecycle management
 ├── mixer.rs            # RtMixer implementation with real-time rendering
@@ -92,6 +95,8 @@ CPAL callback.
 - Rust (real-time audio layer)
   - `rust/src/audio_engine/mod.rs`: Main orchestration and Python-facing API.
   - `rust/src/audio_engine/constants.rs`: Configuration constants and limits.
+  - `rust/src/audio_engine/dsp.rs`: Internal neutral per-pad DSP-chain foundation, typed
+    fixed-size DSP parameter identities, and Rust-owned smoothing helpers for future nodes.
   - `rust/src/audio_engine/errors.rs`: Audio-specific error types.
   - `rust/src/audio_engine/voice.rs`: Voice management and lifecycle.
   - `rust/src/audio_engine/mixer.rs`: Real-time mixer implementation.
@@ -197,6 +202,8 @@ The project deliberately separates non-real-time work from the real-time audio c
   thread.
 - Oversized render slices are split into chunks that fit the existing preallocated per-voice
   stretch buffers.
+- The current per-pad DSP chain is neutral and fixed-size. Its state is owned by `RtMixer`, and
+  callback processing only touches already prepared chain state before the existing EQ/gain path.
 
 ## Gen3 transport timeline plan
 
