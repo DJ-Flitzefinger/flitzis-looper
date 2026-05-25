@@ -571,7 +571,7 @@ class SessionState(BaseModel):
     """Current Tap BPM target pad. Resets tap timestamps when changed."""
 
     tap_bpm_timestamps: list[float] = Field(default_factory=list)
-    """Recent Tap BPM timestamps in monotonic seconds."""
+    """Accepted timestamps for the current explicit Tap BPM measurement series."""
 
     bpm_lock_anchor_pad_id: int | None = None
     """Pad id used to anchor BPM lock master BPM calculation."""

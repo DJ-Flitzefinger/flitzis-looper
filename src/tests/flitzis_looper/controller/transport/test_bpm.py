@@ -34,35 +34,88 @@ def test_effective_bpm_prefers_manual(controller: AppController) -> None:
     assert controller.transport.bpm.effective_bpm(sample_id) == 120.0
 
 
-def test_tap_bpm_three_taps(controller: AppController, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_tap_bpm_computes_on_second_tap(
+    controller: AppController, monkeypatch: pytest.MonkeyPatch, audio_engine_mock: Mock
+) -> None:
     sample_id = 0
-    times = iter([0.0, 0.5, 1.0])
+    times = iter([0.0, 0.5])
     mp_target = "flitzis_looper.controller.transport.bpm.monotonic"
     monkeypatch.setattr(mp_target, lambda: next(times))
 
-    assert controller.transport.bpm.tap_bpm(sample_id) is None
     assert controller.transport.bpm.tap_bpm(sample_id) is None
     bpm = controller.transport.bpm.tap_bpm(sample_id)
 
     assert bpm == pytest.approx(120.0, abs=0.01)
     assert controller.project.manual_bpm[sample_id] == pytest.approx(120.0, abs=0.01)
+    audio_engine_mock.set_pad_bpm.assert_called_with(sample_id, pytest.approx(120.0, abs=0.01))
 
 
-def test_tap_bpm_uses_five_most_recent_taps(
+def test_tap_bpm_uses_all_taps_until_pause(
     controller: AppController, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sample_id = 0
-    times = iter([0.0, 1.0, 2.0, 3.0, 4.0, 10.0, 10.5, 11.0, 11.5, 12.0])
+    times = iter([0.0, 0.5, 1.0, 1.5, 2.0, 3.0])
     mp_target = "flitzis_looper.controller.transport.bpm.monotonic"
     monkeypatch.setattr(mp_target, lambda: next(times))
 
     bpm: float | None = None
-    for _ in range(10):
+    for _ in range(6):
         bpm = controller.transport.bpm.tap_bpm(sample_id)
 
-    assert bpm == pytest.approx(120.0, abs=0.01)
+    assert bpm == pytest.approx(100.0, abs=0.01)
     assert controller.session.tap_bpm_pad_id == sample_id
-    assert len(controller.session.tap_bpm_timestamps) == 5
+    assert controller.session.tap_bpm_timestamps == [0.0, 0.5, 1.0, 1.5, 2.0, 3.0]
+
+
+def test_tap_bpm_resets_after_pause_longer_than_three_seconds(
+    controller: AppController, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sample_id = 0
+    times = iter([0.0, 0.5, 1.0, 4.1, 4.6])
+    mp_target = "flitzis_looper.controller.transport.bpm.monotonic"
+    monkeypatch.setattr(mp_target, lambda: next(times))
+
+    assert controller.transport.bpm.tap_bpm(sample_id) is None
+    assert controller.transport.bpm.tap_bpm(sample_id) == pytest.approx(120.0, abs=0.01)
+    assert controller.transport.bpm.tap_bpm(sample_id) == pytest.approx(120.0, abs=0.01)
+
+    assert controller.transport.bpm.tap_bpm(sample_id) is None
+    assert controller.session.tap_bpm_timestamps == [4.1]
+    assert controller.project.manual_bpm[sample_id] == pytest.approx(120.0, abs=0.01)
+
+    assert controller.transport.bpm.tap_bpm(sample_id) == pytest.approx(120.0, abs=0.01)
+    assert controller.session.tap_bpm_timestamps == [4.1, 4.6]
+
+
+def test_tap_bpm_exact_three_second_pause_continues_series(
+    controller: AppController, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sample_id = 0
+    times = iter([0.0, 0.5, 3.5])
+    mp_target = "flitzis_looper.controller.transport.bpm.monotonic"
+    monkeypatch.setattr(mp_target, lambda: next(times))
+
+    assert controller.transport.bpm.tap_bpm(sample_id) is None
+    assert controller.transport.bpm.tap_bpm(sample_id) == pytest.approx(120.0, abs=0.01)
+    assert controller.transport.bpm.tap_bpm(sample_id) == pytest.approx(34.2857, abs=0.01)
+    assert controller.session.tap_bpm_timestamps == [0.0, 0.5, 3.5]
+
+
+def test_tap_bpm_switching_target_starts_new_series(
+    controller: AppController, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    times = iter([0.0, 0.5, 1.0, 1.5])
+    mp_target = "flitzis_looper.controller.transport.bpm.monotonic"
+    monkeypatch.setattr(mp_target, lambda: next(times))
+
+    assert controller.transport.bpm.tap_bpm(0) is None
+    assert controller.transport.bpm.tap_bpm(0) == pytest.approx(120.0, abs=0.01)
+
+    assert controller.transport.bpm.tap_bpm(1) is None
+    assert controller.session.tap_bpm_pad_id == 1
+    assert controller.session.tap_bpm_timestamps == [1.0]
+
+    assert controller.transport.bpm.tap_bpm(1) == pytest.approx(120.0, abs=0.01)
 
 
 @pytest.mark.parametrize("bpm", [0.0, -10.0])
@@ -77,17 +130,16 @@ def test_set_manual_bpm_non_finite_raises(controller: AppController, bpm: str) -
         controller.transport.bpm.set_manual_bpm(0, float(bpm))
 
 
-def test_tap_bpm_less_than_three(
+def test_tap_bpm_single_tap_returns_none(
     controller: AppController, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sample_id = 0
-    times = iter([0.0, 0.5])
+    times = iter([0.0])
     mp_target = "flitzis_looper.controller.transport.bpm.monotonic"
     monkeypatch.setattr(mp_target, lambda: next(times))
 
     assert controller.transport.bpm.tap_bpm(sample_id) is None
-    assert controller.transport.bpm.tap_bpm(sample_id) is None
-    assert len(controller.session.tap_bpm_timestamps) == 2
+    assert len(controller.session.tap_bpm_timestamps) == 1
 
 
 def test_tap_bpm_non_monotonic_timestamps(
@@ -99,7 +151,7 @@ def test_tap_bpm_non_monotonic_timestamps(
     monkeypatch.setattr(mp_target, lambda: next(times))
 
     assert controller.transport.bpm.tap_bpm(sample_id) is None
-    assert controller.transport.bpm.tap_bpm(sample_id) is None
+    assert controller.transport.bpm.tap_bpm(sample_id) == pytest.approx(120.0, abs=0.01)
     assert controller.transport.bpm.tap_bpm(sample_id) == pytest.approx(120.0, abs=0.01)
     assert controller.transport.bpm.tap_bpm(sample_id) is None
     assert controller.transport.bpm.tap_bpm(sample_id) == pytest.approx(90.0, abs=0.01)
@@ -114,11 +166,11 @@ def test_tap_bpm_negative_intervals(
     monkeypatch.setattr(mp_target, lambda: next(times))
 
     assert controller.transport.bpm.tap_bpm(sample_id) is None
-    assert controller.transport.bpm.tap_bpm(sample_id) is None
+    assert controller.transport.bpm.tap_bpm(sample_id) == pytest.approx(60.0, abs=0.01)
     assert controller.transport.bpm.tap_bpm(sample_id) is None
 
 
-def test_tap_bpm_very_slow_tempo(
+def test_tap_bpm_very_slow_tempo_resets_instead_of_computing(
     controller: AppController, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sample_id = 0
@@ -128,9 +180,8 @@ def test_tap_bpm_very_slow_tempo(
 
     assert controller.transport.bpm.tap_bpm(sample_id) is None
     assert controller.transport.bpm.tap_bpm(sample_id) is None
-    bpm = controller.transport.bpm.tap_bpm(sample_id)
-    assert bpm == pytest.approx(0.6, abs=0.01)
-    assert controller.project.manual_bpm[sample_id] == pytest.approx(0.6, abs=0.01)
+    assert controller.transport.bpm.tap_bpm(sample_id) is None
+    assert controller.project.manual_bpm[sample_id] is None
 
 
 def test_recompute_master_bpm_unlocked(

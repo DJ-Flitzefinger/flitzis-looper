@@ -306,7 +306,6 @@ class TestAudioActions:  # noqa: PLR0904
         monkeypatch.setattr(mp_target, lambda: next(times))
 
         assert audio_actions.pads.tap_bpm(0) is None
-        assert audio_actions.pads.tap_bpm(0) is None
         assert audio_actions.pads.tap_bpm(0) == pytest.approx(120.0, abs=0.01)
 
     def test_unload_sample(self, controller: AppController, audio_engine_mock: Mock) -> None:
