@@ -9,7 +9,7 @@ from flitzis_looper.controller.stems import StemController, StemTaskRunner
 from flitzis_looper.controller.transport import TransportController
 from flitzis_looper.input_mapping import InputMappingController
 from flitzis_looper.models import ProjectState, SessionState
-from flitzis_looper_audio import AudioEngine
+from flitzis_looper_audio import AudioEngine, AudioMessage
 
 if TYPE_CHECKING:
     from flitzis_looper.controller.base import BaseController
@@ -90,6 +90,32 @@ class AppController:
     def on_frame_render(self) -> None:
         for controller in self._controllers:
             controller.on_frame_render()
+
+    def poll_runtime_events(self) -> None:
+        """Poll runtime event sources and update controller-owned state projections."""
+        self.loader.poll_loader_events()
+        self._poll_audio_messages()
+
+    def _poll_audio_messages(self) -> None:
+        while True:
+            msg = self._audio.receive_msg()
+            if msg is None:
+                return
+
+            self._handle_audio_message(msg)
+
+    def _handle_audio_message(self, msg: object) -> None:
+        if isinstance(msg, AudioMessage.PadPeak):
+            self.metering.handle_pad_peak_message(msg)
+
+        if isinstance(msg, AudioMessage.PadPlayhead):
+            self.metering.handle_pad_playhead_message(msg)
+
+        if isinstance(msg, AudioMessage.SampleStarted):
+            self.transport.playback.handle_sample_started_message(msg)
+
+        if isinstance(msg, AudioMessage.SampleStopped):
+            self.transport.playback.handle_sample_stopped_message(msg)
 
     @property
     def project(self) -> ProjectState:

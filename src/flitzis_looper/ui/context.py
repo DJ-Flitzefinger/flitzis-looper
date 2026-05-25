@@ -17,7 +17,6 @@ from flitzis_looper.input_mapping import (
     pad_gain_delta_action,
     tap_bpm_action,
 )
-from flitzis_looper_audio import AudioMessage
 
 if TYPE_CHECKING:
     from imgui_bundle import imgui
@@ -486,29 +485,7 @@ class PollActions:
         self._controller = controller
 
     def poll(self) -> None:
-        self._poll_loader_events()
-        self._poll_audio_messages()
-
-    def _poll_loader_events(self) -> None:
-        self._controller.loader.poll_loader_events()
-
-    def _poll_audio_messages(self) -> None:
-        while True:
-            msg = self._controller._audio.receive_msg()
-            if msg is None:
-                return
-
-            if isinstance(msg, AudioMessage.PadPeak):
-                self._controller.metering.handle_pad_peak_message(msg)
-
-            if isinstance(msg, AudioMessage.PadPlayhead):
-                self._controller.metering.handle_pad_playhead_message(msg)
-
-            if isinstance(msg, AudioMessage.SampleStarted):
-                self._controller.transport.playback.handle_sample_started_message(msg)
-
-            if isinstance(msg, AudioMessage.SampleStopped):
-                self._controller.transport.playback.handle_sample_stopped_message(msg)
+        self._controller.poll_runtime_events()
 
 
 class AudioActions:

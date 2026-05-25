@@ -18,6 +18,13 @@ audio engine, scheduler, transport, mixing, and future internal DSP nodes. The n
 prepare realtime safety, command/parameter flow, state ownership, and clock semantics before the
 EQ is replaced.
 
+This plan is not a freeze on Python-to-Rust migration. Targeted migrations are allowed and
+preferred when they reduce duplicated live-audio authority, improve timing correctness, lower
+latency, or make the realtime boundary safer. The constraint is scope and realtime safety: each
+migration should move one bounded responsibility at a time, keep Python responsible for UI,
+persistence, and offline orchestration, and keep allocation, blocking work, file I/O, Python/GIL
+access, logging, plugin loading, and heavy processing out of the callback and hot path.
+
 Explicit non-goals for this audit:
 
 - no new EQ implementation,
@@ -66,6 +73,7 @@ Relevant durable planning/spec sources:
 - `AGENTS.md`
 - `docs/audio-engine.md`
 - `docs/message-passing.md`
+- `docs/audio-state-ownership.md`
 - `docs/time-stretch-and-pitch-shift.md`
 - `docs/todos-legacy-migration.md`
 - `openspec/specs/per-pad-eq3/spec.md`
@@ -109,6 +117,9 @@ work:
   bounded queue with callback-side coalescing,
 - buffer and prepared-stem handle retirement now leaves the callback through a bounded
   non-audio retirement worker,
+- durable Python intent, transient Python session projections, and live Rust audio state are now
+  documented in `docs/audio-state-ownership.md`,
+- audio-to-control telemetry dispatch is controller-owned rather than UI-context-owned,
 - current EQ is hardwired into the mixer rather than modeled as a DSP node,
 - future parameter smoothing is not yet defined as a first-class DSP system.
 
@@ -355,6 +366,9 @@ Risks:
 
 ## Python/Rust Boundary And Persistence
 
+The Stage 4 ownership cleanup is recorded in `docs/audio-state-ownership.md` and
+`openspec/changes/clarify-state-ownership-boundary/`.
+
 Python should remain responsible for:
 
 - UI rendering and interaction,
@@ -373,14 +387,51 @@ Rust should own:
 - future internal DSP/FX chains and realtime parameter application,
 - low-jitter MIDI capture/normalization outside the callback.
 
+## Targeted Python-To-Rust Migration Policy
+
+The planning should not discourage carefully scoped Rust ownership transfers. When a function
+currently represented in Python participates in live audio timing, scheduler decisions, playback
+rate, loop/source-frame conversion, parameter application, or low-jitter control dispatch, moving
+that responsibility toward Rust is a valid architecture improvement if it is the smallest safe
+step.
+
+Migration rules:
+
+- Move one authority boundary at a time; avoid big-bang rewrites.
+- Update or create an OpenSpec change before or alongside behavior changes.
+- Keep Python as the owner of durable performer intent, project persistence, UI state, settings,
+  mapping edit UX, and offline/background preparation unless a focused design says otherwise.
+- Keep Rust as the owner of live audio truth, using typed fixed-size commands, parameter updates,
+  and telemetry across the Python/Rust boundary.
+- Any new Rust state used by the callback must be bounded, prevalidated, and realtime safe.
+- Heavy work needed by the migration must run outside the callback or behind a bounded worker/ring
+  boundary.
+- Add focused Rust and/or Python tests for the transferred authority and run official OpenSpec
+  validation for affected active changes.
+
+For Stage 5, resolving the tempo-reference ownership risk may therefore include a small
+OpenSpec-backed Rust-side authority migration or bridge if that is the clearest way to unify
+transport grid BPM and BPM-lock tempo matching. Stage 5 is not limited to documentation, but it
+must remain a narrow clock/scheduler step and must not implement new EQ, DSP effects, or plugin
+hosting.
+
 Current problems:
 
-- ProjectState, SessionState, mixer state, and transport state duplicate pieces of pad/activity,
-  BPM, loop, stem, and parameter truth.
-- Telemetry drops can leave Python active/paused state stale.
+- Transport BPM and mixer BPM still need a single clock/scheduler authority decision in Stage 5.
+- Telemetry drops can leave Python active/paused state stale until later telemetry or an explicit
+  controller action reconciles the projection.
 - Several setter methods cross the bridge as best-effort without acknowledgement or coalescing.
 - Persistence is correctly outside realtime operation, but state restoration sends many individual
   messages through the same queue used for live commands.
+
+Resolved in Stage 4:
+
+- `ProjectState` is documented as durable performer intent.
+- `SessionState` is documented as a transient, rebuildable control/UI projection.
+- Rust audio-thread state is documented as live truth for active voices, source playheads,
+  transport, scheduler, loaded buffers, prepared stems, and future smoothed DSP state.
+- UI rendering may request runtime polling, but audio telemetry type dispatch now lives in
+  `AppController.poll_runtime_events()`.
 
 ## MIDI And Keyboard Integration
 
@@ -611,6 +662,8 @@ Output:
 
 ### Analysis Stage 4: Python State, Rust State, And Persistence Boundary
 
+Status: completed by `openspec/changes/clarify-state-ownership-boundary/`.
+
 Files:
 
 - `src/flitzis_looper/models.py`
@@ -629,6 +682,12 @@ Questions:
 Expected output:
 
 - state ownership table and restoration/acknowledgement strategy.
+
+Result:
+
+- `docs/audio-state-ownership.md` defines durable Python intent, transient Python projections,
+  live Rust audio state, restore ordering, and telemetry reconciliation expectations.
+- Audio runtime telemetry dispatch moved from the UI context to controller-owned runtime polling.
 
 ### Analysis Stage 5: Clock, BPM, Pitch, And Scheduler
 
@@ -650,6 +709,9 @@ Questions:
 Expected output:
 
 - one documented clock/BPM ownership model and focused tests.
+- if documentation alone is not enough, one small OpenSpec-backed Rust ownership migration or
+  bridge that removes the duplicated transport-grid versus BPM-lock authority without broad
+  rewrites.
 
 ### Analysis Stage 6: Loop, Source Position, Key Lock, And Stems
 
@@ -841,6 +903,8 @@ Ordering:
 
 ### Phase 4: State Ownership Cleanup
 
+Status: completed by `clarify-state-ownership-boundary`.
+
 Goal: define durable Python intent versus live Rust audio truth.
 
 Scope:
@@ -861,7 +925,8 @@ Tests/checks:
 
 Acceptance:
 
-- no unclear duplicated authority for performance-critical state.
+- durable Python intent versus live Rust audio truth is documented, and telemetry dispatch is
+  controller-owned.
 
 Ordering:
 
@@ -974,14 +1039,15 @@ Acceptance:
 
 ## Next Recommended Step
 
-The next recommended step is Analysis Stage 4 / Phase 4:
+The next recommended step is Analysis Stage 5 / Phase 5:
 
 ```text
-Clarify durable Python state versus live Rust audio state and define ownership for BPM, pitch,
-Key Lock, loop points, stem state, pad/deck state, future DSP parameters, telemetry drops, and
-project restore ordering.
+Establish one coherent clock and BPM model for transport grid timing, BPM-lock tempo matching,
+pitch, Key Lock, quantization, loop playback, and Multi Loop timing.
+Use a targeted Rust ownership migration or bridge if that is the smallest safe way to remove
+duplicated live clock/BPM authority.
 ```
 
-Do not implement the new EQ or any other DSP effect before the state-ownership, clock/scheduler,
-and DSP foundation stages are complete, unless a future user request explicitly supersedes this
-plan with an OpenSpec-backed change.
+Do not implement the new EQ or any other DSP effect before the clock/scheduler and DSP foundation
+stages are complete, unless a future user request explicitly supersedes this plan with an
+OpenSpec-backed change.

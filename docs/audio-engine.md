@@ -9,7 +9,8 @@ The professional audio/performance architecture audit is recorded in
 `docs/audio-performance-architecture-audit.md`. The current Rust ownership direction is correct,
 but future EQ/DSP work should wait until the documented realtime-safety, command/parameter,
 state-ownership, and clock-preparation stages are complete or explicitly superseded by a new
-OpenSpec-backed request.
+OpenSpec-backed request. The current state ownership boundary is recorded in
+`docs/audio-state-ownership.md`.
 
 Do not interpret audio safety as "Rust must not be touched". The protected boundary is the CPAL
 audio callback and realtime hot path. New Rust modules outside that boundary are allowed and
@@ -47,7 +48,10 @@ encouraged when they improve correctness, latency, maintainability, or realtime 
    messages, updates bounded audio state, routes play/stop commands through the Rust scheduler,
    mixes active voices into the output buffer, and advances the Rust transport timeline by
    rendered output frames.
-7. Optional: Python can poll `receive_msg()` for messages emitted by the audio thread (e.g., `Pong`).
+7. Python controllers poll loader and audio runtime events; audio telemetry dispatch is owned by
+   `AppController.poll_runtime_events()`, which updates `SessionState` projections for pad peaks,
+   playheads, and active/stopped pads.
+8. Optional: Python can poll `receive_msg()` for messages emitted by the audio thread (e.g., `Pong`).
 
 ## Module Structure
 
@@ -79,6 +83,8 @@ CPAL callback.
 - Python (control layer)
   - Owns the `AudioEngine` instance and calls its methods.
   - Schedules potentially blocking work (disk I/O, decoding) via the Rust engine.
+  - Owns durable `ProjectState` and transient `SessionState` projections, with the detailed
+    state boundary documented in `docs/audio-state-ownership.md`.
 
 - Rust (real-time audio layer)
   - `rust/src/audio_engine/mod.rs`: Main orchestration and Python-facing API.
@@ -348,6 +354,12 @@ keeps normal quantized starts loop-start based while preserving bounded transpor
 for explicit sync behavior. BPM-lock tempo matching remains separate from the permanent transport
 masterclock unless an explicit `anchor_transport_phase_from_pad` request is sent.
 
+The Stage 4 state ownership slice is
+`openspec/changes/clarify-state-ownership-boundary/`. `ProjectState` owns durable performer
+intent, `SessionState` owns transient UI/control projections, and Rust owns live audio state.
+Audio-to-control telemetry is now dispatched by the controller layer; the UI render context only
+requests polling.
+
 ## Gen3 low-jitter input mapping
 
 The active low-jitter input mapping slice is
@@ -462,3 +474,4 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 - `openspec/changes/add-phase-aware-playback-sync/`
 - `openspec/changes/add-offline-stem-cache/`
 - `openspec/changes/add-low-jitter-input-mapping/`
+- `openspec/changes/clarify-state-ownership-boundary/`

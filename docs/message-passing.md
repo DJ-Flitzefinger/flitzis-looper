@@ -9,8 +9,9 @@ The professional audio/performance audit in `docs/audio-performance-architecture
 identified the original single control ring as a useful foundation, not as the final parameter
 architecture. The Stage 3 preparation slice now separates ordered control commands from fast
 continuous parameter updates and coalesces drained parameter messages before applying them to
-audio-thread state. Future DSP/FX parameters should use this parameter path and keep smoothing on
-the Rust audio side.
+audio-thread state. The Stage 4 ownership slice records durable Python intent versus live Rust
+audio state and moves audio telemetry dispatch into the controller layer. Future DSP/FX
+parameters should use this parameter path and keep smoothing on the Rust audio side.
 
 ## Channels
 
@@ -23,6 +24,8 @@ Three independent SPSC ring buffers are used:
     per-pad EQ.
 - Audio -> control (CPAL callback -> Python thread)
   - Carries small status messages polled via `receive_msg()`.
+  - Controller-owned runtime polling dispatches telemetry to the relevant controller handlers
+    before mutating `SessionState` projections.
 
 All buffers are fixed-capacity (1024 messages). When a buffer is full, pushing returns an error
 instead of waiting for space.
@@ -81,6 +84,9 @@ Disk I/O and decoding happen in `load_sample(...)`, outside the callback.
 - Parameter ring full: best-effort parameter setters may drop the newest update and still return
   success; later accepted updates for the same parameter replace older drained values.
 - Ring buffer empty (audio → control): `receive_msg()` returns `None`.
+- Audio telemetry delayed/dropped: Python `SessionState` active/playhead/metering fields may be
+  stale until later telemetry or explicit controller actions reconcile them; `ProjectState` is not
+  changed silently by missing telemetry.
 - Missing sample slot: triggering playback is ignored safely.
 - Control-message burst: the callback processes only its fixed per-callback budget and leaves
   remaining messages queued.
@@ -269,6 +275,21 @@ from the render loop. The configured values affect the next
 `StemController.generate_stems_async(...)` request, which still uses the same inactive-pad gating
 and background backend path.
 
+## Gen3 state ownership messages
+
+The state ownership cleanup is specified in
+`openspec/changes/clarify-state-ownership-boundary/` and documented in
+`docs/audio-state-ownership.md`.
+
+`ProjectState` is durable performer intent. `SessionState` is a transient projection for UI and
+controller decisions. Rust audio-thread state is live truth for active voices, source playheads,
+pause/render state, transport, scheduler, loaded buffers, prepared stems, and future smoothed DSP
+state.
+
+The UI can request runtime polling during rendering, but `AppController.poll_runtime_events()`
+owns audio telemetry dispatch. `SampleStarted`, `SampleStopped`, `PadPeak`, and `PadPlayhead`
+messages mutate Python session projections only through controller handlers.
+
 ## Not implemented (yet)
 
 - Rich audio → Python event stream (beyond `Pong`).
@@ -282,3 +303,4 @@ and background backend path.
 - `openspec/changes/add-phase-aware-playback-sync/`
 - `openspec/changes/add-offline-stem-cache/`
 - `openspec/changes/add-low-jitter-input-mapping/`
+- `openspec/changes/clarify-state-ownership-boundary/`

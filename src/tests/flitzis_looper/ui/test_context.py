@@ -224,6 +224,17 @@ class TestUiStateComputedProperties:
 class TestAudioActions:  # noqa: PLR0904
     """Test AudioActions delegation to controller."""
 
+    def test_poll_delegates_to_controller_runtime_poll(
+        self, controller: AppController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        audio_actions = AudioActions(controller)
+        poll_runtime_events = Mock()
+        monkeypatch.setattr(controller, "poll_runtime_events", poll_runtime_events)
+
+        audio_actions.poll.poll()
+
+        poll_runtime_events.assert_called_once()
+
     def test_trigger_pad(self, controller: AppController, audio_engine_mock: Mock) -> None:
         """Test trigger_pad delegates to controller."""
         audio_actions = AudioActions(controller)
