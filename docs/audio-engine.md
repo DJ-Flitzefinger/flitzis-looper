@@ -43,7 +43,10 @@ encouraged when they improve correctness, latency, maintainability, or realtime 
 5. Optional MIDI input mapping is captured by a Rust input layer outside the audio callback,
    timestamped immediately, normalized, resolved from an in-memory mapping snapshot, and then
    bridged to the existing bounded control-command path where possible.
-6. The CPAL callback drains pending control messages, updates bounded per-pad timing metadata, routes play/stop commands through the Rust scheduler, mixes active voices into the output buffer, and advances the Rust transport timeline by rendered output frames.
+6. The CPAL callback drains ordered command messages, coalesces separately queued parameter
+   messages, updates bounded audio state, routes play/stop commands through the Rust scheduler,
+   mixes active voices into the output buffer, and advances the Rust transport timeline by
+   rendered output frames.
 7. Optional: Python can poll `receive_msg()` for messages emitted by the audio thread (e.g., `Pong`).
 
 ## Module Structure
@@ -150,11 +153,16 @@ The project deliberately separates non-real-time work from the real-time audio c
 
 - The audio callback MUST avoid blocking, disk I/O, heap allocations, logging, and Python/GIL interaction.
 - Inter-thread communication uses fixed-capacity ring buffers (1024 messages).
-- The callback drains at most `MAX_CONTROL_MESSAGES_PER_CALLBACK` control messages per
-  invocation, currently `64`; additional messages remain queued for later callbacks.
+- Ordered control commands and fast scalar parameter updates use separate control-to-audio rings.
+- The callback drains at most `MAX_CONTROL_MESSAGES_PER_CALLBACK` ordered command messages per
+  invocation, currently `64`; additional command messages remain queued for later callbacks.
+- The callback drains at most `MAX_PARAMETER_MESSAGES_PER_CALLBACK` parameter messages per
+  invocation, currently `64`; repeated drained updates for one parameter identity are coalesced
+  before mixer state is updated.
 - MIDI input ports, keyboard input, mapping JSON files, and Learn UI state are outside the audio
   callback. Rust input/control modules may own MIDI callbacks and bounded queues, but they may
-  only affect playback by sending bounded control messages through the established control path.
+  only affect playback by sending bounded ordered command messages through the established command
+  path.
 - Sample playback is designed for predictable performance:
   - `MAX_SAMPLE_SLOTS` fixed sample slots addressed by `id` (`0..n`).
   - `MAX_VOICES` fixed polyphony; additional triggers are dropped deterministically.

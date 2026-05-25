@@ -6,26 +6,30 @@ Python never touches the ring buffers directly; it calls `AudioEngine` methods w
 ## Architecture audit status
 
 The professional audio/performance audit in `docs/audio-performance-architecture-audit.md`
-identifies the current ring-buffer design as a useful foundation, not as the final parameter
-architecture. Future DSP/FX work should first split discrete commands from fast continuous
-parameters, define backpressure/coalescing semantics, and keep parameter smoothing on the Rust
-audio side. Continuous MIDI CC/NRPN or UI knob updates must not be allowed to flood trigger/stop
-commands or make the callback do unbounded work.
+identified the original single control ring as a useful foundation, not as the final parameter
+architecture. The Stage 3 preparation slice now separates ordered control commands from fast
+continuous parameter updates and coalesces drained parameter messages before applying them to
+audio-thread state. Future DSP/FX parameters should use this parameter path and keep smoothing on
+the Rust audio side.
 
 ## Channels
 
-Two independent SPSC ring buffers are used:
+Three independent SPSC ring buffers are used:
 
-- Control → audio (Python thread → CPAL callback)
-  - Carries control events like “load this sample into slot X” or “trigger slot X”.
-- Audio → control (CPAL callback → Python thread)
+- Command control -> audio (Python/input control threads -> CPAL callback)
+  - Carries ordered control events like "load this sample into slot X" or "trigger slot X".
+- Parameter control -> audio (Python control thread -> CPAL callback)
+  - Carries fast scalar updates such as volume, speed, master BPM, per-pad BPM, per-pad gain, and
+    per-pad EQ.
+- Audio -> control (CPAL callback -> Python thread)
   - Carries small status messages polled via `receive_msg()`.
 
-Both buffers are fixed-capacity (1024 messages). When a buffer is full, pushing returns an error instead of waiting for space.
+All buffers are fixed-capacity (1024 messages). When a buffer is full, pushing returns an error
+instead of waiting for space.
 
 The Rust input-mapping layer also uses bounded non-audio callback queues for MIDI events and
 diagnostic/Learn events. Those queues are outside the CPAL callback. A mapped MIDI trigger can
-only affect audio by sending a bounded control message through the existing control-to-audio path.
+only affect audio by sending bounded ordered command messages through the command control path.
 
 ## What gets sent
 
@@ -33,9 +37,12 @@ Messages are intentionally small and allocation-free on the audio thread:
 
 - Playback triggers are referenced by `id` and `velocity` (no file paths in the callback).
 - Loading publishes decoded sample data via a shared handle; the large sample buffer is not copied just to cross the thread boundary.
-- Speed, BPM Lock, Key Lock mode, and Key Lock parameter updates are fixed-size scalar mode/value
-  messages. Key Lock updates do not carry plugin handles, file paths, heap-owned DSP state, or
-  audio payloads.
+- Speed, master BPM, per-pad BPM, per-pad gain, per-pad EQ, and master volume use fixed-size
+  parameter messages. The callback coalesces drained messages by parameter identity and applies
+  only the latest drained value for each identity.
+- BPM Lock, Key Lock mode, and Key Lock parameter/settings updates remain ordered fixed-size
+  control messages. Key Lock updates do not carry plugin handles, file paths, heap-owned DSP
+  state, or audio payloads.
 - Beatgrid/downbeat publication sends one bounded per-pad timing anchor, not full beat-grid vectors.
 - Input mapping publishes stable binding/action keys across the Python/Rust boundary, then uses
   in-memory snapshots for normal MIDI lookup. Mapping JSON is not read or written in the audio
@@ -46,8 +53,12 @@ Messages are intentionally small and allocation-free on the audio thread:
 
 The CPAL callback:
 
-- Drains pending messages without blocking, up to `MAX_CONTROL_MESSAGES_PER_CALLBACK` per
-  invocation. The current budget is `64`; overflow remains queued for later callbacks.
+- Drains pending ordered command messages without blocking, up to
+  `MAX_CONTROL_MESSAGES_PER_CALLBACK` per invocation. The current command budget is `64`;
+  overflow remains queued for later callbacks.
+- Drains pending parameter messages separately, up to `MAX_PARAMETER_MESSAGES_PER_CALLBACK` per
+  invocation. The current parameter budget is `64`; repeated drained updates for one parameter
+  identity are compacted before mixer state is updated.
 - Owns and advances the Rust transport timeline by rendered output sample frames.
 - Owns the fixed-capacity scheduler used for current-frame playback commands and future
   quantized events.
@@ -65,11 +76,16 @@ Disk I/O and decoding happen in `load_sample(...)`, outside the callback.
 
 ## Failure modes and guarantees
 
-- Ring buffer full: `AudioEngine` methods return an error to Python; the audio thread continues unaffected.
+- Ordered command ring full: command APIs that report delivery failure return an error to Python;
+  the audio thread continues unaffected.
+- Parameter ring full: best-effort parameter setters may drop the newest update and still return
+  success; later accepted updates for the same parameter replace older drained values.
 - Ring buffer empty (audio → control): `receive_msg()` returns `None`.
 - Missing sample slot: triggering playback is ignored safely.
 - Control-message burst: the callback processes only its fixed per-callback budget and leaves
   remaining messages queued.
+- Parameter-message burst: the callback processes only its fixed parameter budget and applies at
+  most one latest drained value per parameter identity in that callback.
 - Retirement backlog temporarily full: the callback can defer a handle-retiring message at the
   queue head until the non-audio retirement worker frees capacity.
 
@@ -88,7 +104,9 @@ CPAL callback:
 - Normalized MIDI input is sent through a bounded queue to a Rust dispatcher thread.
 - The dispatcher resolves the latest in-memory mapping snapshot. It does not read JSON.
 - Direct audio-safe mappings, such as pad trigger, pad stop, and stop-all, are bridged through the
-  existing bounded control-to-audio ring buffer.
+  bounded command control ring. Multi-message direct trigger dispatch is all-or-nothing: if the
+  command queue lacks capacity for the complete loop-region plus play sequence, Rust sends none of
+  the sequence.
 - Controller-owned mappings, including Tap BPM, stem mask buttons, per-pad Gain, per-pad EQ,
   Master Volume, and global Speed/Pitch set-value or relative-step actions, are reported back to
   Python as small event dictionaries containing source, binding key, MIDI value, monotonic
@@ -138,9 +156,9 @@ scheduler/transport pointers.
 ## Speed and Key Lock messages
 
 The Key Lock master-tempo repair is specified in
-`openspec/changes/repair-key-lock-master-tempo/`. It preserves the existing message contract:
-Python sends `SetSpeed(f32)`, `SetBpmLock(bool)`, `SetKeyLock(bool)`, `SetMasterBpm(f32)`, and
-bounded per-pad BPM metadata. Manual Key Lock DSP parameters use a fixed-size
+`openspec/changes/repair-key-lock-master-tempo/`. Speed, master BPM, and bounded per-pad BPM
+metadata now use the continuous parameter path. Python still sends ordered `SetBpmLock(bool)` and
+`SetKeyLock(bool)` control messages. Manual Key Lock DSP parameters use a fixed-size
 `SetKeyLockSettings` message carrying bounded scalar and enum values for delay minimum, delay
 range, head count, interpolation, window, smoothing step, and output gain. Legacy
 `SetKeyLockQuality` preset messages remain compatibility aliases and map to concrete settings.

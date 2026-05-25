@@ -16,13 +16,14 @@ use crate::audio_engine::stem_cache::{
     write_deterministic_stem_artifacts,
 };
 use crate::messages::{
-    AudioMessage, BackgroundTaskKind, ControlMessage, KEY_LOCK_DELAY_MIN_SAMPLES_MAX,
-    KEY_LOCK_DELAY_MIN_SAMPLES_MIN, KEY_LOCK_DELAY_RANGE_SAMPLES_MAX,
-    KEY_LOCK_DELAY_RANGE_SAMPLES_MIN, KEY_LOCK_DELAY_TOTAL_SAMPLES_MAX, KEY_LOCK_HEAD_COUNT_MAX,
-    KEY_LOCK_HEAD_COUNT_MIN, KEY_LOCK_OUTPUT_GAIN_MAX, KEY_LOCK_OUTPUT_GAIN_MIN,
-    KEY_LOCK_SMOOTHING_STEP_MAX, KEY_LOCK_SMOOTHING_STEP_MIN, KeyLockInterpolation, KeyLockQuality,
-    KeyLockSettings, KeyLockWindow, LoaderEvent, PadTimingMetadata, STEM_COMPONENT_MASK,
-    SampleBuffer, StemMixMode, TriggerQuantization, task_to_str,
+    AudioMessage, BackgroundTaskKind, ControlMessage, ControlParameterMessage,
+    KEY_LOCK_DELAY_MIN_SAMPLES_MAX, KEY_LOCK_DELAY_MIN_SAMPLES_MIN,
+    KEY_LOCK_DELAY_RANGE_SAMPLES_MAX, KEY_LOCK_DELAY_RANGE_SAMPLES_MIN,
+    KEY_LOCK_DELAY_TOTAL_SAMPLES_MAX, KEY_LOCK_HEAD_COUNT_MAX, KEY_LOCK_HEAD_COUNT_MIN,
+    KEY_LOCK_OUTPUT_GAIN_MAX, KEY_LOCK_OUTPUT_GAIN_MIN, KEY_LOCK_SMOOTHING_STEP_MAX,
+    KEY_LOCK_SMOOTHING_STEP_MIN, KeyLockInterpolation, KeyLockQuality, KeyLockSettings,
+    KeyLockWindow, LoaderEvent, PadTimingMetadata, STEM_COMPONENT_MASK, SampleBuffer, StemMixMode,
+    TriggerQuantization, task_to_str,
 };
 use numpy::{PyArray1, ToPyArray};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -1156,11 +1157,11 @@ impl AudioEngine {
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
 
         let mut producer_guard = handle
-            .producer
+            .parameter_producer
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetVolume(volume));
+        let _ = producer_guard.push(ControlParameterMessage::SetVolume(volume));
         Ok(())
     }
 
@@ -1176,11 +1177,11 @@ impl AudioEngine {
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
 
         let mut producer_guard = handle
-            .producer
+            .parameter_producer
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetSpeed(speed));
+        let _ = producer_guard.push(ControlParameterMessage::SetSpeed(speed));
         Ok(())
     }
 
@@ -1286,11 +1287,11 @@ impl AudioEngine {
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
 
         let mut producer_guard = handle
-            .producer
+            .parameter_producer
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetMasterBpm(bpm));
+        let _ = producer_guard.push(ControlParameterMessage::SetMasterBpm(bpm));
         Ok(())
     }
 
@@ -1309,11 +1310,11 @@ impl AudioEngine {
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
 
         let mut producer_guard = handle
-            .producer
+            .parameter_producer
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetPadBpm { id, bpm });
+        let _ = producer_guard.push(ControlParameterMessage::SetPadBpm { id, bpm });
         Ok(())
     }
 
@@ -1377,11 +1378,11 @@ impl AudioEngine {
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
 
         let mut producer_guard = handle
-            .producer
+            .parameter_producer
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetPadGain { id, gain });
+        let _ = producer_guard.push(ControlParameterMessage::SetPadGain { id, gain });
         Ok(())
     }
 
@@ -1410,11 +1411,11 @@ impl AudioEngine {
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
 
         let mut producer_guard = handle
-            .producer
+            .parameter_producer
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetPadEq {
+        let _ = producer_guard.push(ControlParameterMessage::SetPadEq {
             id,
             low_db,
             mid_db,

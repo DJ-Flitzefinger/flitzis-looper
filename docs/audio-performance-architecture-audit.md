@@ -89,7 +89,7 @@ The current runtime has a useful split:
 ```text
 Python UI/controller/persistence/offline prep
 -> PyO3 AudioEngine methods
--> bounded Rust control ring buffer
+-> bounded Rust command queue + bounded Rust parameter queue
 -> CPAL callback-owned scheduler, transport, mixer
 -> system audio output
 ```
@@ -100,24 +100,24 @@ command path for simple playback actions or the Python controller path for contr
 actions. This is the right direction.
 
 The current implementation is, however, a feature-accumulated engine rather than a complete
-professional DSP/FX architecture. Several important concepts are present but not yet cleanly
-separated:
+professional DSP/FX architecture. Several important concepts still need cleanup before DSP/FX
+work:
 
-- discrete commands and continuous parameter updates share one control ring,
 - transport BPM and mixer BPM are separate concepts,
 - durable Python state and live Rust state duplicate several authorities,
-- command draining is now bounded per callback, but discrete events and continuous parameters
-  still share one queue,
+- command draining is now bounded per callback and fast scalar parameters now use a separate
+  bounded queue with callback-side coalescing,
 - buffer and prepared-stem handle retirement now leaves the callback through a bounded
   non-audio retirement worker,
 - current EQ is hardwired into the mixer rather than modeled as a DSP node,
-- future parameter smoothing/coalescing is not defined as a first-class system.
+- future parameter smoothing is not yet defined as a first-class DSP system.
 
 ## Rust Audio Engine And Hot Paths
 
 The CPAL audio callback is created in `rust/src/audio_engine/audio_stream.rs`. It owns:
 
-- the control-to-audio consumer ring,
+- the ordered command control consumer ring,
+- the fast parameter control consumer ring,
 - the audio-to-control producer ring,
 - `RtMixer`,
 - `TransportTimeline`,
@@ -127,12 +127,14 @@ The CPAL audio callback is created in `rust/src/audio_engine/audio_stream.rs`. I
 
 The callback currently:
 
-1. drains at most `MAX_CONTROL_MESSAGES_PER_CALLBACK` control messages per invocation,
-   currently `64`, and leaves additional messages queued for later callbacks,
-2. updates mixer/transport/scheduler state from those messages,
-3. renders scheduled audio segments into the CPAL output buffer,
-4. advances the transport by rendered output frames,
-5. emits bounded status messages such as `SampleStarted`, `SampleStopped`, `PadPeak`, and
+1. drains at most `MAX_CONTROL_MESSAGES_PER_CALLBACK` ordered command messages per invocation,
+   currently `64`, and leaves additional command messages queued for later callbacks,
+2. drains at most `MAX_PARAMETER_MESSAGES_PER_CALLBACK` parameter messages per invocation,
+   currently `64`, and coalesces repeated drained updates by parameter identity,
+3. updates mixer/transport/scheduler state from those messages,
+4. renders scheduled audio segments into the CPAL output buffer,
+5. advances the transport by rendered output frames,
+6. emits bounded status messages such as `SampleStarted`, `SampleStopped`, `PadPeak`, and
    `PadPlayhead`.
 
 Positive findings:
@@ -150,9 +152,9 @@ Positive findings:
 
 Risks and gaps:
 
-- The callback work budget is fixed but not priority-aware. UI/MIDI/DSP parameter bursts can
-  still delay later trigger/stop commands across callbacks until the command/parameter path gains
-  coalescing and priority rules.
+- The callback work budget is now split between ordered commands and coalesced scalar parameters.
+  Future DSP parameters still need audio-side smoothing before they are applied to sample
+  processing.
 - The scheduler is fixed-capacity but insertion/drain operations shift arrays. This is bounded,
   but burst behavior should be measured and budgeted.
 - `render_scheduled_audio` and `RtMixer::render` both clear output ranges. This is minor, but it
@@ -166,16 +168,21 @@ Risks and gaps:
 
 ## Ringbus, Command, And Parameter Path
 
-The current ringbus carries multiple categories:
+The Stage 3 command/parameter preparation is recorded in
+`openspec/changes/prepare-command-parameter-path/`. The current bridge now has two bounded
+control-to-audio paths:
 
 - discrete commands: play, stop, stop all, exclusive play, pause/resume, unload,
 - publication commands: loaded full-mix sample buffers, prepared stem buffers,
 - mode updates: stem mode, stem mask, trigger quantization, BPM lock, Key Lock,
 - continuous or frequently updated parameters: volume, speed, pad gain, pad EQ, master BPM,
-  pad BPM, loop region.
+  pad BPM.
 
-The message types are explicit and typed, which is good. The problem is that event semantics are
-not separated from parameter semantics. A professional performance engine should distinguish:
+Loop-region updates remain ordered commands in this slice because existing playback paths rely on
+loop state being applied before a paired trigger.
+
+The message types are explicit and typed. Event semantics and fast parameter semantics are now
+separated at the queue boundary:
 
 ```text
 Discrete events:
@@ -185,17 +192,21 @@ Continuous parameters:
   speed, pitch, gain, EQ/isolator, FX wet/dry, filter cutoff, feedback, stem level.
 ```
 
-Current risks:
+Resolved in Stage 3:
 
-- Some Python-facing methods return ring-full errors; many parameter setters intentionally ignore
-  push failures and return success. That is acceptable only if the system documents those setters
-  as best-effort and coalesced. Today there is no general coalescing model.
-- A burst of continuous updates can flood the same queue needed by discrete trigger/stop commands.
-- Fast future DSP parameters such as filter cutoff or isolator bands need smoothing and a more
-  explicit last-value-wins path.
-- Direct Rust MIDI trigger dispatch currently sends multi-message sequences for some state, such
-  as loop region plus play. If the queue fills between messages, the audio state can receive a
-  partial transaction.
+- Fast scalar parameters use a separate bounded parameter queue, so parameter bursts do not occupy
+  ordered command slots needed by trigger and stop commands.
+- Drained parameter messages are coalesced by parameter identity during one callback invocation,
+  and only the latest drained value is applied for each identity.
+- Direct Rust MIDI trigger dispatch checks command queue capacity for the whole loop-region plus
+  play sequence and sends none of it if the whole transaction cannot fit.
+
+Remaining risks:
+
+- Parameter ring-full behavior remains best-effort for high-rate controls; the newest update may
+  be dropped when the parameter queue is full.
+- Fast future DSP parameters such as filter cutoff or isolator bands still need audio-side
+  smoothing after the coalesced target value reaches Rust DSP state.
 
 Target boundary:
 
@@ -421,18 +432,21 @@ after the realtime-safety, command/parameter, state, and clock preparation phase
 
 Professional-readiness blockers before EQ/DSP replacement:
 
-1. Bounded but unbudgeted callback command drain can create glitches under UI/MIDI/parameter
-   bursts.
-2. Large audio buffer handle replacement may deallocate in the callback if the callback owns the
-   last `Arc`.
-3. `DEFAULT_BLOCK_SAMPLES` assumptions can fail if the device callback delivers larger buffers.
-4. Discrete commands and continuous parameters share one queue with mixed drop/error semantics.
-5. No general coalescing or smoothing path exists for future fast DSP parameters.
-6. Mixer master BPM and transport master BPM are separate authorities.
-7. Python session state can desynchronize if audio-to-control telemetry is dropped.
-8. Loop, stem, and EQ changes are immediate and can click.
-9. Current EQ is not a durable DSP-chain foundation.
-10. There is no per-pad/per-stem/deck/master DSP node architecture.
+1. Mixer master BPM and transport master BPM are separate authorities.
+2. Python session state can desynchronize if audio-to-control telemetry is dropped.
+3. Loop, stem, and EQ changes are immediate and can click.
+4. Future DSP parameters still need audio-side smoothing after the Stage 3 coalesced parameter
+   bridge.
+5. Current EQ is not a durable DSP-chain foundation.
+6. There is no per-pad/per-stem/deck/master DSP node architecture.
+
+Resolved preparation blockers:
+
+- callback command drain is bounded,
+- oversized render blocks are split to preserve preallocated stretch-buffer bounds,
+- large sample/stem handle retirement leaves the callback through a bounded worker,
+- fast scalar parameter updates no longer share the ordered command queue,
+- direct Rust MIDI loop-region plus trigger dispatch is all-or-nothing.
 
 ## Recommended Target Architecture
 
@@ -571,6 +585,8 @@ Result:
 
 ### Analysis Stage 3: Command And Parameter Architecture
 
+Status: completed by `openspec/changes/prepare-command-parameter-path/`.
+
 Files:
 
 - `rust/src/messages.rs`
@@ -587,11 +603,34 @@ Questions:
 - What needs coalescing?
 - How should future DSP parameters reach Rust?
 
+Output:
+
+- ordered command path plus separate bounded continuous parameter path,
+- callback-side last-value-wins coalescing for drained scalar parameters,
+- all-or-nothing direct Rust MIDI dispatch for existing loop-region plus trigger sequences.
+
+### Analysis Stage 4: Python State, Rust State, And Persistence Boundary
+
+Files:
+
+- `src/flitzis_looper/models.py`
+- `src/flitzis_looper/controller/app.py`
+- `src/flitzis_looper/controller/persistence.py`
+- `src/flitzis_looper/controller/transport/`
+- `rust/src/audio_engine/mod.rs`
+
+Questions:
+
+- Which state is durable intent?
+- Which state is live audio truth?
+- Which audio telemetry must be reliable or recoverable?
+- What should be acknowledged versus best-effort?
+
 Expected output:
 
-- discrete command path plus continuous parameter/coalescing design.
+- state ownership table and restoration/acknowledgement strategy.
 
-### Analysis Stage 4: Clock, BPM, Pitch, And Scheduler
+### Analysis Stage 5: Clock, BPM, Pitch, And Scheduler
 
 Files:
 
@@ -612,7 +651,7 @@ Expected output:
 
 - one documented clock/BPM ownership model and focused tests.
 
-### Analysis Stage 5: Loop, Source Position, Key Lock, And Stems
+### Analysis Stage 6: Loop, Source Position, Key Lock, And Stems
 
 Files:
 
@@ -633,27 +672,6 @@ Questions:
 Expected output:
 
 - loop/stem source-position model and click-free transition plan.
-
-### Analysis Stage 6: Python State, Rust State, And Persistence Boundary
-
-Files:
-
-- `src/flitzis_looper/models.py`
-- `src/flitzis_looper/controller/app.py`
-- `src/flitzis_looper/controller/persistence.py`
-- `src/flitzis_looper/controller/transport/`
-- `rust/src/audio_engine/mod.rs`
-
-Questions:
-
-- Which state is durable intent?
-- Which state is live audio truth?
-- Which audio telemetry must be reliable or recoverable?
-- What should be acknowledged versus best-effort?
-
-Expected output:
-
-- state ownership table and restoration/acknowledgement strategy.
 
 ### Analysis Stage 7: MIDI/Keyboard Under Future DSP Parameters
 
@@ -784,6 +802,8 @@ Ordering:
 
 ### Phase 3: Command/Ringbus/Parameter Path Cleanup
 
+Status: completed by `prepare-command-parameter-path`.
+
 Goal: separate event commands from continuous parameters and define overload behavior.
 
 Scope:
@@ -809,9 +829,11 @@ Tests/checks:
 - continuous parameter coalescing tests,
 - MIDI direct-dispatch transaction tests.
 
-Acceptance:
+Acceptance result:
 
-- future DSP parameters have a documented and tested path.
+- fast scalar parameters have a documented and tested bounded path,
+- parameter bursts cannot occupy ordered trigger/stop command queue capacity,
+- future DSP parameters have a documented coalesced path and still need DSP-side smoothing.
 
 Ordering:
 
@@ -952,14 +974,14 @@ Acceptance:
 
 ## Next Recommended Step
 
-The next recommended step is Analysis Stage 3 / Phase 3:
+The next recommended step is Analysis Stage 4 / Phase 4:
 
 ```text
-Separate discrete commands from continuous parameters and define overload semantics:
-classify ControlMessage variants, add coalescing/last-value-wins behavior for fast controls,
-and prevent parameter bursts from starving trigger/stop correctness.
+Clarify durable Python state versus live Rust audio state and define ownership for BPM, pitch,
+Key Lock, loop points, stem state, pad/deck state, future DSP parameters, telemetry drops, and
+project restore ordering.
 ```
 
-Do not implement the new EQ or any other DSP effect before the command/parameter path and later
-DSP foundation stages are complete, unless a future user request explicitly supersedes this plan
-with an OpenSpec-backed change.
+Do not implement the new EQ or any other DSP effect before the state-ownership, clock/scheduler,
+and DSP foundation stages are complete, unless a future user request explicitly supersedes this
+plan with an OpenSpec-backed change.

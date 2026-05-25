@@ -441,6 +441,13 @@ fn dispatch_audio_messages<const N: usize>(
         };
     };
 
+    if producer.slots() < N {
+        return DispatchResult {
+            dispatched: false,
+            direct: true,
+        };
+    }
+
     for message in messages {
         if producer.push(message).is_err() {
             return DispatchResult {
@@ -727,6 +734,29 @@ mod tests {
             consumer.pop().unwrap(),
             ControlMessage::PlaySample { id: 1, volume: 1.0 }
         ));
+    }
+
+    #[test]
+    fn trigger_pad_dispatch_rejects_partial_loop_and_play_sequence() {
+        let (producer, mut consumer) = RingBuffer::<ControlMessage>::new(1);
+        let producer = Arc::new(Mutex::new(producer));
+        let state = Arc::new(Mutex::new(RuntimeState::default()));
+        {
+            let mut guard = state.lock().unwrap();
+            guard.multi_loop = true;
+            guard.pads[1].loaded = true;
+        }
+
+        let result = dispatch_trigger_pad(1, &state, &producer);
+
+        assert_eq!(
+            result,
+            DispatchResult {
+                dispatched: false,
+                direct: true
+            }
+        );
+        assert!(consumer.pop().is_err());
     }
 
     #[test]

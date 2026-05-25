@@ -243,23 +243,81 @@ pub(crate) struct PadTimingMetadata {
     pub phase_anchor_s: f32,
 }
 
+/// High-level semantics for ordered control messages.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ControlMessageClass {
+    Test,
+    PlaybackEvent,
+    OrderedState,
+    Publication,
+}
+
+/// Identity used to coalesce continuous parameter updates.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ControlParameterKey {
+    Volume,
+    Speed,
+    MasterBpm,
+    PadBpm(usize),
+    PadGain(usize),
+    PadEq(usize),
+}
+
+/// Continuous or frequently updated audio parameters.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum ControlParameterMessage {
+    /// Set the global volume level.
+    SetVolume(f32),
+
+    /// Set the global speed multiplier.
+    SetSpeed(f32),
+
+    /// Set the current master BPM when BPM lock is enabled.
+    SetMasterBpm(f32),
+
+    /// Set per-pad BPM metadata.
+    SetPadBpm { id: usize, bpm: Option<f32> },
+
+    /// Set per-pad gain (linear scalar).
+    SetPadGain { id: usize, gain: f32 },
+
+    /// Set per-pad 3-band EQ gains in dB.
+    SetPadEq {
+        id: usize,
+        low_db: f32,
+        mid_db: f32,
+        high_db: f32,
+    },
+}
+
+#[cfg(test)]
+impl ControlParameterMessage {
+    pub(crate) fn key(&self) -> ControlParameterKey {
+        match self {
+            ControlParameterMessage::SetVolume(_) => ControlParameterKey::Volume,
+            ControlParameterMessage::SetSpeed(_) => ControlParameterKey::Speed,
+            ControlParameterMessage::SetMasterBpm(_) => ControlParameterKey::MasterBpm,
+            ControlParameterMessage::SetPadBpm { id, bpm: _ } => ControlParameterKey::PadBpm(*id),
+            ControlParameterMessage::SetPadGain { id, gain: _ } => {
+                ControlParameterKey::PadGain(*id)
+            }
+            ControlParameterMessage::SetPadEq {
+                id,
+                low_db: _,
+                mid_db: _,
+                high_db: _,
+            } => ControlParameterKey::PadEq(*id),
+        }
+    }
+}
+
 /// Message that is emitted from the Python side.
 #[derive(Debug, Clone)]
 pub enum ControlMessage {
     /// Used for testing message passing functionality.
     Ping(),
-
-    /// Set the global volume level.
-    ///
-    /// # Parameters
-    /// * `volume` - Volume level (0.0 to 1.0)
-    SetVolume(f32),
-
-    /// Set the global speed multiplier.
-    ///
-    /// # Parameters
-    /// * `speed` - Speed multiplier (0.5 to 2.0)
-    SetSpeed(f32),
 
     /// Enable or disable BPM lock.
     SetBpmLock(bool),
@@ -273,12 +331,6 @@ pub enum ControlMessage {
     /// Set bounded manual Key Lock DSP parameters.
     SetKeyLockSettings(KeyLockSettings),
 
-    /// Set the current master BPM when BPM lock is enabled.
-    SetMasterBpm(f32),
-
-    /// Set per-pad BPM metadata.
-    SetPadBpm { id: usize, bpm: Option<f32> },
-
     /// Set bounded per-pad beatgrid/downbeat timing metadata.
     SetPadTimingMetadata {
         id: usize,
@@ -287,17 +339,6 @@ pub enum ControlMessage {
 
     /// Request transport downbeat anchoring from a selected playing pad.
     AnchorTransportPhaseFromPad { id: usize },
-
-    /// Set per-pad gain (linear scalar).
-    SetPadGain { id: usize, gain: f32 },
-
-    /// Set per-pad 3-band EQ gains in dB.
-    SetPadEq {
-        id: usize,
-        low_db: f32,
-        mid_db: f32,
-        high_db: f32,
-    },
 
     /// Set per-pad loop region in seconds.
     ///
@@ -387,6 +428,35 @@ pub enum ControlMessage {
     /// # Parameters
     /// * `id` - Identifier of the sample slot to unload
     UnloadSample { id: usize },
+}
+
+#[cfg(test)]
+impl ControlMessage {
+    pub(crate) fn class(&self) -> ControlMessageClass {
+        match self {
+            ControlMessage::Ping() => ControlMessageClass::Test,
+            ControlMessage::PlaySample { .. }
+            | ControlMessage::PlaySampleExclusive { .. }
+            | ControlMessage::StopSample { .. }
+            | ControlMessage::StopAll()
+            | ControlMessage::PauseSample { .. }
+            | ControlMessage::ResumeSample { .. } => ControlMessageClass::PlaybackEvent,
+            ControlMessage::LoadSample { .. } | ControlMessage::PublishPreparedStems { .. } => {
+                ControlMessageClass::Publication
+            }
+            ControlMessage::SetBpmLock(_)
+            | ControlMessage::SetKeyLock(_)
+            | ControlMessage::SetKeyLockQuality(_)
+            | ControlMessage::SetKeyLockSettings(_)
+            | ControlMessage::SetPadTimingMetadata { .. }
+            | ControlMessage::AnchorTransportPhaseFromPad { .. }
+            | ControlMessage::SetPadLoopRegion { .. }
+            | ControlMessage::SetTriggerQuantization(_)
+            | ControlMessage::SetStemMixMode { .. }
+            | ControlMessage::SetStemEnabledMask { .. }
+            | ControlMessage::UnloadSample { .. } => ControlMessageClass::OrderedState,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -666,5 +736,59 @@ mod tests {
                 source_version_hash: 42
             } if enabled_stem_mask == (STEM_MASK_VOCALS | STEM_MASK_DRUMS)
         ));
+    }
+
+    #[test]
+    fn control_messages_classify_ordered_and_parameter_semantics() {
+        assert_eq!(
+            ControlMessage::PlaySample { id: 1, volume: 1.0 }.class(),
+            ControlMessageClass::PlaybackEvent
+        );
+        assert_eq!(
+            ControlMessage::LoadSample {
+                id: 1,
+                sample: SampleBuffer {
+                    channels: 1,
+                    samples: Arc::from([0.0_f32].as_slice()),
+                },
+            }
+            .class(),
+            ControlMessageClass::Publication
+        );
+        assert_eq!(
+            ControlMessage::SetPadLoopRegion {
+                id: 1,
+                start_s: 0.0,
+                end_s: None,
+            }
+            .class(),
+            ControlMessageClass::OrderedState
+        );
+        assert_eq!(
+            ControlMessage::SetTriggerQuantization(TriggerQuantization::Immediate).class(),
+            ControlMessageClass::OrderedState
+        );
+    }
+
+    #[test]
+    fn parameter_messages_expose_stable_coalescing_keys() {
+        assert_eq!(
+            ControlParameterMessage::SetVolume(0.5).key(),
+            ControlParameterKey::Volume
+        );
+        assert_eq!(
+            ControlParameterMessage::SetPadGain { id: 3, gain: 0.75 }.key(),
+            ControlParameterKey::PadGain(3)
+        );
+        assert_eq!(
+            ControlParameterMessage::SetPadEq {
+                id: 4,
+                low_db: 1.0,
+                mid_db: 2.0,
+                high_db: 3.0,
+            }
+            .key(),
+            ControlParameterKey::PadEq(4)
+        );
     }
 }

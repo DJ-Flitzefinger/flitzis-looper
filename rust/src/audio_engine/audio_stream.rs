@@ -21,15 +21,17 @@ use crate::audio_engine::scheduler::{
     FixedCapacityScheduler, ScheduledCommand, TransportScheduler,
 };
 use crate::audio_engine::transport::{QuantizeGrid, TransportTimeline};
-use crate::messages::{AudioMessage, ControlMessage, TriggerQuantization};
+use crate::messages::{AudioMessage, ControlMessage, ControlParameterMessage, TriggerQuantization};
 
 pub(crate) const MAX_CONTROL_MESSAGES_PER_CALLBACK: usize = 64;
+pub(crate) const MAX_PARAMETER_MESSAGES_PER_CALLBACK: usize = 64;
 
 /// Handle to the audio stream with associated message channels
 pub struct AudioStreamHandle {
     pub stream: Stream,
     _retirement_worker: AudioBufferRetirementWorker,
     pub producer: Arc<Mutex<Producer<ControlMessage>>>,
+    pub(crate) parameter_producer: Arc<Mutex<Producer<ControlParameterMessage>>>,
     pub consumer: Arc<Mutex<Consumer<AudioMessage>>>,
     pub output_channels: usize,
     pub output_sample_rate: u32,
@@ -443,6 +445,123 @@ fn drain_control_messages<const CAPACITY: usize, S: AudioMessageSink, R: AudioBu
     processed
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ParameterDrainResult {
+    messages_drained: usize,
+    parameters_applied: usize,
+}
+
+struct PendingControlParameters {
+    volume: Option<f32>,
+    speed: Option<f32>,
+    master_bpm: Option<f32>,
+    pad_bpm: [Option<Option<f32>>; NUM_SAMPLES],
+    pad_gain: [Option<f32>; NUM_SAMPLES],
+    pad_eq: [Option<(f32, f32, f32)>; NUM_SAMPLES],
+}
+
+impl Default for PendingControlParameters {
+    fn default() -> Self {
+        Self {
+            volume: None,
+            speed: None,
+            master_bpm: None,
+            pad_bpm: [None; NUM_SAMPLES],
+            pad_gain: [None; NUM_SAMPLES],
+            pad_eq: [None; NUM_SAMPLES],
+        }
+    }
+}
+
+impl PendingControlParameters {
+    fn record(&mut self, message: ControlParameterMessage) {
+        match message {
+            ControlParameterMessage::SetVolume(volume) => self.volume = Some(volume),
+            ControlParameterMessage::SetSpeed(speed) => self.speed = Some(speed),
+            ControlParameterMessage::SetMasterBpm(bpm) => self.master_bpm = Some(bpm),
+            ControlParameterMessage::SetPadBpm { id, bpm } => {
+                if let Some(slot) = self.pad_bpm.get_mut(id) {
+                    *slot = Some(bpm);
+                }
+            }
+            ControlParameterMessage::SetPadGain { id, gain } => {
+                if let Some(slot) = self.pad_gain.get_mut(id) {
+                    *slot = Some(gain);
+                }
+            }
+            ControlParameterMessage::SetPadEq {
+                id,
+                low_db,
+                mid_db,
+                high_db,
+            } => {
+                if let Some(slot) = self.pad_eq.get_mut(id) {
+                    *slot = Some((low_db, mid_db, high_db));
+                }
+            }
+        }
+    }
+
+    fn apply_to(self, mixer: &mut RtMixer) -> usize {
+        let mut applied = 0;
+
+        if let Some(volume) = self.volume {
+            mixer.set_volume(volume);
+            applied += 1;
+        }
+        if let Some(speed) = self.speed {
+            mixer.set_speed(speed);
+            applied += 1;
+        }
+        if let Some(bpm) = self.master_bpm {
+            mixer.set_master_bpm(bpm);
+            applied += 1;
+        }
+        for (id, bpm) in self.pad_bpm.into_iter().enumerate() {
+            if let Some(bpm) = bpm {
+                mixer.set_pad_bpm(id, bpm);
+                applied += 1;
+            }
+        }
+        for (id, gain) in self.pad_gain.into_iter().enumerate() {
+            if let Some(gain) = gain {
+                mixer.set_pad_gain(id, gain);
+                applied += 1;
+            }
+        }
+        for (id, eq) in self.pad_eq.into_iter().enumerate() {
+            if let Some((low_db, mid_db, high_db)) = eq {
+                mixer.set_pad_eq(id, low_db, mid_db, high_db);
+                applied += 1;
+            }
+        }
+
+        applied
+    }
+}
+
+fn drain_parameter_messages(
+    consumer: &mut Consumer<ControlParameterMessage>,
+    mixer: &mut RtMixer,
+) -> ParameterDrainResult {
+    let mut pending = PendingControlParameters::default();
+    let mut messages_drained = 0;
+
+    while messages_drained < MAX_PARAMETER_MESSAGES_PER_CALLBACK {
+        let Ok(message) = consumer.pop() else {
+            break;
+        };
+
+        pending.record(message);
+        messages_drained += 1;
+    }
+
+    ParameterDrainResult {
+        messages_drained,
+        parameters_applied: pending.apply_to(mixer),
+    }
+}
+
 fn process_control_message<const CAPACITY: usize, S: AudioMessageSink, R: AudioBufferRetirement>(
     message: ControlMessage,
     scheduler: &mut FixedCapacityScheduler<CAPACITY>,
@@ -528,9 +647,6 @@ fn process_control_message<const CAPACITY: usize, S: AudioMessageSink, R: AudioB
         ControlMessage::UnloadSample { id } => {
             mixer.unload_sample_rt(id, retirement);
         }
-        ControlMessage::SetSpeed(speed) => {
-            mixer.set_speed(speed);
-        }
         ControlMessage::SetBpmLock(enabled) => {
             mixer.set_bpm_lock(enabled);
         }
@@ -543,28 +659,11 @@ fn process_control_message<const CAPACITY: usize, S: AudioMessageSink, R: AudioB
         ControlMessage::SetKeyLockSettings(settings) => {
             mixer.set_key_lock_settings(settings);
         }
-        ControlMessage::SetMasterBpm(bpm) => {
-            mixer.set_master_bpm(bpm);
-        }
-        ControlMessage::SetPadBpm { id, bpm } => {
-            mixer.set_pad_bpm(id, bpm);
-        }
         ControlMessage::SetPadTimingMetadata { id, metadata } => {
             mixer.set_pad_timing_metadata(id, metadata);
         }
         ControlMessage::AnchorTransportPhaseFromPad { id } => {
             anchor_transport_phase_from_pad(mixer, transport, id);
-        }
-        ControlMessage::SetPadGain { id, gain } => {
-            mixer.set_pad_gain(id, gain);
-        }
-        ControlMessage::SetPadEq {
-            id,
-            low_db,
-            mid_db,
-            high_db,
-        } => {
-            mixer.set_pad_eq(id, low_db, mid_db, high_db);
         }
         ControlMessage::SetPadLoopRegion { id, start_s, end_s } => {
             mixer.set_pad_loop_region(id, start_s, end_s);
@@ -577,9 +676,6 @@ fn process_control_message<const CAPACITY: usize, S: AudioMessageSink, R: AudioB
         }
         ControlMessage::ResumeSample { id } => {
             mixer.resume_sample(id);
-        }
-        ControlMessage::SetVolume(volume) => {
-            mixer.set_volume(volume);
         }
     }
 }
@@ -613,6 +709,9 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
 
     // Create ring buffer for incoming messages (Python->Rust)
     let (producer_in, mut consumer_in) = RingBuffer::new(1024);
+
+    // Create ring buffer for fast parameter updates (Python->Rust)
+    let (parameter_producer_in, mut parameter_consumer_in) = RingBuffer::new(1024);
 
     // Create ring buffer for outgoing messages (Rust->Python)
     let (mut producer_out, consumer_out) = RingBuffer::new(1024);
@@ -650,6 +749,8 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
                 &mut producer_out,
                 &mut retired_buffers,
             );
+
+            drain_parameter_messages(&mut parameter_consumer_in, &mut mixer);
 
             // Render audio + compute per-pad peaks.
             render_scheduled_audio(
@@ -697,6 +798,7 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
         stream,
         _retirement_worker: retirement_worker,
         producer: Arc::new(Mutex::new(producer_in)),
+        parameter_producer: Arc::new(Mutex::new(parameter_producer_in)),
         consumer: Arc::new(Mutex::new(consumer_out)),
         output_channels: channels as usize,
         output_sample_rate: sample_rate_hz,
@@ -779,6 +881,62 @@ mod tests {
         assert_eq!(processed, MAX_CONTROL_MESSAGES_PER_CALLBACK);
         assert_eq!(messages.len(), MAX_CONTROL_MESSAGES_PER_CALLBACK);
         assert_eq!(consumer.slots(), 3);
+    }
+
+    #[test]
+    fn parameter_drain_coalesces_latest_value_per_identity() {
+        let (mut producer, mut consumer) = RingBuffer::new(8);
+        producer
+            .push(ControlParameterMessage::SetPadGain { id: 0, gain: 0.25 })
+            .unwrap();
+        producer
+            .push(ControlParameterMessage::SetPadGain { id: 0, gain: 0.75 })
+            .unwrap();
+        producer
+            .push(ControlParameterMessage::SetVolume(0.5))
+            .unwrap();
+
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 8, 1.0));
+        assert!(mixer.play_sample(0, 1.0));
+
+        let result = drain_parameter_messages(&mut consumer, &mut mixer);
+
+        assert_eq!(
+            result,
+            ParameterDrainResult {
+                messages_drained: 3,
+                parameters_applied: 2
+            }
+        );
+
+        let mut output = vec![0.0; 1];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert!((output[0] - 0.375).abs() < 1e-5);
+    }
+
+    #[test]
+    fn full_parameter_queue_does_not_consume_command_queue_capacity() {
+        let (mut command_producer, mut command_consumer) = RingBuffer::<ControlMessage>::new(1);
+        let (mut parameter_producer, _parameter_consumer) =
+            RingBuffer::<ControlParameterMessage>::new(1);
+
+        parameter_producer
+            .push(ControlParameterMessage::SetVolume(0.25))
+            .unwrap();
+        assert!(
+            parameter_producer
+                .push(ControlParameterMessage::SetVolume(0.5))
+                .is_err()
+        );
+
+        assert!(command_producer.push(ControlMessage::StopAll()).is_ok());
+        assert!(matches!(
+            command_consumer.pop(),
+            Ok(ControlMessage::StopAll())
+        ));
     }
 
     #[test]
