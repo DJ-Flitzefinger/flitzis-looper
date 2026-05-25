@@ -132,7 +132,7 @@ with the bank-button row rather than the collapsed sidebars. When open, it repla
 Looper display area rather than adding a second floating window. The first controls expose Demucs
 stem quality:
 
-- `demucs_shifts`: integer 1 through 20, default 10,
+- `demucs_shifts`: integer 1 through 20, default 4,
 - `demucs_overlap`: float 0.25 through 0.95, default 0.5.
 
 These values are persistent project settings. The Settings renderer only reads current project
@@ -149,7 +149,7 @@ marking stems available. Missing cache files, stale source versions, or rejected
 must not prevent startup or playback.
 
 Project persistence also stores Demucs stem-quality settings. Older project files that lack those
-fields load with the default high-quality settings, shifts 10 and overlap 0.5. Invalid persisted
+fields load with the default settings, shifts 4 and overlap 0.5. Invalid persisted
 values fail model validation and fall back through the existing safe project-load behavior.
 
 Transient generation progress, last errors, blocked reasons, and momentary performance

@@ -13,10 +13,29 @@ from pydantic import (
 from flitzis_looper.constants import (
     DEFAULT_DEMUCS_OVERLAP,
     DEFAULT_DEMUCS_SHIFTS,
+    DEFAULT_KEY_LOCK_DELAY_MIN_SAMPLES,
+    DEFAULT_KEY_LOCK_DELAY_RANGE_SAMPLES,
+    DEFAULT_KEY_LOCK_HEAD_COUNT,
+    DEFAULT_KEY_LOCK_INTERPOLATION,
+    DEFAULT_KEY_LOCK_OUTPUT_GAIN,
+    DEFAULT_KEY_LOCK_QUALITY,
+    DEFAULT_KEY_LOCK_SMOOTHING_STEP,
+    DEFAULT_KEY_LOCK_WINDOW,
     MAX_DEMUCS_OVERLAP,
     MAX_DEMUCS_SHIFTS,
+    MAX_KEY_LOCK_DELAY_MIN_SAMPLES,
+    MAX_KEY_LOCK_DELAY_RANGE_SAMPLES,
+    MAX_KEY_LOCK_DELAY_TOTAL_SAMPLES,
+    MAX_KEY_LOCK_HEAD_COUNT,
+    MAX_KEY_LOCK_OUTPUT_GAIN,
+    MAX_KEY_LOCK_SMOOTHING_STEP,
     MIN_DEMUCS_OVERLAP,
     MIN_DEMUCS_SHIFTS,
+    MIN_KEY_LOCK_DELAY_MIN_SAMPLES,
+    MIN_KEY_LOCK_DELAY_RANGE_SAMPLES,
+    MIN_KEY_LOCK_HEAD_COUNT,
+    MIN_KEY_LOCK_OUTPUT_GAIN,
+    MIN_KEY_LOCK_SMOOTHING_STEP,
     NUM_BANKS,
     NUM_SAMPLES,
     PAD_EQ_DB_MAX,
@@ -50,18 +69,21 @@ type StemMixMode = Literal["full_mix", "all_stems"]
 type StemMaskDisplayMode = Literal["custom", "instrumental", "all"]
 type StemKind = Literal["vocals", "melody", "bass", "drums", "instrumental"]
 type StemGridIndicatorState = Literal["available", "generating", "blocked", "error"]
+type KeyLockQuality = Literal["performance", "balanced", "high", "very_high"]
+type KeyLockInterpolation = Literal["linear", "cubic"]
+type KeyLockWindow = Literal["triangle", "hann"]
 
 TRIGGER_QUANTIZATION_STEPS: tuple[TriggerQuantizationStep, ...] = (
-    "1_16",
-    "1_32",
     "1_64",
+    "1_32",
+    "1_16",
 )
 TRIGGER_QUANTIZATION_STEP_LABELS: dict[TriggerQuantizationStep, str] = {
     "1_64": "1/64",
     "1_32": "1/32",
     "1_16": "1/16",
 }
-DEFAULT_TRIGGER_QUANTIZATION_STEP: TriggerQuantizationStep = "1_16"
+DEFAULT_TRIGGER_QUANTIZATION_STEP: TriggerQuantizationStep = "1_64"
 LEGACY_TRIGGER_QUANTIZATION_TO_STEP: dict[str, TriggerQuantizationStep] = {
     "next_beat": "1_16",
     "next-beat": "1_16",
@@ -83,6 +105,28 @@ LEGACY_TRIGGER_QUANTIZATION_TO_STEP: dict[str, TriggerQuantizationStep] = {
 STEM_KINDS: tuple[StemKind, ...] = ("vocals", "melody", "bass", "drums", "instrumental")
 STEM_MIX_MODES: tuple[StemMixMode, ...] = ("full_mix", "all_stems")
 STEM_MASK_DISPLAY_MODES: tuple[StemMaskDisplayMode, ...] = ("custom", "instrumental", "all")
+KEY_LOCK_QUALITIES: tuple[KeyLockQuality, ...] = (
+    "performance",
+    "balanced",
+    "high",
+    "very_high",
+)
+KEY_LOCK_QUALITY_LABELS: dict[KeyLockQuality, str] = {
+    "performance": "Performance",
+    "balanced": "Balanced",
+    "high": "High",
+    "very_high": "Very High",
+}
+KEY_LOCK_INTERPOLATIONS: tuple[KeyLockInterpolation, ...] = ("linear", "cubic")
+KEY_LOCK_INTERPOLATION_LABELS: dict[KeyLockInterpolation, str] = {
+    "linear": "Linear",
+    "cubic": "Cubic",
+}
+KEY_LOCK_WINDOWS: tuple[KeyLockWindow, ...] = ("triangle", "hann")
+KEY_LOCK_WINDOW_LABELS: dict[KeyLockWindow, str] = {
+    "triangle": "Triangle",
+    "hann": "Hann",
+}
 STEM_MASK_VOCALS = 1 << 0
 STEM_MASK_MELODY = 1 << 1
 STEM_MASK_BASS = 1 << 2
@@ -241,6 +285,59 @@ class ProjectState(BaseModel):
             if step is not None:
                 data["trigger_quantization_step"] = step
 
+        key_lock_parameter_fields = {
+            "key_lock_delay_min_samples",
+            "key_lock_delay_range_samples",
+            "key_lock_head_count",
+            "key_lock_interpolation",
+            "key_lock_window",
+            "key_lock_smoothing_step",
+            "key_lock_output_gain",
+        }
+        legacy_quality = data.get("key_lock_quality")
+        if isinstance(legacy_quality, str) and not key_lock_parameter_fields.intersection(data):
+            legacy_presets: dict[str, dict[str, object]] = {
+                "performance": {
+                    "key_lock_delay_min_samples": 48.0,
+                    "key_lock_delay_range_samples": 1024.0,
+                    "key_lock_head_count": 2,
+                    "key_lock_interpolation": "linear",
+                    "key_lock_window": "triangle",
+                    "key_lock_smoothing_step": 0.08,
+                    "key_lock_output_gain": 1.0,
+                },
+                "balanced": {
+                    "key_lock_delay_min_samples": 64.0,
+                    "key_lock_delay_range_samples": 1280.0,
+                    "key_lock_head_count": 2,
+                    "key_lock_interpolation": "linear",
+                    "key_lock_window": "hann",
+                    "key_lock_smoothing_step": 0.06,
+                    "key_lock_output_gain": 1.0,
+                },
+                "high": {
+                    "key_lock_delay_min_samples": DEFAULT_KEY_LOCK_DELAY_MIN_SAMPLES,
+                    "key_lock_delay_range_samples": DEFAULT_KEY_LOCK_DELAY_RANGE_SAMPLES,
+                    "key_lock_head_count": DEFAULT_KEY_LOCK_HEAD_COUNT,
+                    "key_lock_interpolation": DEFAULT_KEY_LOCK_INTERPOLATION,
+                    "key_lock_window": DEFAULT_KEY_LOCK_WINDOW,
+                    "key_lock_smoothing_step": DEFAULT_KEY_LOCK_SMOOTHING_STEP,
+                    "key_lock_output_gain": DEFAULT_KEY_LOCK_OUTPUT_GAIN,
+                },
+                "very_high": {
+                    "key_lock_delay_min_samples": 96.0,
+                    "key_lock_delay_range_samples": 1792.0,
+                    "key_lock_head_count": 4,
+                    "key_lock_interpolation": "cubic",
+                    "key_lock_window": "hann",
+                    "key_lock_smoothing_step": 0.035,
+                    "key_lock_output_gain": 1.0,
+                },
+            }
+            legacy_settings = legacy_presets.get(legacy_quality)
+            if legacy_settings is not None:
+                data.update(legacy_settings)
+
         return data
 
     sample_paths: list[str | None] = Field(default_factory=_default_sample_paths)
@@ -296,6 +393,42 @@ class ProjectState(BaseModel):
     """Allow to play multiple loops at the same time."""
     key_lock: bool = False
     """Key lock state."""
+    key_lock_quality: KeyLockQuality = DEFAULT_KEY_LOCK_QUALITY
+    """Legacy global Key Lock DSP quality preset."""
+    key_lock_delay_min_samples: float = Field(
+        default=DEFAULT_KEY_LOCK_DELAY_MIN_SAMPLES,
+        ge=MIN_KEY_LOCK_DELAY_MIN_SAMPLES,
+        le=MAX_KEY_LOCK_DELAY_MIN_SAMPLES,
+    )
+    """Minimum delay used by the Key Lock pitch-compensation delay heads."""
+    key_lock_delay_range_samples: float = Field(
+        default=DEFAULT_KEY_LOCK_DELAY_RANGE_SAMPLES,
+        ge=MIN_KEY_LOCK_DELAY_RANGE_SAMPLES,
+        le=MAX_KEY_LOCK_DELAY_RANGE_SAMPLES,
+    )
+    """Delay modulation range used by the Key Lock pitch-compensation delay heads."""
+    key_lock_head_count: int = Field(
+        default=DEFAULT_KEY_LOCK_HEAD_COUNT,
+        ge=MIN_KEY_LOCK_HEAD_COUNT,
+        le=MAX_KEY_LOCK_HEAD_COUNT,
+    )
+    """Number of Key Lock delay heads mixed per channel."""
+    key_lock_interpolation: KeyLockInterpolation = DEFAULT_KEY_LOCK_INTERPOLATION
+    """Delay-line interpolation used by Key Lock."""
+    key_lock_window: KeyLockWindow = DEFAULT_KEY_LOCK_WINDOW
+    """Crossfade window used by Key Lock delay heads."""
+    key_lock_smoothing_step: float = Field(
+        default=DEFAULT_KEY_LOCK_SMOOTHING_STEP,
+        ge=MIN_KEY_LOCK_SMOOTHING_STEP,
+        le=MAX_KEY_LOCK_SMOOTHING_STEP,
+    )
+    """Maximum per-callback tempo-ratio smoothing step used by Key Lock."""
+    key_lock_output_gain: float = Field(
+        default=DEFAULT_KEY_LOCK_OUTPUT_GAIN,
+        ge=MIN_KEY_LOCK_OUTPUT_GAIN,
+        le=MAX_KEY_LOCK_OUTPUT_GAIN,
+    )
+    """Linear output gain applied after Key Lock pitch compensation."""
     bpm_lock: bool = False
     """BPM lock state."""
     trigger_quantization_enabled: bool = False
@@ -431,6 +564,33 @@ class ProjectState(BaseModel):
             msg = "demucs_overlap must be finite"
             raise ValueError(msg)
         return value
+
+    @field_validator(
+        "key_lock_delay_min_samples",
+        "key_lock_delay_range_samples",
+        "key_lock_smoothing_step",
+        "key_lock_output_gain",
+        mode="after",
+    )
+    @classmethod
+    def _validate_key_lock_finite_float(cls, value: float) -> float:
+        if not math.isfinite(value):
+            msg = "key lock numeric settings must be finite"
+            raise ValueError(msg)
+        return value
+
+    @model_validator(mode="after")
+    def _validate_key_lock_delay_total(self) -> ProjectState:
+        if (
+            self.key_lock_delay_min_samples + self.key_lock_delay_range_samples
+            > MAX_KEY_LOCK_DELAY_TOTAL_SAMPLES
+        ):
+            msg = (
+                "key_lock_delay_min_samples + key_lock_delay_range_samples "
+                f"must be <= {MAX_KEY_LOCK_DELAY_TOTAL_SAMPLES}"
+            )
+            raise ValueError(msg)
+        return self
 
     @field_validator("pad_grid_offset_samples", mode="after")
     @classmethod

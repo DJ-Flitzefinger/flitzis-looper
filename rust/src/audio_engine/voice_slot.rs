@@ -1,6 +1,7 @@
 use crate::audio_engine::constants::{SPEED_MAX, SPEED_MIN};
 use crate::audio_engine::eq3::Eq3State;
 use crate::audio_engine::stretch_processor::StretchProcessor;
+use crate::messages::KeyLockSettings;
 use crate::messages::SampleBuffer;
 
 pub struct VoiceSlot {
@@ -45,6 +46,7 @@ impl VoiceSlot {
         self.volume = volume;
         self.tempo_ratio_smoothed = initial_tempo_ratio;
         self.paused = false;
+        self.stretch.reset();
         for state in &mut self.eq_state {
             state.reset();
         }
@@ -57,6 +59,7 @@ impl VoiceSlot {
         self.volume = 0.0;
         self.tempo_ratio_smoothed = 1.0;
         self.paused = false;
+        self.stretch.reset();
         for state in &mut self.eq_state {
             state.reset();
         }
@@ -67,9 +70,10 @@ impl VoiceSlot {
         self.volume = volume;
         self.tempo_ratio_smoothed = initial_tempo_ratio;
         self.paused = false;
+        self.stretch.reset();
     }
 
-    pub fn smooth_tempo_ratio(&mut self, target: f32) -> f32 {
+    pub fn smooth_tempo_ratio(&mut self, target: f32, settings: KeyLockSettings) -> f32 {
         if !target.is_finite() {
             return self.tempo_ratio_smoothed;
         }
@@ -80,7 +84,7 @@ impl VoiceSlot {
             return self.tempo_ratio_smoothed;
         }
 
-        let max_step = 0.05;
+        let max_step = settings.sanitized().smoothing_step;
         let delta = (target - self.tempo_ratio_smoothed).clamp(-max_step, max_step);
         self.tempo_ratio_smoothed = (self.tempo_ratio_smoothed + delta).clamp(SPEED_MIN, SPEED_MAX);
         target = self.tempo_ratio_smoothed;

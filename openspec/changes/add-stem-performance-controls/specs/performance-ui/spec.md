@@ -201,7 +201,7 @@ The closed state SHALL show a gear icon at the right edge of the center bottom b
 the right edge of the bank-button row. The open state SHALL show an `X` close icon in the same
 bottom-right location and SHALL return to the normal Looper display when activated. The first
 Settings page controls SHALL configure bounded Demucs stem-generation quality values: shifts from
-1 through 20, default 10, and overlap from 0.25 through 0.95, default 0.5. Rendering the Settings
+1 through 20, default 4, and overlap from 0.25 through 0.95, default 0.5. Rendering the Settings
 page SHALL use project/session state and controller actions only; it
 SHALL NOT inspect cache directories, compute source versions, read files, decode audio, invoke
 Demucs, download models, or call low-level Rust background-task APIs from the render loop.

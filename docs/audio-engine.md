@@ -73,6 +73,7 @@ CPAL callback.
   - `rust/src/audio_engine/mixer.rs`: Real-time mixer implementation.
   - `rust/src/audio_engine/input_mapping.rs`: MIDI capture, timestamping, filtering, in-memory
     mapping lookup, and dispatch bridging outside the audio callback.
+  - `rust/src/audio_engine/stretch_processor.rs`: Per-voice bounded speed/key-lock DSP wrapper.
   - `rust/src/audio_engine/transport.rs`: Audio-thread-owned output-frame clock and musical phase helpers.
   - `rust/src/audio_engine/scheduler.rs`: Fixed-capacity absolute output-frame scheduler for playback events.
   - `rust/src/audio_engine/sample_loader.rs`: Audio file decoding and channel mapping.
@@ -83,6 +84,51 @@ CPAL callback.
     - `midir` for MIDI input callbacks outside the audio callback.
     - `rtrb` for SPSC ring buffers.
     - `symphonia` for decoding audio files.
+
+## Speed, BPM Lock, and Key Lock DSP
+
+Global Pitch/Speed and BPM Lock both resolve to one per-voice tempo ratio in the Rust mixer:
+
+- With BPM Lock disabled, the ratio is the global speed multiplier.
+- With BPM Lock enabled and valid master/pad BPM metadata, the ratio is `master_bpm / pad_bpm`.
+- Pads without valid BPM metadata fall back to the global speed multiplier.
+
+Key Lock selects how that tempo ratio is rendered:
+
+- Key Lock disabled uses varispeed semantics. The source playhead advances by the tempo ratio, and
+  perceived pitch follows the speed change.
+- Key Lock enabled uses the master-tempo path. The source playhead still advances by the tempo
+  ratio, but a bounded per-voice pitch-compensation stage reduces the pitch movement caused by
+  varispeed playback.
+
+Key Lock DSP parameters are persisted as one bounded global parameter set. New projects default to
+the former `High` baseline:
+
+- delay minimum: `64` samples,
+- delay range: `1536` samples,
+- delay heads: `2`,
+- interpolation: `cubic`,
+- window: `hann`,
+- smoothing step: `0.05`,
+- output gain: `1.0`.
+
+The supported manual Settings ranges are delay minimum `16..512` samples, delay range
+`256..1984` samples, combined delay minimum plus range at most `2032` samples, head count `2..4`,
+interpolation `linear` or `cubic`, window `triangle` or `hann`, smoothing step `0.01..0.10`, and
+output gain `0.25..2.0`. Legacy Key Lock quality values remain compatibility aliases that map to
+concrete parameter sets.
+
+The current implementation is intentionally held inside `stretch_processor.rs` behind a narrow
+wrapper so a future pro-grade backend can replace the internal algorithm. The wrapper owns fixed
+per-channel input, intermediate/output, and delay-line buffers that are constructed with the voice
+slots before the CPAL callback runs. Rendering reuses that memory; it does not resize buffers,
+read files, load plugins, call Python, block, log, or allocate audio payloads in the callback.
+Changing Key Lock parameters sends only bounded scalar state to Rust and does not retrigger active
+voices.
+
+Prepared stems and full-mix playback share the same source-frame reader before Key Lock
+processing. Stem mask/mix changes therefore preserve the same loop playhead, BPM-lock ratio,
+Key-Lock mode, gain/EQ, metering, and playhead reporting path as full-mix playback.
 
 ## Threading and real-time constraints
 
@@ -126,8 +172,8 @@ Implemented first slice:
   stops occur at the intended sample-frame offset.
 - `AudioEngine.set_trigger_quantization(mode)` publishes a fixed-size trigger-quantization
   update to the audio thread. The controller uses `"immediate"` while trigger quantization is
-  disabled and grid-step strings `"1_16"`, `"1_32"`, or `"1_64"` while it is enabled. The
-  persisted Settings default is `"1_16"`, but new projects keep the bottom-bar `Q` toggle
+  disabled and grid-step strings `"1_64"`, `"1_32"`, or `"1_16"` while it is enabled. The
+  persisted Settings default is `"1_64"`, but new projects keep the bottom-bar `Q` toggle
   disabled so playback remains immediate by default. Legacy `"next_beat"` and `"next_bar"`
   inputs remain accepted as compatibility aliases for `"1_16"`.
 - `AudioEngine.set_pad_timing_metadata(id, phase_anchor_s)` publishes bounded per-pad
@@ -227,7 +273,7 @@ directory, or a local WinGet `Gyan.FFmpeg*` package install, and prepends the re
 to the Demucs subprocess environment. Because the installed Torchaudio save path uses TorchCodec,
 the backend also checks TorchCodec before invoking Demucs and reports `TorchCodec unavailable` if
 its native libraries cannot load.
-The first production backend uses high-quality Demucs defaults of `--shifts 10` and
+The first production backend uses Demucs defaults of `--shifts 4` and
 `--overlap 0.5`. Those values are bounded request parameters (`shifts` 1 through 20 and
 `overlap` 0.25 through 0.95). The Settings page persists validated replacements in project state,
 and `StemController.generate_stems_async(...)` copies them into the file/artifact backend request.
@@ -262,9 +308,10 @@ switching between presets preserves that remembered mask, and clicking the activ
 returns to it. The cached `instrumental.wav` artifact is not used as the `I` preset or as an extra
 layer in `A`. The pad grid now renders compact stem status badges for available, generating,
 blocked, and error states from controller/session snapshots only. Production source separation is
-now provided by the background Demucs backend. A bottom-right Settings overlay exposes Demucs
-shifts and overlap controls, stores them as project settings, and leaves stem generation, model
-lookup, and cache work on the existing background path. Right-clicking `V`, `D`, `M`, or `B`
+now provided by the background Demucs backend. A bottom-right Settings overlay exposes manual
+Key Lock DSP parameters plus Demucs shifts and overlap controls, stores them as project settings,
+and leaves stem
+generation, model lookup, and cache work on the existing background path. Right-clicking `V`, `D`, `M`, or `B`
 sets a non-momentary custom solo state for that component without adding a separate mute feature.
 
 The active Gen3 phase-aware sync slice is `openspec/changes/add-phase-aware-playback-sync/`. It now

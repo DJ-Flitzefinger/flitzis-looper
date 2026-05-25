@@ -14,6 +14,17 @@ pub(crate) const STEM_MASK_BASS: u8 = 1 << 2;
 pub(crate) const STEM_MASK_DRUMS: u8 = 1 << 3;
 pub(crate) const STEM_COMPONENT_MASK: u8 =
     STEM_MASK_VOCALS | STEM_MASK_MELODY | STEM_MASK_BASS | STEM_MASK_DRUMS;
+pub(crate) const KEY_LOCK_DELAY_MIN_SAMPLES_MIN: f32 = 16.0;
+pub(crate) const KEY_LOCK_DELAY_MIN_SAMPLES_MAX: f32 = 512.0;
+pub(crate) const KEY_LOCK_DELAY_RANGE_SAMPLES_MIN: f32 = 256.0;
+pub(crate) const KEY_LOCK_DELAY_RANGE_SAMPLES_MAX: f32 = 1984.0;
+pub(crate) const KEY_LOCK_DELAY_TOTAL_SAMPLES_MAX: f32 = 2032.0;
+pub(crate) const KEY_LOCK_HEAD_COUNT_MIN: u8 = 2;
+pub(crate) const KEY_LOCK_HEAD_COUNT_MAX: u8 = 4;
+pub(crate) const KEY_LOCK_SMOOTHING_STEP_MIN: f32 = 0.01;
+pub(crate) const KEY_LOCK_SMOOTHING_STEP_MAX: f32 = 0.10;
+pub(crate) const KEY_LOCK_OUTPUT_GAIN_MIN: f32 = 0.25;
+pub(crate) const KEY_LOCK_OUTPUT_GAIN_MAX: f32 = 2.0;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SampleBuffer {
@@ -92,6 +103,140 @@ pub enum StemMixMode {
     AllStems,
 }
 
+/// Global Key Lock DSP quality preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyLockQuality {
+    Performance,
+    Balanced,
+    High,
+    VeryHigh,
+}
+
+/// Interpolation used by the bounded Key Lock delay-line reader.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyLockInterpolation {
+    Linear,
+    Cubic,
+}
+
+/// Crossfade window used by the bounded Key Lock delay heads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyLockWindow {
+    Triangle,
+    Hann,
+}
+
+/// Bounded Key Lock DSP parameters prepared outside the audio callback.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KeyLockSettings {
+    pub delay_min_samples: f32,
+    pub delay_range_samples: f32,
+    pub head_count: u8,
+    pub interpolation: KeyLockInterpolation,
+    pub window: KeyLockWindow,
+    pub smoothing_step: f32,
+    pub output_gain: f32,
+}
+
+impl Default for KeyLockSettings {
+    fn default() -> Self {
+        Self {
+            delay_min_samples: 64.0,
+            delay_range_samples: 1536.0,
+            head_count: 2,
+            interpolation: KeyLockInterpolation::Cubic,
+            window: KeyLockWindow::Hann,
+            smoothing_step: 0.05,
+            output_gain: 1.0,
+        }
+    }
+}
+
+impl KeyLockSettings {
+    pub(crate) fn from_quality(quality: KeyLockQuality) -> Self {
+        match quality {
+            KeyLockQuality::Performance => Self {
+                delay_min_samples: 48.0,
+                delay_range_samples: 1024.0,
+                head_count: 2,
+                interpolation: KeyLockInterpolation::Linear,
+                window: KeyLockWindow::Triangle,
+                smoothing_step: 0.08,
+                output_gain: 1.0,
+            },
+            KeyLockQuality::Balanced => Self {
+                delay_min_samples: 64.0,
+                delay_range_samples: 1280.0,
+                head_count: 2,
+                interpolation: KeyLockInterpolation::Linear,
+                window: KeyLockWindow::Hann,
+                smoothing_step: 0.06,
+                output_gain: 1.0,
+            },
+            KeyLockQuality::High => Self::default(),
+            KeyLockQuality::VeryHigh => Self {
+                delay_min_samples: 96.0,
+                delay_range_samples: 1792.0,
+                head_count: 4,
+                interpolation: KeyLockInterpolation::Cubic,
+                window: KeyLockWindow::Hann,
+                smoothing_step: 0.035,
+                output_gain: 1.0,
+            },
+        }
+    }
+
+    pub(crate) fn sanitized(self) -> Self {
+        let defaults = Self::default();
+        let delay_min_samples = finite_or_default(
+            self.delay_min_samples,
+            defaults.delay_min_samples,
+            KEY_LOCK_DELAY_MIN_SAMPLES_MIN,
+            KEY_LOCK_DELAY_MIN_SAMPLES_MAX,
+        );
+        let max_delay_range = (KEY_LOCK_DELAY_TOTAL_SAMPLES_MAX - delay_min_samples).clamp(
+            KEY_LOCK_DELAY_RANGE_SAMPLES_MIN,
+            KEY_LOCK_DELAY_RANGE_SAMPLES_MAX,
+        );
+        let delay_range_samples = finite_or_default(
+            self.delay_range_samples,
+            defaults.delay_range_samples,
+            KEY_LOCK_DELAY_RANGE_SAMPLES_MIN,
+            max_delay_range,
+        );
+
+        Self {
+            delay_min_samples,
+            delay_range_samples,
+            head_count: self
+                .head_count
+                .clamp(KEY_LOCK_HEAD_COUNT_MIN, KEY_LOCK_HEAD_COUNT_MAX),
+            interpolation: self.interpolation,
+            window: self.window,
+            smoothing_step: finite_or_default(
+                self.smoothing_step,
+                defaults.smoothing_step,
+                KEY_LOCK_SMOOTHING_STEP_MIN,
+                KEY_LOCK_SMOOTHING_STEP_MAX,
+            ),
+            output_gain: finite_or_default(
+                self.output_gain,
+                defaults.output_gain,
+                KEY_LOCK_OUTPUT_GAIN_MIN,
+                KEY_LOCK_OUTPUT_GAIN_MAX,
+            ),
+        }
+    }
+}
+
+fn finite_or_default(value: f32, default: f32, min: f32, max: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(min, max)
+    } else {
+        default.clamp(min, max)
+    }
+}
+
 /// Bounded per-pad timing metadata prepared outside the audio callback.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct PadTimingMetadata {
@@ -121,6 +266,12 @@ pub enum ControlMessage {
 
     /// Enable or disable key lock (preserve pitch under tempo changes).
     SetKeyLock(bool),
+
+    /// Select the bounded Key Lock DSP quality preset.
+    SetKeyLockQuality(KeyLockQuality),
+
+    /// Set bounded manual Key Lock DSP parameters.
+    SetKeyLockSettings(KeyLockSettings),
 
     /// Set the current master BPM when BPM lock is enabled.
     SetMasterBpm(f32),
@@ -324,6 +475,58 @@ mod tests {
             message,
             ControlMessage::SetTriggerQuantization(TriggerQuantization::Grid { step_64ths: 4 })
         ));
+    }
+
+    #[test]
+    fn set_key_lock_quality_message_carries_fixed_size_preset() {
+        let message = ControlMessage::SetKeyLockQuality(KeyLockQuality::VeryHigh);
+
+        assert!(matches!(
+            message,
+            ControlMessage::SetKeyLockQuality(KeyLockQuality::VeryHigh)
+        ));
+    }
+
+    #[test]
+    fn set_key_lock_settings_message_carries_fixed_size_parameters() {
+        let settings = KeyLockSettings {
+            delay_min_samples: 96.0,
+            delay_range_samples: 1024.0,
+            head_count: 4,
+            interpolation: KeyLockInterpolation::Cubic,
+            window: KeyLockWindow::Hann,
+            smoothing_step: 0.04,
+            output_gain: 1.1,
+        };
+        let message = ControlMessage::SetKeyLockSettings(settings);
+
+        match message {
+            ControlMessage::SetKeyLockSettings(received) => assert_eq!(received, settings),
+            _ => panic!("expected key lock settings message"),
+        }
+    }
+
+    #[test]
+    fn key_lock_settings_sanitize_to_documented_ranges() {
+        let settings = KeyLockSettings {
+            delay_min_samples: f32::NAN,
+            delay_range_samples: 9999.0,
+            head_count: 99,
+            interpolation: KeyLockInterpolation::Linear,
+            window: KeyLockWindow::Triangle,
+            smoothing_step: 999.0,
+            output_gain: 0.0,
+        }
+        .sanitized();
+
+        assert_eq!(settings.delay_min_samples, 64.0);
+        assert_eq!(
+            settings.delay_range_samples,
+            KEY_LOCK_DELAY_TOTAL_SAMPLES_MAX - settings.delay_min_samples
+        );
+        assert_eq!(settings.head_count, KEY_LOCK_HEAD_COUNT_MAX);
+        assert_eq!(settings.smoothing_step, KEY_LOCK_SMOOTHING_STEP_MAX);
+        assert_eq!(settings.output_gain, KEY_LOCK_OUTPUT_GAIN_MIN);
     }
 
     #[test]

@@ -55,3 +55,15 @@ def active_left_button_repeat_count() -> int:
         float(io.mouse_down_duration[imgui.MouseButton_.left]),
         float(io.mouse_down_duration_prev[imgui.MouseButton_.left]),
     )
+
+
+def hovered_button_repeat_count(button: imgui.MouseButton_) -> int:
+    """Return repeat ticks for the hovered last item while a mouse button is held."""
+    if not imgui.is_item_hovered():
+        return 0
+
+    io = imgui.get_io()
+    return held_repeat_count(
+        float(io.mouse_down_duration[button]),
+        float(io.mouse_down_duration_prev[button]),
+    )

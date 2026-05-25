@@ -13,7 +13,8 @@ the selected-pad sidebar.
 
 - Adjust the global Pitch control in displayed-BPM units when an effective BPM reference is
   available.
-- Make plus and minus actions move the displayed BPM by 0.1 BPM per click.
+- Make left-click plus and minus actions move the displayed BPM by 0.1 BPM per click.
+- Make right-click plus and minus actions move the displayed BPM by 1.0 BPM per click.
 - Snap mouse/slider Pitch movement to a 0.1 BPM grid.
 - Add a visual center indicator beside the Pitch control at the 1.00x/default speed position.
 - Allow double-clicking the BPM display to type a target BPM with two decimal places.

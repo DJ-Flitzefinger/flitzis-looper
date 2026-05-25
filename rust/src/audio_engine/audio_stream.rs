@@ -485,6 +485,12 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
                     ControlMessage::SetKeyLock(enabled) => {
                         mixer.set_key_lock(enabled);
                     }
+                    ControlMessage::SetKeyLockQuality(quality) => {
+                        mixer.set_key_lock_quality(quality);
+                    }
+                    ControlMessage::SetKeyLockSettings(settings) => {
+                        mixer.set_key_lock_settings(settings);
+                    }
                     ControlMessage::SetMasterBpm(bpm) => {
                         mixer.set_master_bpm(bpm);
                     }

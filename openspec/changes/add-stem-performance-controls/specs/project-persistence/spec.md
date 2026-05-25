@@ -58,7 +58,7 @@ durable.
 ### Requirement: Persist Demucs Stem Quality Settings
 The system SHALL persist global Demucs stem-generation quality settings in project state.
 
-New and older projects SHALL default Demucs shifts to 10 and Demucs overlap to 0.5. Persisted
+New and older projects SHALL default Demucs shifts to 4 and Demucs overlap to 0.5. Persisted
 quality settings SHALL be validated against the app-supported ranges before they can be used for
 generation: shifts from 1 through 20 and overlap from 0.25 through 0.95. Project-level changes
 SHALL be written through the existing `samples/flitzis_looper.config.json` persistence path
@@ -80,5 +80,5 @@ without requiring a separate Apply action.
 #### Scenario: Older project defaults quality settings
 - **GIVEN** a project file was created before Demucs quality settings existed
 - **WHEN** the project is loaded
-- **THEN** Demucs shifts defaults to 10
+- **THEN** Demucs shifts defaults to 4
 - **AND** Demucs overlap defaults to 0.5

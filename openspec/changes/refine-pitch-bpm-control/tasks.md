@@ -16,3 +16,5 @@
 - [x] 1.11 Add held plus/minus repeat behavior for Pitch with bounded 0.1 BPM ticks.
 - [x] 1.12 Filter invalid BPM entry characters before they appear in the input field.
 - [x] 1.13 Add focused tests for repeat/wheel helper behavior and updated BPM entry filtering.
+- [x] 1.14 Add right-click Pitch plus/minus behavior for 1.0 BPM coarse steps.
+- [x] 1.15 Add held right-click repeat behavior for Pitch with bounded 1.0 BPM ticks.

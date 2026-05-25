@@ -24,6 +24,9 @@ Messages are intentionally small and allocation-free on the audio thread:
 
 - Playback triggers are referenced by `id` and `velocity` (no file paths in the callback).
 - Loading publishes decoded sample data via a shared handle; the large sample buffer is not copied just to cross the thread boundary.
+- Speed, BPM Lock, Key Lock mode, and Key Lock parameter updates are fixed-size scalar mode/value
+  messages. Key Lock updates do not carry plugin handles, file paths, heap-owned DSP state, or
+  audio payloads.
 - Beatgrid/downbeat publication sends one bounded per-pad timing anchor, not full beat-grid vectors.
 - Input mapping publishes stable binding/action keys across the Python/Rust boundary, then uses
   in-memory snapshots for normal MIDI lookup. Mapping JSON is not read or written in the audio
@@ -38,6 +41,7 @@ The CPAL callback:
 - Owns and advances the Rust transport timeline by rendered output sample frames.
 - Owns the fixed-capacity scheduler used for current-frame playback commands and future
   quantized events.
+- Applies Speed/BPM-Lock/Key-Lock playback using already-owned mixer and per-voice DSP state.
 - Avoids Python/GIL interaction entirely.
 - Performs no disk I/O or decoding.
 - Does not own MIDI ports, poll keyboards, read mapping JSON, update Learn state, or call input
@@ -114,6 +118,23 @@ message. The audio thread derives transport phase from already-owned mixer and t
 Python must not send full beat-grid vectors, file paths, heap-owned data, or direct
 scheduler/transport pointers.
 
+## Speed and Key Lock messages
+
+The Key Lock master-tempo repair is specified in
+`openspec/changes/repair-key-lock-master-tempo/`. It preserves the existing message contract:
+Python sends `SetSpeed(f32)`, `SetBpmLock(bool)`, `SetKeyLock(bool)`, `SetMasterBpm(f32)`, and
+bounded per-pad BPM metadata. Manual Key Lock DSP parameters use a fixed-size
+`SetKeyLockSettings` message carrying bounded scalar and enum values for delay minimum, delay
+range, head count, interpolation, window, smoothing step, and output gain. Legacy
+`SetKeyLockQuality` preset messages remain compatibility aliases and map to concrete settings.
+The audio callback derives the per-voice tempo ratio and chooses varispeed or master-tempo
+processing from already-owned scalar state.
+
+The callback must not load DSP plugins, allocate/resize stretch buffers, read files, decode audio,
+log, block, acquire the Python GIL, or run neural inference when Key Lock is toggled or while it
+is rendering active voices. Parameter changes update bounded mixer state only; they do not allocate,
+reload samples, regenerate stems, inspect caches, or retrigger voices.
+
 Two failure points are distinct:
 
 - Control ring buffer full: the request never reaches the audio callback and follows the
@@ -155,7 +176,7 @@ resolved directory is prepended to the Demucs subprocess `PATH`. It also probes 
 Torchaudio uses it for output writing in the current environment; native-library failures produce
 `TorchCodec unavailable` before Demucs starts.
 The Demucs request also carries bounded quality parameters. The first production defaults are
-`--shifts 10` and `--overlap 0.5`, with app-supported settings ranges of `shifts` 1 through 20
+`--shifts 4` and `--overlap 0.5`, with app-supported settings ranges of `shifts` 1 through 20
 and `overlap` 0.25 through 0.95. The Settings page writes validated values to project state, and
 the controller copies those values into the backend request before the background task starts.
 

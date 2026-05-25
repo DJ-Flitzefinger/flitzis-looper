@@ -1,6 +1,7 @@
 import pytest
 from imgui_bundle import imgui
 
+from flitzis_looper.constants import PITCH_BPM_COARSE_STEPS
 from flitzis_looper.ui.constants import CONTROL_ACTIVE_BORDER_RGBA, CONTROL_BORDER_RGBA
 from flitzis_looper.ui.render.sidebar_right import (
     filtered_bpm_entry_char,
@@ -46,6 +47,10 @@ def test_parse_bpm_entry_text_ignores_invalid_or_non_positive(raw: str) -> None:
 def test_snap_bpm_to_grid_uses_one_tenth() -> None:
     assert snap_bpm_to_grid(123.14) == pytest.approx(123.1)
     assert snap_bpm_to_grid(123.15) == pytest.approx(123.2)
+
+
+def test_right_click_pitch_step_uses_one_bpm() -> None:
+    assert PITCH_BPM_COARSE_STEPS == 10
 
 
 @pytest.mark.parametrize(

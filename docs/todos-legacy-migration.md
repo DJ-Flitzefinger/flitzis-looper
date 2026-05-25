@@ -137,7 +137,7 @@ download from the Generate Stems UI; if the expected checkpoint is missing, it r
 reported as `FFmpeg/ffprobe unavailable`. TorchCodec is required by the current Torchaudio output
 path and is preflighted as `TorchCodec unavailable` when native libraries cannot load. CUDA/GPU use
 is optional and falls back to CPU from the background worker. The default Demucs quality settings
-are `--shifts 10` and `--overlap 0.5`; they are bounded request parameters exposed by the
+are `--shifts 4` and `--overlap 0.5`; they are bounded request parameters exposed by the
 bottom-right Settings overlay with supported ranges of shifts 1 through 20 and overlap 0.25
 through 0.95, then copied into the next backend generation request. FFmpeg lookup uses the process
 `PATH`, an explicit

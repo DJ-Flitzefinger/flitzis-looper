@@ -8,14 +8,39 @@ from pydantic import ValidationError
 from flitzis_looper.constants import (
     DEFAULT_DEMUCS_OVERLAP,
     DEFAULT_DEMUCS_SHIFTS,
+    DEFAULT_KEY_LOCK_DELAY_MIN_SAMPLES,
+    DEFAULT_KEY_LOCK_DELAY_RANGE_SAMPLES,
+    DEFAULT_KEY_LOCK_HEAD_COUNT,
+    DEFAULT_KEY_LOCK_INTERPOLATION,
+    DEFAULT_KEY_LOCK_OUTPUT_GAIN,
+    DEFAULT_KEY_LOCK_QUALITY,
+    DEFAULT_KEY_LOCK_SMOOTHING_STEP,
+    DEFAULT_KEY_LOCK_WINDOW,
     MAX_DEMUCS_OVERLAP,
     MAX_DEMUCS_SHIFTS,
+    MAX_KEY_LOCK_DELAY_MIN_SAMPLES,
+    MAX_KEY_LOCK_DELAY_RANGE_SAMPLES,
+    MAX_KEY_LOCK_DELAY_TOTAL_SAMPLES,
+    MAX_KEY_LOCK_HEAD_COUNT,
+    MAX_KEY_LOCK_OUTPUT_GAIN,
+    MAX_KEY_LOCK_SMOOTHING_STEP,
     MIN_DEMUCS_OVERLAP,
     MIN_DEMUCS_SHIFTS,
+    MIN_KEY_LOCK_DELAY_MIN_SAMPLES,
+    MIN_KEY_LOCK_DELAY_RANGE_SAMPLES,
+    MIN_KEY_LOCK_HEAD_COUNT,
+    MIN_KEY_LOCK_OUTPUT_GAIN,
+    MIN_KEY_LOCK_SMOOTHING_STEP,
     NUM_SAMPLES,
 )
 from flitzis_looper.models import (
     DEFAULT_TRIGGER_QUANTIZATION_STEP,
+    KEY_LOCK_INTERPOLATION_LABELS,
+    KEY_LOCK_INTERPOLATIONS,
+    KEY_LOCK_QUALITIES,
+    KEY_LOCK_QUALITY_LABELS,
+    KEY_LOCK_WINDOW_LABELS,
+    KEY_LOCK_WINDOWS,
     STEM_COMPONENT_MASK,
     STEM_INSTRUMENTAL_PRESET_MASK,
     STEM_KINDS,
@@ -206,6 +231,14 @@ class TestModelSerialization:
         assert "volume" in data
         assert "trigger_quantization_enabled" in data
         assert "trigger_quantization_step" in data
+        assert "key_lock_quality" in data
+        assert "key_lock_delay_min_samples" in data
+        assert "key_lock_delay_range_samples" in data
+        assert "key_lock_head_count" in data
+        assert "key_lock_interpolation" in data
+        assert "key_lock_window" in data
+        assert "key_lock_smoothing_step" in data
+        assert "key_lock_output_gain" in data
         assert "demucs_shifts" in data
         assert "demucs_overlap" in data
         assert "input_mapping_enabled" in data
@@ -258,6 +291,14 @@ def test_project_state_defaults(project_state: ProjectState) -> None:
     """Test ProjectState default values."""
     assert project_state.multi_loop is False
     assert project_state.key_lock is False
+    assert project_state.key_lock_quality == DEFAULT_KEY_LOCK_QUALITY
+    assert project_state.key_lock_delay_min_samples == DEFAULT_KEY_LOCK_DELAY_MIN_SAMPLES
+    assert project_state.key_lock_delay_range_samples == DEFAULT_KEY_LOCK_DELAY_RANGE_SAMPLES
+    assert project_state.key_lock_head_count == DEFAULT_KEY_LOCK_HEAD_COUNT
+    assert project_state.key_lock_interpolation == DEFAULT_KEY_LOCK_INTERPOLATION
+    assert project_state.key_lock_window == DEFAULT_KEY_LOCK_WINDOW
+    assert project_state.key_lock_smoothing_step == DEFAULT_KEY_LOCK_SMOOTHING_STEP
+    assert project_state.key_lock_output_gain == DEFAULT_KEY_LOCK_OUTPUT_GAIN
     assert project_state.bpm_lock is False
     assert project_state.trigger_quantization_enabled is False
     assert project_state.trigger_quantization_step == DEFAULT_TRIGGER_QUANTIZATION_STEP
@@ -310,6 +351,90 @@ def test_legacy_trigger_quantization_mode_migrates_to_new_fields() -> None:
     project = ProjectState.model_validate({"trigger_quantization_step": "1_bar"})
 
     assert project.trigger_quantization_step == "1_16"
+
+
+def test_key_lock_quality_settings_validation(project_state: ProjectState) -> None:
+    project_state.key_lock_quality = "performance"
+    assert project_state.key_lock_quality == "performance"
+
+    project_state.key_lock_quality = "very_high"
+    assert project_state.key_lock_quality == "very_high"
+
+    assert KEY_LOCK_QUALITIES == ("performance", "balanced", "high", "very_high")
+    assert KEY_LOCK_QUALITY_LABELS["very_high"] == "Very High"
+
+    with pytest.raises(ValidationError, match="key_lock_quality"):
+        ProjectState.model_validate({"key_lock_quality": "ultra"})
+
+
+def test_key_lock_manual_parameter_settings_validation(project_state: ProjectState) -> None:
+    project_state.key_lock_delay_min_samples = MIN_KEY_LOCK_DELAY_MIN_SAMPLES
+    project_state.key_lock_delay_range_samples = MIN_KEY_LOCK_DELAY_RANGE_SAMPLES
+    project_state.key_lock_head_count = MIN_KEY_LOCK_HEAD_COUNT
+    project_state.key_lock_interpolation = "linear"
+    project_state.key_lock_window = "triangle"
+    project_state.key_lock_smoothing_step = MIN_KEY_LOCK_SMOOTHING_STEP
+    project_state.key_lock_output_gain = MIN_KEY_LOCK_OUTPUT_GAIN
+
+    assert project_state.key_lock_delay_min_samples == MIN_KEY_LOCK_DELAY_MIN_SAMPLES
+    assert project_state.key_lock_delay_range_samples == MIN_KEY_LOCK_DELAY_RANGE_SAMPLES
+    assert project_state.key_lock_head_count == MIN_KEY_LOCK_HEAD_COUNT
+    assert project_state.key_lock_interpolation == "linear"
+    assert project_state.key_lock_window == "triangle"
+    assert project_state.key_lock_smoothing_step == MIN_KEY_LOCK_SMOOTHING_STEP
+    assert project_state.key_lock_output_gain == MIN_KEY_LOCK_OUTPUT_GAIN
+
+    project_state.key_lock_delay_min_samples = MAX_KEY_LOCK_DELAY_MIN_SAMPLES
+    project_state.key_lock_delay_range_samples = (
+        MAX_KEY_LOCK_DELAY_TOTAL_SAMPLES - MAX_KEY_LOCK_DELAY_MIN_SAMPLES
+    )
+    project_state.key_lock_head_count = MAX_KEY_LOCK_HEAD_COUNT
+    project_state.key_lock_smoothing_step = MAX_KEY_LOCK_SMOOTHING_STEP
+    project_state.key_lock_output_gain = MAX_KEY_LOCK_OUTPUT_GAIN
+
+    assert KEY_LOCK_INTERPOLATIONS == ("linear", "cubic")
+    assert KEY_LOCK_WINDOWS == ("triangle", "hann")
+    assert KEY_LOCK_INTERPOLATION_LABELS["cubic"] == "Cubic"
+    assert KEY_LOCK_WINDOW_LABELS["hann"] == "Hann"
+
+    with pytest.raises(ValidationError, match="key_lock_delay_min_samples"):
+        ProjectState(key_lock_delay_min_samples=MIN_KEY_LOCK_DELAY_MIN_SAMPLES - 1.0)
+
+    with pytest.raises(ValidationError, match="key_lock_delay_range_samples"):
+        ProjectState(key_lock_delay_range_samples=MAX_KEY_LOCK_DELAY_RANGE_SAMPLES + 1.0)
+
+    with pytest.raises(ValidationError, match="head_count"):
+        ProjectState(key_lock_head_count=MAX_KEY_LOCK_HEAD_COUNT + 1)
+
+    with pytest.raises(ValidationError, match="key_lock_interpolation"):
+        ProjectState.model_validate({"key_lock_interpolation": "spline"})
+
+    with pytest.raises(ValidationError, match="key_lock_window"):
+        ProjectState.model_validate({"key_lock_window": "rect"})
+
+    with pytest.raises(ValidationError, match="key_lock_smoothing_step"):
+        ProjectState(key_lock_smoothing_step=MAX_KEY_LOCK_SMOOTHING_STEP + 0.01)
+
+    with pytest.raises(ValidationError, match="key_lock_output_gain"):
+        ProjectState(key_lock_output_gain=MAX_KEY_LOCK_OUTPUT_GAIN + 0.01)
+
+    with pytest.raises(ValidationError, match="key_lock_delay_min_samples"):
+        ProjectState(
+            key_lock_delay_min_samples=MAX_KEY_LOCK_DELAY_MIN_SAMPLES,
+            key_lock_delay_range_samples=MAX_KEY_LOCK_DELAY_RANGE_SAMPLES,
+        )
+
+
+def test_legacy_key_lock_quality_migrates_to_manual_parameters() -> None:
+    project = ProjectState.model_validate({"key_lock_quality": "very_high"})
+
+    assert project.key_lock_delay_min_samples == 96.0
+    assert project.key_lock_delay_range_samples == 1792.0
+    assert project.key_lock_head_count == 4
+    assert project.key_lock_interpolation == "cubic"
+    assert project.key_lock_window == "hann"
+    assert project.key_lock_smoothing_step == pytest.approx(0.035)
+    assert project.key_lock_output_gain == pytest.approx(1.0)
 
 
 def test_demucs_quality_settings_validation(project_state: ProjectState) -> None:

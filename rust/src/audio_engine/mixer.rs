@@ -15,8 +15,8 @@ use crate::audio_engine::eq3::{Eq3Coeffs, coeffs_for_eq3};
 use crate::audio_engine::stretch_processor::DEFAULT_BLOCK_SAMPLES;
 use crate::audio_engine::voice_slot::VoiceSlot;
 use crate::messages::{
-    PadTimingMetadata, PreparedStemSet, STEM_BUFFER_COUNT, STEM_COMPONENT_MASK, SampleBuffer,
-    StemMixMode,
+    KeyLockQuality, KeyLockSettings, PadTimingMetadata, PreparedStemSet, STEM_BUFFER_COUNT,
+    STEM_COMPONENT_MASK, SampleBuffer, StemMixMode,
 };
 use cpal::Sample;
 
@@ -33,14 +33,6 @@ impl FrameRange {
     fn len(self) -> usize {
         self.end.saturating_sub(self.start)
     }
-}
-
-fn transpose_semitones_for_tempo_ratio(tempo_ratio: f32) -> f32 {
-    if !tempo_ratio.is_finite() || tempo_ratio <= 0.0 {
-        return 0.0;
-    }
-
-    -12.0 * tempo_ratio.log2()
 }
 
 fn phase_aligned_initial_frame(
@@ -210,6 +202,9 @@ pub struct RtMixer {
     /// Enable key lock (preserve pitch when tempo changes).
     key_lock_enabled: bool,
 
+    /// Global bounded Key Lock DSP parameters.
+    key_lock_settings: KeyLockSettings,
+
     /// Current master BPM when BPM lock is enabled.
     master_bpm: Option<f32>,
 
@@ -277,6 +272,7 @@ impl RtMixer {
             speed: 1.0,
             bpm_lock_enabled: false,
             key_lock_enabled: false,
+            key_lock_settings: KeyLockSettings::default(),
             master_bpm: None,
             pad_bpm: std::array::from_fn(|_| None),
             pad_phase_anchor_frame: std::array::from_fn(|_| 0),
@@ -515,6 +511,14 @@ impl RtMixer {
 
     pub fn set_key_lock(&mut self, enabled: bool) {
         self.key_lock_enabled = enabled;
+    }
+
+    pub fn set_key_lock_quality(&mut self, quality: KeyLockQuality) {
+        self.key_lock_settings = KeyLockSettings::from_quality(quality).sanitized();
+    }
+
+    pub fn set_key_lock_settings(&mut self, settings: KeyLockSettings) {
+        self.key_lock_settings = settings.sanitized();
     }
 
     pub fn set_master_bpm(&mut self, bpm: f32) {
@@ -893,6 +897,7 @@ impl RtMixer {
         let speed = self.speed;
         let bpm_lock_enabled = self.bpm_lock_enabled;
         let key_lock_enabled = self.key_lock_enabled;
+        let key_lock_settings = self.key_lock_settings;
         let master_bpm = self.master_bpm;
         let pad_bpm = &self.pad_bpm;
         let pad_gain = &self.pad_gain;
@@ -948,12 +953,7 @@ impl RtMixer {
                 }
                 target_tempo_ratio = target_tempo_ratio.clamp(SPEED_MIN, SPEED_MAX);
 
-                let tempo_ratio = voice.smooth_tempo_ratio(target_tempo_ratio);
-                let transpose_semitones = if key_lock_enabled {
-                    transpose_semitones_for_tempo_ratio(tempo_ratio)
-                } else {
-                    0.0
-                };
+                let tempo_ratio = voice.smooth_tempo_ratio(target_tempo_ratio, key_lock_settings);
 
                 let mut input_frames = ((frames as f32) * tempo_ratio).round() as usize;
                 input_frames = input_frames.clamp(1, DEFAULT_BLOCK_SAMPLES);
@@ -992,8 +992,13 @@ impl RtMixer {
                     }
                 }
 
-                voice.stretch.set_transpose_semitones(transpose_semitones);
-                voice.stretch.process(input_frames, frames);
+                voice.stretch.process(
+                    input_frames,
+                    frames,
+                    tempo_ratio,
+                    key_lock_enabled,
+                    key_lock_settings,
+                );
 
                 let eq = pad_eq[voice.sample_id];
                 let pad_gain = pad_gain[voice.sample_id];
@@ -1053,6 +1058,59 @@ mod tests {
         }
     }
 
+    fn create_sine_sample(sample_rate_hz: f32, frames: usize, frequency_hz: f32) -> SampleBuffer {
+        let samples: Vec<f32> = (0..frames)
+            .map(|frame| {
+                (frame as f32 * frequency_hz * std::f32::consts::TAU / sample_rate_hz).sin()
+            })
+            .collect();
+
+        SampleBuffer {
+            channels: 1,
+            samples: Arc::from(samples.into_boxed_slice()),
+        }
+    }
+
+    fn estimate_frequency(samples: &[f32], sample_rate_hz: f32) -> f32 {
+        let mut crossings = Vec::new();
+        for index in 1..samples.len() {
+            let previous = samples[index - 1];
+            let current = samples[index];
+            if previous <= 0.0 && current > 0.0 {
+                let denom = current - previous;
+                let frac = if denom.abs() > f32::EPSILON {
+                    -previous / denom
+                } else {
+                    0.0
+                };
+                crossings.push(index as f32 - 1.0 + frac);
+            }
+        }
+
+        if crossings.len() < 2 {
+            return 0.0;
+        }
+
+        let span = crossings[crossings.len() - 1] - crossings[0];
+        if span <= 0.0 {
+            return 0.0;
+        }
+
+        (crossings.len() - 1) as f32 * sample_rate_hz / span
+    }
+
+    fn render_chunks(mixer: &mut RtMixer, chunks: usize, frames_per_chunk: usize) -> Vec<f32> {
+        let mut result = Vec::with_capacity(chunks * frames_per_chunk);
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        for _ in 0..chunks {
+            let mut output = vec![0.0; frames_per_chunk];
+            mixer.render(&mut output, &mut pad_peaks);
+            result.extend_from_slice(&output);
+        }
+
+        result
+    }
+
     fn active_voice_frame(mixer: &RtMixer, id: usize) -> Option<usize> {
         mixer
             .voices
@@ -1091,13 +1149,6 @@ mod tests {
             available_mask: full_stem_available_mask(),
             stems: values.map(|value| create_test_sample(channels, frames, value)),
         }
-    }
-
-    #[test]
-    fn test_transpose_semitones_for_tempo_ratio() {
-        assert!((transpose_semitones_for_tempo_ratio(1.0) - 0.0).abs() < 1e-6);
-        assert!((transpose_semitones_for_tempo_ratio(2.0) - (-12.0)).abs() < 1e-6);
-        assert!((transpose_semitones_for_tempo_ratio(0.5) - 12.0).abs() < 1e-6);
     }
 
     #[test]
@@ -1166,6 +1217,64 @@ mod tests {
         mixer.set_pad_bpm(0, None);
         let ratio = mixer.tempo_ratio_for_sample_id(0);
         assert!((ratio - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn key_lock_settings_default_to_high_values_and_can_change() {
+        let mut mixer = RtMixer::new(2, 48_000.0);
+
+        assert_eq!(mixer.key_lock_settings, KeyLockSettings::default());
+
+        mixer.set_key_lock_quality(KeyLockQuality::VeryHigh);
+
+        assert_eq!(
+            mixer.key_lock_settings,
+            KeyLockSettings::from_quality(KeyLockQuality::VeryHigh).sanitized()
+        );
+
+        let custom = KeyLockSettings {
+            delay_min_samples: 128.0,
+            delay_range_samples: 1024.0,
+            head_count: 4,
+            interpolation: crate::messages::KeyLockInterpolation::Linear,
+            window: crate::messages::KeyLockWindow::Triangle,
+            smoothing_step: 0.04,
+            output_gain: 1.2,
+        };
+        mixer.set_key_lock_settings(custom);
+
+        assert_eq!(mixer.key_lock_settings, custom);
+    }
+
+    #[test]
+    fn key_lock_reduces_varispeed_pitch_shift_in_mixer_path() {
+        let sample_rate_hz = 48_000.0;
+        let source_hz = 440.0;
+        let source = create_sine_sample(sample_rate_hz, 96_000, source_hz);
+
+        let mut varispeed_mixer = RtMixer::new(1, sample_rate_hz);
+        varispeed_mixer.load_sample(0, source.clone());
+        varispeed_mixer.set_speed(2.0);
+        varispeed_mixer.set_key_lock(false);
+        assert!(varispeed_mixer.play_sample(0, 1.0));
+        let varispeed_output = render_chunks(&mut varispeed_mixer, 24, 512);
+
+        let mut key_lock_mixer = RtMixer::new(1, sample_rate_hz);
+        key_lock_mixer.load_sample(0, source);
+        key_lock_mixer.set_speed(2.0);
+        key_lock_mixer.set_key_lock(true);
+        assert!(key_lock_mixer.play_sample(0, 1.0));
+        let key_lock_output = render_chunks(&mut key_lock_mixer, 24, 512);
+
+        let skip = 4096;
+        let varispeed_hz = estimate_frequency(&varispeed_output[skip..], sample_rate_hz);
+        let key_lock_hz = estimate_frequency(&key_lock_output[skip..], sample_rate_hz);
+
+        assert!(varispeed_hz > 800.0, "varispeed_hz={varispeed_hz}");
+        assert!(
+            (360.0..560.0).contains(&key_lock_hz),
+            "key_lock_hz={key_lock_hz}"
+        );
     }
 
     #[test]

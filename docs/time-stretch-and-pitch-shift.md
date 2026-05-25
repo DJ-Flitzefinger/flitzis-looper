@@ -1,152 +1,83 @@
-# Signalsmith Stretch (Time-stretch and Pitch-shift)
+# Time-stretch and Pitch-shift
 
-Here are the **meaningful knobs, concepts, and practical implications** for integrating **Signalsmith Stretch** into a **live looper with low-latency multi-stream time-stretch/pitch shift**, based on the official docs and known behavior. ([Signalsmith Audio][1])
+This document records the current Gen3 Key Lock decision and the future replacement path for a
+pro-grade master-tempo backend.
 
-## Core Parameters & Configuration
+## Backend research
 
-### 1) **Block Size & Interval**
+The current repo cannot treat every library called "Signalsmith" as equivalent. The installed
+`cute_dsp::SignalsmithStretch` implementation is a simplified Rust port whose `process()` method
+scales buffer indices and does not apply the stored transpose value to rendered output. It is not
+the real Signalsmith Stretch algorithm and does not satisfy the Key Lock contract by itself.
 
-* Stretch uses block-based spectral processing (STFT-style) under the hood.
-* **`blockSamples`**: FFT block length = trade-off between time vs frequency resolution. Larger blocks → better tonal quality at the cost of **latency** and CPU cost.
-* **`intervalSamples`**: hop/overlap length between blocks; smaller intervals → smoother parameter changes and lower internal buffering but more CPU.
-* You can call `stretch.configure(channels, blockSamples, intervalSamples)` for custom tuning. ([GitHub][2])
+Options considered:
 
-**Implications**
+| Backend | Fit | Trade-off |
+| --- | --- | --- |
+| Superpowered TimeStretching | Strongest DJ-oriented commercial candidate. The official SDK documents a mode intended for DJ apps and complete music, with independent tempo/pitch controls and low-latency real-time use. | Proprietary SDK. Needs licensing, distribution, and Rust build integration before use. |
+| Rubber Band Library | Strong open-source native candidate. The official integration notes document real-time mode, dynamic time/pitch ratios, and RT-safe processing after initialization with normal options. | C++ integration and licensing/build surface need a deliberate project decision. |
+| Real Signalsmith Stretch | Lightweight C++ algorithmic candidate. Official docs expose input/output latency, split computation, and transpose controls. | The current Rust crate in the project is not the real implementation. A future integration must bind the real backend or a verified Rust port. |
 
-* Small blocks → *lower algorithmic latency* but more spectral leakage / poorer pitch accuracy.
-* Large blocks → *better quality* for large stretches but added latency.
+## Current implementation
 
-## Time-Stretch / Pitch Controls
+The current repair keeps the processing inside Rust and behind `rust/src/audio_engine/stretch_processor.rs`.
+It corrects the user-facing semantics without adding plugin loading or heavyweight worker traffic
+to the CPAL callback:
 
-### 2) **Time Stretch Ratio**
+- Key Lock off: varispeed playback. Tempo and pitch move together.
+- Key Lock on: master-tempo playback. The source playhead still advances by the active tempo
+  ratio, then a bounded pitch-compensation stage reduces the pitch movement caused by varispeed.
+- BPM Lock supplies the same tempo ratio as before (`master_bpm / pad_bpm` when metadata exists,
+  otherwise global speed fallback). Key Lock only decides how that ratio sounds.
+- Full-mix and prepared-stem playback share the same path.
+- Key Lock DSP parameters are persisted as bounded manual Settings values. New projects default
+  to the former High baseline: delay minimum `64` samples, delay range `1536` samples, `2` heads,
+  cubic interpolation, Hann window, smoothing step `0.05`, and output gain `1.0`.
+- Supported manual ranges are delay minimum `16..512` samples, delay range `256..1984` samples,
+  combined delay minimum plus range at most `2032` samples, head count `2..4`, interpolation
+  `linear` or `cubic`, window `triangle` or `hann`, smoothing step `0.01..0.10`, and output gain
+  `0.25..2.0`.
+- Legacy Key Lock quality preset values remain compatibility aliases, but the Settings page now
+  publishes the concrete parameter set.
 
-* Defined implicitly by **input vs output buffer lengths** in `process()`.
-* If `outputSamples > inputSamples` → slower (stretch); if smaller → faster.
-* There is **no separate ratio parameter** you set; you choose what you feed. ([GitHub][2])
+The current bounded pitch-compensation stage is a pragmatic low-latency implementation, not the
+final statement on DJ-grade quality. Its main purpose is to make the Key Lock contract real,
+deterministic, and safe today while keeping the wrapper replaceable.
 
-**Design**
+## Real-time constraints
 
-* You’ll accumulate buffers of different lengths when looping; maintain stable average for consistency.
+The audio callback must not:
 
-### 3) **Pitch Shift / Transpose**
+- allocate or resize DSP buffers,
+- read files or decode audio,
+- load plugins or models,
+- log,
+- block on locks or waits,
+- acquire the Python GIL,
+- run neural inference or stem separation.
 
-* **`setTransposeFactor()`** or **`setTransposeSemitones()`** alters pitch independent of duration.
-* Optional **“tonality limit”** controls up to what frequency the frequency map is linear (helps preserve timbre). ([GitHub][2])
+Each voice owns fixed input, intermediate/output, and delay-line buffers before rendering starts.
+The callback updates only scalar ratio/mode state and reuses those buffers.
 
-**Knob Logic**
+## Future pro-grade backend path
 
-* Apply pitch automation ahead of time (see latency below).
-* Tonality limit protects lower harmonics from aliasing/artifacts.
+A future replacement should preserve the same wrapper contract:
 
-### 4) **Formant Control**
+- initialization and allocation happen outside the callback,
+- render uses bounded per-voice state,
+- parameter updates are scalar and smoothed,
+- no file paths, plugin handles, Python objects, or heap-owned audio payloads cross into callback
+  messages,
+- algorithmic latency is measured and either compensated or documented.
 
-* **Formant factor / base** adjusts formants relative to pitch shift for more natural sound.
-* Without formant correction, pitch changes often make voices/instruments unnatural (chipmunk effect).
-* This is **not perfect** (broader approximation vs e.g. PSOLA). ([GitHub][2])
+For a commercial DJ-grade result, Superpowered is the best candidate to evaluate first. For an
+open-source native path, evaluate Rubber Band before a real Signalsmith binding because Rubber Band
+documents real-time time/pitch-ratio operation more directly. A real Signalsmith binding remains
+attractive if the project prioritizes a smaller algorithmic footprint over Rubber Band's broader
+feature set.
 
-**Live Tweak**
+Reference URLs:
 
-* Expose a formant factor parameter if voices are key; heavier CPU.
-
-## Latency, Alignment & Sync
-
-### 5) **Input/Output Latency**
-
-* Stretch reports two latencies:
-
-  * **`inputLatency()`** = samples of input *ahead of intended process time* that the algorithm needs before it can commit to accurate spectral content.
-  * **`outputLatency()`** = samples of output *behind the actual processing time*.
-* You need to feed automation:
-
-  * pitch/time changes with **values from `outputLatency()` samples ahead**, and
-  * input audio from **`inputLatency()` ahead**, to stay in sync. ([Signalsmith Audio][1])
-
-**High-Level**
-
-* This latency is inherent to FFT overlap and block buffering.
-* Typical STFT based stretch latencies with moderate blocks fall in the **tens of milliseconds** — larger blocks = larger latency.
-* Exact numbers depend on your block/interval config. Signalsmith doesn’t publish fixed values.
-
-### 6) **Latency Compensation / Sync Strategy**
-
-To keep multiple streams in sync:
-
-* **Buffer alignment offset**
-  Track and subtract `outputLatency()` from presentation time for the stream.
-* **Shared transport clock**
-  Drive all Stretch instances from a central clock; feed input ahead, advance play position by measured latency.
-* **Latency buffer trimming / padding**
-  Use adaptive delay lines: pad early buffers, trim later outputs to align with other streams.
-
-Live loopers commonly do:
-
-```
-desired_output_time = playhead + outputLatency
-fetch input ahead by inputLatency + margin
-apply pitch/stretch
-mix at global time
-```
-
-## Concepts: Technical Why It Matters
-
-### 7) **Block Samples (STFT Processing)**
-
-Block samples = FFT length.
-In spectral stretch: audio is windowed into overlapping blocks and transformed to frequency domain. Bigger blocks → sharper frequency info but worse time precision. Smaller blocks → better timing but more spectral smearing.
-
-Trade-off for live: **minimize block size** while retaining acceptable quality.
-
-### 8) **Formant**
-
-Formants are resonant peaks that define perceived vowel/timbre. Changing pitch without moving formants makes voices unnatural.
-Stretch’s **formant compensation** shifts spectral envelopes relative to pitch so timbre stays recognizable at pitch changes. ([GitHub][2])
-
-### 9) **Denormals**
-
-Not explicitly mentioned in the Stretch docs, but relevant: FFT/dsp can produce **denormal floating numbers** near zero that dramatically slow CPU on some CPUs.
-Mitigation:
-
-* use **flush-to-zero / denormals-are-zero flags**,
-* add tiny noise floor,
-* use SIMD which often flush denormals.
-
-Without mitigation, audio threads might occasionally spike CPU.
-
-## CPU & Real-Time Viability
-
-**Feasibility**
-
-* feasible for **5–20 stereo streams** on modern desktop with tuned block/interval and multithreading.
-* CPU cost scales with block size and stretch factor magnitude.
-
-**Guidelines**
-
-* Use **split computation** (`splitComputation` flag) to smooth out heavy FFT bursts across frames — reduces jitter in audio callback. ([GitHub][2])
-* Use worker thread(s) and ring buffers per stream so that strict audio callback does minimal work.
-* Avoid adjusting heavy knobs (formant, large FFT) mid-callback.
-
-## Live Adjustment & Automations
-
-* Because stretch uses blocks, changes take effect at **block boundaries**; parameter smoothing is crucial to avoid artifacts.
-* Feed automation with lead time = `outputLatency()` samples.
-* Interpolate parameters over multiple blocks for smooth transitions.
-
-## Summary of What You’ll Expose in Your App
-
-| Parameter                      | Purpose              | Impact                       |
-| ------------------------------ | -------------------- | ---------------------------- |
-| Stretch ratio                  | speed vs length      | Latency + spectral integrity |
-| Transpose (semitones / factor) | pitch change         | spectral mapping quality     |
-| Tonality limit                 | quality vs artifacts | timbre fidelity              |
-| Formant factor                 | natural pitch-shift  | CPU + complexity             |
-| blockSamples / intervalSamples | performance tuning   | latency vs quality           |
-| splitComputation               | CPU jitter smoothing | real-time stability          |
-
-## Risks / Uncertainties
-
-* Latency quantization vs other DSP (EQ, loo playback) must be measured and compensated per stream.
-* Worst-case cost under heavy pitch/formant changes might violate tight callbacks unless offloaded.
-* Quality trade-offs not linear; small block can sound bad even if low latency.
-
-[1]: https://signalsmith-audio.co.uk/code/stretch/
-[2]: https://github.com/Signalsmith-Audio/signalsmith-stretch
+- https://docs.superpowered.com/reference/latest/time-stretching/
+- https://breakfastquay.com/rubberband/integration.html
+- https://signalsmith-audio.co.uk/code/stretch/

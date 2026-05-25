@@ -4,16 +4,19 @@
 The system SHALL expose the right-side global Speed/Pitch control as a displayed-BPM control
 whenever an effective BPM reference is available.
 
-When a BPM reference is available, the plus and minus actions SHALL adjust the displayed BPM by
-exactly 0.1 BPM per activation and the mouse/slider control SHALL snap movement to a 0.1 BPM grid.
-When a plus or minus action is held, the system SHALL continue applying 0.1 BPM adjustments at a
-bounded repeat rate after an initial hold delay. The control SHALL convert the selected displayed
-BPM back to the existing bounded speed multiplier before sending updates to the audio engine. The
-speed multiplier range remains 0.5x..2.0x and the default remains 1.00x. The less prominent value
-rendered inside the Pitch fader SHALL continue to show the speed multiplier factor, not the BPM
-value, even though the interaction grid is BPM-based. If no effective BPM reference is available,
-the system MAY preserve the existing bounded speed-multiplier fallback because no BPM-unit
-conversion can be derived.
+When a BPM reference is available, left-click plus and minus actions SHALL adjust the displayed BPM
+by exactly 0.1 BPM per activation, right-click plus and minus actions SHALL adjust the displayed BPM
+by exactly 1.0 BPM per activation, and the mouse/slider control SHALL snap movement to a 0.1 BPM
+grid. When a plus or minus action is held with the left mouse button, the system SHALL continue
+applying 0.1 BPM adjustments at a bounded repeat rate after an initial hold delay. When a plus or
+minus action is held with the right mouse button, the system SHALL continue applying 1.0 BPM
+adjustments at the same bounded repeat cadence after the initial hold delay. The control SHALL
+convert the selected displayed BPM back to the existing bounded speed multiplier before sending
+updates to the audio engine. The speed multiplier range remains 0.5x..2.0x and the default remains
+1.00x. The less prominent value rendered inside the Pitch fader SHALL continue to show the speed
+multiplier factor, not the BPM value, even though the interaction grid is BPM-based. If no effective
+BPM reference is available, the system MAY preserve the existing bounded speed-multiplier fallback
+because no BPM-unit conversion can be derived.
 
 This UI/controller behavior SHALL NOT add disk I/O, Python/GIL access, logging, blocking work,
 heavy allocation, neural inference, or any new work to the Rust audio callback.
@@ -27,11 +30,27 @@ heavy allocation, neural inference, or any new work to the Rust audio callback.
 - **WHEN** the performer activates the Pitch minus action once
 - **THEN** the displayed BPM becomes approximately 120.0
 
+#### Scenario: Right-click plus and minus adjust displayed BPM by one
+- **GIVEN** the selected pad has an effective BPM of 120.0
+- **AND** the global speed multiplier is 1.00x
+- **WHEN** the performer right-clicks the Pitch plus action once
+- **THEN** the displayed BPM becomes approximately 121.0
+- **AND** the speed multiplier sent to the audio engine is approximately `121.0 / 120.0`
+- **WHEN** the performer right-clicks the Pitch minus action once
+- **THEN** the displayed BPM becomes approximately 120.0
+
 #### Scenario: Holding plus repeats BPM nudges
 - **GIVEN** the selected pad has an effective BPM of 120.0
 - **AND** the global speed multiplier is 1.00x
 - **WHEN** the performer holds the Pitch plus action past the repeat delay
 - **THEN** the system continues increasing the displayed BPM in bounded 0.1 BPM ticks until the
+  action is released or the speed limit is reached
+
+#### Scenario: Holding right-click plus repeats one-BPM nudges
+- **GIVEN** the selected pad has an effective BPM of 120.0
+- **AND** the global speed multiplier is 1.00x
+- **WHEN** the performer holds the Pitch plus action with the right mouse button past the repeat delay
+- **THEN** the system continues increasing the displayed BPM in bounded 1.0 BPM ticks until the
   action is released or the speed limit is reached
 
 #### Scenario: Mouse movement snaps to BPM tenths

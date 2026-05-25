@@ -185,7 +185,7 @@ TorchCodec import/native-library loading before invoking Demucs and returns `Tor
 unavailable` when that dependency is not usable.
 
 The adapter uses high-quality Demucs defaults for the first production implementation:
-`--shifts 10` and `--overlap 0.5`. These are stored on the backend request as bounded quality
+`--shifts 4` and `--overlap 0.5`. These are stored on the backend request as bounded quality
 parameters rather than hard-coded backend behavior, so the Settings page can supply validated
 replacement values without changing the backend boundary. App-supported settings are `shifts`
 from 1 through 20 and `overlap` from 0.25 through 0.95; invalid values are rejected in controller

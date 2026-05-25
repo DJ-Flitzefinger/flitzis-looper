@@ -7,6 +7,8 @@ import pytest
 from flitzis_looper_audio import AudioEngine
 from tests.conftest import write_mono_pcm16_wav
 
+type KeyLockParameterArgs = tuple[float, float, int, str, str, float, float]
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -206,6 +208,55 @@ def test_set_trigger_quantization_requires_initialized_engine() -> None:
 
     with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
         engine.set_trigger_quantization("next_beat")
+
+
+def test_set_key_lock_quality_accepts_supported_presets(audio_engine: AudioEngine) -> None:
+    for quality in ("performance", "balanced", "high", "very_high"):
+        audio_engine.set_key_lock_quality(quality)
+
+
+def test_set_key_lock_quality_rejects_invalid_preset(audio_engine: AudioEngine) -> None:
+    with pytest.raises(ValueError, match=r"key lock quality"):
+        audio_engine.set_key_lock_quality("ultra")
+
+
+def test_set_key_lock_quality_requires_initialized_engine() -> None:
+    engine = AudioEngine()
+
+    with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
+        engine.set_key_lock_quality("high")
+
+
+def test_set_key_lock_parameters_accepts_documented_ranges(audio_engine: AudioEngine) -> None:
+    audio_engine.set_key_lock_parameters(64.0, 1536.0, 2, "cubic", "hann", 0.05, 1.0)
+    audio_engine.set_key_lock_parameters(16.0, 256.0, 4, "linear", "triangle", 0.01, 0.25)
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        ((8.0, 1536.0, 2, "cubic", "hann", 0.05, 1.0), "delay_min_samples"),
+        ((64.0, 2048.0, 2, "cubic", "hann", 0.05, 1.0), "delay_range_samples"),
+        ((512.0, 1984.0, 2, "cubic", "hann", 0.05, 1.0), "must be <="),
+        ((64.0, 1536.0, 1, "cubic", "hann", 0.05, 1.0), "head_count"),
+        ((64.0, 1536.0, 2, "spline", "hann", 0.05, 1.0), "interpolation"),
+        ((64.0, 1536.0, 2, "cubic", "rect", 0.05, 1.0), "window"),
+        ((64.0, 1536.0, 2, "cubic", "hann", 0.2, 1.0), "smoothing_step"),
+        ((64.0, 1536.0, 2, "cubic", "hann", 0.05, 3.0), "output_gain"),
+    ],
+)
+def test_set_key_lock_parameters_rejects_invalid_values(
+    audio_engine: AudioEngine, args: KeyLockParameterArgs, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        audio_engine.set_key_lock_parameters(*args)
+
+
+def test_set_key_lock_parameters_requires_initialized_engine() -> None:
+    engine = AudioEngine()
+
+    with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
+        engine.set_key_lock_parameters(64.0, 1536.0, 2, "cubic", "hann", 0.05, 1.0)
 
 
 def test_injected_midi_input_reports_normalized_mapping_event(

@@ -3,7 +3,13 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from flitzis_looper.constants import SPEED_MAX, SPEED_MIN, VOLUME_MAX, VOLUME_MIN
+from flitzis_looper.constants import (
+    PITCH_BPM_COARSE_STEPS,
+    SPEED_MAX,
+    SPEED_MIN,
+    VOLUME_MAX,
+    VOLUME_MIN,
+)
 
 if TYPE_CHECKING:
     from unittest.mock import Mock
@@ -150,6 +156,20 @@ def test_nudge_speed_by_multiple_bpm_steps(
     assert controller.project.speed == pytest.approx(expected_speed)
 
 
+def test_nudge_speed_by_coarse_bpm_steps(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    controller.project.selected_pad = 1
+    controller.transport.bpm.set_manual_bpm(1, 120.0)
+
+    controller.transport.global_params.nudge_speed_by_bpm_steps(PITCH_BPM_COARSE_STEPS)
+
+    expected_speed = 121.0 / 120.0
+    audio_engine_mock.set_speed.assert_called_with(pytest.approx(expected_speed))
+    assert controller.project.speed == pytest.approx(expected_speed)
+
+
 def test_set_effective_display_bpm_uses_locked_master_reference(
     controller: AppController,
     audio_engine_mock: Mock,
@@ -202,6 +222,95 @@ def test_set_key_lock_disable(controller: AppController, audio_engine_mock: Mock
 
     audio_engine_mock.set_key_lock.assert_called_with(enabled=False)
     assert controller.project.key_lock is False
+
+
+def test_set_key_lock_quality_updates_project_and_audio(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.transport.global_params.set_key_lock_quality("very_high")
+
+    assert controller.project.key_lock_quality == "very_high"
+    assert controller.project.key_lock_delay_min_samples == pytest.approx(96.0)
+    assert controller.project.key_lock_delay_range_samples == pytest.approx(1792.0)
+    assert controller.project.key_lock_head_count == 4
+    audio_engine_mock.set_key_lock_parameters.assert_called_once_with(
+        96.0,
+        1792.0,
+        4,
+        "cubic",
+        "hann",
+        0.035,
+        1.0,
+    )
+
+
+def test_set_key_lock_parameters_updates_project_and_audio(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.transport.global_params.set_key_lock_parameters(
+        delay_min_samples=128.0,
+        delay_range_samples=1024.0,
+        head_count=4,
+        interpolation="linear",
+        window="triangle",
+        smoothing_step=0.04,
+        output_gain=1.2,
+    )
+
+    assert controller.project.key_lock_delay_min_samples == pytest.approx(128.0)
+    assert controller.project.key_lock_delay_range_samples == pytest.approx(1024.0)
+    assert controller.project.key_lock_head_count == 4
+    assert controller.project.key_lock_interpolation == "linear"
+    assert controller.project.key_lock_window == "triangle"
+    assert controller.project.key_lock_smoothing_step == pytest.approx(0.04)
+    assert controller.project.key_lock_output_gain == pytest.approx(1.2)
+    audio_engine_mock.set_key_lock_parameters.assert_called_once_with(
+        128.0,
+        1024.0,
+        4,
+        "linear",
+        "triangle",
+        0.04,
+        1.2,
+    )
+
+
+def test_set_key_lock_quality_rejects_invalid_value(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    with pytest.raises(ValueError, match="key lock quality"):
+        controller.transport.global_params.set_key_lock_quality("ultra")
+
+    assert controller.project.key_lock_quality == "high"
+    audio_engine_mock.set_key_lock_parameters.assert_not_called()
+
+
+def test_set_key_lock_parameters_rejects_invalid_value(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    with pytest.raises(ValueError, match="delay_min_samples"):
+        controller.transport.global_params.set_key_lock_parameters(
+            delay_min_samples=8.0,
+            delay_range_samples=1024.0,
+            head_count=2,
+            interpolation="cubic",
+            window="hann",
+            smoothing_step=0.05,
+            output_gain=1.0,
+        )
+
+    with pytest.raises(ValueError, match="must be <="):
+        controller.transport.global_params.set_key_lock_parameters(
+            delay_min_samples=512.0,
+            delay_range_samples=1984.0,
+            head_count=2,
+            interpolation="cubic",
+            window="hann",
+            smoothing_step=0.05,
+            output_gain=1.0,
+        )
+
+    audio_engine_mock.set_key_lock_parameters.assert_not_called()
 
 
 def test_set_bpm_lock_enable(controller: AppController, audio_engine_mock: Mock) -> None:
@@ -345,8 +454,8 @@ def test_enable_trigger_quantization_updates_project_and_audio(
     controller.transport.global_params.set_trigger_quantization_enabled(enabled=True)
 
     assert controller.project.trigger_quantization_enabled is True
-    assert controller.project.trigger_quantization_step == "1_16"
-    audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_16")
+    assert controller.project.trigger_quantization_step == "1_64"
+    audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_64")
 
 
 def test_set_trigger_quantization_step_updates_audio_only_when_enabled(
@@ -393,5 +502,5 @@ def test_set_trigger_quantization_rejects_invalid_mode(
         controller.transport.global_params.set_trigger_quantization("half_note")
 
     assert controller.project.trigger_quantization_enabled is False
-    assert controller.project.trigger_quantization_step == "1_16"
+    assert controller.project.trigger_quantization_step == "1_64"
     audio_engine_mock.set_trigger_quantization.assert_not_called()

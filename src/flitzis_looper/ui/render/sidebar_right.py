@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING
 
 from imgui_bundle import imgui
 
-from flitzis_looper.constants import PITCH_BPM_STEP, SPEED_MAX, SPEED_MIN
+from flitzis_looper.constants import PITCH_BPM_COARSE_STEPS, PITCH_BPM_STEP, SPEED_MAX, SPEED_MIN
 from flitzis_looper.ui.constants import (
     CONTROL_ACTIVE_BORDER_RGBA,
     CONTROL_BORDER_RGBA,
@@ -14,6 +14,7 @@ from flitzis_looper.ui.constants import (
 from flitzis_looper.ui.contextmanager import button_style, style_var
 from flitzis_looper.ui.render.control_gestures import (
     active_left_button_repeat_count,
+    hovered_button_repeat_count,
     hovered_wheel_steps,
     item_middle_clicked,
 )
@@ -245,20 +246,24 @@ def _speed_controls(ctx: UiContext) -> None:
         )
 
     with style_var(imgui.StyleVar_.item_spacing, (0.0, SPACING / 4)):
-        plus_clicked, plus_repeats = _pitch_step_button("+", avail.x, learn_pending=learn_pending)
+        plus_clicked, plus_steps = _pitch_step_button(
+            "+", avail.x, learn_pending=learn_pending
+        )
         if plus_clicked:
             ctx.audio.global_.increase_speed()
-        elif plus_repeats:
-            ctx.audio.global_.nudge_speed_by_bpm_steps(plus_repeats)
+        elif plus_steps:
+            ctx.audio.global_.nudge_speed_by_bpm_steps(plus_steps)
 
         if imgui.button("Reset", (avail.x, 0)):
             ctx.audio.global_.reset_speed()
 
-        minus_clicked, minus_repeats = _pitch_step_button("-", avail.x, learn_pending=learn_pending)
+        minus_clicked, minus_steps = _pitch_step_button(
+            "-", avail.x, learn_pending=learn_pending
+        )
         if minus_clicked:
             ctx.audio.global_.decrease_speed()
-        elif minus_repeats:
-            ctx.audio.global_.nudge_speed_by_bpm_steps(-minus_repeats)
+        elif minus_steps:
+            ctx.audio.global_.nudge_speed_by_bpm_steps(-minus_steps)
 
 
 def _speed_slider_with_bpm_reference(
@@ -332,12 +337,23 @@ def _apply_pitch_hover_gestures(ctx: UiContext) -> None:
 
 
 def _pitch_step_button(label: str, width: float, *, learn_pending: bool) -> tuple[bool, int]:
-    clicked = imgui.button(label, (width, 0))
-    if not clicked and not learn_pending:
+    left_clicked = imgui.button(label, (width, 0))
+    if left_clicked:
+        return True, 0
+    if not learn_pending:
+        right_steps = 0
+        if imgui.is_item_hovered() and imgui.is_mouse_clicked(imgui.MouseButton_.right):
+            right_steps += PITCH_BPM_COARSE_STEPS
+        right_repeats = hovered_button_repeat_count(imgui.MouseButton_.right)
+        if right_repeats:
+            right_steps += right_repeats * PITCH_BPM_COARSE_STEPS
+        if right_steps:
+            return False, right_steps
+
         repeat_count = active_left_button_repeat_count()
         if repeat_count:
             return False, repeat_count
-    return clicked, 0
+    return False, 0
 
 
 def sidebar_right(ctx: UiContext) -> None:
