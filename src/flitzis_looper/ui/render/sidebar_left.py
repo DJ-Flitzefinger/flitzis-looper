@@ -6,6 +6,7 @@ from imgui_bundle import imgui, imgui_knobs
 from flitzis_looper.constants import PAD_EQ_DB_MAX, PAD_EQ_DB_MIN
 from flitzis_looper.ui.constants import SPACING, TEXT_MUTED_RGBA, TEXT_RGBA
 from flitzis_looper.ui.contextmanager import button_style, style_var
+from flitzis_looper.ui.render.control_gestures import hovered_wheel_steps, item_middle_clicked
 
 if TYPE_CHECKING:
     from flitzis_looper.input_mapping import PadEqBand
@@ -38,6 +39,8 @@ _EQ_KNOBS: tuple[tuple[str, str, PadEqBand, str], ...] = (
     ("Mid", "##pad_eq_mid", "mid", "pad_eq_mid_db"),
     ("High", "##pad_eq_high", "high", "pad_eq_high_db"),
 )
+_GAIN_WHEEL_STEP = 0.01
+_EQ_WHEEL_STEP_DB = 0.5
 
 
 @dataclass(frozen=True)
@@ -141,14 +144,23 @@ def _render_loaded_gain(ctx: UiContext, pad_id: int) -> None:
         imgui.set_next_item_width(-1)
         gain_val = max(0, min(100, round(ctx.state.project.pad_gain[pad_id] * 100)))
         changed, new_gain = imgui.slider_int("##pad_gain", gain_val, 0, 100, "%d %")
+        learn_pending = _has_pending_learn_input(ctx)
         learn_clicked = (
-            _has_pending_learn_input(ctx)
+            learn_pending
             and imgui.is_item_hovered()
             and imgui.is_mouse_clicked(imgui.MouseButton_.left)
         )
         if changed or learn_clicked:
             gain_value = new_gain if changed else gain_val
             ctx.audio.pads.set_pad_gain(pad_id, gain_value / 100.0)
+        elif not learn_pending:
+            if item_middle_clicked():
+                ctx.audio.pads.set_pad_gain(pad_id, 1.0)
+            elif wheel_steps := hovered_wheel_steps():
+                ctx.audio.pads.set_pad_gain(
+                    pad_id,
+                    float(ctx.state.project.pad_gain[pad_id]) + _GAIN_WHEEL_STEP * wheel_steps,
+                )
 
 
 def _render_loaded_eq(ctx: UiContext, info: _SidebarPadInfo) -> None:
@@ -197,6 +209,15 @@ def _render_loaded_eq(ctx: UiContext, info: _SidebarPadInfo) -> None:
                     band,
                     float(new_val if changed else knob_val),
                 )
+            elif not learn_pending:
+                if item_middle_clicked():
+                    ctx.audio.pads.set_pad_eq_band(info.pad_id, band, 0.0)
+                elif wheel_steps := hovered_wheel_steps():
+                    ctx.audio.pads.set_pad_eq_band(
+                        info.pad_id,
+                        band,
+                        knob_val + _EQ_WHEEL_STEP_DB * wheel_steps,
+                    )
 
     imgui.dummy((info.avail_x, 0.0))
 

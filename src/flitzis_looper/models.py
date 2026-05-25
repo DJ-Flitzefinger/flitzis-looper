@@ -567,6 +567,15 @@ class SessionState(BaseModel):
     input_mapping_error: str | None = None
     """Last non-fatal input mapping runtime error for UI diagnostics."""
 
+    global_bpm_edit_active: bool = False
+    """Whether the right-side global BPM display is currently in manual edit mode."""
+
+    global_bpm_edit_text: str = ""
+    """Temporary sanitized text buffer for the right-side global BPM edit field."""
+
+    global_bpm_edit_focus_requested: bool = False
+    """Whether the global BPM edit field should receive keyboard focus on the next frame."""
+
     tap_bpm_pad_id: int | None = None
     """Current Tap BPM target pad. Resets tap timestamps when changed."""
 

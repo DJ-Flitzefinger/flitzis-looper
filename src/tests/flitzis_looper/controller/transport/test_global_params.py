@@ -81,6 +81,91 @@ def test_reset_speed(controller: AppController, audio_engine_mock: Mock) -> None
     assert controller.project.speed == 1.0
 
 
+def test_effective_display_bpm_uses_selected_pad_reference(
+    controller: AppController,
+) -> None:
+    controller.project.selected_pad = 1
+    controller.transport.bpm.set_manual_bpm(1, 120.0)
+    controller.project.speed = 1.25
+
+    assert controller.transport.global_params.speed_reference_bpm() == pytest.approx(120.0)
+    assert controller.transport.global_params.effective_display_bpm() == pytest.approx(150.0)
+
+
+def test_set_effective_display_bpm_converts_to_speed(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    controller.project.selected_pad = 1
+    controller.transport.bpm.set_manual_bpm(1, 120.0)
+
+    changed = controller.transport.global_params.set_effective_display_bpm(120.1)
+
+    assert changed is True
+    expected_speed = 120.1 / 120.0
+    audio_engine_mock.set_speed.assert_called_with(pytest.approx(expected_speed))
+    assert controller.project.speed == pytest.approx(expected_speed)
+
+
+def test_set_effective_display_bpm_ignores_missing_reference(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    changed = controller.transport.global_params.set_effective_display_bpm(120.1)
+
+    assert changed is False
+    audio_engine_mock.set_speed.assert_not_called()
+    assert controller.project.speed == 1.0
+
+
+def test_nudge_speed_by_bpm_step_uses_one_tenth_bpm(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    controller.project.selected_pad = 1
+    controller.transport.bpm.set_manual_bpm(1, 120.0)
+
+    controller.transport.global_params.nudge_speed_by_bpm_step(1)
+
+    expected_speed = 120.1 / 120.0
+    audio_engine_mock.set_speed.assert_called_with(pytest.approx(expected_speed))
+    assert controller.project.speed == pytest.approx(expected_speed)
+
+    controller.transport.global_params.nudge_speed_by_bpm_step(-1)
+
+    assert controller.project.speed == pytest.approx(1.0)
+
+
+def test_nudge_speed_by_multiple_bpm_steps(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    controller.project.selected_pad = 1
+    controller.transport.bpm.set_manual_bpm(1, 120.0)
+
+    controller.transport.global_params.nudge_speed_by_bpm_steps(3)
+
+    expected_speed = 120.3 / 120.0
+    audio_engine_mock.set_speed.assert_called_with(pytest.approx(expected_speed))
+    assert controller.project.speed == pytest.approx(expected_speed)
+
+
+def test_set_effective_display_bpm_uses_locked_master_reference(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    controller.project.bpm_lock = True
+    controller.project.speed = 1.5
+    controller.session.master_bpm = 180.0
+
+    changed = controller.transport.global_params.set_effective_display_bpm(180.1)
+
+    assert changed is True
+    expected_speed = 180.1 / 120.0
+    audio_engine_mock.set_speed.assert_called_with(pytest.approx(expected_speed))
+    assert controller.project.speed == pytest.approx(expected_speed)
+
+
 def test_set_multi_loop_enable(controller: AppController) -> None:
     """Test enabling multi loop mode."""
     controller.project.multi_loop = False

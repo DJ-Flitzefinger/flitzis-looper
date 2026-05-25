@@ -74,7 +74,9 @@ CPAL callback:
   timestamp, action key, and dispatch flags. Python interprets relative continuous-control actions
   from those values, supports common increment/decrement encodings such as `1`/`127` and
   `65`/`63`, handles NRPN bindings such as `midi:nrpn:1:0`, and keeps the resulting target changes
-  bounded outside the audio callback.
+  bounded outside the audio callback. Global Speed/Pitch relative actions target 0.1 BPM displayed
+  changes when a BPM reference exists, then convert those targets back to the existing bounded
+  speed multiplier before sending audio control messages.
 
 This path must not simulate mouse clicks, call Python from the audio callback, route MIDI directly
 into callback functions, block the callback, log from the callback, or allocate unbounded audio

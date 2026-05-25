@@ -3,7 +3,6 @@ from typing import TYPE_CHECKING, TypeVar, cast
 
 from pydantic import BaseModel
 
-from flitzis_looper.constants import SPEED_STEP
 from flitzis_looper.input_mapping import (
     KeyboardBinding,
     LooperAction,
@@ -192,15 +191,11 @@ class GlobalSelectors:
 
     def effective_bpm(self) -> float | None:
         """Return the current effective global BPM."""
-        if self._project.bpm_lock and self._session.master_bpm is not None:
-            return float(self._session.master_bpm)
+        return self._controller.transport.global_params.effective_display_bpm()
 
-        selected = self._project.selected_pad
-        bpm = self._controller.transport.bpm.effective_bpm(selected)
-        if bpm is None:
-            return None
-
-        return float(bpm) * float(self._project.speed)
+    def speed_reference_bpm(self) -> float | None:
+        """Return the BPM represented by neutral 1.00x speed."""
+        return self._controller.transport.global_params.speed_reference_bpm()
 
 
 class UiState:
@@ -422,6 +417,12 @@ class GlobalAudioActions:
             lambda: self._controller.transport.global_params.set_speed(speed),
         )
 
+    def set_effective_bpm(self, bpm: float) -> None:
+        self._controller.transport.global_params.set_effective_display_bpm(bpm)
+
+    def nudge_speed_by_bpm_steps(self, steps: int) -> None:
+        self._controller.transport.global_params.nudge_speed_by_bpm_steps(steps)
+
     def reset_speed(self) -> None:
         self._controller.input_mapping.perform_learnable_action(
             LooperAction.reset_speed(),
@@ -431,17 +432,13 @@ class GlobalAudioActions:
     def increase_speed(self) -> None:
         self._controller.input_mapping.perform_learnable_action(
             LooperAction.speed_delta("increase"),
-            lambda: self._controller.transport.global_params.set_speed(
-                self._controller.project.speed + SPEED_STEP
-            ),
+            lambda: self._controller.transport.global_params.nudge_speed_by_bpm_step(1),
         )
 
     def decrease_speed(self) -> None:
         self._controller.input_mapping.perform_learnable_action(
             LooperAction.speed_delta("decrease"),
-            lambda: self._controller.transport.global_params.set_speed(
-                self._controller.project.speed - SPEED_STEP
-            ),
+            lambda: self._controller.transport.global_params.nudge_speed_by_bpm_step(-1),
         )
 
     def toggle_multi_loop(self) -> None:
@@ -716,6 +713,22 @@ class UiActions:
             LooperAction.select_bank(bank_id),
             lambda: self._select_bank(bank_id),
         )
+
+    def start_global_bpm_edit(self, text: str) -> None:
+        self._controller.session.global_bpm_edit_active = True
+        self._controller.session.global_bpm_edit_text = text
+        self._controller.session.global_bpm_edit_focus_requested = True
+
+    def set_global_bpm_edit_text(self, text: str) -> None:
+        self._controller.session.global_bpm_edit_text = text
+
+    def clear_global_bpm_edit_focus_request(self) -> None:
+        self._controller.session.global_bpm_edit_focus_requested = False
+
+    def finish_global_bpm_edit(self) -> None:
+        self._controller.session.global_bpm_edit_active = False
+        self._controller.session.global_bpm_edit_text = ""
+        self._controller.session.global_bpm_edit_focus_requested = False
 
     def store_pressed_pad_state(self, pad_id: int, *, pressed: bool) -> None:
         self._controller.session.pressed_pads[pad_id] = pressed

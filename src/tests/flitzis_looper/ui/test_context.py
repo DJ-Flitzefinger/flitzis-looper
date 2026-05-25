@@ -358,6 +358,20 @@ class TestAudioActions:  # noqa: PLR0904
         audio_engine_mock.set_speed.assert_called_once()
         assert controller.project.speed == expected_speed
 
+    def test_increase_speed_uses_bpm_step_when_reference_exists(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        audio_actions = AudioActions(controller)
+        controller.project.selected_pad = 1
+        controller.transport.bpm.set_manual_bpm(1, 120.0)
+
+        audio_engine_mock.reset_mock()
+
+        audio_actions.global_.increase_speed()
+
+        assert controller.project.speed == pytest.approx(120.1 / 120.0)
+        audio_engine_mock.set_speed.assert_called_once()
+
     def test_decrease_speed(self, controller: AppController, audio_engine_mock: Mock) -> None:
         """Test decrease_speed decreases speed by SPEED_STEP."""
         audio_actions = AudioActions(controller)
@@ -369,6 +383,15 @@ class TestAudioActions:  # noqa: PLR0904
         expected_speed = initial_speed - SPEED_STEP
         audio_engine_mock.set_speed.assert_called_once()
         assert controller.project.speed == expected_speed
+
+    def test_set_effective_bpm(self, controller: AppController) -> None:
+        audio_actions = AudioActions(controller)
+        controller.project.selected_pad = 1
+        controller.transport.bpm.set_manual_bpm(1, 120.0)
+
+        audio_actions.global_.set_effective_bpm(123.45)
+
+        assert controller.project.speed == pytest.approx(123.45 / 120.0)
 
     def test_toggle_multi_loop(self, controller: AppController) -> None:
         """Test toggle_multi_loop toggles multi_loop mode."""
@@ -509,6 +532,23 @@ class TestUiActions:
         ui_actions.select_bank(3)
 
         assert controller.project.selected_bank == 3
+
+    def test_global_bpm_edit_state(self, controller: AppController) -> None:
+        ui_actions = UiActions(controller)
+
+        ui_actions.start_global_bpm_edit("120.00")
+        assert controller.session.global_bpm_edit_active is True
+        assert controller.session.global_bpm_edit_text == "120.00"
+        assert controller.session.global_bpm_edit_focus_requested is True
+
+        ui_actions.set_global_bpm_edit_text("120.10")
+        ui_actions.clear_global_bpm_edit_focus_request()
+        assert controller.session.global_bpm_edit_text == "120.10"
+        assert controller.session.global_bpm_edit_focus_requested is False
+
+        ui_actions.finish_global_bpm_edit()
+        assert controller.session.global_bpm_edit_active is False
+        assert not controller.session.global_bpm_edit_text
 
     def test_store_pressed_pad_state_true(self, controller: AppController) -> None:
         """Test store_pressed_pad_state sets pad pressed state to True."""

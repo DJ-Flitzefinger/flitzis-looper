@@ -13,6 +13,7 @@ from flitzis_looper.models import (
 )
 from flitzis_looper.ui.constants import SPACING
 from flitzis_looper.ui.contextmanager import button_style, item_width, style_var
+from flitzis_looper.ui.render.control_gestures import hovered_wheel_steps, item_middle_clicked
 from flitzis_looper.ui.render.settings import (
     SETTINGS_TOGGLE_BUTTON_SIZE,
     settings_toggle_button,
@@ -40,6 +41,7 @@ STEM_PRESET_BUTTONS: tuple[tuple[str, int, StemMaskDisplayMode], ...] = (
     ("I", STEM_INSTRUMENTAL_PRESET_MASK, "instrumental"),
     ("A", STEM_COMPONENT_MASK, "all"),
 )
+_MASTER_VOLUME_WHEEL_STEP = 0.01
 
 
 def settings_button_local_pos(
@@ -86,14 +88,23 @@ def _master_volume(ctx: UiContext) -> None:
 
         with item_width(240):
             changed, new_value = imgui.slider_int("##master_volume", val, 0, 100, "%d %")
+            learn_pending = _has_pending_learn_input(ctx)
             learn_clicked = (
-                _has_pending_learn_input(ctx)
+                learn_pending
                 and imgui.is_item_hovered()
                 and imgui.is_mouse_clicked(imgui.MouseButton_.left)
             )
             if changed or learn_clicked:
                 volume_value = new_value if changed else val
                 ctx.audio.global_.set_volume(volume_value / 100.0)
+            elif not learn_pending:
+                if item_middle_clicked():
+                    ctx.audio.global_.set_volume(1.0)
+                elif wheel_steps := hovered_wheel_steps():
+                    ctx.audio.global_.set_volume(
+                        float(ctx.state.project.volume)
+                        + _MASTER_VOLUME_WHEEL_STEP * wheel_steps
+                    )
 
 
 def trigger_quantization_button_style(*, enabled: bool) -> ButtonStyleName:

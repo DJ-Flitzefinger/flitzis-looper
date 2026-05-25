@@ -711,6 +711,42 @@ def test_midi_cc_relative_global_speed_uses_directional_steps(
     assert controller.project.speed == pytest.approx(1.0)
 
 
+def test_midi_cc_relative_global_speed_uses_bpm_steps_when_reference_exists(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    controller.input_mapping.set_enabled(enabled=True)
+    controller.project.selected_pad = 1
+    controller.transport.bpm.set_manual_bpm(1, 120.0)
+    controller.input_mapping.save_mapping(
+        "midi",
+        "midi:cc:1:72",
+        global_speed_delta_action(),
+    )
+
+    controller.input_mapping._handle_rust_input_event(
+        {
+            "source": "midi",
+            "binding_key": "midi:cc:1:72",
+            "value": 64,
+            "action_key": "global.speed.delta",
+            "direct": False,
+        }
+    )
+    audio_engine_mock.set_speed.assert_not_called()
+
+    controller.input_mapping._handle_rust_input_event(
+        {
+            "source": "midi",
+            "binding_key": "midi:cc:1:72",
+            "value": 65,
+            "action_key": "global.speed.delta",
+            "direct": False,
+        }
+    )
+    assert controller.project.speed == pytest.approx(120.1 / 120.0)
+
+
 def test_keyboard_mapping_executes_stem_mask_action_without_available_cache(
     controller: AppController,
     audio_engine_mock: Mock,

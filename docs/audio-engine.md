@@ -292,9 +292,12 @@ Implemented first slice:
   handles endless-controller 0..127 wraparound, repeated relative encoder values such as `1`/`127`
   or `65`/`63`, and NRPN Data Increment/Data Decrement messages normalized to stable
   `midi:nrpn:<channel>:<parameter>` bindings. The controller-side setters clamp at the existing
-  target limits. Hardware endless knobs should be configured for relative/inc-dec output; absolute
-  CC mode still reports a finite device-side 0..127 position. MIDI values still do not become
-  audio-callback parameter streams.
+  target limits. Global Speed/Pitch relative steps use the displayed-BPM reference when available,
+  so each relative movement targets a 0.1 BPM change and is converted back to the bounded speed
+  multiplier before reaching Rust; without a BPM reference, the existing bounded multiplier step
+  remains the fallback. Hardware endless knobs should be configured for relative/inc-dec output;
+  absolute CC mode still reports a finite device-side 0..127 position. MIDI values still do not
+  become audio-callback parameter streams.
 - Keyboard mappings retain key-plus-modifier bindings, do not execute while text input is
   focused, and remain the responsiveness reference for mapped dispatch.
 - MIDI Note On velocity greater than zero, Control Change, and NRPN increment/decrement are

@@ -1,6 +1,13 @@
 from typing import TYPE_CHECKING, cast
 
-from flitzis_looper.constants import SPEED_MAX, SPEED_MIN, VOLUME_MAX, VOLUME_MIN
+from flitzis_looper.constants import (
+    PITCH_BPM_STEP,
+    SPEED_MAX,
+    SPEED_MIN,
+    SPEED_STEP,
+    VOLUME_MAX,
+    VOLUME_MIN,
+)
 from flitzis_looper.controller.validation import ensure_finite, normalize_bpm
 from flitzis_looper.models import (
     LEGACY_TRIGGER_QUANTIZATION_TO_STEP,
@@ -133,6 +140,58 @@ class GlobalParametersController:
         self._project.speed = clamped
         self._bpm.recompute_master_bpm()
         self._transport._mark_project_changed()
+
+    def speed_reference_bpm(self) -> float | None:
+        """Return the BPM value represented by 1.00x speed for the current context."""
+        speed = float(self._project.speed)
+        if speed <= 0.0:
+            return None
+
+        if self._project.bpm_lock:
+            master_bpm = normalize_bpm(self._session.master_bpm)
+            if master_bpm is not None:
+                return float(master_bpm) / speed
+
+        return normalize_bpm(self._bpm.effective_bpm(self._project.selected_pad))
+
+    def effective_display_bpm(self) -> float | None:
+        """Return the BPM currently displayed above the global Pitch control."""
+        reference_bpm = self.speed_reference_bpm()
+        if reference_bpm is None:
+            return None
+        return float(reference_bpm) * float(self._project.speed)
+
+    def set_effective_display_bpm(self, bpm: float) -> bool:
+        """Set global speed by targeting a displayed BPM value."""
+        ensure_finite(bpm)
+        if bpm <= 0.0:
+            return False
+
+        reference_bpm = self.speed_reference_bpm()
+        if reference_bpm is None:
+            return False
+
+        self.set_speed(float(bpm) / float(reference_bpm))
+        return True
+
+    def nudge_speed_by_bpm_step(self, direction: int) -> None:
+        """Move Pitch by one BPM-grid step, falling back to multiplier steps without BPM."""
+        if direction > 0:
+            self.nudge_speed_by_bpm_steps(1)
+        elif direction < 0:
+            self.nudge_speed_by_bpm_steps(-1)
+
+    def nudge_speed_by_bpm_steps(self, steps: int) -> None:
+        """Move Pitch by signed BPM-grid steps, or multiplier steps without BPM."""
+        if steps == 0:
+            return
+
+        current_bpm = self.effective_display_bpm()
+        if current_bpm is None:
+            self.set_speed(float(self._project.speed) + SPEED_STEP * steps)
+            return
+
+        self.set_effective_display_bpm(round(float(current_bpm) + PITCH_BPM_STEP * steps, 2))
 
     def reset_speed(self) -> None:
         """Reset global speed back to 1.0x."""

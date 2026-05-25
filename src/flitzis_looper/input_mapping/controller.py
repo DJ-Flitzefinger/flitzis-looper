@@ -1,7 +1,7 @@
 from contextlib import suppress
 from typing import TYPE_CHECKING, Literal, cast
 
-from flitzis_looper.constants import NUM_BANKS, NUM_SAMPLES, SPEED_MAX, SPEED_MIN, SPEED_STEP
+from flitzis_looper.constants import NUM_BANKS, NUM_SAMPLES, SPEED_MAX, SPEED_MIN
 from flitzis_looper.controller.base import BaseController
 from flitzis_looper.input_mapping.actions import LooperAction, PadEqBand
 from flitzis_looper.input_mapping.bindings import KeyboardBinding, MidiBinding
@@ -311,9 +311,7 @@ class InputMappingController(BaseController):
                 self._project.volume + MIDI_RELATIVE_VOLUME_STEP * direction
             )
         elif action_key == "global.speed.delta":
-            self._app.transport.global_params.set_speed(
-                self._project.speed + SPEED_STEP * direction
-            )
+            self._app.transport.global_params.nudge_speed_by_bpm_step(direction)
         elif action_key.startswith("pad.gain.delta:"):
             self._execute_relative_pad_gain(action_key, direction)
         else:
@@ -433,10 +431,10 @@ class InputMappingController(BaseController):
         self._app.transport.global_params.toggle_trigger_quantization()
 
     def _increase_speed(self) -> None:
-        self._app.transport.global_params.set_speed(self._app.project.speed + SPEED_STEP)
+        self._app.transport.global_params.nudge_speed_by_bpm_step(1)
 
     def _decrease_speed(self) -> None:
-        self._app.transport.global_params.set_speed(self._app.project.speed - SPEED_STEP)
+        self._app.transport.global_params.nudge_speed_by_bpm_step(-1)
 
     def _execute_trigger_pad(self, key: str) -> bool:
         if (pad_id := _parse_prefixed_sample_id(key, "pad.trigger:")) is None:
