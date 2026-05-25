@@ -11,7 +11,10 @@ architecture. The Stage 3 preparation slice now separates ordered control comman
 continuous parameter updates and coalesces drained parameter messages before applying them to
 audio-thread state. The Stage 4 ownership slice records durable Python intent versus live Rust
 audio state and moves audio telemetry dispatch into the controller layer. Future DSP/FX
-parameters should use this parameter path and keep smoothing on the Rust audio side.
+parameters should use this parameter path and keep smoothing on the Rust audio side. The Stage 8
+foundation plan in `docs/dsp-fx-foundation-plan.md` and
+`openspec/changes/prepare-dsp-fx-foundation/` keeps the first DSP slice neutral and requires typed
+fixed-size parameter identities for later DSP targets.
 
 ## Channels
 
@@ -129,6 +132,11 @@ controls may produce stable action keys and bounded controller-owned targets, bu
 continuous DSP targets must use the bounded parameter path and Rust-side smoothing before sample
 processing. Future DSP mappings must not use direct MIDI-to-callback execution, carry plugin
 handles, or rely on callback-local state.
+
+Stage 8 adds `openspec/changes/prepare-dsp-fx-foundation/` as the foundation boundary for those
+future parameters. The first implementation slice should add only neutral Rust-owned DSP state and
+smoothing helpers; it should not add a visible effect, EQ replacement, plugin host, or new UI
+control.
 
 This path must not simulate mouse clicks, call Python from the audio callback, route MIDI directly
 into callback functions, block the callback, log from the callback, or allocate unbounded audio
@@ -325,3 +333,4 @@ messages mutate Python session projections only through controller handlers.
 - `openspec/changes/add-offline-stem-cache/`
 - `openspec/changes/add-low-jitter-input-mapping/`
 - `openspec/changes/clarify-state-ownership-boundary/`
+- `openspec/changes/prepare-dsp-fx-foundation/`

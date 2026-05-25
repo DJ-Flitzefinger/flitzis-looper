@@ -11,7 +11,9 @@ but future EQ/DSP work should wait until the documented realtime-safety, command
 state-ownership, and clock-preparation stages are complete or explicitly superseded by a new
 OpenSpec-backed request. The current state ownership boundary is recorded in
 `docs/audio-state-ownership.md`. The Stage 6 loop/source-position/stem alignment model is recorded
-in `docs/audio-loop-source-stem-alignment.md`.
+in `docs/audio-loop-source-stem-alignment.md`. The Stage 8 DSP/FX foundation plan is recorded in
+`docs/dsp-fx-foundation-plan.md` and `openspec/changes/prepare-dsp-fx-foundation/`; it prepares a
+neutral internal Rust foundation before any later EQ replacement or visible effect.
 
 Do not interpret audio safety as "Rust must not be touched". The protected boundary is the CPAL
 audio callback and realtime hot path. New Rust modules outside that boundary are allowed and
@@ -501,3 +503,4 @@ The Rust engine is exposed to Python as `AudioEngine` with:
 - `openspec/changes/add-offline-stem-cache/`
 - `openspec/changes/add-low-jitter-input-mapping/`
 - `openspec/changes/clarify-state-ownership-boundary/`
+- `openspec/changes/prepare-dsp-fx-foundation/`

@@ -124,8 +124,10 @@ still need cleanup before DSP/FX work:
   documented in `docs/audio-state-ownership.md`,
 - audio-to-control telemetry dispatch is controller-owned rather than UI-context-owned,
 - accepted active stem mode/mask changes now use a bounded Rust-owned source-selection ramp,
+- Stage 8 now records the neutral DSP/FX foundation plan in
+  `docs/dsp-fx-foundation-plan.md` and `openspec/changes/prepare-dsp-fx-foundation/`,
 - current EQ is hardwired into the mixer rather than modeled as a DSP node,
-- future parameter smoothing is not yet defined as a first-class DSP system.
+- future parameter smoothing is specified for the foundation but not implemented yet.
 
 ## Rust Audio Engine And Hot Paths
 
@@ -567,6 +569,10 @@ Initial target ownership:
 
 ## DSP/FX Foundation Plan
 
+The Stage 8 plan is recorded in `docs/dsp-fx-foundation-plan.md` and
+`openspec/changes/prepare-dsp-fx-foundation/`. This is a planning artifact and does not implement
+the new EQ, a visible effect, plugin hosting, or a broad rewrite.
+
 Use internal Rust DSP modules. Do not add VST, LV2, CLAP, AU, plugin scanning, or dynamic plugin
 hosting in this phase.
 
@@ -580,6 +586,8 @@ Initial DSP foundation scope:
 - Keep denormal/NaN guards local to DSP nodes.
 - Add deterministic unit tests for neutral pass-through, bounded output, parameter clamping,
   smoothing behavior, sample-rate reconfiguration, and no callback allocation by construction.
+- Keep the first implementation slice neutral: no new performer-facing control, no output change,
+  and no replacement of the current hardwired EQ.
 
 Possible node shape:
 
@@ -835,6 +843,9 @@ Result:
 
 ### Analysis Stage 8: DSP/FX And EQ Replacement Architecture
 
+Status: completed by `docs/dsp-fx-foundation-plan.md` and
+`openspec/changes/prepare-dsp-fx-foundation/`.
+
 Files:
 
 - `rust/src/audio_engine/eq3.rs`
@@ -852,6 +863,15 @@ Questions:
 Expected output:
 
 - OpenSpec delta for DSP foundation and later isolator replacement.
+
+Result:
+
+- The neutral first DSP foundation slice is specified as a per-pad internal Rust chain host with
+  typed fixed-size parameter identities and Rust-owned smoothing state.
+- The first implementation slice must preserve current public Python APIs, persistence, UI
+  controls, current EQ behavior, and rendered audio output within floating-point tolerance.
+- The later DJ isolator remains a separate OpenSpec-backed behavior change after the neutral
+  foundation exists.
 
 ### Analysis Stage 9: Consolidated Implementation Plan
 
@@ -1118,15 +1138,16 @@ Acceptance:
 
 ## Next Recommended Step
 
-Stage 7A has completed the click-free stem mode/mask transition preparation.
+Stage 8 has completed the DSP/FX foundation and later EQ replacement architecture planning.
 
-The next recommended step is Analysis Stage 8:
+The next recommended step is the first implementation slice from
+`openspec/changes/prepare-dsp-fx-foundation/`:
 
 ```text
-Plan the internal Rust DSP/FX foundation and later EQ replacement as an OpenSpec-friendly design
-step, without implementing a visible effect, EQ replacement, plugin hosting, or broad rewrite.
+Implement a neutral internal Rust DSP foundation scaffold: a fixed-size per-pad chain/no-op or
+test-only node, typed DSP parameter identities, and Rust-owned smoothing helpers, while preserving
+current audio output and current EQ behavior.
 ```
 
-Do not implement the new EQ or any other DSP effect before the DSP foundation design and
-foundation stage are complete, unless a future user request explicitly supersedes this plan with an
-OpenSpec-backed change.
+Do not implement the new EQ, a visible DSP/FX effect, plugin hosting, real-time stem separation,
+live loop-edit crossfades, or a broad rewrite during that first foundation slice.
