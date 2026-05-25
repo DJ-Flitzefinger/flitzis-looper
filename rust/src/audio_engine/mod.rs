@@ -38,6 +38,7 @@ use std::thread;
 
 mod analysis;
 mod audio_stream;
+mod buffer_retirement;
 mod channels;
 mod constants;
 mod eq3;

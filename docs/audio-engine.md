@@ -88,6 +88,8 @@ CPAL callback.
   - `rust/src/audio_engine/stretch_processor.rs`: Per-voice bounded speed/key-lock DSP wrapper.
   - `rust/src/audio_engine/transport.rs`: Audio-thread-owned output-frame clock and musical phase helpers.
   - `rust/src/audio_engine/scheduler.rs`: Fixed-capacity absolute output-frame scheduler for playback events.
+  - `rust/src/audio_engine/buffer_retirement.rs`: Bounded non-audio retirement worker for large
+    sample and prepared-stem handles removed by the callback.
   - `rust/src/audio_engine/sample_loader.rs`: Audio file decoding and channel mapping.
   - `rust/src/audio_engine/audio_stream.rs`: CPAL stream management and callback.
   - `rust/src/messages.rs`: Fixed-size message types shared between threads.
@@ -148,6 +150,8 @@ The project deliberately separates non-real-time work from the real-time audio c
 
 - The audio callback MUST avoid blocking, disk I/O, heap allocations, logging, and Python/GIL interaction.
 - Inter-thread communication uses fixed-capacity ring buffers (1024 messages).
+- The callback drains at most `MAX_CONTROL_MESSAGES_PER_CALLBACK` control messages per
+  invocation, currently `64`; additional messages remain queued for later callbacks.
 - MIDI input ports, keyboard input, mapping JSON files, and Learn UI state are outside the audio
   callback. Rust input/control modules may own MIDI callbacks and bounded queues, but they may
   only affect playback by sending bounded control messages through the established control path.
@@ -155,6 +159,11 @@ The project deliberately separates non-real-time work from the real-time audio c
   - `MAX_SAMPLE_SLOTS` fixed sample slots addressed by `id` (`0..n`).
   - `MAX_VOICES` fixed polyphony; additional triggers are dropped deterministically.
 - Sample decoding happens outside the callback. Decoded sample data is published to the audio thread via a shared handle (no full-buffer copies just for cross-thread transfer).
+- Sample and prepared-stem handles removed, replaced, or rejected by the callback are moved to a
+  bounded non-audio retirement worker so large final `Arc` drops do not run on the callback
+  thread.
+- Oversized render slices are split into chunks that fit the existing preallocated per-voice
+  stretch buffers.
 
 ## Gen3 transport timeline plan
 

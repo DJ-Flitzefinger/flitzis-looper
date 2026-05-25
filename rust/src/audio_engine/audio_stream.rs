@@ -12,7 +12,10 @@ use env_logger::{Builder, Env};
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::sync::{Arc, Mutex};
 
-use crate::audio_engine::constants::NUM_SAMPLES;
+use crate::audio_engine::buffer_retirement::{
+    AudioBufferRetirement, AudioBufferRetirementWorker, create_audio_buffer_retirement,
+};
+use crate::audio_engine::constants::{MAX_VOICES, NUM_SAMPLES};
 use crate::audio_engine::mixer::RtMixer;
 use crate::audio_engine::scheduler::{
     FixedCapacityScheduler, ScheduledCommand, TransportScheduler,
@@ -20,9 +23,12 @@ use crate::audio_engine::scheduler::{
 use crate::audio_engine::transport::{QuantizeGrid, TransportTimeline};
 use crate::messages::{AudioMessage, ControlMessage, TriggerQuantization};
 
+pub(crate) const MAX_CONTROL_MESSAGES_PER_CALLBACK: usize = 64;
+
 /// Handle to the audio stream with associated message channels
 pub struct AudioStreamHandle {
     pub stream: Stream,
+    _retirement_worker: AudioBufferRetirementWorker,
     pub producer: Arc<Mutex<Producer<ControlMessage>>>,
     pub consumer: Arc<Mutex<Consumer<AudioMessage>>>,
     pub output_channels: usize,
@@ -49,13 +55,18 @@ impl AudioMessageSink for Producer<AudioMessage> {
     }
 }
 
-fn schedule_immediate_command<const CAPACITY: usize, S: AudioMessageSink>(
+fn schedule_immediate_command<
+    const CAPACITY: usize,
+    S: AudioMessageSink,
+    R: AudioBufferRetirement,
+>(
     scheduler: &mut FixedCapacityScheduler<CAPACITY>,
     callback_start_frame: u64,
     command: ScheduledCommand,
     mixer: &mut RtMixer,
     transport: &mut TransportTimeline,
     audio_messages: &mut S,
+    retirement: &mut R,
 ) {
     if scheduler.schedule(callback_start_frame, command).is_ok() {
         drain_scheduler_due_at_callback_start(
@@ -64,13 +75,18 @@ fn schedule_immediate_command<const CAPACITY: usize, S: AudioMessageSink>(
             mixer,
             transport,
             audio_messages,
+            retirement,
         );
     } else {
-        execute_scheduled_command(mixer, transport, command, audio_messages);
+        execute_scheduled_command(mixer, transport, command, audio_messages, retirement);
     }
 }
 
-fn schedule_play_sample_command<const CAPACITY: usize, S: AudioMessageSink>(
+fn schedule_play_sample_command<
+    const CAPACITY: usize,
+    S: AudioMessageSink,
+    R: AudioBufferRetirement,
+>(
     scheduler: &mut FixedCapacityScheduler<CAPACITY>,
     callback_start_frame: u64,
     trigger_quantization: TriggerQuantization,
@@ -79,6 +95,7 @@ fn schedule_play_sample_command<const CAPACITY: usize, S: AudioMessageSink>(
     volume: f32,
     mixer: &mut RtMixer,
     audio_messages: &mut S,
+    retirement: &mut R,
 ) {
     let command = ScheduledCommand::PlaySample { id, volume };
 
@@ -90,6 +107,7 @@ fn schedule_play_sample_command<const CAPACITY: usize, S: AudioMessageSink>(
             mixer,
             transport,
             audio_messages,
+            retirement,
         );
         return;
     };
@@ -101,11 +119,16 @@ fn schedule_play_sample_command<const CAPACITY: usize, S: AudioMessageSink>(
             mixer,
             transport,
             audio_messages,
+            retirement,
         );
     }
 }
 
-fn schedule_exclusive_play_sample_command<const CAPACITY: usize, S: AudioMessageSink>(
+fn schedule_exclusive_play_sample_command<
+    const CAPACITY: usize,
+    S: AudioMessageSink,
+    R: AudioBufferRetirement,
+>(
     scheduler: &mut FixedCapacityScheduler<CAPACITY>,
     callback_start_frame: u64,
     trigger_quantization: TriggerQuantization,
@@ -114,6 +137,7 @@ fn schedule_exclusive_play_sample_command<const CAPACITY: usize, S: AudioMessage
     volume: f32,
     mixer: &mut RtMixer,
     audio_messages: &mut S,
+    retirement: &mut R,
 ) {
     let command = ScheduledCommand::StopAllThenPlaySample { id, volume };
 
@@ -125,6 +149,7 @@ fn schedule_exclusive_play_sample_command<const CAPACITY: usize, S: AudioMessage
             mixer,
             transport,
             audio_messages,
+            retirement,
         );
         return;
     };
@@ -136,6 +161,7 @@ fn schedule_exclusive_play_sample_command<const CAPACITY: usize, S: AudioMessage
             mixer,
             transport,
             audio_messages,
+            retirement,
         );
     }
 }
@@ -176,27 +202,33 @@ fn anchor_transport_phase_from_pad_at_frame(
     transport.set_master_bpm_and_anchor_bar_phase_at_frame(bpm, bar_phase_beats, output_frame)
 }
 
-fn drain_scheduler_due_at_callback_start<const CAPACITY: usize, S: AudioMessageSink>(
+fn drain_scheduler_due_at_callback_start<
+    const CAPACITY: usize,
+    S: AudioMessageSink,
+    R: AudioBufferRetirement,
+>(
     scheduler: &mut FixedCapacityScheduler<CAPACITY>,
     callback_start_frame: u64,
     mixer: &mut RtMixer,
     transport: &mut TransportTimeline,
     audio_messages: &mut S,
+    retirement: &mut R,
 ) {
     while let Some(event) = scheduler.pop_due_at_callback_start(callback_start_frame) {
-        execute_scheduled_command(mixer, transport, event.command, audio_messages);
+        execute_scheduled_command(mixer, transport, event.command, audio_messages, retirement);
     }
 }
 
-fn execute_scheduled_command<S: AudioMessageSink>(
+fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetirement>(
     mixer: &mut RtMixer,
     _transport: &mut TransportTimeline,
     command: ScheduledCommand,
     audio_messages: &mut S,
+    retirement: &mut R,
 ) {
     match command {
         ScheduledCommand::PlaySample { id, volume } => {
-            let started = mixer.play_sample(id, volume);
+            let started = mixer.play_sample_rt(id, volume, retirement);
 
             if started {
                 audio_messages.push_audio_message(AudioMessage::SampleStarted { id });
@@ -209,35 +241,38 @@ fn execute_scheduled_command<S: AudioMessageSink>(
                 return;
             }
 
-            stop_all_samples(mixer, audio_messages);
-            let started = mixer.play_sample(id, volume);
+            stop_all_samples(mixer, audio_messages, retirement);
+            let started = mixer.play_sample_rt(id, volume, retirement);
 
             if started {
                 audio_messages.push_audio_message(AudioMessage::SampleStarted { id });
             }
         }
         ScheduledCommand::StopSample { id } => {
-            mixer.stop_sample(id);
+            mixer.stop_sample_rt(id, retirement);
             audio_messages.push_audio_message(AudioMessage::SampleStopped { id });
         }
         ScheduledCommand::StopAll => {
-            stop_all_samples(mixer, audio_messages);
+            stop_all_samples(mixer, audio_messages, retirement);
         }
     }
 }
 
-fn stop_all_samples<S: AudioMessageSink>(mixer: &mut RtMixer, audio_messages: &mut S) {
+fn stop_all_samples<S: AudioMessageSink, R: AudioBufferRetirement>(
+    mixer: &mut RtMixer,
+    audio_messages: &mut S,
+    retirement: &mut R,
+) {
     for voice in &mut mixer.voices {
         if voice.active {
-            voice.stop();
-            audio_messages.push_audio_message(AudioMessage::SampleStopped {
-                id: voice.sample_id,
-            });
+            let id = voice.sample_id;
+            voice.stop_rt(retirement);
+            audio_messages.push_audio_message(AudioMessage::SampleStopped { id });
         }
     }
 }
 
-fn render_scheduled_audio<const CAPACITY: usize, S: AudioMessageSink>(
+fn render_scheduled_audio<const CAPACITY: usize, S: AudioMessageSink, R: AudioBufferRetirement>(
     mixer: &mut RtMixer,
     scheduler: &mut FixedCapacityScheduler<CAPACITY>,
     output: &mut [f32],
@@ -246,6 +281,7 @@ fn render_scheduled_audio<const CAPACITY: usize, S: AudioMessageSink>(
     channels: usize,
     transport: &mut TransportTimeline,
     audio_messages: &mut S,
+    retirement: &mut R,
 ) {
     output.fill(0.0);
     pad_peaks.fill(0.0);
@@ -256,6 +292,7 @@ fn render_scheduled_audio<const CAPACITY: usize, S: AudioMessageSink>(
         mixer,
         transport,
         audio_messages,
+        retirement,
     );
 
     if channels == 0 {
@@ -282,6 +319,7 @@ fn render_scheduled_audio<const CAPACITY: usize, S: AudioMessageSink>(
                 rendered_until_frame,
                 callback_end_frame,
                 channels,
+                retirement,
             );
             break;
         };
@@ -296,6 +334,7 @@ fn render_scheduled_audio<const CAPACITY: usize, S: AudioMessageSink>(
                 rendered_until_frame,
                 callback_end_frame,
                 channels,
+                retirement,
             );
             break;
         }
@@ -310,6 +349,7 @@ fn render_scheduled_audio<const CAPACITY: usize, S: AudioMessageSink>(
                 rendered_until_frame,
                 next_target_frame,
                 channels,
+                retirement,
             );
             rendered_until_frame = next_target_frame;
         }
@@ -317,12 +357,12 @@ fn render_scheduled_audio<const CAPACITY: usize, S: AudioMessageSink>(
         while let Some(event) =
             scheduler.pop_due_through(callback_start_frame, rendered_until_frame)
         {
-            execute_scheduled_command(mixer, transport, event.command, audio_messages);
+            execute_scheduled_command(mixer, transport, event.command, audio_messages, retirement);
         }
     }
 }
 
-fn render_mixer_segment(
+fn render_mixer_segment<R: AudioBufferRetirement>(
     mixer: &mut RtMixer,
     output: &mut [f32],
     pad_peaks: &mut [f32; NUM_SAMPLES],
@@ -331,6 +371,7 @@ fn render_mixer_segment(
     segment_start_frame: u64,
     segment_end_frame: u64,
     channels: usize,
+    retirement: &mut R,
 ) {
     if segment_end_frame <= segment_start_frame {
         return;
@@ -341,10 +382,205 @@ fn render_mixer_segment(
     let start = start_frame * channels;
     let end = end_frame * channels;
 
-    mixer.render(&mut output[start..end], segment_peaks);
+    mixer.render_rt(&mut output[start..end], segment_peaks, retirement);
 
     for (peak, segment_peak) in pad_peaks.iter_mut().zip(segment_peaks.iter()) {
         *peak = (*peak).max(*segment_peak);
+    }
+}
+
+fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
+    match message {
+        ControlMessage::LoadSample { .. } | ControlMessage::PublishPreparedStems { .. } => 2,
+        ControlMessage::StopSample { .. } => MAX_VOICES,
+        ControlMessage::UnloadSample { .. } => MAX_VOICES + 2,
+        ControlMessage::StopAll() | ControlMessage::PlaySampleExclusive { .. } => MAX_VOICES,
+        _ => 0,
+    }
+}
+
+fn drain_control_messages<const CAPACITY: usize, S: AudioMessageSink, R: AudioBufferRetirement>(
+    consumer: &mut Consumer<ControlMessage>,
+    scheduler: &mut FixedCapacityScheduler<CAPACITY>,
+    callback_start_frame: u64,
+    trigger_quantization: &mut TriggerQuantization,
+    transport: &mut TransportTimeline,
+    mixer: &mut RtMixer,
+    audio_messages: &mut S,
+    retirement: &mut R,
+) -> usize {
+    let mut processed = 0;
+
+    while processed < MAX_CONTROL_MESSAGES_PER_CALLBACK {
+        let needed_retirement_slots = match consumer.peek() {
+            Ok(message) => control_message_retirement_slots_needed(message),
+            Err(_) => break,
+        };
+
+        if needed_retirement_slots > 0
+            && retirement.available_retirement_slots() < needed_retirement_slots
+        {
+            break;
+        }
+
+        let Ok(message) = consumer.pop() else {
+            break;
+        };
+
+        process_control_message(
+            message,
+            scheduler,
+            callback_start_frame,
+            trigger_quantization,
+            transport,
+            mixer,
+            audio_messages,
+            retirement,
+        );
+        processed += 1;
+    }
+
+    processed
+}
+
+fn process_control_message<const CAPACITY: usize, S: AudioMessageSink, R: AudioBufferRetirement>(
+    message: ControlMessage,
+    scheduler: &mut FixedCapacityScheduler<CAPACITY>,
+    callback_start_frame: u64,
+    trigger_quantization: &mut TriggerQuantization,
+    transport: &mut TransportTimeline,
+    mixer: &mut RtMixer,
+    audio_messages: &mut S,
+    retirement: &mut R,
+) {
+    match message {
+        ControlMessage::Ping() => {
+            audio_messages.push_audio_message(AudioMessage::Pong());
+        }
+        ControlMessage::LoadSample { id, sample } => {
+            mixer.load_sample_rt(id, sample, retirement);
+        }
+        ControlMessage::PublishPreparedStems { id, stems } => {
+            mixer.publish_prepared_stems_rt(id, stems, retirement);
+        }
+        ControlMessage::SetStemMixMode {
+            id,
+            mode,
+            source_version_hash,
+        } => {
+            mixer.set_stem_mix_mode(id, mode, source_version_hash);
+        }
+        ControlMessage::SetStemEnabledMask {
+            id,
+            enabled_stem_mask,
+            source_version_hash,
+        } => {
+            mixer.set_stem_enabled_mask(id, enabled_stem_mask, source_version_hash);
+        }
+        ControlMessage::PlaySample { id, volume } => {
+            schedule_play_sample_command(
+                scheduler,
+                callback_start_frame,
+                *trigger_quantization,
+                transport,
+                id,
+                volume,
+                mixer,
+                audio_messages,
+                retirement,
+            );
+        }
+        ControlMessage::PlaySampleExclusive { id, volume } => {
+            schedule_exclusive_play_sample_command(
+                scheduler,
+                callback_start_frame,
+                *trigger_quantization,
+                transport,
+                id,
+                volume,
+                mixer,
+                audio_messages,
+                retirement,
+            );
+        }
+        ControlMessage::StopSample { id } => {
+            schedule_immediate_command(
+                scheduler,
+                callback_start_frame,
+                ScheduledCommand::StopSample { id },
+                mixer,
+                transport,
+                audio_messages,
+                retirement,
+            );
+        }
+        ControlMessage::StopAll() => {
+            schedule_immediate_command(
+                scheduler,
+                callback_start_frame,
+                ScheduledCommand::StopAll,
+                mixer,
+                transport,
+                audio_messages,
+                retirement,
+            );
+        }
+        ControlMessage::UnloadSample { id } => {
+            mixer.unload_sample_rt(id, retirement);
+        }
+        ControlMessage::SetSpeed(speed) => {
+            mixer.set_speed(speed);
+        }
+        ControlMessage::SetBpmLock(enabled) => {
+            mixer.set_bpm_lock(enabled);
+        }
+        ControlMessage::SetKeyLock(enabled) => {
+            mixer.set_key_lock(enabled);
+        }
+        ControlMessage::SetKeyLockQuality(quality) => {
+            mixer.set_key_lock_quality(quality);
+        }
+        ControlMessage::SetKeyLockSettings(settings) => {
+            mixer.set_key_lock_settings(settings);
+        }
+        ControlMessage::SetMasterBpm(bpm) => {
+            mixer.set_master_bpm(bpm);
+        }
+        ControlMessage::SetPadBpm { id, bpm } => {
+            mixer.set_pad_bpm(id, bpm);
+        }
+        ControlMessage::SetPadTimingMetadata { id, metadata } => {
+            mixer.set_pad_timing_metadata(id, metadata);
+        }
+        ControlMessage::AnchorTransportPhaseFromPad { id } => {
+            anchor_transport_phase_from_pad(mixer, transport, id);
+        }
+        ControlMessage::SetPadGain { id, gain } => {
+            mixer.set_pad_gain(id, gain);
+        }
+        ControlMessage::SetPadEq {
+            id,
+            low_db,
+            mid_db,
+            high_db,
+        } => {
+            mixer.set_pad_eq(id, low_db, mid_db, high_db);
+        }
+        ControlMessage::SetPadLoopRegion { id, start_s, end_s } => {
+            mixer.set_pad_loop_region(id, start_s, end_s);
+        }
+        ControlMessage::SetTriggerQuantization(mode) => {
+            *trigger_quantization = mode;
+        }
+        ControlMessage::PauseSample { id } => {
+            mixer.pause_sample(id);
+        }
+        ControlMessage::ResumeSample { id } => {
+            mixer.resume_sample(id);
+        }
+        ControlMessage::SetVolume(volume) => {
+            mixer.set_volume(volume);
+        }
     }
 }
 
@@ -385,6 +621,7 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
     let mut transport = TransportTimeline::new(sample_rate_hz);
     let mut scheduler = TransportScheduler::new();
     let mut trigger_quantization = TriggerQuantization::Immediate;
+    let (mut retired_buffers, retirement_worker) = create_audio_buffer_retirement();
 
     let emit_interval_frames: u64 = (sample_rate_hz as u64 / 10).max(1);
     let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
@@ -403,134 +640,16 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
             let buffer_start_frame = transport.output_frame();
 
-            // Process incoming messages in real-time
-            while let Ok(message) = consumer_in.pop() {
-                match message {
-                    ControlMessage::Ping() => {
-                        producer_out.push_audio_message(AudioMessage::Pong());
-                    }
-                    ControlMessage::LoadSample { id, sample } => {
-                        mixer.load_sample(id, sample);
-                    }
-                    ControlMessage::PublishPreparedStems { id, stems } => {
-                        mixer.publish_prepared_stems(id, stems);
-                    }
-                    ControlMessage::SetStemMixMode {
-                        id,
-                        mode,
-                        source_version_hash,
-                    } => {
-                        mixer.set_stem_mix_mode(id, mode, source_version_hash);
-                    }
-                    ControlMessage::SetStemEnabledMask {
-                        id,
-                        enabled_stem_mask,
-                        source_version_hash,
-                    } => {
-                        mixer.set_stem_enabled_mask(id, enabled_stem_mask, source_version_hash);
-                    }
-                    ControlMessage::PlaySample { id, volume } => {
-                        schedule_play_sample_command(
-                            &mut scheduler,
-                            buffer_start_frame,
-                            trigger_quantization,
-                            &mut transport,
-                            id,
-                            volume,
-                            &mut mixer,
-                            &mut producer_out,
-                        );
-                    }
-                    ControlMessage::PlaySampleExclusive { id, volume } => {
-                        schedule_exclusive_play_sample_command(
-                            &mut scheduler,
-                            buffer_start_frame,
-                            trigger_quantization,
-                            &mut transport,
-                            id,
-                            volume,
-                            &mut mixer,
-                            &mut producer_out,
-                        );
-                    }
-                    ControlMessage::StopSample { id } => {
-                        schedule_immediate_command(
-                            &mut scheduler,
-                            buffer_start_frame,
-                            ScheduledCommand::StopSample { id },
-                            &mut mixer,
-                            &mut transport,
-                            &mut producer_out,
-                        );
-                    }
-                    ControlMessage::StopAll() => {
-                        schedule_immediate_command(
-                            &mut scheduler,
-                            buffer_start_frame,
-                            ScheduledCommand::StopAll,
-                            &mut mixer,
-                            &mut transport,
-                            &mut producer_out,
-                        );
-                    }
-                    ControlMessage::UnloadSample { id } => {
-                        mixer.unload_sample(id);
-                    }
-                    ControlMessage::SetSpeed(speed) => {
-                        mixer.set_speed(speed);
-                    }
-                    ControlMessage::SetBpmLock(enabled) => {
-                        mixer.set_bpm_lock(enabled);
-                    }
-                    ControlMessage::SetKeyLock(enabled) => {
-                        mixer.set_key_lock(enabled);
-                    }
-                    ControlMessage::SetKeyLockQuality(quality) => {
-                        mixer.set_key_lock_quality(quality);
-                    }
-                    ControlMessage::SetKeyLockSettings(settings) => {
-                        mixer.set_key_lock_settings(settings);
-                    }
-                    ControlMessage::SetMasterBpm(bpm) => {
-                        mixer.set_master_bpm(bpm);
-                    }
-                    ControlMessage::SetPadBpm { id, bpm } => {
-                        mixer.set_pad_bpm(id, bpm);
-                    }
-                    ControlMessage::SetPadTimingMetadata { id, metadata } => {
-                        mixer.set_pad_timing_metadata(id, metadata);
-                    }
-                    ControlMessage::AnchorTransportPhaseFromPad { id } => {
-                        anchor_transport_phase_from_pad(&mixer, &mut transport, id);
-                    }
-                    ControlMessage::SetPadGain { id, gain } => {
-                        mixer.set_pad_gain(id, gain);
-                    }
-                    ControlMessage::SetPadEq {
-                        id,
-                        low_db,
-                        mid_db,
-                        high_db,
-                    } => {
-                        mixer.set_pad_eq(id, low_db, mid_db, high_db);
-                    }
-                    ControlMessage::SetPadLoopRegion { id, start_s, end_s } => {
-                        mixer.set_pad_loop_region(id, start_s, end_s);
-                    }
-                    ControlMessage::SetTriggerQuantization(mode) => {
-                        trigger_quantization = mode;
-                    }
-                    ControlMessage::PauseSample { id } => {
-                        mixer.pause_sample(id);
-                    }
-                    ControlMessage::ResumeSample { id } => {
-                        mixer.resume_sample(id);
-                    }
-                    ControlMessage::SetVolume(volume) => {
-                        mixer.set_volume(volume);
-                    }
-                }
-            }
+            drain_control_messages(
+                &mut consumer_in,
+                &mut scheduler,
+                buffer_start_frame,
+                &mut trigger_quantization,
+                &mut transport,
+                &mut mixer,
+                &mut producer_out,
+                &mut retired_buffers,
+            );
 
             // Render audio + compute per-pad peaks.
             render_scheduled_audio(
@@ -542,6 +661,7 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
                 channels as usize,
                 &mut transport,
                 &mut producer_out,
+                &mut retired_buffers,
             );
 
             let frames = data.len() / channels as usize;
@@ -575,6 +695,7 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
 
     Ok(AudioStreamHandle {
         stream,
+        _retirement_worker: retirement_worker,
         producer: Arc::new(Mutex::new(producer_in)),
         consumer: Arc::new(Mutex::new(consumer_out)),
         output_channels: channels as usize,
@@ -591,6 +712,7 @@ pub fn start_stream(stream: &Stream) -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement;
     use crate::messages::{PadTimingMetadata, SampleBuffer};
     use std::sync::Arc;
 
@@ -628,6 +750,58 @@ mod tests {
             .iter()
             .find(|voice| voice.active && voice.sample_id == id)
             .map(|voice| voice.frame_pos)
+    }
+
+    #[test]
+    fn control_drain_respects_per_callback_budget() {
+        let total_messages = MAX_CONTROL_MESSAGES_PER_CALLBACK + 3;
+        let (mut producer, mut consumer) = RingBuffer::new(total_messages + 1);
+        for _ in 0..total_messages {
+            producer.push(ControlMessage::Ping()).unwrap();
+        }
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        let mut scheduler = FixedCapacityScheduler::<8>::new();
+        let mut transport = TransportTimeline::new(44_100);
+        let mut trigger_quantization = TriggerQuantization::Immediate;
+        let mut messages = Vec::new();
+
+        let processed = drain_control_messages(
+            &mut consumer,
+            &mut scheduler,
+            0,
+            &mut trigger_quantization,
+            &mut transport,
+            &mut mixer,
+            &mut messages,
+            &mut ImmediateAudioBufferRetirement,
+        );
+
+        assert_eq!(processed, MAX_CONTROL_MESSAGES_PER_CALLBACK);
+        assert_eq!(messages.len(), MAX_CONTROL_MESSAGES_PER_CALLBACK);
+        assert_eq!(consumer.slots(), 3);
+    }
+
+    #[test]
+    fn retirement_slot_estimate_covers_polyphonic_stop_paths() {
+        assert_eq!(
+            control_message_retirement_slots_needed(&ControlMessage::StopSample { id: 0 }),
+            MAX_VOICES
+        );
+        assert_eq!(
+            control_message_retirement_slots_needed(&ControlMessage::UnloadSample { id: 0 }),
+            MAX_VOICES + 2
+        );
+        assert_eq!(
+            control_message_retirement_slots_needed(&ControlMessage::StopAll()),
+            MAX_VOICES
+        );
+        assert_eq!(
+            control_message_retirement_slots_needed(&ControlMessage::PlaySampleExclusive {
+                id: 0,
+                volume: 1.0,
+            }),
+            MAX_VOICES
+        );
     }
 
     #[test]
@@ -674,6 +848,7 @@ mod tests {
             &mut mixer,
             &mut transport,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert!(scheduler.is_empty());
@@ -702,6 +877,7 @@ mod tests {
             &mut mixer,
             &mut transport,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert!(
@@ -733,6 +909,7 @@ mod tests {
             1.0,
             &mut mixer,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert_eq!(scheduler.peek_next_target_frame(), Some(5));
@@ -751,6 +928,7 @@ mod tests {
             1,
             &mut transport,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert_eq!(output[0], 0.0);
@@ -782,6 +960,7 @@ mod tests {
             1.0,
             &mut mixer,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert_eq!(scheduler.peek_next_target_frame(), Some(8));
@@ -817,6 +996,7 @@ mod tests {
             1.0,
             &mut mixer,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert!(scheduler.is_empty());
@@ -845,6 +1025,7 @@ mod tests {
             1.0,
             &mut mixer,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert!(scheduler.is_empty());
@@ -872,6 +1053,7 @@ mod tests {
             1.0,
             &mut mixer,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert_eq!(scheduler.peek_next_target_frame(), Some(5));
@@ -899,6 +1081,7 @@ mod tests {
             1.0,
             &mut mixer,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert!(scheduler.is_empty());
@@ -929,6 +1112,7 @@ mod tests {
             1.0,
             &mut mixer,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert!(scheduler.is_empty());
@@ -978,6 +1162,7 @@ mod tests {
             1.0,
             &mut mixer,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert_eq!(scheduler.peek_next_target_frame(), Some(8));
@@ -1015,6 +1200,7 @@ mod tests {
             1.0,
             &mut mixer,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert_eq!(scheduler.peek_next_target_frame(), Some(8));
@@ -1031,6 +1217,7 @@ mod tests {
             1,
             &mut transport,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert!(output[..2].iter().all(|sample| *sample == 0.0));
@@ -1063,6 +1250,7 @@ mod tests {
             &mut mixer,
             &mut transport,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert_eq!(transport.master_bpm(), Some(60.0));
@@ -1079,6 +1267,7 @@ mod tests {
             1.0,
             &mut mixer,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert_eq!(scheduler.peek_next_target_frame(), Some(8));
@@ -1107,6 +1296,7 @@ mod tests {
             1.0,
             &mut mixer,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert!(scheduler.is_empty());
@@ -1123,6 +1313,7 @@ mod tests {
             1.0,
             &mut mixer,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert_eq!(callback_start_frame, 80);
@@ -1155,6 +1346,7 @@ mod tests {
             &mut mixer,
             &mut transport,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
         schedule_play_sample_command(
             &mut scheduler,
@@ -1165,6 +1357,7 @@ mod tests {
             1.0,
             &mut mixer,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert_eq!(scheduler.peek_next_target_frame(), Some(8));
@@ -1255,6 +1448,7 @@ mod tests {
             1.0,
             &mut mixer,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert!(
@@ -1298,6 +1492,7 @@ mod tests {
             1.0,
             &mut mixer,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert!(scheduler.is_empty());
@@ -1348,6 +1543,7 @@ mod tests {
             1.0,
             &mut mixer,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert!(scheduler.is_empty());
@@ -1384,6 +1580,7 @@ mod tests {
             1.0,
             &mut mixer,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert_eq!(scheduler.peek_next_target_frame(), Some(5));
@@ -1413,6 +1610,7 @@ mod tests {
             1,
             &mut transport,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert!((output[0] - 0.5).abs() < 1e-5);
@@ -1459,6 +1657,7 @@ mod tests {
             1.0,
             &mut mixer,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert!(
@@ -1494,6 +1693,7 @@ mod tests {
             1.0,
             &mut mixer,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert!(scheduler.is_empty());
@@ -1534,6 +1734,7 @@ mod tests {
             1,
             &mut transport,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert!(output[..4].iter().all(|sample| *sample == 0.0));
@@ -1543,6 +1744,40 @@ mod tests {
                 .all(|sample| (*sample - 0.5).abs() < 1e-5)
         );
         assert!((pad_peaks[0] - 0.5).abs() < 1e-5);
+        assert_started(&messages, 0, 0);
+    }
+
+    #[test]
+    fn scheduled_start_inside_oversized_buffer_preserves_target_offset() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 1_000, 0.5));
+        let mut scheduler = FixedCapacityScheduler::<8>::new();
+        let mut transport = TransportTimeline::new(44_100);
+        scheduler
+            .schedule(600, ScheduledCommand::PlaySample { id: 0, volume: 1.0 })
+            .unwrap();
+        let mut output = vec![0.0; 700];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        let mut messages = Vec::new();
+
+        render_scheduled_audio(
+            &mut mixer,
+            &mut scheduler,
+            &mut output,
+            &mut pad_peaks,
+            0,
+            1,
+            &mut transport,
+            &mut messages,
+            &mut ImmediateAudioBufferRetirement,
+        );
+
+        assert!(output[..600].iter().all(|sample| *sample == 0.0));
+        assert!(
+            output[600..]
+                .iter()
+                .all(|sample| (*sample - 0.5).abs() < 1e-5)
+        );
         assert_started(&messages, 0, 0);
     }
 
@@ -1569,6 +1804,7 @@ mod tests {
             1,
             &mut transport,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert!(
@@ -1606,6 +1842,7 @@ mod tests {
             1,
             &mut transport,
             &mut messages,
+            &mut ImmediateAudioBufferRetirement,
         );
 
         assert!(

@@ -1,3 +1,4 @@
+use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 use crate::audio_engine::constants::{SPEED_MAX, SPEED_MIN};
 use crate::audio_engine::eq3::Eq3State;
 use crate::audio_engine::stretch_processor::StretchProcessor;
@@ -31,7 +32,29 @@ impl VoiceSlot {
         }
     }
 
-    pub fn start(
+    pub(crate) fn start_rt(
+        &mut self,
+        sample_id: usize,
+        sample: SampleBuffer,
+        initial_frame_pos: usize,
+        volume: f32,
+        initial_tempo_ratio: f32,
+        retirement: &mut impl AudioBufferRetirement,
+    ) {
+        if let Some(old_sample) = self.sample.take() {
+            retirement.retire_sample(old_sample);
+        }
+
+        self.start_inner(
+            sample_id,
+            sample,
+            initial_frame_pos,
+            volume,
+            initial_tempo_ratio,
+        );
+    }
+
+    fn start_inner(
         &mut self,
         sample_id: usize,
         sample: SampleBuffer,
@@ -52,9 +75,22 @@ impl VoiceSlot {
         }
     }
 
-    pub fn stop(&mut self) {
-        self.active = false;
+    #[cfg(test)]
+    pub(crate) fn stop(&mut self) {
         self.sample = None;
+        self.stop_inner();
+    }
+
+    pub(crate) fn stop_rt(&mut self, retirement: &mut impl AudioBufferRetirement) {
+        if let Some(sample) = self.sample.take() {
+            retirement.retire_sample(sample);
+        }
+
+        self.stop_inner();
+    }
+
+    fn stop_inner(&mut self) {
+        self.active = false;
         self.frame_pos = 0;
         self.volume = 0.0;
         self.tempo_ratio_smoothed = 1.0;

@@ -106,8 +106,10 @@ separated:
 - discrete commands and continuous parameter updates share one control ring,
 - transport BPM and mixer BPM are separate concepts,
 - durable Python state and live Rust state duplicate several authorities,
-- the callback drains all available commands without a per-callback budget,
-- buffer and prepared-stem handle lifetimes may still drop large allocations on the callback,
+- command draining is now bounded per callback, but discrete events and continuous parameters
+  still share one queue,
+- buffer and prepared-stem handle retirement now leaves the callback through a bounded
+  non-audio retirement worker,
 - current EQ is hardwired into the mixer rather than modeled as a DSP node,
 - future parameter smoothing/coalescing is not defined as a first-class system.
 
@@ -125,7 +127,8 @@ The CPAL audio callback is created in `rust/src/audio_engine/audio_stream.rs`. I
 
 The callback currently:
 
-1. drains all pending control messages with `while let Ok(message) = consumer_in.pop()`,
+1. drains at most `MAX_CONTROL_MESSAGES_PER_CALLBACK` control messages per invocation,
+   currently `64`, and leaves additional messages queued for later callbacks,
 2. updates mixer/transport/scheduler state from those messages,
 3. renders scheduled audio segments into the CPAL output buffer,
 4. advances the transport by rendered output frames,
@@ -140,22 +143,22 @@ Positive findings:
 - Core mixer arrays and scheduler storage are fixed-capacity.
 - Per-voice stretch buffers are constructed before callback rendering.
 - Stem generation and cache validation are outside the callback.
+- Oversized render slices are split into chunks that fit the existing preallocated stretch-buffer
+  assumptions.
+- Sample and prepared-stem handles removed by the callback are moved to a bounded non-audio
+  retirement worker before large `Arc` deallocation can occur.
 
 Risks and gaps:
 
-- The control-message drain is unbounded per callback. UI/MIDI/DSP parameter bursts can consume
-  callback time before audio is rendered.
+- The callback work budget is fixed but not priority-aware. UI/MIDI/DSP parameter bursts can
+  still delay later trigger/stop commands across callbacks until the command/parameter path gains
+  coalescing and priority rules.
 - The scheduler is fixed-capacity but insertion/drain operations shift arrays. This is bounded,
   but burst behavior should be measured and budgeted.
 - `render_scheduled_audio` and `RtMixer::render` both clear output ranges. This is minor, but it
   is unnecessary hot-path work.
-- `RtMixer::render` assumes the callback frame count stays within the internal
-  `DEFAULT_BLOCK_SAMPLES` render buffers. If CPAL delivers a larger block than requested, the
-  stretch output can be indexed past its internal capacity. The engine needs block splitting or a
-  hard guarded render loop before professional use.
-- `SampleBuffer` and `PreparedStemSet` are shared through `Arc` handles. Loading, unloading, or
-  replacing them in the callback may drop the last strong reference on the callback thread. Large
-  buffer deallocation belongs outside the realtime path.
+- The buffer-retirement path is fixed-size and preallocated. Sustained producer overload can defer
+  handle-retiring control messages at the queue head until retirement capacity is available.
 - Audio-to-control messages are best-effort. Dropped `SampleStarted` or `SampleStopped` telemetry
   can desynchronize Python `SessionState` from live Rust state.
 - Loop, stem-mask, EQ, and several parameter changes are immediate and unsmoothed, so clicks or
@@ -536,6 +539,8 @@ Docs updated:
 
 ### Analysis Stage 2: Realtime Safety And Buffer Lifetime
 
+Status: completed by `openspec/changes/prepare-realtime-callback-safety/`.
+
 Goal: audit and prepare the callback hot path before feature DSP work.
 
 Files:
@@ -553,10 +558,16 @@ Questions:
 - What happens if CPAL delivers more than `DEFAULT_BLOCK_SAMPLES`?
 - Which message handlers do nontrivial work in the callback?
 
-Expected output:
+Result:
 
-- OpenSpec-friendly refactor proposal for callback budgets, deferred audio-buffer retirement, and
-  block-splitting/guarded rendering.
+- OpenSpec change `prepare-realtime-callback-safety` records the bounded callback drain,
+  oversized block handling, and deferred buffer-retirement behavior.
+- The callback processes at most `64` control messages per invocation.
+- Oversized mixer render slices are split to preserve the existing fixed stretch-buffer bounds.
+- Sample and prepared-stem handles removed or rejected in the callback are retired through a
+  bounded non-audio worker before large deallocation can occur.
+- Focused Rust tests cover command-burst budgeting, oversized render chunking, scheduled event
+  offsets, retirement queue behavior, and mixer unload/reject paths.
 
 ### Analysis Stage 3: Command And Parameter Architecture
 
@@ -723,19 +734,20 @@ Acceptance:
 
 ### Phase 2: Realtime-Safety Cleanup
 
+Status: completed by `prepare-realtime-callback-safety`.
+
 Goal: remove known hot-path hazards before future DSP work.
 
-Scope:
+Implemented scope:
 
-- budget command draining per callback or otherwise bound worst-case control handling,
-- guard or split render blocks larger than internal DSP buffers,
-- audit/defer large `Arc` buffer retirement outside the callback,
-- reduce redundant hot-path clearing where safe.
+- budget command draining per callback with `MAX_CONTROL_MESSAGES_PER_CALLBACK = 64`,
+- split render blocks larger than the existing internal stretch-buffer capacity,
+- defer sample/prepared-stem `Arc` retirement outside the callback through a bounded worker.
 
 Affected files:
 
-- `audio_stream.rs`, `mixer.rs`, `voice_slot.rs`, `stretch_processor.rs`, `messages.rs`,
-  focused Rust tests, docs/OpenSpec.
+- `audio_stream.rs`, `mixer.rs`, `voice_slot.rs`, `buffer_retirement.rs`, focused Rust tests,
+  docs/OpenSpec.
 
 Non-goals:
 
@@ -748,17 +760,19 @@ Risks:
 - changing callback scheduling can alter edge timing,
 - deferred retirement needs careful ownership.
 
-Tests/checks:
+Tests/checks completed:
 
 - Rust unit tests for oversized block handling, command-burst budget behavior, and buffer
   retirement policy,
-- full uv-managed Rust/Python validation if behavior changes.
+- official strict OpenSpec validation,
+- full uv-managed Rust/Python validation for the behavior change.
 
-Acceptance:
+Acceptance result:
 
-- no unbounded command drain,
-- no callback panic for larger device blocks,
-- no known large-buffer deallocation on callback.
+- no unbounded command drain remains in the callback,
+- larger device blocks are rendered in safe chunks rather than indexing past stretch buffers,
+- known sample/prepared-stem handle replacement and rejection paths defer large deallocation
+  outside the callback.
 
 Rollback:
 
@@ -938,12 +952,14 @@ Acceptance:
 
 ## Next Recommended Step
 
-The next recommended step is Analysis Stage 2 / Phase 2:
+The next recommended step is Analysis Stage 3 / Phase 3:
 
 ```text
-Audit and prepare the Rust audio callback realtime-safety boundary:
-bounded command drain, oversized callback blocks, and buffer/stem handle retirement.
+Separate discrete commands from continuous parameters and define overload semantics:
+classify ControlMessage variants, add coalescing/last-value-wins behavior for fast controls,
+and prevent parameter bursts from starving trigger/stop correctness.
 ```
 
-Do not implement the new EQ or any other DSP effect before that step is complete, unless a future
-user request explicitly supersedes this plan with an OpenSpec-backed change.
+Do not implement the new EQ or any other DSP effect before the command/parameter path and later
+DSP foundation stages are complete, unless a future user request explicitly supersedes this plan
+with an OpenSpec-backed change.

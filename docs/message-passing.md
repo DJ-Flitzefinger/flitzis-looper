@@ -46,16 +46,20 @@ Messages are intentionally small and allocation-free on the audio thread:
 
 The CPAL callback:
 
-- Drains pending messages without blocking.
+- Drains pending messages without blocking, up to `MAX_CONTROL_MESSAGES_PER_CALLBACK` per
+  invocation. The current budget is `64`; overflow remains queued for later callbacks.
 - Owns and advances the Rust transport timeline by rendered output sample frames.
 - Owns the fixed-capacity scheduler used for current-frame playback commands and future
   quantized events.
 - Applies Speed/BPM-Lock/Key-Lock playback using already-owned mixer and per-voice DSP state.
+- Splits oversized render slices into chunks that fit preallocated per-voice stretch buffers.
 - Avoids Python/GIL interaction entirely.
 - Performs no disk I/O or decoding.
 - Does not own MIDI ports, poll keyboards, read mapping JSON, update Learn state, or call input
   mapping UI/controller code.
 - Mixes audio using fixed-capacity data structures (`MAX_SAMPLE_SLOTS`, `MAX_VOICES`).
+- Moves removed/replaced/rejected sample and prepared-stem handles onto a bounded non-audio
+  retirement worker instead of dropping large final `Arc` allocations in the callback.
 
 Disk I/O and decoding happen in `load_sample(...)`, outside the callback.
 
@@ -64,6 +68,10 @@ Disk I/O and decoding happen in `load_sample(...)`, outside the callback.
 - Ring buffer full: `AudioEngine` methods return an error to Python; the audio thread continues unaffected.
 - Ring buffer empty (audio → control): `receive_msg()` returns `None`.
 - Missing sample slot: triggering playback is ignored safely.
+- Control-message burst: the callback processes only its fixed per-callback budget and leaves
+  remaining messages queued.
+- Retirement backlog temporarily full: the callback can defer a handle-retiring message at the
+  queue head until the non-audio retirement worker frees capacity.
 
 ## Low-jitter input mapping messages
 

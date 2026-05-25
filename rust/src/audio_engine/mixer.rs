@@ -7,6 +7,9 @@
 //! and operates on [`SampleBuffer`](crate::messages::SampleBuffer) data loaded via
 //! [`decode_audio_file_to_sample_buffer`](crate::audio_engine::sample_loader::decode_audio_file_to_sample_buffer).
 
+use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
+#[cfg(test)]
+use crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement;
 use crate::audio_engine::constants::{
     MAX_VOICES, NUM_SAMPLES, PAD_EQ_DB_MAX, PAD_EQ_DB_MIN, PAD_GAIN_MAX, PAD_GAIN_MIN, SPEED_MAX,
     SPEED_MIN, VOLUME_MAX, VOLUME_MIN,
@@ -301,23 +304,59 @@ impl RtMixer {
     ///
     /// The sample must have the same number of channels as the mixer.
     /// Invalid IDs are silently ignored.
-    pub fn load_sample(&mut self, id: usize, sample: SampleBuffer) {
+    #[cfg(test)]
+    pub(crate) fn load_sample(&mut self, id: usize, sample: SampleBuffer) {
+        let mut retirement = ImmediateAudioBufferRetirement;
+        self.load_sample_rt(id, sample, &mut retirement);
+    }
+
+    pub(crate) fn load_sample_rt(
+        &mut self,
+        id: usize,
+        sample: SampleBuffer,
+        retirement: &mut impl AudioBufferRetirement,
+    ) -> bool {
         if id >= NUM_SAMPLES {
-            return;
+            retirement.retire_sample(sample);
+            return false;
         }
 
         if sample.channels != self.channels {
-            return;
+            retirement.retire_sample(sample);
+            return false;
+        }
+
+        if let Some(old_sample) = self.sample_bank[id].take() {
+            retirement.retire_sample(old_sample);
+        }
+        if let Some(old_stems) = self.prepared_stems[id].take() {
+            retirement.retire_prepared_stems(old_stems);
         }
 
         self.sample_bank[id] = Some(sample);
-        self.prepared_stems[id] = None;
         self.stem_enabled_mask[id] = STEM_COMPONENT_MASK;
+        true
     }
 
+    #[cfg(test)]
     pub(crate) fn publish_prepared_stems(&mut self, id: usize, stems: PreparedStemSet) -> bool {
+        let mut retirement = ImmediateAudioBufferRetirement;
+        self.publish_prepared_stems_rt(id, stems, &mut retirement)
+    }
+
+    pub(crate) fn publish_prepared_stems_rt(
+        &mut self,
+        id: usize,
+        stems: PreparedStemSet,
+        retirement: &mut impl AudioBufferRetirement,
+    ) -> bool {
         if !self.can_accept_prepared_stems(id, &stems) {
+            retirement.retire_prepared_stems(stems);
             return false;
+        }
+
+        if let Some(old_stems) = self.prepared_stems[id].take() {
+            retirement.retire_prepared_stems(old_stems);
         }
 
         self.prepared_stems[id] = Some(stems);
@@ -416,25 +455,38 @@ impl RtMixer {
     /// - `velocity`: Playback volume (0.0 to 1.0)
     ///
     /// If no free voice slot is available, the playback request is silently dropped.
-    pub fn play_sample(&mut self, id: usize, velocity: f32) -> bool {
-        self.play_sample_with_phase(id, velocity, None)
+    #[cfg(test)]
+    pub(crate) fn play_sample(&mut self, id: usize, velocity: f32) -> bool {
+        let mut retirement = ImmediateAudioBufferRetirement;
+        self.play_sample_rt(id, velocity, &mut retirement)
     }
 
-    #[allow(dead_code)]
+    pub(crate) fn play_sample_rt(
+        &mut self,
+        id: usize,
+        velocity: f32,
+        retirement: &mut impl AudioBufferRetirement,
+    ) -> bool {
+        self.play_sample_with_phase_rt(id, velocity, None, retirement)
+    }
+
+    #[cfg(test)]
     pub(crate) fn play_sample_phase_aligned(
         &mut self,
         id: usize,
         velocity: f32,
         target_bar_phase_beats: f64,
     ) -> bool {
-        self.play_sample_with_phase(id, velocity, Some(target_bar_phase_beats))
+        let mut retirement = ImmediateAudioBufferRetirement;
+        self.play_sample_with_phase_rt(id, velocity, Some(target_bar_phase_beats), &mut retirement)
     }
 
-    fn play_sample_with_phase(
+    fn play_sample_with_phase_rt(
         &mut self,
         id: usize,
         velocity: f32,
         target_bar_phase_beats: Option<f64>,
+        retirement: &mut impl AudioBufferRetirement,
     ) -> bool {
         if !self.can_play_sample(id, velocity) {
             return false;
@@ -463,7 +515,14 @@ impl RtMixer {
         // Start new voice slot
         for voice_slot in &mut self.voices {
             if !voice_slot.active {
-                voice_slot.start(id, sample.clone(), initial_frame_pos, velocity, tempo_ratio);
+                voice_slot.start_rt(
+                    id,
+                    sample.clone(),
+                    initial_frame_pos,
+                    velocity,
+                    tempo_ratio,
+                    retirement,
+                );
                 return true;
             }
         }
@@ -808,14 +867,24 @@ impl RtMixer {
     /// # Parameters
     ///
     /// - `id`: Sample slot ID to stop
-    pub fn stop_sample(&mut self, id: usize) {
+    #[cfg(test)]
+    pub(crate) fn stop_sample(&mut self, id: usize) {
+        let mut retirement = ImmediateAudioBufferRetirement;
+        self.stop_sample_rt(id, &mut retirement);
+    }
+
+    pub(crate) fn stop_sample_rt(
+        &mut self,
+        id: usize,
+        retirement: &mut impl AudioBufferRetirement,
+    ) {
         if id >= NUM_SAMPLES {
             return;
         }
 
         for voice_slot in &mut self.voices {
             if voice_slot.is_playing_sample(id) {
-                voice_slot.stop();
+                voice_slot.stop_rt(retirement);
             }
         }
     }
@@ -859,16 +928,35 @@ impl RtMixer {
     /// # Parameters
     ///
     /// - `id`: Sample slot ID to unload
-    pub fn unload_sample(&mut self, id: usize) {
+    #[cfg(test)]
+    pub(crate) fn unload_sample(&mut self, id: usize) {
+        let mut retirement = ImmediateAudioBufferRetirement;
+        self.unload_sample_rt(id, &mut retirement);
+    }
+
+    pub(crate) fn unload_sample_rt(
+        &mut self,
+        id: usize,
+        retirement: &mut impl AudioBufferRetirement,
+    ) -> bool {
         if id >= NUM_SAMPLES {
-            return;
+            return false;
         }
 
-        self.stop_sample(id);
-        self.sample_bank[id] = None;
-        self.prepared_stems[id] = None;
+        self.stop_sample_rt(id, retirement);
+        if let Some(sample) = self.sample_bank[id].take() {
+            retirement.retire_sample(sample);
+        }
+        if let Some(stems) = self.prepared_stems[id].take() {
+            retirement.retire_prepared_stems(stems);
+        }
         self.stem_enabled_mask[id] = STEM_COMPONENT_MASK;
         self.pad_phase_anchor_frame[id] = 0;
+        true
+    }
+
+    pub(crate) fn max_realtime_render_frames(&self) -> usize {
+        (DEFAULT_BLOCK_SAMPLES / 2).max(1)
     }
 
     /// Renders audio frames to the output buffer.
@@ -880,10 +968,62 @@ impl RtMixer {
     ///
     /// - `output`: Output buffer to fill with mixed audio samples
     /// - `peaks`: Pad peaks
-    pub fn render(&mut self, output: &mut [f32], pad_peaks: &mut [f32; NUM_SAMPLES]) {
+    #[cfg(test)]
+    pub(crate) fn render(&mut self, output: &mut [f32], pad_peaks: &mut [f32; NUM_SAMPLES]) {
+        let mut retirement = ImmediateAudioBufferRetirement;
+        self.render_rt(output, pad_peaks, &mut retirement);
+    }
+
+    pub(crate) fn render_rt(
+        &mut self,
+        output: &mut [f32],
+        pad_peaks: &mut [f32; NUM_SAMPLES],
+        retirement: &mut impl AudioBufferRetirement,
+    ) {
         pad_peaks.fill(f32::EQUILIBRIUM);
         output.fill(Sample::EQUILIBRIUM);
         self.pad_playhead_frame.fill(None);
+
+        if self.channels == 0 {
+            return;
+        }
+
+        let frames = output.len() / self.channels;
+        if frames == 0 {
+            return;
+        }
+
+        let max_frames = self.max_realtime_render_frames();
+        if frames > max_frames {
+            let mut rendered_frames = 0;
+            let mut chunk_peaks = [f32::EQUILIBRIUM; NUM_SAMPLES];
+
+            while rendered_frames < frames {
+                let chunk_frames = (frames - rendered_frames).min(max_frames);
+                let start = rendered_frames * self.channels;
+                let end = start + chunk_frames * self.channels;
+
+                self.render_rt_chunk(&mut output[start..end], &mut chunk_peaks, retirement);
+                for (peak, chunk_peak) in pad_peaks.iter_mut().zip(chunk_peaks.iter()) {
+                    *peak = (*peak).max(*chunk_peak);
+                }
+
+                rendered_frames += chunk_frames;
+            }
+
+            return;
+        }
+
+        self.render_rt_chunk(output, pad_peaks, retirement);
+    }
+
+    fn render_rt_chunk(
+        &mut self,
+        output: &mut [f32],
+        pad_peaks: &mut [f32; NUM_SAMPLES],
+        retirement: &mut impl AudioBufferRetirement,
+    ) {
+        pad_peaks.fill(f32::EQUILIBRIUM);
 
         if self.channels == 0 {
             return;
@@ -915,14 +1055,14 @@ impl RtMixer {
             let is_paused = voice.paused;
 
             let Some(sample) = voice.sample.clone() else {
-                voice.stop();
+                voice.stop_rt(retirement);
                 continue;
             };
 
             if !is_paused {
                 let sample_frames = sample.samples.len() / self.channels;
                 if sample_frames == 0 {
-                    voice.stop();
+                    voice.stop_rt(retirement);
                     continue;
                 }
                 let prepared_stem_set = if stem_mix_mode[voice.sample_id] == StemMixMode::AllStems {
@@ -968,7 +1108,7 @@ impl RtMixer {
                 }
                 let loop_len = loop_end - loop_start;
                 if loop_len == 0 {
-                    voice.stop();
+                    voice.stop_rt(retirement);
                     continue;
                 }
 
@@ -1119,6 +1259,26 @@ mod tests {
             .map(|voice| voice.frame_pos)
     }
 
+    #[derive(Default)]
+    struct CollectingRetirement {
+        samples: Vec<SampleBuffer>,
+        stems: Vec<PreparedStemSet>,
+    }
+
+    impl AudioBufferRetirement for CollectingRetirement {
+        fn retire_sample(&mut self, sample: SampleBuffer) {
+            self.samples.push(sample);
+        }
+
+        fn retire_prepared_stems(&mut self, stems: PreparedStemSet) {
+            self.stems.push(stems);
+        }
+
+        fn available_retirement_slots(&mut self) -> usize {
+            usize::MAX
+        }
+    }
+
     fn create_test_prepared_stems(
         channels: usize,
         sample_rate_hz: u32,
@@ -1179,6 +1339,80 @@ mod tests {
             max_abs = max_abs.max(y.abs());
         }
         assert!(max_abs > 0.0);
+    }
+
+    #[test]
+    fn test_render_splits_oversized_blocks_to_preserve_stretch_capacity() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.set_speed(2.0);
+        mixer.load_sample(0, create_test_sample(1, 5_000, 0.5));
+        assert!(mixer.play_sample(0, 1.0));
+
+        let frames = mixer.max_realtime_render_frames() * 2 + 37;
+        let mut output = vec![0.0; frames];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert!(output.iter().all(|sample| (*sample - 0.5).abs() < 1e-5));
+        assert_eq!(active_voice_frame(&mixer, 0), Some(frames * 2));
+    }
+
+    #[test]
+    fn test_unload_sample_rt_defers_loaded_sample_retirement() {
+        let samples: Arc<[f32]> = Arc::from(vec![0.5_f32; 32].into_boxed_slice());
+        let weak = Arc::downgrade(&samples);
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(
+            0,
+            SampleBuffer {
+                channels: 1,
+                samples,
+            },
+        );
+        let mut retirement = CollectingRetirement::default();
+
+        assert!(mixer.unload_sample_rt(0, &mut retirement));
+
+        assert!(mixer.sample_bank[0].is_none());
+        assert_eq!(retirement.samples.len(), 1);
+        assert!(weak.upgrade().is_some());
+
+        drop(retirement);
+
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn test_rejected_prepared_stems_are_retired() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 32, 0.5));
+        assert!(mixer.play_sample(0, 1.0));
+
+        let stem_samples: Arc<[f32]> = Arc::from(vec![0.25_f32; 32].into_boxed_slice());
+        let weak = Arc::downgrade(&stem_samples);
+        let stems = PreparedStemSet {
+            source_version_hash: 42,
+            sample_rate_hz: 44_100,
+            channels: 1,
+            frame_count: 32,
+            available_mask: full_stem_available_mask(),
+            stems: std::array::from_fn(|_| SampleBuffer {
+                channels: 1,
+                samples: stem_samples.clone(),
+            }),
+        };
+        drop(stem_samples);
+        let mut retirement = CollectingRetirement::default();
+
+        assert!(!mixer.publish_prepared_stems_rt(0, stems, &mut retirement));
+
+        assert_eq!(retirement.stems.len(), 1);
+        assert!(weak.upgrade().is_some());
+
+        drop(retirement);
+
+        assert!(weak.upgrade().is_none());
     }
 
     #[test]
