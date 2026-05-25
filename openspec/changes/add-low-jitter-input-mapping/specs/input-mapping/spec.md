@@ -75,9 +75,12 @@ through the bounded Rust control path.
 ### Requirement: MIDI Filtering Handles Version One Scope
 The system SHALL filter irrelevant MIDI messages before mapping resolution.
 
-Version 1 SHALL process Note On with velocity greater than zero and Control Change. It SHALL treat
-Note On velocity zero as Note Off and SHALL NOT trigger Learn or playback from it. It SHALL ignore
-Active Sensing, MIDI Clock, SysEx, Program Change, Pitch Bend, Aftertouch, and MPE-style messages.
+Version 1 SHALL process Note On with velocity greater than zero, Control Change, and NRPN
+increment/decrement messages carried by Control Change setup and data-increment/data-decrement
+events. It SHALL treat Note On velocity zero as Note Off and SHALL NOT trigger Learn or playback
+from it. It SHALL ignore NRPN setup Control Changes as standalone Learn/playback targets. It SHALL
+ignore Active Sensing, MIDI Clock, SysEx, Program Change, Pitch Bend, Aftertouch, and MPE-style
+messages.
 
 #### Scenario: Note On velocity zero is ignored
 - **WHEN** the MIDI callback receives Note On channel 1 note 60 velocity 0
@@ -89,6 +92,15 @@ Active Sensing, MIDI Clock, SysEx, Program Change, Pitch Bend, Aftertouch, and M
 - **WHEN** the MIDI callback receives a MIDI Clock message
 - **THEN** the system drops the message for version 1 input mapping
 - **AND** it does not enter mapping lookup
+
+#### Scenario: NRPN increment/decrement is normalized as one binding
+- **WHEN** the MIDI callback receives NRPN MSB and LSB Control Changes on channel 1 for parameter 0
+- **AND** it then receives a Data Increment Control Change on channel 1
+- **THEN** the system normalizes the input as `midi:nrpn:1:0`
+- **AND** it reports an increment value for relative controller-owned dispatch
+- **WHEN** it then receives a Data Decrement Control Change on channel 1
+- **THEN** the system normalizes the same input as `midi:nrpn:1:0`
+- **AND** it reports a decrement value for relative controller-owned dispatch
 
 ### Requirement: Normal Playback Uses In-Memory Mappings
 The system SHALL use in-memory mapping snapshots for normal mapped playback.
@@ -123,6 +135,96 @@ controller/audio command behavior after input normalization.
 - **THEN** the system resolves the same `pad.trigger:0` action
 - **AND** both inputs request the same pad-trigger command semantics
 
+### Requirement: Learnable Control Coverage
+The system SHALL allow Learn to save mappings for Tap BPM, bottom-bar stem mask buttons,
+per-pad Gain, per-pad EQ band controls, Master Volume, and the global Speed/Pitch control.
+
+Keyboard and MIDI Note mappings to continuous controls SHALL save bounded set-value LooperAction
+keys from the value selected while learning. MIDI Control Change and NRPN increment/decrement
+mappings to Master Volume, global Speed/Pitch, per-pad Gain, and per-pad EQ SHALL save
+relative-step LooperAction keys and execute one bounded controller-owned increment or decrement
+outside the audio callback for each detected encoder movement. Relative movement SHALL be
+independent of the CC or NRPN start position and SHALL keep working across 0..127 wraparound or
+repeated relative encoder values, including common single-step encodings such as `1`/`127` and
+`65`/`63`. Target controls SHALL clamp at their existing minimum and maximum values when the MIDI
+control keeps turning. The
+first MIDI continuous-control event after Learn capture or startup SHALL establish the baseline
+without changing the target parameter. Stem mask buttons SHALL remain selectable as Learn targets after an input is
+pending, even when normal stem playback availability disables their execution.
+
+#### Scenario: Learn saves Tap BPM
+- **GIVEN** input mapping is enabled
+- **AND** Learn has captured one MIDI or keyboard input
+- **WHEN** the performer activates Tap BPM for selected pad 5
+- **THEN** the system saves a mapping to `pad.tap_bpm:4`
+- **AND** normal mapped dispatch registers a Tap BPM event for that pad
+
+#### Scenario: Keyboard Learn saves bounded set-value controls
+- **GIVEN** input mapping is enabled
+- **AND** Learn has captured one keyboard input
+- **WHEN** the performer targets Master Volume at 37 percent
+- **THEN** the system saves a mapping to `global.volume:37`
+- **WHEN** the performer targets the selected pad's Mid EQ at -3.5 dB
+- **THEN** the system saves a mapping to a bounded per-pad EQ action
+- **WHEN** the performer targets the selected pad's Gain at 37 percent
+- **THEN** the system saves a mapping to `pad.gain:<pad>:37`
+- **WHEN** the performer targets global Speed/Pitch at 123 percent
+- **THEN** the system saves a mapping to `global.speed:123`
+- **AND** mapped dispatch updates the controller state outside the audio callback
+
+#### Scenario: MIDI CC Learn saves relative continuous controls
+- **GIVEN** input mapping is enabled
+- **AND** Learn has captured MIDI Control Change channel 1 controller 7 with value 64
+- **WHEN** the performer targets Master Volume
+- **THEN** the system saves a mapping to `global.volume.delta`
+- **WHEN** the performer targets the selected pad's Gain
+- **THEN** the system saves a mapping to `pad.gain.delta:<pad>`
+- **WHEN** the performer targets global Speed/Pitch
+- **THEN** the system saves a mapping to `global.speed.delta`
+- **WHEN** that CC value later changes from 64 to 65
+- **THEN** mapped dispatch increases Master Volume by one fixed step outside the audio callback
+- **WHEN** that CC value repeats at 65
+- **THEN** mapped dispatch increases Master Volume by another fixed step outside the audio callback
+- **WHEN** that CC value later changes from 65 to 63
+- **THEN** mapped dispatch decreases Master Volume by one fixed step outside the audio callback
+- **WHEN** that CC value repeats at 63
+- **THEN** mapped dispatch decreases Master Volume by another fixed step outside the audio callback
+
+#### Scenario: NRPN Learn saves relative continuous controls
+- **GIVEN** input mapping is enabled
+- **AND** Learn has captured NRPN parameter 0 on channel 1 with an increment value
+- **WHEN** the performer targets Master Volume
+- **THEN** the system saves a mapping to `global.volume.delta` for `midi:nrpn:1:0`
+- **WHEN** that NRPN input later reports another increment value
+- **THEN** mapped dispatch increases Master Volume by one fixed step outside the audio callback
+- **WHEN** that NRPN input later reports a decrement value
+- **THEN** mapped dispatch decreases Master Volume by one fixed step outside the audio callback
+
+#### Scenario: Endless MIDI encoder covers the full bounded target range
+- **GIVEN** input mapping is enabled
+- **AND** `midi:cc:1:7` is mapped to `global.volume.delta`
+- **WHEN** the performer keeps turning an endless encoder clockwise across the CC 127 to 0 wrap
+- **THEN** mapped dispatch continues increasing Master Volume by fixed steps
+- **WHEN** Master Volume reaches 100 percent and the performer keeps turning clockwise
+- **THEN** Master Volume stays at 100 percent
+- **WHEN** the performer keeps turning the encoder counter-clockwise
+- **THEN** mapped dispatch decreases Master Volume by fixed steps down to 0 percent
+
+#### Scenario: MIDI Note Learn saves bounded set-value controls
+- **GIVEN** input mapping is enabled
+- **AND** Learn has captured MIDI Note On channel 1 note 60
+- **WHEN** the performer targets Master Volume at 37 percent
+- **THEN** the system saves a mapping to `global.volume:37`
+- **AND** mapped dispatch updates the controller state outside the audio callback
+
+#### Scenario: Learn saves disabled stem buttons
+- **GIVEN** input mapping is enabled
+- **AND** Learn has captured one MIDI or keyboard input
+- **AND** the selected pad does not currently allow normal stem-mask execution
+- **WHEN** the performer activates the `A` stem button as the Learn target
+- **THEN** the system saves the `A` button's all-stems preset action
+- **AND** it does not execute stem generation, cache scanning, disk I/O, or audio-callback work
+
 ### Requirement: Python Rust Boundary Is Typed And Testable
 The system SHALL expose a clear Python/Rust boundary for mapping snapshots, captured input events,
 runtime state, and diagnostics.
@@ -134,7 +236,7 @@ testable without physical MIDI hardware through injected MIDI messages.
 
 #### Scenario: Python receives captured MIDI event for Learn
 - **GIVEN** Learn is waiting for input
-- **WHEN** Rust reports a normalized MIDI event with binding key and timestamp
+- **WHEN** Rust reports a normalized MIDI event with binding key, MIDI value, and timestamp
 - **THEN** Python stores that binding as the pending Learn input
 - **AND** the audio callback is not entered for Learn UI state changes
 

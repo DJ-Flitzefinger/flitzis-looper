@@ -8,6 +8,7 @@ from flitzis_looper.ui.constants import SPACING, TEXT_MUTED_RGBA, TEXT_RGBA
 from flitzis_looper.ui.contextmanager import button_style, style_var
 
 if TYPE_CHECKING:
+    from flitzis_looper.input_mapping import PadEqBand
     from flitzis_looper.models import StemMixMode
     from flitzis_looper.ui.context import UiContext
     from flitzis_looper.ui.styles import ButtonStyleName
@@ -32,6 +33,11 @@ _STEM_MIX_OPTIONS: tuple[tuple[StemMixMode, str], ...] = (
     ("full_mix", "FULL MIX"),
     ("all_stems", "ALL STEMS"),
 )
+_EQ_KNOBS: tuple[tuple[str, str, PadEqBand, str], ...] = (
+    ("Low", "##pad_eq_low", "low", "pad_eq_low_db"),
+    ("Mid", "##pad_eq_mid", "mid", "pad_eq_mid_db"),
+    ("High", "##pad_eq_high", "high", "pad_eq_high_db"),
+)
 
 
 @dataclass(frozen=True)
@@ -53,6 +59,13 @@ def _labeled_value_row(
     text_width = imgui.calc_text_size(value).x
     imgui.same_line(max(0.0, avail_x - text_width))
     imgui.text_colored(value_rgba, value)
+
+
+def _has_pending_learn_input(ctx: UiContext) -> bool:
+    return (
+        ctx.state.project.input_mapping_enabled
+        and ctx.state.session.input_learn_pending_binding_key is not None
+    )
 
 
 def _render_pad_header(ctx: UiContext, info: _SidebarPadInfo) -> None:
@@ -128,30 +141,30 @@ def _render_loaded_gain(ctx: UiContext, pad_id: int) -> None:
         imgui.set_next_item_width(-1)
         gain_val = max(0, min(100, round(ctx.state.project.pad_gain[pad_id] * 100)))
         changed, new_gain = imgui.slider_int("##pad_gain", gain_val, 0, 100, "%d %")
-        if changed:
-            ctx.audio.pads.set_pad_gain(pad_id, new_gain / 100.0)
+        learn_clicked = (
+            _has_pending_learn_input(ctx)
+            and imgui.is_item_hovered()
+            and imgui.is_mouse_clicked(imgui.MouseButton_.left)
+        )
+        if changed or learn_clicked:
+            gain_value = new_gain if changed else gain_val
+            ctx.audio.pads.set_pad_gain(pad_id, gain_value / 100.0)
 
 
 def _render_loaded_eq(ctx: UiContext, info: _SidebarPadInfo) -> None:
-    knob_specs = (
-        ("Low", "##pad_eq_low", ctx.state.project.pad_eq_low_db),
-        ("Mid", "##pad_eq_mid", ctx.state.project.pad_eq_mid_db),
-        ("High", "##pad_eq_high", ctx.state.project.pad_eq_high_db),
-    )
-
     knob_width = 68.0
 
     # Vert. space for the knob labels
     imgui.dummy((info.avail_x, SPACING / 2))
 
-    any_changed = False
-    eq_values: list[float] = []
+    learn_pending = _has_pending_learn_input(ctx)
 
     with style_var(imgui.StyleVar_.item_spacing, (SPACING / 2, SPACING / 4)):
-        for idx, (label, knob_id, source_attr) in enumerate(knob_specs):
+        for idx, (label, knob_id, band, source_attr_name) in enumerate(_EQ_KNOBS):
             if idx > 0:
                 imgui.same_line()
 
+            source_attr = getattr(ctx.state.project, source_attr_name)
             knob_val = float(source_attr[info.pad_id])
             changed, new_val = imgui_knobs.knob(
                 knob_id,
@@ -173,11 +186,17 @@ def _render_loaded_eq(ctx: UiContext, info: _SidebarPadInfo) -> None:
                 label,
             )
 
-            any_changed = any_changed or changed
-            eq_values.append(new_val if changed else knob_val)
-
-    if any_changed:
-        ctx.audio.pads.set_pad_eq(info.pad_id, eq_values[0], eq_values[1], eq_values[2])
+            learn_clicked = (
+                learn_pending
+                and imgui.is_item_hovered()
+                and imgui.is_mouse_clicked(imgui.MouseButton_.left)
+            )
+            if changed or learn_clicked:
+                ctx.audio.pads.set_pad_eq_band(
+                    info.pad_id,
+                    band,
+                    float(new_val if changed else knob_val),
+                )
 
     imgui.dummy((info.avail_x, 0.0))
 

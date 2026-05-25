@@ -1,26 +1,39 @@
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class MidiBinding(BaseModel):
     """Device-neutral MIDI binding."""
 
-    kind: Literal["note", "cc"]
+    kind: Literal["note", "cc", "nrpn"]
     channel: int = Field(ge=1, le=16)
-    number: int = Field(ge=0, le=127)
+    number: int = Field(ge=0, le=16383)
 
     @property
     def key(self) -> str:
         return f"midi:{self.kind}:{self.channel}:{self.number}"
 
+    @model_validator(mode="after")
+    def _validate_number_for_kind(self) -> Self:
+        if self.kind in {"note", "cc"} and self.number > 127:
+            msg = f"{self.kind} MIDI binding number out of range: {self.number}"
+            raise ValueError(msg)
+        return self
+
     @classmethod
     def from_key(cls, key: str) -> MidiBinding:
         parts = key.split(":")
-        if len(parts) != 4 or parts[0] != "midi" or parts[1] not in {"note", "cc"}:
+        if len(parts) != 4 or parts[0] != "midi" or parts[1] not in {"note", "cc", "nrpn"}:
             msg = f"invalid MIDI binding key: {key}"
             raise ValueError(msg)
-        kind: Literal["note", "cc"] = "note" if parts[1] == "note" else "cc"
+        kind: Literal["note", "cc", "nrpn"]
+        if parts[1] == "note":
+            kind = "note"
+        elif parts[1] == "cc":
+            kind = "cc"
+        else:
+            kind = "nrpn"
         return cls(kind=kind, channel=int(parts[2]), number=int(parts[3]))
 
 

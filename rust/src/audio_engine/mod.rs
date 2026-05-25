@@ -948,6 +948,7 @@ impl AudioEngine {
         let dict = PyDict::new(py);
         dict.set_item("source", "midi")?;
         dict.set_item("binding_key", event.binding_key)?;
+        dict.set_item("value", event.value)?;
         dict.set_item("received_at_ns", event.received_at_ns)?;
         dict.set_item("dispatched", event.dispatched)?;
         dict.set_item("direct", event.direct)?;

@@ -59,6 +59,26 @@ def _set_cursor_y_for_button(*, center_y: float, height: float) -> None:
     imgui.set_cursor_pos_y(max(0.0, center_y - height / 2.0))
 
 
+def _has_pending_learn_input(ctx: UiContext) -> bool:
+    return (
+        ctx.state.project.input_mapping_enabled
+        and ctx.state.session.input_learn_pending_binding_key is not None
+    )
+
+
+def stem_controls_accept_input(*, enabled: bool, learn_pending: bool) -> bool:
+    """Return whether stem mask buttons should accept a click this frame."""
+    return enabled or learn_pending
+
+
+def stem_button_learn_target_state(
+    button_mask: int,
+    target_display_mode: StemMaskDisplayMode,
+) -> tuple[int, StemMaskDisplayMode]:
+    """Return the stable action saved when Learn targets a stem button."""
+    return button_mask, target_display_mode
+
+
 def _master_volume(ctx: UiContext) -> None:
     with style_var(imgui.StyleVar_.item_spacing, (0, SPACING / 2)):
         val = max(0, min(100, round(ctx.state.project.volume * 100)))
@@ -66,8 +86,14 @@ def _master_volume(ctx: UiContext) -> None:
 
         with item_width(240):
             changed, new_value = imgui.slider_int("##master_volume", val, 0, 100, "%d %")
-            if changed:
-                ctx.audio.global_.set_volume(new_value / 100.0)
+            learn_clicked = (
+                _has_pending_learn_input(ctx)
+                and imgui.is_item_hovered()
+                and imgui.is_mouse_clicked(imgui.MouseButton_.left)
+            )
+            if changed or learn_clicked:
+                volume_value = new_value if changed else val
+                ctx.audio.global_.set_volume(volume_value / 100.0)
 
 
 def trigger_quantization_button_style(*, enabled: bool) -> ButtonStyleName:
@@ -166,6 +192,7 @@ def _stem_mask_button(
     last_custom_mask: int,
     target_display_mode: StemMaskDisplayMode,
 ) -> None:
+    learn_pending = _has_pending_learn_input(ctx)
     style: ButtonStyleName = (
         "mode-on"
         if stem_button_is_active(label, button_mask, current_mask, display_mode)
@@ -182,13 +209,19 @@ def _stem_mask_button(
             and imgui.is_mouse_clicked(imgui.MouseButton_.right)
         )
         if clicked:
-            target_mask, next_display_mode = stem_button_target_state(
-                button_mask,
-                current_mask,
-                last_custom_mask,
-                display_mode,
-                target_display_mode,
-            )
+            if learn_pending:
+                target_mask, next_display_mode = stem_button_learn_target_state(
+                    button_mask,
+                    target_display_mode,
+                )
+            else:
+                target_mask, next_display_mode = stem_button_target_state(
+                    button_mask,
+                    current_mask,
+                    last_custom_mask,
+                    display_mode,
+                    target_display_mode,
+                )
             ctx.audio.stems.set_stem_enabled_mask(pad_id, target_mask, next_display_mode)
         elif right_clicked:
             target_mask, next_display_mode = stem_button_solo_state(button_mask)
@@ -201,9 +234,15 @@ def _stem_mask_controls(ctx: UiContext, center_y: float) -> None:
     last_custom_mask = ctx.state.stems.stem_last_custom_mask(pad_id)
     display_mode = ctx.state.stems.stem_mask_display_mode(pad_id)
     enabled = ctx.state.stems.stem_mask_controls_enabled(pad_id)
+    learn_pending = _has_pending_learn_input(ctx)
 
     _set_cursor_y_for_button(center_y=center_y, height=STEM_BUTTON_SIZE)
-    imgui.begin_disabled(disabled=not enabled)
+    imgui.begin_disabled(
+        disabled=not stem_controls_accept_input(
+            enabled=enabled,
+            learn_pending=learn_pending,
+        )
+    )
     with (
         style_var(imgui.StyleVar_.item_spacing, (STEM_BUTTON_GAP, 0.0)),
         style_var(imgui.StyleVar_.frame_rounding, 16.0),

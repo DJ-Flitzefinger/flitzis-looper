@@ -8,8 +8,10 @@ from flitzis_looper.models import (
 )
 from flitzis_looper.ui.render.bottom_bar import (
     stem_button_is_active,
+    stem_button_learn_target_state,
     stem_button_solo_state,
     stem_button_target_state,
+    stem_controls_accept_input,
     trigger_quantization_button_style,
 )
 
@@ -73,6 +75,18 @@ def test_component_right_click_sets_non_momentary_solo() -> None:
 
     assert target_mask == STEM_MASK_DRUMS
     assert display_mode == "custom"
+
+
+def test_pending_learn_input_allows_disabled_stem_buttons_as_targets() -> None:
+    assert stem_controls_accept_input(enabled=False, learn_pending=True)
+    assert not stem_controls_accept_input(enabled=False, learn_pending=False)
+
+
+def test_stem_learn_target_uses_button_identity_not_current_toggle_state() -> None:
+    target_mask, display_mode = stem_button_learn_target_state(STEM_COMPONENT_MASK, "all")
+
+    assert target_mask == STEM_COMPONENT_MASK
+    assert display_mode == "all"
 
 
 def test_custom_all_components_does_not_light_all_preset() -> None:

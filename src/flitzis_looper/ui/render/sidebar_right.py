@@ -11,6 +11,13 @@ if TYPE_CHECKING:
     from flitzis_looper.ui.styles import ButtonStyleName
 
 
+def _has_pending_learn_input(ctx: UiContext) -> bool:
+    return (
+        ctx.state.project.input_mapping_enabled
+        and ctx.state.session.input_learn_pending_binding_key is not None
+    )
+
+
 def _bpm_display(ctx: UiContext) -> None:
     bpm = ctx.state.global_.effective_bpm()
     bpm_text = f"{bpm:.2f}" if bpm is not None else "--"
@@ -49,8 +56,13 @@ def _speed_controls(ctx: UiContext) -> None:
         SPEED_MAX,
         format="%.2f",
     )
-    if changed:
-        ctx.audio.global_.set_speed(new_value)
+    learn_clicked = (
+        _has_pending_learn_input(ctx)
+        and imgui.is_item_hovered()
+        and imgui.is_mouse_clicked(imgui.MouseButton_.left)
+    )
+    if changed or learn_clicked:
+        ctx.audio.global_.set_speed(float(new_value if changed else ctx.state.project.speed))
 
     with style_var(imgui.StyleVar_.item_spacing, (0.0, SPACING / 4)):
         if imgui.button("+", (avail.x, 0)):

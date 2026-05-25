@@ -4,7 +4,20 @@ from typing import TYPE_CHECKING, TypeVar, cast
 from pydantic import BaseModel
 
 from flitzis_looper.constants import SPEED_STEP
-from flitzis_looper.input_mapping import KeyboardBinding, LooperAction
+from flitzis_looper.input_mapping import (
+    KeyboardBinding,
+    LooperAction,
+    PadEqBand,
+    global_speed_action,
+    global_speed_delta_action,
+    master_volume_action,
+    master_volume_delta_action,
+    pad_eq_action,
+    pad_eq_delta_action,
+    pad_gain_action,
+    pad_gain_delta_action,
+    tap_bpm_action,
+)
 from flitzis_looper_audio import AudioMessage
 
 if TYPE_CHECKING:
@@ -275,7 +288,17 @@ class PadAudioActions:
         self._controller.transport.bpm.clear_manual_bpm(pad_id)
 
     def tap_bpm(self, pad_id: int) -> float | None:
-        return self._controller.transport.bpm.tap_bpm(pad_id)
+        bpm: float | None = None
+
+        def execute() -> None:
+            nonlocal bpm
+            bpm = self._controller.transport.bpm.tap_bpm(pad_id)
+
+        self._controller.input_mapping.perform_learnable_action(
+            tap_bpm_action(pad_id),
+            execute,
+        )
+        return bpm
 
     def set_manual_key(self, pad_id: int, key: str) -> None:
         self._controller.transport.pad.set_manual_key(pad_id, key)
@@ -284,10 +307,45 @@ class PadAudioActions:
         self._controller.transport.pad.clear_manual_key(pad_id)
 
     def set_pad_gain(self, pad_id: int, gain: float) -> None:
-        self._controller.transport.pad.set_pad_gain(pad_id, gain)
+        action = (
+            pad_gain_delta_action(pad_id)
+            if _midi_cc_learn_input_pending(self._controller)
+            else pad_gain_action(pad_id, gain)
+        )
+        self._controller.input_mapping.perform_learnable_action(
+            action,
+            lambda: self._controller.transport.pad.set_pad_gain(pad_id, gain),
+        )
 
     def set_pad_eq(self, pad_id: int, low_db: float, mid_db: float, high_db: float) -> None:
         self._controller.transport.pad.set_pad_eq(pad_id, low_db, mid_db, high_db)
+
+    def set_pad_eq_band(self, pad_id: int, band: PadEqBand, db: float) -> None:
+        low_db = float(self._controller.project.pad_eq_low_db[pad_id])
+        mid_db = float(self._controller.project.pad_eq_mid_db[pad_id])
+        high_db = float(self._controller.project.pad_eq_high_db[pad_id])
+
+        if band == "low":
+            low_db = db
+        elif band == "mid":
+            mid_db = db
+        else:
+            high_db = db
+
+        action = (
+            pad_eq_delta_action(pad_id, band)
+            if _midi_cc_learn_input_pending(self._controller)
+            else pad_eq_action(pad_id, band, db)
+        )
+        self._controller.input_mapping.perform_learnable_action(
+            action,
+            lambda: self._controller.transport.pad.set_pad_eq(
+                pad_id,
+                low_db,
+                mid_db,
+                high_db,
+            ),
+        )
 
 
 class StemAudioActions:
@@ -343,10 +401,26 @@ class GlobalAudioActions:
         self._controller = controller
 
     def set_volume(self, volume: float) -> None:
-        self._controller.transport.global_params.set_volume(volume)
+        action = (
+            master_volume_delta_action()
+            if _midi_cc_learn_input_pending(self._controller)
+            else master_volume_action(volume)
+        )
+        self._controller.input_mapping.perform_learnable_action(
+            action,
+            lambda: self._controller.transport.global_params.set_volume(volume),
+        )
 
     def set_speed(self, speed: float) -> None:
-        self._controller.transport.global_params.set_speed(speed)
+        action = (
+            global_speed_delta_action()
+            if _midi_cc_learn_input_pending(self._controller)
+            else global_speed_action(speed)
+        )
+        self._controller.input_mapping.perform_learnable_action(
+            action,
+            lambda: self._controller.transport.global_params.set_speed(speed),
+        )
 
     def reset_speed(self) -> None:
         self._controller.input_mapping.perform_learnable_action(
@@ -734,3 +808,12 @@ class UiContext:
 
     def on_frame_render(self) -> None:
         self._controller.on_frame_render()
+
+
+def _midi_cc_learn_input_pending(controller: AppController) -> bool:
+    binding_key = controller.session.input_learn_pending_binding_key
+    return (
+        controller.session.input_learn_pending_source == "midi"
+        and binding_key is not None
+        and binding_key.startswith(("midi:cc:", "midi:nrpn:"))
+    )

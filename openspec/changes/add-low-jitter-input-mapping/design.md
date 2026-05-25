@@ -16,7 +16,12 @@ Python.
 The dispatcher thread resolves the event against the latest in-memory mapping snapshot. Direct
 audio-safe commands, such as pad trigger/stop and stop-all, are forwarded through the existing
 bounded control queue. Actions that require project/controller state are reported to Python as
-typed event dictionaries for execution outside the hot path.
+typed event dictionaries for execution outside the hot path. Control Change events carry their
+0..127 value through that dictionary so Python can implement relative controller-owned steps for
+continuous controls, including endless-controller wraparound and repeated relative encoder values.
+The MIDI normalizer also tracks NRPN parameter-select Control Changes and reports Data
+Increment/Data Decrement messages as stable `midi:nrpn:<channel>:<parameter>` bindings with common
+`65`/`63` increment/decrement values, without exposing those values to the audio callback.
 
 The audio callback remains unchanged in responsibility: it only consumes bounded control messages
 and mixes already available audio data.
@@ -24,6 +29,8 @@ and mixes already available audio data.
 ## Supported Inputs
 - MIDI Note On with velocity greater than zero.
 - MIDI Control Change.
+- NRPN increment/decrement encoded through Control Change parameter select and
+  increment/decrement messages.
 - Keyboard key name plus normalized modifiers.
 
 Note On velocity zero is treated as Note Off and ignored for Learn/playback. Active Sensing,

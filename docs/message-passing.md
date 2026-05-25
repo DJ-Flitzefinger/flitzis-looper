@@ -60,15 +60,21 @@ CPAL callback:
 
 - The MIDI backend callback timestamps each supported message with a monotonic timestamp as soon
   as practical.
-- The MIDI callback normalizes only Note On velocity greater than zero and Control Change for
-  version 1. It drops Note On velocity zero, Active Sensing, MIDI Clock, SysEx, Program Change,
-  Pitch Bend, Aftertouch, and MPE-style messages.
+- The MIDI callback normalizes only Note On velocity greater than zero, Control Change, and NRPN
+  increment/decrement carried by Control Change parameter-select plus data-increment/decrement
+  messages for version 1. It drops Note On velocity zero, standalone NRPN setup CCs, Active
+  Sensing, MIDI Clock, SysEx, Program Change, Pitch Bend, Aftertouch, and MPE-style messages.
 - Normalized MIDI input is sent through a bounded queue to a Rust dispatcher thread.
 - The dispatcher resolves the latest in-memory mapping snapshot. It does not read JSON.
 - Direct audio-safe mappings, such as pad trigger, pad stop, and stop-all, are bridged through the
   existing bounded control-to-audio ring buffer.
-- Controller-owned mappings are reported back to Python as small event dictionaries containing
-  source, binding key, monotonic timestamp, action key, and dispatch flags.
+- Controller-owned mappings, including Tap BPM, stem mask buttons, per-pad Gain, per-pad EQ,
+  Master Volume, and global Speed/Pitch set-value or relative-step actions, are reported back to
+  Python as small event dictionaries containing source, binding key, MIDI value, monotonic
+  timestamp, action key, and dispatch flags. Python interprets relative continuous-control actions
+  from those values, supports common increment/decrement encodings such as `1`/`127` and
+  `65`/`63`, handles NRPN bindings such as `midi:nrpn:1:0`, and keeps the resulting target changes
+  bounded outside the audio callback.
 
 This path must not simulate mouse clicks, call Python from the audio callback, route MIDI directly
 into callback functions, block the callback, log from the callback, or allocate unbounded audio

@@ -87,6 +87,15 @@ def test_clear_midi_mappings_preserves_schema_fields(
     assert raw["device_mode"] == "device_neutral"
 
 
+def test_midi_binding_supports_nrpn_keys() -> None:
+    binding = MidiBinding.from_key("midi:nrpn:1:130")
+
+    assert binding.kind == "nrpn"
+    assert binding.channel == 1
+    assert binding.number == 130
+    assert binding.key == "midi:nrpn:1:130"
+
+
 def test_invalid_mapping_file_is_backed_up_and_recreated(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

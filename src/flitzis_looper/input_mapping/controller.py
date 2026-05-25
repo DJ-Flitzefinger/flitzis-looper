@@ -1,9 +1,9 @@
 from contextlib import suppress
 from typing import TYPE_CHECKING, Literal, cast
 
-from flitzis_looper.constants import NUM_BANKS, NUM_SAMPLES
+from flitzis_looper.constants import NUM_BANKS, NUM_SAMPLES, SPEED_MAX, SPEED_MIN, SPEED_STEP
 from flitzis_looper.controller.base import BaseController
-from flitzis_looper.input_mapping.actions import LooperAction
+from flitzis_looper.input_mapping.actions import LooperAction, PadEqBand
 from flitzis_looper.input_mapping.bindings import KeyboardBinding, MidiBinding
 from flitzis_looper.input_mapping.storage import (
     KeyboardMappingEntry,
@@ -30,6 +30,10 @@ if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
 
 type InputSource = Literal["midi", "keyboard"]
+PAD_EQ_BANDS: tuple[PadEqBand, ...] = ("low", "mid", "high")
+MIDI_RELATIVE_VOLUME_STEP = 0.01
+MIDI_RELATIVE_GAIN_STEP = 0.01
+MIDI_RELATIVE_EQ_STEP_DB = 0.5
 
 
 class InputMappingController(BaseController):
@@ -44,6 +48,8 @@ class InputMappingController(BaseController):
         self._app = app
         self._midi = load_midi_mapping_file()
         self._keyboard = load_keyboard_mapping_file()
+        self._midi_cc_values: dict[str, int] = {}
+        self._midi_cc_directions: dict[str, int] = {}
         self._on_frame_render_callbacks.append(self._sync_rust_runtime_state)
         self._on_frame_render_callbacks.append(self._poll_rust_input_events)
 
@@ -226,8 +232,13 @@ class InputMappingController(BaseController):
             ("pad.unload:", self._execute_unload_pad),
             ("pad.analyze:", self._execute_analyze_pad),
             ("pad.adjust_loop:", self._execute_adjust_loop),
+            ("pad.tap_bpm:", self._execute_tap_bpm),
+            ("pad.gain:", self._execute_pad_gain),
+            ("pad.eq:", self._execute_pad_eq),
             ("ui.select_pad:", self._execute_select_pad),
             ("ui.select_bank:", self._execute_select_bank),
+            ("global.volume:", self._execute_master_volume),
+            ("global.speed:", self._execute_global_speed),
             ("global.trigger_quantization:", self._execute_trigger_quantization),
             ("stem.generate:", self._execute_generate_stems),
             ("stem.delete:", self._execute_delete_stems),
@@ -258,6 +269,7 @@ class InputMappingController(BaseController):
         if self._session.input_learn_active:
             self._session.input_learn_pending_source = "midi"
             self._session.input_learn_pending_binding_key = binding_key
+            self._record_midi_cc_value(binding_key, _midi_event_value(event))
             return
 
         if event.get("direct") is True:
@@ -265,7 +277,106 @@ class InputMappingController(BaseController):
 
         action_key = event.get("action_key")
         if isinstance(action_key, str):
+            if self._execute_relative_midi_action(
+                action_key,
+                binding_key,
+                _midi_event_value(event),
+            ):
+                return
             self.execute_action(LooperAction.from_key(action_key))
+
+    def _record_midi_cc_value(self, binding_key: str, value: int | None) -> None:
+        if value is None or not _is_relative_midi_binding_key(binding_key):
+            return
+        self._midi_cc_values[binding_key] = value
+        self._midi_cc_directions.pop(binding_key, None)
+
+    def _execute_relative_midi_action(
+        self,
+        action_key: str,
+        binding_key: str,
+        value: int | None,
+    ) -> bool:
+        if not _is_relative_action_key(action_key):
+            return False
+        if value is None or not _is_relative_midi_binding_key(binding_key):
+            return True
+
+        direction = self._midi_cc_step_direction(binding_key, value)
+        if direction is None:
+            return True
+
+        if action_key == "global.volume.delta":
+            self._app.transport.global_params.set_volume(
+                self._project.volume + MIDI_RELATIVE_VOLUME_STEP * direction
+            )
+        elif action_key == "global.speed.delta":
+            self._app.transport.global_params.set_speed(
+                self._project.speed + SPEED_STEP * direction
+            )
+        elif action_key.startswith("pad.gain.delta:"):
+            self._execute_relative_pad_gain(action_key, direction)
+        else:
+            self._execute_relative_pad_eq(action_key, direction)
+        return True
+
+    def _midi_cc_step_direction(self, binding_key: str, value: int) -> int | None:
+        previous = self._midi_cc_values.get(binding_key)
+        self._midi_cc_values[binding_key] = value
+        if previous is None:
+            return None
+        if previous == value:
+            return self._midi_cc_directions.get(
+                binding_key
+            ) or _repeated_relative_midi_cc_direction(value)
+
+        delta = value - previous
+        if delta > 64:
+            delta -= 128
+        elif delta < -64:
+            delta += 128
+
+        if delta == 0:
+            return None
+        direction = 1 if delta > 0 else -1
+        self._midi_cc_directions[binding_key] = direction
+        return direction
+
+    def _execute_relative_pad_gain(self, key: str, direction: int) -> bool:
+        if (pad_id := _parse_prefixed_sample_id(key, "pad.gain.delta:")) is None:
+            return True
+        self._app.transport.pad.set_pad_gain(
+            pad_id,
+            self._project.pad_gain[pad_id] + MIDI_RELATIVE_GAIN_STEP * direction,
+        )
+        return True
+
+    def _execute_relative_pad_eq(self, key: str, direction: int) -> bool:
+        parts = key.split(":")
+        if len(parts) != 3 or parts[0] != "pad.eq.delta":
+            return True
+        try:
+            pad_id = int(parts[1])
+            validate_sample_id(pad_id)
+        except ValueError:
+            return True
+        band = parts[2]
+        if band not in PAD_EQ_BANDS:
+            return True
+
+        if band == "low":
+            current = float(self._project.pad_eq_low_db[pad_id])
+        elif band == "mid":
+            current = float(self._project.pad_eq_mid_db[pad_id])
+        else:
+            current = float(self._project.pad_eq_high_db[pad_id])
+
+        self._set_pad_eq_band(
+            pad_id,
+            cast("PadEqBand", band),
+            current + MIDI_RELATIVE_EQ_STEP_DB * direction,
+        )
+        return True
 
     def _keyboard_action_for(self, binding_key: str) -> LooperAction | None:
         for mapping in self._keyboard.mappings:
@@ -322,10 +433,10 @@ class InputMappingController(BaseController):
         self._app.transport.global_params.toggle_trigger_quantization()
 
     def _increase_speed(self) -> None:
-        self._app.transport.global_params.set_speed(self._app.project.speed + 0.01)
+        self._app.transport.global_params.set_speed(self._app.project.speed + SPEED_STEP)
 
     def _decrease_speed(self) -> None:
-        self._app.transport.global_params.set_speed(self._app.project.speed - 0.01)
+        self._app.transport.global_params.set_speed(self._app.project.speed - SPEED_STEP)
 
     def _execute_trigger_pad(self, key: str) -> bool:
         if (pad_id := _parse_prefixed_sample_id(key, "pad.trigger:")) is None:
@@ -357,6 +468,57 @@ class InputMappingController(BaseController):
         self._app.session.waveform_editor_open = True
         self._app.session.waveform_editor_pad_id = pad_id
         return True
+
+    def _execute_tap_bpm(self, key: str) -> bool:
+        if (pad_id := _parse_prefixed_sample_id(key, "pad.tap_bpm:")) is None:
+            return False
+        self._app.transport.bpm.tap_bpm(pad_id)
+        return True
+
+    def _execute_pad_gain(self, key: str) -> bool:
+        parts = key.split(":")
+        if len(parts) != 3 or parts[0] != "pad.gain":
+            return False
+        try:
+            pad_id = int(parts[1])
+            percent = int(parts[2])
+            validate_sample_id(pad_id)
+        except ValueError:
+            return False
+        if not 0 <= percent <= 100:
+            return False
+        self._app.transport.pad.set_pad_gain(pad_id, percent / 100.0)
+        return True
+
+    def _execute_pad_eq(self, key: str) -> bool:
+        parts = key.split(":")
+        if len(parts) != 4 or parts[0] != "pad.eq":
+            return False
+        try:
+            pad_id = int(parts[1])
+            db = float(parts[3])
+            validate_sample_id(pad_id)
+        except ValueError:
+            return False
+        band = parts[2]
+        if band not in PAD_EQ_BANDS:
+            return False
+        self._set_pad_eq_band(pad_id, cast("PadEqBand", band), db)
+        return True
+
+    def _set_pad_eq_band(self, pad_id: int, band: PadEqBand, db: float) -> None:
+        low_db = float(self._project.pad_eq_low_db[pad_id])
+        mid_db = float(self._project.pad_eq_mid_db[pad_id])
+        high_db = float(self._project.pad_eq_high_db[pad_id])
+
+        if band == "low":
+            low_db = db
+        elif band == "mid":
+            mid_db = db
+        else:
+            high_db = db
+
+        self._app.transport.pad.set_pad_eq(pad_id, low_db, mid_db, high_db)
 
     def _execute_select_pad(self, key: str) -> bool:
         if (pad_id := _parse_prefixed_sample_id(key, "ui.select_pad:")) is None:
@@ -393,6 +555,34 @@ class InputMappingController(BaseController):
         except (RuntimeError, TypeError) as err:
             self._session.input_mapping_error = str(err)
 
+    def _execute_master_volume(self, key: str) -> bool:
+        raw = key.removeprefix("global.volume:")
+        if raw == key:
+            return False
+        try:
+            percent = int(raw)
+        except ValueError:
+            return False
+        if not 0 <= percent <= 100:
+            return False
+        self._app.transport.global_params.set_volume(percent / 100.0)
+        return True
+
+    def _execute_global_speed(self, key: str) -> bool:
+        raw = key.removeprefix("global.speed:")
+        if raw == key:
+            return False
+        try:
+            percent = int(raw)
+        except ValueError:
+            return False
+        min_percent = round(SPEED_MIN * 100)
+        max_percent = round(SPEED_MAX * 100)
+        if not min_percent <= percent <= max_percent:
+            return False
+        self._app.transport.global_params.set_speed(percent / 100.0)
+        return True
+
     def _execute_trigger_quantization(self, key: str) -> bool:
         mode = key.removeprefix("global.trigger_quantization:")
         valid_modes = {"immediate", "next_beat", "next_bar", *TRIGGER_QUANTIZATION_STEPS}
@@ -403,13 +593,13 @@ class InputMappingController(BaseController):
 
     def _execute_stem_mix(self, key: str) -> bool:
         parts = key.split(":")
-        if len(parts) != 4:
+        if len(parts) != 3 or parts[0] != "stem.mix":
             return False
         try:
-            pad_id = int(parts[2])
+            pad_id = int(parts[1])
         except ValueError:
             return False
-        mode = parts[3]
+        mode = parts[2]
         if mode not in STEM_MIX_MODES:
             return False
         self._app.stems.set_stem_mix_mode(pad_id, cast("StemMixMode", mode))
@@ -417,14 +607,14 @@ class InputMappingController(BaseController):
 
     def _execute_stem_mask(self, key: str) -> bool:
         parts = key.split(":")
-        if len(parts) != 5:
+        if len(parts) != 4 or parts[0] != "stem.mask":
             return False
         try:
-            pad_id = int(parts[2])
-            mask = int(parts[3])
+            pad_id = int(parts[1])
+            mask = int(parts[2])
         except ValueError:
             return False
-        display_mode = parts[4]
+        display_mode = parts[3]
         if display_mode not in STEM_MASK_DISPLAY_MODES:
             return False
         self._app.stems.set_stem_enabled_mask(
@@ -466,3 +656,29 @@ def _parse_prefixed_bank_id(key: str, prefix: str) -> int | None:
     if not 0 <= value < NUM_BANKS:
         return None
     return value
+
+
+def _midi_event_value(event: dict[str, object]) -> int | None:
+    value = event.get("value")
+    if not isinstance(value, bool) and isinstance(value, int) and 0 <= value <= 127:
+        return value
+    return None
+
+
+def _repeated_relative_midi_cc_direction(value: int) -> int | None:
+    if value in {1, 65}:
+        return 1
+    if value in {63, 127}:
+        return -1
+    return None
+
+
+def _is_relative_action_key(action_key: str) -> bool:
+    return (
+        action_key in {"global.volume.delta", "global.speed.delta"}
+        or action_key.startswith(("pad.eq.delta:", "pad.gain.delta:"))
+    )
+
+
+def _is_relative_midi_binding_key(binding_key: str) -> bool:
+    return binding_key.startswith(("midi:cc:", "midi:nrpn:"))

@@ -283,10 +283,23 @@ Implemented first slice:
 
 - The `L` Learn workflow is preserved: `L -> input -> learnable action` saves a mapping, and
   `L -> input -> L` deletes that input's existing mapping.
+- Learnable control coverage includes Tap BPM, the bottom-bar selected-pad `V`/`D`/`M`/`B`/`I`/`A`
+  stem mask buttons, per-pad Gain, per-pad EQ bands, Master Volume, and the global Speed/Pitch
+  control. Keyboard and MIDI Note mappings to continuous controls save bounded set-value actions
+  from the selected UI value. MIDI CC and NRPN increment/decrement mappings to those controls save
+  relative-step actions: the first value establishes a baseline, then later encoder movement
+  applies one controller-owned increment or decrement outside the audio callback. The relative path
+  handles endless-controller 0..127 wraparound, repeated relative encoder values such as `1`/`127`
+  or `65`/`63`, and NRPN Data Increment/Data Decrement messages normalized to stable
+  `midi:nrpn:<channel>:<parameter>` bindings. The controller-side setters clamp at the existing
+  target limits. Hardware endless knobs should be configured for relative/inc-dec output; absolute
+  CC mode still reports a finite device-side 0..127 position. MIDI values still do not become
+  audio-callback parameter streams.
 - Keyboard mappings retain key-plus-modifier bindings, do not execute while text input is
   focused, and remain the responsiveness reference for mapped dispatch.
-- MIDI Note On velocity greater than zero and Control Change are normalized to stable binding
-  keys such as `midi:note:1:60` and `midi:cc:1:7`.
+- MIDI Note On velocity greater than zero, Control Change, and NRPN increment/decrement are
+  normalized to stable binding keys such as `midi:note:1:60`, `midi:cc:1:7`, and
+  `midi:nrpn:1:0`.
 - Note On velocity zero, Active Sensing, MIDI Clock, SysEx, Program Change, Pitch Bend,
   Aftertouch, and MPE-style messages are ignored for version 1.
 - Incoming MIDI events are stamped with a monotonic timestamp immediately in the Rust MIDI
@@ -336,7 +349,8 @@ The Rust engine is exposed to Python as `AudioEngine` with:
     pad runtime state needed for direct Rust dispatch.
   - `start_midi_input()` opens available MIDI input ports through the Rust input layer.
   - `stop_midi_input()` closes those MIDI input connections.
-  - `poll_input_events()` polls normalized MIDI input events for Learn UI and diagnostics.
+  - `poll_input_events()` polls normalized MIDI input events, including MIDI value, for Learn UI
+    and diagnostics.
   - `inject_midi_input_for_test(message)` injects a MIDI message into the same normalization path
     for hardware-free bridge tests.
 

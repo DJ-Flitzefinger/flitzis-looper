@@ -9,18 +9,25 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 const INPUT_QUEUE_CAPACITY: usize = 1024;
+const MIDI_NRPN_MSB_CC: u8 = 99;
+const MIDI_NRPN_LSB_CC: u8 = 98;
+const MIDI_DATA_INCREMENT_CC: u8 = 96;
+const MIDI_DATA_DECREMENT_CC: u8 = 97;
+const MIDI_RELATIVE_INCREMENT_VALUE: u8 = 65;
+const MIDI_RELATIVE_DECREMENT_VALUE: u8 = 63;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MidiBindingKind {
     Note,
     ControlChange,
+    Nrpn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MidiBinding {
     pub kind: MidiBindingKind,
     pub channel: u8,
-    pub number: u8,
+    pub number: u16,
 }
 
 impl MidiBinding {
@@ -28,6 +35,7 @@ impl MidiBinding {
         let kind = match self.kind {
             MidiBindingKind::Note => "note",
             MidiBindingKind::ControlChange => "cc",
+            MidiBindingKind::Nrpn => "nrpn",
         };
         format!("midi:{kind}:{}:{}", self.channel, self.number)
     }
@@ -83,12 +91,14 @@ impl Default for RuntimeState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NormalizedMidiEvent {
     pub binding: MidiBinding,
+    pub value: u8,
     pub received_at_ns: u64,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct InputRuntimeEvent {
     pub binding_key: String,
+    pub value: u8,
     pub received_at_ns: u64,
     pub action_key: Option<String>,
     pub dispatched: bool,
@@ -102,6 +112,7 @@ pub(crate) struct InputRuntime {
     event_rx: Mutex<Receiver<InputRuntimeEvent>>,
     mappings: Arc<Mutex<Vec<InputMapping>>>,
     runtime_state: Arc<Mutex<RuntimeState>>,
+    test_normalizer: Mutex<MidiNormalizer>,
     midi_connections: Mutex<Vec<MidiInputConnection<()>>>,
     running: Arc<AtomicBool>,
     dispatcher: Mutex<Option<JoinHandle<()>>>,
@@ -142,6 +153,7 @@ impl InputRuntime {
             event_rx: Mutex::new(event_rx),
             mappings,
             runtime_state,
+            test_normalizer: Mutex::new(MidiNormalizer::default()),
             midi_connections: Mutex::new(Vec::new()),
             running,
             dispatcher: Mutex::new(Some(dispatcher)),
@@ -231,13 +243,14 @@ impl InputRuntime {
 
             let input_tx = self.input_tx.clone();
             let origin = self.origin;
+            let mut normalizer = MidiNormalizer::default();
             let connection = midi_in
                 .connect(
                     port,
                     &format!("flitzis-looper-input-{index}"),
                     move |_backend_stamp, message, _| {
                         let received_at_ns = monotonic_ns_since(origin);
-                        if let Some(event) = normalize_midi_message(message, received_at_ns) {
+                        if let Some(event) = normalizer.normalize(message, received_at_ns) {
                             let _ = input_tx.try_send(event);
                         }
                     },
@@ -258,7 +271,10 @@ impl InputRuntime {
 
     pub fn inject_midi_message(&self, message: &[u8]) -> bool {
         let received_at_ns = monotonic_ns_since(self.origin);
-        let Some(event) = normalize_midi_message(message, received_at_ns) else {
+        let Ok(mut normalizer) = self.test_normalizer.lock() else {
+            return false;
+        };
+        let Some(event) = normalizer.normalize(message, received_at_ns) else {
             return false;
         };
         self.input_tx.try_send(event).is_ok()
@@ -324,6 +340,7 @@ fn input_dispatch_loop(
 
         let _ = event_tx.try_send(InputRuntimeEvent {
             binding_key,
+            value: event.value,
             received_at_ns: event.received_at_ns,
             action_key,
             dispatched,
@@ -460,42 +477,95 @@ fn parse_input_action(action_key: &str) -> InputAction {
     }
 }
 
-pub(crate) fn normalize_midi_message(
-    message: &[u8],
-    received_at_ns: u64,
-) -> Option<NormalizedMidiEvent> {
-    let status = *message.first()?;
-    let message_type = status & 0xF0;
-    let channel = (status & 0x0F) + 1;
+#[cfg(test)]
+fn normalize_midi_message(message: &[u8], received_at_ns: u64) -> Option<NormalizedMidiEvent> {
+    MidiNormalizer::default().normalize(message, received_at_ns)
+}
 
-    match message_type {
-        0x90 => {
-            if message.len() < 3 || message[2] == 0 {
-                return None;
+#[derive(Debug, Clone, Default)]
+struct MidiNormalizer {
+    nrpn_parameters: [NrpnParameter; 16],
+}
+
+impl MidiNormalizer {
+    fn normalize(&mut self, message: &[u8], received_at_ns: u64) -> Option<NormalizedMidiEvent> {
+        let status = *message.first()?;
+        let message_type = status & 0xF0;
+        let channel = (status & 0x0F) + 1;
+        let channel_index = usize::from(channel - 1);
+
+        match message_type {
+            0x90 => {
+                if message.len() < 3 || message[2] == 0 {
+                    return None;
+                }
+                Some(NormalizedMidiEvent {
+                    binding: MidiBinding {
+                        kind: MidiBindingKind::Note,
+                        channel,
+                        number: u16::from(message[1]),
+                    },
+                    value: message[2],
+                    received_at_ns,
+                })
             }
-            Some(NormalizedMidiEvent {
-                binding: MidiBinding {
-                    kind: MidiBindingKind::Note,
-                    channel,
-                    number: message[1],
-                },
-                received_at_ns,
-            })
-        }
-        0xB0 => {
-            if message.len() < 3 {
-                return None;
+            0xB0 => {
+                if message.len() < 3 {
+                    return None;
+                }
+
+                let controller = message[1];
+                let value = message[2];
+                if controller == MIDI_NRPN_MSB_CC {
+                    self.nrpn_parameters[channel_index].msb = Some(value);
+                    return None;
+                }
+                if controller == MIDI_NRPN_LSB_CC {
+                    self.nrpn_parameters[channel_index].lsb = Some(value);
+                    return None;
+                }
+                if controller == MIDI_DATA_INCREMENT_CC || controller == MIDI_DATA_DECREMENT_CC {
+                    let parameter = self.nrpn_parameters[channel_index].number()?;
+                    let value = if controller == MIDI_DATA_INCREMENT_CC {
+                        MIDI_RELATIVE_INCREMENT_VALUE
+                    } else {
+                        MIDI_RELATIVE_DECREMENT_VALUE
+                    };
+                    return Some(NormalizedMidiEvent {
+                        binding: MidiBinding {
+                            kind: MidiBindingKind::Nrpn,
+                            channel,
+                            number: parameter,
+                        },
+                        value,
+                        received_at_ns,
+                    });
+                }
+
+                Some(NormalizedMidiEvent {
+                    binding: MidiBinding {
+                        kind: MidiBindingKind::ControlChange,
+                        channel,
+                        number: u16::from(controller),
+                    },
+                    value,
+                    received_at_ns,
+                })
             }
-            Some(NormalizedMidiEvent {
-                binding: MidiBinding {
-                    kind: MidiBindingKind::ControlChange,
-                    channel,
-                    number: message[1],
-                },
-                received_at_ns,
-            })
+            _ => None,
         }
-        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct NrpnParameter {
+    msb: Option<u8>,
+    lsb: Option<u8>,
+}
+
+impl NrpnParameter {
+    fn number(&self) -> Option<u16> {
+        Some(u16::from(self.msb?) * 128 + u16::from(self.lsb?))
     }
 }
 
@@ -522,6 +592,7 @@ mod tests {
             }
         );
         assert_eq!(event.binding.key(), "midi:note:1:60");
+        assert_eq!(event.value, 100);
         assert_eq!(event.received_at_ns, 42);
     }
 
@@ -538,6 +609,43 @@ mod tests {
             }
         );
         assert_eq!(event.binding.key(), "midi:cc:4:7");
+        assert_eq!(event.value, 99);
+    }
+
+    #[test]
+    fn nrpn_increment_decrement_normalizes_to_stable_binding() {
+        let mut normalizer = MidiNormalizer::default();
+
+        assert!(normalizer.normalize(&[0xB0, 99, 0], 10).is_none());
+        assert!(normalizer.normalize(&[0xB0, 98, 2], 11).is_none());
+
+        let increment = normalizer
+            .normalize(&[0xB0, 96, 1], 12)
+            .expect("normalized increment");
+        assert_eq!(
+            increment.binding,
+            MidiBinding {
+                kind: MidiBindingKind::Nrpn,
+                channel: 1,
+                number: 2
+            }
+        );
+        assert_eq!(increment.binding.key(), "midi:nrpn:1:2");
+        assert_eq!(increment.value, 65);
+
+        let decrement = normalizer
+            .normalize(&[0xB0, 97, 1], 13)
+            .expect("normalized decrement");
+        assert_eq!(decrement.binding.key(), "midi:nrpn:1:2");
+        assert_eq!(decrement.value, 63);
+    }
+
+    #[test]
+    fn nrpn_increment_without_parameter_is_ignored() {
+        let mut normalizer = MidiNormalizer::default();
+
+        assert!(normalizer.normalize(&[0xB0, 96, 1], 1).is_none());
+        assert!(normalizer.normalize(&[0xB0, 97, 1], 1).is_none());
     }
 
     #[test]
