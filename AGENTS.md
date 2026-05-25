@@ -86,6 +86,8 @@ Depending on the current task, consider reading specific documentation.
 - User Interface: `docs/ui-toolkit.md`
 - Audio Engine: `docs/audio-engine.md`
 - Message Passing (between AudioEngine thread and core): `docs/message-passing.md`
+- Professional audio/performance architecture audit:
+  `docs/audio-performance-architecture-audit.md`
 
 ### Python
 Fetch documentation directly from the web.
@@ -94,6 +96,26 @@ Fetch documentation directly from the web.
 ### Rust
 Find documentation for crate `CRATE` under `rust/target/doc/CRATE/index.html`. (You may need to
 generate the docs first using `cargo doc --manifest-path rust/Cargo.toml`.)
+
+## Gen3 Audio Architecture Guardrails
+
+For professional Looper architecture work, do not treat "audio safety" as "Rust must not be
+touched". The correct rule is:
+
+- The CPAL audio callback and realtime hot path are protected.
+- New Rust modules outside the callback are allowed and encouraged when they improve correctness,
+  latency, maintainability, or realtime safety.
+- The callback must not perform file I/O, JSON reads/writes, Python/GIL access, UI calls, blocking
+  locks, logging/printing, neural inference, plugin loading/scanning, unbounded loops, heavy
+  allocation, or long-running work.
+- Internal Rust DSP modules are the preferred future direction. Do not add VST/LV2/CLAP/AU
+  plugin hosting unless a future explicit OpenSpec-backed request changes that product decision.
+- Do not implement or patch the new EQ/DSP layer before consulting
+  `docs/audio-performance-architecture-audit.md` and preparing the documented realtime-safety,
+  command/parameter, state-ownership, and clock foundations.
+- Keep architecture and DSP work split into small OpenSpec-friendly changes. The next recommended
+  step after the audit is the Rust audio callback/realtime-safety preparation stage, not the EQ
+  replacement.
 
 ## CI/CD
 - All changes must pass lint, format, and test checks in CI

@@ -3,6 +3,18 @@
 Flitzis Looper uses a Rust-based audio engine to meet real-time constraints while keeping the Python side focused on orchestration.
 Python interacts with a single `AudioEngine` object; the CPAL audio callback renders audio without acquiring the Python GIL.
 
+## Architecture audit status
+
+The professional audio/performance architecture audit is recorded in
+`docs/audio-performance-architecture-audit.md`. The current Rust ownership direction is correct,
+but future EQ/DSP work should wait until the documented realtime-safety, command/parameter,
+state-ownership, and clock-preparation stages are complete or explicitly superseded by a new
+OpenSpec-backed request.
+
+Do not interpret audio safety as "Rust must not be touched". The protected boundary is the CPAL
+audio callback and realtime hot path. New Rust modules outside that boundary are allowed and
+encouraged when they improve correctness, latency, maintainability, or realtime safety.
+
 ```text
 +---------------------+
 |   Flitzis Looper    |

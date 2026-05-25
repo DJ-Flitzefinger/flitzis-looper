@@ -3,6 +3,15 @@
 Flitzi's Looper keeps the audio callback real-time safe by communicating with it through fixed-size, single-producer/single-consumer ring buffers.
 Python never touches the ring buffers directly; it calls `AudioEngine` methods which enqueue small, fixed-size control messages.
 
+## Architecture audit status
+
+The professional audio/performance audit in `docs/audio-performance-architecture-audit.md`
+identifies the current ring-buffer design as a useful foundation, not as the final parameter
+architecture. Future DSP/FX work should first split discrete commands from fast continuous
+parameters, define backpressure/coalescing semantics, and keep parameter smoothing on the Rust
+audio side. Continuous MIDI CC/NRPN or UI knob updates must not be allowed to flood trigger/stop
+commands or make the callback do unbounded work.
+
 ## Channels
 
 Two independent SPSC ring buffers are used:
