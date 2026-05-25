@@ -172,7 +172,10 @@ The Stage 6 loop/source/stem alignment clarification is recorded in
 seconds from Python durable intent, but Rust resolves them to live source-frame ranges before
 rendering. Stem mix-mode and enabled-mask messages carry only pad id, source-version hash, and
 bounded scalar state; they select already accepted buffers without changing the voice playhead or
-output-frame scheduler state.
+output-frame scheduler state. The Stage 7A click-free preparation adds only bounded Rust-owned
+source-selection ramp state for accepted active stem mode/mask changes; the callback still reads
+already accepted buffers only and does not perform stem generation, cache I/O, plugin loading,
+logging, blocking waits, Python/GIL access, or unbounded allocation.
 
 ## Speed and Key Lock messages
 

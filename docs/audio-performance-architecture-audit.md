@@ -123,6 +123,7 @@ still need cleanup before DSP/FX work:
 - durable Python intent, transient Python session projections, and live Rust audio state are now
   documented in `docs/audio-state-ownership.md`,
 - audio-to-control telemetry dispatch is controller-owned rather than UI-context-owned,
+- accepted active stem mode/mask changes now use a bounded Rust-owned source-selection ramp,
 - current EQ is hardwired into the mixer rather than modeled as a DSP node,
 - future parameter smoothing is not yet defined as a first-class DSP system.
 
@@ -177,8 +178,9 @@ Risks and gaps:
   handle-retiring control messages at the queue head until retirement capacity is available.
 - Audio-to-control messages are best-effort. Dropped `SampleStarted` or `SampleStopped` telemetry
   can desynchronize Python `SessionState` from live Rust state.
-- Loop, stem-mask, EQ, and several parameter changes are immediate and unsmoothed, so clicks or
-  discontinuities are possible during performance.
+- Live loop edits, EQ, and several parameter changes are immediate and unsmoothed, so clicks or
+  discontinuities are still possible during performance. Accepted active stem mode/mask changes now
+  use a short bounded Rust-side source-selection ramp.
 
 ## Ringbus, Command, And Parameter Path
 
@@ -293,8 +295,8 @@ Risks:
   DJ-grade time-stretch/pitch engine.
 - Live speed and BPM changes are smoothed for tempo ratio but not governed by a broader parameter
   smoothing layer.
-- Simultaneous pitch changes, quantized starts, loop edits, and stem toggles need a
-  deeper state-transition audit before new FX are layered in.
+- Simultaneous pitch changes, quantized starts, live loop edits, and rapid stem toggles still need
+  a deeper state-transition audit before new FX are layered in.
 
 ## Loop Editor And Loop Points
 
@@ -333,11 +335,12 @@ Positive findings:
 - Prepared stems match the full-mix sample shape before publication.
 - The mixer renders stems through the same voice playhead, loop, BPM-lock, Key Lock, gain/EQ,
   metering, and playhead path as full-mix playback.
+- Accepted active stem mode/mask changes now crossfade from the previous source selection to the
+  new selection with fixed-size Rust state and a short source-frame ramp.
 - Phase alignment is structurally sound when prepared stems are aligned to the loaded full mix.
 
 Risks:
 
-- Stem toggles are immediate mask changes with no smoothing or click-free transition.
 - Prepared stem handle replacement may have the same callback-drop risk as full-mix buffers.
 - There is no per-stem DSP/level architecture yet.
 - The cached `instrumental.wav` artifact is not the `I` playback layer; this is intentional, but
@@ -498,7 +501,7 @@ after the realtime-safety, command/parameter, state, and clock preparation phase
 Professional-readiness blockers before EQ/DSP replacement:
 
 1. Python session state can desynchronize if audio-to-control telemetry is dropped.
-2. Loop, stem, and EQ changes are immediate and can click.
+2. Live loop edits and EQ changes are immediate and can click.
 3. Future DSP parameters still need audio-side smoothing after the Stage 3 coalesced parameter
    bridge.
 4. Current EQ is not a durable DSP-chain foundation.
@@ -514,7 +517,9 @@ Resolved preparation blockers:
 - accepted master-BPM parameter updates bridge transport-grid timing and BPM-lock tempo matching
   while preserving transport bar phase,
 - source-frame position, output-frame time, loop-region interpretation, prepared-stem alignment,
-  and the click-free transition follow-up plan are documented and covered by focused mixer tests.
+  and the original click-free transition follow-up plan are documented and covered by focused mixer
+  tests,
+- accepted active stem mode/mask changes now use a bounded source-selection transition helper.
 
 ## Recommended Target Architecture
 
@@ -766,8 +771,8 @@ Result:
 - prepared stems are documented as sharing full-mix source-frame origin, frame count, sample rate,
   channel layout, and source-version identity,
 - stem mode/mask changes preserve the voice playhead and are sequenced before future per-stem DSP,
-- click-free transition work is deferred to a bounded Rust transition helper before DSP foundation
-  and EQ replacement.
+- click-free stem mode/mask transition work is now handled by the bounded Stage 7A Rust transition
+  helper before DSP foundation and EQ replacement.
 
 ### Analysis Stage 7: MIDI/Keyboard Under Future DSP Parameters
 
@@ -799,6 +804,34 @@ Result:
   smoothing,
 - direct Rust MIDI dispatch remains command-only for existing discrete audio-safe transactions,
 - stale runtime snapshots are documented as inappropriate for future live DSP truth.
+
+### Transition Stage 7A: Click-Free Stem Mode/Mask Preparation
+
+Status: completed by `openspec/changes/prepare-click-free-stem-transitions/`.
+
+Files:
+
+- `rust/src/audio_engine/mixer.rs`
+- `docs/audio-loop-source-stem-alignment.md`
+- `openspec/changes/prepare-click-free-stem-transitions/`
+
+Questions:
+
+- How can accepted stem source-selection changes avoid immediate discontinuities?
+- How can the transition stay bounded and avoid becoming the DSP foundation?
+- How can source-frame continuity stay unchanged while the transition is active?
+
+Result:
+
+- active full-mix/all-stems mode changes and enabled-stem mask changes arm a fixed-size
+  Rust-owned transition slot,
+- the transition stores only previous source-selection metadata and a 128 source-frame ramp
+  cursor,
+- rendering reads the previous and current selections at the same loop-relative source frame and
+  crossfades before the existing Key Lock, gain/EQ, metering, and playhead path,
+- inactive pads do not retain stale transitions,
+- no EQ, DSP/FX node, plugin host, real-time stem separation, live loop-edit transition, or broad
+  rewrite was implemented.
 
 ### Analysis Stage 8: DSP/FX And EQ Replacement Architecture
 
@@ -1085,15 +1118,15 @@ Acceptance:
 
 ## Next Recommended Step
 
-Stage 7 has completed the MIDI/keyboard future DSP-parameter mapping clarification.
+Stage 7A has completed the click-free stem mode/mask transition preparation.
 
-The next recommended step is click-free transition preparation before DSP foundation:
+The next recommended step is Analysis Stage 8:
 
 ```text
-Prepare a bounded Rust transition helper for click-free stem mode/mask transitions, without
-implementing a visible effect, EQ replacement, plugin hosting, or broad DSP foundation.
+Plan the internal Rust DSP/FX foundation and later EQ replacement as an OpenSpec-friendly design
+step, without implementing a visible effect, EQ replacement, plugin hosting, or broad rewrite.
 ```
 
-Do not implement the new EQ or any other DSP effect before click-free transition preparation and
-the DSP foundation stages are complete, unless a future user request explicitly supersedes this
-plan with an OpenSpec-backed change.
+Do not implement the new EQ or any other DSP effect before the DSP foundation design and
+foundation stage are complete, unless a future user request explicitly supersedes this plan with an
+OpenSpec-backed change.

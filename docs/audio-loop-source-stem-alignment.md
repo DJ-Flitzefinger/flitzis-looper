@@ -1,9 +1,10 @@
 # Audio Loop Source And Stem Alignment
 
-Date: 2026-05-25
+Date: 2026-05-26
 
-Status: Stage 6 architecture clarification. This document does not implement EQ, DSP effects,
-plugin hosting, a new smoothing layer, or runtime stem separation.
+Status: Stage 7A click-free stem transition preparation. This document does not implement EQ,
+DSP effects, plugin hosting, a general smoothing layer, live loop-edit crossfades, or runtime
+stem separation.
 
 ## Purpose
 
@@ -37,7 +38,7 @@ Live loop edits are immediate. On the next render:
 
 - if the current voice playhead is inside the new loop region, it is preserved;
 - if it is outside the new loop region, it is clamped to the new loop start;
-- no crossfade, zero-crossing search, or click suppression is applied yet.
+- no loop-edit crossfade, zero-crossing search, or click suppression is applied yet.
 
 Prepared stems are accepted only after offline/control-plane validation and Rust publication. A
 prepared set must match the loaded full mix by source version, sample rate, channel layout, frame
@@ -45,32 +46,37 @@ count, and source-frame origin. Once accepted, all-stems rendering uses the same
 loop wrapping, BPM-lock ratio, Key Lock processing, gain/EQ, metering, and playhead telemetry as
 full-mix playback.
 
+Accepted stem mode and enabled-mask changes for active pads now arm a bounded Rust-owned
+transition helper. The helper stores only fixed-size source-selection and ramp cursor state, then
+linearly crossfades from the previous full-mix/stem selection to the new selection over a short
+128 source-frame ramp. Both sides of the transition read the same loop-relative source frame
+before the existing Key Lock/stretch, gain/EQ, metering, and playhead path. Inactive pads do not
+retain stale transitions; the next trigger starts directly from the selected source.
+
 The cached `instrumental.wav` artifact is cache data, not a fifth component layer. The performance
 `I` preset means Drums + Melody + Bass.
 
 ## Decisions
 
-- Rust owns live source playheads, loop wrapping, prepared-stem handles, stem mode/mask state, and
-  future transition/DSP state.
+- Rust owns live source playheads, loop wrapping, prepared-stem handles, stem mode/mask state,
+  stem transition state, and future DSP state.
 - Python owns durable loop-edit intent, persistence, waveform editor UX, stem cache metadata, and
   offline/background generation orchestration.
 - Output-frame scheduling and source-frame playback must stay separate in code and specs.
 - Future per-stem processing should attach after the source-frame reader and loop wrap, before the
   per-pad bus or future per-pad DSP chain.
-- Future high-rate or click-sensitive controls need Rust-side smoothing or crossfade state before
-  they are treated as professional DSP controls.
+- Future high-rate or click-sensitive controls still need Rust-side smoothing or crossfade state
+  before they are treated as professional DSP controls.
 
 ## Follow-Up Plan
 
-The next click-free preparation should be a bounded Rust transition helper, not a visible effect:
+Stage 7A has prepared a bounded Rust transition helper for already selected full-mix/stem buffers.
+The remaining transition follow-ups are intentionally separate:
 
-1. Define a tiny preallocated gain/crossfade ramp state for already selected buffers.
-2. Apply it first to stem mode/mask transitions, because they are bounded source selections and do
-   not require loop-boundary detection.
-3. Evaluate live loop-edit transition policy separately, because moving loop start/end can require
-   different treatment than selecting stems.
-4. Only after these transition semantics are clear should the DSP foundation and EQ replacement
-   proceed.
+1. Evaluate live loop-edit transition policy separately, because moving loop start/end can require
+   different treatment than selecting aligned stems.
+2. Plan the DSP/FX foundation as its own OpenSpec-friendly step before EQ replacement.
+3. Replace the current EQ only after the internal Rust DSP foundation is reviewed and prepared.
 
 Non-goals remain unchanged: no new EQ, no new DSP/FX, no plugin hosting, no real-time stem
 separation, no disk I/O, no Python/GIL access, no logging, no blocking waits, and no heavy

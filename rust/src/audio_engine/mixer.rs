@@ -25,6 +25,7 @@ use cpal::Sample;
 
 const BEATS_PER_BAR_4_4: f64 = 4.0;
 const BAR_PHASE_EPSILON: f64 = 1.0e-9;
+const STEM_TRANSITION_RAMP_FRAMES: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FrameRange {
@@ -35,6 +36,105 @@ struct FrameRange {
 impl FrameRange {
     fn len(self) -> usize {
         self.end.saturating_sub(self.start)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StemRenderSelection {
+    mode: StemMixMode,
+    source_version_hash: u64,
+    enabled_mask: u8,
+}
+
+impl StemRenderSelection {
+    fn full_mix() -> Self {
+        Self {
+            mode: StemMixMode::FullMix,
+            source_version_hash: 0,
+            enabled_mask: STEM_COMPONENT_MASK,
+        }
+    }
+
+    fn from_state(
+        mode: StemMixMode,
+        source_version_hash: u64,
+        enabled_mask: u8,
+    ) -> StemRenderSelection {
+        match mode {
+            StemMixMode::FullMix => StemRenderSelection::full_mix(),
+            StemMixMode::AllStems => StemRenderSelection {
+                mode,
+                source_version_hash,
+                enabled_mask: enabled_mask & STEM_COMPONENT_MASK,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StemTransition {
+    from: StemRenderSelection,
+    elapsed_frames: usize,
+    total_frames: usize,
+}
+
+impl StemTransition {
+    fn inactive() -> Self {
+        Self {
+            from: StemRenderSelection::full_mix(),
+            elapsed_frames: 0,
+            total_frames: 0,
+        }
+    }
+
+    fn start(from: StemRenderSelection, total_frames: usize) -> Self {
+        if total_frames == 0 {
+            return Self::inactive();
+        }
+
+        Self {
+            from,
+            elapsed_frames: 0,
+            total_frames,
+        }
+    }
+
+    fn is_active(self) -> bool {
+        self.total_frames > 0 && self.elapsed_frames < self.total_frames
+    }
+
+    fn gains_at(self, frame_offset: usize) -> (f32, f32) {
+        if !self.is_active() {
+            return (0.0, 1.0);
+        }
+
+        let elapsed = self
+            .elapsed_frames
+            .saturating_add(frame_offset)
+            .min(self.total_frames);
+        let to_gain = elapsed as f32 / self.total_frames as f32;
+        (1.0 - to_gain, to_gain)
+    }
+
+    fn advance(&mut self, frames: usize) {
+        if !self.is_active() {
+            return;
+        }
+
+        self.elapsed_frames = self.elapsed_frames.saturating_add(frames);
+        if self.elapsed_frames >= self.total_frames {
+            self.clear();
+        }
+    }
+
+    fn clear(&mut self) {
+        *self = Self::inactive();
+    }
+}
+
+impl Default for StemTransition {
+    fn default() -> Self {
+        Self::inactive()
     }
 }
 
@@ -181,6 +281,33 @@ fn render_source_sample(
     }
 }
 
+fn render_source_selection_sample(
+    sample: &SampleBuffer,
+    stems: Option<&PreparedStemSet>,
+    selection: StemRenderSelection,
+    frame: usize,
+    channels: usize,
+    channel: usize,
+) -> f32 {
+    match selection.mode {
+        StemMixMode::FullMix => sample.samples[frame * channels + channel],
+        StemMixMode::AllStems => {
+            let matching_stems = stems.filter(|stems| {
+                selection.source_version_hash != 0
+                    && stems.source_version_hash == selection.source_version_hash
+            });
+            render_source_sample(
+                sample,
+                matching_stems,
+                selection.enabled_mask,
+                frame,
+                channels,
+                channel,
+            )
+        }
+    }
+}
+
 /// Real-time mixer that handles sample loading and voice management.
 ///
 /// The mixer maintains a sample bank with preloaded audio samples and manages
@@ -247,6 +374,9 @@ pub struct RtMixer {
     /// Per-pad enabled component-stem mask used when all-stems mode is active.
     stem_enabled_mask: [u8; NUM_SAMPLES],
 
+    /// Per-pad bounded transition state for accepted stem source-selection changes.
+    stem_transitions: [StemTransition; NUM_SAMPLES],
+
     /// Active voices with MAX_VOICES slots.
     pub voices: [VoiceSlot; MAX_VOICES],
 }
@@ -289,6 +419,7 @@ impl RtMixer {
             stem_mix_mode: std::array::from_fn(|_| StemMixMode::FullMix),
             stem_mix_source_version_hash: std::array::from_fn(|_| 0),
             stem_enabled_mask: std::array::from_fn(|_| STEM_COMPONENT_MASK),
+            stem_transitions: std::array::from_fn(|_| StemTransition::default()),
             voices: std::array::from_fn(|_| VoiceSlot::new(channels)),
         }
     }
@@ -335,6 +466,7 @@ impl RtMixer {
 
         self.sample_bank[id] = Some(sample);
         self.stem_enabled_mask[id] = STEM_COMPONENT_MASK;
+        self.stem_transitions[id].clear();
         true
     }
 
@@ -360,6 +492,7 @@ impl RtMixer {
         }
 
         self.prepared_stems[id] = Some(stems);
+        self.stem_transitions[id].clear();
         true
     }
 
@@ -373,10 +506,13 @@ impl RtMixer {
             return false;
         }
 
+        let previous = self.stem_render_selection(id);
         match mode {
             StemMixMode::FullMix => {
                 self.stem_mix_mode[id] = StemMixMode::FullMix;
                 self.stem_mix_source_version_hash[id] = 0;
+                let next = self.stem_render_selection(id);
+                self.arm_stem_transition(id, previous, next);
                 true
             }
             StemMixMode::AllStems => {
@@ -389,6 +525,8 @@ impl RtMixer {
 
                 self.stem_mix_mode[id] = StemMixMode::AllStems;
                 self.stem_mix_source_version_hash[id] = source_version_hash;
+                let next = self.stem_render_selection(id);
+                self.arm_stem_transition(id, previous, next);
                 true
             }
         }
@@ -411,8 +549,41 @@ impl RtMixer {
             return false;
         }
 
+        let previous = self.stem_render_selection(id);
         self.stem_enabled_mask[id] = enabled_stem_mask;
+        let next = self.stem_render_selection(id);
+        self.arm_stem_transition(id, previous, next);
         true
+    }
+
+    fn stem_render_selection(&self, id: usize) -> StemRenderSelection {
+        if id >= NUM_SAMPLES {
+            return StemRenderSelection::full_mix();
+        }
+
+        StemRenderSelection::from_state(
+            self.stem_mix_mode[id],
+            self.stem_mix_source_version_hash[id],
+            self.stem_enabled_mask[id],
+        )
+    }
+
+    fn arm_stem_transition(
+        &mut self,
+        id: usize,
+        previous: StemRenderSelection,
+        next: StemRenderSelection,
+    ) {
+        if id >= NUM_SAMPLES || previous == next {
+            return;
+        }
+
+        if self.sample_is_active(id) {
+            self.stem_transitions[id] =
+                StemTransition::start(previous, STEM_TRANSITION_RAMP_FRAMES);
+        } else {
+            self.stem_transitions[id].clear();
+        }
     }
 
     fn can_accept_prepared_stems(&self, id: usize, stems: &PreparedStemSet) -> bool {
@@ -507,6 +678,7 @@ impl RtMixer {
         // Sample is already playing? -> reset play position
         for voice_slot in &mut self.voices {
             if voice_slot.active && voice_slot.sample_id == id {
+                self.stem_transitions[id].clear();
                 voice_slot.restart(initial_frame_pos, velocity, tempo_ratio);
                 return true;
             }
@@ -515,6 +687,7 @@ impl RtMixer {
         // Start new voice slot
         for voice_slot in &mut self.voices {
             if !voice_slot.active {
+                self.stem_transitions[id].clear();
                 voice_slot.start_rt(
                     id,
                     sample.clone(),
@@ -951,6 +1124,7 @@ impl RtMixer {
             retirement.retire_prepared_stems(stems);
         }
         self.stem_enabled_mask[id] = STEM_COMPONENT_MASK;
+        self.stem_transitions[id].clear();
         self.pad_phase_anchor_frame[id] = 0;
         true
     }
@@ -1034,7 +1208,10 @@ impl RtMixer {
             return;
         }
 
+        let channels = self.channels;
+        let sample_rate_hz = self.sample_rate_hz;
         let speed = self.speed;
+        let volume = self.volume;
         let bpm_lock_enabled = self.bpm_lock_enabled;
         let key_lock_enabled = self.key_lock_enabled;
         let key_lock_settings = self.key_lock_settings;
@@ -1042,10 +1219,14 @@ impl RtMixer {
         let pad_bpm = &self.pad_bpm;
         let pad_gain = &self.pad_gain;
         let pad_eq = &self.pad_eq;
+        let pad_loop_start_frame = &self.pad_loop_start_frame;
+        let pad_loop_end_frame = &self.pad_loop_end_frame;
+        let pad_playhead_frame = &mut self.pad_playhead_frame;
         let prepared_stem_slots = &self.prepared_stems;
         let stem_mix_mode = &self.stem_mix_mode;
         let stem_mix_source_version_hash = &self.stem_mix_source_version_hash;
         let stem_enabled_mask = &self.stem_enabled_mask;
+        let stem_transitions = &mut self.stem_transitions;
 
         for voice in &mut self.voices {
             if !voice.active {
@@ -1060,25 +1241,24 @@ impl RtMixer {
             };
 
             if !is_paused {
-                let sample_frames = sample.samples.len() / self.channels;
+                let sample_frames = sample.samples.len() / channels;
                 if sample_frames == 0 {
                     voice.stop_rt(retirement);
                     continue;
                 }
-                let prepared_stem_set = if stem_mix_mode[voice.sample_id] == StemMixMode::AllStems {
-                    prepared_stem_set_for_render(
-                        prepared_stem_slots[voice.sample_id].as_ref(),
-                        &sample,
-                        self.channels,
-                        self.sample_rate_hz,
-                        sample_frames,
-                    )
-                    .filter(|stems| {
-                        stems.source_version_hash == stem_mix_source_version_hash[voice.sample_id]
-                    })
-                } else {
-                    None
-                };
+                let prepared_stem_set = prepared_stem_set_for_render(
+                    prepared_stem_slots[voice.sample_id].as_ref(),
+                    &sample,
+                    channels,
+                    sample_rate_hz,
+                    sample_frames,
+                );
+                let current_selection = StemRenderSelection::from_state(
+                    stem_mix_mode[voice.sample_id],
+                    stem_mix_source_version_hash[voice.sample_id],
+                    stem_enabled_mask[voice.sample_id],
+                );
+                let stem_transition = stem_transitions[voice.sample_id];
 
                 let mut target_tempo_ratio = speed;
                 if bpm_lock_enabled
@@ -1098,9 +1278,8 @@ impl RtMixer {
                 let mut input_frames = ((frames as f32) * tempo_ratio).round() as usize;
                 input_frames = input_frames.clamp(1, DEFAULT_BLOCK_SAMPLES);
 
-                let mut loop_start = self.pad_loop_start_frame[voice.sample_id].min(sample_frames);
-                let mut loop_end =
-                    self.pad_loop_end_frame[voice.sample_id].unwrap_or(sample_frames);
+                let mut loop_start = pad_loop_start_frame[voice.sample_id].min(sample_frames);
+                let mut loop_end = pad_loop_end_frame[voice.sample_id].unwrap_or(sample_frames);
                 loop_end = loop_end.min(sample_frames);
                 if loop_end <= loop_start {
                     loop_start = 0;
@@ -1118,19 +1297,41 @@ impl RtMixer {
                 let base = voice.frame_pos - loop_start;
 
                 let input_buffers = voice.stretch.input_buffers_mut(input_frames);
-                for (channel, buf) in input_buffers.iter_mut().enumerate().take(self.channels) {
+                for (channel, buf) in input_buffers.iter_mut().enumerate().take(channels) {
                     for (i, sample_ref) in buf.iter_mut().enumerate().take(input_frames) {
                         let frame = loop_start + ((base + i) % loop_len);
-                        *sample_ref = render_source_sample(
-                            &sample,
-                            prepared_stem_set,
-                            stem_enabled_mask[voice.sample_id],
-                            frame,
-                            self.channels,
-                            channel,
-                        );
+                        *sample_ref = if stem_transition.is_active() {
+                            let from_sample = render_source_selection_sample(
+                                &sample,
+                                prepared_stem_set,
+                                stem_transition.from,
+                                frame,
+                                channels,
+                                channel,
+                            );
+                            let to_sample = render_source_selection_sample(
+                                &sample,
+                                prepared_stem_set,
+                                current_selection,
+                                frame,
+                                channels,
+                                channel,
+                            );
+                            let (from_gain, to_gain) = stem_transition.gains_at(i);
+                            from_sample * from_gain + to_sample * to_gain
+                        } else {
+                            render_source_selection_sample(
+                                &sample,
+                                prepared_stem_set,
+                                current_selection,
+                                frame,
+                                channels,
+                                channel,
+                            )
+                        };
                     }
                 }
+                stem_transitions[voice.sample_id].advance(input_frames);
 
                 voice.stretch.process(
                     input_frames,
@@ -1145,14 +1346,14 @@ impl RtMixer {
 
                 let output_buffers = voice.stretch.output_buffers();
                 for frame in 0..frames {
-                    let out_base = frame * self.channels;
-                    for (channel, buffer) in output_buffers.iter().enumerate().take(self.channels) {
+                    let out_base = frame * channels;
+                    for (channel, buffer) in output_buffers.iter().enumerate().take(channels) {
                         let sample = buffer[frame];
                         let mut sample = sample;
                         if let Some(state) = voice.eq_state.get_mut(channel) {
                             sample = eq.process(state, sample);
                         }
-                        let mixed = sample * voice.volume * self.volume * pad_gain;
+                        let mixed = sample * voice.volume * volume * pad_gain;
                         output[out_base + channel] += mixed;
 
                         let peak = mixed.abs();
@@ -1164,11 +1365,10 @@ impl RtMixer {
 
                 voice.frame_pos = loop_start + ((base + input_frames) % loop_len);
             } else {
-                let sample_frames = sample.samples.len() / self.channels;
-                let loop_start = self.pad_loop_start_frame[voice.sample_id].min(sample_frames);
+                let sample_frames = sample.samples.len() / channels;
+                let loop_start = pad_loop_start_frame[voice.sample_id].min(sample_frames);
 
-                let mut loop_end =
-                    self.pad_loop_end_frame[voice.sample_id].unwrap_or(sample_frames);
+                let mut loop_end = pad_loop_end_frame[voice.sample_id].unwrap_or(sample_frames);
                 loop_end = loop_end.min(sample_frames);
                 if loop_end <= loop_start {
                     // Invalid loop; but voice is paused; skip.
@@ -1176,7 +1376,7 @@ impl RtMixer {
                     voice.frame_pos = loop_start;
                 }
             }
-            self.pad_playhead_frame[voice.sample_id] = Some(voice.frame_pos);
+            pad_playhead_frame[voice.sample_id] = Some(voice.frame_pos);
         }
     }
 }
@@ -1960,11 +2160,22 @@ mod tests {
         mixer.render(&mut output, &mut pad_peaks);
 
         assert_eq!(active_voice_frame(&mixer, 0), Some(10));
+        assert!((output[0] - 0.9).abs() < 1e-5);
+        assert!(output[4] < output[0]);
+        assert!(output[4] > 0.35);
+        assert!(mixer.stem_transitions[0].is_active());
+
+        let mut output = vec![0.0; STEM_TRANSITION_RAMP_FRAMES];
+        mixer.render(&mut output, &mut pad_peaks);
+        assert!(!mixer.stem_transitions[0].is_active());
+
+        let mut output = vec![0.0; 5];
+        mixer.render(&mut output, &mut pad_peaks);
         assert!(output.iter().all(|&sample| (sample - 0.35).abs() < 1e-5));
     }
 
     #[test]
-    fn test_stem_mask_change_preserves_loop_relative_source_frame() {
+    fn test_stem_mask_change_crossfades_and_preserves_loop_relative_source_frame() {
         let mut mixer = RtMixer::new(1, 10.0);
         let full_mix = SampleBuffer {
             channels: 1,
@@ -2009,8 +2220,33 @@ mod tests {
         let mut output = vec![0.0; 1];
         mixer.render(&mut output, &mut pad_peaks);
 
-        assert!((output[0] - 104.0).abs() < 1e-4);
+        assert!((output[0] - 4.0).abs() < 1e-4);
         assert_eq!(active_voice_frame(&mixer, 0), Some(5));
+        assert!(mixer.stem_transitions[0].is_active());
+
+        let mut output = vec![0.0; STEM_TRANSITION_RAMP_FRAMES];
+        mixer.render(&mut output, &mut pad_peaks);
+        assert!(!mixer.stem_transitions[0].is_active());
+    }
+
+    #[test]
+    fn test_inactive_stem_mode_change_does_not_leave_stale_transition() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 20, 0.9));
+        let stems =
+            create_test_prepared_stems_with_values(1, 44_100, 20, [0.1, 0.2, 0.05, 0.0, 0.15]);
+        assert!(mixer.publish_prepared_stems(0, stems));
+
+        assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
+        assert!(!mixer.stem_transitions[0].is_active());
+
+        assert!(mixer.play_sample(0, 1.0));
+        let mut output = vec![0.0; 5];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert!(output.iter().all(|&sample| (sample - 0.35).abs() < 1e-5));
+        assert!(!mixer.stem_transitions[0].is_active());
     }
 
     #[test]

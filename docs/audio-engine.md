@@ -164,10 +164,11 @@ wrapping. Prepared stems are eligible for all-stems playback only when they shar
 full-mix source version, sample rate, channel layout, frame count, and source-frame origin.
 
 Live loop edits apply immediately: an active voice keeps its current source frame when it remains
-inside the new loop and clamps to the new loop start when it is outside. Stem mode and mask changes
-select already prepared buffers without retriggering the voice. These transitions are not yet
-click-free; the next preparation should add bounded Rust-side transition state before DSP/FX
-foundation work.
+inside the new loop and clamps to the new loop start when it is outside. Live loop edits still do
+not crossfade. Stem mode and mask changes select already prepared buffers without retriggering the
+voice and now use a bounded Rust-side 128 source-frame transition ramp for active pads before the
+existing Key Lock, gain/EQ, metering, and playhead path. Inactive pads do not retain stale
+transitions.
 
 ## Threading and real-time constraints
 
