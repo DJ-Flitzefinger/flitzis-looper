@@ -116,6 +116,8 @@ processing.
 
 The later 3-band DJ isolator should be a separate OpenSpec-backed behavior change after the
 foundation exists. That change should replace the current hardwired EQ path rather than patch it.
+That dedicated planning change now lives at
+`openspec/changes/replace-hardwired-eq-with-dj-isolator/`.
 
 Initial isolator targets:
 
@@ -157,3 +159,15 @@ For the neutral foundation implementation:
 - run `uv run cargo check --manifest-path rust/Cargo.toml`,
 - run Python tests only if UI/controller/API behavior changes,
 - run the broader uv-managed sequence if behavior, bridge contracts, or shared audio state change.
+
+For the dedicated isolator planning slice:
+
+- run official strict OpenSpec validation for `replace-hardwired-eq-with-dj-isolator`,
+- run `git diff --check`.
+
+For the later isolator implementation:
+
+- run focused Rust DSP and mixer tests for neutral transparency, full kill, bounded boost,
+  smoothing, finite output, sample-rate preparation, and no double hardwired EQ processing,
+- run focused Python controller/UI/input-mapping tests if compatibility glue changes,
+- run the broader uv-managed validation sequence because the change replaces live audio behavior.

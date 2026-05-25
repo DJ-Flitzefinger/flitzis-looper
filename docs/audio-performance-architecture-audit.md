@@ -1138,16 +1138,18 @@ Acceptance:
 
 ## Next Recommended Step
 
-Stage 8 has completed the DSP/FX foundation and later EQ replacement architecture planning.
+Stage 8 has completed the DSP/FX foundation and Stage 9 has a dedicated OpenSpec planning change
+for the later EQ replacement at
+`openspec/changes/replace-hardwired-eq-with-dj-isolator/`.
 
 The next recommended step is the first implementation slice from
-`openspec/changes/prepare-dsp-fx-foundation/`:
+`openspec/changes/replace-hardwired-eq-with-dj-isolator/`:
 
 ```text
-Implement a neutral internal Rust DSP foundation scaffold: a fixed-size per-pad chain/no-op or
-test-only node, typed DSP parameter identities, and Rust-owned smoothing helpers, while preserving
-current audio output and current EQ behavior.
+Implement the fixed-size Rust per-pad DJ isolator DSP node and route the existing per-pad EQ
+setter path to typed smoothed DSP parameters, while preserving the existing selected-pad EQ UI,
+project restore, and mapping semantics.
 ```
 
-Do not implement the new EQ, a visible DSP/FX effect, plugin hosting, real-time stem separation,
-live loop-edit crossfades, or a broad rewrite during that first foundation slice.
+Do not add plugin hosting, unrelated FX, deck/group/master chains, real-time stem separation,
+live loop-edit crossfades, UI redesign, or a broad rewrite during that first isolator slice.
