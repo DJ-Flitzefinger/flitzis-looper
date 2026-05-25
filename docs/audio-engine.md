@@ -193,6 +193,8 @@ Implemented first slice:
   transport master BPM, and downbeat anchor.
 - The CPAL callback advances the transport by the number of rendered output frames.
 - Rust validates transport master BPM and derives beat/bar phase for 4/4 timing.
+- Accepted master-BPM parameter updates are applied to both mixer BPM-lock tempo matching and
+  transport-grid timing while preserving the current transport bar phase.
 - Deterministic Rust unit tests cover frame advancement, BPM conversion, phase, grid
   boundary calculations, and invalid BPM fallback.
 - `FixedCapacityScheduler` stores accepted events in bounded array storage, orders by
@@ -351,8 +353,9 @@ sets a non-momentary custom solo state for that component without adding a separ
 
 The active Gen3 phase-aware sync slice is `openspec/changes/add-phase-aware-playback-sync/`. It now
 keeps normal quantized starts loop-start based while preserving bounded transport/pad phase helpers
-for explicit sync behavior. BPM-lock tempo matching remains separate from the permanent transport
-masterclock unless an explicit `anchor_transport_phase_from_pad` request is sent.
+for explicit sync behavior. Accepted master-BPM updates are shared by BPM-lock tempo matching and
+transport-grid timing, while pad-derived transport phase anchoring remains explicit through
+`anchor_transport_phase_from_pad`.
 
 The Stage 4 state ownership slice is
 `openspec/changes/clarify-state-ownership-boundary/`. `ProjectState` owns durable performer

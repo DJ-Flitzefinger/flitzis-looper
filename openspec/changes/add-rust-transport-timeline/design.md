@@ -74,8 +74,11 @@ immediate playback remains available.
 
 Pad playback is a client of this transport, not its owner. Pad starts, stops, pauses, retriggers,
 unloads, pad BPM changes, and pad timing-metadata publication do not move `output_frame`,
-`master_bpm`, or `downbeat_frame`. Transport BPM/phase changes require an explicit transport or
-sync operation.
+`master_bpm`, or `downbeat_frame`. Transport BPM changes require an explicit transport operation,
+an accepted performance master-BPM parameter update, or a sync operation. Accepted master-BPM
+parameter updates also update mixer BPM-lock tempo matching and preserve the transport's current
+bar phase by adjusting the downbeat anchor without resetting output-frame time or touching active
+voices.
 
 ### Absolute Output-Frame Scheduler
 Add a fixed-capacity scheduler owned by the audio thread. A scheduled event contains:

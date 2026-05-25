@@ -80,10 +80,10 @@ Current Gen3 state: bounded per-pad timing anchors derived from analysis downbea
 published to Rust audio-thread state and remain aligned with the waveform editor grid anchor.
 Low-level quantized scheduled playback uses the permanent Rust transport to choose the current or
 next future grid output frame, but every newly triggered pad starts from its effective loop start.
-BPM-lock tempo matching no longer redefines the permanent transport masterclock as a side effect;
-transport phase anchoring is an explicit sync request. UI/controller trigger-quantization controls
-now expose a bottom-bar `Q` toggle plus Settings grid choices for `1/16`, `1/32`, and `1/64`;
-legacy beat/bar modes migrate to `1/16`.
+Accepted master-BPM updates now bridge BPM-lock tempo matching and transport-grid timing while
+preserving transport bar phase; pad-derived transport phase anchoring is still an explicit sync
+request. UI/controller trigger-quantization controls now expose a bottom-bar `Q` toggle plus
+Settings grid choices for `1/16`, `1/32`, and `1/64`; legacy beat/bar modes migrate to `1/16`.
 
 ### 7b) Low-jitter input mapping and Learn
 - OpenSpec change (active): `add-low-jitter-input-mapping`

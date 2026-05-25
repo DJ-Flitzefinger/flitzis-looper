@@ -7,8 +7,9 @@ and bounded per-pad timing anchors derived from beatgrid/downbeat analysis.
 
 The remaining gap is controlled phase behavior. Quantized starts land on the Rust transport grid
 and must continue to start from the pad's effective loop start. BPM lock tempo-matches pads by BPM
-ratio, but transport downbeat alignment must be an explicit sync operation rather than a side
-effect of whichever pad happens to be playing.
+ratio using the same accepted master BPM as the transport grid, but transport downbeat alignment
+to a pad must be an explicit sync operation rather than a side effect of whichever pad happens to
+be playing.
 
 This change defines the next narrow Gen3 behavior contract before implementation: keep normal
 quantized starts loop-start based, keep bounded phase helpers available for explicit sync, and
@@ -31,7 +32,7 @@ avoid adding heavy work to the audio callback.
   `docs/todos-legacy-migration.md`.
 - Later affected code: Rust transport, mixer, scheduler/audio-stream execution path,
   message enum, and focused Rust tests. Python/controller changes are limited to keeping
-  BPM-lock tempo matching separate from explicit transport phase anchoring.
+  pad-derived transport phase anchoring explicit.
 
 ## Non-Goals
 - No production Rust or Python implementation in this planning slice.

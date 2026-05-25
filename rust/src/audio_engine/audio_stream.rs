@@ -502,7 +502,7 @@ impl PendingControlParameters {
         }
     }
 
-    fn apply_to(self, mixer: &mut RtMixer) -> usize {
+    fn apply_to(self, mixer: &mut RtMixer, transport: &mut TransportTimeline) -> usize {
         let mut applied = 0;
 
         if let Some(volume) = self.volume {
@@ -515,6 +515,7 @@ impl PendingControlParameters {
         }
         if let Some(bpm) = self.master_bpm {
             mixer.set_master_bpm(bpm);
+            transport.set_master_bpm_preserving_bar_phase_at_frame(bpm, transport.output_frame());
             applied += 1;
         }
         for (id, bpm) in self.pad_bpm.into_iter().enumerate() {
@@ -543,6 +544,7 @@ impl PendingControlParameters {
 fn drain_parameter_messages(
     consumer: &mut Consumer<ControlParameterMessage>,
     mixer: &mut RtMixer,
+    transport: &mut TransportTimeline,
 ) -> ParameterDrainResult {
     let mut pending = PendingControlParameters::default();
     let mut messages_drained = 0;
@@ -558,7 +560,7 @@ fn drain_parameter_messages(
 
     ParameterDrainResult {
         messages_drained,
-        parameters_applied: pending.apply_to(mixer),
+        parameters_applied: pending.apply_to(mixer, transport),
     }
 }
 
@@ -750,7 +752,7 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
                 &mut retired_buffers,
             );
 
-            drain_parameter_messages(&mut parameter_consumer_in, &mut mixer);
+            drain_parameter_messages(&mut parameter_consumer_in, &mut mixer, &mut transport);
 
             // Render audio + compute per-pad peaks.
             render_scheduled_audio(
@@ -897,10 +899,11 @@ mod tests {
             .unwrap();
 
         let mut mixer = RtMixer::new(1, 44_100.0);
+        let mut transport = TransportTimeline::new(44_100);
         mixer.load_sample(0, create_test_sample(1, 8, 1.0));
         assert!(mixer.play_sample(0, 1.0));
 
-        let result = drain_parameter_messages(&mut consumer, &mut mixer);
+        let result = drain_parameter_messages(&mut consumer, &mut mixer, &mut transport);
 
         assert_eq!(
             result,
@@ -915,6 +918,38 @@ mod tests {
         mixer.render(&mut output, &mut pad_peaks);
 
         assert!((output[0] - 0.375).abs() < 1e-5);
+    }
+
+    #[test]
+    fn master_bpm_parameter_updates_mixer_and_transport_clock() {
+        let (mut producer, mut consumer) = RingBuffer::new(4);
+        producer
+            .push(ControlParameterMessage::SetMasterBpm(120.0))
+            .unwrap();
+
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.set_bpm_lock(true);
+        mixer.set_pad_bpm(0, Some(100.0));
+
+        let mut transport = TransportTimeline::new(10);
+        assert!(transport.set_master_bpm(60.0));
+        transport.advance_by_rendered_frames(10);
+        assert_eq!(transport.bar_phase_beats(), Some(1.0));
+
+        let result = drain_parameter_messages(&mut consumer, &mut mixer, &mut transport);
+
+        assert_eq!(
+            result,
+            ParameterDrainResult {
+                messages_drained: 1,
+                parameters_applied: 1
+            }
+        );
+        assert_eq!(transport.master_bpm(), Some(120.0));
+        assert_eq!(transport.downbeat_frame(), 5);
+        assert_eq!(transport.bar_phase_beats(), Some(1.0));
+        let output_bpm = mixer.output_bpm_for_sample_id(0).unwrap();
+        assert!((output_bpm - 120.0).abs() < 1e-4);
     }
 
     #[test]

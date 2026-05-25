@@ -91,10 +91,12 @@ The target pad must still be validated before stopping active voices. A missing 
 target pad must not stop the current pad.
 
 ### BPM Lock Transport Phase Anchor
-When BPM lock is enabled, Python tracks the selected anchor pad and derives a mixer master BPM
-for tempo-ratio matching. The permanent transport masterclock is not redefined by that recompute.
-A fixed-size request can explicitly ask the audio thread to anchor transport phase from a selected
-pad when possible.
+When BPM lock is enabled, Python tracks the selected anchor pad and derives a performance master
+BPM for tempo-ratio matching. The audio thread now treats an accepted master-BPM parameter update
+as the shared tempo for both mixer BPM-ratio matching and the permanent transport grid, preserving
+the current transport bar phase at the callback's current output frame. A fixed-size request can
+still explicitly ask the audio thread to anchor transport phase from a selected pad when possible;
+that pad-derived phase sync is not implied by the master-BPM update.
 
 The audio thread can anchor transport downbeat from a playing anchor pad when all are valid:
 

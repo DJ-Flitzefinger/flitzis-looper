@@ -74,9 +74,18 @@ playback, but SHALL NOT claim musical quantization is available.
 ### Requirement: Master BPM Is Owned And Validated In Rust
 The system SHALL store transport master BPM in Rust audio-thread-owned transport state.
 
-Transport master BPM updates SHALL be explicit controlled transport or sync operations. BPM-lock,
-pitch, key-lock, pad playback, pad stop, and per-pad metadata updates SHALL NOT implicitly redefine
-the transport master BPM or downbeat anchor.
+Transport master BPM updates SHALL be explicit controlled transport operations, accepted
+performance master-BPM parameter updates, or sync operations. Accepted performance master-BPM
+updates SHALL use the same validated scalar for transport-grid timing and BPM-lock tempo matching.
+
+When a performance master-BPM update changes the transport BPM, Rust SHALL preserve the current
+transport bar phase at the audio callback's current output frame. Preserving phase MAY move the
+transport downbeat anchor, but it SHALL NOT reset the output-frame clock, stop, restart, retrigger,
+or time-slip active voices.
+
+BPM-lock mode toggles, pitch, key-lock, pad playback, pad stop, and per-pad metadata updates SHALL
+NOT implicitly redefine the transport master BPM or anchor the transport phase to a pad. Pad-derived
+phase anchoring SHALL remain an explicit sync operation.
 
 Master BPM updates SHALL reject non-finite and non-positive values. Invalid master BPM updates
 SHALL NOT corrupt existing transport state.
@@ -86,15 +95,24 @@ SHALL NOT corrupt existing transport state.
 - **THEN** the Rust audio thread stores the new transport master BPM
 - **AND** subsequent beat and bar phase calculations use that BPM
 
+#### Scenario: Performance master BPM bridges transport and tempo matching
+- **GIVEN** BPM lock has a valid performance master BPM for tempo matching
+- **AND** the Rust transport has an existing output-frame clock and bar phase
+- **WHEN** the audio callback applies the accepted master-BPM parameter update
+- **THEN** Rust stores that BPM for both BPM-lock tempo matching and transport-grid timing
+- **AND** the transport preserves its current bar phase at the current output frame
+- **AND** active voices are not stopped, restarted, retriggered, or time-slipped
+
 #### Scenario: Invalid master BPM is ignored safely
 - **WHEN** an explicit transport master-BPM operation provides NaN, infinity, zero, or a negative BPM
 - **THEN** Rust ignores the invalid value
 - **AND** the previous valid transport state remains available
 
-#### Scenario: BPM lock does not implicitly redefine the transport clock
-- **GIVEN** BPM lock changes the mixer tempo-matching master BPM
-- **WHEN** no explicit transport sync operation is requested
+#### Scenario: BPM lock mode changes do not anchor transport phase
+- **GIVEN** BPM lock is enabled or disabled
+- **WHEN** no accepted master-BPM parameter update or explicit transport sync operation is applied
 - **THEN** the transport master BPM and downbeat anchor remain unchanged
+- **AND** the transport output-frame clock continues monotonically
 
 ### Requirement: Absolute Output-Frame Scheduler
 The system SHALL provide an audio-thread-owned scheduler for playback events targeted to

@@ -169,12 +169,15 @@ metadata now use the continuous parameter path. Python still sends ordered `SetB
 range, head count, interpolation, window, smoothing step, and output gain. Legacy
 `SetKeyLockQuality` preset messages remain compatibility aliases and map to concrete settings.
 The audio callback derives the per-voice tempo ratio and chooses varispeed or master-tempo
-processing from already-owned scalar state.
+processing from already-owned scalar state. Accepted master-BPM parameter updates are applied to
+both mixer BPM-lock tempo matching and the Rust transport grid, preserving the current transport
+bar phase at the callback's current output frame. Pad-derived transport phase anchoring remains an
+explicit `AnchorTransportPhaseFromPad` command.
 
 The callback must not load DSP plugins, allocate/resize stretch buffers, read files, decode audio,
 log, block, acquire the Python GIL, or run neural inference when Key Lock is toggled or while it
-is rendering active voices. Parameter changes update bounded mixer state only; they do not allocate,
-reload samples, regenerate stems, inspect caches, or retrigger voices.
+is rendering active voices. Parameter changes update bounded mixer and transport state only; they
+do not allocate, reload samples, regenerate stems, inspect caches, or retrigger voices.
 
 Two failure points are distinct:
 

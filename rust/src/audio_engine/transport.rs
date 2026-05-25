@@ -157,6 +157,22 @@ impl TransportTimeline {
         false
     }
 
+    pub(crate) fn set_master_bpm_preserving_bar_phase_at_frame(
+        &mut self,
+        bpm: f32,
+        output_frame: u64,
+    ) -> bool {
+        if !is_valid_bpm(bpm) {
+            return false;
+        }
+
+        let Some(bar_phase_beats) = self.bar_phase_beats_at_frame(output_frame) else {
+            return self.set_master_bpm(bpm);
+        };
+
+        self.set_master_bpm_and_anchor_bar_phase_at_frame(bpm, bar_phase_beats, output_frame)
+    }
+
     pub(crate) fn set_master_bpm(&mut self, bpm: f32) -> bool {
         if !is_valid_bpm(bpm) {
             return false;
@@ -546,6 +562,23 @@ mod tests {
         assert_eq!(transport.master_bpm(), Some(60.0));
         assert_eq!(transport.downbeat_frame(), 132_000);
         assert_eq!(transport.bar_phase_beats_at_frame(60_000), Some(2.5));
+    }
+
+    #[test]
+    fn master_bpm_update_can_preserve_current_bar_phase() {
+        let mut transport = TransportTimeline::new(10);
+        assert!(transport.set_master_bpm(60.0));
+        transport.advance_by_rendered_frames(10);
+
+        assert_eq!(transport.bar_phase_beats(), Some(1.0));
+
+        assert!(
+            transport.set_master_bpm_preserving_bar_phase_at_frame(120.0, transport.output_frame())
+        );
+
+        assert_eq!(transport.master_bpm(), Some(120.0));
+        assert_eq!(transport.downbeat_frame(), 5);
+        assert_eq!(transport.bar_phase_beats(), Some(1.0));
     }
 
     #[test]

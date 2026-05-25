@@ -23,7 +23,7 @@ callback boundary.
 | Sample identity | Project-local `sample_paths`, durations, analysis metadata | loading ids, pending paths, progress/errors | immutable loaded sample buffers and slot ownership |
 | Pad activity | no live playback persistence | best-effort active/paused pad projection | active voices, pause/render state, source playheads |
 | Metering and playheads | none | best-effort peaks and playhead positions | rendered levels and source/output positions |
-| BPM metadata | manual BPM overrides and analysis BPM | BPM-lock anchor and displayed master BPM projection | per-pad BPM parameter and master BPM used for current audio processing |
+| BPM metadata | manual BPM overrides and analysis BPM | BPM-lock anchor and displayed master BPM projection | per-pad BPM parameter and accepted master BPM shared by BPM-lock tempo matching and transport-grid timing |
 | Speed and pitch | global speed multiplier | edit buffers and display projection | current playback ratio and per-voice smoothing state |
 | Key Lock | enabled flag and bounded settings | UI/editor state only | Key Lock mode, settings, per-voice processor state |
 | Loop points | editable seconds, auto-loop flag, bar count, grid offset samples | waveform editor view state | loop frame region and playhead wrapping after publication |
@@ -83,3 +83,6 @@ For the next stages, assume these authorities:
   changes require OpenSpec coverage, focused tests, and realtime-safety review. Python may still
   store and restore durable intent, but Rust should own the live audio interpretation whenever the
   value affects sample-frame timing or callback-side rendering state.
+- Stage 5 applies that policy to master BPM: Python keeps durable BPM intent and session display
+  projections, while accepted master-BPM updates become the shared Rust live tempo for both
+  BPM-lock tempo matching and transport-grid timing.

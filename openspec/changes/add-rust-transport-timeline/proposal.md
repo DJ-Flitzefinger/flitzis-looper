@@ -14,6 +14,8 @@ the first-started, oldest active, or currently playing pad does not become the c
 ## What Changes
 - Add a permanent Rust-owned global transport timeline advanced by rendered output sample frames.
 - Track transport master BPM, beat phase, bar phase, and a downbeat-aligned transport anchor in Rust.
+- Treat accepted performance master-BPM parameter updates as the shared Rust tempo for both
+  transport-grid timing and BPM-lock tempo matching, preserving current transport bar phase.
 - Add a fixed-capacity scheduler that executes events at absolute output-frame positions.
 - Route quantized pad triggers through the scheduler while preserving existing immediate trigger
   behavior when quantization is disabled and preserving effective loop-start source frames when

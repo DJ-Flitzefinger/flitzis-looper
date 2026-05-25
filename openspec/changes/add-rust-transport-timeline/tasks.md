@@ -49,3 +49,9 @@
 - [x] 8.5 Remove late-click catch-up behavior that starts newly triggered pads inside the loop.
 - [x] 8.6 Add MultiLoop regression coverage for stopping any active pad while other pads keep playing.
 - [x] 8.7 Re-run strict OpenSpec validation and the full uv-managed Rust/Python validation sequence.
+
+## 9. Shared Master-BPM Bridge
+- [x] 9.1 Treat accepted performance master-BPM parameter updates as the shared Rust tempo for transport-grid timing and BPM-lock tempo matching.
+- [x] 9.2 Preserve current transport bar phase when applying a new master BPM.
+- [x] 9.3 Keep pad-derived transport phase anchoring explicit through `AnchorTransportPhaseFromPad`.
+- [x] 9.4 Add focused Rust tests for shared mixer/transport master-BPM application.

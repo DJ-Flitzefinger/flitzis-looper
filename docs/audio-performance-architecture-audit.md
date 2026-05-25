@@ -108,10 +108,11 @@ command path for simple playback actions or the Python controller path for contr
 actions. This is the right direction.
 
 The current implementation is, however, a feature-accumulated engine rather than a complete
-professional DSP/FX architecture. Several important concepts still need cleanup before DSP/FX
-work:
+professional DSP/FX architecture. Several preparation concepts have been cleaned up, and several
+still need cleanup before DSP/FX work:
 
-- transport BPM and mixer BPM are separate concepts,
+- accepted performance master BPM is now bridged to transport-grid timing and mixer BPM-lock
+  tempo matching,
 - durable Python state and live Rust state duplicate several authorities,
 - command draining is now bounded per callback and fast scalar parameters now use a separate
   bounded queue with callback-side coalescing,
@@ -245,17 +246,15 @@ Positive findings:
   frame from the global transport grid.
 - MultiLoop-disabled exclusive starts are atomic in the scheduler when quantized.
 
-Important issue:
+Stage 5 result:
 
-- `ControlMessage::SetMasterBpm` currently updates mixer BPM-lock state but does not update
-  transport master BPM. Quantization and tempo matching can therefore use different master BPM
-  concepts unless an explicit transport-anchor operation happens. This is not good enough for a
-  professional master-clock architecture.
+- `ControlParameterMessage::SetMasterBpm` now updates both mixer BPM-lock state and transport
+  master BPM. The transport preserves its current bar phase at the callback's current output frame,
+  so tempo changes do not reset the output-frame clock or implicitly sync to a pad.
 
 Further gaps:
 
-- There is no single documented authority for "performance master BPM" versus "BPM-lock tempo
-  ratio" versus "transport grid BPM".
+- Future clock work still needs stress coverage around rapid mixed command/parameter bursts.
 - Scheduled events are sample-frame based, but many Python-side edits are still stored and
   reasoned about in seconds.
 - Scheduler-full and audio-telemetry-drop behavior need clearer UI/controller reconciliation.
@@ -269,8 +268,8 @@ BPM currently appears in several places:
 - detected BPM and manual BPM in Python project state,
 - session master BPM in Python controller state,
 - per-pad BPM in Rust mixer state,
-- `RtMixer.master_bpm` for BPM-lock tempo ratio,
-- `TransportTimeline.master_bpm` for quantization grid timing.
+- a shared accepted Rust performance master BPM applied to both `RtMixer.master_bpm` for BPM-lock
+  tempo ratio and `TransportTimeline.master_bpm` for quantization grid timing.
 
 Pitch/speed and Key Lock are routed in Rust through `RtMixer` and `StretchProcessor`:
 
@@ -292,8 +291,7 @@ Risks:
   DJ-grade time-stretch/pitch engine.
 - Live speed and BPM changes are smoothed for tempo ratio but not governed by a broader parameter
   smoothing layer.
-- Transport BPM and mixer BPM are not unified.
-- Simultaneous BPM lock, pitch changes, quantized starts, loop edits, and stem toggles need a
+- Simultaneous pitch changes, quantized starts, loop edits, and stem toggles need a
   deeper state-transition audit before new FX are layered in.
 
 ## Loop Editor And Loop Points
@@ -358,8 +356,8 @@ Positive findings:
 
 Risks:
 
-- Tempo-reference ownership remains partly Python/session and partly Rust/mixer/transport.
-- BPM-lock master BPM and transport grid BPM can diverge.
+- Python session still projects the BPM-lock anchor and displayed master BPM, while Rust owns the
+  accepted live tempo used for audio.
 - There is no complete per-deck or group state model.
 - Pad/deck/global state transitions under simultaneous pitch, keylock, loop edits, stem toggles,
   and quantized starts need focused tests before adding future DSP chains.
@@ -409,15 +407,16 @@ Migration rules:
 - Add focused Rust and/or Python tests for the transferred authority and run official OpenSpec
   validation for affected active changes.
 
-For Stage 5, resolving the tempo-reference ownership risk may therefore include a small
-OpenSpec-backed Rust-side authority migration or bridge if that is the clearest way to unify
-transport grid BPM and BPM-lock tempo matching. Stage 5 is not limited to documentation, but it
-must remain a narrow clock/scheduler step and must not implement new EQ, DSP effects, or plugin
-hosting.
+Stage 5 used a small OpenSpec-backed Rust-side bridge to unify transport grid BPM and BPM-lock
+tempo matching. Accepted master-BPM parameter updates are now the shared Rust live tempo, and
+pad-derived phase anchoring remains explicit. This stage did not implement new EQ, DSP effects, or
+plugin hosting.
 
 Current problems:
 
-- Transport BPM and mixer BPM still need a single clock/scheduler authority decision in Stage 5.
+- Stage 5 resolved the duplicated transport-grid versus BPM-lock master BPM authority. Remaining
+  clock work should focus on mixed state-transition stress cases rather than choosing another
+  master-BPM owner.
 - Telemetry drops can leave Python active/paused state stale until later telemetry or an explicit
   controller action reconciles the projection.
 - Several setter methods cross the bridge as best-effort without acknowledgement or coalescing.
@@ -483,13 +482,12 @@ after the realtime-safety, command/parameter, state, and clock preparation phase
 
 Professional-readiness blockers before EQ/DSP replacement:
 
-1. Mixer master BPM and transport master BPM are separate authorities.
-2. Python session state can desynchronize if audio-to-control telemetry is dropped.
-3. Loop, stem, and EQ changes are immediate and can click.
-4. Future DSP parameters still need audio-side smoothing after the Stage 3 coalesced parameter
+1. Python session state can desynchronize if audio-to-control telemetry is dropped.
+2. Loop, stem, and EQ changes are immediate and can click.
+3. Future DSP parameters still need audio-side smoothing after the Stage 3 coalesced parameter
    bridge.
-5. Current EQ is not a durable DSP-chain foundation.
-6. There is no per-pad/per-stem/deck/master DSP node architecture.
+4. Current EQ is not a durable DSP-chain foundation.
+5. There is no per-pad/per-stem/deck/master DSP node architecture.
 
 Resolved preparation blockers:
 
@@ -497,7 +495,9 @@ Resolved preparation blockers:
 - oversized render blocks are split to preserve preallocated stretch-buffer bounds,
 - large sample/stem handle retirement leaves the callback through a bounded worker,
 - fast scalar parameter updates no longer share the ordered command queue,
-- direct Rust MIDI loop-region plus trigger dispatch is all-or-nothing.
+- direct Rust MIDI loop-region plus trigger dispatch is all-or-nothing,
+- accepted master-BPM parameter updates bridge transport-grid timing and BPM-lock tempo matching
+  while preserving transport bar phase.
 
 ## Recommended Target Architecture
 
@@ -713,7 +713,7 @@ Expected output:
   bridge that removes the duplicated transport-grid versus BPM-lock authority without broad
   rewrites.
 
-### Analysis Stage 6: Loop, Source Position, Key Lock, And Stems
+### Analysis Stage 6: Loop, Source Position, And Stems
 
 Files:
 
@@ -1039,15 +1039,16 @@ Acceptance:
 
 ## Next Recommended Step
 
-The next recommended step is Analysis Stage 5 / Phase 5:
+Stage 5 / Phase 5 has completed its first required ownership bridge: accepted master-BPM updates
+now share one Rust live tempo between transport-grid timing and BPM-lock tempo matching.
+
+The next recommended step is Analysis Stage 6 / Phase 6:
 
 ```text
-Establish one coherent clock and BPM model for transport grid timing, BPM-lock tempo matching,
-pitch, Key Lock, quantization, loop playback, and Multi Loop timing.
-Use a targeted Rust ownership migration or bridge if that is the smallest safe way to remove
-duplicated live clock/BPM authority.
+Make source-frame position, output-frame time, loop points, and prepared-stem alignment explicit
+before DSP/FX foundation work.
 ```
 
-Do not implement the new EQ or any other DSP effect before the clock/scheduler and DSP foundation
-stages are complete, unless a future user request explicitly supersedes this plan with an
-OpenSpec-backed change.
+Do not implement the new EQ or any other DSP effect before the loop/source-position and DSP
+foundation stages are complete, unless a future user request explicitly supersedes this plan with
+an OpenSpec-backed change.

@@ -34,3 +34,7 @@
 - [x] 6.4 Stop publishing automatic BPM-lock phase-anchor requests from Python master-BPM recomputation.
 - [x] 6.5 Add regression coverage proving quantized triggers start from the effective loop start and do not catch up inside the loop.
 - [x] 6.6 Re-run strict OpenSpec validation and the full uv-managed Rust/Python validation sequence.
+
+## 7. Stage 5 Master-BPM Bridge
+- [x] 7.1 Update the phase-sync contract so accepted performance master BPM is shared by transport-grid timing and BPM-lock tempo matching.
+- [x] 7.2 Keep pad-derived phase anchoring explicit and separate from master-BPM updates.
