@@ -1964,6 +1964,56 @@ mod tests {
     }
 
     #[test]
+    fn test_stem_mask_change_preserves_loop_relative_source_frame() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        let full_mix = SampleBuffer {
+            channels: 1,
+            samples: Arc::from(vec![0.0; 8].into_boxed_slice()),
+        };
+        let vocals: Vec<f32> = (0..8).map(|frame| frame as f32).collect();
+        let drums: Vec<f32> = (0..8).map(|frame| 100.0 + frame as f32).collect();
+        let stems = PreparedStemSet {
+            source_version_hash: 42,
+            sample_rate_hz: 10,
+            channels: 1,
+            frame_count: 8,
+            available_mask: full_stem_available_mask(),
+            stems: [
+                SampleBuffer {
+                    channels: 1,
+                    samples: Arc::from(vocals.into_boxed_slice()),
+                },
+                create_test_sample(1, 8, 0.0),
+                create_test_sample(1, 8, 0.0),
+                SampleBuffer {
+                    channels: 1,
+                    samples: Arc::from(drums.into_boxed_slice()),
+                },
+                create_test_sample(1, 8, 0.0),
+            ],
+        };
+        mixer.load_sample(0, full_mix);
+        assert!(mixer.publish_prepared_stems(0, stems));
+        assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
+        assert!(mixer.set_stem_enabled_mask(0, STEM_MASK_VOCALS, 42));
+        mixer.set_pad_loop_region(0, 0.2, Some(0.6));
+        assert!(mixer.play_sample(0, 1.0));
+
+        let mut output = vec![0.0; 2];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+        assert_eq!(output, vec![2.0, 3.0]);
+        assert_eq!(active_voice_frame(&mixer, 0), Some(4));
+
+        assert!(mixer.set_stem_enabled_mask(0, STEM_MASK_DRUMS, 42));
+        let mut output = vec![0.0; 1];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert!((output[0] - 104.0).abs() < 1e-4);
+        assert_eq!(active_voice_frame(&mixer, 0), Some(5));
+    }
+
+    #[test]
     fn test_render_falls_back_to_full_mix_for_incomplete_prepared_stems() {
         let mut mixer = RtMixer::new(1, 44_100.0);
         mixer.load_sample(0, create_test_sample(1, 20, 0.4));
@@ -2310,6 +2360,31 @@ mod tests {
 
         let frame = mixer.pad_playhead_frame[0].unwrap();
         assert!((6..8).contains(&frame));
+    }
+
+    #[test]
+    fn test_live_loop_update_preserves_source_frame_inside_new_region() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        let sample = SampleBuffer {
+            channels: 1,
+            samples: Arc::from((0..10).map(|frame| frame as f32).collect::<Vec<_>>()),
+        };
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.load_sample(0, sample);
+        mixer.set_pad_loop_region(0, 0.0, Some(1.0));
+        assert!(mixer.play_sample(0, 1.0));
+
+        let mut output = vec![0.0; 6];
+        mixer.render(&mut output, &mut pad_peaks);
+        assert_eq!(output, vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
+        assert_eq!(active_voice_frame(&mixer, 0), Some(6));
+
+        mixer.set_pad_loop_region(0, 0.4, Some(0.9));
+        let mut output = vec![0.0; 1];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert_eq!(output, vec![6.0]);
+        assert_eq!(active_voice_frame(&mixer, 0), Some(7));
     }
 
     #[test]

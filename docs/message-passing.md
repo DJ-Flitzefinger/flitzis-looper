@@ -159,6 +159,14 @@ message. The audio thread derives transport phase from already-owned mixer and t
 Python must not send full beat-grid vectors, file paths, heap-owned data, or direct
 scheduler/transport pointers.
 
+The Stage 6 loop/source/stem alignment clarification is recorded in
+`docs/audio-loop-source-stem-alignment.md` and
+`openspec/changes/clarify-loop-source-stem-alignment/`. Loop-region messages still carry bounded
+seconds from Python durable intent, but Rust resolves them to live source-frame ranges before
+rendering. Stem mix-mode and enabled-mask messages carry only pad id, source-version hash, and
+bounded scalar state; they select already accepted buffers without changing the voice playhead or
+output-frame scheduler state.
+
 ## Speed and Key Lock messages
 
 The Key Lock master-tempo repair is specified in

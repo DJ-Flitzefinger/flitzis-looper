@@ -74,6 +74,7 @@ Relevant durable planning/spec sources:
 - `docs/audio-engine.md`
 - `docs/message-passing.md`
 - `docs/audio-state-ownership.md`
+- `docs/audio-loop-source-stem-alignment.md`
 - `docs/time-stretch-and-pitch-shift.md`
 - `docs/todos-legacy-migration.md`
 - `openspec/specs/per-pad-eq3/spec.md`
@@ -87,6 +88,7 @@ Relevant durable planning/spec sources:
 - `openspec/changes/add-low-jitter-input-mapping/`
 - `openspec/changes/add-offline-stem-cache/`
 - `openspec/changes/add-stem-performance-controls/`
+- `openspec/changes/clarify-loop-source-stem-alignment/`
 
 Local continuation memory lives outside the repository in `../codex-meta/`.
 
@@ -497,7 +499,9 @@ Resolved preparation blockers:
 - fast scalar parameter updates no longer share the ordered command queue,
 - direct Rust MIDI loop-region plus trigger dispatch is all-or-nothing,
 - accepted master-BPM parameter updates bridge transport-grid timing and BPM-lock tempo matching
-  while preserving transport bar phase.
+  while preserving transport bar phase,
+- source-frame position, output-frame time, loop-region interpretation, prepared-stem alignment,
+  and the click-free transition follow-up plan are documented and covered by focused mixer tests.
 
 ## Recommended Target Architecture
 
@@ -715,6 +719,9 @@ Expected output:
 
 ### Analysis Stage 6: Loop, Source Position, And Stems
 
+Status: completed by `docs/audio-loop-source-stem-alignment.md` and
+`openspec/changes/clarify-loop-source-stem-alignment/`.
+
 Files:
 
 - `rust/src/audio_engine/mixer.rs`
@@ -734,6 +741,20 @@ Questions:
 Expected output:
 
 - loop/stem source-position model and click-free transition plan.
+
+Result:
+
+- output-frame transport/scheduler time and per-voice source-frame playback position are named as
+  separate runtime concepts,
+- loop regions are documented as Rust-owned half-open source-frame ranges after Python publishes
+  durable editable seconds,
+- live loop edits preserve an in-range source playhead and clamp an out-of-range playhead to the
+  new loop start,
+- prepared stems are documented as sharing full-mix source-frame origin, frame count, sample rate,
+  channel layout, and source-version identity,
+- stem mode/mask changes preserve the voice playhead and are sequenced before future per-stem DSP,
+- click-free transition work is deferred to a bounded Rust transition helper before DSP foundation
+  and EQ replacement.
 
 ### Analysis Stage 7: MIDI/Keyboard Under Future DSP Parameters
 
@@ -1039,16 +1060,15 @@ Acceptance:
 
 ## Next Recommended Step
 
-Stage 5 / Phase 5 has completed its first required ownership bridge: accepted master-BPM updates
-now share one Rust live tempo between transport-grid timing and BPM-lock tempo matching.
+Stage 6 has completed the loop/source-position/prepared-stem alignment clarification.
 
-The next recommended step is Analysis Stage 6 / Phase 6:
+The next recommended step is Analysis Stage 7:
 
 ```text
-Make source-frame position, output-frame time, loop points, and prepared-stem alignment explicit
-before DSP/FX foundation work.
+Review MIDI/keyboard architecture only for future DSP parameter safety, keeping current working
+MIDI behavior intact and treating MIDI latency/jitter as solved unless a new issue appears.
 ```
 
-Do not implement the new EQ or any other DSP effect before the loop/source-position and DSP
-foundation stages are complete, unless a future user request explicitly supersedes this plan with
-an OpenSpec-backed change.
+Do not implement the new EQ or any other DSP effect before the MIDI/DSP-parameter review,
+click-free transition preparation, and DSP foundation stages are complete, unless a future user
+request explicitly supersedes this plan with an OpenSpec-backed change.

@@ -10,7 +10,8 @@ The professional audio/performance architecture audit is recorded in
 but future EQ/DSP work should wait until the documented realtime-safety, command/parameter,
 state-ownership, and clock-preparation stages are complete or explicitly superseded by a new
 OpenSpec-backed request. The current state ownership boundary is recorded in
-`docs/audio-state-ownership.md`.
+`docs/audio-state-ownership.md`. The Stage 6 loop/source-position/stem alignment model is recorded
+in `docs/audio-loop-source-stem-alignment.md`.
 
 Do not interpret audio safety as "Rust must not be touched". The protected boundary is the CPAL
 audio callback and realtime hot path. New Rust modules outside that boundary are allowed and
@@ -152,6 +153,21 @@ voices.
 Prepared stems and full-mix playback share the same source-frame reader before Key Lock
 processing. Stem mask/mix changes therefore preserve the same loop playhead, BPM-lock ratio,
 Key-Lock mode, gain/EQ, metering, and playhead reporting path as full-mix playback.
+
+## Loop, source position, and prepared stems
+
+Loop and stem alignment terms are defined in `docs/audio-loop-source-stem-alignment.md`.
+In short, output-frame time belongs to the Rust transport timeline and scheduler, while
+source-frame position belongs to active mixer voices. Python persists loop-edit intent in seconds;
+Rust converts accepted loop regions to half-open source-frame ranges and owns live playhead
+wrapping. Prepared stems are eligible for all-stems playback only when they share the loaded
+full-mix source version, sample rate, channel layout, frame count, and source-frame origin.
+
+Live loop edits apply immediately: an active voice keeps its current source frame when it remains
+inside the new loop and clamps to the new loop start when it is outside. Stem mode and mask changes
+select already prepared buffers without retriggering the voice. These transitions are not yet
+click-free; the next preparation should add bounded Rust-side transition state before DSP/FX
+foundation work.
 
 ## Threading and real-time constraints
 
