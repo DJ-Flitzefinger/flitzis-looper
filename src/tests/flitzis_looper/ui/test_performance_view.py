@@ -2,7 +2,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, cast
 
 from flitzis_looper.ui.render import performance_view
-from flitzis_looper.ui.render.performance_view import stem_grid_indicator_label
+from flitzis_looper.ui.render.performance_view import stem_grid_indicator_label, wrap_pad_title
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -94,6 +94,23 @@ def test_stem_grid_indicator_labels_are_compact() -> None:
     assert stem_grid_indicator_label("generating") == "..."
     assert stem_grid_indicator_label("blocked") == "BLK"
     assert stem_grid_indicator_label("error") == "!"
+
+
+def test_pad_title_wraps_to_three_padded_lines(monkeypatch: pytest.MonkeyPatch) -> None:
+    def calc_text_size(text: str) -> _Point:
+        return _Point(float(len(text) * 8), 14.0)
+
+    monkeypatch.setattr(
+        "flitzis_looper.ui.render.performance_view.imgui.calc_text_size",
+        calc_text_size,
+    )
+
+    title = wrap_pad_title("VeryLongSampleNameWithNoSpaces.wav", pad_width=80.0)
+    lines = title.splitlines()
+
+    assert len(lines) == 3
+    assert lines[-1].endswith("...")
+    assert all(len(line) * 8 <= 64 for line in lines)
 
 
 def test_loaded_pad_renders_bpm_key_metadata_but_not_vertical_peak_meter(

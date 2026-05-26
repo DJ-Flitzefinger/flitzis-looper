@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 MODE_BUTTON_HEIGHT = 24.0
 MODE_BUTTON_WIDTH = 36.0
 MULTI_LOOP_BUTTON_WIDTH = 88.0
+MASTER_VOLUME_WIDTH = 300.0
 STEM_BUTTON_SIZE = 32.0
 MODE_BUTTON_GAP = SPACING * 0.75
 CONTROL_GROUP_GAP = SPACING * 1.75
@@ -91,7 +92,7 @@ def _master_volume(ctx: UiContext) -> None:
         val = max(0, min(100, round(ctx.state.project.volume * 100)))
         imgui.text_unformatted("Master Volume")
 
-        with item_width(240):
+        with item_width(MASTER_VOLUME_WIDTH):
             changed, new_value = imgui.slider_int("##master_volume", val, 0, 100, "%d %")
             learn_pending = _has_pending_learn_input(ctx)
             learn_clicked = (
@@ -258,11 +259,13 @@ def _stem_mask_controls(ctx: UiContext, center_y: float) -> None:
             learn_pending=learn_pending,
         )
     )
+    row_y = imgui.get_cursor_pos_y()
     with (
         style_var(imgui.StyleVar_.item_spacing, (STEM_BUTTON_GAP, 0.0)),
         style_var(imgui.StyleVar_.frame_rounding, 16.0),
     ):
         for idx, (label, mask) in enumerate(STEM_COMPONENT_BUTTONS):
+            imgui.set_cursor_pos_y(row_y)
             _stem_mask_button(
                 ctx,
                 pad_id,
@@ -277,6 +280,7 @@ def _stem_mask_controls(ctx: UiContext, center_y: float) -> None:
             imgui.same_line(spacing=spacing)
 
         for idx, (label, mask, target_display_mode) in enumerate(STEM_PRESET_BUTTONS):
+            imgui.set_cursor_pos_y(row_y)
             _stem_mask_button(
                 ctx,
                 pad_id,

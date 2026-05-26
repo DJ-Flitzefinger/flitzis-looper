@@ -260,6 +260,29 @@ def _labeled_value_row(
     imgui.text_colored(value_rgba, value)
 
 
+def _labeled_wrapped_value_row(
+    label: str,
+    value: str,
+    *,
+    avail_x: float,
+    value_rgba: imgui.ImVec4Like = TEXT_RGBA,
+) -> None:
+    imgui.text_colored(TEXT_MUTED_RGBA, label)
+
+    label_width = imgui.calc_text_size(label).x
+    gap = imgui.get_style().item_inner_spacing.x
+    value_x = min(avail_x, label_width + gap)
+    imgui.same_line(value_x)
+
+    value_pos = imgui.get_cursor_screen_pos()
+    wrap_x = value_pos.x + max(1.0, avail_x - value_x)
+    imgui.push_text_wrap_pos(wrap_x)
+    try:
+        imgui.text_colored(value_rgba, value)
+    finally:
+        imgui.pop_text_wrap_pos()
+
+
 def _has_pending_learn_input(ctx: UiContext) -> bool:
     return (
         ctx.state.project.input_mapping_enabled
@@ -272,7 +295,7 @@ def _render_pad_header(ctx: UiContext, info: _SidebarPadInfo) -> None:
 
     if info.is_loaded or info.is_loading:
         filename = ctx.state.pads.label(info.pad_id) or "-"
-        _labeled_value_row("Filename", filename, avail_x=info.avail_x)
+        _labeled_wrapped_value_row("Filename", filename, avail_x=info.avail_x)
 
     load_error = ctx.state.pads.load_error(info.pad_id)
     if load_error:

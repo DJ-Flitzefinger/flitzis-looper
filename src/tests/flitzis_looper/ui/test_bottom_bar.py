@@ -7,6 +7,7 @@ from flitzis_looper.models import (
     STEM_MASK_VOCALS,
 )
 from flitzis_looper.ui.render.bottom_bar import (
+    MASTER_VOLUME_WIDTH,
     stem_button_is_active,
     stem_button_learn_target_state,
     stem_button_solo_state,
@@ -37,6 +38,10 @@ def test_stem_preset_display_lights_only_preset_button() -> None:
 def test_trigger_quantization_button_uses_mode_colors() -> None:
     assert trigger_quantization_button_style(enabled=False) == "mode-off"
     assert trigger_quantization_button_style(enabled=True) == "mode-on"
+
+
+def test_master_volume_slider_hit_target_is_wider() -> None:
+    assert MASTER_VOLUME_WIDTH >= 300.0
 
 
 def test_stem_custom_display_lights_component_buttons() -> None:

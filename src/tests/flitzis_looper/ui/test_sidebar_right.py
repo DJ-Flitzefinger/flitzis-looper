@@ -4,6 +4,7 @@ from imgui_bundle import imgui
 from flitzis_looper.constants import PITCH_BPM_COARSE_STEPS
 from flitzis_looper.ui.constants import CONTROL_ACTIVE_BORDER_RGBA, CONTROL_BORDER_RGBA
 from flitzis_looper.ui.render.sidebar_right import (
+    PITCH_SLIDER_GRAB_MIN_SIZE,
     filtered_bpm_entry_char,
     parse_bpm_entry_text,
     pitch_center_indicator_color,
@@ -57,6 +58,10 @@ def test_right_click_pitch_step_uses_one_bpm() -> None:
 def test_pitch_mouse_wheel_uses_one_bpm() -> None:
     assert pitch_wheel_bpm_steps(1) == PITCH_BPM_COARSE_STEPS
     assert pitch_wheel_bpm_steps(-2) == -2 * PITCH_BPM_COARSE_STEPS
+
+
+def test_pitch_slider_grab_is_enlarged_for_easier_targeting() -> None:
+    assert PITCH_SLIDER_GRAB_MIN_SIZE >= 20.0
 
 
 @pytest.mark.parametrize(

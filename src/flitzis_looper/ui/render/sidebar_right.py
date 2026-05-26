@@ -23,6 +23,8 @@ if TYPE_CHECKING:
     from flitzis_looper.ui.context import UiContext
     from flitzis_looper.ui.styles import ButtonStyleName
 
+PITCH_SLIDER_GRAB_MIN_SIZE = 20.0
+
 
 def _has_pending_learn_input(ctx: UiContext) -> bool:
     return (
@@ -275,15 +277,16 @@ def _speed_slider_with_bpm_reference(
     slider_height: float,
     learn_pending: bool,
 ) -> None:
-    changed, new_value = imgui.v_slider_float(
-        "##speed_slider",
-        (slider_width, slider_height),
-        ctx.state.project.speed,
-        SPEED_MIN,
-        SPEED_MAX,
-        format="%.2f",
-    )
-    _draw_pitch_center_indicator(speed=ctx.state.project.speed)
+    with style_var(imgui.StyleVar_.grab_min_size, PITCH_SLIDER_GRAB_MIN_SIZE):
+        changed, new_value = imgui.v_slider_float(
+            "##speed_slider",
+            (slider_width, slider_height),
+            ctx.state.project.speed,
+            SPEED_MIN,
+            SPEED_MAX,
+            format="%.2f",
+        )
+        _draw_pitch_center_indicator(speed=ctx.state.project.speed)
 
     learn_clicked = (
         learn_pending
@@ -306,15 +309,16 @@ def _speed_slider_without_bpm_reference(
     slider_height: float,
     learn_pending: bool,
 ) -> None:
-    changed, new_value = imgui.v_slider_float(
-        "##speed_slider",
-        (slider_width, slider_height),
-        ctx.state.project.speed,
-        SPEED_MIN,
-        SPEED_MAX,
-        format="%.2f",
-    )
-    _draw_pitch_center_indicator(speed=ctx.state.project.speed)
+    with style_var(imgui.StyleVar_.grab_min_size, PITCH_SLIDER_GRAB_MIN_SIZE):
+        changed, new_value = imgui.v_slider_float(
+            "##speed_slider",
+            (slider_width, slider_height),
+            ctx.state.project.speed,
+            SPEED_MIN,
+            SPEED_MAX,
+            format="%.2f",
+        )
+        _draw_pitch_center_indicator(speed=ctx.state.project.speed)
 
     learn_clicked = (
         learn_pending
