@@ -18,3 +18,6 @@
 - [x] 1.13 Add focused tests for repeat/wheel helper behavior and updated BPM entry filtering.
 - [x] 1.14 Add right-click Pitch plus/minus behavior for 1.0 BPM coarse steps.
 - [x] 1.15 Add held right-click repeat behavior for Pitch with bounded 1.0 BPM ticks.
+- [x] 1.16 Increase hovered Pitch mouse-wheel movement to 1.0 BPM ticks.
+- [x] 1.17 Increase hovered Master Volume mouse-wheel movement to five percentage points.
+- [x] 1.18 Increase hovered per-pad EQ mouse-wheel movement to 1.0 dB ticks.

@@ -345,7 +345,7 @@ def test_set_key_lock_quality_requires_initialized_engine() -> None:
 
 def test_set_key_lock_parameters_accepts_documented_ranges(audio_engine: AudioEngine) -> None:
     audio_engine.set_key_lock_parameters(64.0, 1536.0, 2, "cubic", "hann", 0.05, 1.0)
-    audio_engine.set_key_lock_parameters(16.0, 256.0, 4, "linear", "triangle", 0.01, 0.25)
+    audio_engine.set_key_lock_parameters(16.0, 256.0, 1, "linear", "triangle", 0.099, 0.25)
 
 
 @pytest.mark.parametrize(
@@ -354,10 +354,10 @@ def test_set_key_lock_parameters_accepts_documented_ranges(audio_engine: AudioEn
         ((8.0, 1536.0, 2, "cubic", "hann", 0.05, 1.0), "delay_min_samples"),
         ((64.0, 2048.0, 2, "cubic", "hann", 0.05, 1.0), "delay_range_samples"),
         ((512.0, 1984.0, 2, "cubic", "hann", 0.05, 1.0), "must be <="),
-        ((64.0, 1536.0, 1, "cubic", "hann", 0.05, 1.0), "head_count"),
+        ((64.0, 1536.0, 0, "cubic", "hann", 0.05, 1.0), "head_count"),
         ((64.0, 1536.0, 2, "spline", "hann", 0.05, 1.0), "interpolation"),
         ((64.0, 1536.0, 2, "cubic", "rect", 0.05, 1.0), "window"),
-        ((64.0, 1536.0, 2, "cubic", "hann", 0.2, 1.0), "smoothing_step"),
+        ((64.0, 1536.0, 2, "cubic", "hann", 0.1, 1.0), "smoothing_step"),
         ((64.0, 1536.0, 2, "cubic", "hann", 0.05, 3.0), "output_gain"),
     ],
 )

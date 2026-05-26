@@ -49,6 +49,11 @@ if TYPE_CHECKING:
 def _bounded_float(name: str, value: float, minimum: float, maximum: float) -> float:
     ensure_finite(value)
     value = float(value)
+    tolerance = 1.0e-6
+    if value < minimum and value >= minimum - tolerance:
+        return minimum
+    if value > maximum and value <= maximum + tolerance:
+        return maximum
     if not minimum <= value <= maximum:
         msg = f"{name} must be between {minimum} and {maximum}"
         raise ValueError(msg)

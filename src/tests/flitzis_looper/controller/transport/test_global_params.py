@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from flitzis_looper.constants import (
+    MIN_KEY_LOCK_SMOOTHING_STEP,
     PITCH_BPM_COARSE_STEPS,
     SPEED_MAX,
     SPEED_MIN,
@@ -250,27 +251,54 @@ def test_set_key_lock_parameters_updates_project_and_audio(
     controller.transport.global_params.set_key_lock_parameters(
         delay_min_samples=128.0,
         delay_range_samples=1024.0,
-        head_count=4,
+        head_count=1,
         interpolation="linear",
         window="triangle",
-        smoothing_step=0.04,
+        smoothing_step=0.099,
         output_gain=1.2,
     )
 
     assert controller.project.key_lock_delay_min_samples == pytest.approx(128.0)
     assert controller.project.key_lock_delay_range_samples == pytest.approx(1024.0)
-    assert controller.project.key_lock_head_count == 4
+    assert controller.project.key_lock_head_count == 1
     assert controller.project.key_lock_interpolation == "linear"
     assert controller.project.key_lock_window == "triangle"
-    assert controller.project.key_lock_smoothing_step == pytest.approx(0.04)
+    assert controller.project.key_lock_smoothing_step == pytest.approx(0.099)
     assert controller.project.key_lock_output_gain == pytest.approx(1.2)
     audio_engine_mock.set_key_lock_parameters.assert_called_once_with(
         128.0,
         1024.0,
-        4,
+        1,
         "linear",
         "triangle",
-        0.04,
+        0.099,
+        1.2,
+    )
+
+
+def test_set_key_lock_parameters_clamps_float_boundary_noise(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.transport.global_params.set_key_lock_parameters(
+        delay_min_samples=128.0,
+        delay_range_samples=1024.0,
+        head_count=1,
+        interpolation="linear",
+        window="triangle",
+        smoothing_step=MIN_KEY_LOCK_SMOOTHING_STEP - 1.0e-9,
+        output_gain=1.2,
+    )
+
+    assert controller.project.key_lock_smoothing_step == pytest.approx(
+        MIN_KEY_LOCK_SMOOTHING_STEP
+    )
+    audio_engine_mock.set_key_lock_parameters.assert_called_once_with(
+        128.0,
+        1024.0,
+        1,
+        "linear",
+        "triangle",
+        MIN_KEY_LOCK_SMOOTHING_STEP,
         1.2,
     )
 
@@ -307,6 +335,28 @@ def test_set_key_lock_parameters_rejects_invalid_value(
             interpolation="cubic",
             window="hann",
             smoothing_step=0.05,
+            output_gain=1.0,
+        )
+
+    with pytest.raises(ValueError, match="head_count"):
+        controller.transport.global_params.set_key_lock_parameters(
+            delay_min_samples=64.0,
+            delay_range_samples=1536.0,
+            head_count=0,
+            interpolation="cubic",
+            window="hann",
+            smoothing_step=0.05,
+            output_gain=1.0,
+        )
+
+    with pytest.raises(ValueError, match="smoothing_step"):
+        controller.transport.global_params.set_key_lock_parameters(
+            delay_min_samples=64.0,
+            delay_range_samples=1536.0,
+            head_count=2,
+            interpolation="cubic",
+            window="hann",
+            smoothing_step=0.1,
             output_gain=1.0,
         )
 

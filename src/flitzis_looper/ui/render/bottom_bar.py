@@ -41,7 +41,12 @@ STEM_PRESET_BUTTONS: tuple[tuple[str, int, StemMaskDisplayMode], ...] = (
     ("I", STEM_INSTRUMENTAL_PRESET_MASK, "instrumental"),
     ("A", STEM_COMPONENT_MASK, "all"),
 )
-_MASTER_VOLUME_WHEEL_STEP = 0.01
+_MASTER_VOLUME_WHEEL_STEP = 0.05
+
+
+def master_volume_wheel_delta(wheel_steps: int) -> float:
+    """Return volume delta for hovered Master Volume wheel movement."""
+    return _MASTER_VOLUME_WHEEL_STEP * wheel_steps
 
 
 def settings_button_local_pos(
@@ -102,7 +107,7 @@ def _master_volume(ctx: UiContext) -> None:
                     ctx.audio.global_.set_volume(1.0)
                 elif wheel_steps := hovered_wheel_steps():
                     ctx.audio.global_.set_volume(
-                        float(ctx.state.project.volume) + _MASTER_VOLUME_WHEEL_STEP * wheel_steps
+                        float(ctx.state.project.volume) + master_volume_wheel_delta(wheel_steps)
                     )
 
 

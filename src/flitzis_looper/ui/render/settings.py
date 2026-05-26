@@ -86,6 +86,11 @@ def settings_toggle_button(ctx: UiContext) -> None:
         imgui.set_tooltip(settings_toggle_tooltip(settings_open=ctx.state.session.settings_open))
 
 
+def clamp_key_lock_smoothing_step_for_settings(value: float) -> float:
+    """Clamp Settings-page smoothing values to the controller-supported range."""
+    return min(max(float(value), MIN_KEY_LOCK_SMOOTHING_STEP), MAX_KEY_LOCK_SMOOTHING_STEP)
+
+
 def settings_overlay(ctx: UiContext) -> None:
     """Render the Settings page in place of the main Looper surface."""
     with style_var(imgui.StyleVar_.item_spacing, (SPACING, SPACING)):
@@ -144,7 +149,9 @@ def _key_lock_parameter_controls(ctx: UiContext) -> None:
     heads = int(ctx.state.project.key_lock_head_count)
     interpolation = ctx.state.project.key_lock_interpolation
     window = ctx.state.project.key_lock_window
-    smoothing = float(ctx.state.project.key_lock_smoothing_step)
+    smoothing = clamp_key_lock_smoothing_step_for_settings(
+        ctx.state.project.key_lock_smoothing_step
+    )
     output_gain = float(ctx.state.project.key_lock_output_gain)
 
     with item_width(240):
@@ -220,7 +227,7 @@ def _key_lock_parameter_controls(ctx: UiContext) -> None:
             "%.3f",
         )
     if changed:
-        smoothing = float(new_smoothing)
+        smoothing = clamp_key_lock_smoothing_step_for_settings(new_smoothing)
         _set_key_lock_parameters(
             ctx, delay_min, delay_range, heads, interpolation, window, smoothing, output_gain
         )
@@ -319,7 +326,7 @@ def _set_key_lock_parameters(
         head_count=heads,
         interpolation=interpolation,
         window=window,
-        smoothing_step=smoothing,
+        smoothing_step=clamp_key_lock_smoothing_step_for_settings(smoothing),
         output_gain=output_gain,
     )
 

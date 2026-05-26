@@ -110,6 +110,11 @@ def snap_bpm_to_grid(bpm: float) -> float:
     return round(math.floor((float(bpm) / PITCH_BPM_STEP) + 0.5) * PITCH_BPM_STEP, 1)
 
 
+def pitch_wheel_bpm_steps(wheel_steps: int) -> int:
+    """Return 0.1-BPM controller steps for hovered Pitch wheel movement."""
+    return wheel_steps * PITCH_BPM_COARSE_STEPS
+
+
 def pitch_center_indicator_y(item_min_y: float, item_max_y: float) -> float:
     """Return the neutral marker y-position aligned to ImGui's slider grab center."""
     slider_height = item_max_y - item_min_y
@@ -329,7 +334,7 @@ def _apply_pitch_hover_gestures(ctx: UiContext) -> None:
 
     wheel_steps = hovered_wheel_steps()
     if wheel_steps:
-        ctx.audio.global_.nudge_speed_by_bpm_steps(wheel_steps)
+        ctx.audio.global_.nudge_speed_by_bpm_steps(pitch_wheel_bpm_steps(wheel_steps))
 
 
 def _pitch_step_button(label: str, width: float, *, learn_pending: bool) -> tuple[bool, int]:

@@ -43,8 +43,8 @@ The persisted and Rust-published Key Lock parameter set SHALL include delay mini
 delay range in samples, delay head count, delay interpolation mode, delay-head window shape,
 tempo-ratio smoothing step, and output gain. Supported values SHALL be constrained to:
 delay minimum `16..512` samples, delay range `256..1984` samples, combined delay minimum plus
-range at most `2032` samples, head count `2..4`, interpolation `linear` or `cubic`, window
-`triangle` or `hann`, smoothing step `0.01..0.10`, and output gain `0.25..2.0`.
+range at most `2032` samples, head count `1..4`, interpolation `linear` or `cubic`, window
+`triangle` or `hann`, smoothing step `0.01..0.099`, and output gain `0.25..2.0`.
 
 Changing any parameter SHALL NOT stop, reload, retrigger, regenerate stems for, or reanalyze active
 pads. All parameter updates MUST stay inside the same bounded callback-safe processing contract.
@@ -73,6 +73,13 @@ Settings page SHALL publish the concrete bounded parameter set.
 - **GIVEN** a control-plane caller provides a Key Lock parameter outside the documented range
 - **WHEN** the parameter update is validated
 - **THEN** the update is rejected or clamped before it can violate delay-buffer bounds
+- **AND** the audio callback continues rendering with bounded already-owned state
+
+#### Scenario: Minimum Key Lock DSP values remain bounded
+- **GIVEN** a control-plane caller provides head count `1`
+- **AND** smoothing step `0.01`
+- **WHEN** the parameter update is validated
+- **THEN** the update is accepted as the minimum supported Key Lock DSP setting
 - **AND** the audio callback continues rendering with bounded already-owned state
 
 ### Requirement: No Heap Allocations In Audio Callback

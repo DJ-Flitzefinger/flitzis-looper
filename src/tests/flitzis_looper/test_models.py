@@ -406,6 +406,9 @@ def test_key_lock_manual_parameter_settings_validation(project_state: ProjectSta
     with pytest.raises(ValidationError, match="head_count"):
         ProjectState(key_lock_head_count=MAX_KEY_LOCK_HEAD_COUNT + 1)
 
+    with pytest.raises(ValidationError, match="head_count"):
+        ProjectState(key_lock_head_count=MIN_KEY_LOCK_HEAD_COUNT - 1)
+
     with pytest.raises(ValidationError, match="key_lock_interpolation"):
         ProjectState.model_validate({"key_lock_interpolation": "spline"})
 
@@ -414,6 +417,9 @@ def test_key_lock_manual_parameter_settings_validation(project_state: ProjectSta
 
     with pytest.raises(ValidationError, match="key_lock_smoothing_step"):
         ProjectState(key_lock_smoothing_step=MAX_KEY_LOCK_SMOOTHING_STEP + 0.01)
+
+    with pytest.raises(ValidationError, match="key_lock_smoothing_step"):
+        ProjectState(key_lock_smoothing_step=MIN_KEY_LOCK_SMOOTHING_STEP - 0.001)
 
     with pytest.raises(ValidationError, match="key_lock_output_gain"):
         ProjectState(key_lock_output_gain=MAX_KEY_LOCK_OUTPUT_GAIN + 0.01)

@@ -1,5 +1,6 @@
 from imgui_bundle import icons_fontawesome_6
 
+from flitzis_looper.constants import MAX_KEY_LOCK_SMOOTHING_STEP, MIN_KEY_LOCK_SMOOTHING_STEP
 from flitzis_looper.models import (
     KEY_LOCK_INTERPOLATION_LABELS,
     KEY_LOCK_INTERPOLATIONS,
@@ -12,6 +13,7 @@ from flitzis_looper.ui.render.bottom_bar import settings_button_local_pos
 from flitzis_looper.ui.render.settings import (
     KEY_LOCK_PARAMETER_HINTS,
     SETTINGS_TOGGLE_BUTTON_SIZE,
+    clamp_key_lock_smoothing_step_for_settings,
     settings_surface_child_id,
     settings_toggle_button_label,
     settings_toggle_tooltip,
@@ -59,6 +61,16 @@ def test_settings_key_lock_parameter_options_cover_manual_dsp_choices() -> None:
         "smoothing",
         "output_gain",
     }
+
+
+def test_settings_clamps_smoothing_step_float_edge_values() -> None:
+    assert clamp_key_lock_smoothing_step_for_settings(
+        MIN_KEY_LOCK_SMOOTHING_STEP - 1.0e-9
+    ) == MIN_KEY_LOCK_SMOOTHING_STEP
+    assert clamp_key_lock_smoothing_step_for_settings(
+        MAX_KEY_LOCK_SMOOTHING_STEP + 1.0e-9
+    ) == MAX_KEY_LOCK_SMOOTHING_STEP
+    assert clamp_key_lock_smoothing_step_for_settings(0.05) == 0.05
 
 
 def test_settings_button_position_right_aligns_inside_bottom_bar() -> None:

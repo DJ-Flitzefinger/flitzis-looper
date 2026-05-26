@@ -35,10 +35,10 @@ Rust as fixed-size control messages:
 - delay minimum: `16..512` samples,
 - delay range: `256..1984` samples,
 - delay minimum plus range: at most `2032` samples,
-- head count: `2..4`,
+- head count: `1..4`,
 - interpolation: `linear` or `cubic`,
 - window: `triangle` or `hann`,
-- smoothing step: `0.01..0.10`,
+- smoothing step: `0.01..0.099`,
 - output gain: `0.25..2.0`.
 
 New projects use the former High baseline: delay minimum `64`, delay range

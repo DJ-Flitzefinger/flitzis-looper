@@ -8,6 +8,7 @@ from flitzis_looper.ui.render.sidebar_right import (
     parse_bpm_entry_text,
     pitch_center_indicator_color,
     pitch_center_indicator_y,
+    pitch_wheel_bpm_steps,
     sanitize_bpm_entry_text,
     snap_bpm_to_grid,
 )
@@ -51,6 +52,11 @@ def test_snap_bpm_to_grid_uses_one_tenth() -> None:
 
 def test_right_click_pitch_step_uses_one_bpm() -> None:
     assert PITCH_BPM_COARSE_STEPS == 10
+
+
+def test_pitch_mouse_wheel_uses_one_bpm() -> None:
+    assert pitch_wheel_bpm_steps(1) == PITCH_BPM_COARSE_STEPS
+    assert pitch_wheel_bpm_steps(-2) == -2 * PITCH_BPM_COARSE_STEPS
 
 
 @pytest.mark.parametrize(

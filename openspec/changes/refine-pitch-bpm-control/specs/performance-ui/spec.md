@@ -7,7 +7,9 @@ whenever an effective BPM reference is available.
 When a BPM reference is available, left-click plus and minus actions SHALL adjust the displayed BPM
 by exactly 0.1 BPM per activation, right-click plus and minus actions SHALL adjust the displayed BPM
 by exactly 1.0 BPM per activation, and the mouse/slider control SHALL snap movement to a 0.1 BPM
-grid. When a plus or minus action is held with the left mouse button, the system SHALL continue
+grid. Hovering the Pitch control and scrolling the mouse wheel SHALL adjust the displayed BPM by
+exactly 1.0 BPM per wheel movement. When a plus or minus action is held with the left mouse button,
+the system SHALL continue
 applying 0.1 BPM adjustments at a bounded repeat rate after an initial hold delay. When a plus or
 minus action is held with the right mouse button, the system SHALL continue applying 1.0 BPM
 adjustments at the same bounded repeat cadence after the initial hold delay. The control SHALL
@@ -68,7 +70,7 @@ heavy allocation, neural inference, or any new work to the Rust audio callback.
 #### Scenario: Wheel and middle click adjust Pitch while hovered
 - **GIVEN** the selected pad has an effective BPM of 120.0
 - **WHEN** the performer hovers the Pitch control and scrolls the mouse wheel upward once
-- **THEN** the displayed BPM increases by approximately 0.1 BPM
+- **THEN** the displayed BPM increases by approximately 1.0 BPM
 - **WHEN** the performer clicks the mouse wheel while hovering the Pitch control
 - **THEN** the speed multiplier resets to 1.00x
 
@@ -81,12 +83,13 @@ heavy allocation, neural inference, or any new work to the Rust audio callback.
 The system SHALL allow hovered continuous controls to respond to mouse-wheel nudges and mouse-wheel
 button reset clicks.
 
-Hovering Master Volume and Gain then scrolling the mouse wheel SHALL adjust the control by one
-percentage point per wheel movement. Hovering a per-pad EQ control then scrolling the mouse wheel
-SHALL adjust that EQ band by 0.5 dB per wheel movement. Hovering Master Volume and clicking the
-mouse wheel SHALL reset it to 100 percent. Hovering Gain and clicking the mouse wheel SHALL reset
-it to 100 percent. Hovering a per-pad EQ control and clicking the mouse wheel SHALL reset that band
-to 0.0 dB.
+Hovering Master Volume then scrolling the mouse wheel SHALL adjust the control by five percentage
+points per wheel movement. Hovering Gain then scrolling the mouse wheel SHALL adjust the control by
+one percentage point per wheel movement. Hovering a per-pad EQ control then scrolling the mouse
+wheel SHALL adjust that EQ band by 1.0 dB per wheel movement. Hovering Master Volume and clicking
+the mouse wheel SHALL reset it to 100 percent. Hovering Gain and clicking the mouse wheel SHALL
+reset it to 100 percent. Hovering a per-pad EQ control and clicking the mouse wheel SHALL reset
+that band to 0.0 dB.
 
 These gestures SHALL remain UI/controller behavior and SHALL NOT add disk I/O, Python/GIL access,
 logging, blocking work, heavy allocation, neural inference, or any new work to the Rust audio
@@ -95,7 +98,7 @@ callback.
 #### Scenario: Master Volume wheel and middle-click gestures
 - **GIVEN** Master Volume is 50 percent
 - **WHEN** the performer hovers Master Volume and scrolls upward once
-- **THEN** Master Volume becomes approximately 51 percent
+- **THEN** Master Volume becomes approximately 55 percent
 - **WHEN** the performer clicks the mouse wheel while hovering Master Volume
 - **THEN** Master Volume resets to 100 percent
 
@@ -109,7 +112,7 @@ callback.
 #### Scenario: EQ wheel and middle-click gestures
 - **GIVEN** the selected pad Mid EQ is 0.0 dB
 - **WHEN** the performer hovers Mid EQ and scrolls upward once
-- **THEN** Mid EQ becomes approximately 0.5 dB
+- **THEN** Mid EQ becomes approximately 1.0 dB
 - **WHEN** the performer clicks the mouse wheel while hovering Mid EQ
 - **THEN** Mid EQ resets to 0.0 dB
 

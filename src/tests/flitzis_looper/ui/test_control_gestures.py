@@ -1,6 +1,8 @@
 import pytest
 
+from flitzis_looper.ui.render.bottom_bar import master_volume_wheel_delta
 from flitzis_looper.ui.render.control_gestures import held_repeat_count, wheel_step_count
+from flitzis_looper.ui.render.sidebar_left import eq_wheel_delta_db
 
 
 @pytest.mark.parametrize(
@@ -16,6 +18,13 @@ from flitzis_looper.ui.render.control_gestures import held_repeat_count, wheel_s
 )
 def test_wheel_step_count(wheel: float, expected: int) -> None:
     assert wheel_step_count(wheel) == expected
+
+
+def test_control_specific_wheel_deltas() -> None:
+    assert master_volume_wheel_delta(1) == pytest.approx(0.05)
+    assert master_volume_wheel_delta(-2) == pytest.approx(-0.10)
+    assert eq_wheel_delta_db(1) == pytest.approx(1.0)
+    assert eq_wheel_delta_db(-2) == pytest.approx(-2.0)
 
 
 def test_held_repeat_count_waits_for_delay() -> None:

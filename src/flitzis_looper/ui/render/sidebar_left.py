@@ -40,7 +40,12 @@ _EQ_KNOBS: tuple[tuple[str, str, PadEqBand, str], ...] = (
     ("High", "##pad_eq_high", "high", "pad_eq_high_db"),
 )
 _GAIN_WHEEL_STEP = 0.01
-_EQ_WHEEL_STEP_DB = 0.5
+_EQ_WHEEL_STEP_DB = 1.0
+
+
+def eq_wheel_delta_db(wheel_steps: int) -> float:
+    """Return EQ dB delta for hovered EQ wheel movement."""
+    return _EQ_WHEEL_STEP_DB * wheel_steps
 
 
 @dataclass(frozen=True)
@@ -216,7 +221,7 @@ def _render_loaded_eq(ctx: UiContext, info: _SidebarPadInfo) -> None:
                     ctx.audio.pads.set_pad_eq_band(
                         info.pad_id,
                         band,
-                        knob_val + _EQ_WHEEL_STEP_DB * wheel_steps,
+                        knob_val + eq_wheel_delta_db(wheel_steps),
                     )
 
     imgui.dummy((info.avail_x, 0.0))

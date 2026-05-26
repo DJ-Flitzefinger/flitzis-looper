@@ -19,10 +19,10 @@ pub(crate) const KEY_LOCK_DELAY_MIN_SAMPLES_MAX: f32 = 512.0;
 pub(crate) const KEY_LOCK_DELAY_RANGE_SAMPLES_MIN: f32 = 256.0;
 pub(crate) const KEY_LOCK_DELAY_RANGE_SAMPLES_MAX: f32 = 1984.0;
 pub(crate) const KEY_LOCK_DELAY_TOTAL_SAMPLES_MAX: f32 = 2032.0;
-pub(crate) const KEY_LOCK_HEAD_COUNT_MIN: u8 = 2;
+pub(crate) const KEY_LOCK_HEAD_COUNT_MIN: u8 = 1;
 pub(crate) const KEY_LOCK_HEAD_COUNT_MAX: u8 = 4;
 pub(crate) const KEY_LOCK_SMOOTHING_STEP_MIN: f32 = 0.01;
-pub(crate) const KEY_LOCK_SMOOTHING_STEP_MAX: f32 = 0.10;
+pub(crate) const KEY_LOCK_SMOOTHING_STEP_MAX: f32 = 0.099;
 pub(crate) const KEY_LOCK_OUTPUT_GAIN_MIN: f32 = 0.25;
 pub(crate) const KEY_LOCK_OUTPUT_GAIN_MAX: f32 = 2.0;
 
@@ -564,7 +564,7 @@ mod tests {
         let settings = KeyLockSettings {
             delay_min_samples: 96.0,
             delay_range_samples: 1024.0,
-            head_count: 4,
+            head_count: 1,
             interpolation: KeyLockInterpolation::Cubic,
             window: KeyLockWindow::Hann,
             smoothing_step: 0.04,
@@ -599,6 +599,19 @@ mod tests {
         assert_eq!(settings.head_count, KEY_LOCK_HEAD_COUNT_MAX);
         assert_eq!(settings.smoothing_step, KEY_LOCK_SMOOTHING_STEP_MAX);
         assert_eq!(settings.output_gain, KEY_LOCK_OUTPUT_GAIN_MIN);
+
+        let settings = KeyLockSettings {
+            delay_min_samples: 64.0,
+            delay_range_samples: 1536.0,
+            head_count: 0,
+            interpolation: KeyLockInterpolation::Linear,
+            window: KeyLockWindow::Triangle,
+            smoothing_step: 0.05,
+            output_gain: 1.0,
+        }
+        .sanitized();
+
+        assert_eq!(settings.head_count, KEY_LOCK_HEAD_COUNT_MIN);
     }
 
     #[test]

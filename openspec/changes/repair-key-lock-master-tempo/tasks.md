@@ -21,8 +21,12 @@
 - [x] 3.3 Add regression coverage for bounded pitch-compensation delay-line wraparound.
 - [x] 3.4 Add regression coverage for bounded Key Lock parameters and their project/UI plumbing.
 - [x] 3.5 Update repository audio/message-passing/time-stretch documentation.
+- [x] 3.6 Bound smoothing step to `0.01..0.099` and allow the smallest safe head count of `1`.
+- [x] 3.7 Clamp Settings slider boundary noise before publishing smoothing step updates.
 
 ## 4. Validation
 
 - [x] 4.1 Run `openspec validate repair-key-lock-master-tempo --strict`.
 - [x] 4.2 Run the full uv-managed Rust/Python validation sequence.
+- [x] 4.3 Revalidate focused Key Lock parameter bounds.
+- [x] 4.4 Revalidate focused Settings and global-parameter smoothing boundary tests.

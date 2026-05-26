@@ -477,7 +477,7 @@ mod tests {
         let settings = KeyLockSettings {
             delay_min_samples: 128.0,
             delay_range_samples: 1024.0,
-            head_count: 4,
+            head_count: 1,
             interpolation: KeyLockInterpolation::Cubic,
             window: KeyLockWindow::Hann,
             smoothing_step: 0.03,
