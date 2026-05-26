@@ -1,15 +1,23 @@
 //! Internal realtime-safe DSP/FX foundation helpers.
 //!
-//! The first foundation slice is intentionally neutral: it provides typed bounded parameter
-//! identity, Rust-owned smoothing state, and a per-pad chain host without adding a visible effect.
+//! The per-pad chain hosts the first visible DSP node: a bounded 3-band DJ isolator. Existing
+//! Python-facing EQ calls remain compatible, while live audio state is owned by typed normalized
+//! DSP parameters and Rust-side smoothing.
 
 #![allow(dead_code)]
+
+use std::f32::consts::PI;
 
 const DEFAULT_SAMPLE_RATE_HZ: f32 = 44_100.0;
 const DEFAULT_MAX_BLOCK_FRAMES: usize = 1;
 const DEFAULT_CHANNELS: usize = 1;
 const DEFAULT_NORMALIZED_VALUE: f32 = 0.5;
 const DEFAULT_SMOOTHING_STEP: f32 = 0.01;
+const DSP_MAX_CHANNELS: usize = 8;
+const ISOLATOR_LOW_CROSSOVER_HZ: f32 = 250.0;
+const ISOLATOR_HIGH_CROSSOVER_HZ: f32 = 4_000.0;
+const ISOLATOR_BOOST_DB_MAX: f32 = 6.0;
+const BUTTERWORTH_Q: f32 = 0.70710677;
 
 pub(crate) const DSP_PARAMETER_SLOTS: usize = 4;
 pub(crate) const NORMALIZED_PARAMETER_MIN: f32 = 0.0;
@@ -139,15 +147,114 @@ impl Default for SmoothedNormalizedValue {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct NeutralDspNode;
+#[derive(Debug, Clone, Copy)]
+struct BiquadCoeffs {
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+}
 
-impl NeutralDspNode {
-    fn process_sample(self, sample: f32) -> f32 {
-        sample
+impl BiquadCoeffs {
+    const fn identity() -> Self {
+        Self {
+            b0: 1.0,
+            b1: 0.0,
+            b2: 0.0,
+            a1: 0.0,
+            a2: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct BiquadState {
+    z1: f32,
+    z2: f32,
+}
+
+impl BiquadState {
+    fn process(&mut self, coeffs: BiquadCoeffs, x: f32) -> f32 {
+        let y = coeffs.b0 * x + self.z1;
+        self.z1 = coeffs.b1 * x - coeffs.a1 * y + self.z2;
+        self.z2 = coeffs.b2 * x - coeffs.a2 * y;
+        y
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct IsolatorChannelState {
+    low_lp: [BiquadState; 2],
+    high_hp: [BiquadState; 2],
+}
+
+#[derive(Debug, Clone)]
+struct DjIsolatorNode {
+    low_lp: [BiquadCoeffs; 2],
+    high_hp: [BiquadCoeffs; 2],
+    states: [IsolatorChannelState; DSP_MAX_CHANNELS],
+    low_gain: f32,
+    mid_gain: f32,
+    high_gain: f32,
+}
+
+impl DjIsolatorNode {
+    fn new(sample_rate_hz: f32) -> Self {
+        let mut node = Self {
+            low_lp: [BiquadCoeffs::identity(); 2],
+            high_hp: [BiquadCoeffs::identity(); 2],
+            states: [IsolatorChannelState::default(); DSP_MAX_CHANNELS],
+            low_gain: 1.0,
+            mid_gain: 1.0,
+            high_gain: 1.0,
+        };
+        node.prepare(sample_rate_hz);
+        node
     }
 
-    fn reset(&mut self) {}
+    fn prepare(&mut self, sample_rate_hz: f32) {
+        let sample_rate_hz = sanitize_sample_rate(sample_rate_hz);
+        let low_lp = biquad_low_pass_butterworth(sample_rate_hz, ISOLATOR_LOW_CROSSOVER_HZ);
+        let high_hp = biquad_high_pass_butterworth(sample_rate_hz, ISOLATOR_HIGH_CROSSOVER_HZ);
+
+        self.low_lp = [low_lp; 2];
+        self.high_hp = [high_hp; 2];
+        self.reset();
+    }
+
+    fn set_normalized_targets(&mut self, low: f32, mid: f32, high: f32) {
+        self.low_gain = normalized_isolator_gain(low);
+        self.mid_gain = normalized_isolator_gain(mid);
+        self.high_gain = normalized_isolator_gain(high);
+    }
+
+    fn process_sample(&mut self, channel: usize, x: f32) -> f32 {
+        if channel >= DSP_MAX_CHANNELS || !x.is_finite() {
+            return if x.is_finite() { x } else { 0.0 };
+        }
+
+        let state = &mut self.states[channel];
+
+        let mut low = x;
+        for (coeffs, stage) in self.low_lp.iter().zip(state.low_lp.iter_mut()) {
+            low = stage.process(*coeffs, low);
+        }
+
+        let mut high = x;
+        for (coeffs, stage) in self.high_hp.iter().zip(state.high_hp.iter_mut()) {
+            high = stage.process(*coeffs, high);
+        }
+
+        let mid = x - low - high;
+        let y = low * self.low_gain + mid * self.mid_gain + high * self.high_gain;
+
+        if y.is_finite() { y } else { 0.0 }
+    }
+
+    fn reset(&mut self) {
+        self.states = [IsolatorChannelState::default(); DSP_MAX_CHANNELS];
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -157,7 +264,7 @@ pub(crate) struct PerPadDspChain {
     max_block_frames: usize,
     channels: usize,
     parameters: [SmoothedNormalizedValue; DSP_PARAMETER_SLOTS],
-    neutral_node: NeutralDspNode,
+    isolator_node: DjIsolatorNode,
 }
 
 impl PerPadDspChain {
@@ -173,7 +280,7 @@ impl PerPadDspChain {
             max_block_frames: DEFAULT_MAX_BLOCK_FRAMES,
             channels: DEFAULT_CHANNELS,
             parameters: [SmoothedNormalizedValue::default(); DSP_PARAMETER_SLOTS],
-            neutral_node: NeutralDspNode,
+            isolator_node: DjIsolatorNode::new(DEFAULT_SAMPLE_RATE_HZ),
         };
         chain.prepare(sample_rate_hz, max_block_frames, channels);
         chain
@@ -187,7 +294,8 @@ impl PerPadDspChain {
     ) {
         self.sample_rate_hz = sanitize_sample_rate(sample_rate_hz);
         self.max_block_frames = max_block_frames.max(DEFAULT_MAX_BLOCK_FRAMES);
-        self.channels = channels.max(DEFAULT_CHANNELS);
+        self.channels = channels.clamp(DEFAULT_CHANNELS, DSP_MAX_CHANNELS);
+        self.isolator_node.prepare(self.sample_rate_hz);
         self.reset();
     }
 
@@ -200,13 +308,18 @@ impl PerPadDspChain {
     }
 
     pub(crate) fn begin_frame(&mut self) {
-        for parameter in &mut self.parameters {
-            parameter.advance();
-        }
+        let low = self.parameters[DspParameterSlot::Slot0.index()].advance();
+        let mid = self.parameters[DspParameterSlot::Slot1.index()].advance();
+        let high = self.parameters[DspParameterSlot::Slot2.index()].advance();
+        self.isolator_node.set_normalized_targets(low, mid, high);
     }
 
-    pub(crate) fn process_sample(&mut self, sample: f32) -> f32 {
-        self.neutral_node.process_sample(sample)
+    pub(crate) fn process_sample(&mut self, channel: usize, sample: f32) -> f32 {
+        if channel >= self.channels {
+            return sample;
+        }
+
+        self.isolator_node.process_sample(channel, sample)
     }
 
     pub(crate) fn process_interleaved_block(
@@ -225,8 +338,11 @@ impl PerPadDspChain {
         for frame in 0..frames {
             self.begin_frame();
             let frame_start = frame * channels;
-            for sample in &mut buffer[frame_start..frame_start + channels] {
-                *sample = self.process_sample(*sample);
+            for (channel, sample) in buffer[frame_start..frame_start + channels]
+                .iter_mut()
+                .enumerate()
+            {
+                *sample = self.process_sample(channel, *sample);
             }
         }
 
@@ -237,7 +353,8 @@ impl PerPadDspChain {
         for parameter in &mut self.parameters {
             parameter.reset_to_target();
         }
-        self.neutral_node.reset();
+        self.begin_frame();
+        self.isolator_node.reset();
     }
 
     #[cfg(test)]
@@ -248,6 +365,88 @@ impl PerPadDspChain {
     #[cfg(test)]
     pub(crate) fn prepared_state(&self) -> (f32, usize, usize) {
         (self.sample_rate_hz, self.max_block_frames, self.channels)
+    }
+}
+
+fn normalized_isolator_gain(normalized: f32) -> f32 {
+    let normalized = sanitize_normalized(normalized, DEFAULT_NORMALIZED_VALUE);
+    if normalized <= NORMALIZED_PARAMETER_MIN {
+        return 0.0;
+    }
+    if normalized <= DEFAULT_NORMALIZED_VALUE {
+        return normalized / DEFAULT_NORMALIZED_VALUE;
+    }
+
+    let boost = (normalized - DEFAULT_NORMALIZED_VALUE) / DEFAULT_NORMALIZED_VALUE;
+    let boost_db = boost * ISOLATOR_BOOST_DB_MAX;
+    10.0_f32.powf(boost_db / 20.0)
+}
+
+fn biquad_low_pass_butterworth(fs_hz: f32, freq_hz: f32) -> BiquadCoeffs {
+    let freq_hz = clamp_freq_hz(fs_hz, freq_hz);
+    let w0 = 2.0 * PI * freq_hz / fs_hz;
+    let cos_w0 = w0.cos();
+    let sin_w0 = w0.sin();
+    let alpha = sin_w0 / (2.0 * BUTTERWORTH_Q);
+
+    let b0 = (1.0 - cos_w0) * 0.5;
+    let b1 = 1.0 - cos_w0;
+    let b2 = (1.0 - cos_w0) * 0.5;
+    let a0 = 1.0 + alpha;
+    let a1 = -2.0 * cos_w0;
+    let a2 = 1.0 - alpha;
+
+    normalize_biquad(b0, b1, b2, a0, a1, a2)
+}
+
+fn biquad_high_pass_butterworth(fs_hz: f32, freq_hz: f32) -> BiquadCoeffs {
+    let freq_hz = clamp_freq_hz(fs_hz, freq_hz);
+    let w0 = 2.0 * PI * freq_hz / fs_hz;
+    let cos_w0 = w0.cos();
+    let sin_w0 = w0.sin();
+    let alpha = sin_w0 / (2.0 * BUTTERWORTH_Q);
+
+    let b0 = (1.0 + cos_w0) * 0.5;
+    let b1 = -(1.0 + cos_w0);
+    let b2 = (1.0 + cos_w0) * 0.5;
+    let a0 = 1.0 + alpha;
+    let a1 = -2.0 * cos_w0;
+    let a2 = 1.0 - alpha;
+
+    normalize_biquad(b0, b1, b2, a0, a1, a2)
+}
+
+fn clamp_freq_hz(fs_hz: f32, freq_hz: f32) -> f32 {
+    if !fs_hz.is_finite() || fs_hz <= 0.0 {
+        return freq_hz.max(1.0);
+    }
+
+    let nyquist = fs_hz * 0.5;
+    let max_hz = (nyquist * 0.9).max(1.0);
+    freq_hz.clamp(1.0, max_hz)
+}
+
+fn normalize_biquad(b0: f32, b1: f32, b2: f32, a0: f32, a1: f32, a2: f32) -> BiquadCoeffs {
+    if !a0.is_finite() || a0.abs() < 1e-12 {
+        return BiquadCoeffs::identity();
+    }
+
+    let inv_a0 = 1.0 / a0;
+    let coeffs = BiquadCoeffs {
+        b0: b0 * inv_a0,
+        b1: b1 * inv_a0,
+        b2: b2 * inv_a0,
+        a1: a1 * inv_a0,
+        a2: a2 * inv_a0,
+    };
+
+    if [coeffs.b0, coeffs.b1, coeffs.b2, coeffs.a1, coeffs.a2]
+        .iter()
+        .all(|v| v.is_finite())
+    {
+        coeffs
+    } else {
+        BiquadCoeffs::identity()
     }
 }
 
@@ -280,6 +479,31 @@ mod tests {
     use std::mem::size_of;
 
     use super::*;
+
+    fn set_and_snap_parameter(chain: &mut PerPadDspChain, slot: DspParameterSlot, normalized: f32) {
+        let id = DspParameterId::per_pad(0, DspNodeSlot::Slot0, slot).unwrap();
+        assert!(chain.set_parameter(id, normalized));
+        chain.reset();
+    }
+
+    fn sine_rms_after_processing(frequency_hz: f32, chain: &mut PerPadDspChain) -> f32 {
+        let sample_rate_hz = 48_000.0;
+        let frames = 32768;
+        let mut sum = 0.0_f32;
+        let mut count = 0_usize;
+
+        for frame in 0..frames {
+            let x = (frame as f32 * frequency_hz * std::f32::consts::TAU / sample_rate_hz).sin();
+            chain.begin_frame();
+            let y = chain.process_sample(0, x);
+            if frame >= 8192 {
+                sum += y * y;
+                count += 1;
+            }
+        }
+
+        (sum / count as f32).sqrt()
+    }
 
     #[test]
     fn dsp_parameter_id_is_fixed_size_and_rejects_oversized_pad_index() {
@@ -325,14 +549,16 @@ mod tests {
     }
 
     #[test]
-    fn neutral_chain_passes_interleaved_block_through() {
+    fn isolator_chain_is_transparent_at_neutral() {
         let mut chain = PerPadDspChain::new(0, 48_000.0, 8, 2);
-        let mut buffer = vec![0.0, 0.5, -0.25, 1.0, -1.0, 0.25];
+        let mut buffer = vec![0.0, 0.5, -0.25, 1.0, -1.0, 0.25, 0.40, -0.35];
         let expected = buffer.clone();
 
         assert!(chain.process_interleaved_block(&mut buffer, 2));
 
-        assert_eq!(buffer, expected);
+        for (actual, expected) in buffer.iter().zip(expected.iter()) {
+            assert!((*actual - *expected).abs() < 1e-5);
+        }
     }
 
     #[test]
@@ -357,7 +583,7 @@ mod tests {
     }
 
     #[test]
-    fn neutral_chain_rejects_mismatched_or_oversized_blocks_without_mutating_audio() {
+    fn chain_rejects_mismatched_or_oversized_blocks_without_mutating_audio() {
         let mut chain = PerPadDspChain::new(0, 48_000.0, 2, 2);
         let mut buffer = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6];
         let expected = buffer.clone();
@@ -366,5 +592,58 @@ mod tests {
         assert_eq!(buffer, expected);
         assert!(!chain.process_interleaved_block(&mut buffer, 2));
         assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn low_band_full_kill_reduces_low_content_but_preserves_high_content() {
+        let mut neutral_low = PerPadDspChain::new(0, 48_000.0, 8192, 1);
+        let mut killed_low = PerPadDspChain::new(0, 48_000.0, 8192, 1);
+        set_and_snap_parameter(&mut killed_low, DspParameterSlot::Slot0, 0.0);
+
+        let neutral_low_rms = sine_rms_after_processing(20.0, &mut neutral_low);
+        let killed_low_rms = sine_rms_after_processing(20.0, &mut killed_low);
+
+        let mut neutral_high = PerPadDspChain::new(0, 48_000.0, 8192, 1);
+        let mut killed_low_for_high = PerPadDspChain::new(0, 48_000.0, 8192, 1);
+        set_and_snap_parameter(&mut killed_low_for_high, DspParameterSlot::Slot0, 0.0);
+
+        let neutral_high_rms = sine_rms_after_processing(8_000.0, &mut neutral_high);
+        let killed_low_high_rms = sine_rms_after_processing(8_000.0, &mut killed_low_for_high);
+
+        assert!(killed_low_rms < neutral_low_rms * 0.25);
+        assert!(killed_low_high_rms > neutral_high_rms * 0.75);
+    }
+
+    #[test]
+    fn mid_band_boost_is_bounded_to_six_db() {
+        let mut neutral = PerPadDspChain::new(0, 48_000.0, 8192, 1);
+        let mut boosted = PerPadDspChain::new(0, 48_000.0, 8192, 1);
+        set_and_snap_parameter(&mut boosted, DspParameterSlot::Slot1, 1.0);
+
+        let neutral_rms = sine_rms_after_processing(1_000.0, &mut neutral);
+        let boosted_rms = sine_rms_after_processing(1_000.0, &mut boosted);
+
+        assert!(boosted_rms > neutral_rms);
+        assert!(boosted_rms < neutral_rms * 2.05);
+    }
+
+    #[test]
+    fn rapid_target_changes_are_smoothed_and_output_stays_finite() {
+        let mut chain = PerPadDspChain::new(0, 48_000.0, 512, 1);
+        let low_id =
+            DspParameterId::per_pad(0, DspNodeSlot::Slot0, DspParameterSlot::Slot0).unwrap();
+
+        assert!(chain.set_parameter(low_id, 0.0));
+        chain.begin_frame();
+        assert!((chain.parameter(DspParameterSlot::Slot0).current() - 0.49).abs() < 1e-6);
+
+        for frame in 0..512 {
+            let target = if frame % 2 == 0 { 1.0 } else { 0.0 };
+            assert!(chain.set_parameter(low_id, target));
+            chain.begin_frame();
+            let x = if frame == 0 { 1.0 } else { 0.0 };
+            let y = chain.process_sample(0, x);
+            assert!(y.is_finite());
+        }
     }
 }

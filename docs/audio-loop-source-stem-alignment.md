@@ -75,9 +75,10 @@ The remaining transition follow-ups are intentionally separate:
 
 1. Evaluate live loop-edit transition policy separately, because moving loop start/end can require
    different treatment than selecting aligned stems.
-2. Plan the DSP/FX foundation as its own OpenSpec-friendly step before EQ replacement.
-3. Replace the current EQ only after the internal Rust DSP foundation is reviewed and prepared.
+2. Keep future DSP/FX additions on the internal Rust DSP-chain path.
+3. Treat the implemented per-pad DJ isolator as the current EQ live authority; do not reintroduce
+   the old hardwired mixer EQ path.
 
-Non-goals remain unchanged: no new EQ, no new DSP/FX, no plugin hosting, no real-time stem
+Non-goals remain unchanged: no unrelated DSP/FX, no plugin hosting, no real-time stem
 separation, no disk I/O, no Python/GIL access, no logging, no blocking waits, and no heavy
 allocation in the audio callback.

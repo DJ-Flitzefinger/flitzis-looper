@@ -28,7 +28,7 @@ callback boundary.
 | Key Lock | enabled flag and bounded settings | UI/editor state only | Key Lock mode, settings, per-voice processor state |
 | Loop points | editable seconds, auto-loop flag, bar count, grid offset samples | waveform editor view state | loop frame region and playhead wrapping after publication |
 | Stem cache | cache metadata, availability, durable full-mix/all-stems preference | generation progress/errors and component mask display state | accepted prepared-stem handles, mode, enabled component mask |
-| Gain/EQ | per-pad gain and current EQ dB intent | UI gesture state only | current scalar gain/EQ parameters in mixer state |
+| Gain/EQ | per-pad gain and compatible EQ dB intent | UI gesture state only | scalar gain plus smoothed normalized per-pad DJ isolator DSP targets |
 | Future DSP parameters | normalized persisted intent where applicable | UI edit/learn projections | smoothed parameter targets and DSP node state |
 | Transport/quantization | trigger quantization enabled/step | UI display/edit projections | output-frame timeline, downbeat anchor, scheduler |
 

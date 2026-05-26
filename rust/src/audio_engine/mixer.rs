@@ -14,8 +14,7 @@ use crate::audio_engine::constants::{
     MAX_VOICES, NUM_SAMPLES, PAD_EQ_DB_MAX, PAD_EQ_DB_MIN, PAD_GAIN_MAX, PAD_GAIN_MIN, SPEED_MAX,
     SPEED_MIN, VOLUME_MAX, VOLUME_MIN,
 };
-use crate::audio_engine::dsp::PerPadDspChain;
-use crate::audio_engine::eq3::{Eq3Coeffs, coeffs_for_eq3};
+use crate::audio_engine::dsp::{DspNodeSlot, DspParameterId, DspParameterSlot, PerPadDspChain};
 use crate::audio_engine::stretch_processor::DEFAULT_BLOCK_SAMPLES;
 use crate::audio_engine::voice_slot::VoiceSlot;
 use crate::messages::{
@@ -27,6 +26,20 @@ use cpal::Sample;
 const BEATS_PER_BAR_4_4: f64 = 4.0;
 const BAR_PHASE_EPSILON: f64 = 1.0e-9;
 const STEM_TRANSITION_RAMP_FRAMES: usize = 128;
+
+fn pad_eq_db_to_normalized(db: f32) -> f32 {
+    if !db.is_finite() {
+        return 0.5;
+    }
+    if db <= PAD_EQ_DB_MIN {
+        return 0.0;
+    }
+    if db <= 0.0 {
+        return 0.5 * 10.0_f32.powf(db / 20.0);
+    }
+
+    0.5 + 0.5 * (db / PAD_EQ_DB_MAX).clamp(0.0, 1.0)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FrameRange {
@@ -348,11 +361,8 @@ pub struct RtMixer {
     /// Per-pad gain scalar (linear, 0.0..=1.0).
     pad_gain: [f32; NUM_SAMPLES],
 
-    /// Per-pad EQ coefficients (low/mid/high).
-    pad_eq: [Eq3Coeffs; NUM_SAMPLES],
-
-    /// Neutral per-pad DSP/FX chain host for future internal nodes.
-    pad_dsp_chains: [PerPadDspChain; NUM_SAMPLES],
+    /// Per-pad DSP/FX chain with the live DJ isolator EQ node.
+    pad_dsp_chains: Box<[PerPadDspChain]>,
 
     /// Per-pad loop region start frame.
     pad_loop_start_frame: [usize; NUM_SAMPLES],
@@ -414,10 +424,10 @@ impl RtMixer {
             pad_bpm: std::array::from_fn(|_| None),
             pad_phase_anchor_frame: std::array::from_fn(|_| 0),
             pad_gain: std::array::from_fn(|_| 1.0),
-            pad_eq: std::array::from_fn(|_| coeffs_for_eq3(sample_rate_hz, 0.0, 0.0, 0.0)),
-            pad_dsp_chains: std::array::from_fn(|id| {
-                PerPadDspChain::new(id, sample_rate_hz, DEFAULT_BLOCK_SAMPLES, channels)
-            }),
+            pad_dsp_chains: (0..NUM_SAMPLES)
+                .map(|id| PerPadDspChain::new(id, sample_rate_hz, DEFAULT_BLOCK_SAMPLES, channels))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
             pad_loop_start_frame: std::array::from_fn(|_| 0),
             pad_loop_end_frame: std::array::from_fn(|_| None),
             pad_playhead_frame: std::array::from_fn(|_| None),
@@ -695,6 +705,7 @@ impl RtMixer {
         for voice_slot in &mut self.voices {
             if !voice_slot.active {
                 self.stem_transitions[id].clear();
+                self.pad_dsp_chains[id].reset();
                 voice_slot.start_rt(
                     id,
                     sample.clone(),
@@ -916,7 +927,30 @@ impl RtMixer {
             return;
         }
 
-        self.pad_eq[id] = coeffs_for_eq3(self.sample_rate_hz, low_db, mid_db, high_db);
+        let low = pad_eq_db_to_normalized(low_db);
+        let mid = pad_eq_db_to_normalized(mid_db);
+        let high = pad_eq_db_to_normalized(high_db);
+
+        self.set_pad_dsp_parameter(id, DspParameterSlot::Slot0, low);
+        self.set_pad_dsp_parameter(id, DspParameterSlot::Slot1, mid);
+        self.set_pad_dsp_parameter(id, DspParameterSlot::Slot2, high);
+
+        if !self.sample_is_active(id) {
+            self.pad_dsp_chains[id].reset();
+        }
+    }
+
+    fn set_pad_dsp_parameter(
+        &mut self,
+        id: usize,
+        slot: DspParameterSlot,
+        normalized_target: f32,
+    ) -> bool {
+        let Some(parameter_id) = DspParameterId::per_pad(id, DspNodeSlot::Slot0, slot) else {
+            return false;
+        };
+
+        self.pad_dsp_chains[id].set_parameter(parameter_id, normalized_target)
     }
 
     pub fn set_pad_loop_region(&mut self, id: usize, start_s: f32, end_s: Option<f32>) {
@@ -1225,7 +1259,6 @@ impl RtMixer {
         let master_bpm = self.master_bpm;
         let pad_bpm = &self.pad_bpm;
         let pad_gain = &self.pad_gain;
-        let pad_eq = &self.pad_eq;
         let pad_dsp_chains = &mut self.pad_dsp_chains;
         let pad_loop_start_frame = &self.pad_loop_start_frame;
         let pad_loop_end_frame = &self.pad_loop_end_frame;
@@ -1349,7 +1382,6 @@ impl RtMixer {
                     key_lock_settings,
                 );
 
-                let eq = pad_eq[voice.sample_id];
                 let pad_gain = pad_gain[voice.sample_id];
                 let pad_dsp_chain = &mut pad_dsp_chains[voice.sample_id];
 
@@ -1359,10 +1391,7 @@ impl RtMixer {
                     pad_dsp_chain.begin_frame();
                     for (channel, buffer) in output_buffers.iter().enumerate().take(channels) {
                         let sample = buffer[frame];
-                        let mut sample = pad_dsp_chain.process_sample(sample);
-                        if let Some(state) = voice.eq_state.get_mut(channel) {
-                            sample = eq.process(state, sample);
-                        }
+                        let sample = pad_dsp_chain.process_sample(channel, sample);
                         let mixed = sample * voice.volume * volume * pad_gain;
                         output[out_base + channel] += mixed;
 
@@ -1395,7 +1424,6 @@ impl RtMixer {
 mod tests {
     use std::sync::Arc;
 
-    use crate::audio_engine::eq3::Eq3State;
     use crate::messages::{STEM_MASK_BASS, STEM_MASK_DRUMS, STEM_MASK_MELODY, STEM_MASK_VOCALS};
 
     use super::*;
@@ -1419,6 +1447,11 @@ mod tests {
             channels: 1,
             samples: Arc::from(samples.into_boxed_slice()),
         }
+    }
+
+    fn rms(samples: &[f32]) -> f32 {
+        let sum = samples.iter().map(|sample| sample * sample).sum::<f32>();
+        (sum / samples.len() as f32).sqrt()
     }
 
     fn estimate_frequency(samples: &[f32], sample_rate_hz: f32) -> f32 {
@@ -1522,36 +1555,6 @@ mod tests {
     }
 
     #[test]
-    fn test_eq3_coeffs_finite() {
-        let eq = coeffs_for_eq3(44_100.0, 6.0, -3.0, 0.0);
-
-        for coeffs in eq.low_lp.iter().chain(eq.high_hp.iter()) {
-            for v in [coeffs.b0, coeffs.b1, coeffs.b2, coeffs.a1, coeffs.a2] {
-                assert!(v.is_finite());
-            }
-        }
-
-        for g in [eq.low_gain, eq.mid_gain, eq.high_gain] {
-            assert!(g.is_finite());
-            assert!(g >= 0.0);
-        }
-    }
-
-    #[test]
-    fn test_eq3_processing_stable_on_impulse() {
-        let eq = coeffs_for_eq3(44_100.0, 0.0, 6.0, 0.0);
-        let mut state = Eq3State::default();
-        let mut max_abs: f32 = 0.0;
-        for i in 0..512 {
-            let x = if i == 0 { 1.0 } else { 0.0 };
-            let y = eq.process(&mut state, x);
-            assert!(y.is_finite());
-            max_abs = max_abs.max(y.abs());
-        }
-        assert!(max_abs > 0.0);
-    }
-
-    #[test]
     fn test_render_splits_oversized_blocks_to_preserve_stretch_capacity() {
         let mut mixer = RtMixer::new(1, 44_100.0);
         mixer.set_speed(2.0);
@@ -1623,19 +1626,6 @@ mod tests {
         drop(retirement);
 
         assert!(weak.upgrade().is_none());
-    }
-
-    #[test]
-    fn test_eq3_unity_reconstruction() {
-        let eq = coeffs_for_eq3(44_100.0, 0.0, 0.0, 0.0);
-        let mut state = Eq3State::default();
-
-        for i in 0..1024 {
-            let x = (i as f32 * 0.01).sin() * 0.75;
-            let y = eq.process(&mut state, x);
-            assert!(y.is_finite());
-            assert!((y - x).abs() < 1e-5);
-        }
     }
 
     #[test]
@@ -2519,7 +2509,7 @@ mod tests {
     }
 
     #[test]
-    fn test_neutral_pad_dsp_chain_preserves_mixer_output() {
+    fn test_neutral_pad_isolator_preserves_mixer_output() {
         let mut mixer = RtMixer::new(2, 44_100.0);
         let samples = vec![0.10, -0.20, 0.30, -0.40, -0.50, 0.60, 0.70, -0.80];
         let sample = SampleBuffer {
@@ -2544,7 +2534,7 @@ mod tests {
     }
 
     #[test]
-    fn test_neutral_pad_dsp_chain_keeps_existing_eq_behavior_active() {
+    fn test_pad_isolator_full_kill_replaces_hardwired_eq_processing() {
         let mut mixer = RtMixer::new(1, 44_100.0);
         mixer.load_sample(0, create_test_sample(1, 128, 0.5));
         mixer.set_pad_eq(0, PAD_EQ_DB_MIN, PAD_EQ_DB_MIN, PAD_EQ_DB_MIN);
@@ -2556,6 +2546,34 @@ mod tests {
 
         assert!(output.iter().all(|sample| sample.abs() < 1e-6));
         assert!(pad_peaks[0] < 1e-6);
+    }
+
+    #[test]
+    fn test_pad_isolator_boost_is_not_double_processed_by_old_eq_path() {
+        let frames = 4096;
+        let sample = create_sine_sample(44_100.0, frames, 1_000.0);
+        let mut neutral = RtMixer::new(1, 44_100.0);
+        let mut boosted = RtMixer::new(1, 44_100.0);
+        let mut neutral_peaks = [0.0_f32; NUM_SAMPLES];
+        let mut boosted_peaks = [0.0_f32; NUM_SAMPLES];
+
+        neutral.load_sample(0, sample.clone());
+        boosted.load_sample(0, sample);
+        boosted.set_pad_eq(0, PAD_EQ_DB_MAX, PAD_EQ_DB_MAX, PAD_EQ_DB_MAX);
+        assert!(neutral.play_sample(0, 1.0));
+        assert!(boosted.play_sample(0, 1.0));
+
+        let mut neutral_output = vec![0.0; frames];
+        let mut boosted_output = vec![0.0; frames];
+        neutral.render(&mut neutral_output, &mut neutral_peaks);
+        boosted.render(&mut boosted_output, &mut boosted_peaks);
+
+        let neutral_rms = rms(&neutral_output[1024..]);
+        let boosted_rms = rms(&boosted_output[1024..]);
+        let boost_ratio = boosted_rms / neutral_rms;
+
+        assert!(boost_ratio > 1.6);
+        assert!(boost_ratio < 2.2);
     }
 
     #[test]

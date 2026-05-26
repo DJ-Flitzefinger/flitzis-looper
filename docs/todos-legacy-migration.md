@@ -112,12 +112,10 @@ playback can only affect audio by sending bounded control commands through the e
 - [x] As a performer, I can adjust **per-pad 3-band EQ** (low/mid/high).
 - [x] As a performer, I can view a per-pad **level meter** while audio is playing.
 
-Architecture note: the current EQ is a functional placeholder in the Rust mixer, not the final
-professional DJ isolator architecture. The next EQ/DSP work should follow
-`docs/audio-performance-architecture-audit.md`: first prepare realtime safety,
-command/parameter flow, state ownership, and clock semantics, then introduce an internal Rust DSP
-foundation, and only after that replace the current EQ with a 3-band isolator node. Do not treat
-this legacy parity checkbox as permission to patch the current EQ directly.
+Architecture note: the current EQ live path is now the internal Rust per-pad DJ isolator node
+hosted by the DSP foundation. Python keeps compatible dB project intent and UI/mapping semantics,
+while Rust owns smoothed normalized live targets. Future EQ/DSP work should stay on this DSP-chain
+path and must not reintroduce the old hardwired mixer EQ or plugin hosting as a shortcut.
 
 ### 10) Stems: generation, indicators, and performance mixing
 - OpenSpec change (active): `add-offline-stem-cache`

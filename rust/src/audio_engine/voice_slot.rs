@@ -1,6 +1,5 @@
 use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 use crate::audio_engine::constants::{SPEED_MAX, SPEED_MIN};
-use crate::audio_engine::eq3::Eq3State;
 use crate::audio_engine::stretch_processor::StretchProcessor;
 use crate::messages::KeyLockSettings;
 use crate::messages::SampleBuffer;
@@ -13,7 +12,6 @@ pub struct VoiceSlot {
     pub volume: f32,
     tempo_ratio_smoothed: f32,
     pub stretch: StretchProcessor,
-    pub eq_state: Vec<Eq3State>,
     pub paused: bool,
 }
 
@@ -27,7 +25,6 @@ impl VoiceSlot {
             volume: 0.0,
             tempo_ratio_smoothed: 1.0,
             stretch: StretchProcessor::new(channels),
-            eq_state: vec![Eq3State::default(); channels],
             paused: false,
         }
     }
@@ -70,9 +67,6 @@ impl VoiceSlot {
         self.tempo_ratio_smoothed = initial_tempo_ratio;
         self.paused = false;
         self.stretch.reset();
-        for state in &mut self.eq_state {
-            state.reset();
-        }
     }
 
     #[cfg(test)]
@@ -96,9 +90,6 @@ impl VoiceSlot {
         self.tempo_ratio_smoothed = 1.0;
         self.paused = false;
         self.stretch.reset();
-        for state in &mut self.eq_state {
-            state.reset();
-        }
     }
 
     pub fn restart(&mut self, initial_frame_pos: usize, volume: f32, initial_tempo_ratio: f32) {

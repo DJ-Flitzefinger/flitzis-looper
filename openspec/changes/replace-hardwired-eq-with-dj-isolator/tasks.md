@@ -5,17 +5,17 @@
 - [x] 1.4 Run official strict OpenSpec validation for this change.
 
 ## 2. First Implementation Slice
-- [ ] 2.1 Add a fixed-size Rust per-pad isolator DSP node with normalized low/mid/high targets.
-- [ ] 2.2 Route existing per-pad EQ setter behavior to typed DSP parameter identities and Rust-owned smoothing.
-- [ ] 2.3 Render the isolator through the per-pad DSP chain and remove the old hardwired EQ path from live audio processing.
-- [ ] 2.4 Preserve selected-pad EQ controls, middle-click neutral reset, durable project restore, and existing mapping action semantics.
-- [ ] 2.5 Keep plugin hosting, deck/group/master chains, new FX modules, real-time stem separation, and broad rewrites out of scope.
+- [x] 2.1 Add a fixed-size Rust per-pad isolator DSP node with normalized low/mid/high targets.
+- [x] 2.2 Route existing per-pad EQ setter behavior to typed DSP parameter identities and Rust-owned smoothing.
+- [x] 2.3 Render the isolator through the per-pad DSP chain and remove the old hardwired EQ path from live audio processing.
+- [x] 2.4 Preserve selected-pad EQ controls, middle-click neutral reset, durable project restore, and existing mapping action semantics.
+- [x] 2.5 Keep plugin hosting, deck/group/master chains, new FX modules, real-time stem separation, and broad rewrites out of scope.
 
 ## 3. Focused Tests
-- [ ] 3.1 Add Rust DSP tests for neutral transparency, full-kill band behavior, bounded boost, finite output, and sample-rate preparation.
-- [ ] 3.2 Add Rust smoothing tests for coalesced target changes reaching the isolator without zipper-prone immediate jumps.
-- [ ] 3.3 Add Rust mixer tests proving the old hardwired EQ path is not double-processing audio after replacement.
-- [ ] 3.4 Add focused Python controller/UI/input-mapping tests only where the compatibility bridge or action mapping changes.
+- [x] 3.1 Add Rust DSP tests for neutral transparency, full-kill band behavior, bounded boost, finite output, and sample-rate preparation.
+- [x] 3.2 Add Rust smoothing tests for coalesced target changes reaching the isolator without zipper-prone immediate jumps.
+- [x] 3.3 Add Rust mixer tests proving the old hardwired EQ path is not double-processing audio after replacement.
+- [x] 3.4 Confirm focused Python controller/UI/input-mapping tests are not required because the compatibility bridge and action mapping did not change.
 
 ## 4. Documentation And Handoff
 - [x] 4.1 Update repository architecture docs with the validated isolator replacement plan.
@@ -23,6 +23,6 @@
 
 ## 5. Validation
 - [x] 5.1 Run official strict OpenSpec validation for this change after spec edits.
-- [ ] 5.2 Run focused uv-managed Rust tests for DSP/mixer changes.
-- [ ] 5.3 Run focused uv-managed Python tests if controller/UI/mapping compatibility code changes.
-- [ ] 5.4 Run the broader uv-managed validation sequence for behavior or shared audio-state changes.
+- [x] 5.2 Run focused uv-managed Rust tests for DSP/mixer changes.
+- [x] 5.3 Confirm focused Python tests were not required for compatibility glue changes; full pytest passed.
+- [x] 5.4 Run the broader uv-managed validation sequence for behavior or shared audio-state changes.

@@ -2,8 +2,9 @@
 
 Date: 2026-05-25
 
-Status: architecture audit and preparation plan. This document does not implement EQ, DSP
-effects, plugin hosting, or runtime behavior changes.
+Status: architecture audit and preparation plan, updated after the first per-pad DJ isolator
+implementation slice. This document does not authorize unrelated DSP effects, plugin hosting, or
+broad runtime rewrites.
 
 ## Scope
 
@@ -12,11 +13,11 @@ professional live-performance looper foundation for playback, loops, pitch/BPM c
 stems, master clock, quantization, Multi Loop, MIDI/keyboard control, future DSP/FX, and a future
 3-band DJ isolator.
 
-The short answer is: the ownership direction is correct, but the architecture is not ready for
+The short answer is: the ownership direction is correct, but the architecture was not ready for
 professional DSP/FX work without preparation. Rust is already the right place for the realtime
-audio engine, scheduler, transport, mixing, and future internal DSP nodes. The next work should
-prepare realtime safety, command/parameter flow, state ownership, and clock semantics before the
-EQ is replaced.
+audio engine, scheduler, transport, mixing, and internal DSP nodes. The documented preparation
+stages have now allowed the first per-pad EQ replacement slice to move live EQ authority into the
+Rust DSP chain.
 
 This plan is not a freeze on Python-to-Rust migration. Targeted migrations are allowed and
 preferred when they reduce duplicated live-audio authority, improve timing correctness, lower
@@ -27,8 +28,7 @@ access, logging, plugin loading, and heavy processing out of the callback and ho
 
 Explicit non-goals for this audit:
 
-- no new EQ implementation,
-- no new delay, reverb, phaser, flanger, filter, or other FX implementation,
+- no unrelated delay, reverb, phaser, flanger, filter, or other FX implementation,
 - no plugin host,
 - no big-bang engine rewrite,
 - no regression of the currently working MIDI behavior,
@@ -46,7 +46,7 @@ Major Rust audio modules:
   stem mixing, speed/BPM-lock/key-lock routing, gain/EQ, metering, playheads.
 - `rust/src/audio_engine/voice_slot.rs`: active voice state, per-voice DSP buffers, EQ state.
 - `rust/src/audio_engine/stretch_processor.rs`: bounded current varispeed/master-tempo wrapper.
-- `rust/src/audio_engine/eq3.rs`: current per-pad EQ DSP.
+- `rust/src/audio_engine/dsp.rs`: current per-pad DSP chain and DJ isolator EQ node.
 - `rust/src/audio_engine/transport.rs`: output-frame transport clock and musical phase helpers.
 - `rust/src/audio_engine/scheduler.rs`: fixed-capacity absolute output-frame scheduler.
 - `rust/src/audio_engine/input_mapping.rs`: Rust MIDI capture, timestamping, filtering, mapping
@@ -124,12 +124,11 @@ still need cleanup before DSP/FX work:
   documented in `docs/audio-state-ownership.md`,
 - audio-to-control telemetry dispatch is controller-owned rather than UI-context-owned,
 - accepted active stem mode/mask changes now use a bounded Rust-owned source-selection ramp,
-- Stage 8 now records the neutral DSP/FX foundation plan in
-  `docs/dsp-fx-foundation-plan.md` and `openspec/changes/prepare-dsp-fx-foundation/`, and the
-  first neutral Rust foundation slice adds `audio_engine::dsp` plus a fixed-size per-pad chain
-  host without changing public controls or output,
-- current EQ is hardwired into the mixer rather than modeled as a DSP node,
-- future parameter smoothing is specified for the foundation but not implemented yet.
+- Stage 8 records the DSP/FX foundation plan in `docs/dsp-fx-foundation-plan.md` and
+  `openspec/changes/prepare-dsp-fx-foundation/`,
+- the first DJ isolator replacement slice now uses `audio_engine::dsp` as the fixed-size per-pad
+  chain host and routes existing EQ controls to typed smoothed Rust DSP parameters,
+- the previous hardwired mixer `eq3.rs` path is no longer active as live EQ authority.
 
 ## Rust Audio Engine And Hot Paths
 
@@ -225,7 +224,7 @@ Remaining risks:
 
 - Parameter ring-full behavior remains best-effort for high-rate controls; the newest update may
   be dropped when the parameter queue is full.
-- Fast future DSP parameters such as filter cutoff or isolator bands still need audio-side
+- Fast future DSP parameters such as filter cutoff or other FX controls still need audio-side
   smoothing after the coalesced target value reaches Rust DSP state.
 
 Target boundary:
@@ -477,39 +476,36 @@ Stage 7 result:
 
 ## Current EQ Implementation
 
-The current EQ is not merely UI-level; it affects audio in Rust:
+The current EQ remains performer-facing through the same UI/API, but live audio authority is now
+the Rust per-pad DSP chain:
 
-- UI/Python stores per-pad EQ in dB values.
-- `AudioEngine.set_pad_eq(...)` sends `ControlMessage::SetPadEq`.
-- `RtMixer` stores per-pad `Eq3Params`.
-- `eq3.rs` applies current per-voice/channel EQ state during mixing.
+- UI/Python stores per-pad EQ in compatible dB values.
+- `AudioEngine.set_pad_eq(...)` sends `ControlParameterMessage::SetPadEq`.
+- `RtMixer` converts accepted dB triplets to normalized typed per-pad DSP parameter identities.
+- `dsp.rs` applies the per-pad 3-band DJ isolator with Rust-owned smoothing during mixing.
 
 Findings:
 
-- Current UI range is dB-based, with `0.0 dB` neutral and `-60 dB` treated as kill.
-- Current crossover constants in code are `380 Hz` and `2300 Hz`.
-- Repository spec text expects a higher-quality crossover-based isolator direction, and the new
-  target direction is a DJ-style internal Rust isolator with initial `250 Hz` and `4 kHz`
-  crossovers and normalized `0.0..1.0` controls where `0.5` is neutral.
-- The current implementation recomputes EQ coefficients in the callback when parameter messages
-  arrive. It is not per-sample, but it is still not a good model for high-rate mapped controls.
-- There is no parameter smoothing for EQ changes.
-- The EQ is hardwired into mixer rendering rather than represented as a reusable DSP node.
+- Current UI range is still dB-based, with `0.0 dB` neutral, `-60 dB` treated as kill, and
+  `+6 dB` maximum boost.
+- Live Rust targets are normalized `0.0..1.0`, where `0.5` is neutral.
+- The initial isolator crossovers are `250 Hz` and `4 kHz`.
+- Active EQ target changes are smoothed on the Rust audio side before sample processing.
+- The old standalone `eq3.rs` coefficients and per-voice `Eq3State` are removed from the live
+  mixer path, so EQ is not double-applied.
 
-Recommendation: do not patch this EQ into the future architecture. Keep it as the current
-functional placeholder, then replace it later with an internal Rust 3-band DJ isolator DSP node
-after the realtime-safety, command/parameter, state, and clock preparation phases.
+Recommendation: keep future DSP/FX work on the typed Rust DSP-chain path. Do not reintroduce a
+standalone hardwired mixer EQ or external plugin host as a shortcut.
 
 ## Critical Findings
 
 Professional-readiness blockers before EQ/DSP replacement:
 
 1. Python session state can desynchronize if audio-to-control telemetry is dropped.
-2. Live loop edits and EQ changes are immediate and can click.
-3. Future DSP parameters still need audio-side smoothing after the Stage 3 coalesced parameter
-   bridge.
-4. Current EQ is not a durable DSP-chain foundation.
-5. There is no per-pad/per-stem/deck/master DSP node architecture.
+2. Live loop edits are immediate and can click.
+3. Future non-EQ DSP parameters still need audio-side smoothing after the Stage 3 coalesced
+   parameter bridge.
+4. There is no per-stem/deck/master DSP node architecture yet.
 
 Resolved preparation blockers:
 
@@ -580,14 +576,15 @@ hosting in this phase.
 
 Initial DSP foundation scope:
 
-- `rust/src/audio_engine/dsp.rs` defines the small internal neutral node/chain boundary.
-- `RtMixer` owns one fixed-size neutral per-pad chain prepared during mixer construction.
+- `rust/src/audio_engine/dsp.rs` defines the small internal per-pad node/chain boundary.
+- `RtMixer` owns one fixed-size per-pad chain prepared during mixer construction.
 - Typed fixed-size parameter IDs/slots and Rust-owned normalized smoothing helpers exist for
-  later accepted DSP parameters.
-- The first implementation slice remains neutral: no new performer-facing control, no output
-  change, and no replacement of the current hardwired EQ.
-- Deterministic unit tests cover neutral pass-through, bounded output, parameter
-  clamping/rejection, smoothing behavior, prepare/reset behavior, and fixed-size state.
+  accepted DSP parameters.
+- The first foundation slice was neutral; the following isolator replacement slice now hosts the
+  per-pad DJ isolator in that chain.
+- Deterministic unit tests cover neutral transparency, bounded output, parameter
+  clamping/rejection, smoothing behavior, prepare/reset behavior, fixed-size state, and isolator
+  kill/boost behavior.
 
 Possible node shape:
 
@@ -598,7 +595,7 @@ process_block(input, output, frames)
 reset()
 ```
 
-The first real node should be the 3-band DJ isolator after the foundation is ready:
+The first real node is the 3-band DJ isolator:
 
 - bands: low below 250 Hz, mid 250 Hz to 4 kHz, high above 4 kHz,
 - normalized controls: `0.0` full kill, `0.5` neutral, `1.0` limited boost,
@@ -848,7 +845,7 @@ Status: completed by `docs/dsp-fx-foundation-plan.md` and
 
 Files:
 
-- `rust/src/audio_engine/eq3.rs`
+- `rust/src/audio_engine/dsp.rs`
 - `rust/src/audio_engine/mixer.rs`
 - `src/flitzis_looper/ui/render/sidebar_left.py`
 - `src/flitzis_looper/constants.py`
@@ -868,10 +865,10 @@ Result:
 
 - The neutral first DSP foundation slice is specified as a per-pad internal Rust chain host with
   typed fixed-size parameter identities and Rust-owned smoothing state.
-- The first implementation slice must preserve current public Python APIs, persistence, UI
-  controls, current EQ behavior, and rendered audio output within floating-point tolerance.
-- The later DJ isolator remains a separate OpenSpec-backed behavior change after the neutral
-  foundation exists.
+- The first DJ isolator implementation slice preserves current public Python APIs, persistence,
+  UI controls, project restore, and mapping action semantics while changing live Rust EQ
+  authority to typed smoothed DSP parameters.
+- The old hardwired mixer EQ path is removed from live processing, so EQ is not double-applied.
 
 ### Analysis Stage 9: Consolidated Implementation Plan
 
@@ -1070,13 +1067,13 @@ Scope:
 
 Non-goals:
 
-- no isolator replacement yet,
+- no unrelated DSP/FX replacement,
 - no delay/reverb/phaser/flanger/filter implementation,
 - no plugin host.
 
 Acceptance:
 
-- a no-op or test-only node can be hosted without changing audio output,
+- the fixed-size per-pad chain can host bounded nodes,
 - realtime safety constraints are documented and covered by tests/design review.
 
 Ordering:
@@ -1084,6 +1081,9 @@ Ordering:
 - directly before EQ replacement.
 
 ### Phase 7: Replace Current EQ With 3-Band DJ Isolator
+
+Status: first implementation slice completed by
+`openspec/changes/replace-hardwired-eq-with-dj-isolator/`.
 
 Goal: replace the current hardwired EQ with a professional internal Rust DSP node.
 
@@ -1138,18 +1138,19 @@ Acceptance:
 
 ## Next Recommended Step
 
-Stage 8 has completed the DSP/FX foundation and Stage 9 has a dedicated OpenSpec planning change
-for the later EQ replacement at
-`openspec/changes/replace-hardwired-eq-with-dj-isolator/`.
+Stage 8 completed the DSP/FX foundation, Stage 9 created the OpenSpec planning change, and the
+first implementation slice under
+`openspec/changes/replace-hardwired-eq-with-dj-isolator/` now replaces the hardwired per-pad EQ
+live path with the Rust per-pad DJ isolator node.
 
-The next recommended step is the first implementation slice from
-`openspec/changes/replace-hardwired-eq-with-dj-isolator/`:
+The next recommended step is a focused review/audition and tuning decision for the implemented
+isolator before any future FX work:
 
 ```text
-Implement the fixed-size Rust per-pad DJ isolator DSP node and route the existing per-pad EQ
-setter path to typed smoothed DSP parameters, while preserving the existing selected-pad EQ UI,
-project restore, and mapping semantics.
+Review the implemented DJ isolator behavior against representative audio/test tones, decide
+whether the initial crossover/gain curve needs a focused follow-up, and otherwise prepare the
+OpenSpec change for acceptance/archive.
 ```
 
 Do not add plugin hosting, unrelated FX, deck/group/master chains, real-time stem separation,
-live loop-edit crossfades, UI redesign, or a broad rewrite during that first isolator slice.
+live loop-edit crossfades, UI redesign, or a broad rewrite during that review/tuning slice.

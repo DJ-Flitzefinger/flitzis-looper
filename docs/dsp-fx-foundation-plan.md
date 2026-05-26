@@ -2,14 +2,15 @@
 
 Date: 2026-05-26
 
-Status: Stage 8 architecture planning plus the first neutral Rust foundation slice. This document
-does not implement a new EQ, visible DSP/FX effect, plugin host, real-time stem separation, live
-loop-edit crossfade, or broad rewrite.
+Status: Stage 8 architecture planning, the first neutral Rust foundation slice, and the first
+3-band DJ isolator replacement slice are complete. This document does not authorize unrelated
+DSP/FX effects, plugin hosting, real-time stem separation, live loop-edit crossfades, or broad
+rewrites.
 
 ## Purpose
 
-This document defines the smallest safe internal Rust DSP/FX foundation step before the current
-hardwired per-pad EQ is replaced. It complements:
+This document defines the internal Rust DSP/FX foundation and records the first safe per-pad EQ
+replacement slice. It complements:
 
 - `docs/audio-performance-architecture-audit.md`,
 - `docs/audio-state-ownership.md`,
@@ -38,22 +39,22 @@ Existing preparation stages provide the boundary for this plan:
 - future mapped DSP controls must resolve to bounded controller-owned targets before entering the
   Rust parameter path.
 
-## Existing EQ
+## Current EQ
 
-The current EQ path is useful but not the final architecture:
+The old hardwired mixer EQ path has been replaced as live audio authority:
 
-- `rust/src/audio_engine/eq3.rs` implements the current 3-band per-pad EQ coefficients and state,
-- `rust/src/audio_engine/mixer.rs` stores `pad_eq` directly in `RtMixer`,
-- `rust/src/audio_engine/voice_slot.rs` stores per-channel `Eq3State`,
-- Python persists per-pad low/mid/high dB intent and sends `set_pad_eq(...)` through the
-  continuous parameter path,
-- the mixer currently applies EQ after source selection, loop wrapping, playback-rate/Key Lock
-  processing, and before pad gain/master volume metering.
+- `rust/src/audio_engine/dsp.rs` now hosts the fixed-size per-pad DJ isolator node inside the
+  internal DSP chain,
+- `rust/src/audio_engine/mixer.rs` routes existing `set_pad_eq(...)` dB triplets to typed
+  normalized per-pad DSP parameter identities,
+- Python continues to persist per-pad low/mid/high dB intent and uses the same UI, restore, and
+  input-mapping action semantics,
+- live Rust targets are normalized `0.0..1.0`, smoothed on the audio side, and rendered before
+  pad gain/master volume metering,
+- the deleted `eq3.rs` path and per-voice `Eq3State` are no longer active as a second hardwired
+  EQ processing stage.
 
-Stage 8 does not patch this EQ. The foundation should make room for a later replacement instead
-of deepening the hardwired EQ path.
-
-## Target Processing Order
+## Current Processing Order
 
 The long-term internal audio path should be:
 
@@ -62,21 +63,10 @@ full-mix or prepared-stem source selection
 -> source-frame loop wrap and voice playhead
 -> playback-rate and Key Lock processing
 -> optional future per-stem processing
--> neutral first per-pad DSP chain
--> later per-pad isolator EQ node
+-> per-pad DSP chain with DJ isolator node
 -> per-pad gain, voice velocity, master volume, metering, telemetry
 -> optional later deck/group/master chains
 ```
-
-For the first implementation slice, the DSP chain must be neutral and must not replace the
-current EQ. A safe first render order is therefore:
-
-```text
-source/stem -> playback-rate/Key Lock -> neutral per-pad DSP chain -> existing EQ -> gain/meter
-```
-
-This lets tests prove that the chain host can process audio without changing output before any
-performer-facing DSP behavior is added.
 
 ## First Implementation Slice
 
@@ -97,10 +87,24 @@ The first executable task added an internal Rust DSP foundation with no visible 
 The initial foundation should not add a visible filter, delay, reverb, phaser, flanger, isolator,
 stem effect, deck/group/master chain, plugin host, or new UI control.
 
+## First Isolator Replacement Slice
+
+The first isolator implementation slice now replaces the old live EQ authority:
+
+- a fixed-size DJ isolator node lives in each per-pad DSP chain,
+- low, mid, and high targets use typed per-pad DSP parameter identities,
+- existing Python-facing dB values are converted to normalized Rust targets with `0.5` neutral,
+  minimum kill, and `+6 dB` maximum boost,
+- inactive/project-restore updates snap current DSP state to the restored targets, while active
+  playback target changes are smoothed before sample processing,
+- focused Rust DSP and mixer tests cover neutral transparency, full-kill behavior, bounded boost,
+  smoothing, finite output, sample-rate preparation, and the absence of double-processing through
+  the removed hardwired EQ path.
+
 ## Parameter Model
 
-Future DSP parameters should use stable typed identities, not callback-local pointers or UI object
-references. A future identity should be able to name:
+DSP parameters should use stable typed identities, not callback-local pointers or UI object
+references. An identity should be able to name:
 
 - scope: initially per-pad, later optional per-stem/deck/master,
 - pad or bus index where applicable,
@@ -112,14 +116,10 @@ High-rate controller input should continue to derive bounded targets outside the
 accepted targets through the bounded parameter path, and smooth on the Rust side before sample
 processing.
 
-## Later EQ Replacement
+## DJ Isolator Replacement
 
-The later 3-band DJ isolator should be a separate OpenSpec-backed behavior change after the
-foundation exists. That change should replace the current hardwired EQ path rather than patch it.
-That dedicated planning change now lives at
-`openspec/changes/replace-hardwired-eq-with-dj-isolator/`.
-
-Initial isolator targets:
+The 3-band DJ isolator replacement lives at
+`openspec/changes/replace-hardwired-eq-with-dj-isolator/`. Initial isolator targets:
 
 - normalized internal controls in `0.0..1.0` with `0.5` neutral,
 - low band below about `250 Hz`,
@@ -137,8 +137,7 @@ state and smoothing.
 
 ## Non-Goals
 
-- No new EQ implementation in Stage 8.
-- No visible filter, delay, reverb, phaser, flanger, or other effect in Stage 8.
+- No unrelated visible filter, delay, reverb, phaser, flanger, or other effect in this slice.
 - No VST, LV2, CLAP, AU, or other plugin-hosting infrastructure.
 - No real-time stem separation.
 - No live loop-edit crossfade policy.
@@ -165,7 +164,7 @@ For the dedicated isolator planning slice:
 - run official strict OpenSpec validation for `replace-hardwired-eq-with-dj-isolator`,
 - run `git diff --check`.
 
-For the later isolator implementation:
+For the first isolator implementation:
 
 - run focused Rust DSP and mixer tests for neutral transparency, full kill, bounded boost,
   smoothing, finite output, sample-rate preparation, and no double hardwired EQ processing,

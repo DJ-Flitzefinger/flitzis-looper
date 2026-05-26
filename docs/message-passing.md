@@ -10,12 +10,12 @@ identified the original single control ring as a useful foundation, not as the f
 architecture. The Stage 3 preparation slice now separates ordered control commands from fast
 continuous parameter updates and coalesces drained parameter messages before applying them to
 audio-thread state. The Stage 4 ownership slice records durable Python intent versus live Rust
-audio state and moves audio telemetry dispatch into the controller layer. Future DSP/FX
-parameters should use this parameter path and keep smoothing on the Rust audio side. The Stage 8
-foundation plan in `docs/dsp-fx-foundation-plan.md` and
-`openspec/changes/prepare-dsp-fx-foundation/` keeps the first DSP slice neutral; the initial Rust
-implementation now provides typed fixed-size parameter identities and smoothing helpers for later
-DSP targets without exposing new Python controls or messages.
+audio state and moves audio telemetry dispatch into the controller layer. DSP/FX parameters use
+this parameter path and keep smoothing on the Rust audio side. The Stage 8 foundation plan in
+`docs/dsp-fx-foundation-plan.md` and
+`openspec/changes/prepare-dsp-fx-foundation/` added typed fixed-size parameter identities and
+smoothing helpers. The first DJ isolator slice uses those identities while preserving the existing
+Python `set_pad_eq(...)` API and per-pad EQ messages.
 
 ## Channels
 
@@ -47,9 +47,9 @@ Messages are intentionally small and allocation-free on the audio thread:
 - Speed, master BPM, per-pad BPM, per-pad gain, per-pad EQ, and master volume use fixed-size
   parameter messages. The callback coalesces drained messages by parameter identity and applies
   only the latest drained value for each identity.
-- Future DSP parameters are not exposed yet. The internal Rust foundation already has typed
-  fixed-size DSP parameter identities and Rust-owned smoothing state so a later OpenSpec-backed
-  behavior change can add accepted targets without carrying strings, file paths, plugin handles,
+- Per-pad EQ messages remain compatible dB triplets at the Python API boundary. The Rust mixer
+  converts accepted EQ values to normalized per-pad DSP parameter identities for the DJ isolator
+  before sample processing. Those live DSP targets carry no strings, file paths, plugin handles,
   Python objects, or dynamic metadata into the callback.
 - BPM Lock, Key Lock mode, and Key Lock parameter/settings updates remain ordered fixed-size
   control messages. Key Lock updates do not carry plugin handles, file paths, heap-owned DSP
@@ -138,10 +138,10 @@ continuous DSP targets must use the bounded parameter path and Rust-side smoothi
 processing. Future DSP mappings must not use direct MIDI-to-callback execution, carry plugin
 handles, or rely on callback-local state.
 
-Stage 8 adds `openspec/changes/prepare-dsp-fx-foundation/` as the foundation boundary for those
-future parameters. The first implementation slice adds only neutral Rust-owned DSP state and
-smoothing helpers; it does not add a visible effect, EQ replacement, plugin host, or new UI
-control.
+Stage 8 added `openspec/changes/prepare-dsp-fx-foundation/` as the foundation boundary for those
+future parameters. The first DJ isolator replacement slice keeps the same UI and mapping controls
+while routing accepted EQ targets through Rust-owned DSP smoothing. It does not add a plugin host,
+new unrelated FX, deck/group/master chains, or new UI control.
 
 This path must not simulate mouse clicks, call Python from the audio callback, route MIDI directly
 into callback functions, block the callback, log from the callback, or allocate unbounded audio
