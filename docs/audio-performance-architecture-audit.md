@@ -493,6 +493,9 @@ Findings:
 - Active EQ target changes are smoothed on the Rust audio side before sample processing.
 - The old standalone `eq3.rs` coefficients and per-voice `Eq3State` are removed from the live
   mixer path, so EQ is not double-applied.
+- The focused test-tone review confirmed the all-band `+6 dB` cap and mid-band kill behavior, but
+  low kill around `60 Hz` and high kill around `8 kHz` are not archive-ready as final DJ isolator
+  behavior and need one focused tuning follow-up.
 
 Recommendation: keep future DSP/FX work on the typed Rust DSP-chain path. Do not reintroduce a
 standalone hardwired mixer EQ or external plugin host as a shortcut.
@@ -1143,13 +1146,15 @@ first implementation slice under
 `openspec/changes/replace-hardwired-eq-with-dj-isolator/` now replaces the hardwired per-pad EQ
 live path with the Rust per-pad DJ isolator node.
 
-The next recommended step is a focused review/audition and tuning decision for the implemented
-isolator before any future FX work:
+The focused review/audition slice found that the implemented isolator ownership boundary is sound,
+but the low/high kill response needs one focused tuning follow-up before archive. The next
+recommended step is:
 
 ```text
-Review the implemented DJ isolator behavior against representative audio/test tones, decide
-whether the initial crossover/gain curve needs a focused follow-up, and otherwise prepare the
-OpenSpec change for acceptance/archive.
+Tune the existing per-pad DJ isolator topology/reconstruction under
+openspec/changes/replace-hardwired-eq-with-dj-isolator/ so representative low/high band-center
+kill tests suppress their target bands while preserving neutral transparency, bounded boost,
+Rust-owned smoothing, and the existing Python/UI compatibility bridge.
 ```
 
 Do not add plugin hosting, unrelated FX, deck/group/master chains, real-time stem separation,

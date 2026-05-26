@@ -84,3 +84,20 @@ The CPAL audio callback must still avoid disk I/O, JSON reads/writes, Python/GIL
 blocking locks or waits, logging, neural inference, plugin loading/scanning, unbounded loops,
 heavy allocation, and long-running work. The isolator node may only process already owned audio
 buffers and fixed-size Rust state in the callback.
+
+## Focused Review Outcome
+
+The deterministic test-tone review keeps the implementation slice bounded and does not change the
+runtime DSP code. Representative sine-tone checks at `48 kHz` show:
+
+- all-band `+6 dB` boost is uniform at about `1.995x` RMS, matching the intended boost cap,
+- mid kill around `1 kHz` strongly suppresses the band center,
+- low kill around `60 Hz` still leaves substantial residual energy,
+- high kill around `8 kHz` can exceed the neutral RMS instead of suppressing the high band.
+
+Decision: the current ownership bridge and DSP-chain placement are valid, but the initial
+crossover/summation topology is not ready for OpenSpec archive as the final DJ isolator behavior.
+The next slice should tune the existing isolator topology or band reconstruction under this same
+OpenSpec change before acceptance/archive. That follow-up must remain focused on the per-pad
+isolator and must not add unrelated FX, plugin hosting, deck/group/master chains, live loop-edit
+crossfades, real-time stem separation, or UI redesign.

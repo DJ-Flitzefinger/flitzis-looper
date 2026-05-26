@@ -505,6 +505,19 @@ mod tests {
         (sum / count as f32).sqrt()
     }
 
+    fn sine_rms_ratio_with_targets(frequency_hz: f32, low: f32, mid: f32, high: f32) -> f32 {
+        let mut neutral = PerPadDspChain::new(0, 48_000.0, 8192, 1);
+        let neutral_rms = sine_rms_after_processing(frequency_hz, &mut neutral);
+
+        let mut processed = PerPadDspChain::new(0, 48_000.0, 8192, 1);
+        set_and_snap_parameter(&mut processed, DspParameterSlot::Slot0, low);
+        set_and_snap_parameter(&mut processed, DspParameterSlot::Slot1, mid);
+        set_and_snap_parameter(&mut processed, DspParameterSlot::Slot2, high);
+        let processed_rms = sine_rms_after_processing(frequency_hz, &mut processed);
+
+        processed_rms / neutral_rms
+    }
+
     #[test]
     fn dsp_parameter_id_is_fixed_size_and_rejects_oversized_pad_index() {
         let id = DspParameterId::per_pad(3, DspNodeSlot::Slot0, DspParameterSlot::Slot2).unwrap();
@@ -625,6 +638,29 @@ mod tests {
 
         assert!(boosted_rms > neutral_rms);
         assert!(boosted_rms < neutral_rms * 2.05);
+    }
+
+    #[test]
+    fn representative_tone_audition_records_current_isolator_tuning_gap() {
+        let all_band_boost = sine_rms_ratio_with_targets(1_000.0, 1.0, 1.0, 1.0);
+        assert!((all_band_boost - 10.0_f32.powf(ISOLATOR_BOOST_DB_MAX / 20.0)).abs() < 0.02);
+
+        let mid_kill = sine_rms_ratio_with_targets(1_000.0, 0.5, 0.0, 0.5);
+        assert!(mid_kill < 0.05);
+
+        let low_kill = sine_rms_ratio_with_targets(60.0, 0.0, 0.5, 0.5);
+        let high_kill = sine_rms_ratio_with_targets(8_000.0, 0.5, 0.5, 0.0);
+
+        // This review-slice characterization should be replaced by suppression thresholds in
+        // the focused low/high kill tuning follow-up.
+        assert!(
+            low_kill > 0.50,
+            "review should keep the low-kill tuning follow-up active until this drops"
+        );
+        assert!(
+            high_kill > 1.00,
+            "review should keep the high-kill tuning follow-up active until this drops"
+        );
     }
 
     #[test]

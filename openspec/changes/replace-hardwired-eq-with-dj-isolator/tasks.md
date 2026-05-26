@@ -26,3 +26,12 @@
 - [x] 5.2 Run focused uv-managed Rust tests for DSP/mixer changes.
 - [x] 5.3 Confirm focused Python tests were not required for compatibility glue changes; full pytest passed.
 - [x] 5.4 Run the broader uv-managed validation sequence for behavior or shared audio-state changes.
+
+## 6. Focused Review/Audition
+- [x] 6.1 Review the implemented isolator against deterministic low/mid/high representative
+  sine tones.
+- [x] 6.2 Confirm the Rust DSP-chain ownership and all-band boost cap are suitable for the
+  current OpenSpec direction.
+- [x] 6.3 Record that the current low/high kill response is not archive-ready and needs one
+  focused tuning follow-up before OpenSpec acceptance/archive.
+- [x] 6.4 Run official strict OpenSpec validation after the review-note update.

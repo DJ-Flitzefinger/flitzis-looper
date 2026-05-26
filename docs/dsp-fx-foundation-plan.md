@@ -101,6 +101,22 @@ The first isolator implementation slice now replaces the old live EQ authority:
   smoothing, finite output, sample-rate preparation, and the absence of double-processing through
   the removed hardwired EQ path.
 
+## Focused Isolator Review
+
+The first review/audition slice kept runtime DSP unchanged and checked the implemented isolator
+against deterministic representative sine tones. The Rust DSP-chain ownership, normalized
+parameter path, smoothing, and all-band `+6 dB` boost cap remain the right architecture direction.
+The all-band boost review measures about `1.995x` RMS at `1 kHz`, and the mid-kill path strongly
+suppresses a `1 kHz` band-center tone.
+
+The same review found that the current low/high split is not yet archive-ready as final DJ
+isolator behavior: low kill around `60 Hz` leaves substantial residual RMS, and high kill around
+`8 kHz` can exceed neutral RMS instead of suppressing the high band. The next small step should
+tune the existing per-pad isolator topology or reconstruction under
+`openspec/changes/replace-hardwired-eq-with-dj-isolator/`. Do not use that follow-up to add
+unrelated FX, plugin hosting, deck/group/master chains, live loop-edit crossfades, real-time stem
+separation, or UI redesign.
+
 ## Parameter Model
 
 DSP parameters should use stable typed identities, not callback-local pointers or UI object
