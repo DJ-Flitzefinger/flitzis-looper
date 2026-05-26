@@ -45,6 +45,47 @@ def test_handle_pad_peak_message_clamps_peak(
     assert session_state.pad_peak[0] > 0
 
 
+def test_pad_clip_hold_activates_at_clipping_threshold(
+    metering_controller: MeteringController, session_state: SessionState
+) -> None:
+    msg = Mock()
+    msg.sample_id.return_value = 0
+    msg.pad_peak.return_value = 1.0
+
+    with patch("flitzis_looper.controller.metering.monotonic", return_value=10.0):
+        metering_controller.handle_pad_peak_message(msg)
+        assert metering_controller.pad_clip_active(0) is True
+
+    assert session_state.pad_clip_hold_until[0] == pytest.approx(11.0)
+
+
+def test_pad_clip_hold_ignores_sub_clip_peaks(
+    metering_controller: MeteringController, session_state: SessionState
+) -> None:
+    msg = Mock()
+    msg.sample_id.return_value = 0
+    msg.pad_peak.return_value = 0.99
+
+    with patch("flitzis_looper.controller.metering.monotonic", return_value=10.0):
+        metering_controller.handle_pad_peak_message(msg)
+        assert metering_controller.pad_clip_active(0) is False
+
+    assert session_state.pad_clip_hold_until[0] == 0.0
+
+
+def test_pad_clip_hold_expires(
+    metering_controller: MeteringController,
+    session_state: SessionState,
+) -> None:
+    session_state.pad_clip_hold_until[0] = 11.0
+
+    with patch("flitzis_looper.controller.metering.monotonic", return_value=10.99):
+        assert metering_controller.pad_clip_active(0) is True
+
+    with patch("flitzis_looper.controller.metering.monotonic", return_value=11.0):
+        assert metering_controller.pad_clip_active(0) is False
+
+
 def test_handle_pad_peak_message_ignores_non_finite(
     metering_controller: MeteringController, session_state: SessionState
 ) -> None:

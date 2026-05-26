@@ -466,7 +466,7 @@ struct PendingControlParameters {
     speed: Option<f32>,
     master_bpm: Option<f32>,
     pad_bpm: [Option<Option<f32>>; NUM_SAMPLES],
-    pad_gain: [Option<f32>; NUM_SAMPLES],
+    pad_gain_db: [Option<f32>; NUM_SAMPLES],
     pad_eq: [Option<(f32, f32, f32)>; NUM_SAMPLES],
 }
 
@@ -477,7 +477,7 @@ impl Default for PendingControlParameters {
             speed: None,
             master_bpm: None,
             pad_bpm: [None; NUM_SAMPLES],
-            pad_gain: [None; NUM_SAMPLES],
+            pad_gain_db: [None; NUM_SAMPLES],
             pad_eq: [None; NUM_SAMPLES],
         }
     }
@@ -494,9 +494,9 @@ impl PendingControlParameters {
                     *slot = Some(bpm);
                 }
             }
-            ControlParameterMessage::SetPadGain { id, gain } => {
-                if let Some(slot) = self.pad_gain.get_mut(id) {
-                    *slot = Some(gain);
+            ControlParameterMessage::SetPadGain { id, gain_db } => {
+                if let Some(slot) = self.pad_gain_db.get_mut(id) {
+                    *slot = Some(gain_db);
                 }
             }
             ControlParameterMessage::SetPadEq {
@@ -534,9 +534,9 @@ impl PendingControlParameters {
                 applied += 1;
             }
         }
-        for (id, gain) in self.pad_gain.into_iter().enumerate() {
-            if let Some(gain) = gain {
-                mixer.set_pad_gain(id, gain);
+        for (id, gain_db) in self.pad_gain_db.into_iter().enumerate() {
+            if let Some(gain_db) = gain_db {
+                mixer.set_pad_gain(id, gain_db);
                 applied += 1;
             }
         }
@@ -902,10 +902,16 @@ mod tests {
     fn parameter_drain_coalesces_latest_value_per_identity() {
         let (mut producer, mut consumer) = RingBuffer::new(8);
         producer
-            .push(ControlParameterMessage::SetPadGain { id: 0, gain: 0.25 })
+            .push(ControlParameterMessage::SetPadGain {
+                id: 0,
+                gain_db: -6.0,
+            })
             .unwrap();
         producer
-            .push(ControlParameterMessage::SetPadGain { id: 0, gain: 0.75 })
+            .push(ControlParameterMessage::SetPadGain {
+                id: 0,
+                gain_db: 6.0,
+            })
             .unwrap();
         producer
             .push(ControlParameterMessage::SetVolume(0.5))
@@ -914,7 +920,6 @@ mod tests {
         let mut mixer = RtMixer::new(1, 44_100.0);
         let mut transport = TransportTimeline::new(44_100);
         mixer.load_sample(0, create_test_sample(1, 8, 1.0));
-        assert!(mixer.play_sample(0, 1.0));
 
         let result = drain_parameter_messages(&mut consumer, &mut mixer, &mut transport);
 
@@ -928,9 +933,11 @@ mod tests {
 
         let mut output = vec![0.0; 1];
         let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        assert!(mixer.play_sample(0, 1.0));
         mixer.render(&mut output, &mut pad_peaks);
 
-        assert!((output[0] - 0.375).abs() < 1e-5);
+        let expected = 10.0_f32.powf(6.0 / 20.0) * 0.5;
+        assert!((output[0] - expected).abs() < 1e-5);
     }
 
     #[test]

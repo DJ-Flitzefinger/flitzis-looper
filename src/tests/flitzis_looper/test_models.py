@@ -32,6 +32,9 @@ from flitzis_looper.constants import (
     MIN_KEY_LOCK_OUTPUT_GAIN,
     MIN_KEY_LOCK_SMOOTHING_STEP,
     NUM_SAMPLES,
+    PAD_GAIN_DB_DEFAULT,
+    PAD_GAIN_DB_MAX,
+    PAD_GAIN_DB_MIN,
 )
 from flitzis_looper.models import (
     DEFAULT_TRIGGER_QUANTIZATION_STEP,
@@ -319,8 +322,42 @@ def test_project_state_defaults(project_state: ProjectState) -> None:
     assert all(bpm is None for bpm in project_state.manual_bpm)
     assert len(project_state.manual_key) == NUM_SAMPLES
     assert all(key is None for key in project_state.manual_key)
+    assert len(project_state.pad_gain_db) == NUM_SAMPLES
+    assert all(gain_db == PAD_GAIN_DB_DEFAULT for gain_db in project_state.pad_gain_db)
     assert project_state.sidebar_left_expanded is True
     assert project_state.sidebar_right_expanded is True
+
+
+def test_pad_gain_db_validation(project_state: ProjectState) -> None:
+    project_state.pad_gain_db[0] = PAD_GAIN_DB_MIN
+    project_state.pad_gain_db[1] = 0.0
+    project_state.pad_gain_db[2] = PAD_GAIN_DB_MAX
+    assert project_state.pad_gain_db[:3] == [PAD_GAIN_DB_MIN, 0.0, PAD_GAIN_DB_MAX]
+
+    with pytest.raises(ValidationError, match="pad_gain_db"):
+        ProjectState(pad_gain_db=[])
+
+    with pytest.raises(ValidationError, match="pad_gain_db"):
+        ProjectState(pad_gain_db=[PAD_GAIN_DB_MAX + 0.1] * NUM_SAMPLES)
+
+
+def test_legacy_pad_gain_migrates_to_db_defaults_and_unity() -> None:
+    project = ProjectState.model_validate({})
+    assert project.pad_gain_db[0] == 0.0
+
+    project = ProjectState.model_validate({"pad_gain": [1.0] * NUM_SAMPLES})
+    assert project.pad_gain_db[0] == 0.0
+
+    values = [100.0] * NUM_SAMPLES
+    project = ProjectState.model_validate({"pad_gain": values})
+    assert project.pad_gain_db[0] == 0.0
+
+
+def test_legacy_pad_gain_below_unity_migrates_to_clamped_db() -> None:
+    values = [0.5] * NUM_SAMPLES
+    project = ProjectState.model_validate({"pad_gain": values})
+
+    assert project.pad_gain_db[0] == pytest.approx(-6.0206, abs=1e-4)
 
 
 def test_trigger_quantization_settings_validation(project_state: ProjectState) -> None:

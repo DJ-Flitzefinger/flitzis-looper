@@ -8,8 +8,8 @@ from flitzis_looper.constants import (
     NUM_SAMPLES,
     PAD_EQ_DB_MAX,
     PAD_EQ_DB_MIN,
-    PAD_GAIN_MAX,
-    PAD_GAIN_MIN,
+    PAD_GAIN_DB_MAX,
+    PAD_GAIN_DB_MIN,
     SPEED_MAX,
     SPEED_MIN,
     VOLUME_MAX,
@@ -193,7 +193,7 @@ def test_last_sample_slot_accepts_control_messages(audio_engine: AudioEngine) ->
     audio_engine.set_pad_bpm(valid_last_id, 120.0)
     audio_engine.set_pad_timing_metadata(valid_last_id, 0.0)
     audio_engine.set_pad_loop_region(valid_last_id, 0.0, None)
-    audio_engine.set_pad_gain(valid_last_id, 1.0)
+    audio_engine.set_pad_gain(valid_last_id, 0.0)
     audio_engine.set_pad_eq(valid_last_id, 0.0, 0.0, 0.0)
     audio_engine.anchor_transport_phase_from_pad(valid_last_id)
     audio_engine.play_sample(valid_last_id, 1.0)
@@ -233,8 +233,8 @@ def test_fast_parameter_setters_accept_documented_ranges(audio_engine: AudioEngi
     audio_engine.set_master_bpm(1.0)
     audio_engine.set_pad_bpm(0, None)
     audio_engine.set_pad_bpm(0, 120.0)
-    audio_engine.set_pad_gain(0, PAD_GAIN_MIN)
-    audio_engine.set_pad_gain(0, PAD_GAIN_MAX)
+    audio_engine.set_pad_gain(0, PAD_GAIN_DB_MIN)
+    audio_engine.set_pad_gain(0, PAD_GAIN_DB_MAX)
     audio_engine.set_pad_eq(0, PAD_EQ_DB_MIN, 0.0, PAD_EQ_DB_MAX)
 
 
@@ -258,7 +258,7 @@ def test_fast_parameter_setters_reject_invalid_values(audio_engine: AudioEngine)
         audio_engine.set_pad_bpm(0, float("nan"))
 
     with pytest.raises(ValueError, match=r"gain out of range"):
-        audio_engine.set_pad_gain(0, PAD_GAIN_MAX + 0.01)
+        audio_engine.set_pad_gain(0, PAD_GAIN_DB_MAX + 0.01)
 
     with pytest.raises(ValueError, match=r"eq gain out of range"):
         audio_engine.set_pad_eq(0, PAD_EQ_DB_MIN - 0.01, 0.0, 0.0)
@@ -283,7 +283,7 @@ def test_fast_parameter_setters_require_initialized_engine() -> None:
         engine.set_pad_bpm(0, 120.0)
 
     with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
-        engine.set_pad_gain(0, 1.0)
+        engine.set_pad_gain(0, 0.0)
 
     with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
         engine.set_pad_eq(0, 0.0, 0.0, 0.0)

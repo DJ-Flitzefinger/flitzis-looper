@@ -36,8 +36,9 @@ Python UI / controllers / persistence / background workers
 -> full-mix or prepared-stem source selection
 -> source-frame loop wrap and voice playhead
 -> playback-rate / BPM Lock / Key Lock processing
+-> per-pad Gain/Trim (-12 dB..+12 dB, smoothed)
 -> per-pad Rust DSP chain
--> per-pad gain, trigger velocity, master volume
+-> trigger velocity and master volume
 -> metering and audio-to-control telemetry
 -> system audio output
 ```
@@ -150,7 +151,7 @@ source-frame origin.
 
 Active full-mix/stem mode and enabled-mask changes use bounded Rust-owned
 transition state with a short 128 source-frame crossfade. Both sides read the
-same loop-relative source frame before Key Lock, DSP, gain, metering, and
+same loop-relative source frame before Key Lock, Gain/Trim, DSP, metering, and
 telemetry. The `I` performance preset means Drums + Melody + Bass; cached
 `instrumental.wav` is cache data, not a fifth live component.
 
@@ -189,6 +190,20 @@ Future DSP/FX work should extend the internal Rust DSP-chain path through a
 focused OpenSpec change. Do not add VST, LV2, CLAP, AU, or other plugin-hosting
 infrastructure unless the product direction explicitly changes.
 
+## Per-Pad Gain/Trim
+
+Per-pad Gain is a channel trim stage, not a master volume clone. Python persists
+durable intent as `pad_gain_db` with a `0.0 dB` default and a finite
+`-12.0..=+12.0 dB` range. Legacy project files with `pad_gain` linear or percent
+values are migrated so old unity (`1.0` or `100`) loads as `0.0 dB`.
+
+The Rust mixer converts accepted dB targets with `10^(gain_db / 20)`, smooths
+changes in the realtime path, and applies the multiplier after source/stem
+selection and playback-rate/Key Lock processing, before the per-pad DSP/EQ
+chain, trigger velocity, and master volume. Per-pad metering is based on the
+rendered pad contribution after Gain/Trim and EQ but before master volume, with
+clip hold projected into `SessionState`.
+
 ## Input Mapping
 
 Keyboard and MIDI Learn share stable action semantics.
@@ -197,16 +212,16 @@ Rust MIDI capture runs outside the CPAL callback. It timestamps and normalizes
 supported MIDI messages, resolves in-memory mapping snapshots, and may dispatch
 only small discrete audio-safe commands directly through the command ring.
 
-Controller-owned actions such as Tap BPM, stem masks, gain, EQ, master volume,
-and speed are reported back to Python as small events. Future high-rate DSP
-parameter mappings should derive bounded targets outside the callback, send
+Controller-owned actions such as Tap BPM, stem masks, dB Gain/Trim, EQ, master
+volume, and speed are reported back to Python as small events. Future high-rate
+DSP parameter mappings should derive bounded targets outside the callback, send
 accepted targets through the parameter ring, and smooth on the Rust side.
 
 ## Persistence And Restore
 
 `ProjectState` stores durable performer intent such as sample paths, loop
-regions, BPM metadata, gain/EQ intent, stem cache metadata, settings, and
-global controls.
+regions, BPM metadata, dB Gain/Trim and EQ intent, stem cache metadata,
+settings, and global controls.
 
 `SessionState` stores recoverable UI projections such as active pads, paused
 pads, load/generation progress, meters, playheads, and edit buffers.

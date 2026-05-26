@@ -2,7 +2,8 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
 
-from flitzis_looper.constants import PAD_GAIN_MAX, PAD_GAIN_MIN, SPEED_MAX, SPEED_MIN
+from flitzis_looper.audio_gain import clamp_gain_db, format_gain_db
+from flitzis_looper.constants import PAD_GAIN_DB_MAX, PAD_GAIN_DB_MIN, SPEED_MAX, SPEED_MIN
 
 if TYPE_CHECKING:
     from flitzis_looper.models import StemMaskDisplayMode, StemMixMode, TriggerQuantizationMode
@@ -129,12 +130,16 @@ def pad_eq_delta_action(pad_id: int, band: PadEqBand) -> LooperAction:
     )
 
 
-def pad_gain_action(pad_id: int, gain: float) -> LooperAction:
-    """Return a serializable per-pad gain set-value action."""
-    min_percent = round(PAD_GAIN_MIN * 100)
-    max_percent = round(PAD_GAIN_MAX * 100)
-    percent = max(min_percent, min(max_percent, round(float(gain) * 100)))
-    return LooperAction(key=f"pad.gain:{pad_id}:{percent}", label=f"Pad {pad_id + 1} gain")
+def pad_gain_action(pad_id: int, gain_db: float) -> LooperAction:
+    """Return a serializable per-pad Gain/Trim set-value action."""
+    gain_db = clamp_gain_db(gain_db)
+    min_tenths = round(PAD_GAIN_DB_MIN * 10)
+    max_tenths = round(PAD_GAIN_DB_MAX * 10)
+    tenths_db = max(min_tenths, min(max_tenths, round(gain_db * 10)))
+    return LooperAction(
+        key=f"pad.gain_db:{pad_id}:{tenths_db}",
+        label=f"Pad {pad_id + 1} gain {format_gain_db(tenths_db / 10.0)}",
+    )
 
 
 def pad_gain_delta_action(pad_id: int) -> LooperAction:

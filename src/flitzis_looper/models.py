@@ -10,6 +10,7 @@ from pydantic import (
     model_validator,
 )
 
+from flitzis_looper.audio_gain import legacy_gain_value_to_db
 from flitzis_looper.constants import (
     DEFAULT_DEMUCS_OVERLAP,
     DEFAULT_DEMUCS_SHIFTS,
@@ -40,8 +41,9 @@ from flitzis_looper.constants import (
     NUM_SAMPLES,
     PAD_EQ_DB_MAX,
     PAD_EQ_DB_MIN,
-    PAD_GAIN_MAX,
-    PAD_GAIN_MIN,
+    PAD_GAIN_DB_DEFAULT,
+    PAD_GAIN_DB_MAX,
+    PAD_GAIN_DB_MIN,
     SPEED_MAX,
     SPEED_MIN,
     VOLUME_MAX,
@@ -225,8 +227,8 @@ def _default_manual_key() -> list[str | None]:
     return [None] * NUM_SAMPLES
 
 
-def _default_pad_gain() -> list[float]:
-    return [1.0] * NUM_SAMPLES
+def _default_pad_gain_db() -> list[float]:
+    return [PAD_GAIN_DB_DEFAULT] * NUM_SAMPLES
 
 
 def _default_pad_eq() -> list[float]:
@@ -253,6 +255,95 @@ def _default_pad_grid_offset_samples() -> list[int]:
     return [0] * NUM_SAMPLES
 
 
+def _migrate_legacy_pad_gain_field(data: dict[str, object]) -> None:
+    if "pad_gain_db" not in data and "pad_gain" in data:
+        legacy_pad_gain = data.pop("pad_gain")
+        if isinstance(legacy_pad_gain, list):
+            data["pad_gain_db"] = [legacy_gain_value_to_db(gain) for gain in legacy_pad_gain]
+    else:
+        data.pop("pad_gain", None)
+
+
+def _migrate_legacy_trigger_quantization_fields(data: dict[str, object]) -> None:
+    legacy = data.pop("trigger_quantization", None)
+    if isinstance(legacy, str) and "trigger_quantization_enabled" not in data:
+        data["trigger_quantization_enabled"] = legacy not in {
+            "immediate",
+            "disabled",
+            "off",
+        }
+
+    if isinstance(legacy, str) and "trigger_quantization_step" not in data:
+        step = LEGACY_TRIGGER_QUANTIZATION_TO_STEP.get(legacy)
+        if step is not None:
+            data["trigger_quantization_step"] = step
+        elif data.get("trigger_quantization_enabled") is True:
+            data["trigger_quantization_step"] = legacy
+
+    trigger_step = data.get("trigger_quantization_step")
+    if isinstance(trigger_step, str):
+        step = LEGACY_TRIGGER_QUANTIZATION_TO_STEP.get(trigger_step)
+        if step is not None:
+            data["trigger_quantization_step"] = step
+
+
+def _migrate_legacy_key_lock_quality_fields(data: dict[str, object]) -> None:
+    key_lock_parameter_fields = {
+        "key_lock_delay_min_samples",
+        "key_lock_delay_range_samples",
+        "key_lock_head_count",
+        "key_lock_interpolation",
+        "key_lock_window",
+        "key_lock_smoothing_step",
+        "key_lock_output_gain",
+    }
+    legacy_quality = data.get("key_lock_quality")
+    if not isinstance(legacy_quality, str) or key_lock_parameter_fields.intersection(data):
+        return
+
+    legacy_presets: dict[str, dict[str, object]] = {
+        "performance": {
+            "key_lock_delay_min_samples": 48.0,
+            "key_lock_delay_range_samples": 1024.0,
+            "key_lock_head_count": 2,
+            "key_lock_interpolation": "linear",
+            "key_lock_window": "triangle",
+            "key_lock_smoothing_step": 0.08,
+            "key_lock_output_gain": 1.0,
+        },
+        "balanced": {
+            "key_lock_delay_min_samples": 64.0,
+            "key_lock_delay_range_samples": 1280.0,
+            "key_lock_head_count": 2,
+            "key_lock_interpolation": "linear",
+            "key_lock_window": "hann",
+            "key_lock_smoothing_step": 0.06,
+            "key_lock_output_gain": 1.0,
+        },
+        "high": {
+            "key_lock_delay_min_samples": DEFAULT_KEY_LOCK_DELAY_MIN_SAMPLES,
+            "key_lock_delay_range_samples": DEFAULT_KEY_LOCK_DELAY_RANGE_SAMPLES,
+            "key_lock_head_count": DEFAULT_KEY_LOCK_HEAD_COUNT,
+            "key_lock_interpolation": DEFAULT_KEY_LOCK_INTERPOLATION,
+            "key_lock_window": DEFAULT_KEY_LOCK_WINDOW,
+            "key_lock_smoothing_step": DEFAULT_KEY_LOCK_SMOOTHING_STEP,
+            "key_lock_output_gain": DEFAULT_KEY_LOCK_OUTPUT_GAIN,
+        },
+        "very_high": {
+            "key_lock_delay_min_samples": 96.0,
+            "key_lock_delay_range_samples": 1792.0,
+            "key_lock_head_count": 4,
+            "key_lock_interpolation": "cubic",
+            "key_lock_window": "hann",
+            "key_lock_smoothing_step": 0.035,
+            "key_lock_output_gain": 1.0,
+        },
+    }
+    legacy_settings = legacy_presets.get(legacy_quality)
+    if legacy_settings is not None:
+        data.update(legacy_settings)
+
+
 class ProjectState(BaseModel):
     """Persistent state. Saved to disk."""
 
@@ -260,83 +351,15 @@ class ProjectState(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _migrate_legacy_trigger_quantization(cls, value: object) -> object:
+    def _migrate_legacy_project_fields(cls, value: object) -> object:
         if not isinstance(value, dict):
             return value
 
         data = dict(value)
-        legacy = data.pop("trigger_quantization", None)
-        if isinstance(legacy, str) and "trigger_quantization_enabled" not in data:
-            data["trigger_quantization_enabled"] = legacy not in {
-                "immediate",
-                "disabled",
-                "off",
-            }
 
-        if isinstance(legacy, str) and "trigger_quantization_step" not in data:
-            step = LEGACY_TRIGGER_QUANTIZATION_TO_STEP.get(legacy)
-            if step is not None:
-                data["trigger_quantization_step"] = step
-            elif data.get("trigger_quantization_enabled") is True:
-                data["trigger_quantization_step"] = legacy
-
-        if isinstance(data.get("trigger_quantization_step"), str):
-            step = LEGACY_TRIGGER_QUANTIZATION_TO_STEP.get(data["trigger_quantization_step"])
-            if step is not None:
-                data["trigger_quantization_step"] = step
-
-        key_lock_parameter_fields = {
-            "key_lock_delay_min_samples",
-            "key_lock_delay_range_samples",
-            "key_lock_head_count",
-            "key_lock_interpolation",
-            "key_lock_window",
-            "key_lock_smoothing_step",
-            "key_lock_output_gain",
-        }
-        legacy_quality = data.get("key_lock_quality")
-        if isinstance(legacy_quality, str) and not key_lock_parameter_fields.intersection(data):
-            legacy_presets: dict[str, dict[str, object]] = {
-                "performance": {
-                    "key_lock_delay_min_samples": 48.0,
-                    "key_lock_delay_range_samples": 1024.0,
-                    "key_lock_head_count": 2,
-                    "key_lock_interpolation": "linear",
-                    "key_lock_window": "triangle",
-                    "key_lock_smoothing_step": 0.08,
-                    "key_lock_output_gain": 1.0,
-                },
-                "balanced": {
-                    "key_lock_delay_min_samples": 64.0,
-                    "key_lock_delay_range_samples": 1280.0,
-                    "key_lock_head_count": 2,
-                    "key_lock_interpolation": "linear",
-                    "key_lock_window": "hann",
-                    "key_lock_smoothing_step": 0.06,
-                    "key_lock_output_gain": 1.0,
-                },
-                "high": {
-                    "key_lock_delay_min_samples": DEFAULT_KEY_LOCK_DELAY_MIN_SAMPLES,
-                    "key_lock_delay_range_samples": DEFAULT_KEY_LOCK_DELAY_RANGE_SAMPLES,
-                    "key_lock_head_count": DEFAULT_KEY_LOCK_HEAD_COUNT,
-                    "key_lock_interpolation": DEFAULT_KEY_LOCK_INTERPOLATION,
-                    "key_lock_window": DEFAULT_KEY_LOCK_WINDOW,
-                    "key_lock_smoothing_step": DEFAULT_KEY_LOCK_SMOOTHING_STEP,
-                    "key_lock_output_gain": DEFAULT_KEY_LOCK_OUTPUT_GAIN,
-                },
-                "very_high": {
-                    "key_lock_delay_min_samples": 96.0,
-                    "key_lock_delay_range_samples": 1792.0,
-                    "key_lock_head_count": 4,
-                    "key_lock_interpolation": "cubic",
-                    "key_lock_window": "hann",
-                    "key_lock_smoothing_step": 0.035,
-                    "key_lock_output_gain": 1.0,
-                },
-            }
-            legacy_settings = legacy_presets.get(legacy_quality)
-            if legacy_settings is not None:
-                data.update(legacy_settings)
+        _migrate_legacy_pad_gain_field(data)
+        _migrate_legacy_trigger_quantization_fields(data)
+        _migrate_legacy_key_lock_quality_fields(data)
 
         return data
 
@@ -361,8 +384,8 @@ class ProjectState(BaseModel):
     manual_key: list[str | None] = Field(default_factory=_default_manual_key)
     """Optional per-pad key override. When set, used for effective key display."""
 
-    pad_gain: list[float] = Field(default_factory=_default_pad_gain)
-    """Per-pad linear gain scalar (0.0..=1.0)."""
+    pad_gain_db: list[float] = Field(default_factory=_default_pad_gain_db)
+    """Per-pad Gain/Trim in dB."""
 
     pad_eq_low_db: list[float] = Field(default_factory=_default_pad_eq)
     """Per-pad EQ low band gain in dB."""
@@ -464,15 +487,18 @@ class ProjectState(BaseModel):
     sidebar_right_expanded: bool = True
     """Right sidebar expanded/collapsed state."""
 
-    @field_validator("pad_gain", mode="after")
+    @field_validator("pad_gain_db", mode="after")
     @classmethod
-    def _validate_pad_gain(cls, value: list[float]) -> list[float]:
+    def _validate_pad_gain_db(cls, value: list[float]) -> list[float]:
         if len(value) != NUM_SAMPLES:
-            msg = f"pad_gain must have length {NUM_SAMPLES}, got {len(value)}"
+            msg = f"pad_gain_db must have length {NUM_SAMPLES}, got {len(value)}"
             raise ValueError(msg)
-        for gain in value:
-            if not PAD_GAIN_MIN <= gain <= PAD_GAIN_MAX:
-                msg = f"pad_gain values must be in {PAD_GAIN_MIN}..={PAD_GAIN_MAX}, got {gain}"
+        for gain_db in value:
+            if not math.isfinite(gain_db) or not PAD_GAIN_DB_MIN <= gain_db <= PAD_GAIN_DB_MAX:
+                msg = (
+                    f"pad_gain_db values must be finite and in "
+                    f"{PAD_GAIN_DB_MIN}..={PAD_GAIN_DB_MAX}, got {gain_db}"
+                )
                 raise ValueError(msg)
         return value
 
@@ -638,6 +664,9 @@ class SessionState(BaseModel):
     pad_peak_updated_at: list[float] = Field(default_factory=lambda: [0.0] * NUM_SAMPLES)
     """Monotonic timestamp of last pad peak update (seconds)."""
 
+    pad_clip_hold_until: list[float] = Field(default_factory=lambda: [0.0] * NUM_SAMPLES)
+    """Monotonic timestamp until which the per-pad clip indicator stays active."""
+
     pad_playhead_s: list[float | None] = Field(default_factory=_default_pad_playhead_s)
     """Best-effort per-pad playback position in seconds."""
 
@@ -770,6 +799,18 @@ class SessionState(BaseModel):
         for ts in value:
             if not math.isfinite(ts) or ts < 0.0:
                 msg = f"pad_peak_updated_at values must be finite and >= 0.0, got {ts}"
+                raise ValueError(msg)
+        return value
+
+    @field_validator("pad_clip_hold_until", mode="after")
+    @classmethod
+    def _validate_pad_clip_hold_until(cls, value: list[float]) -> list[float]:
+        if len(value) != NUM_SAMPLES:
+            msg = f"pad_clip_hold_until must have length {NUM_SAMPLES}, got {len(value)}"
+            raise ValueError(msg)
+        for ts in value:
+            if not math.isfinite(ts) or ts < 0.0:
+                msg = f"pad_clip_hold_until values must be finite and >= 0.0, got {ts}"
                 raise ValueError(msg)
         return value
 

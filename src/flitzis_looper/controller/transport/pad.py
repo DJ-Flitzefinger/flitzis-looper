@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING
 
-from flitzis_looper.constants import PAD_EQ_DB_MAX, PAD_EQ_DB_MIN, PAD_GAIN_MAX, PAD_GAIN_MIN
+from flitzis_looper.audio_gain import clamp_gain_db
+from flitzis_looper.constants import PAD_EQ_DB_MAX, PAD_EQ_DB_MIN
 from flitzis_looper.controller.validation import ensure_finite
 from flitzis_looper.models import validate_sample_id
 
@@ -18,12 +19,12 @@ class PadController:
         self._audio = transport._audio
         self._loop = transport.loop
 
-    def set_pad_gain(self, sample_id: int, gain: float) -> None:
+    def set_pad_gain(self, sample_id: int, gain_db: float) -> None:
         validate_sample_id(sample_id)
-        ensure_finite(gain)
-        clamped = min(max(gain, PAD_GAIN_MIN), PAD_GAIN_MAX)
+        ensure_finite(gain_db)
+        clamped = clamp_gain_db(gain_db)
         self._audio.set_pad_gain(sample_id, clamped)
-        self._project.pad_gain[sample_id] = clamped
+        self._project.pad_gain_db[sample_id] = clamped
         self._transport._mark_project_changed()
 
     def set_pad_eq(self, sample_id: int, low_db: float, mid_db: float, high_db: float) -> None:

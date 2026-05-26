@@ -1,6 +1,7 @@
 from contextlib import suppress
 from typing import TYPE_CHECKING, Literal, cast
 
+from flitzis_looper.audio_gain import legacy_gain_value_to_db
 from flitzis_looper.constants import NUM_BANKS, NUM_SAMPLES, SPEED_MAX, SPEED_MIN
 from flitzis_looper.controller.base import BaseController
 from flitzis_looper.input_mapping.actions import LooperAction, PadEqBand
@@ -32,7 +33,7 @@ if TYPE_CHECKING:
 type InputSource = Literal["midi", "keyboard"]
 PAD_EQ_BANDS: tuple[PadEqBand, ...] = ("low", "mid", "high")
 MIDI_RELATIVE_VOLUME_STEP = 0.01
-MIDI_RELATIVE_GAIN_STEP = 0.01
+MIDI_RELATIVE_GAIN_STEP_DB = 0.1
 MIDI_RELATIVE_EQ_STEP_DB = 0.5
 
 
@@ -229,7 +230,8 @@ class InputMappingController(BaseController):
             ("pad.analyze:", self._execute_analyze_pad),
             ("pad.adjust_loop:", self._execute_adjust_loop),
             ("pad.tap_bpm:", self._execute_tap_bpm),
-            ("pad.gain:", self._execute_pad_gain),
+            ("pad.gain_db:", self._execute_pad_gain_db),
+            ("pad.gain:", self._execute_legacy_pad_gain),
             ("pad.eq:", self._execute_pad_eq),
             ("ui.select_pad:", self._execute_select_pad),
             ("ui.select_bank:", self._execute_select_bank),
@@ -341,7 +343,7 @@ class InputMappingController(BaseController):
             return True
         self._app.transport.pad.set_pad_gain(
             pad_id,
-            self._project.pad_gain[pad_id] + MIDI_RELATIVE_GAIN_STEP * direction,
+            self._project.pad_gain_db[pad_id] + MIDI_RELATIVE_GAIN_STEP_DB * direction,
         )
         return True
 
@@ -463,7 +465,22 @@ class InputMappingController(BaseController):
         self._app.transport.bpm.tap_bpm(pad_id)
         return True
 
-    def _execute_pad_gain(self, key: str) -> bool:
+    def _execute_pad_gain_db(self, key: str) -> bool:
+        parts = key.split(":")
+        if len(parts) != 3 or parts[0] != "pad.gain_db":
+            return False
+        try:
+            pad_id = int(parts[1])
+            tenths_db = int(parts[2])
+            validate_sample_id(pad_id)
+        except ValueError:
+            return False
+        if not -120 <= tenths_db <= 120:
+            return False
+        self._app.transport.pad.set_pad_gain(pad_id, tenths_db / 10.0)
+        return True
+
+    def _execute_legacy_pad_gain(self, key: str) -> bool:
         parts = key.split(":")
         if len(parts) != 3 or parts[0] != "pad.gain":
             return False
@@ -475,7 +492,7 @@ class InputMappingController(BaseController):
             return False
         if not 0 <= percent <= 100:
             return False
-        self._app.transport.pad.set_pad_gain(pad_id, percent / 100.0)
+        self._app.transport.pad.set_pad_gain(pad_id, legacy_gain_value_to_db(percent))
         return True
 
     def _execute_pad_eq(self, key: str) -> bool:

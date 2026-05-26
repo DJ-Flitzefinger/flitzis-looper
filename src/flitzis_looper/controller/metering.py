@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 class MeteringController(BaseController):
     _PAD_PEAK_HALF_LIFE_SEC = 0.25
+    _PAD_CLIP_HOLD_SEC = 1.0
 
     def __init__(self, project: ProjectState, session: SessionState, audio: AudioEngine) -> None:
         super().__init__(project, session, audio)
@@ -28,9 +29,17 @@ class MeteringController(BaseController):
         if peak is None or not math.isfinite(peak):
             return
 
+        if peak >= 1.0:
+            self._session.pad_clip_hold_until[sample_id] = now + self._PAD_CLIP_HOLD_SEC
+
         peak = min(max(peak, 0.0), 1.0)
         self._session.pad_peak[sample_id] = max(self._session.pad_peak[sample_id], peak)
         self._session.pad_peak_updated_at[sample_id] = now
+
+    def pad_clip_active(self, sample_id: int) -> bool:
+        if not 0 <= sample_id < len(self._session.pad_clip_hold_until):
+            return False
+        return self._session.pad_clip_hold_until[sample_id] > monotonic()
 
     def handle_pad_playhead_message(self, msg: AudioMessage.PadPlayhead) -> None:
         now = monotonic()

@@ -1,8 +1,8 @@
 use crate::audio_engine::analysis::analyze_sample;
 use crate::audio_engine::audio_stream::{AudioStreamHandle, create_audio_stream, start_stream};
 use crate::audio_engine::constants::{
-    NUM_SAMPLES, PAD_EQ_DB_MAX, PAD_EQ_DB_MIN, PAD_GAIN_MAX, PAD_GAIN_MIN, SPEED_MAX, SPEED_MIN,
-    VOLUME_MAX, VOLUME_MIN,
+    NUM_SAMPLES, PAD_EQ_DB_MAX, PAD_EQ_DB_MIN, PAD_GAIN_DB_MAX, PAD_GAIN_DB_MIN, SPEED_MAX,
+    SPEED_MIN, VOLUME_MAX, VOLUME_MIN,
 };
 use crate::audio_engine::errors::SampleLoadError;
 use crate::audio_engine::input_mapping::InputRuntime;
@@ -1363,12 +1363,12 @@ impl AudioEngine {
         Ok(())
     }
 
-    pub fn set_pad_gain(&mut self, id: usize, gain: f32) -> PyResult<()> {
+    pub fn set_pad_gain(&mut self, id: usize, gain_db: f32) -> PyResult<()> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
         }
 
-        if !gain.is_finite() || !(PAD_GAIN_MIN..=PAD_GAIN_MAX).contains(&gain) {
+        if !gain_db.is_finite() || !(PAD_GAIN_DB_MIN..=PAD_GAIN_DB_MAX).contains(&gain_db) {
             return Err(PyValueError::new_err("gain out of range"));
         }
 
@@ -1382,7 +1382,7 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlParameterMessage::SetPadGain { id, gain });
+        let _ = producer_guard.push(ControlParameterMessage::SetPadGain { id, gain_db });
         Ok(())
     }
 

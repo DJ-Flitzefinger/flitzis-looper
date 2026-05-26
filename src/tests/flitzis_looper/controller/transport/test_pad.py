@@ -3,20 +3,23 @@ from unittest.mock import Mock
 
 import pytest
 
-from flitzis_looper.constants import PAD_EQ_DB_MAX, PAD_EQ_DB_MIN, PAD_GAIN_MAX, PAD_GAIN_MIN
+from flitzis_looper.constants import PAD_EQ_DB_MAX, PAD_EQ_DB_MIN, PAD_GAIN_DB_MAX, PAD_GAIN_DB_MIN
 from flitzis_looper.models import BeatGrid, SampleAnalysis
 
 if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
 
 
-@pytest.mark.parametrize(("gain", "exp"), [(0.25, 0.25), (-1.0, PAD_GAIN_MIN), (2.0, PAD_GAIN_MAX)])
+@pytest.mark.parametrize(
+    ("gain_db", "exp"),
+    [(2.5, 2.5), (-20.0, PAD_GAIN_DB_MIN), (20.0, PAD_GAIN_DB_MAX)],
+)
 def test_set_pad_gain_clamps_and_calls_engine(
-    controller: AppController, audio_engine_mock: Mock, gain: float, exp: float
+    controller: AppController, audio_engine_mock: Mock, gain_db: float, exp: float
 ) -> None:
-    controller.transport.pad.set_pad_gain(0, gain)
+    controller.transport.pad.set_pad_gain(0, gain_db)
     audio_engine_mock.set_pad_gain.assert_called_with(0, exp)
-    assert controller.project.pad_gain[0] == exp
+    assert controller.project.pad_gain_db[0] == exp
 
 
 def test_set_pad_eq_clamps_and_calls_engine(

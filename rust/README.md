@@ -51,8 +51,9 @@ Python controllers
 -> TransportTimeline + TransportScheduler
 -> RtMixer
 -> source selection, loop wrap, playback-rate / Key Lock
+-> smoothed per-pad Gain/Trim
 -> per-pad DSP chain
--> gain / volume / metering
+-> trigger velocity / master volume / metering
 -> output buffer
 ```
 
@@ -77,7 +78,7 @@ Use `uv run cargo ...` so PyO3 and maturin use the project Python environment.
 
 - Rust owns live audio truth: transport, scheduler, mixer, loaded buffers,
   source playheads, prepared-stem selection, realtime parameter application,
-  and DSP state.
+  smoothed dB Gain/Trim, metering, and DSP state.
 - Python owns UI, durable project intent, persistence, settings, mapping edit
   UX, and offline/background orchestration.
 - Ordered commands and high-rate scalar parameters use separate bounded queues.

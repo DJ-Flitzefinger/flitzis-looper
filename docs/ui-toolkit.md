@@ -117,7 +117,7 @@ src/flitzis_looper_audio/
 | Render functions | Layout, widget composition, stable IDs, local visual gestures, input-to-action mapping. | Business rules, persistence, file I/O, audio engine calls, background jobs. |
 | `UiContext` | Read-only selectors and explicit action facades used by render code. | Hidden behavior that bypasses controllers for core audio/project rules. |
 | Controllers | Validation, model mutation, persistence dirty marks, background jobs, audio API calls, runtime event polling. | ImGui layout or widget-specific rendering decisions. |
-| `ProjectState` | Durable performer intent: samples, loop regions, BPM/key metadata, gain/EQ intent, stem cache metadata, settings, mappings. | Live audio truth. |
+| `ProjectState` | Durable performer intent: samples, loop regions, BPM/key metadata, dB Gain/Trim and EQ intent, stem cache metadata, settings, mappings. | Live audio truth. |
 | `SessionState` | Recoverable runtime/UI projection: active pads, progress, meters, playheads, open overlays, edit buffers. | Durable behavior contracts or realtime audio authority. |
 | Rust `AudioEngine` | Live audio truth: loaded buffers, transport, scheduler, voices, stems, playback-rate, Key Lock, DSP, metering telemetry. | UI rendering, JSON persistence, file dialogs, Python object ownership in the callback. |
 
@@ -151,7 +151,7 @@ mutation, that is a signal to add or use an action facade.
 Use explicit action groups:
 
 - `ctx.audio.pads.*`: trigger/stop pads, load/unload, loop editing, analysis,
-  BPM/key overrides, pad gain, and pad EQ.
+  BPM/key overrides, pad Gain/Trim in dB, and pad EQ.
 - `ctx.audio.stems.*`: generate/delete stems, set stem mix mode, and set stem
   enabled mask.
 - `ctx.audio.global_.*`: volume, speed, BPM display, Multi Loop, BPM Lock, Key

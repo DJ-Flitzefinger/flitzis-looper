@@ -55,7 +55,7 @@ pub enum AudioMessage {
     /// Sample playback stopped
     SampleStopped { id: usize },
 
-    /// Per-pad peak meter update (mono peak, post gain/EQ).
+    /// Per-pad peak meter update (mono peak, post Gain/Trim and EQ, pre-master).
     PadPeak { id: usize, peak: f32 },
 
     /// Per-pad playback position in seconds (best-effort, low-rate).
@@ -282,8 +282,8 @@ pub(crate) enum ControlParameterMessage {
     /// Set per-pad BPM metadata.
     SetPadBpm { id: usize, bpm: Option<f32> },
 
-    /// Set per-pad gain (linear scalar).
-    SetPadGain { id: usize, gain: f32 },
+    /// Set per-pad Gain/Trim in dB.
+    SetPadGain { id: usize, gain_db: f32 },
 
     /// Set per-pad 3-band EQ gains in dB.
     SetPadEq {
@@ -302,7 +302,7 @@ impl ControlParameterMessage {
             ControlParameterMessage::SetSpeed(_) => ControlParameterKey::Speed,
             ControlParameterMessage::SetMasterBpm(_) => ControlParameterKey::MasterBpm,
             ControlParameterMessage::SetPadBpm { id, bpm: _ } => ControlParameterKey::PadBpm(*id),
-            ControlParameterMessage::SetPadGain { id, gain: _ } => {
+            ControlParameterMessage::SetPadGain { id, gain_db: _ } => {
                 ControlParameterKey::PadGain(*id)
             }
             ControlParameterMessage::SetPadEq {
@@ -792,7 +792,11 @@ mod tests {
             ControlParameterKey::Volume
         );
         assert_eq!(
-            ControlParameterMessage::SetPadGain { id: 3, gain: 0.75 }.key(),
+            ControlParameterMessage::SetPadGain {
+                id: 3,
+                gain_db: 0.75,
+            }
+            .key(),
             ControlParameterKey::PadGain(3)
         );
         assert_eq!(

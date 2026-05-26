@@ -169,12 +169,12 @@ def test_learn_saves_pad_gain_mapping(controller: AppController) -> None:
         "value": 10,
     })
 
-    ctx.audio.pads.set_pad_gain(2, 0.37)
+    ctx.audio.pads.set_pad_gain(2, 0.4)
 
     data = load_midi_mapping_file()
     assert data.mappings[0].input.key == "midi:cc:1:73"
     assert data.mappings[0].action.key == "pad.gain.delta:2"
-    assert controller.project.pad_gain[2] == 1.0
+    assert controller.project.pad_gain_db[2] == 0.0
 
 
 def test_learn_saves_midi_note_pad_gain_mapping_as_set_value(
@@ -190,12 +190,12 @@ def test_learn_saves_midi_note_pad_gain_mapping_as_set_value(
         "value": 100,
     })
 
-    ctx.audio.pads.set_pad_gain(2, 0.37)
+    ctx.audio.pads.set_pad_gain(2, 3.7)
 
     data = load_midi_mapping_file()
     assert data.mappings[0].input.key == "midi:note:1:61"
-    assert data.mappings[0].action.key == "pad.gain:2:37"
-    assert controller.project.pad_gain[2] == 1.0
+    assert data.mappings[0].action.key == "pad.gain_db:2:37"
+    assert controller.project.pad_gain_db[2] == 0.0
 
 
 def test_learn_saves_global_speed_mapping(controller: AppController) -> None:
@@ -386,7 +386,7 @@ def test_keyboard_mapping_executes_pad_gain(
     controller.input_mapping.save_mapping(
         "keyboard",
         binding.key,
-        pad_gain_action(2, 0.42),
+        pad_gain_action(2, 4.2),
     )
 
     handled = controller.input_mapping.capture_keyboard_input(
@@ -395,8 +395,30 @@ def test_keyboard_mapping_executes_pad_gain(
     )
 
     assert handled is True
-    audio_engine_mock.set_pad_gain.assert_called_once_with(2, 0.42)
-    assert controller.project.pad_gain[2] == 0.42
+    audio_engine_mock.set_pad_gain.assert_called_once_with(2, 4.2)
+    assert controller.project.pad_gain_db[2] == 4.2
+
+
+def test_keyboard_mapping_executes_legacy_pad_gain_as_db(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    controller.input_mapping.set_enabled(enabled=True)
+    binding = KeyboardBinding(key_name="G")
+    controller.input_mapping.save_mapping(
+        "keyboard",
+        binding.key,
+        LooperAction.from_key("pad.gain:2:50"),
+    )
+
+    handled = controller.input_mapping.capture_keyboard_input(
+        binding,
+        text_input_focused=False,
+    )
+
+    assert handled is True
+    audio_engine_mock.set_pad_gain.assert_called_once_with(2, pytest.approx(-6.0206))
+    assert controller.project.pad_gain_db[2] == pytest.approx(-6.0206)
 
 
 def test_keyboard_mapping_executes_global_speed(
@@ -618,7 +640,7 @@ def test_midi_cc_relative_pad_gain_uses_directional_steps(
     audio_engine_mock: Mock,
 ) -> None:
     controller.input_mapping.set_enabled(enabled=True)
-    controller.project.pad_gain[2] = 0.5
+    controller.project.pad_gain_db[2] = 0.0
     controller.input_mapping.save_mapping(
         "midi",
         "midi:cc:1:73",
@@ -641,7 +663,7 @@ def test_midi_cc_relative_pad_gain_uses_directional_steps(
         "action_key": "pad.gain.delta:2",
         "direct": False,
     })
-    assert controller.project.pad_gain[2] == pytest.approx(0.51)
+    assert controller.project.pad_gain_db[2] == pytest.approx(0.1)
 
     controller.input_mapping._handle_rust_input_event({
         "source": "midi",
@@ -650,7 +672,7 @@ def test_midi_cc_relative_pad_gain_uses_directional_steps(
         "action_key": "pad.gain.delta:2",
         "direct": False,
     })
-    assert controller.project.pad_gain[2] == pytest.approx(0.5)
+    assert controller.project.pad_gain_db[2] == pytest.approx(0.0)
 
 
 def test_midi_cc_relative_global_speed_uses_directional_steps(

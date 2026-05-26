@@ -54,7 +54,7 @@ class ReadOnlyStateProxy[T]:
         raise AttributeError(msg)
 
 
-class PadSelectors:
+class PadSelectors:  # noqa: PLR0904 - selector facade intentionally mirrors pad UI needs.
     def __init__(self, controller: AppController, project: ProjectState, session: SessionState):
         self._controller = controller
         self._project = project
@@ -121,6 +121,9 @@ class PadSelectors:
 
     def peak(self, pad_id: int) -> float:
         return float(self._session.pad_peak[pad_id])
+
+    def clip_active(self, pad_id: int) -> bool:
+        return self._controller.metering.pad_clip_active(pad_id)
 
     def is_active(self, pad_id: int) -> bool:
         return pad_id in self._session.active_sample_ids
@@ -303,15 +306,15 @@ class PadAudioActions:
     def clear_manual_key(self, pad_id: int) -> None:
         self._controller.transport.pad.clear_manual_key(pad_id)
 
-    def set_pad_gain(self, pad_id: int, gain: float) -> None:
+    def set_pad_gain(self, pad_id: int, gain_db: float) -> None:
         action = (
             pad_gain_delta_action(pad_id)
             if _midi_cc_learn_input_pending(self._controller)
-            else pad_gain_action(pad_id, gain)
+            else pad_gain_action(pad_id, gain_db)
         )
         self._controller.input_mapping.perform_learnable_action(
             action,
-            lambda: self._controller.transport.pad.set_pad_gain(pad_id, gain),
+            lambda: self._controller.transport.pad.set_pad_gain(pad_id, gain_db),
         )
 
     def set_pad_eq(self, pad_id: int, low_db: float, mid_db: float, high_db: float) -> None:

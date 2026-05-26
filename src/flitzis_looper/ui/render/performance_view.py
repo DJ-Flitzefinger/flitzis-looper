@@ -77,29 +77,6 @@ def _pad_button_progress_overlay(progress: float) -> None:
     draw_list.add_rect_filled(pos_min, (fill_x, pos_max.y), imgui.get_color_u32(progress_rgba))
 
 
-def _pad_button_peak_meter(peak: float) -> None:
-    peak = max(0.0, min(1.0, float(peak)))
-
-    pos_min = imgui.get_item_rect_min()
-    pos_max = imgui.get_item_rect_max()
-    meter_w = 6.0
-    padding = 2.0
-    x1 = pos_max.x - padding - meter_w
-    x2 = pos_max.x - padding
-    y2 = pos_max.y - padding
-    y_min = pos_min.y + padding
-    height = max(0.0, y2 - y_min)
-    y1 = y2 - height * peak
-
-    bg_rgba = (0.0, 0.0, 0.0, 0.25)
-    fg_rgba = (1.0, 0.2, 0.2, 0.9) if peak >= 1.0 else (0.2, 0.8, 0.2, 0.7)
-
-    draw_list = imgui.get_window_draw_list()
-    draw_list.add_rect_filled((x1, y_min), (x2, y2), imgui.get_color_u32(bg_rgba))
-    if peak > 0.0:
-        draw_list.add_rect_filled((x1, y1), (x2, y2), imgui.get_color_u32(fg_rgba))
-
-
 def stem_grid_indicator_label(state: StemGridIndicatorState | None) -> str | None:
     """Return the compact pad-grid indicator label for tests and rendering."""
     if state is None:
@@ -209,9 +186,6 @@ def _pad_button(ctx: UiContext, pad_id: int, size: imgui.ImVec2Like) -> None:
 
         if is_loading and loading_progress is not None:
             _pad_button_progress_overlay(loading_progress)
-
-        if is_loaded:
-            _pad_button_peak_meter(ctx.state.pads.peak(pad_id))
 
         if imgui.is_item_hovered():
             _pad_button_input(ctx, pad_id, is_loaded=is_loaded)

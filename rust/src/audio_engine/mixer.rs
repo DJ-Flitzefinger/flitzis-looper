@@ -11,8 +11,8 @@ use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 #[cfg(test)]
 use crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement;
 use crate::audio_engine::constants::{
-    MAX_VOICES, NUM_SAMPLES, PAD_EQ_DB_MAX, PAD_EQ_DB_MIN, PAD_GAIN_MAX, PAD_GAIN_MIN, SPEED_MAX,
-    SPEED_MIN, VOLUME_MAX, VOLUME_MIN,
+    MAX_VOICES, NUM_SAMPLES, PAD_EQ_DB_MAX, PAD_EQ_DB_MIN, PAD_GAIN_DB_DEFAULT, PAD_GAIN_DB_MAX,
+    PAD_GAIN_DB_MIN, PAD_GAIN_SMOOTH_MS, SPEED_MAX, SPEED_MIN, VOLUME_MAX, VOLUME_MIN,
 };
 use crate::audio_engine::dsp::{DspNodeSlot, DspParameterId, DspParameterSlot, PerPadDspChain};
 use crate::audio_engine::stretch_processor::DEFAULT_BLOCK_SAMPLES;
@@ -39,6 +39,69 @@ fn pad_eq_db_to_normalized(db: f32) -> f32 {
     }
 
     0.5 + 0.5 * (db / PAD_EQ_DB_MAX).clamp(0.0, 1.0)
+}
+
+fn gain_db_to_linear(gain_db: f32) -> f32 {
+    10.0_f32.powf(gain_db.clamp(PAD_GAIN_DB_MIN, PAD_GAIN_DB_MAX) / 20.0)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SmoothedGain {
+    current: f32,
+    target: f32,
+    step: f32,
+    frames_remaining: usize,
+}
+
+impl Default for SmoothedGain {
+    fn default() -> Self {
+        let linear = gain_db_to_linear(PAD_GAIN_DB_DEFAULT);
+        Self {
+            current: linear,
+            target: linear,
+            step: 0.0,
+            frames_remaining: 0,
+        }
+    }
+}
+
+impl SmoothedGain {
+    fn set_target_db(&mut self, gain_db: f32, sample_rate_hz: f32, smooth: bool) {
+        let target = gain_db_to_linear(gain_db);
+        self.target = target;
+
+        if !smooth || sample_rate_hz <= 0.0 {
+            self.current = target;
+            self.step = 0.0;
+            self.frames_remaining = 0;
+            return;
+        }
+
+        let smooth_frames = ((sample_rate_hz * PAD_GAIN_SMOOTH_MS) / 1000.0)
+            .round()
+            .max(1.0) as usize;
+        self.step = (target - self.current) / smooth_frames as f32;
+        self.frames_remaining = smooth_frames;
+    }
+
+    fn next(&mut self) -> f32 {
+        if self.frames_remaining == 0 {
+            return self.target;
+        }
+
+        self.current += self.step;
+        self.frames_remaining -= 1;
+        if self.frames_remaining == 0 {
+            self.current = self.target;
+            self.step = 0.0;
+        }
+        self.current
+    }
+
+    #[cfg(test)]
+    fn current(&self) -> f32 {
+        self.current
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -358,8 +421,11 @@ pub struct RtMixer {
     /// Per-pad musical phase anchor derived from bounded beatgrid/downbeat metadata.
     pad_phase_anchor_frame: [usize; NUM_SAMPLES],
 
-    /// Per-pad gain scalar (linear, 0.0..=1.0).
-    pad_gain: [f32; NUM_SAMPLES],
+    /// Per-pad Gain/Trim target in dB.
+    pad_gain_db: [f32; NUM_SAMPLES],
+
+    /// Per-pad smoothed linear Gain/Trim multiplier used by the render path.
+    pad_gain_smoothers: [SmoothedGain; NUM_SAMPLES],
 
     /// Per-pad DSP/FX chain with the live DJ isolator EQ node.
     pad_dsp_chains: Box<[PerPadDspChain]>,
@@ -423,7 +489,8 @@ impl RtMixer {
             master_bpm: None,
             pad_bpm: std::array::from_fn(|_| None),
             pad_phase_anchor_frame: std::array::from_fn(|_| 0),
-            pad_gain: std::array::from_fn(|_| 1.0),
+            pad_gain_db: std::array::from_fn(|_| PAD_GAIN_DB_DEFAULT),
+            pad_gain_smoothers: std::array::from_fn(|_| SmoothedGain::default()),
             pad_dsp_chains: (0..NUM_SAMPLES)
                 .map(|id| PerPadDspChain::new(id, sample_rate_hz, DEFAULT_BLOCK_SAMPLES, channels))
                 .collect::<Vec<_>>()
@@ -902,16 +969,18 @@ impl RtMixer {
         Some(FrameRange { start, end })
     }
 
-    pub fn set_pad_gain(&mut self, id: usize, gain: f32) {
+    pub fn set_pad_gain(&mut self, id: usize, gain_db: f32) {
         if id >= NUM_SAMPLES {
             return;
         }
 
-        if !gain.is_finite() || !(PAD_GAIN_MIN..=PAD_GAIN_MAX).contains(&gain) {
+        if !gain_db.is_finite() || !(PAD_GAIN_DB_MIN..=PAD_GAIN_DB_MAX).contains(&gain_db) {
             return;
         }
 
-        self.pad_gain[id] = gain;
+        self.pad_gain_db[id] = gain_db;
+        let smooth = self.sample_is_active(id);
+        self.pad_gain_smoothers[id].set_target_db(gain_db, self.sample_rate_hz, smooth);
     }
 
     pub fn set_pad_eq(&mut self, id: usize, low_db: f32, mid_db: f32, high_db: f32) {
@@ -1258,7 +1327,7 @@ impl RtMixer {
         let key_lock_settings = self.key_lock_settings;
         let master_bpm = self.master_bpm;
         let pad_bpm = &self.pad_bpm;
-        let pad_gain = &self.pad_gain;
+        let pad_gain_smoothers = &mut self.pad_gain_smoothers;
         let pad_dsp_chains = &mut self.pad_dsp_chains;
         let pad_loop_start_frame = &self.pad_loop_start_frame;
         let pad_loop_end_frame = &self.pad_loop_end_frame;
@@ -1382,20 +1451,22 @@ impl RtMixer {
                     key_lock_settings,
                 );
 
-                let pad_gain = pad_gain[voice.sample_id];
                 let pad_dsp_chain = &mut pad_dsp_chains[voice.sample_id];
+                let pad_gain_smoother = &mut pad_gain_smoothers[voice.sample_id];
 
                 let output_buffers = voice.stretch.output_buffers();
                 for frame in 0..frames {
                     let out_base = frame * channels;
+                    let trim_gain = pad_gain_smoother.next();
                     pad_dsp_chain.begin_frame();
                     for (channel, buffer) in output_buffers.iter().enumerate().take(channels) {
-                        let sample = buffer[frame];
+                        let sample = buffer[frame] * trim_gain;
                         let sample = pad_dsp_chain.process_sample(channel, sample);
-                        let mixed = sample * voice.volume * volume * pad_gain;
+                        let contribution = sample * voice.volume;
+                        let mixed = contribution * volume;
                         output[out_base + channel] += mixed;
 
-                        let peak = mixed.abs();
+                        let peak = contribution.abs();
                         if peak > pad_peaks[voice.sample_id] {
                             pad_peaks[voice.sample_id] = peak;
                         }
@@ -2717,14 +2788,56 @@ mod tests {
         let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
         let sample = create_test_sample(1, 5, 0.8);
         mixer.load_sample(0, sample);
-        mixer.set_pad_gain(0, 0.25);
+        mixer.set_pad_gain(0, -6.0);
         mixer.play_sample(0, 1.0);
 
         let mut output = vec![0.0; 20]; // 20 frames of mono
         mixer.render(&mut output, &mut pad_peaks);
 
-        let expected = 0.8 * 0.25;
+        let expected = 0.8 * gain_db_to_linear(-6.0);
         assert!(output.iter().all(|&s| (s - expected).abs() < 1e-6));
+    }
+
+    #[test]
+    fn test_pad_gain_db_to_linear_reference_values() {
+        assert!((gain_db_to_linear(0.0) - 1.0).abs() < 1e-6);
+        assert!((gain_db_to_linear(6.0) - 1.995_262_4).abs() < 1e-6);
+        assert!((gain_db_to_linear(-6.0) - 0.501_187_2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_pad_gain_boost_applies_to_render() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.load_sample(0, create_test_sample(1, 5, 0.25));
+        mixer.set_pad_gain(0, 6.0);
+        mixer.play_sample(0, 1.0);
+
+        let mut output = vec![0.0; 20];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        let expected = 0.25 * gain_db_to_linear(6.0);
+        assert!(
+            output
+                .iter()
+                .all(|&sample| (sample - expected).abs() < 1e-6)
+        );
+    }
+
+    #[test]
+    fn test_active_pad_gain_changes_are_smoothed() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 1024, 1.0));
+        assert!(mixer.play_sample(0, 1.0));
+
+        mixer.set_pad_gain(0, 12.0);
+        let target = gain_db_to_linear(12.0);
+        assert!((mixer.pad_gain_smoothers[0].current() - 1.0).abs() < 1e-6);
+        assert!(mixer.pad_gain_smoothers[0].frames_remaining > 0);
+
+        let first_smoothed_value = mixer.pad_gain_smoothers[0].next();
+        assert!(first_smoothed_value > 1.0);
+        assert!(first_smoothed_value < target);
     }
 
     #[test]

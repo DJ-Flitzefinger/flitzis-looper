@@ -2,7 +2,7 @@ import pytest
 
 from flitzis_looper.ui.render.bottom_bar import master_volume_wheel_delta
 from flitzis_looper.ui.render.control_gestures import held_repeat_count, wheel_step_count
-from flitzis_looper.ui.render.sidebar_left import eq_wheel_delta_db
+from flitzis_looper.ui.render.sidebar_left import eq_wheel_delta_db, gain_meter_zone_fractions
 
 
 @pytest.mark.parametrize(
@@ -25,6 +25,14 @@ def test_control_specific_wheel_deltas() -> None:
     assert master_volume_wheel_delta(-2) == pytest.approx(-0.10)
     assert eq_wheel_delta_db(1) == pytest.approx(1.0)
     assert eq_wheel_delta_db(-2) == pytest.approx(-2.0)
+
+
+def test_gain_meter_zone_fractions_are_green_yellow_only() -> None:
+    green, yellow = gain_meter_zone_fractions()
+
+    assert green == pytest.approx(0.8)
+    assert yellow == pytest.approx(0.2)
+    assert green + yellow == pytest.approx(1.0)
 
 
 def test_held_repeat_count_waits_for_delay() -> None:
