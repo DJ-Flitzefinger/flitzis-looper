@@ -56,9 +56,9 @@ def test_learn_saves_midi_mapping_and_refreshes_rust_snapshot(
     assert len(data.mappings) == 1
     assert data.mappings[0].input.key == "midi:note:1:60"
     assert data.mappings[0].action.key == "pad.trigger:0"
-    audio_engine_mock.set_input_mapping_snapshot.assert_called_with(
-        [("midi:note:1:60", "pad.trigger:0")]
-    )
+    audio_engine_mock.set_input_mapping_snapshot.assert_called_with([
+        ("midi:note:1:60", "pad.trigger:0")
+    ])
     assert controller.session.input_learn_active is False
 
 
@@ -67,9 +67,10 @@ def test_learn_saves_tap_bpm_mapping(controller: AppController) -> None:
     controller.input_mapping.set_enabled(enabled=True)
 
     ctx.input.toggle_learn()
-    controller.input_mapping._handle_rust_input_event(
-        {"source": "midi", "binding_key": "midi:note:1:60"}
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:note:1:60",
+    })
 
     ctx.audio.pads.tap_bpm(4)
 
@@ -84,9 +85,11 @@ def test_learn_saves_master_volume_mapping(controller: AppController) -> None:
     controller.input_mapping.set_enabled(enabled=True)
 
     ctx.input.toggle_learn()
-    controller.input_mapping._handle_rust_input_event(
-        {"source": "midi", "binding_key": "midi:cc:1:7", "value": 64}
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:7",
+        "value": 64,
+    })
 
     ctx.audio.global_.set_volume(0.37)
 
@@ -101,9 +104,11 @@ def test_learn_saves_nrpn_master_volume_mapping(controller: AppController) -> No
     controller.input_mapping.set_enabled(enabled=True)
 
     ctx.input.toggle_learn()
-    controller.input_mapping._handle_rust_input_event(
-        {"source": "midi", "binding_key": "midi:nrpn:1:0", "value": 65}
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:nrpn:1:0",
+        "value": 65,
+    })
 
     ctx.audio.global_.set_volume(0.37)
 
@@ -120,9 +125,11 @@ def test_learn_saves_midi_note_master_volume_mapping_as_set_value(
     controller.input_mapping.set_enabled(enabled=True)
 
     ctx.input.toggle_learn()
-    controller.input_mapping._handle_rust_input_event(
-        {"source": "midi", "binding_key": "midi:note:1:60", "value": 100}
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:note:1:60",
+        "value": 100,
+    })
 
     ctx.audio.global_.set_volume(0.37)
 
@@ -137,9 +144,11 @@ def test_learn_saves_pad_eq_band_mapping(controller: AppController) -> None:
     controller.input_mapping.set_enabled(enabled=True)
 
     ctx.input.toggle_learn()
-    controller.input_mapping._handle_rust_input_event(
-        {"source": "midi", "binding_key": "midi:cc:1:74", "value": 10}
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:74",
+        "value": 10,
+    })
 
     ctx.audio.pads.set_pad_eq_band(2, "mid", -3.5)
 
@@ -154,9 +163,11 @@ def test_learn_saves_pad_gain_mapping(controller: AppController) -> None:
     controller.input_mapping.set_enabled(enabled=True)
 
     ctx.input.toggle_learn()
-    controller.input_mapping._handle_rust_input_event(
-        {"source": "midi", "binding_key": "midi:cc:1:73", "value": 10}
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:73",
+        "value": 10,
+    })
 
     ctx.audio.pads.set_pad_gain(2, 0.37)
 
@@ -173,9 +184,11 @@ def test_learn_saves_midi_note_pad_gain_mapping_as_set_value(
     controller.input_mapping.set_enabled(enabled=True)
 
     ctx.input.toggle_learn()
-    controller.input_mapping._handle_rust_input_event(
-        {"source": "midi", "binding_key": "midi:note:1:61", "value": 100}
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:note:1:61",
+        "value": 100,
+    })
 
     ctx.audio.pads.set_pad_gain(2, 0.37)
 
@@ -190,9 +203,11 @@ def test_learn_saves_global_speed_mapping(controller: AppController) -> None:
     controller.input_mapping.set_enabled(enabled=True)
 
     ctx.input.toggle_learn()
-    controller.input_mapping._handle_rust_input_event(
-        {"source": "midi", "binding_key": "midi:cc:1:72", "value": 10}
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:72",
+        "value": 10,
+    })
 
     ctx.audio.global_.set_speed(1.23)
 
@@ -209,9 +224,11 @@ def test_learn_saves_midi_note_global_speed_mapping_as_set_value(
     controller.input_mapping.set_enabled(enabled=True)
 
     ctx.input.toggle_learn()
-    controller.input_mapping._handle_rust_input_event(
-        {"source": "midi", "binding_key": "midi:note:1:62", "value": 100}
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:note:1:62",
+        "value": 100,
+    })
 
     ctx.audio.global_.set_speed(1.23)
 
@@ -232,9 +249,10 @@ def test_learn_input_then_l_deletes_existing_midi_mapping(
     )
 
     controller.input_mapping.toggle_learn()
-    controller.input_mapping._handle_rust_input_event(
-        {"source": "midi", "binding_key": "midi:cc:1:7"}
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:7",
+    })
     controller.input_mapping.toggle_learn()
 
     assert load_midi_mapping_file().mappings == []
@@ -415,37 +433,31 @@ def test_midi_cc_relative_master_volume_uses_directional_steps(
         master_volume_delta_action(),
     )
 
-    controller.input_mapping._handle_rust_input_event(
-        {
-            "source": "midi",
-            "binding_key": "midi:cc:1:7",
-            "value": 64,
-            "action_key": "global.volume.delta",
-            "direct": False,
-        }
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:7",
+        "value": 64,
+        "action_key": "global.volume.delta",
+        "direct": False,
+    })
     audio_engine_mock.set_volume.assert_not_called()
 
-    controller.input_mapping._handle_rust_input_event(
-        {
-            "source": "midi",
-            "binding_key": "midi:cc:1:7",
-            "value": 65,
-            "action_key": "global.volume.delta",
-            "direct": False,
-        }
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:7",
+        "value": 65,
+        "action_key": "global.volume.delta",
+        "direct": False,
+    })
     assert controller.project.volume == pytest.approx(0.51)
 
-    controller.input_mapping._handle_rust_input_event(
-        {
-            "source": "midi",
-            "binding_key": "midi:cc:1:7",
-            "value": 63,
-            "action_key": "global.volume.delta",
-            "direct": False,
-        }
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:7",
+        "value": 63,
+        "action_key": "global.volume.delta",
+        "direct": False,
+    })
     assert controller.project.volume == pytest.approx(0.5)
 
 
@@ -469,15 +481,13 @@ def test_midi_cc_relative_master_volume_supports_endless_encoder_values(
         (1, 0.51),
         (1, 0.52),
     ):
-        controller.input_mapping._handle_rust_input_event(
-            {
-                "source": "midi",
-                "binding_key": "midi:cc:1:7",
-                "value": value,
-                "action_key": "global.volume.delta",
-                "direct": False,
-            }
-        )
+        controller.input_mapping._handle_rust_input_event({
+            "source": "midi",
+            "binding_key": "midi:cc:1:7",
+            "value": value,
+            "action_key": "global.volume.delta",
+            "direct": False,
+        })
         assert controller.project.volume == pytest.approx(expected)
 
 
@@ -499,15 +509,13 @@ def test_midi_cc_relative_master_volume_supports_inc_dec_encoder_values(
         (63, 0.51),
         (63, 0.5),
     ):
-        controller.input_mapping._handle_rust_input_event(
-            {
-                "source": "midi",
-                "binding_key": "midi:cc:1:7",
-                "value": value,
-                "action_key": "global.volume.delta",
-                "direct": False,
-            }
-        )
+        controller.input_mapping._handle_rust_input_event({
+            "source": "midi",
+            "binding_key": "midi:cc:1:7",
+            "value": value,
+            "action_key": "global.volume.delta",
+            "direct": False,
+        })
         assert controller.project.volume == pytest.approx(expected)
 
 
@@ -519,25 +527,21 @@ def test_midi_cc_relative_master_volume_uses_learned_inc_dec_code(
     controller.project.volume = 0.5
 
     ctx.input.toggle_learn()
-    controller.input_mapping._handle_rust_input_event(
-        {
-            "source": "midi",
-            "binding_key": "midi:cc:1:7",
-            "value": 65,
-            "direct": False,
-        }
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:7",
+        "value": 65,
+        "direct": False,
+    })
     ctx.audio.global_.set_volume(0.5)
 
-    controller.input_mapping._handle_rust_input_event(
-        {
-            "source": "midi",
-            "binding_key": "midi:cc:1:7",
-            "value": 65,
-            "action_key": "global.volume.delta",
-            "direct": False,
-        }
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:7",
+        "value": 65,
+        "action_key": "global.volume.delta",
+        "direct": False,
+    })
 
     assert controller.project.volume == pytest.approx(0.51)
 
@@ -550,26 +554,22 @@ def test_midi_nrpn_relative_master_volume_uses_learned_inc_dec_code(
     controller.project.volume = 0.5
 
     ctx.input.toggle_learn()
-    controller.input_mapping._handle_rust_input_event(
-        {
-            "source": "midi",
-            "binding_key": "midi:nrpn:1:0",
-            "value": 65,
-            "direct": False,
-        }
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:nrpn:1:0",
+        "value": 65,
+        "direct": False,
+    })
     ctx.audio.global_.set_volume(0.5)
 
     for value, expected in ((65, 0.51), (65, 0.52), (63, 0.51)):
-        controller.input_mapping._handle_rust_input_event(
-            {
-                "source": "midi",
-                "binding_key": "midi:nrpn:1:0",
-                "value": value,
-                "action_key": "global.volume.delta",
-                "direct": False,
-            }
-        )
+        controller.input_mapping._handle_rust_input_event({
+            "source": "midi",
+            "binding_key": "midi:nrpn:1:0",
+            "value": value,
+            "action_key": "global.volume.delta",
+            "direct": False,
+        })
         assert controller.project.volume == pytest.approx(expected)
 
 
@@ -584,38 +584,32 @@ def test_midi_cc_relative_pad_eq_uses_directional_steps(
         pad_eq_delta_action(2, "mid"),
     )
 
-    controller.input_mapping._handle_rust_input_event(
-        {
-            "source": "midi",
-            "binding_key": "midi:cc:1:74",
-            "value": 10,
-            "action_key": "pad.eq.delta:2:mid",
-            "direct": False,
-        }
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:74",
+        "value": 10,
+        "action_key": "pad.eq.delta:2:mid",
+        "direct": False,
+    })
     audio_engine_mock.set_pad_eq.assert_not_called()
 
-    controller.input_mapping._handle_rust_input_event(
-        {
-            "source": "midi",
-            "binding_key": "midi:cc:1:74",
-            "value": 11,
-            "action_key": "pad.eq.delta:2:mid",
-            "direct": False,
-        }
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:74",
+        "value": 11,
+        "action_key": "pad.eq.delta:2:mid",
+        "direct": False,
+    })
     audio_engine_mock.set_pad_eq.assert_called_once_with(2, 0.0, 0.5, 0.0)
     assert controller.project.pad_eq_mid_db[2] == pytest.approx(0.5)
 
-    controller.input_mapping._handle_rust_input_event(
-        {
-            "source": "midi",
-            "binding_key": "midi:cc:1:74",
-            "value": 9,
-            "action_key": "pad.eq.delta:2:mid",
-            "direct": False,
-        }
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:74",
+        "value": 9,
+        "action_key": "pad.eq.delta:2:mid",
+        "direct": False,
+    })
     assert controller.project.pad_eq_mid_db[2] == pytest.approx(0.0)
 
 
@@ -631,37 +625,31 @@ def test_midi_cc_relative_pad_gain_uses_directional_steps(
         pad_gain_delta_action(2),
     )
 
-    controller.input_mapping._handle_rust_input_event(
-        {
-            "source": "midi",
-            "binding_key": "midi:cc:1:73",
-            "value": 64,
-            "action_key": "pad.gain.delta:2",
-            "direct": False,
-        }
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:73",
+        "value": 64,
+        "action_key": "pad.gain.delta:2",
+        "direct": False,
+    })
     audio_engine_mock.set_pad_gain.assert_not_called()
 
-    controller.input_mapping._handle_rust_input_event(
-        {
-            "source": "midi",
-            "binding_key": "midi:cc:1:73",
-            "value": 65,
-            "action_key": "pad.gain.delta:2",
-            "direct": False,
-        }
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:73",
+        "value": 65,
+        "action_key": "pad.gain.delta:2",
+        "direct": False,
+    })
     assert controller.project.pad_gain[2] == pytest.approx(0.51)
 
-    controller.input_mapping._handle_rust_input_event(
-        {
-            "source": "midi",
-            "binding_key": "midi:cc:1:73",
-            "value": 63,
-            "action_key": "pad.gain.delta:2",
-            "direct": False,
-        }
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:73",
+        "value": 63,
+        "action_key": "pad.gain.delta:2",
+        "direct": False,
+    })
     assert controller.project.pad_gain[2] == pytest.approx(0.5)
 
 
@@ -677,37 +665,31 @@ def test_midi_cc_relative_global_speed_uses_directional_steps(
         global_speed_delta_action(),
     )
 
-    controller.input_mapping._handle_rust_input_event(
-        {
-            "source": "midi",
-            "binding_key": "midi:cc:1:72",
-            "value": 64,
-            "action_key": "global.speed.delta",
-            "direct": False,
-        }
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:72",
+        "value": 64,
+        "action_key": "global.speed.delta",
+        "direct": False,
+    })
     audio_engine_mock.set_speed.assert_not_called()
 
-    controller.input_mapping._handle_rust_input_event(
-        {
-            "source": "midi",
-            "binding_key": "midi:cc:1:72",
-            "value": 65,
-            "action_key": "global.speed.delta",
-            "direct": False,
-        }
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:72",
+        "value": 65,
+        "action_key": "global.speed.delta",
+        "direct": False,
+    })
     assert controller.project.speed == pytest.approx(1.01)
 
-    controller.input_mapping._handle_rust_input_event(
-        {
-            "source": "midi",
-            "binding_key": "midi:cc:1:72",
-            "value": 63,
-            "action_key": "global.speed.delta",
-            "direct": False,
-        }
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:72",
+        "value": 63,
+        "action_key": "global.speed.delta",
+        "direct": False,
+    })
     assert controller.project.speed == pytest.approx(1.0)
 
 
@@ -724,26 +706,22 @@ def test_midi_cc_relative_global_speed_uses_bpm_steps_when_reference_exists(
         global_speed_delta_action(),
     )
 
-    controller.input_mapping._handle_rust_input_event(
-        {
-            "source": "midi",
-            "binding_key": "midi:cc:1:72",
-            "value": 64,
-            "action_key": "global.speed.delta",
-            "direct": False,
-        }
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:72",
+        "value": 64,
+        "action_key": "global.speed.delta",
+        "direct": False,
+    })
     audio_engine_mock.set_speed.assert_not_called()
 
-    controller.input_mapping._handle_rust_input_event(
-        {
-            "source": "midi",
-            "binding_key": "midi:cc:1:72",
-            "value": 65,
-            "action_key": "global.speed.delta",
-            "direct": False,
-        }
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:72",
+        "value": 65,
+        "action_key": "global.speed.delta",
+        "direct": False,
+    })
     assert controller.project.speed == pytest.approx(120.1 / 120.0)
 
 
@@ -776,15 +754,13 @@ def test_non_direct_rust_midi_event_executes_python_action(
     controller.input_mapping.set_enabled(enabled=True)
     controller.project.selected_bank = 0
 
-    controller.input_mapping._handle_rust_input_event(
-        {
-            "source": "midi",
-            "binding_key": "midi:cc:1:7",
-            "action_key": "ui.select_bank:2",
-            "direct": False,
-            "dispatched": True,
-        }
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:7",
+        "action_key": "ui.select_bank:2",
+        "direct": False,
+        "dispatched": True,
+    })
 
     assert controller.project.selected_bank == 2
 
@@ -794,15 +770,13 @@ def test_rust_midi_event_is_ignored_when_mapping_disabled(
 ) -> None:
     controller.project.selected_bank = 0
 
-    controller.input_mapping._handle_rust_input_event(
-        {
-            "source": "midi",
-            "binding_key": "midi:cc:1:7",
-            "action_key": "ui.select_bank:2",
-            "direct": False,
-            "dispatched": True,
-        }
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:7",
+        "action_key": "ui.select_bank:2",
+        "direct": False,
+        "dispatched": True,
+    })
 
     assert controller.project.selected_bank == 0
 
@@ -814,15 +788,13 @@ def test_direct_rust_midi_event_is_not_executed_twice(
     controller.input_mapping.set_enabled(enabled=True)
     controller.project.sample_paths[0] = "samples/foo.wav"
 
-    controller.input_mapping._handle_rust_input_event(
-        {
-            "source": "midi",
-            "binding_key": "midi:note:1:60",
-            "action_key": "pad.trigger:0",
-            "direct": True,
-            "dispatched": True,
-        }
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:note:1:60",
+        "action_key": "pad.trigger:0",
+        "direct": True,
+        "dispatched": True,
+    })
 
     audio_engine_mock.play_sample_exclusive.assert_not_called()
 
@@ -834,16 +806,14 @@ def test_future_dsp_midi_event_does_not_call_audio_without_explicit_handler(
     controller.input_mapping.set_enabled(enabled=True)
     audio_engine_mock.reset_mock()
 
-    controller.input_mapping._handle_rust_input_event(
-        {
-            "source": "midi",
-            "binding_key": "midi:cc:1:74",
-            "value": 65,
-            "action_key": "dsp.pad.parameter.delta:0:filter.cutoff",
-            "direct": False,
-            "dispatched": True,
-        }
-    )
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:74",
+        "value": 65,
+        "action_key": "dsp.pad.parameter.delta:0:filter.cutoff",
+        "direct": False,
+        "dispatched": True,
+    })
 
     assert audio_engine_mock.method_calls == []
 

@@ -441,9 +441,7 @@ class TestAudioActions:  # noqa: PLR0904
         assert controller.project.trigger_quantization_enabled is True
         audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_64")
 
-    def test_set_stem_mix_mode(
-        self, controller: AppController, audio_engine_mock: Mock
-    ) -> None:
+    def test_set_stem_mix_mode(self, controller: AppController, audio_engine_mock: Mock) -> None:
         audio_actions = AudioActions(controller)
         controller.project.pad_stem_mix_mode[0] = "all_stems"
 
@@ -459,9 +457,7 @@ class TestAudioActions:  # noqa: PLR0904
         set_stem_enabled_mask = Mock(return_value=True)
         monkeypatch.setattr(controller.stems, "set_stem_enabled_mask", set_stem_enabled_mask)
 
-        audio_actions.stems.set_stem_enabled_mask(
-            0, STEM_INSTRUMENTAL_PRESET_MASK, "instrumental"
-        )
+        audio_actions.stems.set_stem_enabled_mask(0, STEM_INSTRUMENTAL_PRESET_MASK, "instrumental")
 
         set_stem_enabled_mask.assert_called_once_with(
             0, STEM_INSTRUMENTAL_PRESET_MASK, "instrumental"
@@ -478,9 +474,7 @@ class TestAudioActions:  # noqa: PLR0904
 
         generate_stems_async.assert_called_once_with(0)
 
-    def test_delete_stems(
-        self, controller: AppController, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_delete_stems(self, controller: AppController, monkeypatch: pytest.MonkeyPatch) -> None:
         audio_actions = AudioActions(controller)
         delete_stems = Mock(return_value=True)
         monkeypatch.setattr(controller.stems, "delete_stems", delete_stems)

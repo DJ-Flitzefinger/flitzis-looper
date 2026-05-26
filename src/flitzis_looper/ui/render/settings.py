@@ -64,11 +64,7 @@ def settings_surface_child_id(*, settings_open: bool) -> str:
 
 def settings_toggle_button_label(*, settings_open: bool) -> str:
     """Return the icon label for the bottom-right Settings toggle."""
-    icon = (
-        icons_fontawesome_6.ICON_FA_XMARK
-        if settings_open
-        else icons_fontawesome_6.ICON_FA_GEAR
-    )
+    icon = icons_fontawesome_6.ICON_FA_XMARK if settings_open else icons_fontawesome_6.ICON_FA_GEAR
     return f"{icon}##settings_toggle"
 
 

@@ -243,9 +243,7 @@ def test_maybe_flush_not_dirty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert not PROJECT_CONFIG_PATH.exists()
 
 
-def test_flush_if_dirty_writes_immediately(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_flush_if_dirty_writes_immediately(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
 
     project = ProjectState(volume=0.5)

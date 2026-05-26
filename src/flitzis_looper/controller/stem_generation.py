@@ -326,19 +326,13 @@ def _validate_request(request: StemGenerationRequest) -> None:
         msg = "target audio shape must be non-empty"
         raise StemGenerationError(msg)
     if not MIN_DEMUCS_SHIFTS <= request.demucs_shifts <= MAX_DEMUCS_SHIFTS:
-        msg = (
-            f"demucs_shifts must be between {MIN_DEMUCS_SHIFTS} "
-            f"and {MAX_DEMUCS_SHIFTS}"
-        )
+        msg = f"demucs_shifts must be between {MIN_DEMUCS_SHIFTS} and {MAX_DEMUCS_SHIFTS}"
         raise StemGenerationError(msg)
     if not (
         math.isfinite(request.demucs_overlap)
         and MIN_DEMUCS_OVERLAP <= request.demucs_overlap <= MAX_DEMUCS_OVERLAP
     ):
-        msg = (
-            f"demucs_overlap must be between {MIN_DEMUCS_OVERLAP:g} "
-            f"and {MAX_DEMUCS_OVERLAP:g}"
-        )
+        msg = f"demucs_overlap must be between {MIN_DEMUCS_OVERLAP:g} and {MAX_DEMUCS_OVERLAP:g}"
         raise StemGenerationError(msg)
 
 
@@ -433,9 +427,10 @@ def _path_mtime_ns(path: Path) -> int:
 
 
 def _contains_ffmpeg_tools(directory: Path) -> bool:
-    return _tool_executable(directory, "ffmpeg").is_file() and _tool_executable(
-        directory, "ffprobe"
-    ).is_file()
+    return (
+        _tool_executable(directory, "ffmpeg").is_file()
+        and _tool_executable(directory, "ffprobe").is_file()
+    )
 
 
 def _tool_executable(directory: Path, tool: str) -> Path:
@@ -643,9 +638,7 @@ def _write_pcm16_wav(path: Path, shape: AudioShape, samples: list[float]) -> Non
         wav.setnchannels(shape.channels)
         wav.setsampwidth(2)
         wav.setframerate(shape.sample_rate_hz)
-        wav.writeframes(
-            b"".join(struct.pack("<h", _float_to_pcm16(sample)) for sample in samples)
-        )
+        wav.writeframes(b"".join(struct.pack("<h", _float_to_pcm16(sample)) for sample in samples))
 
     temp_path.replace(path)
 

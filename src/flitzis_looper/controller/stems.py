@@ -357,9 +357,7 @@ class StemController(BaseController):  # noqa: PLR0904
             try:
                 self._audio.set_stem_mix_mode(sample_id, "full_mix")
             except (RuntimeError, ValueError) as err:
-                self._session.stem_generation_errors[sample_id] = (
-                    f"Stem mix update failed: {err}"
-                )
+                self._session.stem_generation_errors[sample_id] = f"Stem mix update failed: {err}"
                 return False
 
         try:
@@ -368,9 +366,7 @@ class StemController(BaseController):  # noqa: PLR0904
                 entry.cache_dir if entry is not None else None,
             )
         except OSError as err:
-            self._session.stem_generation_errors[sample_id] = (
-                f"Stem cache delete failed: {err}"
-            )
+            self._session.stem_generation_errors[sample_id] = f"Stem cache delete failed: {err}"
             return False
 
         changed = False
@@ -648,7 +644,7 @@ class StemController(BaseController):  # noqa: PLR0904
 
         try:
             raw_shape = fn(sample_id)
-        except (RuntimeError, TypeError, ValueError):
+        except RuntimeError, TypeError, ValueError:
             return self._duration_based_target_shape(sample_id)
 
         if not isinstance(raw_shape, tuple) or len(raw_shape) != 3:

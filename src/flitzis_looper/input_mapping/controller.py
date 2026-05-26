@@ -120,9 +120,7 @@ class InputMappingController(BaseController):
         if source == "midi":
             midi_binding = MidiBinding.from_key(binding_key)
             self._midi.mappings = [
-                mapping
-                for mapping in self._midi.mappings
-                if mapping.input.key != midi_binding.key
+                mapping for mapping in self._midi.mappings if mapping.input.key != midi_binding.key
             ]
             self._midi.mappings.append(MidiMappingEntry(input=midi_binding, action=action))
             save_midi_mapping_file(self._midi)
@@ -161,9 +159,7 @@ class InputMappingController(BaseController):
         if source == "keyboard":
             before = len(self._keyboard.mappings)
             self._keyboard.mappings = [
-                mapping
-                for mapping in self._keyboard.mappings
-                if mapping.input.key != binding_key
+                mapping for mapping in self._keyboard.mappings if mapping.input.key != binding_key
             ]
             changed = len(self._keyboard.mappings) != before
             if changed:
@@ -413,19 +409,13 @@ class InputMappingController(BaseController):
             self._audio.set_input_mapping_enabled(enabled)
 
     def _toggle_multi_loop(self) -> None:
-        self._app.transport.global_params.set_multi_loop(
-            enabled=not self._app.project.multi_loop
-        )
+        self._app.transport.global_params.set_multi_loop(enabled=not self._app.project.multi_loop)
 
     def _toggle_key_lock(self) -> None:
-        self._app.transport.global_params.set_key_lock(
-            enabled=not self._app.project.key_lock
-        )
+        self._app.transport.global_params.set_key_lock(enabled=not self._app.project.key_lock)
 
     def _toggle_bpm_lock(self) -> None:
-        self._app.transport.global_params.set_bpm_lock(
-            enabled=not self._app.project.bpm_lock
-        )
+        self._app.transport.global_params.set_bpm_lock(enabled=not self._app.project.bpm_lock)
 
     def _toggle_trigger_quantization(self) -> None:
         self._app.transport.global_params.toggle_trigger_quantization()
@@ -672,10 +662,10 @@ def _repeated_relative_midi_cc_direction(value: int) -> int | None:
 
 
 def _is_relative_action_key(action_key: str) -> bool:
-    return (
-        action_key in {"global.volume.delta", "global.speed.delta"}
-        or action_key.startswith(("pad.eq.delta:", "pad.gain.delta:"))
-    )
+    return action_key in {"global.volume.delta", "global.speed.delta"} or action_key.startswith((
+        "pad.eq.delta:",
+        "pad.gain.delta:",
+    ))
 
 
 def _is_relative_midi_binding_key(binding_key: str) -> bool:

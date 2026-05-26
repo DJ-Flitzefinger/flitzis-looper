@@ -692,9 +692,7 @@ class SessionState(BaseModel):
     pad_stem_enabled_mask: list[int] = Field(default_factory=_default_pad_stem_enabled_mask)
     """Session-only per-pad component-stem mask used when all-stems mode is active."""
 
-    pad_stem_last_custom_mask: list[int] = Field(
-        default_factory=_default_pad_stem_last_custom_mask
-    )
+    pad_stem_last_custom_mask: list[int] = Field(default_factory=_default_pad_stem_last_custom_mask)
     """Session-only remembered component mask restored when a stem preset is toggled off."""
 
     pad_stem_mask_display_mode: list[StemMaskDisplayMode] = Field(

@@ -246,9 +246,7 @@ def _speed_controls(ctx: UiContext) -> None:
         )
 
     with style_var(imgui.StyleVar_.item_spacing, (0.0, SPACING / 4)):
-        plus_clicked, plus_steps = _pitch_step_button(
-            "+", avail.x, learn_pending=learn_pending
-        )
+        plus_clicked, plus_steps = _pitch_step_button("+", avail.x, learn_pending=learn_pending)
         if plus_clicked:
             ctx.audio.global_.increase_speed()
         elif plus_steps:
@@ -257,9 +255,7 @@ def _speed_controls(ctx: UiContext) -> None:
         if imgui.button("Reset", (avail.x, 0)):
             ctx.audio.global_.reset_speed()
 
-        minus_clicked, minus_steps = _pitch_step_button(
-            "-", avail.x, learn_pending=learn_pending
-        )
+        minus_clicked, minus_steps = _pitch_step_button("-", avail.x, learn_pending=learn_pending)
         if minus_clicked:
             ctx.audio.global_.decrease_speed()
         elif minus_steps:

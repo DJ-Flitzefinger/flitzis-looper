@@ -43,17 +43,10 @@ class SettingsController(BaseController):
             msg = "demucs shifts must be an integer"
             raise TypeError(msg)
         if not MIN_DEMUCS_SHIFTS <= shifts <= MAX_DEMUCS_SHIFTS:
-            msg = (
-                f"demucs shifts must be between {MIN_DEMUCS_SHIFTS} "
-                f"and {MAX_DEMUCS_SHIFTS}"
-            )
+            msg = f"demucs shifts must be between {MIN_DEMUCS_SHIFTS} and {MAX_DEMUCS_SHIFTS}"
             raise ValueError(msg)
-        if not (
-            math.isfinite(overlap)
-            and MIN_DEMUCS_OVERLAP <= overlap <= MAX_DEMUCS_OVERLAP
-        ):
+        if not (math.isfinite(overlap) and MIN_DEMUCS_OVERLAP <= overlap <= MAX_DEMUCS_OVERLAP):
             msg = (
-                f"demucs overlap must be between {MIN_DEMUCS_OVERLAP:g} "
-                f"and {MAX_DEMUCS_OVERLAP:g}"
+                f"demucs overlap must be between {MIN_DEMUCS_OVERLAP:g} and {MAX_DEMUCS_OVERLAP:g}"
             )
             raise ValueError(msg)

@@ -55,14 +55,12 @@ class KeyboardBinding(BaseModel):
 
     @property
     def key(self) -> str:
-        modifiers = "".join(
-            (
-                "C" if self.ctrl else "-",
-                "A" if self.alt else "-",
-                "S" if self.shift else "-",
-                "M" if self.super else "-",
-            )
-        )
+        modifiers = "".join((
+            "C" if self.ctrl else "-",
+            "A" if self.alt else "-",
+            "S" if self.shift else "-",
+            "M" if self.super else "-",
+        ))
         return f"keyboard:{self.key_name}:{modifiers}"
 
     @classmethod

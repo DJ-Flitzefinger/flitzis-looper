@@ -22,9 +22,7 @@ if TYPE_CHECKING:
     import pytest
 
 
-def test_default_mapping_files_are_created(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_default_mapping_files_are_created(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
 
     keyboard = load_keyboard_mapping_file()

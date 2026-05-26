@@ -102,8 +102,7 @@ def _master_volume(ctx: UiContext) -> None:
                     ctx.audio.global_.set_volume(1.0)
                 elif wheel_steps := hovered_wheel_steps():
                     ctx.audio.global_.set_volume(
-                        float(ctx.state.project.volume)
-                        + _MASTER_VOLUME_WHEEL_STEP * wheel_steps
+                        float(ctx.state.project.volume) + _MASTER_VOLUME_WHEEL_STEP * wheel_steps
                     )
 
 
@@ -269,9 +268,7 @@ def _stem_mask_controls(ctx: UiContext, center_y: float) -> None:
                 last_custom_mask,
                 "custom",
             )
-            spacing = (
-                STEM_BUTTON_GAP if idx < len(STEM_COMPONENT_BUTTONS) - 1 else STEM_PRESET_GAP
-            )
+            spacing = STEM_BUTTON_GAP if idx < len(STEM_COMPONENT_BUTTONS) - 1 else STEM_PRESET_GAP
             imgui.same_line(spacing=spacing)
 
         for idx, (label, mask, target_display_mode) in enumerate(STEM_PRESET_BUTTONS):

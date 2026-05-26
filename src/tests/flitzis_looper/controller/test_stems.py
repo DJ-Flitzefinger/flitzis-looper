@@ -440,9 +440,7 @@ def test_set_stem_mix_mode_all_stems_publishes_current_available_cache(
     assert updated is True
     assert controller.project.pad_stem_mix_mode[0] == "all_stems"
     audio_engine_mock.set_stem_mix_mode.assert_called_once_with(0, "all_stems", version)
-    audio_engine_mock.set_stem_enabled_mask.assert_called_once_with(
-        0, STEM_COMPONENT_MASK, version
-    )
+    audio_engine_mock.set_stem_enabled_mask.assert_called_once_with(0, STEM_COMPONENT_MASK, version)
 
 
 def test_stem_mask_controls_require_available_all_stems(

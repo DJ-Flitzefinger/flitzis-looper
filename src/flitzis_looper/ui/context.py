@@ -383,9 +383,7 @@ class StemAudioActions:
         display_mode: StemMaskDisplayMode = "custom",
     ) -> None:
         def execute() -> None:
-            self._controller.stems.set_stem_enabled_mask(
-                pad_id, enabled_stem_mask, display_mode
-            )
+            self._controller.stems.set_stem_enabled_mask(pad_id, enabled_stem_mask, display_mode)
 
         self._controller.input_mapping.perform_learnable_action(
             LooperAction.stem_mask(pad_id, enabled_stem_mask, display_mode),

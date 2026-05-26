@@ -184,9 +184,7 @@ def test_tap_bpm_very_slow_tempo_resets_instead_of_computing(
     assert controller.project.manual_bpm[sample_id] is None
 
 
-def test_recompute_master_bpm_unlocked(
-    controller: AppController, audio_engine_mock: Mock
-) -> None:
+def test_recompute_master_bpm_unlocked(controller: AppController, audio_engine_mock: Mock) -> None:
     controller.project.bpm_lock = False
     controller.session.master_bpm = 120.0
 

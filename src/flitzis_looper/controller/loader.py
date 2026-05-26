@@ -30,8 +30,7 @@ class LoaderController(BaseController):
         on_pad_bpm_changed: Callable[[int], None],
         on_project_changed: Callable[[], None] | None = None,
         on_stem_generation_started: Callable[[int], None] | None = None,
-        on_stem_generation_progress: Callable[[int, float | None, str | None], None]
-        | None = None,
+        on_stem_generation_progress: Callable[[int, float | None, str | None], None] | None = None,
         on_stem_generation_success: Callable[[int], None] | None = None,
         on_stem_generation_error: Callable[[int, str], None] | None = None,
         on_stems_deleted: Callable[[int], bool] | None = None,

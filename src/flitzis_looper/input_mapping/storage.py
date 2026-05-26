@@ -98,7 +98,7 @@ def _load_mapping_file[T: BaseModel](path: Path, default: T) -> T:
     try:
         parsed_json = json.loads(raw)
         return type(default).model_validate(parsed_json)
-    except (json.JSONDecodeError, ValidationError, OSError, ValueError):
+    except json.JSONDecodeError, ValidationError, OSError, ValueError:
         _backup_invalid_file(path)
         _atomic_write_json(path, default.model_dump(mode="json"))
         return default
