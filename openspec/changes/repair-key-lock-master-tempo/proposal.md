@@ -45,7 +45,6 @@ Performers expect DJ-style behavior:
 
 - Affected specs: `time-stretch-pitch-shift`, `play-samples`, `ring-buffer-messaging`,
   `performance-ui`.
-- Affected docs: `docs/audio-engine.md`, `docs/message-passing.md`,
-  `docs/time-stretch-and-pitch-shift.md`.
+- Affected docs: `docs/architecture.md`, `docs/key-lock-backend.md`.
 - Affected code: Rust audio-engine mixer, per-voice DSP wrapper, Python Settings/project state,
   and focused Rust/Python tests.

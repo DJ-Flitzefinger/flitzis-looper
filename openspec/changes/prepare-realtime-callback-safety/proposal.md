@@ -29,8 +29,7 @@ These are safety and preparation changes, not user-facing EQ or FX work.
 ## Impact
 
 - Affected specs: `ring-buffer-messaging`, `play-samples`, `load-audio-files`.
-- Affected docs: `docs/audio-performance-architecture-audit.md`, `docs/audio-engine.md`,
-  `docs/message-passing.md`.
+- Affected docs: `docs/architecture.md`.
 - Affected code: Rust audio stream callback, mixer/voice buffer lifetime paths, focused Rust
   tests.
 

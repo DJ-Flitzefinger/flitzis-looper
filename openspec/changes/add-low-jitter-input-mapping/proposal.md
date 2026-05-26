@@ -26,8 +26,7 @@ Rust audio scheduler.
 ## Impact
 - Affected specs: `input-mapping` (new), `performance-ui`, `project-persistence`,
   `ring-buffer-messaging`.
-- Affected docs: `docs/audio-engine.md`, `docs/message-passing.md`,
-  `docs/todos-legacy-migration.md`.
+- Affected docs: `docs/architecture.md`, `docs/development.md`.
 - Affected code: Rust audio-engine input/control modules, Python input-mapping controller,
   UI context actions, Settings/bottom-bar rendering, persistence models, and tests.
 

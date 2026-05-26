@@ -33,8 +33,7 @@ the first-started, oldest active, or currently playing pad does not become the c
 ## Impact
 - Affected specs: `transport-timeline` (new), `play-samples`, `multi-loop-mode`,
   `ring-buffer-messaging`, `audio-analysis`, `performance-ui`.
-- Affected docs: `docs/audio-engine.md`, `docs/message-passing.md`,
-  `docs/todos-legacy-migration.md`.
+- Affected docs: `docs/architecture.md`.
 - Later affected code: Rust audio stream, mixer, message enum, new transport/scheduler
   modules, and Python transport/UI controls when quantization is exposed.
 

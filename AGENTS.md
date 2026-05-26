@@ -83,11 +83,21 @@
 Depending on the current task, consider reading specific documentation.
 
 ### Project
+- Documentation map: `docs/README.md`
+- Architecture: `docs/architecture.md`
+- Development workflow and package layout: `docs/development.md`
 - User Interface: `docs/ui-toolkit.md`
-- Audio Engine: `docs/audio-engine.md`
-- Message Passing (between AudioEngine thread and core): `docs/message-passing.md`
-- Professional audio/performance architecture audit:
-  `docs/audio-performance-architecture-audit.md`
+- Stem generation setup: `docs/stem-generation-setup.md`
+- Key Lock backend: `docs/key-lock-backend.md`
+- Project TODOs: `docs/todos.md`
+
+### TODO list policy
+- `docs/todos.md` is the maintained project TODO list for explicit user-requested notes.
+- Add items when the user asks to record a TODO.
+- Work from it only when the user asks to choose from, review, or complete a TODO item.
+- Check off or remove completed items when that TODO is implemented or intentionally abandoned.
+- Do not use TODO items as a substitute for OpenSpec. User-visible behavior changes still need
+  specs, tests, and validation.
 
 ### Python
 Fetch documentation directly from the web.
@@ -110,11 +120,11 @@ touched". The correct rule is:
   allocation, or long-running work.
 - Internal Rust DSP modules are the preferred future direction. Do not add VST/LV2/CLAP/AU
   plugin hosting unless a future explicit OpenSpec-backed request changes that product decision.
-- Do not implement a new DSP/FX module before consulting
-  `docs/audio-performance-architecture-audit.md` and the current handoff context. The realtime
-  safety, command/parameter, state-ownership, clock, DSP foundation, and per-pad isolator
-  preparation stages have been completed; the next post-isolator target must still be chosen
-  explicitly and covered by a focused OpenSpec change before production code changes.
+- Do not implement a new DSP/FX module before consulting `docs/architecture.md`,
+  `docs/README.md`, and the relevant OpenSpec specs/changes. The realtime safety,
+  command/parameter, state-ownership, clock, DSP foundation, and per-pad isolator preparation
+  stages have been completed; the next post-isolator target must still be chosen explicitly and
+  covered by a focused OpenSpec change before production code changes.
 - Keep architecture and DSP work split into small OpenSpec-friendly changes. Do not select a new
   FX module, deck/group/master chain, live loop-edit crossfade, plugin host, or broad rewrite
   automatically.

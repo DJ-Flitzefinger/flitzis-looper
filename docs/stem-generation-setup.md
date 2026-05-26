@@ -1,12 +1,13 @@
 # Stem Generation Setup
 
-Flitzis Looper generates stems offline with Demucs. The Rust audio callback never runs Demucs,
-FFmpeg, disk I/O, model loading, Python/GIL access, or neural inference.
+Flitzis Looper generates stems offline with Demucs. The Rust audio callback
+never runs Demucs, FFmpeg, disk I/O, model loading, Python/GIL access, or neural
+inference.
 
 ## What `uv sync` Installs
 
-The Python runtime dependencies for stem generation are declared in `pyproject.toml` and locked in
-`uv.lock`:
+The Python runtime dependencies for stem generation are declared in
+`pyproject.toml` and locked in `uv.lock`:
 
 - `demucs`
 - `torch`
@@ -22,7 +23,8 @@ $env:UV_NO_CACHE='1'; uv --no-cache run maturin develop
 
 ## Install FFmpeg
 
-Demucs needs both `ffmpeg.exe` and `ffprobe.exe`. On Windows, the recommended install is:
+Demucs needs both `ffmpeg.exe` and `ffprobe.exe`. On Windows, the recommended
+install is:
 
 ```powershell
 winget install --id Gyan.FFmpeg.Shared -e
@@ -54,8 +56,8 @@ Use your actual FFmpeg `bin` folder. It must contain both `ffmpeg.exe` and `ffpr
 
 ## Install The Demucs Model
 
-The Looper does not download the model from the UI. Install the default model once from the
-project environment:
+The Looper does not download the model from the UI. Install the default model
+once from the project environment:
 
 ```powershell
 uv --no-cache run --no-sync python -c "from demucs.pretrained import get_model; get_model('htdemucs'); print('htdemucs model installed')"
@@ -83,17 +85,17 @@ uv --no-cache run --no-sync python -c "from pathlib import Path; import subproce
 
 ## CUDA
 
-CPU stem generation works and is the default fallback. CUDA is used automatically only when
-PyTorch reports CUDA availability:
+CPU stem generation works and is the default fallback. CUDA is used
+automatically only when PyTorch reports CUDA availability:
 
 ```powershell
 uv --no-cache run --no-sync python -c "import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.is_available()); print(torch.cuda.device_count())"
 ```
 
-If this prints `False`, the current environment is CPU-only. To use an NVIDIA GPU, install a
-CUDA-enabled PyTorch/Torchaudio build that is compatible with the current TorchCodec version. The
-separate CUDA Toolkit is normally not required for packaged PyTorch wheels; a compatible/current
-NVIDIA driver is required.
+If this prints `False`, the current environment is CPU-only. To use an NVIDIA
+GPU, install a CUDA-enabled PyTorch/Torchaudio build that is compatible with the
+current TorchCodec version. The separate CUDA Toolkit is normally not required
+for packaged PyTorch wheels; a compatible/current NVIDIA driver is required.
 
 ## Expected Runtime Errors
 

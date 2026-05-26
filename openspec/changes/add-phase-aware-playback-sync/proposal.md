@@ -28,8 +28,7 @@ avoid adding heavy work to the audio callback.
 ## Impact
 - Affected specs: `transport-timeline`, `play-samples`, `multi-loop-mode`,
   `time-stretch-pitch-shift`, `ring-buffer-messaging`.
-- Affected docs: `docs/audio-engine.md`, `docs/message-passing.md`,
-  `docs/todos-legacy-migration.md`.
+- Affected docs: `docs/architecture.md`.
 - Later affected code: Rust transport, mixer, scheduler/audio-stream execution path,
   message enum, and focused Rust tests. Python/controller changes are limited to keeping
   pad-derived transport phase anchoring explicit.

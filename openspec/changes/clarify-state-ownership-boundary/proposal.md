@@ -24,9 +24,7 @@ controller-owned runtime event polling.
 ## Impact
 
 - Affected specs: `project-persistence`, `ring-buffer-messaging`.
-- Affected docs: `docs/audio-state-ownership.md`,
-  `docs/audio-performance-architecture-audit.md`, `docs/audio-engine.md`,
-  `docs/message-passing.md`.
+- Affected docs: `docs/architecture.md`.
 - Affected code: Python controller/UI context event routing and focused controller/UI tests.
 
 ## Non-Goals

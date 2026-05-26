@@ -1,47 +1,47 @@
 # Rust Audio Engine Module
 
 This crate builds the native `flitzis_looper_audio` Python extension. It owns
-the realtime audio path for Flitzis Looper and exposes the `AudioEngine` PyO3
-class used by the Python controllers.
+the realtime audio path and exposes the PyO3 `AudioEngine` class used by the
+Python application package.
+
+The Python package wrapper lives in:
+
+```text
+src/flitzis_looper_audio/
+```
+
+`maturin develop` builds the platform extension into that wrapper package.
 
 ## Module Structure
 
-The audio engine is organized into small internal modules:
+```text
+rust/src/
+|-- lib.rs                         # PyO3 module export
+|-- messages.rs                    # fixed-size command/parameter/telemetry types
+`-- audio_engine/
+    |-- mod.rs                     # AudioEngine API and background orchestration
+    |-- audio_stream.rs            # CPAL callback and scheduler integration
+    |-- buffer_retirement.rs       # non-audio retirement of large handles
+    |-- constants.rs               # banks, slots, ranges, queue budgets
+    |-- dsp.rs                     # per-pad DSP chain and DJ isolator
+    |-- input_mapping.rs           # MIDI capture outside the audio callback
+    |-- mixer.rs                   # RtMixer, voices, loops, stems, gain, DSP
+    |-- scheduler.rs               # fixed-capacity output-frame scheduler
+    |-- transport.rs               # output-frame timeline and musical phase
+    |-- voice_slot.rs              # voice state and per-voice processing buffers
+    |-- stretch_processor.rs       # bounded Key Lock/master-tempo wrapper
+    |-- sample_loader.rs           # non-realtime decode/cache/resample
+    |-- analysis.rs                # non-realtime BPM/key/beat-grid analysis
+    |-- stem_cache.rs              # prepared-stem validation/loading
+    |-- progress.rs
+    |-- channels.rs
+    `-- errors.rs
+```
 
-- `lib.rs`: PyO3 module export for `flitzis_looper_audio`.
-- `messages.rs`: fixed-size command, parameter, loader, and telemetry message
-  types shared between threads.
-- `audio_engine/mod.rs`: Python-facing `AudioEngine` API, background task
-  orchestration, loader/stem publication helpers, and input runtime lifecycle.
-- `audio_engine/audio_stream.rs`: CPAL stream setup, bounded callback message
-  draining, scheduler integration, and realtime rendering entry point.
-- `audio_engine/buffer_retirement.rs`: bounded non-audio retirement worker for
-  large sample and prepared-stem handles removed by the callback.
-- `audio_engine/constants.rs`: shared limits such as banks, grid size, slot
-  count, voice count, and parameter ranges.
-- `audio_engine/dsp.rs`: fixed-size per-pad DSP chain, typed DSP parameter
-  identities, smoothing helpers, and the current DJ isolator node.
-- `audio_engine/input_mapping.rs`: MIDI capture, timestamping, filtering,
-  in-memory mapping lookup, and command dispatch outside the CPAL callback.
-- `audio_engine/mixer.rs`: `RtMixer`, sample slots, prepared-stem state, voice
-  rendering, loop playback, gain, DSP routing, metering, and playhead state.
-- `audio_engine/scheduler.rs`: fixed-capacity absolute output-frame scheduler.
-- `audio_engine/transport.rs`: output-frame transport timeline and musical
-  grid/phase helpers.
-- `audio_engine/voice_slot.rs`: active voice state, pause/resume state, and
-  per-voice stretch/key-lock buffers.
-- `audio_engine/stretch_processor.rs`: bounded varispeed/master-tempo wrapper.
-- `audio_engine/sample_loader.rs`: non-realtime audio decode, channel mapping,
-  resampling, and project-local source caching.
-- `audio_engine/analysis.rs`: non-realtime BPM/key/beat-grid analysis.
-- `audio_engine/stem_cache.rs`: prepared-stem cache validation and loading.
-- `audio_engine/progress.rs`, `audio_engine/channels.rs`, `audio_engine/errors.rs`:
-  supporting helpers.
+Most modules are `pub(crate)`. `lib.rs`, `audio_engine/mod.rs`, and
+`src/flitzis_looper_audio/__init__.pyi` define the Python-facing boundary.
 
-Most implementation modules are `pub(crate)`; `audio_engine/mod.rs` and
-`lib.rs` define the Python-facing boundary.
-
-## Runtime Signal Path
+## Runtime Path
 
 ```text
 Python controllers
@@ -56,8 +56,9 @@ Python controllers
 -> output buffer
 ```
 
-The callback must not perform disk I/O, JSON access, Python/GIL work, logging,
-plugin loading, neural inference, blocking waits, or unbounded work.
+The callback must not perform disk I/O, JSON access, Python/GIL work, UI work,
+logging, plugin loading, neural inference, blocking waits, unbounded loops, or
+heavy allocation.
 
 ## Development Commands
 
@@ -70,18 +71,20 @@ uv run cargo test --manifest-path rust/Cargo.toml
 uv run cargo fmt --manifest-path rust/Cargo.toml --check
 ```
 
-Use the `uv run cargo ...` form so the PyO3 build uses the project Python
-environment consistently.
+Use `uv run cargo ...` so PyO3 and maturin use the project Python environment.
 
 ## Design Notes
 
-- Rust owns live audio truth: transport, scheduler, mixer, source playheads,
-  prepared-stem selection, realtime parameter application, and DSP state.
-- Python owns UI, project persistence, settings, mapping edit UX, and
-  offline/background orchestration.
-- Discrete commands and high-rate scalar parameters use separate bounded
-  control-to-audio queues. Parameter messages are coalesced by identity in the
-  callback before applying the latest drained value.
+- Rust owns live audio truth: transport, scheduler, mixer, loaded buffers,
+  source playheads, prepared-stem selection, realtime parameter application,
+  and DSP state.
+- Python owns UI, durable project intent, persistence, settings, mapping edit
+  UX, and offline/background orchestration.
+- Ordered commands and high-rate scalar parameters use separate bounded queues.
+- Parameter messages are coalesced by identity in the callback before applying
+  the latest drained value.
 - Sample and prepared-stem handles removed from callback-owned state are retired
   through a bounded non-audio worker to avoid large final drops on the audio
   thread.
+
+See `../docs/architecture.md` for the full architecture reference.

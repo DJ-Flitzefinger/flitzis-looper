@@ -22,8 +22,7 @@ work. It applies only to already accepted full-mix and prepared-stem source sele
 ## Impact
 
 - Affected specs: `loop-source-stem-alignment`.
-- Affected docs: `docs/audio-loop-source-stem-alignment.md`,
-  `docs/audio-performance-architecture-audit.md`, `docs/audio-engine.md`.
+- Affected docs: `docs/architecture.md`.
 - Affected code: `rust/src/audio_engine/mixer.rs` and focused Rust mixer tests.
 
 ## Non-Goals

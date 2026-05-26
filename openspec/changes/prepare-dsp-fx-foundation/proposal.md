@@ -21,9 +21,7 @@ This change defines the OpenSpec-backed foundation task before any visible EQ or
 ## Impact
 
 - Affected specs: `dsp-fx-foundation`.
-- Affected docs: `docs/dsp-fx-foundation-plan.md`,
-  `docs/audio-performance-architecture-audit.md`, `docs/audio-engine.md`,
-  `docs/message-passing.md`.
+- Affected docs: `docs/architecture.md`.
 - Expected later code scope: a narrow Rust DSP module, fixed-size per-pad chain state, smoothing
   helpers, focused Rust tests, and only minimal mixer integration needed to prove neutral
   pass-through.

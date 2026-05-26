@@ -22,8 +22,7 @@ alignment need one explicit model.
 
 ## Impact
 - Affected specs: `loop-source-stem-alignment`.
-- Affected docs: `docs/audio-loop-source-stem-alignment.md`,
-  `docs/audio-performance-architecture-audit.md`, `docs/audio-engine.md`.
+- Affected docs: `docs/architecture.md`.
 - Affected tests: focused Rust mixer tests for live loop edits and stem mask changes preserving
   source-frame position.
 

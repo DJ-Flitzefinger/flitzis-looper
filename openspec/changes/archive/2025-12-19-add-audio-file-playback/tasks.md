@@ -28,6 +28,6 @@
 - [x] 5.3 Add Python smoke test that calls `load_sample` and `play_sample` without raising (skip if no audio device is available)
 
 ## 6. Documentation & Validation
-- [x] 6.1 Update `docs/architecture.md` and `docs/message-passing.md` to reflect the implemented loading/playback flow
+- [x] 6.1 Update maintained architecture docs to reflect the implemented loading/playback flow
 - [x] 6.2 Run Rust checks: `cargo fmt --manifest-path rust/Cargo.toml` and `cargo test --manifest-path rust/Cargo.toml`
 - [x] 6.3 Run Python tests: `uv run pytest`

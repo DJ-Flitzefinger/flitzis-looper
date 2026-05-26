@@ -1,94 +1,165 @@
-# Flitzis Looper
+<h1 align="center">Flitzis Looper</h1>
 
-Flitzis Looper is the Gen3 development branch of DJ Flitzefinger's live
-performance scratch looper. The application combines a Python/Dear ImGui Bundle
-control surface with a Rust/CPAL realtime audio engine exposed to Python through
-PyO3 as `flitzis_looper_audio`.
+<p align="center">
+  A live scratch looper for building custom DJ performance instruments from loops,
+  stems, tempo control, and pad-based mappings.
+</p>
 
-The project is built around a clear runtime split:
+Flitzis Looper is a specialized performance tool for DJs and turntablists. It is
+inspired by the classic scratch looper idea that became popular in DJ culture
+around the late 2000s: load musical loops, trigger them quickly, and practice or
+perform over a reliable rhythmic foundation.
 
-- Python owns UI rendering, project persistence, settings, input-mapping edit
-  UX, sample/stem orchestration, and background jobs.
-- Rust owns the live audio path: output-frame transport, scheduling, mixer
-  state, voice playheads, loop wrapping, playback-rate application, Key Lock,
-  prepared-stem rendering, parameter application, per-pad DSP, metering, and
-  audio-thread telemetry.
+This project extends that idea into a configurable live instrument. Instead of a
+fixed collection of scratch beats, the performer can build a personal looper
+from samples, loop regions, stems, tempo settings, pitch controls, mappings, and
+per-pad mix controls. The goal is not to replace a DAW. The goal is to make a
+focused tool that stays fast during performance and gives direct control over
+the material that matters on stage.
 
-## Current Capabilities
+## Performance Features
 
-- 6 x 6 performance pad grid with 6 banks, backed by 216 engine sample slots.
-- Async sample loading, decoding, resampling, project-local source caching, and
-  automatic BPM/key/beat-grid analysis.
-- Loop playback with editable loop regions, 1/64-note snapping, waveform editor,
-  grid offset, play/pause/stop controls, and playhead display.
-- Multi Loop mode and one-at-a-time exclusive triggering.
-- Rust-owned transport timeline, trigger quantization, fixed-capacity scheduler,
-  and explicit transport phase anchoring from a playing pad.
-- Global speed, BPM Lock, Key Lock, master BPM, per-pad BPM metadata, per-pad
-  gain, per-pad metering, and per-pad 3-band DJ isolator EQ.
-- Offline Demucs stem generation through a Python background backend, project
-  stem cache metadata, prepared-stem validation/publication, full-mix/all-stems
-  mode, and selected-pad stem mask controls.
-- Keyboard and MIDI Learn with a Rust MIDI input layer outside the audio
-  callback, in-memory mapping snapshots, direct dispatch for discrete
-  audio-safe commands, and controller-owned dispatch for parameter actions.
+- **Performance pad grid:** A 6 x 6 grid across 6 banks gives 216 sample slots
+  for loops, one-shots, prepared stems, and performance variations.
+- **Multi Loop:** Multiple pads can play together, so a set can combine drums,
+  bass lines, melodic loops, acapellas, textures, and scratch practice material
+  instead of being limited to one loop at a time.
+- **Exclusive playback:** When a tighter classic looper behavior is needed, pads
+  can also be controlled in a one-at-a-time style.
+- **BPM Lock:** Loops with tempo metadata can follow the master BPM, keeping
+  different source loops aligned while the performer changes tempo.
+- **Pitch:** Speed-based pitch control can push loops up or down in energy and
+  help match the feel of different source material.
+- **Key Lock:** Tempo changes can be applied while reducing unwanted pitch
+  movement, which makes BPM changes more useful for melodic material.
+- **Loop Editor:** Loaded audio can be inspected and adjusted with editable loop
+  regions, beat-grid metadata, downbeat alignment, and waveform-based editing.
+- **Stems:** Offline Demucs stem generation can prepare drums, bass, vocals, and
+  melody layers for supported pads. During performance, prepared stems can be
+  combined, muted, or used as alternate playback material.
+- **Per-pad mix controls:** Gain, metering, and a 3-band DJ isolator make
+  individual pads easier to balance inside a live set.
+- **MIDI and keyboard learn:** Keyboard shortcuts and MIDI controls can be mapped
+  to performance actions, so the looper can be played from controllers instead
+  of only from the mouse.
+- **Project persistence:** Sample assignments, loop settings, metadata, mappings,
+  and performance intent are stored with the project so a prepared setup can be
+  reopened and continued.
 
-## Runtime Signal Path
+Used together, these features turn the looper into a performance surface rather
+than a simple sample player. A performer can prepare a bank as a scratch
+practice tool, another as a stem-based remix setup, another as a tempo-matched
+loop kit, and move between them with keyboard or MIDI control. The important
+musical decisions stay close to the pads: what plays, what stays in sync, what
+gets isolated, and what should react immediately during a set.
 
-```text
-Python UI / controllers / persistence / background workers
--> PyO3 AudioEngine API
--> bounded Rust command ring + bounded Rust parameter ring
--> CPAL audio callback
--> TransportTimeline + TransportScheduler
--> RtMixer voice slots
--> full-mix or prepared-stem source selection
--> source-frame loop wrap and voice playhead
--> playback-rate / BPM Lock / Key Lock processing
--> per-pad Rust DSP chain with DJ isolator node
--> per-pad gain, trigger velocity, master volume
--> metering and audio-to-control telemetry
--> system audio output
-```
+## Basic Use
 
-The callback does not perform file I/O, JSON access, Python/GIL work, UI work,
-plugin loading, neural inference, logging, blocking waits, or unbounded work.
+Start the app, load audio onto pads, then trigger pads from the grid:
 
-## Repository Layout
+- Left-click a pad to trigger or retrigger playback.
+- Right-click a pad to stop that pad and select it.
+- Middle-click a pad to open pad actions such as load or unload.
+- Use the waveform editor to adjust loop start, loop end, beat-grid, and
+  downbeat information.
+- Use the bottom bar for transport, performance controls, quantization, stems,
+  and settings.
 
-```text
-src/flitzis_looper/        Python UI, controllers, models, persistence, input mapping
-src/flitzis_looper_audio/  Python type stubs and package wrapper for the Rust module
-rust/src/                  Rust audio engine, message types, DSP, scheduler, loader
-docs/                      Architecture and setup documentation
-openspec/                  Baseline specs and active OpenSpec changes
-src/tests/                 Python and native integration tests
-```
+## How to Install
 
-Key architecture documents:
+Prerequisites:
 
-- [docs/audio-engine.md](docs/audio-engine.md)
-- [docs/message-passing.md](docs/message-passing.md)
-- [docs/audio-state-ownership.md](docs/audio-state-ownership.md)
-- [docs/audio-loop-source-stem-alignment.md](docs/audio-loop-source-stem-alignment.md)
-- [docs/dsp-fx-foundation-plan.md](docs/dsp-fx-foundation-plan.md)
-- [docs/input-mapping-dsp-parameter-policy.md](docs/input-mapping-dsp-parameter-policy.md)
-- [docs/stem-generation-setup.md](docs/stem-generation-setup.md)
+- Python 3.14+
+- [uv](https://docs.astral.sh/uv/)
+- Rust toolchain
+- FFmpeg and Demucs model files only if you use stem generation
 
-## Setup
-
-Run these commands from the repository root:
+Install dependencies and build the editable native extension from the repository
+root:
 
 ```powershell
-uv --no-cache sync
-$env:UV_NO_CACHE='1'; uv --no-cache run maturin develop
+uv sync
+uv run maturin develop
 ```
 
 Start the app:
 
 ```powershell
-uv --no-cache run --no-sync python -m flitzis_looper
+uv run python -m flitzis_looper
 ```
+
+Stem-generation setup is documented in
+[docs/stem-generation-setup.md](docs/stem-generation-setup.md).
+
+## Technical Overview
+
+Flitzis Looper is a Rust/Python application with a deliberate split of
+responsibilities:
+
+- Python owns the Dear ImGui performance UI, project persistence, settings,
+  mapping edit workflows, file dialogs, and offline/background jobs.
+- Rust owns the realtime audio engine: transport, scheduling, mixing, loop
+  playheads, playback-rate application, Key Lock, prepared-stem playback,
+  parameter application, metering, and per-pad DSP.
+
+The key realtime rule is simple: the audio callback only works with bounded
+commands and already prepared audio data. It does not run file I/O, JSON
+persistence, Python/GIL code, Demucs, plugin scanning, logging, blocking waits,
+or unbounded work.
+
+Simplified signal path:
+
+```text
+Python UI / controllers / persistence / background workers
+-> PyO3 AudioEngine API
+-> bounded Rust command and parameter rings
+-> CPAL audio callback
+-> transport, scheduler, mixer, loops, stems, Key Lock, DSP, metering
+-> system audio output
+```
+
+The full architecture is documented in
+[docs/architecture.md](docs/architecture.md).
+
+## Repository Layout
+
+```text
+src/flitzis_looper/        Python app package: UI, controllers, models, persistence
+src/flitzis_looper_audio/  Python wrapper and type stubs for the Rust extension
+rust/src/                  Rust audio engine, PyO3 bridge, DSP, transport, scheduler
+src/tests/                 Python tests and native-extension integration tests
+docs/                      Maintained architecture, development, and setup docs
+openspec/                  Product/behavior contracts and change deltas
+```
+
+`src/flitzis_looper/` is the Python application package.
+`src/flitzis_looper_audio/` is intentionally separate: it is the Python import
+package for the native Rust extension named `flitzis_looper_audio`.
+`maturin develop` builds the platform-specific `.pyd`/extension module into
+that package, `__init__.py` re-exports it, and `__init__.pyi` gives Python and
+mypy a typed API surface. Do not delete or rename that folder unless the Rust
+crate name, PyO3 module name, imports, and packaging are changed together.
+
+## Documentation
+
+Start with [docs/README.md](docs/README.md).
+
+Important documents:
+
+- [docs/architecture.md](docs/architecture.md): current technical architecture.
+- [docs/development.md](docs/development.md): setup, validation, OpenSpec, and
+  package layout.
+- [docs/ui-toolkit.md](docs/ui-toolkit.md): Dear ImGui UI rules.
+- [docs/stem-generation-setup.md](docs/stem-generation-setup.md): Demucs and
+  FFmpeg setup.
+- [docs/key-lock-backend.md](docs/key-lock-backend.md): current Key Lock backend
+  and future replacement path.
+- [docs/todos.md](docs/todos.md): explicit user-requested TODO notes.
+
+Behavior contracts live in `openspec/specs/` and active changes live in
+`openspec/changes/`. Do not treat old archived OpenSpec changes or local notes
+as a feature backlog. `docs/todos.md` is maintained only when the user asks to
+add, review, choose, or complete TODO items.
 
 ## Validation
 
@@ -103,34 +174,9 @@ uv run ruff check src
 uv run mypy src
 ```
 
-Use `uv run cargo ...` for Rust checks so PyO3 and maturin use the project
-Python environment consistently.
+Use `uv run cargo ...`, not plain `cargo ...`, so PyO3 and maturin use the
+project Python environment consistently.
 
-## Stem Generation Setup
+## License
 
-Stem generation is offline/background work. The audio callback only mixes
-already prepared buffers. Before using **Generate Stems** for the first time,
-install the external prerequisites:
-
-```powershell
-winget install --id Gyan.FFmpeg.Shared -e
-where.exe ffmpeg
-where.exe ffprobe
-uv --no-cache run --no-sync python -c "from demucs.pretrained import get_model; get_model('htdemucs'); print('htdemucs model installed')"
-```
-
-Then verify the full stem environment:
-
-```powershell
-uv --no-cache run --no-sync python -c "from pathlib import Path; import subprocess, sys; from flitzis_looper.controller.stem_generation import demucs_cache_environment; env=demucs_cache_environment(Path.home()/'.cache'/'torch'/'hub'/'checkpoints'); subprocess.run(['ffprobe','-version'], env=env, check=True); subprocess.run(['ffmpeg','-version'], env=env, check=True); subprocess.run([sys.executable,'-c','import demucs, torch, torchaudio, torchcodec.encoders'], env=env, check=True); print('Stem prerequisites OK')"
-```
-
-If FFmpeg is installed but the app process cannot find it, point the app at the
-FFmpeg `bin` folder before starting:
-
-```powershell
-$env:FLITZIS_FFMPEG_DIR="C:\path\to\ffmpeg\bin"
-uv --no-cache run --no-sync python -m flitzis_looper
-```
-
-More detail: [docs/stem-generation-setup.md](docs/stem-generation-setup.md).
+[GNU General Public License](./LICENSE.txt)

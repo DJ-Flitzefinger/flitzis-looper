@@ -26,8 +26,7 @@ DSP effect, or plugin hosting.
 ## Impact
 
 - Affected specs: `ring-buffer-messaging`.
-- Affected docs: `docs/audio-performance-architecture-audit.md`, `docs/audio-engine.md`,
-  `docs/message-passing.md`.
+- Affected docs: `docs/architecture.md`.
 - Affected code: Rust message definitions, audio stream callback, Rust input mapping dispatch,
   Python-facing audio parameter setters, focused Rust tests.
 

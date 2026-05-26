@@ -30,8 +30,7 @@ behavior that the real-time audio path cannot safely provide.
 ## Impact
 - Affected specs: `performance-ui`, `project-persistence`, `stem-cache`,
   `play-samples`, `ring-buffer-messaging`, and `background-tasks`.
-- Affected docs: `docs/audio-engine.md`, `docs/message-passing.md`,
-  `docs/todos-legacy-migration.md`.
+- Affected docs: `docs/architecture.md`, `docs/stem-generation-setup.md`.
 - Affected code: `ProjectState`, UI selectors/actions, selected-pad sidebar, pad-grid
   indicators, Settings overlay rendering/actions, stem controller actions, Rust control messages,
   bounded mixer stem mix state, and focused Rust/Python tests.

@@ -25,8 +25,7 @@ per-pad DSP chain, with realtime-safe smoothing and no plugin-hosting dependency
 ## Impact
 
 - Affected spec: `per-pad-eq3`.
-- Affected docs: `docs/dsp-fx-foundation-plan.md`,
-  `docs/audio-performance-architecture-audit.md`, and local handoff notes.
+- Affected docs: `docs/architecture.md` and local handoff notes.
 - Expected later code scope: `rust/src/audio_engine/dsp.rs`, `rust/src/audio_engine/mixer.rs`,
   `rust/src/audio_engine/eq3.rs` or its successor boundary,
   `rust/src/audio_engine/voice_slot.rs`, `rust/src/messages.rs`,

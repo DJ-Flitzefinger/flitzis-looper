@@ -42,8 +42,7 @@ stem buffers may be published for future Rust mixing.
 ## Impact
 - Affected specs: `stem-cache` (new), `background-tasks`, `ring-buffer-messaging`,
   `play-samples`.
-- Affected docs: `docs/audio-engine.md`, `docs/message-passing.md`,
-  `docs/todos-legacy-migration.md`.
+- Affected docs: `docs/architecture.md`, `docs/stem-generation-setup.md`.
 - Later affected code: controller/background-task orchestration, project stem cache metadata,
   Rust message enum, Rust mixer stem-buffer storage, and focused Rust/Python tests.
 

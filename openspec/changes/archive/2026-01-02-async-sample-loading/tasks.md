@@ -40,7 +40,7 @@
 - [x] Handle the different event types to update UI elements (e.g., enable Play button, show spinner, display error messages).
 
 ## 8. Documentation Updates
-- [x] Add documentation for the new async loading API in `docs/audio-engine.md` and `docs/ui-toolkit.md`.
+- [x] Add documentation for the new async loading API in maintained architecture/UI docs.
 - [x] Update any relevant README or developer guides to mention the background loading mechanism.
 
 ## 9. Testing Strategy

@@ -13,7 +13,8 @@ The Rust audio engine dynamically chooses an `output_sample_rate` from the activ
   - Avoid crashes on startup when expected sample files are missing or unusable.
 - Non-Goals:
   - Persisting `SessionState` (runtime/UI ephemeral state).
-  - Implementing waveform editor loop-point persistence (that is TODO #8/#9).
+  - Implementing waveform editor loop-point persistence, which was tracked as a historical
+    legacy TODO item.
   - Supporting multi-project workspaces or explicit “save as/open project” UI (this is a later feature).
 
 ## Decisions
