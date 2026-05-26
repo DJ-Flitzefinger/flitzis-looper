@@ -184,7 +184,7 @@ fn validate_sample_buffer(sample: &SampleBuffer, output_sample_rate: u32) -> Res
     if sample.samples.is_empty() {
         return Err("sample buffer must not be empty".to_string());
     }
-    if sample.samples.len() % sample.channels != 0 {
+    if !sample.samples.len().is_multiple_of(sample.channels) {
         return Err("sample buffer length must align to channel count".to_string());
     }
     Ok(())

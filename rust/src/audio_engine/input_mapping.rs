@@ -3,7 +3,7 @@ use crate::messages::ControlMessage;
 use midir::{Ignore, MidiInput, MidiInputConnection};
 use rtrb::Producer;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TryRecvError, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -222,9 +222,11 @@ impl InputRuntime {
     }
 
     pub fn start_midi_input(&self) -> Result<usize, String> {
-        let probe = MidiInput::new("flitzis-looper-midi-probe").map_err(|err| err.to_string())?;
-        let port_count = probe.ports().len();
-        drop(probe);
+        let port_count = {
+            let probe =
+                MidiInput::new("flitzis-looper-midi-probe").map_err(|err| err.to_string())?;
+            probe.ports().len()
+        };
 
         let mut connections = self
             .midi_connections
@@ -284,10 +286,7 @@ impl InputRuntime {
         let Ok(rx) = self.event_rx.lock() else {
             return None;
         };
-        match rx.try_recv() {
-            Ok(event) => Some(event),
-            Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
-        }
+        rx.try_recv().ok()
     }
 }
 
