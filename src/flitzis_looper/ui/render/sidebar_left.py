@@ -1,8 +1,19 @@
+import math
+import string
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from imgui_bundle import imgui, imgui_knobs
 
+from flitzis_looper.audio_eq import (
+    EQ_KNOB_POSITION_MAX,
+    EQ_KNOB_POSITION_MIN,
+    clamp_eq_db,
+    eq_db_to_knob_position,
+    eq_drag_delta_position,
+    eq_knob_position_to_db,
+    format_eq_db,
+)
 from flitzis_looper.audio_gain import (
     clamp_gain_db,
     format_gain_db,
@@ -12,7 +23,6 @@ from flitzis_looper.audio_gain import (
     gain_meter_fraction_from_peak,
 )
 from flitzis_looper.constants import (
-    PAD_EQ_DB_MAX,
     PAD_EQ_DB_MIN,
     PAD_GAIN_DB_DEFAULT,
     PAD_GAIN_FINE_STEP_DB,
@@ -66,6 +76,7 @@ _GAIN_HANDLE_WIDTH = 6.0
 _GAIN_RIGHT_CLICK_DRAG_THRESHOLD_PX = 3.0
 _GAIN_WHEEL_STEP_DB = 0.5
 _EQ_WHEEL_STEP_DB = 1.0
+_EQ_ENTRY_DIGITS = frozenset(string.digits)
 _METER_BG_RGBA = (0.02, 0.02, 0.02, 0.55)
 _METER_FILL_RGBA = (1.0, 1.0, 1.0, 0.22)
 _METER_GREEN_RGBA = (0.18, 0.74, 0.38, 0.45)
@@ -77,6 +88,74 @@ _METER_GREEN_ZONE_FRACTION = 0.8
 def eq_wheel_delta_db(wheel_steps: int) -> float:
     """Return EQ dB delta for hovered EQ wheel movement."""
     return _EQ_WHEEL_STEP_DB * wheel_steps
+
+
+def sanitize_eq_entry_text(text: str) -> str:
+    """Return manual EQ text containing only ASCII digits and one decimal point."""
+    sanitized: list[str] = []
+    has_decimal = False
+
+    for char in text.replace(",", "."):
+        if char in _EQ_ENTRY_DIGITS:
+            sanitized.append(char)
+        elif char == "." and not has_decimal:
+            has_decimal = True
+            sanitized.append(char)
+
+    return "".join(sanitized)
+
+
+def filtered_eq_entry_char(
+    char_code: int,
+    current_text: str,
+    cursor_pos: int,
+    *,
+    has_selection: bool,
+) -> int | None:
+    """Return a replacement char code, or None when EQ entry must reject it."""
+    if char_code == 0:
+        return 0
+
+    char = chr(char_code)
+    if char == ",":
+        char = "."
+        char_code = ord(".")
+
+    if char in _EQ_ENTRY_DIGITS:
+        return char_code
+
+    current_text = current_text.replace(",", ".")
+    if char == "." and ("." not in current_text or has_selection):
+        return char_code
+
+    return None
+
+
+def eq_entry_char_filter(data: imgui.InputTextCallbackData) -> int:
+    """Reject manual EQ entry characters before they enter the input buffer."""
+    replacement = filtered_eq_entry_char(
+        int(data.event_char),
+        str(data.buf),
+        int(data.cursor_pos),
+        has_selection=data.has_selection(),
+    )
+    if replacement == 0:
+        return 0
+    if replacement is not None:
+        data.event_char = replacement
+        return 0
+    return 1
+
+
+def parse_eq_entry_text(text: str) -> float | None:
+    """Parse manual EQ entry text, returning a clamped one-decimal dB value."""
+    sanitized = sanitize_eq_entry_text(text)
+    if sanitized in {"", "."}:
+        return None
+    value = float(sanitized)
+    if not math.isfinite(value):
+        return None
+    return round(clamp_eq_db(value), 1)
 
 
 def gain_wheel_delta_db(wheel_steps: int) -> float:
@@ -122,6 +201,50 @@ class _GainDragState:
 
 
 _GAIN_DRAG = _GainDragState()
+
+
+@dataclass
+class _EqDragState:
+    pad_id: int | None = None
+    band: PadEqBand | None = None
+
+    def start(self, *, pad_id: int, band: PadEqBand) -> None:
+        self.pad_id = pad_id
+        self.band = band
+
+    def clear(self) -> None:
+        self.pad_id = None
+        self.band = None
+
+    def matches(self, *, pad_id: int, band: PadEqBand) -> bool:
+        return self.pad_id == pad_id and self.band == band
+
+
+@dataclass
+class _EqValueEditState:
+    pad_id: int | None = None
+    band: PadEqBand | None = None
+    text: str = ""
+    focus_requested: bool = False
+
+    def start(self, *, pad_id: int, band: PadEqBand, db: float) -> None:
+        self.pad_id = pad_id
+        self.band = band
+        self.text = f"{clamp_eq_db(db):.1f}"
+        self.focus_requested = True
+
+    def clear(self) -> None:
+        self.pad_id = None
+        self.band = None
+        self.text = ""
+        self.focus_requested = False
+
+    def matches(self, *, pad_id: int, band: PadEqBand) -> bool:
+        return self.pad_id == pad_id and self.band == band
+
+
+_EQ_DRAG = _EqDragState()
+_EQ_VALUE_EDIT = _EqValueEditState()
 
 
 def _labeled_value_row(
@@ -442,9 +565,7 @@ def _render_loaded_gain(ctx: UiContext, pad_id: int) -> None:
 
         learn_pending = _has_pending_learn_input(ctx)
         learn_clicked = (
-            learn_pending
-            and hovered
-            and imgui.is_mouse_clicked(imgui.MouseButton_.left)
+            learn_pending and hovered and imgui.is_mouse_clicked(imgui.MouseButton_.left)
         )
         if learn_clicked:
             ctx.audio.pads.set_pad_gain(pad_id, gain_db)
@@ -477,6 +598,194 @@ def _render_loaded_gain(ctx: UiContext, pad_id: int) -> None:
         imgui.dummy((width, SPACING * 0.75))
 
 
+def _pad_eq_band_db(ctx: UiContext, pad_id: int, band: PadEqBand) -> float:
+    if band == "low":
+        return float(ctx.state.project.pad_eq_low_db[pad_id])
+    if band == "mid":
+        return float(ctx.state.project.pad_eq_mid_db[pad_id])
+    return float(ctx.state.project.pad_eq_high_db[pad_id])
+
+
+def _apply_eq_drag(ctx: UiContext, pad_id: int, band: PadEqBand) -> None:
+    if not _EQ_DRAG.matches(pad_id=pad_id, band=band):
+        return
+
+    if not imgui.is_mouse_down(imgui.MouseButton_.left):
+        _EQ_DRAG.clear()
+        return
+
+    io = imgui.get_io()
+    delta_position = eq_drag_delta_position(float(io.mouse_delta.x), float(io.mouse_delta.y))
+    if delta_position == 0.0:
+        return
+
+    current_db = _pad_eq_band_db(ctx, pad_id, band)
+    current_position = eq_db_to_knob_position(current_db)
+    target_position = min(
+        max(current_position + delta_position, EQ_KNOB_POSITION_MIN),
+        EQ_KNOB_POSITION_MAX,
+    )
+    ctx.audio.pads.set_pad_eq_band(
+        pad_id,
+        band,
+        eq_knob_position_to_db(target_position),
+    )
+
+
+def _render_eq_value_field(
+    ctx: UiContext,
+    *,
+    pad_id: int,
+    band: PadEqBand,
+    db: float,
+    width: float,
+) -> None:
+    if _EQ_VALUE_EDIT.matches(pad_id=pad_id, band=band):
+        imgui.set_next_item_width(width)
+        flags = (
+            imgui.InputTextFlags_.enter_returns_true
+            | imgui.InputTextFlags_.auto_select_all
+            | imgui.InputTextFlags_.callback_char_filter
+        )
+        if _EQ_VALUE_EDIT.focus_requested:
+            imgui.set_keyboard_focus_here()
+            _EQ_VALUE_EDIT.focus_requested = False
+
+        submitted, new_text = imgui.input_text(
+            f"##pad_eq_entry_{band}",
+            _EQ_VALUE_EDIT.text,
+            flags,
+            eq_entry_char_filter,
+        )
+        if new_text != _EQ_VALUE_EDIT.text:
+            _EQ_VALUE_EDIT.text = new_text
+
+        commit = submitted or imgui.is_item_deactivated_after_edit()
+        close = submitted or imgui.is_item_deactivated()
+        if commit:
+            target_db = parse_eq_entry_text(_EQ_VALUE_EDIT.text)
+            if target_db is not None:
+                ctx.audio.pads.set_pad_eq_band(pad_id, band, target_db)
+        if close:
+            _EQ_VALUE_EDIT.clear()
+        return
+
+    value_text = format_eq_db(db)
+    pos = imgui.get_cursor_screen_pos()
+    height = imgui.get_text_line_height_with_spacing()
+    imgui.invisible_button(f"##pad_eq_value_{band}", (width, height))
+    hovered = imgui.is_item_hovered()
+
+    text_size = imgui.calc_text_size(value_text)
+    text_pos = (
+        pos.x + (width - text_size.x) * 0.5,
+        pos.y + (height - text_size.y) * 0.5,
+    )
+    color = CONTROL_HOVERED_RGBA if hovered else TEXT_RGBA
+    imgui.get_window_draw_list().add_text(
+        text_pos,
+        imgui.get_color_u32(color),
+        value_text,
+    )
+
+    if hovered and imgui.is_mouse_double_clicked(imgui.MouseButton_.left):
+        _EQ_VALUE_EDIT.start(pad_id=pad_id, band=band, db=db)
+
+
+def _draw_eq_knob_label(label: str, item_min: imgui.ImVec2, knob_width: float) -> None:
+    text_width = imgui.calc_text_size(label).x
+    label_x = item_min.x + (knob_width - text_width) * 0.5
+    label_y = item_min.y - imgui.get_text_line_height_with_spacing()
+    imgui.get_window_draw_list().add_text(
+        (label_x, label_y),
+        imgui.get_color_u32(TEXT_MUTED_RGBA),
+        label,
+    )
+
+
+def _apply_eq_knob_gestures(
+    ctx: UiContext,
+    *,
+    pad_id: int,
+    band: PadEqBand,
+    knob_val: float,
+    hovered: bool,
+    learn_pending: bool,
+) -> float:
+    learn_clicked = learn_pending and hovered and imgui.is_mouse_clicked(imgui.MouseButton_.left)
+    if learn_clicked:
+        ctx.audio.pads.set_pad_eq_band(pad_id, band, knob_val)
+        return knob_val
+    if learn_pending:
+        return knob_val
+
+    if hovered and imgui.is_mouse_clicked(imgui.MouseButton_.right):
+        ctx.audio.pads.set_pad_eq_band(pad_id, band, PAD_EQ_DB_MIN)
+    elif item_middle_clicked():
+        ctx.audio.pads.set_pad_eq_band(pad_id, band, 0.0)
+    elif hovered and imgui.is_mouse_clicked(imgui.MouseButton_.left):
+        _EQ_DRAG.start(pad_id=pad_id, band=band)
+
+    _apply_eq_drag(ctx, pad_id, band)
+    knob_val = _pad_eq_band_db(ctx, pad_id, band)
+
+    if not _EQ_DRAG.matches(pad_id=pad_id, band=band) and (wheel_steps := hovered_wheel_steps()):
+        ctx.audio.pads.set_pad_eq_band(
+            pad_id,
+            band,
+            knob_val + eq_wheel_delta_db(wheel_steps),
+        )
+        knob_val = _pad_eq_band_db(ctx, pad_id, band)
+
+    return knob_val
+
+
+def _render_eq_knob(
+    ctx: UiContext,
+    info: _SidebarPadInfo,
+    *,
+    label: str,
+    knob_id: str,
+    band: PadEqBand,
+    source_attr_name: str,
+    knob_width: float,
+    learn_pending: bool,
+) -> None:
+    source_attr = getattr(ctx.state.project, source_attr_name)
+    knob_val = float(source_attr[info.pad_id])
+    knob_position = eq_db_to_knob_position(knob_val)
+    imgui.begin_group()
+    imgui_knobs.knob(
+        knob_id,
+        p_value=knob_position,
+        v_min=EQ_KNOB_POSITION_MIN,
+        v_max=EQ_KNOB_POSITION_MAX,
+        format="",
+        size=knob_width,
+        flags=imgui_knobs.ImGuiKnobFlags_.no_input,
+    )
+
+    knob_item_min = imgui.get_item_rect_min()
+    knob_hovered = imgui.is_item_hovered()
+    _draw_eq_knob_label(label, knob_item_min, knob_width)
+    knob_val = _apply_eq_knob_gestures(
+        ctx,
+        pad_id=info.pad_id,
+        band=band,
+        knob_val=knob_val,
+        hovered=knob_hovered,
+        learn_pending=learn_pending,
+    )
+    _render_eq_value_field(
+        ctx,
+        pad_id=info.pad_id,
+        band=band,
+        db=knob_val,
+        width=knob_width,
+    )
+    imgui.end_group()
+
+
 def _render_loaded_eq(ctx: UiContext, info: _SidebarPadInfo) -> None:
     knob_width = 68.0
 
@@ -484,54 +793,26 @@ def _render_loaded_eq(ctx: UiContext, info: _SidebarPadInfo) -> None:
     imgui.dummy((info.avail_x, SPACING / 2))
 
     learn_pending = _has_pending_learn_input(ctx)
+    if _EQ_DRAG.pad_id is not None and not imgui.is_mouse_down(imgui.MouseButton_.left):
+        _EQ_DRAG.clear()
+    if _EQ_VALUE_EDIT.pad_id is not None and _EQ_VALUE_EDIT.pad_id != info.pad_id:
+        _EQ_VALUE_EDIT.clear()
 
     with style_var(imgui.StyleVar_.item_spacing, (SPACING / 2, SPACING / 4)):
         for idx, (label, knob_id, band, source_attr_name) in enumerate(_EQ_KNOBS):
             if idx > 0:
                 imgui.same_line()
 
-            source_attr = getattr(ctx.state.project, source_attr_name)
-            knob_val = float(source_attr[info.pad_id])
-            changed, new_val = imgui_knobs.knob(
-                knob_id,
-                p_value=knob_val,
-                v_min=PAD_EQ_DB_MIN,
-                v_max=PAD_EQ_DB_MAX,
-                format="%.1f dB",
-                size=knob_width,
+            _render_eq_knob(
+                ctx,
+                info,
+                label=label,
+                knob_id=knob_id,
+                band=band,
+                source_attr_name=source_attr_name,
+                knob_width=knob_width,
+                learn_pending=learn_pending,
             )
-
-            draw_list = imgui.get_window_draw_list()
-            item_min = imgui.get_item_rect_min()
-            text_width = imgui.calc_text_size(label).x
-            label_x = item_min.x + (knob_width - text_width) * 0.5
-            label_y = item_min.y - imgui.get_text_line_height_with_spacing()
-            draw_list.add_text(
-                (label_x, label_y),
-                imgui.get_color_u32(TEXT_MUTED_RGBA),
-                label,
-            )
-
-            learn_clicked = (
-                learn_pending
-                and imgui.is_item_hovered()
-                and imgui.is_mouse_clicked(imgui.MouseButton_.left)
-            )
-            if changed or learn_clicked:
-                ctx.audio.pads.set_pad_eq_band(
-                    info.pad_id,
-                    band,
-                    float(new_val if changed else knob_val),
-                )
-            elif not learn_pending:
-                if item_middle_clicked():
-                    ctx.audio.pads.set_pad_eq_band(info.pad_id, band, 0.0)
-                elif wheel_steps := hovered_wheel_steps():
-                    ctx.audio.pads.set_pad_eq_band(
-                        info.pad_id,
-                        band,
-                        knob_val + eq_wheel_delta_db(wheel_steps),
-                    )
 
     imgui.dummy((info.avail_x, 0.0))
 
