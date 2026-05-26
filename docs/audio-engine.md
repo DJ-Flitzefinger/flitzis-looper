@@ -13,12 +13,12 @@ OpenSpec-backed request. The current state ownership boundary is recorded in
 `docs/audio-state-ownership.md`. The Stage 6 loop/source-position/stem alignment model is recorded
 in `docs/audio-loop-source-stem-alignment.md`. The Stage 8 DSP/FX foundation plan is recorded in
 `docs/dsp-fx-foundation-plan.md` and `openspec/changes/prepare-dsp-fx-foundation/`; the first
-implementation slice added the internal Rust per-pad DSP chain foundation. The first DJ isolator
-replacement slice is recorded in
-`openspec/changes/replace-hardwired-eq-with-dj-isolator/` and routes existing per-pad EQ controls
-to smoothed normalized Rust DSP parameters. The focused low/high kill tuning follow-up keeps that
-ownership boundary and tunes the internal isolator reconstruction for representative band-center
-suppression.
+implementation slice added the internal Rust per-pad DSP chain foundation. The DJ isolator
+replacement is now archived into `openspec/specs/per-pad-eq3/spec.md`, with the completed change
+record at `openspec/changes/archive/2026-05-26-replace-hardwired-eq-with-dj-isolator/`, and
+routes existing per-pad EQ controls to smoothed normalized Rust DSP parameters. The focused
+low/high kill tuning follow-up keeps that ownership boundary and tunes the internal isolator
+reconstruction for representative band-center suppression.
 
 Do not interpret audio safety as "Rust must not be touched". The protected boundary is the CPAL
 audio callback and realtime hot path. New Rust modules outside that boundary are allowed and

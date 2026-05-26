@@ -47,3 +47,11 @@
   live loop-edit crossfades, UI redesign, and broad rewrites out of scope.
 - [x] 7.5 Run official strict OpenSpec validation, focused Rust DSP/mixer tests, and the broader
   uv-managed validation sequence.
+
+## 8. Acceptance And Archive
+- [x] 8.1 Review the tuned implementation, active spec delta, design notes, tasks, and repository
+  docs for archive readiness.
+- [x] 8.2 Run official strict OpenSpec validation before archive.
+- [x] 8.3 Run focused uv-managed Rust isolator tests covering the archived behavior surface.
+- [x] 8.4 Archive the change with the official OpenSpec CLI and update the baseline
+  `per-pad-eq3` spec.

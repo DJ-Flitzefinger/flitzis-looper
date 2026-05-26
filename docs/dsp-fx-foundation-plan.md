@@ -3,9 +3,9 @@
 Date: 2026-05-26
 
 Status: Stage 8 architecture planning, the first neutral Rust foundation slice, the first
-3-band DJ isolator replacement slice, and the focused low/high kill tuning follow-up are
-complete. This document does not authorize unrelated DSP/FX effects, plugin hosting, real-time
-stem separation, live loop-edit crossfades, or broad rewrites.
+3-band DJ isolator replacement slice, the focused low/high kill tuning follow-up, and the
+OpenSpec acceptance/archive pass are complete. This document does not authorize unrelated DSP/FX
+effects, plugin hosting, real-time stem separation, live loop-edit crossfades, or broad rewrites.
 
 ## Purpose
 
@@ -16,7 +16,9 @@ replacement slice. It complements:
 - `docs/audio-state-ownership.md`,
 - `docs/audio-loop-source-stem-alignment.md`,
 - `docs/input-mapping-dsp-parameter-policy.md`,
-- `openspec/changes/prepare-dsp-fx-foundation/`.
+- `openspec/changes/prepare-dsp-fx-foundation/`,
+- `openspec/specs/per-pad-eq3/spec.md`,
+- `openspec/changes/archive/2026-05-26-replace-hardwired-eq-with-dj-isolator/`.
 
 The current architecture already has the correct ownership direction: Rust owns live audio truth,
 transport, scheduling, mixing, playback-rate application, and future DSP state; Python owns UI,
@@ -142,8 +144,10 @@ processing.
 
 ## DJ Isolator Replacement
 
-The 3-band DJ isolator replacement lives at
-`openspec/changes/replace-hardwired-eq-with-dj-isolator/`. Initial isolator targets:
+The 3-band DJ isolator replacement is now archived into
+`openspec/specs/per-pad-eq3/spec.md`; the completed change record lives at
+`openspec/changes/archive/2026-05-26-replace-hardwired-eq-with-dj-isolator/`. Accepted isolator
+targets:
 
 - normalized internal controls in `0.0..1.0` with `0.5` neutral,
 - low band below about `250 Hz`,
@@ -201,3 +205,11 @@ For the focused low/high kill tuning follow-up:
 - run focused Rust DSP tests for representative band-center suppression and equal-gain behavior,
 - run focused mixer tests for the existing no-double-processing bridge,
 - run the broader uv-managed validation sequence because live audio DSP behavior changes.
+
+For the isolator acceptance/archive pass:
+
+- run official strict OpenSpec validation for `replace-hardwired-eq-with-dj-isolator`,
+- run focused uv-managed Rust isolator tests,
+- archive the change with the official OpenSpec CLI,
+- validate the baseline specs after archive,
+- run `git diff --check`.

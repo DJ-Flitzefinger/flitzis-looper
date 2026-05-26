@@ -2,8 +2,8 @@
 
 Date: 2026-05-25
 
-Status: architecture audit and preparation plan, updated after the focused per-pad DJ isolator
-low/high kill tuning follow-up. This document does not authorize unrelated DSP effects, plugin
+Status: architecture audit and preparation plan, updated after the per-pad DJ isolator
+OpenSpec acceptance/archive pass. This document does not authorize unrelated DSP effects, plugin
 hosting, or broad runtime rewrites.
 
 ## Scope
@@ -17,7 +17,8 @@ The short answer is: the ownership direction is correct, but the architecture wa
 professional DSP/FX work without preparation. Rust is already the right place for the realtime
 audio engine, scheduler, transport, mixing, and internal DSP nodes. The documented preparation
 stages have now allowed the per-pad EQ replacement and its focused low/high kill tuning follow-up
-to move live EQ authority into the Rust DSP chain.
+to move live EQ authority into the Rust DSP chain. The tuned isolator behavior is archived into
+the baseline `per-pad-eq3` OpenSpec.
 
 This plan is not a freeze on Python-to-Rust migration. Targeted migrations are allowed and
 preferred when they reduce duplicated live-audio authority, improve timing correctness, lower
@@ -1087,8 +1088,8 @@ Ordering:
 
 ### Phase 7: Replace Current EQ With 3-Band DJ Isolator
 
-Status: first implementation slice completed by
-`openspec/changes/replace-hardwired-eq-with-dj-isolator/`.
+Status: completed and archived by
+`openspec/changes/archive/2026-05-26-replace-hardwired-eq-with-dj-isolator/`.
 
 Goal: replace the current hardwired EQ with a professional internal Rust DSP node.
 
@@ -1143,18 +1144,16 @@ Acceptance:
 
 ## Next Recommended Step
 
-Stage 8 completed the DSP/FX foundation, Stage 9 created the OpenSpec planning change, the first
-implementation slice under `openspec/changes/replace-hardwired-eq-with-dj-isolator/` replaced the
-hardwired per-pad EQ live path with the Rust per-pad DJ isolator node, and the focused low/high
-kill tuning follow-up now passes representative band-center suppression checks.
+Stage 8 completed the DSP/FX foundation, Stage 9 created the OpenSpec planning change, the
+implementation and tuning slices replaced the hardwired per-pad EQ live path with the Rust
+per-pad DJ isolator node, and the OpenSpec acceptance/archive pass updated the baseline
+`openspec/specs/per-pad-eq3/spec.md`.
 
-The next recommended step is a separate OpenSpec acceptance/archive preparation slice:
-
-```text
-Review replace-hardwired-eq-with-dj-isolator for archive readiness, ensure the active delta and
-repository docs match the implemented per-pad isolator behavior, run official strict OpenSpec
-validation, and only then archive/update baseline specs if that focused review passes.
-```
+The next recommended step is not an automatic implementation. Start the next small
+OpenSpec-backed planning slice only after the user chooses a concrete post-isolator target, such
+as the first internal FX module or another Gen3 architecture item. That future slice should first
+create or update proposal/design/spec deltas and realtime-safety constraints before any code.
 
 Do not add plugin hosting, unrelated FX, deck/group/master chains, real-time stem separation,
-live loop-edit crossfades, UI redesign, or a broad rewrite during that archive-readiness slice.
+live loop-edit crossfades, UI redesign, or a broad rewrite without a concrete OpenSpec-backed
+request.
