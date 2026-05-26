@@ -92,6 +92,70 @@ def test_loader_success_updates_project_sample_path(
     assert 0 not in controller.session.pending_sample_paths
 
 
+def test_loader_success_initializes_new_sample_loop_defaults(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    controller.session.pending_sample_paths[0] = "/path/to/original.wav"
+    controller.project.pad_loop_auto[0] = False
+    controller.project.pad_loop_start_s[0] = 5.0
+    controller.project.pad_loop_end_s[0] = 10.0
+    controller.project.pad_loop_bars[0] = 2.0
+
+    audio_engine_mock.poll_loader_events.side_effect = [
+        {
+            "type": "success",
+            "id": 0,
+            "duration_s": 32.0,
+            "cached_path": "samples/foo.wav",
+            "analysis": {
+                "bpm": 120.0,
+                "key": "C#m",
+                "beat_grid": {"beats": [2.0, 2.5], "downbeats": [2.0], "bars": [2.0]},
+            },
+        },
+        None,
+    ]
+
+    controller.loader.poll_loader_events()
+
+    assert controller.project.pad_loop_auto[0] is True
+    assert controller.project.pad_loop_bars[0] == 8.0
+    assert controller.project.pad_loop_start_s[0] == pytest.approx(0.0)
+    assert controller.project.pad_loop_end_s[0] is None
+    audio_engine_mock.set_pad_loop_region.assert_called_with(0, 0.0, 16.0)
+
+
+def test_restored_sample_success_preserves_existing_loop_settings(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    controller.project.sample_paths[0] = "samples/foo.wav"
+    controller.session.pending_sample_paths[0] = "samples/foo.wav"
+    controller.project.pad_loop_auto[0] = False
+    controller.project.pad_loop_start_s[0] = 5.0
+    controller.project.pad_loop_end_s[0] = 10.0
+    controller.project.pad_loop_bars[0] = 2.0
+
+    audio_engine_mock.poll_loader_events.side_effect = [
+        {
+            "type": "success",
+            "id": 0,
+            "duration_s": 32.0,
+            "cached_path": "samples/foo.wav",
+        },
+        None,
+    ]
+
+    controller.loader.poll_loader_events()
+
+    assert controller.project.pad_loop_auto[0] is False
+    assert controller.project.pad_loop_bars[0] == 2.0
+    assert controller.project.pad_loop_start_s[0] == pytest.approx(5.0)
+    assert controller.project.pad_loop_end_s[0] == pytest.approx(10.0)
+
+
 def test_unload_sample(controller: AppController, audio_engine_mock: Mock) -> None:
     """Test unloading a sample stops playback and clears state."""
     sample_id = 0

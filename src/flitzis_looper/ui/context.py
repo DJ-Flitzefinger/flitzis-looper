@@ -254,7 +254,7 @@ class PadAudioActions:
     def set_pad_loop_auto(self, pad_id: int, *, enabled: bool) -> None:
         self._controller.transport.loop.set_auto(pad_id, enabled=enabled)
 
-    def set_pad_loop_bars(self, pad_id: int, *, bars: int) -> None:
+    def set_pad_loop_bars(self, pad_id: int, *, bars: float) -> None:
         self._controller.transport.loop.set_bars(pad_id, bars=bars)
 
     def set_pad_loop_start(self, pad_id: int, start_s: float) -> None:

@@ -44,6 +44,9 @@ from flitzis_looper.constants import (
     PAD_GAIN_DB_DEFAULT,
     PAD_GAIN_DB_MAX,
     PAD_GAIN_DB_MIN,
+    PAD_LOOP_BARS_DEFAULT,
+    PAD_LOOP_BARS_GRANULARITY,
+    PAD_LOOP_BARS_MIN,
     SPEED_MAX,
     SPEED_MIN,
     VOLUME_MAX,
@@ -247,8 +250,8 @@ def _default_pad_loop_auto() -> list[bool]:
     return [False] * NUM_SAMPLES
 
 
-def _default_pad_loop_bars() -> list[int]:
-    return [4] * NUM_SAMPLES
+def _default_pad_loop_bars() -> list[float]:
+    return [PAD_LOOP_BARS_DEFAULT] * NUM_SAMPLES
 
 
 def _default_pad_grid_offset_samples() -> list[int]:
@@ -405,7 +408,7 @@ class ProjectState(BaseModel):
     pad_loop_auto: list[bool] = Field(default_factory=_default_pad_loop_auto)
     """Per-pad auto-loop enabled state."""
 
-    pad_loop_bars: list[int] = Field(default_factory=_default_pad_loop_bars)
+    pad_loop_bars: list[float] = Field(default_factory=_default_pad_loop_bars)
     """Per-pad bar count used when auto-loop is enabled."""
 
     pad_grid_offset_samples: list[int] = Field(default_factory=_default_pad_grid_offset_samples)
@@ -555,15 +558,24 @@ class ProjectState(BaseModel):
 
     @field_validator("pad_loop_bars", mode="after")
     @classmethod
-    def _validate_pad_loop_bars(cls, value: list[int]) -> list[int]:
+    def _validate_pad_loop_bars(cls, value: list[float]) -> list[float]:
         if len(value) != NUM_SAMPLES:
             msg = f"pad_loop_bars must have length {NUM_SAMPLES}, got {len(value)}"
             raise ValueError(msg)
+        normalized: list[float] = []
         for bars in value:
-            if bars < 1:
-                msg = f"pad_loop_bars values must be >= 1, got {bars}"
+            if not math.isfinite(bars) or bars < PAD_LOOP_BARS_MIN:
+                msg = f"pad_loop_bars values must be finite and >= {PAD_LOOP_BARS_MIN}, got {bars}"
                 raise ValueError(msg)
-        return value
+            steps = bars / PAD_LOOP_BARS_GRANULARITY
+            if not math.isclose(steps, round(steps), abs_tol=1e-9):
+                msg = (
+                    "pad_loop_bars values must use "
+                    f"{PAD_LOOP_BARS_GRANULARITY}-bar granularity, got {bars}"
+                )
+                raise ValueError(msg)
+            normalized.append(float(round(steps) * PAD_LOOP_BARS_GRANULARITY))
+        return normalized
 
     @field_validator("stem_cache", mode="after")
     @classmethod

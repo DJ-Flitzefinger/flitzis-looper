@@ -43,6 +43,11 @@ class LoaderController(BaseController):
         self._on_stem_generation_success = on_stem_generation_success
         self._on_stem_generation_error = on_stem_generation_error
         self._on_stems_deleted = on_stems_deleted
+        self._on_new_sample_loaded: Callable[[int], None] | None = None
+
+    def set_new_sample_loaded_callback(self, callback: Callable[[int], None]) -> None:
+        """Register behavior that runs after a newly assigned sample finishes loading."""
+        self._on_new_sample_loaded = callback
 
     def restore_samples_from_project_state(self) -> None:
         """Schedule async loads for cached samples referenced by `ProjectState`.
@@ -276,7 +281,9 @@ class LoaderController(BaseController):
         if isinstance(target_path, str):
             target_path = self._normalize_project_path(target_path)
 
-        if target_path is not None and self._project.sample_paths[sample_id] != target_path:
+        previous_path = self._project.sample_paths[sample_id]
+        new_assignment = target_path is not None and previous_path != target_path
+        if new_assignment:
             self._project.sample_paths[sample_id] = target_path
             self._clear_stem_cache(sample_id)
             self._mark_project_changed()
@@ -284,6 +291,9 @@ class LoaderController(BaseController):
         duration_s = event.get("duration_s")
         if isinstance(duration_s, float):
             self._project.sample_durations[sample_id] = duration_s
+
+        if new_assignment and self._on_new_sample_loaded is not None:
+            self._on_new_sample_loaded(sample_id)
 
         # If analysis is provided in the event (from normal loading), store it
         analysis = event.get("analysis")

@@ -1,5 +1,11 @@
+import math
 from typing import TYPE_CHECKING
 
+from flitzis_looper.constants import (
+    PAD_LOOP_BARS_DEFAULT,
+    PAD_LOOP_BARS_GRANULARITY,
+    PAD_LOOP_BARS_MIN,
+)
 from flitzis_looper.controller.timing_metadata import timing_anchor_sec_from_analysis
 from flitzis_looper.controller.validation import ensure_finite, normalize_bpm
 from flitzis_looper.models import validate_sample_id
@@ -18,34 +24,63 @@ class PadLoopController:
         self._audio = transport._audio
 
     def reset(self, sample_id: int) -> None:
-        """Reset a pad's loop region to a computed default."""
+        """Set a pad's loop region to the full loaded track.
+
+        Kept as the current UI/backward-compatible entry point until the
+        waveform editor labels this action as ALL.
+        """
+        self.set_full_track_region(sample_id)
+
+    def initialize_loaded_pad_defaults(self, sample_id: int) -> None:
+        """Initialize loop intent for a newly loaded track."""
         validate_sample_id(sample_id)
 
-        start_s, end_s, auto = self._default_pad_loop_region(sample_id)
-        self._project.pad_loop_start_s[sample_id] = start_s
-        self._project.pad_loop_end_s[sample_id] = end_s
-        self._project.pad_loop_auto[sample_id] = auto
-        self._project.pad_loop_bars[sample_id] = 4
-        self._transport._mark_project_changed()
+        changed = (
+            self._project.pad_loop_start_s[sample_id] != 0.0
+            or self._project.pad_loop_end_s[sample_id] is not None
+            or not self._project.pad_loop_auto[sample_id]
+            or self._project.pad_loop_bars[sample_id] != PAD_LOOP_BARS_DEFAULT
+        )
+
+        self._project.pad_loop_start_s[sample_id] = 0.0
+        self._project.pad_loop_end_s[sample_id] = None
+        self._project.pad_loop_auto[sample_id] = True
+        self._project.pad_loop_bars[sample_id] = PAD_LOOP_BARS_DEFAULT
+        if changed:
+            self._transport._mark_project_changed()
 
         self.apply_grid_anchor_to_audio(sample_id)
         self._apply_effective_pad_loop_region_to_audio(sample_id)
 
-    def _default_pad_loop_region(self, sample_id: int) -> tuple[float, float | None, bool]:
-        # Anchor the musical grid to the default onset.
-        start_s = self._grid_anchor_sec(sample_id)
+    def set_full_track_region(self, sample_id: int) -> None:
+        """Store and publish an explicit full-track loop region for a loaded pad."""
+        validate_sample_id(sample_id)
 
-        # Auto-loop is the default, even when BPM is unavailable.
-        start_s = self._snap_to_nearest_64th_grid(sample_id, start_s)
-        start_s = self._quantize_time_to_cached_samples(start_s)
+        if self._project.sample_paths[sample_id] is None:
+            return
 
-        bpm = normalize_bpm(self._transport.bpm.effective_bpm(sample_id))
-        if bpm is None:
-            return (start_s, None, True)
+        duration_s = self._project.sample_durations[sample_id]
+        if duration_s is None or not math.isfinite(duration_s) or duration_s <= 0.0:
+            return
 
-        duration_s = (4 * 4) * 60.0 / bpm
-        end_s = self._quantize_time_to_cached_samples(start_s + duration_s)
-        return (start_s, end_s, True)
+        start_s = 0.0
+        end_s = self._quantize_time_to_cached_samples(float(duration_s))
+        if end_s <= start_s:
+            return
+
+        changed = (
+            self._project.pad_loop_start_s[sample_id] != start_s
+            or self._project.pad_loop_end_s[sample_id] != end_s
+            or self._project.pad_loop_auto[sample_id]
+        )
+
+        self._project.pad_loop_start_s[sample_id] = start_s
+        self._project.pad_loop_end_s[sample_id] = end_s
+        self._project.pad_loop_auto[sample_id] = False
+        if changed:
+            self._transport._mark_project_changed()
+
+        self._apply_effective_pad_loop_region_to_audio(sample_id)
 
     def _apply_effective_pad_loop_region_to_audio(self, sample_id: int) -> None:
         if self._project.sample_paths[sample_id] is None:
@@ -174,6 +209,55 @@ class PadLoopController:
         frames = max(frames, 0)
         return frames / sample_rate_hz
 
+    @staticmethod
+    def _duration_s_for_bars(*, bars: float, bpm: float) -> float:
+        return (bars * 4.0) * 60.0 / bpm
+
+    @staticmethod
+    def _normalize_requested_bars(bars: float) -> float:
+        ensure_finite(bars)
+        bars = float(bars)
+        if bars < PAD_LOOP_BARS_MIN:
+            msg = f"bars must be >= {PAD_LOOP_BARS_MIN}, got {bars!r}"
+            raise ValueError(msg)
+
+        steps = bars / PAD_LOOP_BARS_GRANULARITY
+        rounded_steps = round(steps)
+        if not math.isclose(steps, rounded_steps, abs_tol=1e-9):
+            msg = f"bars must use {PAD_LOOP_BARS_GRANULARITY}-bar granularity, got {bars!r}"
+            raise ValueError(msg)
+        return float(rounded_steps * PAD_LOOP_BARS_GRANULARITY)
+
+    def _stored_bars(self, sample_id: int) -> float:
+        bars = float(self._project.pad_loop_bars[sample_id])
+        if not math.isfinite(bars) or bars < PAD_LOOP_BARS_MIN:
+            return PAD_LOOP_BARS_DEFAULT
+        return bars
+
+    def max_auto_loop_bars(self, sample_id: int) -> float | None:
+        """Return the largest auto-loop bar count that fits, or None when unknown."""
+        validate_sample_id(sample_id)
+
+        bpm = normalize_bpm(self._bpm.effective_bpm(sample_id))
+        if bpm is None:
+            return None
+
+        duration_s = self._project.sample_durations[sample_id]
+        if duration_s is None or not math.isfinite(duration_s) or duration_s <= 0.0:
+            return None
+
+        start_s = self._quantize_time_to_cached_samples(
+            float(self._project.pad_loop_start_s[sample_id])
+        )
+        remaining_s = float(duration_s) - start_s
+        if remaining_s <= 0.0:
+            return 0.0
+
+        bar_s = self._duration_s_for_bars(bars=1.0, bpm=bpm)
+        if bar_s <= 0.0:
+            return None
+        return remaining_s / bar_s
+
     def _effective_pad_loop_region(self, sample_id: int) -> tuple[float, float | None]:
         start_s = float(self._project.pad_loop_start_s[sample_id])
         end_s = self._project.pad_loop_end_s[sample_id]
@@ -190,21 +274,16 @@ class PadLoopController:
                 if end_s <= start_s:
                     end_s = start_s + one_sample_s
             return (start_s, end_s)
-        start_s = self._snap_to_nearest_64th_grid(sample_id, start_s)
 
         start_s = self._quantize_time_to_cached_samples(start_s)
 
         effective_bpm = self._bpm.effective_bpm(sample_id)
         bpm = normalize_bpm(effective_bpm)
         if bpm is None:
-            if end_s is not None:
-                end_s = self._quantize_time_to_cached_samples(float(end_s))
-                if end_s <= start_s:
-                    end_s = start_s + one_sample_s
-            return (start_s, end_s)
+            return (start_s, None)
 
-        bars = max(1, int(self._project.pad_loop_bars[sample_id]))
-        duration_s = (bars * 4) * 60.0 / bpm
+        bars = self._stored_bars(sample_id)
+        duration_s = self._duration_s_for_bars(bars=bars, bpm=bpm)
         end_s_effective = start_s + duration_s
         end_s_effective = self._quantize_time_to_cached_samples(end_s_effective)
         if end_s_effective <= start_s:
@@ -230,9 +309,14 @@ class PadLoopController:
         self._transport._mark_project_changed()
         self._apply_effective_pad_loop_region_to_audio(sample_id)
 
-    def set_bars(self, sample_id: int, *, bars: int) -> None:
+    def set_bars(self, sample_id: int, *, bars: float) -> None:
         validate_sample_id(sample_id)
-        bars = max(1, int(bars))
+
+        bars = self._normalize_requested_bars(bars)
+        max_bars = self.max_auto_loop_bars(sample_id)
+        if max_bars is not None and bars > max_bars + 1e-9:
+            return
+
         if bars == self._transport._project.pad_loop_bars[sample_id]:
             return
 

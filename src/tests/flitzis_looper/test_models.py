@@ -35,6 +35,8 @@ from flitzis_looper.constants import (
     PAD_GAIN_DB_DEFAULT,
     PAD_GAIN_DB_MAX,
     PAD_GAIN_DB_MIN,
+    PAD_LOOP_BARS_DEFAULT,
+    PAD_LOOP_BARS_MIN,
 )
 from flitzis_looper.models import (
     DEFAULT_TRIGGER_QUANTIZATION_STEP,
@@ -324,6 +326,14 @@ def test_project_state_defaults(project_state: ProjectState) -> None:
     assert all(key is None for key in project_state.manual_key)
     assert len(project_state.pad_gain_db) == NUM_SAMPLES
     assert all(gain_db == PAD_GAIN_DB_DEFAULT for gain_db in project_state.pad_gain_db)
+    assert len(project_state.pad_loop_start_s) == NUM_SAMPLES
+    assert all(start_s == 0.0 for start_s in project_state.pad_loop_start_s)
+    assert len(project_state.pad_loop_end_s) == NUM_SAMPLES
+    assert all(end_s is None for end_s in project_state.pad_loop_end_s)
+    assert len(project_state.pad_loop_auto) == NUM_SAMPLES
+    assert not any(project_state.pad_loop_auto)
+    assert len(project_state.pad_loop_bars) == NUM_SAMPLES
+    assert all(bars == PAD_LOOP_BARS_DEFAULT for bars in project_state.pad_loop_bars)
     assert project_state.sidebar_left_expanded is True
     assert project_state.sidebar_right_expanded is True
 
@@ -358,6 +368,25 @@ def test_legacy_pad_gain_below_unity_migrates_to_clamped_db() -> None:
     project = ProjectState.model_validate({"pad_gain": values})
 
     assert project.pad_gain_db[0] == pytest.approx(-6.0206, abs=1e-4)
+
+
+def test_pad_loop_bars_accepts_half_bar_and_legacy_integer_values() -> None:
+    project = ProjectState.model_validate({"pad_loop_bars": [4] * NUM_SAMPLES})
+    assert project.pad_loop_bars[0] == 4.0
+
+    project = ProjectState.model_validate({"pad_loop_bars": [0.5] * NUM_SAMPLES})
+    assert project.pad_loop_bars[0] == PAD_LOOP_BARS_MIN
+
+
+def test_pad_loop_bars_validation_rejects_invalid_values() -> None:
+    with pytest.raises(ValidationError, match="pad_loop_bars"):
+        ProjectState(pad_loop_bars=[0.0] * NUM_SAMPLES)
+
+    with pytest.raises(ValidationError, match="granularity"):
+        ProjectState(pad_loop_bars=[0.75] * NUM_SAMPLES)
+
+    with pytest.raises(ValidationError, match="pad_loop_bars"):
+        ProjectState(pad_loop_bars=[float("nan")] * NUM_SAMPLES)
 
 
 def test_trigger_quantization_settings_validation(project_state: ProjectState) -> None:

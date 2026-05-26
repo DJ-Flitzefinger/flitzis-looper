@@ -105,6 +105,7 @@ class BpmController:
         # Grid offset clamp depends on effective BPM, so re-clamp on changes.
         self._transport.loop.reclamp_grid_offset_samples(sample_id)
         self._transport.loop.apply_grid_anchor_to_audio(sample_id)
+        self._transport.loop._apply_effective_pad_loop_region_to_audio(sample_id)
 
         if self._session.bpm_lock_anchor_pad_id != sample_id:
             return
