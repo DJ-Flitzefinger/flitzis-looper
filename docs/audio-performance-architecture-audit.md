@@ -45,7 +45,7 @@ Major Rust audio modules:
 - `rust/src/messages.rs`: fixed message enums and shared buffer descriptors.
 - `rust/src/audio_engine/mixer.rs`: `RtMixer`, fixed sample slots, voice slots, loop playback,
   stem mixing, speed/BPM-lock/key-lock routing, gain/EQ, metering, playheads.
-- `rust/src/audio_engine/voice_slot.rs`: active voice state, per-voice DSP buffers, EQ state.
+- `rust/src/audio_engine/voice_slot.rs`: active voice state and per-voice stretch/key-lock buffers.
 - `rust/src/audio_engine/stretch_processor.rs`: bounded current varispeed/master-tempo wrapper.
 - `rust/src/audio_engine/dsp.rs`: current per-pad DSP chain and DJ isolator EQ node.
 - `rust/src/audio_engine/transport.rs`: output-frame transport clock and musical phase helpers.
@@ -57,7 +57,8 @@ Major Rust audio modules:
 
 Major Python/UI/controller modules:
 
-- `src/flitzis_looper/app.py`: app entrypoint.
+- `src/flitzis_looper/__main__.py` and `src/flitzis_looper/ui/run.py`: app entrypoint and ImGui
+  runner.
 - `src/flitzis_looper/controller/app.py`: controller composition and project restore.
 - `src/flitzis_looper/controller/loader.py`: load/unload and sample-state orchestration.
 - `src/flitzis_looper/controller/transport/`: playback, BPM, global parameters, loop operations.
@@ -110,9 +111,9 @@ MIDI is now captured in Rust outside the audio callback and enters either the di
 command path for simple playback actions or the Python controller path for controller-owned
 actions. This is the right direction.
 
-The current implementation is, however, a feature-accumulated engine rather than a complete
-professional DSP/FX architecture. Several preparation concepts have been cleaned up, and several
-still need cleanup before DSP/FX work:
+The current implementation is still a feature-accumulated engine rather than a complete
+professional DSP/FX architecture. The main preparation concepts have been moved into bounded Rust
+audio state, and remaining follow-up work should be selected as explicit post-isolator targets:
 
 - accepted performance master BPM is now bridged to transport-grid timing and mixer BPM-lock
   tempo matching,
@@ -129,7 +130,7 @@ still need cleanup before DSP/FX work:
   `openspec/changes/prepare-dsp-fx-foundation/`,
 - the first DJ isolator replacement slice now uses `audio_engine::dsp` as the fixed-size per-pad
   chain host and routes existing EQ controls to typed smoothed Rust DSP parameters,
-- the previous hardwired mixer `eq3.rs` path is no longer active as live EQ authority.
+- the previous standalone hardwired mixer EQ path is no longer active as live EQ authority.
 
 ## Rust Audio Engine And Hot Paths
 
@@ -182,9 +183,9 @@ Risks and gaps:
   handle-retiring control messages at the queue head until retirement capacity is available.
 - Audio-to-control messages are best-effort. Dropped `SampleStarted` or `SampleStopped` telemetry
   can desynchronize Python `SessionState` from live Rust state.
-- Live loop edits, EQ, and several parameter changes are immediate and unsmoothed, so clicks or
-  discontinuities are still possible during performance. Accepted active stem mode/mask changes now
-  use a short bounded Rust-side source-selection ramp.
+- Live loop edits and several non-EQ parameter changes are immediate and may still click or step
+  during performance. Per-pad EQ targets now smooth in the Rust DSP chain, and accepted active
+  stem mode/mask changes use a short bounded Rust-side source-selection ramp.
 
 ## Ringbus, Command, And Parameter Path
 
@@ -492,7 +493,7 @@ Findings:
 - Live Rust targets are normalized `0.0..1.0`, where `0.5` is neutral.
 - The initial isolator crossovers are `250 Hz` and `4 kHz`.
 - Active EQ target changes are smoothed on the Rust audio side before sample processing.
-- The old standalone `eq3.rs` coefficients and per-voice `Eq3State` are removed from the live
+- The old standalone mixer EQ coefficients and per-voice hardwired EQ state are removed from the live
   mixer path, so EQ is not double-applied.
 - The focused low/high tuning follow-up replaces the residual `dry - low - high` reconstruction
   with fixed-size Linkwitz-Riley-style band splitting for non-equal gains and an equal-gain dry

@@ -1,10 +1,10 @@
 # time-stretch-pitch-shift Specification
 
 ## Purpose
-TBD - created by archiving change add-real-time-time-stretch-pitch-shift. Update Purpose after archive.
+To define Rust-side realtime playback-rate and Key Lock behavior for active voices, including bounded tempo-ratio updates and callback-safe processing.
 ## Requirements
 ### Requirement: Real-time Time-stretch And Pitch-shift In Mixer
-The system SHALL perform time-stretch and pitch-shift in real-time inside the Rust mixer for each active voice, using Signalsmith Stretch via the `signalsmith_dsp` crate.
+The system SHALL perform playback-rate and Key Lock processing in real time inside the Rust mixer for each active voice, using bounded per-voice Rust processor state.
 
 #### Scenario: Mixer produces output using stretch processing
 - **GIVEN** a pad is playing a looping sample
@@ -57,4 +57,3 @@ The system SHALL NOT perform heap allocations during the audio callback while ap
 #### Scenario: Callback remains allocation-free
 - **WHEN** the mixer renders audio with time-stretch enabled
 - **THEN** no heap allocations occur
-

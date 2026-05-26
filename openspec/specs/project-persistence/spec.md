@@ -1,7 +1,7 @@
 # project-persistence Specification
 
 ## Purpose
-TBD - created by archiving change add-portable-project-persistence. Update Purpose after archive.
+To persist durable performer intent in a project-local JSON file while keeping invalid or missing restored assets from blocking application startup.
 ## Requirements
 ### Requirement: Persist And Restore ProjectState
 The system SHALL persist `ProjectState` to a JSON file at `./samples/flitzis_looper.config.json` and SHALL restore it on application start.
@@ -49,30 +49,31 @@ If a referenced audio file is missing, the system SHALL ignore that pad assignme
 
 If a referenced audio file exists but is not usable by the audio engine (e.g., invalid or unsupported format), the system SHALL ignore that pad assignment and MUST NOT crash.
 
-#### Scenario: Missing cached WAV does not crash
+#### Scenario: Missing cached audio file does not crash
 - **GIVEN** `ProjectState.sample_paths[pad_id]` points to a file under `./samples/`
 - **AND** that file does not exist on disk
 - **WHEN** the application restores the project
 - **THEN** the system ignores the sample for `pad_id`
 - **AND** the UI remains usable
 
-#### Scenario: Corrupt cached WAV does not crash
+#### Scenario: Corrupt cached audio file does not crash
 - **GIVEN** `ProjectState.sample_paths[pad_id]` points to a file under `./samples/`
 - **AND** that file exists but cannot be decoded
 - **WHEN** the application restores the project
 - **THEN** the system ignores the sample for `pad_id`
 - **AND** the UI remains usable
 
-### Requirement: Restore Validates Cached WAV Sample Rate
-When restoring a pad from a cached WAV file, the system SHALL validate that the cached WAV sample rate matches the current audio engine output sample rate.
+### Requirement: Restore Loads Cached Audio Through The Normal Loader
+When restoring a pad from a cached audio file, the system SHALL schedule the same async loader path used for newly selected files.
 
-If the cached WAV sample rate does not match, the system SHALL ignore that sample and MUST NOT crash.
+The loader SHALL decode, channel-map, and resample the restored file to the current audio engine output format outside the audio callback. Restore MUST NOT perform disk I/O, decoding, or resampling in the audio callback.
 
-#### Scenario: Cached WAV sample rate mismatch is ignored
-- **GIVEN** `ProjectState.sample_paths[pad_id]` points to a cached WAV under `./samples/`
-- **AND** that WAV exists but has a sample rate different from the current output sample rate
+#### Scenario: Cached audio sample rate mismatch is resampled outside the callback
+- **GIVEN** `ProjectState.sample_paths[pad_id]` points to a cached audio file under `./samples/`
+- **AND** that audio file exists but has a sample rate different from the current output sample rate
 - **WHEN** the application restores the project
-- **THEN** the system ignores the sample for `pad_id`
+- **THEN** the system schedules the cached file through the async loader
+- **AND** the loader resamples the decoded audio outside the audio callback
 - **AND** the UI remains usable
 
 ### Requirement: Persist per-pad grid offset samples
@@ -91,4 +92,3 @@ If `grid_offset_samples` is missing when loading older projects, the system SHAL
 - **WHEN** the project is loaded
 - **THEN** Pad A has `grid_offset_samples = +123`
 - **AND** Pad B has `grid_offset_samples = -456`
-

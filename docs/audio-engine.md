@@ -1,519 +1,208 @@
 # Audio Engine
 
-Flitzis Looper uses a Rust-based audio engine to meet real-time constraints while keeping the Python side focused on orchestration.
-Python interacts with a single `AudioEngine` object; the CPAL audio callback renders audio without acquiring the Python GIL.
+Flitzis Looper uses a Rust audio engine for realtime playback and a Python
+control/UI layer for orchestration. Python interacts with a single PyO3
+`AudioEngine` object from the native `flitzis_looper_audio` module. The CPAL
+audio callback renders without acquiring the Python GIL.
 
-## Architecture audit status
+## Architecture Status
 
-The professional audio/performance architecture audit is recorded in
-`docs/audio-performance-architecture-audit.md`. The current Rust ownership direction is correct,
-but future DSP/FX work should wait until the documented realtime-safety, command/parameter,
-state-ownership, and clock-preparation stages are complete or explicitly superseded by a new
-OpenSpec-backed request. The current state ownership boundary is recorded in
-`docs/audio-state-ownership.md`. The Stage 6 loop/source-position/stem alignment model is recorded
-in `docs/audio-loop-source-stem-alignment.md`. The Stage 8 DSP/FX foundation plan is recorded in
-`docs/dsp-fx-foundation-plan.md` and `openspec/changes/prepare-dsp-fx-foundation/`; the first
-implementation slice added the internal Rust per-pad DSP chain foundation. The DJ isolator
-replacement is now archived into `openspec/specs/per-pad-eq3/spec.md`, with the completed change
-record at `openspec/changes/archive/2026-05-26-replace-hardwired-eq-with-dj-isolator/`, and
-routes existing per-pad EQ controls to smoothed normalized Rust DSP parameters. The focused
-low/high kill tuning follow-up keeps that ownership boundary and tunes the internal isolator
-reconstruction for representative band-center suppression.
+The Gen3 preparation stages for realtime callback safety, command/parameter
+separation, state ownership, clock/scheduler ownership, loop/source/stem
+alignment, input mapping, DSP-chain foundation, and the per-pad DJ isolator
+replacement are complete. The current architecture is therefore ready for the
+next focused OpenSpec-backed target, but no new FX module, plugin host,
+deck/group/master chain, realtime stem separation, live loop-edit crossfade, or
+broad rewrite is implied by this document.
 
-Do not interpret audio safety as "Rust must not be touched". The protected boundary is the CPAL
-audio callback and realtime hot path. New Rust modules outside that boundary are allowed and
-encouraged when they improve correctness, latency, maintainability, or realtime safety.
+The protected boundary is the CPAL audio callback and realtime hot path. Rust
+modules outside that boundary may still be changed when a focused OpenSpec
+change justifies the work and preserves realtime constraints.
+
+## Runtime Split
+
+- Python owns UI rendering, `ProjectState` persistence, settings, input-mapping
+  edit UX, background sample/stem orchestration, and durable performer intent.
+- Rust owns live audio truth: transport timeline, scheduler, mixer state, voice
+  playheads, loop wrapping, playback-rate application, Key Lock processing,
+  prepared-stem rendering, realtime parameter application, per-pad DSP,
+  metering, and audio-to-control telemetry.
+
+## Signal Path
 
 ```text
-+---------------------+
-|   Flitzis Looper    |
-|      (Python)       |
-+----------+----------+
-           |
-           v
-+---------------------+
-|    AudioEngine      |
-| (Rust, cpal, PyO3)  |
-+----------+----------+
-           |
-           v
-+---------------------+
-|  System Audio API   |
-| (ALSA/PulseAudio)   |
-+---------------------+
+Python UI / controllers / persistence / background workers
+-> PyO3 AudioEngine API
+-> bounded Rust command ring + bounded Rust parameter ring
+-> CPAL audio callback
+-> bounded command drain and parameter coalescing
+-> TransportTimeline + TransportScheduler
+-> RtMixer voice slots
+-> full-mix or prepared-stem source selection
+-> source-frame loop wrap and voice playhead
+-> playback-rate / BPM Lock / Key Lock processing
+-> per-pad Rust DSP chain
+-> per-pad gain, trigger velocity, master volume
+-> metering and audio-to-control telemetry
+-> system audio output
 ```
 
-## High-level flow
-
-1. Python creates an `AudioEngine` instance and calls `run()`.
-2. `run()` initializes a CPAL output stream and two ring buffers (control→audio, audio→control).
-3. Python schedules audio loading into sample slots using `load_sample_async(id, path)` and polls `poll_loader_events()`.
-4. Python triggers playback using `play_sample(id, velocity)`.
-5. Optional MIDI input mapping is captured by a Rust input layer outside the audio callback,
-   timestamped immediately, normalized, resolved from an in-memory mapping snapshot, and then
-   bridged to the existing bounded control-command path where possible.
-6. The CPAL callback drains ordered command messages, coalesces separately queued parameter
-   messages, updates bounded audio state, routes play/stop commands through the Rust scheduler,
-   renders source playback through the per-pad DSP-chain DJ isolator and gain path, mixes active
-   voices into the output buffer, and advances the Rust transport timeline by rendered output
-   frames.
-7. Python controllers poll loader and audio runtime events; audio telemetry dispatch is owned by
-   `AppController.poll_runtime_events()`, which updates `SessionState` projections for pad peaks,
-   playheads, and active/stopped pads.
-8. Optional: Python can poll `receive_msg()` for messages emitted by the audio thread (e.g., `Pong`).
+The callback does not perform disk I/O, JSON access, Python/GIL work, UI work,
+plugin loading, neural inference, logging, blocking waits, or unbounded work.
 
 ## Module Structure
 
-The audio engine is organized into modular components following the single responsibility principle:
-
+```text
+rust/src/
+|-- lib.rs                         # PyO3 module export
+|-- messages.rs                    # fixed-size messages and shared descriptors
+`-- audio_engine/
+    |-- mod.rs                     # AudioEngine API and background orchestration
+    |-- audio_stream.rs            # CPAL callback, drains, scheduler integration
+    |-- buffer_retirement.rs       # non-audio retirement of large handles
+    |-- constants.rs               # banks, grid size, slot count, ranges
+    |-- dsp.rs                     # per-pad DSP chain and DJ isolator node
+    |-- input_mapping.rs           # Rust MIDI capture/dispatch outside callback
+    |-- mixer.rs                   # RtMixer, voices, loops, stems, gain, DSP
+    |-- scheduler.rs               # fixed-capacity output-frame scheduler
+    |-- transport.rs               # output-frame timeline and musical grid phase
+    |-- voice_slot.rs              # voice state and per-voice stretch buffers
+    |-- stretch_processor.rs       # bounded varispeed/master-tempo wrapper
+    |-- sample_loader.rs           # non-realtime decode/cache/resample
+    |-- analysis.rs                # non-realtime BPM/key/beat-grid analysis
+    |-- stem_cache.rs              # prepared-stem validation/loading
+    |-- progress.rs
+    |-- channels.rs
+    `-- errors.rs
 ```
-audio_engine/
-├── mod.rs              # Main orchestration, re-exports, public API
-├── constants.rs        # Configuration constants (NUM_BANKS, GRID_SIZE, etc.)
-├── dsp.rs              # Internal per-pad DSP chain, DJ isolator, typed parameter IDs, smoothing
-├── errors.rs           # Error types (SampleLoadError)
-├── voice.rs            # Voice struct and lifecycle management
-├── mixer.rs            # RtMixer implementation with real-time rendering
-├── sample_loader.rs    # Audio file decoding and channel mapping
-└── audio_stream.rs     # CPAL stream management and callback setup
-```
 
-Each module is `pub(crate)` with only `mod.rs` exposing the public API, ensuring clear encapsulation and reducing coupling between components.
+## Command And Parameter Path
 
-The Gen3 transport helper lives in `rust/src/audio_engine/transport.rs`; the fixed-capacity
-absolute-frame scheduler helper lives in `rust/src/audio_engine/scheduler.rs` and is owned by the
-CPAL callback.
+Control-to-audio communication is split into two bounded SPSC rings:
 
-The low-jitter input mapping helper lives in `rust/src/audio_engine/input_mapping.rs`. It owns
-MIDI capture, timestamping, filtering, in-memory mapping lookup, and dispatch bridging outside the
-CPAL callback.
+- Ordered command ring: play, stop, pause/resume, exclusive play, unload,
+  sample publication, prepared-stem publication, loop regions, stem mode/mask,
+  trigger quantization, Key Lock/BPM Lock mode, and other ordered state changes.
+- Fast parameter ring: high-rate scalar updates such as volume, speed, master
+  BPM, per-pad BPM, per-pad gain, and per-pad EQ/DSP targets.
 
-## Main components
+The callback drains at most `MAX_CONTROL_MESSAGES_PER_CALLBACK` ordered
+commands per invocation and at most `MAX_PARAMETER_MESSAGES_PER_CALLBACK`
+parameter messages per invocation. Both current budgets are `64`. Drained
+parameter messages are coalesced by identity before they are applied, so the
+latest drained target wins for each parameter in that callback.
 
-- Python (control layer)
-  - Owns the `AudioEngine` instance and calls its methods.
-  - Schedules potentially blocking work (disk I/O, decoding) via the Rust engine.
-  - Owns durable `ProjectState` and transient `SessionState` projections, with the detailed
-    state boundary documented in `docs/audio-state-ownership.md`.
+## Transport And Scheduling
 
-- Rust (real-time audio layer)
-  - `rust/src/audio_engine/mod.rs`: Main orchestration and Python-facing API.
-  - `rust/src/audio_engine/constants.rs`: Configuration constants and limits.
-  - `rust/src/audio_engine/dsp.rs`: Internal per-pad DSP-chain foundation, DJ isolator node,
-    typed fixed-size DSP parameter identities, and Rust-owned smoothing helpers.
-  - `rust/src/audio_engine/errors.rs`: Audio-specific error types.
-  - `rust/src/audio_engine/voice.rs`: Voice management and lifecycle.
-  - `rust/src/audio_engine/mixer.rs`: Real-time mixer implementation.
-  - `rust/src/audio_engine/input_mapping.rs`: MIDI capture, timestamping, filtering, in-memory
-    mapping lookup, and dispatch bridging outside the audio callback.
-  - `rust/src/audio_engine/stretch_processor.rs`: Per-voice bounded speed/key-lock DSP wrapper.
-  - `rust/src/audio_engine/transport.rs`: Audio-thread-owned output-frame clock and musical phase helpers.
-  - `rust/src/audio_engine/scheduler.rs`: Fixed-capacity absolute output-frame scheduler for playback events.
-  - `rust/src/audio_engine/buffer_retirement.rs`: Bounded non-audio retirement worker for large
-    sample and prepared-stem handles removed by the callback.
-  - `rust/src/audio_engine/sample_loader.rs`: Audio file decoding and channel mapping.
-  - `rust/src/audio_engine/audio_stream.rs`: CPAL stream management and callback.
-  - `rust/src/messages.rs`: Fixed-size message types shared between threads.
-  - Dependencies:
-    - `cpal` for the audio callback/stream.
-    - `midir` for MIDI input callbacks outside the audio callback.
-    - `rtrb` for SPSC ring buffers.
-    - `symphonia` for decoding audio files.
+`TransportTimeline` is the Rust-owned output-frame clock. It advances by the
+number of rendered output frames and derives musical phase from sample rate,
+master BPM, and downbeat anchor.
 
-## Speed, BPM Lock, and Key Lock DSP
+`TransportScheduler` stores bounded scheduled events by absolute output frame.
+Immediate and quantized play/stop paths both use scheduler execution. Quantized
+triggers choose when the pad becomes audible in output time; they do not seek
+inside the source loop. Explicit pad-derived phase sync uses
+`AudioEngine.anchor_transport_phase_from_pad(id)`.
 
-Global Pitch/Speed and BPM Lock both resolve to one per-voice tempo ratio in the Rust mixer:
+Accepted master-BPM parameter updates apply to both transport-grid timing and
+BPM-lock tempo matching while preserving current transport bar phase.
 
-- With BPM Lock disabled, the ratio is the global speed multiplier.
-- With BPM Lock enabled and valid master/pad BPM metadata, the ratio is `master_bpm / pad_bpm`.
+## Playback, Loops, And Stems
+
+The runtime keeps output-frame scheduling separate from source-frame playback:
+
+- Output frames belong to transport and scheduler timing.
+- Source frames belong to loaded full-mix buffers, prepared stems, loop regions,
+  and active voice playheads.
+
+Python persists loop intent in seconds. Rust converts accepted loop regions to
+half-open source-frame ranges and owns live playhead wrapping. Live loop edits
+apply immediately: an in-range playhead is preserved; an out-of-range playhead
+is clamped to the new loop start. There is no live loop-edit crossfade yet.
+
+Stems are generated offline in Python background work. Rust accepts prepared
+immutable stem buffers only after non-realtime validation and renders them
+through the same source-frame playhead, loop, BPM Lock, Key Lock, per-pad DSP,
+gain, metering, and telemetry path as full-mix playback. Active full-mix/stem
+mode and stem-mask changes use bounded Rust-owned transition state with a short
+128 source-frame crossfade.
+
+## Speed, BPM Lock, And Key Lock
+
+Speed and BPM Lock resolve to one Rust mixer tempo ratio per active voice:
+
+- BPM Lock off: the ratio is the global speed multiplier.
+- BPM Lock on with valid metadata: the ratio is `master_bpm / pad_bpm`.
 - Pads without valid BPM metadata fall back to the global speed multiplier.
 
-Key Lock selects how that tempo ratio is rendered:
+Key Lock selects how that ratio is rendered:
 
-- Key Lock disabled uses varispeed semantics. The source playhead advances by the tempo ratio, and
-  perceived pitch follows the speed change.
-- Key Lock enabled uses the master-tempo path. The source playhead still advances by the tempo
-  ratio, but a bounded per-voice pitch-compensation stage reduces the pitch movement caused by
-  varispeed playback.
+- Key Lock off uses varispeed semantics, so pitch follows playback speed.
+- Key Lock on uses the bounded master-tempo wrapper in
+  `stretch_processor.rs`, preserving source playhead timing while applying
+  pitch compensation.
 
-Key Lock DSP parameters are persisted as one bounded global parameter set. New projects default to
-the former `High` baseline:
+Key Lock settings are bounded scalar values persisted in `ProjectState` and
+published to Rust as fixed-size control messages. Voice-local buffers are
+constructed before callback rendering and reused during processing.
 
-- delay minimum: `64` samples,
-- delay range: `1536` samples,
-- delay heads: `2`,
-- interpolation: `cubic`,
-- window: `hann`,
-- smoothing step: `0.05`,
-- output gain: `1.0`.
+## Per-Pad DSP And EQ
 
-The supported manual Settings ranges are delay minimum `16..512` samples, delay range
-`256..1984` samples, combined delay minimum plus range at most `2032` samples, head count `2..4`,
-interpolation `linear` or `cubic`, window `triangle` or `hann`, smoothing step `0.01..0.10`, and
-output gain `0.25..2.0`. Legacy Key Lock quality values remain compatibility aliases that map to
-concrete parameter sets.
+`dsp.rs` provides the current fixed-size per-pad DSP chain. The first live node
+is the per-pad 3-band DJ isolator. The public Python/UI EQ API remains
+compatible with dB-oriented project intent, while Rust converts accepted live
+targets to normalized DSP parameters:
 
-The current implementation is intentionally held inside `stretch_processor.rs` behind a narrow
-wrapper so a future pro-grade backend can replace the internal algorithm. The wrapper owns fixed
-per-channel input, intermediate/output, and delay-line buffers that are constructed with the voice
-slots before the CPAL callback runs. Rendering reuses that memory; it does not resize buffers,
-read files, load plugins, call Python, block, log, or allocate audio payloads in the callback.
-Changing Key Lock parameters sends only bounded scalar state to Rust and does not retrigger active
-voices.
+- `0.0`: band kill
+- `0.5`: neutral
+- `1.0`: limited boost
 
-Prepared stems and full-mix playback share the same source-frame reader before Key Lock
-processing. Stem mask/mix changes therefore preserve the same loop playhead, BPM-lock ratio,
-Key-Lock mode, gain/EQ, metering, and playhead reporting path as full-mix playback.
+The old standalone mixer EQ path is not active as a second processing stage.
+Future DSP/FX work should extend the Rust DSP-chain path through focused
+OpenSpec changes.
 
-## Loop, source position, and prepared stems
+## Loading, Analysis, And Persistence
 
-Loop and stem alignment terms are defined in `docs/audio-loop-source-stem-alignment.md`.
-In short, output-frame time belongs to the Rust transport timeline and scheduler, while
-source-frame position belongs to active mixer voices. Python persists loop-edit intent in seconds;
-Rust converts accepted loop regions to half-open source-frame ranges and owns live playhead
-wrapping. Prepared stems are eligible for all-stems playback only when they share the loaded
-full-mix source version, sample rate, channel layout, frame count, and source-frame origin.
+`AudioEngine.load_sample_async(id, path, run_analysis=True)` decodes, resamples,
+caches the source under `samples/`, optionally analyzes BPM/key/beat grid, and
+publishes a shared immutable sample handle to the audio thread. This work runs
+outside the callback.
 
-Live loop edits apply immediately: an active voice keeps its current source frame when it remains
-inside the new loop and clamps to the new loop start when it is outside. Live loop edits still do
-not crossfade. Stem mode and mask changes select already prepared buffers without retriggering the
-voice and now use a bounded Rust-side 128 source-frame transition ramp for active pads before the
-existing Key Lock, gain/EQ, metering, and playhead path. Inactive pads do not retain stale
-transitions.
+Project persistence stores durable intent in `samples/flitzis_looper.config.json`.
+The controller restores project state, applies bounded audio settings, validates
+stem cache metadata, schedules cached sample loads, and publishes input mapping
+runtime state.
 
-## Threading and real-time constraints
+## Current Python API Surface
 
-The project deliberately separates non-real-time work from the real-time audio callback:
+The native `AudioEngine` exposes lifecycle, sample, stem, playback, transport,
+parameter, input mapping, loader/event polling, and waveform-render-data APIs.
+The type stub in `src/flitzis_looper_audio/__init__.pyi` is the current compact
+reference for the Python surface.
 
-- The audio callback MUST avoid blocking, disk I/O, heap allocations, logging, and Python/GIL interaction.
-- Inter-thread communication uses fixed-capacity ring buffers (1024 messages).
-- Ordered control commands and fast scalar parameter updates use separate control-to-audio rings.
-- The callback drains at most `MAX_CONTROL_MESSAGES_PER_CALLBACK` ordered command messages per
-  invocation, currently `64`; additional command messages remain queued for later callbacks.
-- The callback drains at most `MAX_PARAMETER_MESSAGES_PER_CALLBACK` parameter messages per
-  invocation, currently `64`; repeated drained updates for one parameter identity are coalesced
-  before mixer state is updated.
-- MIDI input ports, keyboard input, mapping JSON files, and Learn UI state are outside the audio
-  callback. Rust input/control modules may own MIDI callbacks and bounded queues, but they may
-  only affect playback by sending bounded ordered command messages through the established command
-  path.
-- Sample playback is designed for predictable performance:
-  - `MAX_SAMPLE_SLOTS` fixed sample slots addressed by `id` (`0..n`).
-  - `MAX_VOICES` fixed polyphony; additional triggers are dropped deterministically.
-- Sample decoding happens outside the callback. Decoded sample data is published to the audio thread via a shared handle (no full-buffer copies just for cross-thread transfer).
-- Sample and prepared-stem handles removed, replaced, or rejected by the callback are moved to a
-  bounded non-audio retirement worker so large final `Arc` drops do not run on the callback
-  thread.
-- Oversized render slices are split into chunks that fit the existing preallocated per-voice
-  stretch buffers.
-- The current per-pad DSP chain is fixed-size and hosts the DJ isolator EQ node. Its state is
-  owned by `RtMixer`, and callback processing only touches already prepared chain state before the
-  existing gain/metering path.
+## Not Implemented Yet
 
-## Gen3 transport timeline plan
+- Audio device selection/configuration beyond the default CPAL output device.
+- Broader channel-layout support beyond the current mono/stereo mapping.
+- Realtime stem separation.
+- Plugin hosting or external plugin scanning.
+- Live loop-edit crossfade/zero-crossing transition policy.
+- Deck/group/master DSP chains.
+- A richer reliable audio-state snapshot/acknowledgement stream beyond current
+  best-effort telemetry.
 
-The first Gen3 behavior change is specified in
-`openspec/changes/add-rust-transport-timeline/`. The initial transport timeline module now
-exists and is owned by the audio callback. The fixed-capacity scheduler module now exists
-with deterministic unit tests, and the audio callback owns a scheduler for current-frame
-playback integration.
-
-Implemented first slice:
-
-- `TransportTimeline` stores the absolute output-frame clock, output sample rate, default
-  transport master BPM, and downbeat anchor.
-- The CPAL callback advances the transport by the number of rendered output frames.
-- Rust validates transport master BPM and derives beat/bar phase for 4/4 timing.
-- Accepted master-BPM parameter updates are applied to both mixer BPM-lock tempo matching and
-  transport-grid timing while preserving the current transport bar phase.
-- Deterministic Rust unit tests cover frame advancement, BPM conversion, phase, grid
-  boundary calculations, and invalid BPM fallback.
-- `FixedCapacityScheduler` stores accepted events in bounded array storage, orders by
-  absolute output frame, preserves same-frame insertion order, drains late events at the
-  current callback start frame, and rejects new events when full without eviction.
-- Scheduler tests cover named capacity, target-frame ordering, same-frame stable ordering,
-  late events, in-buffer target execution frames, and full-capacity rejection.
-- The CPAL callback owns `TransportScheduler` and routes `PlaySample`, `StopSample`, and
-  `StopAll` through current-frame scheduled commands while preserving the public immediate
-  `play_sample` behavior.
-- Scheduled events inside an output buffer split rendering at the target frame so starts and
-  stops occur at the intended sample-frame offset.
-- `AudioEngine.set_trigger_quantization(mode)` publishes a fixed-size trigger-quantization
-  update to the audio thread. The controller uses `"immediate"` while trigger quantization is
-  disabled and grid-step strings `"1_64"`, `"1_32"`, or `"1_16"` while it is enabled. The
-  persisted Settings default is `"1_64"`, but new projects keep the bottom-bar `Q` toggle
-  disabled so playback remains immediate by default. Legacy `"next_beat"` and `"next_bar"`
-  inputs remain accepted as compatibility aliases for `"1_16"`.
-- `AudioEngine.set_pad_timing_metadata(id, phase_anchor_s)` publishes bounded per-pad
-  beatgrid/downbeat timing metadata prepared outside the audio callback. The Python controller
-  derives `phase_anchor_s` from the same `grid_anchor_sec` that the waveform editor draws and
-  snaps against: first finite non-negative downbeat, then first finite non-negative beat, then
-  `0.0`, plus the per-pad grid offset in samples. Unloaded pads do not publish stale grid anchors
-  to Rust, and published anchors are bounded to non-negative seconds before crossing the native API.
-- When trigger quantization is enabled, Rust computes the current or next future selected-grid
-  target frame from the permanent `TransportTimeline`, the downbeat anchor, and the selected grid
-  step, then schedules `PlaySample` at that absolute output frame. Quantization only changes when
-  the pad becomes audible in output time; every newly triggered pad starts from its effective Loop
-  Editor loop start, or sample start when no loop region exists. Rust does not compensate late
-  clicks by starting inside the loop and does not establish the masterclock from active pads.
-- Scheduler-full quantized play requests are rejected without evicting existing scheduled events
-  or changing currently playing pads.
-- `AudioEngine.play_sample_exclusive(id, velocity)` publishes one fixed-size command for
-  one-at-a-time playback. With quantization enabled, Rust schedules the stop-all operation and
-  requested pad start as one atomic `StopAllThenPlaySample` event at the same absolute output
-  frame; scheduler-full rejection leaves current playback unchanged.
-- The corrected `add-phase-aware-playback-sync` slice keeps `TransportTimeline` target-frame phase
-  helpers and `RtMixer` phase helper coverage available for explicit sync behavior, but normal
-  quantized `PlaySample` and `PlaySampleExclusive` events no longer carry a source-frame phase
-  descriptor and no longer seek into the source loop.
-- Immediate playback commands carry no phase descriptor, so `play_sample` and
-  `play_sample_exclusive` keep the existing prompt loop-start behavior when trigger quantization
-  is disabled.
-- `AudioEngine.anchor_transport_phase_from_pad(id)` publishes a fixed-size explicit phase-anchor
-  request. When the selected pad is active and has valid BPM/timing metadata, the audio thread
-  derives the pad's current bar phase from mixer state and moves the Rust transport downbeat anchor
-  to the matching phase while setting the transport BPM from the active pad output tempo when
-  needed. If the pad is inactive, paused, or missing BPM/timing metadata, the transport downbeat is
-  left unchanged and existing BPM-ratio tempo matching continues.
-
-The planned direction is:
-
-- Rust owns the global transport timeline and advances it by rendered output sample frames.
-- The global transport timeline runs independently of active pad count and trigger quantization
-  state.
-- Scheduled playback events target absolute output-frame positions.
-- Rust stores transport master BPM and derives beat/bar phase from the audio-thread sample-frame
-  clock.
-- Quantized pad triggers use a fixed-capacity scheduler owned by the audio thread.
-- Existing immediate trigger behavior remains the default when trigger quantization is disabled.
-- Quantized pad triggers preserve source-side loop starts and manual musical offsets between pads.
-- Beatgrid and downbeat metadata is prepared outside the audio callback, then published as
-  bounded per-pad timing metadata for Rust playback timing.
-
-The audio callback must remain real-time safe for this work. It must not perform disk I/O,
-Python/GIL access, blocking waits or locks, logging, heavy allocations, neural network
-inference, real-time stem separation, or long-running work.
-
-Later Gen3 stem work must be offline/cache-based. Stem generation is only allowed for pads
-that are not currently playing; the audio callback may only mix already prepared audio data.
-
-The active Gen3 stem planning slice is `openspec/changes/add-offline-stem-cache/`. It defines
-offline/background stem generation, project-local stem cache identity, inactive-pad gating,
-fixed-size publication of prepared immutable stem buffers, and future real-time-safe stem mixing
-using the same voice playhead and loop timing as full-mix playback. It does not implement neural
-inference, stem UI, or mixer stem toggles.
-
-The performer-facing stem control planning slice is
-`openspec/changes/add-stem-performance-controls/`. It defines stem availability indicators,
-selected-pad generation entry points, explicit full-mix versus all-stems mode selection, future
-per-stem mute/solo/toggle controls, persistence expectations, and fixed-size audio-thread stem mix
-control messages. This planning slice does not implement UI controls, production source
-separation, neural model integration, or new mixer control behavior.
-
-The current stem implementation defines Python-side project metadata for a pad-scoped
-project-local `samples/stems/#<pad-number>/` cache layout, using a source-version token derived
-from the cached source path plus file metadata. The controller rejects stem generation requests
-for pads that are playing, loading, analyzing, already generating stems, missing a loaded source,
-or missing the cached source file. The selected-pad sidebar now renders controller/session stem
-status, routes Generate Stems and Delete Stems through controller actions, and exposes the durable
-full-mix/all-stems mode control without inspecting cache directories in the render loop. Unload
-Audio deletes the tracked pad stem cache outside the audio callback.
-
-Production stem generation now runs through a replaceable Python-side backend boundary. The first
-backend adapter invokes Demucs from a background worker, with Torch/Demucs work kept out of app
-startup and out of Rust. The backend request carries the source path, pad id, source version,
-project-local cache directory, loaded sample shape, model cache directory, and device policy. The
-Demucs adapter maps `other.wav` to project `melody.wav`, derives `instrumental.wav` by summing the
-final aligned drums, bass, and melody artifacts, and postprocesses final cache WAV files so they
-match the loaded full-mix sample rate, channel count, and frame count before Rust publication.
-User-facing setup commands for FFmpeg and the Demucs model are documented in
-`docs/stem-generation-setup.md`.
-Demucs is declared as a runtime dependency of the application so a freshly synced environment can
-start the backend. Model download is intentionally not started from the Looper UI: the performer
-must install the Demucs model ahead of time, and the backend reports the short error
-`no Model installed` when the expected local checkpoint is missing. If the active Python
-environment is not synced or is otherwise missing Demucs/Torch, generation reports a normal
-background-task error and full-mix playback remains available.
-Demucs also requires working `ffprobe` and `ffmpeg` executables for audio probing/decoding. The
-backend checks those tools before invoking Demucs and reports `FFmpeg/ffprobe unavailable` when
-Windows cannot run them. Tool lookup uses the process `PATH`, an explicit `FLITZIS_FFMPEG_DIR`
-directory, or a local WinGet `Gyan.FFmpeg*` package install, and prepends the resolved directory
-to the Demucs subprocess environment. Because the installed Torchaudio save path uses TorchCodec,
-the backend also checks TorchCodec before invoking Demucs and reports `TorchCodec unavailable` if
-its native libraries cannot load.
-The first production backend uses Demucs defaults of `--shifts 4` and
-`--overlap 0.5`. Those values are bounded request parameters (`shifts` 1 through 20 and
-`overlap` 0.25 through 0.95). The Settings page persists validated replacements in project state,
-and `StemController.generate_stems_async(...)` copies them into the file/artifact backend request.
-`AudioEngine.publish_prepared_stems(id, source_version, cache_dir)` validates those cached WAV
-artifacts against the currently loaded full-mix buffer outside the audio callback, then publishes
-shared immutable prepared-stem handles to Rust through a fixed-size control message.
-
-Demucs model files are kept in the standard Torch Hub checkpoint cache, outside the repository and
-outside project samples. On Windows this is
-`C:\Users\<YOUR_NAME>\.cache\torch\hub\checkpoints`; the default `htdemucs` checkpoint expected by
-the Looper is `955717e8-8726e21a.th`. GPU acceleration is optional. CPU separation is supported
-but slower. Windows GPU acceleration requires an NVIDIA GPU, a compatible/current NVIDIA driver,
-and a CUDA-enabled PyTorch/Torchaudio build; the separate CUDA Toolkit is not expected for normal
-packaged PyTorch use. If the CUDA path fails, the background worker retries on CPU when CPU
-processing can proceed.
-
-The low-level Rust API still exposes a deterministic `generate_stems_async(id, source_version,
-cache_dir)` cache writer for engine-level validation. It is not the production separation path.
-The audio callback accepts prepared handles only for loaded inactive pads and stores them in
-bounded per-pad/per-stem state. The first performer-control implementation slice adds a durable
-per-pad `full_mix`/`all_stems` preference with `full_mix` as the default for new and older
-projects. Rust stores that preference as bounded audio-thread state updated by fixed-size control
-messages, and prepared stems are used only when `all_stems` is selected and the accepted prepared
-set matches the requested source-version hash. Missing, stale, incomplete, rejected, or disabled
-stems fall back to the loaded full-mix buffer. The next performer-control slice added a selected-pad
-bottom-bar `V`/`D`/`M`/`B`/`I`/`A` mask control: `V`, `D`, `M`, and `B` toggle component stems,
-`I` selects Drums + Melody + Bass, and `A` selects Vocals + Drums + Melody + Bass. Component clicks
-from `I` or `A` enter custom mode with only the clicked component active, while custom masks that
-match a preset remain custom until the performer explicitly clicks that preset. `I` and `A` share
-one exclusive preset group: entering a preset remembers the last `V`/`D`/`M`/`B` component mask,
-switching between presets preserves that remembered mask, and clicking the active preset again
-returns to it. The cached `instrumental.wav` artifact is not used as the `I` preset or as an extra
-layer in `A`. The pad grid now renders compact stem status badges for available, generating,
-blocked, and error states from controller/session snapshots only. Production source separation is
-now provided by the background Demucs backend. A bottom-right Settings overlay exposes manual
-Key Lock DSP parameters plus Demucs shifts and overlap controls, stores them as project settings,
-and leaves stem
-generation, model lookup, and cache work on the existing background path. Right-clicking `V`, `D`, `M`, or `B`
-sets a non-momentary custom solo state for that component without adding a separate mute feature.
-
-The active Gen3 phase-aware sync slice is `openspec/changes/add-phase-aware-playback-sync/`. It now
-keeps normal quantized starts loop-start based while preserving bounded transport/pad phase helpers
-for explicit sync behavior. Accepted master-BPM updates are shared by BPM-lock tempo matching and
-transport-grid timing, while pad-derived transport phase anchoring remains explicit through
-`anchor_transport_phase_from_pad`.
-
-The Stage 4 state ownership slice is
-`openspec/changes/clarify-state-ownership-boundary/`. `ProjectState` owns durable performer
-intent, `SessionState` owns transient UI/control projections, and Rust owns live audio state.
-Audio-to-control telemetry is now dispatched by the controller layer; the UI render context only
-requests polling.
-
-## Gen3 low-jitter input mapping
-
-The active low-jitter input mapping slice is
-`openspec/changes/add-low-jitter-input-mapping/`. It keeps Python in charge of Settings, Learn
-state, keyboard focus rules, and mapping-file edits, while moving the MIDI hot path into Rust
-outside the CPAL callback.
-
-Implemented first slice:
-
-- The `L` Learn workflow is preserved: `L -> input -> learnable action` saves a mapping, and
-  `L -> input -> L` deletes that input's existing mapping.
-- Learnable control coverage includes Tap BPM, the bottom-bar selected-pad `V`/`D`/`M`/`B`/`I`/`A`
-  stem mask buttons, per-pad Gain, per-pad EQ bands, Master Volume, and the global Speed/Pitch
-  control. Keyboard and MIDI Note mappings to continuous controls save bounded set-value actions
-  from the selected UI value. MIDI CC and NRPN increment/decrement mappings to those controls save
-  relative-step actions: the first value establishes a baseline, then later encoder movement
-  applies one controller-owned increment or decrement outside the audio callback. The relative path
-  handles endless-controller 0..127 wraparound, repeated relative encoder values such as `1`/`127`
-  or `65`/`63`, and NRPN Data Increment/Data Decrement messages normalized to stable
-  `midi:nrpn:<channel>:<parameter>` bindings. The controller-side setters clamp at the existing
-  target limits. Global Speed/Pitch relative steps use the displayed-BPM reference when available,
-  so each relative movement targets a 0.1 BPM change and is converted back to the bounded speed
-  multiplier before reaching Rust; without a BPM reference, the existing bounded multiplier step
-  remains the fallback. Hardware endless knobs should be configured for relative/inc-dec output;
-  absolute CC mode still reports a finite device-side 0..127 position. MIDI values still do not
-  become audio-callback parameter streams.
-- Keyboard mappings retain key-plus-modifier bindings, do not execute while text input is
-  focused, and remain the responsiveness reference for mapped dispatch.
-- MIDI Note On velocity greater than zero, Control Change, and NRPN increment/decrement are
-  normalized to stable binding keys such as `midi:note:1:60`, `midi:cc:1:7`, and
-  `midi:nrpn:1:0`.
-- Note On velocity zero, Active Sensing, MIDI Clock, SysEx, Program Change, Pitch Bend,
-  Aftertouch, and MPE-style messages are ignored for version 1.
-- Incoming MIDI events are stamped with a monotonic timestamp immediately in the Rust MIDI
-  callback and placed onto a bounded channel without Python, JSON, UI updates, or logging.
-- Normal mapped MIDI playback resolves against an in-memory snapshot published by Python after
-  Learn/save/delete/clear-all changes. The hot path does not read or write JSON.
-- Direct audio-safe actions such as pad trigger, pad stop, and stop-all are bridged to the
-  existing bounded control-command path. Other mapped actions are reported to Python for
-  controller-owned execution outside the hot path.
-- The Settings page exposes Input Mapping ON/OFF plus Delete all Keyboard Mappings and Delete
-  all MIDI Mappings.
-
-The Rust MIDI input layer is not part of the audio callback. The audio callback must never handle
-MIDI ports, keyboard polling, Learn state, mapping JSON, Python/GIL access, blocking locks,
-logging, neural inference, or unbounded work.
-
-Stage 7 adds the future DSP-parameter mapping policy in
-`docs/input-mapping-dsp-parameter-policy.md`. The current MIDI behavior stays unchanged: direct
-Rust dispatch remains for existing discrete audio-safe commands, while future mapped DSP knobs
-should resolve to stable action keys, bounded controller-owned targets, the bounded Rust parameter
-path, and audio-side smoothing before sample processing.
-
-## Current Python API surface
-
-The Rust engine is exposed to Python as `AudioEngine` with:
-
-- Lifecycle
-  - `AudioEngine()`
-  - `run()`
-  - `shut_down()`
-
-- Sample workflow
-  - `load_sample_async(id, path)` schedules loading on a Rust background thread.
-  - `poll_loader_events()` polls for background loader events (e.g. started/success/error).
-  - `play_sample(id, velocity)` triggers playback (`velocity` in `0.0..=1.0`).
-  - `play_sample_exclusive(id, velocity)` stops all active voices and starts the requested loaded
-    sample as one audio-thread command. The controller uses this for MultiLoop-disabled playback.
-  - `set_trigger_quantization(mode)` sets low-level Rust trigger quantization mode. Supported
-    modes are `"immediate"` plus grid steps `"1_16"`, `"1_32"`, and `"1_64"`. Legacy
-    `"next_beat"` and `"next_bar"` aliases remain accepted as `"1_16"`.
-    The Python controller persists `trigger_quantization_enabled` separately from
-    `trigger_quantization_step`; the bottom-bar `Q` toggle enables/disables quantization and the
-    Settings page selects the grid step.
-  - `set_pad_timing_metadata(id, phase_anchor_s)` publishes a finite non-negative per-pad phase
-    anchor derived from analysis metadata. It is stored in Rust state for pad timing metadata and
-    explicit sync behavior; full beat-grid vectors are not sent to the callback.
-  - `anchor_transport_phase_from_pad(id)` explicitly requests transport downbeat anchoring from a
-    selected playing pad using only audio-thread-owned transport and mixer state.
-  - `set_input_mapping_enabled(enabled)` turns the Rust input layer's mapping resolution on or off.
-  - `set_input_mapping_snapshot(mappings)` publishes `(binding_key, action_key)` MIDI mappings to
-    Rust for in-memory lookup.
-  - `set_input_runtime_state(multi_loop, loaded, loop_starts, loop_ends)` publishes the bounded
-    pad runtime state needed for direct Rust dispatch.
-  - `start_midi_input()` opens available MIDI input ports through the Rust input layer.
-  - `stop_midi_input()` closes those MIDI input connections.
-  - `poll_input_events()` polls normalized MIDI input events, including MIDI value, for Learn UI
-    and diagnostics.
-  - `inject_midi_input_for_test(message)` injects a MIDI message into the same normalization path
-    for hardware-free bridge tests.
-
-- Messaging utilities
-  - `ping()` sends a ping to the audio thread.
-  - `receive_msg()` polls for an `AudioMessage` from the audio thread and returns `None` when no message is available.
-
-## Not implemented (yet)
-
-- Audio device selection/configuration (the engine currently uses the default output device/config).
-- Broader channel-layout support; currently decoding only supports mono↔stereo mapping.
-- Real-time stem separation is intentionally out of scope.
-- Offline stem cache identity, request gating, deterministic cache artifact writing, prepared
-  stem-buffer validation/publication, prepared-stem rendering fallback infrastructure, durable
-  full-mix/all-stems mode plumbing, selected-pad stem status, Generate Stems button wiring,
-  selected-pad full-mix/all-stems controls, bottom-bar selected-pad per-stem mask controls, and
-  pad-grid stem indicators are implemented. Production Demucs source separation is implemented
-  behind a replaceable backend boundary, and the Settings overlay now exposes the bounded Demucs
-  quality parameters. The selected-pad Delete Stems action, automatic stem deletion on Unload
-  Audio, and component right-click solo setter are implemented; no separate stem mute feature is
-  planned for the current Gen3 direction.
-
-## Related specs
+## Related Specs And Docs
 
 - `openspec/specs/minimal-audio-engine/spec.md`
 - `openspec/specs/ring-buffer-messaging/spec.md`
 - `openspec/specs/load-audio-files/spec.md`
 - `openspec/specs/play-samples/spec.md`
+- `openspec/specs/per-pad-eq3/spec.md`
 - `openspec/changes/add-rust-transport-timeline/`
 - `openspec/changes/add-phase-aware-playback-sync/`
 - `openspec/changes/add-offline-stem-cache/`
+- `openspec/changes/add-stem-performance-controls/`
 - `openspec/changes/add-low-jitter-input-mapping/`
 - `openspec/changes/clarify-state-ownership-boundary/`
 - `openspec/changes/prepare-dsp-fx-foundation/`
-- `openspec/changes/replace-hardwired-eq-with-dj-isolator/`
+- `openspec/changes/archive/2026-05-26-replace-hardwired-eq-with-dj-isolator/`

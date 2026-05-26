@@ -115,7 +115,7 @@ The waveform editor SHALL support the following mouse interactions over the wave
 - **GIVEN** the waveform editor is visible
 - **AND** the waveform is zoomed such that individual samples are visible
 - **WHEN** the performer sets a loop marker
-- **THEN** the resulting marker time corresponds to an integer sample index at the cached WAV sample rate
+- **THEN** the resulting marker time corresponds to an integer sample index at the loaded sample rate
 
 #### Scenario: Right click sets loop end only in manual mode
 - **GIVEN** the waveform editor is visible
@@ -256,4 +256,3 @@ Note: `1/32` and `1/64` are shorthand for 1/32-note and 1/64-note subdivisions i
 - **WHEN** the waveform editor renders the grid
 - **THEN** it selects `1/16 beat` (1/64-note) as the visible subdivision
 - **AND** it renders 1/64-note minor lines
-

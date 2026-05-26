@@ -2,13 +2,14 @@
 
 Date: 2026-05-26
 
-Status: Stage 7 architecture clarification. This document does not implement a new EQ, DSP/FX
-node, plugin host, smoothing layer, or new MIDI behavior.
+Status: maintained input-mapping policy for current and future Rust DSP parameters. The per-pad
+DJ isolator now uses the bounded Rust DSP parameter path; this document does not authorize a new
+DSP/FX node, plugin host, direct MIDI-to-callback path, or new MIDI behavior.
 
 ## Purpose
 
-This document defines how keyboard and MIDI mappings should approach future DSP parameters after
-the Gen3 low-jitter input work and before the DSP/FX foundation is built. It complements
+This document defines how keyboard and MIDI mappings should approach current and future DSP
+parameters after the Gen3 low-jitter input work and the first DSP-chain foundation. It complements
 `docs/audio-performance-architecture-audit.md`, `docs/message-passing.md`, and
 `docs/audio-state-ownership.md`.
 
@@ -24,9 +25,9 @@ The Rust MIDI layer may capture, timestamp, normalize, and resolve mappings outs
 callback. It must not become a direct callback path. The audio callback only observes bounded
 command messages or bounded parameter messages later.
 
-## Future DSP Parameter Rules
+## DSP Parameter Rules
 
-Future mapped DSP parameters should use these rules:
+Mapped DSP parameters should use these rules:
 
 1. Keyboard and MIDI Note mappings may save bounded set-value actions when the UI target value is
    explicit and finite.
@@ -50,10 +51,10 @@ loop regions, and Multi Loop mode. That snapshot can be slightly stale until the
 This is acceptable for current trigger gating because direct dispatch remains all-or-nothing and
 falls back by rejecting unsafe or incomplete command sequences.
 
-Future DSP mappings should not depend on this snapshot for live DSP truth. Rust owns live DSP
-parameter state after accepted parameter updates, while Python owns persisted performer intent and
-mapping-edit UX. If a future mapped DSP action needs context, the controller should derive the
-target value outside the callback and publish a typed parameter update to Rust.
+DSP mappings should not depend on this snapshot for live DSP truth. Rust owns live DSP parameter
+state after accepted parameter updates, while Python owns persisted performer intent and
+mapping-edit UX. If a mapped DSP action needs context, the controller should derive the target
+value outside the callback and publish a typed parameter update to Rust.
 
 ## Non-Goals
 

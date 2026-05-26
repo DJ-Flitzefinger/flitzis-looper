@@ -1,7 +1,7 @@
 # audio-analysis Specification
 
 ## Purpose
-TBD - created by archiving change add-sample-audio-analysis. Update Purpose after archive.
+To define background audio analysis for BPM, key, beat grid, and downbeat metadata used by UI display, snapping, and Rust timing metadata publication.
 ## Requirements
 
 ### Requirement: Analyze Audio For BPM, Key, And Beat Grid
@@ -53,4 +53,3 @@ Manual analysis SHALL enqueue an analysis-only background task and SHALL NOT re-
 - **WHEN** the user attempts to trigger "Analyze audio" for that pad
 - **THEN** the system blocks the request
 - **AND** no analysis-only job is started for that pad
-

@@ -1,7 +1,7 @@
 # per-pad-gain Specification
 
 ## Purpose
-TBD - created by archiving change add-per-pad-mixing-metering-eq. Update Purpose after archive.
+To define performer-facing per-pad gain controls, persistence, validation, and audio-engine publication.
 ## Requirements
 ### Requirement: Per-pad gain control
 The system SHALL provide a per-pad gain parameter for each pad sample slot id in the range `0..NUM_SAMPLES`.
@@ -32,4 +32,3 @@ The audio engine SHALL apply the per-pad gain when mixing voices for a pad, in a
 - **AND** pad gain is `g`
 - **WHEN** the mixer renders audio
 - **THEN** the pad’s contribution is scaled by approximately `v * m * g`
-

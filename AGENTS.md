@@ -14,11 +14,11 @@
 - Generate `coverage.md`: `uv run pytest --cov --cov-report markdown`
 
 ### Rust
-- Check: `cargo check --manifest-path rust/Cargo.toml`
-- Lint: `cargo clippy --manifest-path ./rust/Cargo.toml`
-- Format (only check): `cargo fmt --manifest-path rust/Cargo.toml --check`
-- Format: `cargo fmt --manifest-path rust/Cargo.toml`
-- Tests: `cargo test --manifest-path rust/Cargo.toml`
+- Check: `uv run cargo check --manifest-path rust/Cargo.toml`
+- Lint: `uv run cargo clippy --manifest-path ./rust/Cargo.toml`
+- Format (only check): `uv run cargo fmt --manifest-path rust/Cargo.toml --check`
+- Format: `uv run cargo fmt --manifest-path rust/Cargo.toml`
+- Tests: `uv run cargo test --manifest-path rust/Cargo.toml`
 
 ## Dependency Management
 
@@ -31,9 +31,9 @@
 
 ### Rust
 - Add
-  - `cargo add --manifest-path rust/Cargo.toml CRATE`
-  - `cargo add --manifest-path rust/Cargo.toml --dev CRATE` for dev dependency
-- Remove: `cargo remove --manifest-path rust/Cargo.toml CRATE`
+  - `uv run cargo add --manifest-path rust/Cargo.toml CRATE`
+  - `uv run cargo add --manifest-path rust/Cargo.toml --dev CRATE` for dev dependency
+- Remove: `uv run cargo remove --manifest-path rust/Cargo.toml CRATE`
 
 ## Code Style
 
@@ -110,12 +110,14 @@ touched". The correct rule is:
   allocation, or long-running work.
 - Internal Rust DSP modules are the preferred future direction. Do not add VST/LV2/CLAP/AU
   plugin hosting unless a future explicit OpenSpec-backed request changes that product decision.
-- Do not implement or patch the new EQ/DSP layer before consulting
-  `docs/audio-performance-architecture-audit.md` and preparing the documented realtime-safety,
-  command/parameter, state-ownership, and clock foundations.
-- Keep architecture and DSP work split into small OpenSpec-friendly changes. The next recommended
-  step after the audit is the Rust audio callback/realtime-safety preparation stage, not the EQ
-  replacement.
+- Do not implement a new DSP/FX module before consulting
+  `docs/audio-performance-architecture-audit.md` and the current handoff context. The realtime
+  safety, command/parameter, state-ownership, clock, DSP foundation, and per-pad isolator
+  preparation stages have been completed; the next post-isolator target must still be chosen
+  explicitly and covered by a focused OpenSpec change before production code changes.
+- Keep architecture and DSP work split into small OpenSpec-friendly changes. Do not select a new
+  FX module, deck/group/master chain, live loop-edit crossfade, plugin host, or broad rewrite
+  automatically.
 
 ## CI/CD
 - All changes must pass lint, format, and test checks in CI

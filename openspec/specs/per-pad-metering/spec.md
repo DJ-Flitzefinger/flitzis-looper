@@ -1,7 +1,7 @@
 # per-pad-metering Specification
 
 ## Purpose
-TBD - created by archiving change add-per-pad-mixing-metering-eq. Update Purpose after archive.
+To define per-pad metering telemetry from the Rust audio engine and its UI/session projection.
 ## Requirements
 ### Requirement: Per-pad peak metering is available to the UI
 The audio engine SHALL compute per-pad peak levels for pads that are currently contributing to the output.
@@ -59,4 +59,3 @@ The UI SHOULD avoid per-frame heavy computation for metering; it SHALL use cache
 - **WHEN** the performance view is rendered
 - **THEN** the UI draws meters using peak values already stored in state
 - **AND** no blocking operations occur in the UI render loop
-

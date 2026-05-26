@@ -1,7 +1,7 @@
 # pad-button Specification
 
 ## Purpose
-TBD - created by archiving change refactor-split-controller-uistate-pad-button. Update Purpose after archive.
+To define performance pad button presentation and interaction behavior through selector-backed UI state and controller-owned actions.
 ## Requirements
 ### Requirement: `_pad_button` is split into focused helpers
 The performance pad rendering helper `_pad_button` SHALL be split into focused helper functions (e.g. label formatting, progress overlay, meter drawing, input handling, overlays) to reduce complexity and keep the implementation within Ruff complexity thresholds.
@@ -19,4 +19,3 @@ The `_pad_button` refactor SHALL preserve the current behavior of pad buttons as
 #### Scenario: Pad UI behavior remains consistent
 - **WHEN** a user interacts with pads (trigger, stop, load, analyze)
 - **THEN** the pad button continues to render the same status indicators and respond to clicks as before
-

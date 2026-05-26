@@ -5,7 +5,7 @@ To support sample-based playback by loading, decoding, and unloading audio files
 ## Requirements
 
 ### Requirement: Load Audio File Into Sample Slot
-The system SHALL expose a Python API to load an audio file from a filesystem path into a named sample slot identified by an integer `id` in the range 0..36.
+The system SHALL expose a Python API to load an audio file from a filesystem path into a named sample slot identified by an integer `id` in the range `0..NUM_SAMPLES`.
 
 Before the loaded sample is considered part of the current project, the system SHALL copy the original audio file into the project's `./samples/` directory.
 
@@ -25,11 +25,11 @@ The decoder SHALL support loading at least: WAV, FLAC, MP3, AIFF (`.aif`/`.aiff`
 - **WHEN** a sample is already loaded into slot `id`
 - **AND** `AudioEngine.load_sample_async(id, path)` is called and succeeds
 - **THEN** the buffer associated with `id` is replaced by the newly loaded buffer
-- **AND** `ProjectState.sample_paths[id]` is updated to the new project-local WAV path
+- **AND** `ProjectState.sample_paths[id]` is updated to the new project-local audio path
 - **AND** any currently active voices for `id` stop contributing to the audio output
 
 #### Scenario: Sample id is out of range
-- **WHEN** `AudioEngine.load_sample_async(id, path)` is called with `id >= 36`
+- **WHEN** `AudioEngine.load_sample_async(id, path)` is called with `id >= NUM_SAMPLES`
 - **THEN** the call fails with a Python exception
 - **AND** no sample slot state is modified
 
@@ -52,7 +52,7 @@ The system SHALL publish loaded sample buffers to the audio callback via shared 
 - **AND** the sample data is not duplicated solely for cross-thread transfer
 
 ### Requirement: Unload Sample Slot
-The system SHALL expose a Python API to unload a previously loaded sample from a sample slot identified by an integer `id` in the range 0..36.
+The system SHALL expose a Python API to unload a previously loaded sample from a sample slot identified by an integer `id` in the range `0..NUM_SAMPLES`.
 
 If `ProjectState.sample_paths[id]` refers to a project-local audio file under `./samples/`, the system SHALL attempt to delete that cached file when unloading the pad.
 
@@ -69,13 +69,13 @@ If the cached file is not present, the system MUST ignore the deletion attempt a
 - **AND** `AudioEngine.unload_sample(id)` is called
 - **THEN** all currently active voices for `id` stop contributing to the audio output
 
-#### Scenario: Unload removes cached WAV file
+#### Scenario: Unload removes cached audio file
 - **GIVEN** `ProjectState.sample_paths[id]` points to a cached audio file under `./samples/`
 - **AND** that file exists on disk
 - **WHEN** `AudioEngine.unload_sample(id)` is called
 - **THEN** the cached audio file is removed from `./samples/`
 
-#### Scenario: Unload ignores missing cached WAV file
+#### Scenario: Unload ignores missing cached audio file
 - **GIVEN** `ProjectState.sample_paths[id]` points to a cached audio file under `./samples/`
 - **AND** that file does not exist on disk
 - **WHEN** `AudioEngine.unload_sample(id)` is called
@@ -86,7 +86,7 @@ If the cached file is not present, the system MUST ignore the deletion attempt a
 - **THEN** the request is ignored (or dropped)
 
 #### Scenario: Unload sample id is out of range
-- **WHEN** `AudioEngine.unload_sample(id)` is called with `id >= 36`
+- **WHEN** `AudioEngine.unload_sample(id)` is called with `id >= NUM_SAMPLES`
 - **THEN** the call fails with a Python exception
 
 ### Requirement: Store Analysis Results In App State
@@ -108,6 +108,4 @@ The persisted beat grid SHALL use a reduced representation consisting of beat ti
 - **GIVEN** a sample is loaded into slot `id` and analysis results exist
 - **WHEN** a different sample is loaded into slot `id` successfully
 - **THEN** analysis results for `id` correspond to the newly loaded sample
-
-
 

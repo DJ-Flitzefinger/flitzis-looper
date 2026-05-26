@@ -11,8 +11,12 @@ OpenSpec change.
 ## Current baseline (what exists today)
 From the current codebase:
 
-- A Rust `AudioEngine` exists (CPAL-based) with a minimal Python API: load sample by `id`, trigger playback with `velocity`, and stop playback by `id`.
-- A Python UI entrypoint exists (`python -m flitzis_looper`) and boots a fixed-size Dear PyGui window with the performance layout (6×6 pad grid + bank selector row).
+- A Rust `AudioEngine` exists as the PyO3 `flitzis_looper_audio` module. It owns realtime
+  transport, scheduling, mixing, loop/source playheads, prepared-stem playback, and per-pad DSP
+  state for the 216 sample slots behind the 6-bank, 6 x 6 pad surface.
+- A Python UI entrypoint exists (`python -m flitzis_looper`) and boots a Dear ImGui Bundle window
+  with the performance layout, controller-owned runtime polling, settings, waveform editor,
+  selected-pad sidebars, and input mapping surfaces.
 
 Everything below tracks parity against `old-project` as a reference snapshot.
 

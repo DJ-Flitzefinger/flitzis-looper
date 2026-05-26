@@ -5,8 +5,8 @@ pro-grade master-tempo backend.
 
 The broader professional audio architecture audit is in
 `docs/audio-performance-architecture-audit.md`. Treat this Key Lock wrapper as one replaceable
-part of the future Rust audio/DSP foundation, not as a reason to add new EQ/FX before the
-realtime-safety, command/parameter, state, and clock preparation stages are complete.
+part of the Rust audio/DSP foundation. It does not imply plugin hosting, a new FX module, or a
+broad rewrite; future backend replacement should remain a focused OpenSpec-backed change.
 
 ## Backend research
 

@@ -4,7 +4,7 @@
 To enable real-time-safe triggering, looping playback, and mixing of previously loaded samples by ID (with velocity) from Python, with bounded polyphony to avoid allocations in the audio callback.
 ## Requirements
 ### Requirement: Trigger Sample Playback By ID
-The system SHALL provide a Python API to trigger playback of a previously loaded sample by integer `id` in the range 0..36, with a floating-point `velocity` in the range 0.0 to 1.0.
+The system SHALL provide a Python API to trigger playback of a previously loaded sample by integer `id` in the range `0..NUM_SAMPLES`, with a floating-point `velocity` in the range 0.0 to 1.0.
 
 Triggered playback SHALL loop continuously until stopped via `AudioEngine.stop_sample(id)` (or the sample is unloaded; see `load-audio-files`).
 
@@ -25,7 +25,7 @@ If no loop region is configured, playback SHALL start at the start of the sample
 - **THEN** playback continues from the loop start (or sample start if no region) without requiring a new trigger
 
 #### Scenario: Sample id is out of range
-- **WHEN** `AudioEngine.play_sample(id, velocity)` is called with `id >= 36`
+- **WHEN** `AudioEngine.play_sample(id, velocity)` is called with `id >= NUM_SAMPLES`
 - **THEN** the call fails with a Python exception
 - **AND** no playback is triggered
 
@@ -51,7 +51,7 @@ The system SHALL ensure that triggering playback and mixing audio in the real-ti
 - **AND** no heap allocations occur
 
 ### Requirement: Stop Sample Playback By ID
-The system SHALL provide a Python API to stop playback of a previously triggered sample by integer `id` in the range 0..36.
+The system SHALL provide a Python API to stop playback of a previously triggered sample by integer `id` in the range `0..NUM_SAMPLES`.
 
 #### Scenario: Stop ends active voices for the sample id
 - **WHEN** a sample is playing due to one or more prior `play_sample(id, ...)` calls
@@ -59,7 +59,7 @@ The system SHALL provide a Python API to stop playback of a previously triggered
 - **THEN** all currently active voices for `id` stop contributing to the audio output
 
 #### Scenario: Stop sample id is out of range
-- **WHEN** `AudioEngine.stop_sample(id)` is called with `id >= 36`
+- **WHEN** `AudioEngine.stop_sample(id)` is called with `id >= NUM_SAMPLES`
 - **THEN** the call fails with a Python exception
 
 #### Scenario: Stop missing sample id is handled safely
@@ -143,4 +143,3 @@ The system SHALL publish per-pad effective BPM metadata to the audio engine so i
 - **GIVEN** a pad has updated effective BPM metadata
 - **WHEN** the controller publishes metadata to the audio engine
 - **THEN** subsequent playback processing uses that BPM when BPM lock is enabled
-

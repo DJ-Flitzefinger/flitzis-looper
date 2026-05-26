@@ -1,7 +1,7 @@
 # background-tasks Specification
 
 ## Purpose
-TBD - created by archiving change add-sample-audio-analysis. Update Purpose after archive.
+To define non-realtime per-pad background operations, progress reporting, and conflict prevention for tasks such as analysis and offline stem generation.
 ## Requirements
 ### Requirement: Background Tasks Support Per-Pad Operations
 The system SHALL support running non-real-time operations for a pad as background tasks with progress reporting.
@@ -27,4 +27,3 @@ The system SHALL prevent conflicting background operations for the same pad.
 - **GIVEN** a pad is currently loading
 - **WHEN** the user tries to start a manual background task for that pad
 - **THEN** the task is rejected or deferred
-

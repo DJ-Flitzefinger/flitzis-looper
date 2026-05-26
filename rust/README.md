@@ -1,65 +1,87 @@
-# Audio Engine Module
+# Rust Audio Engine Module
 
-This module contains the real-time audio engine for Flitzis Looper.
+This crate builds the native `flitzis_looper_audio` Python extension. It owns
+the realtime audio path for Flitzis Looper and exposes the `AudioEngine` PyO3
+class used by the Python controllers.
 
-## Structure
+## Module Structure
 
-The audio engine is organized into modular components following the single responsibility principle:
+The audio engine is organized into small internal modules:
 
-- **`mod.rs`** - Main orchestration and Python-facing API
-- **`constants.rs`** - Configuration constants (NUM_BANKS, GRID_SIZE, MAX_VOICES, etc.)
-- **`errors.rs`** - Error types (SampleLoadError and conversions)
-- **`voice.rs`** - Voice management and lifecycle (sample_id, frame_pos, volume)
-- **`mixer.rs`** - Real-time mixer (RtMixer) with load/unload/play/stop/rendering logic
-- **`sample_loader.rs`** - Audio file decoding (decode_audio_file_to_sample_buffer, map_channels)
-- **`audio_stream.rs`** - CPAL stream management (stream creation, callback setup, logger config)
+- `lib.rs`: PyO3 module export for `flitzis_looper_audio`.
+- `messages.rs`: fixed-size command, parameter, loader, and telemetry message
+  types shared between threads.
+- `audio_engine/mod.rs`: Python-facing `AudioEngine` API, background task
+  orchestration, loader/stem publication helpers, and input runtime lifecycle.
+- `audio_engine/audio_stream.rs`: CPAL stream setup, bounded callback message
+  draining, scheduler integration, and realtime rendering entry point.
+- `audio_engine/buffer_retirement.rs`: bounded non-audio retirement worker for
+  large sample and prepared-stem handles removed by the callback.
+- `audio_engine/constants.rs`: shared limits such as banks, grid size, slot
+  count, voice count, and parameter ranges.
+- `audio_engine/dsp.rs`: fixed-size per-pad DSP chain, typed DSP parameter
+  identities, smoothing helpers, and the current DJ isolator node.
+- `audio_engine/input_mapping.rs`: MIDI capture, timestamping, filtering,
+  in-memory mapping lookup, and command dispatch outside the CPAL callback.
+- `audio_engine/mixer.rs`: `RtMixer`, sample slots, prepared-stem state, voice
+  rendering, loop playback, gain, DSP routing, metering, and playhead state.
+- `audio_engine/scheduler.rs`: fixed-capacity absolute output-frame scheduler.
+- `audio_engine/transport.rs`: output-frame transport timeline and musical
+  grid/phase helpers.
+- `audio_engine/voice_slot.rs`: active voice state, pause/resume state, and
+  per-voice stretch/key-lock buffers.
+- `audio_engine/stretch_processor.rs`: bounded varispeed/master-tempo wrapper.
+- `audio_engine/sample_loader.rs`: non-realtime audio decode, channel mapping,
+  resampling, and project-local source caching.
+- `audio_engine/analysis.rs`: non-realtime BPM/key/beat-grid analysis.
+- `audio_engine/stem_cache.rs`: prepared-stem cache validation and loading.
+- `audio_engine/progress.rs`, `audio_engine/channels.rs`, `audio_engine/errors.rs`:
+  supporting helpers.
 
-## Design Principles
+Most implementation modules are `pub(crate)`; `audio_engine/mod.rs` and
+`lib.rs` define the Python-facing boundary.
 
-1. **Encapsulation**: All sub-modules are `pub(crate)` - only `mod.rs` exposes the public API
-2. **Single Responsibility**: Each module has one clear purpose
-3. **Testability**: Each module can be tested independently
-4. **Real-time Safety**: Audio callback avoids blocking, allocations, and Python GIL
+## Runtime Signal Path
 
-## Testing
-
-Each module contains its own unit tests:
-- Voice tests → `voice.rs`
-- Mixer tests → `mixer.rs`
-- Decoder tests → `sample_loader.rs`
-- Integration tests → `mod.rs`
-
-Run tests with: `cargo test --manifest-path rust/Cargo.toml`
-
-## Python FFI
-
-The audio engine is exposed to Python via PyO3:
-- Public types are exported through `lib.rs`
-- The `AudioEngine` class provides the main interface
-- All methods maintain compatibility with Python expectations
-
-## Architecture
-
+```text
+Python controllers
+-> AudioEngine PyO3 methods
+-> bounded command ring + bounded parameter ring
+-> CPAL callback
+-> TransportTimeline + TransportScheduler
+-> RtMixer
+-> source selection, loop wrap, playback-rate / Key Lock
+-> per-pad DSP chain
+-> gain / volume / metering
+-> output buffer
 ```
-Python (Control)
-    ↓ ↑ (PyO3 bindings)
-mod.rs (Orchestration)
-    ↓ ↑ (module calls)
-sub-modules (Implementation)
-    ↓
-CPAL (Audio Hardware)
+
+The callback must not perform disk I/O, JSON access, Python/GIL work, logging,
+plugin loading, neural inference, blocking waits, or unbounded work.
+
+## Development Commands
+
+Run these from the repository root:
+
+```powershell
+uv run maturin develop
+uv run cargo check --manifest-path rust/Cargo.toml
+uv run cargo test --manifest-path rust/Cargo.toml
+uv run cargo fmt --manifest-path rust/Cargo.toml --check
 ```
 
-## Future Extensions
+Use the `uv run cargo ...` form so the PyO3 build uses the project Python
+environment consistently.
 
-When adding new features:
-1. Place related code in the appropriate module
-2. Add tests in the same module
-3. Update this README if creating new modules
-4. Ensure public API changes are documented
+## Design Notes
 
-## Notes
-
-- The original monolithic `audio_engine.rs` was refactored into this structure on 2025-12-22
-- No public APIs were changed during the refactor
-- Internal structure enables better maintainability and collaboration
+- Rust owns live audio truth: transport, scheduler, mixer, source playheads,
+  prepared-stem selection, realtime parameter application, and DSP state.
+- Python owns UI, project persistence, settings, mapping edit UX, and
+  offline/background orchestration.
+- Discrete commands and high-rate scalar parameters use separate bounded
+  control-to-audio queues. Parameter messages are coalesced by identity in the
+  callback before applying the latest drained value.
+- Sample and prepared-stem handles removed from callback-owned state are retired
+  through a bounded non-audio worker to avoid large final drops on the audio
+  thread.

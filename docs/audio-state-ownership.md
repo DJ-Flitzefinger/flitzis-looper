@@ -1,14 +1,16 @@
 # Audio State Ownership
 
-Date: 2026-05-25
+Date: 2026-05-26
 
-Status: Stage 4 architecture preparation. This document does not implement EQ, DSP effects,
-plugin hosting, transport BPM unification, or new user controls.
+Status: maintained architecture reference after the Gen3 realtime-safety, command/parameter,
+state-ownership, clock, DSP-foundation, and per-pad isolator preparation stages. This document
+does not authorize new user controls, plugin hosting, deck/group/master chains, or broad runtime
+rewrites.
 
 ## Purpose
 
-This document defines the boundary between durable Python intent, transient Python session
-projections, and live Rust audio state before clock/scheduler and DSP foundation work continues.
+This document defines the current boundary between durable Python intent, transient Python session
+projections, and live Rust audio state.
 
 This boundary is not a prohibition on moving focused responsibilities from Python to Rust. If a
 Python-side function currently influences live audio timing, transport/BPM authority, scheduling,

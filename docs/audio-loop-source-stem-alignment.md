@@ -2,15 +2,16 @@
 
 Date: 2026-05-26
 
-Status: Stage 7A click-free stem transition preparation. This document does not implement EQ,
-DSP effects, plugin hosting, a general smoothing layer, live loop-edit crossfades, or runtime
-stem separation.
+Status: maintained loop/source/stem architecture reference after the Stage 7A stem-transition
+preparation and the per-pad DSP-chain isolator replacement. This document does not authorize
+unrelated DSP effects, plugin hosting, a general smoothing layer, live loop-edit crossfades, or
+runtime stem separation.
 
 ## Purpose
 
-This document makes the loop/source-position/stem model explicit before DSP/FX foundation work.
-It complements `docs/audio-performance-architecture-audit.md` and
-`docs/audio-state-ownership.md`.
+This document defines the loop/source-position/stem model used by the current Rust mixer and DSP
+path. It complements `docs/audio-performance-architecture-audit.md`,
+`docs/audio-engine.md`, and `docs/audio-state-ownership.md`.
 
 ## Terms
 

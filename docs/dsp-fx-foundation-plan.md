@@ -53,7 +53,7 @@ The old hardwired mixer EQ path has been replaced as live audio authority:
   input-mapping action semantics,
 - live Rust targets are normalized `0.0..1.0`, smoothed on the audio side, and rendered before
   pad gain/master volume metering,
-- the deleted `eq3.rs` path and per-voice `Eq3State` are no longer active as a second hardwired
+- the previous standalone mixer EQ path and per-voice hardwired EQ state are no longer active as a second hardwired
   EQ processing stage.
 
 ## Current Processing Order
@@ -172,44 +172,20 @@ state and smoothing.
 - No broad Python-to-Rust port.
 - No Python DSP or callback access to Python/GIL state.
 
-## Validation Plan
+## Validation Guidance
 
-For the Stage 8 planning slice:
+The foundation and isolator changes described above have already passed their focused Rust tests,
+full uv-managed validation where required, and official OpenSpec validation before the isolator
+change was archived.
 
-- run official strict OpenSpec validation for `prepare-dsp-fx-foundation`,
-- run `git diff --check`.
+For future DSP/FX changes:
 
-For the neutral foundation implementation:
-
-- run focused Rust DSP/mixer tests through
-  `uv --no-cache run cargo test --manifest-path rust/Cargo.toml`,
-- run `uv run cargo check --manifest-path rust/Cargo.toml`,
-- run Python tests only if UI/controller/API behavior changes,
-- run the broader uv-managed sequence if behavior, bridge contracts, or shared audio state change.
-
-For the dedicated isolator planning slice:
-
-- run official strict OpenSpec validation for `replace-hardwired-eq-with-dj-isolator`,
-- run `git diff --check`.
-
-For the first isolator implementation:
-
-- run focused Rust DSP and mixer tests for neutral transparency, full kill, bounded boost,
-  smoothing, finite output, sample-rate preparation, and no double hardwired EQ processing,
-- run focused Python controller/UI/input-mapping tests if compatibility glue changes,
-- run the broader uv-managed validation sequence because the change replaces live audio behavior.
-
-For the focused low/high kill tuning follow-up:
-
-- run official strict OpenSpec validation for `replace-hardwired-eq-with-dj-isolator`,
-- run focused Rust DSP tests for representative band-center suppression and equal-gain behavior,
-- run focused mixer tests for the existing no-double-processing bridge,
-- run the broader uv-managed validation sequence because live audio DSP behavior changes.
-
-For the isolator acceptance/archive pass:
-
-- run official strict OpenSpec validation for `replace-hardwired-eq-with-dj-isolator`,
-- run focused uv-managed Rust isolator tests,
-- archive the change with the official OpenSpec CLI,
-- validate the baseline specs after archive,
-- run `git diff --check`.
+- create or update a focused OpenSpec change before production code changes,
+- include explicit callback realtime-safety constraints,
+- run `openspec validate <change-id> --strict` or the official npx fallback,
+- add focused Rust DSP/mixer tests for the changed node or routing behavior,
+- add Python controller/UI/input-mapping tests only when public behavior or compatibility glue
+  changes,
+- run the broader uv-managed validation sequence when live audio behavior, bridge contracts, or
+  shared audio state changes,
+- run `git diff --check` for documentation-only slices.
