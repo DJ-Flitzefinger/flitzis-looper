@@ -817,6 +817,7 @@ pub fn start_stream(stream: &Stream) -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::*;
     use crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement;
+    use crate::audio_engine::constants::PAD_EQ_DB_MIN;
     use crate::messages::{PadTimingMetadata, SampleBuffer};
     use std::sync::Arc;
 
@@ -918,6 +919,48 @@ mod tests {
         mixer.render(&mut output, &mut pad_peaks);
 
         assert!((output[0] - 0.375).abs() < 1e-5);
+    }
+
+    #[test]
+    fn parameter_drain_coalesces_latest_pad_eq_target() {
+        let (mut producer, mut consumer) = RingBuffer::new(4);
+        producer
+            .push(ControlParameterMessage::SetPadEq {
+                id: 0,
+                low_db: PAD_EQ_DB_MIN,
+                mid_db: PAD_EQ_DB_MIN,
+                high_db: PAD_EQ_DB_MIN,
+            })
+            .unwrap();
+        producer
+            .push(ControlParameterMessage::SetPadEq {
+                id: 0,
+                low_db: 0.0,
+                mid_db: 0.0,
+                high_db: 0.0,
+            })
+            .unwrap();
+
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        let mut transport = TransportTimeline::new(44_100);
+        mixer.load_sample(0, create_test_sample(1, 8, 0.5));
+
+        let result = drain_parameter_messages(&mut consumer, &mut mixer, &mut transport);
+
+        assert_eq!(
+            result,
+            ParameterDrainResult {
+                messages_drained: 2,
+                parameters_applied: 1
+            }
+        );
+
+        assert!(mixer.play_sample(0, 1.0));
+        let mut output = vec![0.0; 1];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert!((output[0] - 0.5).abs() < 1e-5);
     }
 
     #[test]

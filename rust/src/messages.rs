@@ -356,7 +356,7 @@ pub enum ControlMessage {
 
     ///
     /// # Parameters
-    /// * `id` - Unique identifier for the sample slot (0..36)
+    /// * `id` - Unique identifier for the sample slot (0..NUM_SAMPLES)
     /// * `sample` - Pre-decoded immutable sample buffer (shared handle)
     LoadSample { id: usize, sample: SampleBuffer },
 
