@@ -399,6 +399,28 @@ def test_keyboard_mapping_executes_pad_gain(
     assert controller.project.pad_gain_db[2] == 4.2
 
 
+def test_keyboard_mapping_executes_pad_gain_negative_minimum(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    controller.input_mapping.set_enabled(enabled=True)
+    binding = KeyboardBinding(key_name="G")
+    controller.input_mapping.save_mapping(
+        "keyboard",
+        binding.key,
+        pad_gain_action(2, -60.0),
+    )
+
+    handled = controller.input_mapping.capture_keyboard_input(
+        binding,
+        text_input_focused=False,
+    )
+
+    assert handled is True
+    audio_engine_mock.set_pad_gain.assert_called_once_with(2, -60.0)
+    assert controller.project.pad_gain_db[2] == -60.0
+
+
 def test_keyboard_mapping_executes_legacy_pad_gain_as_db(
     controller: AppController,
     audio_engine_mock: Mock,

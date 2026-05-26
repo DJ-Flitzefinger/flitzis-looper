@@ -1,3 +1,5 @@
+import pytest
+
 from flitzis_looper.models import (
     STEM_COMPONENT_MASK,
     STEM_INSTRUMENTAL_PRESET_MASK,
@@ -8,6 +10,15 @@ from flitzis_looper.models import (
 )
 from flitzis_looper.ui.render.bottom_bar import (
     MASTER_VOLUME_WIDTH,
+    MODE_BUTTON_GAP,
+    MODE_BUTTON_WIDTH,
+    START_STOP_BUTTON_GAP,
+    START_STOP_BUTTON_HEIGHT,
+    START_STOP_BUTTON_LABEL,
+    START_STOP_BUTTON_WIDTH,
+    settings_button_local_pos,
+    start_stop_button_local_pos,
+    start_stop_button_style,
     stem_button_is_active,
     stem_button_learn_target_state,
     stem_button_solo_state,
@@ -15,6 +26,7 @@ from flitzis_looper.ui.render.bottom_bar import (
     stem_controls_accept_input,
     trigger_quantization_button_style,
 )
+from flitzis_looper.ui.render.settings import SETTINGS_TOGGLE_BUTTON_SIZE
 
 
 def test_stem_preset_display_lights_only_preset_button() -> None:
@@ -42,6 +54,41 @@ def test_trigger_quantization_button_uses_mode_colors() -> None:
 
 def test_master_volume_slider_hit_target_is_wider() -> None:
     assert MASTER_VOLUME_WIDTH >= 300.0
+
+
+def test_start_stop_button_is_wider_than_two_mode_buttons() -> None:
+    assert START_STOP_BUTTON_WIDTH >= MODE_BUTTON_WIDTH * 2 + MODE_BUTTON_GAP
+
+
+def test_start_stop_button_label_matches_requested_copy() -> None:
+    assert START_STOP_BUTTON_LABEL.startswith("START/STOP")
+
+
+def test_start_stop_button_style_uses_green_then_red() -> None:
+    assert start_stop_button_style(stopped=False) == "mode-on"
+    assert start_stop_button_style(stopped=True) == "mode-off"
+
+
+def test_start_stop_button_position_left_aligns_with_settings_button() -> None:
+    start_stop_x, start_stop_y = start_stop_button_local_pos(
+        cursor_x=10.0,
+        cursor_y=4.0,
+        available_width=500.0,
+        available_height=55.0,
+    )
+    settings_x, settings_y = settings_button_local_pos(
+        cursor_x=10.0,
+        cursor_y=4.0,
+        available_width=500.0,
+        available_height=55.0,
+    )
+
+    assert (start_stop_x + START_STOP_BUTTON_WIDTH + START_STOP_BUTTON_GAP) == pytest.approx(
+        settings_x
+    )
+    assert start_stop_y + START_STOP_BUTTON_HEIGHT / 2.0 == pytest.approx(
+        settings_y + SETTINGS_TOGGLE_BUTTON_SIZE / 2.0
+    )
 
 
 def test_stem_custom_display_lights_component_buttons() -> None:

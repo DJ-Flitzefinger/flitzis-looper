@@ -409,6 +409,15 @@ class GlobalAudioActions:
             lambda: self._controller.transport.global_params.set_volume(volume),
         )
 
+    def set_momentary_output_mute(self, *, enabled: bool) -> None:
+        self._controller.transport.global_params.set_momentary_output_mute(enabled=enabled)
+
+    def start_or_restart_start_stop(self) -> None:
+        self._controller.transport.playback.start_or_restart_global_start_stop()
+
+    def stop_start_stop(self) -> None:
+        self._controller.transport.playback.stop_global_start_stop()
+
     def set_speed(self, speed: float) -> None:
         action = (
             global_speed_delta_action()
@@ -713,6 +722,9 @@ class UiActions:
 
     def store_pressed_pad_state(self, pad_id: int, *, pressed: bool) -> None:
         self._controller.session.pressed_pads[pad_id] = pressed
+
+    def store_global_start_stop_pressed(self, *, pressed: bool) -> None:
+        self._controller.session.global_start_stop_left_pressed = pressed
 
     def _select_bank(self, bank_id: int) -> None:
         self._controller.project.selected_bank = bank_id

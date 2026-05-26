@@ -28,10 +28,14 @@ MODE_BUTTON_WIDTH = 36.0
 MULTI_LOOP_BUTTON_WIDTH = 88.0
 MASTER_VOLUME_WIDTH = 300.0
 STEM_BUTTON_SIZE = 32.0
+START_STOP_BUTTON_WIDTH = 92.0
+START_STOP_BUTTON_HEIGHT = SETTINGS_TOGGLE_BUTTON_SIZE
+START_STOP_BUTTON_LABEL = "START/STOP##global_start_stop"
 MODE_BUTTON_GAP = SPACING * 0.75
 CONTROL_GROUP_GAP = SPACING * 1.75
 STEM_BUTTON_GAP = SPACING * 0.5
 STEM_PRESET_GAP = SPACING * 0.75
+START_STOP_BUTTON_GAP = SPACING
 STEM_COMPONENT_BUTTONS = (
     ("V", STEM_MASK_VOCALS),
     ("D", STEM_MASK_DRUMS),
@@ -60,6 +64,25 @@ def settings_button_local_pos(
     """Return the local bottom-bar cursor position for the Settings toggle."""
     x = cursor_x + max(0.0, available_width - SETTINGS_TOGGLE_BUTTON_SIZE)
     y = cursor_y + max(0.0, (available_height - SETTINGS_TOGGLE_BUTTON_SIZE) / 2.0)
+    return (x, y)
+
+
+def start_stop_button_local_pos(
+    *,
+    cursor_x: float,
+    cursor_y: float,
+    available_width: float,
+    available_height: float,
+) -> tuple[float, float]:
+    """Return the local bottom-bar cursor position for START/STOP."""
+    x = cursor_x + max(
+        0.0,
+        available_width
+        - SETTINGS_TOGGLE_BUTTON_SIZE
+        - START_STOP_BUTTON_GAP
+        - START_STOP_BUTTON_WIDTH,
+    )
+    y = cursor_y + max(0.0, (available_height - START_STOP_BUTTON_HEIGHT) / 2.0)
     return (x, y)
 
 
@@ -104,7 +127,9 @@ def _master_volume(ctx: UiContext) -> None:
                 volume_value = new_value if changed else val
                 ctx.audio.global_.set_volume(volume_value / 100.0)
             elif not learn_pending:
-                if item_middle_clicked():
+                if imgui.is_item_hovered() and imgui.is_mouse_clicked(imgui.MouseButton_.right):
+                    ctx.audio.global_.set_volume(0.0)
+                elif item_middle_clicked():
                     ctx.audio.global_.set_volume(1.0)
                 elif wheel_steps := hovered_wheel_steps():
                     ctx.audio.global_.set_volume(
@@ -115,6 +140,11 @@ def _master_volume(ctx: UiContext) -> None:
 def trigger_quantization_button_style(*, enabled: bool) -> ButtonStyleName:
     """Return the bottom-bar Q button style for tests and rendering."""
     return "mode-on" if enabled else "mode-off"
+
+
+def start_stop_button_style(*, stopped: bool) -> ButtonStyleName:
+    """Return the bottom-bar START/STOP button style for tests and rendering."""
+    return "mode-off" if stopped else "mode-on"
 
 
 def _trigger_quantization_toggle(ctx: UiContext, center_y: float) -> None:
@@ -314,6 +344,37 @@ def _bottom_bar_controls(ctx: UiContext, center_y: float) -> None:
     _stem_mask_controls(ctx, center_y)
 
 
+def _start_stop_button(ctx: UiContext) -> None:
+    with button_style(start_stop_button_style(stopped=ctx.state.session.global_stop_engaged)):
+        imgui.button(
+            START_STOP_BUTTON_LABEL,
+            (START_STOP_BUTTON_WIDTH, START_STOP_BUTTON_HEIGHT),
+        )
+
+    hovered = imgui.is_item_hovered()
+
+    if imgui.is_mouse_down(imgui.MouseButton_.left):
+        if hovered and not ctx.state.session.global_start_stop_left_pressed:
+            ctx.audio.global_.start_or_restart_start_stop()
+            ctx.ui.store_global_start_stop_pressed(pressed=True)
+    else:
+        ctx.ui.store_global_start_stop_pressed(pressed=False)
+
+    if hovered and imgui.is_mouse_down(imgui.MouseButton_.right):
+        ctx.audio.global_.stop_start_stop()
+
+    if hovered and imgui.is_mouse_clicked(imgui.MouseButton_.middle):
+        ctx.audio.global_.set_momentary_output_mute(enabled=True)
+
+    if ctx.state.session.global_stop_momentary_mute_active and not imgui.is_mouse_down(
+        imgui.MouseButton_.middle
+    ):
+        ctx.audio.global_.set_momentary_output_mute(enabled=False)
+
+    if hovered:
+        imgui.set_tooltip("Start/restart loops; right stop; hold mouse wheel for mute")
+
+
 def bottom_bar(ctx: UiContext) -> None:
     avail = imgui.get_content_region_avail()
     start_pos = imgui.get_cursor_pos()
@@ -321,12 +382,21 @@ def bottom_bar(ctx: UiContext) -> None:
 
     _bottom_bar_controls(ctx, center_y)
 
-    imgui.set_cursor_pos(
-        settings_button_local_pos(
-            cursor_x=start_pos.x,
-            cursor_y=start_pos.y,
-            available_width=avail.x,
-            available_height=avail.y,
-        )
+    start_stop_pos = start_stop_button_local_pos(
+        cursor_x=start_pos.x,
+        cursor_y=start_pos.y,
+        available_width=avail.x,
+        available_height=avail.y,
     )
+    settings_pos = settings_button_local_pos(
+        cursor_x=start_pos.x,
+        cursor_y=start_pos.y,
+        available_width=avail.x,
+        available_height=avail.y,
+    )
+
+    imgui.set_cursor_pos(start_stop_pos)
+    _start_stop_button(ctx)
+
+    imgui.set_cursor_pos(settings_pos)
     settings_toggle_button(ctx)

@@ -2,7 +2,14 @@ from contextlib import suppress
 from typing import TYPE_CHECKING, Literal, cast
 
 from flitzis_looper.audio_gain import legacy_gain_value_to_db
-from flitzis_looper.constants import NUM_BANKS, NUM_SAMPLES, SPEED_MAX, SPEED_MIN
+from flitzis_looper.constants import (
+    NUM_BANKS,
+    NUM_SAMPLES,
+    PAD_GAIN_DB_MAX,
+    PAD_GAIN_DB_MIN,
+    SPEED_MAX,
+    SPEED_MIN,
+)
 from flitzis_looper.controller.base import BaseController
 from flitzis_looper.input_mapping.actions import LooperAction, PadEqBand
 from flitzis_looper.input_mapping.bindings import KeyboardBinding, MidiBinding
@@ -475,7 +482,9 @@ class InputMappingController(BaseController):
             validate_sample_id(pad_id)
         except ValueError:
             return False
-        if not -120 <= tenths_db <= 120:
+        min_tenths = round(PAD_GAIN_DB_MIN * 10)
+        max_tenths = round(PAD_GAIN_DB_MAX * 10)
+        if not min_tenths <= tenths_db <= max_tenths:
             return False
         self._app.transport.pad.set_pad_gain(pad_id, tenths_db / 10.0)
         return True

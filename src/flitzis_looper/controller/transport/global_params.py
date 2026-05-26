@@ -332,6 +332,20 @@ class GlobalParametersController:
         self._project.volume = clamped
         self._transport._mark_project_changed()
 
+    def set_momentary_output_mute(self, *, enabled: bool) -> None:
+        """Temporarily mute engine output without changing persisted volume."""
+        if enabled:
+            if self._session.global_stop_momentary_mute_active:
+                return
+            self._audio.set_volume(VOLUME_MIN)
+            self._session.global_stop_momentary_mute_active = True
+            return
+
+        if not self._session.global_stop_momentary_mute_active:
+            return
+        self._audio.set_volume(self._project.volume)
+        self._session.global_stop_momentary_mute_active = False
+
     def set_speed(self, speed: float) -> None:
         """Set global playback speed multiplier."""
         ensure_finite(speed)

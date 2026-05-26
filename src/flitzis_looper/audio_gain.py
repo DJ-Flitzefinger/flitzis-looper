@@ -19,18 +19,34 @@ def clamp_gain_db(gain_db: float) -> float:
 
 
 def normalized_to_gain_db(normalized: float) -> float:
-    """Map normalized UI position `0.0..1.0` to `-12..+12 dB` Gain/Trim."""
+    """Map normalized UI position to asymmetric `-60..0..+12 dB` Gain/Trim."""
     if not math.isfinite(normalized):
         msg = "normalized gain must be finite"
         raise ValueError(msg)
     normalized = min(max(float(normalized), PAD_GAIN_NORMALIZED_MIN), PAD_GAIN_NORMALIZED_MAX)
-    return PAD_GAIN_DB_MIN + normalized * (PAD_GAIN_DB_MAX - PAD_GAIN_DB_MIN)
+    if normalized <= PAD_GAIN_NORMALIZED_CENTER:
+        negative_fraction = normalized / PAD_GAIN_NORMALIZED_CENTER
+        return PAD_GAIN_DB_MIN + negative_fraction * (PAD_GAIN_DB_DEFAULT - PAD_GAIN_DB_MIN)
+
+    positive_fraction = (normalized - PAD_GAIN_NORMALIZED_CENTER) / (
+        PAD_GAIN_NORMALIZED_MAX - PAD_GAIN_NORMALIZED_CENTER
+    )
+    return PAD_GAIN_DB_DEFAULT + positive_fraction * (PAD_GAIN_DB_MAX - PAD_GAIN_DB_DEFAULT)
 
 
 def gain_db_to_normalized(gain_db: float) -> float:
     """Map dB Gain/Trim to normalized UI position."""
     gain_db = clamp_gain_db(gain_db)
-    return (gain_db - PAD_GAIN_DB_MIN) / (PAD_GAIN_DB_MAX - PAD_GAIN_DB_MIN)
+    if gain_db <= PAD_GAIN_DB_DEFAULT:
+        negative_fraction = (gain_db - PAD_GAIN_DB_MIN) / (PAD_GAIN_DB_DEFAULT - PAD_GAIN_DB_MIN)
+        return PAD_GAIN_NORMALIZED_MIN + negative_fraction * (
+            PAD_GAIN_NORMALIZED_CENTER - PAD_GAIN_NORMALIZED_MIN
+        )
+
+    positive_fraction = (gain_db - PAD_GAIN_DB_DEFAULT) / (PAD_GAIN_DB_MAX - PAD_GAIN_DB_DEFAULT)
+    return PAD_GAIN_NORMALIZED_CENTER + positive_fraction * (
+        PAD_GAIN_NORMALIZED_MAX - PAD_GAIN_NORMALIZED_CENTER
+    )
 
 
 def gain_db_to_linear(gain_db: float) -> float:
@@ -55,7 +71,7 @@ def legacy_gain_value_to_db(value: object) -> float:
 
     try:
         legacy = float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return PAD_GAIN_DB_DEFAULT
 
     if not math.isfinite(legacy):

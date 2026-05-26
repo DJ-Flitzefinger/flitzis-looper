@@ -66,6 +66,45 @@ class PadPlaybackController:
         """Stop all currently active pads."""
         self._audio.stop_all()
 
+    def start_or_restart_global_start_stop(self) -> None:
+        """Start remembered loops or restart active loops from their loop starts."""
+        if self._session.global_stop_engaged:
+            target_sample_ids = sorted(self._session.global_stop_restore_sample_ids)
+            self._session.global_stop_engaged = False
+            self._session.global_stop_restore_sample_ids = set()
+        else:
+            target_sample_ids = sorted(
+                self._session.active_sample_ids - self._session.paused_sample_ids
+            )
+
+        if not target_sample_ids:
+            return
+
+        started_sample_ids: set[int] = set()
+        for sample_id in target_sample_ids:
+            if self._project.sample_paths[sample_id] is None:
+                continue
+            start_s, end_s = self._loop.effective_region(sample_id)
+            self._audio.set_pad_loop_region(sample_id, start_s, end_s)
+            self._audio.play_sample(sample_id, 1.0)
+            started_sample_ids.add(sample_id)
+
+        self._session.active_sample_ids.update(started_sample_ids)
+        self._session.paused_sample_ids.difference_update(started_sample_ids)
+
+    def stop_global_start_stop(self) -> None:
+        """Stop active loops from START/STOP right mouse down without starting anything."""
+        active_sample_ids = set(self._session.active_sample_ids)
+        if not active_sample_ids:
+            return
+
+        playing_sample_ids = active_sample_ids - self._session.paused_sample_ids
+        self._session.global_stop_restore_sample_ids = playing_sample_ids
+        self._session.global_stop_engaged = bool(playing_sample_ids)
+        self._audio.stop_all()
+        self._session.active_sample_ids.clear()
+        self._session.paused_sample_ids.clear()
+
     def pause_pad(self, sample_id: int) -> None:
         """Pause a pad if it is currently playing.
 

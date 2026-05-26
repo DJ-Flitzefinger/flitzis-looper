@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 @pytest.mark.parametrize(
     ("gain_db", "exp"),
-    [(2.5, 2.5), (-20.0, PAD_GAIN_DB_MIN), (20.0, PAD_GAIN_DB_MAX)],
+    [(2.5, 2.5), (-70.0, PAD_GAIN_DB_MIN), (20.0, PAD_GAIN_DB_MAX)],
 )
 def test_set_pad_gain_clamps_and_calls_engine(
     controller: AppController, audio_engine_mock: Mock, gain_db: float, exp: float

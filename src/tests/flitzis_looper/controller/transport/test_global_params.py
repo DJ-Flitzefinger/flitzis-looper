@@ -48,6 +48,43 @@ def test_set_volume_clamps_min(controller: AppController, audio_engine_mock: Moc
     assert controller.project.volume == VOLUME_MIN
 
 
+def test_momentary_output_mute_does_not_change_project_volume(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.project.volume = 0.7
+    audio_engine_mock.reset_mock()
+
+    controller.transport.global_params.set_momentary_output_mute(enabled=True)
+
+    audio_engine_mock.set_volume.assert_called_once_with(VOLUME_MIN)
+    assert controller.project.volume == pytest.approx(0.7)
+    assert controller.session.global_stop_momentary_mute_active is True
+
+    audio_engine_mock.reset_mock()
+    controller.transport.global_params.set_momentary_output_mute(enabled=False)
+
+    audio_engine_mock.set_volume.assert_called_once_with(0.7)
+    assert controller.project.volume == pytest.approx(0.7)
+    assert controller.session.global_stop_momentary_mute_active is False
+
+
+def test_momentary_output_mute_repeated_calls_are_noops(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.project.volume = 0.7
+
+    controller.transport.global_params.set_momentary_output_mute(enabled=True)
+    controller.transport.global_params.set_momentary_output_mute(enabled=True)
+
+    audio_engine_mock.set_volume.assert_called_once_with(VOLUME_MIN)
+
+    audio_engine_mock.reset_mock()
+    controller.transport.global_params.set_momentary_output_mute(enabled=False)
+    controller.transport.global_params.set_momentary_output_mute(enabled=False)
+
+    audio_engine_mock.set_volume.assert_called_once_with(0.7)
+
+
 def test_set_speed_normal(controller: AppController, audio_engine_mock: Mock) -> None:
     """Test setting speed within valid range."""
     speed = 1.5
@@ -289,9 +326,7 @@ def test_set_key_lock_parameters_clamps_float_boundary_noise(
         output_gain=1.2,
     )
 
-    assert controller.project.key_lock_smoothing_step == pytest.approx(
-        MIN_KEY_LOCK_SMOOTHING_STEP
-    )
+    assert controller.project.key_lock_smoothing_step == pytest.approx(MIN_KEY_LOCK_SMOOTHING_STEP)
     audio_engine_mock.set_key_lock_parameters.assert_called_once_with(
         128.0,
         1024.0,

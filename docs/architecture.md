@@ -36,7 +36,7 @@ Python UI / controllers / persistence / background workers
 -> full-mix or prepared-stem source selection
 -> source-frame loop wrap and voice playhead
 -> playback-rate / BPM Lock / Key Lock processing
--> per-pad Gain/Trim (-12 dB..+12 dB, smoothed)
+-> per-pad Gain/Trim (-60 dB..+12 dB, smoothed)
 -> per-pad Rust DSP chain
 -> trigger velocity and master volume
 -> metering and audio-to-control telemetry
@@ -194,7 +194,7 @@ infrastructure unless the product direction explicitly changes.
 
 Per-pad Gain is a channel trim stage, not a master volume clone. Python persists
 durable intent as `pad_gain_db` with a `0.0 dB` default and a finite
-`-12.0..=+12.0 dB` range. Legacy project files with `pad_gain` linear or percent
+`-60.0..=+12.0 dB` range. Legacy project files with `pad_gain` linear or percent
 values are migrated so old unity (`1.0` or `100`) loads as `0.0 dB`.
 
 The Rust mixer converts accepted dB targets with `10^(gain_db / 20)`, smooths

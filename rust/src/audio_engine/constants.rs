@@ -31,7 +31,7 @@ pub const VOLUME_MIN: f32 = 0.0;
 pub const VOLUME_MAX: f32 = 1.0;
 
 /// Minimum per-pad Gain/Trim in dB.
-pub const PAD_GAIN_DB_MIN: f32 = -12.0;
+pub const PAD_GAIN_DB_MIN: f32 = -60.0;
 
 /// Maximum per-pad Gain/Trim in dB.
 pub const PAD_GAIN_DB_MAX: f32 = 12.0;

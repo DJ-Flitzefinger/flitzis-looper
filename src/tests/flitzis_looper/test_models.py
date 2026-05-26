@@ -551,6 +551,10 @@ def test_stem_cache_validation_requires_per_pad_length() -> None:
 def test_session_state_defaults(session_state: SessionState) -> None:
     """Test SessionState default values."""
     assert len(session_state.active_sample_ids) == 0
+    assert session_state.global_stop_engaged is False
+    assert session_state.global_stop_restore_sample_ids == set()
+    assert session_state.global_stop_momentary_mute_active is False
+    assert session_state.global_start_stop_left_pressed is False
     assert len(session_state.pressed_pads) == NUM_SAMPLES
     assert all(pressed is False for pressed in session_state.pressed_pads)
     assert session_state.file_dialog_pad_id is None

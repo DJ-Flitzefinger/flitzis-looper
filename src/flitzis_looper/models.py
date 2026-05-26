@@ -655,6 +655,18 @@ class SessionState(BaseModel):
     paused_sample_ids: set[int] = Field(default_factory=set)
     """Pads that are currently paused (active but temporarily silenced)."""
 
+    global_stop_engaged: bool = False
+    """Whether the bottom-bar START/STOP control has stopped a remembered active set."""
+
+    global_stop_restore_sample_ids: set[int] = Field(default_factory=set)
+    """Session-only pad ids remembered by the bottom-bar START/STOP control."""
+
+    global_stop_momentary_mute_active: bool = False
+    """Whether the START/STOP control's middle-hold output mute is currently active."""
+
+    global_start_stop_left_pressed: bool = False
+    """Whether START/STOP has already handled the current left mouse hold."""
+
     pressed_pads: list[bool] = Field(default_factory=lambda: [False] * NUM_SAMPLES)
     """Currently pressed pads."""
 
@@ -843,6 +855,7 @@ class SessionState(BaseModel):
     @field_validator(
         "active_sample_ids",
         "paused_sample_ids",
+        "global_stop_restore_sample_ids",
         "pressed_pads",
         "loading_sample_ids",
         "analyzing_sample_ids",
