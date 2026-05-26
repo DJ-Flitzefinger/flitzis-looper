@@ -84,6 +84,8 @@ fn schedule_immediate_command<
     }
 }
 
+// Keep callback hot-path state borrows explicit instead of hiding them in a context struct.
+#[allow(clippy::too_many_arguments)]
 fn schedule_play_sample_command<
     const CAPACITY: usize,
     S: AudioMessageSink,
@@ -126,6 +128,8 @@ fn schedule_play_sample_command<
     }
 }
 
+// Keep callback hot-path state borrows explicit instead of hiding them in a context struct.
+#[allow(clippy::too_many_arguments)]
 fn schedule_exclusive_play_sample_command<
     const CAPACITY: usize,
     S: AudioMessageSink,
@@ -274,6 +278,8 @@ fn stop_all_samples<S: AudioMessageSink, R: AudioBufferRetirement>(
     }
 }
 
+// Keep scheduler, transport, mixer, output, and retirement ownership visible in the render path.
+#[allow(clippy::too_many_arguments)]
 fn render_scheduled_audio<const CAPACITY: usize, S: AudioMessageSink, R: AudioBufferRetirement>(
     mixer: &mut RtMixer,
     scheduler: &mut FixedCapacityScheduler<CAPACITY>,
@@ -364,6 +370,8 @@ fn render_scheduled_audio<const CAPACITY: usize, S: AudioMessageSink, R: AudioBu
     }
 }
 
+// Keep segment frame bounds and realtime state explicit for in-buffer scheduling tests.
+#[allow(clippy::too_many_arguments)]
 fn render_mixer_segment<R: AudioBufferRetirement>(
     mixer: &mut RtMixer,
     output: &mut [f32],
@@ -401,6 +409,8 @@ fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
     }
 }
 
+// Keep queue, scheduler, transport, mixer, telemetry, and retirement state explicit in the callback.
+#[allow(clippy::too_many_arguments)]
 fn drain_control_messages<const CAPACITY: usize, S: AudioMessageSink, R: AudioBufferRetirement>(
     consumer: &mut Consumer<ControlMessage>,
     scheduler: &mut FixedCapacityScheduler<CAPACITY>,
@@ -564,6 +574,8 @@ fn drain_parameter_messages(
     }
 }
 
+// Keep ordered command effects explicit at the realtime boundary.
+#[allow(clippy::too_many_arguments)]
 fn process_control_message<const CAPACITY: usize, S: AudioMessageSink, R: AudioBufferRetirement>(
     message: ControlMessage,
     scheduler: &mut FixedCapacityScheduler<CAPACITY>,

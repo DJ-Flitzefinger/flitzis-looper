@@ -267,6 +267,8 @@ pub(crate) enum ControlParameterKey {
 
 /// Continuous or frequently updated audio parameters.
 #[derive(Debug, Clone, Copy, PartialEq)]
+// Keep stable Set* message names aligned with the existing command/parameter API.
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum ControlParameterMessage {
     /// Set the global volume level.
     SetVolume(f32),
