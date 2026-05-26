@@ -16,7 +16,9 @@ in `docs/audio-loop-source-stem-alignment.md`. The Stage 8 DSP/FX foundation pla
 implementation slice added the internal Rust per-pad DSP chain foundation. The first DJ isolator
 replacement slice is recorded in
 `openspec/changes/replace-hardwired-eq-with-dj-isolator/` and routes existing per-pad EQ controls
-to smoothed normalized Rust DSP parameters.
+to smoothed normalized Rust DSP parameters. The focused low/high kill tuning follow-up keeps that
+ownership boundary and tunes the internal isolator reconstruction for representative band-center
+suppression.
 
 Do not interpret audio safety as "Rust must not be touched". The protected boundary is the CPAL
 audio callback and realtime hot path. New Rust modules outside that boundary are allowed and

@@ -185,13 +185,19 @@ impl BiquadState {
 
 #[derive(Debug, Clone, Copy, Default)]
 struct IsolatorChannelState {
-    low_lp: [BiquadState; 2],
-    high_hp: [BiquadState; 2],
+    low_split_lp: [BiquadState; 2],
+    low_split_hp: [BiquadState; 2],
+    high_split_lp: [BiquadState; 2],
+    high_split_hp: [BiquadState; 2],
+    low_align_lp: [BiquadState; 2],
+    low_align_hp: [BiquadState; 2],
 }
 
 #[derive(Debug, Clone)]
 struct DjIsolatorNode {
     low_lp: [BiquadCoeffs; 2],
+    low_hp: [BiquadCoeffs; 2],
+    high_lp: [BiquadCoeffs; 2],
     high_hp: [BiquadCoeffs; 2],
     states: [IsolatorChannelState; DSP_MAX_CHANNELS],
     low_gain: f32,
@@ -203,6 +209,8 @@ impl DjIsolatorNode {
     fn new(sample_rate_hz: f32) -> Self {
         let mut node = Self {
             low_lp: [BiquadCoeffs::identity(); 2],
+            low_hp: [BiquadCoeffs::identity(); 2],
+            high_lp: [BiquadCoeffs::identity(); 2],
             high_hp: [BiquadCoeffs::identity(); 2],
             states: [IsolatorChannelState::default(); DSP_MAX_CHANNELS],
             low_gain: 1.0,
@@ -216,9 +224,13 @@ impl DjIsolatorNode {
     fn prepare(&mut self, sample_rate_hz: f32) {
         let sample_rate_hz = sanitize_sample_rate(sample_rate_hz);
         let low_lp = biquad_low_pass_butterworth(sample_rate_hz, ISOLATOR_LOW_CROSSOVER_HZ);
+        let low_hp = biquad_high_pass_butterworth(sample_rate_hz, ISOLATOR_LOW_CROSSOVER_HZ);
+        let high_lp = biquad_low_pass_butterworth(sample_rate_hz, ISOLATOR_HIGH_CROSSOVER_HZ);
         let high_hp = biquad_high_pass_butterworth(sample_rate_hz, ISOLATOR_HIGH_CROSSOVER_HZ);
 
         self.low_lp = [low_lp; 2];
+        self.low_hp = [low_hp; 2];
+        self.high_lp = [high_lp; 2];
         self.high_hp = [high_hp; 2];
         self.reset();
     }
@@ -236,18 +248,23 @@ impl DjIsolatorNode {
 
         let state = &mut self.states[channel];
 
-        let mut low = x;
-        for (coeffs, stage) in self.low_lp.iter().zip(state.low_lp.iter_mut()) {
-            low = stage.process(*coeffs, low);
-        }
+        let low_split = process_biquad_cascade(&self.low_lp, &mut state.low_split_lp, x);
+        let above_low = process_biquad_cascade(&self.low_hp, &mut state.low_split_hp, x);
+        let mid = process_biquad_cascade(&self.high_lp, &mut state.high_split_lp, above_low);
+        let high = process_biquad_cascade(&self.high_hp, &mut state.high_split_hp, above_low);
 
-        let mut high = x;
-        for (coeffs, stage) in self.high_hp.iter().zip(state.high_hp.iter_mut()) {
-            high = stage.process(*coeffs, high);
-        }
+        let low_aligned_lp =
+            process_biquad_cascade(&self.high_lp, &mut state.low_align_lp, low_split);
+        let low_aligned_hp =
+            process_biquad_cascade(&self.high_hp, &mut state.low_align_hp, low_split);
+        let low = low_aligned_lp + low_aligned_hp;
 
-        let mid = x - low - high;
-        let y = low * self.low_gain + mid * self.mid_gain + high * self.high_gain;
+        // Equal gains should behave as one scalar gain and keep neutral rendering sample-exact.
+        let y = if gains_are_equal(self.low_gain, self.mid_gain, self.high_gain) {
+            x * self.low_gain
+        } else {
+            low * self.low_gain + mid * self.mid_gain + high * self.high_gain
+        };
 
         if y.is_finite() { y } else { 0.0 }
     }
@@ -255,6 +272,21 @@ impl DjIsolatorNode {
     fn reset(&mut self) {
         self.states = [IsolatorChannelState::default(); DSP_MAX_CHANNELS];
     }
+}
+
+fn process_biquad_cascade(
+    coeffs: &[BiquadCoeffs; 2],
+    stages: &mut [BiquadState; 2],
+    mut sample: f32,
+) -> f32 {
+    for (coeffs, stage) in coeffs.iter().zip(stages.iter_mut()) {
+        sample = stage.process(*coeffs, sample);
+    }
+    sample
+}
+
+fn gains_are_equal(low: f32, mid: f32, high: f32) -> bool {
+    (low - mid).abs() < 1e-6 && (mid - high).abs() < 1e-6
 }
 
 #[derive(Debug, Clone)]
@@ -641,7 +673,7 @@ mod tests {
     }
 
     #[test]
-    fn representative_tone_audition_records_current_isolator_tuning_gap() {
+    fn representative_band_center_kills_suppress_target_bands_after_tuning() {
         let all_band_boost = sine_rms_ratio_with_targets(1_000.0, 1.0, 1.0, 1.0);
         assert!((all_band_boost - 10.0_f32.powf(ISOLATOR_BOOST_DB_MAX / 20.0)).abs() < 0.02);
 
@@ -650,17 +682,13 @@ mod tests {
 
         let low_kill = sine_rms_ratio_with_targets(60.0, 0.0, 0.5, 0.5);
         let high_kill = sine_rms_ratio_with_targets(8_000.0, 0.5, 0.5, 0.0);
+        let low_kill_high_content = sine_rms_ratio_with_targets(8_000.0, 0.0, 0.5, 0.5);
+        let high_kill_low_content = sine_rms_ratio_with_targets(60.0, 0.5, 0.5, 0.0);
 
-        // This review-slice characterization should be replaced by suppression thresholds in
-        // the focused low/high kill tuning follow-up.
-        assert!(
-            low_kill > 0.50,
-            "review should keep the low-kill tuning follow-up active until this drops"
-        );
-        assert!(
-            high_kill > 1.00,
-            "review should keep the high-kill tuning follow-up active until this drops"
-        );
+        assert!(low_kill < 0.05);
+        assert!(high_kill < 0.10);
+        assert!(low_kill_high_content > 0.85);
+        assert!(high_kill_low_content > 0.85);
     }
 
     #[test]

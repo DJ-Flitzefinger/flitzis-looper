@@ -101,3 +101,22 @@ The next slice should tune the existing isolator topology or band reconstruction
 OpenSpec change before acceptance/archive. That follow-up must remain focused on the per-pad
 isolator and must not add unrelated FX, plugin hosting, deck/group/master chains, live loop-edit
 crossfades, real-time stem separation, or UI redesign.
+
+## Focused Tuning Outcome
+
+The tuning follow-up keeps the same per-pad Rust DSP-chain ownership, public compatibility setter,
+normalized parameter model, and smoothing behavior. It replaces the previous residual
+`dry - low - high` reconstruction with fixed-size Linkwitz-Riley-style splits for non-equal
+isolator gains:
+
+- low/above-low split at `250 Hz`,
+- mid/high split at `4 kHz`,
+- low branch alignment through the upper crossover before summation,
+- exact dry-path output when all three gains are equal.
+
+The equal-gain dry path preserves neutral transparency, all-band kill silence, and uniform
+all-band `+6 dB` boost. The non-equal band split suppresses representative `60 Hz` low-kill and
+`8 kHz` high-kill tones while preserving other-band audibility. No UI behavior, project restore
+behavior, input-mapping semantics, plugin hosting, unrelated FX, deck/group/master chains,
+real-time stem separation, live loop-edit crossfades, or broad rewrite is added by this tuning
+slice.

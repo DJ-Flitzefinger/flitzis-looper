@@ -102,6 +102,16 @@ Accepted target changes SHALL be smoothed on the Rust audio side before sample p
 - **THEN** low-frequency content is removed from that pad
 - **AND** mid and high content remains audible
 
+#### Scenario: Representative low and high band-center kills are suppressed
+- **GIVEN** deterministic representative tones are rendered through the per-pad isolator at
+  `48 kHz`
+- **WHEN** the low band is set to minimum kill while mid and high remain neutral
+- **THEN** `60 Hz` low-band-center content is strongly suppressed
+- **AND** `8 kHz` high-band content remains audible
+- **WHEN** the high band is set to minimum kill while low and mid remain neutral
+- **THEN** `8 kHz` high-band-center content is strongly suppressed
+- **AND** `60 Hz` low-band content remains audible
+
 #### Scenario: Rapid EQ target changes are smoothed
 - **GIVEN** pad `id` is playing
 - **WHEN** repeated accepted targets for one isolator band reach Rust through the parameter path

@@ -35,3 +35,15 @@
 - [x] 6.3 Record that the current low/high kill response is not archive-ready and needs one
   focused tuning follow-up before OpenSpec acceptance/archive.
 - [x] 6.4 Run official strict OpenSpec validation after the review-note update.
+
+## 7. Focused Low/High Kill Tuning
+- [x] 7.1 Replace the residual `dry - low - high` reconstruction with tuned fixed-size
+  Linkwitz-Riley-style band splitting for non-equal isolator gains.
+- [x] 7.2 Preserve exact neutral transparency, all-band kill silence, and uniform all-band
+  `+6 dB` boost through the equal-gain dry path.
+- [x] 7.3 Add representative low/high band-center kill thresholds while preserving other-band
+  audibility, Rust-owned smoothing, and bounded finite output.
+- [x] 7.4 Keep plugin hosting, unrelated FX, deck/group/master chains, real-time stem separation,
+  live loop-edit crossfades, UI redesign, and broad rewrites out of scope.
+- [x] 7.5 Run official strict OpenSpec validation, focused Rust DSP/mixer tests, and the broader
+  uv-managed validation sequence.

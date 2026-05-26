@@ -2,9 +2,9 @@
 
 Date: 2026-05-25
 
-Status: architecture audit and preparation plan, updated after the first per-pad DJ isolator
-implementation slice. This document does not authorize unrelated DSP effects, plugin hosting, or
-broad runtime rewrites.
+Status: architecture audit and preparation plan, updated after the focused per-pad DJ isolator
+low/high kill tuning follow-up. This document does not authorize unrelated DSP effects, plugin
+hosting, or broad runtime rewrites.
 
 ## Scope
 
@@ -16,8 +16,8 @@ stems, master clock, quantization, Multi Loop, MIDI/keyboard control, future DSP
 The short answer is: the ownership direction is correct, but the architecture was not ready for
 professional DSP/FX work without preparation. Rust is already the right place for the realtime
 audio engine, scheduler, transport, mixing, and internal DSP nodes. The documented preparation
-stages have now allowed the first per-pad EQ replacement slice to move live EQ authority into the
-Rust DSP chain.
+stages have now allowed the per-pad EQ replacement and its focused low/high kill tuning follow-up
+to move live EQ authority into the Rust DSP chain.
 
 This plan is not a freeze on Python-to-Rust migration. Targeted migrations are allowed and
 preferred when they reduce duplicated live-audio authority, improve timing correctness, lower
@@ -493,9 +493,11 @@ Findings:
 - Active EQ target changes are smoothed on the Rust audio side before sample processing.
 - The old standalone `eq3.rs` coefficients and per-voice `Eq3State` are removed from the live
   mixer path, so EQ is not double-applied.
-- The focused test-tone review confirmed the all-band `+6 dB` cap and mid-band kill behavior, but
-  low kill around `60 Hz` and high kill around `8 kHz` are not archive-ready as final DJ isolator
-  behavior and need one focused tuning follow-up.
+- The focused low/high tuning follow-up replaces the residual `dry - low - high` reconstruction
+  with fixed-size Linkwitz-Riley-style band splitting for non-equal gains and an equal-gain dry
+  path for exact neutral transparency, all-band kill silence, and uniform all-band `+6 dB` boost.
+- Focused test-tone coverage now requires representative low kill around `60 Hz`, high kill
+  around `8 kHz`, mid kill around `1 kHz`, and other-band audibility.
 
 Recommendation: keep future DSP/FX work on the typed Rust DSP-chain path. Do not reintroduce a
 standalone hardwired mixer EQ or external plugin host as a shortcut.
@@ -1141,21 +1143,18 @@ Acceptance:
 
 ## Next Recommended Step
 
-Stage 8 completed the DSP/FX foundation, Stage 9 created the OpenSpec planning change, and the
-first implementation slice under
-`openspec/changes/replace-hardwired-eq-with-dj-isolator/` now replaces the hardwired per-pad EQ
-live path with the Rust per-pad DJ isolator node.
+Stage 8 completed the DSP/FX foundation, Stage 9 created the OpenSpec planning change, the first
+implementation slice under `openspec/changes/replace-hardwired-eq-with-dj-isolator/` replaced the
+hardwired per-pad EQ live path with the Rust per-pad DJ isolator node, and the focused low/high
+kill tuning follow-up now passes representative band-center suppression checks.
 
-The focused review/audition slice found that the implemented isolator ownership boundary is sound,
-but the low/high kill response needs one focused tuning follow-up before archive. The next
-recommended step is:
+The next recommended step is a separate OpenSpec acceptance/archive preparation slice:
 
 ```text
-Tune the existing per-pad DJ isolator topology/reconstruction under
-openspec/changes/replace-hardwired-eq-with-dj-isolator/ so representative low/high band-center
-kill tests suppress their target bands while preserving neutral transparency, bounded boost,
-Rust-owned smoothing, and the existing Python/UI compatibility bridge.
+Review replace-hardwired-eq-with-dj-isolator for archive readiness, ensure the active delta and
+repository docs match the implemented per-pad isolator behavior, run official strict OpenSpec
+validation, and only then archive/update baseline specs if that focused review passes.
 ```
 
 Do not add plugin hosting, unrelated FX, deck/group/master chains, real-time stem separation,
-live loop-edit crossfades, UI redesign, or a broad rewrite during that review/tuning slice.
+live loop-edit crossfades, UI redesign, or a broad rewrite during that archive-readiness slice.

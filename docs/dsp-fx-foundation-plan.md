@@ -2,10 +2,10 @@
 
 Date: 2026-05-26
 
-Status: Stage 8 architecture planning, the first neutral Rust foundation slice, and the first
-3-band DJ isolator replacement slice are complete. This document does not authorize unrelated
-DSP/FX effects, plugin hosting, real-time stem separation, live loop-edit crossfades, or broad
-rewrites.
+Status: Stage 8 architecture planning, the first neutral Rust foundation slice, the first
+3-band DJ isolator replacement slice, and the focused low/high kill tuning follow-up are
+complete. This document does not authorize unrelated DSP/FX effects, plugin hosting, real-time
+stem separation, live loop-edit crossfades, or broad rewrites.
 
 ## Purpose
 
@@ -97,6 +97,9 @@ The first isolator implementation slice now replaces the old live EQ authority:
   minimum kill, and `+6 dB` maximum boost,
 - inactive/project-restore updates snap current DSP state to the restored targets, while active
   playback target changes are smoothed before sample processing,
+- the tuned isolator uses fixed-size Linkwitz-Riley-style splits for non-equal band gains and an
+  equal-gain dry path for exact neutral transparency, all-band kill silence, and uniform all-band
+  `+6 dB` boost,
 - focused Rust DSP and mixer tests cover neutral transparency, full-kill behavior, bounded boost,
   smoothing, finite output, sample-rate preparation, and the absence of double-processing through
   the removed hardwired EQ path.
@@ -109,13 +112,18 @@ parameter path, smoothing, and all-band `+6 dB` boost cap remain the right archi
 The all-band boost review measures about `1.995x` RMS at `1 kHz`, and the mid-kill path strongly
 suppresses a `1 kHz` band-center tone.
 
-The same review found that the current low/high split is not yet archive-ready as final DJ
-isolator behavior: low kill around `60 Hz` leaves substantial residual RMS, and high kill around
-`8 kHz` can exceed neutral RMS instead of suppressing the high band. The next small step should
-tune the existing per-pad isolator topology or reconstruction under
-`openspec/changes/replace-hardwired-eq-with-dj-isolator/`. Do not use that follow-up to add
-unrelated FX, plugin hosting, deck/group/master chains, live loop-edit crossfades, real-time stem
-separation, or UI redesign.
+The same review found that the initial low/high split was not archive-ready as final DJ isolator
+behavior: low kill around `60 Hz` left substantial residual RMS, and high kill around `8 kHz`
+could exceed neutral RMS instead of suppressing the high band.
+
+The focused tuning follow-up keeps the same per-pad DSP-chain ownership and replaces the residual
+`dry - low - high` reconstruction with fixed-size Linkwitz-Riley-style band splitting for
+non-equal gains. It preserves exact dry output when all three band gains are equal, so neutral
+transparency, all-band kill silence, and uniform all-band `+6 dB` boost stay bounded and
+deterministic. Focused tests now require representative `60 Hz` low-kill and `8 kHz` high-kill
+suppression while preserving other-band audibility. No unrelated FX, plugin hosting,
+deck/group/master chains, live loop-edit crossfades, real-time stem separation, or UI redesign
+was added.
 
 ## Parameter Model
 
@@ -186,3 +194,10 @@ For the first isolator implementation:
   smoothing, finite output, sample-rate preparation, and no double hardwired EQ processing,
 - run focused Python controller/UI/input-mapping tests if compatibility glue changes,
 - run the broader uv-managed validation sequence because the change replaces live audio behavior.
+
+For the focused low/high kill tuning follow-up:
+
+- run official strict OpenSpec validation for `replace-hardwired-eq-with-dj-isolator`,
+- run focused Rust DSP tests for representative band-center suppression and equal-gain behavior,
+- run focused mixer tests for the existing no-double-processing bridge,
+- run the broader uv-managed validation sequence because live audio DSP behavior changes.
