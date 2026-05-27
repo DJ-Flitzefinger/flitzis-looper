@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, cast
 
 from imgui_bundle import ImVec4, icons_fontawesome_6, imgui, imgui_ctx, implot
 
+from flitzis_looper.constants import PAD_LOOP_BARS_MIN
 from flitzis_looper.ui.constants import (
     PLOT_FILL_RGBA,
     PLOT_MARKER_RGBA,
@@ -61,12 +62,100 @@ def _render_icon_button(label: str, size: float) -> bool:
     return False
 
 
+def _render_icon_button_mouse_down(label: str, size: float) -> tuple[bool, bool]:
+    with imgui_ctx.push_style_var(imgui.StyleVar_.button_text_align, (0.5, 0.65)):
+        imgui.button(label, (size, size))
+    hovered = imgui.is_item_hovered()
+    left_clicked = hovered and imgui.is_mouse_clicked(imgui.MouseButton_.left)
+    right_clicked = hovered and imgui.is_mouse_clicked(imgui.MouseButton_.right)
+    return (left_clicked, right_clicked)
+
+
 def _render_text_button(label: str, height: float) -> bool:
     padding = imgui.get_style().frame_padding
     with imgui_ctx.push_style_var(imgui.StyleVar_.frame_padding, (padding.x + SPACING, padding.y)):
         if imgui.button(label, (0, height)):
             return True
     return False
+
+
+def format_loop_bars(bars: float) -> str:
+    if not math.isfinite(bars):
+        return "-"
+
+    if bars.is_integer():
+        return str(int(bars))
+
+    return f"{bars:g}"
+
+
+def _power_bar_step_target(bars: float, direction: int) -> float | None:
+    if not math.isfinite(bars) or direction == 0:
+        return None
+
+    if direction > 0:
+        if bars < PAD_LOOP_BARS_MIN:
+            return PAD_LOOP_BARS_MIN
+
+        ratio = max(1.0, bars / PAD_LOOP_BARS_MIN)
+        exponent = math.floor(math.log2(ratio)) + 1
+        return float(PAD_LOOP_BARS_MIN * (2**exponent))
+
+    if bars <= PAD_LOOP_BARS_MIN:
+        return None
+
+    ratio = bars / PAD_LOOP_BARS_MIN
+    exponent = math.ceil(math.log2(ratio)) - 1
+    if exponent < 0:
+        return None
+    return float(PAD_LOOP_BARS_MIN * (2**exponent))
+
+
+def bar_step_target(
+    bars: float,
+    direction: int,
+    *,
+    power_step: bool,
+    max_bars: float | None,
+) -> float | None:
+    if not math.isfinite(bars) or direction == 0:
+        return None
+
+    if power_step:
+        target = _power_bar_step_target(bars, direction)
+    else:
+        target = bars + float(direction)
+        if target < PAD_LOOP_BARS_MIN:
+            return None
+
+    if target is None:
+        return None
+
+    if max_bars is not None and target > max_bars + 1e-9:
+        return None
+
+    return target
+
+
+def _apply_bar_step(
+    ctx: UiContext,
+    pad_id: int,
+    *,
+    bars: float,
+    direction: int,
+    power_step: bool,
+    max_bars: float | None,
+) -> None:
+    target = bar_step_target(
+        bars,
+        direction,
+        power_step=power_step,
+        max_bars=max_bars,
+    )
+    if target is None:
+        return
+
+    ctx.audio.pads.set_pad_loop_bars(pad_id, bars=target)
 
 
 def _render_playback_controls(ctx: UiContext, pad_id: int, height: float) -> None:
@@ -128,8 +217,8 @@ def _render_loop_controls(ctx: UiContext, pad_id: int, height: float, text_pos_y
     auto_enabled = ctx.state.project.pad_loop_auto[pad_id]
 
     imgui.same_line(spacing=SPACING)
-    if _render_text_button("Reset##wf_loop_reset", height):
-        ctx.audio.pads.reset_pad_loop_region(pad_id)
+    if _render_text_button("ALL##wf_loop_all", height):
+        ctx.audio.pads.set_pad_full_track_loop_region(pad_id)
 
     imgui.same_line(spacing=SPACING)
     check_h = imgui.get_frame_height()
@@ -141,27 +230,62 @@ def _render_loop_controls(ctx: UiContext, pad_id: int, height: float, text_pos_y
 
     bars = ctx.state.project.pad_loop_bars[pad_id]
     bpm = ctx.state.pads.effective_bpm(pad_id)
+    max_bars = ctx.state.pads.max_auto_loop_bars(pad_id)
 
     imgui.same_line(spacing=SPACING)
-    if bpm is None and new_auto:
+    if bpm is None:
         imgui.set_cursor_pos_y(text_pos_y)
-        imgui.text_colored(TEXT_MUTED_RGBA, f"Bars: {bars} (BPM unavailable)")
+        imgui.text_colored(TEXT_MUTED_RGBA, f"Bars: {format_loop_bars(bars)} (BPM unavailable)")
     else:
         imgui.set_cursor_pos_y(text_pos_y)
         imgui.text_colored(TEXT_MUTED_RGBA, "Bars")
         imgui.same_line(spacing=SPACING / 2)
         imgui.set_cursor_pos_y(text_pos_y)
-        imgui.text(str(bars))
+        imgui.text(format_loop_bars(bars))
 
         imgui.same_line(spacing=SPACING / 2)
         btn_minus_label = f"{icons_fontawesome_6.ICON_FA_CHEVRON_LEFT}##wf_loop_bars_minus"
-        if _render_icon_button(btn_minus_label, height):
-            ctx.audio.pads.set_pad_loop_bars(pad_id, bars=max(1, bars - 1))
+        minus_left, minus_right = _render_icon_button_mouse_down(btn_minus_label, height)
+        if minus_left:
+            _apply_bar_step(
+                ctx,
+                pad_id,
+                bars=bars,
+                direction=-1,
+                power_step=True,
+                max_bars=max_bars,
+            )
+        elif minus_right:
+            _apply_bar_step(
+                ctx,
+                pad_id,
+                bars=bars,
+                direction=-1,
+                power_step=False,
+                max_bars=max_bars,
+            )
 
         imgui.same_line(spacing=SPACING / 2)
         btn_plus_label = f"{icons_fontawesome_6.ICON_FA_CHEVRON_RIGHT}##wf_loop_bars_plus"
-        if _render_icon_button(btn_plus_label, height):
-            ctx.audio.pads.set_pad_loop_bars(pad_id, bars=bars + 1)
+        plus_left, plus_right = _render_icon_button_mouse_down(btn_plus_label, height)
+        if plus_left:
+            _apply_bar_step(
+                ctx,
+                pad_id,
+                bars=bars,
+                direction=1,
+                power_step=True,
+                max_bars=max_bars,
+            )
+        elif plus_right:
+            _apply_bar_step(
+                ctx,
+                pad_id,
+                bars=bars,
+                direction=1,
+                power_step=False,
+                max_bars=max_bars,
+            )
 
     _render_grid_offset_control(ctx, pad_id, height, text_pos_y)
 
@@ -428,44 +552,35 @@ def _handle_clicks(ctx: UiContext, pad_id: int, sample_duration_s: float) -> Non
     if not is_plot_hovered:
         return
 
-    left_released = imgui.is_mouse_released(imgui.MouseButton_.left)
+    if imgui.is_mouse_clicked(imgui.MouseButton_.middle):
+        mouse_pos = imgui.get_mouse_pos()
+        mouse_plot_pos = implot.pixels_to_plot(mouse_pos.x, mouse_pos.y)
+        seek_s = max(0.0, min(float(sample_duration_s), float(mouse_plot_pos.x)))
+        ctx.ui.waveform.seek_selected_pad_to_position(seek_s)
+
     right_released = imgui.is_mouse_released(imgui.MouseButton_.right)
 
-    if not (left_released or right_released):
+    if not right_released:
         return
 
     auto_enabled = ctx.state.project.pad_loop_auto[pad_id]
-    if auto_enabled and right_released:
+    if auto_enabled:
         return
 
     mouse_pos = imgui.get_mouse_pos()
     mouse_plot_pos = implot.pixels_to_plot(mouse_pos.x, mouse_pos.y)
     click_x = mouse_plot_pos.x
 
-    if left_released:
-        drag_delta = imgui.get_mouse_drag_delta(imgui.MouseButton_.left)
-        if abs(drag_delta.x) > 1 or abs(drag_delta.y) > 1:
-            imgui.reset_mouse_drag_delta(imgui.MouseButton_.left)
-            return
-
-        loop_start_s, loop_end_s = ctx.state.pads.effective_loop_region(pad_id)
-        new_start = max(0.0, click_x)
-        if loop_end_s is not None:
-            new_start = min(new_start, loop_end_s)
-        ctx.audio.pads.set_pad_loop_start(pad_id, new_start)
-        imgui.reset_mouse_drag_delta(imgui.MouseButton_.left)
-
-    if right_released:
-        drag_delta = imgui.get_mouse_drag_delta(imgui.MouseButton_.right)
-        if abs(drag_delta.x) > 1 or abs(drag_delta.y) > 1:
-            imgui.reset_mouse_drag_delta(imgui.MouseButton_.right)
-            return
-
-        loop_start_s, loop_end_s = ctx.state.pads.effective_loop_region(pad_id)
-        new_end = min(sample_duration_s, click_x)
-        new_end = max(new_end, loop_start_s)
-        ctx.audio.pads.set_pad_loop_end(pad_id, new_end)
+    drag_delta = imgui.get_mouse_drag_delta(imgui.MouseButton_.right)
+    if abs(drag_delta.x) > 1 or abs(drag_delta.y) > 1:
         imgui.reset_mouse_drag_delta(imgui.MouseButton_.right)
+        return
+
+    loop_start_s, _ = ctx.state.pads.effective_loop_region(pad_id)
+    new_end = min(sample_duration_s, click_x)
+    new_end = max(new_end, loop_start_s)
+    ctx.audio.pads.set_pad_loop_end(pad_id, new_end)
+    imgui.reset_mouse_drag_delta(imgui.MouseButton_.right)
 
 
 def _render_plot(ctx: UiContext, pad_id: int) -> None:

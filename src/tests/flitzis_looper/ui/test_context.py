@@ -308,6 +308,23 @@ class TestAudioActions:  # noqa: PLR0904
         audio_actions.pads.clear_manual_key(0)
         assert controller.project.manual_key[0] is None
 
+    def test_set_pad_full_track_loop_region(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        audio_actions = AudioActions(controller)
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
+        controller.project.sample_durations[0] = 42.0
+        controller.project.pad_loop_auto[0] = True
+        controller.project.pad_loop_start_s[0] = 2.0
+        controller.project.pad_loop_end_s[0] = 8.0
+
+        audio_actions.pads.set_pad_full_track_loop_region(0)
+
+        assert controller.project.pad_loop_start_s[0] == pytest.approx(0.0)
+        assert controller.project.pad_loop_end_s[0] == pytest.approx(42.0)
+        assert controller.project.pad_loop_auto[0] is False
+        audio_engine_mock.set_pad_loop_region.assert_called_once_with(0, 0.0, 42.0)
+
     def test_tap_bpm_delegates(
         self, controller: AppController, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -823,3 +840,17 @@ class TestWaveformEditorTransportControls:
         assert controller.session.active_sample_ids == {0, 1}
         assert controller.session.pad_playhead_s[0] == pytest.approx(12.0)
         assert audio_engine_mock.method_calls == []
+
+    def test_seek_selected_pad_to_position_calls_selected_pad_seek(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
+        controller.project.sample_durations[0] = 10.0
+        controller.session.active_sample_ids.add(0)
+
+        ctx.ui.waveform.seek_selected_pad_to_position(12.5)
+
+        audio_engine_mock.seek_sample.assert_called_once_with(0, 10.0)
+        assert controller.session.pad_playhead_s[0] == pytest.approx(10.0)

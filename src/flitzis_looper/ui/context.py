@@ -107,6 +107,9 @@ class PadSelectors:  # noqa: PLR0904 - selector facade intentionally mirrors pad
     def effective_loop_region(self, pad_id: int) -> tuple[float, float | None]:
         return self._controller.transport.loop.effective_region(pad_id)
 
+    def max_auto_loop_bars(self, pad_id: int) -> float | None:
+        return self._controller.transport.loop.max_auto_loop_bars(pad_id)
+
     def is_analyzing(self, pad_id: int) -> bool:
         return pad_id in self._session.analyzing_sample_ids
 
@@ -248,8 +251,8 @@ class PadAudioActions:
             lambda: self._controller.transport.playback.stop_pad(pad_id),
         )
 
-    def reset_pad_loop_region(self, pad_id: int) -> None:
-        self._controller.transport.loop.reset(pad_id)
+    def set_pad_full_track_loop_region(self, pad_id: int) -> None:
+        self._controller.transport.loop.set_full_track_region(pad_id)
 
     def set_pad_loop_auto(self, pad_id: int, *, enabled: bool) -> None:
         self._controller.transport.loop.set_auto(pad_id, enabled=enabled)
@@ -586,6 +589,14 @@ class WaveformEditorActions:
         loop_start_s, _ = self._controller.transport.loop.effective_region(pad_id)
         self._controller.transport.playback.stop_pad(pad_id)
         self._controller.session.pad_playhead_s[pad_id] = loop_start_s
+
+    def seek_selected_pad_to_position(self, position_s: float) -> None:
+        """Seek the selected pad's active or paused voice to a source position."""
+        pad_id = self._selected_pad_id()
+        if pad_id is None:
+            return
+
+        self._controller.transport.playback.seek_pad(pad_id, position_s)
 
     def record_view_range(self, pad_id: int, start_s: float, end_s: float) -> None:
         """Record the plot's current visible X-range for a pad."""

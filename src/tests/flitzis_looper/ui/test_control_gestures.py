@@ -3,6 +3,7 @@ import pytest
 from flitzis_looper.ui.render.bottom_bar import master_volume_wheel_delta
 from flitzis_looper.ui.render.control_gestures import held_repeat_count, wheel_step_count
 from flitzis_looper.ui.render.sidebar_left import eq_wheel_delta_db, gain_meter_zone_fractions
+from flitzis_looper.ui.render.waveform_editor import bar_step_target, format_loop_bars
 
 
 @pytest.mark.parametrize(
@@ -46,3 +47,51 @@ def test_held_repeat_count_emits_tick_at_delay_crossing() -> None:
 def test_held_repeat_count_emits_crossed_interval_ticks() -> None:
     assert held_repeat_count(0.56, 0.34) == 3
     assert held_repeat_count(0.56, 0.45) == 1
+
+
+@pytest.mark.parametrize(
+    ("bars", "direction", "power_step", "max_bars", "expected"),
+    [
+        (8.0, 1, True, None, 16.0),
+        (8.0, -1, True, None, 4.0),
+        (7.0, 1, True, None, 8.0),
+        (7.0, -1, True, None, 4.0),
+        (0.5, -1, True, None, None),
+        (8.0, -1, False, None, 7.0),
+        (0.5, 1, False, None, 1.5),
+        (1.0, -1, False, None, None),
+        (6.0, 1, False, 6.0, None),
+        (4.0, 1, True, 6.0, None),
+    ],
+)
+def test_waveform_bar_step_targets(
+    bars: float,
+    direction: int,
+    *,
+    power_step: bool,
+    max_bars: float | None,
+    expected: float | None,
+) -> None:
+    target = bar_step_target(
+        bars,
+        direction,
+        power_step=power_step,
+        max_bars=max_bars,
+    )
+
+    if expected is None:
+        assert target is None
+    else:
+        assert target == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("bars", "expected"),
+    [
+        (8.0, "8"),
+        (0.5, "0.5"),
+        (1.5, "1.5"),
+    ],
+)
+def test_waveform_loop_bar_labels(bars: float, expected: str) -> None:
+    assert format_loop_bars(bars) == expected
