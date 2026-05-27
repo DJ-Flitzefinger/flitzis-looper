@@ -399,6 +399,34 @@ fn render_mixer_segment<R: AudioBufferRetirement>(
     }
 }
 
+fn master_output_peak(output: &[f32]) -> f32 {
+    output.iter().fold(0.0_f32, |peak, sample| {
+        if sample.is_finite() {
+            peak.max(sample.abs())
+        } else {
+            peak
+        }
+    })
+}
+
+fn publish_master_peak_telemetry<S: AudioMessageSink>(
+    audio_messages: &mut S,
+    master_peak: f32,
+    frame_clock: u64,
+    emit_interval_frames: u64,
+    last_master_emit_frame: &mut u64,
+) {
+    if frame_clock.wrapping_sub(*last_master_emit_frame) < emit_interval_frames {
+        return;
+    }
+
+    *last_master_emit_frame = frame_clock;
+
+    if master_peak > 0.0 && master_peak.is_finite() {
+        audio_messages.push_audio_message(AudioMessage::MasterPeak { peak: master_peak });
+    }
+}
+
 fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
     match message {
         ControlMessage::LoadSample { .. } | ControlMessage::PublishPreparedStems { .. } => 2,
@@ -742,6 +770,7 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
     let emit_interval_frames: u64 = (sample_rate_hz as u64 / 10).max(1);
     let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
     let mut last_emit_frame = [0_u64; NUM_SAMPLES];
+    let mut last_master_emit_frame = 0_u64;
 
     // Create stream config
     let stream_config = StreamConfig {
@@ -781,6 +810,7 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
                 &mut producer_out,
                 &mut retired_buffers,
             );
+            let master_peak = master_output_peak(data);
 
             let frames = data.len() / channels as usize;
             transport.advance_by_rendered_frames(frames);
@@ -804,6 +834,14 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
                     let _ = producer_out.push(AudioMessage::PadPlayhead { id, position_s });
                 }
             }
+
+            publish_master_peak_telemetry(
+                &mut producer_out,
+                master_peak,
+                frame_clock,
+                emit_interval_frames,
+                &mut last_master_emit_frame,
+            );
         },
         |err| {
             log::error!("Audio stream error: {}", err);
@@ -1037,6 +1075,64 @@ mod tests {
             command_consumer.pop(),
             Ok(ControlMessage::StopAll())
         ));
+    }
+
+    #[test]
+    fn master_output_peak_is_post_sum_and_post_master_volume() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 16, 0.8));
+        mixer.load_sample(1, create_test_sample(1, 16, 0.6));
+        mixer.set_volume(0.5);
+        assert!(mixer.play_sample(0, 1.0));
+        assert!(mixer.play_sample(1, 1.0));
+
+        let mut output = vec![0.0; 16];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert!(output.iter().all(|sample| (*sample - 0.7).abs() < 1e-5));
+        assert!((master_output_peak(&output) - 0.7).abs() < 1e-5);
+        assert!((pad_peaks[0] - 0.8).abs() < 1e-5);
+        assert!((pad_peaks[1] - 0.6).abs() < 1e-5);
+    }
+
+    #[test]
+    fn master_peak_telemetry_preserves_unclamped_value() {
+        let (mut producer, mut consumer) = RingBuffer::<AudioMessage>::new(2);
+        let mut last_master_emit_frame = 0;
+
+        publish_master_peak_telemetry(
+            &mut producer,
+            1.25,
+            4_410,
+            4_410,
+            &mut last_master_emit_frame,
+        );
+
+        assert_eq!(last_master_emit_frame, 4_410);
+        assert!(matches!(
+            consumer.pop(),
+            Ok(AudioMessage::MasterPeak { peak }) if (peak - 1.25).abs() < 1e-5
+        ));
+    }
+
+    #[test]
+    fn full_audio_message_queue_drops_master_peak_without_blocking() {
+        let (mut producer, mut consumer) = RingBuffer::<AudioMessage>::new(1);
+        producer.push(AudioMessage::Pong()).unwrap();
+        let mut last_master_emit_frame = 0;
+
+        publish_master_peak_telemetry(
+            &mut producer,
+            0.75,
+            4_410,
+            4_410,
+            &mut last_master_emit_frame,
+        );
+
+        assert_eq!(last_master_emit_frame, 4_410);
+        assert!(matches!(consumer.pop(), Ok(AudioMessage::Pong())));
+        assert!(consumer.pop().is_err());
     }
 
     #[test]

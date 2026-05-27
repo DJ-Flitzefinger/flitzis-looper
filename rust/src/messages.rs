@@ -58,6 +58,9 @@ pub enum AudioMessage {
     /// Per-pad peak meter update (mono peak, post Gain/Trim and EQ, pre-master).
     PadPeak { id: usize, peak: f32 },
 
+    /// Master output peak meter update (mono peak, post-sum and post-master volume).
+    MasterPeak { peak: f32 },
+
     /// Per-pad playback position in seconds (best-effort, low-rate).
     PadPlayhead { id: usize, position_s: f32 },
 }
@@ -70,6 +73,7 @@ impl AudioMessage {
             AudioMessage::SampleStopped { id } => Some(*id),
             AudioMessage::PadPeak { id, peak: _ } => Some(*id),
             AudioMessage::PadPlayhead { id, position_s: _ } => Some(*id),
+            AudioMessage::MasterPeak { peak: _ } => None,
             _ => None,
         }
     }
@@ -77,6 +81,13 @@ impl AudioMessage {
     pub fn pad_peak(&self) -> Option<f32> {
         match self {
             AudioMessage::PadPeak { id: _, peak } => Some(*peak),
+            _ => None,
+        }
+    }
+
+    pub fn master_peak(&self) -> Option<f32> {
+        match self {
+            AudioMessage::MasterPeak { peak } => Some(*peak),
             _ => None,
         }
     }
@@ -543,6 +554,15 @@ pub enum LoaderEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn master_peak_message_exposes_unclamped_output_peak() {
+        let message = AudioMessage::MasterPeak { peak: 1.25 };
+
+        assert_eq!(message.sample_id(), None);
+        assert_eq!(message.pad_peak(), None);
+        assert_eq!(message.master_peak(), Some(1.25));
+    }
 
     #[test]
     fn set_trigger_quantization_message_carries_fixed_size_mode() {

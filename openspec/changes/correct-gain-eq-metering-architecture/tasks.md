@@ -4,8 +4,8 @@
 - [x] 1.2 Validate the change with `openspec validate correct-gain-eq-metering-architecture --strict`.
 - [x] 2.1 Fix manual EQ text entry to accept valid negative values and reject invalid characters before insertion.
 - [x] 2.2 Add focused Python tests for negative EQ text entry and clamping.
-- [ ] 3.1 Add Rust-side master output peak telemetry after pad summing and Master Volume.
-- [ ] 3.2 Add focused Rust tests for unclamped master peak telemetry and realtime-safe backpressure.
+- [x] 3.1 Add Rust-side master output peak telemetry after pad summing and Master Volume.
+- [x] 3.2 Add focused Rust tests for unclamped master peak telemetry and realtime-safe backpressure.
 - [ ] 4.1 Carry master output peak and one-second clip hold through Python session/controller state.
 - [ ] 4.2 Add focused Python tests for master peak projection and clip hold.
 - [ ] 5.1 Render master output metering in the Master Volume control area.
