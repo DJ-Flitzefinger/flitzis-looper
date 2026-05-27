@@ -96,9 +96,7 @@ def sanitize_eq_entry_text(text: str) -> str:
     has_decimal = False
 
     for char in text.replace(",", "."):
-        if char == "-" and not sanitized:
-            sanitized.append(char)
-        elif char in _EQ_ENTRY_DIGITS:
+        if (char == "-" and not sanitized) or char in _EQ_ENTRY_DIGITS:
             sanitized.append(char)
         elif char == "." and not has_decimal:
             has_decimal = True

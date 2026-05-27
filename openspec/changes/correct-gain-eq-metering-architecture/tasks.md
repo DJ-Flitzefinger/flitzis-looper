@@ -13,4 +13,4 @@
 - [x] 6.1 Add focused isolator peak-behavior tests before considering any DSP topology change.
 - [x] 6.2 Decide from the isolator measurements that no DSP topology, hidden gain compensation, or
   automatic output-protection change is warranted in this correction.
-- [ ] 7.1 Consolidate final specs and docs after implementation.
+- [x] 7.1 Consolidate final specs and docs after implementation.

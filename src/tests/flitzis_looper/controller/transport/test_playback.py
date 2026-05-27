@@ -112,9 +112,7 @@ def test_seek_pad_clamps_projection_to_loaded_duration(
     assert controller.session.pad_playhead_s[sample_id] == 10.0
 
 
-def test_seek_pad_ignores_stopped_pad(
-    controller: AppController, audio_engine_mock: Mock
-) -> None:
+def test_seek_pad_ignores_stopped_pad(controller: AppController, audio_engine_mock: Mock) -> None:
     sample_id = 0
     controller.project.sample_paths[sample_id] = "/path/to/sample.wav"
     controller.project.sample_durations[sample_id] = 10.0

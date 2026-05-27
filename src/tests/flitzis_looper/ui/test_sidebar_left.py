@@ -77,12 +77,9 @@ def test_parse_eq_entry_text_ignores_empty_values(raw: str) -> None:
 
 
 def test_filtered_eq_entry_char_accepts_replacing_selected_negative_sign() -> None:
-    assert (
-        filtered_eq_entry_char(
-            ord("-"),
-            "-3",
-            0,
-            has_selection=True,
-        )
-        == ord("-")
-    )
+    assert filtered_eq_entry_char(
+        ord("-"),
+        "-3",
+        0,
+        has_selection=True,
+    ) == ord("-")

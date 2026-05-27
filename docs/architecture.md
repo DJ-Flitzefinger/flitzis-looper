@@ -38,8 +38,10 @@ Python UI / controllers / persistence / background workers
 -> playback-rate / BPM Lock / Key Lock processing
 -> per-pad Gain/Trim (-60 dB..+12 dB, smoothed)
 -> per-pad Rust DSP chain
--> trigger velocity and master volume
--> metering and audio-to-control telemetry
+-> trigger velocity
+-> per-pad pre-master metering and pad summing
+-> Master Volume and momentary output mute
+-> master output metering and audio-to-control telemetry
 -> system audio output
 ```
 
@@ -105,8 +107,8 @@ Control-to-audio communication is split into bounded rings:
   BPM Lock, timing metadata, and ping.
 - Fast parameter ring: master volume, global speed, master BPM, per-pad BPM,
   per-pad gain, and per-pad EQ/DSP targets.
-- Audio-to-control telemetry ring: pong, sample started/stopped, pad peak, and
-  pad playhead messages.
+- Audio-to-control telemetry ring: pong, sample started/stopped, pad peak,
+  master output peak, and pad playhead messages.
 
 The callback drains bounded budgets per invocation. Parameter messages are
 coalesced by identity before application, so the latest drained value wins for
@@ -203,6 +205,12 @@ selection and playback-rate/Key Lock processing, before the per-pad DSP/EQ
 chain, trigger velocity, and master volume. Per-pad metering is based on the
 rendered pad contribution after Gain/Trim and EQ but before master volume, with
 clip hold projected into `SessionState`.
+
+Master output metering is separate from the selected-pad meter. Rust measures it
+after active pad contributions are summed and after Master Volume or momentary
+output mute is applied. Master peak telemetry preserves finite values above
+`1.0`; Python projects the unclamped peak into `SessionState`, and the bottom
+bar Master Volume fader renders the display fill and one-second `CLIP` hold.
 
 ## Input Mapping
 

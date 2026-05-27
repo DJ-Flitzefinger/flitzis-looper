@@ -64,12 +64,14 @@ def test_settings_key_lock_parameter_options_cover_manual_dsp_choices() -> None:
 
 
 def test_settings_clamps_smoothing_step_float_edge_values() -> None:
-    assert clamp_key_lock_smoothing_step_for_settings(
-        MIN_KEY_LOCK_SMOOTHING_STEP - 1.0e-9
-    ) == MIN_KEY_LOCK_SMOOTHING_STEP
-    assert clamp_key_lock_smoothing_step_for_settings(
-        MAX_KEY_LOCK_SMOOTHING_STEP + 1.0e-9
-    ) == MAX_KEY_LOCK_SMOOTHING_STEP
+    assert (
+        clamp_key_lock_smoothing_step_for_settings(MIN_KEY_LOCK_SMOOTHING_STEP - 1.0e-9)
+        == MIN_KEY_LOCK_SMOOTHING_STEP
+    )
+    assert (
+        clamp_key_lock_smoothing_step_for_settings(MAX_KEY_LOCK_SMOOTHING_STEP + 1.0e-9)
+        == MAX_KEY_LOCK_SMOOTHING_STEP
+    )
     assert clamp_key_lock_smoothing_step_for_settings(0.05) == 0.05
 
 

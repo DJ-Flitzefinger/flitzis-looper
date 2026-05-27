@@ -33,10 +33,62 @@ before sample processing.
 The system SHALL preserve the selected-pad left-sidebar low, mid, and high EQ controls while
 routing their accepted live targets to the Rust DSP-chain isolator node.
 
+The selected-pad EQ knobs SHALL render `0.0 dB` at the visual 12 o'clock position. The positive
+half of the knob SHALL map linearly from `0.0 dB` to `+6.0 dB`; the negative half SHALL preserve
+the logarithmic isolator kill curve stretched from `0.0 dB` down to the `-60.0 dB` kill position.
+
+The UI SHALL set an EQ band to `-60.0 dB` immediately when the performer right-clicks that band's
+knob, and the band SHALL remain at that value until a later explicit EQ adjustment changes it.
+When the performer left-drags an EQ knob, the UI SHALL use vertical mouse movement as the primary
+adjustment and horizontal mouse movement as a finer adjustment at half the vertical sensitivity.
+
+Manual EQ value entry SHALL accept finite typed values in the supported performer-facing EQ range,
+including valid negative values such as `-6`, `-6.0`, and `-60`. The input filter SHALL allow an
+optional leading `-`, digits, `.`, and `,`; typed comma SHALL be converted to `.` before insertion.
+The input filter SHALL reject invalid characters before they appear in the edit field. Committed
+manual values SHALL be clamped to the supported `-60.0..=+6.0 dB` range before they are stored or
+published to Rust.
+
 The UI SHALL preserve the existing neutral reset gesture for each band. Keyboard and MIDI mappings
 for per-pad EQ SHALL continue to use stable action semantics outside the audio callback, derive
 bounded controller-owned target changes, and publish accepted targets through the bounded
 parameter path.
+
+#### Scenario: Neutral EQ is centered visually
+- **GIVEN** pad `id` is selected
+- **AND** its low EQ band is `0.0 dB`
+- **WHEN** the left-sidebar EQ controls are rendered
+- **THEN** the low EQ knob points to 12 o'clock
+
+#### Scenario: Right-click kills one EQ band
+- **GIVEN** pad `id` is selected
+- **WHEN** the performer right-clicks the mid EQ knob
+- **THEN** the selected pad's mid EQ value becomes `-60.0 dB`
+- **AND** no right-drag gesture is required to keep that value
+
+#### Scenario: Horizontal left-drag is finer than vertical drag
+- **GIVEN** pad `id` is selected
+- **WHEN** the performer left-drags a high EQ knob horizontally by the same pixel distance as a
+  vertical drag
+- **THEN** the horizontal drag produces half the knob-position change of the vertical drag
+
+#### Scenario: Manual EQ entry accepts negative values
+- **GIVEN** the performer is manually editing the selected pad's high EQ value
+- **WHEN** the performer types `-6.0` and commits the field
+- **THEN** the selected pad's high EQ value becomes `-6.0 dB`
+- **AND** the accepted live target is published through the existing bounded parameter path
+
+#### Scenario: Manual EQ entry accepts full kill
+- **GIVEN** the performer is manually editing an EQ value
+- **WHEN** the performer types `-60` and commits the field
+- **THEN** the committed value is accepted as the band kill value
+
+#### Scenario: Manual EQ entry rejects invalid characters before insertion
+- **GIVEN** the performer is manually editing an EQ value
+- **WHEN** the performer types `U+00DC`
+- **THEN** the character is rejected before it appears in the field
+- **WHEN** the performer types `,`
+- **THEN** `.` appears in the field instead
 
 #### Scenario: Adjusting EQ updates playback
 - **GIVEN** pad `id` is selected and currently playing
@@ -69,9 +121,10 @@ audio state.
   Python/GIL interaction occur due to EQ processing
 
 ### Requirement: EQ composes with gain and master volume
-The EQ SHALL be applied per pad through the Rust DSP-chain path after source selection, loop
-wrapping, playback-rate and Key Lock processing, and before per-trigger velocity, per-pad gain,
-master volume, metering, and telemetry.
+The system SHALL apply EQ per pad through the Rust DSP-chain path after source selection, loop
+wrapping, playback-rate handling, Key Lock rendering, and per-pad Gain/Trim, and before
+per-trigger velocity, selected-pad pre-master metering, pad summing, Master Volume, master output
+metering, and telemetry.
 
 The replacement SHALL NOT apply both the old hardwired EQ path and the new isolator node to the
 same rendered voice.
@@ -81,7 +134,8 @@ same rendered voice.
 - **AND** pad gain is reduced
 - **AND** an isolator band target is changed away from neutral
 - **WHEN** the mixer renders audio
-- **THEN** the output reflects both the isolator change and the gain reduction
+- **THEN** the source is first trimmed by per-pad Gain/Trim
+- **AND** the trimmed signal is then processed by the isolator node
 - **AND** the pad is not processed by a second hardwired EQ stage
 
 ### Requirement: Per-pad EQ uses crossover-based isolator processing

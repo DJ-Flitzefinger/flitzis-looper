@@ -1,4 +1,10 @@
-## MODIFIED Requirements
+# master-output-metering Specification
+
+## Purpose
+Defines final master output peak telemetry, runtime projection, UI rendering, clip indication, and
+the explicit headroom policy for output protection.
+
+## Requirements
 
 ### Requirement: Master output peak telemetry
 The audio engine SHALL compute master output peak levels after all active pad contributions are
