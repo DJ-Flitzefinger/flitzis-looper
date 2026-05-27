@@ -695,12 +695,6 @@ fn process_control_message<const CAPACITY: usize, S: AudioMessageSink, R: AudioB
         ControlMessage::SetKeyLock(enabled) => {
             mixer.set_key_lock(enabled);
         }
-        ControlMessage::SetKeyLockQuality(quality) => {
-            mixer.set_key_lock_quality(quality);
-        }
-        ControlMessage::SetKeyLockSettings(settings) => {
-            mixer.set_key_lock_settings(settings);
-        }
         ControlMessage::SetPadTimingMetadata { id, metadata } => {
             mixer.set_pad_timing_metadata(id, metadata);
         }

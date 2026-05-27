@@ -18,8 +18,8 @@ use crate::audio_engine::dsp::{DspNodeSlot, DspParameterId, DspParameterSlot, Pe
 use crate::audio_engine::stretch_processor::DEFAULT_BLOCK_SAMPLES;
 use crate::audio_engine::voice_slot::{ExplicitSeekMode, VoiceSlot};
 use crate::messages::{
-    KeyLockQuality, KeyLockSettings, PadTimingMetadata, PreparedStemSet, STEM_BUFFER_COUNT,
-    STEM_COMPONENT_MASK, SampleBuffer, StemMixMode,
+    PadTimingMetadata, PreparedStemSet, STEM_BUFFER_COUNT, STEM_COMPONENT_MASK, SampleBuffer,
+    StemMixMode,
 };
 use cpal::Sample;
 
@@ -500,9 +500,6 @@ pub struct RtMixer {
     /// Enable key lock (preserve pitch when tempo changes).
     key_lock_enabled: bool,
 
-    /// Global bounded Key Lock DSP parameters.
-    key_lock_settings: KeyLockSettings,
-
     /// Current master BPM when BPM lock is enabled.
     master_bpm: Option<f32>,
 
@@ -576,7 +573,6 @@ impl RtMixer {
             speed: 1.0,
             bpm_lock_enabled: false,
             key_lock_enabled: false,
-            key_lock_settings: KeyLockSettings::default(),
             master_bpm: None,
             pad_bpm: std::array::from_fn(|_| None),
             pad_phase_anchor_frame: std::array::from_fn(|_| 0),
@@ -928,14 +924,6 @@ impl RtMixer {
 
     pub fn set_key_lock(&mut self, enabled: bool) {
         self.key_lock_enabled = enabled;
-    }
-
-    pub fn set_key_lock_quality(&mut self, quality: KeyLockQuality) {
-        self.key_lock_settings = KeyLockSettings::from_quality(quality).sanitized();
-    }
-
-    pub fn set_key_lock_settings(&mut self, settings: KeyLockSettings) {
-        self.key_lock_settings = settings.sanitized();
     }
 
     pub fn set_master_bpm(&mut self, bpm: f32) {
@@ -1481,7 +1469,6 @@ impl RtMixer {
         let volume = self.volume;
         let bpm_lock_enabled = self.bpm_lock_enabled;
         let key_lock_enabled = self.key_lock_enabled;
-        let key_lock_settings = self.key_lock_settings;
         let master_bpm = self.master_bpm;
         let pad_bpm = &self.pad_bpm;
         let pad_gain_smoothers = &mut self.pad_gain_smoothers;
@@ -1540,7 +1527,7 @@ impl RtMixer {
                 }
                 target_tempo_ratio = target_tempo_ratio.clamp(SPEED_MIN, SPEED_MAX);
 
-                let tempo_ratio = voice.smooth_tempo_ratio(target_tempo_ratio, key_lock_settings);
+                let tempo_ratio = voice.smooth_tempo_ratio(target_tempo_ratio);
 
                 let mut input_frames = ((frames as f32) * tempo_ratio).round() as usize;
                 input_frames = input_frames.clamp(1, DEFAULT_BLOCK_SAMPLES);
@@ -1624,13 +1611,9 @@ impl RtMixer {
                 }
                 stem_transitions[voice.sample_id].advance(input_frames);
 
-                voice.stretch.process(
-                    input_frames,
-                    frames,
-                    tempo_ratio,
-                    key_lock_enabled,
-                    key_lock_settings,
-                );
+                voice
+                    .stretch
+                    .process(input_frames, frames, tempo_ratio, key_lock_enabled);
 
                 let pad_dsp_chain = &mut pad_dsp_chains[voice.sample_id];
                 let pad_gain_smoother = &mut pad_gain_smoothers[voice.sample_id];
@@ -1960,33 +1943,6 @@ mod tests {
         mixer.set_pad_bpm(0, None);
         let ratio = mixer.tempo_ratio_for_sample_id(0);
         assert!((ratio - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn key_lock_settings_default_to_high_values_and_can_change() {
-        let mut mixer = RtMixer::new(2, 48_000.0);
-
-        assert_eq!(mixer.key_lock_settings, KeyLockSettings::default());
-
-        mixer.set_key_lock_quality(KeyLockQuality::VeryHigh);
-
-        assert_eq!(
-            mixer.key_lock_settings,
-            KeyLockSettings::from_quality(KeyLockQuality::VeryHigh).sanitized()
-        );
-
-        let custom = KeyLockSettings {
-            delay_min_samples: 128.0,
-            delay_range_samples: 1024.0,
-            head_count: 4,
-            interpolation: crate::messages::KeyLockInterpolation::Linear,
-            window: crate::messages::KeyLockWindow::Triangle,
-            smoothing_step: 0.04,
-            output_gain: 1.2,
-        };
-        mixer.set_key_lock_settings(custom);
-
-        assert_eq!(mixer.key_lock_settings, custom);
     }
 
     #[test]

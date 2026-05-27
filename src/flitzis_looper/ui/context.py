@@ -23,9 +23,6 @@ if TYPE_CHECKING:
 
     from flitzis_looper.controller import AppController
     from flitzis_looper.models import (
-        KeyLockInterpolation,
-        KeyLockQuality,
-        KeyLockWindow,
         ProjectState,
         SampleAnalysis,
         SessionState,
@@ -825,30 +822,6 @@ class SettingsActions:
 
     def set_trigger_quantization_step(self, step: TriggerQuantizationStep) -> None:
         self._controller.transport.global_params.set_trigger_quantization_step(step)
-
-    def set_key_lock_quality(self, quality: KeyLockQuality) -> None:
-        self._controller.transport.global_params.set_key_lock_quality(quality)
-
-    def set_key_lock_parameters(
-        self,
-        *,
-        delay_min_samples: float,
-        delay_range_samples: float,
-        head_count: int,
-        interpolation: KeyLockInterpolation,
-        window: KeyLockWindow,
-        smoothing_step: float,
-        output_gain: float,
-    ) -> None:
-        self._controller.transport.global_params.set_key_lock_parameters(
-            delay_min_samples=delay_min_samples,
-            delay_range_samples=delay_range_samples,
-            head_count=head_count,
-            interpolation=interpolation,
-            window=window,
-            smoothing_step=smoothing_step,
-            output_gain=output_gain,
-        )
 
     def set_input_mapping_enabled(self, *, enabled: bool) -> None:
         self._controller.input_mapping.set_enabled(enabled=enabled)

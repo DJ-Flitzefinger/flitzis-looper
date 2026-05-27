@@ -1,8 +1,9 @@
 use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 use crate::audio_engine::constants::{SPEED_MAX, SPEED_MIN};
 use crate::audio_engine::stretch_processor::StretchProcessor;
-use crate::messages::KeyLockSettings;
 use crate::messages::SampleBuffer;
+
+const KEY_LOCK_TEMPO_SMOOTHING_STEP: f32 = 0.05;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ExplicitSeekMode {
@@ -122,7 +123,7 @@ impl VoiceSlot {
         self.explicit_seek_mode = ExplicitSeekMode::Normal;
     }
 
-    pub fn smooth_tempo_ratio(&mut self, target: f32, settings: KeyLockSettings) -> f32 {
+    pub fn smooth_tempo_ratio(&mut self, target: f32) -> f32 {
         if !target.is_finite() {
             return self.tempo_ratio_smoothed;
         }
@@ -133,7 +134,7 @@ impl VoiceSlot {
             return self.tempo_ratio_smoothed;
         }
 
-        let max_step = settings.sanitized().smoothing_step;
+        let max_step = KEY_LOCK_TEMPO_SMOOTHING_STEP;
         let delta = (target - self.tempo_ratio_smoothed).clamp(-max_step, max_step);
         self.tempo_ratio_smoothed = (self.tempo_ratio_smoothed + delta).clamp(SPEED_MIN, SPEED_MAX);
         target = self.tempo_ratio_smoothed;

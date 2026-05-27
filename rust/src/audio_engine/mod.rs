@@ -16,14 +16,9 @@ use crate::audio_engine::stem_cache::{
     write_deterministic_stem_artifacts,
 };
 use crate::messages::{
-    AudioMessage, BackgroundTaskKind, ControlMessage, ControlParameterMessage,
-    KEY_LOCK_DELAY_MIN_SAMPLES_MAX, KEY_LOCK_DELAY_MIN_SAMPLES_MIN,
-    KEY_LOCK_DELAY_RANGE_SAMPLES_MAX, KEY_LOCK_DELAY_RANGE_SAMPLES_MIN,
-    KEY_LOCK_DELAY_TOTAL_SAMPLES_MAX, KEY_LOCK_HEAD_COUNT_MAX, KEY_LOCK_HEAD_COUNT_MIN,
-    KEY_LOCK_OUTPUT_GAIN_MAX, KEY_LOCK_OUTPUT_GAIN_MIN, KEY_LOCK_SMOOTHING_STEP_MAX,
-    KEY_LOCK_SMOOTHING_STEP_MIN, KeyLockInterpolation, KeyLockQuality, KeyLockSettings,
-    KeyLockWindow, LoaderEvent, PadTimingMetadata, STEM_COMPONENT_MASK, SampleBuffer, StemMixMode,
-    TriggerQuantization, task_to_str,
+    AudioMessage, BackgroundTaskKind, ControlMessage, ControlParameterMessage, LoaderEvent,
+    PadTimingMetadata, STEM_COMPONENT_MASK, SampleBuffer, StemMixMode, TriggerQuantization,
+    task_to_str,
 };
 use numpy::{PyArray1, ToPyArray};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -96,116 +91,6 @@ fn parse_stem_mix_mode(mode: &str) -> Option<StemMixMode> {
         "all_stems" | "all-stems" | "stems" => Some(StemMixMode::AllStems),
         _ => None,
     }
-}
-
-fn parse_key_lock_quality(quality: &str) -> Option<KeyLockQuality> {
-    match quality
-        .trim()
-        .to_ascii_lowercase()
-        .replace(['-', ' '], "_")
-        .as_str()
-    {
-        "performance" | "fast" | "low" => Some(KeyLockQuality::Performance),
-        "balanced" | "balance" | "medium" => Some(KeyLockQuality::Balanced),
-        "high" => Some(KeyLockQuality::High),
-        "very_high" | "veryhigh" | "very" => Some(KeyLockQuality::VeryHigh),
-        _ => None,
-    }
-}
-
-fn parse_key_lock_interpolation(interpolation: &str) -> Option<KeyLockInterpolation> {
-    match interpolation
-        .trim()
-        .to_ascii_lowercase()
-        .replace(['-', ' '], "_")
-        .as_str()
-    {
-        "linear" => Some(KeyLockInterpolation::Linear),
-        "cubic" | "cubic_hermite" | "hermite" => Some(KeyLockInterpolation::Cubic),
-        _ => None,
-    }
-}
-
-fn parse_key_lock_window(window: &str) -> Option<KeyLockWindow> {
-    match window
-        .trim()
-        .to_ascii_lowercase()
-        .replace(['-', ' '], "_")
-        .as_str()
-    {
-        "triangle" | "triangular" => Some(KeyLockWindow::Triangle),
-        "hann" | "hanning" => Some(KeyLockWindow::Hann),
-        _ => None,
-    }
-}
-
-fn validate_key_lock_float(name: &'static str, value: f32, min: f32, max: f32) -> PyResult<f32> {
-    if value.is_finite() && (min..=max).contains(&value) {
-        Ok(value)
-    } else {
-        Err(PyValueError::new_err(format!(
-            "{name} must be finite and in {min}..={max}"
-        )))
-    }
-}
-
-fn key_lock_settings_from_api(
-    delay_min_samples: f32,
-    delay_range_samples: f32,
-    head_count: u8,
-    interpolation: &str,
-    window: &str,
-    smoothing_step: f32,
-    output_gain: f32,
-) -> PyResult<KeyLockSettings> {
-    let delay_min_samples = validate_key_lock_float(
-        "delay_min_samples",
-        delay_min_samples,
-        KEY_LOCK_DELAY_MIN_SAMPLES_MIN,
-        KEY_LOCK_DELAY_MIN_SAMPLES_MAX,
-    )?;
-    let delay_range_samples = validate_key_lock_float(
-        "delay_range_samples",
-        delay_range_samples,
-        KEY_LOCK_DELAY_RANGE_SAMPLES_MIN,
-        KEY_LOCK_DELAY_RANGE_SAMPLES_MAX,
-    )?;
-    if delay_min_samples + delay_range_samples > KEY_LOCK_DELAY_TOTAL_SAMPLES_MAX {
-        return Err(PyValueError::new_err(format!(
-            "delay_min_samples + delay_range_samples must be <= {KEY_LOCK_DELAY_TOTAL_SAMPLES_MAX}"
-        )));
-    }
-    if !(KEY_LOCK_HEAD_COUNT_MIN..=KEY_LOCK_HEAD_COUNT_MAX).contains(&head_count) {
-        return Err(PyValueError::new_err(format!(
-            "head_count must be in {KEY_LOCK_HEAD_COUNT_MIN}..={KEY_LOCK_HEAD_COUNT_MAX}"
-        )));
-    }
-    let interpolation = parse_key_lock_interpolation(interpolation)
-        .ok_or_else(|| PyValueError::new_err("interpolation must be linear or cubic"))?;
-    let window = parse_key_lock_window(window)
-        .ok_or_else(|| PyValueError::new_err("window must be triangle or hann"))?;
-    let smoothing_step = validate_key_lock_float(
-        "smoothing_step",
-        smoothing_step,
-        KEY_LOCK_SMOOTHING_STEP_MIN,
-        KEY_LOCK_SMOOTHING_STEP_MAX,
-    )?;
-    let output_gain = validate_key_lock_float(
-        "output_gain",
-        output_gain,
-        KEY_LOCK_OUTPUT_GAIN_MIN,
-        KEY_LOCK_OUTPUT_GAIN_MAX,
-    )?;
-
-    Ok(KeyLockSettings {
-        delay_min_samples,
-        delay_range_samples,
-        head_count,
-        interpolation,
-        window,
-        smoothing_step,
-        output_gain,
-    })
 }
 
 struct PadLoadingGuard {
@@ -1213,67 +1098,6 @@ impl AudioEngine {
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
         let _ = producer_guard.push(ControlMessage::SetKeyLock(enabled));
-        Ok(())
-    }
-
-    pub fn set_key_lock_quality(&mut self, quality: &str) -> PyResult<()> {
-        let quality = parse_key_lock_quality(quality)
-            .ok_or_else(|| PyValueError::new_err("key lock quality is unsupported"))?;
-
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
-        let mut producer_guard = handle
-            .producer
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
-
-        producer_guard
-            .push(ControlMessage::SetKeyLockQuality(quality))
-            .map_err(|_| {
-                PyRuntimeError::new_err("Failed to send SetKeyLockQuality - buffer may be full")
-            })?;
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn set_key_lock_parameters(
-        &mut self,
-        delay_min_samples: f32,
-        delay_range_samples: f32,
-        head_count: u8,
-        interpolation: &str,
-        window: &str,
-        smoothing_step: f32,
-        output_gain: f32,
-    ) -> PyResult<()> {
-        let settings = key_lock_settings_from_api(
-            delay_min_samples,
-            delay_range_samples,
-            head_count,
-            interpolation,
-            window,
-            smoothing_step,
-            output_gain,
-        )?;
-
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
-        let mut producer_guard = handle
-            .producer
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
-
-        producer_guard
-            .push(ControlMessage::SetKeyLockSettings(settings))
-            .map_err(|_| {
-                PyRuntimeError::new_err("Failed to send SetKeyLockSettings - buffer may be full")
-            })?;
         Ok(())
     }
 

@@ -39,13 +39,6 @@ def test_apply_global_audio_settings_only_when_changed(
     transport_controller._project.volume = 0.8
     transport_controller._project.speed = 1.2
     transport_controller._project.key_lock = True
-    transport_controller._project.key_lock_delay_min_samples = 128.0
-    transport_controller._project.key_lock_delay_range_samples = 1024.0
-    transport_controller._project.key_lock_head_count = 4
-    transport_controller._project.key_lock_interpolation = "linear"
-    transport_controller._project.key_lock_window = "triangle"
-    transport_controller._project.key_lock_smoothing_step = 0.04
-    transport_controller._project.key_lock_output_gain = 1.2
     transport_controller._project.bpm_lock = False
     transport_controller._project.trigger_quantization_enabled = True
     transport_controller._project.trigger_quantization_step = "1_32"
@@ -56,15 +49,6 @@ def test_apply_global_audio_settings_only_when_changed(
     audio_engine_mock.set_volume.assert_called_once()
     audio_engine_mock.set_speed.assert_called_once()
     audio_engine_mock.set_key_lock.assert_called_once()
-    audio_engine_mock.set_key_lock_parameters.assert_called_once_with(
-        128.0,
-        1024.0,
-        4,
-        "linear",
-        "triangle",
-        0.04,
-        1.2,
-    )
     audio_engine_mock.set_bpm_lock.assert_not_called()
     audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_32")
 
@@ -78,11 +62,6 @@ def test_apply_global_audio_settings_calls_all_methods(
     transport_controller._project.volume = 0.9
     transport_controller._project.speed = 0.5
     transport_controller._project.key_lock = True
-    transport_controller._project.key_lock_delay_min_samples = 48.0
-    transport_controller._project.key_lock_delay_range_samples = 1024.0
-    transport_controller._project.key_lock_interpolation = "linear"
-    transport_controller._project.key_lock_window = "triangle"
-    transport_controller._project.key_lock_smoothing_step = 0.08
     transport_controller._project.bpm_lock = True
     transport_controller._project.trigger_quantization_enabled = True
     transport_controller._project.trigger_quantization_step = "1_64"
@@ -93,15 +72,6 @@ def test_apply_global_audio_settings_calls_all_methods(
     audio_engine_mock.set_volume.assert_called_once()
     audio_engine_mock.set_speed.assert_called_once()
     audio_engine_mock.set_key_lock.assert_called_once()
-    audio_engine_mock.set_key_lock_parameters.assert_called_once_with(
-        48.0,
-        1024.0,
-        2,
-        "linear",
-        "triangle",
-        0.08,
-        1.0,
-    )
     audio_engine_mock.set_bpm_lock.assert_called_once()
     audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_64")
 

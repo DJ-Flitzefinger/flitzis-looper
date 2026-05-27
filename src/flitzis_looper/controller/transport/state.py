@@ -37,17 +37,6 @@ class ApplyProjectState:
         if self._project.key_lock != defaults.key_lock:
             self._audio.set_key_lock(enabled=self._project.key_lock)
 
-        if _key_lock_settings_tuple(self._project) != _key_lock_settings_tuple(defaults):
-            self._audio.set_key_lock_parameters(
-                self._project.key_lock_delay_min_samples,
-                self._project.key_lock_delay_range_samples,
-                self._project.key_lock_head_count,
-                self._project.key_lock_interpolation,
-                self._project.key_lock_window,
-                self._project.key_lock_smoothing_step,
-                self._project.key_lock_output_gain,
-            )
-
         if self._project.bpm_lock != defaults.bpm_lock:
             self._audio.set_bpm_lock(enabled=self._project.bpm_lock)
 
@@ -113,17 +102,3 @@ class ApplyProjectState:
             self._session.bpm_lock_anchor_bpm = None
 
         self._bpm.recompute_master_bpm()
-
-
-def _key_lock_settings_tuple(
-    project: ProjectState,
-) -> tuple[float, float, int, str, str, float, float]:
-    return (
-        project.key_lock_delay_min_samples,
-        project.key_lock_delay_range_samples,
-        project.key_lock_head_count,
-        project.key_lock_interpolation,
-        project.key_lock_window,
-        project.key_lock_smoothing_step,
-        project.key_lock_output_gain,
-    )

@@ -1,24 +1,6 @@
 from typing import TYPE_CHECKING, cast
 
 from flitzis_looper.constants import (
-    DEFAULT_KEY_LOCK_DELAY_MIN_SAMPLES,
-    DEFAULT_KEY_LOCK_DELAY_RANGE_SAMPLES,
-    DEFAULT_KEY_LOCK_HEAD_COUNT,
-    DEFAULT_KEY_LOCK_INTERPOLATION,
-    DEFAULT_KEY_LOCK_OUTPUT_GAIN,
-    DEFAULT_KEY_LOCK_SMOOTHING_STEP,
-    DEFAULT_KEY_LOCK_WINDOW,
-    MAX_KEY_LOCK_DELAY_MIN_SAMPLES,
-    MAX_KEY_LOCK_DELAY_RANGE_SAMPLES,
-    MAX_KEY_LOCK_DELAY_TOTAL_SAMPLES,
-    MAX_KEY_LOCK_HEAD_COUNT,
-    MAX_KEY_LOCK_OUTPUT_GAIN,
-    MAX_KEY_LOCK_SMOOTHING_STEP,
-    MIN_KEY_LOCK_DELAY_MIN_SAMPLES,
-    MIN_KEY_LOCK_DELAY_RANGE_SAMPLES,
-    MIN_KEY_LOCK_HEAD_COUNT,
-    MIN_KEY_LOCK_OUTPUT_GAIN,
-    MIN_KEY_LOCK_SMOOTHING_STEP,
     PITCH_BPM_STEP,
     SPEED_MAX,
     SPEED_MIN,
@@ -28,9 +10,6 @@ from flitzis_looper.constants import (
 )
 from flitzis_looper.controller.validation import ensure_finite, normalize_bpm
 from flitzis_looper.models import (
-    KEY_LOCK_INTERPOLATIONS,
-    KEY_LOCK_QUALITIES,
-    KEY_LOCK_WINDOWS,
     LEGACY_TRIGGER_QUANTIZATION_TO_STEP,
     TRIGGER_QUANTIZATION_STEPS,
 )
@@ -38,70 +17,9 @@ from flitzis_looper.models import (
 if TYPE_CHECKING:
     from flitzis_looper.controller.transport import TransportController
     from flitzis_looper.models import (
-        KeyLockInterpolation,
-        KeyLockQuality,
-        KeyLockWindow,
         TriggerQuantizationMode,
         TriggerQuantizationStep,
     )
-
-
-def _bounded_float(name: str, value: float, minimum: float, maximum: float) -> float:
-    ensure_finite(value)
-    value = float(value)
-    tolerance = 1.0e-6
-    if value < minimum and value >= minimum - tolerance:
-        return minimum
-    if value > maximum and value <= maximum + tolerance:
-        return maximum
-    if not minimum <= value <= maximum:
-        msg = f"{name} must be between {minimum} and {maximum}"
-        raise ValueError(msg)
-    return value
-
-
-def _key_lock_parameters_from_quality(quality: KeyLockQuality) -> dict[str, object]:
-    match quality:
-        case "performance":
-            return {
-                "delay_min_samples": 48.0,
-                "delay_range_samples": 1024.0,
-                "head_count": 2,
-                "interpolation": "linear",
-                "window": "triangle",
-                "smoothing_step": 0.08,
-                "output_gain": 1.0,
-            }
-        case "balanced":
-            return {
-                "delay_min_samples": 64.0,
-                "delay_range_samples": 1280.0,
-                "head_count": 2,
-                "interpolation": "linear",
-                "window": "hann",
-                "smoothing_step": 0.06,
-                "output_gain": 1.0,
-            }
-        case "very_high":
-            return {
-                "delay_min_samples": 96.0,
-                "delay_range_samples": 1792.0,
-                "head_count": 4,
-                "interpolation": "cubic",
-                "window": "hann",
-                "smoothing_step": 0.035,
-                "output_gain": 1.0,
-            }
-        case _:
-            return {
-                "delay_min_samples": DEFAULT_KEY_LOCK_DELAY_MIN_SAMPLES,
-                "delay_range_samples": DEFAULT_KEY_LOCK_DELAY_RANGE_SAMPLES,
-                "head_count": DEFAULT_KEY_LOCK_HEAD_COUNT,
-                "interpolation": DEFAULT_KEY_LOCK_INTERPOLATION,
-                "window": DEFAULT_KEY_LOCK_WINDOW,
-                "smoothing_step": DEFAULT_KEY_LOCK_SMOOTHING_STEP,
-                "output_gain": DEFAULT_KEY_LOCK_OUTPUT_GAIN,
-            }
 
 
 class GlobalParametersController:
@@ -126,121 +44,6 @@ class GlobalParametersController:
         self._project.key_lock = enabled
         self._audio.set_key_lock(enabled=enabled)
         self._transport._mark_project_changed()
-
-    def set_key_lock_quality(self, quality: KeyLockQuality | str) -> None:
-        """Set legacy Key Lock quality by applying its concrete DSP parameters."""
-        if quality not in KEY_LOCK_QUALITIES:
-            msg = "key lock quality is unsupported"
-            raise ValueError(msg)
-
-        validated = cast("KeyLockQuality", quality)
-        parameters = _key_lock_parameters_from_quality(validated)
-        quality_changed = validated != self._project.key_lock_quality
-
-        self._project.key_lock_quality = validated
-        parameters_changed = self.set_key_lock_parameters(
-            delay_min_samples=cast("float", parameters["delay_min_samples"]),
-            delay_range_samples=cast("float", parameters["delay_range_samples"]),
-            head_count=cast("int", parameters["head_count"]),
-            interpolation=cast("KeyLockInterpolation", parameters["interpolation"]),
-            window=cast("KeyLockWindow", parameters["window"]),
-            smoothing_step=cast("float", parameters["smoothing_step"]),
-            output_gain=cast("float", parameters["output_gain"]),
-        )
-        if quality_changed and not parameters_changed:
-            self._transport._mark_project_changed()
-
-    def set_key_lock_parameters(
-        self,
-        *,
-        delay_min_samples: float,
-        delay_range_samples: float,
-        head_count: int,
-        interpolation: KeyLockInterpolation | str,
-        window: KeyLockWindow | str,
-        smoothing_step: float,
-        output_gain: float,
-    ) -> bool:
-        """Set the global manual Key Lock DSP parameters."""
-        delay_min_samples = _bounded_float(
-            "delay_min_samples",
-            delay_min_samples,
-            MIN_KEY_LOCK_DELAY_MIN_SAMPLES,
-            MAX_KEY_LOCK_DELAY_MIN_SAMPLES,
-        )
-        delay_range_samples = _bounded_float(
-            "delay_range_samples",
-            delay_range_samples,
-            MIN_KEY_LOCK_DELAY_RANGE_SAMPLES,
-            MAX_KEY_LOCK_DELAY_RANGE_SAMPLES,
-        )
-        if delay_min_samples + delay_range_samples > MAX_KEY_LOCK_DELAY_TOTAL_SAMPLES:
-            msg = (
-                "delay_min_samples + delay_range_samples must be <= "
-                f"{MAX_KEY_LOCK_DELAY_TOTAL_SAMPLES}"
-            )
-            raise ValueError(msg)
-        if not MIN_KEY_LOCK_HEAD_COUNT <= head_count <= MAX_KEY_LOCK_HEAD_COUNT:
-            msg = (
-                f"head_count must be between {MIN_KEY_LOCK_HEAD_COUNT} "
-                f"and {MAX_KEY_LOCK_HEAD_COUNT}"
-            )
-            raise ValueError(msg)
-        if interpolation not in KEY_LOCK_INTERPOLATIONS:
-            msg = "interpolation must be linear or cubic"
-            raise ValueError(msg)
-        if window not in KEY_LOCK_WINDOWS:
-            msg = "window must be triangle or hann"
-            raise ValueError(msg)
-        smoothing_step = _bounded_float(
-            "smoothing_step",
-            smoothing_step,
-            MIN_KEY_LOCK_SMOOTHING_STEP,
-            MAX_KEY_LOCK_SMOOTHING_STEP,
-        )
-        output_gain = _bounded_float(
-            "output_gain",
-            output_gain,
-            MIN_KEY_LOCK_OUTPUT_GAIN,
-            MAX_KEY_LOCK_OUTPUT_GAIN,
-        )
-
-        validated_interpolation = cast("KeyLockInterpolation", interpolation)
-        validated_window = cast("KeyLockWindow", window)
-        changed = (
-            delay_min_samples != self._project.key_lock_delay_min_samples
-            or delay_range_samples != self._project.key_lock_delay_range_samples
-            or int(head_count) != self._project.key_lock_head_count
-            or validated_interpolation != self._project.key_lock_interpolation
-            or validated_window != self._project.key_lock_window
-            or smoothing_step != self._project.key_lock_smoothing_step
-            or output_gain != self._project.key_lock_output_gain
-        )
-        if not changed:
-            return False
-
-        if delay_range_samples < self._project.key_lock_delay_range_samples:
-            self._project.key_lock_delay_range_samples = delay_range_samples
-            self._project.key_lock_delay_min_samples = delay_min_samples
-        else:
-            self._project.key_lock_delay_min_samples = delay_min_samples
-            self._project.key_lock_delay_range_samples = delay_range_samples
-        self._project.key_lock_head_count = int(head_count)
-        self._project.key_lock_interpolation = validated_interpolation
-        self._project.key_lock_window = validated_window
-        self._project.key_lock_smoothing_step = smoothing_step
-        self._project.key_lock_output_gain = output_gain
-        self._audio.set_key_lock_parameters(
-            delay_min_samples,
-            delay_range_samples,
-            int(head_count),
-            validated_interpolation,
-            validated_window,
-            smoothing_step,
-            output_gain,
-        )
-        self._transport._mark_project_changed()
-        return True
 
     def set_bpm_lock(self, *, enabled: bool) -> None:
         """Enable or disable BPM Lock mode."""

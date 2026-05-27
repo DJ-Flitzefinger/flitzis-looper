@@ -182,11 +182,12 @@ with silence and continues with bounded work. Playhead telemetry remains
 source-frame based; Rubber Band output latency does not shift loop ownership or
 transport scheduling.
 
-Key Lock settings are still bounded scalar values in `ProjectState` and
-fixed-size Rust control messages. During the Rubber Band transition, the
-existing smoothing setting still limits active tempo-ratio changes; obsolete
-delay-line quality fields remain compatibility surface until the UI/API cleanup
-phase removes or replaces them.
+Project persistence stores only the global Key Lock performer intent. The old
+manual delay-line quality, delay, head-count, interpolation, window, smoothing,
+and output-gain settings are no longer exposed in the Settings UI, persisted in
+`ProjectState`, or sent through Python/Rust control messages. Active tempo-ratio
+changes still use a fixed internal Rust smoothing step so the callback receives
+only bounded mode changes.
 
 ## Per-Pad DSP And EQ
 

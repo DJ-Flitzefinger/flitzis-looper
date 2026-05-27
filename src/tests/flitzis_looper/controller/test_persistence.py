@@ -276,14 +276,6 @@ def test_complex_project_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         demucs_overlap=0.25,
         volume=0.75,
         key_lock=True,
-        key_lock_quality="very_high",
-        key_lock_delay_min_samples=128.0,
-        key_lock_delay_range_samples=1024.0,
-        key_lock_head_count=4,
-        key_lock_interpolation="linear",
-        key_lock_window="triangle",
-        key_lock_smoothing_step=0.04,
-        key_lock_output_gain=1.2,
         bpm_lock=True,
         trigger_quantization_enabled=True,
         trigger_quantization_step="1_64",
@@ -301,14 +293,6 @@ def test_complex_project_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert loaded.demucs_shifts == 4
     assert loaded.demucs_overlap == pytest.approx(0.25)
     assert loaded.key_lock is True
-    assert loaded.key_lock_quality == "very_high"
-    assert loaded.key_lock_delay_min_samples == pytest.approx(128.0)
-    assert loaded.key_lock_delay_range_samples == pytest.approx(1024.0)
-    assert loaded.key_lock_head_count == 4
-    assert loaded.key_lock_interpolation == "linear"
-    assert loaded.key_lock_window == "triangle"
-    assert loaded.key_lock_smoothing_step == pytest.approx(0.04)
-    assert loaded.key_lock_output_gain == pytest.approx(1.2)
     assert loaded.bpm_lock is True
     assert loaded.trigger_quantization_enabled is True
     assert loaded.trigger_quantization_step == "1_64"
@@ -415,31 +399,13 @@ def test_missing_demucs_quality_settings_load_defaults(
     assert loaded.demucs_overlap == pytest.approx(DEFAULT_DEMUCS_OVERLAP)
 
 
-def test_missing_key_lock_quality_loads_high_default(
+def test_removed_key_lock_backend_settings_are_not_persisted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
-    project = ProjectState(volume=0.5)
-    data = project.model_dump(mode="json")
-    data.pop("key_lock_quality", None)
-
-    config_path = tmp_path / PROJECT_CONFIG_PATH
-    config_path.parent.mkdir(parents=True)
-    config_path.write_text(json.dumps(data), encoding="utf-8")
-
-    loaded = ProjectPersistence.from_config_path().project
-    assert loaded.key_lock_quality == "high"
-
-
-def test_missing_key_lock_parameters_load_defaults(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-
-    project = ProjectState(volume=0.5)
-    data = project.model_dump(mode="json")
-    for key in [
+    obsolete_keys = [
+        "key_lock_quality",
         "key_lock_delay_min_samples",
         "key_lock_delay_range_samples",
         "key_lock_head_count",
@@ -447,21 +413,35 @@ def test_missing_key_lock_parameters_load_defaults(
         "key_lock_window",
         "key_lock_smoothing_step",
         "key_lock_output_gain",
-    ]:
-        data.pop(key, None)
+    ]
+    data = ProjectState(volume=0.5, key_lock=True).model_dump(mode="json")
+    data.update(
+        {
+            "key_lock_quality": "very_high",
+            "key_lock_delay_min_samples": 128.0,
+            "key_lock_delay_range_samples": 1024.0,
+            "key_lock_head_count": 4,
+            "key_lock_interpolation": "linear",
+            "key_lock_window": "triangle",
+            "key_lock_smoothing_step": 0.04,
+            "key_lock_output_gain": 1.2,
+        }
+    )
 
     config_path = tmp_path / PROJECT_CONFIG_PATH
     config_path.parent.mkdir(parents=True)
     config_path.write_text(json.dumps(data), encoding="utf-8")
 
     loaded = ProjectPersistence.from_config_path().project
-    assert loaded.key_lock_delay_min_samples == pytest.approx(64.0)
-    assert loaded.key_lock_delay_range_samples == pytest.approx(1536.0)
-    assert loaded.key_lock_head_count == 2
-    assert loaded.key_lock_interpolation == "cubic"
-    assert loaded.key_lock_window == "hann"
-    assert loaded.key_lock_smoothing_step == pytest.approx(0.05)
-    assert loaded.key_lock_output_gain == pytest.approx(1.0)
+    assert loaded.key_lock is True
+
+    persistence = ProjectPersistence(loaded)
+    persistence.mark_dirty()
+    persistence.flush(now=0.0)
+
+    saved = json.loads(PROJECT_CONFIG_PATH.read_text(encoding="utf-8"))
+    for key in obsolete_keys:
+        assert key not in saved
 
 
 def test_grid_offset_samples_persisted_per_pad(

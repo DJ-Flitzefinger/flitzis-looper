@@ -691,39 +691,6 @@ class TestSettingsActions:
         assert controller.project.trigger_quantization_step == "1_32"
         assert controller.persistence._dirty is True
 
-    def test_set_key_lock_parameters_delegates_to_global_params(
-        self, controller: AppController, audio_engine_mock: Mock
-    ) -> None:
-        settings_actions = SettingsActions(controller)
-
-        settings_actions.set_key_lock_parameters(
-            delay_min_samples=128.0,
-            delay_range_samples=1024.0,
-            head_count=4,
-            interpolation="linear",
-            window="triangle",
-            smoothing_step=0.04,
-            output_gain=1.2,
-        )
-
-        assert controller.project.key_lock_delay_min_samples == pytest.approx(128.0)
-        assert controller.project.key_lock_delay_range_samples == pytest.approx(1024.0)
-        assert controller.project.key_lock_head_count == 4
-        assert controller.project.key_lock_interpolation == "linear"
-        assert controller.project.key_lock_window == "triangle"
-        assert controller.project.key_lock_smoothing_step == pytest.approx(0.04)
-        assert controller.project.key_lock_output_gain == pytest.approx(1.2)
-        audio_engine_mock.set_key_lock_parameters.assert_called_once_with(
-            128.0,
-            1024.0,
-            4,
-            "linear",
-            "triangle",
-            0.04,
-            1.2,
-        )
-        assert controller.persistence._dirty is True
-
 
 class TestUiContext:
     """Test UiContext initialization and access."""

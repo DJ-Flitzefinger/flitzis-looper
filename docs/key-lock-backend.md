@@ -1,7 +1,6 @@
 # Key Lock Backend
 
-This document records the current Rubber Band based Key Lock implementation and
-the remaining cleanup work around the older manual Key Lock settings surface.
+This document records the current Rubber Band based Key Lock implementation.
 
 Key Lock is one replaceable part of the Rust audio/DSP foundation. It does not
 imply plugin hosting, a new FX module, or a broad rewrite.
@@ -44,29 +43,22 @@ fallback.
 
 ## Settings Contract
 
-Key Lock DSP settings are still persisted as bounded scalar values and
-published to Rust as fixed-size control messages:
+Project persistence stores the global `key_lock` boolean as performer intent.
+It does not store Rubber Band handles, runtime paths, buffers, measured
+latency, or callback-internal backend state.
 
-- delay minimum: `16..512` samples,
-- delay range: `256..1984` samples,
-- delay minimum plus range: at most `2032` samples,
-- head count: `1..4`,
-- interpolation: `linear` or `cubic`,
-- window: `triangle` or `hann`,
-- smoothing step: `0.01..0.099`,
-- output gain: `0.25..2.0`.
+The older manual delay-line surface has been removed from the active app
+contract:
 
-New projects still use the former High baseline: delay minimum `64`, delay
-range `1536`, `2` heads, cubic interpolation, Hann window, smoothing step
-`0.05`, and output gain `1.0`.
+- no Key Lock quality preset in `ProjectState`,
+- no delay minimum/range, head count, interpolation, window, smoothing, or
+  output-gain fields in `ProjectState`,
+- no performer-facing Settings UI controls for those removed backend details,
+- no Python wrapper methods or Rust control messages for those removed
+  settings.
 
-Legacy quality presets remain compatibility aliases that map to concrete
-parameter sets. During the Rubber Band transition, only the smoothing step is
-still active in the Rust voice path because it limits tempo-ratio changes; the
-old delay-line delay, head-count, interpolation, window, and output-gain fields
-no longer affect Rubber Band processing. A later cleanup phase should remove or
-replace those obsolete performer-facing settings from Python, the type stubs,
-and the UI.
+Rust still applies a fixed internal tempo-ratio smoothing step to active voices.
+That value is not persisted or user-tunable in this branch.
 
 ## Realtime Constraints
 

@@ -1,5 +1,4 @@
 use crate::audio_engine::rubberband_backend::RubberBandLiveShifter;
-use crate::messages::KeyLockSettings;
 
 /// Default maximum block size handled by the per-voice DSP wrapper.
 ///
@@ -107,7 +106,6 @@ impl StretchProcessor {
         output_samples: usize,
         tempo_ratio: f32,
         preserve_pitch: bool,
-        _settings: KeyLockSettings,
     ) {
         if self.channels == 0 {
             return;
@@ -413,7 +411,6 @@ impl FixedFifo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::messages::KeyLockQuality;
 
     fn estimate_frequency(samples: &[f32], sample_rate_hz: f32) -> f32 {
         let mut crossings = Vec::new();
@@ -470,13 +467,7 @@ mod tests {
             *sample = (index as f32 * 0.01).sin();
         }
 
-        processor.process(
-            256,
-            256,
-            1.0,
-            true,
-            KeyLockSettings::from_quality(KeyLockQuality::High),
-        );
+        processor.process(256, 256, 1.0, true);
         let output = &processor.output_buffers()[0][..256];
 
         for (index, sample) in output.iter().enumerate() {
@@ -493,13 +484,7 @@ mod tests {
             *sample = index as f32;
         }
 
-        processor.process(
-            1024,
-            512,
-            2.0,
-            false,
-            KeyLockSettings::from_quality(KeyLockQuality::High),
-        );
+        processor.process(1024, 512, 2.0, false);
 
         assert_eq!(processor.output_buffers()[0][0], 0.0);
         assert!((processor.output_buffers()[0][511] - 1023.0).abs() < 1.0e-3);
@@ -518,13 +503,7 @@ mod tests {
             *sample = 0.5;
         }
 
-        processor.process(
-            input_samples,
-            output_samples,
-            2.0,
-            true,
-            KeyLockSettings::from_quality(KeyLockQuality::High),
-        );
+        processor.process(input_samples, output_samples, 2.0, true);
 
         assert!(
             processor.output_buffers()[0][..output_samples]
@@ -542,13 +521,7 @@ mod tests {
             for (index, sample) in input[0].iter_mut().take(block_size).enumerate() {
                 *sample = ((chunk * block_size + index) as f32 * 0.031).sin();
             }
-            processor.process(
-                block_size,
-                block_size,
-                2.0,
-                true,
-                KeyLockSettings::from_quality(KeyLockQuality::High),
-            );
+            processor.process(block_size, block_size, 2.0, true);
         }
 
         processor.reset();
@@ -558,13 +531,7 @@ mod tests {
         for sample in input[0].iter_mut().take(output_samples) {
             *sample = 0.5;
         }
-        processor.process(
-            output_samples,
-            output_samples,
-            2.0,
-            true,
-            KeyLockSettings::from_quality(KeyLockQuality::High),
-        );
+        processor.process(output_samples, output_samples, 2.0, true);
 
         assert!(
             processor.output_buffers()[0][..output_samples]
@@ -589,13 +556,7 @@ mod tests {
                     absolute_index as f32 * input_hz * std::f32::consts::TAU / sample_rate_hz;
                 *sample = phase.sin();
             }
-            processor.process(
-                1024,
-                512,
-                2.0,
-                false,
-                KeyLockSettings::from_quality(KeyLockQuality::High),
-            );
+            processor.process(1024, 512, 2.0, false);
             varispeed.extend_from_slice(&processor.output_buffers()[0][..512]);
         }
 
@@ -608,13 +569,7 @@ mod tests {
                     absolute_index as f32 * input_hz * std::f32::consts::TAU / sample_rate_hz;
                 *sample = phase.sin();
             }
-            processor.process(
-                1024,
-                512,
-                2.0,
-                true,
-                KeyLockSettings::from_quality(KeyLockQuality::High),
-            );
+            processor.process(1024, 512, 2.0, true);
             locked.extend_from_slice(&processor.output_buffers()[0][..512]);
         }
 
@@ -627,49 +582,7 @@ mod tests {
     }
 
     #[test]
-    fn all_key_lock_quality_presets_render_finite_output() {
-        for quality in [
-            KeyLockQuality::Performance,
-            KeyLockQuality::Balanced,
-            KeyLockQuality::High,
-            KeyLockQuality::VeryHigh,
-        ] {
-            let mut processor = StretchProcessor::new(2);
-            for chunk in 0..8 {
-                let input = processor.input_buffers_mut(1024);
-                for (channel, channel_input) in input.iter_mut().enumerate().take(2) {
-                    for (index, sample) in channel_input.iter_mut().take(1024).enumerate() {
-                        let phase = (chunk * 1024 + index) as f32 * 0.031 + channel as f32;
-                        *sample = phase.sin() * 0.5;
-                    }
-                }
-
-                processor.process(
-                    1024,
-                    512,
-                    1.75,
-                    true,
-                    KeyLockSettings::from_quality(quality),
-                );
-
-                for channel in processor.output_buffers().iter().take(2) {
-                    assert!(channel[..512].iter().all(|sample| sample.is_finite()));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn custom_key_lock_settings_render_finite_output() {
-        let settings = KeyLockSettings {
-            delay_min_samples: 128.0,
-            delay_range_samples: 1024.0,
-            head_count: 1,
-            interpolation: crate::messages::KeyLockInterpolation::Cubic,
-            window: crate::messages::KeyLockWindow::Hann,
-            smoothing_step: 0.03,
-            output_gain: 1.25,
-        };
+    fn rubberband_key_lock_renders_finite_output() {
         let mut processor = StretchProcessor::new(1);
         for chunk in 0..8 {
             let input = processor.input_buffers_mut(1024);
@@ -678,7 +591,7 @@ mod tests {
                 *sample = phase.sin() * 0.5;
             }
 
-            processor.process(1024, 512, 1.5, true, settings);
+            processor.process(1024, 512, 1.5, true);
 
             assert!(
                 processor.output_buffers()[0][..512]

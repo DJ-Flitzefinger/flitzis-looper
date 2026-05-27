@@ -23,10 +23,10 @@
 
 ## 4. Python And UI Contract
 
-- [ ] 4.1 Remove or replace obsolete custom delay-line Key Lock settings from the performer-facing Settings UI.
-- [ ] 4.2 Remove obsolete delay-line settings from active Python/Rust control messages when no longer needed.
-- [ ] 4.3 Keep global Key Lock persistence as performer intent without persisting Rubber Band handles, paths, or runtime buffers.
-- [ ] 4.4 Update Python type stubs and focused Python tests for the revised API.
+- [x] 4.1 Remove or replace obsolete custom delay-line Key Lock settings from the performer-facing Settings UI.
+- [x] 4.2 Remove obsolete delay-line settings from active Python/Rust control messages when no longer needed.
+- [x] 4.3 Keep global Key Lock persistence as performer intent without persisting Rubber Band handles, paths, or runtime buffers.
+- [x] 4.4 Update Python type stubs and focused Python tests for the revised API.
 
 ## 5. Mixer Behavior Tests
 
@@ -42,11 +42,11 @@
 - [x] 6.1 Update `docs/architecture.md` and `docs/key-lock-backend.md` after implementation.
 - [x] 6.2 Document Windows and Linux native Rubber Band setup in `README.md` and `docs/development.md`.
 - [x] 6.3 Ensure production source has no hardcoded local vcpkg or workstation-specific library paths.
-- [ ] 6.4 Verify Windows local development with vcpkg-provided Rubber Band.
+- [x] 6.4 Verify Windows local development with vcpkg-provided Rubber Band.
 - [ ] 6.5 Verify Linux local development with distro/pkg-config-provided Rubber Band.
-- [ ] 6.6 Record the later Nuitka installer DLL bundle requirements for Windows packaging.
-- [ ] 6.7 Run `uv run maturin develop`.
-- [ ] 6.8 Run `uv run cargo check --manifest-path rust/Cargo.toml`.
-- [ ] 6.9 Run `uv run cargo test --manifest-path rust/Cargo.toml`.
-- [ ] 6.10 Run `uv run pytest`.
-- [ ] 6.11 Run `uv run ruff check src`, `uv run mypy src`, `uv run cargo fmt --manifest-path rust/Cargo.toml --check`, and `git diff --check`.
+- [x] 6.6 Record the later Nuitka installer DLL bundle requirements for Windows packaging.
+- [x] 6.7 Run `uv run maturin develop`.
+- [x] 6.8 Run `uv run cargo check --manifest-path rust/Cargo.toml`.
+- [x] 6.9 Run `uv run cargo test --manifest-path rust/Cargo.toml`.
+- [x] 6.10 Run `uv run pytest`.
+- [x] 6.11 Run `uv run ruff check src`, `uv run mypy src`, `uv run cargo fmt --manifest-path rust/Cargo.toml --check`, and `git diff --check`.

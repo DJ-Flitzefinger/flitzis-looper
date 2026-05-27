@@ -102,11 +102,14 @@ environment before building native dependencies:
 cmd /s /c '"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 && uv run maturin develop'
 ```
 
-For source runs that link Rubber Band dynamically, ensure the vcpkg runtime DLL
-directory is available before starting Python:
+For source runs that link Rubber Band dynamically, the Python wrapper registers
+Windows DLL directories before loading the native extension. It checks
+`RUBBERBAND_DLL_DIRS`, `RUBBERBAND_DLL_DIR`, `VCPKG_ROOT`, the default
+`$env:LOCALAPPDATA\vcpkg` location, and `PATH` entries that contain
+`rubberband-3.dll`. For an explicit shell override:
 
 ```powershell
-$env:PATH = "$env:VCPKG_ROOT\installed\x64-windows\bin;$env:PATH"
+$env:RUBBERBAND_DLL_DIR = "$env:VCPKG_ROOT\installed\x64-windows\bin"
 uv run python -m flitzis_looper
 ```
 
