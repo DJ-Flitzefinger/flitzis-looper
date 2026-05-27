@@ -595,7 +595,7 @@ impl RtMixer {
             stem_mix_source_version_hash: std::array::from_fn(|_| 0),
             stem_enabled_mask: std::array::from_fn(|_| STEM_COMPONENT_MASK),
             stem_transitions: std::array::from_fn(|_| StemTransition::default()),
-            voices: std::array::from_fn(|_| VoiceSlot::new(channels)),
+            voices: std::array::from_fn(|_| VoiceSlot::with_sample_rate(channels, sample_rate_hz)),
         }
     }
 
@@ -754,10 +754,19 @@ impl RtMixer {
         }
 
         if self.sample_is_active(id) {
+            self.reset_voice_stretch_for_sample(id);
             self.stem_transitions[id] =
                 StemTransition::start(previous, STEM_TRANSITION_RAMP_FRAMES);
         } else {
             self.stem_transitions[id].clear();
+        }
+    }
+
+    fn reset_voice_stretch_for_sample(&mut self, id: usize) {
+        for voice in &mut self.voices {
+            if voice.active && voice.sample_id == id {
+                voice.stretch.reset();
+            }
         }
     }
 
@@ -1958,16 +1967,16 @@ mod tests {
         varispeed_mixer.set_speed(2.0);
         varispeed_mixer.set_key_lock(false);
         assert!(varispeed_mixer.play_sample(0, 1.0));
-        let varispeed_output = render_chunks(&mut varispeed_mixer, 24, 512);
+        let varispeed_output = render_chunks(&mut varispeed_mixer, 48, 512);
 
         let mut key_lock_mixer = RtMixer::new(1, sample_rate_hz);
         key_lock_mixer.load_sample(0, source);
         key_lock_mixer.set_speed(2.0);
         key_lock_mixer.set_key_lock(true);
         assert!(key_lock_mixer.play_sample(0, 1.0));
-        let key_lock_output = render_chunks(&mut key_lock_mixer, 24, 512);
+        let key_lock_output = render_chunks(&mut key_lock_mixer, 48, 512);
 
-        let skip = 4096;
+        let skip = 8192;
         let varispeed_hz = estimate_frequency(&varispeed_output[skip..], sample_rate_hz);
         let key_lock_hz = estimate_frequency(&key_lock_output[skip..], sample_rate_hz);
 

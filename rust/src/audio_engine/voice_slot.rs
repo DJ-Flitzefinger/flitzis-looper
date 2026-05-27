@@ -24,7 +24,7 @@ pub struct VoiceSlot {
 }
 
 impl VoiceSlot {
-    pub fn new(channels: usize) -> Self {
+    pub fn with_sample_rate(channels: usize, sample_rate_hz: f32) -> Self {
         Self {
             active: false,
             sample_id: 0,
@@ -32,7 +32,7 @@ impl VoiceSlot {
             frame_pos: 0,
             volume: 0.0,
             tempo_ratio_smoothed: 1.0,
-            stretch: StretchProcessor::new(channels),
+            stretch: StretchProcessor::with_sample_rate(channels, sample_rate_hz),
             paused: false,
             explicit_seek_mode: ExplicitSeekMode::Normal,
         }

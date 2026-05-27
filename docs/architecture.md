@@ -168,12 +168,25 @@ Speed and BPM Lock resolve to one Rust mixer tempo ratio per active voice:
 Key Lock selects rendering semantics:
 
 - Off: varispeed playback, so pitch follows playback speed.
-- On: bounded master-tempo wrapper in `stretch_processor.rs`, so tempo changes
-  remain while pitch movement is reduced.
+- On: `stretch_processor.rs` keeps the source-frame tempo progression and sends
+  the varispeed block through a per-voice Rubber Band LiveShifter with pitch
+  scale derived from the inverse tempo ratio, so tempo changes remain while
+  perceived pitch stays approximately stable.
 
-Key Lock settings are bounded scalar values in `ProjectState` and fixed-size
-Rust control messages. Voice-local processing buffers are allocated before
-callback rendering and reused.
+Rubber Band handles, block buffers, input/output FIFOs, and channel staging
+arrays are allocated with each voice slot before callback rendering and reused.
+The callback never constructs handles, discovers libraries, resizes these
+buffers, or waits for shifted output. If a fixed-size Rubber Band block is not
+available for part of a callback block, the processor fills that missing output
+with silence and continues with bounded work. Playhead telemetry remains
+source-frame based; Rubber Band output latency does not shift loop ownership or
+transport scheduling.
+
+Key Lock settings are still bounded scalar values in `ProjectState` and
+fixed-size Rust control messages. During the Rubber Band transition, the
+existing smoothing setting still limits active tempo-ratio changes; obsolete
+delay-line quality fields remain compatibility surface until the UI/API cleanup
+phase removes or replaces them.
 
 ## Per-Pad DSP And EQ
 

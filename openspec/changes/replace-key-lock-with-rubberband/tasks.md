@@ -15,11 +15,11 @@
 
 ## 3. Voice-State Integration
 
-- [ ] 3.1 Replace the custom delay-line pitch-compensation active path with Rubber Band processing.
-- [ ] 3.2 Preserve Key Lock off varispeed playback.
-- [ ] 3.3 Preallocate all Rubber Band staging buffers, channel pointers, FIFO storage, and output buffers before callback rendering.
-- [ ] 3.4 Reset or isolate backend state for play, retrigger, seek, stop, unload, and stem-source changes.
-- [ ] 3.5 Implement a deterministic bounded fallback for missing shifted output without unbounded callback loops.
+- [x] 3.1 Replace the custom delay-line pitch-compensation active path with Rubber Band processing.
+- [x] 3.2 Preserve Key Lock off varispeed playback.
+- [x] 3.3 Preallocate all Rubber Band staging buffers, channel pointers, FIFO storage, and output buffers before callback rendering.
+- [x] 3.4 Reset or isolate backend state for play, retrigger, seek, stop, unload, and stem-source changes.
+- [x] 3.5 Implement a deterministic bounded fallback for missing shifted output without unbounded callback loops.
 
 ## 4. Python And UI Contract
 
@@ -30,8 +30,8 @@
 
 ## 5. Mixer Behavior Tests
 
-- [ ] 5.1 Cover Key Lock off varispeed vs Key Lock on Rubber Band pitch preservation.
-- [ ] 5.2 Cover neutral tempo ratio transparency.
+- [x] 5.1 Cover Key Lock off varispeed vs Key Lock on Rubber Band pitch preservation.
+- [x] 5.2 Cover neutral tempo ratio transparency.
 - [ ] 5.3 Cover ratio changes while voices are active.
 - [ ] 5.4 Cover loop wrapping, retrigger, stop/unload cleanup, and active Key Lock toggles.
 - [ ] 5.5 Cover full-mix and prepared-stem playback through the same Key Lock path.
@@ -39,9 +39,9 @@
 
 ## 6. Documentation And Validation
 
-- [ ] 6.1 Update `docs/architecture.md` and `docs/key-lock-backend.md` after implementation.
+- [x] 6.1 Update `docs/architecture.md` and `docs/key-lock-backend.md` after implementation.
 - [x] 6.2 Document Windows and Linux native Rubber Band setup in `README.md` and `docs/development.md`.
-- [ ] 6.3 Ensure production source has no hardcoded local vcpkg or workstation-specific library paths.
+- [x] 6.3 Ensure production source has no hardcoded local vcpkg or workstation-specific library paths.
 - [ ] 6.4 Verify Windows local development with vcpkg-provided Rubber Band.
 - [ ] 6.5 Verify Linux local development with distro/pkg-config-provided Rubber Band.
 - [ ] 6.6 Record the later Nuitka installer DLL bundle requirements for Windows packaging.
