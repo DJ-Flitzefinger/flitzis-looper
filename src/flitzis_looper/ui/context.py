@@ -561,6 +561,7 @@ class WaveformEditorActions:
 
         # Trigger without stopping other pads (ignores multi_loop setting).
         self._controller.transport.playback.trigger_pad_keep_others(pad_id)
+        self._controller.session.paused_sample_ids.discard(pad_id)
 
     def pause_selected_pad_on_press(self) -> None:
         """Toggle pause/resume for the selected pad.
@@ -580,6 +581,39 @@ class WaveformEditorActions:
         else:
             self._controller.transport.playback.pause_pad(pad_id)
 
+    def pause_selected_pad_hold_on_press(self) -> None:
+        """Pause the selected pad until the matching right mouse hold is released."""
+        pad_id = self._selected_pad_id()
+        session = self._controller.session
+        session.waveform_pause_hold_pad_id = None
+        if pad_id is None:
+            return
+
+        if pad_id not in session.active_sample_ids or pad_id in session.paused_sample_ids:
+            return
+
+        self._controller.transport.playback.pause_pad(pad_id)
+        if pad_id in session.paused_sample_ids:
+            session.waveform_pause_hold_pad_id = pad_id
+
+    def pause_selected_pad_hold_on_release(self) -> None:
+        """Resume the pad paused by a waveform Pause right-button hold."""
+        session = self._controller.session
+        pad_id = session.waveform_pause_hold_pad_id
+        if pad_id is None:
+            return
+
+        session.waveform_pause_hold_pad_id = None
+        self._controller.transport.playback.resume_pad(pad_id)
+
+    def stop_selected_pad_on_press(self) -> None:
+        """Stop only the selected pad (waveform editor Play right mouse down)."""
+        pad_id = self._selected_pad_id()
+        if pad_id is None:
+            return
+
+        self._controller.transport.playback.stop_pad(pad_id)
+
     def stop_and_reset_selected_pad_on_press(self) -> None:
         """Stop playback and reset playhead to loop start (selected pad)."""
         pad_id = self._selected_pad_id()
@@ -597,6 +631,15 @@ class WaveformEditorActions:
             return
 
         self._controller.transport.playback.seek_pad(pad_id, position_s)
+
+    def set_loop_start_and_play_selected_pad(self, start_s: float) -> None:
+        """Set the selected pad loop start, then retrigger it from the accepted start."""
+        pad_id = self._selected_pad_id()
+        if pad_id is None:
+            return
+
+        self._controller.transport.loop.set_start(pad_id, start_s)
+        self.play_restart_selected_pad_on_press()
 
     def record_view_range(self, pad_id: int, start_s: float, end_s: float) -> None:
         """Record the plot's current visible X-range for a pad."""

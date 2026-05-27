@@ -179,16 +179,18 @@ NOT change playback state.
 - **AND** other pads' playback is not stopped by this action
 
 ### Requirement: Waveform editor supports mouse interactions
-The waveform editor SHALL support waveform display mouse interactions without using empty-plot
-left-click as a loop-start or playback-seek shortcut.
+The waveform editor SHALL support waveform display mouse interactions for loop-marker editing,
+middle-click seeking, and view navigation.
 
 Mouse wheel up/down SHALL zoom the waveform view in/out. Holding and dragging the middle mouse
 button MAY pan the waveform view after the initial middle mouse down seek, but SHALL NOT issue
 repeated seek commands during the same hold.
 
-Empty-plot left-click SHALL NOT change loop start, SHALL NOT change loop end, and SHALL NOT seek
-playback. Loop start editing SHALL remain available through the draggable loop-start marker.
+Empty-plot left-click SHALL set the selected pad loop start using the loop-region snapping and
+sample-quantization rules. After accepting the new loop start, the editor SHALL retrigger only the
+selected pad from the new effective loop start without stopping other active pads.
 
+Empty-plot left-click SHALL NOT set loop end and SHALL NOT perform the middle-click seek behavior.
 Right-click loop-end editing SHALL remain available only when auto-loop is off.
 
 #### Scenario: Mouse wheel zooms
@@ -205,12 +207,14 @@ Right-click loop-end editing SHALL remain available only when auto-loop is off.
 - **THEN** the waveform view pans
 - **AND** no additional seek commands are sent until a new middle mouse press occurs
 
-#### Scenario: Empty plot left-click does not move loop start
+#### Scenario: Empty plot left-click sets loop start and retriggers selected pad
 - **GIVEN** the waveform editor is visible
-- **AND** the selected pad loop start is 10.0 seconds
-- **WHEN** the performer left-clicks an empty point in the waveform plot at 12.0 seconds
-- **THEN** the selected pad loop start remains 10.0 seconds
-- **AND** playback position is unchanged by the left-click
+- **AND** Pad A is selected and loaded
+- **AND** Pad B is active
+- **WHEN** the performer left-clicks an empty point in the waveform plot at time T
+- **THEN** Pad A loop start becomes approximately T subject to the snapping rules in `loop-region`
+- **AND** Pad A playback starts from the new effective loop start
+- **AND** Pad B playback is not stopped by this action
 
 #### Scenario: Draggable marker edits loop start
 - **GIVEN** the waveform editor is visible
@@ -259,4 +263,3 @@ least 12 px apart, falling back to a 4-bar subdivision when no finer subdivision
 - **WHEN** the waveform editor renders the grid
 - **THEN** it selects 1/64-note minor lines
 - **AND** stronger major lines remain aligned to beat or bar boundaries
-

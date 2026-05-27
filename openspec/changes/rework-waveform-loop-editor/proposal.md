@@ -7,8 +7,8 @@ destructive marker editor. Newly loaded tracks should be immediately useful as 8
 the start of the track, the full-track action should be explicit, and seeking inside the waveform
 should not accidentally move loop markers.
 
-Current specs still define 4-bar defaults, a Reset action, plot left-click marker placement, and a
-dedicated Stop button. Those contracts conflict with the requested loop editor workflow.
+Current specs still define 4-bar defaults, a Reset action, and a dedicated Stop button. Those
+contracts conflict with the requested loop editor workflow.
 
 ## What Changes
 
@@ -17,8 +17,8 @@ dedicated Stop button. Those contracts conflict with the requested loop editor w
   by disabling auto-loop for that pad.
 - Loop bar counts support `0.5` and larger finite values, with power-of-two left-click stepping and
   exact `1.0` bar right-click stepping bounded by the remaining loaded track duration.
-- Empty waveform left-click no longer sets loop start or seeks playback; loop markers remain
-  editable through explicit marker dragging.
+- Empty waveform left-click sets the selected pad loop start and immediately retriggers the
+  selected pad from the new effective loop start without stopping other pads.
 - Middle mouse down in the waveform seeks the selected pad's active or paused voice without
   changing loop markers.
 - Seeking outside the active loop plays through to the loop or track boundary before normal loop
@@ -44,4 +44,3 @@ This change may add a bounded scalar seek command to the Rust audio command path
 audio callback MUST NOT add disk I/O, JSON reads/writes, Python/GIL access, UI calls, blocking
 locks, logging, neural inference, plugin loading/scanning, unbounded loops, heavy allocation, or
 long-running work.
-

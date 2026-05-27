@@ -41,9 +41,10 @@ change is a no-op.
 
 ## Waveform gestures
 
-Empty plot left-click is no longer a loop-start shortcut and no longer seeks. Loop start remains
-editable through the draggable start marker. Manual loop end editing remains explicit and must not
-be triggered by auto-loop mode.
+Empty plot left-click remains a fast loop-start shortcut. It sets the selected pad's loop start
+using the same controller-owned snapping and sample quantization as marker dragging, then retriggers
+only the selected pad from the new effective loop start. It must not stop other active pads and
+must not become a generic playback seek shortcut.
 
 Middle mouse down sends one immediate seek request for the selected pad. If the performer keeps
 holding and drags with the middle button, the view can continue to pan after the initial seek; the
@@ -92,4 +93,3 @@ All heavy work remains outside the audio callback. The callback may read bounded
 and update voice playheads, but it must not perform disk I/O, JSON work, Python/GIL access, UI
 calls, blocking locks, logging, neural inference, plugin scanning/loading, unbounded loops, heavy
 allocation, or long-running work.
-

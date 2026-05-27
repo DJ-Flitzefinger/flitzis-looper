@@ -158,21 +158,26 @@ def _apply_bar_step(
     ctx.audio.pads.set_pad_loop_bars(pad_id, bars=target)
 
 
-def _render_playback_controls(ctx: UiContext, pad_id: int, height: float) -> None:
-    is_active = ctx.state.pads.is_active(pad_id)
+def _render_playback_controls(ctx: UiContext, height: float) -> None:
+    if not imgui.is_mouse_down(imgui.MouseButton_.right):
+        ctx.ui.waveform.pause_selected_pad_hold_on_release()
 
-    if is_active:
-        if _render_icon_button(f"{icons_fontawesome_6.ICON_FA_PAUSE}##wf_pause", height):
-            ctx.ui.waveform.pause_selected_pad_on_press()
-    elif _render_icon_button(f"{icons_fontawesome_6.ICON_FA_PLAY}##wf_play", height):
-        ctx.ui.waveform.pause_selected_pad_on_press()
+    play_left, play_right = _render_icon_button_mouse_down(
+        f"{icons_fontawesome_6.ICON_FA_PLAY}##wf_play", height
+    )
+    if play_left:
         ctx.ui.waveform.play_restart_selected_pad_on_press()
+    elif play_right:
+        ctx.ui.waveform.stop_selected_pad_on_press()
 
-    imgui.begin_disabled(disabled=not is_active)
     imgui.same_line(spacing=SPACING)
-    if _render_icon_button(f"{icons_fontawesome_6.ICON_FA_STOP}##wf_stop", height):
-        ctx.ui.waveform.stop_and_reset_selected_pad_on_press()
-    imgui.end_disabled()
+    pause_left, pause_right = _render_icon_button_mouse_down(
+        f"{icons_fontawesome_6.ICON_FA_PAUSE}##wf_pause", height
+    )
+    if pause_left:
+        ctx.ui.waveform.pause_selected_pad_on_press()
+    elif pause_right:
+        ctx.ui.waveform.pause_selected_pad_hold_on_press()
 
 
 def _render_zoom_buttons(ctx: UiContext, pad_id: int, height: float) -> None:
@@ -558,7 +563,28 @@ def _handle_clicks(ctx: UiContext, pad_id: int, sample_duration_s: float) -> Non
         seek_s = max(0.0, min(float(sample_duration_s), float(mouse_plot_pos.x)))
         ctx.ui.waveform.seek_selected_pad_to_position(seek_s)
 
+    left_released = imgui.is_mouse_released(imgui.MouseButton_.left)
     right_released = imgui.is_mouse_released(imgui.MouseButton_.right)
+
+    if not (left_released or right_released):
+        return
+
+    mouse_pos = imgui.get_mouse_pos()
+    mouse_plot_pos = implot.pixels_to_plot(mouse_pos.x, mouse_pos.y)
+    click_x = float(mouse_plot_pos.x)
+
+    if left_released:
+        drag_delta = imgui.get_mouse_drag_delta(imgui.MouseButton_.left)
+        if abs(drag_delta.x) > 1 or abs(drag_delta.y) > 1:
+            imgui.reset_mouse_drag_delta(imgui.MouseButton_.left)
+            return
+
+        _, loop_end_s = ctx.state.pads.effective_loop_region(pad_id)
+        new_start = max(0.0, min(float(sample_duration_s), click_x))
+        if loop_end_s is not None:
+            new_start = min(new_start, loop_end_s)
+        ctx.ui.waveform.set_loop_start_and_play_selected_pad(new_start)
+        imgui.reset_mouse_drag_delta(imgui.MouseButton_.left)
 
     if not right_released:
         return
@@ -566,10 +592,6 @@ def _handle_clicks(ctx: UiContext, pad_id: int, sample_duration_s: float) -> Non
     auto_enabled = ctx.state.project.pad_loop_auto[pad_id]
     if auto_enabled:
         return
-
-    mouse_pos = imgui.get_mouse_pos()
-    mouse_plot_pos = implot.pixels_to_plot(mouse_pos.x, mouse_pos.y)
-    click_x = mouse_plot_pos.x
 
     drag_delta = imgui.get_mouse_drag_delta(imgui.MouseButton_.right)
     if abs(drag_delta.x) > 1 or abs(drag_delta.y) > 1:
@@ -662,7 +684,7 @@ def waveform_editor(ctx: UiContext) -> None:
                 text_h = imgui.get_text_line_height()
                 text_pos_y = imgui.get_cursor_pos_y() + (toolbar_height - text_h) / 2 - 3
 
-                _render_playback_controls(ctx, pad_id, toolbar_height)
+                _render_playback_controls(ctx, toolbar_height)
                 _separator(ctx, "View", toolbar_height, text_pos_y)
                 _render_zoom_buttons(ctx, pad_id, toolbar_height)
                 _render_view_jump_buttons(ctx, toolbar_height)

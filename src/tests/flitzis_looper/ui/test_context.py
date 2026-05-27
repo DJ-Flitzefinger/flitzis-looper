@@ -8,7 +8,7 @@ Tests cover:
 """
 
 from typing import TYPE_CHECKING, cast
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -723,6 +723,7 @@ class TestWaveformEditorTransportControls:
         controller.project.pad_loop_end_s[0] = 5.0
 
         controller.session.active_sample_ids.update({0, 1})
+        controller.session.paused_sample_ids.add(0)
         controller.session.pad_playhead_s[0] = 4.2
 
         ctx.ui.waveform.play_restart_selected_pad_on_press()
@@ -731,12 +732,61 @@ class TestWaveformEditorTransportControls:
         audio_engine_mock.play_sample.assert_called_once_with(0, 1.0)
         audio_engine_mock.set_pad_loop_region.assert_called_once_with(0, 2.0, 5.0)
         assert controller.session.pad_playhead_s[0] == pytest.approx(2.0)
+        assert 0 not in controller.session.paused_sample_ids
 
         # Restart is a trigger: pressing again retriggers from loop start.
         ctx.ui.waveform.play_restart_selected_pad_on_press()
         assert audio_engine_mock.play_sample.call_count == 2
         assert audio_engine_mock.set_pad_loop_region.call_count == 2
         assert controller.session.pad_playhead_s[0] == pytest.approx(2.0)
+
+    def test_set_loop_start_and_play_selected_pad_retriggers_from_new_start(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
+        controller.project.sample_paths[1] = "/path/to/other.wav"
+        controller.project.sample_durations[0] = 20.0
+        controller.project.multi_loop = False  # Would normally stop others.
+
+        controller.project.pad_loop_auto[0] = False
+        controller.project.pad_loop_start_s[0] = 2.0
+        controller.project.pad_loop_end_s[0] = 9.0
+
+        controller.session.active_sample_ids.add(1)
+        controller.session.pad_playhead_s[0] = 7.5
+        controller.session.pad_playhead_s[1] = 1.5
+
+        ctx.ui.waveform.set_loop_start_and_play_selected_pad(4.25)
+
+        assert controller.project.pad_loop_start_s[0] == pytest.approx(4.25)
+        audio_engine_mock.stop_all.assert_not_called()
+        assert audio_engine_mock.set_pad_loop_region.call_args_list == [
+            call(0, 4.25, 9.0),
+            call(0, 4.25, 9.0),
+        ]
+        audio_engine_mock.play_sample.assert_called_once_with(0, 1.0)
+        assert controller.session.pad_playhead_s[0] == pytest.approx(4.25)
+        assert controller.session.pad_playhead_s[1] == pytest.approx(1.5)
+
+    def test_stop_selected_pad_on_press_stops_only_selected_without_resetting_playhead(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
+        controller.project.sample_paths[1] = "/path/to/other.wav"
+        controller.session.active_sample_ids.update({0, 1})
+        controller.session.pad_playhead_s[0] = 7.0
+        controller.session.pad_playhead_s[1] = 1.5
+
+        ctx.ui.waveform.stop_selected_pad_on_press()
+
+        audio_engine_mock.stop_all.assert_not_called()
+        audio_engine_mock.stop_sample.assert_called_once_with(0)
+        assert controller.session.pad_playhead_s[0] == pytest.approx(7.0)
+        assert controller.session.pad_playhead_s[1] == pytest.approx(1.5)
 
     def test_stop_and_reset_selected_pad_on_press_stops_only_selected_and_resets_playhead(
         self, controller: AppController, audio_engine_mock: Mock
@@ -796,6 +846,46 @@ class TestWaveformEditorTransportControls:
         assert 1 not in controller.session.paused_sample_ids
 
         # Simulate no audio message change for pause (paused state managed by UI)
+
+    def test_pause_selected_pad_hold_pauses_then_resumes_on_release(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
+        controller.project.sample_paths[1] = "/path/to/other.wav"
+        controller.session.active_sample_ids.update({0, 1})
+
+        ctx.ui.waveform.pause_selected_pad_hold_on_press()
+
+        audio_engine_mock.pause_sample.assert_called_once_with(0)
+        assert controller.session.waveform_pause_hold_pad_id == 0
+        assert 0 in controller.session.paused_sample_ids
+        assert 1 not in controller.session.paused_sample_ids
+
+        ctx.ui.waveform.pause_selected_pad_hold_on_release()
+
+        audio_engine_mock.resume_sample.assert_called_once_with(0)
+        assert controller.session.waveform_pause_hold_pad_id is None
+        assert 0 not in controller.session.paused_sample_ids
+        assert 1 not in controller.session.paused_sample_ids
+
+    def test_pause_selected_pad_hold_does_not_resume_previously_paused_pad(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
+        controller.session.active_sample_ids.add(0)
+        controller.session.paused_sample_ids.add(0)
+
+        ctx.ui.waveform.pause_selected_pad_hold_on_press()
+        ctx.ui.waveform.pause_selected_pad_hold_on_release()
+
+        audio_engine_mock.pause_sample.assert_not_called()
+        audio_engine_mock.resume_sample.assert_not_called()
+        assert controller.session.waveform_pause_hold_pad_id is None
+        assert 0 in controller.session.paused_sample_ids
 
     def test_resume_selected_pad_after_pause(
         self, controller: AppController, audio_engine_mock: Mock

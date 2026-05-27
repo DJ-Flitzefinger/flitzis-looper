@@ -27,13 +27,13 @@
 
 ## 4. Waveform Editor UI
 
-- [x] 4.1 Remove empty-plot left-click loop-start/seek behavior while keeping loop marker dragging
-  available.
+- [x] 4.1 Keep empty-plot left-click loop-start placement, make it retrigger the selected pad from
+  the new effective loop start, and keep middle-click as the separate playback seek shortcut.
 - [x] 4.2 Add middle mouse-down seek and reconcile it with middle-drag pan without repeated seeks.
 - [x] 4.3 Rename Reset to `ALL` and route it to the full-track controller action.
 - [x] 4.4 Implement left-click power-of-two bar stepping and right-click exact `1.0` bar stepping
   with helper tests.
-- [ ] 4.5 Rework Play/Pause mouse-down and right-button hold behavior with selected-pad-only tests.
+- [x] 4.5 Rework Play/Pause mouse-down and right-button hold behavior with selected-pad-only tests.
 - [ ] 4.6 Add waveform maximize/restore behavior, larger toolbar hit targets, and stable ImGui IDs.
 
 ## 5. Selected-Pad Sidebar
