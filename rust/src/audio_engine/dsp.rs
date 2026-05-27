@@ -550,6 +550,94 @@ mod tests {
         processed_rms / neutral_rms
     }
 
+    fn peak(samples: &[f32], skip_frames: usize) -> f32 {
+        samples
+            .iter()
+            .skip(skip_frames)
+            .fold(0.0_f32, |peak, sample| peak.max(sample.abs()))
+    }
+
+    fn rms(samples: &[f32], skip_frames: usize) -> f32 {
+        let mut sum = 0.0_f32;
+        let mut count = 0_usize;
+
+        for sample in samples.iter().skip(skip_frames) {
+            sum += sample * sample;
+            count += 1;
+        }
+
+        (sum / count as f32).sqrt()
+    }
+
+    fn process_samples_with_targets(samples: &[f32], low: f32, mid: f32, high: f32) -> Vec<f32> {
+        let mut chain = PerPadDspChain::new(0, 48_000.0, samples.len(), 1);
+        set_and_snap_parameter(&mut chain, DspParameterSlot::Slot0, low);
+        set_and_snap_parameter(&mut chain, DspParameterSlot::Slot1, mid);
+        set_and_snap_parameter(&mut chain, DspParameterSlot::Slot2, high);
+
+        samples
+            .iter()
+            .map(|sample| {
+                chain.begin_frame();
+                chain.process_sample(0, *sample)
+            })
+            .collect()
+    }
+
+    fn process_unity_recombined_without_equal_gain_bypass(samples: &[f32]) -> Vec<f32> {
+        let low_lp = [biquad_low_pass_butterworth(48_000.0, ISOLATOR_LOW_CROSSOVER_HZ); 2];
+        let low_hp = [biquad_high_pass_butterworth(48_000.0, ISOLATOR_LOW_CROSSOVER_HZ); 2];
+        let high_lp = [biquad_low_pass_butterworth(48_000.0, ISOLATOR_HIGH_CROSSOVER_HZ); 2];
+        let high_hp = [biquad_high_pass_butterworth(48_000.0, ISOLATOR_HIGH_CROSSOVER_HZ); 2];
+        let mut state = IsolatorChannelState::default();
+
+        samples
+            .iter()
+            .map(|sample| {
+                let low_split = process_biquad_cascade(&low_lp, &mut state.low_split_lp, *sample);
+                let above_low = process_biquad_cascade(&low_hp, &mut state.low_split_hp, *sample);
+                let mid = process_biquad_cascade(&high_lp, &mut state.high_split_lp, above_low);
+                let high = process_biquad_cascade(&high_hp, &mut state.high_split_hp, above_low);
+                let low_aligned_lp =
+                    process_biquad_cascade(&high_lp, &mut state.low_align_lp, low_split);
+                let low_aligned_hp =
+                    process_biquad_cascade(&high_hp, &mut state.low_align_hp, low_split);
+                low_aligned_lp + low_aligned_hp + mid + high
+            })
+            .collect()
+    }
+
+    fn synthetic_music_like_peak_fixture() -> Vec<f32> {
+        const SAMPLE_RATE_HZ: f32 = 48_000.0;
+        const FRAMES: usize = 65_536;
+        let partials = [
+            (110.0_f32, 0.209_833_79_f32, 0.081_706_22_f32),
+            (220.0, 0.129_769_03, 3.983_640_2),
+            (440.0, 0.205_166_16, 4.983_892),
+            (880.0, 0.100_801_63, 5.384_113_6),
+            (1_760.0, 0.202_630_95, 3.292_761_2),
+            (3_200.0, 0.102_391_07, 5.693_269_7),
+            (5_200.0, 0.054_096, -403.809_8),
+            (6_400.0, 0.077_668_05, -496.991_1),
+            (7_600.0, 0.067_512_58, -589.453_3),
+            (9_600.0, 0.049_924_93, -744.790_16),
+        ];
+
+        (0..FRAMES)
+            .map(|frame| {
+                let t = frame as f32 / SAMPLE_RATE_HZ;
+                let envelope = 0.86 + 0.14 * (std::f32::consts::TAU * 1.7 * t + 0.3).sin();
+                let sample = partials
+                    .iter()
+                    .map(|(frequency_hz, amplitude, phase)| {
+                        amplitude * (std::f32::consts::TAU * frequency_hz * t + phase).sin()
+                    })
+                    .sum::<f32>();
+                sample * envelope
+            })
+            .collect()
+    }
+
     #[test]
     fn dsp_parameter_id_is_fixed_size_and_rejects_oversized_pad_index() {
         let id = DspParameterId::per_pad(3, DspNodeSlot::Slot0, DspParameterSlot::Slot2).unwrap();
@@ -689,6 +777,49 @@ mod tests {
         assert!(high_kill < 0.10);
         assert!(low_kill_high_content > 0.85);
         assert!(high_kill_low_content > 0.85);
+    }
+
+    #[test]
+    fn pad_isolator_unity_recombined_without_bypass_keeps_peak_behavior_bounded() {
+        let samples = synthetic_music_like_peak_fixture();
+        let recombined = process_unity_recombined_without_equal_gain_bypass(&samples);
+        let skip_frames = 8192;
+        let input_peak = peak(&samples, skip_frames);
+        let recombined_peak = peak(&recombined, skip_frames);
+        let peak_ratio = recombined_peak / input_peak;
+        let rms_ratio = rms(&recombined, skip_frames) / rms(&samples, skip_frames);
+
+        // The no-bypass recombination path can move sample peaks through crossover phase shift.
+        // A ratio above 1.30 would be suspicious for this fixture even with near-neutral RMS.
+        assert!(
+            (0.90..=1.30).contains(&peak_ratio),
+            "unity recombination peak ratio should stay bounded: {peak_ratio}"
+        );
+        assert!(
+            (0.95..=1.05).contains(&rms_ratio),
+            "unity recombination RMS ratio should stay near neutral: {rms_ratio}"
+        );
+    }
+
+    #[test]
+    fn pad_isolator_high_kill_can_raise_sample_peak_on_phase_cancelling_material() {
+        let samples = synthetic_music_like_peak_fixture();
+        let high_killed = process_samples_with_targets(&samples, 0.5, 0.5, 0.0);
+        let skip_frames = 8192;
+        let input_peak = peak(&samples, skip_frames);
+        let killed_peak = peak(&high_killed, skip_frames);
+        let peak_ratio = killed_peak / input_peak;
+
+        // A modest rise is expected for this fixture because removing high-band content changes
+        // phase cancellation at the sample level. Above 1.20 would be suspicious for this topology.
+        assert!(
+            peak_ratio > 1.02,
+            "expected high kill to raise sample peak, got ratio {peak_ratio}"
+        );
+        assert!(
+            peak_ratio < 1.20,
+            "high-kill sample peak rise exceeded the suspicious threshold: {peak_ratio}"
+        );
     }
 
     #[test]

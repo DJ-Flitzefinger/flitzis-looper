@@ -10,5 +10,5 @@
 - [x] 4.2 Add focused Python tests for master peak projection and clip hold.
 - [x] 5.1 Render master output metering in the Master Volume control area.
 - [x] 5.2 Add focused UI/helper validation where available.
-- [ ] 6.1 Add focused isolator peak-behavior tests before considering any DSP topology change.
+- [x] 6.1 Add focused isolator peak-behavior tests before considering any DSP topology change.
 - [ ] 7.1 Consolidate final specs and docs after implementation.
