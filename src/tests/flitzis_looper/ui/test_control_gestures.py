@@ -6,9 +6,7 @@ from flitzis_looper.ui.render.sidebar_left import eq_wheel_delta_db, gain_meter_
 from flitzis_looper.ui.render.waveform_editor import (
     bar_step_target,
     format_loop_bars,
-    titlebar_control_rects,
-    titlebar_control_size,
-    titlebar_frame_padding_y,
+    toolbar_close_spacing,
     toolbar_control_size,
 )
 
@@ -117,24 +115,14 @@ def test_waveform_toolbar_control_size_meets_hit_target_bounds(
     assert toolbar_control_size(frame_height) == pytest.approx(expected)
 
 
-def test_waveform_titlebar_padding_expands_to_minimum_height() -> None:
-    padding_y = titlebar_frame_padding_y(text_line_height=18.0, current_padding_y=3.0)
-
-    assert 18.0 + padding_y * 2.0 == pytest.approx(40.0)
-
-
-def test_waveform_titlebar_control_size_meets_close_and_maximize_hit_target_bounds() -> None:
-    assert titlebar_control_size(40.0) == pytest.approx(32.0)
-    assert titlebar_control_size(48.0) == pytest.approx(40.0)
-
-
-def test_waveform_titlebar_control_rects_order_in_frame_maximize_close() -> None:
-    in_frame_rect, maximize_rect, close_rect = titlebar_control_rects(
-        window_pos=(100.0, 50.0),
-        window_size=(500.0, 320.0),
-        titlebar_height=40.0,
-    )
-
-    assert in_frame_rect[1][0] < maximize_rect[0][0]
-    assert maximize_rect[1][0] < close_rect[0][0]
-    assert close_rect[1][0] == pytest.approx(594.0)
+@pytest.mark.parametrize(
+    ("remaining_width", "button_size", "expected"),
+    [
+        (220.0, 32.0, 188.0),
+        (28.0, 32.0, 12.0),
+    ],
+)
+def test_waveform_toolbar_close_spacing_pushes_close_button_right(
+    remaining_width: float, button_size: float, expected: float
+) -> None:
+    assert toolbar_close_spacing(remaining_width, button_size) == pytest.approx(expected)

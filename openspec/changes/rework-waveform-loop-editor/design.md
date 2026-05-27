@@ -79,22 +79,16 @@ right mouse down stops only the selected pad. Pause left mouse down toggles paus
 right mouse down records transient hold state, pauses immediately, and resumes on right release
 only if that hold caused the pause.
 
-## Window state
+## Editor presentation
 
-Waveform maximize/restore state and in-frame mode are transient UI/session state. They should not
-be saved as durable project intent unless a later spec explicitly asks for persistence.
+The waveform editor is now an in-frame surface only. It renders in the same center-area slot used
+by the Settings page, replacing the performance surface while open and resizing with the Looper
+main window.
 
-The title-bar control order from right to left is close `X`, maximize/restore, then in-frame mode.
-The close action closes the editor but preserves the current in-frame preference, so reopening
-through `Adjust Loop` uses the same presentation mode during the session. The title bar should be
-taller than the previous compact default and expose larger white icon hit targets so the controls
-remain visible over dark platform title bars.
-
-Maximize is only meaningful for floating presentation. It should use the selected monitor work
-area rather than the Looper main viewport, matching the user's expectation for a normal maximized
-window. In-frame mode renders the waveform editor in the same center surface position used by the
-Settings page; this keeps it tied to the Looper main window size. Toolbar and title-bar hit target
-sizing is a UI presentation concern and must stay out of controller and Rust audio logic.
+The separate ImGui/window presentation, maximize/restore state, title-bar controls, and
+floating/in-frame mode toggle are removed. Closing the editor is a toolbar action: an icon-only
+`X` sits at the far right of the existing horizontal control strip. Toolbar hit target sizing is a
+UI presentation concern and must stay out of controller and Rust audio logic.
 
 ## Realtime safety
 

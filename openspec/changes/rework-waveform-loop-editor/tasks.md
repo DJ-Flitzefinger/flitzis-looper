@@ -1,7 +1,8 @@
 ## 1. Specification
 
 - [x] 1.1 Add OpenSpec deltas for loop defaults, `ALL`, bar stepping, middle-click seek,
-  transport controls, maximize/restore, and `Adjust Loop` toggle-close behavior.
+  transport controls, in-frame-only editor presentation, toolbar close, and `Adjust Loop`
+  toggle-close behavior.
 - [x] 1.2 Run official strict OpenSpec validation for `rework-waveform-loop-editor`.
 
 ## 2. Loop Region Model And Controller
@@ -34,10 +35,10 @@
 - [x] 4.4 Implement left-click power-of-two bar stepping and right-click exact `1.0` bar stepping
   with helper tests.
 - [x] 4.5 Rework Play/Pause mouse-down and right-button hold behavior with selected-pad-only tests.
-- [x] 4.6 Add waveform title-bar maximize/restore behavior, larger title-bar and toolbar hit
-  targets, and stable ImGui IDs.
-- [x] 4.7 Refine title-bar controls so icons render white, floating maximize uses the monitor work
-  area, and the in-frame mode can be toggled from the editor controls.
+- [x] 4.6 Remove the separate waveform editor window, title bar, maximize/restore state, and
+  floating/in-frame mode toggle.
+- [x] 4.7 Render the waveform editor only in the center surface and add a right-aligned toolbar
+  close button with focused helper coverage.
 
 ## 5. Selected-Pad Sidebar
 
@@ -54,7 +55,7 @@
   `uv run cargo test --manifest-path rust/Cargo.toml`, `uv run pytest`,
   `uv run ruff check src`, and `uv run mypy src`.
 - [x] 6.4 Re-run focused UI/model/input tests, `ruff`, `mypy`, strict OpenSpec validation, and
-  `git diff --check` after the title-bar/in-frame refinement.
+  `git diff --check` after the in-frame-only cleanup.
 
 ## Blockers And Non-Goals
 

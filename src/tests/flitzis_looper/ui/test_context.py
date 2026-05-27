@@ -553,15 +553,11 @@ class TestUiActions:
         controller.project.sample_paths[3] = "/path/to/sample.wav"
         controller.session.waveform_editor_open = True
         controller.session.waveform_editor_pad_id = 3
-        controller.session.waveform_editor_maximized = True
-        controller.session.waveform_editor_in_frame = True
 
         ui_actions.open_waveform_editor(3)
 
         assert controller.session.waveform_editor_open is False
         assert controller.session.waveform_editor_pad_id is None
-        assert controller.session.waveform_editor_maximized is False
-        assert controller.session.waveform_editor_in_frame is True
 
     def test_adjust_loop_switches_open_editor_to_different_loaded_pad(
         self, controller: AppController
@@ -755,60 +751,6 @@ def _open_waveform_editor(controller: AppController, pad_id: int) -> UiContext:
 
 class TestWaveformEditorTransportControls:
     """Test waveform editor transport control actions."""
-
-    def test_toggle_maximized_tracks_restore_bounds(self, controller: AppController) -> None:
-        ctx = _open_waveform_editor(controller, 0)
-        ctx.ui.waveform.record_normal_window_bounds(pos=(12.0, 24.0), size=(640.0, 360.0))
-
-        ctx.ui.waveform.toggle_maximized()
-        assert controller.session.waveform_editor_maximized is True
-        assert ctx.ui.waveform.consume_restore_window_bounds() is None
-
-        ctx.ui.waveform.toggle_maximized()
-        assert controller.session.waveform_editor_maximized is False
-        assert ctx.ui.waveform.consume_restore_window_bounds() == (
-            (12.0, 24.0),
-            (640.0, 360.0),
-        )
-        assert ctx.ui.waveform.consume_restore_window_bounds() is None
-
-    def test_toggle_maximized_exits_in_frame_mode(self, controller: AppController) -> None:
-        ctx = _open_waveform_editor(controller, 0)
-        controller.session.waveform_editor_in_frame = True
-
-        ctx.ui.waveform.toggle_maximized()
-
-        assert controller.session.waveform_editor_in_frame is False
-        assert controller.session.waveform_editor_maximized is True
-
-    def test_toggle_in_frame_persists_across_close_and_reopen(
-        self, controller: AppController
-    ) -> None:
-        ui_actions = UiActions(controller)
-        controller.project.sample_paths[0] = "/path/to/sample.wav"
-        ctx = _open_waveform_editor(controller, 0)
-
-        ctx.ui.waveform.toggle_in_frame()
-        assert controller.session.waveform_editor_in_frame is True
-
-        ctx.ui.waveform.close()
-        assert controller.session.waveform_editor_open is False
-        assert controller.session.waveform_editor_in_frame is True
-
-        ui_actions.open_waveform_editor(0)
-
-        assert controller.session.waveform_editor_open is True
-        assert controller.session.waveform_editor_pad_id == 0
-        assert controller.session.waveform_editor_in_frame is True
-
-    def test_toggle_in_frame_clears_maximized(self, controller: AppController) -> None:
-        ctx = _open_waveform_editor(controller, 0)
-        controller.session.waveform_editor_maximized = True
-
-        ctx.ui.waveform.toggle_in_frame()
-
-        assert controller.session.waveform_editor_in_frame is True
-        assert controller.session.waveform_editor_maximized is False
 
     def test_play_restart_selected_pad_on_press_does_not_stop_other_pads_and_restarts_from_start(
         self, controller: AppController, audio_engine_mock: Mock

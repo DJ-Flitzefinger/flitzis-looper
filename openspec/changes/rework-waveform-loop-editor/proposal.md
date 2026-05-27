@@ -26,9 +26,8 @@ contracts conflict with the requested loop editor workflow.
 - Waveform transport buttons change to mouse-down Play and Pause controls: Play left-click
   retriggers from loop start, Play right-click stops, Pause left-click toggles pause/resume, and
   Pause right-hold pauses only for the hold duration.
-- The waveform editor gains title-bar close, maximize/restore, and in-frame controls; maximize uses
-  the monitor work area, while in-frame mode renders the editor in the Looper center surface and is
-  remembered for the current session across close/reopen.
+- The waveform editor renders only in the Looper center surface, no longer opens as a separate
+  window, and closes through a right-aligned toolbar `X` button.
 - `Adjust Loop` toggles the already-open editor closed when it targets the same selected pad, and
   switches the editor when it targets a different pad.
 
@@ -36,8 +35,8 @@ contracts conflict with the requested loop editor workflow.
 
 - No live loop-edit crossfade, zero-crossing policy, or broader loop smoothing.
 - No plugin, VST, LV2, CLAP, AU, external DSP, stem-separation, or key-lock behavior changes.
-- No broad UI redesign outside the waveform loop editor title bar, in-frame surface, toolbar/plot,
-  and selected-pad sidebar `Adjust Loop` action.
+- No broad UI redesign outside the waveform loop editor in-frame surface, toolbar/plot, and
+  selected-pad sidebar `Adjust Loop` action.
 - No change to the existing offline stem cache or sample loading architecture.
 
 ## Realtime Constraints

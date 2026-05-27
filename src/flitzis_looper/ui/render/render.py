@@ -17,7 +17,7 @@ from flitzis_looper.ui.render.performance_view import performance_view
 from flitzis_looper.ui.render.settings import settings_overlay, settings_surface_child_id
 from flitzis_looper.ui.render.sidebar_left import sidebar_left
 from flitzis_looper.ui.render.sidebar_right import sidebar_right
-from flitzis_looper.ui.render.waveform_editor import waveform_editor, waveform_editor_in_frame
+from flitzis_looper.ui.render.waveform_editor import waveform_editor
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -113,21 +113,17 @@ def _sidebar(
 def _center_area(ctx: UiContext) -> None:
     avail = imgui.get_content_region_avail()
     surface_height = max(0.0, avail.y - BOTTOM_BAR_HEIGHT - SPACING)
-    waveform_in_frame = (
-        ctx.state.session.waveform_editor_open
-        and ctx.state.session.waveform_editor_in_frame
-        and not ctx.state.session.settings_open
-    )
+    waveform_open = ctx.state.session.waveform_editor_open and not ctx.state.session.settings_open
 
     with style_var(imgui.StyleVar_.item_spacing, (0.0, 0.0)):
         imgui.begin_child(
-            "waveform_editor_in_frame"
-            if waveform_in_frame
+            "waveform_editor"
+            if waveform_open
             else settings_surface_child_id(settings_open=ctx.state.session.settings_open),
             (-1, surface_height),
         )
-        if waveform_in_frame:
-            waveform_editor_in_frame(ctx)
+        if waveform_open:
+            waveform_editor(ctx)
         elif ctx.state.session.settings_open:
             settings_overlay(ctx)
         else:
@@ -223,7 +219,6 @@ def render_ui(ctx: UiContext) -> None:
     with default_style():
         _main(ctx)
         if not ctx.state.session.settings_open:
-            waveform_editor(ctx)
             _file_dialog(ctx)
 
     ctx.persistence.maybe_flush()

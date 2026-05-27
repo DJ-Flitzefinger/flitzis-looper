@@ -469,7 +469,6 @@ class InputMappingController(BaseController):
         if session.waveform_editor_open and session.waveform_editor_pad_id == pad_id:
             session.waveform_editor_open = False
             session.waveform_editor_pad_id = None
-            session.waveform_editor_maximized = False
             return True
 
         session.waveform_editor_open = True

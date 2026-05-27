@@ -766,12 +766,6 @@ class SessionState(BaseModel):
     waveform_pause_hold_pad_id: int | None = None
     """Pad paused by the waveform editor's transient right-button Pause hold."""
 
-    waveform_editor_maximized: bool = False
-    """Whether the waveform editor is using its transient maximized window state."""
-
-    waveform_editor_in_frame: bool = False
-    """Whether the waveform editor opens as an in-frame center overlay."""
-
     settings_open: bool = False
     """Whether the Settings overlay is open."""
 

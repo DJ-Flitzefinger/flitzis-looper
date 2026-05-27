@@ -82,68 +82,65 @@ playback.
 - **THEN** Pad A does not start playback
 - **AND** Pad A loop markers are unchanged
 
-### Requirement: Waveform editor provides title-bar window controls
-The waveform editor SHALL provide title-bar controls ordered from right to left as close `X`,
-maximize/restore, and in-frame mode.
+### Requirement: Waveform editor renders only in-frame with toolbar close
+The waveform editor SHALL render only in the Looper center surface and SHALL NOT open as a separate
+ImGui or platform window.
 
-The close `X` SHALL close the waveform editor without changing the current in-frame mode
-preference.
+The waveform editor SHALL replace the performance surface while it is open, similar to the
+Settings page, and SHALL resize with the Looper main window.
 
-The maximize state and in-frame mode SHALL be transient UI/session state and SHALL NOT be
-persisted as project intent.
+The waveform editor SHALL NOT provide a title bar, floating-window presentation, maximize/restore
+control, or in-frame/floating mode toggle.
 
-When the editor is floating, activating maximize SHALL resize the floating waveform editor to the
-current monitor work area, matching normal operating-system window maximize behavior rather than
-constraining it to the Looper main viewport.
-
-When in-frame mode is enabled, the waveform editor SHALL render as an overlay in the Looper center
-surface, replacing the performance surface like the Settings page and resizing with the Looper main
-window. Closing and reopening the waveform editor SHALL preserve the in-frame mode until the
-performer toggles in-frame mode off.
-
-The waveform editor title bar SHALL be taller than the previous compact title bar and SHALL expose
-in-frame, maximize/restore, and close hit targets of at least 32 logical pixels on both axes.
+The waveform editor toolbar SHALL provide an icon-only close `X` button at the far right of the
+same horizontal control area that contains the editor transport, view, and loop controls.
 
 Toolbar icon hit targets SHALL be at least 32 logical pixels on both axes and no smaller than
 1.5 times the current ImGui frame height.
 
-#### Scenario: Maximize expands the waveform editor
-- **GIVEN** the waveform editor is visible as a floating window
-- **WHEN** the performer activates the maximize affordance
-- **THEN** the editor uses the current monitor work area as its maximized bounds
-- **AND** the loaded waveform remains visible
-- **AND** loop controls remain available
+#### Scenario: Waveform editor opens in-frame
+- **GIVEN** the waveform editor is closed
+- **WHEN** the performer activates `Adjust Loop` for a loaded selected pad
+- **THEN** the editor replaces the Looper center performance surface
+- **AND** no separate waveform editor window is opened
 
-#### Scenario: Restore returns from maximized state
-- **GIVEN** the waveform editor is maximized
-- **WHEN** the performer activates the restore affordance
-- **THEN** the editor returns to its normal window state
-
-#### Scenario: Title-bar window controls are easier to press
+#### Scenario: Toolbar close button closes the editor
 - **GIVEN** the waveform editor is visible
-- **WHEN** the title bar is rendered
-- **THEN** the close `X` is the rightmost title-bar control
-- **AND** the maximize/restore affordance is immediately left of the close `X`
-- **AND** the in-frame mode affordance is immediately left of maximize/restore
-- **AND** all three title-bar controls expose hit targets at least 32 logical pixels on both axes
-
-#### Scenario: In-frame mode persists across close and reopen
-- **GIVEN** the waveform editor is visible
-- **WHEN** the performer activates the in-frame mode affordance
-- **THEN** the editor renders in the Looper center surface and resizes with the Looper main window
-- **WHEN** the performer closes the editor with `X`
-- **AND** later opens the same loaded pad with `Adjust Loop`
-- **THEN** the editor opens in-frame again
-- **WHEN** the performer activates the in-frame mode affordance again
-- **THEN** the editor returns to floating window presentation
+- **WHEN** the performer activates the toolbar close `X`
+- **THEN** the waveform editor closes
+- **AND** the Looper center performance surface is visible again
 
 #### Scenario: Toolbar hit targets are easier to press
 - **GIVEN** the waveform editor is visible
 - **WHEN** the toolbar is rendered
-- **THEN** Play, Pause, view-jump, bar-step, `ALL`, and grid-offset controls each expose hit targets
-  at least 32 logical pixels on both axes
+- **THEN** Play, Pause, view-jump, bar-step, `ALL`, grid-offset, and close controls each expose hit
+  targets at least 32 logical pixels on both axes
 
 ## MODIFIED Requirements
+
+### Requirement: Waveform editor window for selected pad
+The system SHALL provide the waveform editor for the selected pad as an in-frame Looper center
+surface rather than as a separate ImGui window.
+
+The waveform editor SHALL open when the performer activates the "Adjust Loop" action for the
+currently selected loaded pad.
+
+The waveform editor SHALL be closable through the toolbar close `X` affordance.
+
+The waveform editor MUST NOT create a separate ImGui or platform window while this in-frame
+surface is visible.
+
+#### Scenario: Opening the waveform editor
+- **GIVEN** a loaded pad is selected
+- **WHEN** the performer activates "Adjust Loop" in the selected-pad sidebar
+- **THEN** the waveform editor is visible in the Looper center surface
+- **AND** no separate waveform editor window is opened
+
+#### Scenario: Closing the waveform editor
+- **GIVEN** the waveform editor is visible
+- **WHEN** the performer closes the editor via the toolbar close `X`
+- **THEN** the waveform editor is no longer visible
+- **AND** the Looper center performance surface is visible again
 
 ### Requirement: Waveform editor provides transport and navigation controls
 The waveform editor SHALL provide selected-pad transport and view navigation controls in an upper
