@@ -72,7 +72,50 @@ Prerequisites:
 - Python 3.14+
 - [uv](https://docs.astral.sh/uv/)
 - Rust toolchain
+- Rubber Band native development/runtime library for Rubber Band Key Lock builds
 - FFmpeg and Demucs model files only if you use stem generation
+
+### Native Rubber Band Dependency
+
+The Rubber Band Key Lock backend uses the native Rubber Band library through a
+small Rust FFI wrapper. Build and runtime discovery must be set up before the
+app starts; no library discovery happens in the realtime audio callback.
+
+Linux development should use the distribution package where possible:
+
+```bash
+# Debian/Ubuntu
+sudo apt install librubberband-dev pkg-config
+
+# Fedora/RHEL-like
+sudo dnf install rubberband-devel pkgconf-pkg-config
+
+# Arch-like
+sudo pacman -S rubberband pkgconf
+```
+
+Windows development can use vcpkg:
+
+```powershell
+git clone https://github.com/microsoft/vcpkg.git "$env:LOCALAPPDATA\vcpkg"
+& "$env:LOCALAPPDATA\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+& "$env:LOCALAPPDATA\vcpkg\vcpkg.exe" install rubberband:x64-windows
+setx VCPKG_ROOT "$env:LOCALAPPDATA\vcpkg"
+```
+
+When running from source on Windows, the Rubber Band runtime DLL directory must
+be on `PATH` before starting the app, unless the build or packaging step copies
+the DLLs next to the native extension:
+
+```powershell
+$env:PATH = "$env:VCPKG_ROOT\installed\x64-windows\bin;$env:PATH"
+```
+
+For later non-technical Windows distribution, the intended path is a Nuitka
+installer that bundles the required runtime DLLs. End users of that installer
+should not need vcpkg, CMake, Ninja, Rust, or Rubber Band development packages.
+Rubber Band's GPL/commercial licensing model must be checked before publishing
+binary installers.
 
 Install dependencies and build the editable native extension from the repository
 root:

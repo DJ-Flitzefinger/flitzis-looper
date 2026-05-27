@@ -153,20 +153,42 @@ or moved to a non-realtime preparation path.
 
 ## Build And Runtime Integration
 
-The first build-file change should be minimal:
+The first build-file change should be cross-platform and minimal:
 
-- Teach Rust build/link setup where to find the vcpkg `x64-windows` include and
-  lib directories.
-- Link against `rubberband.lib`.
-- Ensure local `uv run maturin develop` can run with the required DLL directory
-  available.
+- On Linux, prefer `pkg-config` discovery for the system `rubberband` package.
+  Common development packages include `librubberband-dev` on Debian/Ubuntu,
+  `rubberband-devel` on Fedora/RHEL-like distributions, and `rubberband` plus
+  `pkgconf` on Arch-like distributions.
+- On Windows, prefer `VCPKG_ROOT` with the `x64-windows` triplet for local
+  development and link against `rubberband.lib`.
+- Support explicit override environment variables only when automatic discovery
+  is insufficient, for example include/lib/runtime directories supplied by a
+  developer or packaging script.
+- Ensure local `uv run maturin develop` can run with required runtime libraries
+  available before the app starts.
 - Keep vcpkg and downloaded build tools outside `repo/`; the repository must not
   vendor the Rubber Band source, DLLs, or vcpkg tree.
+- Do not hardcode the local Windows path
+  `C:\Users\user\AppData\Local\vcpkg` or any Linux workstation path in
+  production source.
 
-The production build strategy can later choose between a documented developer
-environment variable, a build script, or packaging-copy step. The first
-implementation slice should prefer the smallest local Windows path that proves
-the FFI boundary.
+Runtime library loading is still platform-specific:
+
+- Windows development can use the vcpkg `installed\x64-windows\bin` directory on
+  `PATH`, or copy required DLLs next to the extension during packaging.
+- Linux development should use the system dynamic linker path from the distro
+  package by default. Custom library directories should be documented through
+  environment variables or linker configuration rather than source-code paths.
+
+The later Nuitka setup build should bundle the required Windows native DLLs with
+the application installer. At minimum that means `rubberband-3.dll`,
+`sleefdft.dll`, `sleef.dll`, and `samplerate.dll` from the selected Rubber Band
+distribution, plus any MSVC runtime requirements not already supplied by the
+target environment.
+
+Rubber Band's GPL/commercial licensing model must remain visible in release
+planning. The repository is GPL-licensed, but any future installer distribution
+still needs a deliberate licensing check before publishing binaries.
 
 ## Validation Strategy
 
@@ -178,5 +200,9 @@ the FFI boundary.
   changes while active, loop wrap, retrigger, stop/unload cleanup, and prepared
   stems.
 - Run official strict OpenSpec validation for this change.
+- Validate native dependency discovery on Windows and Linux before declaring
+  the branch ready for merge or release packaging.
+- Document Windows and Linux developer installation steps in `README.md` and
+  `docs/development.md`.
 - Before the branch is ready for user testing, run the full uv-managed Rust and
   Python validation sequence.

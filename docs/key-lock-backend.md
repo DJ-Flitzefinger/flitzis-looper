@@ -87,6 +87,27 @@ A future replacement should preserve the wrapper contract:
   callback messages,
 - measured and documented algorithmic latency.
 
+## Rubber Band Replacement Branch Requirements
+
+The `gen3-rubberband` branch replaces the custom delay-line compensation path
+with Rubber Band. That branch must preserve the current Linux support and add
+Windows support without making vcpkg a hardcoded production dependency.
+
+Required build/runtime direction:
+
+- Linux uses the system Rubber Band development package and `pkg-config` where
+  possible.
+- Windows development may use vcpkg through `VCPKG_ROOT` or documented override
+  variables.
+- Production source must not contain local paths such as a developer's vcpkg
+  checkout or Linux home directory.
+- Runtime library discovery and missing-library diagnostics happen before audio
+  rendering starts, not in the CPAL callback.
+- The later Windows setup installer should bundle the Rubber Band runtime DLLs
+  so non-technical users do not need build tools or vcpkg.
+- Binary distribution planning must account for Rubber Band's GPL/commercial
+  licensing model.
+
 Reference URLs:
 
 - https://docs.superpowered.com/reference/latest/time-stretching/

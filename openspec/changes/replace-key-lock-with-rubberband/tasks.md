@@ -4,6 +4,7 @@
 - [x] 1.2 Create the initial OpenSpec proposal, design, and spec deltas.
 - [x] 1.3 Run a minimal Rust build/link probe against the installed Rubber Band C API.
 - [x] 1.4 Validate `replace-key-lock-with-rubberband` with official strict OpenSpec validation.
+- [x] 1.5 Add cross-platform Windows/Linux dependency and packaging requirements to the plan.
 
 ## 2. Rust FFI Boundary
 
@@ -39,8 +40,13 @@
 ## 6. Documentation And Validation
 
 - [ ] 6.1 Update `docs/architecture.md` and `docs/key-lock-backend.md` after implementation.
-- [ ] 6.2 Run `uv run maturin develop`.
-- [ ] 6.3 Run `uv run cargo check --manifest-path rust/Cargo.toml`.
-- [ ] 6.4 Run `uv run cargo test --manifest-path rust/Cargo.toml`.
-- [ ] 6.5 Run `uv run pytest`.
-- [ ] 6.6 Run `uv run ruff check src`, `uv run mypy src`, `uv run cargo fmt --manifest-path rust/Cargo.toml --check`, and `git diff --check`.
+- [x] 6.2 Document Windows and Linux native Rubber Band setup in `README.md` and `docs/development.md`.
+- [ ] 6.3 Ensure production source has no hardcoded local vcpkg or workstation-specific library paths.
+- [ ] 6.4 Verify Windows local development with vcpkg-provided Rubber Band.
+- [ ] 6.5 Verify Linux local development with distro/pkg-config-provided Rubber Band.
+- [ ] 6.6 Record the later Nuitka installer DLL bundle requirements for Windows packaging.
+- [ ] 6.7 Run `uv run maturin develop`.
+- [ ] 6.8 Run `uv run cargo check --manifest-path rust/Cargo.toml`.
+- [ ] 6.9 Run `uv run cargo test --manifest-path rust/Cargo.toml`.
+- [ ] 6.10 Run `uv run pytest`.
+- [ ] 6.11 Run `uv run ruff check src`, `uv run mypy src`, `uv run cargo fmt --manifest-path rust/Cargo.toml --check`, and `git diff --check`.

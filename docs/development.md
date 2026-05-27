@@ -38,6 +38,84 @@ uv run python -m flitzis_looper
 Use `uv run cargo ...`, not plain `cargo ...`, so the Rust/PyO3 build uses the
 project Python environment consistently.
 
+## Native Rubber Band Dependency
+
+The Rubber Band Key Lock backend depends on the native Rubber Band C API. The
+repository should discover that dependency through platform-appropriate build
+metadata or explicit environment variables. Production code must not hardcode a
+developer's local vcpkg directory, Linux home directory, or other workstation
+path.
+
+### Linux
+
+Prefer distro packages plus `pkg-config`:
+
+```bash
+# Debian/Ubuntu
+sudo apt install librubberband-dev pkg-config
+
+# Fedora/RHEL-like
+sudo dnf install rubberband-devel pkgconf-pkg-config
+
+# Arch-like
+sudo pacman -S rubberband pkgconf
+```
+
+The normal Linux development path should allow:
+
+```bash
+uv sync
+uv run maturin develop
+uv run python -m flitzis_looper
+```
+
+If a developer uses a custom Rubber Band install prefix, keep that configuration
+outside source code, for example through `PKG_CONFIG_PATH`, `LD_LIBRARY_PATH`,
+or future project-documented override variables.
+
+### Windows
+
+For local Windows development, vcpkg is the preferred route:
+
+```powershell
+git clone https://github.com/microsoft/vcpkg.git "$env:LOCALAPPDATA\vcpkg"
+& "$env:LOCALAPPDATA\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+& "$env:LOCALAPPDATA\vcpkg\vcpkg.exe" install rubberband:x64-windows
+setx VCPKG_ROOT "$env:LOCALAPPDATA\vcpkg"
+```
+
+If `cl.exe` is not visible in the normal shell, use the Visual Studio developer
+environment before building native dependencies:
+
+```powershell
+cmd /s /c '"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 && uv run maturin develop'
+```
+
+For source runs that link Rubber Band dynamically, ensure the vcpkg runtime DLL
+directory is available before starting Python:
+
+```powershell
+$env:PATH = "$env:VCPKG_ROOT\installed\x64-windows\bin;$env:PATH"
+uv run python -m flitzis_looper
+```
+
+Observed vcpkg runtime DLLs for the current branch are `rubberband-3.dll`,
+`sleefdft.dll`, `sleef.dll`, and `samplerate.dll`. Packaging scripts may copy
+those DLLs next to the built native extension instead of requiring `PATH`.
+
+### Nuitka Installer Direction
+
+The later Windows installer should be built so non-technical users do not need
+development tools. The Nuitka packaging step should bundle the app, the PyO3
+extension, the required Rubber Band runtime DLLs, and any MSVC runtime
+requirements not otherwise guaranteed by the target system.
+
+Do not commit generated Rubber Band DLLs, vcpkg trees, Linux `.so` files, or
+Nuitka build output into the repository. Keep redistributable binary handling in
+packaging scripts and release artifacts. Before publishing a binary installer,
+confirm that Rubber Band's GPL/commercial licensing requirements match the
+intended distribution model.
+
 ## Validation
 
 Focused changes should run focused tests. Broader Rust/audio, persistence,

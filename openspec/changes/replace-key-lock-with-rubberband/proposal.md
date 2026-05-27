@@ -32,6 +32,12 @@ Rubber Band while preserving the realtime audio boundary:
   performer-facing Settings UI and Python/Rust message surface.
 - Document Rubber Band latency, block-size, DLL/runtime, and callback-boundary
   requirements before treating the branch as ready for user testing.
+- Keep Windows and Linux as equal supported development/runtime targets.
+- Keep local dependency paths out of production source; use documented build
+  discovery such as `pkg-config`, `VCPKG_ROOT`, or explicit environment
+  variables.
+- Prepare the dependency layout so a later Nuitka-based Windows installer can
+  bundle the required native runtime libraries for non-technical users.
 
 ## Non-Goals
 
@@ -43,6 +49,11 @@ Rubber Band while preserving the realtime audio boundary:
 - No broad DSP-chain rewrite, deck/group/master FX chain, or transport rewrite.
 - No old-project migration requirement for removed custom delay-line settings;
   the user has no old projects for this branch.
+- No vendoring of vcpkg, Rubber Band source archives, generated DLLs, or Linux
+  shared libraries into the Git repository.
+- No final Nuitka installer implementation in this branch slice; this change
+  only keeps the architecture and documentation compatible with that packaging
+  goal.
 
 ## Realtime Constraints
 
@@ -58,8 +69,10 @@ reporting setup must happen outside the callback.
 ## Impact
 
 - Affected specs: `time-stretch-pitch-shift`, `play-samples`,
-  `ring-buffer-messaging`, `performance-ui`, `project-persistence`.
-- Affected docs: `docs/architecture.md`, `docs/key-lock-backend.md`.
+  `ring-buffer-messaging`, `performance-ui`, `project-persistence`,
+  `distribution-setup`.
+- Affected docs: `README.md`, `docs/development.md`,
+  `docs/architecture.md`, `docs/key-lock-backend.md`.
 - Affected code: Rust audio-engine Key Lock wrapper, voice lifecycle/mixer
   integration, Rust build/link setup, Python Settings/project-state plumbing,
   Python type stubs, and focused Rust/Python tests.
