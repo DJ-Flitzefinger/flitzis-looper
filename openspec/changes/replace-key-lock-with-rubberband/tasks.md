@@ -8,10 +8,10 @@
 
 ## 2. Rust FFI Boundary
 
-- [ ] 2.1 Add a small Rust Rubber Band backend wrapper with manually declared C FFI.
-- [ ] 2.2 Keep opaque handle ownership and all unsafe calls isolated behind a safe Rust API.
-- [ ] 2.3 Query and expose channel count, fixed block size, start delay, and backend version or equivalent diagnostic data.
-- [ ] 2.4 Add wrapper lifecycle tests outside the audio callback.
+- [x] 2.1 Add a small Rust Rubber Band backend wrapper with manually declared C FFI.
+- [x] 2.2 Keep opaque handle ownership and all unsafe calls isolated behind a safe Rust API.
+- [x] 2.3 Query and expose channel count, fixed block size, start delay, and backend version or equivalent diagnostic data.
+- [x] 2.4 Add wrapper lifecycle tests outside the audio callback.
 
 ## 3. Voice-State Integration
 

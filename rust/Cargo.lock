@@ -427,6 +427,7 @@ dependencies = [
  "log",
  "midir",
  "numpy",
+ "pkg-config",
  "pyo3",
  "rtrb",
  "rubato",

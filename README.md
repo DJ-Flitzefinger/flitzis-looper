@@ -103,6 +103,12 @@ git clone https://github.com/microsoft/vcpkg.git "$env:LOCALAPPDATA\vcpkg"
 setx VCPKG_ROOT "$env:LOCALAPPDATA\vcpkg"
 ```
 
+The Rust build script looks for `RUBBERBAND_LIB_DIR` first. If that is not set,
+Windows builds use `VCPKG_ROOT`, or `$env:LOCALAPPDATA\vcpkg` when present.
+`RUBBERBAND_VCPKG_TRIPLET` can override the default `x64-windows` triplet.
+Custom builds may also set `RUBBERBAND_INCLUDE_DIR`, `RUBBERBAND_LINK_KIND`
+(`dylib` or `static`), and `RUBBERBAND_EXTRA_LIBS`.
+
 When running from source on Windows, the Rubber Band runtime DLL directory must
 be on `PATH` before starting the app, unless the build or packaging step copies
 the DLLs next to the native extension:

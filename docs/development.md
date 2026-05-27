@@ -84,6 +84,17 @@ git clone https://github.com/microsoft/vcpkg.git "$env:LOCALAPPDATA\vcpkg"
 setx VCPKG_ROOT "$env:LOCALAPPDATA\vcpkg"
 ```
 
+Build discovery order:
+
+- `RUBBERBAND_LIB_DIR` for an explicit library directory override.
+- `pkg-config` for non-Windows system packages.
+- `VCPKG_ROOT`, or `$env:LOCALAPPDATA\vcpkg` on Windows when present.
+
+Optional overrides are `RUBBERBAND_INCLUDE_DIR` for header validation,
+`RUBBERBAND_VCPKG_TRIPLET` for a non-default vcpkg triplet,
+`RUBBERBAND_LINK_KIND` for `dylib` or `static`, and
+`RUBBERBAND_EXTRA_LIBS` for comma- or semicolon-separated extra linker inputs.
+
 If `cl.exe` is not visible in the normal shell, use the Visual Studio developer
 environment before building native dependencies:
 

@@ -47,6 +47,7 @@ mod errors;
 mod input_mapping;
 mod mixer;
 mod progress;
+mod rubberband_backend;
 mod sample_loader;
 mod scheduler;
 mod stem_cache;
