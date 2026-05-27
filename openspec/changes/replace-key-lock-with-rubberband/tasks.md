@@ -32,10 +32,10 @@
 
 - [x] 5.1 Cover Key Lock off varispeed vs Key Lock on Rubber Band pitch preservation.
 - [x] 5.2 Cover neutral tempo ratio transparency.
-- [ ] 5.3 Cover ratio changes while voices are active.
-- [ ] 5.4 Cover loop wrapping, retrigger, stop/unload cleanup, and active Key Lock toggles.
-- [ ] 5.5 Cover full-mix and prepared-stem playback through the same Key Lock path.
-- [ ] 5.6 Cover Multi Loop with several active Key Lock voices within bounded callback work.
+- [x] 5.3 Cover ratio changes while voices are active.
+- [x] 5.4 Cover loop wrapping, retrigger, stop/unload cleanup, and active Key Lock toggles.
+- [x] 5.5 Cover full-mix and prepared-stem playback through the same Key Lock path.
+- [x] 5.6 Cover Multi Loop with several active Key Lock voices within bounded callback work.
 
 ## 6. Documentation And Validation
 

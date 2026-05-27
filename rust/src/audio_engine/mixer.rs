@@ -1713,6 +1713,30 @@ mod tests {
         }
     }
 
+    fn create_sine_prepared_stems(
+        sample_rate_hz: u32,
+        frames: usize,
+        frequency_hz: f32,
+    ) -> PreparedStemSet {
+        let source = create_sine_sample(sample_rate_hz as f32, frames, frequency_hz);
+        let silence = create_test_sample(1, frames, 0.0);
+
+        PreparedStemSet {
+            source_version_hash: 42,
+            sample_rate_hz,
+            channels: 1,
+            frame_count: frames,
+            available_mask: full_stem_available_mask(),
+            stems: [
+                source,
+                silence.clone(),
+                silence.clone(),
+                silence.clone(),
+                silence,
+            ],
+        }
+    }
+
     fn create_frame_number_sample(frames: usize) -> SampleBuffer {
         SampleBuffer {
             channels: 1,
@@ -1776,6 +1800,15 @@ mod tests {
             .iter()
             .find(|voice| voice.active && voice.sample_id == id)
             .map(|voice| voice.frame_pos)
+    }
+
+    fn active_voice_rubberband_block_size(mixer: &RtMixer, id: usize) -> usize {
+        mixer
+            .voices
+            .iter()
+            .find(|voice| voice.active && voice.sample_id == id)
+            .map(|voice| voice.stretch.rubberband_block_size())
+            .unwrap_or(1)
     }
 
     #[derive(Default)]
@@ -1985,6 +2018,196 @@ mod tests {
             (360.0..560.0).contains(&key_lock_hz),
             "key_lock_hz={key_lock_hz}"
         );
+    }
+
+    #[test]
+    fn key_lock_ratio_change_while_active_advances_existing_voice() {
+        let sample_rate_hz = 48_000.0;
+        let source = create_sine_sample(sample_rate_hz, 200_000, 330.0);
+        let mut mixer = RtMixer::new(1, sample_rate_hz);
+        mixer.load_sample(0, source);
+        mixer.set_speed(1.0);
+        mixer.set_key_lock(true);
+        assert!(mixer.play_sample(0, 1.0));
+
+        let before_change_output = render_chunks(&mut mixer, 4, 512);
+        let frame_before_change = active_voice_frame(&mixer, 0).unwrap();
+
+        mixer.set_speed(2.0);
+        let after_change_output = render_chunks(&mut mixer, 12, 512);
+        let frame_after_change = active_voice_frame(&mixer, 0).unwrap();
+
+        assert!(before_change_output.iter().all(|sample| sample.is_finite()));
+        assert!(after_change_output.iter().all(|sample| sample.is_finite()));
+        assert_eq!(mixer.voices.iter().filter(|voice| voice.active).count(), 1);
+        assert!(frame_after_change > frame_before_change + 12 * 512);
+        assert!(frame_after_change <= frame_before_change + 12 * 1024);
+    }
+
+    #[test]
+    fn active_key_lock_toggles_do_not_retrigger_or_stop_voice() {
+        let mut mixer = RtMixer::new(1, 48_000.0);
+        mixer.load_sample(0, create_sine_sample(48_000.0, 96_000, 440.0));
+        mixer.set_speed(2.0);
+        mixer.set_key_lock(false);
+        assert!(mixer.play_sample(0, 1.0));
+
+        let varispeed_output = render_chunks(&mut mixer, 1, 512);
+        let after_varispeed = active_voice_frame(&mixer, 0).unwrap();
+        mixer.set_key_lock(true);
+        let key_lock_output = render_chunks(&mut mixer, 1, 512);
+        let after_key_lock = active_voice_frame(&mixer, 0).unwrap();
+        mixer.set_key_lock(false);
+        let restored_output = render_chunks(&mut mixer, 1, 512);
+        let after_restore = active_voice_frame(&mixer, 0).unwrap();
+
+        assert!(varispeed_output.iter().all(|sample| sample.is_finite()));
+        assert!(key_lock_output.iter().all(|sample| sample.is_finite()));
+        assert!(restored_output.iter().all(|sample| sample.is_finite()));
+        assert_eq!(after_varispeed, 1024);
+        assert_eq!(after_key_lock, 2048);
+        assert_eq!(after_restore, 3072);
+        assert_eq!(mixer.voices.iter().filter(|voice| voice.active).count(), 1);
+    }
+
+    #[test]
+    fn key_lock_loop_wrap_keeps_source_playhead_in_loop_region() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_frame_number_sample(30));
+        mixer.set_pad_loop_region(0, 1.0, Some(1.8));
+        mixer.set_speed(2.0);
+        mixer.set_key_lock(true);
+        assert!(mixer.play_sample(0, 1.0));
+
+        let output = render_chunks(&mut mixer, 1, 5);
+
+        assert!(output.iter().all(|sample| sample.is_finite()));
+        assert_eq!(active_voice_frame(&mixer, 0), Some(12));
+    }
+
+    #[test]
+    fn key_lock_retrigger_stop_and_unload_clear_pending_shifted_output() {
+        let mut mixer = RtMixer::new(1, 48_000.0);
+        let source = create_sine_sample(48_000.0, 96_000, 440.0);
+        mixer.load_sample(0, source.clone());
+        mixer.set_speed(2.0);
+        mixer.set_key_lock(true);
+        assert!(mixer.play_sample(0, 1.0));
+
+        let primed_output = render_chunks(&mut mixer, 24, 512);
+        assert!(primed_output.iter().any(|sample| sample.abs() > 1.0e-4));
+
+        let block_size = active_voice_rubberband_block_size(&mixer, 0);
+        let fallback_frames = block_size
+            .saturating_sub(1)
+            .clamp(1, mixer.max_realtime_render_frames());
+
+        assert!(mixer.play_sample(0, 1.0));
+        let retrigger_output = render_chunks(&mut mixer, 1, fallback_frames);
+        assert!(retrigger_output.iter().all(|sample| sample.abs() < 1.0e-6));
+
+        let primed_output = render_chunks(&mut mixer, 24, 512);
+        assert!(primed_output.iter().any(|sample| sample.abs() > 1.0e-4));
+
+        mixer.stop_sample(0);
+        let stopped_output = render_chunks(&mut mixer, 1, 512);
+        assert!(stopped_output.iter().all(|sample| sample.abs() < 1.0e-6));
+        assert!(mixer.voices.iter().all(|voice| !voice.active));
+
+        assert!(mixer.play_sample(0, 1.0));
+        let restart_output = render_chunks(&mut mixer, 1, fallback_frames);
+        assert!(restart_output.iter().all(|sample| sample.abs() < 1.0e-6));
+
+        let primed_output = render_chunks(&mut mixer, 24, 512);
+        assert!(primed_output.iter().any(|sample| sample.abs() > 1.0e-4));
+
+        mixer.unload_sample(0);
+        let unloaded_output = render_chunks(&mut mixer, 1, 512);
+        assert!(unloaded_output.iter().all(|sample| sample.abs() < 1.0e-6));
+        assert!(mixer.sample_bank[0].is_none());
+        assert!(mixer.voices.iter().all(|voice| !voice.active));
+
+        mixer.load_sample(0, source);
+        assert!(mixer.play_sample(0, 1.0));
+        let reload_output = render_chunks(&mut mixer, 1, fallback_frames);
+        assert!(reload_output.iter().all(|sample| sample.abs() < 1.0e-6));
+    }
+
+    #[test]
+    fn prepared_stems_share_bpm_lock_key_lock_pitch_path_with_full_mix() {
+        let sample_rate_hz = 48_000.0;
+        let frames = 96_000;
+        let source_hz = 330.0;
+
+        let mut full_mix_mixer = RtMixer::new(1, sample_rate_hz);
+        full_mix_mixer.load_sample(0, create_sine_sample(sample_rate_hz, frames, source_hz));
+        full_mix_mixer.set_bpm_lock(true);
+        full_mix_mixer.set_master_bpm(120.0);
+        full_mix_mixer.set_pad_bpm(0, Some(60.0));
+        full_mix_mixer.set_key_lock(true);
+        assert!(full_mix_mixer.play_sample(0, 1.0));
+
+        let mut stem_mixer = RtMixer::new(1, sample_rate_hz);
+        stem_mixer.load_sample(0, create_test_sample(1, frames, 0.0));
+        assert!(stem_mixer.publish_prepared_stems(
+            0,
+            create_sine_prepared_stems(sample_rate_hz as u32, frames, source_hz)
+        ));
+        assert!(stem_mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
+        stem_mixer.set_bpm_lock(true);
+        stem_mixer.set_master_bpm(120.0);
+        stem_mixer.set_pad_bpm(0, Some(60.0));
+        stem_mixer.set_key_lock(true);
+        assert!(stem_mixer.play_sample(0, 1.0));
+
+        let full_mix_output = render_chunks(&mut full_mix_mixer, 40, 512);
+        let stem_output = render_chunks(&mut stem_mixer, 40, 512);
+        let skip = 8192;
+        let full_mix_hz = estimate_frequency(&full_mix_output[skip..], sample_rate_hz);
+        let stem_hz = estimate_frequency(&stem_output[skip..], sample_rate_hz);
+
+        assert_eq!(
+            active_voice_frame(&full_mix_mixer, 0),
+            active_voice_frame(&stem_mixer, 0)
+        );
+        assert!(
+            (260.0..420.0).contains(&full_mix_hz),
+            "full_mix_hz={full_mix_hz}"
+        );
+        assert!((260.0..420.0).contains(&stem_hz), "stem_hz={stem_hz}");
+        assert!(
+            (full_mix_hz - stem_hz).abs() < 60.0,
+            "full_mix_hz={full_mix_hz} stem_hz={stem_hz}"
+        );
+    }
+
+    #[test]
+    fn multi_loop_key_lock_voices_render_finite_and_stay_bounded() {
+        let mut mixer = RtMixer::new(1, 48_000.0);
+        mixer.set_speed(2.0);
+        mixer.set_key_lock(true);
+        let active_voices = 8;
+
+        for id in 0..active_voices {
+            mixer.load_sample(
+                id,
+                create_sine_sample(48_000.0, 96_000, 220.0 + id as f32 * 35.0),
+            );
+            mixer.set_pad_loop_region(id, 0.0, Some(1.5));
+            assert!(mixer.play_sample(id, 0.5));
+        }
+
+        let frames = mixer.max_realtime_render_frames() * 2 + 17;
+        let output = render_chunks(&mut mixer, 1, frames);
+
+        assert_eq!(
+            mixer.voices.iter().filter(|voice| voice.active).count(),
+            active_voices
+        );
+        assert!(output.iter().all(|sample| sample.is_finite()));
+        for id in 0..active_voices {
+            assert_eq!(active_voice_frame(&mixer, id), Some(2082));
+        }
     }
 
     #[test]
