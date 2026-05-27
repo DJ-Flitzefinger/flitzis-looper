@@ -91,12 +91,14 @@ def eq_wheel_delta_db(wheel_steps: int) -> float:
 
 
 def sanitize_eq_entry_text(text: str) -> str:
-    """Return manual EQ text containing only ASCII digits and one decimal point."""
+    """Return manual EQ text containing an optional leading minus and decimal point."""
     sanitized: list[str] = []
     has_decimal = False
 
     for char in text.replace(",", "."):
-        if char in _EQ_ENTRY_DIGITS:
+        if char == "-" and not sanitized:
+            sanitized.append(char)
+        elif char in _EQ_ENTRY_DIGITS:
             sanitized.append(char)
         elif char == "." and not has_decimal:
             has_decimal = True
@@ -125,6 +127,9 @@ def filtered_eq_entry_char(
         return char_code
 
     current_text = current_text.replace(",", ".")
+    if char == "-" and cursor_pos == 0 and (has_selection or not current_text.startswith("-")):
+        return char_code
+
     if char == "." and ("." not in current_text or has_selection):
         return char_code
 
@@ -150,9 +155,12 @@ def eq_entry_char_filter(data: imgui.InputTextCallbackData) -> int:
 def parse_eq_entry_text(text: str) -> float | None:
     """Parse manual EQ entry text, returning a clamped one-decimal dB value."""
     sanitized = sanitize_eq_entry_text(text)
-    if sanitized in {"", "."}:
+    if sanitized in {"", ".", "-", "-."}:
         return None
-    value = float(sanitized)
+    try:
+        value = float(sanitized)
+    except ValueError:
+        return None
     if not math.isfinite(value):
         return None
     return round(clamp_eq_db(value), 1)
