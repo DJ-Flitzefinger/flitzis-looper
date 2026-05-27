@@ -28,6 +28,9 @@ _LOOP_START_DRAG_LINE_ID = 0
 _LOOP_END_DRAG_LINE_ID = 1
 
 _GRID_MIN_MINOR_STEP_PX = 12.0
+_TOOLBAR_MIN_HIT_TARGET_PX = 32.0
+_TOOLBAR_FRAME_HEIGHT_MULTIPLIER = 1.5
+_DEFAULT_EDITOR_SIZE = (960.0, 420.0)
 
 
 @dataclass(slots=True)
@@ -39,6 +42,15 @@ class _GridOffsetDragState:
 
 _GRID_OFFSET_PX_PER_STEP = 2.0
 _GRID_OFFSET_DRAG = _GridOffsetDragState()
+
+
+def toolbar_control_size(frame_height: float) -> float:
+    """Return the minimum square toolbar hit target for the current frame height."""
+    return max(_TOOLBAR_MIN_HIT_TARGET_PX, float(frame_height) * _TOOLBAR_FRAME_HEIGHT_MULTIPLIER)
+
+
+def _visible_label(label: str) -> str:
+    return label.split("##", 1)[0]
 
 
 def _separator(ctx: UiContext, label: str, height: float, text_pos_y: float) -> None:
@@ -73,8 +85,11 @@ def _render_icon_button_mouse_down(label: str, size: float) -> tuple[bool, bool]
 
 def _render_text_button(label: str, height: float) -> bool:
     padding = imgui.get_style().frame_padding
+    horizontal_padding = padding.x + SPACING
+    label_width = imgui.calc_text_size(_visible_label(label)).x
+    width = max(height, label_width + horizontal_padding * 2)
     with imgui_ctx.push_style_var(imgui.StyleVar_.frame_padding, (padding.x + SPACING, padding.y)):
-        if imgui.button(label, (0, height)):
+        if imgui.button(label, (width, height)):
             return True
     return False
 
@@ -216,6 +231,21 @@ def _render_view_jump_buttons(ctx: UiContext, height: float) -> None:
     if imgui.is_item_hovered():
         with imgui_ctx.begin_tooltip():
             imgui.text("Jump to end")
+
+
+def _render_maximize_button(ctx: UiContext, height: float) -> None:
+    imgui.same_line(spacing=SPACING)
+    is_maximized = ctx.state.session.waveform_editor_maximized
+    icon = (
+        icons_fontawesome_6.ICON_FA_WINDOW_RESTORE
+        if is_maximized
+        else icons_fontawesome_6.ICON_FA_WINDOW_MAXIMIZE
+    )
+    if _render_icon_button(f"{icon}##wf_window_maximize", height):
+        ctx.ui.waveform.toggle_maximized()
+    if imgui.is_item_hovered():
+        with imgui_ctx.begin_tooltip():
+            imgui.text("Restore" if is_maximized else "Maximize")
 
 
 def _render_loop_controls(ctx: UiContext, pad_id: int, height: float, text_pos_y: float) -> None:
@@ -663,6 +693,42 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
     implot.end_plot()
 
 
+def _imvec2(value: tuple[float, float]) -> imgui.ImVec2:
+    return imgui.ImVec2(float(value[0]), float(value[1]))
+
+
+def _apply_editor_window_state(ctx: UiContext) -> int:
+    flags = imgui.WindowFlags_.no_collapse
+
+    if ctx.state.session.waveform_editor_maximized:
+        viewport = imgui.get_main_viewport()
+        imgui.set_next_window_pos(viewport.work_pos, imgui.Cond_.always)
+        imgui.set_next_window_size(viewport.work_size, imgui.Cond_.always)
+        return flags | imgui.WindowFlags_.no_move | imgui.WindowFlags_.no_resize
+
+    restore_bounds = ctx.ui.waveform.consume_restore_window_bounds()
+    if restore_bounds is not None:
+        pos, size = restore_bounds
+        imgui.set_next_window_pos(_imvec2(pos), imgui.Cond_.always)
+        imgui.set_next_window_size(_imvec2(size), imgui.Cond_.always)
+        return flags
+
+    imgui.set_next_window_size(_imvec2(_DEFAULT_EDITOR_SIZE), imgui.Cond_.first_use_ever)
+    return flags
+
+
+def _record_normal_editor_bounds(ctx: UiContext) -> None:
+    if ctx.state.session.waveform_editor_maximized:
+        return
+
+    pos = imgui.get_window_pos()
+    size = imgui.get_window_size()
+    ctx.ui.waveform.record_normal_window_bounds(
+        pos=(float(pos.x), float(pos.y)),
+        size=(float(size.x), float(size.y)),
+    )
+
+
 def waveform_editor(ctx: UiContext) -> None:
     session = ctx.state.session
     pad_id = session.waveform_editor_pad_id
@@ -673,18 +739,20 @@ def waveform_editor(ctx: UiContext) -> None:
     if not ctx.state.pads.is_loaded(pad_id):
         return
 
-    with imgui_ctx.begin(
-        "Waveform Editor", p_open=True, flags=imgui.WindowFlags_.no_collapse
-    ) as window:
+    flags = _apply_editor_window_state(ctx)
+    with imgui_ctx.begin("Waveform Editor", p_open=True, flags=flags) as window:
         if window:
+            _record_normal_editor_bounds(ctx)
+
             # Toolbar
             with imgui_ctx.begin_group():
-                toolbar_height = imgui.get_frame_height() * 1.3
+                toolbar_height = toolbar_control_size(imgui.get_frame_height())
 
                 text_h = imgui.get_text_line_height()
                 text_pos_y = imgui.get_cursor_pos_y() + (toolbar_height - text_h) / 2 - 3
 
                 _render_playback_controls(ctx, toolbar_height)
+                _render_maximize_button(ctx, toolbar_height)
                 _separator(ctx, "View", toolbar_height, text_pos_y)
                 _render_zoom_buttons(ctx, pad_id, toolbar_height)
                 _render_view_jump_buttons(ctx, toolbar_height)

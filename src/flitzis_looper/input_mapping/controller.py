@@ -462,8 +462,18 @@ class InputMappingController(BaseController):
     def _execute_adjust_loop(self, key: str) -> bool:
         if (pad_id := _parse_prefixed_sample_id(key, "pad.adjust_loop:")) is None:
             return False
-        self._app.session.waveform_editor_open = True
-        self._app.session.waveform_editor_pad_id = pad_id
+        if self._project.sample_paths[pad_id] is None:
+            return True
+
+        session = self._app.session
+        if session.waveform_editor_open and session.waveform_editor_pad_id == pad_id:
+            session.waveform_editor_open = False
+            session.waveform_editor_pad_id = None
+            session.waveform_editor_maximized = False
+            return True
+
+        session.waveform_editor_open = True
+        session.waveform_editor_pad_id = pad_id
         return True
 
     def _execute_tap_bpm(self, key: str) -> bool:

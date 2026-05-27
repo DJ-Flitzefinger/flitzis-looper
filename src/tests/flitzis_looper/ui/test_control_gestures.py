@@ -3,7 +3,11 @@ import pytest
 from flitzis_looper.ui.render.bottom_bar import master_volume_wheel_delta
 from flitzis_looper.ui.render.control_gestures import held_repeat_count, wheel_step_count
 from flitzis_looper.ui.render.sidebar_left import eq_wheel_delta_db, gain_meter_zone_fractions
-from flitzis_looper.ui.render.waveform_editor import bar_step_target, format_loop_bars
+from flitzis_looper.ui.render.waveform_editor import (
+    bar_step_target,
+    format_loop_bars,
+    toolbar_control_size,
+)
 
 
 @pytest.mark.parametrize(
@@ -95,3 +99,16 @@ def test_waveform_bar_step_targets(
 )
 def test_waveform_loop_bar_labels(bars: float, expected: str) -> None:
     assert format_loop_bars(bars) == expected
+
+
+@pytest.mark.parametrize(
+    ("frame_height", "expected"),
+    [
+        (18.0, 32.0),
+        (24.0, 36.0),
+    ],
+)
+def test_waveform_toolbar_control_size_meets_hit_target_bounds(
+    frame_height: float, expected: float
+) -> None:
+    assert toolbar_control_size(frame_height) == pytest.approx(expected)

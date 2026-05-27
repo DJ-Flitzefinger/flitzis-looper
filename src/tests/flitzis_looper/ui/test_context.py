@@ -539,6 +539,50 @@ class TestUiActions:
 
         assert controller.session.file_dialog_pad_id is None
 
+    def test_adjust_loop_opens_loaded_pad_waveform_editor(self, controller: AppController) -> None:
+        ui_actions = UiActions(controller)
+        controller.project.sample_paths[3] = "/path/to/sample.wav"
+
+        ui_actions.open_waveform_editor(3)
+
+        assert controller.session.waveform_editor_open is True
+        assert controller.session.waveform_editor_pad_id == 3
+
+    def test_adjust_loop_closes_same_pad_waveform_editor(self, controller: AppController) -> None:
+        ui_actions = UiActions(controller)
+        controller.project.sample_paths[3] = "/path/to/sample.wav"
+        controller.session.waveform_editor_open = True
+        controller.session.waveform_editor_pad_id = 3
+        controller.session.waveform_editor_maximized = True
+
+        ui_actions.open_waveform_editor(3)
+
+        assert controller.session.waveform_editor_open is False
+        assert controller.session.waveform_editor_pad_id is None
+        assert controller.session.waveform_editor_maximized is False
+
+    def test_adjust_loop_switches_open_editor_to_different_loaded_pad(
+        self, controller: AppController
+    ) -> None:
+        ui_actions = UiActions(controller)
+        controller.project.sample_paths[3] = "/path/to/sample.wav"
+        controller.project.sample_paths[4] = "/path/to/other.wav"
+        controller.session.waveform_editor_open = True
+        controller.session.waveform_editor_pad_id = 3
+
+        ui_actions.open_waveform_editor(4)
+
+        assert controller.session.waveform_editor_open is True
+        assert controller.session.waveform_editor_pad_id == 4
+
+    def test_adjust_loop_ignores_unloaded_pad(self, controller: AppController) -> None:
+        ui_actions = UiActions(controller)
+
+        ui_actions.open_waveform_editor(3)
+
+        assert controller.session.waveform_editor_open is False
+        assert controller.session.waveform_editor_pad_id is None
+
     def test_select_pad(self, controller: AppController) -> None:
         """Test select_pad sets selected_pad."""
         ui_actions = UiActions(controller)
@@ -709,6 +753,22 @@ def _open_waveform_editor(controller: AppController, pad_id: int) -> UiContext:
 
 class TestWaveformEditorTransportControls:
     """Test waveform editor transport control actions."""
+
+    def test_toggle_maximized_tracks_restore_bounds(self, controller: AppController) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+        ctx.ui.waveform.record_normal_window_bounds(pos=(12.0, 24.0), size=(640.0, 360.0))
+
+        ctx.ui.waveform.toggle_maximized()
+        assert controller.session.waveform_editor_maximized is True
+        assert ctx.ui.waveform.consume_restore_window_bounds() is None
+
+        ctx.ui.waveform.toggle_maximized()
+        assert controller.session.waveform_editor_maximized is False
+        assert ctx.ui.waveform.consume_restore_window_bounds() == (
+            (12.0, 24.0),
+            (640.0, 360.0),
+        )
+        assert ctx.ui.waveform.consume_restore_window_bounds() is None
 
     def test_play_restart_selected_pad_on_press_does_not_stop_other_pads_and_restarts_from_start(
         self, controller: AppController, audio_engine_mock: Mock

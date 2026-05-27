@@ -531,6 +531,8 @@ class WaveformEditorActions:
 
         # Per-pad view state for the waveform editor plot (seconds).
         self._pad_view_ranges: dict[int, tuple[float, float]] = {}
+        self._normal_window_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None
+        self._restore_window_bounds_pending = False
 
     def _selected_pad_id(self) -> int | None:
         return self._controller.session.waveform_editor_pad_id
@@ -544,6 +546,28 @@ class WaveformEditorActions:
         session = self._controller.session
         session.waveform_editor_open = False
         session.waveform_editor_pad_id = None
+        session.waveform_editor_maximized = False
+        self._restore_window_bounds_pending = False
+
+    def toggle_for_pad(self, pad_id: int) -> None:
+        """Open, close, or retarget the waveform editor for a loaded pad."""
+        if self._controller.project.sample_paths[pad_id] is None:
+            return
+
+        session = self._controller.session
+        if session.waveform_editor_open and session.waveform_editor_pad_id == pad_id:
+            self.close()
+            return
+
+        self.open(pad_id)
+
+    def toggle_maximized(self) -> None:
+        """Toggle the waveform editor's transient maximized state."""
+        session = self._controller.session
+        was_maximized = session.waveform_editor_maximized
+        session.waveform_editor_maximized = not was_maximized
+        if was_maximized:
+            self._restore_window_bounds_pending = True
 
     def play_restart_selected_pad_on_press(self) -> None:
         """Restart playback for the selected pad (waveform editor)."""
@@ -645,6 +669,29 @@ class WaveformEditorActions:
         """Record the plot's current visible X-range for a pad."""
         self._pad_view_ranges[int(pad_id)] = (float(start_s), float(end_s))
 
+    def record_normal_window_bounds(
+        self,
+        *,
+        pos: tuple[float, float],
+        size: tuple[float, float],
+    ) -> None:
+        """Remember normal editor bounds for a later restore from maximized state."""
+        if self._controller.session.waveform_editor_maximized:
+            return
+        self._normal_window_bounds = (
+            (float(pos[0]), float(pos[1])),
+            (float(size[0]), float(size[1])),
+        )
+
+    def consume_restore_window_bounds(
+        self,
+    ) -> tuple[tuple[float, float], tuple[float, float]] | None:
+        """Return remembered normal bounds once after leaving maximized state."""
+        if not self._restore_window_bounds_pending:
+            return None
+        self._restore_window_bounds_pending = False
+        return self._normal_window_bounds
+
     def _current_view_width_s(self, pad_id: int, *, sample_duration_s: float) -> float:
         if sample_duration_s <= 0.0:
             return 0.0
@@ -745,7 +792,7 @@ class UiActions:
     def open_waveform_editor(self, pad_id: int) -> None:
         self._controller.input_mapping.perform_learnable_action(
             LooperAction.adjust_loop(pad_id),
-            lambda: self.waveform.open(pad_id),
+            lambda: self.waveform.toggle_for_pad(pad_id),
         )
 
     def select_pad(self, pad_id: int) -> None:

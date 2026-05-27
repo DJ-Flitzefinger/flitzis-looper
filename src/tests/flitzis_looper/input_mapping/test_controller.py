@@ -330,6 +330,45 @@ def test_keyboard_mapping_executes_tap_bpm(controller: AppController) -> None:
     assert len(controller.session.tap_bpm_timestamps) == 1
 
 
+def test_keyboard_mapping_adjust_loop_toggles_and_switches_editor(
+    controller: AppController,
+) -> None:
+    controller.input_mapping.set_enabled(enabled=True)
+    binding = KeyboardBinding(key_name="W")
+    controller.input_mapping.save_mapping("keyboard", binding.key, LooperAction.adjust_loop(2))
+    controller.project.sample_paths[1] = "samples/other.wav"
+    controller.project.sample_paths[2] = "samples/foo.wav"
+
+    handled = controller.input_mapping.capture_keyboard_input(
+        binding,
+        text_input_focused=False,
+    )
+
+    assert handled is True
+    assert controller.session.waveform_editor_open is True
+    assert controller.session.waveform_editor_pad_id == 2
+
+    handled = controller.input_mapping.capture_keyboard_input(
+        binding,
+        text_input_focused=False,
+    )
+
+    assert handled is True
+    assert controller.session.waveform_editor_open is False
+    assert controller.session.waveform_editor_pad_id is None
+
+    controller.session.waveform_editor_open = True
+    controller.session.waveform_editor_pad_id = 1
+    handled = controller.input_mapping.capture_keyboard_input(
+        binding,
+        text_input_focused=False,
+    )
+
+    assert handled is True
+    assert controller.session.waveform_editor_open is True
+    assert controller.session.waveform_editor_pad_id == 2
+
+
 def test_keyboard_mapping_executes_master_volume(
     controller: AppController,
     audio_engine_mock: Mock,
