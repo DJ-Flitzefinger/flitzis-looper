@@ -40,6 +40,18 @@ and summing. The correction intentionally does not add hidden limiting, hidden g
 or an automatic gain drop when an isolator band is killed. Those features change sound and must be
 specified as explicit optional behavior before implementation.
 
+## DSP Topology Decision
+
+The focused isolator peak tests prove that killing the high band can produce a modest sample-peak
+rise on phase-cancelling material while unity recombination remains RMS-neutral and bounded. That
+measurement does not justify changing the isolator topology, adding hidden gain compensation, or
+adding automatic output protection in this change.
+
+The implemented correction therefore keeps the current DAW-like floating-point headroom policy and
+relies on accurate pad and master metering to expose peaks above full scale. Any future limiter,
+master trim/headroom control, or automatic compensation remains a separate, explicit behavior
+change because it would alter sound or performer control semantics.
+
 ## EQ Text Entry
 
 Manual EQ value entry should use the same supported range as the EQ controls. It must allow an
@@ -53,4 +65,3 @@ Master output metering should reuse fixed-size audio-thread state and the existi
 audio-to-control telemetry pattern. If the telemetry channel is full, a master peak update should
 be dropped without blocking. No Python objects, UI state, allocation-heavy work, file access, or
 logging belongs in the callback.
-
