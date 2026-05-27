@@ -111,6 +111,9 @@ class AppController:
         if isinstance(msg, AudioMessage.PadPeak):
             self.metering.handle_pad_peak_message(msg)
 
+        if isinstance(msg, AudioMessage.MasterPeak):
+            self.metering.handle_master_peak_message(msg)
+
         if isinstance(msg, AudioMessage.PadPlayhead):
             self.metering.handle_pad_playhead_message(msg)
 

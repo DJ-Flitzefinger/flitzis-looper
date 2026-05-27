@@ -691,6 +691,15 @@ class SessionState(BaseModel):
     pad_clip_hold_until: list[float] = Field(default_factory=lambda: [0.0] * NUM_SAMPLES)
     """Monotonic timestamp until which the per-pad clip indicator stays active."""
 
+    master_output_peak: float = 0.0
+    """Best-effort master output peak level, preserving finite values above 1.0."""
+
+    master_output_peak_updated_at: float = 0.0
+    """Monotonic timestamp of last master output peak update (seconds)."""
+
+    master_output_clip_hold_until: float = 0.0
+    """Monotonic timestamp until which the master output clip indicator stays active."""
+
     pad_playhead_s: list[float | None] = Field(default_factory=_default_pad_playhead_s)
     """Best-effort per-pad playback position in seconds."""
 
@@ -839,6 +848,26 @@ class SessionState(BaseModel):
             if not math.isfinite(ts) or ts < 0.0:
                 msg = f"pad_clip_hold_until values must be finite and >= 0.0, got {ts}"
                 raise ValueError(msg)
+        return value
+
+    @field_validator("master_output_peak", mode="after")
+    @classmethod
+    def _validate_master_output_peak(cls, value: float) -> float:
+        if not math.isfinite(value) or value < 0.0:
+            msg = f"master_output_peak must be finite and >= 0.0, got {value}"
+            raise ValueError(msg)
+        return value
+
+    @field_validator(
+        "master_output_peak_updated_at",
+        "master_output_clip_hold_until",
+        mode="after",
+    )
+    @classmethod
+    def _validate_master_output_timestamps(cls, value: float) -> float:
+        if not math.isfinite(value) or value < 0.0:
+            msg = f"master output timestamps must be finite and >= 0.0, got {value}"
+            raise ValueError(msg)
         return value
 
     @field_validator("pad_playhead_s", mode="after")

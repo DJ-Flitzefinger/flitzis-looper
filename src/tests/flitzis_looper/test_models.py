@@ -605,6 +605,31 @@ def test_session_state_defaults(session_state: SessionState) -> None:
     assert session_state.input_learn_pending_source is None
     assert session_state.input_learn_pending_binding_key is None
     assert session_state.input_mapping_error is None
+    assert session_state.master_output_peak == 0.0
+    assert session_state.master_output_peak_updated_at == 0.0
+    assert session_state.master_output_clip_hold_until == 0.0
+
+
+def test_master_output_metering_state_validation(session_state: SessionState) -> None:
+    session_state.master_output_peak = 1.25
+    session_state.master_output_peak_updated_at = 10.0
+    session_state.master_output_clip_hold_until = 11.0
+
+    assert session_state.master_output_peak == pytest.approx(1.25)
+    assert session_state.master_output_peak_updated_at == pytest.approx(10.0)
+    assert session_state.master_output_clip_hold_until == pytest.approx(11.0)
+
+    with pytest.raises(ValidationError, match="master_output_peak"):
+        SessionState(master_output_peak=-0.1)
+
+    with pytest.raises(ValidationError, match="master_output_peak"):
+        SessionState(master_output_peak=float("inf"))
+
+    with pytest.raises(ValidationError, match="master output timestamps"):
+        SessionState(master_output_peak_updated_at=-0.1)
+
+    with pytest.raises(ValidationError, match="master output timestamps"):
+        SessionState(master_output_clip_hold_until=float("nan"))
 
 
 def test_stem_enabled_mask_validation(session_state: SessionState) -> None:

@@ -25,6 +25,14 @@ class _PadPeakMessage:
         return self._peak
 
 
+class _MasterPeakMessage:
+    def __init__(self, peak: float) -> None:
+        self._peak = peak
+
+    def master_peak(self) -> float:
+        return self._peak
+
+
 class _PadPlayheadMessage:
     def __init__(self, sample_id: int, playhead_s: float) -> None:
         self._sample_id = sample_id
@@ -156,6 +164,7 @@ def test_controller_poll_runtime_events_dispatches_audio_messages(
     """Test controller-owned runtime polling updates session audio projections."""
     audio_messages = SimpleNamespace(
         PadPeak=_PadPeakMessage,
+        MasterPeak=_MasterPeakMessage,
         PadPlayhead=_PadPlayheadMessage,
         SampleStarted=_SampleStartedMessage,
         SampleStopped=_SampleStoppedMessage,
@@ -166,6 +175,7 @@ def test_controller_poll_runtime_events_dispatches_audio_messages(
     audio_engine_mock.poll_loader_events.return_value = None
     audio_engine_mock.receive_msg.side_effect = [
         _PadPeakMessage(0, 0.75),
+        _MasterPeakMessage(1.25),
         _PadPlayheadMessage(0, 1.25),
         _SampleStartedMessage(0),
         None,
@@ -174,6 +184,8 @@ def test_controller_poll_runtime_events_dispatches_audio_messages(
     controller.poll_runtime_events()
 
     assert controller.session.pad_peak[0] == pytest.approx(0.75)
+    assert controller.session.master_output_peak == pytest.approx(1.25)
+    assert controller.session.master_output_clip_hold_until == pytest.approx(124.0)
     assert controller.session.pad_playhead_s[0] == pytest.approx(1.25)
     assert controller.session.active_sample_ids == {0}
     audio_engine_mock.poll_loader_events.assert_called_once()
