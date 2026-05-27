@@ -588,6 +588,7 @@ def test_session_state_defaults(session_state: SessionState) -> None:
     assert all(pressed is False for pressed in session_state.pressed_pads)
     assert session_state.file_dialog_pad_id is None
     assert session_state.waveform_editor_maximized is False
+    assert session_state.waveform_editor_in_frame is False
     assert session_state.settings_open is False
     assert session_state.tap_bpm_pad_id is None
     assert session_state.tap_bpm_timestamps == []

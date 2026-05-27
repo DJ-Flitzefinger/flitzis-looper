@@ -82,23 +82,35 @@ playback.
 - **THEN** Pad A does not start playback
 - **AND** Pad A loop markers are unchanged
 
-### Requirement: Waveform editor provides title-bar maximize and larger controls
-The waveform editor SHALL provide an explicit maximize/restore affordance in the window title bar
-at the far right, immediately left of the close `X` affordance.
+### Requirement: Waveform editor provides title-bar window controls
+The waveform editor SHALL provide title-bar controls ordered from right to left as close `X`,
+maximize/restore, and in-frame mode.
 
-The maximize state SHALL be transient UI/session state and SHALL NOT be persisted as project
-intent.
+The close `X` SHALL close the waveform editor without changing the current in-frame mode
+preference.
+
+The maximize state and in-frame mode SHALL be transient UI/session state and SHALL NOT be
+persisted as project intent.
+
+When the editor is floating, activating maximize SHALL resize the floating waveform editor to the
+current monitor work area, matching normal operating-system window maximize behavior rather than
+constraining it to the Looper main viewport.
+
+When in-frame mode is enabled, the waveform editor SHALL render as an overlay in the Looper center
+surface, replacing the performance surface like the Settings page and resizing with the Looper main
+window. Closing and reopening the waveform editor SHALL preserve the in-frame mode until the
+performer toggles in-frame mode off.
 
 The waveform editor title bar SHALL be taller than the previous compact title bar and SHALL expose
-maximize/restore and close hit targets of at least 32 logical pixels on both axes.
+in-frame, maximize/restore, and close hit targets of at least 32 logical pixels on both axes.
 
 Toolbar icon hit targets SHALL be at least 32 logical pixels on both axes and no smaller than
 1.5 times the current ImGui frame height.
 
 #### Scenario: Maximize expands the waveform editor
-- **GIVEN** the waveform editor is visible
+- **GIVEN** the waveform editor is visible as a floating window
 - **WHEN** the performer activates the maximize affordance
-- **THEN** the editor uses the maximized window state
+- **THEN** the editor uses the current monitor work area as its maximized bounds
 - **AND** the loaded waveform remains visible
 - **AND** loop controls remain available
 
@@ -110,8 +122,20 @@ Toolbar icon hit targets SHALL be at least 32 logical pixels on both axes and no
 #### Scenario: Title-bar window controls are easier to press
 - **GIVEN** the waveform editor is visible
 - **WHEN** the title bar is rendered
-- **THEN** the maximize/restore affordance is immediately left of the close `X`
-- **AND** both title-bar window controls expose hit targets at least 32 logical pixels on both axes
+- **THEN** the close `X` is the rightmost title-bar control
+- **AND** the maximize/restore affordance is immediately left of the close `X`
+- **AND** the in-frame mode affordance is immediately left of maximize/restore
+- **AND** all three title-bar controls expose hit targets at least 32 logical pixels on both axes
+
+#### Scenario: In-frame mode persists across close and reopen
+- **GIVEN** the waveform editor is visible
+- **WHEN** the performer activates the in-frame mode affordance
+- **THEN** the editor renders in the Looper center surface and resizes with the Looper main window
+- **WHEN** the performer closes the editor with `X`
+- **AND** later opens the same loaded pad with `Adjust Loop`
+- **THEN** the editor opens in-frame again
+- **WHEN** the performer activates the in-frame mode affordance again
+- **THEN** the editor returns to floating window presentation
 
 #### Scenario: Toolbar hit targets are easier to press
 - **GIVEN** the waveform editor is visible

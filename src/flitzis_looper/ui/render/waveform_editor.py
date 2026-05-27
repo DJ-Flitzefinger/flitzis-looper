@@ -1,11 +1,12 @@
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 from imgui_bundle import ImVec4, icons_fontawesome_6, imgui, imgui_ctx, implot
 
 from flitzis_looper.constants import PAD_LOOP_BARS_MIN
 from flitzis_looper.ui.constants import (
+    BG_FRAME_ACTIVE_RGBA,
     CONTROL_HOVERED_RGBA,
     CONTROL_PRESSED_RGBA,
     MODE_OFF_HOVERED_RGBA,
@@ -18,10 +19,13 @@ from flitzis_looper.ui.constants import (
     SPACING,
     TEXT_MUTED_RGBA,
     TEXT_RGBA,
+    WHITE_RGBA,
 )
 from flitzis_looper.ui.contextmanager import implot_style_color, implot_style_var
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     import numpy as np
     from numpy.typing import NDArray
 
@@ -37,6 +41,7 @@ _TITLEBAR_MIN_HEIGHT_PX = 40.0
 _TITLEBAR_MIN_CONTROL_SIZE_PX = 32.0
 _TITLEBAR_CONTROL_GAP_PX = 4.0
 _TITLEBAR_CONTROL_MARGIN_X_PX = 6.0
+_TITLEBAR_TEXT_MARGIN_X_PX = 10.0
 _DEFAULT_EDITOR_SIZE = (960.0, 420.0)
 
 
@@ -49,6 +54,26 @@ class _GridOffsetDragState:
 
 _GRID_OFFSET_PX_PER_STEP = 2.0
 _GRID_OFFSET_DRAG = _GridOffsetDragState()
+
+
+class _Vec2Like(Protocol):
+    x: float
+    y: float
+
+
+class _PlatformMonitorLike(Protocol):
+    main_pos: _Vec2Like
+    main_size: _Vec2Like
+    work_pos: _Vec2Like
+    work_size: _Vec2Like
+
+
+class _PlatformMonitorVectorLike(Protocol):
+    def __len__(self) -> int: ...
+
+    def __iter__(self) -> Iterator[_PlatformMonitorLike]: ...
+
+    def __getitem__(self, index: int) -> _PlatformMonitorLike: ...
 
 
 def toolbar_control_size(frame_height: float) -> float:
@@ -65,6 +90,33 @@ def titlebar_frame_padding_y(text_line_height: float, current_padding_y: float) 
 def titlebar_control_size(titlebar_height: float) -> float:
     """Return the square hit target for custom title-bar window controls."""
     return max(_TITLEBAR_MIN_CONTROL_SIZE_PX, float(titlebar_height) - 8.0)
+
+
+def titlebar_control_rects(
+    *,
+    window_pos: tuple[float, float],
+    window_size: tuple[float, float],
+    titlebar_height: float,
+) -> tuple[
+    tuple[tuple[float, float], tuple[float, float]],
+    tuple[tuple[float, float], tuple[float, float]],
+    tuple[tuple[float, float], tuple[float, float]],
+]:
+    """Return in-frame, maximize, and close control rectangles."""
+    button_size = titlebar_control_size(titlebar_height)
+    y = float(window_pos[1]) + (float(titlebar_height) - button_size) / 2.0
+    close_x2 = float(window_pos[0]) + float(window_size[0]) - _TITLEBAR_CONTROL_MARGIN_X_PX
+    close_x1 = close_x2 - button_size
+    maximize_x2 = close_x1 - _TITLEBAR_CONTROL_GAP_PX
+    maximize_x1 = maximize_x2 - button_size
+    in_frame_x2 = maximize_x1 - _TITLEBAR_CONTROL_GAP_PX
+    in_frame_x1 = in_frame_x2 - button_size
+
+    return (
+        ((in_frame_x1, y), (in_frame_x2, y + button_size)),
+        ((maximize_x1, y), (maximize_x2, y + button_size)),
+        ((close_x1, y), (close_x2, y + button_size)),
+    )
 
 
 def _visible_label(label: str) -> str:
@@ -700,13 +752,65 @@ def _imvec2(value: tuple[float, float]) -> imgui.ImVec2:
     return imgui.ImVec2(float(value[0]), float(value[1]))
 
 
+def _point_in_rect(
+    point: tuple[float, float], pos: tuple[float, float], size: tuple[float, float]
+) -> bool:
+    return (
+        point[0] >= pos[0]
+        and point[0] <= pos[0] + size[0]
+        and point[1] >= pos[1]
+        and point[1] <= pos[1] + size[1]
+    )
+
+
+def _monitor_work_bounds_for_rect(
+    pos: tuple[float, float], size: tuple[float, float]
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    monitors = cast("_PlatformMonitorVectorLike", imgui.get_platform_io().monitors)
+    if len(monitors) <= 0:
+        return None
+
+    center = (pos[0] + size[0] / 2.0, pos[1] + size[1] / 2.0)
+    selected: _PlatformMonitorLike | None = None
+    for monitor in monitors:
+        main_pos = (float(monitor.main_pos.x), float(monitor.main_pos.y))
+        main_size = (float(monitor.main_size.x), float(monitor.main_size.y))
+        if _point_in_rect(center, main_pos, main_size):
+            selected = monitor
+            break
+
+    if selected is None:
+        selected = monitors[0]
+
+    return (
+        (float(selected.work_pos.x), float(selected.work_pos.y)),
+        (float(selected.work_size.x), float(selected.work_size.y)),
+    )
+
+
+def _fallback_viewport_work_bounds() -> tuple[tuple[float, float], tuple[float, float]]:
+    viewport = imgui.get_main_viewport()
+    return (
+        (float(viewport.work_pos.x), float(viewport.work_pos.y)),
+        (float(viewport.work_size.x), float(viewport.work_size.y)),
+    )
+
+
 def _apply_editor_window_state(ctx: UiContext) -> int:
     flags = imgui.WindowFlags_.no_collapse
 
     if ctx.state.session.waveform_editor_maximized:
-        viewport = imgui.get_main_viewport()
-        imgui.set_next_window_pos(viewport.work_pos, imgui.Cond_.always)
-        imgui.set_next_window_size(viewport.work_size, imgui.Cond_.always)
+        normal_bounds = ctx.ui.waveform._normal_window_bounds_for_render()
+        if normal_bounds is None:
+            normal_bounds = _fallback_viewport_work_bounds()
+
+        screen_bounds = _monitor_work_bounds_for_rect(*normal_bounds)
+        if screen_bounds is None:
+            screen_bounds = _fallback_viewport_work_bounds()
+
+        pos, size = screen_bounds
+        imgui.set_next_window_pos(_imvec2(pos), imgui.Cond_.always)
+        imgui.set_next_window_size(_imvec2(size), imgui.Cond_.always)
         return flags | imgui.WindowFlags_.no_move | imgui.WindowFlags_.no_resize
 
     restore_bounds = ctx.ui.waveform.consume_restore_window_bounds()
@@ -779,7 +883,7 @@ def _draw_titlebar_control(
         imgui.get_font(),
         icon_font_size,
         text_pos,
-        imgui.get_color_u32(TEXT_RGBA),
+        imgui.color_convert_float4_to_u32(WHITE_RGBA),
         icon,
     )
 
@@ -792,12 +896,20 @@ def _draw_titlebar_control(
 def _render_titlebar_controls(ctx: UiContext, titlebar_height: float) -> bool:
     window_pos = imgui.get_window_pos()
     window_size = imgui.get_window_size()
-    button_size = titlebar_control_size(titlebar_height)
-    y = float(window_pos.y) + (float(titlebar_height) - button_size) / 2.0
-    close_x2 = float(window_pos.x) + float(window_size.x) - _TITLEBAR_CONTROL_MARGIN_X_PX
-    close_x1 = close_x2 - button_size
-    maximize_x2 = close_x1 - _TITLEBAR_CONTROL_GAP_PX
-    maximize_x1 = maximize_x2 - button_size
+    in_frame_rect, maximize_rect, close_rect = titlebar_control_rects(
+        window_pos=(float(window_pos.x), float(window_pos.y)),
+        window_size=(float(window_size.x), float(window_size.y)),
+        titlebar_height=titlebar_height,
+    )
+
+    if _draw_titlebar_control(
+        rect_min=in_frame_rect[0],
+        rect_max=in_frame_rect[1],
+        icon=icons_fontawesome_6.ICON_FA_DOWN_LEFT_AND_UP_RIGHT_TO_CENTER,
+        tooltip="Show in frame",
+    ):
+        ctx.ui.waveform.toggle_in_frame()
+        return True
 
     is_maximized = ctx.state.session.waveform_editor_maximized
     maximize_icon = (
@@ -805,29 +917,124 @@ def _render_titlebar_controls(ctx: UiContext, titlebar_height: float) -> bool:
         if is_maximized
         else icons_fontawesome_6.ICON_FA_WINDOW_MAXIMIZE
     )
-    maximize_clicked = maximize_x1 > float(window_pos.x) + 120.0 and _draw_titlebar_control(
-        rect_min=(maximize_x1, y),
-        rect_max=(maximize_x2, y + button_size),
+    if _draw_titlebar_control(
+        rect_min=maximize_rect[0],
+        rect_max=maximize_rect[1],
         icon=maximize_icon,
         tooltip="Restore" if is_maximized else "Maximize",
-    )
-    if maximize_clicked:
+    ):
         ctx.ui.waveform.toggle_maximized()
 
-    return _draw_titlebar_control(
-        rect_min=(close_x1, y),
-        rect_max=(close_x2, y + button_size),
+    if _draw_titlebar_control(
+        rect_min=close_rect[0],
+        rect_max=close_rect[1],
         icon=icons_fontawesome_6.ICON_FA_XMARK,
         tooltip="Close",
         close_button=True,
+    ):
+        ctx.ui.waveform.close()
+        return True
+
+    return False
+
+
+def _render_editor_body(ctx: UiContext, pad_id: int) -> None:
+    with imgui_ctx.begin_group():
+        toolbar_height = toolbar_control_size(imgui.get_frame_height())
+
+        text_h = imgui.get_text_line_height()
+        text_pos_y = imgui.get_cursor_pos_y() + (toolbar_height - text_h) / 2 - 3
+
+        _render_playback_controls(ctx, toolbar_height)
+        _separator(ctx, "View", toolbar_height, text_pos_y)
+        _render_zoom_buttons(ctx, pad_id, toolbar_height)
+        _render_view_jump_buttons(ctx, toolbar_height)
+        _separator(ctx, "Loop", toolbar_height, text_pos_y)
+        _render_loop_controls(ctx, pad_id, toolbar_height, text_pos_y)
+
+    _render_plot(ctx, pad_id)
+
+
+def _render_in_frame_titlebar(ctx: UiContext, titlebar_height: float) -> bool:
+    window_pos = imgui.get_cursor_screen_pos()
+    avail = imgui.get_content_region_avail()
+    titlebar_width = max(1.0, float(avail.x))
+    rect_min = (float(window_pos.x), float(window_pos.y))
+    rect_max = (rect_min[0] + titlebar_width, rect_min[1] + titlebar_height)
+    draw_list = imgui.get_window_draw_list()
+    draw_list.add_rect_filled(rect_min, rect_max, imgui.get_color_u32(BG_FRAME_ACTIVE_RGBA))
+
+    text_y = rect_min[1] + (titlebar_height - imgui.get_text_line_height()) / 2.0
+    draw_list.add_text(
+        (rect_min[0] + _TITLEBAR_TEXT_MARGIN_X_PX, text_y),
+        imgui.color_convert_float4_to_u32(WHITE_RGBA),
+        "Waveform Editor",
     )
+
+    in_frame_rect, maximize_rect, close_rect = titlebar_control_rects(
+        window_pos=rect_min,
+        window_size=(titlebar_width, titlebar_height),
+        titlebar_height=titlebar_height,
+    )
+
+    if _draw_titlebar_control(
+        rect_min=in_frame_rect[0],
+        rect_max=in_frame_rect[1],
+        icon=icons_fontawesome_6.ICON_FA_UP_RIGHT_FROM_SQUARE,
+        tooltip="Open as window",
+    ):
+        ctx.ui.waveform.toggle_in_frame()
+        imgui.dummy((titlebar_width, titlebar_height))
+        return False
+
+    if _draw_titlebar_control(
+        rect_min=maximize_rect[0],
+        rect_max=maximize_rect[1],
+        icon=icons_fontawesome_6.ICON_FA_WINDOW_MAXIMIZE,
+        tooltip="Maximize",
+    ):
+        ctx.ui.waveform.toggle_maximized()
+        imgui.dummy((titlebar_width, titlebar_height))
+        return False
+
+    if _draw_titlebar_control(
+        rect_min=close_rect[0],
+        rect_max=close_rect[1],
+        icon=icons_fontawesome_6.ICON_FA_XMARK,
+        tooltip="Close",
+        close_button=True,
+    ):
+        ctx.ui.waveform.close()
+        imgui.dummy((titlebar_width, titlebar_height))
+        return False
+
+    imgui.dummy((titlebar_width, titlebar_height))
+    return True
+
+
+def waveform_editor_in_frame(ctx: UiContext) -> None:
+    session = ctx.state.session
+    pad_id = session.waveform_editor_pad_id
+
+    if not session.waveform_editor_open or not session.waveform_editor_in_frame or pad_id is None:
+        return
+
+    if not ctx.state.pads.is_loaded(pad_id):
+        return
+
+    titlebar_height = max(_TITLEBAR_MIN_HEIGHT_PX, imgui.get_text_line_height() + 18.0)
+    if not _render_in_frame_titlebar(ctx, titlebar_height):
+        return
+
+    imgui.dummy((0.0, SPACING))
+    _render_editor_body(ctx, pad_id)
 
 
 def waveform_editor(ctx: UiContext) -> None:
     session = ctx.state.session
     pad_id = session.waveform_editor_pad_id
 
-    if not session.waveform_editor_open or pad_id is None:
+    if not session.waveform_editor_open or session.waveform_editor_in_frame or pad_id is None:
         return
 
     if not ctx.state.pads.is_loaded(pad_id):
@@ -848,26 +1055,10 @@ def waveform_editor(ctx: UiContext) -> None:
 
             if window:
                 if _render_titlebar_controls(ctx, titlebar_height):
-                    ctx.ui.waveform.close()
                     return
 
                 _record_normal_editor_bounds(ctx)
-
-                # Toolbar
-                with imgui_ctx.begin_group():
-                    toolbar_height = toolbar_control_size(imgui.get_frame_height())
-
-                    text_h = imgui.get_text_line_height()
-                    text_pos_y = imgui.get_cursor_pos_y() + (toolbar_height - text_h) / 2 - 3
-
-                    _render_playback_controls(ctx, toolbar_height)
-                    _separator(ctx, "View", toolbar_height, text_pos_y)
-                    _render_zoom_buttons(ctx, pad_id, toolbar_height)
-                    _render_view_jump_buttons(ctx, toolbar_height)
-                    _separator(ctx, "Loop", toolbar_height, text_pos_y)
-                    _render_loop_controls(ctx, pad_id, toolbar_height, text_pos_y)
-
-                _render_plot(ctx, pad_id)
+                _render_editor_body(ctx, pad_id)
     finally:
         if not style_popped:
             imgui.pop_style_var()

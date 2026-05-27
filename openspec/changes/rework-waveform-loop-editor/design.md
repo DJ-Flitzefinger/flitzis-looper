@@ -81,14 +81,20 @@ only if that hold caused the pause.
 
 ## Window state
 
-Waveform maximize/restore state is transient UI/session state. It should not be saved as durable
-project intent unless a later spec explicitly asks for persistence.
+Waveform maximize/restore state and in-frame mode are transient UI/session state. They should not
+be saved as durable project intent unless a later spec explicitly asks for persistence.
 
-The maximize/restore affordance belongs in the waveform editor title bar at the far right,
-immediately left of the close `X`, so transport controls remain dedicated to playback. The title
-bar should be taller than the previous compact default and expose larger hit targets for both
-maximize/restore and close. Toolbar and title-bar hit target sizing is a UI presentation concern
-and must stay out of controller and Rust audio logic.
+The title-bar control order from right to left is close `X`, maximize/restore, then in-frame mode.
+The close action closes the editor but preserves the current in-frame preference, so reopening
+through `Adjust Loop` uses the same presentation mode during the session. The title bar should be
+taller than the previous compact default and expose larger white icon hit targets so the controls
+remain visible over dark platform title bars.
+
+Maximize is only meaningful for floating presentation. It should use the selected monitor work
+area rather than the Looper main viewport, matching the user's expectation for a normal maximized
+window. In-frame mode renders the waveform editor in the same center surface position used by the
+Settings page; this keeps it tied to the Looper main window size. Toolbar and title-bar hit target
+sizing is a UI presentation concern and must stay out of controller and Rust audio logic.
 
 ## Realtime safety
 

@@ -348,6 +348,7 @@ def test_keyboard_mapping_adjust_loop_toggles_and_switches_editor(
     assert controller.session.waveform_editor_open is True
     assert controller.session.waveform_editor_pad_id == 2
 
+    controller.session.waveform_editor_in_frame = True
     handled = controller.input_mapping.capture_keyboard_input(
         binding,
         text_input_focused=False,
@@ -356,6 +357,7 @@ def test_keyboard_mapping_adjust_loop_toggles_and_switches_editor(
     assert handled is True
     assert controller.session.waveform_editor_open is False
     assert controller.session.waveform_editor_pad_id is None
+    assert controller.session.waveform_editor_in_frame is True
 
     controller.session.waveform_editor_open = True
     controller.session.waveform_editor_pad_id = 1

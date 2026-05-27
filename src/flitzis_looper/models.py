@@ -769,6 +769,9 @@ class SessionState(BaseModel):
     waveform_editor_maximized: bool = False
     """Whether the waveform editor is using its transient maximized window state."""
 
+    waveform_editor_in_frame: bool = False
+    """Whether the waveform editor opens as an in-frame center overlay."""
+
     settings_open: bool = False
     """Whether the Settings overlay is open."""
 
