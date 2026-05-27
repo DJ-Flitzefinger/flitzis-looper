@@ -8,7 +8,7 @@
 - [x] 3.2 Add focused Rust tests for unclamped master peak telemetry and realtime-safe backpressure.
 - [x] 4.1 Carry master output peak and one-second clip hold through Python session/controller state.
 - [x] 4.2 Add focused Python tests for master peak projection and clip hold.
-- [ ] 5.1 Render master output metering in the Master Volume control area.
-- [ ] 5.2 Add focused UI/helper validation where available.
+- [x] 5.1 Render master output metering in the Master Volume control area.
+- [x] 5.2 Add focused UI/helper validation where available.
 - [ ] 6.1 Add focused isolator peak-behavior tests before considering any DSP topology change.
 - [ ] 7.1 Consolidate final specs and docs after implementation.

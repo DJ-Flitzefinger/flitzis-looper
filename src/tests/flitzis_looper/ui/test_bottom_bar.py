@@ -9,6 +9,7 @@ from flitzis_looper.models import (
     STEM_MASK_VOCALS,
 )
 from flitzis_looper.ui.render.bottom_bar import (
+    MASTER_METER_CLIP_WIDTH,
     MASTER_VOLUME_WIDTH,
     MODE_BUTTON_GAP,
     MODE_BUTTON_WIDTH,
@@ -16,6 +17,9 @@ from flitzis_looper.ui.render.bottom_bar import (
     START_STOP_BUTTON_HEIGHT,
     START_STOP_BUTTON_LABEL,
     START_STOP_BUTTON_WIDTH,
+    master_meter_geometry,
+    master_output_meter_fill_fraction,
+    master_volume_fraction_from_mouse_x,
     settings_button_local_pos,
     start_stop_button_local_pos,
     start_stop_button_style,
@@ -54,6 +58,48 @@ def test_trigger_quantization_button_uses_mode_colors() -> None:
 
 def test_master_volume_slider_hit_target_is_wider() -> None:
     assert MASTER_VOLUME_WIDTH >= 300.0
+
+
+def test_master_meter_geometry_reserves_right_clip_region() -> None:
+    geometry = master_meter_geometry(pos_min_x=10.0, pos_max_x=310.0)
+
+    assert geometry.clip_max_x == pytest.approx(310.0)
+    assert geometry.clip_min_x == pytest.approx(310.0 - MASTER_METER_CLIP_WIDTH)
+    assert geometry.meter_max_x < geometry.clip_min_x
+    assert geometry.meter_width > 0.0
+
+
+@pytest.mark.parametrize(
+    ("peak", "expected"),
+    [
+        (0.0, 0.0),
+        (1.0, 1.0),
+        (1.25, 1.0),
+    ],
+)
+def test_master_output_meter_fill_clamps_visual_range(peak: float, expected: float) -> None:
+    assert master_output_meter_fill_fraction(peak) == pytest.approx(expected)
+
+
+def test_master_volume_fraction_uses_meter_area_before_clip_region() -> None:
+    geometry = master_meter_geometry(pos_min_x=10.0, pos_max_x=310.0)
+    meter_mid_x = 10.0 + geometry.meter_width * 0.5
+
+    assert master_volume_fraction_from_mouse_x(
+        mouse_x=0.0,
+        pos_min_x=10.0,
+        meter_max_x=geometry.meter_max_x,
+    ) == pytest.approx(0.0)
+    assert master_volume_fraction_from_mouse_x(
+        mouse_x=meter_mid_x,
+        pos_min_x=10.0,
+        meter_max_x=geometry.meter_max_x,
+    ) == pytest.approx(0.5)
+    assert master_volume_fraction_from_mouse_x(
+        mouse_x=geometry.clip_min_x,
+        pos_min_x=10.0,
+        meter_max_x=geometry.meter_max_x,
+    ) == pytest.approx(1.0)
 
 
 def test_start_stop_button_is_wider_than_two_mode_buttons() -> None:

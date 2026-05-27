@@ -205,6 +205,14 @@ class GlobalSelectors:
         """Return the BPM represented by neutral 1.00x speed."""
         return self._controller.transport.global_params.speed_reference_bpm()
 
+    def master_output_peak(self) -> float:
+        """Return the current master output peak used by the bottom-bar meter."""
+        return float(self._session.master_output_peak)
+
+    def master_clip_active(self) -> bool:
+        """Return whether the held master output clip indicator is active."""
+        return self._controller.metering.master_clip_active()
+
 
 class UiState:
     """Read-only proxy of app state for UI rendering."""

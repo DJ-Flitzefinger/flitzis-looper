@@ -1,7 +1,9 @@
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from imgui_bundle import imgui
 
+from flitzis_looper.audio_gain import gain_meter_fraction_from_peak
 from flitzis_looper.models import (
     STEM_COMPONENT_MASK,
     STEM_INSTRUMENTAL_PRESET_MASK,
@@ -11,8 +13,16 @@ from flitzis_looper.models import (
     STEM_MASK_VOCALS,
     StemMaskDisplayMode,
 )
-from flitzis_looper.ui.constants import SPACING
-from flitzis_looper.ui.contextmanager import button_style, item_width, style_var
+from flitzis_looper.ui.constants import (
+    CONTROL_BORDER_RGBA,
+    CONTROL_HOVERED_RGBA,
+    CONTROL_PRESSED_RGBA,
+    CONTROL_RGBA,
+    SPACING,
+    TEXT_MUTED_RGBA,
+    TEXT_RGBA,
+)
+from flitzis_looper.ui.contextmanager import button_style, style_var
 from flitzis_looper.ui.render.control_gestures import hovered_wheel_steps, item_middle_clicked
 from flitzis_looper.ui.render.settings import (
     SETTINGS_TOGGLE_BUTTON_SIZE,
@@ -27,6 +37,8 @@ MODE_BUTTON_HEIGHT = 24.0
 MODE_BUTTON_WIDTH = 36.0
 MULTI_LOOP_BUTTON_WIDTH = 88.0
 MASTER_VOLUME_WIDTH = 300.0
+MASTER_VOLUME_FADER_HEIGHT = MODE_BUTTON_HEIGHT
+MASTER_METER_CLIP_WIDTH = 38.0
 STEM_BUTTON_SIZE = 32.0
 START_STOP_BUTTON_WIDTH = 92.0
 START_STOP_BUTTON_HEIGHT = SETTINGS_TOGGLE_BUTTON_SIZE
@@ -47,11 +59,60 @@ STEM_PRESET_BUTTONS: tuple[tuple[str, int, StemMaskDisplayMode], ...] = (
     ("A", STEM_COMPONENT_MASK, "all"),
 )
 _MASTER_VOLUME_WHEEL_STEP = 0.05
+_MASTER_METER_CLIP_GAP = 4.0
+_MASTER_METER_GREEN_ZONE_FRACTION = 0.8
+_MASTER_METER_BG_RGBA = (0.02, 0.02, 0.02, 0.72)
+_MASTER_METER_FILL_RGBA = (1.0, 1.0, 1.0, 0.24)
+_MASTER_METER_GREEN_RGBA = (0.18, 0.74, 0.38, 0.35)
+_MASTER_METER_YELLOW_RGBA = (0.95, 0.75, 0.18, 0.45)
+_MASTER_METER_CLIP_RGBA = (1.0, 0.08, 0.08, 0.95)
+
+
+@dataclass(frozen=True)
+class MasterMeterGeometry:
+    """Horizontal geometry for the integrated Master Volume output meter."""
+
+    meter_max_x: float
+    meter_width: float
+    clip_min_x: float
+    clip_max_x: float
 
 
 def master_volume_wheel_delta(wheel_steps: int) -> float:
     """Return volume delta for hovered Master Volume wheel movement."""
     return _MASTER_VOLUME_WHEEL_STEP * wheel_steps
+
+
+def master_meter_geometry(*, pos_min_x: float, pos_max_x: float) -> MasterMeterGeometry:
+    """Return Master Volume meter geometry with a right-end CLIP region."""
+    width = max(0.0, pos_max_x - pos_min_x)
+    clip_width = min(MASTER_METER_CLIP_WIDTH, width)
+    clip_min_x = max(pos_min_x, pos_max_x - clip_width)
+    meter_max_x = max(pos_min_x, clip_min_x - _MASTER_METER_CLIP_GAP)
+    return MasterMeterGeometry(
+        meter_max_x=meter_max_x,
+        meter_width=max(0.0, meter_max_x - pos_min_x),
+        clip_min_x=clip_min_x,
+        clip_max_x=pos_max_x,
+    )
+
+
+def master_volume_fraction_from_mouse_x(
+    *,
+    mouse_x: float,
+    pos_min_x: float,
+    meter_max_x: float,
+) -> float:
+    """Return the Master Volume fader fraction selected by a mouse X position."""
+    meter_width = max(0.0, meter_max_x - pos_min_x)
+    if meter_width <= 0.0:
+        return 0.0
+    return min(max((mouse_x - pos_min_x) / meter_width, 0.0), 1.0)
+
+
+def master_output_meter_fill_fraction(peak: float) -> float:
+    """Return clamped visual meter fill for an unclamped master output peak."""
+    return gain_meter_fraction_from_peak(peak)
 
 
 def settings_button_local_pos(
@@ -97,6 +158,209 @@ def _has_pending_learn_input(ctx: UiContext) -> bool:
     )
 
 
+def _master_volume_bg_rgba(*, active: bool, hovered: bool) -> imgui.ImVec4Like:
+    if active:
+        return CONTROL_PRESSED_RGBA
+    if hovered:
+        return CONTROL_HOVERED_RGBA
+    return CONTROL_RGBA
+
+
+def _draw_master_meter_zones(
+    draw_list: imgui.ImDrawList,
+    pos_min: imgui.ImVec2,
+    pos_max: imgui.ImVec2,
+    geometry: MasterMeterGeometry,
+) -> None:
+    meter_min = (pos_min.x, pos_min.y)
+    meter_max = (geometry.meter_max_x, pos_max.y)
+    green_end = pos_min.x + geometry.meter_width * _MASTER_METER_GREEN_ZONE_FRACTION
+
+    draw_list.add_rect_filled(meter_min, meter_max, imgui.get_color_u32(_MASTER_METER_BG_RGBA))
+    draw_list.add_rect_filled(
+        meter_min,
+        (green_end, pos_max.y),
+        imgui.get_color_u32(_MASTER_METER_GREEN_RGBA),
+    )
+    draw_list.add_rect_filled(
+        (green_end, pos_min.y),
+        meter_max,
+        imgui.get_color_u32(_MASTER_METER_YELLOW_RGBA),
+    )
+
+
+def _draw_master_meter_fill(
+    draw_list: imgui.ImDrawList,
+    pos_min: imgui.ImVec2,
+    pos_max: imgui.ImVec2,
+    geometry: MasterMeterGeometry,
+    peak: float,
+) -> None:
+    fill_x = pos_min.x + geometry.meter_width * master_output_meter_fill_fraction(peak)
+    if fill_x <= pos_min.x:
+        return
+
+    draw_list.add_rect_filled(
+        (pos_min.x, pos_min.y),
+        (fill_x, pos_max.y),
+        imgui.get_color_u32(_MASTER_METER_FILL_RGBA),
+    )
+
+
+def _draw_master_clip_indicator(
+    draw_list: imgui.ImDrawList,
+    pos_min: imgui.ImVec2,
+    pos_max: imgui.ImVec2,
+    geometry: MasterMeterGeometry,
+    *,
+    active: bool,
+) -> None:
+    clip_min = (geometry.clip_min_x, pos_min.y)
+    clip_max = (geometry.clip_max_x, pos_max.y)
+    clip_bg = _MASTER_METER_CLIP_RGBA if active else _MASTER_METER_BG_RGBA
+    clip_text = TEXT_RGBA if active else TEXT_MUTED_RGBA
+
+    draw_list.add_rect_filled(clip_min, clip_max, imgui.get_color_u32(clip_bg))
+    draw_list.add_rect(clip_min, clip_max, imgui.get_color_u32(CONTROL_BORDER_RGBA))
+
+    label = "CLIP"
+    label_size = imgui.calc_text_size(label)
+    label_pos = (
+        clip_min[0] + (clip_max[0] - clip_min[0] - label_size.x) * 0.5,
+        clip_min[1] + (clip_max[1] - clip_min[1] - label_size.y) * 0.5,
+    )
+    draw_list.add_text(label_pos, imgui.get_color_u32(clip_text), label)
+
+
+def _draw_master_volume_value(
+    draw_list: imgui.ImDrawList,
+    pos_min: imgui.ImVec2,
+    pos_max: imgui.ImVec2,
+    geometry: MasterMeterGeometry,
+    value: int,
+) -> None:
+    value_text = f"{value} %"
+    text_size = imgui.calc_text_size(value_text)
+    text_pos = (
+        pos_min.x + (geometry.meter_width - text_size.x) * 0.5,
+        pos_min.y + (pos_max.y - pos_min.y - text_size.y) * 0.5,
+    )
+    draw_list.add_text(text_pos, imgui.get_color_u32(TEXT_RGBA), value_text)
+
+
+def _draw_master_volume_handle(
+    draw_list: imgui.ImDrawList,
+    pos_min: imgui.ImVec2,
+    pos_max: imgui.ImVec2,
+    geometry: MasterMeterGeometry,
+    value: int,
+) -> None:
+    raw_handle_x = pos_min.x + geometry.meter_width * (value / 100.0)
+    handle_x = min(
+        max(raw_handle_x, pos_min.x + 2.0),
+        max(pos_min.x + 2.0, geometry.meter_max_x - 2.0),
+    )
+    draw_list.add_rect_filled(
+        (handle_x - 2.0, pos_min.y + 2.0),
+        (handle_x + 2.0, pos_max.y - 2.0),
+        imgui.get_color_u32(TEXT_RGBA),
+    )
+
+
+def _draw_master_volume_fader(
+    *,
+    ctx: UiContext,
+    value: int,
+    pos_min: imgui.ImVec2,
+    pos_max: imgui.ImVec2,
+    active: bool,
+    hovered: bool,
+) -> None:
+    geometry = master_meter_geometry(pos_min_x=pos_min.x, pos_max_x=pos_max.x)
+    draw_list = imgui.get_window_draw_list()
+
+    draw_list.add_rect_filled(
+        (pos_min.x, pos_min.y),
+        (pos_max.x, pos_max.y),
+        imgui.get_color_u32(_master_volume_bg_rgba(active=active, hovered=hovered)),
+    )
+    _draw_master_meter_zones(draw_list, pos_min, pos_max, geometry)
+    _draw_master_meter_fill(
+        draw_list,
+        pos_min,
+        pos_max,
+        geometry,
+        ctx.state.global_.master_output_peak(),
+    )
+    _draw_master_clip_indicator(
+        draw_list,
+        pos_min,
+        pos_max,
+        geometry,
+        active=ctx.state.global_.master_clip_active(),
+    )
+    draw_list.add_rect(
+        (pos_min.x, pos_min.y),
+        (geometry.meter_max_x, pos_max.y),
+        imgui.get_color_u32(CONTROL_BORDER_RGBA),
+    )
+    _draw_master_volume_value(draw_list, pos_min, pos_max, geometry, value)
+    _draw_master_volume_handle(draw_list, pos_min, pos_max, geometry, value)
+
+
+def _set_volume_from_master_fader_drag(
+    ctx: UiContext,
+    pos_min: imgui.ImVec2,
+    geometry: MasterMeterGeometry,
+) -> None:
+    mouse_x = float(imgui.get_io().mouse_pos.x)
+    fraction = master_volume_fraction_from_mouse_x(
+        mouse_x=mouse_x,
+        pos_min_x=pos_min.x,
+        meter_max_x=geometry.meter_max_x,
+    )
+    if abs(fraction - float(ctx.state.project.volume)) > 0.0005:
+        ctx.audio.global_.set_volume(fraction)
+
+
+def _master_volume_fader(ctx: UiContext, value: int) -> None:
+    imgui.invisible_button(
+        "##master_volume",
+        (MASTER_VOLUME_WIDTH, MASTER_VOLUME_FADER_HEIGHT),
+    )
+    pos_min = imgui.get_item_rect_min()
+    pos_max = imgui.get_item_rect_max()
+    hovered = imgui.is_item_hovered()
+    active = imgui.is_item_active()
+    geometry = master_meter_geometry(pos_min_x=pos_min.x, pos_max_x=pos_max.x)
+    learn_pending = _has_pending_learn_input(ctx)
+    learn_clicked = learn_pending and hovered and imgui.is_mouse_clicked(imgui.MouseButton_.left)
+
+    if learn_clicked:
+        ctx.audio.global_.set_volume(value / 100.0)
+    elif not learn_pending:
+        if active and imgui.is_mouse_down(imgui.MouseButton_.left):
+            _set_volume_from_master_fader_drag(ctx, pos_min, geometry)
+        elif hovered and imgui.is_mouse_clicked(imgui.MouseButton_.right):
+            ctx.audio.global_.set_volume(0.0)
+        elif item_middle_clicked():
+            ctx.audio.global_.set_volume(1.0)
+        elif wheel_steps := hovered_wheel_steps():
+            ctx.audio.global_.set_volume(
+                float(ctx.state.project.volume) + master_volume_wheel_delta(wheel_steps)
+            )
+
+    draw_value = max(0, min(100, round(ctx.state.project.volume * 100)))
+    _draw_master_volume_fader(
+        ctx=ctx,
+        value=draw_value,
+        pos_min=pos_min,
+        pos_max=pos_max,
+        active=active,
+        hovered=hovered,
+    )
+
+
 def stem_controls_accept_input(*, enabled: bool, learn_pending: bool) -> bool:
     """Return whether stem mask buttons should accept a click this frame."""
     return enabled or learn_pending
@@ -115,26 +379,7 @@ def _master_volume(ctx: UiContext) -> None:
         val = max(0, min(100, round(ctx.state.project.volume * 100)))
         imgui.text_unformatted("Master Volume")
 
-        with item_width(MASTER_VOLUME_WIDTH):
-            changed, new_value = imgui.slider_int("##master_volume", val, 0, 100, "%d %")
-            learn_pending = _has_pending_learn_input(ctx)
-            learn_clicked = (
-                learn_pending
-                and imgui.is_item_hovered()
-                and imgui.is_mouse_clicked(imgui.MouseButton_.left)
-            )
-            if changed or learn_clicked:
-                volume_value = new_value if changed else val
-                ctx.audio.global_.set_volume(volume_value / 100.0)
-            elif not learn_pending:
-                if imgui.is_item_hovered() and imgui.is_mouse_clicked(imgui.MouseButton_.right):
-                    ctx.audio.global_.set_volume(0.0)
-                elif item_middle_clicked():
-                    ctx.audio.global_.set_volume(1.0)
-                elif wheel_steps := hovered_wheel_steps():
-                    ctx.audio.global_.set_volume(
-                        float(ctx.state.project.volume) + master_volume_wheel_delta(wheel_steps)
-                    )
+        _master_volume_fader(ctx, val)
 
 
 def trigger_quantization_button_style(*, enabled: bool) -> ButtonStyleName:

@@ -220,6 +220,16 @@ class TestUiStateComputedProperties:
         assert ui_state.stems.stem_generation_status(0) == ("Writing stem cache", 0.5)
         assert ui_state.stems.stem_generation_error(0) == "failed"
 
+    def test_global_master_meter_selectors(
+        self, controller: AppController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ui_state = UiState(controller)
+        controller.session.master_output_peak = 1.25
+        monkeypatch.setattr(controller.metering, "master_clip_active", lambda: True)
+
+        assert ui_state.global_.master_output_peak() == pytest.approx(1.25)
+        assert ui_state.global_.master_clip_active() is True
+
 
 class TestAudioActions:  # noqa: PLR0904
     """Test AudioActions delegation to controller."""
