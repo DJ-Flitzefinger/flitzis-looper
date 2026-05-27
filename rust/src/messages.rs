@@ -423,6 +423,11 @@ pub enum ControlMessage {
     /// If the sample was not paused, this has no effect.
     ResumeSample { id: usize },
 
+    /// Seek an active or paused sample voice to a source position in seconds.
+    ///
+    /// If the sample has no active or paused voice, this has no effect.
+    SeekSample { id: usize, position_s: f32 },
+
     /// Unload a sample slot.
     ///
     /// This stops all active voices for the sample and clears the sample buffer in the slot.
@@ -442,7 +447,8 @@ impl ControlMessage {
             | ControlMessage::StopSample { .. }
             | ControlMessage::StopAll()
             | ControlMessage::PauseSample { .. }
-            | ControlMessage::ResumeSample { .. } => ControlMessageClass::PlaybackEvent,
+            | ControlMessage::ResumeSample { .. }
+            | ControlMessage::SeekSample { .. } => ControlMessageClass::PlaybackEvent,
             ControlMessage::LoadSample { .. } | ControlMessage::PublishPreparedStems { .. } => {
                 ControlMessageClass::Publication
             }
@@ -757,6 +763,14 @@ mod tests {
     fn control_messages_classify_ordered_and_parameter_semantics() {
         assert_eq!(
             ControlMessage::PlaySample { id: 1, volume: 1.0 }.class(),
+            ControlMessageClass::PlaybackEvent
+        );
+        assert_eq!(
+            ControlMessage::SeekSample {
+                id: 1,
+                position_s: 2.5,
+            }
+            .class(),
             ControlMessageClass::PlaybackEvent
         );
         assert_eq!(

@@ -1456,6 +1456,31 @@ impl AudioEngine {
         Ok(())
     }
 
+    /// Seek an active or paused sample voice to a source position in seconds.
+    pub fn seek_sample(&mut self, id: usize, position_s: f32) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+
+        if !position_s.is_finite() || position_s < 0.0 {
+            return Err(PyValueError::new_err("position_s out of range"));
+        }
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        producer_guard
+            .push(ControlMessage::SeekSample { id, position_s })
+            .map_err(|_| PyRuntimeError::new_err("Failed to send SeekSample - buffer may be full"))
+    }
+
     pub fn set_trigger_quantization(&mut self, mode: &str) -> PyResult<()> {
         let mode = parse_trigger_quantization(mode).ok_or_else(|| {
             PyValueError::new_err(

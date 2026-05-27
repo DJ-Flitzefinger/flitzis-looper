@@ -84,6 +84,61 @@ def test_stop_pad_not_active(controller: AppController, audio_engine_mock: Mock)
     audio_engine_mock.stop_sample.assert_not_called()
 
 
+def test_seek_pad_calls_audio_and_updates_playhead(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    sample_id = 0
+    controller.project.sample_paths[sample_id] = "/path/to/sample.wav"
+    controller.project.sample_durations[sample_id] = 10.0
+    controller.session.active_sample_ids.add(sample_id)
+
+    controller.transport.playback.seek_pad(sample_id, 3.5)
+
+    audio_engine_mock.seek_sample.assert_called_once_with(sample_id, 3.5)
+    assert controller.session.pad_playhead_s[sample_id] == 3.5
+
+
+def test_seek_pad_clamps_projection_to_loaded_duration(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    sample_id = 0
+    controller.project.sample_paths[sample_id] = "/path/to/sample.wav"
+    controller.project.sample_durations[sample_id] = 10.0
+    controller.session.active_sample_ids.add(sample_id)
+
+    controller.transport.playback.seek_pad(sample_id, 12.5)
+
+    audio_engine_mock.seek_sample.assert_called_once_with(sample_id, 10.0)
+    assert controller.session.pad_playhead_s[sample_id] == 10.0
+
+
+def test_seek_pad_ignores_stopped_pad(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    sample_id = 0
+    controller.project.sample_paths[sample_id] = "/path/to/sample.wav"
+    controller.project.sample_durations[sample_id] = 10.0
+
+    controller.transport.playback.seek_pad(sample_id, 3.5)
+
+    audio_engine_mock.seek_sample.assert_not_called()
+    assert controller.session.pad_playhead_s[sample_id] is None
+
+
+def test_seek_pad_keeps_paused_pad_paused(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    sample_id = 0
+    controller.project.sample_paths[sample_id] = "/path/to/sample.wav"
+    controller.session.active_sample_ids.add(sample_id)
+    controller.session.paused_sample_ids.add(sample_id)
+
+    controller.transport.playback.seek_pad(sample_id, 3.5)
+
+    audio_engine_mock.seek_sample.assert_called_once_with(sample_id, 3.5)
+    assert sample_id in controller.session.paused_sample_ids
+
+
 def test_stop_all_pads(controller: AppController, audio_engine_mock: Mock) -> None:
     """Test stopping all pads clears active samples."""
     controller.session.active_sample_ids.update({0, 1, 2})
@@ -327,3 +382,15 @@ def test_trigger_invalid_sample_id(controller: AppController, audio_engine_mock:
 def test_stop_invalid_sample_id(controller: AppController, audio_engine_mock: Mock) -> None:
     with pytest.raises(ValueError, match="sample_id must be >= 0"):
         controller.transport.playback.stop_pad(-1)
+
+
+def test_seek_invalid_sample_id(controller: AppController, audio_engine_mock: Mock) -> None:
+    with pytest.raises(ValueError, match="sample_id must be >= 0"):
+        controller.transport.playback.seek_pad(-1, 0.0)
+
+
+def test_seek_rejects_non_finite_position(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    with pytest.raises(ValueError, match="value must be finite"):
+        controller.transport.playback.seek_pad(0, float("nan"))

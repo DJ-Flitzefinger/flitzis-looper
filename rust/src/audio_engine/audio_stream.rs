@@ -691,6 +691,9 @@ fn process_control_message<const CAPACITY: usize, S: AudioMessageSink, R: AudioB
         ControlMessage::ResumeSample { id } => {
             mixer.resume_sample(id);
         }
+        ControlMessage::SeekSample { id, position_s } => {
+            mixer.seek_sample(id, position_s);
+        }
     }
 }
 

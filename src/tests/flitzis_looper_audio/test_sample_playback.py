@@ -127,6 +127,9 @@ def test_transport_slot_id_range_rejects_project_slot_count(audio_engine: AudioE
         audio_engine.resume_sample(invalid_id)
 
     with pytest.raises(ValueError, match=r"id out of range"):
+        audio_engine.seek_sample(invalid_id, 0.0)
+
+    with pytest.raises(ValueError, match=r"id out of range"):
         audio_engine.anchor_transport_phase_from_pad(invalid_id)
 
     with pytest.raises(ValueError, match=r"id out of range"):
@@ -199,6 +202,7 @@ def test_last_sample_slot_accepts_control_messages(audio_engine: AudioEngine) ->
     audio_engine.play_sample(valid_last_id, 1.0)
     audio_engine.play_sample_exclusive(valid_last_id, 1.0)
     audio_engine.pause_sample(valid_last_id)
+    audio_engine.seek_sample(valid_last_id, 0.0)
     audio_engine.resume_sample(valid_last_id)
     audio_engine.stop_sample(valid_last_id)
     audio_engine.unload_sample(valid_last_id)
@@ -219,6 +223,21 @@ def test_play_sample_exclusive_requires_initialized_engine() -> None:
 
     with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
         engine.play_sample_exclusive(0, 1.0)
+
+
+def test_seek_sample_requires_initialized_engine() -> None:
+    engine = AudioEngine()
+
+    with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
+        engine.seek_sample(0, 1.0)
+
+
+def test_seek_sample_rejects_invalid_positions(audio_engine: AudioEngine) -> None:
+    with pytest.raises(ValueError, match=r"position_s out of range"):
+        audio_engine.seek_sample(0, float("nan"))
+
+    with pytest.raises(ValueError, match=r"position_s out of range"):
+        audio_engine.seek_sample(0, -0.01)
 
 
 def test_stop_all_is_safe_when_nothing_playing(audio_engine: AudioEngine) -> None:

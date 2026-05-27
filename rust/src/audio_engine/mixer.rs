@@ -16,7 +16,7 @@ use crate::audio_engine::constants::{
 };
 use crate::audio_engine::dsp::{DspNodeSlot, DspParameterId, DspParameterSlot, PerPadDspChain};
 use crate::audio_engine::stretch_processor::DEFAULT_BLOCK_SAMPLES;
-use crate::audio_engine::voice_slot::VoiceSlot;
+use crate::audio_engine::voice_slot::{ExplicitSeekMode, VoiceSlot};
 use crate::messages::{
     KeyLockQuality, KeyLockSettings, PadTimingMetadata, PreparedStemSet, STEM_BUFFER_COUNT,
     STEM_COMPONENT_MASK, SampleBuffer, StemMixMode,
@@ -113,6 +113,97 @@ struct FrameRange {
 impl FrameRange {
     fn len(self) -> usize {
         self.end.saturating_sub(self.start)
+    }
+}
+
+fn explicit_seek_mode_for_frame(
+    frame: usize,
+    loop_region: FrameRange,
+    sample_frames: usize,
+) -> ExplicitSeekMode {
+    if frame < loop_region.start {
+        ExplicitSeekMode::BeforeLoop
+    } else if frame >= loop_region.end && loop_region.end < sample_frames {
+        ExplicitSeekMode::AfterLoop
+    } else {
+        ExplicitSeekMode::Normal
+    }
+}
+
+fn source_frame_for_playback(
+    frame_pos: usize,
+    offset: usize,
+    sample_frames: usize,
+    loop_region: FrameRange,
+    seek_mode: ExplicitSeekMode,
+) -> usize {
+    let loop_len = loop_region.len();
+    debug_assert!(loop_len > 0);
+
+    match seek_mode {
+        ExplicitSeekMode::Normal => {
+            let base = frame_pos.saturating_sub(loop_region.start);
+            loop_region.start + ((base + offset) % loop_len)
+        }
+        ExplicitSeekMode::BeforeLoop => {
+            let frame = frame_pos.saturating_add(offset);
+            if frame < loop_region.start {
+                frame
+            } else {
+                loop_region.start + ((frame - loop_region.start) % loop_len)
+            }
+        }
+        ExplicitSeekMode::AfterLoop => {
+            let frame = frame_pos.saturating_add(offset);
+            if frame < sample_frames {
+                frame
+            } else {
+                loop_region.start + ((frame - sample_frames) % loop_len)
+            }
+        }
+    }
+}
+
+fn advance_playback_position(
+    frame_pos: usize,
+    input_frames: usize,
+    sample_frames: usize,
+    loop_region: FrameRange,
+    seek_mode: ExplicitSeekMode,
+) -> (usize, ExplicitSeekMode) {
+    let loop_len = loop_region.len();
+    debug_assert!(loop_len > 0);
+
+    match seek_mode {
+        ExplicitSeekMode::Normal => {
+            let base = frame_pos.saturating_sub(loop_region.start);
+            (
+                loop_region.start + ((base + input_frames) % loop_len),
+                ExplicitSeekMode::Normal,
+            )
+        }
+        ExplicitSeekMode::BeforeLoop => {
+            let frame = frame_pos.saturating_add(input_frames);
+            if frame < loop_region.start {
+                (frame, ExplicitSeekMode::BeforeLoop)
+            } else {
+                (
+                    loop_region.start + ((frame - loop_region.start) % loop_len),
+                    ExplicitSeekMode::Normal,
+                )
+            }
+        }
+        ExplicitSeekMode::AfterLoop => {
+            let frame = frame_pos.saturating_add(input_frames);
+            if frame < sample_frames {
+                (frame, ExplicitSeekMode::AfterLoop)
+            } else {
+                (
+                    loop_region.start + ((frame - sample_frames) % loop_len),
+                    ExplicitSeekMode::Normal,
+                )
+            }
+        }
     }
 }
 
@@ -923,6 +1014,23 @@ impl RtMixer {
         frame.round() as usize
     }
 
+    fn source_frame_from_seconds(&self, position_s: f32, sample_frames: usize) -> usize {
+        if !position_s.is_finite() || position_s < 0.0 {
+            return 0;
+        }
+
+        let frame = position_s as f64 * self.sample_rate_hz as f64;
+        if !frame.is_finite() || frame <= 0.0 {
+            return 0;
+        }
+
+        if frame >= sample_frames as f64 {
+            return sample_frames;
+        }
+
+        frame.round() as usize
+    }
+
     fn effective_loop_start_frame(&self, id: usize, sample_frames: usize) -> usize {
         self.effective_loop_region(id, sample_frames)
             .map(|region| region.start)
@@ -1061,6 +1169,46 @@ impl RtMixer {
 
         self.pad_loop_start_frame[id] = start_frame;
         self.pad_loop_end_frame[id] = end_frame;
+
+        for voice_slot in &mut self.voices {
+            if voice_slot.is_playing_sample(id) {
+                voice_slot.clear_explicit_seek();
+            }
+        }
+    }
+
+    pub fn seek_sample(&mut self, id: usize, position_s: f32) -> bool {
+        if id >= NUM_SAMPLES || !position_s.is_finite() || position_s < 0.0 || self.channels == 0 {
+            return false;
+        }
+
+        let Some(sample) = self.sample_bank[id].as_ref() else {
+            return false;
+        };
+        let sample_frames = sample.samples.len() / self.channels;
+        if sample_frames == 0 {
+            return false;
+        }
+
+        let Some(loop_region) = self.effective_loop_region(id, sample_frames) else {
+            return false;
+        };
+        let target_frame = self.source_frame_from_seconds(position_s, sample_frames);
+        let seek_mode = explicit_seek_mode_for_frame(target_frame, loop_region, sample_frames);
+
+        let mut did_seek = false;
+        for voice_slot in &mut self.voices {
+            if voice_slot.is_playing_sample(id) {
+                voice_slot.seek(target_frame, seek_mode);
+                did_seek = true;
+            }
+        }
+
+        if did_seek {
+            self.pad_playhead_frame[id] = Some(target_frame);
+        }
+
+        did_seek
     }
 
     pub fn pad_playhead_seconds(&self, id: usize) -> Option<f32> {
@@ -1401,15 +1549,39 @@ impl RtMixer {
                     continue;
                 }
 
-                if voice.frame_pos < loop_start || voice.frame_pos >= loop_end {
+                let loop_region = FrameRange {
+                    start: loop_start,
+                    end: loop_end,
+                };
+                let mut seek_mode = voice.explicit_seek_mode;
+                if seek_mode == ExplicitSeekMode::Normal
+                    && (voice.frame_pos < loop_start || voice.frame_pos >= loop_end)
+                {
                     voice.frame_pos = loop_start;
                 }
-                let base = voice.frame_pos - loop_start;
+                if voice.frame_pos > sample_frames {
+                    voice.frame_pos = sample_frames;
+                }
+                if seek_mode == ExplicitSeekMode::BeforeLoop && voice.frame_pos >= loop_start {
+                    seek_mode = ExplicitSeekMode::Normal;
+                    voice.explicit_seek_mode = ExplicitSeekMode::Normal;
+                }
+                if seek_mode == ExplicitSeekMode::AfterLoop && voice.frame_pos < loop_end {
+                    seek_mode = ExplicitSeekMode::Normal;
+                    voice.explicit_seek_mode = ExplicitSeekMode::Normal;
+                }
+                let source_frame_pos = voice.frame_pos;
 
                 let input_buffers = voice.stretch.input_buffers_mut(input_frames);
                 for (channel, buf) in input_buffers.iter_mut().enumerate().take(channels) {
                     for (i, sample_ref) in buf.iter_mut().enumerate().take(input_frames) {
-                        let frame = loop_start + ((base + i) % loop_len);
+                        let frame = source_frame_for_playback(
+                            source_frame_pos,
+                            i,
+                            sample_frames,
+                            loop_region,
+                            seek_mode,
+                        );
                         *sample_ref = if stem_transition.is_active() {
                             let from_sample = render_source_selection_sample(
                                 &sample,
@@ -1473,7 +1645,15 @@ impl RtMixer {
                     }
                 }
 
-                voice.frame_pos = loop_start + ((base + input_frames) % loop_len);
+                let (next_frame_pos, next_seek_mode) = advance_playback_position(
+                    source_frame_pos,
+                    input_frames,
+                    sample_frames,
+                    loop_region,
+                    seek_mode,
+                );
+                voice.frame_pos = next_frame_pos;
+                voice.explicit_seek_mode = next_seek_mode;
             } else {
                 let sample_frames = sample.samples.len() / channels;
                 let loop_start = pad_loop_start_frame[voice.sample_id].min(sample_frames);
@@ -1482,8 +1662,12 @@ impl RtMixer {
                 loop_end = loop_end.min(sample_frames);
                 if loop_end <= loop_start {
                     // Invalid loop; but voice is paused; skip.
-                } else if voice.frame_pos < loop_start || voice.frame_pos >= loop_end {
+                } else if voice.explicit_seek_mode == ExplicitSeekMode::Normal
+                    && (voice.frame_pos < loop_start || voice.frame_pos >= loop_end)
+                {
                     voice.frame_pos = loop_start;
+                } else if voice.frame_pos > sample_frames {
+                    voice.frame_pos = sample_frames;
                 }
             }
             pad_playhead_frame[voice.sample_id] = Some(voice.frame_pos);
@@ -1517,6 +1701,18 @@ mod tests {
         SampleBuffer {
             channels: 1,
             samples: Arc::from(samples.into_boxed_slice()),
+        }
+    }
+
+    fn create_frame_number_sample(frames: usize) -> SampleBuffer {
+        SampleBuffer {
+            channels: 1,
+            samples: Arc::from(
+                (0..frames)
+                    .map(|frame| frame as f32)
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            ),
         }
     }
 
@@ -2760,6 +2956,133 @@ mod tests {
 
         assert_eq!(output, vec![6.0]);
         assert_eq!(active_voice_frame(&mixer, 0), Some(7));
+    }
+
+    #[test]
+    fn test_seek_before_loop_plays_into_loop_then_wraps() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_frame_number_sample(30));
+        mixer.set_pad_loop_region(0, 1.0, Some(1.8));
+        assert!(mixer.play_sample(0, 1.0));
+
+        assert!(mixer.seek_sample(0, 0.5));
+        assert_eq!(active_voice_frame(&mixer, 0), Some(5));
+
+        let mut output = vec![0.0; 16];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert_eq!(
+            output,
+            vec![
+                5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 10.0,
+                11.0, 12.0,
+            ]
+        );
+        assert_eq!(active_voice_frame(&mixer, 0), Some(13));
+    }
+
+    #[test]
+    fn test_seek_inside_loop_uses_normal_loop_wrapping() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_frame_number_sample(30));
+        mixer.set_pad_loop_region(0, 1.0, Some(1.8));
+        assert!(mixer.play_sample(0, 1.0));
+
+        assert!(mixer.seek_sample(0, 1.2));
+
+        let mut output = vec![0.0; 10];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert_eq!(
+            output,
+            vec![12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 10.0, 11.0, 12.0, 13.0]
+        );
+        assert_eq!(active_voice_frame(&mixer, 0), Some(14));
+    }
+
+    #[test]
+    fn test_seek_after_loop_plays_to_track_end_then_wraps_to_loop() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_frame_number_sample(30));
+        mixer.set_pad_loop_region(0, 1.0, Some(1.8));
+        assert!(mixer.play_sample(0, 1.0));
+
+        assert!(mixer.seek_sample(0, 2.2));
+
+        let mut output = vec![0.0; 12];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert_eq!(
+            output,
+            vec![
+                22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0, 29.0, 10.0, 11.0, 12.0, 13.0
+            ]
+        );
+        assert_eq!(active_voice_frame(&mixer, 0), Some(14));
+    }
+
+    #[test]
+    fn test_seek_paused_voice_keeps_paused_state_until_resume() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_frame_number_sample(30));
+        mixer.set_pad_loop_region(0, 1.0, Some(1.8));
+        assert!(mixer.play_sample(0, 1.0));
+        mixer.pause_sample(0);
+
+        assert!(mixer.seek_sample(0, 2.2));
+
+        let mut output = vec![1.0; 4];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert_eq!(output, vec![0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(active_voice_frame(&mixer, 0), Some(22));
+        assert!(
+            mixer
+                .voices
+                .iter()
+                .any(|voice| { voice.active && voice.sample_id == 0 && voice.paused })
+        );
+
+        mixer.resume_sample(0);
+        let mut output = vec![0.0; 10];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert_eq!(
+            output,
+            vec![22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0, 29.0, 10.0, 11.0]
+        );
+    }
+
+    #[test]
+    fn test_seek_stopped_sample_is_noop() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_frame_number_sample(30));
+
+        assert!(!mixer.seek_sample(0, 1.2));
+        assert_eq!(mixer.pad_playhead_seconds(0), None);
+        assert_eq!(active_voice_frame(&mixer, 0), None);
+    }
+
+    #[test]
+    fn test_live_loop_update_after_explicit_seek_keeps_existing_clamp_behavior() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_frame_number_sample(30));
+        mixer.set_pad_loop_region(0, 1.0, Some(1.8));
+        assert!(mixer.play_sample(0, 1.0));
+        assert!(mixer.seek_sample(0, 2.2));
+
+        mixer.set_pad_loop_region(0, 1.2, Some(1.6));
+
+        let mut output = vec![0.0; 1];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert_eq!(output, vec![12.0]);
+        assert_eq!(active_voice_frame(&mixer, 0), Some(13));
     }
 
     #[test]

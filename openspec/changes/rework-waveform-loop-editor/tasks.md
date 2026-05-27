@@ -6,23 +6,23 @@
 
 ## 2. Loop Region Model And Controller
 
-- [ ] 2.1 Initialize newly loaded tracks with auto-loop enabled, `8.0` bars, and loop start `0.0`.
-- [ ] 2.2 Allow persisted `pad_loop_bars` values to represent finite numeric half-bar/integer
+- [x] 2.1 Initialize newly loaded tracks with auto-loop enabled, `8.0` bars, and loop start `0.0`.
+- [x] 2.2 Allow persisted `pad_loop_bars` values to represent finite numeric half-bar/integer
   values while preserving compatibility with existing integer project files.
-- [ ] 2.3 Add controller-owned maximum-bar validation from loop start, sample duration, and
+- [x] 2.3 Add controller-owned maximum-bar validation from loop start, sample duration, and
   effective BPM; reject out-of-range bar changes as no-ops.
-- [ ] 2.4 Replace Reset behavior with `ALL`: explicit full-track start/end, auto-loop disabled,
+- [x] 2.4 Replace Reset behavior with `ALL`: explicit full-track start/end, auto-loop disabled,
   immediate Rust loop-region application, and focused regression tests.
 
 ## 3. Audio Seek Path
 
-- [ ] 3.1 Add a bounded Rust control message and PyO3 API for selected-pad source-position seek.
-- [ ] 3.2 Preserve realtime safety: no disk I/O, JSON, Python/GIL, UI calls, blocking locks,
+- [x] 3.1 Add a bounded Rust control message and PyO3 API for selected-pad source-position seek.
+- [x] 3.2 Preserve realtime safety: no disk I/O, JSON, Python/GIL, UI calls, blocking locks,
   logging, neural inference, plugin loading/scanning, unbounded loops, heavy allocation, or
   long-running callback work.
-- [ ] 3.3 Implement before-loop, inside-loop, and after-loop explicit seek semantics without
+- [x] 3.3 Implement before-loop, inside-loop, and after-loop explicit seek semantics without
   changing loop markers or broadening live loop-edit behavior.
-- [ ] 3.4 Add focused Rust and Python controller tests for seek API calls, playhead projection, and
+- [x] 3.4 Add focused Rust and Python controller tests for seek API calls, playhead projection, and
   loop wrapping after explicit seeks.
 
 ## 4. Waveform Editor UI

@@ -1,5 +1,7 @@
+import math
 from typing import TYPE_CHECKING
 
+from flitzis_looper.controller.validation import ensure_finite
 from flitzis_looper.models import validate_sample_id
 
 if TYPE_CHECKING:
@@ -133,6 +135,24 @@ class PadPlaybackController:
 
         self._audio.resume_sample(sample_id)
         self._session.paused_sample_ids.discard(sample_id)
+
+    def seek_pad(self, sample_id: int, position_s: float) -> None:
+        """Seek an active or paused pad voice without changing loop markers."""
+        validate_sample_id(sample_id)
+        ensure_finite(position_s)
+
+        if self._project.sample_paths[sample_id] is None:
+            return
+        if sample_id not in self._session.active_sample_ids:
+            return
+
+        target_s = max(0.0, float(position_s))
+        duration_s = self._project.sample_durations[sample_id]
+        if duration_s is not None and math.isfinite(duration_s) and duration_s >= 0.0:
+            target_s = min(target_s, float(duration_s))
+
+        self._audio.seek_sample(sample_id, target_s)
+        self._session.pad_playhead_s[sample_id] = target_s
 
     def handle_sample_started_message(self, msg: AudioMessage.SampleStarted) -> None:
         pad_id = msg.sample_id()

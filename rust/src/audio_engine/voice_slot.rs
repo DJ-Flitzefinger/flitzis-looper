@@ -4,6 +4,13 @@ use crate::audio_engine::stretch_processor::StretchProcessor;
 use crate::messages::KeyLockSettings;
 use crate::messages::SampleBuffer;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ExplicitSeekMode {
+    Normal,
+    BeforeLoop,
+    AfterLoop,
+}
+
 pub struct VoiceSlot {
     pub active: bool,
     pub sample_id: usize,
@@ -13,6 +20,7 @@ pub struct VoiceSlot {
     tempo_ratio_smoothed: f32,
     pub stretch: StretchProcessor,
     pub paused: bool,
+    pub(crate) explicit_seek_mode: ExplicitSeekMode,
 }
 
 impl VoiceSlot {
@@ -26,6 +34,7 @@ impl VoiceSlot {
             tempo_ratio_smoothed: 1.0,
             stretch: StretchProcessor::new(channels),
             paused: false,
+            explicit_seek_mode: ExplicitSeekMode::Normal,
         }
     }
 
@@ -66,6 +75,7 @@ impl VoiceSlot {
         self.volume = volume;
         self.tempo_ratio_smoothed = initial_tempo_ratio;
         self.paused = false;
+        self.explicit_seek_mode = ExplicitSeekMode::Normal;
         self.stretch.reset();
     }
 
@@ -89,6 +99,7 @@ impl VoiceSlot {
         self.volume = 0.0;
         self.tempo_ratio_smoothed = 1.0;
         self.paused = false;
+        self.explicit_seek_mode = ExplicitSeekMode::Normal;
         self.stretch.reset();
     }
 
@@ -97,7 +108,18 @@ impl VoiceSlot {
         self.volume = volume;
         self.tempo_ratio_smoothed = initial_tempo_ratio;
         self.paused = false;
+        self.explicit_seek_mode = ExplicitSeekMode::Normal;
         self.stretch.reset();
+    }
+
+    pub(crate) fn seek(&mut self, frame_pos: usize, mode: ExplicitSeekMode) {
+        self.frame_pos = frame_pos;
+        self.explicit_seek_mode = mode;
+        self.stretch.reset();
+    }
+
+    pub(crate) fn clear_explicit_seek(&mut self) {
+        self.explicit_seek_mode = ExplicitSeekMode::Normal;
     }
 
     pub fn smooth_tempo_ratio(&mut self, target: f32, settings: KeyLockSettings) -> f32 {
