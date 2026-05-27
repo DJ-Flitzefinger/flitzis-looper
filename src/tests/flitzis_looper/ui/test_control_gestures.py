@@ -6,6 +6,8 @@ from flitzis_looper.ui.render.sidebar_left import eq_wheel_delta_db, gain_meter_
 from flitzis_looper.ui.render.waveform_editor import (
     bar_step_target,
     format_loop_bars,
+    titlebar_control_size,
+    titlebar_frame_padding_y,
     toolbar_control_size,
 )
 
@@ -112,3 +114,14 @@ def test_waveform_toolbar_control_size_meets_hit_target_bounds(
     frame_height: float, expected: float
 ) -> None:
     assert toolbar_control_size(frame_height) == pytest.approx(expected)
+
+
+def test_waveform_titlebar_padding_expands_to_minimum_height() -> None:
+    padding_y = titlebar_frame_padding_y(text_line_height=18.0, current_padding_y=3.0)
+
+    assert 18.0 + padding_y * 2.0 == pytest.approx(40.0)
+
+
+def test_waveform_titlebar_control_size_meets_close_and_maximize_hit_target_bounds() -> None:
+    assert titlebar_control_size(40.0) == pytest.approx(32.0)
+    assert titlebar_control_size(48.0) == pytest.approx(40.0)

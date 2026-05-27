@@ -84,8 +84,11 @@ only if that hold caused the pause.
 Waveform maximize/restore state is transient UI/session state. It should not be saved as durable
 project intent unless a later spec explicitly asks for persistence.
 
-Toolbar hit target sizing is a UI presentation concern and must stay out of controller and Rust
-audio logic.
+The maximize/restore affordance belongs in the waveform editor title bar at the far right,
+immediately left of the close `X`, so transport controls remain dedicated to playback. The title
+bar should be taller than the previous compact default and expose larger hit targets for both
+maximize/restore and close. Toolbar and title-bar hit target sizing is a UI presentation concern
+and must stay out of controller and Rust audio logic.
 
 ## Realtime safety
 

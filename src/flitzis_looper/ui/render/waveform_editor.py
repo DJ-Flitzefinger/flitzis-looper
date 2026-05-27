@@ -6,6 +6,9 @@ from imgui_bundle import ImVec4, icons_fontawesome_6, imgui, imgui_ctx, implot
 
 from flitzis_looper.constants import PAD_LOOP_BARS_MIN
 from flitzis_looper.ui.constants import (
+    CONTROL_HOVERED_RGBA,
+    CONTROL_PRESSED_RGBA,
+    MODE_OFF_HOVERED_RGBA,
     PLOT_FILL_RGBA,
     PLOT_MARKER_RGBA,
     PLOT_PLAYHEAD_RGBA,
@@ -30,6 +33,10 @@ _LOOP_END_DRAG_LINE_ID = 1
 _GRID_MIN_MINOR_STEP_PX = 12.0
 _TOOLBAR_MIN_HIT_TARGET_PX = 32.0
 _TOOLBAR_FRAME_HEIGHT_MULTIPLIER = 1.5
+_TITLEBAR_MIN_HEIGHT_PX = 40.0
+_TITLEBAR_MIN_CONTROL_SIZE_PX = 32.0
+_TITLEBAR_CONTROL_GAP_PX = 4.0
+_TITLEBAR_CONTROL_MARGIN_X_PX = 6.0
 _DEFAULT_EDITOR_SIZE = (960.0, 420.0)
 
 
@@ -47,6 +54,17 @@ _GRID_OFFSET_DRAG = _GridOffsetDragState()
 def toolbar_control_size(frame_height: float) -> float:
     """Return the minimum square toolbar hit target for the current frame height."""
     return max(_TOOLBAR_MIN_HIT_TARGET_PX, float(frame_height) * _TOOLBAR_FRAME_HEIGHT_MULTIPLIER)
+
+
+def titlebar_frame_padding_y(text_line_height: float, current_padding_y: float) -> float:
+    """Return vertical title-bar padding for larger window controls."""
+    required_padding = (_TITLEBAR_MIN_HEIGHT_PX - float(text_line_height)) / 2.0
+    return max(float(current_padding_y), required_padding)
+
+
+def titlebar_control_size(titlebar_height: float) -> float:
+    """Return the square hit target for custom title-bar window controls."""
+    return max(_TITLEBAR_MIN_CONTROL_SIZE_PX, float(titlebar_height) - 8.0)
 
 
 def _visible_label(label: str) -> str:
@@ -231,21 +249,6 @@ def _render_view_jump_buttons(ctx: UiContext, height: float) -> None:
     if imgui.is_item_hovered():
         with imgui_ctx.begin_tooltip():
             imgui.text("Jump to end")
-
-
-def _render_maximize_button(ctx: UiContext, height: float) -> None:
-    imgui.same_line(spacing=SPACING)
-    is_maximized = ctx.state.session.waveform_editor_maximized
-    icon = (
-        icons_fontawesome_6.ICON_FA_WINDOW_RESTORE
-        if is_maximized
-        else icons_fontawesome_6.ICON_FA_WINDOW_MAXIMIZE
-    )
-    if _render_icon_button(f"{icon}##wf_window_maximize", height):
-        ctx.ui.waveform.toggle_maximized()
-    if imgui.is_item_hovered():
-        with imgui_ctx.begin_tooltip():
-            imgui.text("Restore" if is_maximized else "Maximize")
 
 
 def _render_loop_controls(ctx: UiContext, pad_id: int, height: float, text_pos_y: float) -> None:
@@ -729,6 +732,97 @@ def _record_normal_editor_bounds(ctx: UiContext) -> None:
     )
 
 
+def _rect_contains_mouse(rect_min: tuple[float, float], rect_max: tuple[float, float]) -> bool:
+    mouse_pos = imgui.get_mouse_pos()
+    return (
+        mouse_pos.x >= rect_min[0]
+        and mouse_pos.x <= rect_max[0]
+        and mouse_pos.y >= rect_min[1]
+        and mouse_pos.y <= rect_max[1]
+    )
+
+
+def _draw_titlebar_control(
+    *,
+    rect_min: tuple[float, float],
+    rect_max: tuple[float, float],
+    icon: str,
+    tooltip: str,
+    close_button: bool = False,
+) -> bool:
+    draw_list = imgui.get_window_draw_list()
+    hovered = _rect_contains_mouse(rect_min, rect_max) and imgui.is_window_hovered()
+    pressed = hovered and imgui.is_mouse_down(imgui.MouseButton_.left)
+    clicked = hovered and imgui.is_mouse_clicked(imgui.MouseButton_.left)
+
+    if hovered:
+        bg_rgba = (
+            MODE_OFF_HOVERED_RGBA
+            if close_button
+            else CONTROL_PRESSED_RGBA
+            if pressed
+            else CONTROL_HOVERED_RGBA
+        )
+        draw_list.add_rect_filled(rect_min, rect_max, imgui.get_color_u32(bg_rgba), 3.0)
+
+    button_size = rect_max[0] - rect_min[0]
+    icon_font_size = min(button_size * 0.62, imgui.get_font_size() * 1.45)
+    scale = icon_font_size / max(1.0, imgui.get_font_size())
+    icon_size = imgui.calc_text_size(icon)
+    text_width = icon_size.x * scale
+    text_height = icon_size.y * scale
+    text_pos = (
+        rect_min[0] + (button_size - text_width) / 2.0,
+        rect_min[1] + (button_size - text_height) / 2.0 - 1.0,
+    )
+    draw_list.add_text(
+        imgui.get_font(),
+        icon_font_size,
+        text_pos,
+        imgui.get_color_u32(TEXT_RGBA),
+        icon,
+    )
+
+    if hovered:
+        imgui.set_tooltip(tooltip)
+
+    return clicked
+
+
+def _render_titlebar_controls(ctx: UiContext, titlebar_height: float) -> bool:
+    window_pos = imgui.get_window_pos()
+    window_size = imgui.get_window_size()
+    button_size = titlebar_control_size(titlebar_height)
+    y = float(window_pos.y) + (float(titlebar_height) - button_size) / 2.0
+    close_x2 = float(window_pos.x) + float(window_size.x) - _TITLEBAR_CONTROL_MARGIN_X_PX
+    close_x1 = close_x2 - button_size
+    maximize_x2 = close_x1 - _TITLEBAR_CONTROL_GAP_PX
+    maximize_x1 = maximize_x2 - button_size
+
+    is_maximized = ctx.state.session.waveform_editor_maximized
+    maximize_icon = (
+        icons_fontawesome_6.ICON_FA_WINDOW_RESTORE
+        if is_maximized
+        else icons_fontawesome_6.ICON_FA_WINDOW_MAXIMIZE
+    )
+    maximize_clicked = maximize_x1 > float(window_pos.x) + 120.0 and _draw_titlebar_control(
+        rect_min=(maximize_x1, y),
+        rect_max=(maximize_x2, y + button_size),
+        icon=maximize_icon,
+        tooltip="Restore" if is_maximized else "Maximize",
+    )
+    if maximize_clicked:
+        ctx.ui.waveform.toggle_maximized()
+
+    return _draw_titlebar_control(
+        rect_min=(close_x1, y),
+        rect_max=(close_x2, y + button_size),
+        icon=icons_fontawesome_6.ICON_FA_XMARK,
+        tooltip="Close",
+        close_button=True,
+    )
+
+
 def waveform_editor(ctx: UiContext) -> None:
     session = ctx.state.session
     pad_id = session.waveform_editor_pad_id
@@ -740,26 +834,40 @@ def waveform_editor(ctx: UiContext) -> None:
         return
 
     flags = _apply_editor_window_state(ctx)
-    with imgui_ctx.begin("Waveform Editor", p_open=True, flags=flags) as window:
-        if window:
-            _record_normal_editor_bounds(ctx)
+    frame_padding = imgui.get_style().frame_padding
+    titlebar_padding_y = titlebar_frame_padding_y(
+        imgui.get_text_line_height(), float(frame_padding.y)
+    )
+    titlebar_height = imgui.get_text_line_height() + titlebar_padding_y * 2.0
+    style_popped = False
+    imgui.push_style_var(imgui.StyleVar_.frame_padding, (frame_padding.x, titlebar_padding_y))
+    try:
+        with imgui_ctx.begin("Waveform Editor", p_open=None, flags=flags) as window:
+            imgui.pop_style_var()
+            style_popped = True
 
-            # Toolbar
-            with imgui_ctx.begin_group():
-                toolbar_height = toolbar_control_size(imgui.get_frame_height())
+            if window:
+                if _render_titlebar_controls(ctx, titlebar_height):
+                    ctx.ui.waveform.close()
+                    return
 
-                text_h = imgui.get_text_line_height()
-                text_pos_y = imgui.get_cursor_pos_y() + (toolbar_height - text_h) / 2 - 3
+                _record_normal_editor_bounds(ctx)
 
-                _render_playback_controls(ctx, toolbar_height)
-                _render_maximize_button(ctx, toolbar_height)
-                _separator(ctx, "View", toolbar_height, text_pos_y)
-                _render_zoom_buttons(ctx, pad_id, toolbar_height)
-                _render_view_jump_buttons(ctx, toolbar_height)
-                _separator(ctx, "Loop", toolbar_height, text_pos_y)
-                _render_loop_controls(ctx, pad_id, toolbar_height, text_pos_y)
+                # Toolbar
+                with imgui_ctx.begin_group():
+                    toolbar_height = toolbar_control_size(imgui.get_frame_height())
 
-            _render_plot(ctx, pad_id)
+                    text_h = imgui.get_text_line_height()
+                    text_pos_y = imgui.get_cursor_pos_y() + (toolbar_height - text_h) / 2 - 3
 
-        if not window.opened:
-            ctx.ui.waveform.close()
+                    _render_playback_controls(ctx, toolbar_height)
+                    _separator(ctx, "View", toolbar_height, text_pos_y)
+                    _render_zoom_buttons(ctx, pad_id, toolbar_height)
+                    _render_view_jump_buttons(ctx, toolbar_height)
+                    _separator(ctx, "Loop", toolbar_height, text_pos_y)
+                    _render_loop_controls(ctx, pad_id, toolbar_height, text_pos_y)
+
+                _render_plot(ctx, pad_id)
+    finally:
+        if not style_popped:
+            imgui.pop_style_var()

@@ -82,12 +82,15 @@ playback.
 - **THEN** Pad A does not start playback
 - **AND** Pad A loop markers are unchanged
 
-### Requirement: Waveform editor provides maximize and larger toolbar controls
-The waveform editor SHALL provide an explicit maximize/restore affordance and toolbar controls
-with larger hit targets than the previous compact toolbar.
+### Requirement: Waveform editor provides title-bar maximize and larger controls
+The waveform editor SHALL provide an explicit maximize/restore affordance in the window title bar
+at the far right, immediately left of the close `X` affordance.
 
 The maximize state SHALL be transient UI/session state and SHALL NOT be persisted as project
 intent.
+
+The waveform editor title bar SHALL be taller than the previous compact title bar and SHALL expose
+maximize/restore and close hit targets of at least 32 logical pixels on both axes.
 
 Toolbar icon hit targets SHALL be at least 32 logical pixels on both axes and no smaller than
 1.5 times the current ImGui frame height.
@@ -104,11 +107,17 @@ Toolbar icon hit targets SHALL be at least 32 logical pixels on both axes and no
 - **WHEN** the performer activates the restore affordance
 - **THEN** the editor returns to its normal window state
 
+#### Scenario: Title-bar window controls are easier to press
+- **GIVEN** the waveform editor is visible
+- **WHEN** the title bar is rendered
+- **THEN** the maximize/restore affordance is immediately left of the close `X`
+- **AND** both title-bar window controls expose hit targets at least 32 logical pixels on both axes
+
 #### Scenario: Toolbar hit targets are easier to press
 - **GIVEN** the waveform editor is visible
 - **WHEN** the toolbar is rendered
-- **THEN** Play, Pause, view-jump, bar-step, `ALL`, grid-offset, and maximize/restore controls each
-  expose hit targets at least 32 logical pixels on both axes
+- **THEN** Play, Pause, view-jump, bar-step, `ALL`, and grid-offset controls each expose hit targets
+  at least 32 logical pixels on both axes
 
 ## MODIFIED Requirements
 

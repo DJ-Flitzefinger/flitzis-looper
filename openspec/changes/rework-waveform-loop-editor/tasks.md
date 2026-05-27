@@ -34,19 +34,20 @@
 - [x] 4.4 Implement left-click power-of-two bar stepping and right-click exact `1.0` bar stepping
   with helper tests.
 - [x] 4.5 Rework Play/Pause mouse-down and right-button hold behavior with selected-pad-only tests.
-- [ ] 4.6 Add waveform maximize/restore behavior, larger toolbar hit targets, and stable ImGui IDs.
+- [x] 4.6 Add waveform title-bar maximize/restore behavior, larger title-bar and toolbar hit
+  targets, and stable ImGui IDs.
 
 ## 5. Selected-Pad Sidebar
 
-- [ ] 5.1 Make `Adjust Loop` close the editor when it is already open for the same pad.
-- [ ] 5.2 Make `Adjust Loop` switch the editor when a different loaded pad is selected.
-- [ ] 5.3 Add focused UI action tests for open, same-pad close, and different-pad switch.
+- [x] 5.1 Make `Adjust Loop` close the editor when it is already open for the same pad.
+- [x] 5.2 Make `Adjust Loop` switch the editor when a different loaded pad is selected.
+- [x] 5.3 Add focused UI action tests for open, same-pad close, and different-pad switch.
 
 ## 6. Validation
 
-- [ ] 6.1 Run focused Python tests for loop/model/loader/UI action behavior.
-- [ ] 6.2 Run Rust seek and mixer tests through `uv run cargo test --manifest-path rust/Cargo.toml`.
-- [ ] 6.3 Run full validation for the finished behavior slice when feasible: `uv sync`,
+- [x] 6.1 Run focused Python tests for loop/model/loader/UI action behavior.
+- [x] 6.2 Run Rust seek and mixer tests through `uv run cargo test --manifest-path rust/Cargo.toml`.
+- [x] 6.3 Run full validation for the finished behavior slice when feasible: `uv sync`,
   `uv run maturin develop`, `uv run cargo check --manifest-path rust/Cargo.toml`,
   `uv run cargo test --manifest-path rust/Cargo.toml`, `uv run pytest`,
   `uv run ruff check src`, and `uv run mypy src`.
