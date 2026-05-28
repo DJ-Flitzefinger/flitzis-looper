@@ -47,6 +47,8 @@ def test_set_pad_eq_clamps_and_calls_engine(
 def test_set_pad_key_lock_updates_only_one_pad(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
+    controller.project.sample_paths[3] = "samples/foo.wav"
+    controller.project.sample_paths[4] = "samples/bar.wav"
     controller.project.pad_key_lock[4] = True
     enabled = True
 
@@ -59,6 +61,7 @@ def test_set_pad_key_lock_updates_only_one_pad(
 
 
 def test_toggle_pad_key_lock(controller: AppController, audio_engine_mock: Mock) -> None:
+    controller.project.sample_paths[3] = "samples/foo.wav"
     enabled = True
 
     controller.transport.pad.toggle_pad_key_lock(3)
@@ -68,9 +71,31 @@ def test_toggle_pad_key_lock(controller: AppController, audio_engine_mock: Mock)
 
 
 def test_set_pad_key_lock_no_op(controller: AppController, audio_engine_mock: Mock) -> None:
+    controller.project.sample_paths[3] = "samples/foo.wav"
     controller.transport.pad.set_pad_key_lock(3, enabled=False)
 
     audio_engine_mock.set_pad_key_lock.assert_not_called()
+
+
+def test_set_pad_key_lock_ignores_unloaded_pad(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.transport.pad.set_pad_key_lock(3, enabled=True)
+
+    audio_engine_mock.set_pad_key_lock.assert_not_called()
+    assert controller.project.pad_key_lock[3] is False
+
+
+def test_set_pad_key_lock_resets_stale_unloaded_pad(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.project.pad_key_lock[3] = True
+    disabled = False
+
+    controller.transport.pad.set_pad_key_lock(3, enabled=True)
+
+    audio_engine_mock.set_pad_key_lock.assert_called_once_with(3, disabled)
+    assert controller.project.pad_key_lock[3] is False
 
 
 def test_poll_audio_messages_updates_session_peak(

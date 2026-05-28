@@ -306,6 +306,11 @@ class LoaderController(BaseController):
                 sample_id,
                 defaults.pad_stem_mix_mode[sample_id],
             ),
+            _reset_pad_value(
+                self._project.pad_key_lock,
+                sample_id,
+                defaults.pad_key_lock[sample_id],
+            ),
             _reset_pad_value(self._project.manual_bpm, sample_id, defaults.manual_bpm[sample_id]),
             _reset_pad_value(self._project.manual_key, sample_id, defaults.manual_key[sample_id]),
         ))
@@ -360,6 +365,7 @@ class LoaderController(BaseController):
             defaults.pad_loop_start_s[sample_id],
             defaults.pad_loop_end_s[sample_id],
         )
+        self._audio.set_pad_key_lock(sample_id, defaults.pad_key_lock[sample_id])
 
     def _handle_loader_started(self, sample_id: int, _event: dict[str, object]) -> None:
         if self._project.sample_paths[sample_id] is None:
@@ -430,10 +436,7 @@ class LoaderController(BaseController):
         self._clear_analysis_task_state(sample_id)
 
         if self._project.sample_paths[sample_id] is not None:
-            self._project.sample_paths[sample_id] = None
-            self._project.sample_durations[sample_id] = None
-            self._project.sample_analysis[sample_id] = None
-            self._clear_stem_cache(sample_id)
+            self._reset_unloaded_pad_defaults(sample_id)
             self._on_pad_bpm_changed(sample_id)
             self._mark_project_changed()
 
@@ -628,10 +631,7 @@ class LoaderController(BaseController):
         self._mark_project_changed()
 
     def _clear_restored_pad(self, sample_id: int) -> None:
-        self._project.sample_paths[sample_id] = None
-        self._project.sample_durations[sample_id] = None
-        self._project.sample_analysis[sample_id] = None
-        self._clear_stem_cache(sample_id)
+        self._reset_unloaded_pad_defaults(sample_id)
         self._on_pad_bpm_changed(sample_id)
 
     @staticmethod

@@ -70,6 +70,12 @@ class ProjectPersistence:
         sample_paths = data.get("sample_paths")
         if isinstance(sample_paths, list):
             data["sample_paths"] = self._normalize_sample_paths_for_save(sample_paths)
+            pad_key_lock = data.get("pad_key_lock")
+            if isinstance(pad_key_lock, list):
+                data["pad_key_lock"] = self._normalize_pad_key_lock_for_save(
+                    sample_paths,
+                    pad_key_lock,
+                )
 
         text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
         self._atomic_write_text(text)
@@ -147,4 +153,17 @@ class ProjectPersistence:
 
             normalized.append(rel.as_posix())
 
+        return normalized
+
+    @staticmethod
+    def _normalize_pad_key_lock_for_save(
+        sample_paths: list[object],
+        pad_key_lock: list[object],
+    ) -> list[object]:
+        normalized = list(pad_key_lock)
+        for sample_id, sample_path in enumerate(sample_paths):
+            if sample_id >= len(normalized):
+                break
+            if sample_path is None:
+                normalized[sample_id] = False
         return normalized

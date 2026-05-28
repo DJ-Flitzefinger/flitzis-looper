@@ -82,6 +82,7 @@ def test_load_sample_async_resets_stale_empty_pad_settings(
     defaults = ProjectState()
     controller.project.manual_bpm[sample_id] = 123.0
     controller.project.manual_key[sample_id] = "Gm"
+    controller.project.pad_key_lock[sample_id] = True
     controller.project.pad_gain_db[sample_id] = -6.0
     controller.project.pad_eq_low_db[sample_id] = 1.0
     controller.project.pad_eq_mid_db[sample_id] = -2.0
@@ -96,6 +97,7 @@ def test_load_sample_async_resets_stale_empty_pad_settings(
 
     assert controller.project.manual_bpm[sample_id] == defaults.manual_bpm[sample_id]
     assert controller.project.manual_key[sample_id] == defaults.manual_key[sample_id]
+    assert controller.project.pad_key_lock[sample_id] == defaults.pad_key_lock[sample_id]
     assert controller.project.pad_gain_db[sample_id] == defaults.pad_gain_db[sample_id]
     assert controller.project.pad_eq_low_db[sample_id] == defaults.pad_eq_low_db[sample_id]
     assert controller.project.pad_eq_mid_db[sample_id] == defaults.pad_eq_mid_db[sample_id]
@@ -112,6 +114,8 @@ def test_load_sample_async_resets_stale_empty_pad_settings(
     audio_engine_mock.set_pad_gain.assert_called_with(sample_id, defaults.pad_gain_db[sample_id])
     audio_engine_mock.set_pad_eq.assert_called_with(sample_id, 0.0, 0.0, 0.0)
     audio_engine_mock.set_pad_loop_region.assert_called_with(sample_id, 0.0, None)
+    disabled = False
+    audio_engine_mock.set_pad_key_lock.assert_called_with(sample_id, disabled)
     audio_engine_mock.load_sample_async.assert_called_with(
         sample_id, "/path/to/new.wav", run_analysis=True
     )
@@ -286,6 +290,7 @@ def test_unload_sample_resets_track_bound_pad_settings(
         cache_dir="samples/stems/old",
     )
     controller.project.pad_stem_mix_mode[sample_id] = "all_stems"
+    controller.project.pad_key_lock[sample_id] = True
     controller.project.manual_bpm[sample_id] = 128.0
     controller.project.manual_key[sample_id] = "Gm"
     controller.project.pad_gain_db[sample_id] = -9.0
@@ -305,6 +310,7 @@ def test_unload_sample_resets_track_bound_pad_settings(
     assert controller.project.sample_analysis[sample_id] == defaults.sample_analysis[sample_id]
     assert controller.project.stem_cache[sample_id] == defaults.stem_cache[sample_id]
     assert controller.project.pad_stem_mix_mode[sample_id] == defaults.pad_stem_mix_mode[sample_id]
+    assert controller.project.pad_key_lock[sample_id] == defaults.pad_key_lock[sample_id]
     assert controller.project.manual_bpm[sample_id] == defaults.manual_bpm[sample_id]
     assert controller.project.manual_key[sample_id] == defaults.manual_key[sample_id]
     assert controller.project.pad_gain_db[sample_id] == defaults.pad_gain_db[sample_id]
@@ -324,6 +330,8 @@ def test_unload_sample_resets_track_bound_pad_settings(
     audio_engine_mock.set_pad_gain.assert_called_with(sample_id, defaults.pad_gain_db[sample_id])
     audio_engine_mock.set_pad_eq.assert_called_with(sample_id, 0.0, 0.0, 0.0)
     audio_engine_mock.set_pad_loop_region.assert_called_with(sample_id, 0.0, None)
+    disabled = False
+    audio_engine_mock.set_pad_key_lock.assert_called_with(sample_id, disabled)
 
 
 def test_unload_sample_with_negative_grid_offset_does_not_publish_invalid_timing_metadata(

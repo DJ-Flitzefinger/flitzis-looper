@@ -9,7 +9,7 @@
 
 ## 3. Controller And UI Boundary
 - [x] 3.1 Add controller APIs for setting and toggling one pad's Key Lock state.
-- [x] 3.2 Change global `set_key_lock` so it overwrites every per-pad Key Lock value.
+- [x] 3.2 Change global `set_key_lock` so it overwrites loaded pads without retaining settings for unloaded pads.
 - [x] 3.3 Expose selected-pad Key Lock selectors and actions through `UiContext`.
 - [x] 3.4 Add focused tests for global overwrite and independent per-pad toggles.
 
@@ -21,7 +21,7 @@
 - [x] 4.5 Add Rust tests for mixed per-pad states and global overwrite behavior.
 
 ## 5. Performance UI
-- [x] 5.1 Render the selected-pad `KEY LOCK` button at the bottom of the left sidebar under Stem Mix / stem controls.
+- [x] 5.1 Render the selected-pad `KEY LOCK` button at the bottom of the left sidebar under Stem Mix / stem controls only for loaded pads.
 - [x] 5.2 Use the same on/off visual language as the global Key Lock button.
 - [x] 5.3 Wire the button so it toggles only the selected pad.
 - [x] 5.4 Add focused UI/context tests where feasible without pixel automation.
@@ -31,6 +31,13 @@
 - [x] 6.2 Run `uv run cargo check --manifest-path rust/Cargo.toml`.
 - [x] 6.3 Run focused Rust tests for touched audio paths.
 - [x] 6.4 Run broad validation from `codex-meta/workflow.md` before marking the feature complete.
+
+## 7. Loaded-Pad Regression
+- [x] 7.1 Hide the selected-pad `KEY LOCK` button for unloaded and loading pads.
+- [x] 7.2 Reset per-pad Key Lock on unload and before loading into an empty pad.
+- [x] 7.3 Prevent global Key Lock from writing enabled state to unloaded pads.
+- [x] 7.4 Add focused regression tests for unloaded-pad rendering, persistence, and controller cleanup.
+- [x] 7.5 Run focused regression validation for this fix.
 
 Note: `uv run mypy src` still reports pre-existing typing issues in
 `src/tests/flitzis_looper/ui/test_sidebar_left.py` and

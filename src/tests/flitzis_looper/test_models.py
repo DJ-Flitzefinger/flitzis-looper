@@ -459,6 +459,26 @@ def test_pad_key_lock_validation(project_state: ProjectState) -> None:
         ProjectState(pad_key_lock=[])
 
 
+def test_unloaded_pad_key_lock_normalized_on_load() -> None:
+    pad_key_lock = [False] * NUM_SAMPLES
+    pad_key_lock[3] = True
+
+    project = ProjectState(pad_key_lock=pad_key_lock)
+
+    assert project.pad_key_lock[3] is False
+
+
+def test_loaded_pad_key_lock_preserved_on_load() -> None:
+    sample_paths = [None] * NUM_SAMPLES
+    sample_paths[3] = "samples/foo.wav"
+    pad_key_lock = [False] * NUM_SAMPLES
+    pad_key_lock[3] = True
+
+    project = ProjectState(sample_paths=sample_paths, pad_key_lock=pad_key_lock)
+
+    assert project.pad_key_lock[3] is True
+
+
 def test_stem_cache_entry_represents_expected_kinds() -> None:
     files = StemFileSet(
         vocals="samples/stems/a/vocals.wav",

@@ -187,6 +187,7 @@ class TestUiStateComputedProperties:
 
     def test_pad_key_lock_selector(self, controller: AppController) -> None:
         ui_state = UiState(controller)
+        controller.project.sample_paths[3] = "samples/foo.wav"
         controller.project.pad_key_lock[3] = True
 
         assert ui_state.pads.key_lock(3) is True
@@ -327,6 +328,7 @@ class TestAudioActions:  # noqa: PLR0904
 
     def test_toggle_pad_key_lock(self, controller: AppController, audio_engine_mock: Mock) -> None:
         audio_actions = AudioActions(controller)
+        controller.project.sample_paths[3] = "samples/foo.wav"
         enabled = True
 
         audio_actions.pads.toggle_pad_key_lock(3)
@@ -459,12 +461,18 @@ class TestAudioActions:  # noqa: PLR0904
     def test_toggle_key_lock(self, controller: AppController) -> None:
         """Test toggle_key_lock toggles key_lock mode."""
         audio_actions = AudioActions(controller)
+        controller.project.sample_paths[3] = "samples/foo.wav"
         initial_state = controller.project.key_lock
 
         audio_actions.global_.toggle_key_lock()
 
         assert controller.project.key_lock is not initial_state
-        assert all(controller.project.pad_key_lock)
+        assert controller.project.pad_key_lock[3] is True
+        assert not any(
+            enabled
+            for sample_id, enabled in enumerate(controller.project.pad_key_lock)
+            if sample_id != 3
+        )
 
     def test_toggle_bpm_lock(self, controller: AppController) -> None:
         """Test toggle_bpm_lock toggles bpm_lock mode."""

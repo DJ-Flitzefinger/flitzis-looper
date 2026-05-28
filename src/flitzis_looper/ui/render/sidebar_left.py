@@ -1030,8 +1030,8 @@ def sidebar_left(ctx: UiContext) -> None:
     with style_var(imgui.StyleVar_.item_spacing, (0.0, SPACING / 4)):
         if info.is_loaded:
             _render_loaded_actions(ctx, info.pad_id)
+            _render_pad_key_lock(ctx, info.pad_id)
         elif info.is_loading:
             _render_loading_status(ctx, info.pad_id)
         else:
             _render_unloaded_actions(ctx, info.pad_id)
-        _render_pad_key_lock(ctx, info.pad_id)

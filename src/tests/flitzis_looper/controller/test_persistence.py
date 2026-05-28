@@ -500,6 +500,7 @@ def test_pad_key_lock_persisted_per_pad(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.chdir(tmp_path)
 
     project = ProjectState(volume=0.5)
+    project.sample_paths[3] = "samples/foo.wav"
     project.pad_key_lock[3] = True
 
     persistence = ProjectPersistence(project)
@@ -509,6 +510,25 @@ def test_pad_key_lock_persisted_per_pad(tmp_path: Path, monkeypatch: pytest.Monk
     loaded = ProjectPersistence.from_config_path().project
     assert loaded.pad_key_lock[3] is True
     assert loaded.pad_key_lock[4] is False
+
+
+def test_unloaded_pad_key_lock_saved_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    project = ProjectState(volume=0.5)
+    project.pad_key_lock[3] = True
+
+    persistence = ProjectPersistence(project)
+    persistence.mark_dirty()
+    persistence.flush(now=0.0)
+
+    data = json.loads((tmp_path / PROJECT_CONFIG_PATH).read_text(encoding="utf-8"))
+    assert data["pad_key_lock"][3] is False
+
+    loaded = ProjectPersistence.from_config_path().project
+    assert loaded.pad_key_lock[3] is False
 
 
 def test_transient_stem_generation_state_is_not_persisted(

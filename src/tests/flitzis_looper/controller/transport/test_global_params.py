@@ -244,21 +244,42 @@ def test_set_multi_loop_disable(controller: AppController) -> None:
 def test_set_key_lock_enable(controller: AppController, audio_engine_mock: Mock) -> None:
     """Test enabling key lock mode."""
     controller.project.key_lock = False
+    controller.project.sample_paths[3] = "samples/foo.wav"
+    controller.project.sample_paths[4] = "samples/bar.wav"
+    enabled = True
 
-    controller.transport.global_params.set_key_lock(enabled=True)
+    controller.transport.global_params.set_key_lock(enabled=enabled)
 
-    audio_engine_mock.set_key_lock.assert_called_with(enabled=True)
+    audio_engine_mock.set_key_lock.assert_not_called()
+    assert audio_engine_mock.set_pad_key_lock.call_count == 2
+    audio_engine_mock.set_pad_key_lock.assert_any_call(3, enabled)
+    audio_engine_mock.set_pad_key_lock.assert_any_call(4, enabled)
     assert controller.project.key_lock is True
-    assert all(controller.project.pad_key_lock)
+    assert controller.project.pad_key_lock[3] is True
+    assert controller.project.pad_key_lock[4] is True
+    assert not any(
+        enabled
+        for sample_id, enabled in enumerate(controller.project.pad_key_lock)
+        if sample_id not in {3, 4}
+    )
 
 
 def test_set_key_lock_disable(controller: AppController, audio_engine_mock: Mock) -> None:
     """Test disabling key lock mode."""
     controller.project.key_lock = True
+    controller.project.sample_paths[3] = "samples/foo.wav"
+    controller.project.sample_paths[4] = "samples/bar.wav"
+    controller.project.pad_key_lock[3] = True
+    controller.project.pad_key_lock[4] = True
+    controller.project.pad_key_lock[5] = True
+    disabled = False
 
-    controller.transport.global_params.set_key_lock(enabled=False)
+    controller.transport.global_params.set_key_lock(enabled=disabled)
 
-    audio_engine_mock.set_key_lock.assert_called_with(enabled=False)
+    audio_engine_mock.set_key_lock.assert_not_called()
+    assert audio_engine_mock.set_pad_key_lock.call_count == 2
+    audio_engine_mock.set_pad_key_lock.assert_any_call(3, disabled)
+    audio_engine_mock.set_pad_key_lock.assert_any_call(4, disabled)
     assert controller.project.key_lock is False
     assert not any(controller.project.pad_key_lock)
 
@@ -267,15 +288,27 @@ def test_set_key_lock_overwrites_mixed_pad_values(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     controller.project.key_lock = True
+    controller.project.sample_paths[2] = "samples/two.wav"
+    controller.project.sample_paths[3] = "samples/three.wav"
+    controller.project.sample_paths[4] = "samples/four.wav"
     controller.project.pad_key_lock[3] = False
     for sample_id in range(len(controller.project.pad_key_lock)):
         if sample_id != 3:
             controller.project.pad_key_lock[sample_id] = True
+    enabled = True
 
-    controller.transport.global_params.set_key_lock(enabled=True)
+    controller.transport.global_params.set_key_lock(enabled=enabled)
 
-    audio_engine_mock.set_key_lock.assert_called_with(enabled=True)
-    assert all(controller.project.pad_key_lock)
+    audio_engine_mock.set_key_lock.assert_not_called()
+    audio_engine_mock.set_pad_key_lock.assert_called_once_with(3, enabled)
+    assert controller.project.pad_key_lock[2] is True
+    assert controller.project.pad_key_lock[3] is True
+    assert controller.project.pad_key_lock[4] is True
+    assert not any(
+        enabled
+        for sample_id, enabled in enumerate(controller.project.pad_key_lock)
+        if sample_id not in {2, 3, 4}
+    )
 
 
 def test_set_bpm_lock_enable(controller: AppController, audio_engine_mock: Mock) -> None:
@@ -351,8 +384,9 @@ def test_non_finite_speed_inf(controller: AppController) -> None:
 
 def test_set_key_lock_no_op(controller: AppController, audio_engine_mock: Mock) -> None:
     controller.project.key_lock = True
-    controller.project.pad_key_lock = [True] * len(controller.project.pad_key_lock)
     controller.project.selected_pad = 1
+    controller.project.sample_paths[1] = "samples/foo.wav"
+    controller.project.pad_key_lock[1] = True
     controller.transport.bpm.set_manual_bpm(1, 120.0)
 
     audio_engine_mock.reset_mock()
@@ -361,6 +395,7 @@ def test_set_key_lock_no_op(controller: AppController, audio_engine_mock: Mock) 
 
     assert controller.project.key_lock is True
     audio_engine_mock.set_key_lock.assert_not_called()
+    audio_engine_mock.set_pad_key_lock.assert_not_called()
 
 
 def test_set_bpm_lock_no_op(controller: AppController, audio_engine_mock: Mock) -> None:

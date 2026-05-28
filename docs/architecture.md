@@ -201,9 +201,10 @@ Key Lock selects rendering semantics per pad:
   scale derived from the inverse tempo ratio, so tempo changes remain while
   perceived pitch stays approximately stable.
 
-The global Key Lock control is a master write operation over the per-pad Key
-Lock array. After a global update, individual pad controls can change one pad
-without changing other pads.
+The global Key Lock control is a master write operation over currently loaded
+per-pad Key Lock entries. Unloaded pads are normalized to disabled Key Lock
+intent and do not receive selected-pad Key Lock controls. After a global update,
+individual loaded-pad controls can change one pad without changing other pads.
 
 BPM-locked source addressing happens before full-mix/stem sample reads and
 before Key Lock processing. Full-mix and prepared-stem playback therefore feed
@@ -220,7 +221,8 @@ source-frame based; Rubber Band output latency does not shift loop ownership or
 transport scheduling.
 
 Project persistence stores global Key Lock control intent and per-pad Key Lock
-booleans. Rubber Band handles, runtime paths, buffers, measured latency,
+booleans for loaded-pad intent, with unloaded pads saved and restored as
+disabled. Rubber Band handles, runtime paths, buffers, measured latency,
 algorithmic delay, and backend tuning parameters are not persisted, exposed in
 performer settings, or sent through Python/Rust control messages. Active
 tempo-ratio changes use a fixed internal Rust smoothing step so the callback

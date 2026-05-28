@@ -14,11 +14,11 @@ of being the only effective state.
 ## What Changes
 
 - Add a per-pad `KEY LOCK` button in the selected-pad left sidebar under the
-  Stem Mix / stem controls.
+  Stem Mix / stem controls only for loaded pads.
 - Persist a Key Lock boolean for every pad.
 - Keep the global `KEY LOCK` button in the right sidebar.
-- Change global Key Lock activation so it writes the same enabled value to every
-  per-pad Key Lock state.
+- Change global Key Lock activation so it writes the same enabled value to
+  loaded pads only and leaves unloaded pads with no enabled Key Lock intent.
 - Allow later per-pad toggles to change only the selected pad after a global
   overwrite.
 - Route per-pad Key Lock updates through bounded controller and Rust audio-engine
@@ -56,7 +56,7 @@ bounded parameter state.
 ## Impact
 
 - Affected specs: `performance-ui`, `time-stretch-pitch-shift`,
-  `project-persistence`.
+  `project-persistence`, `load-audio-files`.
 - Affected docs: `docs/architecture.md`, `docs/key-lock-backend.md` if
   implementation changes the documented Key Lock ownership details.
 - Affected code: Python `ProjectState`, persistence tests, controller global and

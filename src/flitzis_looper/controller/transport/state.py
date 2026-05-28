@@ -51,11 +51,10 @@ class ApplyProjectState:
         if self._project.pad_key_lock == defaults.pad_key_lock:
             return
 
-        if all(value is self._project.pad_key_lock[0] for value in self._project.pad_key_lock):
-            self._audio.set_key_lock(enabled=self._project.pad_key_lock[0])
-            return
-
         for sample_id, enabled in enumerate(self._project.pad_key_lock):
+            if self._project.sample_paths[sample_id] is None:
+                continue
+
             if enabled != defaults.pad_key_lock[sample_id]:
                 self._audio.set_pad_key_lock(sample_id, enabled)
 

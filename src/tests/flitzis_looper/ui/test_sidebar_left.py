@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+
 import pytest
 
 from flitzis_looper.ui.render import sidebar_left
@@ -61,6 +63,47 @@ class _GainContext:
     def __init__(self) -> None:
         self.audio = _GainAudio()
         self.state = _GainState()
+
+
+class _SidebarPads:
+    __slots__ = ("_loaded", "_loading")
+
+    def __init__(self, *, loaded: bool, loading: bool) -> None:
+        self._loaded = loaded
+        self._loading = loading
+
+    def is_loaded(self, _pad_id: int) -> bool:
+        return self._loaded
+
+    def is_loading(self, _pad_id: int) -> bool:
+        return self._loading
+
+
+class _SidebarProject:
+    __slots__ = ("selected_pad",)
+
+    def __init__(self) -> None:
+        self.selected_pad = 0
+
+
+class _SidebarState:
+    __slots__ = ("pads", "project")
+
+    def __init__(self, *, loaded: bool, loading: bool) -> None:
+        self.project = _SidebarProject()
+        self.pads = _SidebarPads(loaded=loaded, loading=loading)
+
+
+class _SidebarContext:
+    __slots__ = ("state",)
+
+    def __init__(self, *, loaded: bool, loading: bool) -> None:
+        self.state = _SidebarState(loaded=loaded, loading=loading)
+
+
+@contextmanager
+def _noop_style_var(*_args: object, **_kwargs: object) -> object:
+    yield
 
 
 @pytest.mark.parametrize(
@@ -171,3 +214,71 @@ def test_gain_left_drag_tracks_absolute_pointer_position(
         sidebar_left._GAIN_DRAG.clear()
 
     assert ctx.audio.pads.calls == [(0, pytest.approx(6.0))]
+
+
+@pytest.mark.parametrize(
+    ("pad_state", "expected_key_lock_calls"),
+    [
+        ("loaded", [0]),
+        ("loading", []),
+        ("empty", []),
+    ],
+)
+def test_sidebar_renders_pad_key_lock_only_for_loaded_pads(
+    monkeypatch: pytest.MonkeyPatch,
+    pad_state: str,
+    expected_key_lock_calls: list[int],
+) -> None:
+    key_lock_calls: list[int] = []
+
+    monkeypatch.setattr("flitzis_looper.ui.render.sidebar_left.style_var", _noop_style_var)
+    monkeypatch.setattr(
+        "flitzis_looper.ui.render.sidebar_left.imgui.get_content_region_avail",
+        lambda: _Point(240.0, 0.0),
+    )
+    monkeypatch.setattr("flitzis_looper.ui.render.sidebar_left.imgui.separator", lambda: None)
+    monkeypatch.setattr(
+        "flitzis_looper.ui.render.sidebar_left._render_pad_header",
+        lambda _ctx, _info: None,
+    )
+    monkeypatch.setattr(
+        "flitzis_looper.ui.render.sidebar_left._render_bpm",
+        lambda _ctx, _info: None,
+    )
+    monkeypatch.setattr(
+        "flitzis_looper.ui.render.sidebar_left._render_key",
+        lambda _ctx, _info: None,
+    )
+    monkeypatch.setattr(
+        "flitzis_looper.ui.render.sidebar_left._render_loaded_gain",
+        lambda _ctx, _pad_id: None,
+    )
+    monkeypatch.setattr(
+        "flitzis_looper.ui.render.sidebar_left._render_loaded_eq",
+        lambda _ctx, _info: None,
+    )
+    monkeypatch.setattr(
+        "flitzis_looper.ui.render.sidebar_left._render_loaded_actions",
+        lambda _ctx, _pad_id: None,
+    )
+    monkeypatch.setattr(
+        "flitzis_looper.ui.render.sidebar_left._render_loading_status",
+        lambda _ctx, _pad_id: None,
+    )
+    monkeypatch.setattr(
+        "flitzis_looper.ui.render.sidebar_left._render_unloaded_actions",
+        lambda _ctx, _pad_id: None,
+    )
+    monkeypatch.setattr(
+        "flitzis_looper.ui.render.sidebar_left._render_pad_key_lock",
+        lambda _ctx, pad_id: key_lock_calls.append(pad_id),
+    )
+
+    sidebar_left.sidebar_left(
+        _SidebarContext(
+            loaded=pad_state == "loaded",
+            loading=pad_state == "loading",
+        )
+    )
+
+    assert key_lock_calls == expected_key_lock_calls

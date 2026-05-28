@@ -6,16 +6,17 @@ state. Project persistence stores only durable performer intent, while Rust owns
 live audio truth and callback-safe processing.
 
 The new behavior keeps that ownership split. Python stores and edits durable
-per-pad intent. Rust stores bounded per-pad live state and reads it while
-rendering active voices. The global button remains a master write operation over
-the per-pad intent array.
+per-pad intent for loaded pads. Rust stores bounded per-pad live state and reads
+it while rendering active voices. The global button remains a master write
+operation over currently loaded pads, while unloaded pads stay at disabled
+per-pad intent.
 
 ## Goals
 
 - Add an obvious selected-pad `KEY LOCK` control without moving or removing the
-  existing global `KEY LOCK` control.
+  existing global `KEY LOCK` control, and show it only for loaded pads.
 - Persist one Key Lock boolean per pad with safe defaults for older projects.
-- Make global Key Lock overwrite every per-pad value.
+- Make global Key Lock overwrite every loaded per-pad value.
 - Make per-pad Key Lock toggles affect only the selected pad.
 - Ensure simultaneous pads can render with different Key Lock semantics.
 - Keep all callback work bounded and free of Python, I/O, blocking, logging, and
@@ -36,32 +37,38 @@ the per-pad intent array.
 
 `ProjectState` gains a `pad_key_lock` boolean list with one entry per pad. New
 projects and older project files default every entry to `False`. Model
-validation keeps the list length fixed to the pad count and rejects invalid
-types through the existing safe project-load behavior.
+validation keeps the list length fixed to the pad count, rejects invalid types
+through the existing safe project-load behavior, and normalizes unloaded pads to
+disabled per-pad Key Lock intent.
 
 `ProjectState.key_lock` remains as the global master button state. It represents
 the last global Key Lock setting, not a separate override layer. When the global
-button changes, controller logic sets both `project.key_lock` and every
-`project.pad_key_lock[*]` value to the same boolean.
+button changes, controller logic sets `project.key_lock` and sets only currently
+loaded `project.pad_key_lock[*]` values to the same boolean. Unloaded pads are
+kept disabled and are not allowed to retain stale per-pad Key Lock state.
 
 ### Controller And UI Boundary
 
 Controllers own validation, persistence dirty marks, and audio-engine calls.
 Render code reads the selected pad's Key Lock state through `UiContext` and
 emits an explicit per-pad toggle action. The left selected-pad sidebar renders a
-`KEY LOCK` button at the bottom, under the Stem Mix / stem controls, using the
-same on/off visual language as the global Key Lock button.
+`KEY LOCK` button at the bottom, under the Stem Mix / stem controls, only when
+the selected pad has loaded audio, using the same on/off visual language as the
+global Key Lock button.
 
-The per-pad action updates only that pad and leaves `ProjectState.key_lock`
-unchanged. This preserves the behavior where a performer can apply a global
-baseline and then make individual pad exceptions.
+The per-pad action updates only a loaded target pad and leaves
+`ProjectState.key_lock` unchanged. Requests against unloaded pads are ignored
+after clearing stale per-pad Key Lock state. This preserves the behavior where a
+performer can apply a global baseline and then make individual loaded-pad
+exceptions without creating settings for empty pads.
 
 ### Rust Audio State
 
 Rust keeps bounded per-pad Key Lock state, for example a fixed-size boolean
 array indexed by sample/pad id. `ControlMessage::SetKeyLock(bool)` remains
-available and sets every per-pad value. A new per-pad control message and PyO3
-method update one pad's value after validating the id.
+available as a low-level all-pad overwrite, while the Python global UI path
+publishes per-pad updates only for loaded pads. A new per-pad control message
+and PyO3 method update one pad's value after validating the id.
 
 During rendering, the mixer selects Key Lock processing from the active voice's
 pad id. Pads with Key Lock enabled use the existing Rubber Band backed path.

@@ -39,13 +39,26 @@ class GlobalParametersController:
 
     def set_key_lock(self, *, enabled: bool) -> None:
         """Enable or disable Key Lock mode."""
-        pad_values_already_match = all(value is enabled for value in self._project.pad_key_lock)
-        if enabled == self._project.key_lock and pad_values_already_match:
-            return
+        changed = enabled != self._project.key_lock
         self._project.key_lock = enabled
+
         for sample_id in range(len(self._project.pad_key_lock)):
+            if self._project.sample_paths[sample_id] is None:
+                if self._project.pad_key_lock[sample_id]:
+                    self._project.pad_key_lock[sample_id] = False
+                    changed = True
+                continue
+
+            if self._project.pad_key_lock[sample_id] is enabled:
+                continue
+
             self._project.pad_key_lock[sample_id] = enabled
-        self._audio.set_key_lock(enabled=enabled)
+            self._audio.set_pad_key_lock(sample_id, enabled)
+            changed = True
+
+        if not changed:
+            return
+
         self._transport._mark_project_changed()
 
     def set_bpm_lock(self, *, enabled: bool) -> None:

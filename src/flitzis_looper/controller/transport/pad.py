@@ -45,6 +45,14 @@ class PadController:
     def set_pad_key_lock(self, sample_id: int, *, enabled: bool) -> None:
         """Enable or disable Key Lock for one pad."""
         validate_sample_id(sample_id)
+        if self._project.sample_paths[sample_id] is None:
+            if self._project.pad_key_lock[sample_id]:
+                disabled = False
+                self._audio.set_pad_key_lock(sample_id, disabled)
+                self._project.pad_key_lock[sample_id] = False
+                self._transport._mark_project_changed()
+            return
+
         if self._project.pad_key_lock[sample_id] is enabled:
             return
 

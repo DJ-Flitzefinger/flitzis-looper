@@ -250,6 +250,24 @@ def _migrate_legacy_trigger_quantization_fields(data: dict[str, object]) -> None
             data["trigger_quantization_step"] = step
 
 
+def _normalize_unloaded_pad_key_lock_fields(data: dict[str, object]) -> None:
+    pad_key_lock = data.get("pad_key_lock")
+    if not isinstance(pad_key_lock, list):
+        return
+
+    sample_paths = data.get("sample_paths")
+    if not isinstance(sample_paths, list):
+        sample_paths = []
+
+    normalized = list(pad_key_lock)
+    for sample_id in range(len(normalized)):
+        sample_path = sample_paths[sample_id] if sample_id < len(sample_paths) else None
+        if sample_path is None:
+            normalized[sample_id] = False
+
+    data["pad_key_lock"] = normalized
+
+
 class ProjectState(BaseModel):
     """Persistent state. Saved to disk."""
 
@@ -265,6 +283,7 @@ class ProjectState(BaseModel):
 
         _migrate_legacy_pad_gain_field(data)
         _migrate_legacy_trigger_quantization_fields(data)
+        _normalize_unloaded_pad_key_lock_fields(data)
 
         return data
 

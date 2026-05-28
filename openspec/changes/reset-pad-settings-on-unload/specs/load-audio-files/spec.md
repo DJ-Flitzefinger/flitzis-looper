@@ -6,11 +6,12 @@ unloaded from a pad.
 
 Track-bound settings SHALL include the pad's sample path, sample duration, analysis result, manual
 BPM override, manual key override, Gain/Trim, low/mid/high EQ, loop start, loop end, auto-loop
-state, auto-loop bar count, grid offset samples, stem cache metadata, and stem mix preference.
+state, auto-loop bar count, grid offset samples, stem cache metadata, stem mix preference, and
+per-pad Key Lock intent.
 
-The system SHALL publish neutral live defaults for pad BPM, Gain/Trim, EQ, and loop region outside
-the audio callback so a later track loaded into the same pad does not inherit stale live audio
-state.
+The system SHALL publish neutral live defaults for pad BPM, Gain/Trim, EQ, loop region, and
+per-pad Key Lock outside the audio callback so a later track loaded into the same pad does not
+inherit stale live audio state.
 
 The system MUST NOT reset global project settings, input mappings, selected pad/bank, sidebar
 visibility, or other non-track-bound UI preferences as part of unloading a pad.

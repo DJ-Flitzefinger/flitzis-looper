@@ -26,8 +26,9 @@ explicit seek mode, and optional `PlaybackTimelineAnchor`.
 - Per-pad Key Lock on: source-frame tempo progression remains active, and the
   varispeed block is processed through a per-voice Rubber Band LiveShifter with
   pitch scale derived from `1.0 / tempo_ratio`.
-- The global Key Lock control overwrites every per-pad Key Lock value. A later
-  per-pad toggle changes only that pad.
+- The global Key Lock control overwrites currently loaded pads' per-pad Key
+  Lock values. A later per-pad toggle changes only that loaded pad, and unloaded
+  pads remain disabled.
 - BPM Lock off: the active tempo ratio is the global speed multiplier.
 - BPM Lock on with valid master and pad BPM metadata: the active tempo ratio is
   `master_bpm / pad_bpm`.
@@ -77,9 +78,10 @@ continues rendering.
 ## Settings Contract
 
 Project persistence stores the global `key_lock` boolean as global-control
-intent and `pad_key_lock` as one durable boolean per pad. It does not store
-Rubber Band handles, DLL/shared-library paths, runtime buffers, measured
-latency, algorithmic delay, or callback-internal backend state.
+intent and `pad_key_lock` as bounded loaded-pad intent. Unloaded pads are saved
+and restored with disabled per-pad Key Lock values. It does not store Rubber
+Band handles, DLL/shared-library paths, runtime buffers, measured latency,
+algorithmic delay, or callback-internal backend state.
 
 The performer Settings UI exposes no Rubber Band backend tuning surface. Rust
 uses a fixed internal tempo-ratio smoothing step for active voices; that value is

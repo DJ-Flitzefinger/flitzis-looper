@@ -21,9 +21,9 @@ When a pad's effective Key Lock state is disabled, the system SHALL render that 
 ## ADDED Requirements
 
 ### Requirement: Per-Pad Key Lock State Drives Active Voices
-The system SHALL choose Key Lock processing for each active voice from that voice's pad-specific Key Lock state.
+The system SHALL choose Key Lock processing for each active voice from that voice's loaded pad-specific Key Lock state.
 
-Global Key Lock updates SHALL overwrite every pad's Key Lock state. Per-pad Key Lock updates SHALL change only the addressed pad. Updating either state SHALL NOT stop, retrigger, reload, regenerate stems, reanalyze pads, time-slip active voices, or move source loop positions.
+Global Key Lock updates SHALL overwrite only currently loaded pads' Key Lock state and SHALL leave unloaded pads at disabled Key Lock state. Per-pad Key Lock updates SHALL change only the addressed loaded pad. Updating either state SHALL NOT stop, retrigger, reload, regenerate stems, reanalyze pads, time-slip active voices, or move source loop positions.
 
 #### Scenario: Different pads use different Key Lock modes
 - **GIVEN** Pad 1 and Pad 3 are playing
@@ -34,10 +34,11 @@ Global Key Lock updates SHALL overwrite every pad's Key Lock state. Per-pad Key 
 - **AND** Pad 3 uses varispeed playback
 - **AND** neither pad is retriggered by the mode difference
 
-#### Scenario: Global update overwrites all live pad states
+#### Scenario: Global update overwrites loaded live pad states
 - **GIVEN** active pads have mixed per-pad Key Lock states
 - **WHEN** the performer enables global Key Lock
-- **THEN** every pad's effective Key Lock state becomes enabled
+- **THEN** every loaded pad's effective Key Lock state becomes enabled
+- **AND** unloaded pads retain disabled Key Lock state
 - **AND** active voices adopt the new state without stopping or retriggering
 
 #### Scenario: Per-pad update affects only one active pad
@@ -47,6 +48,12 @@ Global Key Lock updates SHALL overwrite every pad's Key Lock state. Per-pad Key 
 - **THEN** Pad 3 uses varispeed playback
 - **AND** Pad 4 continues using Key Lock pitch-preservation processing
 - **AND** the update uses bounded audio-engine state
+
+#### Scenario: Per-pad update ignores unloaded pad
+- **GIVEN** Pad 3 has no loaded audio
+- **WHEN** the performer or controller requests Key Lock for Pad 3
+- **THEN** Pad 3's effective Key Lock state remains disabled
+- **AND** no active voice can inherit stale Key Lock state from the unloaded pad
 
 ### Requirement: Per-Pad Key Lock Realtime Safety
 The system SHALL store realtime per-pad Key Lock state as bounded scalar audio-engine state.

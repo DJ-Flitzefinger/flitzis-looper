@@ -103,6 +103,8 @@ class PadSelectors:  # noqa: PLR0904 - selector facade intentionally mirrors pad
         return self._controller.transport.pad.effective_key(pad_id)
 
     def key_lock(self, pad_id: int) -> bool:
+        if self._project.sample_paths[pad_id] is None:
+            return False
         return bool(self._project.pad_key_lock[pad_id])
 
     def effective_loop_region(self, pad_id: int) -> tuple[float, float | None]:
