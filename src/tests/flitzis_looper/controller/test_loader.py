@@ -12,7 +12,9 @@ from flitzis_looper.controller.stems import (
 from flitzis_looper.models import (
     STEM_COMPONENT_MASK,
     STEM_KINDS,
+    BeatGrid,
     ProjectState,
+    SampleAnalysis,
     SessionState,
     StemCacheEntry,
 )
@@ -70,6 +72,49 @@ def test_load_sample_async_unloads_existing(
     assert controller.project.sample_paths[sample_id] is None
     assert controller.project.stem_cache[sample_id] is None
     assert controller.session.pending_sample_paths[sample_id] == new_path
+
+
+def test_load_sample_async_resets_stale_empty_pad_settings(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    """Loading into an empty pad starts from defaults even if the config has stale values."""
+    sample_id = 0
+    defaults = ProjectState()
+    controller.project.manual_bpm[sample_id] = 123.0
+    controller.project.manual_key[sample_id] = "Gm"
+    controller.project.pad_gain_db[sample_id] = -6.0
+    controller.project.pad_eq_low_db[sample_id] = 1.0
+    controller.project.pad_eq_mid_db[sample_id] = -2.0
+    controller.project.pad_eq_high_db[sample_id] = 3.0
+    controller.project.pad_loop_auto[sample_id] = True
+    controller.project.pad_loop_start_s[sample_id] = 5.0
+    controller.project.pad_loop_end_s[sample_id] = 10.0
+    controller.project.pad_loop_bars[sample_id] = 2.0
+    controller.project.pad_grid_offset_samples[sample_id] = -240
+
+    controller.loader.load_sample_async(sample_id, "/path/to/new.wav")
+
+    assert controller.project.manual_bpm[sample_id] == defaults.manual_bpm[sample_id]
+    assert controller.project.manual_key[sample_id] == defaults.manual_key[sample_id]
+    assert controller.project.pad_gain_db[sample_id] == defaults.pad_gain_db[sample_id]
+    assert controller.project.pad_eq_low_db[sample_id] == defaults.pad_eq_low_db[sample_id]
+    assert controller.project.pad_eq_mid_db[sample_id] == defaults.pad_eq_mid_db[sample_id]
+    assert controller.project.pad_eq_high_db[sample_id] == defaults.pad_eq_high_db[sample_id]
+    assert controller.project.pad_loop_auto[sample_id] == defaults.pad_loop_auto[sample_id]
+    assert controller.project.pad_loop_start_s[sample_id] == defaults.pad_loop_start_s[sample_id]
+    assert controller.project.pad_loop_end_s[sample_id] == defaults.pad_loop_end_s[sample_id]
+    assert controller.project.pad_loop_bars[sample_id] == defaults.pad_loop_bars[sample_id]
+    assert (
+        controller.project.pad_grid_offset_samples[sample_id]
+        == defaults.pad_grid_offset_samples[sample_id]
+    )
+    audio_engine_mock.set_pad_bpm.assert_called_with(sample_id, None)
+    audio_engine_mock.set_pad_gain.assert_called_with(sample_id, defaults.pad_gain_db[sample_id])
+    audio_engine_mock.set_pad_eq.assert_called_with(sample_id, 0.0, 0.0, 0.0)
+    audio_engine_mock.set_pad_loop_region.assert_called_with(sample_id, 0.0, None)
+    audio_engine_mock.load_sample_async.assert_called_with(
+        sample_id, "/path/to/new.wav", run_analysis=True
+    )
 
 
 def test_loader_success_updates_project_sample_path(
@@ -187,6 +232,64 @@ def test_unload_sample(controller: AppController, audio_engine_mock: Mock) -> No
     assert controller.project.stem_cache[sample_id] is None
     assert sample_id not in controller.session.active_sample_ids
     assert sample_id not in controller.session.stem_generating_sample_ids
+
+
+def test_unload_sample_resets_track_bound_pad_settings(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    """Unloading clears the persisted settings that belong to the previous track."""
+    sample_id = 0
+    defaults = ProjectState()
+    controller.project.sample_paths[sample_id] = "/path/to/sample.wav"
+    controller.project.sample_durations[sample_id] = 42.0
+    controller.project.sample_analysis[sample_id] = SampleAnalysis(
+        bpm=123.0,
+        key="C#m",
+        beat_grid=BeatGrid(beats=[0.0, 0.5], downbeats=[0.0], bars=[0.0]),
+    )
+    controller.project.stem_cache[sample_id] = StemCacheEntry(
+        source_version="old",
+        cache_dir="samples/stems/old",
+    )
+    controller.project.pad_stem_mix_mode[sample_id] = "all_stems"
+    controller.project.manual_bpm[sample_id] = 128.0
+    controller.project.manual_key[sample_id] = "Gm"
+    controller.project.pad_gain_db[sample_id] = -9.0
+    controller.project.pad_eq_low_db[sample_id] = 1.5
+    controller.project.pad_eq_mid_db[sample_id] = -3.0
+    controller.project.pad_eq_high_db[sample_id] = 4.5
+    controller.project.pad_loop_auto[sample_id] = True
+    controller.project.pad_loop_start_s[sample_id] = 6.0
+    controller.project.pad_loop_end_s[sample_id] = 14.0
+    controller.project.pad_loop_bars[sample_id] = 2.0
+    controller.project.pad_grid_offset_samples[sample_id] = 512
+
+    controller.loader.unload_sample(sample_id)
+
+    assert controller.project.sample_paths[sample_id] == defaults.sample_paths[sample_id]
+    assert controller.project.sample_durations[sample_id] == defaults.sample_durations[sample_id]
+    assert controller.project.sample_analysis[sample_id] == defaults.sample_analysis[sample_id]
+    assert controller.project.stem_cache[sample_id] == defaults.stem_cache[sample_id]
+    assert controller.project.pad_stem_mix_mode[sample_id] == defaults.pad_stem_mix_mode[sample_id]
+    assert controller.project.manual_bpm[sample_id] == defaults.manual_bpm[sample_id]
+    assert controller.project.manual_key[sample_id] == defaults.manual_key[sample_id]
+    assert controller.project.pad_gain_db[sample_id] == defaults.pad_gain_db[sample_id]
+    assert controller.project.pad_eq_low_db[sample_id] == defaults.pad_eq_low_db[sample_id]
+    assert controller.project.pad_eq_mid_db[sample_id] == defaults.pad_eq_mid_db[sample_id]
+    assert controller.project.pad_eq_high_db[sample_id] == defaults.pad_eq_high_db[sample_id]
+    assert controller.project.pad_loop_auto[sample_id] == defaults.pad_loop_auto[sample_id]
+    assert controller.project.pad_loop_start_s[sample_id] == defaults.pad_loop_start_s[sample_id]
+    assert controller.project.pad_loop_end_s[sample_id] == defaults.pad_loop_end_s[sample_id]
+    assert controller.project.pad_loop_bars[sample_id] == defaults.pad_loop_bars[sample_id]
+    assert (
+        controller.project.pad_grid_offset_samples[sample_id]
+        == defaults.pad_grid_offset_samples[sample_id]
+    )
+    audio_engine_mock.unload_sample.assert_called_once_with(sample_id)
+    audio_engine_mock.set_pad_bpm.assert_called_with(sample_id, None)
+    audio_engine_mock.set_pad_gain.assert_called_with(sample_id, defaults.pad_gain_db[sample_id])
+    audio_engine_mock.set_pad_eq.assert_called_with(sample_id, 0.0, 0.0, 0.0)
+    audio_engine_mock.set_pad_loop_region.assert_called_with(sample_id, 0.0, None)
 
 
 def test_unload_sample_with_negative_grid_offset_does_not_publish_invalid_timing_metadata(

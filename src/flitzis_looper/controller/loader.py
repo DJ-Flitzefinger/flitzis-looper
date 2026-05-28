@@ -1,6 +1,6 @@
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from pydantic import ValidationError
 
@@ -19,6 +19,17 @@ if TYPE_CHECKING:
 
     from flitzis_looper.models import StemCacheEntry
     from flitzis_looper_audio import AudioEngine
+
+
+_PadValue = TypeVar("_PadValue")
+
+
+def _reset_pad_value(values: list[_PadValue], sample_id: int, default: _PadValue) -> bool:
+    if values[sample_id] == default:
+        return False
+
+    values[sample_id] = default
+    return True
 
 
 class LoaderController(BaseController):
@@ -95,6 +106,9 @@ class LoaderController(BaseController):
         validate_sample_id(sample_id)
         if self.is_sample_loaded(sample_id):
             self.unload_sample(sample_id)
+        else:
+            self._reset_unloaded_pad_defaults(sample_id)
+            self._on_pad_bpm_changed(sample_id)
 
         self._project.sample_analysis[sample_id] = None
         self._clear_stem_cache(sample_id)
@@ -116,11 +130,24 @@ class LoaderController(BaseController):
         """Stop playback and unload a sample slot."""
         validate_sample_id(sample_id)
         self._session.active_sample_ids.discard(sample_id)
+        self._session.paused_sample_ids.discard(sample_id)
+        self._session.global_stop_restore_sample_ids.discard(sample_id)
         self._session.loading_sample_ids.discard(sample_id)
         self._session.pending_sample_paths.pop(sample_id, None)
         self._session.sample_load_progress.pop(sample_id, None)
         self._session.sample_load_stage.pop(sample_id, None)
         self._session.sample_load_errors.pop(sample_id, None)
+        self._session.pressed_pads[sample_id] = False
+        self._session.pad_peak[sample_id] = 0.0
+        self._session.pad_peak_updated_at[sample_id] = 0.0
+        self._session.pad_clip_hold_until[sample_id] = 0.0
+        self._session.pad_playhead_s[sample_id] = None
+        self._session.pad_playhead_updated_at[sample_id] = 0.0
+        if self._session.waveform_pause_hold_pad_id == sample_id:
+            self._session.waveform_pause_hold_pad_id = None
+        if self._session.tap_bpm_pad_id == sample_id:
+            self._session.tap_bpm_pad_id = None
+            self._session.tap_bpm_timestamps.clear()
 
         self._clear_analysis_task_state(sample_id)
         self._clear_stem_generation_state(sample_id)
@@ -132,9 +159,7 @@ class LoaderController(BaseController):
             self._clear_stem_cache(sample_id)
 
         self._audio.unload_sample(sample_id)
-        self._project.sample_paths[sample_id] = None
-        self._project.sample_durations[sample_id] = None
-        self._project.sample_analysis[sample_id] = None
+        self._reset_unloaded_pad_defaults(sample_id)
         self._on_pad_bpm_changed(sample_id)
         self._mark_project_changed()
 
@@ -245,6 +270,93 @@ class LoaderController(BaseController):
 
     def _clear_stem_cache(self, sample_id: int) -> None:
         self._project.stem_cache[sample_id] = None
+
+    def _reset_unloaded_pad_defaults(self, sample_id: int) -> None:
+        defaults = ProjectState()
+        self._reset_unloaded_pad_project_defaults(sample_id, defaults)
+        self._publish_unloaded_pad_audio_defaults(sample_id, defaults)
+
+    def _reset_unloaded_pad_project_defaults(self, sample_id: int, defaults: ProjectState) -> bool:
+        source_changed = self._reset_unloaded_pad_source_defaults(sample_id, defaults)
+        mixing_changed = self._reset_unloaded_pad_mixing_defaults(sample_id, defaults)
+        loop_changed = self._reset_unloaded_pad_loop_defaults(sample_id, defaults)
+        return source_changed or mixing_changed or loop_changed
+
+    def _reset_unloaded_pad_source_defaults(self, sample_id: int, defaults: ProjectState) -> bool:
+        return any((
+            _reset_pad_value(
+                self._project.sample_paths, sample_id, defaults.sample_paths[sample_id]
+            ),
+            _reset_pad_value(
+                self._project.sample_durations,
+                sample_id,
+                defaults.sample_durations[sample_id],
+            ),
+            _reset_pad_value(
+                self._project.sample_analysis,
+                sample_id,
+                defaults.sample_analysis[sample_id],
+            ),
+            _reset_pad_value(self._project.stem_cache, sample_id, defaults.stem_cache[sample_id]),
+            _reset_pad_value(
+                self._project.pad_stem_mix_mode,
+                sample_id,
+                defaults.pad_stem_mix_mode[sample_id],
+            ),
+            _reset_pad_value(self._project.manual_bpm, sample_id, defaults.manual_bpm[sample_id]),
+            _reset_pad_value(self._project.manual_key, sample_id, defaults.manual_key[sample_id]),
+        ))
+
+    def _reset_unloaded_pad_mixing_defaults(self, sample_id: int, defaults: ProjectState) -> bool:
+        return any((
+            _reset_pad_value(self._project.pad_gain_db, sample_id, defaults.pad_gain_db[sample_id]),
+            _reset_pad_value(
+                self._project.pad_eq_low_db, sample_id, defaults.pad_eq_low_db[sample_id]
+            ),
+            _reset_pad_value(
+                self._project.pad_eq_mid_db, sample_id, defaults.pad_eq_mid_db[sample_id]
+            ),
+            _reset_pad_value(
+                self._project.pad_eq_high_db, sample_id, defaults.pad_eq_high_db[sample_id]
+            ),
+        ))
+
+    def _reset_unloaded_pad_loop_defaults(self, sample_id: int, defaults: ProjectState) -> bool:
+        return any((
+            _reset_pad_value(
+                self._project.pad_loop_start_s,
+                sample_id,
+                defaults.pad_loop_start_s[sample_id],
+            ),
+            _reset_pad_value(
+                self._project.pad_loop_end_s, sample_id, defaults.pad_loop_end_s[sample_id]
+            ),
+            _reset_pad_value(
+                self._project.pad_loop_auto, sample_id, defaults.pad_loop_auto[sample_id]
+            ),
+            _reset_pad_value(
+                self._project.pad_loop_bars, sample_id, defaults.pad_loop_bars[sample_id]
+            ),
+            _reset_pad_value(
+                self._project.pad_grid_offset_samples,
+                sample_id,
+                defaults.pad_grid_offset_samples[sample_id],
+            ),
+        ))
+
+    def _publish_unloaded_pad_audio_defaults(self, sample_id: int, defaults: ProjectState) -> None:
+        self._audio.set_pad_gain(sample_id, defaults.pad_gain_db[sample_id])
+        self._audio.set_pad_eq(
+            sample_id,
+            defaults.pad_eq_low_db[sample_id],
+            defaults.pad_eq_mid_db[sample_id],
+            defaults.pad_eq_high_db[sample_id],
+        )
+        self._audio.set_pad_loop_region(
+            sample_id,
+            defaults.pad_loop_start_s[sample_id],
+            defaults.pad_loop_end_s[sample_id],
+        )
 
     def _handle_loader_started(self, sample_id: int, _event: dict[str, object]) -> None:
         if self._project.sample_paths[sample_id] is None:
