@@ -44,6 +44,35 @@ def test_set_pad_eq_clamps_and_calls_engine(
     assert controller.project.pad_eq_mid_db[sample_id] == PAD_EQ_DB_MIN
 
 
+def test_set_pad_key_lock_updates_only_one_pad(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.project.pad_key_lock[4] = True
+    enabled = True
+
+    controller.transport.pad.set_pad_key_lock(3, enabled=enabled)
+
+    audio_engine_mock.set_pad_key_lock.assert_called_once_with(3, enabled)
+    assert controller.project.pad_key_lock[3] is True
+    assert controller.project.pad_key_lock[4] is True
+    assert controller.project.pad_key_lock[2] is False
+
+
+def test_toggle_pad_key_lock(controller: AppController, audio_engine_mock: Mock) -> None:
+    enabled = True
+
+    controller.transport.pad.toggle_pad_key_lock(3)
+
+    audio_engine_mock.set_pad_key_lock.assert_called_once_with(3, enabled)
+    assert controller.project.pad_key_lock[3] is True
+
+
+def test_set_pad_key_lock_no_op(controller: AppController, audio_engine_mock: Mock) -> None:
+    controller.transport.pad.set_pad_key_lock(3, enabled=False)
+
+    audio_engine_mock.set_pad_key_lock.assert_not_called()
+
+
 def test_poll_audio_messages_updates_session_peak(
     controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:

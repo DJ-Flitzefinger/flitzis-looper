@@ -941,6 +941,13 @@ def _render_stem_controls(ctx: UiContext, info: _SidebarPadInfo) -> None:
     _render_stem_mix_mode(ctx, info)
 
 
+def _render_pad_key_lock(ctx: UiContext, pad_id: int) -> None:
+    style_name: ButtonStyleName = "mode-on" if ctx.state.pads.key_lock(pad_id) else "mode-off"
+    with button_style(style_name):
+        if imgui.button("KEY LOCK##pad_key_lock", (-1, 0)):
+            ctx.audio.pads.toggle_pad_key_lock(pad_id)
+
+
 def _render_loaded_actions(ctx: UiContext, pad_id: int) -> None:
     if imgui.button("Unload Audio", (-1, 0)):
         ctx.audio.pads.unload_sample(pad_id)
@@ -1027,3 +1034,4 @@ def sidebar_left(ctx: UiContext) -> None:
             _render_loading_status(ctx, info.pad_id)
         else:
             _render_unloaded_actions(ctx, info.pad_id)
+        _render_pad_key_lock(ctx, info.pad_id)

@@ -207,6 +207,7 @@ class TestModelSerialization:
         assert "pad_stem_mix_mode" in data
         assert "manual_bpm" in data
         assert "manual_key" in data
+        assert "pad_key_lock" in data
         assert "speed" in data
         assert "volume" in data
         assert "trigger_quantization_enabled" in data
@@ -280,6 +281,8 @@ def test_project_state_defaults(project_state: ProjectState) -> None:
     assert all(entry is None for entry in project_state.stem_cache)
     assert len(project_state.pad_stem_mix_mode) == NUM_SAMPLES
     assert all(mode == "full_mix" for mode in project_state.pad_stem_mix_mode)
+    assert len(project_state.pad_key_lock) == NUM_SAMPLES
+    assert not any(project_state.pad_key_lock)
     assert len(project_state.manual_bpm) == NUM_SAMPLES
     assert all(bpm is None for bpm in project_state.manual_bpm)
     assert len(project_state.manual_key) == NUM_SAMPLES
@@ -380,19 +383,17 @@ def test_legacy_trigger_quantization_mode_migrates_to_new_fields() -> None:
 
 
 def test_removed_key_lock_backend_settings_are_ignored() -> None:
-    project = ProjectState.model_validate(
-        {
-            "key_lock": True,
-            "key_lock_quality": "very_high",
-            "key_lock_delay_min_samples": 128.0,
-            "key_lock_delay_range_samples": 1024.0,
-            "key_lock_head_count": 4,
-            "key_lock_interpolation": "linear",
-            "key_lock_window": "triangle",
-            "key_lock_smoothing_step": 0.04,
-            "key_lock_output_gain": 1.2,
-        }
-    )
+    project = ProjectState.model_validate({
+        "key_lock": True,
+        "key_lock_quality": "very_high",
+        "key_lock_delay_min_samples": 128.0,
+        "key_lock_delay_range_samples": 1024.0,
+        "key_lock_head_count": 4,
+        "key_lock_interpolation": "linear",
+        "key_lock_window": "triangle",
+        "key_lock_smoothing_step": 0.04,
+        "key_lock_output_gain": 1.2,
+    })
     dumped = project.model_dump(mode="json")
 
     assert project.key_lock is True
@@ -448,6 +449,14 @@ def test_stem_mix_mode_validation(project_state: ProjectState) -> None:
 
     with pytest.raises(ValidationError, match="pad_stem_mix_mode must have length"):
         ProjectState(pad_stem_mix_mode=[])
+
+
+def test_pad_key_lock_validation(project_state: ProjectState) -> None:
+    project_state.pad_key_lock[3] = True
+    assert project_state.pad_key_lock[3] is True
+
+    with pytest.raises(ValidationError, match="pad_key_lock must have length"):
+        ProjectState(pad_key_lock=[])
 
 
 def test_stem_cache_entry_represents_expected_kinds() -> None:

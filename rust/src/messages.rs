@@ -193,6 +193,9 @@ pub enum ControlMessage {
     /// Enable or disable key lock (preserve pitch under tempo changes).
     SetKeyLock(bool),
 
+    /// Enable or disable Key Lock for one pad.
+    SetPadKeyLock { id: usize, enabled: bool },
+
     /// Set bounded per-pad beatgrid/downbeat timing metadata.
     SetPadTimingMetadata {
         id: usize,
@@ -314,6 +317,7 @@ impl ControlMessage {
             }
             ControlMessage::SetBpmLock(_)
             | ControlMessage::SetKeyLock(_)
+            | ControlMessage::SetPadKeyLock { .. }
             | ControlMessage::SetPadTimingMetadata { .. }
             | ControlMessage::AnchorTransportPhaseFromPad { .. }
             | ControlMessage::SetPadLoopRegion { .. }
@@ -562,6 +566,22 @@ mod tests {
     }
 
     #[test]
+    fn pad_key_lock_message_carries_bounded_state() {
+        let message = ControlMessage::SetPadKeyLock {
+            id: 3,
+            enabled: true,
+        };
+
+        assert!(matches!(
+            message,
+            ControlMessage::SetPadKeyLock {
+                id: 3,
+                enabled: true
+            }
+        ));
+    }
+
+    #[test]
     fn control_messages_classify_ordered_and_parameter_semantics() {
         assert_eq!(
             ControlMessage::PlaySample { id: 1, volume: 1.0 }.class(),
@@ -597,6 +617,14 @@ mod tests {
         );
         assert_eq!(
             ControlMessage::SetTriggerQuantization(TriggerQuantization::Immediate).class(),
+            ControlMessageClass::OrderedState
+        );
+        assert_eq!(
+            ControlMessage::SetPadKeyLock {
+                id: 1,
+                enabled: true,
+            }
+            .class(),
             ControlMessageClass::OrderedState
         );
     }

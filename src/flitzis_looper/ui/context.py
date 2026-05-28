@@ -102,6 +102,9 @@ class PadSelectors:  # noqa: PLR0904 - selector facade intentionally mirrors pad
     def effective_key(self, pad_id: int) -> str | None:
         return self._controller.transport.pad.effective_key(pad_id)
 
+    def key_lock(self, pad_id: int) -> bool:
+        return bool(self._project.pad_key_lock[pad_id])
+
     def effective_loop_region(self, pad_id: int) -> tuple[float, float | None]:
         return self._controller.transport.loop.effective_region(pad_id)
 
@@ -241,7 +244,7 @@ class UiState:
         return cast("SessionState", self._session_proxy)
 
 
-class PadAudioActions:
+class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad controls.
     def __init__(self, controller: AppController):
         self._controller = controller
 
@@ -355,6 +358,9 @@ class PadAudioActions:
                 high_db,
             ),
         )
+
+    def toggle_pad_key_lock(self, pad_id: int) -> None:
+        self._controller.transport.pad.toggle_pad_key_lock(pad_id)
 
 
 class StemAudioActions:

@@ -34,8 +34,7 @@ class ApplyProjectState:
         if self._project.speed != defaults.speed:
             self._audio.set_speed(self._project.speed)
 
-        if self._project.key_lock != defaults.key_lock:
-            self._audio.set_key_lock(enabled=self._project.key_lock)
+        self._apply_key_lock_settings(defaults)
 
         if self._project.bpm_lock != defaults.bpm_lock:
             self._audio.set_bpm_lock(enabled=self._project.bpm_lock)
@@ -47,6 +46,18 @@ class ApplyProjectState:
                 else "immediate"
             )
             self._audio.set_trigger_quantization(mode)
+
+    def _apply_key_lock_settings(self, defaults: ProjectState) -> None:
+        if self._project.pad_key_lock == defaults.pad_key_lock:
+            return
+
+        if all(value is self._project.pad_key_lock[0] for value in self._project.pad_key_lock):
+            self._audio.set_key_lock(enabled=self._project.pad_key_lock[0])
+            return
+
+        for sample_id, enabled in enumerate(self._project.pad_key_lock):
+            if enabled != defaults.pad_key_lock[sample_id]:
+                self._audio.set_pad_key_lock(sample_id, enabled)
 
     def _apply_per_pad_mixing(self, defaults: ProjectState) -> None:
         for sample_id, gain_db in enumerate(self._project.pad_gain_db):

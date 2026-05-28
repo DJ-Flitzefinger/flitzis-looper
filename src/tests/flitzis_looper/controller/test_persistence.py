@@ -380,6 +380,25 @@ def test_missing_pad_stem_mix_mode_loads_as_full_mix(
     assert all(mode == "full_mix" for mode in loaded.pad_stem_mix_mode)
 
 
+def test_missing_pad_key_lock_loads_as_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    project = ProjectState(volume=0.5)
+    data = project.model_dump(mode="json")
+    data.pop("pad_key_lock", None)
+
+    config_path = tmp_path / PROJECT_CONFIG_PATH
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+
+    loaded = ProjectPersistence.from_config_path().project
+    assert loaded.volume == pytest.approx(0.5)
+    assert loaded.pad_key_lock[0] is False
+    assert not any(loaded.pad_key_lock)
+
+
 def test_missing_demucs_quality_settings_load_defaults(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -415,18 +434,16 @@ def test_removed_key_lock_backend_settings_are_not_persisted(
         "key_lock_output_gain",
     ]
     data = ProjectState(volume=0.5, key_lock=True).model_dump(mode="json")
-    data.update(
-        {
-            "key_lock_quality": "very_high",
-            "key_lock_delay_min_samples": 128.0,
-            "key_lock_delay_range_samples": 1024.0,
-            "key_lock_head_count": 4,
-            "key_lock_interpolation": "linear",
-            "key_lock_window": "triangle",
-            "key_lock_smoothing_step": 0.04,
-            "key_lock_output_gain": 1.2,
-        }
-    )
+    data.update({
+        "key_lock_quality": "very_high",
+        "key_lock_delay_min_samples": 128.0,
+        "key_lock_delay_range_samples": 1024.0,
+        "key_lock_head_count": 4,
+        "key_lock_interpolation": "linear",
+        "key_lock_window": "triangle",
+        "key_lock_smoothing_step": 0.04,
+        "key_lock_output_gain": 1.2,
+    })
 
     config_path = tmp_path / PROJECT_CONFIG_PATH
     config_path.parent.mkdir(parents=True)
@@ -477,6 +494,21 @@ def test_pad_stem_mix_mode_persisted_per_pad(
     loaded = ProjectPersistence.from_config_path().project
     assert loaded.pad_stem_mix_mode[0] == "all_stems"
     assert loaded.pad_stem_mix_mode[1] == "full_mix"
+
+
+def test_pad_key_lock_persisted_per_pad(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    project = ProjectState(volume=0.5)
+    project.pad_key_lock[3] = True
+
+    persistence = ProjectPersistence(project)
+    persistence.mark_dirty()
+    persistence.flush(now=0.0)
+
+    loaded = ProjectPersistence.from_config_path().project
+    assert loaded.pad_key_lock[3] is True
+    assert loaded.pad_key_lock[4] is False
 
 
 def test_transient_stem_generation_state_is_not_persisted(

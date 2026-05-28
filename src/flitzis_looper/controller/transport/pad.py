@@ -42,6 +42,21 @@ class PadController:
         self._project.pad_eq_high_db[sample_id] = high_db
         self._transport._mark_project_changed()
 
+    def set_pad_key_lock(self, sample_id: int, *, enabled: bool) -> None:
+        """Enable or disable Key Lock for one pad."""
+        validate_sample_id(sample_id)
+        if self._project.pad_key_lock[sample_id] is enabled:
+            return
+
+        self._audio.set_pad_key_lock(sample_id, enabled)
+        self._project.pad_key_lock[sample_id] = enabled
+        self._transport._mark_project_changed()
+
+    def toggle_pad_key_lock(self, sample_id: int) -> None:
+        """Toggle Key Lock for one pad."""
+        validate_sample_id(sample_id)
+        self.set_pad_key_lock(sample_id, enabled=not self._project.pad_key_lock[sample_id])
+
     def set_manual_key(self, sample_id: int, key: str) -> None:
         """Set a pad's manual key override."""
         validate_sample_id(sample_id)

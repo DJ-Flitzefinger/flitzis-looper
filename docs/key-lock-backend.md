@@ -14,17 +14,20 @@ rust/src/audio_engine/stretch_processor.rs
 rust/src/audio_engine/rubberband_backend.rs
 ```
 
-`RtMixer` owns tempo-ratio selection, source-frame addressing, full-mix/stem
-source reads, and per-voice `StretchProcessor` calls. `VoiceSlot` owns the
-per-voice `StretchProcessor`, smoothed tempo ratio, explicit seek mode, and
-optional `PlaybackTimelineAnchor`.
+`RtMixer` owns tempo-ratio selection, per-pad Key Lock state, source-frame
+addressing, full-mix/stem source reads, and per-voice `StretchProcessor` calls.
+`VoiceSlot` owns the per-voice `StretchProcessor`, smoothed tempo ratio,
+explicit seek mode, and optional `PlaybackTimelineAnchor`.
 
 ## Playback Semantics
 
-- Key Lock off: playback is varispeed, so tempo and pitch move together.
-- Key Lock on: source-frame tempo progression remains active, and the varispeed
-  block is processed through a per-voice Rubber Band LiveShifter with pitch
-  scale derived from `1.0 / tempo_ratio`.
+- Per-pad Key Lock off: playback is varispeed, so tempo and pitch move
+  together.
+- Per-pad Key Lock on: source-frame tempo progression remains active, and the
+  varispeed block is processed through a per-voice Rubber Band LiveShifter with
+  pitch scale derived from `1.0 / tempo_ratio`.
+- The global Key Lock control overwrites every per-pad Key Lock value. A later
+  per-pad toggle changes only that pad.
 - BPM Lock off: the active tempo ratio is the global speed multiplier.
 - BPM Lock on with valid master and pad BPM metadata: the active tempo ratio is
   `master_bpm / pad_bpm`.
@@ -73,10 +76,10 @@ continues rendering.
 
 ## Settings Contract
 
-Project persistence stores the global `key_lock` boolean as performer intent.
-It does not store Rubber Band handles, DLL/shared-library paths, runtime
-buffers, measured latency, algorithmic delay, or callback-internal backend
-state.
+Project persistence stores the global `key_lock` boolean as global-control
+intent and `pad_key_lock` as one durable boolean per pad. It does not store
+Rubber Band handles, DLL/shared-library paths, runtime buffers, measured
+latency, algorithmic delay, or callback-internal backend state.
 
 The performer Settings UI exposes no Rubber Band backend tuning surface. Rust
 uses a fixed internal tempo-ratio smoothing step for active voices; that value is
@@ -95,10 +98,10 @@ The audio callback must not:
 - run neural inference or stem separation,
 - spin while waiting for Rubber Band output.
 
-The callback updates scalar mode/ratio state, reads prepared source buffers,
-uses fixed Rubber Band staging storage, consumes or produces bounded FIFO data,
-and mixes the resulting output through Gain/Trim, DSP, metering, and master
-volume.
+The callback updates scalar mode/ratio state, reads bounded per-pad Key Lock
+state, reads prepared source buffers, uses fixed Rubber Band staging storage,
+consumes or produces bounded FIFO data, and mixes the resulting output through
+Gain/Trim, DSP, metering, and master volume.
 
 ## Native Dependency
 

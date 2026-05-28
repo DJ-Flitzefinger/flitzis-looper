@@ -178,6 +178,10 @@ def _default_pad_stem_mix_mode() -> list[StemMixMode]:
     return ["full_mix"] * NUM_SAMPLES
 
 
+def _default_pad_key_lock() -> list[bool]:
+    return [False] * NUM_SAMPLES
+
+
 def _default_manual_bpm() -> list[float | None]:
     return [None] * NUM_SAMPLES
 
@@ -278,6 +282,9 @@ class ProjectState(BaseModel):
 
     pad_stem_mix_mode: list[StemMixMode] = Field(default_factory=_default_pad_stem_mix_mode)
     """Per-pad durable stem mix preference."""
+
+    pad_key_lock: list[bool] = Field(default_factory=_default_pad_key_lock)
+    """Per-pad durable Key Lock intent."""
 
     manual_bpm: list[float | None] = Field(default_factory=_default_manual_bpm)
     """Optional per-pad BPM override. When set, used for effective BPM display."""
@@ -454,6 +461,14 @@ class ProjectState(BaseModel):
     def _validate_pad_stem_mix_mode(cls, value: list[StemMixMode]) -> list[StemMixMode]:
         if len(value) != NUM_SAMPLES:
             msg = f"pad_stem_mix_mode must have length {NUM_SAMPLES}, got {len(value)}"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("pad_key_lock", mode="after")
+    @classmethod
+    def _validate_pad_key_lock(cls, value: list[bool]) -> list[bool]:
+        if len(value) != NUM_SAMPLES:
+            msg = f"pad_key_lock must have length {NUM_SAMPLES}, got {len(value)}"
             raise ValueError(msg)
         return value
 

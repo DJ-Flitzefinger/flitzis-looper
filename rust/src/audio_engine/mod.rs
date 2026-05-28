@@ -1101,6 +1101,25 @@ impl AudioEngine {
         Ok(())
     }
 
+    pub fn set_pad_key_lock(&mut self, id: usize, enabled: bool) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        let _ = producer_guard.push(ControlMessage::SetPadKeyLock { id, enabled });
+        Ok(())
+    }
+
     pub fn set_master_bpm(&mut self, bpm: f32) -> PyResult<()> {
         if !bpm.is_finite() || bpm <= 0.0 {
             return Err(PyValueError::new_err("bpm out of range"));

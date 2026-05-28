@@ -39,6 +39,9 @@ def test_apply_global_audio_settings_only_when_changed(
     transport_controller._project.volume = 0.8
     transport_controller._project.speed = 1.2
     transport_controller._project.key_lock = True
+    transport_controller._project.pad_key_lock = [True] * len(
+        transport_controller._project.pad_key_lock
+    )
     transport_controller._project.bpm_lock = False
     transport_controller._project.trigger_quantization_enabled = True
     transport_controller._project.trigger_quantization_step = "1_32"
@@ -62,6 +65,9 @@ def test_apply_global_audio_settings_calls_all_methods(
     transport_controller._project.volume = 0.9
     transport_controller._project.speed = 0.5
     transport_controller._project.key_lock = True
+    transport_controller._project.pad_key_lock = [True] * len(
+        transport_controller._project.pad_key_lock
+    )
     transport_controller._project.bpm_lock = True
     transport_controller._project.trigger_quantization_enabled = True
     transport_controller._project.trigger_quantization_step = "1_64"
@@ -89,6 +95,21 @@ def test_apply_per_pad_mixing_only_when_changed(
     apply_project_state._apply_per_pad_mixing(defaults)
 
     audio_engine_mock.set_pad_gain.assert_called_once()
+
+
+def test_apply_key_lock_settings_publishes_mixed_pad_state(
+    transport_controller: TransportController,
+    apply_project_state: ApplyProjectState,
+    audio_engine_mock: Mock,
+) -> None:
+    transport_controller._project.pad_key_lock[3] = True
+
+    defaults = ProjectState()
+    apply_project_state._apply_key_lock_settings(defaults)
+
+    audio_engine_mock.set_key_lock.assert_not_called()
+    enabled = True
+    audio_engine_mock.set_pad_key_lock.assert_called_once_with(3, enabled)
 
 
 def test_apply_per_pad_mixing_calls_gain_for_each_pad(
@@ -280,6 +301,9 @@ def test_apply_project_state_with_modified_state(
     transport_controller._project.volume = 0.8
     transport_controller._project.speed = 0.5
     transport_controller._project.key_lock = True
+    transport_controller._project.pad_key_lock = [True] * len(
+        transport_controller._project.pad_key_lock
+    )
     transport_controller._project.bpm_lock = True
     transport_controller._project.trigger_quantization_enabled = True
     transport_controller._project.trigger_quantization_step = "1_32"

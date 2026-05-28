@@ -193,13 +193,17 @@ Speed and BPM Lock resolve to one Rust mixer tempo ratio per active voice:
 - BPM Lock on with valid metadata: `master_bpm / pad_bpm`.
 - Missing pad BPM metadata: global speed fallback.
 
-Key Lock selects rendering semantics:
+Key Lock selects rendering semantics per pad:
 
 - Off: varispeed playback, so pitch follows playback speed.
 - On: `stretch_processor.rs` keeps the source-frame tempo progression and sends
   the varispeed block through a per-voice Rubber Band LiveShifter with pitch
   scale derived from the inverse tempo ratio, so tempo changes remain while
   perceived pitch stays approximately stable.
+
+The global Key Lock control is a master write operation over the per-pad Key
+Lock array. After a global update, individual pad controls can change one pad
+without changing other pads.
 
 BPM-locked source addressing happens before full-mix/stem sample reads and
 before Key Lock processing. Full-mix and prepared-stem playback therefore feed
@@ -215,12 +219,12 @@ with silence and continues with bounded work. Playhead telemetry remains
 source-frame based; Rubber Band output latency does not shift loop ownership or
 transport scheduling.
 
-Project persistence stores only the global Key Lock performer intent. Rubber
-Band handles, runtime paths, buffers, measured latency, algorithmic delay, and
-backend tuning parameters are not persisted, exposed in performer settings, or
-sent through Python/Rust control messages. Active tempo-ratio changes use a
-fixed internal Rust smoothing step so the callback receives only bounded mode
-changes.
+Project persistence stores global Key Lock control intent and per-pad Key Lock
+booleans. Rubber Band handles, runtime paths, buffers, measured latency,
+algorithmic delay, and backend tuning parameters are not persisted, exposed in
+performer settings, or sent through Python/Rust control messages. Active
+tempo-ratio changes use a fixed internal Rust smoothing step so the callback
+receives only bounded mode changes.
 
 ## Per-Pad DSP And EQ
 

@@ -556,8 +556,8 @@ pub struct RtMixer {
     /// Enable BPM lock (tempo matching).
     bpm_lock_enabled: bool,
 
-    /// Enable key lock (preserve pitch when tempo changes).
-    key_lock_enabled: bool,
+    /// Per-pad Key Lock state (preserve pitch when tempo changes).
+    pad_key_lock_enabled: [bool; NUM_SAMPLES],
 
     /// Current master BPM when BPM lock is enabled.
     master_bpm: Option<f32>,
@@ -631,7 +631,7 @@ impl RtMixer {
             volume: VOLUME_MAX,
             speed: 1.0,
             bpm_lock_enabled: false,
-            key_lock_enabled: false,
+            pad_key_lock_enabled: std::array::from_fn(|_| false),
             master_bpm: None,
             pad_bpm: std::array::from_fn(|_| None),
             pad_phase_anchor_frame: std::array::from_fn(|_| 0),
@@ -1012,7 +1012,15 @@ impl RtMixer {
     }
 
     pub fn set_key_lock(&mut self, enabled: bool) {
-        self.key_lock_enabled = enabled;
+        self.pad_key_lock_enabled.fill(enabled);
+    }
+
+    pub fn set_pad_key_lock(&mut self, id: usize, enabled: bool) {
+        if id >= NUM_SAMPLES {
+            return;
+        }
+
+        self.pad_key_lock_enabled[id] = enabled;
     }
 
     pub fn set_master_bpm(&mut self, bpm: f32) {
@@ -1640,7 +1648,7 @@ impl RtMixer {
         let speed = self.speed;
         let volume = self.volume;
         let bpm_lock_enabled = self.bpm_lock_enabled;
-        let key_lock_enabled = self.key_lock_enabled;
+        let pad_key_lock_enabled = &self.pad_key_lock_enabled;
         let master_bpm = self.master_bpm;
         let pad_bpm = &self.pad_bpm;
         let pad_gain_smoothers = &mut self.pad_gain_smoothers;
@@ -1827,9 +1835,12 @@ impl RtMixer {
                 }
                 stem_transitions[voice.sample_id].advance(input_frames);
 
-                voice
-                    .stretch
-                    .process(input_frames, frames, tempo_ratio, key_lock_enabled);
+                voice.stretch.process(
+                    input_frames,
+                    frames,
+                    tempo_ratio,
+                    pad_key_lock_enabled[voice.sample_id],
+                );
 
                 let pad_dsp_chain = &mut pad_dsp_chains[voice.sample_id];
                 let pad_gain_smoother = &mut pad_gain_smoothers[voice.sample_id];
@@ -2315,6 +2326,63 @@ mod tests {
         assert_eq!(after_key_lock, 2048);
         assert_eq!(after_restore, 3072);
         assert_eq!(mixer.voices.iter().filter(|voice| voice.active).count(), 1);
+    }
+
+    #[test]
+    fn global_key_lock_overwrites_all_pad_states() {
+        let mut mixer = RtMixer::new(1, 48_000.0);
+
+        mixer.set_pad_key_lock(3, true);
+        mixer.set_pad_key_lock(4, false);
+        mixer.set_key_lock(true);
+
+        assert!(mixer.pad_key_lock_enabled.iter().all(|enabled| *enabled));
+
+        mixer.set_key_lock(false);
+
+        assert!(mixer.pad_key_lock_enabled.iter().all(|enabled| !*enabled));
+    }
+
+    #[test]
+    fn per_pad_key_lock_update_changes_only_target_pad() {
+        let mut mixer = RtMixer::new(1, 48_000.0);
+
+        mixer.set_key_lock(true);
+        mixer.set_pad_key_lock(3, false);
+
+        assert!(mixer.pad_key_lock_enabled[2]);
+        assert!(!mixer.pad_key_lock_enabled[3]);
+        assert!(mixer.pad_key_lock_enabled[4]);
+    }
+
+    #[test]
+    fn per_pad_key_lock_modes_render_independently() {
+        let sample_rate_hz = 48_000.0;
+        let source_hz = 440.0;
+        let source = create_sine_sample(sample_rate_hz, 96_000, source_hz);
+        let mut mixer = RtMixer::new(1, sample_rate_hz);
+        mixer.load_sample(0, source.clone());
+        mixer.load_sample(1, source);
+        mixer.set_speed(2.0);
+        mixer.set_key_lock(false);
+        mixer.set_pad_key_lock(1, true);
+
+        assert!(mixer.play_sample(0, 1.0));
+        let varispeed_output = render_chunks(&mut mixer, 48, 512);
+        mixer.stop_sample(0);
+
+        assert!(mixer.play_sample(1, 1.0));
+        let key_lock_output = render_chunks(&mut mixer, 48, 512);
+
+        let skip = 8192;
+        let varispeed_hz = estimate_frequency(&varispeed_output[skip..], sample_rate_hz);
+        let key_lock_hz = estimate_frequency(&key_lock_output[skip..], sample_rate_hz);
+
+        assert!(varispeed_hz > 800.0, "varispeed_hz={varispeed_hz}");
+        assert!(
+            (360.0..560.0).contains(&key_lock_hz),
+            "key_lock_hz={key_lock_hz}"
+        );
     }
 
     #[test]

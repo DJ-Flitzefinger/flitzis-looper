@@ -185,6 +185,13 @@ class TestUiStateComputedProperties:
         controller.transport.pad.set_manual_key(0, "Gm")
         assert ui_state.pads.effective_key(0) == "Gm"
 
+    def test_pad_key_lock_selector(self, controller: AppController) -> None:
+        ui_state = UiState(controller)
+        controller.project.pad_key_lock[3] = True
+
+        assert ui_state.pads.key_lock(3) is True
+        assert ui_state.pads.key_lock(4) is False
+
     def test_pad_stem_selectors_delegate_to_stem_controller(
         self, controller: AppController
     ) -> None:
@@ -318,6 +325,15 @@ class TestAudioActions:  # noqa: PLR0904
         audio_actions.pads.clear_manual_key(0)
         assert controller.project.manual_key[0] is None
 
+    def test_toggle_pad_key_lock(self, controller: AppController, audio_engine_mock: Mock) -> None:
+        audio_actions = AudioActions(controller)
+        enabled = True
+
+        audio_actions.pads.toggle_pad_key_lock(3)
+
+        audio_engine_mock.set_pad_key_lock.assert_called_once_with(3, enabled)
+        assert controller.project.pad_key_lock[3] is True
+
     def test_set_pad_full_track_loop_region(
         self, controller: AppController, audio_engine_mock: Mock
     ) -> None:
@@ -448,6 +464,7 @@ class TestAudioActions:  # noqa: PLR0904
         audio_actions.global_.toggle_key_lock()
 
         assert controller.project.key_lock is not initial_state
+        assert all(controller.project.pad_key_lock)
 
     def test_toggle_bpm_lock(self, controller: AppController) -> None:
         """Test toggle_bpm_lock toggles bpm_lock mode."""
