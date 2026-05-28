@@ -22,11 +22,11 @@ if TYPE_CHECKING:
     from flitzis_looper.ui.context import UiContext
     from flitzis_looper.ui.styles import ButtonStyleName
 
-STEM_GRID_INDICATORS: dict[str, tuple[str, imgui.ImVec4Like, imgui.ImVec4Like, str]] = {
-    "available": ("ST", MODE_ON_RGBA, TEXT_ACTIVE_RGBA, "Stems available"),
-    "generating": ("...", BANK_PRESSED_RGBA, TEXT_ACTIVE_RGBA, "Generating stems"),
-    "blocked": ("BLK", CONTROL_RGBA, TEXT_RGBA, "Stem generation blocked"),
-    "error": ("!", MODE_OFF_RGBA, TEXT_RGBA, "Stem generation error"),
+STEM_GRID_INDICATORS: dict[str, tuple[str, imgui.ImVec4Like, imgui.ImVec4Like]] = {
+    "available": ("ST", MODE_ON_RGBA, TEXT_ACTIVE_RGBA),
+    "generating": ("...", BANK_PRESSED_RGBA, TEXT_ACTIVE_RGBA),
+    "blocked": ("BLK", CONTROL_RGBA, TEXT_RGBA),
+    "error": ("!", MODE_OFF_RGBA, TEXT_RGBA),
 }
 PAD_TITLE_MAX_LINES = 3
 PAD_TITLE_PADDING_SAMPLE = "M"
@@ -193,7 +193,7 @@ def _pad_button_stem_indicator(ctx: UiContext, pad_id: int) -> None:
     if state is None:
         return
 
-    label, bg_rgba, text_rgba, tooltip = STEM_GRID_INDICATORS[state]
+    label, bg_rgba, text_rgba = STEM_GRID_INDICATORS[state]
     pos_min = imgui.get_item_rect_min()
     pos_max = imgui.get_item_rect_max()
     text_size = imgui.calc_text_size(label)
@@ -212,9 +212,6 @@ def _pad_button_stem_indicator(ctx: UiContext, pad_id: int) -> None:
         imgui.get_color_u32(text_rgba),
         label,
     )
-
-    if imgui.is_item_hovered():
-        imgui.set_tooltip(tooltip)
 
 
 def _pad_button_input(ctx: UiContext, pad_id: int, *, is_loaded: bool) -> None:

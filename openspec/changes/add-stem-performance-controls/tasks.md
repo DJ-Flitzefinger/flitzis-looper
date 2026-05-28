@@ -20,6 +20,7 @@
 - [x] 2.14 Add a selected-pad Delete Stems action under Generate Stems.
 - [x] 2.15 Disable full-mix/all-stems selection when the selected pad has no current prepared stems.
 - [x] 2.16 Add non-momentary right-click solo setting for `V`/`D`/`M`/`B`.
+- [x] 2.17 Suppress pad-grid stem indicator hover tooltips.
 
 ## 3. Future Persistence Implementation
 - [x] 3.1 Persist per-pad durable stem mix mode with a full-mix default for new and older projects.

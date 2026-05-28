@@ -5,8 +5,9 @@ The system SHALL show per-pad stem availability, generation progress, blocked st
 errors in the performance UI without blocking rendering.
 
 The pad grid MAY use compact indicators, while the selected-pad sidebar SHALL provide the
-detailed status for the selected pad. UI rendering SHALL use controller/session snapshots and
-SHALL NOT inspect cache directories, decode audio, run inference, or perform blocking work.
+detailed status for the selected pad. Pad-grid compact indicators SHALL NOT show hover tooltips
+or hover status messages. UI rendering SHALL use controller/session snapshots and SHALL NOT
+inspect cache directories, decode audio, run inference, or perform blocking work.
 
 #### Scenario: Selected pad shows available stems
 - **GIVEN** the selected pad has loaded audio
@@ -26,6 +27,12 @@ SHALL NOT inspect cache directories, decode audio, run inference, or perform blo
 - **WHEN** the performance UI is rendered
 - **THEN** the selected-pad sidebar shows the error outside the audio callback
 - **AND** the pad remains playable using full-mix playback
+
+#### Scenario: Pad-grid indicators do not show hover messages
+- **GIVEN** the pad grid shows a compact stem status indicator for a pad
+- **WHEN** the performer hovers that pad
+- **THEN** the UI does not show a stem status tooltip or hover message over the pad
+- **AND** the selected-pad sidebar remains the detailed status surface
 
 ### Requirement: Selected-Pad Stem Generation Action
 The system SHALL provide a selected-pad action for requesting offline stem generation through
