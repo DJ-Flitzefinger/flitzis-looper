@@ -48,7 +48,8 @@ path.
 
 ### Linux
 
-Prefer distro packages plus `pkg-config`:
+Prefer distro packages plus `pkg-config` when the distro package provides
+Rubber Band's LiveShifter C API (`rubberband_live_*`):
 
 ```bash
 # Debian/Ubuntu
@@ -60,6 +61,13 @@ sudo dnf install rubberband-devel pkgconf-pkg-config
 # Arch-like
 sudo pacman -S rubberband pkgconf
 ```
+
+The Rubber Band Key Lock backend needs a package with LiveShifter support, such
+as Rubber Band 4.0.0. Ubuntu 24.04 `librubberband-dev` 3.3.0 is too old for this
+branch because its C header and shared library do not provide
+`rubberband_live_*` symbols. For older distro packages, install a newer Rubber
+Band package or source build and expose it through `PKG_CONFIG_PATH`, or use
+`RUBBERBAND_LIB_DIR` together with `RUBBERBAND_INCLUDE_DIR`.
 
 The normal Linux development path should allow:
 
@@ -87,7 +95,8 @@ setx VCPKG_ROOT "$env:LOCALAPPDATA\vcpkg"
 Build discovery order:
 
 - `RUBBERBAND_LIB_DIR` for an explicit library directory override.
-- `pkg-config` for non-Windows system packages.
+- `pkg-config` for non-Windows system packages that expose the required
+  LiveShifter C API.
 - `VCPKG_ROOT`, or `$env:LOCALAPPDATA\vcpkg` on Windows when present.
 
 Optional overrides are `RUBBERBAND_INCLUDE_DIR` for header validation,

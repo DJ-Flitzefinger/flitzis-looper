@@ -43,7 +43,7 @@
 - [x] 6.2 Document Windows and Linux native Rubber Band setup in `README.md` and `docs/development.md`.
 - [x] 6.3 Ensure production source has no hardcoded local vcpkg or workstation-specific library paths.
 - [x] 6.4 Verify Windows local development with vcpkg-provided Rubber Band.
-- [ ] 6.5 Verify Linux local development with distro/pkg-config-provided Rubber Band.
+- [x] 6.5 Verify Linux local development with pkg-config-provided Rubber Band LiveShifter support.
 - [x] 6.6 Record the later Nuitka installer DLL bundle requirements for Windows packaging.
 - [x] 6.7 Run `uv run maturin develop`.
 - [x] 6.8 Run `uv run cargo check --manifest-path rust/Cargo.toml`.

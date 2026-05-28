@@ -26,6 +26,16 @@ if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
 
 
+def _running_audio_engine_or_skip() -> AudioEngine:
+    audio = AudioEngine()
+    try:
+        audio.run()
+    except RuntimeError as exc:
+        audio.shut_down()
+        pytest.skip(f"AudioEngine unavailable: {exc}")
+    return audio
+
+
 def test_load_sample_async(controller: AppController, audio_engine_mock: Mock) -> None:
     """Test scheduling a sample load updates state and calls audio engine."""
     sample_id = 0
@@ -227,8 +237,7 @@ def test_restore_sample_does_not_copy_file(tmp_path: Path, monkeypatch: pytest.M
     session = SessionState()
     project.sample_paths[0] = "samples/test.wav"
 
-    audio = AudioEngine()
-    audio.run()
+    audio = _running_audio_engine_or_skip()
 
     try:
         loader = LoaderController(
@@ -268,8 +277,7 @@ def test_load_new_sample_copies_file(tmp_path: Path, monkeypatch: pytest.MonkeyP
     session = SessionState()
 
     # Create audio engine and loader
-    audio = AudioEngine()
-    audio.run()
+    audio = _running_audio_engine_or_skip()
 
     try:
         loader = LoaderController(

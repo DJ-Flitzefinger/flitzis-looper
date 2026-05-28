@@ -81,7 +81,13 @@ The Rubber Band Key Lock backend uses the native Rubber Band library through a
 small Rust FFI wrapper. Build and runtime discovery must be set up before the
 app starts; no library discovery happens in the realtime audio callback.
 
-Linux development should use the distribution package where possible:
+The current Key Lock backend requires Rubber Band's LiveShifter C API
+(`rubberband_live_*`). Use Rubber Band 4.0.0 or another package that provides
+that API. Some LTS distribution packages are too old: Ubuntu 24.04
+`librubberband-dev` 3.3.0 does not satisfy this branch.
+
+Linux development should use the distribution package where it provides the
+LiveShifter C API:
 
 ```bash
 # Debian/Ubuntu
@@ -93,6 +99,10 @@ sudo dnf install rubberband-devel pkgconf-pkg-config
 # Arch-like
 sudo pacman -S rubberband pkgconf
 ```
+
+If the distribution package is older, install a newer Rubber Band package or a
+source build and expose its `.pc` file with `PKG_CONFIG_PATH`, or use the
+documented explicit library/include override variables.
 
 Windows development can use vcpkg:
 

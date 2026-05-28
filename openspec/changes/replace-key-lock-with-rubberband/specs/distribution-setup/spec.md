@@ -3,13 +3,19 @@
 ### Requirement: Cross-platform Rubber Band Dependency Discovery
 The system SHALL support Rubber Band native library discovery for Windows and Linux without hardcoding developer-local paths in production code.
 
-On Linux, the preferred development path SHALL use the system Rubber Band development package and `pkg-config` metadata when available. On Windows, the preferred development path SHALL use a documented vcpkg installation or explicit environment variables for include, library, and runtime DLL directories.
+On Linux, the preferred development path SHALL use the system Rubber Band development package and `pkg-config` metadata when that package provides the LiveShifter C API required by the Key Lock backend. On Windows, the preferred development path SHALL use a documented vcpkg installation or explicit environment variables for include, library, and runtime DLL directories.
 
 #### Scenario: Linux build uses system package metadata
 - **GIVEN** a Linux developer has installed the Rubber Band development package and `pkg-config`
 - **WHEN** the developer runs the repository build through `uv run maturin develop`
 - **THEN** the build discovers Rubber Band headers and link libraries through system package metadata or documented environment overrides
 - **AND** the production source does not contain workstation-specific library paths
+
+#### Scenario: Linux package is too old
+- **GIVEN** a Linux developer has installed a Rubber Band development package whose C header does not provide `rubberband_live_*` declarations
+- **WHEN** the developer runs the repository build through `uv run maturin develop`
+- **THEN** the build fails before runtime with a diagnostic that the Key Lock backend requires a Rubber Band package with LiveShifter C API support
+- **AND** the app does not produce a native extension that later fails at import because of unresolved Rubber Band symbols
 
 #### Scenario: Windows build uses documented vcpkg paths
 - **GIVEN** a Windows developer has installed Rubber Band with vcpkg

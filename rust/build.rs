@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 const RERUN_ENV_VARS: &[&str] = &[
@@ -22,7 +23,7 @@ fn main() {
 
     if let Some(lib_dir) = env_path("RUBBERBAND_LIB_DIR") {
         validate_dir("RUBBERBAND_LIB_DIR", &lib_dir);
-        validate_optional_include_dir();
+        validate_required_override_include_dir();
         emit_manual_link(&lib_dir);
         return;
     }
@@ -40,13 +41,47 @@ fn main() {
         );
     }
 
-    if let Err(err) = pkg_config::Config::new().probe("rubberband") {
-        panic!(
-            "Rubber Band library not found through pkg-config ({err}). \
-             Install the system Rubber Band development package, configure PKG_CONFIG_PATH, \
-             or set RUBBERBAND_LIB_DIR."
-        );
+    match pkg_config::Config::new().probe("rubberband") {
+        Ok(library) => validate_pkg_config_live_api(&library),
+        Err(err) => {
+            panic!(
+                "Rubber Band library not found through pkg-config ({err}). \
+                 Install a Rubber Band development package that provides the LiveShifter C API, \
+                 configure PKG_CONFIG_PATH, or set RUBBERBAND_LIB_DIR and RUBBERBAND_INCLUDE_DIR."
+            );
+        }
     }
+}
+
+fn validate_pkg_config_live_api(library: &pkg_config::Library) {
+    for include_dir in &library.include_paths {
+        if let Some(header) = rubberband_header_path(include_dir) {
+            validate_live_api_header(&header);
+            return;
+        }
+    }
+
+    for include_dir in [Path::new("/usr/include"), Path::new("/usr/local/include")] {
+        if let Some(header) = rubberband_header_path(include_dir) {
+            validate_live_api_header(&header);
+            return;
+        }
+    }
+
+    panic!(
+        "Rubber Band was found through pkg-config, but rubberband/rubberband-c.h was not found. \
+         Install the matching development headers or configure PKG_CONFIG_PATH."
+    );
+}
+
+fn validate_required_override_include_dir() {
+    let include_dir = env_path("RUBBERBAND_INCLUDE_DIR").unwrap_or_else(|| {
+        panic!(
+            "RUBBERBAND_INCLUDE_DIR must be set when RUBBERBAND_LIB_DIR is used so the build can \
+             verify that the selected Rubber Band library provides the LiveShifter C API."
+        )
+    });
+    validate_include_dir(&include_dir);
 }
 
 fn emit_vcpkg_link(vcpkg_root: &Path) {
@@ -113,23 +148,64 @@ fn discover_vcpkg_root() -> Option<PathBuf> {
         })
 }
 
-fn validate_optional_include_dir() {
-    if let Some(include_dir) = env_path("RUBBERBAND_INCLUDE_DIR") {
-        validate_include_dir(&include_dir);
-    }
-}
-
 fn validate_include_dir(include_dir: &Path) {
     validate_dir("Rubber Band include directory", include_dir);
 
-    let nested_header = include_dir.join("rubberband").join("rubberband-c.h");
-    let flat_header = include_dir.join("rubberband-c.h");
-    if !nested_header.is_file() && !flat_header.is_file() {
+    let Some(header) = rubberband_header_path(include_dir) else {
         panic!(
             "Rubber Band C API header not found under {}. Expected rubberband/rubberband-c.h.",
             include_dir.display()
         );
+    };
+
+    validate_live_api_header(&header);
+}
+
+fn rubberband_header_path(include_dir: &Path) -> Option<PathBuf> {
+    [
+        include_dir.join("rubberband").join("rubberband-c.h"),
+        include_dir.join("rubberband-c.h"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+}
+
+fn validate_live_api_header(header: &Path) {
+    let contents = fs::read_to_string(header).unwrap_or_else(|err| {
+        panic!(
+            "Failed to read Rubber Band C API header at {}: {err}",
+            header.display()
+        )
+    });
+
+    let required_symbols = [
+        "rubberband_live_new",
+        "rubberband_live_delete",
+        "rubberband_live_reset",
+        "rubberband_live_set_pitch_scale",
+        "rubberband_live_get_pitch_scale",
+        "rubberband_live_get_start_delay",
+        "rubberband_live_get_block_size",
+        "rubberband_live_shift",
+        "rubberband_live_get_channel_count",
+        "rubberband_live_set_debug_level",
+        "rubberband_live_set_default_debug_level",
+    ];
+
+    if required_symbols
+        .iter()
+        .all(|symbol| contents.contains(symbol))
+    {
+        return;
     }
+
+    panic!(
+        "Rubber Band C API header at {} does not provide the LiveShifter `rubberband_live_*` API. \
+         The Key Lock backend requires a Rubber Band development package with LiveShifter support; \
+         the Ubuntu 24.04 `librubberband-dev` 3.3.0 package is too old. Use a newer distro package, \
+         a source install, or another documented install path that provides these symbols.",
+        header.display()
+    );
 }
 
 fn validate_dir(label: &str, path: &Path) {

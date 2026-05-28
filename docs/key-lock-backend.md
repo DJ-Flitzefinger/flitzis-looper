@@ -41,6 +41,12 @@ callback block because a fixed Rubber Band block has not yet been completed, the
 processor fills the missing frames with silence as a deterministic bounded
 fallback.
 
+The LiveShifter path requires a Rubber Band C API that exports
+`rubberband_live_*` symbols. The tested Windows vcpkg Rubber Band 4.0.0 package
+does. Ubuntu 24.04 `librubberband-dev` 3.3.0 does not, so that distro package is
+too old for this backend even though it provides the older general stretcher C
+API.
+
 ## Settings Contract
 
 Project persistence stores the global `key_lock` boolean as performer intent.
@@ -109,7 +115,7 @@ Windows support without making vcpkg a hardcoded production dependency.
 Required build/runtime direction:
 
 - Linux uses the system Rubber Band development package and `pkg-config` where
-  possible.
+  that package provides the required LiveShifter C API.
 - Windows development may use vcpkg through `VCPKG_ROOT` or documented override
   variables.
 - Production source must not contain local paths such as a developer's vcpkg
