@@ -1777,12 +1777,62 @@ mod tests {
         result
     }
 
+    fn render_frames_with_pattern(mixer: &mut RtMixer, total_frames: usize, pattern: &[usize]) {
+        assert!(!pattern.is_empty());
+        let mut remaining = total_frames;
+        let mut pattern_index = 0;
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+
+        while remaining > 0 {
+            let frames = pattern[pattern_index % pattern.len()].min(remaining);
+            pattern_index += 1;
+            if frames == 0 {
+                continue;
+            }
+
+            let mut output = vec![0.0; frames];
+            mixer.render(&mut output, &mut pad_peaks);
+            remaining -= frames;
+        }
+    }
+
     fn active_voice_frame(mixer: &RtMixer, id: usize) -> Option<usize> {
         mixer
             .voices
             .iter()
             .find(|voice| voice.active && voice.sample_id == id)
             .map(|voice| voice.frame_pos)
+    }
+
+    fn four_bar_loop_frames(sample_rate_hz: f32, bpm: f32) -> usize {
+        ((sample_rate_hz as f64 * 60.0 / bpm as f64) * 16.0).round() as usize
+    }
+
+    fn circular_phase_error_frames(left_phase: f64, right_phase: f64, cycle_frames: f64) -> f64 {
+        let difference = (left_phase - right_phase).abs() % cycle_frames;
+        difference.min(cycle_frames - difference)
+    }
+
+    fn bpm_locked_phase_error_frames(
+        mixer: &RtMixer,
+        left_id: usize,
+        left_bpm: f32,
+        right_id: usize,
+        right_bpm: f32,
+        master_bpm: f32,
+        sample_rate_hz: f32,
+    ) -> f64 {
+        let left_loop_frames = four_bar_loop_frames(sample_rate_hz, left_bpm);
+        let right_loop_frames = four_bar_loop_frames(sample_rate_hz, right_bpm);
+        let output_cycle_frames = four_bar_loop_frames(sample_rate_hz, master_bpm) as f64;
+        let left_ratio = f64::from((master_bpm / left_bpm).clamp(SPEED_MIN, SPEED_MAX));
+        let right_ratio = f64::from((master_bpm / right_bpm).clamp(SPEED_MIN, SPEED_MAX));
+        let left_frame = active_voice_frame(mixer, left_id).expect("left voice active");
+        let right_frame = active_voice_frame(mixer, right_id).expect("right voice active");
+        let left_phase = (left_frame % left_loop_frames) as f64 / left_ratio;
+        let right_phase = (right_frame % right_loop_frames) as f64 / right_ratio;
+
+        circular_phase_error_frames(left_phase, right_phase, output_cycle_frames)
     }
 
     fn active_voice_rubberband_block_size(mixer: &RtMixer, id: usize) -> usize {
@@ -2164,6 +2214,130 @@ mod tests {
         for id in 0..active_voices {
             assert_eq!(active_voice_frame(&mixer, id), Some(2082));
         }
+    }
+
+    #[test]
+    #[ignore = "known failing reproduction for BPM-locked Multi Loop drift"]
+    fn bpm_locked_multi_loop_should_stay_phase_stable_across_repeated_wraps() {
+        const SAMPLE_RATE_HZ: f32 = 3_360.0;
+        const ANCHOR_BPM: f32 = 120.0;
+        const SECOND_PAD_BPM: f32 = 140.0;
+        const LOOP_REPEATS: usize = 10;
+        const PHASE_TOLERANCE_FRAMES: f64 = 1.0;
+
+        let patterns: [(&str, &[usize]); 2] = [
+            ("fixed-512", &[512]),
+            ("variable", &[127, 385, 64, 448, 511, 1]),
+        ];
+        let mut failures = Vec::new();
+
+        for speed in [1.0_f32, 1.25, 1.5, 2.0] {
+            let master_bpm = ANCHOR_BPM * speed;
+            let output_cycle_frames = four_bar_loop_frames(SAMPLE_RATE_HZ, master_bpm);
+
+            for key_lock_enabled in [false, true] {
+                for (pattern_name, pattern) in patterns {
+                    let mut mixer = RtMixer::new(1, SAMPLE_RATE_HZ);
+                    mixer.set_bpm_lock(true);
+                    mixer.set_master_bpm(master_bpm);
+                    mixer.set_key_lock(key_lock_enabled);
+
+                    for (id, bpm) in [(0, ANCHOR_BPM), (1, SECOND_PAD_BPM), (2, ANCHOR_BPM)] {
+                        let loop_frames = four_bar_loop_frames(SAMPLE_RATE_HZ, bpm);
+                        mixer.load_sample(id, create_test_sample(1, loop_frames, 0.25));
+                        mixer.set_pad_bpm(id, Some(bpm));
+                        mixer.set_pad_loop_region(
+                            id,
+                            0.0,
+                            Some(loop_frames as f32 / SAMPLE_RATE_HZ),
+                        );
+                        assert!(mixer.play_sample(id, 1.0));
+                    }
+
+                    render_frames_with_pattern(&mut mixer, output_cycle_frames, pattern);
+
+                    let matched_bpm_first_pass_error = bpm_locked_phase_error_frames(
+                        &mixer,
+                        0,
+                        ANCHOR_BPM,
+                        1,
+                        SECOND_PAD_BPM,
+                        master_bpm,
+                        SAMPLE_RATE_HZ,
+                    );
+                    if matched_bpm_first_pass_error > PHASE_TOLERANCE_FRAMES {
+                        failures.push(format!(
+                            "matched BPM drifted on first pass: speed={speed}, \
+                             key_lock={key_lock_enabled}, pattern={pattern_name}, \
+                             error={matched_bpm_first_pass_error:.3} frames",
+                        ));
+                    }
+
+                    render_frames_with_pattern(
+                        &mut mixer,
+                        output_cycle_frames * (LOOP_REPEATS - 1),
+                        pattern,
+                    );
+
+                    let same_bpm_error = bpm_locked_phase_error_frames(
+                        &mixer,
+                        0,
+                        ANCHOR_BPM,
+                        2,
+                        ANCHOR_BPM,
+                        master_bpm,
+                        SAMPLE_RATE_HZ,
+                    );
+                    let matched_bpm_error = bpm_locked_phase_error_frames(
+                        &mixer,
+                        0,
+                        ANCHOR_BPM,
+                        1,
+                        SECOND_PAD_BPM,
+                        master_bpm,
+                        SAMPLE_RATE_HZ,
+                    );
+
+                    if same_bpm_error > PHASE_TOLERANCE_FRAMES {
+                        failures.push(format!(
+                            "same BPM drifted: speed={speed}, key_lock={key_lock_enabled}, \
+                             pattern={pattern_name}, error={same_bpm_error:.3} frames",
+                        ));
+                    }
+                    if matched_bpm_error > PHASE_TOLERANCE_FRAMES {
+                        failures.push(format!(
+                            "matched BPM drifted: speed={speed}, key_lock={key_lock_enabled}, \
+                             pattern={pattern_name}, error={matched_bpm_error:.3} frames",
+                        ));
+                    }
+
+                    assert!(mixer.play_sample(0, 1.0));
+                    assert!(mixer.play_sample(1, 1.0));
+                    let retrigger_error = bpm_locked_phase_error_frames(
+                        &mixer,
+                        0,
+                        ANCHOR_BPM,
+                        1,
+                        SECOND_PAD_BPM,
+                        master_bpm,
+                        SAMPLE_RATE_HZ,
+                    );
+                    if retrigger_error > PHASE_TOLERANCE_FRAMES {
+                        failures.push(format!(
+                            "matched BPM retrigger did not reset phase: speed={speed}, \
+                             key_lock={key_lock_enabled}, pattern={pattern_name}, \
+                             error={retrigger_error:.3} frames",
+                        ));
+                    }
+                }
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "BPM-locked Multi Loop voices should remain phase-stable after repeated wraps: {}",
+            failures.join("; ")
+        );
     }
 
     #[test]

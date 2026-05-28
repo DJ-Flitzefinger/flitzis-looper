@@ -12,6 +12,44 @@ if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
 
 
+def _configure_source_stable_grid_pad(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    sample_id: int,
+) -> tuple[float, float]:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    controller.project.sample_paths[sample_id] = f"samples/pad-{sample_id}.wav"
+    controller.project.sample_durations[sample_id] = 40.0
+    controller.project.sample_analysis[sample_id] = SampleAnalysis(
+        bpm=120.0,
+        key="C",
+        beat_grid=BeatGrid(beats=[10.0], downbeats=[10.0], bars=[10.0]),
+    )
+    controller.project.pad_loop_auto[sample_id] = True
+
+    controller.transport.loop.set_grid_offset_samples(sample_id, 240)
+    controller.transport.loop.set_start(sample_id, 10.0)
+
+    anchor_s = 10.005
+    snapped_start_s = 10.005
+    assert controller.transport.loop.grid_anchor_sec(sample_id) == pytest.approx(anchor_s)
+    assert controller.project.pad_loop_start_s[sample_id] == pytest.approx(snapped_start_s)
+    return (anchor_s, snapped_start_s)
+
+
+def _assert_source_stable_grid_pad(
+    controller: AppController,
+    sample_id: int,
+    *,
+    anchor_s: float,
+    snapped_start_s: float,
+) -> None:
+    assert controller.transport.loop.grid_anchor_sec(sample_id) == pytest.approx(anchor_s)
+    assert controller.project.pad_loop_start_s[sample_id] == pytest.approx(snapped_start_s)
+    effective_start_s, _ = controller.transport.loop.effective_region(sample_id)
+    assert effective_start_s == pytest.approx(snapped_start_s)
+
+
 def test_initialize_loaded_pad_defaults_uses_track_start_and_eight_bars(
     controller: AppController,
     audio_engine_mock: Mock,
@@ -230,6 +268,89 @@ def test_effective_bpm_change_reclamps_grid_offset_samples(
     controller.transport.bpm.set_manual_bpm(sample_id, 240.0)
 
     assert controller.project.pad_grid_offset_samples[sample_id] == 48_000
+
+
+def test_grid_anchor_and_snapped_start_stay_stable_under_global_modes(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    sample_id = 0
+    controller.project.selected_pad = sample_id
+    anchor_s, snapped_start_s = _configure_source_stable_grid_pad(
+        controller, audio_engine_mock, sample_id
+    )
+    audio_engine_mock.reset_mock()
+
+    actions = [
+        lambda: controller.transport.global_params.set_speed(1.5),
+        lambda: controller.transport.global_params.set_bpm_lock(enabled=True),
+        lambda: controller.transport.global_params.set_key_lock(enabled=True),
+        lambda: controller.transport.global_params.set_trigger_quantization_enabled(enabled=True),
+        lambda: controller.transport.global_params.set_trigger_quantization_step("1_32"),
+        lambda: controller.transport.global_params.set_trigger_quantization_step("1_64"),
+        controller.transport.bpm.recompute_master_bpm,
+        lambda: controller.transport.global_params.set_speed(1.25),
+        lambda: controller.transport.global_params.set_key_lock(enabled=False),
+        lambda: controller.transport.global_params.set_bpm_lock(enabled=False),
+    ]
+
+    for action in actions:
+        action()
+        _assert_source_stable_grid_pad(
+            controller,
+            sample_id,
+            anchor_s=anchor_s,
+            snapped_start_s=snapped_start_s,
+        )
+
+    audio_engine_mock.set_pad_timing_metadata.assert_not_called()
+
+
+def test_grid_anchor_and_snapped_start_stay_stable_when_other_pad_plays(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    sample_id = 0
+    other_id = 1
+    anchor_s, snapped_start_s = _configure_source_stable_grid_pad(
+        controller, audio_engine_mock, sample_id
+    )
+    controller.project.sample_paths[other_id] = "samples/other.wav"
+    controller.project.sample_durations[other_id] = 8.0
+    controller.project.sample_analysis[other_id] = SampleAnalysis(
+        bpm=100.0,
+        key="G",
+        beat_grid=BeatGrid(beats=[0.0], downbeats=[0.0], bars=[0.0]),
+    )
+    controller.project.multi_loop = True
+    audio_engine_mock.reset_mock()
+
+    controller.transport.playback.trigger_pad(other_id)
+    _assert_source_stable_grid_pad(
+        controller,
+        sample_id,
+        anchor_s=anchor_s,
+        snapped_start_s=snapped_start_s,
+    )
+
+    controller.session.active_sample_ids.add(other_id)
+    controller.transport.playback.stop_pad(other_id)
+    _assert_source_stable_grid_pad(
+        controller,
+        sample_id,
+        anchor_s=anchor_s,
+        snapped_start_s=snapped_start_s,
+    )
+
+    controller.transport.playback.trigger_pad(other_id)
+    _assert_source_stable_grid_pad(
+        controller,
+        sample_id,
+        anchor_s=anchor_s,
+        snapped_start_s=snapped_start_s,
+    )
+
+    audio_engine_mock.set_pad_timing_metadata.assert_not_called()
 
 
 def test_snapping_uses_effective_bpm_manual_override_over_analysis(
