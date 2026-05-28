@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING
 
 from imgui_bundle import im_file_dialog as ifd
+from imgui_bundle import imgui
 
 if TYPE_CHECKING:
     from flitzis_looper.ui.context import UiContext
@@ -16,6 +17,14 @@ def open_file_dialog(sample_id: int) -> None:
     ifd.FileDialog.instance().open(_get_key(sample_id), "Load Audio", filter=_FILTER)
 
 
+def _release_mouse_buttons_after_native_dialog() -> None:
+    io = imgui.get_io()
+    released = False
+    io.add_mouse_button_event(imgui.MouseButton_.left, released)
+    io.add_mouse_button_event(imgui.MouseButton_.right, released)
+    io.add_mouse_button_event(imgui.MouseButton_.middle, released)
+
+
 def check_file_dialog(ctx: UiContext, sample_id: int) -> None:
     if ifd.FileDialog.instance().is_done(_get_key(sample_id)):
         try:
@@ -24,4 +33,5 @@ def check_file_dialog(ctx: UiContext, sample_id: int) -> None:
                 ctx.audio.pads.load_sample_async(sample_id, res.path())
         finally:
             ifd.FileDialog.instance().close()
+            _release_mouse_buttons_after_native_dialog()
             ctx.ui.close_file_dialog()
