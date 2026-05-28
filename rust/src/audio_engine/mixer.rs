@@ -16,7 +16,7 @@ use crate::audio_engine::constants::{
 };
 use crate::audio_engine::dsp::{DspNodeSlot, DspParameterId, DspParameterSlot, PerPadDspChain};
 use crate::audio_engine::stretch_processor::DEFAULT_BLOCK_SAMPLES;
-use crate::audio_engine::voice_slot::{ExplicitSeekMode, VoiceSlot};
+use crate::audio_engine::voice_slot::{ExplicitSeekMode, PlaybackTimelineAnchor, VoiceSlot};
 use crate::messages::{
     PadTimingMetadata, PreparedStemSet, STEM_BUFFER_COUNT, STEM_COMPONENT_MASK, SampleBuffer,
     StemMixMode,
@@ -205,6 +205,65 @@ fn advance_playback_position(
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AnchoredPlaybackPosition {
+    source_frame_pos: usize,
+    input_frames: usize,
+    next_frame_pos: usize,
+}
+
+fn rounded_source_offset(
+    anchor: PlaybackTimelineAnchor,
+    output_frame: u64,
+    tempo_ratio: f32,
+) -> Option<usize> {
+    if output_frame < anchor.output_frame || !tempo_ratio.is_finite() || tempo_ratio <= 0.0 {
+        return None;
+    }
+
+    let output_delta = output_frame - anchor.output_frame;
+    let source_delta = (output_delta as f64 * f64::from(tempo_ratio)).round();
+    if !source_delta.is_finite() || source_delta < 0.0 || source_delta > usize::MAX as f64 {
+        return None;
+    }
+
+    Some(source_delta as usize)
+}
+
+fn anchored_playback_position(
+    anchor: PlaybackTimelineAnchor,
+    output_start_frame: u64,
+    output_frames: usize,
+    tempo_ratio: f32,
+    sample_frames: usize,
+    loop_region: FrameRange,
+) -> Option<AnchoredPlaybackPosition> {
+    let output_end_frame = output_start_frame.checked_add(output_frames as u64)?;
+    let start_offset = rounded_source_offset(anchor, output_start_frame, tempo_ratio)?;
+    let end_offset = rounded_source_offset(anchor, output_end_frame, tempo_ratio)?;
+    let input_frames = end_offset
+        .saturating_sub(start_offset)
+        .clamp(1, DEFAULT_BLOCK_SAMPLES);
+
+    Some(AnchoredPlaybackPosition {
+        source_frame_pos: source_frame_for_playback(
+            anchor.source_frame,
+            start_offset,
+            sample_frames,
+            loop_region,
+            ExplicitSeekMode::Normal,
+        ),
+        input_frames,
+        next_frame_pos: source_frame_for_playback(
+            anchor.source_frame,
+            end_offset,
+            sample_frames,
+            loop_region,
+            ExplicitSeekMode::Normal,
+        ),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -812,13 +871,35 @@ impl RtMixer {
         self.play_sample_rt(id, velocity, &mut retirement)
     }
 
+    #[cfg(test)]
     pub(crate) fn play_sample_rt(
         &mut self,
         id: usize,
         velocity: f32,
         retirement: &mut impl AudioBufferRetirement,
     ) -> bool {
-        self.play_sample_with_phase_rt(id, velocity, None, retirement)
+        self.play_sample_with_phase_rt(id, velocity, None, None, retirement)
+    }
+
+    pub(crate) fn play_sample_at_output_frame_rt(
+        &mut self,
+        id: usize,
+        velocity: f32,
+        output_frame: u64,
+        retirement: &mut impl AudioBufferRetirement,
+    ) -> bool {
+        self.play_sample_with_phase_rt(id, velocity, None, Some(output_frame), retirement)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn play_sample_at_output_frame(
+        &mut self,
+        id: usize,
+        velocity: f32,
+        output_frame: u64,
+    ) -> bool {
+        let mut retirement = ImmediateAudioBufferRetirement;
+        self.play_sample_at_output_frame_rt(id, velocity, output_frame, &mut retirement)
     }
 
     #[cfg(test)]
@@ -829,7 +910,13 @@ impl RtMixer {
         target_bar_phase_beats: f64,
     ) -> bool {
         let mut retirement = ImmediateAudioBufferRetirement;
-        self.play_sample_with_phase_rt(id, velocity, Some(target_bar_phase_beats), &mut retirement)
+        self.play_sample_with_phase_rt(
+            id,
+            velocity,
+            Some(target_bar_phase_beats),
+            None,
+            &mut retirement,
+        )
     }
 
     fn play_sample_with_phase_rt(
@@ -837,6 +924,7 @@ impl RtMixer {
         id: usize,
         velocity: f32,
         target_bar_phase_beats: Option<f64>,
+        start_output_frame: Option<u64>,
         retirement: &mut impl AudioBufferRetirement,
     ) -> bool {
         if !self.can_play_sample(id, velocity) {
@@ -859,7 +947,7 @@ impl RtMixer {
         for voice_slot in &mut self.voices {
             if voice_slot.active && voice_slot.sample_id == id {
                 self.stem_transitions[id].clear();
-                voice_slot.restart(initial_frame_pos, velocity, tempo_ratio);
+                voice_slot.restart(initial_frame_pos, velocity, tempo_ratio, start_output_frame);
                 return true;
             }
         }
@@ -875,6 +963,7 @@ impl RtMixer {
                     initial_frame_pos,
                     velocity,
                     tempo_ratio,
+                    start_output_frame,
                     retirement,
                 );
                 return true;
@@ -1174,7 +1263,26 @@ impl RtMixer {
         }
     }
 
+    #[cfg(test)]
     pub fn seek_sample(&mut self, id: usize, position_s: f32) -> bool {
+        self.seek_sample_with_output_frame(id, position_s, None)
+    }
+
+    pub(crate) fn seek_sample_at_output_frame(
+        &mut self,
+        id: usize,
+        position_s: f32,
+        output_frame: u64,
+    ) -> bool {
+        self.seek_sample_with_output_frame(id, position_s, Some(output_frame))
+    }
+
+    fn seek_sample_with_output_frame(
+        &mut self,
+        id: usize,
+        position_s: f32,
+        output_frame: Option<u64>,
+    ) -> bool {
         if id >= NUM_SAMPLES || !position_s.is_finite() || position_s < 0.0 || self.channels == 0 {
             return false;
         }
@@ -1196,7 +1304,7 @@ impl RtMixer {
         let mut did_seek = false;
         for voice_slot in &mut self.voices {
             if voice_slot.is_playing_sample(id) {
-                voice_slot.seek(target_frame, seek_mode);
+                voice_slot.seek(target_frame, seek_mode, output_frame);
                 did_seek = true;
             }
         }
@@ -1321,13 +1429,25 @@ impl RtMixer {
     ///
     /// If the sample is playing, its voice becomes silent but retains its
     /// current playback position. If the sample is not playing, this has no effect.
+    #[cfg(test)]
     pub fn pause_sample(&mut self, id: usize) {
+        self.pause_sample_with_output_frame(id, None);
+    }
+
+    pub(crate) fn pause_sample_at_output_frame(&mut self, id: usize, output_frame: u64) {
+        self.pause_sample_with_output_frame(id, Some(output_frame));
+    }
+
+    fn pause_sample_with_output_frame(&mut self, id: usize, output_frame: Option<u64>) {
         if id >= NUM_SAMPLES {
             return;
         }
 
         for voice_slot in &mut self.voices {
             if voice_slot.is_playing_sample(id) {
+                if let Some(output_frame) = output_frame {
+                    voice_slot.anchor_timeline(output_frame);
+                }
                 voice_slot.pause();
             }
         }
@@ -1337,13 +1457,25 @@ impl RtMixer {
     ///
     /// If the sample was paused, playback continues from that point.
     /// If the sample was not paused, this has no effect.
+    #[cfg(test)]
     pub fn resume_sample(&mut self, id: usize) {
+        self.resume_sample_with_output_frame(id, None);
+    }
+
+    pub(crate) fn resume_sample_at_output_frame(&mut self, id: usize, output_frame: u64) {
+        self.resume_sample_with_output_frame(id, Some(output_frame));
+    }
+
+    fn resume_sample_with_output_frame(&mut self, id: usize, output_frame: Option<u64>) {
         if id >= NUM_SAMPLES {
             return;
         }
 
         for voice_slot in &mut self.voices {
             if voice_slot.is_playing_sample(id) {
+                if let Some(output_frame) = output_frame {
+                    voice_slot.anchor_timeline(output_frame);
+                }
                 voice_slot.resume();
             }
         }
@@ -1403,10 +1535,42 @@ impl RtMixer {
         self.render_rt(output, pad_peaks, &mut retirement);
     }
 
+    #[cfg(test)]
+    pub(crate) fn render_at_output_frame(
+        &mut self,
+        output_start_frame: u64,
+        output: &mut [f32],
+        pad_peaks: &mut [f32; NUM_SAMPLES],
+    ) {
+        let mut retirement = ImmediateAudioBufferRetirement;
+        self.render_rt_at_output_frame(output, pad_peaks, output_start_frame, &mut retirement);
+    }
+
+    #[cfg(test)]
     pub(crate) fn render_rt(
         &mut self,
         output: &mut [f32],
         pad_peaks: &mut [f32; NUM_SAMPLES],
+        retirement: &mut impl AudioBufferRetirement,
+    ) {
+        self.render_rt_with_output_frame(output, pad_peaks, None, retirement);
+    }
+
+    pub(crate) fn render_rt_at_output_frame(
+        &mut self,
+        output: &mut [f32],
+        pad_peaks: &mut [f32; NUM_SAMPLES],
+        output_start_frame: u64,
+        retirement: &mut impl AudioBufferRetirement,
+    ) {
+        self.render_rt_with_output_frame(output, pad_peaks, Some(output_start_frame), retirement);
+    }
+
+    fn render_rt_with_output_frame(
+        &mut self,
+        output: &mut [f32],
+        pad_peaks: &mut [f32; NUM_SAMPLES],
+        output_start_frame: Option<u64>,
         retirement: &mut impl AudioBufferRetirement,
     ) {
         pad_peaks.fill(f32::EQUILIBRIUM);
@@ -1431,8 +1595,15 @@ impl RtMixer {
                 let chunk_frames = (frames - rendered_frames).min(max_frames);
                 let start = rendered_frames * self.channels;
                 let end = start + chunk_frames * self.channels;
+                let chunk_output_start_frame =
+                    output_start_frame.map(|frame| frame.saturating_add(rendered_frames as u64));
 
-                self.render_rt_chunk(&mut output[start..end], &mut chunk_peaks, retirement);
+                self.render_rt_chunk(
+                    &mut output[start..end],
+                    &mut chunk_peaks,
+                    chunk_output_start_frame,
+                    retirement,
+                );
                 for (peak, chunk_peak) in pad_peaks.iter_mut().zip(chunk_peaks.iter()) {
                     *peak = (*peak).max(*chunk_peak);
                 }
@@ -1443,13 +1614,14 @@ impl RtMixer {
             return;
         }
 
-        self.render_rt_chunk(output, pad_peaks, retirement);
+        self.render_rt_chunk(output, pad_peaks, output_start_frame, retirement);
     }
 
     fn render_rt_chunk(
         &mut self,
         output: &mut [f32],
         pad_peaks: &mut [f32; NUM_SAMPLES],
+        output_start_frame: Option<u64>,
         retirement: &mut impl AudioBufferRetirement,
     ) {
         pad_peaks.fill(f32::EQUILIBRIUM);
@@ -1514,10 +1686,14 @@ impl RtMixer {
                 );
                 let stem_transition = stem_transitions[voice.sample_id];
 
+                let pad_bpm_for_voice = pad_bpm[voice.sample_id];
+                let bpm_locked_phase = bpm_lock_enabled
+                    && master_bpm.is_some_and(|bpm| bpm.is_finite() && bpm > 0.0)
+                    && pad_bpm_for_voice.is_some_and(|bpm| bpm.is_finite() && bpm > 0.0);
+
                 let mut target_tempo_ratio = speed;
                 if bpm_lock_enabled
-                    && let (Some(master_bpm), Some(pad_bpm)) =
-                        (master_bpm, pad_bpm[voice.sample_id])
+                    && let (Some(master_bpm), Some(pad_bpm)) = (master_bpm, pad_bpm_for_voice)
                 {
                     target_tempo_ratio = master_bpm / pad_bpm;
                 }
@@ -1527,10 +1703,9 @@ impl RtMixer {
                 }
                 target_tempo_ratio = target_tempo_ratio.clamp(SPEED_MIN, SPEED_MAX);
 
+                let previous_tempo_ratio = voice.tempo_ratio_smoothed();
                 let tempo_ratio = voice.smooth_tempo_ratio(target_tempo_ratio);
-
-                let mut input_frames = ((frames as f32) * tempo_ratio).round() as usize;
-                input_frames = input_frames.clamp(1, DEFAULT_BLOCK_SAMPLES);
+                let tempo_ratio_changed = (tempo_ratio - previous_tempo_ratio).abs() > f32::EPSILON;
 
                 let mut loop_start = pad_loop_start_frame[voice.sample_id].min(sample_frames);
                 let mut loop_end = pad_loop_end_frame[voice.sample_id].unwrap_or(sample_frames);
@@ -1550,23 +1725,64 @@ impl RtMixer {
                     end: loop_end,
                 };
                 let mut seek_mode = voice.explicit_seek_mode;
+                let mut timeline_anchor_needs_reset = tempo_ratio_changed;
                 if seek_mode == ExplicitSeekMode::Normal
                     && (voice.frame_pos < loop_start || voice.frame_pos >= loop_end)
                 {
                     voice.frame_pos = loop_start;
+                    timeline_anchor_needs_reset = true;
                 }
                 if voice.frame_pos > sample_frames {
                     voice.frame_pos = sample_frames;
+                    timeline_anchor_needs_reset = true;
                 }
                 if seek_mode == ExplicitSeekMode::BeforeLoop && voice.frame_pos >= loop_start {
                     seek_mode = ExplicitSeekMode::Normal;
                     voice.explicit_seek_mode = ExplicitSeekMode::Normal;
+                    timeline_anchor_needs_reset = true;
                 }
                 if seek_mode == ExplicitSeekMode::AfterLoop && voice.frame_pos < loop_end {
                     seek_mode = ExplicitSeekMode::Normal;
                     voice.explicit_seek_mode = ExplicitSeekMode::Normal;
+                    timeline_anchor_needs_reset = true;
                 }
-                let source_frame_pos = voice.frame_pos;
+
+                if let Some(segment_start_frame) = output_start_frame
+                    && (timeline_anchor_needs_reset || voice.timeline_anchor.is_none())
+                {
+                    voice.anchor_timeline(segment_start_frame);
+                }
+
+                let anchored_position = if bpm_locked_phase && seek_mode == ExplicitSeekMode::Normal
+                {
+                    output_start_frame.zip(voice.timeline_anchor).and_then(
+                        |(segment_start_frame, anchor)| {
+                            anchored_playback_position(
+                                anchor,
+                                segment_start_frame,
+                                frames,
+                                tempo_ratio,
+                                sample_frames,
+                                loop_region,
+                            )
+                        },
+                    )
+                } else {
+                    None
+                };
+
+                let (source_frame_pos, input_frames, anchored_next_frame_pos) =
+                    if let Some(position) = anchored_position {
+                        (
+                            position.source_frame_pos,
+                            position.input_frames,
+                            Some(position.next_frame_pos),
+                        )
+                    } else {
+                        let mut input_frames = ((frames as f32) * tempo_ratio).round() as usize;
+                        input_frames = input_frames.clamp(1, DEFAULT_BLOCK_SAMPLES);
+                        (voice.frame_pos, input_frames, None)
+                    };
 
                 let input_buffers = voice.stretch.input_buffers_mut(input_frames);
                 for (channel, buf) in input_buffers.iter_mut().enumerate().take(channels) {
@@ -1637,15 +1853,28 @@ impl RtMixer {
                     }
                 }
 
-                let (next_frame_pos, next_seek_mode) = advance_playback_position(
-                    source_frame_pos,
-                    input_frames,
-                    sample_frames,
-                    loop_region,
-                    seek_mode,
-                );
+                let (next_frame_pos, next_seek_mode) =
+                    if let Some(next_frame_pos) = anchored_next_frame_pos {
+                        (next_frame_pos, ExplicitSeekMode::Normal)
+                    } else {
+                        advance_playback_position(
+                            source_frame_pos,
+                            input_frames,
+                            sample_frames,
+                            loop_region,
+                            seek_mode,
+                        )
+                    };
                 voice.frame_pos = next_frame_pos;
                 voice.explicit_seek_mode = next_seek_mode;
+                if anchored_next_frame_pos.is_none()
+                    && let Some(segment_start_frame) = output_start_frame
+                {
+                    voice.timeline_anchor.replace(PlaybackTimelineAnchor {
+                        output_frame: segment_start_frame.saturating_add(frames as u64),
+                        source_frame: next_frame_pos,
+                    });
+                }
             } else {
                 let sample_frames = sample.samples.len() / channels;
                 let loop_start = pad_loop_start_frame[voice.sample_id].min(sample_frames);
@@ -1660,6 +1889,12 @@ impl RtMixer {
                     voice.frame_pos = loop_start;
                 } else if voice.frame_pos > sample_frames {
                     voice.frame_pos = sample_frames;
+                }
+                if let Some(segment_start_frame) = output_start_frame {
+                    voice.timeline_anchor.replace(PlaybackTimelineAnchor {
+                        output_frame: segment_start_frame.saturating_add(frames as u64),
+                        source_frame: voice.frame_pos,
+                    });
                 }
             }
             pad_playhead_frame[voice.sample_id] = Some(voice.frame_pos);
@@ -1777,7 +2012,12 @@ mod tests {
         result
     }
 
-    fn render_frames_with_pattern(mixer: &mut RtMixer, total_frames: usize, pattern: &[usize]) {
+    fn render_frames_with_pattern(
+        mixer: &mut RtMixer,
+        output_frame: &mut u64,
+        total_frames: usize,
+        pattern: &[usize],
+    ) {
         assert!(!pattern.is_empty());
         let mut remaining = total_frames;
         let mut pattern_index = 0;
@@ -1791,7 +2031,8 @@ mod tests {
             }
 
             let mut output = vec![0.0; frames];
-            mixer.render(&mut output, &mut pad_peaks);
+            mixer.render_at_output_frame(*output_frame, &mut output, &mut pad_peaks);
+            *output_frame = (*output_frame).saturating_add(frames as u64);
             remaining -= frames;
         }
     }
@@ -2217,7 +2458,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "known failing reproduction for BPM-locked Multi Loop drift"]
     fn bpm_locked_multi_loop_should_stay_phase_stable_across_repeated_wraps() {
         const SAMPLE_RATE_HZ: f32 = 3_360.0;
         const ANCHOR_BPM: f32 = 120.0;
@@ -2237,6 +2477,7 @@ mod tests {
 
             for key_lock_enabled in [false, true] {
                 for (pattern_name, pattern) in patterns {
+                    let mut output_frame = 0_u64;
                     let mut mixer = RtMixer::new(1, SAMPLE_RATE_HZ);
                     mixer.set_bpm_lock(true);
                     mixer.set_master_bpm(master_bpm);
@@ -2251,10 +2492,15 @@ mod tests {
                             0.0,
                             Some(loop_frames as f32 / SAMPLE_RATE_HZ),
                         );
-                        assert!(mixer.play_sample(id, 1.0));
+                        assert!(mixer.play_sample_at_output_frame(id, 1.0, output_frame));
                     }
 
-                    render_frames_with_pattern(&mut mixer, output_cycle_frames, pattern);
+                    render_frames_with_pattern(
+                        &mut mixer,
+                        &mut output_frame,
+                        output_cycle_frames,
+                        pattern,
+                    );
 
                     let matched_bpm_first_pass_error = bpm_locked_phase_error_frames(
                         &mixer,
@@ -2275,6 +2521,7 @@ mod tests {
 
                     render_frames_with_pattern(
                         &mut mixer,
+                        &mut output_frame,
                         output_cycle_frames * (LOOP_REPEATS - 1),
                         pattern,
                     );
@@ -2311,8 +2558,8 @@ mod tests {
                         ));
                     }
 
-                    assert!(mixer.play_sample(0, 1.0));
-                    assert!(mixer.play_sample(1, 1.0));
+                    assert!(mixer.play_sample_at_output_frame(0, 1.0, output_frame));
+                    assert!(mixer.play_sample_at_output_frame(1, 1.0, output_frame));
                     let retrigger_error = bpm_locked_phase_error_frames(
                         &mixer,
                         0,
@@ -2338,6 +2585,109 @@ mod tests {
             "BPM-locked Multi Loop voices should remain phase-stable after repeated wraps: {}",
             failures.join("; ")
         );
+    }
+
+    #[test]
+    fn prepared_stems_share_output_anchored_bpm_lock_phase_with_full_mix() {
+        const SAMPLE_RATE_HZ: f32 = 3_360.0;
+        const ANCHOR_BPM: f32 = 120.0;
+        const STEM_PAD_BPM: f32 = 140.0;
+        const PHASE_TOLERANCE_FRAMES: f64 = 1.0;
+
+        let mut output_frame = 0_u64;
+        let mut mixer = RtMixer::new(1, SAMPLE_RATE_HZ);
+        mixer.set_bpm_lock(true);
+        mixer.set_master_bpm(ANCHOR_BPM * 1.5);
+
+        let full_mix_loop_frames = four_bar_loop_frames(SAMPLE_RATE_HZ, ANCHOR_BPM);
+        mixer.load_sample(0, create_test_sample(1, full_mix_loop_frames, 0.2));
+        mixer.set_pad_bpm(0, Some(ANCHOR_BPM));
+        mixer.set_pad_loop_region(0, 0.0, Some(full_mix_loop_frames as f32 / SAMPLE_RATE_HZ));
+
+        let stem_loop_frames = four_bar_loop_frames(SAMPLE_RATE_HZ, STEM_PAD_BPM);
+        mixer.load_sample(1, create_test_sample(1, stem_loop_frames, 0.0));
+        assert!(mixer.publish_prepared_stems(
+            1,
+            create_test_prepared_stems_with_values(
+                1,
+                SAMPLE_RATE_HZ as u32,
+                stem_loop_frames,
+                [0.1, 0.05, 0.0, 0.0, 0.05],
+            ),
+        ));
+        assert!(mixer.set_stem_mix_mode(1, StemMixMode::AllStems, 42));
+        mixer.set_pad_bpm(1, Some(STEM_PAD_BPM));
+        mixer.set_pad_loop_region(1, 0.0, Some(stem_loop_frames as f32 / SAMPLE_RATE_HZ));
+
+        assert!(mixer.play_sample_at_output_frame(0, 1.0, output_frame));
+        assert!(mixer.play_sample_at_output_frame(1, 1.0, output_frame));
+
+        render_frames_with_pattern(
+            &mut mixer,
+            &mut output_frame,
+            four_bar_loop_frames(SAMPLE_RATE_HZ, ANCHOR_BPM * 1.5) * 10,
+            &[127, 385, 64, 448, 511, 1],
+        );
+
+        let error = bpm_locked_phase_error_frames(
+            &mixer,
+            0,
+            ANCHOR_BPM,
+            1,
+            STEM_PAD_BPM,
+            ANCHOR_BPM * 1.5,
+            SAMPLE_RATE_HZ,
+        );
+        assert!(
+            error <= PHASE_TOLERANCE_FRAMES,
+            "prepared-stem pad drifted from full mix by {error:.3} frames"
+        );
+    }
+
+    #[test]
+    fn missing_bpm_fallback_does_not_disturb_synced_multi_loop_pads() {
+        const SAMPLE_RATE_HZ: f32 = 3_360.0;
+        const ANCHOR_BPM: f32 = 120.0;
+        const SECOND_PAD_BPM: f32 = 140.0;
+        const PHASE_TOLERANCE_FRAMES: f64 = 1.0;
+
+        let mut output_frame = 0_u64;
+        let mut mixer = RtMixer::new(1, SAMPLE_RATE_HZ);
+        mixer.set_speed(1.25);
+        mixer.set_bpm_lock(true);
+        mixer.set_master_bpm(ANCHOR_BPM * 1.5);
+
+        for (id, bpm) in [(0, Some(ANCHOR_BPM)), (1, Some(SECOND_PAD_BPM)), (2, None)] {
+            let loop_bpm = bpm.unwrap_or(ANCHOR_BPM);
+            let loop_frames = four_bar_loop_frames(SAMPLE_RATE_HZ, loop_bpm);
+            mixer.load_sample(id, create_test_sample(1, loop_frames, 0.2));
+            mixer.set_pad_bpm(id, bpm);
+            mixer.set_pad_loop_region(id, 0.0, Some(loop_frames as f32 / SAMPLE_RATE_HZ));
+            assert!(mixer.play_sample_at_output_frame(id, 1.0, output_frame));
+        }
+
+        render_frames_with_pattern(
+            &mut mixer,
+            &mut output_frame,
+            four_bar_loop_frames(SAMPLE_RATE_HZ, ANCHOR_BPM * 1.5) * 10,
+            &[512, 127, 385, 64],
+        );
+
+        let error = bpm_locked_phase_error_frames(
+            &mixer,
+            0,
+            ANCHOR_BPM,
+            1,
+            SECOND_PAD_BPM,
+            ANCHOR_BPM * 1.5,
+            SAMPLE_RATE_HZ,
+        );
+        assert!(
+            error <= PHASE_TOLERANCE_FRAMES,
+            "valid BPM pads drifted after missing-BPM pad joined by {error:.3} frames"
+        );
+        assert!(active_voice_frame(&mixer, 2).is_some());
+        assert_eq!(mixer.output_bpm_for_sample_id(2), None);
     }
 
     #[test]

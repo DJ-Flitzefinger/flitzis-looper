@@ -80,7 +80,14 @@ fn schedule_immediate_command<
             retirement,
         );
     } else {
-        execute_scheduled_command(mixer, transport, command, audio_messages, retirement);
+        execute_scheduled_command(
+            mixer,
+            transport,
+            callback_start_frame,
+            command,
+            audio_messages,
+            retirement,
+        );
     }
 }
 
@@ -221,20 +228,29 @@ fn drain_scheduler_due_at_callback_start<
     retirement: &mut R,
 ) {
     while let Some(event) = scheduler.pop_due_at_callback_start(callback_start_frame) {
-        execute_scheduled_command(mixer, transport, event.command, audio_messages, retirement);
+        execute_scheduled_command(
+            mixer,
+            transport,
+            event.execution_frame,
+            event.command,
+            audio_messages,
+            retirement,
+        );
     }
 }
 
 fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetirement>(
     mixer: &mut RtMixer,
     _transport: &mut TransportTimeline,
+    output_frame: u64,
     command: ScheduledCommand,
     audio_messages: &mut S,
     retirement: &mut R,
 ) {
     match command {
         ScheduledCommand::PlaySample { id, volume } => {
-            let started = mixer.play_sample_rt(id, volume, retirement);
+            let started =
+                mixer.play_sample_at_output_frame_rt(id, volume, output_frame, retirement);
 
             if started {
                 audio_messages.push_audio_message(AudioMessage::SampleStarted { id });
@@ -248,7 +264,8 @@ fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetirement>(
             }
 
             stop_all_samples(mixer, audio_messages, retirement);
-            let started = mixer.play_sample_rt(id, volume, retirement);
+            let started =
+                mixer.play_sample_at_output_frame_rt(id, volume, output_frame, retirement);
 
             if started {
                 audio_messages.push_audio_message(AudioMessage::SampleStarted { id });
@@ -365,7 +382,14 @@ fn render_scheduled_audio<const CAPACITY: usize, S: AudioMessageSink, R: AudioBu
         while let Some(event) =
             scheduler.pop_due_through(callback_start_frame, rendered_until_frame)
         {
-            execute_scheduled_command(mixer, transport, event.command, audio_messages, retirement);
+            execute_scheduled_command(
+                mixer,
+                transport,
+                event.execution_frame,
+                event.command,
+                audio_messages,
+                retirement,
+            );
         }
     }
 }
@@ -392,7 +416,12 @@ fn render_mixer_segment<R: AudioBufferRetirement>(
     let start = start_frame * channels;
     let end = end_frame * channels;
 
-    mixer.render_rt(&mut output[start..end], segment_peaks, retirement);
+    mixer.render_rt_at_output_frame(
+        &mut output[start..end],
+        segment_peaks,
+        segment_start_frame,
+        retirement,
+    );
 
     for (peak, segment_peak) in pad_peaks.iter_mut().zip(segment_peaks.iter()) {
         *peak = (*peak).max(*segment_peak);
@@ -708,13 +737,13 @@ fn process_control_message<const CAPACITY: usize, S: AudioMessageSink, R: AudioB
             *trigger_quantization = mode;
         }
         ControlMessage::PauseSample { id } => {
-            mixer.pause_sample(id);
+            mixer.pause_sample_at_output_frame(id, callback_start_frame);
         }
         ControlMessage::ResumeSample { id } => {
-            mixer.resume_sample(id);
+            mixer.resume_sample_at_output_frame(id, callback_start_frame);
         }
         ControlMessage::SeekSample { id, position_s } => {
-            mixer.seek_sample(id, position_s);
+            mixer.seek_sample_at_output_frame(id, position_s, callback_start_frame);
         }
     }
 }

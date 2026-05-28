@@ -133,6 +133,13 @@ source loop. Explicit pad-derived sync uses
 Accepted master-BPM updates apply to both transport-grid timing and BPM-lock
 tempo matching while preserving current transport bar phase.
 
+Scheduled render segments pass their absolute output-frame bounds into the
+mixer. BPM-locked active voices with valid pad BPM metadata keep fixed
+output-frame/source-frame anchors, so loop phase is derived from the Rust master
+timeline instead of cumulative per-callback source-frame rounding. Pads without
+valid BPM metadata remain on the documented global-speed fallback and do not
+redefine the synced timeline.
+
 ## Playback, Loops, And Stems
 
 The runtime keeps two time domains separate:

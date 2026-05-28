@@ -13,23 +13,23 @@
 
 ## 3. Rust Timing Repair
 
-- [ ] 3.1 Thread absolute segment output-frame bounds into the mixer if output-frame anchored addressing is selected.
-- [ ] 3.2 Add only the fixed-size voice sync metadata required for BPM-locked phase-stable source addressing.
-- [ ] 3.3 Preserve immediate trigger, quantized trigger, stop, pause/resume, seek, retrigger, live loop edit, Key Lock, Gain/EQ, metering, and prepared-stem behavior.
-- [ ] 3.4 Keep missing BPM metadata on the documented global-speed fallback.
-- [ ] 3.5 Keep the audio callback free of disk I/O, JSON, Python/GIL access, UI work, blocking locks, logging, neural inference, plugin loading, unbounded loops, heavy allocation, and long-running work.
+- [x] 3.1 Thread absolute segment output-frame bounds into the mixer if output-frame anchored addressing is selected.
+- [x] 3.2 Add only the fixed-size voice sync metadata required for BPM-locked phase-stable source addressing.
+- [x] 3.3 Preserve immediate trigger, quantized trigger, stop, pause/resume, seek, retrigger, live loop edit, Key Lock, Gain/EQ, metering, and prepared-stem behavior.
+- [x] 3.4 Keep missing BPM metadata on the documented global-speed fallback.
+- [x] 3.5 Keep the audio callback free of disk I/O, JSON, Python/GIL access, UI work, blocking locks, logging, neural inference, plugin loading, unbounded loops, heavy allocation, and long-running work.
 
 ## 4. Regression Coverage
 
-- [ ] 4.1 Convert the ignored drift reproduction into passing regression coverage when the repair lands.
-- [ ] 4.2 Add focused Rust coverage for prepared stems sharing the repaired BPM-locked timing path.
-- [ ] 4.3 Add focused Rust coverage for missing BPM metadata fallback and retrigger reset behavior.
+- [x] 4.1 Convert the ignored drift reproduction into passing regression coverage when the repair lands.
+- [x] 4.2 Add focused Rust coverage for prepared stems sharing the repaired BPM-locked timing path.
+- [x] 4.3 Add focused Rust coverage for missing BPM metadata fallback and retrigger reset behavior.
 
 ## 5. Validation
 
 - [x] 5.1 Run `openspec validate repair-multi-loop-bpm-sync --strict`.
-- [ ] 5.2 Run `uv run cargo check --manifest-path rust/Cargo.toml`.
-- [ ] 5.3 Run `uv run cargo test --manifest-path rust/Cargo.toml`.
+- [x] 5.2 Run `uv run cargo check --manifest-path rust/Cargo.toml`.
+- [x] 5.3 Run `uv run cargo test --manifest-path rust/Cargo.toml`.
 - [x] 5.4 Run focused Python controller tests for loop/global/playback stability.
-- [ ] 5.5 Run `uv run pytest` if Python-facing behavior changes beyond tests.
-- [ ] 5.6 Run `uv run cargo fmt --manifest-path rust/Cargo.toml --check`, `uv run ruff check src`, and `git diff --check` before the repair is considered complete.
+- [x] 5.5 Run `uv run pytest` if Python-facing behavior changes beyond tests.
+- [x] 5.6 Run `uv run cargo fmt --manifest-path rust/Cargo.toml --check`, `uv run ruff check src`, and `git diff --check` before the repair is considered complete.

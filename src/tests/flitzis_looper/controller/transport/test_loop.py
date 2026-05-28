@@ -7,6 +7,7 @@ from flitzis_looper.controller.transport.loop import PadLoopController
 from flitzis_looper.models import BeatGrid, SampleAnalysis
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from unittest.mock import Mock
 
     from flitzis_looper.controller import AppController
@@ -281,7 +282,7 @@ def test_grid_anchor_and_snapped_start_stay_stable_under_global_modes(
     )
     audio_engine_mock.reset_mock()
 
-    actions = [
+    actions: list[Callable[[], None]] = [
         lambda: controller.transport.global_params.set_speed(1.5),
         lambda: controller.transport.global_params.set_bpm_lock(enabled=True),
         lambda: controller.transport.global_params.set_key_lock(enabled=True),
