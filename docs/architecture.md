@@ -141,6 +141,19 @@ position, so pads that represent the same musical loop length share the same
 output-frame loop boundaries. Pads without valid BPM metadata use global-speed
 tempo resolution and do not define or alter the BPM-locked phase path.
 
+## Sample Loading
+
+Sample loading runs on non-realtime worker threads. The loader reads files,
+decodes audio, derives channel count and sample rate from decoded buffers when
+container metadata is incomplete, resamples to the active output rate when
+needed, maps channels to the output layout, and publishes an immutable buffer
+handle to Rust live-audio state.
+
+For MP3 files, the loader tolerates isolated recoverable frame decode errors by
+skipping the bad packet and continuing with later packets. It still rejects
+files with no decodable audio frames, or streams whose decoded sample rate or
+channel count changes mid-file.
+
 ## Playback, Loops, And Stems
 
 The runtime keeps two time domains separate:

@@ -44,6 +44,47 @@ fn clamp_progress(percent: f32) -> f32 {
     }
 }
 
+const MAX_CONSECUTIVE_PACKET_DECODE_ERRORS: usize = 64;
+
+fn update_decoded_stream_config(
+    sample_rate_hz: &mut Option<u32>,
+    channels: &mut Option<usize>,
+    decoded_rate_hz: u32,
+    decoded_channels: usize,
+) -> Result<(), SampleLoadError> {
+    if decoded_channels == 0 {
+        return Err(SampleLoadError::MissingChannels);
+    }
+
+    match *sample_rate_hz {
+        Some(initial_rate_hz) if initial_rate_hz != decoded_rate_hz => {
+            Err(SampleLoadError::InconsistentSampleRate {
+                initial_rate_hz,
+                new_rate_hz: decoded_rate_hz,
+            })
+        }
+        Some(_) => Ok(()),
+        None => {
+            *sample_rate_hz = Some(decoded_rate_hz);
+            Ok(())
+        }
+    }?;
+
+    match *channels {
+        Some(initial_channels) if initial_channels != decoded_channels => {
+            Err(SampleLoadError::InconsistentChannels {
+                initial_channels,
+                new_channels: decoded_channels,
+            })
+        }
+        Some(_) => Ok(()),
+        None => {
+            *channels = Some(decoded_channels);
+            Ok(())
+        }
+    }
+}
+
 /// Resample audio data.
 ///
 /// # Arguments
@@ -223,25 +264,23 @@ where
     let track = format
         .default_track()
         .ok_or(SampleLoadError::NoDefaultTrack)?;
-    let file_rate_hz = track
-        .codec_params
+    let track_id = track.id;
+    let codec_params = track.codec_params.clone();
+    let total_frames = codec_params.n_frames;
+
+    let mut decoder = get_codecs().make(&codec_params, &DecoderOptions::default())?;
+
+    let initial_resampling_required = codec_params
         .sample_rate
-        .ok_or(SampleLoadError::MissingSampleRate)?;
-    let file_channels = track
-        .codec_params
-        .channels
-        .ok_or(SampleLoadError::MissingChannels)?
-        .count();
+        .is_some_and(|file_rate_hz| file_rate_hz != output_rate_hz);
 
-    let mut decoder = get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
-
-    let resampling_required = file_rate_hz != output_rate_hz;
-
-    let total_frames = track.codec_params.n_frames;
+    let mut file_rate_hz: Option<u32> = None;
+    let mut file_channels: Option<usize> = None;
     let mut decoded_frames: u64 = 0;
+    let mut consecutive_packet_decode_errors: usize = 0;
     progress(SampleLoadProgress {
         subtask: SampleLoadSubtask::Decoding,
-        resampling_required,
+        resampling_required: initial_resampling_required,
         percent: 0.0,
     });
 
@@ -254,13 +293,38 @@ where
             {
                 break;
             }
+            Err(SymphoniaError::DecodeError(_)) => {
+                // Older MP3s may contain damaged frames inside otherwise usable streams.
+                // Keep scanning, but cap consecutive failures to avoid an endless loop.
+                consecutive_packet_decode_errors += 1;
+                if consecutive_packet_decode_errors > MAX_CONSECUTIVE_PACKET_DECODE_ERRORS {
+                    break;
+                }
+                continue;
+            }
             Err(err) => return Err(SampleLoadError::Decode(err)),
         };
+        consecutive_packet_decode_errors = 0;
 
-        let audio_buf = decoder.decode(&packet)?;
+        if packet.track_id() != track_id {
+            continue;
+        }
+
+        let audio_buf = match decoder.decode(&packet) {
+            Ok(audio_buf) => audio_buf,
+            // Skip a single bad packet and keep any already-decoded audio.
+            Err(SymphoniaError::DecodeError(_)) => continue,
+            Err(err) => return Err(SampleLoadError::Decode(err)),
+        };
         let spec = *audio_buf.spec();
         let duration = audio_buf.capacity() as u64;
         let packet_frames = audio_buf.frames() as u64;
+        update_decoded_stream_config(
+            &mut file_rate_hz,
+            &mut file_channels,
+            spec.rate,
+            spec.channels.count(),
+        )?;
 
         let mut sample_buf = SymphoniaSampleBuffer::<f32>::new(duration, spec);
         sample_buf.copy_interleaved_ref(audio_buf);
@@ -271,11 +335,19 @@ where
             let percent = (decoded_frames as f32 / total_frames as f32).min(1.0);
             progress(SampleLoadProgress {
                 subtask: SampleLoadSubtask::Decoding,
-                resampling_required,
+                resampling_required: initial_resampling_required,
                 percent: clamp_progress(percent),
             });
         }
     }
+
+    if decoded.is_empty() {
+        return Err(SampleLoadError::NoDecodedFrames);
+    }
+
+    let file_rate_hz = file_rate_hz.ok_or(SampleLoadError::MissingSampleRate)?;
+    let file_channels = file_channels.ok_or(SampleLoadError::MissingChannels)?;
+    let resampling_required = file_rate_hz != output_rate_hz;
 
     progress(SampleLoadProgress {
         subtask: SampleLoadSubtask::Decoding,
@@ -440,6 +512,59 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_decoded_stream_config_accepts_missing_container_metadata() {
+        let mut sample_rate_hz = None;
+        let mut channels = None;
+
+        update_decoded_stream_config(&mut sample_rate_hz, &mut channels, 44_100, 2).unwrap();
+
+        assert_eq!(sample_rate_hz, Some(44_100));
+        assert_eq!(channels, Some(2));
+    }
+
+    #[test]
+    fn test_decoded_stream_config_rejects_midstream_sample_rate_change() {
+        let mut sample_rate_hz = Some(44_100);
+        let mut channels = Some(2);
+
+        let result = update_decoded_stream_config(&mut sample_rate_hz, &mut channels, 48_000, 2);
+
+        assert!(matches!(
+            result,
+            Err(SampleLoadError::InconsistentSampleRate {
+                initial_rate_hz: 44_100,
+                new_rate_hz: 48_000,
+            })
+        ));
+    }
+
+    #[test]
+    fn test_decoded_stream_config_rejects_midstream_channel_change() {
+        let mut sample_rate_hz = Some(44_100);
+        let mut channels = Some(2);
+
+        let result = update_decoded_stream_config(&mut sample_rate_hz, &mut channels, 44_100, 1);
+
+        assert!(matches!(
+            result,
+            Err(SampleLoadError::InconsistentChannels {
+                initial_channels: 2,
+                new_channels: 1,
+            })
+        ));
+    }
+
+    #[test]
+    fn test_decoded_stream_config_rejects_zero_channels() {
+        let mut sample_rate_hz = None;
+        let mut channels = None;
+
+        let result = update_decoded_stream_config(&mut sample_rate_hz, &mut channels, 44_100, 0);
+
+        assert!(matches!(result, Err(SampleLoadError::MissingChannels)));
     }
 
     #[test]

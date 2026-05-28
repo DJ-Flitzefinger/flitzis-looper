@@ -33,6 +33,28 @@ pub enum SampleLoadError {
     #[error("audio file is missing channel information")]
     MissingChannels,
 
+    /// No decodable audio frames were found.
+    #[error("audio file contains no decodable audio frames")]
+    NoDecodedFrames,
+
+    /// Decoded audio changes sample rate mid-stream.
+    #[error("audio stream changes sample rate from {initial_rate_hz} Hz to {new_rate_hz} Hz")]
+    InconsistentSampleRate {
+        /// Initial decoded sample rate.
+        initial_rate_hz: u32,
+        /// Later decoded sample rate.
+        new_rate_hz: u32,
+    },
+
+    /// Decoded audio changes channel count mid-stream.
+    #[error("audio stream changes channel count from {initial_channels} to {new_channels}")]
+    InconsistentChannels {
+        /// Initial decoded channel count.
+        initial_channels: usize,
+        /// Later decoded channel count.
+        new_channels: usize,
+    },
+
     /// Unsupported channel mapping configuration.
     #[error(
         "unsupported channel mapping: file has {file_channels} channels, output has {output_channels} channels (only mono↔stereo supported)"
