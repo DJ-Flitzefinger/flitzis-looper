@@ -49,6 +49,22 @@ def gain_db_to_normalized(gain_db: float) -> float:
     )
 
 
+def gain_track_x_to_db(pointer_x: float, axis_min_x: float, axis_max_x: float) -> float:
+    """Map an absolute horizontal Gain/Trim control position to dB."""
+    pointer_x = float(pointer_x)
+    axis_min_x = float(axis_min_x)
+    axis_max_x = float(axis_max_x)
+    if not all(math.isfinite(value) for value in (pointer_x, axis_min_x, axis_max_x)):
+        msg = "gain track position must be finite"
+        raise ValueError(msg)
+
+    width = axis_max_x - axis_min_x
+    if width <= 0.0:
+        return PAD_GAIN_DB_DEFAULT
+
+    return normalized_to_gain_db((pointer_x - axis_min_x) / width)
+
+
 def gain_db_to_linear(gain_db: float) -> float:
     """Convert dB Gain/Trim to linear gain."""
     return math.pow(10.0, clamp_gain_db(gain_db) / 20.0)

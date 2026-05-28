@@ -84,25 +84,28 @@ class _State:
         self.stems = _Stems()
 
 
-class _BlockedStems:
-    __slots__ = ()
+class _IndicatorStems:
+    __slots__ = ("_state",)
+
+    def __init__(self, state: str) -> None:
+        self._state = state
 
     def stem_grid_indicator_state(self, _pad_id: int) -> str:
-        return "blocked"
+        return self._state
 
 
 class _StemIndicatorState:
     __slots__ = ("stems",)
 
-    def __init__(self) -> None:
-        self.stems = _BlockedStems()
+    def __init__(self, state: str) -> None:
+        self.stems = _IndicatorStems(state)
 
 
 class _StemIndicatorContext:
     __slots__ = ("state",)
 
-    def __init__(self) -> None:
-        self.state = _StemIndicatorState()
+    def __init__(self, state: str) -> None:
+        self.state = _StemIndicatorState(state)
 
 
 class _Context:
@@ -121,7 +124,7 @@ def test_stem_grid_indicator_labels_are_compact() -> None:
     assert stem_grid_indicator_label(None) is None
     assert stem_grid_indicator_label("available") == "ST"
     assert stem_grid_indicator_label("generating") == "..."
-    assert stem_grid_indicator_label("blocked") == "BLK"
+    assert stem_grid_indicator_label("blocked") is None
     assert stem_grid_indicator_label("error") == "!"
 
 
@@ -177,9 +180,28 @@ def test_pad_grid_stem_indicator_does_not_set_hover_tooltip(
         set_tooltip,
     )
 
-    performance_view._pad_button_stem_indicator(cast("UiContext", _StemIndicatorContext()), 0)
+    performance_view._pad_button_stem_indicator(
+        cast("UiContext", _StemIndicatorContext("available")),
+        0,
+    )
 
-    assert draw_list.texts == ["BLK"]
+    assert draw_list.texts == ["ST"]
+
+
+def test_pad_grid_blocked_stem_indicator_is_hidden(monkeypatch: pytest.MonkeyPatch) -> None:
+    def item_rect_min() -> _Point:
+        msg = "blocked indicator should not render"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(
+        "flitzis_looper.ui.render.performance_view.imgui.get_item_rect_min",
+        item_rect_min,
+    )
+
+    performance_view._pad_button_stem_indicator(
+        cast("UiContext", _StemIndicatorContext("blocked")),
+        0,
+    )
 
 
 def test_pad_title_wraps_to_three_padded_lines(monkeypatch: pytest.MonkeyPatch) -> None:

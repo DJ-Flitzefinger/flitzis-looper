@@ -8,6 +8,7 @@ from flitzis_looper.audio_gain import (
     gain_drag_delta_db,
     gain_fine_step_direction,
     gain_meter_fraction_from_peak,
+    gain_track_x_to_db,
     normalized_to_gain_db,
 )
 
@@ -54,6 +55,20 @@ def test_gain_drag_delta_direction_and_fine_speed() -> None:
     assert gain_drag_delta_db(10.0, 0.0, fine=False) == pytest.approx(1.0)
     assert gain_drag_delta_db(0.0, 10.0, fine=False) == pytest.approx(-1.0)
     assert gain_drag_delta_db(10.0, 0.0, fine=True) == pytest.approx(0.2)
+
+
+def test_gain_track_x_to_db_maps_absolute_position_with_existing_curve() -> None:
+    assert gain_track_x_to_db(0.0, 0.0, 100.0) == pytest.approx(-60.0)
+    assert gain_track_x_to_db(25.0, 0.0, 100.0) == pytest.approx(-30.0)
+    assert gain_track_x_to_db(50.0, 0.0, 100.0) == pytest.approx(0.0)
+    assert gain_track_x_to_db(75.0, 0.0, 100.0) == pytest.approx(6.0)
+    assert gain_track_x_to_db(100.0, 0.0, 100.0) == pytest.approx(12.0)
+
+
+def test_gain_track_x_to_db_clamps_outside_track() -> None:
+    assert gain_track_x_to_db(-50.0, 0.0, 100.0) == pytest.approx(-60.0)
+    assert gain_track_x_to_db(150.0, 0.0, 100.0) == pytest.approx(12.0)
+    assert gain_track_x_to_db(50.0, 50.0, 50.0) == pytest.approx(0.0)
 
 
 def test_gain_meter_fraction_handles_silence_and_clip() -> None:

@@ -21,6 +21,7 @@ from flitzis_looper.audio_gain import (
     gain_drag_delta_db,
     gain_fine_step_direction,
     gain_meter_fraction_from_peak,
+    gain_track_x_to_db,
 )
 from flitzis_looper.constants import (
     PAD_EQ_DB_MIN,
@@ -546,6 +547,13 @@ def _apply_gain_drag(ctx: UiContext, pad_id: int) -> None:
                 clamp_gain_db(current + PAD_GAIN_FINE_STEP_DB * direction),
             )
         state.clear()
+        return
+
+    if state.button == imgui.MouseButton_.left:
+        axis_min_x = imgui.get_item_rect_min().x
+        axis_max_x = imgui.get_item_rect_max().x
+        mouse_x = float(imgui.get_io().mouse_pos.x)
+        ctx.audio.pads.set_pad_gain(pad_id, gain_track_x_to_db(mouse_x, axis_min_x, axis_max_x))
         return
 
     io = imgui.get_io()

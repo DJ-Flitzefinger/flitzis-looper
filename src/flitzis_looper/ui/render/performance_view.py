@@ -6,7 +6,6 @@ from flitzis_looper.constants import GRID_SIZE, NUM_BANKS, NUM_PADS
 from flitzis_looper.ui.constants import (
     BANK_BUTTONS_HEIGHT,
     BANK_PRESSED_RGBA,
-    CONTROL_RGBA,
     MODE_OFF_RGBA,
     MODE_ON_RGBA,
     PAD_GRID_GAP,
@@ -25,7 +24,6 @@ if TYPE_CHECKING:
 STEM_GRID_INDICATORS: dict[str, tuple[str, imgui.ImVec4Like, imgui.ImVec4Like]] = {
     "available": ("ST", MODE_ON_RGBA, TEXT_ACTIVE_RGBA),
     "generating": ("...", BANK_PRESSED_RGBA, TEXT_ACTIVE_RGBA),
-    "blocked": ("BLK", CONTROL_RGBA, TEXT_RGBA),
     "error": ("!", MODE_OFF_RGBA, TEXT_RGBA),
 }
 PAD_TITLE_MAX_LINES = 3
@@ -185,7 +183,10 @@ def stem_grid_indicator_label(state: StemGridIndicatorState | None) -> str | Non
     """Return the compact pad-grid indicator label for tests and rendering."""
     if state is None:
         return None
-    return STEM_GRID_INDICATORS[state][0]
+    indicator = STEM_GRID_INDICATORS.get(state)
+    if indicator is None:
+        return None
+    return indicator[0]
 
 
 def _pad_button_stem_indicator(ctx: UiContext, pad_id: int) -> None:
@@ -193,7 +194,11 @@ def _pad_button_stem_indicator(ctx: UiContext, pad_id: int) -> None:
     if state is None:
         return
 
-    label, bg_rgba, text_rgba = STEM_GRID_INDICATORS[state]
+    indicator = STEM_GRID_INDICATORS.get(state)
+    if indicator is None:
+        return
+
+    label, bg_rgba, text_rgba = indicator
     pos_min = imgui.get_item_rect_min()
     pos_max = imgui.get_item_rect_max()
     text_size = imgui.calc_text_size(label)
