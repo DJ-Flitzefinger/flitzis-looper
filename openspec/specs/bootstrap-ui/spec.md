@@ -10,13 +10,13 @@ The system SHALL provide a Python entrypoint to start the UI from the `flitzis_l
 - **WHEN** `python -m flitzis_looper` is executed
 - **THEN** the UI starts without raising an exception
 
-### Requirement: Fixed-Size Application Window
-The system SHALL create a Dear ImGui Bundle application window with a fixed size of 960x630 pixels and prevent user resizing.
+### Requirement: Application Window
+The system SHALL create a Dear ImGui Bundle application window with an initial size of 960x630 pixels and allow the runner to restore the user's previous window geometry when available.
 
 #### Scenario: Window starts at fixed size
 - **WHEN** the UI is started
-- **THEN** the viewport is created with width 960 and height 630
-- **AND** the viewport is user-resizable
+- **THEN** the viewport is created with width 960 and height 630 when no previous geometry is restored
+- **AND** the viewport may be user-resized through the Dear ImGui Bundle runner
 
 ### Requirement: Full-Size Primary Content Panel
 The system SHALL render a single primary content window/panel that fills the viewport.
@@ -27,11 +27,10 @@ The system SHALL render a single primary content window/panel that fills the vie
 - **AND** the primary content window fills the viewport
 
 ### Requirement: Application Logic Instantiation
-The system SHALL instantiate an application logic object during UI startup, and the application logic SHALL instantiate `flitzis_looper_rs.AudioEngine`.
+The system SHALL instantiate an application logic object during UI startup, and the application logic SHALL instantiate `flitzis_looper_audio.AudioEngine`.
 
 #### Scenario: Startup constructs application and audio engine
 - **WHEN** the UI is started
 - **THEN** an application object is created
 - **AND** the application contains an `AudioEngine` instance
 - **AND** audio playback is not started as part of this change
-

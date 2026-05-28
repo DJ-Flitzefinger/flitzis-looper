@@ -8,15 +8,23 @@ Tests cover:
 """
 
 from typing import TYPE_CHECKING, cast
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
 from flitzis_looper.constants import SPEED_STEP
-from flitzis_looper.models import BeatGrid, ProjectState, SampleAnalysis
+from flitzis_looper.models import (
+    STEM_INSTRUMENTAL_PRESET_MASK,
+    BeatGrid,
+    ProjectState,
+    SampleAnalysis,
+    StemCacheEntry,
+)
 from flitzis_looper.ui.context import (
     AudioActions,
+    InputMappingActions,
     ReadOnlyStateProxy,
+    SettingsActions,
     UiActions,
     UiContext,
     UiState,
@@ -177,9 +185,65 @@ class TestUiStateComputedProperties:
         controller.transport.pad.set_manual_key(0, "Gm")
         assert ui_state.pads.effective_key(0) == "Gm"
 
+    def test_pad_stem_selectors_delegate_to_stem_controller(
+        self, controller: AppController
+    ) -> None:
+        ui_state = UiState(controller)
+        controller.project.pad_stem_mix_mode[0] = "all_stems"
+        controller.project.stem_cache[0] = StemCacheEntry(
+            source_version="samples/foo.wav|10|20",
+            cache_dir="samples/stems/cache",
+            available=True,
+        )
+        controller.session.stem_generation_stage[0] = "Writing stem cache"
+        controller.session.stem_generation_progress[0] = 0.5
+        controller.session.stem_generation_errors[0] = "failed"
+        controller.session.stem_generating_sample_ids.add(0)
+        controller.session.pad_stem_enabled_mask[0] = STEM_INSTRUMENTAL_PRESET_MASK
+        controller.session.pad_stem_last_custom_mask[0] = STEM_INSTRUMENTAL_PRESET_MASK
+        controller.session.pad_stem_mask_display_mode[0] = "instrumental"
+        controller.project.sample_paths[0] = "samples/foo.wav"
+        controller.session.active_sample_ids.add(0)
 
-class TestAudioActions:
+        assert ui_state.stems.stem_mix_mode(0) == "all_stems"
+        assert ui_state.stems.stems_available(0) is True
+        assert ui_state.stems.has_stem_cache(0) is True
+        assert ui_state.stems.stem_enabled_mask(0) == STEM_INSTRUMENTAL_PRESET_MASK
+        assert ui_state.stems.stem_last_custom_mask(0) == STEM_INSTRUMENTAL_PRESET_MASK
+        assert ui_state.stems.stem_mask_display_mode(0) == "instrumental"
+        assert ui_state.stems.stem_mask_controls_enabled(0) is True
+        assert ui_state.stems.stem_grid_indicator_state(0) == "error"
+        assert ui_state.stems.is_stem_generation_running(0) is True
+        assert ui_state.stems.stem_generation_block_reason(0) == (
+            "Cannot generate stems while the pad is playing"
+        )
+        assert ui_state.stems.stem_generation_status(0) == ("Writing stem cache", 0.5)
+        assert ui_state.stems.stem_generation_error(0) == "failed"
+
+    def test_global_master_meter_selectors(
+        self, controller: AppController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ui_state = UiState(controller)
+        controller.session.master_output_peak = 1.25
+        monkeypatch.setattr(controller.metering, "master_clip_active", lambda: True)
+
+        assert ui_state.global_.master_output_peak() == pytest.approx(1.25)
+        assert ui_state.global_.master_clip_active() is True
+
+
+class TestAudioActions:  # noqa: PLR0904
     """Test AudioActions delegation to controller."""
+
+    def test_poll_delegates_to_controller_runtime_poll(
+        self, controller: AppController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        audio_actions = AudioActions(controller)
+        poll_runtime_events = Mock()
+        monkeypatch.setattr(controller, "poll_runtime_events", poll_runtime_events)
+
+        audio_actions.poll.poll()
+
+        poll_runtime_events.assert_called_once()
 
     def test_trigger_pad(self, controller: AppController, audio_engine_mock: Mock) -> None:
         """Test trigger_pad delegates to controller."""
@@ -188,7 +252,7 @@ class TestAudioActions:
 
         audio_actions.pads.trigger_pad(0)
 
-        audio_engine_mock.play_sample.assert_called_once_with(0, 1.0)
+        audio_engine_mock.play_sample_exclusive.assert_called_once_with(0, 1.0)
         # Simulate the audio message that would update state
         msg = Mock()
         msg.sample_id.return_value = 0
@@ -254,6 +318,23 @@ class TestAudioActions:
         audio_actions.pads.clear_manual_key(0)
         assert controller.project.manual_key[0] is None
 
+    def test_set_pad_full_track_loop_region(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        audio_actions = AudioActions(controller)
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
+        controller.project.sample_durations[0] = 42.0
+        controller.project.pad_loop_auto[0] = True
+        controller.project.pad_loop_start_s[0] = 2.0
+        controller.project.pad_loop_end_s[0] = 8.0
+
+        audio_actions.pads.set_pad_full_track_loop_region(0)
+
+        assert controller.project.pad_loop_start_s[0] == pytest.approx(0.0)
+        assert controller.project.pad_loop_end_s[0] == pytest.approx(42.0)
+        assert controller.project.pad_loop_auto[0] is False
+        audio_engine_mock.set_pad_loop_region.assert_called_once_with(0, 0.0, 42.0)
+
     def test_tap_bpm_delegates(
         self, controller: AppController, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -262,7 +343,6 @@ class TestAudioActions:
         mp_target = "flitzis_looper.controller.transport.bpm.monotonic"
         monkeypatch.setattr(mp_target, lambda: next(times))
 
-        assert audio_actions.pads.tap_bpm(0) is None
         assert audio_actions.pads.tap_bpm(0) is None
         assert audio_actions.pads.tap_bpm(0) == pytest.approx(120.0, abs=0.01)
 
@@ -316,6 +396,20 @@ class TestAudioActions:
         audio_engine_mock.set_speed.assert_called_once()
         assert controller.project.speed == expected_speed
 
+    def test_increase_speed_uses_bpm_step_when_reference_exists(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        audio_actions = AudioActions(controller)
+        controller.project.selected_pad = 1
+        controller.transport.bpm.set_manual_bpm(1, 120.0)
+
+        audio_engine_mock.reset_mock()
+
+        audio_actions.global_.increase_speed()
+
+        assert controller.project.speed == pytest.approx(120.1 / 120.0)
+        audio_engine_mock.set_speed.assert_called_once()
+
     def test_decrease_speed(self, controller: AppController, audio_engine_mock: Mock) -> None:
         """Test decrease_speed decreases speed by SPEED_STEP."""
         audio_actions = AudioActions(controller)
@@ -327,6 +421,15 @@ class TestAudioActions:
         expected_speed = initial_speed - SPEED_STEP
         audio_engine_mock.set_speed.assert_called_once()
         assert controller.project.speed == expected_speed
+
+    def test_set_effective_bpm(self, controller: AppController) -> None:
+        audio_actions = AudioActions(controller)
+        controller.project.selected_pad = 1
+        controller.transport.bpm.set_manual_bpm(1, 120.0)
+
+        audio_actions.global_.set_effective_bpm(123.45)
+
+        assert controller.project.speed == pytest.approx(123.45 / 120.0)
 
     def test_toggle_multi_loop(self, controller: AppController) -> None:
         """Test toggle_multi_loop toggles multi_loop mode."""
@@ -354,6 +457,58 @@ class TestAudioActions:
         audio_actions.global_.toggle_bpm_lock()
 
         assert controller.project.bpm_lock is not initial_state
+
+    def test_toggle_trigger_quantization(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        audio_actions = AudioActions(controller)
+
+        audio_actions.global_.toggle_trigger_quantization()
+
+        assert controller.project.trigger_quantization_enabled is True
+        audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_64")
+
+    def test_set_stem_mix_mode(self, controller: AppController, audio_engine_mock: Mock) -> None:
+        audio_actions = AudioActions(controller)
+        controller.project.pad_stem_mix_mode[0] = "all_stems"
+
+        audio_actions.stems.set_stem_mix_mode(0, "full_mix")
+
+        assert controller.project.pad_stem_mix_mode[0] == "full_mix"
+        audio_engine_mock.set_stem_mix_mode.assert_called_once_with(0, "full_mix")
+
+    def test_set_stem_enabled_mask(
+        self, controller: AppController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        audio_actions = AudioActions(controller)
+        set_stem_enabled_mask = Mock(return_value=True)
+        monkeypatch.setattr(controller.stems, "set_stem_enabled_mask", set_stem_enabled_mask)
+
+        audio_actions.stems.set_stem_enabled_mask(0, STEM_INSTRUMENTAL_PRESET_MASK, "instrumental")
+
+        set_stem_enabled_mask.assert_called_once_with(
+            0, STEM_INSTRUMENTAL_PRESET_MASK, "instrumental"
+        )
+
+    def test_generate_stems_async(
+        self, controller: AppController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        audio_actions = AudioActions(controller)
+        generate_stems_async = Mock(return_value=True)
+        monkeypatch.setattr(controller.stems, "generate_stems_async", generate_stems_async)
+
+        audio_actions.stems.generate_stems_async(0)
+
+        generate_stems_async.assert_called_once_with(0)
+
+    def test_delete_stems(self, controller: AppController, monkeypatch: pytest.MonkeyPatch) -> None:
+        audio_actions = AudioActions(controller)
+        delete_stems = Mock(return_value=True)
+        monkeypatch.setattr(controller.stems, "delete_stems", delete_stems)
+
+        audio_actions.stems.delete_stems(0)
+
+        delete_stems.assert_called_once_with(0)
 
 
 class TestUiActions:
@@ -394,6 +549,48 @@ class TestUiActions:
 
         assert controller.session.file_dialog_pad_id is None
 
+    def test_adjust_loop_opens_loaded_pad_waveform_editor(self, controller: AppController) -> None:
+        ui_actions = UiActions(controller)
+        controller.project.sample_paths[3] = "/path/to/sample.wav"
+
+        ui_actions.open_waveform_editor(3)
+
+        assert controller.session.waveform_editor_open is True
+        assert controller.session.waveform_editor_pad_id == 3
+
+    def test_adjust_loop_closes_same_pad_waveform_editor(self, controller: AppController) -> None:
+        ui_actions = UiActions(controller)
+        controller.project.sample_paths[3] = "/path/to/sample.wav"
+        controller.session.waveform_editor_open = True
+        controller.session.waveform_editor_pad_id = 3
+
+        ui_actions.open_waveform_editor(3)
+
+        assert controller.session.waveform_editor_open is False
+        assert controller.session.waveform_editor_pad_id is None
+
+    def test_adjust_loop_switches_open_editor_to_different_loaded_pad(
+        self, controller: AppController
+    ) -> None:
+        ui_actions = UiActions(controller)
+        controller.project.sample_paths[3] = "/path/to/sample.wav"
+        controller.project.sample_paths[4] = "/path/to/other.wav"
+        controller.session.waveform_editor_open = True
+        controller.session.waveform_editor_pad_id = 3
+
+        ui_actions.open_waveform_editor(4)
+
+        assert controller.session.waveform_editor_open is True
+        assert controller.session.waveform_editor_pad_id == 4
+
+    def test_adjust_loop_ignores_unloaded_pad(self, controller: AppController) -> None:
+        ui_actions = UiActions(controller)
+
+        ui_actions.open_waveform_editor(3)
+
+        assert controller.session.waveform_editor_open is False
+        assert controller.session.waveform_editor_pad_id is None
+
     def test_select_pad(self, controller: AppController) -> None:
         """Test select_pad sets selected_pad."""
         ui_actions = UiActions(controller)
@@ -409,6 +606,23 @@ class TestUiActions:
         ui_actions.select_bank(3)
 
         assert controller.project.selected_bank == 3
+
+    def test_global_bpm_edit_state(self, controller: AppController) -> None:
+        ui_actions = UiActions(controller)
+
+        ui_actions.start_global_bpm_edit("120.00")
+        assert controller.session.global_bpm_edit_active is True
+        assert controller.session.global_bpm_edit_text == "120.00"
+        assert controller.session.global_bpm_edit_focus_requested is True
+
+        ui_actions.set_global_bpm_edit_text("120.10")
+        ui_actions.clear_global_bpm_edit_focus_request()
+        assert controller.session.global_bpm_edit_text == "120.10"
+        assert controller.session.global_bpm_edit_focus_requested is False
+
+        ui_actions.finish_global_bpm_edit()
+        assert controller.session.global_bpm_edit_active is False
+        assert not controller.session.global_bpm_edit_text
 
     def test_store_pressed_pad_state_true(self, controller: AppController) -> None:
         """Test store_pressed_pad_state sets pad pressed state to True."""
@@ -428,6 +642,56 @@ class TestUiActions:
         assert controller.session.pressed_pads[5] is False
 
 
+class TestSettingsActions:
+    """Test Settings overlay state and quality actions."""
+
+    def test_open_close_toggle_settings_overlay(self, controller: AppController) -> None:
+        settings_actions = SettingsActions(controller)
+
+        settings_actions.open()
+        assert controller.session.settings_open is True
+
+        settings_actions.toggle()
+        assert controller.session.settings_open is False
+
+        settings_actions.toggle()
+        assert controller.session.settings_open is True
+
+        settings_actions.close()
+        assert controller.session.settings_open is False
+
+    def test_set_demucs_quality_delegates_to_stem_controller(
+        self, controller: AppController
+    ) -> None:
+        settings_actions = SettingsActions(controller)
+
+        settings_actions.set_demucs_quality(shifts=4, overlap=0.25)
+
+        assert controller.project.demucs_shifts == 4
+        assert controller.project.demucs_overlap == pytest.approx(0.25)
+        assert controller.persistence._dirty is True
+
+    def test_set_demucs_quality_does_not_start_stem_generation(
+        self, controller: AppController
+    ) -> None:
+        settings_actions = SettingsActions(controller)
+
+        settings_actions.set_demucs_quality(shifts=6, overlap=0.4)
+
+        assert controller.session.stem_generating_sample_ids == set()
+        assert controller.session.stem_generation_source_versions == {}
+
+    def test_set_trigger_quantization_step_delegates_to_global_params(
+        self, controller: AppController
+    ) -> None:
+        settings_actions = SettingsActions(controller)
+
+        settings_actions.set_trigger_quantization_step("1_32")
+
+        assert controller.project.trigger_quantization_step == "1_32"
+        assert controller.persistence._dirty is True
+
+
 class TestUiContext:
     """Test UiContext initialization and access."""
 
@@ -439,6 +703,8 @@ class TestUiContext:
         assert isinstance(ui_context.state, UiState)
         assert isinstance(ui_context.audio, AudioActions)
         assert isinstance(ui_context.ui, UiActions)
+        assert isinstance(ui_context.ui.settings, SettingsActions)
+        assert isinstance(ui_context.input, InputMappingActions)
 
     def test_ui_context_provides_access_to_components(self, controller: AppController) -> None:
         """Test UiContext provides access to all UI components."""
@@ -476,6 +742,7 @@ class TestWaveformEditorTransportControls:
         controller.project.pad_loop_end_s[0] = 5.0
 
         controller.session.active_sample_ids.update({0, 1})
+        controller.session.paused_sample_ids.add(0)
         controller.session.pad_playhead_s[0] = 4.2
 
         ctx.ui.waveform.play_restart_selected_pad_on_press()
@@ -484,12 +751,61 @@ class TestWaveformEditorTransportControls:
         audio_engine_mock.play_sample.assert_called_once_with(0, 1.0)
         audio_engine_mock.set_pad_loop_region.assert_called_once_with(0, 2.0, 5.0)
         assert controller.session.pad_playhead_s[0] == pytest.approx(2.0)
+        assert 0 not in controller.session.paused_sample_ids
 
         # Restart is a trigger: pressing again retriggers from loop start.
         ctx.ui.waveform.play_restart_selected_pad_on_press()
         assert audio_engine_mock.play_sample.call_count == 2
         assert audio_engine_mock.set_pad_loop_region.call_count == 2
         assert controller.session.pad_playhead_s[0] == pytest.approx(2.0)
+
+    def test_set_loop_start_and_play_selected_pad_retriggers_from_new_start(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
+        controller.project.sample_paths[1] = "/path/to/other.wav"
+        controller.project.sample_durations[0] = 20.0
+        controller.project.multi_loop = False  # Would normally stop others.
+
+        controller.project.pad_loop_auto[0] = False
+        controller.project.pad_loop_start_s[0] = 2.0
+        controller.project.pad_loop_end_s[0] = 9.0
+
+        controller.session.active_sample_ids.add(1)
+        controller.session.pad_playhead_s[0] = 7.5
+        controller.session.pad_playhead_s[1] = 1.5
+
+        ctx.ui.waveform.set_loop_start_and_play_selected_pad(4.25)
+
+        assert controller.project.pad_loop_start_s[0] == pytest.approx(4.25)
+        audio_engine_mock.stop_all.assert_not_called()
+        assert audio_engine_mock.set_pad_loop_region.call_args_list == [
+            call(0, 4.25, 9.0),
+            call(0, 4.25, 9.0),
+        ]
+        audio_engine_mock.play_sample.assert_called_once_with(0, 1.0)
+        assert controller.session.pad_playhead_s[0] == pytest.approx(4.25)
+        assert controller.session.pad_playhead_s[1] == pytest.approx(1.5)
+
+    def test_stop_selected_pad_on_press_stops_only_selected_without_resetting_playhead(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
+        controller.project.sample_paths[1] = "/path/to/other.wav"
+        controller.session.active_sample_ids.update({0, 1})
+        controller.session.pad_playhead_s[0] = 7.0
+        controller.session.pad_playhead_s[1] = 1.5
+
+        ctx.ui.waveform.stop_selected_pad_on_press()
+
+        audio_engine_mock.stop_all.assert_not_called()
+        audio_engine_mock.stop_sample.assert_called_once_with(0)
+        assert controller.session.pad_playhead_s[0] == pytest.approx(7.0)
+        assert controller.session.pad_playhead_s[1] == pytest.approx(1.5)
 
     def test_stop_and_reset_selected_pad_on_press_stops_only_selected_and_resets_playhead(
         self, controller: AppController, audio_engine_mock: Mock
@@ -550,6 +866,46 @@ class TestWaveformEditorTransportControls:
 
         # Simulate no audio message change for pause (paused state managed by UI)
 
+    def test_pause_selected_pad_hold_pauses_then_resumes_on_release(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
+        controller.project.sample_paths[1] = "/path/to/other.wav"
+        controller.session.active_sample_ids.update({0, 1})
+
+        ctx.ui.waveform.pause_selected_pad_hold_on_press()
+
+        audio_engine_mock.pause_sample.assert_called_once_with(0)
+        assert controller.session.waveform_pause_hold_pad_id == 0
+        assert 0 in controller.session.paused_sample_ids
+        assert 1 not in controller.session.paused_sample_ids
+
+        ctx.ui.waveform.pause_selected_pad_hold_on_release()
+
+        audio_engine_mock.resume_sample.assert_called_once_with(0)
+        assert controller.session.waveform_pause_hold_pad_id is None
+        assert 0 not in controller.session.paused_sample_ids
+        assert 1 not in controller.session.paused_sample_ids
+
+    def test_pause_selected_pad_hold_does_not_resume_previously_paused_pad(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
+        controller.session.active_sample_ids.add(0)
+        controller.session.paused_sample_ids.add(0)
+
+        ctx.ui.waveform.pause_selected_pad_hold_on_press()
+        ctx.ui.waveform.pause_selected_pad_hold_on_release()
+
+        audio_engine_mock.pause_sample.assert_not_called()
+        audio_engine_mock.resume_sample.assert_not_called()
+        assert controller.session.waveform_pause_hold_pad_id is None
+        assert 0 in controller.session.paused_sample_ids
+
     def test_resume_selected_pad_after_pause(
         self, controller: AppController, audio_engine_mock: Mock
     ) -> None:
@@ -593,3 +949,17 @@ class TestWaveformEditorTransportControls:
         assert controller.session.active_sample_ids == {0, 1}
         assert controller.session.pad_playhead_s[0] == pytest.approx(12.0)
         assert audio_engine_mock.method_calls == []
+
+    def test_seek_selected_pad_to_position_calls_selected_pad_seek(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+
+        controller.project.sample_paths[0] = "/path/to/sample.wav"
+        controller.project.sample_durations[0] = 10.0
+        controller.session.active_sample_ids.add(0)
+
+        ctx.ui.waveform.seek_selected_pad_to_position(12.5)
+
+        audio_engine_mock.seek_sample.assert_called_once_with(0, 10.0)
+        assert controller.session.pad_playhead_s[0] == pytest.approx(10.0)

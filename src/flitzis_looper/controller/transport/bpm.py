@@ -1,5 +1,4 @@
 import math
-from itertools import pairwise
 from time import monotonic
 from typing import TYPE_CHECKING
 
@@ -13,7 +12,7 @@ if TYPE_CHECKING:
 class BpmController:
     """Manage BPM overrides, tap detection, and master BPM computation."""
 
-    _TAP_BPM_WINDOW_SIZE = 5
+    _TAP_BPM_RESET_AFTER_S = 3.0
 
     def __init__(self, transport: TransportController) -> None:
         self._transport = transport
@@ -49,18 +48,19 @@ class BpmController:
             self._session.tap_bpm_timestamps.clear()
 
         timestamps = self._session.tap_bpm_timestamps
-        if timestamps and now <= timestamps[-1]:
-            return None
+        if timestamps:
+            elapsed_since_last_tap = now - timestamps[-1]
+            if elapsed_since_last_tap <= 0:
+                return None
+            if elapsed_since_last_tap > self._TAP_BPM_RESET_AFTER_S:
+                timestamps.clear()
 
         timestamps.append(now)
-        if len(timestamps) > self._TAP_BPM_WINDOW_SIZE:
-            del timestamps[: -self._TAP_BPM_WINDOW_SIZE]
 
-        if len(timestamps) < 3:
+        if len(timestamps) < 2:
             return None
 
-        intervals = [b - a for a, b in pairwise(timestamps)]
-        avg_interval = sum(intervals) / len(intervals)
+        avg_interval = (timestamps[-1] - timestamps[0]) / (len(timestamps) - 1)
         if avg_interval <= 0:
             return None
 
@@ -69,6 +69,7 @@ class BpmController:
             return None
 
         self._project.manual_bpm[sample_id] = bpm
+        self.on_pad_bpm_changed(sample_id)
         self._transport._mark_project_changed()
         return bpm
 
@@ -103,6 +104,8 @@ class BpmController:
 
         # Grid offset clamp depends on effective BPM, so re-clamp on changes.
         self._transport.loop.reclamp_grid_offset_samples(sample_id)
+        self._transport.loop.apply_grid_anchor_to_audio(sample_id)
+        self._transport.loop._apply_effective_pad_loop_region_to_audio(sample_id)
 
         if self._session.bpm_lock_anchor_pad_id != sample_id:
             return

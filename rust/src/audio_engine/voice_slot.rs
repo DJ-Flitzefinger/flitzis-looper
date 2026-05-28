@@ -1,7 +1,22 @@
+use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 use crate::audio_engine::constants::{SPEED_MAX, SPEED_MIN};
-use crate::audio_engine::eq3::Eq3State;
 use crate::audio_engine::stretch_processor::StretchProcessor;
 use crate::messages::SampleBuffer;
+
+const KEY_LOCK_TEMPO_SMOOTHING_STEP: f32 = 0.05;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ExplicitSeekMode {
+    Normal,
+    BeforeLoop,
+    AfterLoop,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlaybackTimelineAnchor {
+    pub(crate) output_frame: u64,
+    pub(crate) source_frame: usize,
+}
 
 pub struct VoiceSlot {
     pub active: bool,
@@ -11,12 +26,13 @@ pub struct VoiceSlot {
     pub volume: f32,
     tempo_ratio_smoothed: f32,
     pub stretch: StretchProcessor,
-    pub eq_state: Vec<Eq3State>,
     pub paused: bool,
+    pub(crate) explicit_seek_mode: ExplicitSeekMode,
+    pub(crate) timeline_anchor: Option<PlaybackTimelineAnchor>,
 }
 
 impl VoiceSlot {
-    pub fn new(channels: usize) -> Self {
+    pub fn with_sample_rate(channels: usize, sample_rate_hz: f32) -> Self {
         Self {
             active: false,
             sample_id: 0,
@@ -24,19 +40,45 @@ impl VoiceSlot {
             frame_pos: 0,
             volume: 0.0,
             tempo_ratio_smoothed: 1.0,
-            stretch: StretchProcessor::new(channels),
-            eq_state: vec![Eq3State::default(); channels],
+            stretch: StretchProcessor::with_sample_rate(channels, sample_rate_hz),
             paused: false,
+            explicit_seek_mode: ExplicitSeekMode::Normal,
+            timeline_anchor: None,
         }
     }
 
-    pub fn start(
+    pub(crate) fn start_rt(
         &mut self,
         sample_id: usize,
         sample: SampleBuffer,
         initial_frame_pos: usize,
         volume: f32,
         initial_tempo_ratio: f32,
+        start_output_frame: Option<u64>,
+        retirement: &mut impl AudioBufferRetirement,
+    ) {
+        if let Some(old_sample) = self.sample.take() {
+            retirement.retire_sample(old_sample);
+        }
+
+        self.start_inner(
+            sample_id,
+            sample,
+            initial_frame_pos,
+            volume,
+            initial_tempo_ratio,
+            start_output_frame,
+        );
+    }
+
+    fn start_inner(
+        &mut self,
+        sample_id: usize,
+        sample: SampleBuffer,
+        initial_frame_pos: usize,
+        volume: f32,
+        initial_tempo_ratio: f32,
+        start_output_frame: Option<u64>,
     ) {
         self.active = true;
         self.sample_id = sample_id;
@@ -45,28 +87,75 @@ impl VoiceSlot {
         self.volume = volume;
         self.tempo_ratio_smoothed = initial_tempo_ratio;
         self.paused = false;
-        for state in &mut self.eq_state {
-            state.reset();
-        }
+        self.explicit_seek_mode = ExplicitSeekMode::Normal;
+        self.timeline_anchor = start_output_frame.map(|output_frame| PlaybackTimelineAnchor {
+            output_frame,
+            source_frame: initial_frame_pos,
+        });
+        self.stretch.reset();
     }
 
-    pub fn stop(&mut self) {
-        self.active = false;
+    #[cfg(test)]
+    pub(crate) fn stop(&mut self) {
         self.sample = None;
+        self.stop_inner();
+    }
+
+    pub(crate) fn stop_rt(&mut self, retirement: &mut impl AudioBufferRetirement) {
+        if let Some(sample) = self.sample.take() {
+            retirement.retire_sample(sample);
+        }
+
+        self.stop_inner();
+    }
+
+    fn stop_inner(&mut self) {
+        self.active = false;
         self.frame_pos = 0;
         self.volume = 0.0;
         self.tempo_ratio_smoothed = 1.0;
         self.paused = false;
-        for state in &mut self.eq_state {
-            state.reset();
-        }
+        self.explicit_seek_mode = ExplicitSeekMode::Normal;
+        self.timeline_anchor = None;
+        self.stretch.reset();
     }
 
-    pub fn restart(&mut self, initial_frame_pos: usize, volume: f32, initial_tempo_ratio: f32) {
+    pub fn restart(
+        &mut self,
+        initial_frame_pos: usize,
+        volume: f32,
+        initial_tempo_ratio: f32,
+        start_output_frame: Option<u64>,
+    ) {
         self.frame_pos = initial_frame_pos;
         self.volume = volume;
         self.tempo_ratio_smoothed = initial_tempo_ratio;
         self.paused = false;
+        self.explicit_seek_mode = ExplicitSeekMode::Normal;
+        self.timeline_anchor = start_output_frame.map(|output_frame| PlaybackTimelineAnchor {
+            output_frame,
+            source_frame: initial_frame_pos,
+        });
+        self.stretch.reset();
+    }
+
+    pub(crate) fn seek(
+        &mut self,
+        frame_pos: usize,
+        mode: ExplicitSeekMode,
+        output_frame: Option<u64>,
+    ) {
+        self.frame_pos = frame_pos;
+        self.explicit_seek_mode = mode;
+        self.timeline_anchor = output_frame.map(|output_frame| PlaybackTimelineAnchor {
+            output_frame,
+            source_frame: frame_pos,
+        });
+        self.stretch.reset();
+    }
+
+    pub(crate) fn clear_explicit_seek(&mut self) {
+        self.explicit_seek_mode = ExplicitSeekMode::Normal;
     }
 
     pub fn smooth_tempo_ratio(&mut self, target: f32) -> f32 {
@@ -80,12 +169,23 @@ impl VoiceSlot {
             return self.tempo_ratio_smoothed;
         }
 
-        let max_step = 0.05;
+        let max_step = KEY_LOCK_TEMPO_SMOOTHING_STEP;
         let delta = (target - self.tempo_ratio_smoothed).clamp(-max_step, max_step);
         self.tempo_ratio_smoothed = (self.tempo_ratio_smoothed + delta).clamp(SPEED_MIN, SPEED_MAX);
         target = self.tempo_ratio_smoothed;
 
         target
+    }
+
+    pub(crate) fn tempo_ratio_smoothed(&self) -> f32 {
+        self.tempo_ratio_smoothed
+    }
+
+    pub(crate) fn anchor_timeline(&mut self, output_frame: u64) {
+        self.timeline_anchor = Some(PlaybackTimelineAnchor {
+            output_frame,
+            source_frame: self.frame_pos,
+        });
     }
 
     pub fn is_playing_sample(&self, sample_id: usize) -> bool {

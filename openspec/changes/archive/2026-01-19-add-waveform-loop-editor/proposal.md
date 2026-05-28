@@ -25,4 +25,4 @@ Performers need to adjust per-pad loop start/end precisely, using audio-derived 
 ## Non-Goals
 - Stereo waveform view (use mono view only).
 - Beat-grid overlays beyond snapping behavior (no beat labels/lines in this change).
-- Intro-region playback (separate future capability; referenced in `docs/todos-legacy-migration.md`).
+- Intro-region playback (separate future capability).

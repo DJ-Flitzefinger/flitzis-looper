@@ -1,17 +1,24 @@
 use crate::audio_engine::analysis::analyze_sample;
 use crate::audio_engine::audio_stream::{AudioStreamHandle, create_audio_stream, start_stream};
 use crate::audio_engine::constants::{
-    NUM_SAMPLES, PAD_EQ_DB_MAX, PAD_EQ_DB_MIN, PAD_GAIN_MAX, PAD_GAIN_MIN, SPEED_MAX, SPEED_MIN,
-    VOLUME_MAX, VOLUME_MIN,
+    NUM_SAMPLES, PAD_EQ_DB_MAX, PAD_EQ_DB_MIN, PAD_GAIN_DB_MAX, PAD_GAIN_DB_MIN, SPEED_MAX,
+    SPEED_MIN, VOLUME_MAX, VOLUME_MIN,
 };
 use crate::audio_engine::errors::SampleLoadError;
+use crate::audio_engine::input_mapping::InputRuntime;
 use crate::audio_engine::progress::{LoadProgressStage, ProgressReporter};
 use crate::audio_engine::sample_loader::{
     SampleLoadProgress, SampleLoadSubtask, cache_audio_file_for_project,
     decode_audio_file_to_sample_buffer,
 };
+use crate::audio_engine::stem_cache::{
+    prepare_stem_buffers_from_cache, project_stem_cache_dir, source_version_hash,
+    write_deterministic_stem_artifacts,
+};
 use crate::messages::{
-    AudioMessage, BackgroundTaskKind, ControlMessage, LoaderEvent, SampleBuffer, task_to_str,
+    AudioMessage, BackgroundTaskKind, ControlMessage, ControlParameterMessage, LoaderEvent,
+    PadTimingMetadata, STEM_COMPONENT_MASK, SampleBuffer, StemMixMode, TriggerQuantization,
+    task_to_str,
 };
 use numpy::{PyArray1, ToPyArray};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -27,14 +34,20 @@ use std::thread;
 
 mod analysis;
 mod audio_stream;
+mod buffer_retirement;
 mod channels;
 mod constants;
-mod eq3;
+mod dsp;
 mod errors;
+mod input_mapping;
 mod mixer;
 mod progress;
+mod rubberband_backend;
 mod sample_loader;
+mod scheduler;
+mod stem_cache;
 mod stretch_processor;
+mod transport;
 mod voice_slot;
 
 /// Tuple: (is_raw_mode, xs, y_min, y_max)
@@ -51,6 +64,34 @@ type WaveformResult = PyResult<
         Option<Py<PyArray1<f32>>>,
     )>,
 >;
+
+fn parse_trigger_quantization(mode: &str) -> Option<TriggerQuantization> {
+    let normalized_owned = mode.trim().to_ascii_lowercase().replace(['-', '/'], "_");
+    let normalized = normalized_owned
+        .strip_prefix("grid_")
+        .unwrap_or(normalized_owned.as_str());
+
+    let step_64ths = match normalized {
+        "1_64" => Some(1),
+        "1_32" => Some(2),
+        "1_16" => Some(4),
+        "next_beat" | "beat" | "next_bar" | "bar" => Some(4),
+        _ => None,
+    };
+
+    match normalized {
+        "immediate" | "disabled" | "off" => Some(TriggerQuantization::Immediate),
+        _ => step_64ths.map(|step_64ths| TriggerQuantization::Grid { step_64ths }),
+    }
+}
+
+fn parse_stem_mix_mode(mode: &str) -> Option<StemMixMode> {
+    match mode {
+        "full_mix" | "full-mix" | "fullmix" => Some(StemMixMode::FullMix),
+        "all_stems" | "all-stems" | "stems" => Some(StemMixMode::AllStems),
+        _ => None,
+    }
+}
 
 struct PadLoadingGuard {
     id: usize,
@@ -79,6 +120,10 @@ impl Drop for PadTaskGuard {
     }
 }
 
+fn has_active_task_for_id(tasks: &HashSet<(usize, BackgroundTaskKind)>, id: usize) -> bool {
+    tasks.iter().any(|(task_id, _)| *task_id == id)
+}
+
 /// AudioEngine provides minimal audio output capabilities using cpal
 #[pyclass]
 pub struct AudioEngine {
@@ -89,6 +134,7 @@ pub struct AudioEngine {
     sample_cache: Arc<Mutex<Vec<Option<SampleBuffer>>>>,
     loading_sample_ids: Arc<Mutex<HashSet<usize>>>,
     active_tasks: Arc<Mutex<HashSet<(usize, BackgroundTaskKind)>>>,
+    input_runtime: Option<InputRuntime>,
 }
 
 #[pymethods]
@@ -106,6 +152,7 @@ impl AudioEngine {
             sample_cache: Arc::new(Mutex::new(vec![None; NUM_SAMPLES])),
             loading_sample_ids: Arc::new(Mutex::new(HashSet::new())),
             active_tasks: Arc::new(Mutex::new(HashSet::new())),
+            input_runtime: None,
         })
     }
 
@@ -120,6 +167,7 @@ impl AudioEngine {
                 start_stream(&handle.stream).map_err(|e| {
                     PyRuntimeError::new_err(format!("Failed to start audio stream: {e}"))
                 })?;
+                self.input_runtime = Some(InputRuntime::new(handle.producer.clone()));
                 self.stream_handle = Some(handle);
                 self.is_playing = true;
                 Ok(())
@@ -138,11 +186,99 @@ impl AudioEngine {
         Ok(handle.output_sample_rate)
     }
 
+    pub fn loaded_sample_shape(&self, id: usize) -> PyResult<(u32, usize, usize)> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err(format!(
+                "id out of range (expected 0..{}, got {id})",
+                NUM_SAMPLES - 1
+            )));
+        }
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let sample = {
+            let cache = self
+                .sample_cache
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("Failed to acquire sample cache lock"))?;
+            cache
+                .get(id)
+                .and_then(|slot| slot.clone())
+                .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?
+        };
+
+        let frames = sample.samples.len() / sample.channels;
+        Ok((handle.output_sample_rate, sample.channels, frames))
+    }
+
     /// Shut down the audio engine.
     pub fn shut_down(&mut self) -> PyResult<()> {
+        self.input_runtime = None;
         self.stream_handle = None;
         self.is_playing = false;
         Ok(())
+    }
+
+    pub fn set_input_mapping_enabled(&self, enabled: bool) -> PyResult<()> {
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        runtime.set_enabled(enabled);
+        Ok(())
+    }
+
+    pub fn set_input_mapping_snapshot(&self, mappings: Vec<(String, String)>) -> PyResult<()> {
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        runtime.replace_mappings(mappings);
+        Ok(())
+    }
+
+    pub fn set_input_runtime_state(
+        &self,
+        multi_loop: bool,
+        loaded: Vec<bool>,
+        loop_starts: Vec<f32>,
+        loop_ends: Vec<Option<f32>>,
+    ) -> PyResult<()> {
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        runtime
+            .set_runtime_state(multi_loop, loaded, loop_starts, loop_ends)
+            .map_err(PyValueError::new_err)
+    }
+
+    pub fn start_midi_input(&self) -> PyResult<usize> {
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        runtime.start_midi_input().map_err(PyRuntimeError::new_err)
+    }
+
+    pub fn stop_midi_input(&self) -> PyResult<()> {
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        runtime.stop_midi_input();
+        Ok(())
+    }
+
+    pub fn inject_midi_input_for_test(&self, message: Vec<u8>) -> PyResult<bool> {
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        Ok(runtime.inject_midi_message(&message))
     }
 
     /// Load an audio file into a sample slot on a background thread.
@@ -360,9 +496,10 @@ impl AudioEngine {
                 .active_tasks
                 .lock()
                 .map_err(|_| PyRuntimeError::new_err("Failed to acquire active tasks lock"))?;
-            if !tasks.insert((id, BackgroundTaskKind::Analysis)) {
-                return Err(PyValueError::new_err("analysis task already running"));
+            if has_active_task_for_id(&tasks, id) {
+                return Err(PyValueError::new_err("sample task already running"));
             }
+            tasks.insert((id, BackgroundTaskKind::Analysis));
         }
 
         let sample = {
@@ -422,11 +559,276 @@ impl AudioEngine {
             let _ = loader_tx.send(LoaderEvent::TaskSuccess {
                 id,
                 task: BackgroundTaskKind::Analysis,
-                analysis,
+                analysis: Some(analysis),
             });
         });
 
         Ok(())
+    }
+
+    /// Schedule offline stem generation on a background thread.
+    ///
+    /// This API currently provides source-version-aware task gating and deterministic cache
+    /// artifact writing. Neural inference is intentionally not implemented here yet.
+    pub fn generate_stems_async(
+        &self,
+        id: usize,
+        source_version: String,
+        cache_dir: String,
+    ) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err(format!(
+                "id out of range (expected 0..{}, got {id})",
+                NUM_SAMPLES - 1
+            )));
+        }
+
+        if source_version.trim().is_empty() {
+            return Err(PyValueError::new_err("source_version must not be empty"));
+        }
+
+        project_stem_cache_dir(&cache_dir).map_err(PyValueError::new_err)?;
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        let output_sample_rate = handle.output_sample_rate;
+
+        {
+            let loading = self
+                .loading_sample_ids
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("Failed to acquire loading ids lock"))?;
+            if loading.contains(&id) {
+                return Err(PyValueError::new_err("sample is currently loading"));
+            }
+        }
+
+        let sample = {
+            let cache = self
+                .sample_cache
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("Failed to acquire sample cache lock"))?;
+            cache
+                .get(id)
+                .and_then(|slot| slot.clone())
+                .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?
+        };
+
+        {
+            let mut tasks = self
+                .active_tasks
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("Failed to acquire active tasks lock"))?;
+            if has_active_task_for_id(&tasks, id) {
+                return Err(PyValueError::new_err("sample task already running"));
+            }
+            tasks.insert((id, BackgroundTaskKind::StemGeneration));
+        }
+
+        let loader_tx = self.loader_tx.clone();
+        let active_tasks = self.active_tasks.clone();
+
+        thread::spawn(move || {
+            let _task_guard = PadTaskGuard {
+                id,
+                task: BackgroundTaskKind::StemGeneration,
+                active_tasks,
+            };
+
+            let _ = loader_tx.send(LoaderEvent::TaskStarted {
+                id,
+                task: BackgroundTaskKind::StemGeneration,
+            });
+
+            let _ = loader_tx.send(LoaderEvent::TaskProgress {
+                id,
+                task: BackgroundTaskKind::StemGeneration,
+                percent: 0.0,
+                stage: "Generating stems".to_string(),
+            });
+
+            let result =
+                write_deterministic_stem_artifacts(&sample, output_sample_rate, &cache_dir, {
+                    let loader_tx = loader_tx.clone();
+                    move |percent, stage| {
+                        let _ = loader_tx.send(LoaderEvent::TaskProgress {
+                            id,
+                            task: BackgroundTaskKind::StemGeneration,
+                            percent,
+                            stage: stage.to_string(),
+                        });
+                    }
+                });
+
+            match result {
+                Ok(()) => {
+                    let _ = loader_tx.send(LoaderEvent::TaskSuccess {
+                        id,
+                        task: BackgroundTaskKind::StemGeneration,
+                        analysis: None,
+                    });
+                }
+                Err(error) => {
+                    let _ = loader_tx.send(LoaderEvent::TaskError {
+                        id,
+                        task: BackgroundTaskKind::StemGeneration,
+                        error,
+                    });
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Validate cached stem artifacts and publish prepared handles to the audio thread.
+    pub fn publish_prepared_stems(
+        &self,
+        id: usize,
+        source_version: String,
+        cache_dir: String,
+    ) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err(format!(
+                "id out of range (expected 0..{}, got {id})",
+                NUM_SAMPLES - 1
+            )));
+        }
+
+        if source_version.trim().is_empty() {
+            return Err(PyValueError::new_err("source_version must not be empty"));
+        }
+
+        project_stem_cache_dir(&cache_dir).map_err(PyValueError::new_err)?;
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let sample = {
+            let cache = self
+                .sample_cache
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("Failed to acquire sample cache lock"))?;
+            cache
+                .get(id)
+                .and_then(|slot| slot.clone())
+                .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?
+        };
+
+        let stems = prepare_stem_buffers_from_cache(
+            &source_version,
+            &sample,
+            handle.output_sample_rate,
+            &cache_dir,
+        )
+        .map_err(PyValueError::new_err)?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        producer_guard
+            .push(ControlMessage::PublishPreparedStems { id, stems })
+            .map_err(|_| {
+                PyRuntimeError::new_err("Failed to send PublishPreparedStems - buffer may be full")
+            })
+    }
+
+    /// Select whether a pad renders from the loaded full mix or all prepared stems.
+    #[pyo3(signature = (id, mode, source_version = None))]
+    pub fn set_stem_mix_mode(
+        &mut self,
+        id: usize,
+        mode: &str,
+        source_version: Option<String>,
+    ) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+
+        let mode = parse_stem_mix_mode(mode)
+            .ok_or_else(|| PyValueError::new_err("stem mix mode must be full_mix or all_stems"))?;
+
+        let source_version_hash = match mode {
+            StemMixMode::FullMix => 0,
+            StemMixMode::AllStems => {
+                let source_version = source_version
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| {
+                        PyValueError::new_err("source_version must not be empty for all_stems mode")
+                    })?;
+                source_version_hash(source_version)
+            }
+        };
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        producer_guard
+            .push(ControlMessage::SetStemMixMode {
+                id,
+                mode,
+                source_version_hash,
+            })
+            .map_err(|_| {
+                PyRuntimeError::new_err("Failed to send SetStemMixMode - buffer may be full")
+            })
+    }
+
+    /// Select which prepared component stems are enabled for all-stems playback.
+    pub fn set_stem_enabled_mask(
+        &mut self,
+        id: usize,
+        enabled_stem_mask: u8,
+        source_version: String,
+    ) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+
+        if enabled_stem_mask & !STEM_COMPONENT_MASK != 0 {
+            return Err(PyValueError::new_err(
+                "stem enabled mask contains unsupported stems",
+            ));
+        }
+
+        if source_version.trim().is_empty() {
+            return Err(PyValueError::new_err("source_version must not be empty"));
+        }
+
+        let source_version_hash = source_version_hash(&source_version);
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        producer_guard
+            .push(ControlMessage::SetStemEnabledMask {
+                id,
+                enabled_stem_mask,
+                source_version_hash,
+            })
+            .map_err(|_| {
+                PyRuntimeError::new_err("Failed to send SetStemEnabledMask - buffer may be full")
+            })
     }
 
     /// Poll for pending background loader events.
@@ -508,16 +910,19 @@ impl AudioEngine {
                 dict.set_item("id", id)?;
                 dict.set_item("task", task_to_str(task))?;
 
-                let analysis_dict = PyDict::new(py);
-                analysis_dict.set_item("bpm", analysis.bpm)?;
-                analysis_dict.set_item("key", analysis.key)?;
+                if let Some(analysis) = analysis {
+                    let analysis_dict = PyDict::new(py);
+                    analysis_dict.set_item("bpm", analysis.bpm)?;
+                    analysis_dict.set_item("key", analysis.key)?;
 
-                let beat_grid_dict = PyDict::new(py);
-                beat_grid_dict.set_item("beats", &analysis.beat_grid.beats)?;
-                beat_grid_dict.set_item("downbeats", &analysis.beat_grid.downbeats)?;
-                analysis_dict.set_item("beat_grid", beat_grid_dict)?;
+                    let beat_grid_dict = PyDict::new(py);
+                    beat_grid_dict.set_item("beats", &analysis.beat_grid.beats)?;
+                    beat_grid_dict.set_item("downbeats", &analysis.beat_grid.downbeats)?;
+                    beat_grid_dict.set_item("bars", &analysis.beat_grid.bars)?;
+                    analysis_dict.set_item("beat_grid", beat_grid_dict)?;
 
-                dict.set_item("analysis", analysis_dict)?;
+                    dict.set_item("analysis", analysis_dict)?;
+                }
             }
             LoaderEvent::TaskError { id, task, error } => {
                 dict.set_item("type", "task_error")?;
@@ -525,6 +930,33 @@ impl AudioEngine {
                 dict.set_item("task", task_to_str(task))?;
                 dict.set_item("msg", error)?;
             }
+        }
+
+        Ok(Some(dict.into_any().unbind()))
+    }
+
+    /// Poll for pending normalized input mapping events.
+    ///
+    /// Returns `None` when no input events are available.
+    pub fn poll_input_events(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let Some(event) = runtime.poll_event() else {
+            return Ok(None);
+        };
+
+        let dict = PyDict::new(py);
+        dict.set_item("source", "midi")?;
+        dict.set_item("binding_key", event.binding_key)?;
+        dict.set_item("value", event.value)?;
+        dict.set_item("received_at_ns", event.received_at_ns)?;
+        dict.set_item("dispatched", event.dispatched)?;
+        dict.set_item("direct", event.direct)?;
+        if let Some(action_key) = event.action_key {
+            dict.set_item("action_key", action_key)?;
         }
 
         Ok(Some(dict.into_any().unbind()))
@@ -553,6 +985,33 @@ impl AudioEngine {
         producer_guard
             .push(ControlMessage::PlaySample { id, volume })
             .map_err(|_| PyRuntimeError::new_err("Failed to send PlaySample - buffer may be full"))
+    }
+
+    /// Stop all active voices and play a sample as one audio-thread command.
+    pub fn play_sample_exclusive(&mut self, id: usize, volume: f32) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+
+        if !volume.is_finite() || !(VOLUME_MIN..=VOLUME_MAX).contains(&volume) {
+            return Err(PyValueError::new_err("volume out of range"));
+        }
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        producer_guard
+            .push(ControlMessage::PlaySampleExclusive { id, volume })
+            .map_err(|_| {
+                PyRuntimeError::new_err("Failed to send PlaySampleExclusive - buffer may be full")
+            })
     }
 
     /// Stop playback of all active voices.
@@ -584,11 +1043,11 @@ impl AudioEngine {
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
 
         let mut producer_guard = handle
-            .producer
+            .parameter_producer
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetVolume(volume));
+        let _ = producer_guard.push(ControlParameterMessage::SetVolume(volume));
         Ok(())
     }
 
@@ -604,11 +1063,11 @@ impl AudioEngine {
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
 
         let mut producer_guard = handle
-            .producer
+            .parameter_producer
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetSpeed(speed));
+        let _ = producer_guard.push(ControlParameterMessage::SetSpeed(speed));
         Ok(())
     }
 
@@ -653,11 +1112,11 @@ impl AudioEngine {
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
 
         let mut producer_guard = handle
-            .producer
+            .parameter_producer
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetMasterBpm(bpm));
+        let _ = producer_guard.push(ControlParameterMessage::SetMasterBpm(bpm));
         Ok(())
     }
 
@@ -676,21 +1135,21 @@ impl AudioEngine {
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
 
         let mut producer_guard = handle
-            .producer
+            .parameter_producer
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetPadBpm { id, bpm });
+        let _ = producer_guard.push(ControlParameterMessage::SetPadBpm { id, bpm });
         Ok(())
     }
 
-    pub fn set_pad_gain(&mut self, id: usize, gain: f32) -> PyResult<()> {
+    pub fn set_pad_timing_metadata(&mut self, id: usize, phase_anchor_s: f32) -> PyResult<()> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
         }
 
-        if !gain.is_finite() || !(PAD_GAIN_MIN..=PAD_GAIN_MAX).contains(&gain) {
-            return Err(PyValueError::new_err("gain out of range"));
+        if !phase_anchor_s.is_finite() || phase_anchor_s < 0.0 {
+            return Err(PyValueError::new_err("phase_anchor_s out of range"));
         }
 
         let handle = self
@@ -703,7 +1162,52 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetPadGain { id, gain });
+        let _ = producer_guard.push(ControlMessage::SetPadTimingMetadata {
+            id,
+            metadata: PadTimingMetadata { phase_anchor_s },
+        });
+        Ok(())
+    }
+
+    pub fn anchor_transport_phase_from_pad(&mut self, id: usize) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        let _ = producer_guard.push(ControlMessage::AnchorTransportPhaseFromPad { id });
+        Ok(())
+    }
+
+    pub fn set_pad_gain(&mut self, id: usize, gain_db: f32) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+
+        if !gain_db.is_finite() || !(PAD_GAIN_DB_MIN..=PAD_GAIN_DB_MAX).contains(&gain_db) {
+            return Err(PyValueError::new_err("gain out of range"));
+        }
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .parameter_producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        let _ = producer_guard.push(ControlParameterMessage::SetPadGain { id, gain_db });
         Ok(())
     }
 
@@ -732,11 +1236,11 @@ impl AudioEngine {
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
 
         let mut producer_guard = handle
-            .producer
+            .parameter_producer
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetPadEq {
+        let _ = producer_guard.push(ControlParameterMessage::SetPadEq {
             id,
             low_db,
             mid_db,
@@ -775,6 +1279,57 @@ impl AudioEngine {
 
         let _ = producer_guard.push(ControlMessage::SetPadLoopRegion { id, start_s, end_s });
         Ok(())
+    }
+
+    /// Seek an active or paused sample voice to a source position in seconds.
+    pub fn seek_sample(&mut self, id: usize, position_s: f32) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+
+        if !position_s.is_finite() || position_s < 0.0 {
+            return Err(PyValueError::new_err("position_s out of range"));
+        }
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        producer_guard
+            .push(ControlMessage::SeekSample { id, position_s })
+            .map_err(|_| PyRuntimeError::new_err("Failed to send SeekSample - buffer may be full"))
+    }
+
+    pub fn set_trigger_quantization(&mut self, mode: &str) -> PyResult<()> {
+        let mode = parse_trigger_quantization(mode).ok_or_else(|| {
+            PyValueError::new_err(
+                "trigger quantization mode must be immediate or one of 1/16, 1/32, 1/64",
+            )
+        })?;
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let mut producer_guard = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        producer_guard
+            .push(ControlMessage::SetTriggerQuantization(mode))
+            .map_err(|_| {
+                PyRuntimeError::new_err(
+                    "Failed to send SetTriggerQuantization - buffer may be full",
+                )
+            })
     }
 
     /// Stop playback of a previously triggered sample.
@@ -893,7 +1448,7 @@ impl AudioEngine {
         }
 
         if let Ok(mut set) = self.active_tasks.lock() {
-            set.remove(&(id, BackgroundTaskKind::Analysis));
+            set.retain(|(task_id, _)| *task_id != id);
         }
 
         Ok(())

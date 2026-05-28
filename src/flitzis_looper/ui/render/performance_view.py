@@ -5,25 +5,138 @@ from imgui_bundle import imgui
 from flitzis_looper.constants import GRID_SIZE, NUM_BANKS, NUM_PADS
 from flitzis_looper.ui.constants import (
     BANK_BUTTONS_HEIGHT,
+    BANK_PRESSED_RGBA,
+    CONTROL_RGBA,
+    MODE_OFF_RGBA,
+    MODE_ON_RGBA,
     PAD_GRID_GAP,
     SPACING,
     TEXT_ACTIVE_RGBA,
     TEXT_MUTED_RGBA,
+    TEXT_RGBA,
 )
 from flitzis_looper.ui.contextmanager import button_style, style_var
 
 if TYPE_CHECKING:
+    from flitzis_looper.models import StemGridIndicatorState
     from flitzis_looper.ui.context import UiContext
     from flitzis_looper.ui.styles import ButtonStyleName
 
+STEM_GRID_INDICATORS: dict[str, tuple[str, imgui.ImVec4Like, imgui.ImVec4Like, str]] = {
+    "available": ("ST", MODE_ON_RGBA, TEXT_ACTIVE_RGBA, "Stems available"),
+    "generating": ("...", BANK_PRESSED_RGBA, TEXT_ACTIVE_RGBA, "Generating stems"),
+    "blocked": ("BLK", CONTROL_RGBA, TEXT_RGBA, "Stem generation blocked"),
+    "error": ("!", MODE_OFF_RGBA, TEXT_RGBA, "Stem generation error"),
+}
+PAD_TITLE_MAX_LINES = 3
+PAD_TITLE_PADDING_SAMPLE = "M"
+PAD_TITLE_FALLBACK_PADDING_PX = 8.0
+
+
+def _text_width(text: str) -> float:
+    return float(imgui.calc_text_size(text).x)
+
+
+def _fit_text_to_width(text: str, max_width: float) -> str:
+    if max_width <= 0.0 or _text_width(text) <= max_width:
+        return text
+
+    ellipsis = "..."
+    ellipsis_width = _text_width(ellipsis)
+    if ellipsis_width >= max_width:
+        return ""
+
+    fitted = ""
+    target_width = max_width - ellipsis_width
+    for char in text:
+        candidate = f"{fitted}{char}"
+        if _text_width(candidate) > target_width:
+            break
+        fitted = candidate
+
+    return f"{fitted.rstrip()}{ellipsis}" if fitted else ellipsis
+
+
+def _split_word_to_width(word: str, max_width: float) -> list[str]:
+    if max_width <= 0.0 or _text_width(word) <= max_width:
+        return [word]
+
+    parts: list[str] = []
+    current = ""
+    for char in word:
+        candidate = f"{current}{char}"
+        if current and _text_width(candidate) > max_width:
+            parts.append(current)
+            current = char
+        else:
+            current = candidate
+
+    if current:
+        parts.append(current)
+    return parts or [word]
+
+
+def wrapped_text_lines(text: str, *, max_width: float, max_lines: int) -> list[str]:
+    """Return pixel-width wrapped text lines for compact controls."""
+    if max_lines <= 0:
+        return []
+
+    words = text.split()
+    if not words:
+        return [""]
+
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        for segment in _split_word_to_width(word, max_width):
+            candidate = segment if not current else f"{current} {segment}"
+            if current and _text_width(candidate) > max_width:
+                lines.append(current)
+                current = segment
+            else:
+                current = candidate
+
+    if current:
+        lines.append(current)
+
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        lines[-1] = _fit_text_to_width(f"{lines[-1]}...", max_width)
+
+    return lines
+
+
+def pad_title_horizontal_padding() -> float:
+    """Return approximately one character of horizontal pad-title inset."""
+    width = _text_width(PAD_TITLE_PADDING_SAMPLE)
+    return width if width > 0.0 else PAD_TITLE_FALLBACK_PADDING_PX
+
+
+def wrap_pad_title(title: str, *, pad_width: float, max_lines: int = PAD_TITLE_MAX_LINES) -> str:
+    """Return a pad title label constrained to the padded pad width."""
+    content_width = max(1.0, pad_width - pad_title_horizontal_padding() * 2.0)
+    return "\n".join(wrapped_text_lines(title, max_width=content_width, max_lines=max_lines))
+
+
+def _vec2_width(size: imgui.ImVec2Like) -> float:
+    if isinstance(size, (tuple, list)):
+        return float(size[0])
+    return float(size.x)
+
 
 def _pad_button_label(
-    ctx: UiContext, pad_id: int, *, is_loaded: bool, is_loading: bool
+    ctx: UiContext,
+    pad_id: int,
+    *,
+    is_loaded: bool,
+    is_loading: bool,
+    pad_width: float,
 ) -> tuple[str, float | None]:
     if not (is_loaded or is_loading):
         return "", None
 
     filename = ctx.state.pads.label(pad_id)
+    filename_label = wrap_pad_title(filename, pad_width=pad_width) if filename else ""
     stage: str | None
 
     if is_loading:
@@ -32,7 +145,9 @@ def _pad_button_label(
         loading_progress = float(progress) if isinstance(progress, (int, float)) else None
         percent_text = "" if loading_progress is None else f"{int(loading_progress * 100):d} %"
         status_line = " ".join([p for p in (stage, percent_text) if p])
-        label = f"{filename}\n{status_line}" if filename else (status_line or "Loading…")
+        label = (
+            f"{filename_label}\n{status_line}" if filename_label else (status_line or "Loading…")
+        )
         return label, loading_progress
 
     if ctx.state.pads.is_analyzing(pad_id):
@@ -40,10 +155,12 @@ def _pad_button_label(
         stage = stage or "Analyzing"
         percent_text = "" if progress is None else f"{int(float(progress) * 100):d} %"
         status_line = " ".join([p for p in (stage, percent_text) if p])
-        label = f"{filename}\n{status_line}" if filename else (status_line or "Analyzing…")
+        label = (
+            f"{filename_label}\n{status_line}" if filename_label else (status_line or "Analyzing…")
+        )
         return label, None
 
-    return filename, None
+    return filename_label, None
 
 
 def _pad_button_progress_overlay(progress: float) -> None:
@@ -64,31 +181,44 @@ def _pad_button_progress_overlay(progress: float) -> None:
     draw_list.add_rect_filled(pos_min, (fill_x, pos_max.y), imgui.get_color_u32(progress_rgba))
 
 
-def _pad_button_peak_meter(peak: float) -> None:
-    peak = max(0.0, min(1.0, float(peak)))
+def stem_grid_indicator_label(state: StemGridIndicatorState | None) -> str | None:
+    """Return the compact pad-grid indicator label for tests and rendering."""
+    if state is None:
+        return None
+    return STEM_GRID_INDICATORS[state][0]
 
+
+def _pad_button_stem_indicator(ctx: UiContext, pad_id: int) -> None:
+    state = ctx.state.stems.stem_grid_indicator_state(pad_id)
+    if state is None:
+        return
+
+    label, bg_rgba, text_rgba, tooltip = STEM_GRID_INDICATORS[state]
     pos_min = imgui.get_item_rect_min()
     pos_max = imgui.get_item_rect_max()
-    meter_w = 6.0
-    padding = 2.0
-    x1 = pos_max.x - padding - meter_w
-    x2 = pos_max.x - padding
-    y2 = pos_max.y - padding
-    y_min = pos_min.y + padding
-    height = max(0.0, y2 - y_min)
-    y1 = y2 - height * peak
+    text_size = imgui.calc_text_size(label)
+    padding = (5.0, 2.0)
+    margin = 5.0
 
-    bg_rgba = (0.0, 0.0, 0.0, 0.25)
-    fg_rgba = (1.0, 0.2, 0.2, 0.9) if peak >= 1.0 else (0.2, 0.8, 0.2, 0.7)
+    x1 = pos_min.x + margin
+    y2 = pos_max.y - margin
+    x2 = x1 + text_size.x + padding[0] * 2.0
+    y1 = y2 - text_size.y - padding[1] * 2.0
 
     draw_list = imgui.get_window_draw_list()
-    draw_list.add_rect_filled((x1, y_min), (x2, y2), imgui.get_color_u32(bg_rgba))
-    if peak > 0.0:
-        draw_list.add_rect_filled((x1, y1), (x2, y2), imgui.get_color_u32(fg_rgba))
+    draw_list.add_rect_filled((x1, y1), (x2, y2), imgui.get_color_u32(bg_rgba))
+    draw_list.add_text(
+        (x1 + padding[0], y1 + padding[1]),
+        imgui.get_color_u32(text_rgba),
+        label,
+    )
+
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(tooltip)
 
 
 def _pad_button_input(ctx: UiContext, pad_id: int, *, is_loaded: bool) -> None:
-    if imgui.is_mouse_clicked(imgui.MouseButton_.middle) and not ctx.state.pads.is_selected(pad_id):
+    if imgui.is_mouse_clicked(imgui.MouseButton_.middle):
         ctx.ui.select_pad(pad_id)
 
     if imgui.is_mouse_down(imgui.MouseButton_.left):
@@ -99,6 +229,9 @@ def _pad_button_input(ctx: UiContext, pad_id: int, *, is_loaded: bool) -> None:
         ctx.ui.store_pressed_pad_state(pad_id, pressed=True)
     else:
         ctx.ui.store_pressed_pad_state(pad_id, pressed=False)
+
+    if imgui.is_mouse_clicked(imgui.MouseButton_.right):
+        ctx.ui.select_pad(pad_id)
 
     if imgui.is_mouse_down(imgui.MouseButton_.right):
         ctx.audio.pads.stop_pad(pad_id)
@@ -125,6 +258,8 @@ def _pad_button_overlays(ctx: UiContext, pad_id: int, *, is_active: bool, is_loa
     elif key is not None:
         info = key
 
+    _pad_button_stem_indicator(ctx, pad_id)
+
     if info is None:
         return
 
@@ -145,8 +280,13 @@ def _pad_button(ctx: UiContext, pad_id: int, size: imgui.ImVec2Like) -> None:
     if is_selected:
         style_name += "-selected"
 
+    pad_width = _vec2_width(size)
     label, loading_progress = _pad_button_label(
-        ctx, pad_id, is_loaded=is_loaded, is_loading=is_loading
+        ctx,
+        pad_id,
+        is_loaded=is_loaded,
+        is_loading=is_loading,
+        pad_width=pad_width,
     )
     id_str = f"pad_btn_{pad_id}"
 
@@ -155,9 +295,6 @@ def _pad_button(ctx: UiContext, pad_id: int, size: imgui.ImVec2Like) -> None:
 
         if is_loading and loading_progress is not None:
             _pad_button_progress_overlay(loading_progress)
-
-        if is_loaded:
-            _pad_button_peak_meter(ctx.state.pads.peak(pad_id))
 
         if imgui.is_item_hovered():
             _pad_button_input(ctx, pad_id, is_loaded=is_loaded)

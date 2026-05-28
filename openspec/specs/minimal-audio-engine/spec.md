@@ -1,22 +1,27 @@
 # minimal-audio-engine Specification
 
 ## Purpose
-To provide a low-latency real-time audio engine implemented in Rust with bindings for use from Python code.
+To provide a low-latency realtime audio engine implemented in Rust with bindings for use from Python code.
 ## Requirements
 ### Requirement: Minimal Audio Engine Implementation
-The system SHALL provide a minimal audio engine capable of real-time playback, mixing, and streaming using Rust with thread-safe communication to Python.
+The system SHALL provide a minimal audio engine capable of realtime playback, mixing, and streaming using Rust with thread-safe communication to Python.
 
 The audio engine implementation SHALL be organized in a modular structure with clear separation of concerns.
 
 #### Module Structure
-```
+```text
 audio_engine/
-├── mod.rs – Main module that orchestrates sub-modules
-├── mixer.rs – Real-time mixing engine
-├── voice.rs – Voice state management
-├── sample_loader.rs – Audio file loading and decoding
-├── constants.rs – Configuration constants
-└── errors.rs – Audio-specific error types
+|-- mod.rs             - Python-facing API and orchestration
+|-- audio_stream.rs    - CPAL stream and callback setup
+|-- mixer.rs           - realtime mixing engine
+|-- voice_slot.rs      - active voice state management
+|-- sample_loader.rs   - audio file loading, decoding, and caching
+|-- transport.rs       - output-frame transport timeline
+|-- scheduler.rs       - fixed-capacity playback scheduler
+|-- dsp.rs             - per-pad DSP chain state
+|-- input_mapping.rs   - MIDI input handling outside the audio callback
+|-- constants.rs       - configuration constants
+`-- errors.rs          - audio-specific error types
 ```
 
 #### Scenario: Modular Audio Engine Initialization
@@ -37,10 +42,10 @@ audio_engine/
 - **AND** modules are testable in isolation
 
 ### Requirement: Python AudioEngine Instantiation
-The system SHALL expose an AudioEngine class to Python that can be instantiated with `AudioEngine()`.
+The system SHALL expose an `AudioEngine` class to Python through the `flitzis_looper_audio` native module that can be instantiated with `AudioEngine()`.
 
 #### Scenario: Python instantiation success
-- **WHEN** Python code imports `flitzis_looper_rs`
+- **WHEN** Python code imports `flitzis_looper_audio`
 - **THEN** the `AudioEngine` class is available
 - **AND** an instance can be created with `AudioEngine()`
 - **AND** the instance has `run()` and `shut_down()` methods
@@ -48,6 +53,5 @@ The system SHALL expose an AudioEngine class to Python that can be instantiated 
 #### Scenario: Python FFI integration
 - **WHEN** an `AudioEngine` is instantiated from Python
 - **THEN** the underlying Rust `AudioEngine` is created
-- **AND** the cpal stream is initialized
+- **AND** the CPAL stream is initialized by `run()`
 - **AND** no Python GIL is held during audio processing
-

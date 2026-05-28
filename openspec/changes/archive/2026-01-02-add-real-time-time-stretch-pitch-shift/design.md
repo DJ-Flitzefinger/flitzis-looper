@@ -69,7 +69,7 @@ This achieves “tempo alignment” by BPM (same beat duration), but does not gu
 If BPM lock is OFF but Key lock is ON, `tempo_ratio` is still derived from `speed`, so key lock still prevents tempo from affecting pitch.
 
 ## Signalsmith Stretch Integration Notes
-Based on `docs/time-stretch-and-pitch-shift.md`:
+Based on the maintained Key Lock backend documentation:
 - Stretch ratio is controlled implicitly by input vs output lengths in `process()`; for playback speed `tempo_ratio`, the stretch ratio is approximately `1 / tempo_ratio`.
 - Parameter changes should be fed with lead time (≈ `outputLatency()` samples) and smoothed to avoid artifacts.
 - Choose an initial configuration that balances quality and latency (e.g., block 1024, interval 256), with a path to future tuning.

@@ -14,11 +14,11 @@
 - Generate `coverage.md`: `uv run pytest --cov --cov-report markdown`
 
 ### Rust
-- Check: `cargo check --manifest-path rust/Cargo.toml`
-- Lint: `cargo clippy --manifest-path ./rust/Cargo.toml`
-- Format (only check): `cargo fmt --manifest-path rust/Cargo.toml --check`
-- Format: `cargo fmt --manifest-path rust/Cargo.toml`
-- Tests: `cargo test --manifest-path rust/Cargo.toml`
+- Check: `uv run cargo check --manifest-path rust/Cargo.toml`
+- Lint: `uv run cargo clippy --manifest-path ./rust/Cargo.toml`
+- Format (only check): `uv run cargo fmt --manifest-path rust/Cargo.toml --check`
+- Format: `uv run cargo fmt --manifest-path rust/Cargo.toml`
+- Tests: `uv run cargo test --manifest-path rust/Cargo.toml`
 
 ## Dependency Management
 
@@ -31,9 +31,9 @@
 
 ### Rust
 - Add
-  - `cargo add --manifest-path rust/Cargo.toml CRATE`
-  - `cargo add --manifest-path rust/Cargo.toml --dev CRATE` for dev dependency
-- Remove: `cargo remove --manifest-path rust/Cargo.toml CRATE`
+  - `uv run cargo add --manifest-path rust/Cargo.toml CRATE`
+  - `uv run cargo add --manifest-path rust/Cargo.toml --dev CRATE` for dev dependency
+- Remove: `uv run cargo remove --manifest-path rust/Cargo.toml CRATE`
 
 ## Code Style
 
@@ -83,9 +83,21 @@
 Depending on the current task, consider reading specific documentation.
 
 ### Project
+- Documentation map: `docs/README.md`
+- Architecture: `docs/architecture.md`
+- Development workflow and package layout: `docs/development.md`
 - User Interface: `docs/ui-toolkit.md`
-- Audio Engine: `docs/audio-engine.md`
-- Message Passing (between AudioEngine thread and core): `docs/message-passing.md`
+- Stem generation setup: `docs/stem-generation-setup.md`
+- Key Lock backend: `docs/key-lock-backend.md`
+- Project TODOs: `docs/todos.md`
+
+### TODO list policy
+- `docs/todos.md` is the maintained project TODO list for explicit user-requested notes.
+- Add items when the user asks to record a TODO.
+- Work from it only when the user asks to choose from, review, or complete a TODO item.
+- Check off or remove completed items when that TODO is implemented or intentionally abandoned.
+- Do not use TODO items as a substitute for OpenSpec. User-visible behavior changes still need
+  specs, tests, and validation.
 
 ### Python
 Fetch documentation directly from the web.
@@ -94,6 +106,28 @@ Fetch documentation directly from the web.
 ### Rust
 Find documentation for crate `CRATE` under `rust/target/doc/CRATE/index.html`. (You may need to
 generate the docs first using `cargo doc --manifest-path rust/Cargo.toml`.)
+
+## Gen3 Audio Architecture Guardrails
+
+For professional Looper architecture work, do not treat "audio safety" as "Rust must not be
+touched". The correct rule is:
+
+- The CPAL audio callback and realtime hot path are protected.
+- New Rust modules outside the callback are allowed and encouraged when they improve correctness,
+  latency, maintainability, or realtime safety.
+- The callback must not perform file I/O, JSON reads/writes, Python/GIL access, UI calls, blocking
+  locks, logging/printing, neural inference, plugin loading/scanning, unbounded loops, heavy
+  allocation, or long-running work.
+- Internal Rust DSP modules are the preferred future direction. Do not add VST/LV2/CLAP/AU
+  plugin hosting unless a future explicit OpenSpec-backed request changes that product decision.
+- Do not implement a new DSP/FX module before consulting `docs/architecture.md`,
+  `docs/README.md`, and the relevant OpenSpec specs/changes. The realtime safety,
+  command/parameter, state-ownership, clock, DSP foundation, and per-pad isolator preparation
+  stages have been completed; the next post-isolator target must still be chosen explicitly and
+  covered by a focused OpenSpec change before production code changes.
+- Keep architecture and DSP work split into small OpenSpec-friendly changes. Do not select a new
+  FX module, deck/group/master chain, live loop-edit crossfade, plugin host, or broad rewrite
+  automatically.
 
 ## CI/CD
 - All changes must pass lint, format, and test checks in CI

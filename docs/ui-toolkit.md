@@ -1,178 +1,343 @@
-# UI Toolkit: ImGui Development Guidelines
+# UI Toolkit: Dear ImGui Guidelines
 
-This project’s UI is built with ImGui (an immediate-mode GUI). This document defines the development guidelines for keeping the UI responsive and predictable while keeping the application core testable and independent.
+Flitzis Looper uses Dear ImGui through `imgui-bundle`. ImGui is
+immediate-mode: every frame describes the UI again from current application
+state, and ImGui resolves interaction from current input plus stable widget IDs.
 
-The key idea: **ImGui makes the UI a per-frame “view” of application state.** If we lean into that paradigm, we naturally get a clean Core/UI split, explicit event flow, and deterministic behavior.
+This document defines the project-specific UI architecture. It is not a generic
+ImGui tutorial. The goal is a responsive performance UI that stays thin,
+predictable, and testable while the domain logic, persistence, background work,
+and realtime audio engine remain outside rendering code.
 
 ## Goals
 
-- Keep the **domain/core** deterministic, testable, and free of UI concerns.
-- Keep the **UI layer thin**: layout + input mapping only.
-- Treat **rendering as a constant redraw loop** with predictable per-frame cost.
+- Keep the domain core deterministic, testable, and independent from ImGui.
+- Keep render functions thin: layout, display, and input-to-action mapping.
+- Make every user action explicit through `UiContext`.
+- Keep per-frame work bounded and predictable.
+- Keep the UI away from the realtime audio callback and live Rust audio state.
 
 ## Core/UI Separation Pattern (required)
 
-ImGui’s “redraw every frame from state” model works best when the UI is a pure adapter around a core state machine.
+ImGui works best when the UI is a per-frame adapter around application state and
+explicit actions. In this project, the "core" is not one reducer function. It is
+the combination of Pydantic state models, Python controllers, persistence,
+background workers, and the Rust `AudioEngine` boundary.
 
 ```text
-+-------------------------------+
-|           Domain Core         |  ← state, reducers, validation, rules
-| (deterministic, testable)     |
-+---------------+---------------+
-                ▲
-                | state snapshot
-                |
-                | actions/events
-                ▼
-+-------------------------------+
-|              UI               |  ← layout + input mapping (ImGui)
-|   (thin adapter, per frame)   |
-+-------------------------------+
++------------------------------------------------------------------+
+|                            Domain Core                           |
+|                                                                  |
+|  ProjectState       durable performer intent, saved to disk       |
+|  SessionState       transient runtime/UI projection               |
+|  Controllers        validation, orchestration, side effects        |
+|  AudioEngine        Rust realtime engine behind bounded APIs       |
++-----------------------------+------------------------------------+
+                              ^
+                              | read-only selectors and snapshots
+                              |
+                              | explicit actions / intent
+                              v
++-----------------------------+------------------------------------+
+|                                  UI                              |
+|                                                                  |
+|  render/*.py        layout, widgets, visual state, input mapping  |
+|  UiContext          read-only state facade + action facade        |
+|  ImGui              immediate-mode frame renderer                 |
++------------------------------------------------------------------+
 ```
 
-### What goes into the core
+Render functions must read through `ctx.state` and emit intent through
+`ctx.audio`, `ctx.ui`, or `ctx.input`. They must not reach around `UiContext` to
+mutate project state, call low-level audio APIs, or perform slow work directly.
 
-The core owns:
+## Current UI Runtime Flow
 
-- **State**: the full application state needed to make decisions.
-- **Actions/Events**: inputs the application can handle (e.g., “pad triggered”, “bank selected”).
-- **Reducer / update function**: deterministic logic that applies events to state.
-- **Commands/Effects** (optional but recommended): side effects described as data (e.g., “send message to audio engine”), executed outside the reducer.
+The UI shell starts in `src/flitzis_looper/ui/run.py`:
 
-Core code MUST NOT:
+1. Create `AppController`.
+2. Create `UiContext(controller)`.
+3. Configure Hello ImGui/ImmApp runner parameters.
+4. Register `render_ui(context)` as the per-frame callback.
+5. Register `controller.shut_down` for exit.
 
-- Call ImGui APIs.
-- Block on I/O.
-- Depend on frame timing for correctness.
+`render_ui()` in `src/flitzis_looper/ui/render/render.py` is the canonical frame
+entrypoint:
 
-### What goes into the UI
-
-The UI owns:
-
-- **Layout**: windows, panels, widget composition.
-- **Input mapping**: translate user input into core actions/events.
-- **Ephemeral UI state** only (e.g., temporary text input buffers, which popup is open).
-
-UI code MUST NOT:
-
-- Contain business rules (validation, state machine logic).
-- Perform file I/O, decoding, networking, or other long-running work.
-- Mutate core state directly in ad-hoc ways (everything goes through explicit events).
-
-### Recommended event flow
-
-Per frame:
-
-1. Take a **snapshot** of core state for this frame.
-2. Build the ImGui UI from that snapshot.
-3. Collect **UI-produced actions/events**.
-4. Apply events to the core reducer.
-5. Execute any resulting commands/effects (outside rendering).
-
-A minimal structure (Rust-like pseudocode, not tied to a specific binding):
-
-```rust
-// Domain
-struct AppState { /* ... */ }
-
-enum Action {
-    SelectBank { bank: u8 },
-    TriggerPad { pad: u8, velocity: f32 },
-    StopPad { pad: u8 },
-}
-
-enum Command {
-    SendToAudio(/* ... */),
-    PersistConfig,
-}
-
-fn reduce(state: &mut AppState, action: Action) -> Vec<Command> {
-    // Pure, deterministic logic.
-    // Returns commands to execute outside the reducer.
-    vec![]
-}
-
-// UI
-fn draw_ui(ui: &imgui::Ui, state: &AppState) -> Vec<Action> {
-    // Draw widgets based on state snapshot.
-    // Return user intent as Actions.
-    vec![]
-}
+```text
+render_ui(ctx)
+-> ctx.on_frame_render()
+   -> controller.on_frame_render()
+      -> controller-owned per-frame callbacks
+-> poll keyboard input for Learn/mapped actions
+-> ctx.audio.poll.poll()
+   -> loader events + audio telemetry messages
+-> draw main layout, settings/performance view, bottom bar
+-> draw waveform editor and file dialog when applicable
+-> ctx.persistence.maybe_flush()
 ```
 
-## Immediate-mode for our use case
+This ordering matters:
 
-ImGui is immediate-mode: you don’t create a persistent widget tree and mutate it over time. Instead, **every frame you describe the UI** and ImGui computes interactions based on current input + widget IDs.
+- controller-owned frame updates happen before drawing,
+- keyboard/MIDI mapping intent is captured before widgets are drawn,
+- loader and audio telemetry are folded into `SessionState` before visual
+  meters/playheads are rendered,
+- persistence flushing is outside individual widgets.
 
-For this application (real-time controls, fast feedback, lots of “current status” display), this fits well:
+## Project File Map
 
-- **Frame boundaries are explicit**: you can reason about “what happened this frame” and bound per-frame work.
-- **State is explicit**: UI behavior depends on state you pass in, not hidden widget internals.
-- **Event handling is explicit**: clicks/changes become actions you can log, test, replay, and validate.
+```text
+src/flitzis_looper/ui/run.py
+    UI runner setup, fonts, Hello ImGui/ImmApp integration.
 
-Immediate-mode is not “no state”; it’s “you own the state”. That ownership is what keeps Core/UI clean.
+src/flitzis_looper/ui/context.py
+    Public UI boundary. Provides read-only state selectors and grouped action
+    facades for audio, UI, waveform, settings, and input mapping.
 
-## Thin UI layer (what it means here)
+src/flitzis_looper/ui/render/
+    Immediate-mode render functions for the main surface, sidebars, bottom bar,
+    settings, waveform editor, file dialog, and control gestures.
 
-“Thin UI layer” means the UI is an adapter between input/output (widgets) and the core (events/state).
+src/flitzis_looper/controller/
+    Application controllers. Own validation, state mutation, persistence marks,
+    background orchestration, audio API calls, and runtime event polling.
 
-### Rules of thumb
+src/flitzis_looper/models.py
+    Pydantic `ProjectState` and `SessionState`.
 
-- UI functions should be easy to read as: **layout → emit actions**.
-- If a piece of logic is important enough to test, it belongs in the core.
-- UI should not “decide”; it should **ask** (emit intent) and the core should decide.
+src/flitzis_looper_audio/
+    Python import boundary for the Rust audio extension.
+```
 
-### Handling non-UI work
+## State Ownership
 
-If a UI interaction needs a slow operation (file access, decoding, heavy computation):
+| Layer | Owns | Must not own |
+| --- | --- | --- |
+| Render functions | Layout, widget composition, stable IDs, local visual gestures, input-to-action mapping. | Business rules, persistence, file I/O, audio engine calls, background jobs. |
+| `UiContext` | Read-only selectors and explicit action facades used by render code. | Hidden behavior that bypasses controllers for core audio/project rules. |
+| Controllers | Validation, model mutation, persistence dirty marks, background jobs, audio API calls, runtime event polling. | ImGui layout or widget-specific rendering decisions. |
+| `ProjectState` | Durable performer intent: samples, loop regions, BPM/key metadata, dB Gain/Trim and EQ intent, stem cache metadata, settings, mappings. | Live audio truth. |
+| `SessionState` | Recoverable runtime/UI projection: active pads, progress, meters, playheads, open overlays, edit buffers. | Durable behavior contracts or realtime audio authority. |
+| Rust `AudioEngine` | Live audio truth: loaded buffers, transport, scheduler, voices, stems, playback-rate, Key Lock, DSP, metering telemetry. | UI rendering, JSON persistence, file dialogs, Python object ownership in the callback. |
 
-- UI emits an action like `RequestLoadSample { … }`.
-- The core schedules work (via a command/effect).
-- Completion comes back as a new event like `SampleLoaded { … }`.
-- UI simply reflects progress based on core state.
+Some UI-specific state is intentionally stored in `ProjectState` or
+`SessionState`, for example selected pad, selected bank, sidebar expansion,
+settings visibility, and text-edit buffers. Render functions still should not
+mutate those fields directly. Use `ctx.ui.*` actions so persistence marks,
+validation, and future behavior changes remain centralized.
 
-In Flitzis Looper, async sample loading follows this pattern via `AudioEngine.load_sample_async()` and per-frame polling with `AudioEngine.poll_loader_events()`.
+## `UiContext` Contract
 
-This avoids UI stalls and keeps the frame loop predictable.
+`UiContext` is the only object render modules should need.
 
-## Constant redraw (and how to budget it)
+### Read path
 
-ImGui expects a render loop that rebuilds the UI every frame. In this project, **constant redraw is a feature**, not a bug:
+Use `ctx.state`:
 
-- It keeps the UI responsive without relying on complex invalidation logic.
-- It makes “live” UI (meters, play state, timing indicators) straightforward.
+- `ctx.state.project`: read-only proxy for durable project state.
+- `ctx.state.session`: read-only proxy for transient session state.
+- `ctx.state.pads`: derived pad selectors such as label, loading state, BPM,
+  key, loop region, active/selected state, peak, and playhead projection.
+- `ctx.state.stems`: stem availability, mix mode, masks, progress, and errors.
+- `ctx.state.banks`: bank selection.
+- `ctx.state.global_`: global derived values such as effective BPM.
 
-### Guidelines
+`ReadOnlyStateProxy` intentionally raises on assignment. If render code needs a
+mutation, that is a signal to add or use an action facade.
 
-- **Assume every frame runs**: do not gate correctness on a “redraw only on change” mindset.
-- Keep per-frame work **bounded and predictable**:
-  - Avoid per-frame allocations in hot UI paths.
-  - Precompute expensive derived values outside `draw_ui`.
-  - Cache formatted strings where it matters.
-- Use **stable widget IDs** derived from domain identifiers (not fragile indices that may shift when lists change).
-- Do not perform blocking operations in the render loop.
+### Write path
 
-### Concurrency + real-time safety
+Use explicit action groups:
 
-Even with constant redraw, UI must never interfere with real-time audio processing. Keep strict boundaries:
+- `ctx.audio.pads.*`: trigger/stop pads, load/unload, loop editing, analysis,
+  BPM/key overrides, pad Gain/Trim in dB, and pad EQ.
+- `ctx.audio.stems.*`: generate/delete stems, set stem mix mode, and set stem
+  enabled mask.
+- `ctx.audio.global_.*`: volume, speed, BPM display, Multi Loop, BPM Lock, Key
+  Lock, and trigger quantization.
+- `ctx.ui.*`: UI-only actions such as sidebars, file dialog, waveform editor,
+  selected pad/bank, global BPM edit state, and pressed-pad projection.
+- `ctx.ui.settings.*`: settings overlay actions.
+- `ctx.input.*`: Learn mode and keyboard capture.
 
-- The UI runs on its own thread (or at least outside any real-time callback).
-- Communication with the audio engine (and other subsystems) happens via explicit messages/commands.
-- The UI renders from snapshots of state, not from live data structures shared with real-time code.
+These actions route through controllers when behavior affects project intent,
+audio state, persistence, input mappings, or background work.
 
-## Testing implications
+## Immediate-Mode Rules
 
-ImGui is not designed for heavy black-box UI automation. The architecture above embraces that reality:
+Immediate-mode is not "stateless UI". It means the application owns state and
+the UI redraws from that state every frame.
 
-- Test the core reducer/state machine thoroughly (high coverage, fast, deterministic).
-- Keep UI testing minimal and focused on “wiring” smoke tests.
+Render code should be readable as:
 
-If a behavior can’t be verified without clicking pixels, it usually means too much logic lives in the UI.
+```text
+read state -> draw widget -> if interacted, emit action
+```
 
-## PR checklist
+Rules:
 
-- UI code only draws and emits actions; no business rules.
-- Core logic is independent of ImGui and easily unit-tested.
-- No blocking work or heavy computation in the render loop.
-- Widget IDs are stable and derived from domain identifiers.
-- Actions/events are explicit and flow through a reducer/update function.
+- Assume the draw function runs every frame.
+- Keep per-frame work bounded and predictable.
+- Derive widget IDs from stable domain identifiers such as pad ID, bank ID,
+  stem kind, EQ band, setting key, or action key.
+- Do not use shifting display labels as the only ImGui ID when a stable domain
+  ID exists.
+- Precompute expensive derived values in controllers or helpers.
+- Keep validation and clamping in controller/model logic.
+- Put meaningful behavior behind testable controller/helper APIs.
+
+## What Belongs In The Core
+
+Core/controller/model code owns:
+
+- state transitions that affect project or audio behavior,
+- validation and clamping,
+- persistence dirty tracking and flushing,
+- sample loading and unloading,
+- waveform render-data generation,
+- BPM/key/beat-grid analysis,
+- loop-region semantics,
+- keyboard/MIDI mapping state,
+- stem generation and cache validation,
+- Rust `AudioEngine` API calls,
+- telemetry polling and projection into `SessionState`.
+
+Core code must not call ImGui APIs or depend on widget frame timing for
+correctness.
+
+## What Belongs In The UI
+
+UI/render code owns:
+
+- windows, child regions, panels, overlays, and widget layout,
+- visual grouping, colors, spacing, and label presentation,
+- translating user gestures into `UiContext` actions,
+- short-lived visual gesture state when it has no business meaning,
+- opening/closing ImGui popups and file-dialog surfaces through `ctx.ui`.
+
+UI code must not:
+
+- perform file I/O,
+- scan cache directories,
+- decode audio,
+- run Demucs,
+- call blocking operations,
+- own MIDI ports,
+- mutate durable project state directly,
+- call low-level Rust APIs for work that belongs in a controller.
+
+## Slow Work And Background Tasks
+
+Any interaction that can take noticeable time must be modeled as request,
+progress, completion, and error state:
+
+```text
+UI gesture
+-> UiContext action
+-> controller validates request
+-> background/audio worker starts
+-> controller polls events
+-> SessionState records progress/completion/error
+-> UI redraws from SessionState
+```
+
+Current examples:
+
+- sample loading through `LoaderController`,
+- audio analysis through loader/analysis flow,
+- offline Demucs stem generation through `StemController`,
+- Rust audio telemetry through `AppController.poll_runtime_events()`.
+
+Render functions should never hide slow work behind a button click.
+
+## Audio Boundary
+
+The UI never touches realtime audio state directly. It sends intent to
+controllers, and controllers call bounded `AudioEngine` methods.
+
+```text
+UI gesture
+-> UiContext action
+-> controller validation / state mutation
+-> PyO3 AudioEngine method
+-> bounded Rust command or parameter ring
+-> CPAL audio callback
+-> telemetry message
+-> controller projection into SessionState
+-> UI redraw
+```
+
+The CPAL callback must remain isolated from:
+
+- ImGui objects,
+- Python/GIL access,
+- file I/O and JSON persistence,
+- plugin loading/scanning,
+- Demucs or neural inference,
+- blocking locks or waits,
+- logging/printing,
+- heavy allocation or unbounded work.
+
+For more detail, read [architecture.md](architecture.md).
+
+## Waveform Editor Pattern
+
+The waveform editor is the main UI surface where heavier derived display data is
+needed. Its pattern is:
+
+- render code owns layout and visible plot interaction,
+- `ctx.ui.waveform` stores editor view state and short-lived cached render data,
+- `controller.transport.waveform.get_render_data(...)` supplies waveform render
+  data,
+- loop edits still go through transport loop actions,
+- playback controls in the editor go through playback actions.
+
+Do not move waveform decoding, sample scanning, or source-buffer access into
+render functions.
+
+## Input Mapping Pattern
+
+Keyboard and MIDI Learn are action-based. UI code should map gestures to stable
+`LooperAction` objects, not directly to ad hoc side effects.
+
+Rules:
+
+- Learnable actions should use existing action factories from
+  `flitzis_looper.input_mapping`.
+- Text-input focus must be respected before capturing keyboard shortcuts.
+- MIDI/keyboard mapping behavior belongs in `InputMappingController`, not in
+  render modules.
+- High-rate continuous parameters should be routed through controller/action
+  paths that can choose safe Rust parameter-ring updates and smoothing.
+
+## Testing Implications
+
+ImGui is poor at deep black-box pixel testing. The architecture should make most
+behavior testable without clicking pixels.
+
+Preferred tests:
+
+- controller tests for validation, state transitions, persistence marks, and
+  audio API calls,
+- helper tests for derived labels, display values, gesture math, and formatting,
+- targeted render-helper tests where a calculation is pure enough to exercise
+  without a live UI backend.
+
+If a behavior can only be verified by exact pixel interaction, too much logic is
+probably in rendering code.
+
+## Change Checklist
+
+Before changing UI code, check:
+
+- Does the render function only draw and emit explicit actions?
+- Is the relevant state read through `ctx.state`?
+- Does mutation go through `ctx.audio`, `ctx.ui`, or `ctx.input`?
+- Are validation, clamping, persistence marks, and audio calls owned by
+  controllers?
+- Are widget IDs stable across labels, banks, and pad contents?
+- Is per-frame work bounded?
+- Is slow work represented by progress/completion/error state?
+- Can the behavior be tested without pixel automation?
+- Does the change preserve the audio callback boundary described above?

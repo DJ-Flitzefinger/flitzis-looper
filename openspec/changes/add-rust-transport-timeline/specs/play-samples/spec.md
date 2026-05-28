@@ -1,0 +1,88 @@
+## ADDED Requirements
+
+### Requirement: Immediate Trigger Compatibility Through Transport Scheduler
+The system SHALL preserve existing immediate sample trigger behavior when trigger
+quantization is disabled.
+
+The implementation MAY internally route immediate triggers through the transport scheduler
+with a target equal to the current output frame, or it MAY keep an immediate fast path. In
+both cases, `AudioEngine.play_sample(id, velocity)` SHALL retain the current observable
+behavior unless the user has explicitly enabled quantized triggering through future controls.
+
+#### Scenario: Existing play_sample remains immediate by default
+- **GIVEN** trigger quantization is disabled
+- **AND** a sample is loaded into slot `id`
+- **WHEN** `AudioEngine.play_sample(id, velocity)` is called
+- **THEN** playback starts or restarts using the current immediate trigger behavior
+- **AND** no beat or bar boundary wait is introduced
+
+#### Scenario: Missing sample remains safe under the transport path
+- **GIVEN** no sample is loaded into slot `id`
+- **WHEN** `AudioEngine.play_sample(id, velocity)` is called with quantization disabled
+- **THEN** the trigger is ignored or dropped safely
+- **AND** the audio callback continues without panic or blocking
+
+### Requirement: Quantized Triggers Preserve Source Loop Start
+The system SHALL start every newly triggered quantized pad from that pad's effective loop
+start source frame.
+
+Quantized trigger scheduling SHALL only change the absolute output frame where the pad becomes
+audible. It SHALL NOT change the initial source frame, seek into the middle of the loop, seek near
+the loop end, or apply late-click catch-up inside the source loop.
+
+If a loop region is configured for the pad, the effective loop start SHALL be the configured loop
+start. If no loop region is configured, the effective loop start SHALL be sample frame zero.
+
+#### Scenario: Quantized play starts from configured loop start
+- **GIVEN** trigger quantization is enabled
+- **AND** a loaded pad has a configured loop region starting at source frame 9,600
+- **WHEN** the pad trigger is scheduled on the next transport grid boundary
+- **THEN** the pad becomes audible at that output frame
+- **AND** playback starts from source frame 9,600
+
+#### Scenario: Late click does not seek into the loop
+- **GIVEN** trigger quantization is enabled
+- **AND** the human trigger arrives after the nearest previous grid boundary
+- **WHEN** Rust schedules the trigger
+- **THEN** Rust targets the next future grid boundary
+- **AND** the initial source frame remains the effective loop start
+
+### Requirement: Quantized Trigger Failure Does Not Partially Change Playback
+The system SHALL reject a quantized trigger request without applying partial playback
+changes when the fixed-capacity scheduler cannot accept the request.
+
+For transitions that would stop one or more currently playing pads and start another pad at
+a quantized boundary, scheduler rejection SHALL leave currently playing pads unchanged.
+
+#### Scenario: Scheduler-full quantized start leaves playback unchanged
+- **GIVEN** trigger quantization is enabled
+- **AND** the scheduler is full
+- **AND** pad 1 is currently playing
+- **WHEN** pad 2 is triggered
+- **THEN** the pad 2 start is rejected
+- **AND** pad 1 remains playing
+- **AND** no partial stop/start transition is applied
+
+### Requirement: Exclusive Sample Trigger API
+The system SHALL provide a Python API `AudioEngine.play_sample_exclusive(id, velocity)` that
+requests one audio-thread command to stop all active voices and start the requested loaded
+sample.
+
+When trigger quantization is disabled, `AudioEngine.play_sample_exclusive(id, velocity)`
+SHALL preserve the existing one-at-a-time behavior of stopping currently active voices and
+starting the requested sample promptly.
+
+When trigger quantization is enabled, Rust SHALL schedule the stop-all operation and the
+requested sample start as one fixed-size scheduled command at one absolute output frame.
+
+#### Scenario: Exclusive trigger is one fixed-size request
+- **WHEN** Python/control code requests exclusive playback for a loaded pad
+- **THEN** the request is sent to the audio thread as one fixed-size control message
+- **AND** the audio thread represents the stop-all-then-play transition as one scheduled command
+
+#### Scenario: Exclusive trigger does not stop pads when the target cannot play
+- **GIVEN** pad 1 is currently playing
+- **AND** pad 2 has no loaded sample
+- **WHEN** exclusive playback is requested for pad 2
+- **THEN** pad 1 remains playing
+- **AND** no partial stop/start transition is applied

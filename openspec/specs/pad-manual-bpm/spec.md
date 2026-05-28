@@ -1,7 +1,7 @@
 # pad-manual-bpm Specification
 
 ## Purpose
-TBD - created by archiving change add-pad-manual-bpm. Update Purpose after archive.
+To define manual per-pad BPM entry, Tap BPM behavior, and effective BPM precedence for playback and UI timing.
 ## Requirements
 ### Requirement: Store Manual BPM Per Pad
 The system SHALL allow a performer to set an optional manual BPM value per pad.
@@ -40,4 +40,3 @@ The Tap BPM workflow SHALL:
 - **WHEN** the performer taps 10 times
 - **THEN** only the 5 most recent tap timestamps are used to compute BPM
 - **AND** the computed BPM is based on the average interval between consecutive taps in that 5-tap window
-

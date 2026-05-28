@@ -80,7 +80,7 @@ Rejected: large messages increase ring buffer pressure and add copy overhead.
 2. Add the non-real-time file decode path to `AudioEngine.load_sample` (using `symphonia`).
 3. Implement the sample bank + voice mixer in the audio callback.
 4. Add deterministic unit tests for decoding and mixing.
-5. Update docs (`docs/architecture.md`, `docs/message-passing.md`) to match the implemented data flow.
+5. Update maintained architecture docs to match the implemented data flow.
 
 ## Open Questions
 - Should resampling be required for usability, or can v1 error on mismatched sample rate?

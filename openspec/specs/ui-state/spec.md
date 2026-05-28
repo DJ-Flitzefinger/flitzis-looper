@@ -1,7 +1,7 @@
 # ui-state Specification
 
 ## Purpose
-TBD - created by archiving change refactor-split-controller-uistate-pad-button. Update Purpose after archive.
+To define read-only UI state selectors and action surfaces that keep ImGui rendering thin and controller-owned logic testable.
 ## Requirements
 ### Requirement: UI computed state is decomposed into selector components
 The UI state layer SHALL provide read-only computed state access while decomposing `UiState` into smaller selector components so that no single UI state class violates Ruff `PLR0904` public-method thresholds.
@@ -38,4 +38,3 @@ The UI refactor SHALL preserve the observable UI semantics required by existing 
 #### Scenario: Existing UI tests remain valid
 - **WHEN** the existing Python test suite is executed
 - **THEN** UI context and render-related tests continue to pass
-

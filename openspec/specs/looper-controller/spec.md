@@ -1,7 +1,7 @@
 # looper-controller Specification
 
 ## Purpose
-TBD - created by archiving change refactor-split-controller-uistate-pad-button. Update Purpose after archive.
+To define the Python controller boundary that coordinates project state, session projections, audio-engine calls, persistence, and UI-facing actions.
 ## Requirements
 ### Requirement: Controller is decomposed into focused modules
 The Python control layer SHALL provide a `LooperController` entrypoint while decomposing controller responsibilities into smaller focused modules/classes so that no single class violates Ruff `PLR0904` public-method thresholds.
@@ -37,4 +37,3 @@ The controller refactor SHALL preserve observable behavior required by existing 
 #### Scenario: Behavior remains compliant with existing specs
 - **WHEN** the existing Python test suite is executed
 - **THEN** controller-dependent tests continue to pass
-

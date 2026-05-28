@@ -1,10 +1,25 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from flitzis_looper.constants import SPEED_MAX, SPEED_MIN, VOLUME_MAX, VOLUME_MIN
+from flitzis_looper.constants import (
+    PITCH_BPM_STEP,
+    SPEED_MAX,
+    SPEED_MIN,
+    SPEED_STEP,
+    VOLUME_MAX,
+    VOLUME_MIN,
+)
 from flitzis_looper.controller.validation import ensure_finite, normalize_bpm
+from flitzis_looper.models import (
+    LEGACY_TRIGGER_QUANTIZATION_TO_STEP,
+    TRIGGER_QUANTIZATION_STEPS,
+)
 
 if TYPE_CHECKING:
     from flitzis_looper.controller.transport import TransportController
+    from flitzis_looper.models import (
+        TriggerQuantizationMode,
+        TriggerQuantizationStep,
+    )
 
 
 class GlobalParametersController:
@@ -50,6 +65,68 @@ class GlobalParametersController:
         self._audio.set_bpm_lock(enabled=enabled)
         self._bpm.recompute_master_bpm()
 
+    def _audio_trigger_quantization_mode(self) -> str:
+        if not self._project.trigger_quantization_enabled:
+            return "immediate"
+        return self._project.trigger_quantization_step
+
+    def _publish_trigger_quantization(self) -> None:
+        self._audio.set_trigger_quantization(self._audio_trigger_quantization_mode())
+
+    def set_trigger_quantization_enabled(self, *, enabled: bool) -> None:
+        """Enable or disable global trigger quantization."""
+        if enabled == self._project.trigger_quantization_enabled:
+            return
+
+        self._project.trigger_quantization_enabled = enabled
+        self._publish_trigger_quantization()
+        self._transport._mark_project_changed()
+
+    def toggle_trigger_quantization(self) -> None:
+        """Toggle global trigger quantization on or off."""
+        self.set_trigger_quantization_enabled(
+            enabled=not self._project.trigger_quantization_enabled
+        )
+
+    def set_trigger_quantization_step(self, step: TriggerQuantizationStep) -> None:
+        """Set the global trigger quantization grid step."""
+        if step == self._project.trigger_quantization_step:
+            return
+
+        self._project.trigger_quantization_step = step
+        if self._project.trigger_quantization_enabled:
+            self._publish_trigger_quantization()
+        self._transport._mark_project_changed()
+
+    def set_trigger_quantization(self, mode: TriggerQuantizationMode | str) -> None:
+        """Set global trigger quantization from legacy mode strings."""
+        if mode in {"immediate", "disabled", "off"}:
+            self.set_trigger_quantization_enabled(enabled=False)
+            return
+
+        if mode == "enabled":
+            self.set_trigger_quantization_enabled(enabled=True)
+            return
+
+        step = LEGACY_TRIGGER_QUANTIZATION_TO_STEP.get(str(mode))
+        if step is None:
+            if mode not in TRIGGER_QUANTIZATION_STEPS:
+                msg = "trigger quantization mode is unsupported"
+                raise ValueError(msg)
+            step = cast("TriggerQuantizationStep", mode)
+
+        changed = (
+            not self._project.trigger_quantization_enabled
+            or step != self._project.trigger_quantization_step
+        )
+        if not changed:
+            return
+
+        self._project.trigger_quantization_step = step
+        self._project.trigger_quantization_enabled = True
+        self._publish_trigger_quantization()
+        self._transport._mark_project_changed()
+
     def set_volume(self, volume: float) -> None:
         """Set global volume."""
         ensure_finite(volume)
@@ -57,6 +134,20 @@ class GlobalParametersController:
         self._audio.set_volume(clamped)
         self._project.volume = clamped
         self._transport._mark_project_changed()
+
+    def set_momentary_output_mute(self, *, enabled: bool) -> None:
+        """Temporarily mute engine output without changing persisted volume."""
+        if enabled:
+            if self._session.global_stop_momentary_mute_active:
+                return
+            self._audio.set_volume(VOLUME_MIN)
+            self._session.global_stop_momentary_mute_active = True
+            return
+
+        if not self._session.global_stop_momentary_mute_active:
+            return
+        self._audio.set_volume(self._project.volume)
+        self._session.global_stop_momentary_mute_active = False
 
     def set_speed(self, speed: float) -> None:
         """Set global playback speed multiplier."""
@@ -66,6 +157,58 @@ class GlobalParametersController:
         self._project.speed = clamped
         self._bpm.recompute_master_bpm()
         self._transport._mark_project_changed()
+
+    def speed_reference_bpm(self) -> float | None:
+        """Return the BPM value represented by 1.00x speed for the current context."""
+        speed = float(self._project.speed)
+        if speed <= 0.0:
+            return None
+
+        if self._project.bpm_lock:
+            master_bpm = normalize_bpm(self._session.master_bpm)
+            if master_bpm is not None:
+                return float(master_bpm) / speed
+
+        return normalize_bpm(self._bpm.effective_bpm(self._project.selected_pad))
+
+    def effective_display_bpm(self) -> float | None:
+        """Return the BPM currently displayed above the global Pitch control."""
+        reference_bpm = self.speed_reference_bpm()
+        if reference_bpm is None:
+            return None
+        return float(reference_bpm) * float(self._project.speed)
+
+    def set_effective_display_bpm(self, bpm: float) -> bool:
+        """Set global speed by targeting a displayed BPM value."""
+        ensure_finite(bpm)
+        if bpm <= 0.0:
+            return False
+
+        reference_bpm = self.speed_reference_bpm()
+        if reference_bpm is None:
+            return False
+
+        self.set_speed(float(bpm) / float(reference_bpm))
+        return True
+
+    def nudge_speed_by_bpm_step(self, direction: int) -> None:
+        """Move Pitch by one BPM-grid step, falling back to multiplier steps without BPM."""
+        if direction > 0:
+            self.nudge_speed_by_bpm_steps(1)
+        elif direction < 0:
+            self.nudge_speed_by_bpm_steps(-1)
+
+    def nudge_speed_by_bpm_steps(self, steps: int) -> None:
+        """Move Pitch by signed BPM-grid steps, or multiplier steps without BPM."""
+        if steps == 0:
+            return
+
+        current_bpm = self.effective_display_bpm()
+        if current_bpm is None:
+            self.set_speed(float(self._project.speed) + SPEED_STEP * steps)
+            return
+
+        self.set_effective_display_bpm(round(float(current_bpm) + PITCH_BPM_STEP * steps, 2))
 
     def reset_speed(self) -> None:
         """Reset global speed back to 1.0x."""

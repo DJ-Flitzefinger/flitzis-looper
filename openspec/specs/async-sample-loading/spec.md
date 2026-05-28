@@ -1,7 +1,7 @@
 # async-sample-loading Specification
 
 ## Purpose
-TBD - created by archiving change async-sample-loading. Update Purpose after archive.
+To define non-blocking sample loading, progress reporting, analysis integration, and safe publication of decoded audio to the Rust audio thread.
 ## Requirements
 ### Requirement: Background Loading of Audio Samples
 The system **SHALL** provide a non‑blocking API `load_sample_async(id: usize, path: str) -> None` that returns immediately after scheduling the sample load operation on a background worker thread.  
@@ -109,4 +109,3 @@ When the analysis stage cannot provide fine-grained progress updates, the system
 - **WHEN** analysis starts and the system cannot compute fine-grained analysis progress
 - **THEN** the system emits a progress update at the start of analysis
 - **AND** the system emits a progress update with `percent == 1.0` once analysis finishes
-

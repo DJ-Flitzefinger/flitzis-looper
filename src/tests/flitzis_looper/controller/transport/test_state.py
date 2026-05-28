@@ -40,6 +40,8 @@ def test_apply_global_audio_settings_only_when_changed(
     transport_controller._project.speed = 1.2
     transport_controller._project.key_lock = True
     transport_controller._project.bpm_lock = False
+    transport_controller._project.trigger_quantization_enabled = True
+    transport_controller._project.trigger_quantization_step = "1_32"
 
     defaults = ProjectState()
     apply_project_state._apply_global_audio_settings(defaults)
@@ -48,6 +50,7 @@ def test_apply_global_audio_settings_only_when_changed(
     audio_engine_mock.set_speed.assert_called_once()
     audio_engine_mock.set_key_lock.assert_called_once()
     audio_engine_mock.set_bpm_lock.assert_not_called()
+    audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_32")
 
 
 def test_apply_global_audio_settings_calls_all_methods(
@@ -60,6 +63,8 @@ def test_apply_global_audio_settings_calls_all_methods(
     transport_controller._project.speed = 0.5
     transport_controller._project.key_lock = True
     transport_controller._project.bpm_lock = True
+    transport_controller._project.trigger_quantization_enabled = True
+    transport_controller._project.trigger_quantization_step = "1_64"
 
     defaults = ProjectState()
     apply_project_state._apply_global_audio_settings(defaults)
@@ -68,6 +73,7 @@ def test_apply_global_audio_settings_calls_all_methods(
     audio_engine_mock.set_speed.assert_called_once()
     audio_engine_mock.set_key_lock.assert_called_once()
     audio_engine_mock.set_bpm_lock.assert_called_once()
+    audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_64")
 
 
 def test_apply_per_pad_mixing_only_when_changed(
@@ -76,8 +82,8 @@ def test_apply_per_pad_mixing_only_when_changed(
     audio_engine_mock: Mock,
 ) -> None:
     """Test _apply_per_pad_mixing only updates pads with changed values."""
-    transport_controller._project.pad_gain[0] = 0.9
-    transport_controller._project.pad_gain[1] = 1.0
+    transport_controller._project.pad_gain_db[0] = -3.0
+    transport_controller._project.pad_gain_db[1] = 0.0
 
     defaults = ProjectState()
     apply_project_state._apply_per_pad_mixing(defaults)
@@ -91,9 +97,9 @@ def test_apply_per_pad_mixing_calls_gain_for_each_pad(
     audio_engine_mock: Mock,
 ) -> None:
     """Test _apply_per_pad_mixing iterates over all pads for gain."""
-    transport_controller._project.pad_gain[0] = 0.9
-    transport_controller._project.pad_gain[1] = 0.8
-    transport_controller._project.pad_gain[2] = 0.7
+    transport_controller._project.pad_gain_db[0] = -3.0
+    transport_controller._project.pad_gain_db[1] = 1.5
+    transport_controller._project.pad_gain_db[2] = 6.0
 
     defaults = ProjectState()
     apply_project_state._apply_per_pad_mixing(defaults)
@@ -262,6 +268,7 @@ def test_apply_project_state_with_defaults(
     audio_engine_mock.set_speed.assert_not_called()
     audio_engine_mock.set_key_lock.assert_not_called()
     audio_engine_mock.set_bpm_lock.assert_not_called()
+    audio_engine_mock.set_trigger_quantization.assert_not_called()
 
 
 def test_apply_project_state_with_modified_state(
@@ -274,8 +281,10 @@ def test_apply_project_state_with_modified_state(
     transport_controller._project.speed = 0.5
     transport_controller._project.key_lock = True
     transport_controller._project.bpm_lock = True
+    transport_controller._project.trigger_quantization_enabled = True
+    transport_controller._project.trigger_quantization_step = "1_32"
     transport_controller._project.sample_paths[0] = "/path/to/sample.wav"
-    transport_controller._project.pad_gain[0] = 0.9
+    transport_controller._project.pad_gain_db[0] = -3.0
     transport_controller._project.pad_loop_start_s[0] = 1.0
     transport_controller._project.pad_loop_auto[0] = True
 
@@ -296,3 +305,4 @@ def test_apply_project_state_with_modified_state(
         audio_engine_mock.set_speed.assert_called_once()
         audio_engine_mock.set_key_lock.assert_called_once()
         audio_engine_mock.set_bpm_lock.assert_called_once()
+        audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_32")

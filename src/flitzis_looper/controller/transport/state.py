@@ -40,10 +40,18 @@ class ApplyProjectState:
         if self._project.bpm_lock != defaults.bpm_lock:
             self._audio.set_bpm_lock(enabled=self._project.bpm_lock)
 
+        if self._project.trigger_quantization_enabled != defaults.trigger_quantization_enabled:
+            mode = (
+                self._project.trigger_quantization_step
+                if self._project.trigger_quantization_enabled
+                else "immediate"
+            )
+            self._audio.set_trigger_quantization(mode)
+
     def _apply_per_pad_mixing(self, defaults: ProjectState) -> None:
-        for sample_id, gain in enumerate(self._project.pad_gain):
-            if gain != defaults.pad_gain[sample_id]:
-                self._audio.set_pad_gain(sample_id, gain)
+        for sample_id, gain_db in enumerate(self._project.pad_gain_db):
+            if gain_db != defaults.pad_gain_db[sample_id]:
+                self._audio.set_pad_gain(sample_id, gain_db)
 
         for sample_id, low_db in enumerate(self._project.pad_eq_low_db):
             mid_db = self._project.pad_eq_mid_db[sample_id]

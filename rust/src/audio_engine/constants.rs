@@ -15,6 +15,9 @@ pub const NUM_SAMPLES: usize = NUM_PADS * NUM_BANKS;
 /// Maximum number of voices that can be active simultaneously.
 pub const MAX_VOICES: usize = 32;
 
+/// Maximum number of accepted absolute-frame scheduler events.
+pub const MAX_SCHEDULED_EVENTS: usize = 1024;
+
 /// Minimum playback speed multiplier (50%).
 pub const SPEED_MIN: f32 = 0.5;
 
@@ -27,11 +30,17 @@ pub const VOLUME_MIN: f32 = 0.0;
 /// Maximum volume level (100%).
 pub const VOLUME_MAX: f32 = 1.0;
 
-/// Minimum per-pad gain.
-pub const PAD_GAIN_MIN: f32 = 0.0;
+/// Minimum per-pad Gain/Trim in dB.
+pub const PAD_GAIN_DB_MIN: f32 = -60.0;
 
-/// Maximum per-pad gain.
-pub const PAD_GAIN_MAX: f32 = 1.0;
+/// Maximum per-pad Gain/Trim in dB.
+pub const PAD_GAIN_DB_MAX: f32 = 12.0;
+
+/// Default per-pad Gain/Trim in dB.
+pub const PAD_GAIN_DB_DEFAULT: f32 = 0.0;
+
+/// Per-pad Gain/Trim smoothing time in milliseconds.
+pub const PAD_GAIN_SMOOTH_MS: f32 = 10.0;
 
 /// Minimum per-band EQ gain in dB.
 ///

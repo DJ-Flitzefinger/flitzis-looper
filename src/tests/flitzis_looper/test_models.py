@@ -5,8 +5,37 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from flitzis_looper.constants import NUM_SAMPLES
-from flitzis_looper.models import BeatGrid, ProjectState, SampleAnalysis, SessionState
+from flitzis_looper.constants import (
+    DEFAULT_DEMUCS_OVERLAP,
+    DEFAULT_DEMUCS_SHIFTS,
+    MAX_DEMUCS_OVERLAP,
+    MAX_DEMUCS_SHIFTS,
+    MIN_DEMUCS_OVERLAP,
+    MIN_DEMUCS_SHIFTS,
+    NUM_SAMPLES,
+    PAD_GAIN_DB_DEFAULT,
+    PAD_GAIN_DB_MAX,
+    PAD_GAIN_DB_MIN,
+    PAD_LOOP_BARS_DEFAULT,
+    PAD_LOOP_BARS_MIN,
+)
+from flitzis_looper.models import (
+    DEFAULT_TRIGGER_QUANTIZATION_STEP,
+    STEM_COMPONENT_MASK,
+    STEM_INSTRUMENTAL_PRESET_MASK,
+    STEM_KINDS,
+    STEM_MASK_BASS,
+    STEM_MASK_DISPLAY_MODES,
+    STEM_MASK_DRUMS,
+    STEM_MASK_MELODY,
+    STEM_MIX_MODES,
+    BeatGrid,
+    ProjectState,
+    SampleAnalysis,
+    SessionState,
+    StemCacheEntry,
+    StemFileSet,
+)
 
 
 class TestProjectStateValidation:
@@ -174,10 +203,18 @@ class TestModelSerialization:
         assert "multi_loop" in data
         assert "sample_paths" in data
         assert "sample_analysis" in data
+        assert "stem_cache" in data
+        assert "pad_stem_mix_mode" in data
         assert "manual_bpm" in data
         assert "manual_key" in data
         assert "speed" in data
         assert "volume" in data
+        assert "trigger_quantization_enabled" in data
+        assert "trigger_quantization_step" in data
+        assert "key_lock" in data
+        assert "demucs_shifts" in data
+        assert "demucs_overlap" in data
+        assert "input_mapping_enabled" in data
         assert "selected_pad" in data
 
         assert data["sample_analysis"][0]["bpm"] == 120.0
@@ -228,25 +265,302 @@ def test_project_state_defaults(project_state: ProjectState) -> None:
     assert project_state.multi_loop is False
     assert project_state.key_lock is False
     assert project_state.bpm_lock is False
+    assert project_state.trigger_quantization_enabled is False
+    assert project_state.trigger_quantization_step == DEFAULT_TRIGGER_QUANTIZATION_STEP
+    assert project_state.demucs_shifts == DEFAULT_DEMUCS_SHIFTS
+    assert project_state.demucs_overlap == DEFAULT_DEMUCS_OVERLAP
+    assert project_state.input_mapping_enabled is False
     assert project_state.speed == 1.0
     assert project_state.volume == 1.0
     assert project_state.selected_pad == 0
     assert project_state.selected_bank == 0
     assert len(project_state.sample_paths) == NUM_SAMPLES
     assert all(path is None for path in project_state.sample_paths)
+    assert len(project_state.stem_cache) == NUM_SAMPLES
+    assert all(entry is None for entry in project_state.stem_cache)
+    assert len(project_state.pad_stem_mix_mode) == NUM_SAMPLES
+    assert all(mode == "full_mix" for mode in project_state.pad_stem_mix_mode)
     assert len(project_state.manual_bpm) == NUM_SAMPLES
     assert all(bpm is None for bpm in project_state.manual_bpm)
     assert len(project_state.manual_key) == NUM_SAMPLES
     assert all(key is None for key in project_state.manual_key)
+    assert len(project_state.pad_gain_db) == NUM_SAMPLES
+    assert all(gain_db == PAD_GAIN_DB_DEFAULT for gain_db in project_state.pad_gain_db)
+    assert len(project_state.pad_loop_start_s) == NUM_SAMPLES
+    assert all(start_s == 0.0 for start_s in project_state.pad_loop_start_s)
+    assert len(project_state.pad_loop_end_s) == NUM_SAMPLES
+    assert all(end_s is None for end_s in project_state.pad_loop_end_s)
+    assert len(project_state.pad_loop_auto) == NUM_SAMPLES
+    assert not any(project_state.pad_loop_auto)
+    assert len(project_state.pad_loop_bars) == NUM_SAMPLES
+    assert all(bars == PAD_LOOP_BARS_DEFAULT for bars in project_state.pad_loop_bars)
     assert project_state.sidebar_left_expanded is True
     assert project_state.sidebar_right_expanded is True
+
+
+def test_pad_gain_db_validation(project_state: ProjectState) -> None:
+    project_state.pad_gain_db[0] = PAD_GAIN_DB_MIN
+    project_state.pad_gain_db[1] = 0.0
+    project_state.pad_gain_db[2] = PAD_GAIN_DB_MAX
+    assert project_state.pad_gain_db[:3] == [PAD_GAIN_DB_MIN, 0.0, PAD_GAIN_DB_MAX]
+
+    with pytest.raises(ValidationError, match="pad_gain_db"):
+        ProjectState(pad_gain_db=[])
+
+    with pytest.raises(ValidationError, match="pad_gain_db"):
+        ProjectState(pad_gain_db=[PAD_GAIN_DB_MAX + 0.1] * NUM_SAMPLES)
+
+
+def test_legacy_pad_gain_migrates_to_db_defaults_and_unity() -> None:
+    project = ProjectState.model_validate({})
+    assert project.pad_gain_db[0] == 0.0
+
+    project = ProjectState.model_validate({"pad_gain": [1.0] * NUM_SAMPLES})
+    assert project.pad_gain_db[0] == 0.0
+
+    values = [100.0] * NUM_SAMPLES
+    project = ProjectState.model_validate({"pad_gain": values})
+    assert project.pad_gain_db[0] == 0.0
+
+
+def test_legacy_pad_gain_below_unity_migrates_to_clamped_db() -> None:
+    values = [0.5] * NUM_SAMPLES
+    project = ProjectState.model_validate({"pad_gain": values})
+
+    assert project.pad_gain_db[0] == pytest.approx(-6.0206, abs=1e-4)
+
+
+def test_pad_loop_bars_accepts_half_bar_and_legacy_integer_values() -> None:
+    project = ProjectState.model_validate({"pad_loop_bars": [4] * NUM_SAMPLES})
+    assert project.pad_loop_bars[0] == 4.0
+
+    project = ProjectState.model_validate({"pad_loop_bars": [0.5] * NUM_SAMPLES})
+    assert project.pad_loop_bars[0] == PAD_LOOP_BARS_MIN
+
+
+def test_pad_loop_bars_validation_rejects_invalid_values() -> None:
+    with pytest.raises(ValidationError, match="pad_loop_bars"):
+        ProjectState(pad_loop_bars=[0.0] * NUM_SAMPLES)
+
+    with pytest.raises(ValidationError, match="granularity"):
+        ProjectState(pad_loop_bars=[0.75] * NUM_SAMPLES)
+
+    with pytest.raises(ValidationError, match="pad_loop_bars"):
+        ProjectState(pad_loop_bars=[float("nan")] * NUM_SAMPLES)
+
+
+def test_trigger_quantization_settings_validation(project_state: ProjectState) -> None:
+    project_state.trigger_quantization_enabled = True
+    assert project_state.trigger_quantization_enabled is True
+
+    project_state.trigger_quantization_step = "1_64"
+    assert project_state.trigger_quantization_step == "1_64"
+
+    project_state.trigger_quantization_step = "1_32"
+    assert project_state.trigger_quantization_step == "1_32"
+
+    with pytest.raises(ValidationError):
+        ProjectState.model_validate({"trigger_quantization_step": "half_note"})
+
+
+def test_legacy_trigger_quantization_mode_migrates_to_new_fields() -> None:
+    project = ProjectState.model_validate({"trigger_quantization": "next_bar"})
+
+    assert project.trigger_quantization_enabled is True
+    assert project.trigger_quantization_step == "1_16"
+
+    project = ProjectState.model_validate({"trigger_quantization": "immediate"})
+
+    assert project.trigger_quantization_enabled is False
+    assert project.trigger_quantization_step == DEFAULT_TRIGGER_QUANTIZATION_STEP
+
+    project = ProjectState.model_validate({"trigger_quantization_step": "1_bar"})
+
+    assert project.trigger_quantization_step == "1_16"
+
+
+def test_removed_key_lock_backend_settings_are_ignored() -> None:
+    project = ProjectState.model_validate(
+        {
+            "key_lock": True,
+            "key_lock_quality": "very_high",
+            "key_lock_delay_min_samples": 128.0,
+            "key_lock_delay_range_samples": 1024.0,
+            "key_lock_head_count": 4,
+            "key_lock_interpolation": "linear",
+            "key_lock_window": "triangle",
+            "key_lock_smoothing_step": 0.04,
+            "key_lock_output_gain": 1.2,
+        }
+    )
+    dumped = project.model_dump(mode="json")
+
+    assert project.key_lock is True
+    for key in [
+        "key_lock_quality",
+        "key_lock_delay_min_samples",
+        "key_lock_delay_range_samples",
+        "key_lock_head_count",
+        "key_lock_interpolation",
+        "key_lock_window",
+        "key_lock_smoothing_step",
+        "key_lock_output_gain",
+    ]:
+        assert key not in dumped
+
+
+def test_demucs_quality_settings_validation(project_state: ProjectState) -> None:
+    project_state.demucs_shifts = MIN_DEMUCS_SHIFTS
+    assert project_state.demucs_shifts == MIN_DEMUCS_SHIFTS
+
+    project_state.demucs_shifts = MAX_DEMUCS_SHIFTS
+    assert project_state.demucs_shifts == MAX_DEMUCS_SHIFTS
+
+    project_state.demucs_overlap = MIN_DEMUCS_OVERLAP
+    assert project_state.demucs_overlap == MIN_DEMUCS_OVERLAP
+
+    project_state.demucs_overlap = MAX_DEMUCS_OVERLAP
+    assert project_state.demucs_overlap == MAX_DEMUCS_OVERLAP
+
+    with pytest.raises(ValidationError, match="demucs_shifts"):
+        ProjectState(demucs_shifts=MIN_DEMUCS_SHIFTS - 1)
+
+    with pytest.raises(ValidationError, match="demucs_shifts"):
+        ProjectState(demucs_shifts=MAX_DEMUCS_SHIFTS + 1)
+
+    with pytest.raises(ValidationError, match="demucs_overlap"):
+        ProjectState(demucs_overlap=MIN_DEMUCS_OVERLAP - 0.01)
+
+    with pytest.raises(ValidationError, match="demucs_overlap"):
+        ProjectState(demucs_overlap=MAX_DEMUCS_OVERLAP + 0.01)
+
+    with pytest.raises(ValidationError, match="demucs_overlap"):
+        ProjectState(demucs_overlap=float("nan"))
+
+
+def test_stem_mix_mode_validation(project_state: ProjectState) -> None:
+    project_state.pad_stem_mix_mode[0] = "all_stems"
+    assert project_state.pad_stem_mix_mode[0] == "all_stems"
+    assert tuple(STEM_MIX_MODES) == ("full_mix", "all_stems")
+
+    with pytest.raises(ValidationError):
+        ProjectState.model_validate({"pad_stem_mix_mode": ["half_stems"] * NUM_SAMPLES})
+
+    with pytest.raises(ValidationError, match="pad_stem_mix_mode must have length"):
+        ProjectState(pad_stem_mix_mode=[])
+
+
+def test_stem_cache_entry_represents_expected_kinds() -> None:
+    files = StemFileSet(
+        vocals="samples/stems/a/vocals.wav",
+        melody="samples/stems/a/melody.wav",
+        bass="samples/stems/a/bass.wav",
+        drums="samples/stems/a/drums.wav",
+        instrumental="samples/stems/a/instrumental.wav",
+    )
+    entry = StemCacheEntry(
+        source_version="samples/foo.wav|10|20",
+        cache_dir="samples/stems/a",
+        stems=files,
+        available=True,
+    )
+
+    assert tuple(STEM_KINDS) == ("vocals", "melody", "bass", "drums", "instrumental")
+    for kind in STEM_KINDS:
+        path = entry.stems.path_for(kind)
+        assert path is not None
+        assert path.endswith(f"{kind}.wav")
+
+
+def test_stem_cache_validation_requires_per_pad_length() -> None:
+    with pytest.raises(ValidationError, match="stem_cache must have length"):
+        ProjectState(stem_cache=[])
 
 
 def test_session_state_defaults(session_state: SessionState) -> None:
     """Test SessionState default values."""
     assert len(session_state.active_sample_ids) == 0
+    assert session_state.global_stop_engaged is False
+    assert session_state.global_stop_restore_sample_ids == set()
+    assert session_state.global_stop_momentary_mute_active is False
+    assert session_state.global_start_stop_left_pressed is False
     assert len(session_state.pressed_pads) == NUM_SAMPLES
     assert all(pressed is False for pressed in session_state.pressed_pads)
     assert session_state.file_dialog_pad_id is None
+    assert session_state.settings_open is False
     assert session_state.tap_bpm_pad_id is None
     assert session_state.tap_bpm_timestamps == []
+    assert session_state.stem_generating_sample_ids == set()
+    assert session_state.stem_generation_source_versions == {}
+    assert session_state.stem_generation_progress == {}
+    assert session_state.stem_generation_stage == {}
+    assert session_state.stem_generation_errors == {}
+    assert len(session_state.pad_stem_enabled_mask) == NUM_SAMPLES
+    assert all(mask == STEM_COMPONENT_MASK for mask in session_state.pad_stem_enabled_mask)
+    assert len(session_state.pad_stem_last_custom_mask) == NUM_SAMPLES
+    assert all(mask == STEM_COMPONENT_MASK for mask in session_state.pad_stem_last_custom_mask)
+    assert len(session_state.pad_stem_mask_display_mode) == NUM_SAMPLES
+    assert all(mode == "all" for mode in session_state.pad_stem_mask_display_mode)
+    assert session_state.input_learn_active is False
+    assert session_state.input_learn_pending_source is None
+    assert session_state.input_learn_pending_binding_key is None
+    assert session_state.input_mapping_error is None
+    assert session_state.master_output_peak == 0.0
+    assert session_state.master_output_peak_updated_at == 0.0
+    assert session_state.master_output_clip_hold_until == 0.0
+
+
+def test_master_output_metering_state_validation(session_state: SessionState) -> None:
+    session_state.master_output_peak = 1.25
+    session_state.master_output_peak_updated_at = 10.0
+    session_state.master_output_clip_hold_until = 11.0
+
+    assert session_state.master_output_peak == pytest.approx(1.25)
+    assert session_state.master_output_peak_updated_at == pytest.approx(10.0)
+    assert session_state.master_output_clip_hold_until == pytest.approx(11.0)
+
+    with pytest.raises(ValidationError, match="master_output_peak"):
+        SessionState(master_output_peak=-0.1)
+
+    with pytest.raises(ValidationError, match="master_output_peak"):
+        SessionState(master_output_peak=float("inf"))
+
+    with pytest.raises(ValidationError, match="master output timestamps"):
+        SessionState(master_output_peak_updated_at=-0.1)
+
+    with pytest.raises(ValidationError, match="master output timestamps"):
+        SessionState(master_output_clip_hold_until=float("nan"))
+
+
+def test_stem_enabled_mask_validation(session_state: SessionState) -> None:
+    session_state.pad_stem_enabled_mask[0] = STEM_INSTRUMENTAL_PRESET_MASK
+    assert session_state.pad_stem_enabled_mask[0] == (
+        STEM_MASK_DRUMS | STEM_MASK_MELODY | STEM_MASK_BASS
+    )
+
+    with pytest.raises(ValidationError, match="pad_stem_enabled_mask"):
+        SessionState(pad_stem_enabled_mask=[])
+
+    with pytest.raises(ValidationError, match="component masks"):
+        SessionState(pad_stem_enabled_mask=[1 << 4] * NUM_SAMPLES)
+
+    session_state.pad_stem_last_custom_mask[0] = STEM_INSTRUMENTAL_PRESET_MASK
+    assert session_state.pad_stem_last_custom_mask[0] == STEM_INSTRUMENTAL_PRESET_MASK
+
+    with pytest.raises(ValidationError, match="pad_stem_last_custom_mask"):
+        SessionState(pad_stem_last_custom_mask=[])
+
+    with pytest.raises(ValidationError, match="component masks"):
+        SessionState(pad_stem_last_custom_mask=[1 << 4] * NUM_SAMPLES)
+
+
+def test_stem_mask_display_mode_validation(session_state: SessionState) -> None:
+    session_state.pad_stem_mask_display_mode[0] = "instrumental"
+    assert session_state.pad_stem_mask_display_mode[0] == "instrumental"
+    assert tuple(STEM_MASK_DISPLAY_MODES) == ("custom", "instrumental", "all")
+
+    with pytest.raises(ValidationError, match="pad_stem_mask_display_mode"):
+        SessionState(pad_stem_mask_display_mode=[])
+
+    with pytest.raises(ValidationError):
+        SessionState.model_validate({"pad_stem_mask_display_mode": ["preset"] * NUM_SAMPLES})

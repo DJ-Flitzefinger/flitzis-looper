@@ -1,7 +1,7 @@
 # controller-test-coverage Specification
 
 ## Purpose
-TBD - created by archiving change improve-controller-test-coverage. Update Purpose after archive.
+To define focused controller, validation, metering, loader, transport, and persistence test coverage expectations for the Python control layer.
 ## Requirements
 ### Requirement: BaseController Test Coverage
 The test suite SHALL include unit tests for BaseController covering initialization, audio sample rate retrieval, and project change marking behavior.
@@ -820,4 +820,3 @@ The PadPlaybackController tests SHALL verify:
 - **GIVEN** invalid sample_id (out of range)
 - **WHEN** stop_pad is called
 - **THEN** ValueError is raised
-
