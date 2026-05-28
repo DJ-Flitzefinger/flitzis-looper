@@ -4,6 +4,7 @@ import pytest
 
 from flitzis_looper.input_mapping.actions import (
     LooperAction,
+    PadEqBand,
     global_speed_action,
     global_speed_delta_action,
     master_volume_action,
@@ -12,6 +13,7 @@ from flitzis_looper.input_mapping.actions import (
     pad_eq_delta_action,
     pad_gain_action,
     pad_gain_delta_action,
+    selected_pad_eq_delta_action,
     tap_bpm_action,
 )
 from flitzis_looper.input_mapping.bindings import KeyboardBinding
@@ -154,8 +156,104 @@ def test_learn_saves_pad_eq_band_mapping(controller: AppController) -> None:
 
     data = load_midi_mapping_file()
     assert data.mappings[0].input.key == "midi:cc:1:74"
-    assert data.mappings[0].action.key == "pad.eq.delta:2:mid"
+    assert data.mappings[0].action.key == "pad.eq.selected.delta:mid"
     assert controller.project.pad_eq_mid_db[2] == 0.0
+
+
+def test_midi_learn_keeps_first_pending_input_for_eq_cc_burst(
+    controller: AppController,
+) -> None:
+    ctx = UiContext(controller)
+    controller.input_mapping.set_enabled(enabled=True)
+
+    ctx.input.toggle_learn()
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:70",
+        "value": 64,
+    })
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:71",
+        "value": 64,
+    })
+
+    ctx.audio.pads.set_pad_eq_band(2, "low", 0.0)
+
+    data = load_midi_mapping_file()
+    assert len(data.mappings) == 1
+    assert data.mappings[0].input.key == "midi:cc:1:70"
+    assert data.mappings[0].action.key == "pad.eq.selected.delta:low"
+
+
+def test_learn_start_discards_queued_midi_tail_before_capturing_next_pot(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    ctx = UiContext(controller)
+    controller.input_mapping.set_enabled(enabled=True)
+    audio_engine_mock.poll_input_events.side_effect = [
+        {
+            "source": "midi",
+            "binding_key": "midi:cc:1:70",
+            "value": 65,
+        },
+        None,
+    ]
+
+    ctx.input.toggle_learn()
+
+    assert controller.session.input_learn_pending_binding_key is None
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:71",
+        "value": 64,
+    })
+    ctx.audio.pads.set_pad_eq_band(2, "mid", 0.0)
+
+    data = load_midi_mapping_file()
+    assert len(data.mappings) == 1
+    assert data.mappings[0].input.key == "midi:cc:1:71"
+    assert data.mappings[0].action.key == "pad.eq.selected.delta:mid"
+
+
+def test_learn_saves_three_pad_eq_band_mappings(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    ctx = UiContext(controller)
+    controller.input_mapping.set_enabled(enabled=True)
+
+    eq_targets: tuple[tuple[int, PadEqBand], ...] = (
+        (70, "low"),
+        (71, "mid"),
+        (72, "high"),
+    )
+    for cc_number, band in eq_targets:
+        ctx.input.toggle_learn()
+        controller.input_mapping._handle_rust_input_event({
+            "source": "midi",
+            "binding_key": f"midi:cc:1:{cc_number}",
+            "value": 64,
+        })
+        ctx.audio.pads.set_pad_eq_band(2, band, 0.0)
+
+    data = load_midi_mapping_file()
+    assert [mapping.input.key for mapping in data.mappings] == [
+        "midi:cc:1:70",
+        "midi:cc:1:71",
+        "midi:cc:1:72",
+    ]
+    assert [mapping.action.key for mapping in data.mappings] == [
+        "pad.eq.selected.delta:low",
+        "pad.eq.selected.delta:mid",
+        "pad.eq.selected.delta:high",
+    ]
+    audio_engine_mock.set_input_mapping_snapshot.assert_called_with([
+        ("midi:cc:1:70", "pad.eq.selected.delta:low"),
+        ("midi:cc:1:71", "pad.eq.selected.delta:mid"),
+        ("midi:cc:1:72", "pad.eq.selected.delta:high"),
+    ])
 
 
 def test_learn_saves_pad_gain_mapping(controller: AppController) -> None:
@@ -236,6 +334,31 @@ def test_learn_saves_midi_note_global_speed_mapping_as_set_value(
     assert data.mappings[0].input.key == "midi:note:1:62"
     assert data.mappings[0].action.key == "global.speed:123"
     assert controller.project.speed == 1.0
+
+
+def test_learn_saves_start_stop_mapping(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    ctx = UiContext(controller)
+    controller.input_mapping.set_enabled(enabled=True)
+    controller.project.sample_paths[0] = "samples/foo.wav"
+    controller.session.active_sample_ids.add(0)
+
+    ctx.input.toggle_learn()
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:note:1:63",
+        "value": 100,
+    })
+
+    ctx.audio.global_.start_or_restart_start_stop()
+
+    data = load_midi_mapping_file()
+    assert data.mappings[0].input.key == "midi:note:1:63"
+    assert data.mappings[0].action.key == "global.start_stop"
+    audio_engine_mock.play_sample.assert_not_called()
+    assert controller.session.input_learn_active is False
 
 
 def test_learn_input_then_l_deletes_existing_midi_mapping(
@@ -696,6 +819,50 @@ def test_midi_cc_relative_pad_eq_uses_directional_steps(
     assert controller.project.pad_eq_mid_db[2] == pytest.approx(0.0)
 
 
+def test_midi_cc_relative_selected_pad_eq_follows_current_selection(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    controller.input_mapping.set_enabled(enabled=True)
+    controller.input_mapping.save_mapping(
+        "midi",
+        "midi:cc:1:70",
+        selected_pad_eq_delta_action("high"),
+    )
+
+    controller.project.selected_pad = 2
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:70",
+        "value": 64,
+        "action_key": "pad.eq.selected.delta:high",
+        "direct": False,
+    })
+    audio_engine_mock.set_pad_eq.assert_not_called()
+
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:70",
+        "value": 65,
+        "action_key": "pad.eq.selected.delta:high",
+        "direct": False,
+    })
+    audio_engine_mock.set_pad_eq.assert_called_once_with(2, 0.0, 0.0, 0.5)
+    assert controller.project.pad_eq_high_db[2] == pytest.approx(0.5)
+
+    controller.project.selected_pad = 5
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:cc:1:70",
+        "value": 66,
+        "action_key": "pad.eq.selected.delta:high",
+        "direct": False,
+    })
+
+    assert controller.project.pad_eq_high_db[2] == pytest.approx(0.5)
+    assert controller.project.pad_eq_high_db[5] == pytest.approx(0.5)
+
+
 def test_midi_cc_relative_pad_gain_uses_directional_steps(
     controller: AppController,
     audio_engine_mock: Mock,
@@ -846,6 +1013,25 @@ def test_non_direct_rust_midi_event_executes_python_action(
     })
 
     assert controller.project.selected_bank == 2
+
+
+def test_non_direct_rust_midi_event_executes_start_stop_action(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    controller.input_mapping.set_enabled(enabled=True)
+    controller.project.sample_paths[0] = "samples/foo.wav"
+    controller.session.active_sample_ids.add(0)
+
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:note:1:63",
+        "action_key": "global.start_stop",
+        "direct": False,
+        "dispatched": True,
+    })
+
+    audio_engine_mock.play_sample.assert_called_once_with(0, 1.0)
 
 
 def test_rust_midi_event_is_ignored_when_mapping_disabled(

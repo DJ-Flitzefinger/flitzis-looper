@@ -71,6 +71,7 @@ def stem_backend() -> FakeStemGenerationBackend:
 def audio_engine_mock() -> Iterator[Mock]:
     with patch("flitzis_looper.controller.app.AudioEngine", autospec=True) as audio_engine:
         audio_engine.return_value.output_sample_rate.return_value = 44_100
+        audio_engine.return_value.poll_input_events.return_value = None
         if hasattr(audio_engine.return_value, "loaded_sample_shape"):
             audio_engine.return_value.loaded_sample_shape.return_value = (44_100, 1, 128)
         yield audio_engine.return_value

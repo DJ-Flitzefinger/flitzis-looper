@@ -597,6 +597,15 @@ def _start_stop_button(ctx: UiContext) -> None:
         )
 
     hovered = imgui.is_item_hovered()
+    learn_pending = _has_pending_learn_input(ctx)
+
+    if learn_pending:
+        ctx.ui.store_global_start_stop_pressed(pressed=False)
+        if hovered and imgui.is_mouse_clicked(imgui.MouseButton_.left):
+            ctx.audio.global_.start_or_restart_start_stop()
+        if hovered:
+            imgui.set_tooltip("Set START/STOP mapping")
+        return
 
     if imgui.is_mouse_down(imgui.MouseButton_.left):
         if hovered and not ctx.state.session.global_start_stop_left_pressed:

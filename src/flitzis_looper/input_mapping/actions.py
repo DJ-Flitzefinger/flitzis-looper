@@ -113,6 +113,11 @@ def tap_bpm_action(pad_id: int) -> LooperAction:
     return LooperAction(key=f"pad.tap_bpm:{pad_id}", label=f"Tap BPM {pad_id + 1}")
 
 
+def start_stop_action() -> LooperAction:
+    """Return the serializable bottom-bar START/STOP primary action."""
+    return LooperAction(key="global.start_stop", label="START/STOP")
+
+
 def pad_eq_action(pad_id: int, band: PadEqBand, db: float) -> LooperAction:
     """Return a serializable per-pad EQ set-value action."""
     value = round(float(db), 1)
@@ -127,6 +132,14 @@ def pad_eq_delta_action(pad_id: int, band: PadEqBand) -> LooperAction:
     return LooperAction(
         key=f"pad.eq.delta:{pad_id}:{band}",
         label=f"Pad {pad_id + 1} {band} EQ relative",
+    )
+
+
+def selected_pad_eq_delta_action(band: PadEqBand) -> LooperAction:
+    """Return a serializable selected-pad EQ relative-step action."""
+    return LooperAction(
+        key=f"pad.eq.selected.delta:{band}",
+        label=f"Selected pad {band} EQ relative",
     )
 
 

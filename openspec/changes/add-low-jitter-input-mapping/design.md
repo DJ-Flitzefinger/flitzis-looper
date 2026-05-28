@@ -19,9 +19,14 @@ bounded control queue. Actions that require project/controller state are reporte
 typed event dictionaries for execution outside the hot path. Control Change events carry their
 0..127 value through that dictionary so Python can implement relative controller-owned steps for
 continuous controls, including endless-controller wraparound and repeated relative encoder values.
-The MIDI normalizer also tracks NRPN parameter-select Control Changes and reports Data
+The MIDI normalizer also tracks fresh NRPN parameter-select Control Changes and reports Data
 Increment/Data Decrement messages as stable `midi:nrpn:<channel>:<parameter>` bindings with common
 `65`/`63` increment/decrement values, without exposing those values to the audio callback.
+Standalone Data Increment/Data Decrement messages are treated as relative Control Change inputs
+keyed by their data byte, which keeps hardware Inc/Dec modes with value-keyed knobs independently
+learnable instead of collapsing them into a stale or generic NRPN parameter. Data bytes greater
+than `1` are also treated as value-keyed Inc/Dec controls even if a fresh NRPN parameter select was
+seen immediately before the event, because standard single-step NRPN increments use data byte `1`.
 
 The audio callback remains unchanged in responsibility: it only consumes bounded control messages
 and mixes already available audio data.
@@ -31,6 +36,8 @@ and mixes already available audio data.
 - MIDI Control Change.
 - NRPN increment/decrement encoded through Control Change parameter select and
   increment/decrement messages.
+- Standalone Control Change Data Increment/Data Decrement messages whose data byte identifies a
+  relative Inc/Dec control.
 - Keyboard key name plus normalized modifiers.
 
 Note On velocity zero is treated as Note Off and ignored for Learn/playback. Active Sensing,
@@ -43,7 +50,7 @@ save, delete, clear-all, and ON/OFF changes, Python publishes a new in-memory MI
 to Rust. Normal mapped playback never reads or writes JSON.
 
 Mappings use stable string keys at the boundary:
-- MIDI binding: `midi:<note|cc>:<channel>:<number>`
+- MIDI binding: `midi:<note|cc|nrpn>:<channel>:<number>`
 - Keyboard binding: `keyboard:<key>:<ctrl><alt><shift><super>`
 - Action: stable LooperAction key, for example `pad.trigger:0` or `ui.select_bank:2`
 

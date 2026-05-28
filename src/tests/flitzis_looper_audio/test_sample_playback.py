@@ -388,6 +388,45 @@ def test_injected_nrpn_increment_reports_stable_mapping_event(
     assert event["value"] == 63
 
 
+def test_injected_standalone_inc_dec_reports_distinct_relative_cc_events(
+    audio_engine: AudioEngine,
+) -> None:
+    audio_engine.set_input_mapping_enabled(True)
+    audio_engine.set_input_mapping_snapshot([
+        ("midi:cc:1:1", "pad.eq.selected.delta:low"),
+        ("midi:cc:1:2", "pad.eq.selected.delta:mid"),
+    ])
+
+    assert audio_engine.inject_midi_input_for_test([0xB0, 96, 1]) is True
+    event = _wait_for_input_event(audio_engine)
+
+    assert event["source"] == "midi"
+    assert event["binding_key"] == "midi:cc:1:1"
+    assert event["action_key"] == "pad.eq.selected.delta:low"
+    assert event["value"] == 65
+    assert event["direct"] is False
+    assert event["dispatched"] is True
+
+    assert audio_engine.inject_midi_input_for_test([0xB0, 96, 2]) is True
+    event = _wait_for_input_event(audio_engine)
+    assert event["binding_key"] == "midi:cc:1:2"
+    assert event["action_key"] == "pad.eq.selected.delta:mid"
+    assert event["value"] == 65
+
+    assert audio_engine.inject_midi_input_for_test([0xB0, 97, 2]) is True
+    event = _wait_for_input_event(audio_engine)
+    assert event["binding_key"] == "midi:cc:1:2"
+    assert event["value"] == 63
+
+    assert audio_engine.inject_midi_input_for_test([0xB0, 99, 0]) is False
+    assert audio_engine.inject_midi_input_for_test([0xB0, 98, 0]) is False
+    assert audio_engine.inject_midi_input_for_test([0xB0, 96, 2]) is True
+    event = _wait_for_input_event(audio_engine)
+    assert event["binding_key"] == "midi:cc:1:2"
+    assert event["action_key"] == "pad.eq.selected.delta:mid"
+    assert event["value"] == 65
+
+
 def test_set_stem_mix_mode_accepts_supported_modes(audio_engine: AudioEngine) -> None:
     audio_engine.set_stem_mix_mode(0, "full_mix")
     audio_engine.set_stem_mix_mode(0, "all_stems", "source-version")

@@ -96,7 +96,10 @@ class InputMappingController(BaseController):
             self._clear_learn_state()
             return
 
-        self._session.input_learn_active = not self._session.input_learn_active
+        next_active = not self._session.input_learn_active
+        if next_active:
+            self._drain_rust_input_events()
+        self._session.input_learn_active = next_active
         self._session.input_learn_pending_source = None
         self._session.input_learn_pending_binding_key = None
 
@@ -194,8 +197,12 @@ class InputMappingController(BaseController):
             return False
 
         if self._session.input_learn_active:
-            self._session.input_learn_pending_source = "keyboard"
-            self._session.input_learn_pending_binding_key = binding.key
+            if (
+                self._session.input_learn_pending_source is None
+                or self._session.input_learn_pending_binding_key is None
+            ):
+                self._session.input_learn_pending_source = "keyboard"
+                self._session.input_learn_pending_binding_key = binding.key
             return True
 
         action = self._keyboard_action_for(binding.key)
@@ -224,6 +231,7 @@ class InputMappingController(BaseController):
             "global.bpm_lock.toggle": self._toggle_bpm_lock,
             "global.trigger_quantization.toggle": self._toggle_trigger_quantization,
             "global.stop_all": self._app.transport.playback.stop_all_pads,
+            "global.start_stop": self._app.transport.playback.start_or_restart_global_start_stop,
             "global.speed.increase": self._increase_speed,
             "global.speed.decrease": self._decrease_speed,
             "global.speed.reset": self._app.transport.global_params.reset_speed,
@@ -263,6 +271,17 @@ class InputMappingController(BaseController):
                 return
             self._handle_rust_input_event(event)
 
+    def _drain_rust_input_events(self) -> None:
+        while True:
+            try:
+                event = self._audio.poll_input_events()
+            except RuntimeError as err:
+                self._session.input_mapping_error = str(err)
+                return
+
+            if event is None:
+                return
+
     def _handle_rust_input_event(self, event: dict[str, object]) -> None:
         source = event.get("source")
         binding_key = event.get("binding_key")
@@ -272,9 +291,13 @@ class InputMappingController(BaseController):
             return
 
         if self._session.input_learn_active:
-            self._session.input_learn_pending_source = "midi"
-            self._session.input_learn_pending_binding_key = binding_key
-            self._record_midi_cc_value(binding_key, _midi_event_value(event))
+            if (
+                self._session.input_learn_pending_source is None
+                or self._session.input_learn_pending_binding_key is None
+            ):
+                self._session.input_learn_pending_source = "midi"
+                self._session.input_learn_pending_binding_key = binding_key
+                self._record_midi_cc_value(binding_key, _midi_event_value(event))
             return
 
         if event.get("direct") is True:
@@ -319,6 +342,8 @@ class InputMappingController(BaseController):
             self._app.transport.global_params.nudge_speed_by_bpm_step(direction)
         elif action_key.startswith("pad.gain.delta:"):
             self._execute_relative_pad_gain(action_key, direction)
+        elif action_key.startswith("pad.eq.selected.delta:"):
+            self._execute_relative_selected_pad_eq(action_key, direction)
         else:
             self._execute_relative_pad_eq(action_key, direction)
         return True
@@ -377,6 +402,27 @@ class InputMappingController(BaseController):
         self._set_pad_eq_band(
             pad_id,
             cast("PadEqBand", band),
+            current + MIDI_RELATIVE_EQ_STEP_DB * direction,
+        )
+        return True
+
+    def _execute_relative_selected_pad_eq(self, key: str, direction: int) -> bool:
+        raw_band = key.removeprefix("pad.eq.selected.delta:")
+        if raw_band == key or raw_band not in PAD_EQ_BANDS:
+            return True
+
+        pad_id = self._project.selected_pad
+        band = cast("PadEqBand", raw_band)
+        if band == "low":
+            current = float(self._project.pad_eq_low_db[pad_id])
+        elif band == "mid":
+            current = float(self._project.pad_eq_mid_db[pad_id])
+        else:
+            current = float(self._project.pad_eq_high_db[pad_id])
+
+        self._set_pad_eq_band(
+            pad_id,
+            band,
             current + MIDI_RELATIVE_EQ_STEP_DB * direction,
         )
         return True
@@ -699,6 +745,7 @@ def _repeated_relative_midi_cc_direction(value: int) -> int | None:
 def _is_relative_action_key(action_key: str) -> bool:
     return action_key in {"global.volume.delta", "global.speed.delta"} or action_key.startswith((
         "pad.eq.delta:",
+        "pad.eq.selected.delta:",
         "pad.gain.delta:",
     ))
 

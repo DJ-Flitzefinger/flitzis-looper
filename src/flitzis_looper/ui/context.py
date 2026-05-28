@@ -12,9 +12,10 @@ from flitzis_looper.input_mapping import (
     master_volume_action,
     master_volume_delta_action,
     pad_eq_action,
-    pad_eq_delta_action,
     pad_gain_action,
     pad_gain_delta_action,
+    selected_pad_eq_delta_action,
+    start_stop_action,
     tap_bpm_action,
 )
 
@@ -341,7 +342,7 @@ class PadAudioActions:
             high_db = db
 
         action = (
-            pad_eq_delta_action(pad_id, band)
+            selected_pad_eq_delta_action(band)
             if _midi_cc_learn_input_pending(self._controller)
             else pad_eq_action(pad_id, band, db)
         )
@@ -421,7 +422,10 @@ class GlobalAudioActions:
         self._controller.transport.global_params.set_momentary_output_mute(enabled=enabled)
 
     def start_or_restart_start_stop(self) -> None:
-        self._controller.transport.playback.start_or_restart_global_start_stop()
+        self._controller.input_mapping.perform_learnable_action(
+            start_stop_action(),
+            self._controller.transport.playback.start_or_restart_global_start_stop,
+        )
 
     def stop_start_stop(self) -> None:
         self._controller.transport.playback.stop_global_start_stop()

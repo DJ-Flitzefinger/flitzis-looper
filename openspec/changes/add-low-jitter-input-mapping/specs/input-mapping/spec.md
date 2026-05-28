@@ -77,10 +77,13 @@ The system SHALL filter irrelevant MIDI messages before mapping resolution.
 
 Version 1 SHALL process Note On with velocity greater than zero, Control Change, and NRPN
 increment/decrement messages carried by Control Change setup and data-increment/data-decrement
-events. It SHALL treat Note On velocity zero as Note Off and SHALL NOT trigger Learn or playback
-from it. It SHALL ignore NRPN setup Control Changes as standalone Learn/playback targets. It SHALL
-ignore Active Sensing, MIDI Clock, SysEx, Program Change, Pitch Bend, Aftertouch, and MPE-style
-messages.
+events. Data Increment/Data Decrement Control Changes without a fresh NRPN setup, or with a
+value-keyed data byte greater than 1, SHALL be treated as relative Control Change inputs whose
+binding number is the event data byte, so hardware Inc/Dec modes that encode knob identity in that
+byte remain independently learnable. The system SHALL treat Note On velocity zero as Note Off and
+SHALL NOT trigger Learn or playback from it. It SHALL ignore NRPN setup Control Changes as
+standalone Learn/playback targets. It SHALL ignore Active Sensing, MIDI Clock, SysEx, Program
+Change, Pitch Bend, Aftertouch, and MPE-style messages.
 
 #### Scenario: Note On velocity zero is ignored
 - **WHEN** the MIDI callback receives Note On channel 1 note 60 velocity 0
@@ -101,6 +104,16 @@ messages.
 - **WHEN** it then receives a Data Decrement Control Change on channel 1
 - **THEN** the system normalizes the same input as `midi:nrpn:1:0`
 - **AND** it reports a decrement value for relative controller-owned dispatch
+
+#### Scenario: Standalone Inc/Dec encoder values remain distinct
+- **WHEN** the MIDI callback receives a Data Increment Control Change on channel 1 with data byte 1
+  and no fresh NRPN setup
+- **THEN** the system normalizes the input as `midi:cc:1:1`
+- **AND** it reports an increment value for relative controller-owned dispatch
+- **WHEN** the MIDI callback receives fresh NRPN parameter 0 setup followed by a Data Increment
+  Control Change on channel 1 with data byte 2
+- **THEN** the system normalizes the input as `midi:cc:1:2`
+- **AND** it does not collapse both physical encoder movements into the same NRPN binding
 
 ### Requirement: Normal Playback Uses In-Memory Mappings
 The system SHALL use in-memory mapping snapshots for normal mapped playback.
@@ -137,13 +150,18 @@ controller/audio command behavior after input normalization.
 
 ### Requirement: Learnable Control Coverage
 The system SHALL allow Learn to save mappings for Tap BPM, bottom-bar stem mask buttons,
-per-pad Gain, per-pad EQ band controls, Master Volume, and the global Speed/Pitch control.
+bottom-bar START/STOP, per-pad Gain, per-pad EQ band controls, Master Volume, and the global
+Speed/Pitch control.
 
 Keyboard and MIDI Note mappings to continuous controls SHALL save bounded set-value LooperAction
 keys from the value selected while learning. MIDI Control Change and NRPN increment/decrement
-mappings to Master Volume, global Speed/Pitch, per-pad Gain, and per-pad EQ SHALL save
+mappings to Master Volume, global Speed/Pitch, per-pad Gain, and selected-pad EQ SHALL save
 relative-step LooperAction keys and execute one bounded controller-owned increment or decrement
-outside the audio callback for each detected encoder movement. Relative movement SHALL be
+outside the audio callback for each detected encoder movement. Selected-pad EQ relative mappings
+SHALL apply to the currently selected pad at dispatch time rather than the pad that was selected
+when Learn saved the mapping. Activating Learn SHALL discard already queued MIDI input events
+before waiting for the next input so tail events from a previous knob movement cannot become the
+new pending Learn binding. Relative movement SHALL be
 independent of the CC or NRPN start position and SHALL keep working across 0..127 wraparound or
 repeated relative encoder values, including common single-step encodings such as `1`/`127` and
 `65`/`63`. Target controls SHALL clamp at their existing minimum and maximum values when the MIDI
@@ -158,6 +176,14 @@ pending, even when normal stem playback availability disables their execution.
 - **WHEN** the performer activates Tap BPM for selected pad 5
 - **THEN** the system saves a mapping to `pad.tap_bpm:4`
 - **AND** normal mapped dispatch registers a Tap BPM event for that pad
+
+#### Scenario: Learn saves START/STOP
+- **GIVEN** input mapping is enabled
+- **AND** Learn has captured one MIDI or keyboard input
+- **WHEN** the performer activates the bottom-bar START/STOP control
+- **THEN** the system saves a mapping to `global.start_stop`
+- **AND** normal mapped dispatch performs the START/STOP primary start-or-restart action outside
+  the audio callback
 
 #### Scenario: Keyboard Learn saves bounded set-value controls
 - **GIVEN** input mapping is enabled
@@ -181,6 +207,8 @@ pending, even when normal stem playback availability disables their execution.
 - **THEN** the system saves a mapping to `pad.gain.delta:<pad>`
 - **WHEN** the performer targets global Speed/Pitch
 - **THEN** the system saves a mapping to `global.speed.delta`
+- **WHEN** the performer targets the selected pad's High EQ
+- **THEN** the system saves a selected-pad relative EQ mapping for High EQ
 - **WHEN** that CC value later changes from 64 to 65
 - **THEN** mapped dispatch increases Master Volume by one fixed step outside the audio callback
 - **WHEN** that CC value repeats at 65
@@ -189,6 +217,44 @@ pending, even when normal stem playback availability disables their execution.
 - **THEN** mapped dispatch decreases Master Volume by one fixed step outside the audio callback
 - **WHEN** that CC value repeats at 63
 - **THEN** mapped dispatch decreases Master Volume by another fixed step outside the audio callback
+
+#### Scenario: MIDI Learn keeps the first captured continuous input
+- **GIVEN** input mapping is enabled
+- **AND** Learn is waiting for one MIDI input
+- **WHEN** the performer turns a MIDI Control Change knob and the device emits multiple Control
+  Change events before the performer chooses a UI target
+- **THEN** the first accepted normalized MIDI input remains the pending Learn binding
+- **AND** later Control Change events do not replace the pending binding before a target is chosen
+
+#### Scenario: Learn start discards queued MIDI tail events
+- **GIVEN** input mapping is enabled
+- **AND** a tail Control Change event from a previous knob movement is already queued
+- **WHEN** the performer activates Learn
+- **THEN** the queued tail event is discarded before Learn waits for input
+- **WHEN** the performer turns a different MIDI Control Change knob
+- **THEN** that different knob becomes the pending Learn binding
+
+#### Scenario: MIDI CC EQ mappings follow selected pad
+- **GIVEN** input mapping is enabled
+- **AND** `midi:cc:1:70`, `midi:cc:1:71`, and `midi:cc:1:72` are mapped to selected-pad Low,
+  Mid, and High EQ relative actions
+- **WHEN** pad 1 is selected and the performer turns `midi:cc:1:70`
+- **THEN** pad 1 Low EQ changes outside the audio callback
+- **WHEN** pad 2 is selected and the performer turns `midi:cc:1:70`
+- **THEN** pad 2 Low EQ changes outside the audio callback
+- **AND** the mapping does not remain bound to pad 1
+
+#### Scenario: Standalone Inc/Dec EQ mappings stay independent
+- **GIVEN** input mapping is enabled
+- **AND** the MIDI device sends standalone Inc/Dec messages where data bytes 1, 2, and 3 identify
+  three physical encoders
+- **WHEN** the performer learns data byte 1 to selected-pad Low EQ
+- **AND** learns data byte 2 to selected-pad Mid EQ
+- **AND** learns data byte 3 to selected-pad High EQ
+- **THEN** the system saves three separate mappings for `midi:cc:1:1`, `midi:cc:1:2`, and
+  `midi:cc:1:3`
+- **AND** later turns of those three encoders control Low, Mid, and High independently on the
+  currently selected pad
 
 #### Scenario: NRPN Learn saves relative continuous controls
 - **GIVEN** input mapping is enabled

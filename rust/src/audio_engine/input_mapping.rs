@@ -11,10 +11,14 @@ use std::time::{Duration, Instant};
 const INPUT_QUEUE_CAPACITY: usize = 1024;
 const MIDI_NRPN_MSB_CC: u8 = 99;
 const MIDI_NRPN_LSB_CC: u8 = 98;
+const MIDI_RPN_MSB_CC: u8 = 101;
+const MIDI_RPN_LSB_CC: u8 = 100;
 const MIDI_DATA_INCREMENT_CC: u8 = 96;
 const MIDI_DATA_DECREMENT_CC: u8 = 97;
 const MIDI_RELATIVE_INCREMENT_VALUE: u8 = 65;
 const MIDI_RELATIVE_DECREMENT_VALUE: u8 = 63;
+const MIDI_INC_DEC_VALUE_KEY_MIN: u8 = 2;
+const MIDI_NRPN_ACTIVE_TTL_NS: u64 = 250_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MidiBindingKind {
@@ -521,40 +525,60 @@ impl MidiNormalizer {
                 }
 
                 let controller = message[1];
-                let value = message[2];
+                let data_value = message[2];
                 if controller == MIDI_NRPN_MSB_CC {
-                    self.nrpn_parameters[channel_index].msb = Some(value);
+                    self.nrpn_parameters[channel_index].set_msb(data_value, received_at_ns);
                     return None;
                 }
                 if controller == MIDI_NRPN_LSB_CC {
-                    self.nrpn_parameters[channel_index].lsb = Some(value);
+                    self.nrpn_parameters[channel_index].set_lsb(data_value, received_at_ns);
+                    return None;
+                }
+                if controller == MIDI_RPN_MSB_CC || controller == MIDI_RPN_LSB_CC {
+                    self.nrpn_parameters[channel_index].clear();
                     return None;
                 }
                 if controller == MIDI_DATA_INCREMENT_CC || controller == MIDI_DATA_DECREMENT_CC {
-                    let parameter = self.nrpn_parameters[channel_index].number()?;
                     let value = if controller == MIDI_DATA_INCREMENT_CC {
                         MIDI_RELATIVE_INCREMENT_VALUE
                     } else {
                         MIDI_RELATIVE_DECREMENT_VALUE
                     };
+                    if data_value < MIDI_INC_DEC_VALUE_KEY_MIN
+                        && let Some(parameter) =
+                            self.nrpn_parameters[channel_index].active_number(received_at_ns)
+                    {
+                        self.nrpn_parameters[channel_index].touch(received_at_ns);
+                        return Some(NormalizedMidiEvent {
+                            binding: MidiBinding {
+                                kind: MidiBindingKind::Nrpn,
+                                channel,
+                                number: parameter,
+                            },
+                            value,
+                            received_at_ns,
+                        });
+                    }
+
                     return Some(NormalizedMidiEvent {
                         binding: MidiBinding {
-                            kind: MidiBindingKind::Nrpn,
+                            kind: MidiBindingKind::ControlChange,
                             channel,
-                            number: parameter,
+                            number: u16::from(data_value),
                         },
                         value,
                         received_at_ns,
                     });
                 }
 
+                self.nrpn_parameters[channel_index].clear();
                 Some(NormalizedMidiEvent {
                     binding: MidiBinding {
                         kind: MidiBindingKind::ControlChange,
                         channel,
                         number: u16::from(controller),
                     },
-                    value,
+                    value: data_value,
                     received_at_ns,
                 })
             }
@@ -567,11 +591,40 @@ impl MidiNormalizer {
 struct NrpnParameter {
     msb: Option<u8>,
     lsb: Option<u8>,
+    selected_at_ns: Option<u64>,
 }
 
 impl NrpnParameter {
+    fn set_msb(&mut self, value: u8, received_at_ns: u64) {
+        self.msb = Some(value);
+        self.selected_at_ns = Some(received_at_ns);
+    }
+
+    fn set_lsb(&mut self, value: u8, received_at_ns: u64) {
+        self.lsb = Some(value);
+        self.selected_at_ns = Some(received_at_ns);
+    }
+
     fn number(&self) -> Option<u16> {
         Some(u16::from(self.msb?) * 128 + u16::from(self.lsb?))
+    }
+
+    fn active_number(&self, received_at_ns: u64) -> Option<u16> {
+        let selected_at_ns = self.selected_at_ns?;
+        if received_at_ns.saturating_sub(selected_at_ns) > MIDI_NRPN_ACTIVE_TTL_NS {
+            return None;
+        }
+        self.number()
+    }
+
+    fn touch(&mut self, received_at_ns: u64) {
+        self.selected_at_ns = Some(received_at_ns);
+    }
+
+    fn clear(&mut self) {
+        self.msb = None;
+        self.lsb = None;
+        self.selected_at_ns = None;
     }
 }
 
@@ -647,11 +700,75 @@ mod tests {
     }
 
     #[test]
-    fn nrpn_increment_without_parameter_is_ignored() {
+    fn standalone_inc_dec_messages_use_data_byte_as_relative_cc_identity() {
         let mut normalizer = MidiNormalizer::default();
 
-        assert!(normalizer.normalize(&[0xB0, 96, 1], 1).is_none());
-        assert!(normalizer.normalize(&[0xB0, 97, 1], 1).is_none());
+        let increment = normalizer
+            .normalize(&[0xB0, 96, 1], 1)
+            .expect("normalized increment");
+        assert_eq!(increment.binding.key(), "midi:cc:1:1");
+        assert_eq!(increment.value, 65);
+
+        let decrement = normalizer
+            .normalize(&[0xB0, 97, 1], 2)
+            .expect("normalized decrement");
+        assert_eq!(decrement.binding.key(), "midi:cc:1:1");
+        assert_eq!(decrement.value, 63);
+
+        let second_knob = normalizer
+            .normalize(&[0xB0, 96, 2], 3)
+            .expect("normalized second knob");
+        assert_eq!(second_knob.binding.key(), "midi:cc:1:2");
+        assert_eq!(second_knob.value, 65);
+    }
+
+    #[test]
+    fn stale_nrpn_selection_does_not_collapse_standalone_inc_dec_knobs() {
+        let mut normalizer = MidiNormalizer::default();
+
+        assert!(normalizer.normalize(&[0xB0, 99, 0], 10).is_none());
+        assert!(normalizer.normalize(&[0xB0, 98, 0], 11).is_none());
+
+        let event = normalizer
+            .normalize(&[0xB0, 96, 3], 11 + MIDI_NRPN_ACTIVE_TTL_NS + 1)
+            .expect("normalized standalone increment");
+        assert_eq!(event.binding.key(), "midi:cc:1:3");
+        assert_eq!(event.value, 65);
+    }
+
+    #[test]
+    fn value_keyed_inc_dec_messages_do_not_collapse_even_after_fresh_nrpn_setup() {
+        let mut normalizer = MidiNormalizer::default();
+
+        assert!(normalizer.normalize(&[0xB0, 99, 0], 10).is_none());
+        assert!(normalizer.normalize(&[0xB0, 98, 0], 11).is_none());
+
+        let event = normalizer
+            .normalize(&[0xB0, 96, 2], 12)
+            .expect("normalized value-keyed increment");
+        assert_eq!(event.binding.key(), "midi:cc:1:2");
+        assert_eq!(event.value, 65);
+
+        let event = normalizer
+            .normalize(&[0xB0, 97, 2], 13)
+            .expect("normalized value-keyed decrement");
+        assert_eq!(event.binding.key(), "midi:cc:1:2");
+        assert_eq!(event.value, 63);
+    }
+
+    #[test]
+    fn rpn_selection_clears_pending_nrpn_parameter() {
+        let mut normalizer = MidiNormalizer::default();
+
+        assert!(normalizer.normalize(&[0xB0, 99, 0], 10).is_none());
+        assert!(normalizer.normalize(&[0xB0, 98, 0], 11).is_none());
+        assert!(normalizer.normalize(&[0xB0, 101, 0], 12).is_none());
+
+        let event = normalizer
+            .normalize(&[0xB0, 96, 4], 13)
+            .expect("normalized standalone increment");
+        assert_eq!(event.binding.key(), "midi:cc:1:4");
+        assert_eq!(event.value, 65);
     }
 
     #[test]
