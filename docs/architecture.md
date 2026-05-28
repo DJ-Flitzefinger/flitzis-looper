@@ -1,9 +1,8 @@
 # Architecture
 
-This is the maintained technical reference for the current architecture. It
-intentionally replaces older planning and audit documents. OpenSpec still owns
-behavior requirements; this document explains how the implementation is
-organized and where live authority sits.
+This is the maintained technical reference for the current architecture.
+OpenSpec owns behavior requirements; this document explains how the
+implementation is organized and where live authority sits.
 
 ## Runtime Split
 
@@ -33,8 +32,9 @@ Python UI / controllers / persistence / background workers
 -> bounded command drain and parameter coalescing
 -> TransportTimeline + TransportScheduler
 -> RtMixer voice slots
+-> output-frame anchored voice timing for BPM-locked pads
 -> full-mix or prepared-stem source selection
--> source-frame loop wrap and voice playhead
+-> source-frame loop wrap and playhead telemetry
 -> playback-rate / BPM Lock / Key Lock processing
 -> per-pad Gain/Trim (-60 dB..+12 dB, smoothed)
 -> per-pad Rust DSP chain
@@ -134,11 +134,12 @@ Accepted master-BPM updates apply to both transport-grid timing and BPM-lock
 tempo matching while preserving current transport bar phase.
 
 Scheduled render segments pass their absolute output-frame bounds into the
-mixer. BPM-locked active voices with valid pad BPM metadata keep fixed
-output-frame/source-frame anchors, so loop phase is derived from the Rust master
-timeline instead of cumulative per-callback source-frame rounding. Pads without
-valid BPM metadata remain on the documented global-speed fallback and do not
-redefine the synced timeline.
+mixer. BPM-locked active voices with valid master and pad BPM metadata store
+fixed output-frame/source-frame anchors. During rendering, `RtMixer` maps the
+absolute output-frame delta through the active tempo ratio to a source loop
+position, so pads that represent the same musical loop length share the same
+output-frame loop boundaries. Pads without valid BPM metadata use global-speed
+tempo resolution and do not define or alter the BPM-locked phase path.
 
 ## Playback, Loops, And Stems
 
@@ -152,6 +153,13 @@ Python persists loop intent in seconds. Rust converts accepted loop regions to
 half-open source-frame ranges and owns live playhead wrapping. Live loop edits
 apply immediately: an in-range playhead is preserved; an out-of-range playhead
 is clamped to the new loop start. There is no live loop-edit crossfade yet.
+
+The Loop Editor grid is source-domain editing state. Python derives the visible
+grid anchor from analysis onset/downbeat metadata plus the per-pad
+`pad_grid_offset_samples` value, stores snapped loop markers in source time, and
+publishes the same anchor to Rust as pad timing metadata. Global speed, BPM
+Lock, Key Lock, trigger quantization, and other-pad playback do not move a
+pad's source grid or snapped loop markers.
 
 Stem generation is offline/background work. Rust accepts prepared immutable stem
 buffers only after non-realtime validation. Prepared stems must match the loaded
@@ -180,6 +188,11 @@ Key Lock selects rendering semantics:
   scale derived from the inverse tempo ratio, so tempo changes remain while
   perceived pitch stays approximately stable.
 
+BPM-locked source addressing happens before full-mix/stem sample reads and
+before Key Lock processing. Full-mix and prepared-stem playback therefore feed
+the same source-frame sequence into Rubber Band, Gain/Trim, DSP, metering, and
+telemetry.
+
 Rubber Band handles, block buffers, input/output FIFOs, and channel staging
 arrays are allocated with each voice slot before callback rendering and reused.
 The callback never constructs handles, discovers libraries, resizes these
@@ -189,12 +202,12 @@ with silence and continues with bounded work. Playhead telemetry remains
 source-frame based; Rubber Band output latency does not shift loop ownership or
 transport scheduling.
 
-Project persistence stores only the global Key Lock performer intent. The old
-manual delay-line quality, delay, head-count, interpolation, window, smoothing,
-and output-gain settings are no longer exposed in the Settings UI, persisted in
-`ProjectState`, or sent through Python/Rust control messages. Active tempo-ratio
-changes still use a fixed internal Rust smoothing step so the callback receives
-only bounded mode changes.
+Project persistence stores only the global Key Lock performer intent. Rubber
+Band handles, runtime paths, buffers, measured latency, algorithmic delay, and
+backend tuning parameters are not persisted, exposed in performer settings, or
+sent through Python/Rust control messages. Active tempo-ratio changes use a
+fixed internal Rust smoothing step so the callback receives only bounded mode
+changes.
 
 ## Per-Pad DSP And EQ
 
@@ -206,8 +219,9 @@ live node is a 3-band DJ isolator:
 - Python still persists dB-oriented low/mid/high project intent for UI and
   compatibility,
 - Rust converts accepted live values to typed normalized DSP parameters and
-  smooths changes before sample processing,
-- the old hardwired mixer EQ path is no longer active as a second live stage.
+  smooths changes before sample processing.
+
+The live EQ path has a single DSP-chain implementation.
 
 Future DSP/FX work should extend the internal Rust DSP-chain path through a
 focused OpenSpec change. Do not add VST, LV2, CLAP, AU, or other plugin-hosting
@@ -217,8 +231,8 @@ infrastructure unless the product direction explicitly changes.
 
 Per-pad Gain is a channel trim stage, not a master volume clone. Python persists
 durable intent as `pad_gain_db` with a `0.0 dB` default and a finite
-`-60.0..=+12.0 dB` range. Legacy project files with `pad_gain` linear or percent
-values are migrated so old unity (`1.0` or `100`) loads as `0.0 dB`.
+`-60.0..=+12.0 dB` range. Project-file migration accepts `pad_gain` linear or
+percent values so unity (`1.0` or `100`) loads as `0.0 dB`.
 
 The Rust mixer converts accepted dB targets with `10^(gain_db / 20)`, smooths
 changes in the realtime path, and applies the multiplier after source/stem

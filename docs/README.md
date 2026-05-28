@@ -34,7 +34,7 @@ For focused areas:
 | `development.md` | Setup, validation, OpenSpec workflow, package layout, and generated-file notes. |
 | `ui-toolkit.md` | Project-specific Dear ImGui design and state-flow rules. |
 | `stem-generation-setup.md` | External requirements for offline Demucs stem generation. |
-| `key-lock-backend.md` | Current Key Lock implementation and future pro-grade backend path. |
+| `key-lock-backend.md` | Current Rubber Band Key Lock backend, timing semantics, realtime constraints, and native dependency requirements. |
 | `todos.md` | Explicit user-requested TODO notes; not an automatic work queue. |
 
 ## What Belongs In OpenSpec Instead

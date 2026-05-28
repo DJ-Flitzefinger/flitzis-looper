@@ -166,6 +166,11 @@ commands and already prepared audio data. It does not run file I/O, JSON
 persistence, Python/GIL code, Demucs, plugin scanning, logging, blocking waits,
 or unbounded work.
 
+BPM-locked voices with valid tempo metadata are timed from the Rust
+output-frame transport timeline. Their source loop phase is mapped from fixed
+output-frame/source-frame anchors, while the Loop Editor grid and loop markers
+remain source-domain editing state.
+
 Simplified signal path:
 
 ```text
@@ -211,8 +216,8 @@ Important documents:
 - [docs/ui-toolkit.md](docs/ui-toolkit.md): Dear ImGui UI rules.
 - [docs/stem-generation-setup.md](docs/stem-generation-setup.md): Demucs and
   FFmpeg setup.
-- [docs/key-lock-backend.md](docs/key-lock-backend.md): current Key Lock backend
-  and future replacement path.
+- [docs/key-lock-backend.md](docs/key-lock-backend.md): current Rubber Band Key
+  Lock backend and native dependency requirements.
 - [docs/todos.md](docs/todos.md): explicit user-requested TODO notes.
 
 Behavior contracts live in `openspec/specs/` and active changes live in

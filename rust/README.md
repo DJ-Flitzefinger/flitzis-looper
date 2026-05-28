@@ -50,6 +50,7 @@ Python controllers
 -> CPAL callback
 -> TransportTimeline + TransportScheduler
 -> RtMixer
+-> output-frame anchored BPM Lock timing
 -> source selection, loop wrap, playback-rate / Key Lock
 -> smoothed per-pad Gain/Trim
 -> per-pad DSP chain
@@ -84,6 +85,10 @@ Use `uv run cargo ...` so PyO3 and maturin use the project Python environment.
 - Ordered commands and high-rate scalar parameters use separate bounded queues.
 - Parameter messages are coalesced by identity in the callback before applying
   the latest drained value.
+- Scheduled mixer segments carry absolute output-frame positions. BPM-locked
+  active voices with valid master and pad BPM metadata use fixed
+  output-frame/source-frame anchors to derive source loop phase from the Rust
+  transport timeline.
 - Sample and prepared-stem handles removed from callback-owned state are retired
   through a bounded non-audio worker to avoid large final drops on the audio
   thread.

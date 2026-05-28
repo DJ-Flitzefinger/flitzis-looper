@@ -1,131 +1,124 @@
-# Design: Multi Loop BPM-Lock synchronization repair
+# Design: Multi Loop BPM-Lock timing model
 
-## Context
+## Overview
 
-Gen3 already separates output-frame transport time from source-frame playback:
+Gen3 keeps output-frame transport time and source-frame editing state as
+separate domains:
 
-- `TransportTimeline` owns the absolute output-frame clock and master BPM.
-- `TransportScheduler` uses output-frame targets for trigger quantization.
-- `RtMixer` stores active voice source-frame playheads and loop regions.
-- Python persists loop/grid intent in seconds and publishes bounded loop/timing metadata to Rust.
-- Prepared stems are aligned source buffers and use the same voice playhead path as the full mix.
+- `TransportTimeline` owns the absolute output-frame clock, master BPM, and
+  downbeat anchor.
+- `TransportScheduler` uses output-frame targets for immediate and quantized
+  trigger execution.
+- `RtMixer` owns active voice source-frame playheads, loop regions, source
+  selection, tempo-ratio application, Key Lock, Gain/Trim, DSP, and metering.
+- Python persists loop/grid intent in seconds and publishes bounded loop/timing
+  metadata to Rust.
+- Prepared stems are source-aligned buffers and use the same source-frame
+  addressing path as the full mix.
 
-The current defect sits at the boundary between the first two bullets and the active voice path.
-Normal loop wrapping advances each voice locally by an integer number of source frames per render
-chunk. Different BPM ratios can round differently, so pads that should complete one shared musical
-cycle together accumulate independent phase error.
-
-## Goals
-
-- Use the Rust master output timeline as the authority for shared BPM-locked musical phase.
-- Keep the Loop Editor grid, Grid Offset, loop markers, source buffers, and prepared stems in
-  source-frame space.
-- Prevent BPM-locked active voices from accumulating per-callback rounding drift across repeated
-  loop wraps.
-- Preserve existing immediate trigger, quantized trigger, stop, pause/resume, seek, retrigger,
-  loop edit, Key Lock, Gain/EQ, metering, and prepared-stem behavior unless the spec explicitly
-  says otherwise.
-- Keep all callback work bounded and realtime-safe.
-
-## Non-Goals
-
-- No plugin hosting, external FX graph, or new DSP module.
-- No realtime stem generation.
-- No live loop-edit crossfade or zero-crossing search.
-- No source-grid reinterpretation as a global transport grid.
-- No automatic sync for pads without valid BPM metadata.
+BPM-locked active voices with valid master and pad BPM metadata derive loop
+phase from the Rust output-frame timeline through fixed
+output-frame/source-frame anchors. The Loop Editor grid, Grid Offset, loop
+markers, source buffers, and prepared stems remain source-frame facts.
 
 ## Time Domains
 
-### Source-domain facts
+### Source-Domain Facts
 
 - Loaded full-mix source frames.
 - Prepared stem source frames and source-version alignment.
-- Python loop start/end intent and Rust half-open source-frame loop region.
+- Python loop start/end intent and Rust half-open source-frame loop regions.
 - Analysis onset/downbeat and per-pad Grid Offset.
 - Loop Editor visible musical grid and snapped loop marker positions.
 - Rust pad timing metadata published from the Loop Editor source anchor.
 - Voice source-frame read position and playhead telemetry.
 
-These values must remain stable when global playback modes change unless the performer edits pad
-loop/grid settings or loads/replaces the pad's source audio.
+These values stay stable when global playback modes change unless the performer
+edits pad loop/grid settings or loads/replaces the pad's source audio.
 
-### Output-domain facts
+### Output-Domain Facts
 
 - `TransportTimeline.output_frame`.
 - Transport master BPM and downbeat anchor.
 - Trigger quantization target frames.
-- Callback/segment start and end output-frame bounds.
-- Shared BPM-locked musical phase for active voices that have valid BPM metadata.
+- Callback and scheduled segment start/end output-frame bounds.
+- Shared BPM-locked musical phase for active voices with valid BPM metadata.
 
-These values decide when audio is rendered and how a BPM-locked voice maps the shared output phase
-to a source-frame position.
+These values decide when audio is rendered and how a BPM-locked voice maps the
+shared output phase to a source-frame position.
 
-## Candidate Repair Direction
+## Render Segment Timing
 
-The preferred direction is output-frame anchored source addressing:
+`audio_stream.rs::render_mixer_segment(...)` passes each scheduled segment's
+absolute output-frame start into `RtMixer::render_rt_at_output_frame(...)`.
+`RtMixer` renders that segment with the same callback-owned realtime state used
+by immediate paths.
 
-1. Thread the absolute segment output-frame range from `audio_stream.rs::render_mixer_segment(...)`
-   into the mixer.
-2. Store minimal per-voice sync metadata at start/retrigger time, such as the output frame where
-   the voice became active, its effective loop start, loop length, BPM, and the source frame that
-   corresponds to the start output frame.
-3. For BPM-locked voices with valid metadata, derive the loop-relative source frame for each
-   rendered output frame from absolute output-frame delta and the active tempo ratio, using a
-   non-cumulative calculation.
-4. Keep local source-frame advancement as the fallback for non-BPM-locked voices, missing metadata,
-   explicit before-loop/after-loop seek modes where appropriate, or implementation cases that have
-   not yet been made output-frame-addressable.
-5. Keep Rubber Band, Gain/EQ, stem selection, and metering attached after the source reader so
-   they consume the same corrected source-frame sequence.
+`VoiceSlot` stores an optional `PlaybackTimelineAnchor`:
 
-A fractional source-position accumulator is a narrower fallback if it can prove no drift across
-all required cases, but it is weaker because it still leaves each pad as an independent clock. A
-hard master-loop retrigger at boundaries is also weaker because it risks audible discontinuities
-and Rubber Band state resets. Any selected approach must be justified against the tests in this
-change before production code lands.
+```text
+output_frame: absolute output frame for the voice timeline anchor
+source_frame: source frame corresponding to that output frame
+```
 
-## Selected Strategy
+Start, retrigger, seek, pause/resume, and loop-boundary state changes establish
+or refresh the anchor from the current segment output frame and voice source
+frame. During BPM-locked playback with valid master and pad BPM metadata,
+`RtMixer` computes:
 
-Use output-frame anchored source addressing for BPM-locked active voices with valid pad BPM
-metadata.
+```text
+source_offset = round((segment_output_frame - anchor.output_frame) * tempo_ratio)
+```
 
-Rejected options:
+The resulting source offset is mapped through the voice's half-open source-frame
+loop region. The same mapping also determines the next source frame recorded for
+playhead telemetry. Pads that represent the same musical loop length therefore
+share output-frame loop boundaries across repeated wraps, including fixed and
+variable callback segment sizes.
 
-- Fractional source-position accumulator: it reduces callback-rounding error, but each pad still
-  owns an independent local clock and can diverge through loop edits, segment splits, or future
-  timing paths.
-- Master-loop boundary retrigger/snap: it can hide accumulated error at boundaries, but it risks
-  audible discontinuities, Rubber Band FIFO/state resets, and click behavior that this change does
-  not specify.
-- Standalone hard phase correction: it has similar click and state-reset risks unless combined
-  with a deeper source-addressing repair.
+Pads without valid BPM metadata use the global speed multiplier. They can play
+concurrently in Multi Loop mode, but they do not define the BPM-locked phase
+path used by pads with valid metadata.
 
-The implementation should thread absolute segment output-frame bounds into the mixer and attach
-fixed-size sync metadata to voices at start/retrigger time. For BPM-locked voices with valid
-metadata, source frames should be derived from absolute output-frame position plus voice sync
-metadata, not from cumulative per-callback rounded source-frame increments. Non-BPM-locked voices,
-voices missing valid BPM metadata, and explicit seek edge modes may initially keep the existing
-local progression path where the documented behavior requires it.
+## Loop Editor And Trigger Quantization
+
+The Loop Editor grid is a source-domain editing grid. Python derives the grid
+anchor from pad analysis metadata plus `pad_grid_offset_samples`, renders
+visible grid lines from that anchor, stores snapped loop markers in source time,
+and publishes the same anchor to Rust as pad timing metadata.
+
+Trigger quantization uses the Rust transport grid only to choose an output-frame
+start time. It does not seek inside the source loop and does not move the Loop
+Editor grid or snapped source markers.
+
+## Stems, Key Lock, And DSP
+
+Full-mix and prepared-stem playback use the same source-frame address for a
+given voice frame before Gain/Trim, DSP, metering, and playhead telemetry.
+
+Key Lock consumes the same source-frame sequence as varispeed playback. Rubber
+Band LiveShifter state, fixed staging buffers, and bounded FIFOs belong to the
+voice slot and do not redefine source loop ownership, trigger quantization, or
+the Rust master output timeline.
 
 ## Realtime Constraints
 
-The audio callback must not perform disk I/O, JSON reads/writes, Python/GIL work, UI work,
-blocking locks, logging, neural inference, plugin loading/scanning, unbounded loops, heavy
-allocation, or long-running work.
+The audio callback must not perform disk I/O, JSON reads/writes, Python/GIL
+work, UI work, blocking locks, logging, neural inference, plugin
+loading/scanning, unbounded loops, heavy allocation, or long-running work.
 
-Any additional voice sync metadata must be fixed-size state stored in existing voice/mixer
-structures before or during bounded callback control paths. The repair must not allocate per
-sample, per loop wrap, or per callback chunk.
+Voice sync metadata is fixed-size state stored in existing voice/mixer
+structures. Rendering does not allocate per sample, per loop wrap, or per
+callback chunk.
 
 ## Validation Strategy
 
-- Keep the ignored Rust reproduction until the repair is ready, then unignore it or replace it
-  with equivalent passing regression tests.
-- Add focused Rust tests for first-pass drift, repeated wraps, retrigger reset, fixed and variable
-  segment sizes, Key Lock off/on, same-BPM controls, different-BPM matched pads, missing BPM
-  fallback, and prepared-stem parity.
-- Keep Python controller tests for Loop Editor Grid Offset and snapped loop stability under speed,
-  BPM Lock, Key Lock, trigger quantization, master-BPM recomputation, and other-pad playback.
-- Run strict OpenSpec validation for this change.
-- Run uv-managed Rust checks/tests and focused Python tests before considering the repair complete.
+- Rust tests cover first-pass and repeated-wrap phase stability, retrigger reset,
+  fixed and variable segment sizes, Key Lock off/on, same-BPM controls,
+  different-BPM matched pads, missing BPM metadata, and prepared-stem parity.
+- Python controller tests cover Loop Editor Grid Offset and snapped-loop
+  stability under speed, BPM Lock, Key Lock, trigger quantization, master-BPM
+  recomputation, and other-pad playback.
+- OpenSpec strict validation covers the active behavior requirements.
+- The full validation path uses uv-managed Rust and Python commands from the
+  repository root.

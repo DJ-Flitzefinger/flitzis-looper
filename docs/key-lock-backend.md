@@ -2,69 +2,85 @@
 
 This document records the current Rubber Band based Key Lock implementation.
 
-Key Lock is one replaceable part of the Rust audio/DSP foundation. It does not
-imply plugin hosting, a new FX module, or a broad rewrite.
+Key Lock is one bounded part of the Rust audio/DSP foundation. It does not imply
+plugin hosting, a separate FX graph, or realtime stem generation.
 
-## Current Implementation
+## Runtime Modules
 
-The current path lives behind:
+The active backend is implemented behind:
 
 ```text
 rust/src/audio_engine/stretch_processor.rs
 rust/src/audio_engine/rubberband_backend.rs
 ```
 
-User-facing semantics:
+`RtMixer` owns tempo-ratio selection, source-frame addressing, full-mix/stem
+source reads, and per-voice `StretchProcessor` calls. `VoiceSlot` owns the
+per-voice `StretchProcessor`, smoothed tempo ratio, explicit seek mode, and
+optional `PlaybackTimelineAnchor`.
 
-- Key Lock off: varispeed playback. Tempo and pitch move together.
-- Key Lock on: master-tempo-style playback. The source playhead still advances
-  by the active tempo ratio, then the varispeed block is processed through a
-  per-voice Rubber Band LiveShifter with pitch scale derived from
-  `1.0 / tempo_ratio`.
-- BPM Lock supplies the same tempo ratio as before:
-  `master_bpm / pad_bpm` when metadata exists, otherwise global speed fallback.
-- Full-mix and prepared-stem playback share the same path.
+## Playback Semantics
 
-The previous custom delay-line pitch-compensation stage has been removed from
-the active runtime path. Rubber Band handle construction, fixed block-size and
-start-delay queries, staging buffers, channel pointer arrays, and bounded FIFOs
-are prepared with the voice slot before callback rendering. The callback reuses
-those buffers and never performs library discovery, handle construction, buffer
-resize, disk I/O, logging, blocking waits, Python/GIL work, plugin work, or
-unbounded retry loops.
+- Key Lock off: playback is varispeed, so tempo and pitch move together.
+- Key Lock on: source-frame tempo progression remains active, and the varispeed
+  block is processed through a per-voice Rubber Band LiveShifter with pitch
+  scale derived from `1.0 / tempo_ratio`.
+- BPM Lock off: the active tempo ratio is the global speed multiplier.
+- BPM Lock on with valid master and pad BPM metadata: the active tempo ratio is
+  `master_bpm / pad_bpm`.
+- Pads without valid BPM metadata use the global speed multiplier.
+- Full-mix and prepared-stem playback share the same source addressing and Key
+  Lock path.
 
-The selected Windows vcpkg Rubber Band 4.0.0 package reports a 512-frame
-LiveShifter block size and a 3678-sample start delay at 48 kHz stereo. The first
-implementation accepts that output delay while keeping playhead telemetry and
-loop ownership source-frame based. If shifted output is not available for a
-callback block because a fixed Rubber Band block has not yet been completed, the
-processor fills the missing frames with silence as a deterministic bounded
-fallback.
+## BPM-Locked Timing
 
-The LiveShifter path requires a Rubber Band C API that exports
-`rubberband_live_*` symbols. The tested Windows vcpkg Rubber Band 4.0.0 package
-does. Ubuntu 24.04 `librubberband-dev` 3.3.0 does not, so that distro package is
-too old for this backend even though it provides the older general stretcher C
-API.
+Scheduled render segments carry absolute output-frame positions from
+`audio_stream.rs` into `RtMixer::render_rt_at_output_frame(...)`.
+
+BPM-locked active voices with valid master and pad BPM metadata store a fixed
+`PlaybackTimelineAnchor` containing:
+
+- the absolute output frame where the current voice timeline is anchored,
+- the source frame corresponding to that output frame.
+
+For each rendered segment, `RtMixer` maps absolute output-frame delta through
+the active tempo ratio, converts that non-cumulative source offset into the
+voice's half-open source-frame loop region, and records the next anchored source
+frame for playhead telemetry. Pads that represent the same musical loop length
+therefore share the same output-frame loop boundaries across repeated loop
+wraps.
+
+START/STOP, explicit retrigger, seek, pause/resume, and loop-boundary state
+changes refresh the voice timeline anchor. Ordinary loop wrapping does not
+redefine the Rust master output timeline, Rubber Band state, the Loop Editor
+source grid, or prepared-stem alignment.
+
+## Rubber Band Processing
+
+Each voice slot prepares its Rubber Band handle, fixed block-size metadata,
+input buffers, channel pointer arrays, shifted-output buffers, and bounded FIFOs
+outside the per-sample render work. The audio callback reuses that state.
+
+The tested Windows vcpkg Rubber Band 4.0.0 package reports a 512-frame
+LiveShifter block size and a 3678-sample start delay at 48 kHz stereo. Playhead
+telemetry and loop ownership remain source-frame based. Rubber Band output
+latency does not shift trigger quantization, transport scheduling, or source
+loop ownership.
+
+If shifted output is unavailable for part of a callback block, the processor
+fills the missing frames with silence as a deterministic bounded result and
+continues rendering.
 
 ## Settings Contract
 
 Project persistence stores the global `key_lock` boolean as performer intent.
-It does not store Rubber Band handles, runtime paths, buffers, measured
-latency, or callback-internal backend state.
+It does not store Rubber Band handles, DLL/shared-library paths, runtime
+buffers, measured latency, algorithmic delay, or callback-internal backend
+state.
 
-The older manual delay-line surface has been removed from the active app
-contract:
-
-- no Key Lock quality preset in `ProjectState`,
-- no delay minimum/range, head count, interpolation, window, smoothing, or
-  output-gain fields in `ProjectState`,
-- no performer-facing Settings UI controls for those removed backend details,
-- no Python wrapper methods or Rust control messages for those removed
-  settings.
-
-Rust still applies a fixed internal tempo-ratio smoothing step to active voices.
-That value is not persisted or user-tunable in this branch.
+The performer Settings UI exposes no Rubber Band backend tuning surface. Rust
+uses a fixed internal tempo-ratio smoothing step for active voices; that value is
+not persisted or user-tunable.
 
 ## Realtime Constraints
 
@@ -76,59 +92,36 @@ The audio callback must not:
 - log,
 - block on locks or waits,
 - acquire the Python GIL,
-- run neural inference or stem separation.
+- run neural inference or stem separation,
+- spin while waiting for Rubber Band output.
 
-Each voice owns fixed source input, varispeed, Rubber Band staging, shifted
-output, and FIFO buffers before rendering starts. The callback updates only
-scalar ratio/mode state, pushes or pops from bounded preallocated storage, and
-reuses those buffers.
+The callback updates scalar mode/ratio state, reads prepared source buffers,
+uses fixed Rubber Band staging storage, consumes or produces bounded FIFO data,
+and mixes the resulting output through Gain/Trim, DSP, metering, and master
+volume.
 
-## Historical Backend Candidates
+## Native Dependency
 
-The current repo cannot treat every library called "Signalsmith" as equivalent.
-The installed `cute_dsp::SignalsmithStretch` path was a simplified Rust port and
-not the real Signalsmith Stretch algorithm.
+The backend requires a Rubber Band C API that exports `rubberband_live_*`
+symbols. The Windows vcpkg Rubber Band 4.0.0 package satisfies that requirement.
+Ubuntu 24.04 `librubberband-dev` 3.3.0 does not provide the required LiveShifter
+C API.
 
-Candidates:
+Build discovery uses documented platform mechanisms and explicit environment
+overrides:
 
-| Backend | Fit | Trade-off |
-| --- | --- | --- |
-| Superpowered TimeStretching | Strong DJ-oriented commercial candidate with independent tempo/pitch controls and low-latency realtime use. | Proprietary SDK. Needs licensing, distribution, and Rust build integration. |
-| Rubber Band Library | Strong open-source native candidate with documented realtime mode and dynamic ratios. | C++ integration and licensing/build surface need a deliberate project decision. |
-| Real Signalsmith Stretch | Lightweight algorithmic candidate with documented latency and transpose controls. | Needs binding to the real backend or a verified Rust port. |
+- Linux: `pkg-config` for a Rubber Band package with LiveShifter C API support,
+  or explicit `RUBBERBAND_LIB_DIR` and `RUBBERBAND_INCLUDE_DIR` overrides.
+- Windows: `RUBBERBAND_LIB_DIR`, `VCPKG_ROOT`, or the documented
+  `%LOCALAPPDATA%\vcpkg` development location.
+- Runtime DLL/shared-library availability is established before the audio engine
+  enters realtime callback rendering.
 
-The Rubber Band replacement preserves the wrapper contract:
-
-- initialization and allocation outside the callback,
-- bounded per-voice render state,
-- scalar smoothed parameter updates,
-- no file paths, plugin handles, Python objects, or heap-owned audio payloads in
-  callback messages,
-- measured and documented algorithmic latency.
-
-## Rubber Band Replacement Branch Requirements
-
-The `gen3-rubberband` branch replaces the custom delay-line compensation path
-with Rubber Band. That branch must preserve the current Linux support and add
-Windows support without making vcpkg a hardcoded production dependency.
-
-Required build/runtime direction:
-
-- Linux uses the system Rubber Band development package and `pkg-config` where
-  that package provides the required LiveShifter C API.
-- Windows development may use vcpkg through `VCPKG_ROOT` or documented override
-  variables.
-- Production source must not contain local paths such as a developer's vcpkg
-  checkout or Linux home directory.
-- Runtime library discovery and missing-library diagnostics happen before audio
-  rendering starts, not in the CPAL callback.
-- The later Windows setup installer should bundle the Rubber Band runtime DLLs
-  so non-technical users do not need build tools or vcpkg.
-- Binary distribution planning must account for Rubber Band's GPL/commercial
-  licensing model.
+The Windows source-run helper registers Rubber Band DLL directories before
+loading the native extension. Packaging should provide the required runtime
+libraries with the application artifact and account for Rubber Band licensing
+before binary distribution.
 
 Reference URLs:
 
-- https://docs.superpowered.com/reference/latest/time-stretching/
 - https://breakfastquay.com/rubberband/integration.html
-- https://signalsmith-audio.co.uk/code/stretch/
