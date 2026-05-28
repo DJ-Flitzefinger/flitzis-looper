@@ -143,6 +143,9 @@ class LoaderController(BaseController):
         self._session.pad_clip_hold_until[sample_id] = 0.0
         self._session.pad_playhead_s[sample_id] = None
         self._session.pad_playhead_updated_at[sample_id] = 0.0
+        if self._session.waveform_editor_pad_id == sample_id:
+            self._session.waveform_editor_open = False
+            self._session.waveform_editor_pad_id = None
         if self._session.waveform_pause_hold_pad_id == sample_id:
             self._session.waveform_pause_hold_pad_id = None
         if self._session.tap_bpm_pad_id == sample_id:

@@ -234,6 +234,40 @@ def test_unload_sample(controller: AppController, audio_engine_mock: Mock) -> No
     assert sample_id not in controller.session.stem_generating_sample_ids
 
 
+def test_unload_sample_closes_waveform_editor_for_unloaded_pad(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    """Unloading the edited pad returns the center surface to the pad view."""
+    sample_id = 0
+    controller.project.sample_paths[sample_id] = "/path/to/sample.wav"
+    controller.session.waveform_editor_open = True
+    controller.session.waveform_editor_pad_id = sample_id
+
+    controller.loader.unload_sample(sample_id)
+
+    assert controller.session.waveform_editor_open is False
+    assert controller.session.waveform_editor_pad_id is None
+    audio_engine_mock.unload_sample.assert_called_once_with(sample_id)
+
+
+def test_unload_sample_keeps_waveform_editor_for_different_pad(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    """Unloading another pad does not close an unrelated editor."""
+    sample_id = 0
+    edited_pad_id = 1
+    controller.project.sample_paths[sample_id] = "/path/to/sample.wav"
+    controller.project.sample_paths[edited_pad_id] = "/path/to/other.wav"
+    controller.session.waveform_editor_open = True
+    controller.session.waveform_editor_pad_id = edited_pad_id
+
+    controller.loader.unload_sample(sample_id)
+
+    assert controller.session.waveform_editor_open is True
+    assert controller.session.waveform_editor_pad_id == edited_pad_id
+    audio_engine_mock.unload_sample.assert_called_once_with(sample_id)
+
+
 def test_unload_sample_resets_track_bound_pad_settings(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
