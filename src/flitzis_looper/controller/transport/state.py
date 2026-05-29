@@ -60,10 +60,16 @@ class ApplyProjectState:
 
     def _apply_per_pad_mixing(self, defaults: ProjectState) -> None:
         for sample_id, gain_db in enumerate(self._project.pad_gain_db):
+            if self._project.sample_paths[sample_id] is None:
+                continue
+
             if gain_db != defaults.pad_gain_db[sample_id]:
                 self._audio.set_pad_gain(sample_id, gain_db)
 
         for sample_id, low_db in enumerate(self._project.pad_eq_low_db):
+            if self._project.sample_paths[sample_id] is None:
+                continue
+
             mid_db = self._project.pad_eq_mid_db[sample_id]
             high_db = self._project.pad_eq_high_db[sample_id]
 
@@ -94,6 +100,9 @@ class ApplyProjectState:
 
     def _apply_pad_bpm_settings(self) -> None:
         for sample_id in range(len(self._project.sample_paths)):
+            if self._project.sample_paths[sample_id] is None:
+                continue
+
             if (
                 self._project.manual_bpm[sample_id] is None
                 and self._project.sample_analysis[sample_id] is None

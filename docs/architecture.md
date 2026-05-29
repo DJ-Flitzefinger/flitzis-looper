@@ -116,6 +116,9 @@ each parameter in that callback.
 
 Python does not touch ring buffers directly. It calls `AudioEngine` methods that
 validate inputs and enqueue small Rust values or handles.
+Must-apply `AudioEngine` setters for command and parameter publications report a
+caller-visible `RuntimeError` when the target ring cannot accept the message.
+Only explicitly classified best-effort paths may drop queue failures.
 
 ## Transport And Scheduling
 
@@ -311,11 +314,16 @@ Startup order:
 2. Create fresh `SessionState`.
 3. Start `AudioEngine`.
 4. Construct controllers.
-5. Publish restored global settings, gain/EQ, loop regions, BPM/timing metadata,
-   BPM Lock, Key Lock, and quantization to Rust.
+5. Validate restored sample assignments, clear missing or unusable pads with
+   explicit neutral Rust state, and schedule cached sample loads.
 6. Validate restored stem cache metadata.
-7. Schedule cached sample loads.
+7. Publish restored global settings and loaded-pad live-audio state to Rust.
 8. Publish input-mapping runtime state.
+
+Normal startup projection skips per-pad gain, EQ, BPM, timing metadata, loop
+regions, Key Lock, stem mode, and stem masks for empty pads. Explicit unload,
+clear, or force-reset paths still publish the bounded neutral state needed to
+remove stale Rust live-audio state for that pad.
 
 Audio-to-control telemetry is best-effort and controller-owned. Dropped
 telemetry must not silently change durable project intent.

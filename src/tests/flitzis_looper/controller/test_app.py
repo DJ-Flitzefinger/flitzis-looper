@@ -1,13 +1,15 @@
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import pytest
 
 import flitzis_looper.controller.app as app_module
 from flitzis_looper.constants import NUM_SAMPLES
+from flitzis_looper.models import ProjectState
 
 if TYPE_CHECKING:
+    from pathlib import Path
     from unittest.mock import Mock
 
     from flitzis_looper.controller import AppController
@@ -89,6 +91,83 @@ def test_controller_applies_project_state(controller: AppController) -> None:
 def test_controller_restores_samples(controller: AppController) -> None:
     """Test AppController restores samples from project during initialization."""
     assert controller.loader.restore_samples_from_project_state is not None
+
+
+def test_controller_validates_restored_samples_before_projecting_audio(
+    audio_engine_mock: Mock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test startup clears invalid restored pads before applying project state."""
+    monkeypatch.chdir(tmp_path)
+    order: list[str] = []
+
+    with (
+        patch.object(
+            app_module.LoaderController,
+            "restore_samples_from_project_state",
+            autospec=True,
+            side_effect=lambda _self: order.append("loader"),
+        ),
+        patch.object(
+            app_module.StemController,
+            "restore_stem_cache_from_project_state",
+            autospec=True,
+            side_effect=lambda _self: order.append("stems"),
+        ),
+        patch.object(
+            app_module.TransportController,
+            "apply_project_state_to_audio",
+            autospec=True,
+            side_effect=lambda _self: order.append("transport"),
+        ),
+        patch.object(
+            app_module.InputMappingController,
+            "apply_project_state_to_input_runtime",
+            autospec=True,
+            side_effect=lambda _self: order.append("input"),
+        ),
+    ):
+        controller = app_module.AppController()
+
+    assert controller._audio is audio_engine_mock
+    assert order == ["loader", "stems", "transport", "input"]
+
+
+def test_controller_clears_missing_restored_sample_before_audio_projection(
+    audio_engine_mock: Mock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing restored files are neutralized, not projected as loaded pads."""
+    monkeypatch.chdir(tmp_path)
+    defaults = ProjectState()
+    project = ProjectState()
+    project.sample_paths[0] = "samples/missing.wav"
+    project.manual_bpm[0] = 123.0
+    project.pad_gain_db[0] = -9.0
+    project.pad_eq_low_db[0] = -3.0
+    project.pad_eq_high_db[0] = 3.0
+
+    persistence = app_module.ProjectPersistence(project)
+    with patch.object(
+        app_module.ProjectPersistence,
+        "from_config_path",
+        return_value=persistence,
+    ):
+        app_module.AppController()
+
+    assert project.sample_paths[0] is None
+    audio_engine_mock.load_sample_async.assert_not_called()
+    assert call(0, -9.0) not in audio_engine_mock.set_pad_gain.call_args_list
+    audio_engine_mock.set_pad_gain.assert_any_call(0, defaults.pad_gain_db[0])
+    audio_engine_mock.set_pad_eq.assert_any_call(
+        0,
+        defaults.pad_eq_low_db[0],
+        defaults.pad_eq_mid_db[0],
+        defaults.pad_eq_high_db[0],
+    )
+    audio_engine_mock.set_pad_bpm.assert_any_call(0, None)
 
 
 def test_controller_shut_down_flushes_persistence(controller: AppController) -> None:

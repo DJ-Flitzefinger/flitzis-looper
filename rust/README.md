@@ -83,6 +83,9 @@ Use `uv run cargo ...` so PyO3 and maturin use the project Python environment.
 - Python owns UI, durable project intent, persistence, settings, mapping edit
   UX, and offline/background orchestration.
 - Ordered commands and high-rate scalar parameters use separate bounded queues.
+- PyO3 setters for must-apply command and parameter publications report full
+  queues as caller-visible `RuntimeError`s instead of silently accepting the
+  write.
 - Parameter messages are coalesced by identity in the callback before applying
   the latest drained value.
 - Scheduled mixer segments carry absolute output-frame positions. BPM-locked

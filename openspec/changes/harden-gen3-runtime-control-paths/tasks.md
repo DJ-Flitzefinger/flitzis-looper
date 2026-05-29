@@ -23,12 +23,12 @@
 
 ## 4. Correctness Slice C: Must-Apply Setters And Startup Projection
 
-- [ ] 4.1 Make must-apply command and parameter producer failures caller-visible.
-- [ ] 4.2 Update Python callers/tests to handle explicit failures where appropriate.
-- [ ] 4.3 Make startup per-pad publication loaded-pad-aware.
-- [ ] 4.4 Preserve explicit unload and reset neutralization.
-- [ ] 4.5 Add focused Rust and Python regression tests.
-- [ ] 4.6 Check and update affected maintained docs for setter acceptance semantics and startup
+- [x] 4.1 Make must-apply command and parameter producer failures caller-visible.
+- [x] 4.2 Update Python callers/tests to handle explicit failures where appropriate.
+- [x] 4.3 Make startup per-pad publication loaded-pad-aware.
+- [x] 4.4 Preserve explicit unload and reset neutralization.
+- [x] 4.5 Add focused Rust and Python regression tests.
+- [x] 4.6 Check and update affected maintained docs for setter acceptance semantics and startup
       restore/projection flow.
 
 ## 5. Realtime Optimization Slice

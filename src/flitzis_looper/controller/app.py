@@ -78,9 +78,9 @@ class AppController:
             self.input_mapping,
         }
 
-        self.transport.apply_project_state_to_audio()
-        self.stems.restore_stem_cache_from_project_state()
         self.loader.restore_samples_from_project_state()
+        self.stems.restore_stem_cache_from_project_state()
+        self.transport.apply_project_state_to_audio()
         self.input_mapping.apply_project_state_to_input_runtime()
 
     def shut_down(self) -> None:

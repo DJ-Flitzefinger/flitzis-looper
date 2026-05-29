@@ -24,6 +24,7 @@ use numpy::{PyArray1, ToPyArray};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use rtrb::Producer;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{
@@ -91,6 +92,26 @@ fn parse_stem_mix_mode(mode: &str) -> Option<StemMixMode> {
         "all_stems" | "all-stems" | "stems" => Some(StemMixMode::AllStems),
         _ => None,
     }
+}
+
+fn push_control_message(
+    producer: &mut Producer<ControlMessage>,
+    message: ControlMessage,
+    label: &str,
+) -> PyResult<()> {
+    producer.push(message).map_err(|_| {
+        PyRuntimeError::new_err(format!("Failed to send {label} - buffer may be full"))
+    })
+}
+
+fn push_parameter_message(
+    producer: &mut Producer<ControlParameterMessage>,
+    message: ControlParameterMessage,
+    label: &str,
+) -> PyResult<()> {
+    producer.push(message).map_err(|_| {
+        PyRuntimeError::new_err(format!("Failed to send {label} - buffer may be full"))
+    })
 }
 
 struct PadLoadingGuard {
@@ -1160,8 +1181,11 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlParameterMessage::SetVolume(volume));
-        Ok(())
+        push_parameter_message(
+            &mut producer_guard,
+            ControlParameterMessage::SetVolume(volume),
+            "SetVolume",
+        )
     }
 
     /// Set the global speed multiplier.
@@ -1180,8 +1204,11 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlParameterMessage::SetSpeed(speed));
-        Ok(())
+        push_parameter_message(
+            &mut producer_guard,
+            ControlParameterMessage::SetSpeed(speed),
+            "SetSpeed",
+        )
     }
 
     pub fn set_bpm_lock(&mut self, enabled: bool) -> PyResult<()> {
@@ -1195,8 +1222,11 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetBpmLock(enabled));
-        Ok(())
+        push_control_message(
+            &mut producer_guard,
+            ControlMessage::SetBpmLock(enabled),
+            "SetBpmLock",
+        )
     }
 
     pub fn set_key_lock(&mut self, enabled: bool) -> PyResult<()> {
@@ -1210,8 +1240,11 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetKeyLock(enabled));
-        Ok(())
+        push_control_message(
+            &mut producer_guard,
+            ControlMessage::SetKeyLock(enabled),
+            "SetKeyLock",
+        )
     }
 
     pub fn set_pad_key_lock(&mut self, id: usize, enabled: bool) -> PyResult<()> {
@@ -1229,8 +1262,11 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetPadKeyLock { id, enabled });
-        Ok(())
+        push_control_message(
+            &mut producer_guard,
+            ControlMessage::SetPadKeyLock { id, enabled },
+            "SetPadKeyLock",
+        )
     }
 
     pub fn set_master_bpm(&mut self, bpm: f32) -> PyResult<()> {
@@ -1248,8 +1284,11 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlParameterMessage::SetMasterBpm(bpm));
-        Ok(())
+        push_parameter_message(
+            &mut producer_guard,
+            ControlParameterMessage::SetMasterBpm(bpm),
+            "SetMasterBpm",
+        )
     }
 
     pub fn set_pad_bpm(&mut self, id: usize, bpm: Option<f32>) -> PyResult<()> {
@@ -1271,8 +1310,11 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlParameterMessage::SetPadBpm { id, bpm });
-        Ok(())
+        push_parameter_message(
+            &mut producer_guard,
+            ControlParameterMessage::SetPadBpm { id, bpm },
+            "SetPadBpm",
+        )
     }
 
     pub fn set_pad_timing_metadata(&mut self, id: usize, phase_anchor_s: f32) -> PyResult<()> {
@@ -1294,11 +1336,14 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetPadTimingMetadata {
-            id,
-            metadata: PadTimingMetadata { phase_anchor_s },
-        });
-        Ok(())
+        push_control_message(
+            &mut producer_guard,
+            ControlMessage::SetPadTimingMetadata {
+                id,
+                metadata: PadTimingMetadata { phase_anchor_s },
+            },
+            "SetPadTimingMetadata",
+        )
     }
 
     pub fn anchor_transport_phase_from_pad(&mut self, id: usize) -> PyResult<()> {
@@ -1316,8 +1361,11 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::AnchorTransportPhaseFromPad { id });
-        Ok(())
+        push_control_message(
+            &mut producer_guard,
+            ControlMessage::AnchorTransportPhaseFromPad { id },
+            "AnchorTransportPhaseFromPad",
+        )
     }
 
     pub fn set_pad_gain(&mut self, id: usize, gain_db: f32) -> PyResult<()> {
@@ -1339,8 +1387,11 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlParameterMessage::SetPadGain { id, gain_db });
-        Ok(())
+        push_parameter_message(
+            &mut producer_guard,
+            ControlParameterMessage::SetPadGain { id, gain_db },
+            "SetPadGain",
+        )
     }
 
     pub fn set_pad_eq(
@@ -1372,13 +1423,16 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlParameterMessage::SetPadEq {
-            id,
-            low_db,
-            mid_db,
-            high_db,
-        });
-        Ok(())
+        push_parameter_message(
+            &mut producer_guard,
+            ControlParameterMessage::SetPadEq {
+                id,
+                low_db,
+                mid_db,
+                high_db,
+            },
+            "SetPadEq",
+        )
     }
 
     pub fn set_pad_loop_region(
@@ -1409,8 +1463,11 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetPadLoopRegion { id, start_s, end_s });
-        Ok(())
+        push_control_message(
+            &mut producer_guard,
+            ControlMessage::SetPadLoopRegion { id, start_s, end_s },
+            "SetPadLoopRegion",
+        )
     }
 
     /// Seek an active or paused sample voice to a source position in seconds.
@@ -1798,6 +1855,39 @@ impl AudioEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rtrb::RingBuffer;
+
+    #[test]
+    fn push_control_message_reports_full_queue() {
+        Python::initialize();
+
+        let (mut producer, _consumer) = RingBuffer::new(1);
+        producer.push(ControlMessage::Ping()).unwrap();
+
+        let error = push_control_message(&mut producer, ControlMessage::StopAll(), "StopAll")
+            .expect_err("full command queue should fail");
+
+        assert!(error.to_string().contains("Failed to send StopAll"));
+    }
+
+    #[test]
+    fn push_parameter_message_reports_full_queue() {
+        Python::initialize();
+
+        let (mut producer, _consumer) = RingBuffer::new(1);
+        producer
+            .push(ControlParameterMessage::SetVolume(0.5))
+            .unwrap();
+
+        let error = push_parameter_message(
+            &mut producer,
+            ControlParameterMessage::SetSpeed(1.0),
+            "SetSpeed",
+        )
+        .expect_err("full parameter queue should fail");
+
+        assert!(error.to_string().contains("Failed to send SetSpeed"));
+    }
 
     #[test]
     fn pad_request_ids_increment_and_invalidate_old_work() {
