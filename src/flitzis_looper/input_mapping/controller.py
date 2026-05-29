@@ -248,6 +248,7 @@ class InputMappingController(BaseController):
             "global.speed.increase": self._increase_speed,
             "global.speed.decrease": self._decrease_speed,
             "global.speed.reset": self._app.transport.global_params.reset_speed,
+            "pad.tap_bpm.selected": self._execute_selected_tap_bpm,
         }
 
     def _prefix_action_handlers(self) -> tuple[tuple[str, Callable[[str], bool]], ...]:
@@ -580,6 +581,9 @@ class InputMappingController(BaseController):
             return False
         self._app.transport.bpm.tap_bpm(pad_id)
         return True
+
+    def _execute_selected_tap_bpm(self) -> None:
+        self._app.transport.bpm.tap_bpm(self._project.selected_pad)
 
     def _execute_pad_gain_db(self, key: str) -> bool:
         parts = key.split(":")

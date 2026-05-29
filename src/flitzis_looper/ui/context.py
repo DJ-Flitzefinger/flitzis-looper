@@ -15,8 +15,8 @@ from flitzis_looper.input_mapping import (
     pad_gain_action,
     pad_gain_delta_action,
     selected_pad_eq_delta_action,
+    selected_tap_bpm_action,
     start_stop_action,
-    tap_bpm_action,
 )
 
 if TYPE_CHECKING:
@@ -309,7 +309,7 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
             bpm = self._controller.transport.bpm.tap_bpm(pad_id)
 
         self._controller.input_mapping.perform_learnable_action(
-            tap_bpm_action(pad_id),
+            selected_tap_bpm_action(),
             execute,
         )
         return bpm

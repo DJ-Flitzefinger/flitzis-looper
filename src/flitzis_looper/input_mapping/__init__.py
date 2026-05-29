@@ -10,6 +10,7 @@ from flitzis_looper.input_mapping.actions import (
     pad_gain_action,
     pad_gain_delta_action,
     selected_pad_eq_delta_action,
+    selected_tap_bpm_action,
     start_stop_action,
     tap_bpm_action,
 )
@@ -41,6 +42,7 @@ __all__ = [
     "pad_gain_action",
     "pad_gain_delta_action",
     "selected_pad_eq_delta_action",
+    "selected_tap_bpm_action",
     "start_stop_action",
     "tap_bpm_action",
 ]
