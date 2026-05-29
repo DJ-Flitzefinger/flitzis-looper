@@ -9,16 +9,16 @@
 - [x] 2.2 Reject stale Rust load publication after unload or replacement.
 - [x] 2.3 Ignore stale Python loader, progress, error, and analysis events after unload or replacement.
 - [x] 2.4 Add focused Rust and Python regression tests.
-- [ ] 2.5 Perform documentation catch-up for request-id event/API semantics and update maintained
+- [x] 2.5 Perform documentation catch-up for request-id event/API semantics and update maintained
       repo docs if needed before continuing later implementation slices.
 
 ## 3. Correctness Slice B: Direct MIDI Learn And Failed Dispatch
 
-- [ ] 3.1 Publish Learn/capture runtime state from Python to Rust input runtime.
-- [ ] 3.2 Suppress direct dispatch while Learn is waiting for MIDI input.
-- [ ] 3.3 Fallback or surface direct-dispatch failures without partial audio commands.
-- [ ] 3.4 Add focused Rust and Python input-mapping tests.
-- [ ] 3.5 Check and update affected maintained docs for input-runtime, Learn, and direct-dispatch
+- [x] 3.1 Publish Learn/capture runtime state from Python to Rust input runtime.
+- [x] 3.2 Suppress direct dispatch while Learn is waiting for MIDI input.
+- [x] 3.3 Fallback or surface direct-dispatch failures without partial audio commands.
+- [x] 3.4 Add focused Rust and Python input-mapping tests.
+- [x] 3.5 Check and update affected maintained docs for input-runtime, Learn, and direct-dispatch
       architecture/API changes.
 
 ## 4. Correctness Slice C: Must-Apply Setters And Startup Projection

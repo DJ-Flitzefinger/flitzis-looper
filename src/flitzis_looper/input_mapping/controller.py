@@ -65,6 +65,7 @@ class InputMappingController(BaseController):
         """Apply persisted mapping state to the Rust input runtime."""
         self._sync_rust_mapping_snapshot()
         self._sync_rust_runtime_state()
+        self._sync_rust_learn_state()
         self._set_rust_enabled(enabled=self._project.input_mapping_enabled)
         self._sync_midi_ports()
 
@@ -102,6 +103,7 @@ class InputMappingController(BaseController):
         self._session.input_learn_active = next_active
         self._session.input_learn_pending_source = None
         self._session.input_learn_pending_binding_key = None
+        self._sync_rust_learn_state()
 
     def perform_learnable_action(self, action: LooperAction, execute: Callable[[], None]) -> None:
         """Execute or learn-map a UI action depending on current Learn state."""
@@ -300,7 +302,7 @@ class InputMappingController(BaseController):
                 self._record_midi_cc_value(binding_key, _midi_event_value(event))
             return
 
-        if event.get("direct") is True:
+        if event.get("direct") is True and event.get("dispatched") is True:
             return
 
         action_key = event.get("action_key")
@@ -462,6 +464,10 @@ class InputMappingController(BaseController):
     def _set_rust_enabled(self, *, enabled: bool) -> None:
         with suppress(RuntimeError, TypeError):
             self._audio.set_input_mapping_enabled(enabled)
+
+    def _sync_rust_learn_state(self) -> None:
+        with suppress(RuntimeError, TypeError):
+            self._audio.set_input_learn_active(self._session.input_learn_active)
 
     def _toggle_multi_loop(self) -> None:
         self._app.transport.global_params.set_multi_loop(enabled=not self._app.project.multi_loop)
@@ -697,6 +703,7 @@ class InputMappingController(BaseController):
         self._session.input_learn_active = False
         self._session.input_learn_pending_source = None
         self._session.input_learn_pending_binding_key = None
+        self._sync_rust_learn_state()
 
 
 def _parse_prefixed_sample_id(key: str, prefix: str) -> int | None:

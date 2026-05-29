@@ -64,6 +64,25 @@ def test_learn_saves_midi_mapping_and_refreshes_rust_snapshot(
     assert controller.session.input_learn_active is False
 
 
+def test_toggle_learn_publishes_capture_state_to_rust(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    controller.input_mapping.set_enabled(enabled=True)
+    audio_engine_mock.reset_mock()
+
+    controller.input_mapping.toggle_learn()
+
+    active = True
+    audio_engine_mock.set_input_learn_active.assert_called_once_with(active)
+
+    audio_engine_mock.reset_mock()
+    controller.input_mapping.toggle_learn()
+
+    active = False
+    audio_engine_mock.set_input_learn_active.assert_called_once_with(active)
+
+
 def test_learn_saves_tap_bpm_mapping(controller: AppController) -> None:
     ctx = UiContext(controller)
     controller.input_mapping.set_enabled(enabled=True)
@@ -1066,6 +1085,26 @@ def test_direct_rust_midi_event_is_not_executed_twice(
     })
 
     audio_engine_mock.play_sample_exclusive.assert_not_called()
+
+
+def test_failed_direct_rust_midi_event_executes_python_fallback(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    controller.input_mapping.set_enabled(enabled=True)
+    controller.project.sample_paths[0] = "samples/foo.wav"
+    audio_engine_mock.reset_mock()
+
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:note:1:60",
+        "action_key": "pad.trigger:0",
+        "direct": True,
+        "dispatched": False,
+    })
+
+    audio_engine_mock.set_pad_loop_region.assert_called_once_with(0, 0.0, None)
+    audio_engine_mock.play_sample_exclusive.assert_called_once_with(0, 1.0)
 
 
 def test_future_dsp_midi_event_does_not_call_audio_without_explicit_handler(

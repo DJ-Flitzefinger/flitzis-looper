@@ -89,6 +89,13 @@ Use `uv run cargo ...` so PyO3 and maturin use the project Python environment.
   active voices with valid master and pad BPM metadata use fixed
   output-frame/source-frame anchors to derive source loop phase from the Rust
   transport timeline.
+- Per-pad load and analysis work carries request identity across the PyO3
+  boundary. Rust rejects stale sample publication after unload or replacement,
+  and Python ignores stale progress, error, success, and analysis events.
+- Rust MIDI capture runs outside the callback and receives mapping snapshots,
+  input-runtime pad state, and Learn/capture state from Python. Direct MIDI
+  command dispatch is all-or-nothing; failed direct attempts are reported back
+  to Python for controller-owned fallback outside the MIDI dispatcher.
 - Sample and prepared-stem handles removed from callback-owned state are retired
   through a bounded non-audio worker to avoid large final drops on the audio
   thread.

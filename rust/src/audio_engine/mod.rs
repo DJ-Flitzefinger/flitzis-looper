@@ -262,6 +262,15 @@ impl AudioEngine {
         Ok(())
     }
 
+    pub fn set_input_learn_active(&self, active: bool) -> PyResult<()> {
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        runtime.set_learn_capture_active(active);
+        Ok(())
+    }
+
     pub fn set_input_mapping_snapshot(&self, mappings: Vec<(String, String)>) -> PyResult<()> {
         let runtime = self
             .input_runtime

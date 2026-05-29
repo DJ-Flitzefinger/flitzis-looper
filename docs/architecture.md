@@ -273,11 +273,28 @@ Keyboard and MIDI Learn share stable action semantics.
 Rust MIDI capture runs outside the CPAL callback. It timestamps and normalizes
 supported MIDI messages, resolves in-memory mapping snapshots, and may dispatch
 only small discrete audio-safe commands directly through the command ring.
+Python publishes Learn/capture state to Rust so Learn takes precedence over
+mapped playback: while Learn is active, Rust reports the MIDI input as capture
+data and does not resolve mappings or enqueue direct playback commands.
+
+Direct Rust dispatch is all-or-nothing. If the bounded command transaction
+cannot be fully enqueued or current Rust input-runtime state cannot accept it,
+Rust emits the mapped action with `direct=True` and `dispatched=False`; Python
+then applies normal controller fallback semantics outside the MIDI dispatcher.
 
 Controller-owned actions such as Tap BPM, stem masks, dB Gain/Trim, EQ, master
 volume, and speed are reported back to Python as small events. Future high-rate
 DSP parameter mappings should derive bounded targets outside the callback, send
 accepted targets through the parameter ring, and smooth on the Rust side.
+
+## Background Task Identity
+
+Per-pad load and analysis work carries request identity across the Rust/Python
+boundary. Python records the current accepted request for each pad and ignores
+stale progress, error, success, and analysis events after unload or replacement.
+Rust also checks the current per-pad load request before publishing decoded
+sample buffers into the cache or command ring, so stale workers cannot restore
+old live-audio state.
 
 ## Persistence And Restore
 

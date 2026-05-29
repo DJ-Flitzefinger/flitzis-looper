@@ -308,6 +308,11 @@ Rules:
 - Text-input focus must be respected before capturing keyboard shortcuts.
 - MIDI/keyboard mapping behavior belongs in `InputMappingController`, not in
   render modules.
+- `InputMappingController` publishes Learn state to Rust so MIDI Learn capture
+  suppresses direct Rust dispatch before any mapped playback command is queued.
+- Direct Rust MIDI events with `dispatched=True` must not be executed again in
+  Python; direct events with `dispatched=False` use the same controller fallback
+  path as non-direct MIDI actions.
 - High-rate continuous parameters should be routed through controller/action
   paths that can choose safe Rust parameter-ring updates and smoothing.
 
