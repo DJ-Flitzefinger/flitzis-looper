@@ -13,6 +13,8 @@ The waveform editor MUST NOT render the existing non-musical grid concurrently w
 
 **Anchor and BPM**
 - The effective BPM used for grid rendering SHALL be the same effective BPM used for musical snapping: manual BPM override first, else analysis BPM.
+- The grid SHALL use the underlying effective BPM value with at least 0.001 BPM precision when
+  available, independent of any rounded pad-overlay BPM display.
 - `beat_sec = 60 / effective_bpm`
 - The grid MUST be anchored at `grid_anchor_sec`, defined as:
   - `grid_anchor_sec = default_onset_sec + grid_offset_sec`

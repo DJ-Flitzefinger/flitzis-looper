@@ -276,4 +276,4 @@ def test_loaded_pad_renders_bpm_key_metadata_but_not_vertical_peak_meter(
     performance_view._pad_button(cast("UiContext", _Context()), 0, (200.0, 100.0))
 
     assert button_labels == ["Track.wav##pad_btn_0"]
-    assert draw_list.texts == ["#1", "94.0 D#"]
+    assert draw_list.texts == ["#1", "94 D#"]

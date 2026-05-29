@@ -17,3 +17,7 @@
 - [x] 1.15 Add spectral fine-tempo refinement for supported common-ratio candidates and near-integer BPMs.
 - [x] 1.16 Verify `test-audio/LOOPER Donkey Work 1.mp3` and `test-audio/08 Streets Won't Let Me Chill Instro.mp3` report the expected BPMs.
 - [x] 1.17 Re-run OpenSpec, Python tests, Rust build/check/no-run validation, and `git diff --check`; native Rust test execution is blocked in this Windows shell by a missing runtime DLL.
+- [x] 1.18 Preserve near-integer BPM analysis precision instead of snapping analysis results to integer BPM.
+- [x] 1.19 Add strongly dominant 4/5 spectral tempo refinement for performer-tempo cases such as `White_Label_Looper_Vol_2.mp3`.
+- [x] 1.20 Round only the pad-control BPM overlay while keeping editable BPM displays and timing/grid values precise.
+- [x] 1.21 Verify the updated local test-audio cases, OpenSpec validation, and focused Rust/Python tests.

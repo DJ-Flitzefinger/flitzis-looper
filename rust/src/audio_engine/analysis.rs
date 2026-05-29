@@ -13,7 +13,6 @@ const TEMPO_CANDIDATE_FAMILY_RATIO: f64 = 0.030;
 const TEMPO_CANDIDATE_DECISIVE_RATIO: f64 = 1.25;
 const TEMPO_CANDIDATE_PREFERRED_MIN_BPM: f64 = 70.0;
 const TEMPO_CANDIDATE_PREFERRED_MAX_BPM: f64 = 160.0;
-const TEMPO_CANDIDATE_INTEGER_SNAP_TOLERANCE: f64 = 0.35;
 const FIXED_TEMPO_TRANSIENT_THRESHOLD_RATIO: f32 = 0.35;
 const FIXED_TEMPO_MIN_TRANSIENTS: usize = 16;
 const FIXED_TEMPO_MIN_SPAN_S: f64 = 8.0;
@@ -25,13 +24,17 @@ const SPECTRAL_TEMPO_HOP_SIZE: usize = 512;
 const SPECTRAL_TEMPO_LOCAL_MEAN_RADIUS: usize = 16;
 const SPECTRAL_TEMPO_FINE_SEARCH_RADIUS_BPM: f64 = 1.5;
 const SPECTRAL_TEMPO_FINE_SEARCH_STEP_BPM: f64 = 0.01;
+const SPECTRAL_TEMPO_FINE_REFINE_RADIUS_BPM: f64 = 0.05;
+const SPECTRAL_TEMPO_FINE_REFINE_STEP_BPM: f64 = 0.001;
 const SPECTRAL_TEMPO_MIN_SCORE: f64 = 0.05;
-const SPECTRAL_TEMPO_COMMON_RATIO_SCORE_FLOOR: f64 = 0.80;
+const SPECTRAL_TEMPO_SUPPORTED_RATIO_SCORE_FLOOR: f64 = 0.80;
+const SPECTRAL_TEMPO_STRONG_RATIO_SCORE_FLOOR: f64 = 1.75;
+const SPECTRAL_TEMPO_STRONG_RATIO_MIN_SCORE: f64 = 0.70;
 const SPECTRAL_TEMPO_THREE_QUARTER_RATIO: f64 = 0.75;
+const SPECTRAL_TEMPO_FOUR_FIFTHS_RATIO: f64 = 0.80;
 const SPECTRAL_TEMPO_COMMON_RATIO_TOLERANCE: f64 = 0.04;
 const SPECTRAL_TEMPO_MIN_BPM: f64 = 50.0;
 const SPECTRAL_TEMPO_MAX_BPM: f64 = 190.0;
-const SPECTRAL_TEMPO_TIGHT_INTEGER_SNAP_TOLERANCE: f64 = 0.15;
 
 /// Analyze audio using stratum-dsp.
 pub fn analyze_sample(
@@ -46,17 +49,20 @@ pub fn analyze_sample(
 
     let candidates = tempo_candidates_from_result(&result);
     let candidate_bpm = candidate_family_consensus_bpm(&result, &candidates).unwrap_or(result.bpm);
-    let transient_bpm = refined_fixed_tempo_bpm(&mono, sample_rate_hz, candidate_bpm)
-        .unwrap_or_else(|| round_bpm_to_cent(f64::from(candidate_bpm)));
-    let should_run_spectral_refinement = result.bpm_confidence
-        <= TEMPO_CANDIDATE_CONFIDENCE_THRESHOLD
-        || (transient_bpm - candidate_bpm).abs() > 0.005;
-    let bpm = if should_run_spectral_refinement {
-        refined_spectral_tempo_bpm(&mono, sample_rate_hz, transient_bpm, &candidates)
-            .unwrap_or(transient_bpm)
-    } else {
-        transient_bpm
-    };
+    let transient_refined_bpm = refined_fixed_tempo_bpm(&mono, sample_rate_hz, candidate_bpm);
+    let transient_bpm =
+        transient_refined_bpm.unwrap_or_else(|| round_bpm_to_milli(f64::from(candidate_bpm)));
+    let allow_spectral_base_refinement = transient_refined_bpm.is_none()
+        && (result.bpm_confidence <= TEMPO_CANDIDATE_CONFIDENCE_THRESHOLD
+            || (transient_bpm - candidate_bpm).abs() > 0.005);
+    let bpm = refined_spectral_tempo_bpm(
+        &mono,
+        sample_rate_hz,
+        transient_bpm,
+        &candidates,
+        allow_spectral_base_refinement,
+    )
+    .unwrap_or(transient_bpm);
 
     Ok(SampleAnalysis {
         bpm,
@@ -160,7 +166,7 @@ fn tempo_candidate_family_consensus_bpm(
     }
 
     let bpm = canonical_tempo_family_bpm(&families[best_family])?;
-    Some(round_bpm_to_cent(snap_bpm_to_near_integer(bpm)))
+    Some(round_bpm_to_milli(bpm))
 }
 
 fn cluster_tempo_candidates(candidates: &[TempoCandidate]) -> Vec<TempoCluster> {
@@ -282,28 +288,22 @@ fn tempo_ratio_distance(left: f64, right: f64) -> f64 {
     ((left - right).abs()) / left.max(right).max(f64::MIN_POSITIVE)
 }
 
-fn snap_bpm_to_near_integer(bpm: f64) -> f64 {
-    let rounded = bpm.round();
-    if (bpm - rounded).abs() <= TEMPO_CANDIDATE_INTEGER_SNAP_TOLERANCE {
-        rounded
-    } else {
-        bpm
-    }
-}
-
-fn snap_bpm_to_tight_integer(bpm: f64) -> f64 {
-    let rounded = bpm.round();
-    if (bpm - rounded).abs() <= SPECTRAL_TEMPO_TIGHT_INTEGER_SNAP_TOLERANCE {
-        rounded
-    } else {
-        bpm
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 struct FineTempoEstimate {
     bpm: f64,
     score: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CommonRatioTempoKind {
+    SupportedCandidate,
+    StrongSpectral,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CommonRatioTempoTarget {
+    bpm: f64,
+    kind: CommonRatioTempoKind,
 }
 
 fn refined_spectral_tempo_bpm(
@@ -311,6 +311,7 @@ fn refined_spectral_tempo_bpm(
     sample_rate_hz: u32,
     reference_bpm: f32,
     candidates: &[TempoCandidate],
+    allow_base_refinement: bool,
 ) -> Option<f32> {
     if mono.is_empty() || sample_rate_hz == 0 || !reference_bpm.is_finite() || reference_bpm <= 0.0
     {
@@ -321,44 +322,82 @@ fn refined_spectral_tempo_bpm(
     let fps = f64::from(sample_rate_hz) / SPECTRAL_TEMPO_HOP_SIZE as f64;
     let base = fine_tempo_near(&novelty, fps, f64::from(reference_bpm))?;
 
-    let mut chosen = (base.score >= SPECTRAL_TEMPO_MIN_SCORE).then_some(base);
-    if let Some(target_bpm) = three_quarter_tempo_target(f64::from(reference_bpm), candidates)
-        && let Some(estimate) = fine_tempo_near(&novelty, fps, target_bpm)
-        && estimate.score >= SPECTRAL_TEMPO_MIN_SCORE
-        && chosen.is_none_or(|base| {
-            estimate.score >= base.score * SPECTRAL_TEMPO_COMMON_RATIO_SCORE_FLOOR
-        })
-    {
-        chosen = Some(estimate);
+    let mut common_ratio_choice: Option<FineTempoEstimate> = None;
+    for target in common_ratio_tempo_targets(f64::from(reference_bpm), candidates) {
+        let Some(estimate) = fine_tempo_near(&novelty, fps, target.bpm) else {
+            continue;
+        };
+        if common_ratio_estimate_is_accepted(target, estimate, base)
+            && common_ratio_choice.is_none_or(|chosen| estimate.score > chosen.score)
+        {
+            common_ratio_choice = Some(estimate);
+        }
     }
 
-    let chosen = chosen?;
-    Some(round_bpm_to_cent(snap_bpm_to_tight_integer(chosen.bpm)))
+    let chosen = common_ratio_choice.or_else(|| {
+        (allow_base_refinement && base.score >= SPECTRAL_TEMPO_MIN_SCORE).then_some(base)
+    })?;
+    Some(round_bpm_to_milli(chosen.bpm))
 }
 
-fn three_quarter_tempo_target(reference_bpm: f64, candidates: &[TempoCandidate]) -> Option<f64> {
+fn common_ratio_tempo_targets(
+    reference_bpm: f64,
+    candidates: &[TempoCandidate],
+) -> Vec<CommonRatioTempoTarget> {
     if !reference_bpm.is_finite() || reference_bpm <= 0.0 {
-        return None;
+        return Vec::new();
     }
 
-    let target_bpm = reference_bpm * SPECTRAL_TEMPO_THREE_QUARTER_RATIO;
-    if !(SPECTRAL_TEMPO_MIN_BPM..=SPECTRAL_TEMPO_MAX_BPM).contains(&target_bpm) {
-        return None;
+    let mut targets = Vec::new();
+    let supported_target_bpm = reference_bpm * SPECTRAL_TEMPO_THREE_QUARTER_RATIO;
+    if (SPECTRAL_TEMPO_MIN_BPM..=SPECTRAL_TEMPO_MAX_BPM).contains(&supported_target_bpm)
+        && tempo_candidates_support_target(supported_target_bpm, candidates)
+    {
+        targets.push(CommonRatioTempoTarget {
+            bpm: supported_target_bpm,
+            kind: CommonRatioTempoKind::SupportedCandidate,
+        });
     }
 
-    candidates
-        .iter()
-        .any(|candidate| {
-            candidate.score.is_finite()
-                && candidate.score > 0.0
-                && normalize_bpm_near_reference(candidate.bpm, target_bpm).is_some_and(
-                    |normalized_bpm| {
-                        tempo_ratio_distance(normalized_bpm, target_bpm)
-                            <= SPECTRAL_TEMPO_COMMON_RATIO_TOLERANCE
-                    },
-                )
-        })
-        .then_some(target_bpm)
+    let strong_target_bpm = reference_bpm * SPECTRAL_TEMPO_FOUR_FIFTHS_RATIO;
+    if (SPECTRAL_TEMPO_MIN_BPM..=SPECTRAL_TEMPO_MAX_BPM).contains(&strong_target_bpm) {
+        targets.push(CommonRatioTempoTarget {
+            bpm: strong_target_bpm,
+            kind: CommonRatioTempoKind::StrongSpectral,
+        });
+    }
+
+    targets
+}
+
+fn tempo_candidates_support_target(target_bpm: f64, candidates: &[TempoCandidate]) -> bool {
+    candidates.iter().any(|candidate| {
+        candidate.score.is_finite()
+            && candidate.score > 0.0
+            && normalize_bpm_near_reference(candidate.bpm, target_bpm).is_some_and(
+                |normalized_bpm| {
+                    tempo_ratio_distance(normalized_bpm, target_bpm)
+                        <= SPECTRAL_TEMPO_COMMON_RATIO_TOLERANCE
+                },
+            )
+    })
+}
+
+fn common_ratio_estimate_is_accepted(
+    target: CommonRatioTempoTarget,
+    estimate: FineTempoEstimate,
+    base: FineTempoEstimate,
+) -> bool {
+    match target.kind {
+        CommonRatioTempoKind::SupportedCandidate => {
+            estimate.score >= SPECTRAL_TEMPO_MIN_SCORE
+                && estimate.score >= base.score * SPECTRAL_TEMPO_SUPPORTED_RATIO_SCORE_FLOOR
+        }
+        CommonRatioTempoKind::StrongSpectral => {
+            estimate.score >= SPECTRAL_TEMPO_STRONG_RATIO_MIN_SCORE
+                && estimate.score >= base.score * SPECTRAL_TEMPO_STRONG_RATIO_SCORE_FLOOR
+        }
+    }
 }
 
 fn spectral_flux_novelty_curve(mono: &[f32]) -> Option<Vec<f64>> {
@@ -455,20 +494,51 @@ fn fine_tempo_near(novelty: &[f64], fps: f64, center_bpm: f64) -> Option<FineTem
         return None;
     }
 
-    let steps = ((SPECTRAL_TEMPO_FINE_SEARCH_RADIUS_BPM * 2.0)
-        / SPECTRAL_TEMPO_FINE_SEARCH_STEP_BPM)
-        .round() as usize;
-    let start_bpm = center_bpm - SPECTRAL_TEMPO_FINE_SEARCH_RADIUS_BPM;
-    let mut best: Option<FineTempoEstimate> = None;
+    let coarse = best_fine_tempo_in_range(
+        novelty,
+        fps,
+        center_bpm - SPECTRAL_TEMPO_FINE_SEARCH_RADIUS_BPM,
+        center_bpm + SPECTRAL_TEMPO_FINE_SEARCH_RADIUS_BPM,
+        SPECTRAL_TEMPO_FINE_SEARCH_STEP_BPM,
+    )?;
 
+    best_fine_tempo_in_range(
+        novelty,
+        fps,
+        coarse.bpm - SPECTRAL_TEMPO_FINE_REFINE_RADIUS_BPM,
+        coarse.bpm + SPECTRAL_TEMPO_FINE_REFINE_RADIUS_BPM,
+        SPECTRAL_TEMPO_FINE_REFINE_STEP_BPM,
+    )
+    .or(Some(coarse))
+}
+
+fn best_fine_tempo_in_range(
+    novelty: &[f64],
+    fps: f64,
+    start_bpm: f64,
+    end_bpm: f64,
+    step_bpm: f64,
+) -> Option<FineTempoEstimate> {
+    if !start_bpm.is_finite()
+        || !end_bpm.is_finite()
+        || !step_bpm.is_finite()
+        || end_bpm < start_bpm
+        || step_bpm <= 0.0
+    {
+        return None;
+    }
+
+    let steps = ((end_bpm - start_bpm) / step_bpm).round() as usize;
+    let mut best: Option<FineTempoEstimate> = None;
     for step in 0..=steps {
-        let bpm = start_bpm + step as f64 * SPECTRAL_TEMPO_FINE_SEARCH_STEP_BPM;
+        let bpm = start_bpm + step as f64 * step_bpm;
         if !(SPECTRAL_TEMPO_MIN_BPM..=SPECTRAL_TEMPO_MAX_BPM).contains(&bpm) {
             continue;
         }
 
-        let score = novelty_autocorrelation_score(novelty, fps, bpm)?;
-        if best.is_none_or(|estimate| score > estimate.score) {
+        if let Some(score) = novelty_autocorrelation_score(novelty, fps, bpm)
+            && best.is_none_or(|estimate| score > estimate.score)
+        {
             best = Some(FineTempoEstimate { bpm, score });
         }
     }
@@ -551,7 +621,7 @@ fn refined_fixed_tempo_bpm(mono: &[f32], sample_rate_hz: u32, reference_bpm: f32
         return None;
     }
 
-    Some(round_bpm_to_cent(normalized_bpm))
+    Some(round_bpm_to_milli(normalized_bpm))
 }
 
 fn strong_transient_starts_s(
@@ -675,8 +745,8 @@ fn normalize_bpm_near_reference(observed_bpm: f64, reference_bpm: f64) -> Option
     Some(best)
 }
 
-fn round_bpm_to_cent(bpm: f64) -> f32 {
-    ((bpm * 100.0).round() / 100.0) as f32
+fn round_bpm_to_milli(bpm: f64) -> f32 {
+    ((bpm * 1000.0).round() / 1000.0) as f32
 }
 
 #[cfg(test)]
@@ -742,7 +812,7 @@ mod tests {
         let bpm = tempo_candidate_family_consensus_bpm(44.86, 0.04, &candidates)
             .expect("candidate consensus bpm");
 
-        assert!((bpm - 90.0).abs() < 0.005);
+        assert!((bpm - 89.95).abs() < 0.005);
     }
 
     #[test]
@@ -777,7 +847,7 @@ mod tests {
         let bpm = tempo_candidate_family_consensus_bpm(110.08, 0.01, &candidates)
             .expect("candidate consensus bpm");
 
-        assert!((bpm - 88.0).abs() < 0.005);
+        assert!((bpm - 88.32).abs() < 0.005);
     }
 
     #[test]
@@ -815,21 +885,33 @@ mod tests {
             },
         ];
 
-        let bpm = refined_spectral_tempo_bpm(&samples, sample_rate_hz, 89.0, &candidates)
+        let bpm = refined_spectral_tempo_bpm(&samples, sample_rate_hz, 89.0, &candidates, true)
             .expect("refined bpm");
 
         assert!((bpm - 66.67).abs() < 0.02);
     }
 
     #[test]
-    fn spectral_tempo_refinement_tightly_snaps_near_integer_tempo() {
+    fn spectral_tempo_refinement_selects_strong_four_fifths_tempo() {
         let sample_rate_hz = 44_100;
-        let samples = synthetic_click_track(sample_rate_hz, 94.0, 160);
+        let samples = synthetic_click_track(sample_rate_hz, 83.154, 180);
 
-        let bpm =
-            refined_spectral_tempo_bpm(&samples, sample_rate_hz, 93.5, &[]).expect("refined bpm");
+        let bpm = refined_spectral_tempo_bpm(&samples, sample_rate_hz, 103.93, &[], false)
+            .expect("refined bpm");
 
-        assert!((bpm - 94.0).abs() < 0.005);
+        assert!((bpm - 83.154).abs() < 0.02);
+    }
+
+    #[test]
+    fn spectral_tempo_refinement_preserves_fractional_near_integer_tempo() {
+        let sample_rate_hz = 44_100;
+        let samples = synthetic_click_track(sample_rate_hz, 89.993, 180);
+
+        let bpm = refined_spectral_tempo_bpm(&samples, sample_rate_hz, 90.0, &[], true)
+            .expect("refined bpm");
+
+        assert!((bpm - 89.993).abs() < 0.015);
+        assert!((bpm - 90.0).abs() > 0.005);
     }
 
     fn synthetic_click_track(sample_rate_hz: u32, bpm: f64, beats: usize) -> Vec<f32> {
