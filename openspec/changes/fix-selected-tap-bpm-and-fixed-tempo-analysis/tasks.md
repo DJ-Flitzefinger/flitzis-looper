@@ -12,3 +12,8 @@
 - [x] 1.10 Add regression coverage for 90 BPM and 88 BPM candidate-family failures.
 - [x] 1.11 Verify `test-audio/48.wav` and `test-audio/AZAD, Kool Savas - #1.mp3` report the expected BPMs.
 - [x] 1.12 Re-run OpenSpec and focused validation.
+- [x] 1.13 Snap start-near analysis anchors so Loop Editor grid lines begin at track start when the detected first beat/downbeat is only analyzer hop latency.
+- [x] 1.14 Preserve MP3 decode timeline across recoverable packet errors by inserting silence when packet duration is known.
+- [x] 1.15 Add spectral fine-tempo refinement for supported common-ratio candidates and near-integer BPMs.
+- [x] 1.16 Verify `test-audio/LOOPER Donkey Work 1.mp3` and `test-audio/08 Streets Won't Let Me Chill Instro.mp3` report the expected BPMs.
+- [x] 1.17 Re-run OpenSpec, Python tests, Rust build/check/no-run validation, and `git diff --check`; native Rust test execution is blocked in this Windows shell by a missing runtime DLL.

@@ -2,7 +2,9 @@ use crate::{
     audio_engine::channels::map_channels,
     messages::{SampleAnalysis, SampleBuffer},
 };
-use stratum_dsp::{AnalysisConfig, AnalysisResult, analyze_audio};
+use stratum_dsp::{
+    AnalysisConfig, AnalysisResult, analyze_audio, features::chroma::extractor::compute_stft,
+};
 
 const TEMPO_CANDIDATE_TOP_N: usize = 25;
 const TEMPO_CANDIDATE_CONFIDENCE_THRESHOLD: f32 = 0.20;
@@ -18,6 +20,18 @@ const FIXED_TEMPO_MIN_SPAN_S: f64 = 8.0;
 const FIXED_TEMPO_MAX_REFERENCE_DEVIATION: f64 = 0.03;
 const FIXED_TEMPO_MAX_RMS_RESIDUAL_S: f64 = 0.010;
 const FIXED_TEMPO_MAX_INTERVAL_RESIDUAL_RATIO: f64 = 0.03;
+const SPECTRAL_TEMPO_FRAME_SIZE: usize = 2048;
+const SPECTRAL_TEMPO_HOP_SIZE: usize = 512;
+const SPECTRAL_TEMPO_LOCAL_MEAN_RADIUS: usize = 16;
+const SPECTRAL_TEMPO_FINE_SEARCH_RADIUS_BPM: f64 = 1.5;
+const SPECTRAL_TEMPO_FINE_SEARCH_STEP_BPM: f64 = 0.01;
+const SPECTRAL_TEMPO_MIN_SCORE: f64 = 0.05;
+const SPECTRAL_TEMPO_COMMON_RATIO_SCORE_FLOOR: f64 = 0.80;
+const SPECTRAL_TEMPO_THREE_QUARTER_RATIO: f64 = 0.75;
+const SPECTRAL_TEMPO_COMMON_RATIO_TOLERANCE: f64 = 0.04;
+const SPECTRAL_TEMPO_MIN_BPM: f64 = 50.0;
+const SPECTRAL_TEMPO_MAX_BPM: f64 = 190.0;
+const SPECTRAL_TEMPO_TIGHT_INTEGER_SNAP_TOLERANCE: f64 = 0.15;
 
 /// Analyze audio using stratum-dsp.
 pub fn analyze_sample(
@@ -30,9 +44,19 @@ pub fn analyze_sample(
     let result = analyze_audio(&mono, sample_rate_hz, analysis_config())
         .map_err(|err| format!("analysis failed: {err}"))?;
 
-    let candidate_bpm = candidate_family_consensus_bpm(&result).unwrap_or(result.bpm);
-    let bpm = refined_fixed_tempo_bpm(&mono, sample_rate_hz, candidate_bpm)
+    let candidates = tempo_candidates_from_result(&result);
+    let candidate_bpm = candidate_family_consensus_bpm(&result, &candidates).unwrap_or(result.bpm);
+    let transient_bpm = refined_fixed_tempo_bpm(&mono, sample_rate_hz, candidate_bpm)
         .unwrap_or_else(|| round_bpm_to_cent(f64::from(candidate_bpm)));
+    let should_run_spectral_refinement = result.bpm_confidence
+        <= TEMPO_CANDIDATE_CONFIDENCE_THRESHOLD
+        || (transient_bpm - candidate_bpm).abs() > 0.005;
+    let bpm = if should_run_spectral_refinement {
+        refined_spectral_tempo_bpm(&mono, sample_rate_hz, transient_bpm, &candidates)
+            .unwrap_or(transient_bpm)
+    } else {
+        transient_bpm
+    };
 
     Ok(SampleAnalysis {
         bpm,
@@ -60,20 +84,35 @@ struct TempoCluster {
     support: f64,
 }
 
-fn candidate_family_consensus_bpm(result: &AnalysisResult) -> Option<f32> {
-    let candidates = result.metadata.tempogram_candidates.as_ref()?;
-    let candidates = candidates
-        .iter()
-        .map(|candidate| TempoCandidate {
-            bpm: f64::from(candidate.bpm),
-            score: f64::from(candidate.score),
+fn tempo_candidates_from_result(result: &AnalysisResult) -> Vec<TempoCandidate> {
+    result
+        .metadata
+        .tempogram_candidates
+        .as_ref()
+        .map(|candidates| {
+            candidates
+                .iter()
+                .map(|candidate| TempoCandidate {
+                    bpm: f64::from(candidate.bpm),
+                    score: f64::from(candidate.score),
+                })
+                .collect::<Vec<_>>()
         })
-        .collect::<Vec<_>>();
+        .unwrap_or_default()
+}
+
+fn candidate_family_consensus_bpm(
+    result: &AnalysisResult,
+    candidates: &[TempoCandidate],
+) -> Option<f32> {
+    if candidates.is_empty() {
+        return None;
+    }
 
     tempo_candidate_family_consensus_bpm(
         f64::from(result.bpm),
         f64::from(result.bpm_confidence),
-        &candidates,
+        candidates,
     )
 }
 
@@ -250,6 +289,228 @@ fn snap_bpm_to_near_integer(bpm: f64) -> f64 {
     } else {
         bpm
     }
+}
+
+fn snap_bpm_to_tight_integer(bpm: f64) -> f64 {
+    let rounded = bpm.round();
+    if (bpm - rounded).abs() <= SPECTRAL_TEMPO_TIGHT_INTEGER_SNAP_TOLERANCE {
+        rounded
+    } else {
+        bpm
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FineTempoEstimate {
+    bpm: f64,
+    score: f64,
+}
+
+fn refined_spectral_tempo_bpm(
+    mono: &[f32],
+    sample_rate_hz: u32,
+    reference_bpm: f32,
+    candidates: &[TempoCandidate],
+) -> Option<f32> {
+    if mono.is_empty() || sample_rate_hz == 0 || !reference_bpm.is_finite() || reference_bpm <= 0.0
+    {
+        return None;
+    }
+
+    let novelty = spectral_flux_novelty_curve(mono)?;
+    let fps = f64::from(sample_rate_hz) / SPECTRAL_TEMPO_HOP_SIZE as f64;
+    let base = fine_tempo_near(&novelty, fps, f64::from(reference_bpm))?;
+
+    let mut chosen = (base.score >= SPECTRAL_TEMPO_MIN_SCORE).then_some(base);
+    if let Some(target_bpm) = three_quarter_tempo_target(f64::from(reference_bpm), candidates)
+        && let Some(estimate) = fine_tempo_near(&novelty, fps, target_bpm)
+        && estimate.score >= SPECTRAL_TEMPO_MIN_SCORE
+        && chosen.is_none_or(|base| {
+            estimate.score >= base.score * SPECTRAL_TEMPO_COMMON_RATIO_SCORE_FLOOR
+        })
+    {
+        chosen = Some(estimate);
+    }
+
+    let chosen = chosen?;
+    Some(round_bpm_to_cent(snap_bpm_to_tight_integer(chosen.bpm)))
+}
+
+fn three_quarter_tempo_target(reference_bpm: f64, candidates: &[TempoCandidate]) -> Option<f64> {
+    if !reference_bpm.is_finite() || reference_bpm <= 0.0 {
+        return None;
+    }
+
+    let target_bpm = reference_bpm * SPECTRAL_TEMPO_THREE_QUARTER_RATIO;
+    if !(SPECTRAL_TEMPO_MIN_BPM..=SPECTRAL_TEMPO_MAX_BPM).contains(&target_bpm) {
+        return None;
+    }
+
+    candidates
+        .iter()
+        .any(|candidate| {
+            candidate.score.is_finite()
+                && candidate.score > 0.0
+                && normalize_bpm_near_reference(candidate.bpm, target_bpm).is_some_and(
+                    |normalized_bpm| {
+                        tempo_ratio_distance(normalized_bpm, target_bpm)
+                            <= SPECTRAL_TEMPO_COMMON_RATIO_TOLERANCE
+                    },
+                )
+        })
+        .then_some(target_bpm)
+}
+
+fn spectral_flux_novelty_curve(mono: &[f32]) -> Option<Vec<f64>> {
+    let spectrogram =
+        compute_stft(mono, SPECTRAL_TEMPO_FRAME_SIZE, SPECTRAL_TEMPO_HOP_SIZE).ok()?;
+    if spectrogram.len() < 3 {
+        return None;
+    }
+
+    let mut flux = Vec::with_capacity(spectrogram.len().saturating_sub(1));
+    for frames in spectrogram.windows(2) {
+        let previous = &frames[0];
+        let current = &frames[1];
+        let bins = previous.len().min(current.len());
+        if bins == 0 {
+            continue;
+        }
+
+        let mut value = 0.0_f64;
+        for bin in 0..bins {
+            let previous_mag = (1.0 + 10.0 * f64::from(previous[bin].max(0.0))).ln();
+            let current_mag = (1.0 + 10.0 * f64::from(current[bin].max(0.0))).ln();
+            value += (current_mag - previous_mag).max(0.0);
+        }
+        flux.push(value);
+    }
+
+    condition_novelty_curve(flux)
+}
+
+fn condition_novelty_curve(values: Vec<f64>) -> Option<Vec<f64>> {
+    if values.len() < 3 {
+        return None;
+    }
+
+    let mut prefix = Vec::with_capacity(values.len() + 1);
+    prefix.push(0.0);
+    for value in &values {
+        prefix.push(prefix.last().copied().unwrap_or(0.0) + value.max(0.0));
+    }
+
+    let mut conditioned = vec![0.0; values.len()];
+    for (index, value) in values.iter().enumerate() {
+        let lower = index.saturating_sub(SPECTRAL_TEMPO_LOCAL_MEAN_RADIUS);
+        let upper = (index + SPECTRAL_TEMPO_LOCAL_MEAN_RADIUS + 1).min(values.len());
+        let count = (upper - lower).max(1) as f64;
+        let mean = (prefix[upper] - prefix[lower]) / count;
+        conditioned[index] = (value - mean).max(0.0);
+    }
+
+    let mut smoothed = conditioned.clone();
+    for index in 1..conditioned.len() - 1 {
+        smoothed[index] = conditioned[index - 1] * 0.25
+            + conditioned[index] * 0.5
+            + conditioned[index + 1] * 0.25;
+    }
+
+    let cap = percentile(&smoothed, 0.99)?;
+    let floor = percentile(&smoothed, 0.20)?;
+    if cap > floor {
+        for value in &mut smoothed {
+            *value = value.min(cap) - floor;
+            if *value < 0.0 {
+                *value = 0.0;
+            }
+        }
+    }
+
+    Some(smoothed)
+}
+
+fn percentile(values: &[f64], percentile: f64) -> Option<f64> {
+    if values.is_empty() || !percentile.is_finite() {
+        return None;
+    }
+
+    let mut sorted = values
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite())
+        .collect::<Vec<_>>();
+    if sorted.is_empty() {
+        return None;
+    }
+    sorted.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
+
+    let clamped = percentile.clamp(0.0, 1.0);
+    let index = (clamped * (sorted.len() - 1) as f64).round() as usize;
+    sorted.get(index).copied()
+}
+
+fn fine_tempo_near(novelty: &[f64], fps: f64, center_bpm: f64) -> Option<FineTempoEstimate> {
+    if novelty.len() < 3 || !fps.is_finite() || fps <= 0.0 || !center_bpm.is_finite() {
+        return None;
+    }
+
+    let steps = ((SPECTRAL_TEMPO_FINE_SEARCH_RADIUS_BPM * 2.0)
+        / SPECTRAL_TEMPO_FINE_SEARCH_STEP_BPM)
+        .round() as usize;
+    let start_bpm = center_bpm - SPECTRAL_TEMPO_FINE_SEARCH_RADIUS_BPM;
+    let mut best: Option<FineTempoEstimate> = None;
+
+    for step in 0..=steps {
+        let bpm = start_bpm + step as f64 * SPECTRAL_TEMPO_FINE_SEARCH_STEP_BPM;
+        if !(SPECTRAL_TEMPO_MIN_BPM..=SPECTRAL_TEMPO_MAX_BPM).contains(&bpm) {
+            continue;
+        }
+
+        let score = novelty_autocorrelation_score(novelty, fps, bpm)?;
+        if best.is_none_or(|estimate| score > estimate.score) {
+            best = Some(FineTempoEstimate { bpm, score });
+        }
+    }
+
+    best
+}
+
+fn novelty_autocorrelation_score(novelty: &[f64], fps: f64, bpm: f64) -> Option<f64> {
+    if !bpm.is_finite() || bpm <= 0.0 {
+        return None;
+    }
+
+    let lag = 60.0 / bpm * fps;
+    if !lag.is_finite() || lag < 1.0 {
+        return None;
+    }
+
+    let lag_floor = lag.floor() as usize;
+    let frac = lag - lag_floor as f64;
+    if lag_floor < 1 || lag_floor + 2 >= novelty.len() {
+        return None;
+    }
+
+    let len = novelty.len() - lag_floor - 1;
+    let mut dot = 0.0;
+    let mut left_power = 0.0;
+    let mut right_power = 0.0;
+
+    for offset in 0..len {
+        let left = novelty[lag_floor + 1 + offset];
+        let right = (1.0 - frac) * novelty[1 + offset] + frac * novelty[offset];
+        dot += left * right;
+        left_power += left * left;
+        right_power += right * right;
+    }
+
+    let denominator = (left_power * right_power).sqrt();
+    if denominator <= 0.0 || !denominator.is_finite() {
+        return Some(0.0);
+    }
+
+    Some(dot / denominator)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -533,6 +794,42 @@ mod tests {
         ];
 
         assert!(tempo_candidate_family_consensus_bpm(124.0, 0.75, &candidates).is_none());
+    }
+
+    #[test]
+    fn spectral_tempo_refinement_selects_supported_three_quarter_tempo() {
+        let sample_rate_hz = 44_100;
+        let samples = synthetic_click_track(sample_rate_hz, 66.666_666, 160);
+        let candidates = [
+            TempoCandidate {
+                bpm: 89.0,
+                score: 0.68,
+            },
+            TempoCandidate {
+                bpm: 66.0,
+                score: 0.39,
+            },
+            TempoCandidate {
+                bpm: 133.27,
+                score: 0.35,
+            },
+        ];
+
+        let bpm = refined_spectral_tempo_bpm(&samples, sample_rate_hz, 89.0, &candidates)
+            .expect("refined bpm");
+
+        assert!((bpm - 66.67).abs() < 0.02);
+    }
+
+    #[test]
+    fn spectral_tempo_refinement_tightly_snaps_near_integer_tempo() {
+        let sample_rate_hz = 44_100;
+        let samples = synthetic_click_track(sample_rate_hz, 94.0, 160);
+
+        let bpm =
+            refined_spectral_tempo_bpm(&samples, sample_rate_hz, 93.5, &[]).expect("refined bpm");
+
+        assert!((bpm - 94.0).abs() < 0.005);
     }
 
     fn synthetic_click_track(sample_rate_hz: u32, bpm: f64, beats: usize) -> Vec<f32> {

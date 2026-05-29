@@ -13,6 +13,13 @@ primary BPM lands on a half-time, double-time, or subdivision candidate, especia
 is low. Since this app assumes one fixed tempo per song, stable candidate families and highly
 regular transient grids should refine the published BPM.
 
+Some fixed-tempo MP3s still expose ambiguous subdivision candidates and near-integer tempo drift.
+The analysis should prefer the performer's constant tempo when a supported common-ratio candidate
+survives a full-track spectral autocorrelation check. Separately, beat-grid metadata near the very
+start of a file can contain analyzer hop latency (for example 512 or 1536 samples) rather than a
+musical offset, causing the Loop Editor's first bar line to start late. Recoverable MP3 packet
+decode errors should also preserve the decoded timeline whenever the packet duration is known.
+
 ## What Changes
 
 - Add a selected-pad Tap BPM mapping action that always taps the current selected pad when executed.
@@ -21,18 +28,25 @@ regular transient grids should refine the published BPM.
   stronger octave-family consensus than the primary BPM.
 - Further refine BPM when strong decoded transients form a stable fixed-tempo grid near the chosen
   candidate-family tempo.
+- Add a spectral autocorrelation post-check that can choose a supported common-ratio performer
+  tempo, such as 3/4 of a stronger subdivision candidate, and tightly snap near-integer BPMs.
 - Round the refined fixed-tempo BPM to 0.01 BPM before publishing analysis metadata.
+- Snap analysis beat/downbeat anchors very close to file start to 0.0 seconds before deriving the
+  Loop Editor grid anchor and Rust pad timing metadata.
+- Preserve MP3 timeline length across recoverable packet decode errors by inserting silence for a
+  bad packet when the stream channel layout and packet duration are known.
 
 ## Non-Goals
 
 - No tempo-change detection or variable-tempo support.
 - No neural inference, plugin loading, disk I/O, Python/GIL access, blocking work, logging, or heavy
   allocation in the Rust audio callback.
-- No replacement of `stratum_dsp`; candidate consensus and fixed-tempo refinement are bounded
-  non-realtime post-processes in the existing analysis worker.
+- No replacement of `stratum_dsp`; candidate consensus, transient checks, and spectral tempo
+  refinement are bounded non-realtime post-processes in the existing analysis worker.
 
 ## Impact
 
-- Affected specs: `pad-manual-bpm`, `audio-analysis`
-- Affected code: Python input mapping actions/controller, UI action facade, Rust non-realtime audio
-  analysis, focused Python/Rust tests.
+- Affected specs: `pad-manual-bpm`, `audio-analysis`, `loop-region`, `waveform-editor`,
+  `load-audio-files`
+- Affected code: Python input mapping actions/controller, UI action facade, timing metadata, Rust
+  non-realtime audio analysis/sample loading, focused Python/Rust tests.

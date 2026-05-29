@@ -153,10 +153,13 @@ container metadata is incomplete, resamples to the active output rate when
 needed, maps channels to the output layout, and publishes an immutable buffer
 handle to Rust live-audio state.
 
-For MP3 files, the loader tolerates isolated recoverable frame decode errors by
-skipping the bad packet and continuing with later packets. It still rejects
-files with no decodable audio frames, or streams whose decoded sample rate or
-channel count changes mid-file.
+For MP3 files, the loader tolerates isolated recoverable frame decode errors.
+Once the stream channel layout is known, a bad packet with a known packet
+duration is replaced with silence for the same number of source frames so the
+decoded timeline does not drift shorter; otherwise the loader keeps scanning
+without fabricating an unknown duration. It still rejects files with no
+decodable audio frames, or streams whose decoded sample rate or channel count
+changes mid-file.
 
 ## Playback, Loops, And Stems
 

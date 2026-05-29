@@ -46,6 +46,23 @@ fn clamp_progress(percent: f32) -> f32 {
 
 const MAX_CONSECUTIVE_PACKET_DECODE_ERRORS: usize = 64;
 
+fn append_decode_error_silence(
+    decoded: &mut Vec<f32>,
+    channels: Option<usize>,
+    packet_frames: u64,
+) -> Option<u64> {
+    let channels = channels.filter(|channels| *channels > 0)?;
+    if packet_frames == 0 {
+        return None;
+    }
+
+    let frames = usize::try_from(packet_frames).ok()?;
+    let silence_samples = frames.checked_mul(channels)?;
+    let new_len = decoded.len().checked_add(silence_samples)?;
+    decoded.resize(new_len, 0.0);
+    Some(packet_frames)
+}
+
 fn update_decoded_stream_config(
     sample_rate_hz: &mut Option<u32>,
     channels: &mut Option<usize>,
@@ -312,8 +329,22 @@ where
 
         let audio_buf = match decoder.decode(&packet) {
             Ok(audio_buf) => audio_buf,
-            // Skip a single bad packet and keep any already-decoded audio.
-            Err(SymphoniaError::DecodeError(_)) => continue,
+            Err(SymphoniaError::DecodeError(_)) => {
+                if let Some(silence_frames) =
+                    append_decode_error_silence(&mut decoded, file_channels, packet.dur)
+                {
+                    decoded_frames = decoded_frames.saturating_add(silence_frames);
+                    if let Some(total_frames) = total_frames {
+                        let percent = (decoded_frames as f32 / total_frames as f32).min(1.0);
+                        progress(SampleLoadProgress {
+                            subtask: SampleLoadSubtask::Decoding,
+                            resampling_required: initial_resampling_required,
+                            percent: clamp_progress(percent),
+                        });
+                    }
+                }
+                continue;
+            }
             Err(err) => return Err(SampleLoadError::Decode(err)),
         };
         let spec = *audio_buf.spec();
@@ -565,6 +596,25 @@ mod tests {
         let result = update_decoded_stream_config(&mut sample_rate_hz, &mut channels, 44_100, 0);
 
         assert!(matches!(result, Err(SampleLoadError::MissingChannels)));
+    }
+
+    #[test]
+    fn test_decode_error_silence_preserves_packet_duration() {
+        let mut decoded = vec![1.0, -1.0];
+
+        let frames = append_decode_error_silence(&mut decoded, Some(2), 3).unwrap();
+
+        assert_eq!(frames, 3);
+        assert_eq!(decoded, vec![1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_decode_error_silence_requires_known_channels() {
+        let mut decoded = vec![1.0, -1.0];
+
+        assert_eq!(append_decode_error_silence(&mut decoded, None, 3), None);
+        assert_eq!(append_decode_error_silence(&mut decoded, Some(2), 0), None);
+        assert_eq!(decoded, vec![1.0, -1.0]);
     }
 
     #[test]
