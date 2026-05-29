@@ -161,6 +161,37 @@ without fabricating an unknown duration. It still rejects files with no
 decodable audio frames, or streams whose decoded sample rate or channel count
 changes mid-file.
 
+## Audio Analysis And Timing Metadata
+
+Audio analysis runs on non-realtime worker threads after a sample is decoded and
+published. `stratum_dsp` provides the primary BPM, key, beat-grid, downbeat, and
+tempogram-candidate data. The Rust analysis post-process then assumes fixed
+tempo material and may refine the published BPM when the primary candidate is
+weak or lands on a subdivision.
+
+The fixed-tempo refinement layers are bounded worker-side checks:
+
+- candidate-family consensus groups octave-related tempogram candidates and can
+  choose the stronger performer-tempo family,
+- decoded strong transients can fit one stable constant-tempo grid near the
+  chosen candidate-family BPM,
+- full-track spectral autocorrelation can validate supported common-ratio
+  performer tempos, including 3/4 subdivision corrections and strongly
+  dominant 4/5 corrections.
+
+Published analysis BPM values preserve fractional precision for timing and grid
+math. Near-integer tempos are not snapped to integer BPM solely for display
+readability; compact pad overlays may round for scanning, while editable BPM
+fields and the Loop Editor grid use the underlying effective BPM. Stable
+transient fits take precedence over tiny spectral offsets, so exact metronome
+material can remain exact while difficult performer-tempo tracks still benefit
+from spectral common-ratio correction.
+
+Beat/downbeat anchors reported very close to file start are normalized to
+`0.0` before deriving the Loop Editor grid anchor and pad timing metadata. This
+keeps the first bar line at the track start when the analyzer only reported hop
+latency rather than a musical offset.
+
 ## Playback, Loops, And Stems
 
 The runtime keeps two time domains separate:
