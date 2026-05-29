@@ -6,6 +6,11 @@ import pytest
 
 import flitzis_looper.controller.app as app_module
 from flitzis_looper.constants import NUM_SAMPLES
+from flitzis_looper.controller.loader import LoaderController
+from flitzis_looper.controller.persistence import ProjectPersistence
+from flitzis_looper.controller.stems import StemController
+from flitzis_looper.controller.transport import TransportController
+from flitzis_looper.input_mapping import InputMappingController
 from flitzis_looper.models import ProjectState
 
 if TYPE_CHECKING:
@@ -104,25 +109,25 @@ def test_controller_validates_restored_samples_before_projecting_audio(
 
     with (
         patch.object(
-            app_module.LoaderController,
+            LoaderController,
             "restore_samples_from_project_state",
             autospec=True,
             side_effect=lambda _self: order.append("loader"),
         ),
         patch.object(
-            app_module.StemController,
+            StemController,
             "restore_stem_cache_from_project_state",
             autospec=True,
             side_effect=lambda _self: order.append("stems"),
         ),
         patch.object(
-            app_module.TransportController,
+            TransportController,
             "apply_project_state_to_audio",
             autospec=True,
             side_effect=lambda _self: order.append("transport"),
         ),
         patch.object(
-            app_module.InputMappingController,
+            InputMappingController,
             "apply_project_state_to_input_runtime",
             autospec=True,
             side_effect=lambda _self: order.append("input"),
@@ -149,9 +154,9 @@ def test_controller_clears_missing_restored_sample_before_audio_projection(
     project.pad_eq_low_db[0] = -3.0
     project.pad_eq_high_db[0] = 3.0
 
-    persistence = app_module.ProjectPersistence(project)
+    persistence = ProjectPersistence(project)
     with patch.object(
-        app_module.ProjectPersistence,
+        ProjectPersistence,
         "from_config_path",
         return_value=persistence,
     ):

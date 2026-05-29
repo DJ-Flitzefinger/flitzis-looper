@@ -469,7 +469,7 @@ def test_unloaded_pad_key_lock_normalized_on_load() -> None:
 
 
 def test_loaded_pad_key_lock_preserved_on_load() -> None:
-    sample_paths = [None] * NUM_SAMPLES
+    sample_paths: list[str | None] = [None] * NUM_SAMPLES
     sample_paths[3] = "samples/foo.wav"
     pad_key_lock = [False] * NUM_SAMPLES
     pad_key_lock[3] = True

@@ -51,8 +51,8 @@
 
 ## 7. Validation
 
-- [ ] 7.1 Run focused validation after each implementation slice.
+- [x] 7.1 Run focused validation after each implementation slice.
 - [x] 7.2 Run strict OpenSpec validation for this change after spec edits.
-- [ ] 7.3 Run full uv-managed Rust/Python validation before completing the branch handoff.
-- [ ] 7.4 Confirm required documentation updates are complete, or explicitly record why no
+- [x] 7.3 Run full uv-managed Rust/Python validation before completing the branch handoff.
+- [x] 7.4 Confirm required documentation updates are complete, or explicitly record why no
       maintained docs changed for each slice.
