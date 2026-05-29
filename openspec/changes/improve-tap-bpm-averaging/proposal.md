@@ -11,8 +11,11 @@ steadier as the performer continues tapping.
 ## What Changes
 
 - Start a Tap BPM measurement only when the performer explicitly activates Tap BPM.
-- Compute BPM from the average interval across all taps in the current measurement series.
+- Compute BPM by fitting one constant interval across all accepted taps in the current measurement
+  series.
 - Update the manual BPM after the second tap and after every later tap in the same series.
+- Display pad BPM with two decimal places so the immediate Tap BPM result is visible at the
+  precision the controller stores.
 - Reset the current measurement series when the performer pauses for longer than 3 seconds before
   tapping again.
 - Preserve the existing per-pad target behavior and manual-BPM override semantics.

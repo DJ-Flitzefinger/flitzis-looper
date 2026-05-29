@@ -6,3 +6,7 @@
 - [x] 1.4 Add focused controller/UI tests for second-tap calculation, full-series averaging, and pause reset.
 - [x] 1.5 Run official OpenSpec validation for `improve-tap-bpm-averaging`.
 - [x] 1.6 Run focused Python validation and `git diff --check`.
+- [x] 1.7 Replace endpoint-average Tap BPM with all-tap least-squares tempo fitting.
+- [x] 1.8 Display pad BPM with two decimal places.
+- [x] 1.9 Re-run official OpenSpec validation for the updated Tap BPM change.
+- [x] 1.10 Re-run focused Tap BPM Python validation and `git diff --check`.
