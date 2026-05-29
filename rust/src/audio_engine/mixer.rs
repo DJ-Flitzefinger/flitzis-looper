@@ -27,6 +27,57 @@ const BEATS_PER_BAR_4_4: f64 = 4.0;
 const BAR_PHASE_EPSILON: f64 = 1.0e-9;
 const STEM_TRANSITION_RAMP_FRAMES: usize = 128;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RtRenderPadActivity {
+    ids: [usize; NUM_SAMPLES],
+    seen: [bool; NUM_SAMPLES],
+    count: usize,
+}
+
+impl Default for RtRenderPadActivity {
+    fn default() -> Self {
+        Self {
+            ids: [0; NUM_SAMPLES],
+            seen: [false; NUM_SAMPLES],
+            count: 0,
+        }
+    }
+}
+
+impl RtRenderPadActivity {
+    pub(crate) fn clear(&mut self) {
+        for id in self.ids[..self.count].iter().copied() {
+            self.seen[id] = false;
+        }
+        self.count = 0;
+    }
+
+    pub(crate) fn record(&mut self, id: usize) {
+        if id >= NUM_SAMPLES || self.seen[id] {
+            return;
+        }
+        if self.count < self.ids.len() {
+            self.ids[self.count] = id;
+            self.seen[id] = true;
+            self.count += 1;
+        }
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = usize> + '_ {
+        self.ids[..self.count].iter().copied()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.count
+    }
+
+    #[cfg(test)]
+    pub(crate) fn contains(&self, id: usize) -> bool {
+        id < NUM_SAMPLES && self.seen[id]
+    }
+}
+
 fn pad_eq_db_to_normalized(db: f32) -> f32 {
     if !db.is_finite() {
         return 0.5;
@@ -1561,9 +1612,11 @@ impl RtMixer {
         pad_peaks: &mut [f32; NUM_SAMPLES],
         retirement: &mut impl AudioBufferRetirement,
     ) {
-        self.render_rt_with_output_frame(output, pad_peaks, None, retirement);
+        let mut pad_activity = RtRenderPadActivity::default();
+        self.render_rt_with_output_frame(output, pad_peaks, None, &mut pad_activity, retirement);
     }
 
+    #[cfg(test)]
     pub(crate) fn render_rt_at_output_frame(
         &mut self,
         output: &mut [f32],
@@ -1571,7 +1624,31 @@ impl RtMixer {
         output_start_frame: u64,
         retirement: &mut impl AudioBufferRetirement,
     ) {
-        self.render_rt_with_output_frame(output, pad_peaks, Some(output_start_frame), retirement);
+        let mut pad_activity = RtRenderPadActivity::default();
+        self.render_rt_at_output_frame_tracking_pads(
+            output,
+            pad_peaks,
+            output_start_frame,
+            &mut pad_activity,
+            retirement,
+        );
+    }
+
+    pub(crate) fn render_rt_at_output_frame_tracking_pads(
+        &mut self,
+        output: &mut [f32],
+        pad_peaks: &mut [f32; NUM_SAMPLES],
+        output_start_frame: u64,
+        pad_activity: &mut RtRenderPadActivity,
+        retirement: &mut impl AudioBufferRetirement,
+    ) {
+        self.render_rt_with_output_frame(
+            output,
+            pad_peaks,
+            Some(output_start_frame),
+            pad_activity,
+            retirement,
+        );
     }
 
     fn render_rt_with_output_frame(
@@ -1579,6 +1656,7 @@ impl RtMixer {
         output: &mut [f32],
         pad_peaks: &mut [f32; NUM_SAMPLES],
         output_start_frame: Option<u64>,
+        pad_activity: &mut RtRenderPadActivity,
         retirement: &mut impl AudioBufferRetirement,
     ) {
         pad_peaks.fill(f32::EQUILIBRIUM);
@@ -1610,10 +1688,11 @@ impl RtMixer {
                     &mut output[start..end],
                     &mut chunk_peaks,
                     chunk_output_start_frame,
+                    pad_activity,
                     retirement,
                 );
-                for (peak, chunk_peak) in pad_peaks.iter_mut().zip(chunk_peaks.iter()) {
-                    *peak = (*peak).max(*chunk_peak);
+                for id in pad_activity.iter() {
+                    pad_peaks[id] = pad_peaks[id].max(chunk_peaks[id]);
                 }
 
                 rendered_frames += chunk_frames;
@@ -1622,7 +1701,13 @@ impl RtMixer {
             return;
         }
 
-        self.render_rt_chunk(output, pad_peaks, output_start_frame, retirement);
+        self.render_rt_chunk(
+            output,
+            pad_peaks,
+            output_start_frame,
+            pad_activity,
+            retirement,
+        );
     }
 
     fn render_rt_chunk(
@@ -1630,6 +1715,7 @@ impl RtMixer {
         output: &mut [f32],
         pad_peaks: &mut [f32; NUM_SAMPLES],
         output_start_frame: Option<u64>,
+        pad_activity: &mut RtRenderPadActivity,
         retirement: &mut impl AudioBufferRetirement,
     ) {
         pad_peaks.fill(f32::EQUILIBRIUM);
@@ -1666,6 +1752,7 @@ impl RtMixer {
             if !voice.active {
                 continue;
             }
+            pad_activity.record(voice.sample_id);
 
             let is_paused = voice.paused;
 

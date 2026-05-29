@@ -45,6 +45,7 @@ impl LoadProgressStage {
 
 pub struct ProgressReporter {
     id: usize,
+    request_id: u64,
     tx: Sender<LoaderEvent>,
     last_emit: Instant,
     min_interval: Duration,
@@ -52,10 +53,11 @@ pub struct ProgressReporter {
 }
 
 impl ProgressReporter {
-    pub fn new(id: usize, tx: Sender<LoaderEvent>) -> Self {
+    pub fn new(id: usize, request_id: u64, tx: Sender<LoaderEvent>) -> Self {
         let min_interval = Duration::from_millis(100);
         Self {
             id,
+            request_id,
             tx,
             last_emit: Instant::now()
                 .checked_sub(min_interval)
@@ -95,6 +97,7 @@ impl ProgressReporter {
         };
         let _ = self.tx.send(LoaderEvent::Progress {
             id: self.id,
+            request_id: self.request_id,
             percent,
             stage,
         });

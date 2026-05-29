@@ -10,6 +10,19 @@ if TYPE_CHECKING:
     from flitzis_looper.models import ProjectState, SessionState
 
 
+def _activate_pad_peak(
+    metering_controller: MeteringController,
+    session_state: SessionState,
+    sample_id: int,
+    *,
+    peak: float,
+    updated_at: float,
+) -> None:
+    session_state.pad_peak[sample_id] = peak
+    session_state.pad_peak_updated_at[sample_id] = updated_at
+    metering_controller._active_peak_sample_ids.add(sample_id)
+
+
 @pytest.fixture
 def metering_controller(
     project_state: ProjectState, session_state: SessionState, audio_engine_mock: Mock
@@ -44,6 +57,7 @@ def test_handle_pad_peak_message_clamps_peak(
 
     assert session_state.pad_peak[0] == 1.0
     assert session_state.pad_peak[0] > 0
+    assert 0 in metering_controller._active_peak_sample_ids
 
 
 def test_pad_clip_hold_activates_at_clipping_threshold(
@@ -241,8 +255,7 @@ def test_decay_pad_peaks_exponential_decay(
     metering_controller: MeteringController, session_state: SessionState
 ) -> None:
     """Test _decay_pad_peaks applies exponential decay."""
-    session_state.pad_peak[0] = 1.0
-    session_state.pad_peak_updated_at[0] = 0.0
+    _activate_pad_peak(metering_controller, session_state, 0, peak=1.0, updated_at=0.0)
 
     with patch("flitzis_looper.controller.metering.monotonic", return_value=0.1):
         metering_controller._decay_pad_peaks()
@@ -284,13 +297,13 @@ def test_decay_pad_peaks_clears_below_threshold(
     metering_controller: MeteringController, session_state: SessionState
 ) -> None:
     """Test _decay_pad_peaks clears peaks below threshold."""
-    session_state.pad_peak[0] = 0.00005
-    session_state.pad_peak_updated_at[0] = 1.0
+    _activate_pad_peak(metering_controller, session_state, 0, peak=0.00005, updated_at=1.0)
 
     with patch("flitzis_looper.controller.metering.monotonic", return_value=2.5):
         metering_controller._decay_pad_peaks()
 
     assert session_state.pad_peak[0] == 0.0
+    assert 0 not in metering_controller._active_peak_sample_ids
 
 
 def test_decay_pad_peaks_skips_zero_peaks(
@@ -309,8 +322,7 @@ def test_decay_pad_peaks_updates_timestamp(
     metering_controller: MeteringController, session_state: SessionState
 ) -> None:
     """Test _decay_pad_peaks updates timestamp for decayed peaks."""
-    session_state.pad_peak[0] = 0.8
-    session_state.pad_peak_updated_at[0] = 0.0
+    _activate_pad_peak(metering_controller, session_state, 0, peak=0.8, updated_at=0.0)
 
     with patch("flitzis_looper.controller.metering.monotonic", return_value=0.1):
         metering_controller._decay_pad_peaks()
@@ -322,10 +334,8 @@ def test_multiple_pad_peaks_decay_independently(
     metering_controller: MeteringController, session_state: SessionState
 ) -> None:
     """Test multiple pad peaks decay independently."""
-    session_state.pad_peak[0] = 0.8
-    session_state.pad_peak_updated_at[0] = 0.0
-    session_state.pad_peak[1] = 0.8
-    session_state.pad_peak_updated_at[1] = 0.0
+    _activate_pad_peak(metering_controller, session_state, 0, peak=0.8, updated_at=0.0)
+    _activate_pad_peak(metering_controller, session_state, 1, peak=0.8, updated_at=0.0)
 
     with patch("flitzis_looper.controller.metering.monotonic", return_value=0.5):
         metering_controller._decay_pad_peaks()
@@ -338,6 +348,22 @@ def test_multiple_pad_peaks_decay_independently(
 
     assert session_state.pad_peak[0] == session_state.pad_peak[1]
     assert session_state.pad_peak[0] < 0.8
+
+
+def test_decay_pad_peaks_only_visits_active_peak_set(
+    metering_controller: MeteringController, session_state: SessionState
+) -> None:
+    session_state.pad_peak[0] = 0.8
+    session_state.pad_peak_updated_at[0] = 0.0
+    _activate_pad_peak(metering_controller, session_state, 1, peak=0.8, updated_at=0.0)
+
+    with patch("flitzis_looper.controller.metering.monotonic", return_value=0.5):
+        metering_controller._decay_pad_peaks()
+
+    assert session_state.pad_peak[0] == pytest.approx(0.8)
+    assert session_state.pad_peak_updated_at[0] == 0.0
+    assert session_state.pad_peak[1] == pytest.approx(0.8)
+    assert session_state.pad_peak_updated_at[1] == pytest.approx(0.5)
 
 
 def test_poll_audio_messages_ignores_missing_attributes(

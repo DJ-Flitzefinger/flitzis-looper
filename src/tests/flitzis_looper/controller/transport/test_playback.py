@@ -258,6 +258,55 @@ def test_global_start_stop_left_restores_remembered_set_together(
     assert controller.session.active_sample_ids == {0, 1}
 
 
+def test_manual_pad_trigger_after_global_stop_forgets_remembered_set(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    for sample_id in (0, 1, 2, 3):
+        controller.project.sample_paths[sample_id] = f"/path/to/sample-{sample_id}.wav"
+    controller.project.multi_loop = True
+    controller.session.active_sample_ids.update({0, 1, 2})
+
+    controller.transport.playback.stop_global_start_stop()
+    audio_engine_mock.reset_mock()
+
+    controller.transport.playback.trigger_pad(3)
+    msg = Mock()
+    msg.sample_id.return_value = 3
+    controller.transport.playback.handle_sample_started_message(msg)
+
+    assert controller.session.global_stop_engaged is False
+    assert controller.session.global_stop_restore_sample_ids == set()
+
+    audio_engine_mock.reset_mock()
+    controller.transport.playback.start_or_restart_global_start_stop()
+
+    assert audio_engine_mock.play_sample.call_args_list == [call(3, 1.0)]
+
+
+def test_manual_pad_stop_after_global_stop_forgets_remembered_set(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    for sample_id in (0, 1, 2, 3):
+        controller.project.sample_paths[sample_id] = f"/path/to/sample-{sample_id}.wav"
+    controller.session.global_stop_engaged = True
+    controller.session.global_stop_restore_sample_ids = {0, 1, 2}
+    controller.session.active_sample_ids.add(3)
+
+    controller.transport.playback.stop_pad(3)
+
+    assert controller.session.global_stop_engaged is False
+    assert controller.session.global_stop_restore_sample_ids == set()
+
+    msg = Mock()
+    msg.sample_id.return_value = 3
+    controller.transport.playback.handle_sample_stopped_message(msg)
+    audio_engine_mock.reset_mock()
+
+    controller.transport.playback.start_or_restart_global_start_stop()
+
+    audio_engine_mock.play_sample.assert_not_called()
+
+
 def test_global_start_stop_right_never_restores_remembered_set(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:

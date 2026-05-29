@@ -16,7 +16,7 @@ use crate::audio_engine::buffer_retirement::{
     AudioBufferRetirement, AudioBufferRetirementWorker, create_audio_buffer_retirement,
 };
 use crate::audio_engine::constants::{MAX_VOICES, NUM_SAMPLES};
-use crate::audio_engine::mixer::RtMixer;
+use crate::audio_engine::mixer::{RtMixer, RtRenderPadActivity};
 use crate::audio_engine::scheduler::{
     FixedCapacityScheduler, ScheduledCommand, TransportScheduler,
 };
@@ -296,6 +296,7 @@ fn stop_all_samples<S: AudioMessageSink, R: AudioBufferRetirement>(
 }
 
 // Keep scheduler, transport, mixer, output, and retirement ownership visible in the render path.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn render_scheduled_audio<const CAPACITY: usize, S: AudioMessageSink, R: AudioBufferRetirement>(
     mixer: &mut RtMixer,
@@ -308,8 +309,42 @@ fn render_scheduled_audio<const CAPACITY: usize, S: AudioMessageSink, R: AudioBu
     audio_messages: &mut S,
     retirement: &mut R,
 ) {
+    let mut pad_activity = RtRenderPadActivity::default();
+    render_scheduled_audio_tracking_pads(
+        mixer,
+        scheduler,
+        output,
+        pad_peaks,
+        &mut pad_activity,
+        callback_start_frame,
+        channels,
+        transport,
+        audio_messages,
+        retirement,
+    );
+}
+
+// Keep scheduler, transport, mixer, output, telemetry, and retirement ownership visible.
+#[allow(clippy::too_many_arguments)]
+fn render_scheduled_audio_tracking_pads<
+    const CAPACITY: usize,
+    S: AudioMessageSink,
+    R: AudioBufferRetirement,
+>(
+    mixer: &mut RtMixer,
+    scheduler: &mut FixedCapacityScheduler<CAPACITY>,
+    output: &mut [f32],
+    pad_peaks: &mut [f32; NUM_SAMPLES],
+    pad_activity: &mut RtRenderPadActivity,
+    callback_start_frame: u64,
+    channels: usize,
+    transport: &mut TransportTimeline,
+    audio_messages: &mut S,
+    retirement: &mut R,
+) {
     output.fill(0.0);
     pad_peaks.fill(0.0);
+    pad_activity.clear();
 
     drain_scheduler_due_at_callback_start(
         scheduler,
@@ -340,6 +375,7 @@ fn render_scheduled_audio<const CAPACITY: usize, S: AudioMessageSink, R: AudioBu
                 output,
                 pad_peaks,
                 &mut segment_peaks,
+                pad_activity,
                 callback_start_frame,
                 rendered_until_frame,
                 callback_end_frame,
@@ -355,6 +391,7 @@ fn render_scheduled_audio<const CAPACITY: usize, S: AudioMessageSink, R: AudioBu
                 output,
                 pad_peaks,
                 &mut segment_peaks,
+                pad_activity,
                 callback_start_frame,
                 rendered_until_frame,
                 callback_end_frame,
@@ -370,6 +407,7 @@ fn render_scheduled_audio<const CAPACITY: usize, S: AudioMessageSink, R: AudioBu
                 output,
                 pad_peaks,
                 &mut segment_peaks,
+                pad_activity,
                 callback_start_frame,
                 rendered_until_frame,
                 next_target_frame,
@@ -401,6 +439,7 @@ fn render_mixer_segment<R: AudioBufferRetirement>(
     output: &mut [f32],
     pad_peaks: &mut [f32; NUM_SAMPLES],
     segment_peaks: &mut [f32; NUM_SAMPLES],
+    pad_activity: &mut RtRenderPadActivity,
     callback_start_frame: u64,
     segment_start_frame: u64,
     segment_end_frame: u64,
@@ -416,15 +455,16 @@ fn render_mixer_segment<R: AudioBufferRetirement>(
     let start = start_frame * channels;
     let end = end_frame * channels;
 
-    mixer.render_rt_at_output_frame(
+    mixer.render_rt_at_output_frame_tracking_pads(
         &mut output[start..end],
         segment_peaks,
         segment_start_frame,
+        pad_activity,
         retirement,
     );
 
-    for (peak, segment_peak) in pad_peaks.iter_mut().zip(segment_peaks.iter()) {
-        *peak = (*peak).max(*segment_peak);
+    for id in pad_activity.iter() {
+        pad_peaks[id] = pad_peaks[id].max(segment_peaks[id]);
     }
 }
 
@@ -453,6 +493,36 @@ fn publish_master_peak_telemetry<S: AudioMessageSink>(
 
     if master_peak > 0.0 && master_peak.is_finite() {
         audio_messages.push_audio_message(AudioMessage::MasterPeak { peak: master_peak });
+    }
+}
+
+fn publish_pad_telemetry<S: AudioMessageSink>(
+    audio_messages: &mut S,
+    mixer: &RtMixer,
+    pad_peaks: &[f32; NUM_SAMPLES],
+    pad_activity: &RtRenderPadActivity,
+    frame_clock: u64,
+    emit_interval_frames: u64,
+    last_pad_emit_frame: &mut u64,
+) {
+    if frame_clock.wrapping_sub(*last_pad_emit_frame) < emit_interval_frames {
+        return;
+    }
+
+    *last_pad_emit_frame = frame_clock;
+
+    for id in pad_activity.iter() {
+        let peak = pad_peaks[id];
+        if peak > 0.0 && peak.is_finite() {
+            let peak = peak.clamp(0.0, 1.0);
+            audio_messages.push_audio_message(AudioMessage::PadPeak { id, peak });
+        }
+
+        if let Some(position_s) = mixer.pad_playhead_seconds(id)
+            && position_s.is_finite()
+        {
+            audio_messages.push_audio_message(AudioMessage::PadPlayhead { id, position_s });
+        }
     }
 }
 
@@ -518,13 +588,36 @@ struct ParameterDrainResult {
     parameters_applied: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PendingPadBpm {
+    id: usize,
+    bpm: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingPadGain {
+    id: usize,
+    gain_db: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingPadEq {
+    id: usize,
+    low_db: f32,
+    mid_db: f32,
+    high_db: f32,
+}
+
 struct PendingControlParameters {
     volume: Option<f32>,
     speed: Option<f32>,
     master_bpm: Option<f32>,
-    pad_bpm: [Option<Option<f32>>; NUM_SAMPLES],
-    pad_gain_db: [Option<f32>; NUM_SAMPLES],
-    pad_eq: [Option<(f32, f32, f32)>; NUM_SAMPLES],
+    pad_bpm: [PendingPadBpm; MAX_PARAMETER_MESSAGES_PER_CALLBACK],
+    pad_bpm_count: usize,
+    pad_gain: [PendingPadGain; MAX_PARAMETER_MESSAGES_PER_CALLBACK],
+    pad_gain_count: usize,
+    pad_eq: [PendingPadEq; MAX_PARAMETER_MESSAGES_PER_CALLBACK],
+    pad_eq_count: usize,
 }
 
 impl Default for PendingControlParameters {
@@ -533,9 +626,20 @@ impl Default for PendingControlParameters {
             volume: None,
             speed: None,
             master_bpm: None,
-            pad_bpm: [None; NUM_SAMPLES],
-            pad_gain_db: [None; NUM_SAMPLES],
-            pad_eq: [None; NUM_SAMPLES],
+            pad_bpm: [PendingPadBpm { id: 0, bpm: None }; MAX_PARAMETER_MESSAGES_PER_CALLBACK],
+            pad_bpm_count: 0,
+            pad_gain: [PendingPadGain {
+                id: 0,
+                gain_db: 0.0,
+            }; MAX_PARAMETER_MESSAGES_PER_CALLBACK],
+            pad_gain_count: 0,
+            pad_eq: [PendingPadEq {
+                id: 0,
+                low_db: 0.0,
+                mid_db: 0.0,
+                high_db: 0.0,
+            }; MAX_PARAMETER_MESSAGES_PER_CALLBACK],
+            pad_eq_count: 0,
         }
     }
 }
@@ -547,14 +651,10 @@ impl PendingControlParameters {
             ControlParameterMessage::SetSpeed(speed) => self.speed = Some(speed),
             ControlParameterMessage::SetMasterBpm(bpm) => self.master_bpm = Some(bpm),
             ControlParameterMessage::SetPadBpm { id, bpm } => {
-                if let Some(slot) = self.pad_bpm.get_mut(id) {
-                    *slot = Some(bpm);
-                }
+                self.record_pad_bpm(id, bpm);
             }
             ControlParameterMessage::SetPadGain { id, gain_db } => {
-                if let Some(slot) = self.pad_gain_db.get_mut(id) {
-                    *slot = Some(gain_db);
-                }
+                self.record_pad_gain(id, gain_db);
             }
             ControlParameterMessage::SetPadEq {
                 id,
@@ -562,10 +662,66 @@ impl PendingControlParameters {
                 mid_db,
                 high_db,
             } => {
-                if let Some(slot) = self.pad_eq.get_mut(id) {
-                    *slot = Some((low_db, mid_db, high_db));
-                }
+                self.record_pad_eq(id, low_db, mid_db, high_db);
             }
+        }
+    }
+
+    fn record_pad_bpm(&mut self, id: usize, bpm: Option<f32>) {
+        if id >= NUM_SAMPLES {
+            return;
+        }
+        if let Some(pending) = self.pad_bpm[..self.pad_bpm_count]
+            .iter_mut()
+            .find(|pending| pending.id == id)
+        {
+            pending.bpm = bpm;
+            return;
+        }
+        if self.pad_bpm_count < self.pad_bpm.len() {
+            self.pad_bpm[self.pad_bpm_count] = PendingPadBpm { id, bpm };
+            self.pad_bpm_count += 1;
+        }
+    }
+
+    fn record_pad_gain(&mut self, id: usize, gain_db: f32) {
+        if id >= NUM_SAMPLES {
+            return;
+        }
+        if let Some(pending) = self.pad_gain[..self.pad_gain_count]
+            .iter_mut()
+            .find(|pending| pending.id == id)
+        {
+            pending.gain_db = gain_db;
+            return;
+        }
+        if self.pad_gain_count < self.pad_gain.len() {
+            self.pad_gain[self.pad_gain_count] = PendingPadGain { id, gain_db };
+            self.pad_gain_count += 1;
+        }
+    }
+
+    fn record_pad_eq(&mut self, id: usize, low_db: f32, mid_db: f32, high_db: f32) {
+        if id >= NUM_SAMPLES {
+            return;
+        }
+        if let Some(pending) = self.pad_eq[..self.pad_eq_count]
+            .iter_mut()
+            .find(|pending| pending.id == id)
+        {
+            pending.low_db = low_db;
+            pending.mid_db = mid_db;
+            pending.high_db = high_db;
+            return;
+        }
+        if self.pad_eq_count < self.pad_eq.len() {
+            self.pad_eq[self.pad_eq_count] = PendingPadEq {
+                id,
+                low_db,
+                mid_db,
+                high_db,
+            };
+            self.pad_eq_count += 1;
         }
     }
 
@@ -585,23 +741,17 @@ impl PendingControlParameters {
             transport.set_master_bpm_preserving_bar_phase_at_frame(bpm, transport.output_frame());
             applied += 1;
         }
-        for (id, bpm) in self.pad_bpm.into_iter().enumerate() {
-            if let Some(bpm) = bpm {
-                mixer.set_pad_bpm(id, bpm);
-                applied += 1;
-            }
+        for pending in self.pad_bpm[..self.pad_bpm_count].iter().copied() {
+            mixer.set_pad_bpm(pending.id, pending.bpm);
+            applied += 1;
         }
-        for (id, gain_db) in self.pad_gain_db.into_iter().enumerate() {
-            if let Some(gain_db) = gain_db {
-                mixer.set_pad_gain(id, gain_db);
-                applied += 1;
-            }
+        for pending in self.pad_gain[..self.pad_gain_count].iter().copied() {
+            mixer.set_pad_gain(pending.id, pending.gain_db);
+            applied += 1;
         }
-        for (id, eq) in self.pad_eq.into_iter().enumerate() {
-            if let Some((low_db, mid_db, high_db)) = eq {
-                mixer.set_pad_eq(id, low_db, mid_db, high_db);
-                applied += 1;
-            }
+        for pending in self.pad_eq[..self.pad_eq_count].iter().copied() {
+            mixer.set_pad_eq(pending.id, pending.low_db, pending.mid_db, pending.high_db);
+            applied += 1;
         }
 
         applied
@@ -795,7 +945,8 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
 
     let emit_interval_frames: u64 = (sample_rate_hz as u64 / 10).max(1);
     let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
-    let mut last_emit_frame = [0_u64; NUM_SAMPLES];
+    let mut pad_activity = RtRenderPadActivity::default();
+    let mut last_pad_emit_frame = 0_u64;
     let mut last_master_emit_frame = 0_u64;
 
     // Create stream config
@@ -825,11 +976,12 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
             drain_parameter_messages(&mut parameter_consumer_in, &mut mixer, &mut transport);
 
             // Render audio + compute per-pad peaks.
-            render_scheduled_audio(
+            render_scheduled_audio_tracking_pads(
                 &mut mixer,
                 &mut scheduler,
                 data,
                 &mut pad_peaks,
+                &mut pad_activity,
                 buffer_start_frame,
                 channels as usize,
                 &mut transport,
@@ -842,24 +994,15 @@ pub fn create_audio_stream() -> Result<AudioStreamHandle, Box<dyn std::error::Er
             transport.advance_by_rendered_frames(frames);
             let frame_clock = transport.output_frame();
 
-            for (id, peak) in pad_peaks.iter().enumerate() {
-                if frame_clock.wrapping_sub(last_emit_frame[id]) < emit_interval_frames {
-                    continue;
-                }
-
-                last_emit_frame[id] = frame_clock;
-
-                if *peak > 0.0 && peak.is_finite() {
-                    let peak = peak.clamp(0.0, 1.0);
-                    let _ = producer_out.push(AudioMessage::PadPeak { id, peak });
-                }
-
-                if let Some(position_s) = mixer.pad_playhead_seconds(id)
-                    && position_s.is_finite()
-                {
-                    let _ = producer_out.push(AudioMessage::PadPlayhead { id, position_s });
-                }
-            }
+            publish_pad_telemetry(
+                &mut producer_out,
+                &mixer,
+                &pad_peaks,
+                &pad_activity,
+                frame_clock,
+                emit_interval_frames,
+                &mut last_pad_emit_frame,
+            );
 
             publish_master_peak_telemetry(
                 &mut producer_out,
@@ -1050,6 +1193,62 @@ mod tests {
     }
 
     #[test]
+    fn parameter_drain_ignores_invalid_pad_ids_while_coalescing_touched_ids() {
+        let (mut producer, mut consumer) = RingBuffer::new(8);
+        producer
+            .push(ControlParameterMessage::SetPadGain {
+                id: NUM_SAMPLES,
+                gain_db: 12.0,
+            })
+            .unwrap();
+        producer
+            .push(ControlParameterMessage::SetPadGain {
+                id: 1,
+                gain_db: -6.0,
+            })
+            .unwrap();
+        producer
+            .push(ControlParameterMessage::SetPadGain {
+                id: 1,
+                gain_db: 6.0,
+            })
+            .unwrap();
+        producer
+            .push(ControlParameterMessage::SetPadBpm {
+                id: 2,
+                bpm: Some(90.0),
+            })
+            .unwrap();
+        producer
+            .push(ControlParameterMessage::SetPadBpm { id: 2, bpm: None })
+            .unwrap();
+
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        let mut transport = TransportTimeline::new(44_100);
+        mixer.load_sample(1, create_test_sample(1, 8, 1.0));
+        mixer.set_pad_bpm(2, Some(100.0));
+
+        let result = drain_parameter_messages(&mut consumer, &mut mixer, &mut transport);
+
+        assert_eq!(
+            result,
+            ParameterDrainResult {
+                messages_drained: 5,
+                parameters_applied: 2
+            }
+        );
+        assert_eq!(mixer.output_bpm_for_sample_id(2), None);
+
+        assert!(mixer.play_sample(1, 1.0));
+        let mut output = vec![0.0; 1];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        let expected = 10.0_f32.powf(6.0 / 20.0);
+        assert!((output[0] - expected).abs() < 1e-5);
+    }
+
+    #[test]
     fn master_bpm_parameter_updates_mixer_and_transport_clock() {
         let (mut producer, mut consumer) = RingBuffer::new(4);
         producer
@@ -1159,6 +1358,63 @@ mod tests {
         assert_eq!(last_master_emit_frame, 4_410);
         assert!(matches!(consumer.pop(), Ok(AudioMessage::Pong())));
         assert!(consumer.pop().is_err());
+    }
+
+    #[test]
+    fn pad_telemetry_publishes_only_touched_pads_on_shared_interval() {
+        let mixer = RtMixer::new(1, 44_100.0);
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        pad_peaks[0] = 0.5;
+        pad_peaks[1] = 0.75;
+        let mut activity = RtRenderPadActivity::default();
+        activity.record(0);
+        let mut messages = Vec::new();
+        let mut last_pad_emit_frame = 0;
+
+        publish_pad_telemetry(
+            &mut messages,
+            &mixer,
+            &pad_peaks,
+            &activity,
+            9,
+            10,
+            &mut last_pad_emit_frame,
+        );
+
+        assert!(messages.is_empty());
+        assert_eq!(last_pad_emit_frame, 0);
+
+        publish_pad_telemetry(
+            &mut messages,
+            &mixer,
+            &pad_peaks,
+            &activity,
+            10,
+            10,
+            &mut last_pad_emit_frame,
+        );
+
+        assert_eq!(last_pad_emit_frame, 10);
+        assert_eq!(messages.len(), 1);
+        assert!(matches!(
+            messages[0],
+            AudioMessage::PadPeak { id: 0, peak } if (peak - 0.5).abs() < 1e-5
+        ));
+
+        messages.clear();
+        activity.clear();
+        publish_pad_telemetry(
+            &mut messages,
+            &mixer,
+            &pad_peaks,
+            &activity,
+            20,
+            10,
+            &mut last_pad_emit_frame,
+        );
+
+        assert_eq!(last_pad_emit_frame, 20);
+        assert!(messages.is_empty());
     }
 
     #[test]
@@ -2194,6 +2450,41 @@ mod tests {
         );
         assert!(output[4..].iter().all(|sample| *sample == 0.0));
         assert!((pad_peaks[0] - 0.5).abs() < 1e-5);
+        assert_stopped(&messages, 0, 0);
+    }
+
+    #[test]
+    fn scheduled_render_tracks_pad_activity_across_split_segments() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 32, 0.5));
+        mixer.play_sample(0, 1.0);
+        let mut scheduler = FixedCapacityScheduler::<8>::new();
+        let mut transport = TransportTimeline::new(44_100);
+        scheduler
+            .schedule(4, ScheduledCommand::StopSample { id: 0 })
+            .unwrap();
+        let mut output = vec![0.0; 8];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        let mut pad_activity = RtRenderPadActivity::default();
+        let mut messages = Vec::new();
+
+        render_scheduled_audio_tracking_pads(
+            &mut mixer,
+            &mut scheduler,
+            &mut output,
+            &mut pad_peaks,
+            &mut pad_activity,
+            0,
+            1,
+            &mut transport,
+            &mut messages,
+            &mut ImmediateAudioBufferRetirement,
+        );
+
+        assert!(pad_activity.contains(0));
+        assert_eq!(pad_activity.len(), 1);
+        assert!((pad_peaks[0] - 0.5).abs() < 1e-5);
+        assert_eq!(mixer.pad_playhead_seconds(0), None);
         assert_stopped(&messages, 0, 0);
     }
 

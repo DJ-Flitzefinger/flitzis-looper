@@ -14,6 +14,7 @@ from flitzis_looper.input_mapping.actions import (
     pad_gain_action,
     pad_gain_delta_action,
     selected_pad_eq_delta_action,
+    selected_tap_bpm_action,
     tap_bpm_action,
 )
 from flitzis_looper.input_mapping.bindings import KeyboardBinding
@@ -64,6 +65,25 @@ def test_learn_saves_midi_mapping_and_refreshes_rust_snapshot(
     assert controller.session.input_learn_active is False
 
 
+def test_toggle_learn_publishes_capture_state_to_rust(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    controller.input_mapping.set_enabled(enabled=True)
+    audio_engine_mock.reset_mock()
+
+    controller.input_mapping.toggle_learn()
+
+    active = True
+    audio_engine_mock.set_input_learn_active.assert_called_once_with(active)
+
+    audio_engine_mock.reset_mock()
+    controller.input_mapping.toggle_learn()
+
+    active = False
+    audio_engine_mock.set_input_learn_active.assert_called_once_with(active)
+
+
 def test_learn_saves_tap_bpm_mapping(controller: AppController) -> None:
     ctx = UiContext(controller)
     controller.input_mapping.set_enabled(enabled=True)
@@ -78,7 +98,7 @@ def test_learn_saves_tap_bpm_mapping(controller: AppController) -> None:
 
     data = load_midi_mapping_file()
     assert data.mappings[0].input.key == "midi:note:1:60"
-    assert data.mappings[0].action.key == "pad.tap_bpm:4"
+    assert data.mappings[0].action.key == "pad.tap_bpm.selected"
     assert controller.session.input_learn_active is False
 
 
@@ -450,6 +470,66 @@ def test_keyboard_mapping_executes_tap_bpm(controller: AppController) -> None:
 
     assert handled is True
     assert controller.session.tap_bpm_pad_id == 3
+    assert len(controller.session.tap_bpm_timestamps) == 1
+
+
+def test_keyboard_mapping_executes_selected_tap_bpm(
+    controller: AppController,
+) -> None:
+    controller.input_mapping.set_enabled(enabled=True)
+    binding = KeyboardBinding(key_name="T")
+    controller.input_mapping.save_mapping(
+        "keyboard",
+        binding.key,
+        selected_tap_bpm_action(),
+    )
+
+    controller.project.selected_pad = 3
+    handled = controller.input_mapping.capture_keyboard_input(
+        binding,
+        text_input_focused=False,
+    )
+
+    assert handled is True
+    assert controller.session.tap_bpm_pad_id == 3
+    assert len(controller.session.tap_bpm_timestamps) == 1
+
+    controller.project.selected_pad = 5
+    handled = controller.input_mapping.capture_keyboard_input(
+        binding,
+        text_input_focused=False,
+    )
+
+    assert handled is True
+    assert controller.session.tap_bpm_pad_id == 5
+    assert len(controller.session.tap_bpm_timestamps) == 1
+
+
+def test_midi_mapping_executes_selected_tap_bpm(controller: AppController) -> None:
+    controller.input_mapping.set_enabled(enabled=True)
+
+    controller.project.selected_pad = 3
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:note:1:60",
+        "action_key": "pad.tap_bpm.selected",
+        "direct": False,
+        "dispatched": True,
+    })
+
+    assert controller.session.tap_bpm_pad_id == 3
+    assert len(controller.session.tap_bpm_timestamps) == 1
+
+    controller.project.selected_pad = 5
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:note:1:60",
+        "action_key": "pad.tap_bpm.selected",
+        "direct": False,
+        "dispatched": True,
+    })
+
+    assert controller.session.tap_bpm_pad_id == 5
     assert len(controller.session.tap_bpm_timestamps) == 1
 
 
@@ -1066,6 +1146,88 @@ def test_direct_rust_midi_event_is_not_executed_twice(
     })
 
     audio_engine_mock.play_sample_exclusive.assert_not_called()
+
+
+def test_input_runtime_state_sync_skips_unchanged_frames(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    audio_engine_mock.reset_mock()
+
+    controller.input_mapping.on_frame_render()
+
+    audio_engine_mock.set_input_runtime_state.assert_not_called()
+
+    controller.project.multi_loop = True
+    controller.input_mapping.on_frame_render()
+
+    audio_engine_mock.set_input_runtime_state.assert_called_once()
+    multi_loop, loaded, loop_starts, loop_ends = (
+        audio_engine_mock.set_input_runtime_state.call_args.args
+    )
+    assert multi_loop is True
+    assert loaded[0] is False
+    assert loop_starts[0] == 0.0
+    assert loop_ends[0] is None
+
+    audio_engine_mock.reset_mock()
+    controller.input_mapping.on_frame_render()
+
+    audio_engine_mock.set_input_runtime_state.assert_not_called()
+
+
+def test_input_runtime_state_sync_republishes_loaded_loop_changes(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    controller.project.sample_paths[0] = "samples/foo.wav"
+    controller.project.pad_loop_auto[0] = False
+    controller.project.pad_loop_start_s[0] = 1.0
+    controller.project.pad_loop_end_s[0] = 4.0
+    audio_engine_mock.reset_mock()
+
+    controller.input_mapping.on_frame_render()
+
+    audio_engine_mock.set_input_runtime_state.assert_called_once()
+    _, loaded, loop_starts, loop_ends = audio_engine_mock.set_input_runtime_state.call_args.args
+    assert loaded[0] is True
+    assert loop_starts[0] == pytest.approx(1.0)
+    assert loop_ends[0] == pytest.approx(4.0)
+
+    audio_engine_mock.reset_mock()
+    controller.input_mapping.on_frame_render()
+
+    audio_engine_mock.set_input_runtime_state.assert_not_called()
+
+    controller.transport.loop.set_start(0, 2.0)
+    audio_engine_mock.reset_mock()
+
+    controller.input_mapping.on_frame_render()
+
+    audio_engine_mock.set_input_runtime_state.assert_called_once()
+    _, _, loop_starts, loop_ends = audio_engine_mock.set_input_runtime_state.call_args.args
+    assert loop_starts[0] == pytest.approx(2.0)
+    assert loop_ends[0] == pytest.approx(4.0)
+
+
+def test_failed_direct_rust_midi_event_executes_python_fallback(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    controller.input_mapping.set_enabled(enabled=True)
+    controller.project.sample_paths[0] = "samples/foo.wav"
+    audio_engine_mock.reset_mock()
+
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:note:1:60",
+        "action_key": "pad.trigger:0",
+        "direct": True,
+        "dispatched": False,
+    })
+
+    audio_engine_mock.set_pad_loop_region.assert_called_once_with(0, 0.0, None)
+    audio_engine_mock.play_sample_exclusive.assert_called_once_with(0, 1.0)
 
 
 def test_future_dsp_midi_event_does_not_call_audio_without_explicit_handler(

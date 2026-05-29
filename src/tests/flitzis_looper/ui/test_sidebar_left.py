@@ -1,6 +1,8 @@
 from contextlib import contextmanager
+from typing import TYPE_CHECKING, cast
 
 import pytest
+from imgui_bundle import imgui
 
 from flitzis_looper.ui.render import sidebar_left
 from flitzis_looper.ui.render.sidebar_left import (
@@ -8,6 +10,11 @@ from flitzis_looper.ui.render.sidebar_left import (
     parse_eq_entry_text,
     sanitize_eq_entry_text,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from flitzis_looper.ui.context import UiContext
 
 
 class _Point:
@@ -102,8 +109,8 @@ class _SidebarContext:
 
 
 @contextmanager
-def _noop_style_var(*_args: object, **_kwargs: object) -> object:
-    yield
+def _noop_style_var(*_args: object, **_kwargs: object) -> Iterator[None]:
+    yield None
 
 
 @pytest.mark.parametrize(
@@ -190,8 +197,8 @@ def test_gain_left_drag_tracks_absolute_pointer_position(
     ctx = _GainContext()
     sidebar_left._GAIN_DRAG.start(
         pad_id=0,
-        button=sidebar_left.imgui.MouseButton_.left,
-        mouse_pos=_Point(10.0, 0.0),
+        button=imgui.MouseButton_.left,
+        mouse_pos=imgui.ImVec2(10.0, 0.0),
     )
 
     monkeypatch.setattr("flitzis_looper.ui.render.sidebar_left.imgui.is_mouse_down", lambda _: True)
@@ -209,11 +216,14 @@ def test_gain_left_drag_tracks_absolute_pointer_position(
     )
 
     try:
-        sidebar_left._apply_gain_drag(ctx, 0)
+        sidebar_left._apply_gain_drag(cast("UiContext", ctx), 0)
     finally:
         sidebar_left._GAIN_DRAG.clear()
 
-    assert ctx.audio.pads.calls == [(0, pytest.approx(6.0))]
+    assert len(ctx.audio.pads.calls) == 1
+    pad_id, gain_db = ctx.audio.pads.calls[0]
+    assert pad_id == 0
+    assert gain_db == pytest.approx(6.0)
 
 
 @pytest.mark.parametrize(
@@ -275,9 +285,12 @@ def test_sidebar_renders_pad_key_lock_only_for_loaded_pads(
     )
 
     sidebar_left.sidebar_left(
-        _SidebarContext(
-            loaded=pad_state == "loaded",
-            loading=pad_state == "loading",
+        cast(
+            "UiContext",
+            _SidebarContext(
+                loaded=pad_state == "loaded",
+                loading=pad_state == "loading",
+            ),
         )
     )
 

@@ -306,16 +306,18 @@ impl PerPadDspChain {
         max_block_frames: usize,
         channels: usize,
     ) -> Self {
-        let mut chain = Self {
+        let sample_rate_hz = sanitize_sample_rate(sample_rate_hz);
+        let max_block_frames = max_block_frames.max(DEFAULT_MAX_BLOCK_FRAMES);
+        let channels = channels.clamp(DEFAULT_CHANNELS, DSP_MAX_CHANNELS);
+
+        Self {
             pad_id: u16::try_from(pad_id).unwrap_or(u16::MAX),
-            sample_rate_hz: DEFAULT_SAMPLE_RATE_HZ,
-            max_block_frames: DEFAULT_MAX_BLOCK_FRAMES,
-            channels: DEFAULT_CHANNELS,
+            sample_rate_hz,
+            max_block_frames,
+            channels,
             parameters: [SmoothedNormalizedValue::default(); DSP_PARAMETER_SLOTS],
-            isolator_node: DjIsolatorNode::new(DEFAULT_SAMPLE_RATE_HZ),
-        };
-        chain.prepare(sample_rate_hz, max_block_frames, channels);
-        chain
+            isolator_node: DjIsolatorNode::new(sample_rate_hz),
+        }
     }
 
     pub(crate) fn prepare(

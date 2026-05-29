@@ -60,8 +60,8 @@ class BpmController:
         if len(timestamps) < 2:
             return None
 
-        avg_interval = (timestamps[-1] - timestamps[0]) / (len(timestamps) - 1)
-        if avg_interval <= 0:
+        avg_interval = _estimate_tap_interval_s(timestamps)
+        if avg_interval is None:
             return None
 
         bpm = 60.0 / avg_interval
@@ -112,3 +112,28 @@ class BpmController:
 
         self._session.bpm_lock_anchor_bpm = bpm
         self.recompute_master_bpm()
+
+
+def _estimate_tap_interval_s(timestamps: list[float]) -> float | None:
+    """Estimate the constant tap interval from all accepted tap timestamps."""
+    count = len(timestamps)
+    if count < 2:
+        return None
+
+    mean_index = (count - 1) / 2.0
+    mean_time = sum(timestamps) / count
+    denominator = 0.0
+    numerator = 0.0
+    for index, timestamp in enumerate(timestamps):
+        index_offset = index - mean_index
+        denominator += index_offset * index_offset
+        numerator += index_offset * (float(timestamp) - mean_time)
+
+    if denominator <= 0.0:
+        return None
+
+    interval_s = numerator / denominator
+    if not math.isfinite(interval_s) or interval_s <= 0.0:
+        return None
+
+    return interval_s

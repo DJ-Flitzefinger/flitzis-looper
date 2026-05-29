@@ -113,6 +113,11 @@ def tap_bpm_action(pad_id: int) -> LooperAction:
     return LooperAction(key=f"pad.tap_bpm:{pad_id}", label=f"Tap BPM {pad_id + 1}")
 
 
+def selected_tap_bpm_action() -> LooperAction:
+    """Return a serializable Tap BPM action for the currently selected pad."""
+    return LooperAction(key="pad.tap_bpm.selected", label="Tap BPM selected pad")
+
+
 def start_stop_action() -> LooperAction:
     """Return the serializable bottom-bar START/STOP primary action."""
     return LooperAction(key="global.start_stop", label="START/STOP")

@@ -6,11 +6,12 @@ measurement and sets it as the pad's manual BPM.
 
 The Tap BPM workflow SHALL record taps only when the performer explicitly activates the Tap BPM
 control. The first tap for a target pad SHALL start the current measurement series without setting
-manual BPM. The second and every later monotonic tap in that series SHALL compute BPM from the
-average interval between all consecutive taps recorded in the current series and SHALL update the
-pad's manual BPM immediately. The measurement series SHALL continue until the performer changes the
-Tap BPM target pad or the next tap arrives more than 3.0 seconds after the previous accepted tap;
-after such a pause, that tap SHALL become the first tap of a new measurement series.
+manual BPM. The second and every later monotonic tap in that series SHALL estimate one constant
+tempo from all accepted tap timestamps in the current series, using a least-squares fit of tap index
+to tap time, and SHALL update the pad's manual BPM immediately. The measurement series SHALL
+continue until the performer changes the Tap BPM target pad or the next tap arrives more than
+3.0 seconds after the previous accepted tap; after such a pause, that tap SHALL become the first tap
+of a new measurement series.
 
 The Tap BPM workflow SHALL NOT start or extend a measurement series merely because a song is
 loaded, playing, analyzed, or displayed. Tap BPM measurement state remains Python/control-plane UI
@@ -31,13 +32,13 @@ neural inference to the Rust audio callback.
 - **THEN** the computed BPM is approximately 120.0
 - **AND** the pad's manual BPM is set to that computed value
 
-#### Scenario: Long tap series uses all accepted taps
+#### Scenario: Long tap series fits one constant tempo from all accepted taps
 - **GIVEN** a pad is the current Tap BPM target
 - **WHEN** the performer activates Tap BPM six times with accepted consecutive intervals of
   0.5, 0.5, 0.5, 0.5, and 1.0 seconds
-- **THEN** the computed BPM is approximately 100.0
-- **AND** the computation uses all accepted intervals in the current series rather than a fixed
-  five-tap window
+- **THEN** the computed BPM is approximately 105.0
+- **AND** the computation uses all accepted tap timestamps in the current series rather than a
+  fixed five-tap window or only the first and last timestamps
 
 #### Scenario: Pause longer than three seconds resets measurement
 - **GIVEN** a pad is the current Tap BPM target

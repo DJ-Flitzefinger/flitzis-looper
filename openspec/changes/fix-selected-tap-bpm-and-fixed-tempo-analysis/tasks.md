@@ -1,0 +1,23 @@
+## 1. Implementation
+
+- [x] 1.1 Add a selected-pad Tap BPM action for Learn and mapped execution.
+- [x] 1.2 Preserve existing pad-specific Tap BPM mapping execution.
+- [x] 1.3 Add fixed-tempo BPM refinement after automatic analysis.
+- [x] 1.4 Add focused Python input-mapping tests.
+- [x] 1.5 Add focused Rust BPM-refinement tests.
+- [x] 1.6 Verify the provided `test-audio/test_120bpm_10min.mp3` reports 120.00 BPM after the fix.
+- [x] 1.7 Run official OpenSpec validation.
+- [x] 1.8 Run focused Python/Rust validation and `git diff --check`.
+- [x] 1.9 Add low-confidence candidate-family BPM consensus.
+- [x] 1.10 Add regression coverage for 90 BPM and 88 BPM candidate-family failures.
+- [x] 1.11 Verify `test-audio/48.wav` and `test-audio/AZAD, Kool Savas - #1.mp3` report the expected BPMs.
+- [x] 1.12 Re-run OpenSpec and focused validation.
+- [x] 1.13 Snap start-near analysis anchors so Loop Editor grid lines begin at track start when the detected first beat/downbeat is only analyzer hop latency.
+- [x] 1.14 Preserve MP3 decode timeline across recoverable packet errors by inserting silence when packet duration is known.
+- [x] 1.15 Add spectral fine-tempo refinement for supported common-ratio candidates and near-integer BPMs.
+- [x] 1.16 Verify `test-audio/LOOPER Donkey Work 1.mp3` and `test-audio/08 Streets Won't Let Me Chill Instro.mp3` report the expected BPMs.
+- [x] 1.17 Re-run OpenSpec, Python tests, Rust build/check/no-run validation, and `git diff --check`; native Rust test execution is blocked in this Windows shell by a missing runtime DLL.
+- [x] 1.18 Preserve near-integer BPM analysis precision instead of snapping analysis results to integer BPM.
+- [x] 1.19 Add strongly dominant 4/5 spectral tempo refinement for performer-tempo cases such as `White_Label_Looper_Vol_2.mp3`.
+- [x] 1.20 Round only the pad-control BPM overlay while keeping editable BPM displays and timing/grid values precise.
+- [x] 1.21 Verify the updated local test-audio cases, OpenSpec validation, and focused Rust/Python tests.

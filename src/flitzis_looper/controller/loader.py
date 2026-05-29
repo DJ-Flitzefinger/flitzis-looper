@@ -55,6 +55,8 @@ class LoaderController(BaseController):
         self._on_stem_generation_error = on_stem_generation_error
         self._on_stems_deleted = on_stems_deleted
         self._on_new_sample_loaded: Callable[[int], None] | None = None
+        self._load_request_ids: dict[int, int] = {}
+        self._analysis_request_ids: dict[int, int] = {}
 
     def set_new_sample_loaded_callback(self, callback: Callable[[int], None]) -> None:
         """Register behavior that runs after a newly assigned sample finishes loading."""
@@ -123,8 +125,10 @@ class LoaderController(BaseController):
 
         self._session.pending_sample_paths[sample_id] = path
         self._session.loading_sample_ids.add(sample_id)
+        self._load_request_ids.pop(sample_id, None)
 
-        self._audio.load_sample_async(sample_id, path, run_analysis=True)
+        request_id = self._audio.load_sample_async(sample_id, path, run_analysis=True)
+        self._record_load_request_id(sample_id, request_id)
 
     def unload_sample(self, sample_id: int) -> None:
         """Stop playback and unload a sample slot."""
@@ -134,6 +138,7 @@ class LoaderController(BaseController):
         self._session.global_stop_restore_sample_ids.discard(sample_id)
         self._session.loading_sample_ids.discard(sample_id)
         self._session.pending_sample_paths.pop(sample_id, None)
+        self._load_request_ids.pop(sample_id, None)
         self._session.sample_load_progress.pop(sample_id, None)
         self._session.sample_load_stage.pop(sample_id, None)
         self._session.sample_load_errors.pop(sample_id, None)
@@ -184,12 +189,15 @@ class LoaderController(BaseController):
 
         self._clear_analysis_task_messages(sample_id)
         self._session.analyzing_sample_ids.add(sample_id)
+        self._analysis_request_ids.pop(sample_id, None)
 
         try:
-            self._audio.analyze_sample_async(sample_id)
+            request_id = self._audio.analyze_sample_async(sample_id)
         except RuntimeError as err:
             self._session.analyzing_sample_ids.discard(sample_id)
             self._session.sample_analysis_errors[sample_id] = str(err)
+        else:
+            self._record_analysis_request_id(sample_id, request_id)
 
     def poll_loader_events(self) -> None:
         """Drain pending loader events from the Rust audio engine."""
@@ -253,6 +261,7 @@ class LoaderController(BaseController):
 
     def _clear_analysis_task_state(self, sample_id: int) -> None:
         self._session.analyzing_sample_ids.discard(sample_id)
+        self._analysis_request_ids.pop(sample_id, None)
         self._clear_analysis_task_messages(sample_id)
 
     def _clear_analysis_task_messages(self, sample_id: int) -> None:
@@ -368,6 +377,9 @@ class LoaderController(BaseController):
         self._audio.set_pad_key_lock(sample_id, defaults.pad_key_lock[sample_id])
 
     def _handle_loader_started(self, sample_id: int, _event: dict[str, object]) -> None:
+        if not self._matches_load_request(sample_id, _event):
+            return
+
         if self._project.sample_paths[sample_id] is None:
             self._project.sample_analysis[sample_id] = None
             self._clear_stem_cache(sample_id)
@@ -381,6 +393,9 @@ class LoaderController(BaseController):
         self._clear_analysis_task_state(sample_id)
 
     def _handle_loader_progress(self, sample_id: int, event: dict[str, object]) -> None:
+        if not self._matches_load_request(sample_id, event):
+            return
+
         stage = event.get("stage")
         if isinstance(stage, str):
             self._session.sample_load_stage[sample_id] = stage
@@ -390,10 +405,14 @@ class LoaderController(BaseController):
             self._session.sample_load_progress[sample_id] = float(percent)
 
     def _handle_loader_success(self, sample_id: int, event: dict[str, object]) -> None:
+        if not self._matches_load_request(sample_id, event):
+            return
+
         self._session.loading_sample_ids.discard(sample_id)
         self._session.sample_load_errors.pop(sample_id, None)
         self._session.sample_load_progress.pop(sample_id, None)
         self._session.sample_load_stage.pop(sample_id, None)
+        self._load_request_ids.pop(sample_id, None)
 
         pending = self._session.pending_sample_paths.pop(sample_id, None)
         cached_path = event.get("cached_path")
@@ -429,10 +448,14 @@ class LoaderController(BaseController):
         self._clear_analysis_task_state(sample_id)
 
     def _handle_loader_error(self, sample_id: int, event: dict[str, object]) -> None:
+        if not self._matches_load_request(sample_id, event):
+            return
+
         self._session.loading_sample_ids.discard(sample_id)
         self._session.sample_load_progress.pop(sample_id, None)
         self._session.sample_load_stage.pop(sample_id, None)
         self._session.pending_sample_paths.pop(sample_id, None)
+        self._load_request_ids.pop(sample_id, None)
         self._clear_analysis_task_state(sample_id)
 
         if self._project.sample_paths[sample_id] is not None:
@@ -456,6 +479,9 @@ class LoaderController(BaseController):
             return
 
         if task != "analysis":
+            return
+
+        if not self._matches_analysis_request(sample_id, event):
             return
 
         self._session.analyzing_sample_ids.add(sample_id)
@@ -489,6 +515,9 @@ class LoaderController(BaseController):
         if task != "analysis":
             return
 
+        if not self._matches_analysis_request(sample_id, event):
+            return
+
         stage = event.get("stage")
         if isinstance(stage, str):
             self._session.sample_analysis_stage[sample_id] = stage
@@ -508,6 +537,9 @@ class LoaderController(BaseController):
             return
 
         if task != "analysis":
+            return
+
+        if not self._matches_analysis_request(sample_id, event):
             return
 
         self._store_sample_analysis(sample_id, event.get("analysis"))
@@ -609,7 +641,11 @@ class LoaderController(BaseController):
         if task != "analysis":
             return
 
+        if not self._matches_analysis_request(sample_id, event):
+            return
+
         self._session.analyzing_sample_ids.discard(sample_id)
+        self._analysis_request_ids.pop(sample_id, None)
         self._session.sample_analysis_progress.pop(sample_id, None)
         self._session.sample_analysis_stage.pop(sample_id, None)
 
@@ -662,12 +698,41 @@ class LoaderController(BaseController):
     def _schedule_restored_load(self, sample_id: int, rel: Path, *, run_analysis: bool) -> bool:
         self._session.pending_sample_paths[sample_id] = rel.as_posix()
         self._session.loading_sample_ids.add(sample_id)
+        self._load_request_ids.pop(sample_id, None)
 
         try:
-            self._audio.load_sample_async(sample_id, rel.as_posix(), run_analysis=run_analysis)
+            request_id = self._audio.load_sample_async(
+                sample_id,
+                rel.as_posix(),
+                run_analysis=run_analysis,
+            )
         except RuntimeError:
             self._session.loading_sample_ids.discard(sample_id)
             self._session.pending_sample_paths.pop(sample_id, None)
+            self._load_request_ids.pop(sample_id, None)
             return False
 
+        self._record_load_request_id(sample_id, request_id)
         return True
+
+    def _record_load_request_id(self, sample_id: int, request_id: object) -> None:
+        if isinstance(request_id, bool) or not isinstance(request_id, int):
+            return
+        self._load_request_ids[sample_id] = request_id
+
+    def _record_analysis_request_id(self, sample_id: int, request_id: object) -> None:
+        if isinstance(request_id, bool) or not isinstance(request_id, int):
+            return
+        self._analysis_request_ids[sample_id] = request_id
+
+    def _matches_load_request(self, sample_id: int, event: dict[str, object]) -> bool:
+        request_id = event.get("request_id")
+        if isinstance(request_id, bool) or not isinstance(request_id, int):
+            return True
+        return self._load_request_ids.get(sample_id) == request_id
+
+    def _matches_analysis_request(self, sample_id: int, event: dict[str, object]) -> bool:
+        request_id = event.get("request_id")
+        if isinstance(request_id, bool) or not isinstance(request_id, int):
+            return True
+        return self._analysis_request_ids.get(sample_id) == request_id

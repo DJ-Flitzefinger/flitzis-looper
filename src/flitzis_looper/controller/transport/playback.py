@@ -19,6 +19,10 @@ class PadPlaybackController:
         self._audio = transport._audio
         self._loop = transport.loop
 
+    def _forget_global_start_stop_restore(self) -> None:
+        self._session.global_stop_engaged = False
+        self._session.global_stop_restore_sample_ids = set()
+
     def trigger_pad(self, sample_id: int) -> None:
         """Trigger or retrigger a pad's loop.
 
@@ -37,9 +41,11 @@ class PadPlaybackController:
 
         if not self._project.multi_loop:
             self._audio.play_sample_exclusive(sample_id, 1.0)
+            self._forget_global_start_stop_restore()
             return
 
         self._audio.play_sample(sample_id, 1.0)
+        self._forget_global_start_stop_restore()
 
     def trigger_pad_keep_others(self, sample_id: int) -> None:
         """Trigger or retrigger a pad's loop without stopping other pads.
@@ -55,6 +61,7 @@ class PadPlaybackController:
         start_s, end_s = self._loop.effective_region(sample_id)
         self._audio.set_pad_loop_region(sample_id, start_s, end_s)
         self._audio.play_sample(sample_id, 1.0)
+        self._forget_global_start_stop_restore()
 
     def stop_pad(self, sample_id: int) -> None:
         """Stop a pad if it is currently active."""
@@ -63,6 +70,7 @@ class PadPlaybackController:
             return
 
         self._audio.stop_sample(sample_id)
+        self._forget_global_start_stop_restore()
 
     def stop_all_pads(self) -> None:
         """Stop all currently active pads."""

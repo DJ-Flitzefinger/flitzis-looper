@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
+from imgui_bundle import imgui
+
 from flitzis_looper.ui.render import file_dialog
 
 if TYPE_CHECKING:
@@ -19,14 +21,14 @@ class _MouseIo:
 
 def test_release_mouse_buttons_after_native_dialog(monkeypatch: pytest.MonkeyPatch) -> None:
     io = _MouseIo()
-    monkeypatch.setattr(file_dialog.imgui, "get_io", lambda: io)
+    monkeypatch.setattr("flitzis_looper.ui.render.file_dialog.imgui.get_io", lambda: io)
 
     file_dialog._release_mouse_buttons_after_native_dialog()
 
     assert io.events == [
-        (file_dialog.imgui.MouseButton_.left, False),
-        (file_dialog.imgui.MouseButton_.right, False),
-        (file_dialog.imgui.MouseButton_.middle, False),
+        (imgui.MouseButton_.left, False),
+        (imgui.MouseButton_.right, False),
+        (imgui.MouseButton_.middle, False),
     ]
 
 
@@ -91,8 +93,11 @@ def test_check_file_dialog_loads_result_and_releases_mouse_buttons(
     io = _MouseIo()
     ctx = _Context()
 
-    monkeypatch.setattr(file_dialog.ifd.FileDialog, "instance", staticmethod(lambda: dialog))
-    monkeypatch.setattr(file_dialog.imgui, "get_io", lambda: io)
+    monkeypatch.setattr(
+        "flitzis_looper.ui.render.file_dialog.ifd.FileDialog.instance",
+        staticmethod(lambda: dialog),
+    )
+    monkeypatch.setattr("flitzis_looper.ui.render.file_dialog.imgui.get_io", lambda: io)
 
     file_dialog.check_file_dialog(cast("UiContext", ctx), 7)
 
@@ -101,7 +106,7 @@ def test_check_file_dialog_loads_result_and_releases_mouse_buttons(
     assert dialog.closed is True
     assert ctx.ui.closed is True
     assert io.events == [
-        (file_dialog.imgui.MouseButton_.left, False),
-        (file_dialog.imgui.MouseButton_.right, False),
-        (file_dialog.imgui.MouseButton_.middle, False),
+        (imgui.MouseButton_.left, False),
+        (imgui.MouseButton_.right, False),
+        (imgui.MouseButton_.middle, False),
     ]

@@ -157,15 +157,40 @@ def test_set_loop_start_snaps_using_default_onset_anchor_when_auto_enabled(
     controller.project.sample_analysis[sample_id] = SampleAnalysis(
         bpm=120.0,
         key="C",
-        beat_grid=BeatGrid(beats=[0.0], downbeats=[1.0 / 128.0], bars=[0.0]),
+        beat_grid=BeatGrid(beats=[0.0], downbeats=[16.0 / 128.0], bars=[0.0]),
     )
 
     controller.transport.loop.set_auto(sample_id, enabled=True)
-    controller.transport.loop.set_start(sample_id, 1.0 / 32.0)
+    controller.transport.loop.set_start(sample_id, 21.0 / 128.0)
 
     start_s = controller.project.pad_loop_start_s[sample_id]
-    assert start_s == 5.0 / 128.0
-    assert start_s * 128 == 5
+    assert start_s == 20.0 / 128.0
+    assert start_s * 128 == 20
+
+
+def test_near_start_analysis_anchor_snaps_to_track_start(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 44_100
+
+    sample_id = 0
+    controller.project.sample_paths[sample_id] = "samples/foo.wav"
+    controller.project.sample_analysis[sample_id] = SampleAnalysis(
+        bpm=90.0,
+        key="C",
+        beat_grid=BeatGrid(
+            beats=[1536.0 / 44_100.0],
+            downbeats=[1536.0 / 44_100.0],
+            bars=[1536.0 / 44_100.0],
+        ),
+    )
+
+    assert controller.transport.loop.grid_anchor_sec(sample_id) == pytest.approx(0.0)
+
+    controller.transport.loop.apply_grid_anchor_to_audio(sample_id)
+
+    audio_engine_mock.set_pad_timing_metadata.assert_called_once_with(sample_id, 0.0)
 
 
 def test_set_loop_start_snaps_using_shifted_anchor_and_is_sample_accurate(

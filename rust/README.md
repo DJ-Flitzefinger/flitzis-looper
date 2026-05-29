@@ -83,12 +83,26 @@ Use `uv run cargo ...` so PyO3 and maturin use the project Python environment.
 - Python owns UI, durable project intent, persistence, settings, mapping edit
   UX, and offline/background orchestration.
 - Ordered commands and high-rate scalar parameters use separate bounded queues.
+- PyO3 setters for must-apply command and parameter publications report full
+  queues as caller-visible `RuntimeError`s instead of silently accepting the
+  write.
 - Parameter messages are coalesced by identity in the callback before applying
-  the latest drained value.
+  the latest drained value. The callback applies only identities touched by the
+  drained batch instead of sweeping every pad slot.
+- Pad peak/playhead telemetry is cadence-gated and published only for pads
+  touched by rendering in that callback; inactive bank slots are not scanned for
+  telemetry.
 - Scheduled mixer segments carry absolute output-frame positions. BPM-locked
   active voices with valid master and pad BPM metadata use fixed
   output-frame/source-frame anchors to derive source loop phase from the Rust
   transport timeline.
+- Per-pad load and analysis work carries request identity across the PyO3
+  boundary. Rust rejects stale sample publication after unload or replacement,
+  and Python ignores stale progress, error, success, and analysis events.
+- Rust MIDI capture runs outside the callback and receives mapping snapshots,
+  input-runtime pad state, and Learn/capture state from Python. Direct MIDI
+  command dispatch is all-or-nothing; failed direct attempts are reported back
+  to Python for controller-owned fallback outside the MIDI dispatcher.
 - Sample and prepared-stem handles removed from callback-owned state are retired
   through a bounded non-audio worker to avoid large final drops on the audio
   thread.

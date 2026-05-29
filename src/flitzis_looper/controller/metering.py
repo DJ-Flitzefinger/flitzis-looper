@@ -18,6 +18,7 @@ class MeteringController(BaseController):
     def __init__(self, project: ProjectState, session: SessionState, audio: AudioEngine) -> None:
         super().__init__(project, session, audio)
 
+        self._active_peak_sample_ids: set[int] = set()
         self._on_frame_render_callbacks.append(self._decay_pad_peaks)
         self._on_frame_render_callbacks.append(self._decay_master_peak)
 
@@ -38,6 +39,8 @@ class MeteringController(BaseController):
         peak = min(max(peak, 0.0), 1.0)
         self._session.pad_peak[sample_id] = max(self._session.pad_peak[sample_id], peak)
         self._session.pad_peak_updated_at[sample_id] = now
+        if self._session.pad_peak[sample_id] > 0.0:
+            self._active_peak_sample_ids.add(sample_id)
 
     def pad_clip_active(self, sample_id: int) -> bool:
         if not 0 <= sample_id < len(self._session.pad_clip_hold_until):
@@ -79,13 +82,19 @@ class MeteringController(BaseController):
         now = monotonic()
         peaks = self._session.pad_peak
         updated = self._session.pad_peak_updated_at
-        for idx, peak in enumerate(peaks):
+        for idx in tuple(self._active_peak_sample_ids):
+            if not 0 <= idx < len(peaks):
+                self._active_peak_sample_ids.discard(idx)
+                continue
+
             peaks[idx], updated[idx] = self._decayed_peak(
-                peak,
+                peaks[idx],
                 updated[idx],
                 now,
                 half_life_sec=self._PAD_PEAK_HALF_LIFE_SEC,
             )
+            if peaks[idx] <= 0.0:
+                self._active_peak_sample_ids.discard(idx)
 
     def _decay_master_peak(self) -> None:
         peak, updated_at = self._decayed_peak(

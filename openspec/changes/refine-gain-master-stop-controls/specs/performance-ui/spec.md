@@ -58,6 +58,28 @@ effective loops. This action SHALL NOT stop playback.
 - **THEN** pads 1 and 2 are started together
 - **AND** START/STOP renders green
 
+### Requirement: Manual Pad Actions Clear Remembered START/STOP Set
+The system SHALL clear any remembered START/STOP restore set when the performer manually triggers
+or stops a pad after START/STOP has stopped a loop set.
+
+After a manual pad trigger or stop clears the remembered set, START/STOP left mouse down SHALL
+restart only the pads that are currently playing. START/STOP right mouse down SHALL remember only
+the pads that are currently playing at that moment.
+
+#### Scenario: Manual pad trigger replaces the stopped restore target
+- **GIVEN** START/STOP previously remembered pads 1, 2, and 3 from a right-button stop
+- **WHEN** the performer manually triggers pad 4
+- **AND** the performer presses the left mouse button down on START/STOP
+- **THEN** pad 4 is restarted
+- **AND** pads 1, 2, and 3 are not started from the old remembered set
+
+#### Scenario: Manual pad stop clears the stopped restore target
+- **GIVEN** START/STOP previously remembered pads 1, 2, and 3 from a right-button stop
+- **AND** pad 4 is currently playing due to manual pad interaction
+- **WHEN** the performer manually stops pad 4
+- **AND** the performer presses the left mouse button down on START/STOP
+- **THEN** pads 1, 2, and 3 are not started from the old remembered set
+
 ### Requirement: START/STOP Right Mouse Stops
 The system SHALL make right mouse button down on the bottom-bar START/STOP button stop the
 currently playing loop set immediately and remember exactly the pads that were playing at that

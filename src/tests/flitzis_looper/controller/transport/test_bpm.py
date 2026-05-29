@@ -50,7 +50,7 @@ def test_tap_bpm_computes_on_second_tap(
     audio_engine_mock.set_pad_bpm.assert_called_with(sample_id, pytest.approx(120.0, abs=0.01))
 
 
-def test_tap_bpm_uses_all_taps_until_pause(
+def test_tap_bpm_fits_constant_tempo_across_all_taps(
     controller: AppController, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sample_id = 0
@@ -62,9 +62,24 @@ def test_tap_bpm_uses_all_taps_until_pause(
     for _ in range(6):
         bpm = controller.transport.bpm.tap_bpm(sample_id)
 
-    assert bpm == pytest.approx(100.0, abs=0.01)
+    assert bpm == pytest.approx(105.0, abs=0.01)
     assert controller.session.tap_bpm_pad_id == sample_id
     assert controller.session.tap_bpm_timestamps == [0.0, 0.5, 1.0, 1.5, 2.0, 3.0]
+
+
+def test_tap_bpm_uses_internal_taps_not_only_first_and_last(
+    controller: AppController, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sample_id = 0
+    times = iter([0.0, 0.52, 0.99, 1.51, 1.98, 2.50])
+    mp_target = "flitzis_looper.controller.transport.bpm.monotonic"
+    monkeypatch.setattr(mp_target, lambda: next(times))
+
+    bpm: float | None = None
+    for _ in range(6):
+        bpm = controller.transport.bpm.tap_bpm(sample_id)
+
+    assert bpm == pytest.approx(120.69, abs=0.01)
 
 
 def test_tap_bpm_resets_after_pause_longer_than_three_seconds(
@@ -154,7 +169,7 @@ def test_tap_bpm_non_monotonic_timestamps(
     assert controller.transport.bpm.tap_bpm(sample_id) == pytest.approx(120.0, abs=0.01)
     assert controller.transport.bpm.tap_bpm(sample_id) == pytest.approx(120.0, abs=0.01)
     assert controller.transport.bpm.tap_bpm(sample_id) is None
-    assert controller.transport.bpm.tap_bpm(sample_id) == pytest.approx(90.0, abs=0.01)
+    assert controller.transport.bpm.tap_bpm(sample_id) == pytest.approx(92.31, abs=0.01)
 
 
 def test_tap_bpm_negative_intervals(

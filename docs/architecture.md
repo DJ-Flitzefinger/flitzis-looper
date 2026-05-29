@@ -112,10 +112,14 @@ Control-to-audio communication is split into bounded rings:
 
 The callback drains bounded budgets per invocation. Parameter messages are
 coalesced by identity before application, so the latest drained value wins for
-each parameter in that callback.
+each parameter in that callback. The apply step walks only the identities
+touched by the drained batch rather than sweeping every pad slot.
 
 Python does not touch ring buffers directly. It calls `AudioEngine` methods that
 validate inputs and enqueue small Rust values or handles.
+Must-apply `AudioEngine` setters for command and parameter publications report a
+caller-visible `RuntimeError` when the target ring cannot accept the message.
+Only explicitly classified best-effort paths may drop queue failures.
 
 ## Transport And Scheduling
 
@@ -149,10 +153,13 @@ container metadata is incomplete, resamples to the active output rate when
 needed, maps channels to the output layout, and publishes an immutable buffer
 handle to Rust live-audio state.
 
-For MP3 files, the loader tolerates isolated recoverable frame decode errors by
-skipping the bad packet and continuing with later packets. It still rejects
-files with no decodable audio frames, or streams whose decoded sample rate or
-channel count changes mid-file.
+For MP3 files, the loader tolerates isolated recoverable frame decode errors.
+Once the stream channel layout is known, a bad packet with a known packet
+duration is replaced with silence for the same number of source frames so the
+decoded timeline does not drift shorter; otherwise the loader keeps scanning
+without fabricating an unknown duration. It still rejects files with no
+decodable audio frames, or streams whose decoded sample rate or channel count
+changes mid-file.
 
 ## Playback, Loops, And Stems
 
@@ -265,6 +272,11 @@ after active pad contributions are summed and after Master Volume or momentary
 output mute is applied. Master peak telemetry preserves finite values above
 `1.0`; Python projects the unclamped peak into `SessionState`, and the bottom
 bar Master Volume fader renders the display fill and one-second `CLIP` hold.
+Pad peak and playhead telemetry uses the same cadence gate but publishes only
+pads touched by the render path in that callback; inactive bank slots are not
+scanned for telemetry messages. Python keeps pad peaks with nonzero decay work
+in an active set, so frame rendering decays only pads that recently received
+peak telemetry until they fall back to silence.
 
 ## Input Mapping
 
@@ -273,11 +285,31 @@ Keyboard and MIDI Learn share stable action semantics.
 Rust MIDI capture runs outside the CPAL callback. It timestamps and normalizes
 supported MIDI messages, resolves in-memory mapping snapshots, and may dispatch
 only small discrete audio-safe commands directly through the command ring.
+Python publishes Learn/capture state to Rust so Learn takes precedence over
+mapped playback: while Learn is active, Rust reports the MIDI input as capture
+data and does not resolve mappings or enqueue direct playback commands.
+Python also publishes Rust input-runtime pad state at startup and when the
+loaded-pad, effective loop-region, BPM, grid-offset, or Multi Loop signature
+changes; unchanged UI frames do not republish the same snapshot.
+
+Direct Rust dispatch is all-or-nothing. If the bounded command transaction
+cannot be fully enqueued or current Rust input-runtime state cannot accept it,
+Rust emits the mapped action with `direct=True` and `dispatched=False`; Python
+then applies normal controller fallback semantics outside the MIDI dispatcher.
 
 Controller-owned actions such as Tap BPM, stem masks, dB Gain/Trim, EQ, master
 volume, and speed are reported back to Python as small events. Future high-rate
 DSP parameter mappings should derive bounded targets outside the callback, send
 accepted targets through the parameter ring, and smooth on the Rust side.
+
+## Background Task Identity
+
+Per-pad load and analysis work carries request identity across the Rust/Python
+boundary. Python records the current accepted request for each pad and ignores
+stale progress, error, success, and analysis events after unload or replacement.
+Rust also checks the current per-pad load request before publishing decoded
+sample buffers into the cache or command ring, so stale workers cannot restore
+old live-audio state.
 
 ## Persistence And Restore
 
@@ -294,11 +326,16 @@ Startup order:
 2. Create fresh `SessionState`.
 3. Start `AudioEngine`.
 4. Construct controllers.
-5. Publish restored global settings, gain/EQ, loop regions, BPM/timing metadata,
-   BPM Lock, Key Lock, and quantization to Rust.
+5. Validate restored sample assignments, clear missing or unusable pads with
+   explicit neutral Rust state, and schedule cached sample loads.
 6. Validate restored stem cache metadata.
-7. Schedule cached sample loads.
+7. Publish restored global settings and loaded-pad live-audio state to Rust.
 8. Publish input-mapping runtime state.
+
+Normal startup projection skips per-pad gain, EQ, BPM, timing metadata, loop
+regions, Key Lock, stem mode, and stem masks for empty pads. Explicit unload,
+clear, or force-reset paths still publish the bounded neutral state needed to
+remove stale Rust live-audio state for that pad.
 
 Audio-to-control telemetry is best-effort and controller-owned. Dropped
 telemetry must not silently change durable project intent.

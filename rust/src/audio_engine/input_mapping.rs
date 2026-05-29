@@ -112,6 +112,7 @@ pub(crate) struct InputRuntimeEvent {
 pub(crate) struct InputRuntime {
     origin: Instant,
     enabled: Arc<AtomicBool>,
+    learn_capture_active: Arc<AtomicBool>,
     input_tx: SyncSender<NormalizedMidiEvent>,
     event_rx: Mutex<Receiver<InputRuntimeEvent>>,
     mappings: Arc<Mutex<Vec<InputMapping>>>,
@@ -126,6 +127,7 @@ impl InputRuntime {
     pub fn new(audio_producer: Arc<Mutex<Producer<ControlMessage>>>) -> Self {
         let origin = Instant::now();
         let enabled = Arc::new(AtomicBool::new(false));
+        let learn_capture_active = Arc::new(AtomicBool::new(false));
         let mappings = Arc::new(Mutex::new(Vec::new()));
         let runtime_state = Arc::new(Mutex::new(RuntimeState::default()));
         let running = Arc::new(AtomicBool::new(true));
@@ -137,6 +139,7 @@ impl InputRuntime {
             let mappings = mappings.clone();
             let runtime_state = runtime_state.clone();
             let running = running.clone();
+            let learn_capture_active = learn_capture_active.clone();
             thread::spawn(move || {
                 input_dispatch_loop(
                     input_rx,
@@ -145,6 +148,7 @@ impl InputRuntime {
                     runtime_state,
                     audio_producer,
                     enabled,
+                    learn_capture_active,
                     running,
                 );
             })
@@ -153,6 +157,7 @@ impl InputRuntime {
         Self {
             origin,
             enabled,
+            learn_capture_active,
             input_tx,
             event_rx: Mutex::new(event_rx),
             mappings,
@@ -166,6 +171,10 @@ impl InputRuntime {
 
     pub fn set_enabled(&self, enabled: bool) {
         self.enabled.store(enabled, Ordering::Release);
+    }
+
+    pub fn set_learn_capture_active(&self, active: bool) {
+        self.learn_capture_active.store(active, Ordering::Release);
     }
 
     pub fn replace_mappings(&self, mappings: Vec<(String, String)>) {
@@ -315,6 +324,7 @@ fn input_dispatch_loop(
     runtime_state: Arc<Mutex<RuntimeState>>,
     audio_producer: Arc<Mutex<Producer<ControlMessage>>>,
     enabled: Arc<AtomicBool>,
+    learn_capture_active: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
 ) {
     while running.load(Ordering::Acquire) {
@@ -325,11 +335,12 @@ fn input_dispatch_loop(
         };
 
         let binding_key = event.binding.key();
-        let mapping = if enabled.load(Ordering::Acquire) {
-            lookup_mapping(&mappings, &binding_key)
-        } else {
-            None
-        };
+        let mapping =
+            if enabled.load(Ordering::Acquire) && !learn_capture_active.load(Ordering::Acquire) {
+                lookup_mapping(&mappings, &binding_key)
+            } else {
+                None
+            };
 
         let mut dispatched = false;
         let mut direct = false;
@@ -638,6 +649,16 @@ mod tests {
     use super::*;
     use rtrb::RingBuffer;
 
+    fn wait_for_input_event(runtime: &InputRuntime) -> InputRuntimeEvent {
+        for _ in 0..100 {
+            if let Some(event) = runtime.poll_event() {
+                return event;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("timed out waiting for input runtime event");
+    }
+
     #[test]
     fn note_on_velocity_positive_normalizes_with_timestamp() {
         let event = normalize_midi_message(&[0x90, 60, 100], 42).expect("normalized");
@@ -890,6 +911,56 @@ mod tests {
                 direct: true
             }
         );
+        assert!(consumer.pop().is_err());
+    }
+
+    #[test]
+    fn learn_capture_suppresses_direct_dispatch_and_mapping_action() {
+        let (producer, mut consumer) = RingBuffer::<ControlMessage>::new(8);
+        let runtime = InputRuntime::new(Arc::new(Mutex::new(producer)));
+        runtime.set_enabled(true);
+        runtime.replace_mappings(vec![(
+            "midi:note:1:60".to_string(),
+            "pad.trigger:0".to_string(),
+        )]);
+        runtime
+            .set_runtime_state(
+                false,
+                vec![true; NUM_SAMPLES],
+                vec![0.0; NUM_SAMPLES],
+                vec![None; NUM_SAMPLES],
+            )
+            .unwrap();
+        runtime.set_learn_capture_active(true);
+
+        assert!(runtime.inject_midi_message(&[0x90, 60, 100]));
+        let event = wait_for_input_event(&runtime);
+
+        assert_eq!(event.binding_key, "midi:note:1:60");
+        assert_eq!(event.value, 100);
+        assert_eq!(event.action_key, None);
+        assert!(!event.dispatched);
+        assert!(!event.direct);
+        assert!(consumer.pop().is_err());
+    }
+
+    #[test]
+    fn failed_direct_dispatch_event_keeps_action_for_python_fallback() {
+        let (producer, mut consumer) = RingBuffer::<ControlMessage>::new(8);
+        let runtime = InputRuntime::new(Arc::new(Mutex::new(producer)));
+        runtime.set_enabled(true);
+        runtime.replace_mappings(vec![(
+            "midi:note:1:60".to_string(),
+            "pad.trigger:0".to_string(),
+        )]);
+
+        assert!(runtime.inject_midi_message(&[0x90, 60, 100]));
+        let event = wait_for_input_event(&runtime);
+
+        assert_eq!(event.binding_key, "midi:note:1:60");
+        assert_eq!(event.action_key, Some("pad.trigger:0".to_string()));
+        assert!(!event.dispatched);
+        assert!(event.direct);
         assert!(consumer.pop().is_err());
     }
 

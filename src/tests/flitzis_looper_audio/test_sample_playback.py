@@ -364,6 +364,54 @@ def test_injected_midi_input_reports_normalized_mapping_event(
     assert audio_engine.poll_input_events() is None
 
 
+def test_injected_mapped_midi_is_capture_only_while_learn_active(
+    audio_engine: AudioEngine,
+) -> None:
+    audio_engine.set_input_mapping_enabled(True)
+    audio_engine.set_input_mapping_snapshot([("midi:note:1:60", "pad.trigger:0")])
+    multi_loop = False
+    audio_engine.set_input_runtime_state(
+        multi_loop,
+        [True] * NUM_SAMPLES,
+        [0.0] * NUM_SAMPLES,
+        [None] * NUM_SAMPLES,
+    )
+    learn_active = True
+    audio_engine.set_input_learn_active(learn_active)
+
+    assert audio_engine.inject_midi_input_for_test([0x90, 60, 100]) is True
+    event = _wait_for_input_event(audio_engine)
+
+    assert event["source"] == "midi"
+    assert event["binding_key"] == "midi:note:1:60"
+    assert "action_key" not in event
+    assert event["direct"] is False
+    assert event["dispatched"] is False
+
+
+def test_injected_direct_midi_reports_failed_dispatch_for_fallback(
+    audio_engine: AudioEngine,
+) -> None:
+    audio_engine.set_input_mapping_enabled(True)
+    audio_engine.set_input_mapping_snapshot([("midi:note:1:60", "pad.trigger:0")])
+    multi_loop = False
+    audio_engine.set_input_runtime_state(
+        multi_loop,
+        [False] * NUM_SAMPLES,
+        [0.0] * NUM_SAMPLES,
+        [None] * NUM_SAMPLES,
+    )
+
+    assert audio_engine.inject_midi_input_for_test([0x90, 60, 100]) is True
+    event = _wait_for_input_event(audio_engine)
+
+    assert event["source"] == "midi"
+    assert event["binding_key"] == "midi:note:1:60"
+    assert event["action_key"] == "pad.trigger:0"
+    assert event["direct"] is True
+    assert event["dispatched"] is False
+
+
 def test_injected_nrpn_increment_reports_stable_mapping_event(
     audio_engine: AudioEngine,
 ) -> None:
@@ -590,7 +638,10 @@ def test_publish_prepared_stems_rejects_misaligned_cache_artifacts(
 def test_load_sample_async_emits_started_and_error_for_missing_file(
     audio_engine: AudioEngine,
 ) -> None:
-    audio_engine.load_sample_async(0, "file-does-not-exist.wav", run_analysis=True)
+    request_id = audio_engine.load_sample_async(0, "file-does-not-exist.wav", run_analysis=True)
+
+    assert isinstance(request_id, int)
+    assert request_id > 0
 
     deadline = time.monotonic() + 1.0
     seen: dict[str, dict[str, object]] = {}
@@ -607,9 +658,11 @@ def test_load_sample_async_emits_started_and_error_for_missing_file(
 
     assert "started" in seen
     assert seen["started"].get("id") == 0
+    assert seen["started"].get("request_id") == request_id
 
     assert "error" in seen
     assert seen["error"].get("id") == 0
+    assert seen["error"].get("request_id") == request_id
     assert isinstance(seen["error"].get("msg"), str)
 
 

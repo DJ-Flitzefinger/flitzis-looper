@@ -1,5 +1,5 @@
 from typing import TYPE_CHECKING
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import pytest
 
@@ -90,6 +90,7 @@ def test_apply_per_pad_mixing_only_when_changed(
     audio_engine_mock: Mock,
 ) -> None:
     """Test _apply_per_pad_mixing only updates pads with changed values."""
+    transport_controller._project.sample_paths[0] = "samples/foo.wav"
     transport_controller._project.pad_gain_db[0] = -3.0
     transport_controller._project.pad_gain_db[1] = 0.0
 
@@ -134,7 +135,9 @@ def test_apply_per_pad_mixing_calls_gain_for_each_pad(
     apply_project_state: ApplyProjectState,
     audio_engine_mock: Mock,
 ) -> None:
-    """Test _apply_per_pad_mixing iterates over all pads for gain."""
+    """Test _apply_per_pad_mixing publishes gain only for loaded pads."""
+    transport_controller._project.sample_paths[0] = "samples/foo.wav"
+    transport_controller._project.sample_paths[2] = "samples/bar.wav"
     transport_controller._project.pad_gain_db[0] = -3.0
     transport_controller._project.pad_gain_db[1] = 1.5
     transport_controller._project.pad_gain_db[2] = 6.0
@@ -142,7 +145,10 @@ def test_apply_per_pad_mixing_calls_gain_for_each_pad(
     defaults = ProjectState()
     apply_project_state._apply_per_pad_mixing(defaults)
 
-    assert audio_engine_mock.set_pad_gain.call_count >= 3
+    assert audio_engine_mock.set_pad_gain.call_args_list == [
+        call(0, -3.0),
+        call(2, 6.0),
+    ]
 
 
 def test_apply_per_pad_mixing_calls_eq_for_each_pad(
@@ -151,6 +157,7 @@ def test_apply_per_pad_mixing_calls_eq_for_each_pad(
     audio_engine_mock: Mock,
 ) -> None:
     """Test _apply_per_pad_mixing calls EQ for pads with changed EQ values."""
+    transport_controller._project.sample_paths[0] = "samples/foo.wav"
     transport_controller._project.pad_eq_low_db[0] = -3.0
     transport_controller._project.pad_eq_mid_db[0] = 0.0
     transport_controller._project.pad_eq_high_db[0] = 3.0
@@ -159,6 +166,21 @@ def test_apply_per_pad_mixing_calls_eq_for_each_pad(
     apply_project_state._apply_per_pad_mixing(defaults)
 
     audio_engine_mock.set_pad_eq.assert_called_once()
+
+
+def test_apply_per_pad_mixing_skips_unloaded_pad_eq(
+    transport_controller: TransportController,
+    apply_project_state: ApplyProjectState,
+    audio_engine_mock: Mock,
+) -> None:
+    """Test startup projection does not publish stale EQ for empty pads."""
+    transport_controller._project.pad_eq_low_db[0] = -3.0
+    transport_controller._project.pad_eq_high_db[0] = 3.0
+
+    defaults = ProjectState()
+    apply_project_state._apply_per_pad_mixing(defaults)
+
+    audio_engine_mock.set_pad_eq.assert_not_called()
 
 
 def test_apply_pad_loop_regions_skips_unloaded_pads(
@@ -247,6 +269,19 @@ def test_apply_pad_bpm_settings_triggers_bpm_update(
         mock_method.return_value = None
         apply_project_state._apply_pad_bpm_settings()
         assert mock_method.call_count >= 1
+
+
+def test_apply_pad_bpm_settings_skips_unloaded_pad_metadata(
+    transport_controller: TransportController,
+    apply_project_state: ApplyProjectState,
+) -> None:
+    """Test stale BPM metadata on empty pads is not projected during startup."""
+    transport_controller._project.manual_bpm[0] = 120.0
+
+    with patch.object(transport_controller.bpm, "on_pad_bpm_changed", autospec=True) as mock_method:
+        mock_method.return_value = None
+        apply_project_state._apply_pad_bpm_settings()
+        mock_method.assert_not_called()
 
 
 def test_apply_bpm_lock_settings_enabled(

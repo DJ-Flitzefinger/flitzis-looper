@@ -24,6 +24,7 @@ use numpy::{PyArray1, ToPyArray};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use rtrb::Producer;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{
@@ -93,6 +94,26 @@ fn parse_stem_mix_mode(mode: &str) -> Option<StemMixMode> {
     }
 }
 
+fn push_control_message(
+    producer: &mut Producer<ControlMessage>,
+    message: ControlMessage,
+    label: &str,
+) -> PyResult<()> {
+    producer.push(message).map_err(|_| {
+        PyRuntimeError::new_err(format!("Failed to send {label} - buffer may be full"))
+    })
+}
+
+fn push_parameter_message(
+    producer: &mut Producer<ControlParameterMessage>,
+    message: ControlParameterMessage,
+    label: &str,
+) -> PyResult<()> {
+    producer.push(message).map_err(|_| {
+        PyRuntimeError::new_err(format!("Failed to send {label} - buffer may be full"))
+    })
+}
+
 struct PadLoadingGuard {
     id: usize,
     loading_sample_ids: Arc<Mutex<HashSet<usize>>>,
@@ -124,6 +145,35 @@ fn has_active_task_for_id(tasks: &HashSet<(usize, BackgroundTaskKind)>, id: usiz
     tasks.iter().any(|(task_id, _)| *task_id == id)
 }
 
+fn next_pad_request_id(pad_request_ids: &Arc<Mutex<Vec<u64>>>, id: usize) -> Result<u64, String> {
+    let mut guard = pad_request_ids
+        .lock()
+        .map_err(|_| "Failed to acquire pad request id lock".to_string())?;
+    let Some(current) = guard.get_mut(id) else {
+        return Err("id out of range".to_string());
+    };
+    let next = current.wrapping_add(1);
+    *current = if next == 0 { 1 } else { next };
+    Ok(*current)
+}
+
+fn current_pad_request_id(
+    pad_request_ids: &Arc<Mutex<Vec<u64>>>,
+    id: usize,
+) -> Result<u64, String> {
+    let guard = pad_request_ids
+        .lock()
+        .map_err(|_| "Failed to acquire pad request id lock".to_string())?;
+    guard
+        .get(id)
+        .copied()
+        .ok_or_else(|| "id out of range".to_string())
+}
+
+fn pad_request_matches(pad_request_ids: &Arc<Mutex<Vec<u64>>>, id: usize, request_id: u64) -> bool {
+    current_pad_request_id(pad_request_ids, id).is_ok_and(|current| current == request_id)
+}
+
 /// AudioEngine provides minimal audio output capabilities using cpal
 #[pyclass]
 pub struct AudioEngine {
@@ -134,6 +184,7 @@ pub struct AudioEngine {
     sample_cache: Arc<Mutex<Vec<Option<SampleBuffer>>>>,
     loading_sample_ids: Arc<Mutex<HashSet<usize>>>,
     active_tasks: Arc<Mutex<HashSet<(usize, BackgroundTaskKind)>>>,
+    pad_request_ids: Arc<Mutex<Vec<u64>>>,
     input_runtime: Option<InputRuntime>,
 }
 
@@ -152,6 +203,7 @@ impl AudioEngine {
             sample_cache: Arc::new(Mutex::new(vec![None; NUM_SAMPLES])),
             loading_sample_ids: Arc::new(Mutex::new(HashSet::new())),
             active_tasks: Arc::new(Mutex::new(HashSet::new())),
+            pad_request_ids: Arc::new(Mutex::new(vec![0; NUM_SAMPLES])),
             input_runtime: None,
         })
     }
@@ -231,6 +283,15 @@ impl AudioEngine {
         Ok(())
     }
 
+    pub fn set_input_learn_active(&self, active: bool) -> PyResult<()> {
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        runtime.set_learn_capture_active(active);
+        Ok(())
+    }
+
     pub fn set_input_mapping_snapshot(&self, mappings: Vec<(String, String)>) -> PyResult<()> {
         let runtime = self
             .input_runtime
@@ -292,7 +353,7 @@ impl AudioEngine {
         id: usize,
         path: String,
         run_analysis: Option<bool>,
-    ) -> PyResult<()> {
+    ) -> PyResult<u64> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err(format!(
                 "id out of range (expected 0..{}, got {id})",
@@ -311,6 +372,7 @@ impl AudioEngine {
         let output_sample_rate = handle.output_sample_rate;
         let sample_cache = self.sample_cache.clone();
         let loading_sample_ids = self.loading_sample_ids.clone();
+        let pad_request_ids = self.pad_request_ids.clone();
         let run_analysis = run_analysis.unwrap_or(true);
 
         {
@@ -321,6 +383,9 @@ impl AudioEngine {
                 return Err(PyValueError::new_err("sample is already loading"));
             }
         }
+
+        let request_id =
+            next_pad_request_id(&pad_request_ids, id).map_err(PyRuntimeError::new_err)?;
 
         {
             let mut cache = sample_cache
@@ -337,9 +402,9 @@ impl AudioEngine {
                 loading_sample_ids,
             };
 
-            let _ = loader_tx.send(LoaderEvent::Started { id });
+            let _ = loader_tx.send(LoaderEvent::Started { id, request_id });
 
-            let mut progress = ProgressReporter::new(id, loader_tx.clone());
+            let mut progress = ProgressReporter::new(id, request_id, loader_tx.clone());
 
             let sample = match decode_audio_file_to_sample_buffer(
                 Path::new(&path),
@@ -359,6 +424,7 @@ impl AudioEngine {
                 Err(SampleLoadError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
                     let _ = loader_tx.send(LoaderEvent::Error {
                         id,
+                        request_id,
                         error: format!("File not found: {path}"),
                     });
                     return;
@@ -366,6 +432,7 @@ impl AudioEngine {
                 Err(err) => {
                     let _ = loader_tx.send(LoaderEvent::Error {
                         id,
+                        request_id,
                         error: err.to_string(),
                     });
                     return;
@@ -384,6 +451,7 @@ impl AudioEngine {
                     Err(err) => {
                         let _ = loader_tx.send(LoaderEvent::Error {
                             id,
+                            request_id,
                             error: format!("Failed to cache audio file: {err}"),
                         });
                         return;
@@ -400,7 +468,11 @@ impl AudioEngine {
                         Some(result)
                     }
                     Err(err) => {
-                        let _ = loader_tx.send(LoaderEvent::Error { id, error: err });
+                        let _ = loader_tx.send(LoaderEvent::Error {
+                            id,
+                            request_id,
+                            error: err,
+                        });
                         return;
                     }
                 }
@@ -418,6 +490,10 @@ impl AudioEngine {
             let frames = sample.samples.len() / sample.channels;
             let duration_s = frames as f32 / output_sample_rate as f32;
 
+            if !pad_request_matches(&pad_request_ids, id, request_id) {
+                return;
+            }
+
             let sample_for_audio = sample.clone();
             if let Ok(mut cache) = sample_cache.lock()
                 && let Some(slot) = cache.get_mut(id)
@@ -430,6 +506,7 @@ impl AudioEngine {
                 Err(_) => {
                     let _ = loader_tx.send(LoaderEvent::Error {
                         id,
+                        request_id,
                         error: "Failed to acquire producer lock".to_string(),
                     });
                     return;
@@ -445,6 +522,7 @@ impl AudioEngine {
             {
                 let _ = loader_tx.send(LoaderEvent::Error {
                     id,
+                    request_id,
                     error: "Failed to send LoadSample - buffer may be full".to_string(),
                 });
                 return;
@@ -458,17 +536,18 @@ impl AudioEngine {
             );
             let _ = loader_tx.send(LoaderEvent::Success {
                 id,
+                request_id,
                 duration_s,
                 cached_path,
                 analysis,
             });
         });
 
-        Ok(())
+        Ok(request_id)
     }
 
     /// Analyze a previously loaded sample on a background thread.
-    pub fn analyze_sample_async(&self, id: usize) -> PyResult<()> {
+    pub fn analyze_sample_async(&self, id: usize) -> PyResult<u64> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err(format!(
                 "id out of range (expected 0..{}, got {id})",
@@ -516,6 +595,9 @@ impl AudioEngine {
         let loader_tx = self.loader_tx.clone();
         let output_sample_rate = handle.output_sample_rate;
         let active_tasks = self.active_tasks.clone();
+        let pad_request_ids = self.pad_request_ids.clone();
+        let request_id =
+            current_pad_request_id(&pad_request_ids, id).map_err(PyRuntimeError::new_err)?;
 
         thread::spawn(move || {
             let _task_guard = PadTaskGuard {
@@ -526,12 +608,14 @@ impl AudioEngine {
 
             let _ = loader_tx.send(LoaderEvent::TaskStarted {
                 id,
+                request_id,
                 task: BackgroundTaskKind::Analysis,
             });
 
             let stage = LoadProgressStage::Analyzing.stage_label().to_string();
             let _ = loader_tx.send(LoaderEvent::TaskProgress {
                 id,
+                request_id,
                 task: BackgroundTaskKind::Analysis,
                 percent: 0.0,
                 stage: stage.clone(),
@@ -540,8 +624,12 @@ impl AudioEngine {
             let analysis = match analyze_sample(&sample, output_sample_rate) {
                 Ok(result) => result,
                 Err(error) => {
+                    if !pad_request_matches(&pad_request_ids, id, request_id) {
+                        return;
+                    }
                     let _ = loader_tx.send(LoaderEvent::TaskError {
                         id,
+                        request_id,
                         task: BackgroundTaskKind::Analysis,
                         error,
                     });
@@ -549,8 +637,13 @@ impl AudioEngine {
                 }
             };
 
+            if !pad_request_matches(&pad_request_ids, id, request_id) {
+                return;
+            }
+
             let _ = loader_tx.send(LoaderEvent::TaskProgress {
                 id,
+                request_id,
                 task: BackgroundTaskKind::Analysis,
                 percent: 1.0,
                 stage,
@@ -558,12 +651,13 @@ impl AudioEngine {
 
             let _ = loader_tx.send(LoaderEvent::TaskSuccess {
                 id,
+                request_id,
                 task: BackgroundTaskKind::Analysis,
                 analysis: Some(analysis),
             });
         });
 
-        Ok(())
+        Ok(request_id)
     }
 
     /// Schedule offline stem generation on a background thread.
@@ -629,6 +723,8 @@ impl AudioEngine {
 
         let loader_tx = self.loader_tx.clone();
         let active_tasks = self.active_tasks.clone();
+        let request_id =
+            current_pad_request_id(&self.pad_request_ids, id).map_err(PyRuntimeError::new_err)?;
 
         thread::spawn(move || {
             let _task_guard = PadTaskGuard {
@@ -639,11 +735,13 @@ impl AudioEngine {
 
             let _ = loader_tx.send(LoaderEvent::TaskStarted {
                 id,
+                request_id,
                 task: BackgroundTaskKind::StemGeneration,
             });
 
             let _ = loader_tx.send(LoaderEvent::TaskProgress {
                 id,
+                request_id,
                 task: BackgroundTaskKind::StemGeneration,
                 percent: 0.0,
                 stage: "Generating stems".to_string(),
@@ -655,6 +753,7 @@ impl AudioEngine {
                     move |percent, stage| {
                         let _ = loader_tx.send(LoaderEvent::TaskProgress {
                             id,
+                            request_id,
                             task: BackgroundTaskKind::StemGeneration,
                             percent,
                             stage: stage.to_string(),
@@ -666,6 +765,7 @@ impl AudioEngine {
                 Ok(()) => {
                     let _ = loader_tx.send(LoaderEvent::TaskSuccess {
                         id,
+                        request_id,
                         task: BackgroundTaskKind::StemGeneration,
                         analysis: None,
                     });
@@ -673,6 +773,7 @@ impl AudioEngine {
                 Err(error) => {
                     let _ = loader_tx.send(LoaderEvent::TaskError {
                         id,
+                        request_id,
                         task: BackgroundTaskKind::StemGeneration,
                         error,
                     });
@@ -848,24 +949,33 @@ impl AudioEngine {
 
         let dict = PyDict::new(py);
         match event {
-            LoaderEvent::Started { id } => {
+            LoaderEvent::Started { id, request_id } => {
                 dict.set_item("type", "started")?;
                 dict.set_item("id", id)?;
+                dict.set_item("request_id", request_id)?;
             }
-            LoaderEvent::Progress { id, percent, stage } => {
+            LoaderEvent::Progress {
+                id,
+                request_id,
+                percent,
+                stage,
+            } => {
                 dict.set_item("type", "progress")?;
                 dict.set_item("id", id)?;
+                dict.set_item("request_id", request_id)?;
                 dict.set_item("percent", percent)?;
                 dict.set_item("stage", stage)?;
             }
             LoaderEvent::Success {
                 id,
+                request_id,
                 duration_s,
                 cached_path,
                 analysis,
             } => {
                 dict.set_item("type", "success")?;
                 dict.set_item("id", id)?;
+                dict.set_item("request_id", request_id)?;
                 dict.set_item("duration_s", duration_s)?;
                 dict.set_item("cached_path", cached_path)?;
 
@@ -883,31 +993,49 @@ impl AudioEngine {
                     dict.set_item("analysis", analysis_dict)?;
                 }
             }
-            LoaderEvent::Error { id, error } => {
+            LoaderEvent::Error {
+                id,
+                request_id,
+                error,
+            } => {
                 dict.set_item("type", "error")?;
                 dict.set_item("id", id)?;
+                dict.set_item("request_id", request_id)?;
                 dict.set_item("msg", error)?;
             }
-            LoaderEvent::TaskStarted { id, task } => {
+            LoaderEvent::TaskStarted {
+                id,
+                request_id,
+                task,
+            } => {
                 dict.set_item("type", "task_started")?;
                 dict.set_item("id", id)?;
+                dict.set_item("request_id", request_id)?;
                 dict.set_item("task", task_to_str(task))?;
             }
             LoaderEvent::TaskProgress {
                 id,
+                request_id,
                 task,
                 percent,
                 stage,
             } => {
                 dict.set_item("type", "task_progress")?;
                 dict.set_item("id", id)?;
+                dict.set_item("request_id", request_id)?;
                 dict.set_item("task", task_to_str(task))?;
                 dict.set_item("percent", percent)?;
                 dict.set_item("stage", stage)?;
             }
-            LoaderEvent::TaskSuccess { id, task, analysis } => {
+            LoaderEvent::TaskSuccess {
+                id,
+                request_id,
+                task,
+                analysis,
+            } => {
                 dict.set_item("type", "task_success")?;
                 dict.set_item("id", id)?;
+                dict.set_item("request_id", request_id)?;
                 dict.set_item("task", task_to_str(task))?;
 
                 if let Some(analysis) = analysis {
@@ -924,9 +1052,15 @@ impl AudioEngine {
                     dict.set_item("analysis", analysis_dict)?;
                 }
             }
-            LoaderEvent::TaskError { id, task, error } => {
+            LoaderEvent::TaskError {
+                id,
+                request_id,
+                task,
+                error,
+            } => {
                 dict.set_item("type", "task_error")?;
                 dict.set_item("id", id)?;
+                dict.set_item("request_id", request_id)?;
                 dict.set_item("task", task_to_str(task))?;
                 dict.set_item("msg", error)?;
             }
@@ -1047,8 +1181,11 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlParameterMessage::SetVolume(volume));
-        Ok(())
+        push_parameter_message(
+            &mut producer_guard,
+            ControlParameterMessage::SetVolume(volume),
+            "SetVolume",
+        )
     }
 
     /// Set the global speed multiplier.
@@ -1067,8 +1204,11 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlParameterMessage::SetSpeed(speed));
-        Ok(())
+        push_parameter_message(
+            &mut producer_guard,
+            ControlParameterMessage::SetSpeed(speed),
+            "SetSpeed",
+        )
     }
 
     pub fn set_bpm_lock(&mut self, enabled: bool) -> PyResult<()> {
@@ -1082,8 +1222,11 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetBpmLock(enabled));
-        Ok(())
+        push_control_message(
+            &mut producer_guard,
+            ControlMessage::SetBpmLock(enabled),
+            "SetBpmLock",
+        )
     }
 
     pub fn set_key_lock(&mut self, enabled: bool) -> PyResult<()> {
@@ -1097,8 +1240,11 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetKeyLock(enabled));
-        Ok(())
+        push_control_message(
+            &mut producer_guard,
+            ControlMessage::SetKeyLock(enabled),
+            "SetKeyLock",
+        )
     }
 
     pub fn set_pad_key_lock(&mut self, id: usize, enabled: bool) -> PyResult<()> {
@@ -1116,8 +1262,11 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetPadKeyLock { id, enabled });
-        Ok(())
+        push_control_message(
+            &mut producer_guard,
+            ControlMessage::SetPadKeyLock { id, enabled },
+            "SetPadKeyLock",
+        )
     }
 
     pub fn set_master_bpm(&mut self, bpm: f32) -> PyResult<()> {
@@ -1135,8 +1284,11 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlParameterMessage::SetMasterBpm(bpm));
-        Ok(())
+        push_parameter_message(
+            &mut producer_guard,
+            ControlParameterMessage::SetMasterBpm(bpm),
+            "SetMasterBpm",
+        )
     }
 
     pub fn set_pad_bpm(&mut self, id: usize, bpm: Option<f32>) -> PyResult<()> {
@@ -1158,8 +1310,11 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlParameterMessage::SetPadBpm { id, bpm });
-        Ok(())
+        push_parameter_message(
+            &mut producer_guard,
+            ControlParameterMessage::SetPadBpm { id, bpm },
+            "SetPadBpm",
+        )
     }
 
     pub fn set_pad_timing_metadata(&mut self, id: usize, phase_anchor_s: f32) -> PyResult<()> {
@@ -1181,11 +1336,14 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetPadTimingMetadata {
-            id,
-            metadata: PadTimingMetadata { phase_anchor_s },
-        });
-        Ok(())
+        push_control_message(
+            &mut producer_guard,
+            ControlMessage::SetPadTimingMetadata {
+                id,
+                metadata: PadTimingMetadata { phase_anchor_s },
+            },
+            "SetPadTimingMetadata",
+        )
     }
 
     pub fn anchor_transport_phase_from_pad(&mut self, id: usize) -> PyResult<()> {
@@ -1203,8 +1361,11 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::AnchorTransportPhaseFromPad { id });
-        Ok(())
+        push_control_message(
+            &mut producer_guard,
+            ControlMessage::AnchorTransportPhaseFromPad { id },
+            "AnchorTransportPhaseFromPad",
+        )
     }
 
     pub fn set_pad_gain(&mut self, id: usize, gain_db: f32) -> PyResult<()> {
@@ -1226,8 +1387,11 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlParameterMessage::SetPadGain { id, gain_db });
-        Ok(())
+        push_parameter_message(
+            &mut producer_guard,
+            ControlParameterMessage::SetPadGain { id, gain_db },
+            "SetPadGain",
+        )
     }
 
     pub fn set_pad_eq(
@@ -1259,13 +1423,16 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlParameterMessage::SetPadEq {
-            id,
-            low_db,
-            mid_db,
-            high_db,
-        });
-        Ok(())
+        push_parameter_message(
+            &mut producer_guard,
+            ControlParameterMessage::SetPadEq {
+                id,
+                low_db,
+                mid_db,
+                high_db,
+            },
+            "SetPadEq",
+        )
     }
 
     pub fn set_pad_loop_region(
@@ -1296,8 +1463,11 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        let _ = producer_guard.push(ControlMessage::SetPadLoopRegion { id, start_s, end_s });
-        Ok(())
+        push_control_message(
+            &mut producer_guard,
+            ControlMessage::SetPadLoopRegion { id, start_s, end_s },
+            "SetPadLoopRegion",
+        )
     }
 
     /// Seek an active or paused sample voice to a source position in seconds.
@@ -1444,6 +1614,8 @@ impl AudioEngine {
             .stream_handle
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        let _ = next_pad_request_id(&self.pad_request_ids, id).map_err(PyRuntimeError::new_err)?;
 
         let mut producer_guard = handle
             .producer
@@ -1677,5 +1849,67 @@ impl AudioEngine {
                 Some(maxs_py.into()),
             )))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rtrb::RingBuffer;
+
+    #[test]
+    fn push_control_message_reports_full_queue() {
+        Python::initialize();
+
+        let (mut producer, _consumer) = RingBuffer::new(1);
+        producer.push(ControlMessage::Ping()).unwrap();
+
+        let error = push_control_message(&mut producer, ControlMessage::StopAll(), "StopAll")
+            .expect_err("full command queue should fail");
+
+        assert!(error.to_string().contains("Failed to send StopAll"));
+    }
+
+    #[test]
+    fn push_parameter_message_reports_full_queue() {
+        Python::initialize();
+
+        let (mut producer, _consumer) = RingBuffer::new(1);
+        producer
+            .push(ControlParameterMessage::SetVolume(0.5))
+            .unwrap();
+
+        let error = push_parameter_message(
+            &mut producer,
+            ControlParameterMessage::SetSpeed(1.0),
+            "SetSpeed",
+        )
+        .expect_err("full parameter queue should fail");
+
+        assert!(error.to_string().contains("Failed to send SetSpeed"));
+    }
+
+    #[test]
+    fn pad_request_ids_increment_and_invalidate_old_work() {
+        let ids = Arc::new(Mutex::new(vec![0; 2]));
+
+        let first = next_pad_request_id(&ids, 0).expect("first request id");
+        let second = next_pad_request_id(&ids, 0).expect("second request id");
+
+        assert_eq!(first, 1);
+        assert_eq!(second, 2);
+        assert!(!pad_request_matches(&ids, 0, first));
+        assert!(pad_request_matches(&ids, 0, second));
+        assert!(pad_request_matches(&ids, 1, 0));
+    }
+
+    #[test]
+    fn pad_request_ids_do_not_wrap_to_zero() {
+        let ids = Arc::new(Mutex::new(vec![u64::MAX]));
+
+        let next = next_pad_request_id(&ids, 0).expect("wrapped request id");
+
+        assert_eq!(next, 1);
+        assert!(pad_request_matches(&ids, 0, 1));
     }
 }

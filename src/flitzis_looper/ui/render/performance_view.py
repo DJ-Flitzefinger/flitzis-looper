@@ -254,7 +254,7 @@ def _pad_button_overlays(ctx: UiContext, pad_id: int, *, is_active: bool, is_loa
 
     info = None
     if bpm is not None:
-        info = f"{bpm:.1f}"
+        info = f"{bpm:.0f}"
         if key is not None:
             info = f"{info} {key}"
     elif key is not None:

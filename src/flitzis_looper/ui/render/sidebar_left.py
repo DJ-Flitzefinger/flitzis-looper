@@ -322,7 +322,7 @@ def _render_bpm(ctx: UiContext, info: _SidebarPadInfo) -> None:
         bpm_value,
         0.0,
         0.0,
-        "%.1f",
+        "%.2f",
     )
     if changed:
         if new_value <= 0:
