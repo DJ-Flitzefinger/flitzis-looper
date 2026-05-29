@@ -590,7 +590,10 @@ def test_publish_prepared_stems_rejects_misaligned_cache_artifacts(
 def test_load_sample_async_emits_started_and_error_for_missing_file(
     audio_engine: AudioEngine,
 ) -> None:
-    audio_engine.load_sample_async(0, "file-does-not-exist.wav", run_analysis=True)
+    request_id = audio_engine.load_sample_async(0, "file-does-not-exist.wav", run_analysis=True)
+
+    assert isinstance(request_id, int)
+    assert request_id > 0
 
     deadline = time.monotonic() + 1.0
     seen: dict[str, dict[str, object]] = {}
@@ -607,9 +610,11 @@ def test_load_sample_async_emits_started_and_error_for_missing_file(
 
     assert "started" in seen
     assert seen["started"].get("id") == 0
+    assert seen["started"].get("request_id") == request_id
 
     assert "error" in seen
     assert seen["error"].get("id") == 0
+    assert seen["error"].get("request_id") == request_id
     assert isinstance(seen["error"].get("msg"), str)
 
 

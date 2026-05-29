@@ -353,7 +353,7 @@ pub fn task_to_str(task: BackgroundTaskKind) -> &'static str {
 #[derive(Debug, Clone)]
 pub enum LoaderEvent {
     /// Loading started for the given sample slot id.
-    Started { id: usize },
+    Started { id: usize, request_id: u64 },
 
     /// A progress update.
     ///
@@ -361,6 +361,7 @@ pub enum LoaderEvent {
     /// - `stage` is a human-readable stage string (e.g. "Loading (decoding)").
     Progress {
         id: usize,
+        request_id: u64,
         percent: f32,
         stage: String,
     },
@@ -368,20 +369,30 @@ pub enum LoaderEvent {
     /// Loading completed successfully.
     Success {
         id: usize,
+        request_id: u64,
         duration_s: f32,
         cached_path: String,
         analysis: Option<SampleAnalysis>,
     },
 
     /// Loading failed.
-    Error { id: usize, error: String },
+    Error {
+        id: usize,
+        request_id: u64,
+        error: String,
+    },
 
     /// A per-pad background task started.
-    TaskStarted { id: usize, task: BackgroundTaskKind },
+    TaskStarted {
+        id: usize,
+        request_id: u64,
+        task: BackgroundTaskKind,
+    },
 
     /// A per-pad task progress update.
     TaskProgress {
         id: usize,
+        request_id: u64,
         task: BackgroundTaskKind,
         percent: f32,
         stage: String,
@@ -390,6 +401,7 @@ pub enum LoaderEvent {
     /// A per-pad task completed successfully.
     TaskSuccess {
         id: usize,
+        request_id: u64,
         task: BackgroundTaskKind,
         analysis: Option<SampleAnalysis>,
     },
@@ -397,6 +409,7 @@ pub enum LoaderEvent {
     /// A per-pad task failed.
     TaskError {
         id: usize,
+        request_id: u64,
         task: BackgroundTaskKind,
         error: String,
     },

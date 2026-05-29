@@ -151,6 +151,53 @@ def test_loader_success_updates_project_sample_path(
     assert 0 not in controller.session.pending_sample_paths
 
 
+def test_stale_loader_success_with_old_request_id_is_ignored(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    audio_engine_mock.load_sample_async.return_value = 2
+    controller.loader.load_sample_async(0, "/path/to/current.wav")
+
+    audio_engine_mock.poll_loader_events.side_effect = [
+        {
+            "type": "success",
+            "id": 0,
+            "request_id": 1,
+            "duration_s": 1.0,
+            "cached_path": "samples/old.wav",
+        },
+        None,
+    ]
+
+    controller.loader.poll_loader_events()
+
+    assert controller.project.sample_paths[0] is None
+    assert controller.project.sample_durations[0] is None
+    assert controller.session.pending_sample_paths[0] == "/path/to/current.wav"
+    assert 0 in controller.session.loading_sample_ids
+
+
+def test_stale_loader_progress_after_unload_is_ignored(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    audio_engine_mock.load_sample_async.return_value = 7
+    controller.loader.load_sample_async(0, "/path/to/current.wav")
+
+    controller.loader.unload_sample(0)
+
+    audio_engine_mock.poll_loader_events.side_effect = [
+        {"type": "progress", "id": 0, "request_id": 7, "stage": "Decoding", "percent": 0.5},
+        None,
+    ]
+
+    controller.loader.poll_loader_events()
+
+    assert 0 not in controller.session.loading_sample_ids
+    assert 0 not in controller.session.sample_load_progress
+    assert 0 not in controller.session.sample_load_stage
+
+
 def test_loader_success_initializes_new_sample_loop_defaults(
     controller: AppController,
     audio_engine_mock: Mock,
@@ -525,6 +572,38 @@ def test_task_success_stores_analysis_and_clears_task_state(
     assert 0 not in controller.session.sample_analysis_progress
     assert 0 not in controller.session.sample_analysis_stage
     assert 0 not in controller.session.sample_analysis_errors
+
+
+def test_stale_analysis_success_after_unload_is_ignored(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    controller.project.sample_paths[0] = "samples/old.wav"
+    audio_engine_mock.analyze_sample_async.return_value = 5
+    controller.loader.analyze_sample_async(0)
+
+    controller.loader.unload_sample(0)
+
+    audio_engine_mock.poll_loader_events.side_effect = [
+        {
+            "type": "task_success",
+            "id": 0,
+            "request_id": 5,
+            "task": "analysis",
+            "analysis": {
+                "bpm": 120.0,
+                "key": "C#m",
+                "beat_grid": {"beats": [0.0, 0.5], "downbeats": [0.0], "bars": [0.0]},
+            },
+        },
+        None,
+    ]
+
+    controller.loader.poll_loader_events()
+
+    assert controller.project.sample_paths[0] is None
+    assert controller.project.sample_analysis[0] is None
+    assert 0 not in controller.session.analyzing_sample_ids
 
 
 def test_task_error_records_error_and_clears_progress(
