@@ -536,15 +536,14 @@ class AudioActions:
 class WaveformEditorActions:
     """Waveform editor UI state/actions."""
 
-    # Cache render data
-    _last_pad_id: int | None = None
-    _last_width_px: int | None = None
-    _last_start_s: float | None = None
-    _last_end_s: float | None = None
-    _last_waveform_value: WaveFormRenderData | None = None
-
     def __init__(self, controller: AppController) -> None:
         self._controller = controller
+        self._last_pad_id: int | None = None
+        self._last_width_px: int | None = None
+        self._last_start_s: float | None = None
+        self._last_end_s: float | None = None
+        self._last_source_identity: tuple[str | None, float | None] | None = None
+        self._last_waveform_value: WaveFormRenderData | None = None
 
         # Per-pad view state for the waveform editor plot (seconds).
         self._pad_view_ranges: dict[int, tuple[float, float]] = {}
@@ -728,20 +727,33 @@ class WaveformEditorActions:
     def get_render_data(
         self, pad_id: int, width_px: int, start_s: float, end_s: float
     ) -> WaveFormRenderData | None:
+        source_identity = self._waveform_source_identity(pad_id)
         if (
             self._last_pad_id != pad_id
             or self._last_width_px != width_px
             or self._last_start_s != start_s
             or self._last_end_s != end_s
+            or self._last_source_identity != source_identity
         ):
             self._last_pad_id = pad_id
             self._last_width_px = width_px
             self._last_start_s = start_s
             self._last_end_s = end_s
+            self._last_source_identity = source_identity
             self._last_waveform_value = self._controller.transport.waveform.get_render_data(
                 pad_id, width_px, start_s, end_s
             )
         return self._last_waveform_value
+
+    def _waveform_source_identity(self, pad_id: int) -> tuple[str | None, float | None]:
+        if not 0 <= pad_id < len(self._controller.project.sample_paths):
+            return (None, None)
+
+        duration_s = self._controller.project.sample_durations[pad_id]
+        return (
+            self._controller.project.sample_paths[pad_id],
+            float(duration_s) if duration_s is not None else None,
+        )
 
 
 class UiActions:

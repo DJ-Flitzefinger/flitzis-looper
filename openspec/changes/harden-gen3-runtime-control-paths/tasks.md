@@ -33,20 +33,20 @@
 
 ## 5. Realtime Optimization Slice
 
-- [ ] 5.1 Remove no-op all-pad parameter work from the callback.
-- [ ] 5.2 Reduce callback telemetry all-slot scans without changing meter semantics.
-- [ ] 5.3 Remove duplicate Rust DSP prepare work at startup.
-- [ ] 5.4 Add focused Rust callback/mixer tests.
-- [ ] 5.5 Check and update affected maintained docs for callback work bounds, telemetry semantics,
+- [x] 5.1 Remove no-op all-pad parameter work from the callback.
+- [x] 5.2 Reduce callback telemetry all-slot scans without changing meter semantics.
+- [x] 5.3 Remove duplicate Rust DSP prepare work at startup.
+- [x] 5.4 Add focused Rust callback/mixer tests.
+- [x] 5.5 Check and update affected maintained docs for callback work bounds, telemetry semantics,
       and DSP preparation if changed.
 
 ## 6. UI And Control-Thread Optimization Slice
 
-- [ ] 6.1 Publish input runtime state only when dirty.
-- [ ] 6.2 Fix waveform render-data cache source identity.
-- [ ] 6.3 Track active Python meter peaks instead of decaying all pads every frame.
-- [ ] 6.4 Add focused Python tests.
-- [ ] 6.5 Check and update affected maintained docs for input-runtime publishing, waveform cache
+- [x] 6.1 Publish input runtime state only when dirty.
+- [x] 6.2 Fix waveform render-data cache source identity.
+- [x] 6.3 Track active Python meter peaks instead of decaying all pads every frame.
+- [x] 6.4 Add focused Python tests.
+- [x] 6.5 Check and update affected maintained docs for input-runtime publishing, waveform cache
       identity, or metering projection if changed.
 
 ## 7. Validation

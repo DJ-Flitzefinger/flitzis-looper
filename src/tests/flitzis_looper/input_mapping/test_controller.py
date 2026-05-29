@@ -1087,6 +1087,68 @@ def test_direct_rust_midi_event_is_not_executed_twice(
     audio_engine_mock.play_sample_exclusive.assert_not_called()
 
 
+def test_input_runtime_state_sync_skips_unchanged_frames(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    audio_engine_mock.reset_mock()
+
+    controller.input_mapping.on_frame_render()
+
+    audio_engine_mock.set_input_runtime_state.assert_not_called()
+
+    controller.project.multi_loop = True
+    controller.input_mapping.on_frame_render()
+
+    audio_engine_mock.set_input_runtime_state.assert_called_once()
+    multi_loop, loaded, loop_starts, loop_ends = (
+        audio_engine_mock.set_input_runtime_state.call_args.args
+    )
+    assert multi_loop is True
+    assert loaded[0] is False
+    assert loop_starts[0] == 0.0
+    assert loop_ends[0] is None
+
+    audio_engine_mock.reset_mock()
+    controller.input_mapping.on_frame_render()
+
+    audio_engine_mock.set_input_runtime_state.assert_not_called()
+
+
+def test_input_runtime_state_sync_republishes_loaded_loop_changes(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    controller.project.sample_paths[0] = "samples/foo.wav"
+    controller.project.pad_loop_auto[0] = False
+    controller.project.pad_loop_start_s[0] = 1.0
+    controller.project.pad_loop_end_s[0] = 4.0
+    audio_engine_mock.reset_mock()
+
+    controller.input_mapping.on_frame_render()
+
+    audio_engine_mock.set_input_runtime_state.assert_called_once()
+    _, loaded, loop_starts, loop_ends = audio_engine_mock.set_input_runtime_state.call_args.args
+    assert loaded[0] is True
+    assert loop_starts[0] == pytest.approx(1.0)
+    assert loop_ends[0] == pytest.approx(4.0)
+
+    audio_engine_mock.reset_mock()
+    controller.input_mapping.on_frame_render()
+
+    audio_engine_mock.set_input_runtime_state.assert_not_called()
+
+    controller.transport.loop.set_start(0, 2.0)
+    audio_engine_mock.reset_mock()
+
+    controller.input_mapping.on_frame_render()
+
+    audio_engine_mock.set_input_runtime_state.assert_called_once()
+    _, _, loop_starts, loop_ends = audio_engine_mock.set_input_runtime_state.call_args.args
+    assert loop_starts[0] == pytest.approx(2.0)
+    assert loop_ends[0] == pytest.approx(4.0)
+
+
 def test_failed_direct_rust_midi_event_executes_python_fallback(
     controller: AppController,
     audio_engine_mock: Mock,

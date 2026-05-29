@@ -271,7 +271,9 @@ output mute is applied. Master peak telemetry preserves finite values above
 bar Master Volume fader renders the display fill and one-second `CLIP` hold.
 Pad peak and playhead telemetry uses the same cadence gate but publishes only
 pads touched by the render path in that callback; inactive bank slots are not
-scanned for telemetry messages.
+scanned for telemetry messages. Python keeps pad peaks with nonzero decay work
+in an active set, so frame rendering decays only pads that recently received
+peak telemetry until they fall back to silence.
 
 ## Input Mapping
 
@@ -283,6 +285,9 @@ only small discrete audio-safe commands directly through the command ring.
 Python publishes Learn/capture state to Rust so Learn takes precedence over
 mapped playback: while Learn is active, Rust reports the MIDI input as capture
 data and does not resolve mappings or enqueue direct playback commands.
+Python also publishes Rust input-runtime pad state at startup and when the
+loaded-pad, effective loop-region, BPM, grid-offset, or Multi Loop signature
+changes; unchanged UI frames do not republish the same snapshot.
 
 Direct Rust dispatch is all-or-nothing. If the bounded command transaction
 cannot be fully enqueued or current Rust input-runtime state cannot accept it,

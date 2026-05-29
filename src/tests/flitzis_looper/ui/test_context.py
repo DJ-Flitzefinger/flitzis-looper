@@ -988,3 +988,26 @@ class TestWaveformEditorTransportControls:
 
         audio_engine_mock.seek_sample.assert_called_once_with(0, 10.0)
         assert controller.session.pad_playhead_s[0] == pytest.approx(10.0)
+
+    def test_waveform_render_cache_includes_source_identity(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+        first_render = object()
+        second_render = object()
+        audio_engine_mock.get_waveform_render_data.side_effect = [first_render, second_render]
+        controller.project.sample_paths[0] = "samples/first.wav"
+        controller.project.sample_durations[0] = 10.0
+
+        first = ctx.ui.waveform.get_render_data(0, 320, 0.0, 10.0)
+        cached = ctx.ui.waveform.get_render_data(0, 320, 0.0, 10.0)
+        controller.project.sample_paths[0] = "samples/second.wav"
+        second = ctx.ui.waveform.get_render_data(0, 320, 0.0, 10.0)
+
+        assert first is first_render
+        assert cached is first_render
+        assert second is second_render
+        assert audio_engine_mock.get_waveform_render_data.call_args_list == [
+            call(0, 320, 0.0, 10.0),
+            call(0, 320, 0.0, 10.0),
+        ]

@@ -287,7 +287,8 @@ The waveform editor is the main UI surface where heavier derived display data is
 needed. Its pattern is:
 
 - render code owns layout and visible plot interaction,
-- `ctx.ui.waveform` stores editor view state and short-lived cached render data,
+- `ctx.ui.waveform` stores editor view state and short-lived cached render data
+  keyed by pad, visible range, resolution, and current sample identity,
 - `controller.transport.waveform.get_render_data(...)` supplies waveform render
   data,
 - loop edits still go through transport loop actions,

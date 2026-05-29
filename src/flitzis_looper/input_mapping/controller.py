@@ -38,6 +38,16 @@ if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
 
 type InputSource = Literal["midi", "keyboard"]
+type _InputRuntimePadSignature = tuple[
+    bool,
+    float,
+    float | None,
+    bool,
+    float,
+    int,
+    float | None,
+]
+type _InputRuntimeStateSignature = tuple[bool, tuple[_InputRuntimePadSignature, ...]]
 PAD_EQ_BANDS: tuple[PadEqBand, ...] = ("low", "mid", "high")
 MIDI_RELATIVE_VOLUME_STEP = 0.01
 MIDI_RELATIVE_GAIN_STEP_DB = 0.1
@@ -58,6 +68,7 @@ class InputMappingController(BaseController):
         self._keyboard = load_keyboard_mapping_file()
         self._midi_cc_values: dict[str, int] = {}
         self._midi_cc_directions: dict[str, int] = {}
+        self._last_input_runtime_state_signature: _InputRuntimeStateSignature | None = None
         self._on_frame_render_callbacks.append(self._sync_rust_runtime_state)
         self._on_frame_render_callbacks.append(self._poll_rust_input_events)
 
@@ -441,6 +452,10 @@ class InputMappingController(BaseController):
             self._audio.set_input_mapping_snapshot(mappings)
 
     def _sync_rust_runtime_state(self) -> None:
+        signature = self._input_runtime_state_signature()
+        if signature == self._last_input_runtime_state_signature:
+            return
+
         loaded = [path is not None for path in self._project.sample_paths]
         loop_starts: list[float] = []
         loop_ends: list[float | None] = []
@@ -453,13 +468,46 @@ class InputMappingController(BaseController):
             loop_starts.append(float(start_s))
             loop_ends.append(float(end_s) if end_s is not None else None)
 
-        with suppress(RuntimeError, ValueError, TypeError):
+        try:
             self._audio.set_input_runtime_state(
                 self._project.multi_loop,
                 loaded,
                 loop_starts,
                 loop_ends,
             )
+        except RuntimeError, ValueError, TypeError:
+            return
+
+        self._last_input_runtime_state_signature = signature
+
+    def _input_runtime_state_signature(self) -> _InputRuntimeStateSignature:
+        pad_signatures: list[_InputRuntimePadSignature] = []
+        for sample_id, sample_path in enumerate(self._project.sample_paths):
+            if sample_path is None:
+                pad_signatures.append((False, 0.0, None, True, 0.0, 0, None))
+                continue
+
+            end_s = self._project.pad_loop_end_s[sample_id]
+            pad_signatures.append((
+                True,
+                float(self._project.pad_loop_start_s[sample_id]),
+                float(end_s) if end_s is not None else None,
+                bool(self._project.pad_loop_auto[sample_id]),
+                float(self._project.pad_loop_bars[sample_id]),
+                int(self._project.pad_grid_offset_samples[sample_id]),
+                self._input_runtime_bpm_signature(sample_id),
+            ))
+        return (self._project.multi_loop, tuple(pad_signatures))
+
+    def _input_runtime_bpm_signature(self, sample_id: int) -> float | None:
+        manual = self._project.manual_bpm[sample_id]
+        if manual is not None:
+            return float(manual)
+
+        analysis = self._project.sample_analysis[sample_id]
+        if analysis is None:
+            return None
+        return float(analysis.bpm) if analysis.bpm is not None else None
 
     def _set_rust_enabled(self, *, enabled: bool) -> None:
         with suppress(RuntimeError, TypeError):
