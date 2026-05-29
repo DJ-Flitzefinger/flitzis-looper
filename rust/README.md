@@ -87,7 +87,11 @@ Use `uv run cargo ...` so PyO3 and maturin use the project Python environment.
   queues as caller-visible `RuntimeError`s instead of silently accepting the
   write.
 - Parameter messages are coalesced by identity in the callback before applying
-  the latest drained value.
+  the latest drained value. The callback applies only identities touched by the
+  drained batch instead of sweeping every pad slot.
+- Pad peak/playhead telemetry is cadence-gated and published only for pads
+  touched by rendering in that callback; inactive bank slots are not scanned for
+  telemetry.
 - Scheduled mixer segments carry absolute output-frame positions. BPM-locked
   active voices with valid master and pad BPM metadata use fixed
   output-frame/source-frame anchors to derive source loop phase from the Rust

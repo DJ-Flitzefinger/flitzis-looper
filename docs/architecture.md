@@ -112,7 +112,8 @@ Control-to-audio communication is split into bounded rings:
 
 The callback drains bounded budgets per invocation. Parameter messages are
 coalesced by identity before application, so the latest drained value wins for
-each parameter in that callback.
+each parameter in that callback. The apply step walks only the identities
+touched by the drained batch rather than sweeping every pad slot.
 
 Python does not touch ring buffers directly. It calls `AudioEngine` methods that
 validate inputs and enqueue small Rust values or handles.
@@ -268,6 +269,9 @@ after active pad contributions are summed and after Master Volume or momentary
 output mute is applied. Master peak telemetry preserves finite values above
 `1.0`; Python projects the unclamped peak into `SessionState`, and the bottom
 bar Master Volume fader renders the display fill and one-second `CLIP` hold.
+Pad peak and playhead telemetry uses the same cadence gate but publishes only
+pads touched by the render path in that callback; inactive bank slots are not
+scanned for telemetry messages.
 
 ## Input Mapping
 
