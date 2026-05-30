@@ -174,6 +174,32 @@ fn pad_request_matches(pad_request_ids: &Arc<Mutex<Vec<u64>>>, id: usize, reques
     current_pad_request_id(pad_request_ids, id).is_ok_and(|current| current == request_id)
 }
 
+fn publish_loaded_sample(
+    producer: &Arc<Mutex<Producer<ControlMessage>>>,
+    sample_cache: &Arc<Mutex<Vec<Option<SampleBuffer>>>>,
+    id: usize,
+    sample: SampleBuffer,
+) -> Result<(), String> {
+    let mut producer_guard = producer
+        .lock()
+        .map_err(|_| "Failed to acquire producer lock".to_string())?;
+
+    producer_guard
+        .push(ControlMessage::LoadSample {
+            id,
+            sample: sample.clone(),
+        })
+        .map_err(|_| "Failed to send LoadSample - buffer may be full".to_string())?;
+
+    if let Ok(mut cache) = sample_cache.lock()
+        && let Some(slot) = cache.get_mut(id)
+    {
+        *slot = Some(sample);
+    }
+
+    Ok(())
+}
+
 /// AudioEngine provides minimal audio output capabilities using cpal
 #[pyclass]
 pub struct AudioEngine {
@@ -494,36 +520,11 @@ impl AudioEngine {
                 return;
             }
 
-            let sample_for_audio = sample.clone();
-            if let Ok(mut cache) = sample_cache.lock()
-                && let Some(slot) = cache.get_mut(id)
-            {
-                *slot = Some(sample);
-            }
-
-            let mut producer_guard = match producer.lock() {
-                Ok(guard) => guard,
-                Err(_) => {
-                    let _ = loader_tx.send(LoaderEvent::Error {
-                        id,
-                        request_id,
-                        error: "Failed to acquire producer lock".to_string(),
-                    });
-                    return;
-                }
-            };
-
-            if producer_guard
-                .push(ControlMessage::LoadSample {
-                    id,
-                    sample: sample_for_audio,
-                })
-                .is_err()
-            {
+            if let Err(error) = publish_loaded_sample(&producer, &sample_cache, id, sample) {
                 let _ = loader_tx.send(LoaderEvent::Error {
                     id,
                     request_id,
-                    error: "Failed to send LoadSample - buffer may be full".to_string(),
+                    error,
                 });
                 return;
             }
@@ -1887,6 +1888,26 @@ mod tests {
         .expect_err("full parameter queue should fail");
 
         assert!(error.to_string().contains("Failed to send SetSpeed"));
+    }
+
+    #[test]
+    fn publish_loaded_sample_rejects_full_queue_without_cache_insert() {
+        let (mut producer, _consumer) = RingBuffer::new(1);
+        producer.push(ControlMessage::Ping()).unwrap();
+        let producer = Arc::new(Mutex::new(producer));
+        let sample_cache = Arc::new(Mutex::new(vec![None; 1]));
+        let sample = SampleBuffer {
+            channels: 1,
+            samples: Arc::from([0.0_f32, 0.0].as_slice()),
+        };
+
+        let result = publish_loaded_sample(&producer, &sample_cache, 0, sample);
+
+        assert_eq!(
+            result.expect_err("full command queue should reject publication"),
+            "Failed to send LoadSample - buffer may be full"
+        );
+        assert!(sample_cache.lock().unwrap()[0].is_none());
     }
 
     #[test]
