@@ -6,8 +6,13 @@ from imgui_bundle import imgui
 
 from flitzis_looper.ui.render import sidebar_left
 from flitzis_looper.ui.render.sidebar_left import (
+    MANUAL_BPM_ENTRY_MAX,
+    MANUAL_BPM_ENTRY_MIN,
+    filtered_bpm_entry_char,
     filtered_eq_entry_char,
     parse_eq_entry_text,
+    parse_manual_bpm_entry_text,
+    sanitize_bpm_entry_text,
     sanitize_eq_entry_text,
 )
 
@@ -131,6 +136,21 @@ def test_sanitize_eq_entry_text(raw: str, expected: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("123,456abc", "123.45"),
+        ("12..3", "12.3"),
+        ("a1b2c3", "123"),
+        ("120,5", "120.5"),
+        ("0\n1 2", "012"),
+        ("\u00dc1", "1"),
+    ],
+)
+def test_sanitize_manual_bpm_entry_text(raw: str, expected: str) -> None:
+    assert sanitize_bpm_entry_text(raw) == expected
+
+
+@pytest.mark.parametrize(
     ("char", "current", "cursor", "expected"),
     [
         ("1", "", 0, ord("1")),
@@ -162,6 +182,35 @@ def test_filtered_eq_entry_char(
 
 
 @pytest.mark.parametrize(
+    ("char", "current", "cursor", "expected"),
+    [
+        ("1", "", 0, ord("1")),
+        (",", "120", 3, ord(".")),
+        (".", "120", 3, ord(".")),
+        (".", "120.1", 5, None),
+        ("5", "120.12", 6, None),
+        ("5", "120.12", 2, ord("5")),
+        ("\u00dc", "120", 3, None),
+    ],
+)
+def test_filtered_manual_bpm_entry_char(
+    char: str,
+    current: str,
+    cursor: int,
+    expected: int | None,
+) -> None:
+    assert (
+        filtered_bpm_entry_char(
+            ord(char),
+            current,
+            cursor,
+            has_selection=False,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
     ("raw", "expected"),
     [
         ("3,5", 3.5),
@@ -177,9 +226,32 @@ def test_parse_eq_entry_text(raw: str, expected: float) -> None:
     assert parse_eq_entry_text(raw) == pytest.approx(expected)
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("123,456abc", 123.45),
+        ("120.1", 120.1),
+        ("001.20", 1.2),
+        ("0", MANUAL_BPM_ENTRY_MIN),
+        ("0.49", MANUAL_BPM_ENTRY_MIN),
+        ("0,5", MANUAL_BPM_ENTRY_MIN),
+        ("400", MANUAL_BPM_ENTRY_MAX),
+        ("400.01", MANUAL_BPM_ENTRY_MAX),
+        ("500", MANUAL_BPM_ENTRY_MAX),
+    ],
+)
+def test_parse_manual_bpm_entry_text(raw: str, expected: float) -> None:
+    assert parse_manual_bpm_entry_text(raw) == pytest.approx(expected)
+
+
 @pytest.mark.parametrize("raw", ["", ".", "-", "-."])
 def test_parse_eq_entry_text_ignores_empty_values(raw: str) -> None:
     assert parse_eq_entry_text(raw) is None
+
+
+@pytest.mark.parametrize("raw", ["", "."])
+def test_parse_manual_bpm_entry_text_ignores_empty_values(raw: str) -> None:
+    assert parse_manual_bpm_entry_text(raw) is None
 
 
 def test_filtered_eq_entry_char_accepts_replacing_selected_negative_sign() -> None:

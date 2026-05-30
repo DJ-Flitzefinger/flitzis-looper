@@ -38,6 +38,7 @@ from flitzis_looper.ui.constants import (
     TEXT_RGBA,
 )
 from flitzis_looper.ui.contextmanager import button_style, style_var
+from flitzis_looper.ui.render.bpm_entry import filtered_bpm_entry_char, sanitize_bpm_entry_text
 from flitzis_looper.ui.render.control_gestures import hovered_wheel_steps, item_middle_clicked
 
 if TYPE_CHECKING:
@@ -78,6 +79,8 @@ _GAIN_RIGHT_CLICK_DRAG_THRESHOLD_PX = 3.0
 _GAIN_WHEEL_STEP_DB = 0.5
 _EQ_WHEEL_STEP_DB = 1.0
 _EQ_ENTRY_DIGITS = frozenset(string.digits)
+MANUAL_BPM_ENTRY_MIN = 0.5
+MANUAL_BPM_ENTRY_MAX = 400.0
 _METER_BG_RGBA = (0.02, 0.02, 0.02, 0.55)
 _METER_FILL_RGBA = (1.0, 1.0, 1.0, 0.22)
 _METER_GREEN_RGBA = (0.18, 0.74, 0.38, 0.45)
@@ -151,6 +154,22 @@ def eq_entry_char_filter(data: imgui.InputTextCallbackData) -> int:
     return 1
 
 
+def manual_bpm_entry_char_filter(data: imgui.InputTextCallbackData) -> int:
+    """Reject manual BPM entry characters before they enter the input buffer."""
+    replacement = filtered_bpm_entry_char(
+        int(data.event_char),
+        str(data.buf),
+        int(data.cursor_pos),
+        has_selection=data.has_selection(),
+    )
+    if replacement == 0:
+        return 0
+    if replacement is not None:
+        data.event_char = replacement
+        return 0
+    return 1
+
+
 def parse_eq_entry_text(text: str) -> float | None:
     """Parse manual EQ entry text, returning a clamped one-decimal dB value."""
     sanitized = sanitize_eq_entry_text(text)
@@ -163,6 +182,30 @@ def parse_eq_entry_text(text: str) -> float | None:
     if not math.isfinite(value):
         return None
     return round(clamp_eq_db(value), 1)
+
+
+def parse_manual_bpm_entry_text(text: str) -> float | None:
+    """Parse manual BPM text, returning a two-decimal value clamped to UI bounds."""
+    sanitized = sanitize_bpm_entry_text(text)
+    if sanitized in {"", "."}:
+        return None
+    try:
+        value = float(sanitized)
+    except ValueError:
+        return None
+    if not math.isfinite(value):
+        return None
+    return round(min(max(value, MANUAL_BPM_ENTRY_MIN), MANUAL_BPM_ENTRY_MAX), 2)
+
+
+def format_manual_bpm_entry_value(bpm: float | None) -> str:
+    """Return the BPM text shown when the manual BPM field is not being edited."""
+    if bpm is None:
+        return ""
+    value = float(bpm)
+    if not math.isfinite(value):
+        return ""
+    return f"{value:.2f}"
 
 
 def gain_wheel_delta_db(wheel_steps: int) -> float:
@@ -182,6 +225,18 @@ class _SidebarPadInfo:
     avail_x: float
     is_loaded: bool
     is_loading: bool
+
+
+@dataclass
+class _BpmEntryState:
+    pad_id: int | None = None
+    text: str = ""
+    active: bool = False
+
+    def sync(self, *, pad_id: int, display_text: str) -> None:
+        if self.pad_id != pad_id or not self.active:
+            self.pad_id = pad_id
+            self.text = display_text
 
 
 @dataclass
@@ -207,6 +262,7 @@ class _GainDragState:
         self.dragged = False
 
 
+_BPM_ENTRY = _BpmEntryState()
 _GAIN_DRAG = _GainDragState()
 
 
@@ -311,24 +367,42 @@ def _render_pad_header(ctx: UiContext, info: _SidebarPadInfo) -> None:
 
 def _render_bpm(ctx: UiContext, info: _SidebarPadInfo) -> None:
     effective_bpm = ctx.state.pads.effective_bpm(info.pad_id) if info.is_loaded else None
-    bpm_value = 0.0 if effective_bpm is None else float(effective_bpm)
 
     imgui.text_colored(TEXT_MUTED_RGBA, "BPM")
     input_width = 92.0
     imgui.same_line(max(0.0, info.avail_x - input_width))
     imgui.set_next_item_width(input_width)
-    changed, new_value = imgui.input_float(
-        "##sidebar_bpm",
-        bpm_value,
-        0.0,
-        0.0,
-        "%.2f",
+    _BPM_ENTRY.sync(
+        pad_id=info.pad_id,
+        display_text=format_manual_bpm_entry_value(effective_bpm),
     )
-    if changed:
-        if new_value <= 0:
+    flags = (
+        imgui.InputTextFlags_.enter_returns_true
+        | imgui.InputTextFlags_.auto_select_all
+        | imgui.InputTextFlags_.callback_char_filter
+    )
+    submitted, new_text = imgui.input_text(
+        "##sidebar_bpm",
+        _BPM_ENTRY.text,
+        flags,
+        manual_bpm_entry_char_filter,
+    )
+    sanitized = sanitize_bpm_entry_text(new_text)
+    if sanitized != _BPM_ENTRY.text:
+        _BPM_ENTRY.text = sanitized
+
+    commit = submitted or imgui.is_item_deactivated_after_edit()
+    close = submitted or imgui.is_item_deactivated()
+    _BPM_ENTRY.active = imgui.is_item_active()
+    if commit:
+        target_bpm = parse_manual_bpm_entry_text(_BPM_ENTRY.text)
+        if target_bpm is None:
             ctx.audio.pads.clear_manual_bpm(info.pad_id)
         else:
-            ctx.audio.pads.set_manual_bpm(info.pad_id, float(new_value))
+            ctx.audio.pads.set_manual_bpm(info.pad_id, target_bpm)
+            _BPM_ENTRY.text = format_manual_bpm_entry_value(target_bpm)
+    if close:
+        _BPM_ENTRY.active = False
 
     imgui.button("Tap BPM", (-1, 0))
     if imgui.is_item_hovered() and imgui.is_mouse_clicked(imgui.MouseButton_.left):
