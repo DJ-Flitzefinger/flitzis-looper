@@ -436,16 +436,13 @@ fn find_unique_cache_path(
 ) -> std::io::Result<PathBuf> {
     let base = project_samples_dir.join(format!("{stem}{extension}"));
 
-    // Check if any file with this stem exists (regardless of extension)
-    let has_collision = base.exists()
-        || std::fs::read_dir(project_samples_dir)?.any(|entry| {
-            let entry = entry.unwrap();
-            let file_name = entry.file_name();
-            let file_name_str = file_name.to_string_lossy();
-            file_name_str.starts_with(&format!("{stem}_"))
-                || file_name_str == format!("{stem}{}", extension)
-                || file_name_str.starts_with(&format!("{stem}."))
-        });
+    let has_collision = if base.exists() {
+        true
+    } else {
+        let directory_file_names = std::fs::read_dir(project_samples_dir)?
+            .map(|entry| entry.map(|entry| entry.file_name()));
+        has_cache_filename_collision(false, stem, extension, directory_file_names)?
+    };
 
     if !has_collision {
         return Ok(base);
@@ -463,6 +460,38 @@ fn find_unique_cache_path(
         std::io::ErrorKind::AlreadyExists,
         "too many filename collisions",
     ))
+}
+
+fn has_cache_filename_collision<I, N>(
+    base_exists: bool,
+    stem: &str,
+    extension: &str,
+    file_names: I,
+) -> std::io::Result<bool>
+where
+    I: IntoIterator<Item = std::io::Result<N>>,
+    N: AsRef<std::ffi::OsStr>,
+{
+    if base_exists {
+        return Ok(true);
+    }
+
+    let suffixed_stem = format!("{stem}_");
+    let exact_name = format!("{stem}{extension}");
+    let extension_collision_prefix = format!("{stem}.");
+
+    for file_name in file_names {
+        let file_name = file_name?;
+        let file_name_str = file_name.as_ref().to_string_lossy();
+        if file_name_str.starts_with(&suffixed_stem)
+            || file_name_str == exact_name
+            || file_name_str.starts_with(&extension_collision_prefix)
+        {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 /// Copies an audio file to the project samples directory with collision handling.
@@ -505,6 +534,7 @@ pub fn cache_audio_file_for_project(
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
     use std::io::Write;
 
     use super::*;
@@ -759,6 +789,19 @@ mod tests {
             result.unwrap_err().kind(),
             std::io::ErrorKind::AlreadyExists
         );
+    }
+
+    #[test]
+    fn test_cache_filename_collision_propagates_directory_entry_error() {
+        let file_names: Vec<std::io::Result<OsString>> = vec![Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "entry failed",
+        ))];
+
+        let result = has_cache_filename_collision(false, "loop", ".wav", file_names);
+
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
     }
 
     #[test]
