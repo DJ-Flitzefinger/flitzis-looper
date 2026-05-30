@@ -215,7 +215,11 @@ pad's source grid or snapped loop markers.
 Stem generation is offline/background work. Rust accepts prepared immutable stem
 buffers only after non-realtime validation. Prepared stems must match the loaded
 full mix by source version, sample rate, channel layout, frame count, and
-source-frame origin.
+source-frame origin. Cache publication compares the component-stem transient
+sum with the loaded full-mix buffer and, outside the realtime callback, applies
+one shared frame offset to the prepared stem set when an offline separator has
+introduced a measurable global delay. Individual stems are not shifted
+independently.
 
 Restored stem caches are validated in Python before the pad is treated as
 stem-available, but restored prepared stems are published to Rust only after the

@@ -10,6 +10,13 @@ use std::path::{Component, Path, PathBuf};
 use crate::messages::{PreparedStemSet, STEM_BUFFER_COUNT, SampleBuffer};
 
 pub(crate) const STEM_FILE_NAMES: [&str; 5] = ["vocals", "melody", "bass", "drums", "instrumental"];
+const COMPONENT_STEM_COUNT: usize = 4;
+const STEM_ALIGNMENT_MAX_SHIFT_SECONDS: f32 = 0.25;
+const STEM_ALIGNMENT_ANALYSIS_SECONDS: f32 = 4.0;
+const STEM_ALIGNMENT_PRE_ONSET_SECONDS: f32 = 0.5;
+const STEM_ALIGNMENT_MIN_SCORE: f32 = 0.35;
+const STEM_ALIGNMENT_MIN_IMPROVEMENT: f32 = 0.08;
+const STEM_ALIGNMENT_ONSET_THRESHOLD_RATIO: f32 = 0.05;
 
 pub(crate) fn project_stem_cache_dir(cache_dir: &str) -> Result<PathBuf, String> {
     let path = Path::new(cache_dir);
@@ -151,6 +158,13 @@ fn prepare_stem_buffers_from_cache_at_project_root(
         buffers.push(buffer);
     }
 
+    align_component_stems_to_reference(
+        reference,
+        &mut buffers,
+        output_sample_rate,
+        expected_frames,
+    );
+
     let stems: [SampleBuffer; STEM_BUFFER_COUNT] = buffers
         .try_into()
         .map_err(|_| "stem set is incomplete".to_string())?;
@@ -163,6 +177,257 @@ fn prepare_stem_buffers_from_cache_at_project_root(
         available_mask: ((1_u16 << STEM_BUFFER_COUNT) - 1) as u8,
         stems,
     })
+}
+
+fn align_component_stems_to_reference(
+    reference: &SampleBuffer,
+    buffers: &mut [SampleBuffer],
+    output_sample_rate: u32,
+    expected_frames: usize,
+) {
+    if buffers.len() != STEM_BUFFER_COUNT || reference.channels == 0 || expected_frames == 0 {
+        return;
+    }
+
+    let frame_offset =
+        detected_stem_alignment_offset(reference, buffers, output_sample_rate, expected_frames);
+    if frame_offset == 0 {
+        return;
+    }
+
+    for buffer in buffers {
+        shift_sample_buffer(buffer, expected_frames, frame_offset);
+    }
+}
+
+fn detected_stem_alignment_offset(
+    reference: &SampleBuffer,
+    buffers: &[SampleBuffer],
+    output_sample_rate: u32,
+    expected_frames: usize,
+) -> isize {
+    let channels = reference.channels;
+    if channels == 0 || buffers.len() < COMPONENT_STEM_COUNT {
+        return 0;
+    }
+
+    let reference_onset = onset_signal(reference.samples.as_ref(), channels, expected_frames);
+    let component_mix = mixed_component_stem_samples(buffers, channels, expected_frames);
+    let component_onset = onset_signal(&component_mix, channels, expected_frames);
+    best_alignment_offset(
+        &reference_onset,
+        &component_onset,
+        output_sample_rate,
+        expected_frames,
+    )
+}
+
+fn mixed_component_stem_samples(
+    buffers: &[SampleBuffer],
+    channels: usize,
+    expected_frames: usize,
+) -> Vec<f32> {
+    let expected_samples = expected_frames.saturating_mul(channels);
+    let mut mixed = vec![0.0; expected_samples];
+    for buffer in buffers.iter().take(COMPONENT_STEM_COUNT) {
+        if buffer.channels != channels || buffer.samples.len() != expected_samples {
+            continue;
+        }
+        for (mixed_sample, stem_sample) in mixed.iter_mut().zip(buffer.samples.iter()) {
+            *mixed_sample += *stem_sample;
+        }
+    }
+    mixed
+}
+
+fn onset_signal(samples: &[f32], channels: usize, frames: usize) -> Vec<f32> {
+    let mut signal = vec![0.0; frames];
+    if channels == 0 {
+        return signal;
+    }
+
+    let usable_frames = frames.min(samples.len() / channels);
+    let mut previous = 0.0_f32;
+    for (frame, signal_value) in signal.iter_mut().enumerate().take(usable_frames) {
+        let start = frame * channels;
+        let stop = start + channels;
+        let envelope = samples[start..stop]
+            .iter()
+            .map(|sample| sample.abs())
+            .sum::<f32>()
+            / channels as f32;
+        *signal_value = (envelope - previous).max(0.0);
+        previous = envelope;
+    }
+    signal
+}
+
+fn best_alignment_offset(
+    reference: &[f32],
+    candidate: &[f32],
+    output_sample_rate: u32,
+    expected_frames: usize,
+) -> isize {
+    let max_reference = reference.iter().copied().fold(0.0_f32, f32::max);
+    let max_candidate = candidate.iter().copied().fold(0.0_f32, f32::max);
+    if max_reference <= f32::EPSILON || max_candidate <= f32::EPSILON {
+        return 0;
+    }
+
+    let analysis = alignment_analysis_range(reference, output_sample_rate, expected_frames);
+    if analysis.len() < 4 {
+        return 0;
+    }
+
+    let max_shift_frames = ((output_sample_rate as f32 * STEM_ALIGNMENT_MAX_SHIFT_SECONDS).round()
+        as usize)
+        .min(analysis.len().saturating_sub(1));
+    if max_shift_frames == 0 {
+        return 0;
+    }
+
+    let reference_window = &reference[analysis.start..analysis.end];
+    let candidate_window = &candidate[analysis.start..analysis.end];
+    let coarse_hop = (output_sample_rate as usize / 4_000).clamp(1, 64);
+    let coarse_reference = downsample_max(reference_window, coarse_hop);
+    let coarse_candidate = downsample_max(candidate_window, coarse_hop);
+    let coarse_lag = best_lag_in_range(
+        &coarse_reference,
+        &coarse_candidate,
+        -((max_shift_frames / coarse_hop) as isize),
+        (max_shift_frames / coarse_hop) as isize,
+    )
+    .lag;
+
+    let coarse_frame_lag = coarse_lag * coarse_hop as isize;
+    let refine_radius = (coarse_hop as isize).saturating_mul(2).max(1);
+    let lower = (coarse_frame_lag - refine_radius).max(-(max_shift_frames as isize));
+    let upper = (coarse_frame_lag + refine_radius).min(max_shift_frames as isize);
+    let best = best_lag_in_range(reference_window, candidate_window, lower, upper);
+    let zero_score = correlation_for_lag(reference_window, candidate_window, 0);
+
+    if best.lag == 0
+        || best.score < STEM_ALIGNMENT_MIN_SCORE
+        || best.score < zero_score + STEM_ALIGNMENT_MIN_IMPROVEMENT
+    {
+        return 0;
+    }
+
+    best.lag
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AlignmentAnalysisRange {
+    start: usize,
+    end: usize,
+}
+
+impl AlignmentAnalysisRange {
+    fn len(self) -> usize {
+        self.end.saturating_sub(self.start)
+    }
+}
+
+fn alignment_analysis_range(
+    reference: &[f32],
+    output_sample_rate: u32,
+    expected_frames: usize,
+) -> AlignmentAnalysisRange {
+    let max_reference = reference.iter().copied().fold(0.0_f32, f32::max);
+    let threshold = max_reference * STEM_ALIGNMENT_ONSET_THRESHOLD_RATIO;
+    let onset_frame = reference
+        .iter()
+        .position(|value| *value >= threshold)
+        .unwrap_or(0);
+    let pre_onset_frames =
+        (output_sample_rate as f32 * STEM_ALIGNMENT_PRE_ONSET_SECONDS).round() as usize;
+    let analysis_frames =
+        (output_sample_rate as f32 * STEM_ALIGNMENT_ANALYSIS_SECONDS).round() as usize;
+    let start = onset_frame.saturating_sub(pre_onset_frames);
+    let end = start.saturating_add(analysis_frames).min(expected_frames);
+    AlignmentAnalysisRange { start, end }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LagScore {
+    lag: isize,
+    score: f32,
+}
+
+fn best_lag_in_range(reference: &[f32], candidate: &[f32], lower: isize, upper: isize) -> LagScore {
+    let mut best = LagScore {
+        lag: 0,
+        score: f32::NEG_INFINITY,
+    };
+    for lag in lower..=upper {
+        let score = correlation_for_lag(reference, candidate, lag);
+        if score > best.score {
+            best = LagScore { lag, score };
+        }
+    }
+    best
+}
+
+fn correlation_for_lag(reference: &[f32], candidate: &[f32], lag: isize) -> f32 {
+    let len = reference.len().min(candidate.len());
+    if len == 0 || lag.unsigned_abs() >= len {
+        return 0.0;
+    }
+
+    let (reference_start, candidate_start, count) = if lag >= 0 {
+        (0, lag as usize, len - lag as usize)
+    } else {
+        ((-lag) as usize, 0, len - (-lag) as usize)
+    };
+    if count == 0 {
+        return 0.0;
+    }
+
+    let mut dot = 0.0_f32;
+    let mut reference_energy = 0.0_f32;
+    let mut candidate_energy = 0.0_f32;
+    for offset in 0..count {
+        let reference_value = reference[reference_start + offset];
+        let candidate_value = candidate[candidate_start + offset];
+        dot += reference_value * candidate_value;
+        reference_energy += reference_value * reference_value;
+        candidate_energy += candidate_value * candidate_value;
+    }
+
+    let denominator = (reference_energy * candidate_energy).sqrt();
+    if denominator <= f32::EPSILON {
+        return 0.0;
+    }
+    dot / denominator
+}
+
+fn downsample_max(signal: &[f32], hop: usize) -> Vec<f32> {
+    let hop = hop.max(1);
+    signal
+        .chunks(hop)
+        .map(|chunk| chunk.iter().copied().fold(0.0_f32, f32::max))
+        .collect()
+}
+
+fn shift_sample_buffer(buffer: &mut SampleBuffer, expected_frames: usize, frame_offset: isize) {
+    let channels = buffer.channels;
+    if channels == 0 || buffer.samples.len() != expected_frames.saturating_mul(channels) {
+        return;
+    }
+
+    let mut shifted = vec![0.0; buffer.samples.len()];
+    for frame in 0..expected_frames {
+        let source_frame = frame as isize + frame_offset;
+        if !(0..expected_frames as isize).contains(&source_frame) {
+            continue;
+        }
+
+        let source_start = source_frame as usize * channels;
+        let target_start = frame * channels;
+        shifted[target_start..target_start + channels]
+            .copy_from_slice(&buffer.samples[source_start..source_start + channels]);
+    }
+    buffer.samples = shifted.into_boxed_slice().into();
 }
 
 pub(crate) fn source_version_hash(source_version: &str) -> u64 {
@@ -526,6 +791,67 @@ mod tests {
             assert_eq!(stem.channels, 2);
             assert_eq!(stem.samples.len(), 4);
         }
+    }
+
+    #[test]
+    fn prepare_stem_buffers_aligns_delayed_stems_to_reference_origin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_dir = tmp.path().join("samples").join("stems").join("cache");
+        fs::create_dir_all(&cache_dir).unwrap();
+        let mut reference_samples = vec![0.0_f32; 64];
+        reference_samples[8] = 1.0;
+        reference_samples[24] = 0.5;
+        let sample = SampleBuffer {
+            channels: 1,
+            samples: reference_samples.into_boxed_slice().into(),
+        };
+
+        let mut delayed_drums = vec![0.0_f32; 64];
+        delayed_drums[13] = 1.0;
+        delayed_drums[29] = 0.5;
+        for stem_name in ["vocals", "melody", "bass"] {
+            write_pcm16_wav(
+                &cache_dir.join(format!("{stem_name}.wav")),
+                1,
+                48_000,
+                &[0.0; 64],
+                false,
+            )
+            .unwrap();
+        }
+        write_pcm16_wav(
+            &cache_dir.join("drums.wav"),
+            1,
+            48_000,
+            &delayed_drums,
+            false,
+        )
+        .unwrap();
+        write_pcm16_wav(
+            &cache_dir.join("instrumental.wav"),
+            1,
+            48_000,
+            &delayed_drums,
+            false,
+        )
+        .unwrap();
+
+        let prepared = prepare_stem_buffers_from_cache_at_project_root(
+            "samples/loop.wav|64|10",
+            &sample,
+            48_000,
+            "samples/stems/cache",
+            tmp.path(),
+        )
+        .unwrap();
+
+        let drums = &prepared.stems[3].samples;
+        assert_eq!(drums[8], 1.0);
+        assert_eq!(drums[13], 0.0);
+        assert!((drums[24] - 0.5).abs() < 0.0001);
+        let instrumental = &prepared.stems[4].samples;
+        assert_eq!(instrumental[8], 1.0);
+        assert_eq!(instrumental[13], 0.0);
     }
 
     #[test]
