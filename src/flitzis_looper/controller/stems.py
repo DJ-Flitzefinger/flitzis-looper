@@ -369,14 +369,14 @@ class StemController(BaseController):  # noqa: PLR0904
         ):
             return False
 
+        if not self._publish_all_stems_state(sample_id, source_version):
+            return False
+
         if mode != self._project.pad_stem_mix_mode[sample_id]:
             self._project.pad_stem_mix_mode[sample_id] = mode
             self._mark_project_changed()
 
-        if not self.publish_stem_mix_mode_if_available(sample_id):
-            return False
-
-        return self.publish_stem_enabled_mask_if_available(sample_id)
+        return True
 
     def delete_stems(self, sample_id: int) -> bool:
         """Delete cached stems for a pad and return to full-mix playback."""
@@ -463,13 +463,7 @@ class StemController(BaseController):  # noqa: PLR0904
         if source_version is None or source_version != entry.source_version:
             return True
 
-        try:
-            self._audio.set_stem_mix_mode(sample_id, "all_stems", source_version)
-        except (RuntimeError, ValueError) as err:
-            self._session.stem_generation_errors[sample_id] = f"Stem mix update failed: {err}"
-            return False
-
-        return True
+        return self._publish_stem_mix_mode(sample_id, source_version)
 
     def publish_stem_enabled_mask_if_available(self, sample_id: int) -> bool:
         """Publish the session stem mask to Rust when current prepared stems are available."""
@@ -485,6 +479,22 @@ class StemController(BaseController):  # noqa: PLR0904
         if source_version is None or source_version != entry.source_version:
             return True
 
+        return self._publish_stem_enabled_mask(sample_id, source_version)
+
+    def _publish_all_stems_state(self, sample_id: int, source_version: str) -> bool:
+        if not self._publish_stem_mix_mode(sample_id, source_version):
+            return False
+        return self._publish_stem_enabled_mask(sample_id, source_version)
+
+    def _publish_stem_mix_mode(self, sample_id: int, source_version: str) -> bool:
+        try:
+            self._audio.set_stem_mix_mode(sample_id, "all_stems", source_version)
+        except (RuntimeError, ValueError) as err:
+            self._session.stem_generation_errors[sample_id] = f"Stem mix update failed: {err}"
+            return False
+        return True
+
+    def _publish_stem_enabled_mask(self, sample_id: int, source_version: str) -> bool:
         try:
             self._audio.set_stem_enabled_mask(
                 sample_id,
@@ -494,7 +504,6 @@ class StemController(BaseController):  # noqa: PLR0904
         except (RuntimeError, ValueError) as err:
             self._session.stem_generation_errors[sample_id] = f"Stem mask update failed: {err}"
             return False
-
         return True
 
     def source_version_for_pad(self, sample_id: int) -> str | None:

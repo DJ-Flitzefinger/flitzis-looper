@@ -443,6 +443,59 @@ def test_set_stem_mix_mode_all_stems_publishes_current_available_cache(
     audio_engine_mock.set_stem_enabled_mask.assert_called_once_with(0, STEM_COMPONENT_MASK, version)
 
 
+def test_set_stem_mix_mode_all_stems_keeps_full_mix_when_mode_publish_fails(
+    controller: AppController, audio_engine_mock: Mock, tmp_path: Path
+) -> None:
+    project_path = _load_project_sample(controller, tmp_path)
+    version = source_version_for_sample_path(project_path)
+    assert version is not None
+
+    cache_dir = cache_dir_for_sample_id(0)
+    controller.project.stem_cache[0] = StemCacheEntry(
+        source_version=version,
+        cache_dir=cache_dir,
+        stems=expected_stem_files(cache_dir),
+        available=True,
+    )
+    audio_engine_mock.set_stem_mix_mode.side_effect = RuntimeError("buffer may be full")
+
+    updated = controller.stems.set_stem_mix_mode(0, "all_stems")
+
+    assert updated is False
+    assert controller.project.pad_stem_mix_mode[0] == "full_mix"
+    assert controller.session.pad_stem_enabled_mask[0] == STEM_COMPONENT_MASK
+    audio_engine_mock.set_stem_mix_mode.assert_called_once_with(0, "all_stems", version)
+    audio_engine_mock.set_stem_enabled_mask.assert_not_called()
+    assert "Stem mix update failed" in controller.session.stem_generation_errors[0]
+
+
+def test_set_stem_mix_mode_all_stems_keeps_full_mix_when_mask_publish_fails(
+    controller: AppController, audio_engine_mock: Mock, tmp_path: Path
+) -> None:
+    project_path = _load_project_sample(controller, tmp_path)
+    version = source_version_for_sample_path(project_path)
+    assert version is not None
+
+    cache_dir = cache_dir_for_sample_id(0)
+    controller.project.stem_cache[0] = StemCacheEntry(
+        source_version=version,
+        cache_dir=cache_dir,
+        stems=expected_stem_files(cache_dir),
+        available=True,
+    )
+    controller.session.pad_stem_enabled_mask[0] = STEM_MASK_VOCALS
+    audio_engine_mock.set_stem_enabled_mask.side_effect = RuntimeError("buffer may be full")
+
+    updated = controller.stems.set_stem_mix_mode(0, "all_stems")
+
+    assert updated is False
+    assert controller.project.pad_stem_mix_mode[0] == "full_mix"
+    assert controller.session.pad_stem_enabled_mask[0] == STEM_MASK_VOCALS
+    audio_engine_mock.set_stem_mix_mode.assert_called_once_with(0, "all_stems", version)
+    audio_engine_mock.set_stem_enabled_mask.assert_called_once_with(0, STEM_MASK_VOCALS, version)
+    assert "Stem mask update failed" in controller.session.stem_generation_errors[0]
+
+
 def test_stem_mask_controls_require_available_all_stems(
     controller: AppController, tmp_path: Path
 ) -> None:
