@@ -127,6 +127,12 @@ the DLLs next to the native extension:
 $env:PATH = "$env:VCPKG_ROOT\installed\x64-windows\bin;$env:PATH"
 ```
 
+The Python wrapper also registers documented DLL directories before importing
+the native extension. Standalone Rust test binaries do not use that wrapper; on
+Windows, run Rust tests with `.\scripts\run-rust-tests.ps1` so uv's selected
+Python runtime and the Rubber Band runtime directory are added to `PATH` before
+`cargo test` launches the test executable.
+
 For later non-technical Windows distribution, the intended path is a Nuitka
 installer that bundles the required runtime DLLs. End users of that installer
 should not need vcpkg, CMake, Ninja, Rust, or Rubber Band development packages.
@@ -232,14 +238,16 @@ Common checks from the repository root:
 ```powershell
 uv run maturin develop
 uv run cargo check --manifest-path rust/Cargo.toml
-uv run cargo test --manifest-path rust/Cargo.toml
+.\scripts\run-rust-tests.ps1
 uv run pytest
 uv run ruff check src
 uv run mypy src
 ```
 
 Use `uv run cargo ...`, not plain `cargo ...`, so PyO3 and maturin use the
-project Python environment consistently.
+project Python environment consistently. On non-Windows platforms, or when a
+Windows shell already exposes the required runtime DLLs to test executables, use
+`uv run cargo test --manifest-path rust/Cargo.toml` directly.
 
 ## License
 

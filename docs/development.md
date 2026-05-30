@@ -8,7 +8,7 @@ layout for the current project.
 Expected development branch:
 
 ```text
-gen3
+main
 ```
 
 Before repository edits:
@@ -122,6 +122,26 @@ $env:RUBBERBAND_DLL_DIR = "$env:VCPKG_ROOT\installed\x64-windows\bin"
 uv run python -m flitzis_looper
 ```
 
+Standalone Rust test binaries do not import the Python wrapper, so
+`os.add_dll_directory(...)` is not available to them. On Windows, run Rust tests
+through the repository helper so uv's selected Python runtime directory and the
+Rubber Band runtime directory are prepended to `PATH` before `cargo test` starts
+the test executable:
+
+```powershell
+.\scripts\run-rust-tests.ps1
+```
+
+The helper asks `uv run python` for the active Python runtime location. For
+Rubber Band, it uses `RUBBERBAND_DLL_DIRS`, `RUBBERBAND_DLL_DIR`, a `bin`
+sibling of `RUBBERBAND_LIB_DIR`, `VCPKG_ROOT`, the default
+`$env:LOCALAPPDATA\vcpkg` location, and existing `PATH` entries that contain
+`rubberband-3.dll`. Extra arguments are forwarded to Cargo, for example:
+
+```powershell
+.\scripts\run-rust-tests.ps1 publish_loaded_sample_rejects_full_queue_without_cache_insert
+```
+
 Observed vcpkg runtime DLLs for the current branch are `rubberband-3.dll`,
 `sleefdft.dll`, `sleef.dll`, and `samplerate.dll`. Packaging scripts may copy
 those DLLs next to the built native extension instead of requiring `PATH`.
@@ -148,11 +168,18 @@ OpenSpec, bridge, or UI-control changes should run the full sequence:
 uv sync
 uv run maturin develop
 uv run cargo check --manifest-path rust/Cargo.toml
-uv run cargo test --manifest-path rust/Cargo.toml
+.\scripts\run-rust-tests.ps1
 uv run pytest
 uv run ruff check src
 uv run mypy src
 git diff --check
+```
+
+On non-Windows platforms, or in a Windows shell where the required runtime DLLs
+are already visible to test executables, the Rust test command is:
+
+```powershell
+uv run cargo test --manifest-path rust/Cargo.toml
 ```
 
 Rust formatting:

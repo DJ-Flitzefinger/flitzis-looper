@@ -123,9 +123,13 @@ overrides:
   enters realtime callback rendering.
 
 The Windows source-run helper registers Rubber Band DLL directories before
-loading the native extension. Packaging should provide the required runtime
-libraries with the application artifact and account for Rubber Band licensing
-before binary distribution.
+loading the native extension. Standalone Rust test binaries do not import that
+Python wrapper, so Windows Rust validation should either run with the Rubber
+Band runtime directory already on `PATH` or use `scripts/run-rust-tests.ps1`,
+which discovers uv's selected Python runtime plus the same documented Rubber
+Band runtime locations and prepends them to `PATH` before invoking Cargo.
+Packaging should provide the required runtime libraries with the application
+artifact and account for Rubber Band licensing before binary distribution.
 
 Reference URLs:
 

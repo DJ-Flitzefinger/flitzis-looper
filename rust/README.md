@@ -69,11 +69,17 @@ Run these from the repository root:
 ```powershell
 uv run maturin develop
 uv run cargo check --manifest-path rust/Cargo.toml
-uv run cargo test --manifest-path rust/Cargo.toml
+.\scripts\run-rust-tests.ps1
 uv run cargo fmt --manifest-path rust/Cargo.toml --check
 ```
 
 Use `uv run cargo ...` so PyO3 and maturin use the project Python environment.
+The Windows script adds uv's selected Python runtime and the documented Rubber
+Band runtime directories to `PATH` before launching the standalone Rust test
+executable.
+On non-Windows platforms, or in a Windows shell where the Rubber Band runtime
+DLLs are already visible to standalone test executables, the Rust test command
+is `uv run cargo test --manifest-path rust/Cargo.toml`.
 
 ## Design Notes
 
