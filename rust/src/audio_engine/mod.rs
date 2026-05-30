@@ -570,17 +570,6 @@ impl AudioEngine {
             }
         }
 
-        {
-            let mut tasks = self
-                .active_tasks
-                .lock()
-                .map_err(|_| PyRuntimeError::new_err("Failed to acquire active tasks lock"))?;
-            if has_active_task_for_id(&tasks, id) {
-                return Err(PyValueError::new_err("sample task already running"));
-            }
-            tasks.insert((id, BackgroundTaskKind::Analysis));
-        }
-
         let sample = {
             let cache = self
                 .sample_cache
@@ -591,6 +580,17 @@ impl AudioEngine {
                 .and_then(|slot| slot.clone())
                 .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?
         };
+
+        {
+            let mut tasks = self
+                .active_tasks
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("Failed to acquire active tasks lock"))?;
+            if has_active_task_for_id(&tasks, id) {
+                return Err(PyValueError::new_err("sample task already running"));
+            }
+            tasks.insert((id, BackgroundTaskKind::Analysis));
+        }
 
         let loader_tx = self.loader_tx.clone();
         let output_sample_rate = handle.output_sample_rate;

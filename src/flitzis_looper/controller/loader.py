@@ -193,12 +193,18 @@ class LoaderController(BaseController):
             return
 
         self._clear_analysis_task_messages(sample_id)
+        if not self.is_sample_loaded(sample_id):
+            self._session.analyzing_sample_ids.discard(sample_id)
+            self._analysis_request_ids.pop(sample_id, None)
+            self._session.sample_analysis_errors[sample_id] = "sample is not loaded"
+            return
+
         self._session.analyzing_sample_ids.add(sample_id)
         self._analysis_request_ids.pop(sample_id, None)
 
         try:
             request_id = self._audio.analyze_sample_async(sample_id)
-        except RuntimeError as err:
+        except (RuntimeError, ValueError) as err:
             self._session.analyzing_sample_ids.discard(sample_id)
             self._session.sample_analysis_errors[sample_id] = str(err)
         else:

@@ -1066,10 +1066,22 @@ def test_analyze_sample_async_already_loading(
     assert 0 not in controller.session.analyzing_sample_ids
 
 
+def test_analyze_sample_async_unloaded_pad_rejected_before_audio(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    """Test analysis on an unloaded pad is rejected without calling Rust."""
+    controller.loader.analyze_sample_async(0)
+
+    audio_engine_mock.analyze_sample_async.assert_not_called()
+    assert 0 not in controller.session.analyzing_sample_ids
+    assert controller.session.sample_analysis_errors[0] == "sample is not loaded"
+
+
 def test_analyze_sample_async_runtime_error(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     """Test analysis runtime error is handled gracefully."""
+    controller.project.sample_paths[0] = "/path/to/sample.wav"
     audio_engine_mock.analyze_sample_async.side_effect = RuntimeError("Audio engine busy")
 
     controller.loader.analyze_sample_async(0)

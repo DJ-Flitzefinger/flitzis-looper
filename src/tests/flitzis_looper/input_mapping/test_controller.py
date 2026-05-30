@@ -572,6 +572,18 @@ def test_keyboard_mapping_adjust_loop_toggles_and_switches_editor(
     assert controller.session.waveform_editor_pad_id == 2
 
 
+def test_input_mapping_analyze_unloaded_pad_is_handled(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    handled = controller.input_mapping.execute_action(LooperAction.analyze_pad(0))
+
+    assert handled is True
+    audio_engine_mock.analyze_sample_async.assert_not_called()
+    assert 0 not in controller.session.analyzing_sample_ids
+    assert controller.session.sample_analysis_errors[0] == "sample is not loaded"
+
+
 def test_keyboard_mapping_executes_master_volume(
     controller: AppController,
     audio_engine_mock: Mock,

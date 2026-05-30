@@ -584,6 +584,14 @@ def test_publish_prepared_stems_rejects_invalid_cache_dir(audio_engine: AudioEng
         audio_engine.publish_prepared_stems(0, "source", "../samples/stems/cache")
 
 
+def test_analyze_unloaded_pad_does_not_poison_active_task_gate(
+    audio_engine: AudioEngine,
+) -> None:
+    for _attempt in range(2):
+        with pytest.raises(ValueError, match="sample is not loaded"):
+            audio_engine.analyze_sample_async(0)
+
+
 def test_generate_stems_async_writes_project_cache_artifacts(
     audio_engine: AudioEngine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
