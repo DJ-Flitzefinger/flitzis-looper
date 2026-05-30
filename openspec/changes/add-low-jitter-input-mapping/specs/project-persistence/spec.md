@@ -26,10 +26,16 @@ the MIDI file's schema version and `device_mode` field while setting `mappings =
 The system SHALL persist the input mapping enabled flag with project state.
 
 Mapping file contents SHALL remain in the dedicated input mapping files, while the project state
-SHALL store whether input mapping is currently enabled.
+SHALL store whether input mapping is currently enabled. New and older projects SHALL default the
+input mapping enabled flag to `true`.
 
 #### Scenario: Enabled flag round-trips through project config
 - **GIVEN** input mapping is enabled in project state
 - **WHEN** project state is saved and reloaded
 - **THEN** input mapping remains enabled
 - **AND** keyboard and MIDI mapping entries still come from their dedicated input files
+
+#### Scenario: Missing enabled flag defaults to on
+- **GIVEN** a project file was created before the input mapping enabled flag existed
+- **WHEN** the project is loaded
+- **THEN** input mapping is enabled

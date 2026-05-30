@@ -491,7 +491,7 @@ class TestAudioActions:  # noqa: PLR0904
         audio_actions.global_.toggle_trigger_quantization()
 
         assert controller.project.trigger_quantization_enabled is True
-        audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_64")
+        audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_32")
 
     def test_set_stem_mix_mode(self, controller: AppController, audio_engine_mock: Mock) -> None:
         audio_actions = AudioActions(controller)
@@ -711,9 +711,9 @@ class TestSettingsActions:
     ) -> None:
         settings_actions = SettingsActions(controller)
 
-        settings_actions.set_trigger_quantization_step("1_32")
+        settings_actions.set_trigger_quantization_step("1_64")
 
-        assert controller.project.trigger_quantization_step == "1_32"
+        assert controller.project.trigger_quantization_step == "1_64"
         assert controller.persistence._dirty is True
 
 

@@ -270,7 +270,7 @@ def test_project_state_defaults(project_state: ProjectState) -> None:
     assert project_state.trigger_quantization_step == DEFAULT_TRIGGER_QUANTIZATION_STEP
     assert project_state.demucs_shifts == DEFAULT_DEMUCS_SHIFTS
     assert project_state.demucs_overlap == DEFAULT_DEMUCS_OVERLAP
-    assert project_state.input_mapping_enabled is False
+    assert project_state.input_mapping_enabled is True
     assert project_state.speed == 1.0
     assert project_state.volume == 1.0
     assert project_state.selected_pad == 0

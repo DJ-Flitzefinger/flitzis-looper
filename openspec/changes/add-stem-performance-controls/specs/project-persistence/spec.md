@@ -9,6 +9,11 @@ source version and complete project-local cache files before marking stems avail
 playback. Restore SHALL degrade safely to full-mix playback when metadata is missing, stale,
 invalid, or incomplete.
 
+Project restore SHALL publish a restored current prepared stem set to the Rust audio engine after
+the matching full-mix sample has loaded successfully. If Rust publication rejects the restored
+prepared set, restore SHALL mark those stems unavailable for performer controls and SHALL preserve
+full-mix playback.
+
 #### Scenario: Current stem cache metadata restores as available
 - **GIVEN** a saved project has stem cache metadata for pad source version A
 - **AND** the pad still loads source version A
@@ -16,6 +21,20 @@ invalid, or incomplete.
 - **WHEN** the project is restored
 - **THEN** the pad's stem cache may be marked available
 - **AND** playback remains usable if Rust publication later rejects the prepared set
+
+#### Scenario: Restored current stems are published after full mix load
+- **GIVEN** a saved project has complete stem cache metadata for pad source version A
+- **AND** the pad's full-mix sample restores successfully as source version A
+- **WHEN** the restored sample load completes
+- **THEN** the system publishes the prepared stem set to the Rust audio engine
+- **AND** a restored all-stems preference can affect playback without regenerating stems
+
+#### Scenario: Rejected restored stems become unavailable
+- **GIVEN** a saved project has complete stem cache metadata for pad source version A
+- **AND** the pad's full-mix sample restores successfully as source version A
+- **WHEN** Rust rejects publication of the restored prepared stem set
+- **THEN** the system marks the stems unavailable for performer controls
+- **AND** the pad remains playable using full-mix playback
 
 #### Scenario: Stale stem cache metadata is not restored as playable
 - **GIVEN** a saved project has stem cache metadata for source version A
@@ -58,7 +77,7 @@ durable.
 ### Requirement: Persist Demucs Stem Quality Settings
 The system SHALL persist global Demucs stem-generation quality settings in project state.
 
-New and older projects SHALL default Demucs shifts to 4 and Demucs overlap to 0.5. Persisted
+New and older projects SHALL default Demucs shifts to 1 and Demucs overlap to 0.5. Persisted
 quality settings SHALL be validated against the app-supported ranges before they can be used for
 generation: shifts from 1 through 20 and overlap from 0.25 through 0.95. Project-level changes
 SHALL be written through the existing `samples/flitzis_looper.config.json` persistence path
@@ -80,5 +99,5 @@ without requiring a separate Apply action.
 #### Scenario: Older project defaults quality settings
 - **GIVEN** a project file was created before Demucs quality settings existed
 - **WHEN** the project is loaded
-- **THEN** Demucs shifts defaults to 4
+- **THEN** Demucs shifts defaults to 1
 - **AND** Demucs overlap defaults to 0.5

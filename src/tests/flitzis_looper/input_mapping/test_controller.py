@@ -1117,6 +1117,7 @@ def test_non_direct_rust_midi_event_executes_start_stop_action(
 def test_rust_midi_event_is_ignored_when_mapping_disabled(
     controller: AppController,
 ) -> None:
+    controller.input_mapping.set_enabled(enabled=False)
     controller.project.selected_bank = 0
 
     controller.input_mapping._handle_rust_input_event({

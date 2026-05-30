@@ -229,7 +229,7 @@ playback of only `instrumental.wav`.
 The system SHALL run the default Demucs backend with bounded quality parameters outside the audio
 callback.
 
-The default Demucs backend SHALL pass `--shifts 4` and `--overlap 0.5` unless the Settings page
+The default Demucs backend SHALL pass `--shifts 1` and `--overlap 0.5` unless the Settings page
 provides validated replacement values. The control layer SHALL persist the configured values in
 project state and SHALL reject Demucs quality parameters outside the app-supported range before
 invoking Demucs. The app-supported range SHALL be `shifts` from 1 through 20 and `overlap` from
@@ -239,7 +239,7 @@ invoking Demucs. The app-supported range SHALL be `shifts` from 1 through 20 and
 - **GIVEN** the required Demucs model, FFmpeg tools, and TorchCodec support are available
 - **AND** no Settings page override has supplied alternate quality parameters
 - **WHEN** the performer requests stem generation
-- **THEN** the background backend invokes Demucs with `--shifts 4`
+- **THEN** the background backend invokes Demucs with `--shifts 1`
 - **AND** the background backend invokes Demucs with `--overlap 0.5`
 
 #### Scenario: Settings quality values are used

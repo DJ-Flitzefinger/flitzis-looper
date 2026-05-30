@@ -61,6 +61,9 @@ class AppController:
             on_stem_generation_error=self.stems._handle_stem_generation_error,
             on_stems_deleted=self.stems.delete_stems,
         )
+        self.loader.set_restored_sample_loaded_callback(
+            self.stems.publish_restored_stem_cache_if_available
+        )
         self.loader.set_new_sample_loaded_callback(
             self.transport.loop.initialize_loaded_pad_defaults
         )

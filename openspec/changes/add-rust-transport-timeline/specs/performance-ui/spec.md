@@ -14,7 +14,7 @@ mask buttons, and Settings toggle SHALL share a consistent horizontal alignment 
 visually grouped by function.
 
 The Settings page SHALL expose the persisted trigger quantization grid as fixed musical steps:
-`1/16`, `1/32`, and `1/64`. The default grid step SHALL be `1/16`, and the minimum `1/64` step
+`1/16`, `1/32`, and `1/64`. The default grid step SHALL be `1/32`, and the minimum `1/64` step
 SHALL match the loop editor's finest musical grid line spacing when the loop editor is zoomed far
 enough to show that grid.
 
@@ -26,14 +26,14 @@ callback, or introduce unbounded audio-thread work.
 - **WHEN** the application starts with a new project
 - **THEN** the bottom-bar `Q` button indicates disabled trigger quantization
 - **AND** pad triggers preserve immediate behavior unless the performer enables `Q`
-- **AND** the Settings page shows `1/16` as the selected quantization grid
+- **AND** the Settings page shows `1/32` as the selected quantization grid
 
 #### Scenario: Enabling trigger quantization publishes the selected grid
 - **GIVEN** the application is running with trigger quantization disabled
-- **AND** the Settings page trigger quantization grid is `1/16`
+- **AND** the Settings page trigger quantization grid is `1/32`
 - **WHEN** the performer activates the bottom-bar `Q` button
 - **THEN** the project trigger quantization enabled state becomes `true`
-- **AND** the control layer calls `AudioEngine.set_trigger_quantization("1_16")`
+- **AND** the control layer calls `AudioEngine.set_trigger_quantization("1_32")`
 - **AND** the bottom-bar `Q` button indicates enabled trigger quantization
 
 #### Scenario: Changing the Settings grid while disabled is persisted

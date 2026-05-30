@@ -35,7 +35,7 @@
 
 ## 7. Settings-Based Quantization Update
 - [x] 7.1 Replace the performance-view trigger quantization mode segment with a bottom-bar `Q` toggle.
-- [x] 7.2 Move trigger quantization grid selection to Settings with `1/16`, `1/32`, and `1/64` options and `1/16` default.
+- [x] 7.2 Move trigger quantization grid selection to Settings with `1/16`, `1/32`, and `1/64` options and `1/32` default.
 - [x] 7.3 Keep quantized scheduling on the Rust transport grid and preserve audio callback real-time safety.
 - [x] 7.4 Persist and migrate trigger quantization settings.
 - [x] 7.5 Align the bottom-bar mode, stem, and Settings controls on a consistent horizontal line.

@@ -241,6 +241,38 @@ class StemController(BaseController):  # noqa: PLR0904
         if changed:
             self._mark_project_changed()
 
+    def publish_restored_stem_cache_if_available(self, sample_id: int) -> bool:
+        """Publish restored prepared stems after the restored full mix has loaded."""
+        validate_sample_id(sample_id)
+        entry = self._project.stem_cache[sample_id]
+        if entry is None or not entry.available:
+            return True
+
+        source_version = self.source_version_for_pad(sample_id)
+        if source_version is None or source_version != entry.source_version:
+            self._project.stem_cache[sample_id] = None
+            if self._project.pad_stem_mix_mode[sample_id] != "full_mix":
+                self._project.pad_stem_mix_mode[sample_id] = "full_mix"
+            self._mark_project_changed()
+            return True
+
+        if not self._entry_files_available(entry):
+            self._project.stem_cache[sample_id] = entry.model_copy(update={"available": False})
+            self._mark_project_changed()
+            return True
+
+        try:
+            self._audio.publish_prepared_stems(sample_id, source_version, entry.cache_dir)
+        except (RuntimeError, ValueError) as err:
+            self._project.stem_cache[sample_id] = entry.model_copy(update={"available": False})
+            self._session.stem_generation_errors[sample_id] = (
+                f"Restored stem publication failed: {err}"
+            )
+            self._mark_project_changed()
+            return False
+
+        return self._publish_all_stems_mode_if_preferred(sample_id, source_version)
+
     def invalidate_stem_cache(self, sample_id: int) -> None:
         """Mark cached stem metadata unavailable for a pad."""
         validate_sample_id(sample_id)
@@ -728,9 +760,9 @@ class StemController(BaseController):  # noqa: PLR0904
                 "Stem generation completed on CPU after CUDA fallback"
             )
 
-    def _publish_all_stems_mode_if_preferred(self, sample_id: int, source_version: str) -> None:
+    def _publish_all_stems_mode_if_preferred(self, sample_id: int, source_version: str) -> bool:
         if self._project.pad_stem_mix_mode[sample_id] != "all_stems":
-            return
+            return True
 
         try:
             self._audio.set_stem_mix_mode(sample_id, "all_stems", source_version)
@@ -743,3 +775,5 @@ class StemController(BaseController):  # noqa: PLR0904
             self._session.stem_generation_errors[sample_id] = (
                 f"Stem generation completed but mix update failed: {err}"
             )
+            return False
+        return True

@@ -217,11 +217,23 @@ buffers only after non-realtime validation. Prepared stems must match the loaded
 full mix by source version, sample rate, channel layout, frame count, and
 source-frame origin.
 
+Restored stem caches are validated in Python before the pad is treated as
+stem-available, but restored prepared stems are published to Rust only after the
+matching restored full-mix sample has completed its async load. If publication
+is rejected, Python marks the cache unavailable for controls and leaves Rust in
+full-mix playback.
+
 Active full-mix/stem mode and enabled-mask changes use bounded Rust-owned
 transition state with a short 128 source-frame crossfade. Both sides read the
 same loop-relative source frame before Key Lock, Gain/Trim, DSP, metering, and
 telemetry. The `I` performance preset means Drums + Melody + Bass; cached
 `instrumental.wav` is cache data, not a fifth live component.
+
+Unload Audio and Delete Stems both route through stem cleanup before a pad is
+considered empty. The cleanup deletes tracked project-local stem artifacts,
+clears durable stem-cache metadata, returns durable stem mode to `full_mix`,
+resets session-only stem masks, and publishes neutral/full-mix state to Rust.
+Rust `UnloadSample` also retires any prepared stem buffers held by the mixer.
 
 ## Speed, BPM Lock, And Key Lock
 
@@ -359,14 +371,18 @@ Startup order:
 4. Construct controllers.
 5. Validate restored sample assignments, clear missing or unusable pads with
    explicit neutral Rust state, and schedule cached sample loads.
-6. Validate restored stem cache metadata.
-7. Publish restored global settings and loaded-pad live-audio state to Rust.
+6. Validate restored stem cache metadata; publish restored prepared stems only
+   after each matching full-mix sample load succeeds.
+7. Publish restored global settings and non-stem loaded-pad live-audio state to
+   Rust.
 8. Publish input-mapping runtime state.
 
 Normal startup projection skips per-pad gain, EQ, BPM, timing metadata, loop
 regions, Key Lock, stem mode, and stem masks for empty pads. Explicit unload,
 clear, or force-reset paths still publish the bounded neutral state needed to
-remove stale Rust live-audio state for that pad.
+remove stale Rust live-audio state for that pad. Stem cleanup additionally
+removes the project metadata that would otherwise make a later restored-load
+callback eligible to republish prepared stems.
 
 Audio-to-control telemetry is best-effort and controller-owned. Dropped
 telemetry must not silently change durable project intent.

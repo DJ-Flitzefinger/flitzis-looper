@@ -66,7 +66,7 @@ TRIGGER_QUANTIZATION_STEP_LABELS: dict[TriggerQuantizationStep, str] = {
     "1_32": "1/32",
     "1_16": "1/16",
 }
-DEFAULT_TRIGGER_QUANTIZATION_STEP: TriggerQuantizationStep = "1_64"
+DEFAULT_TRIGGER_QUANTIZATION_STEP: TriggerQuantizationStep = "1_32"
 LEGACY_TRIGGER_QUANTIZATION_TO_STEP: dict[str, TriggerQuantizationStep] = {
     "next_beat": "1_16",
     "next-beat": "1_16",
@@ -349,7 +349,7 @@ class ProjectState(BaseModel):
     """Whether global pad trigger quantization is enabled."""
     trigger_quantization_step: TriggerQuantizationStep = DEFAULT_TRIGGER_QUANTIZATION_STEP
     """Global pad trigger quantization grid step."""
-    input_mapping_enabled: bool = False
+    input_mapping_enabled: bool = True
     """Enable performer MIDI/keyboard input mappings."""
     demucs_shifts: int = Field(
         default=DEFAULT_DEMUCS_SHIFTS,

@@ -30,7 +30,7 @@ stem buffers may be published for future Rust mixing.
   `Gyan.FFmpeg*` package installs before reporting them unavailable.
 - Require usable TorchCodec support for the current Torchaudio output path, with a short
   `TorchCodec unavailable` error before Demucs starts if native libraries cannot load.
-- Use Demucs defaults of `--shifts 4` and `--overlap 0.5`, modeled as bounded
+- Use Demucs defaults of `--shifts 1` and `--overlap 0.5`, modeled as bounded
   request parameters that can be replaced by validated Settings page values.
 - Delete tracked pad stem cache artifacts on pad unload or explicit stem deletion outside the
   audio callback.

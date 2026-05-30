@@ -418,6 +418,23 @@ def test_missing_demucs_quality_settings_load_defaults(
     assert loaded.demucs_overlap == pytest.approx(DEFAULT_DEMUCS_OVERLAP)
 
 
+def test_missing_input_mapping_enabled_loads_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    project = ProjectState(volume=0.5)
+    data = project.model_dump(mode="json")
+    data.pop("input_mapping_enabled", None)
+
+    config_path = tmp_path / PROJECT_CONFIG_PATH
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+
+    loaded = ProjectPersistence.from_config_path().project
+    assert loaded.input_mapping_enabled is True
+
+
 def test_removed_key_lock_backend_settings_are_not_persisted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

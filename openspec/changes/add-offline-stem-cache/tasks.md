@@ -53,7 +53,7 @@
 - [x] 8.9 Declare Demucs as an application runtime dependency so model installation state is checked separately from package installation.
 - [x] 8.10 Require the default `htdemucs` checkpoint to be preinstalled and return `no Model installed` without invoking Demucs when it is missing.
 - [x] 8.11 Declare TorchCodec as a runtime dependency for Demucs/Torchaudio WAV output and preflight `ffprobe`/`ffmpeg` before invoking Demucs.
-- [x] 8.12 Run Demucs with defaults `--shifts 4` and `--overlap 0.5`.
+- [x] 8.12 Run Demucs with defaults `--shifts 1` and `--overlap 0.5`.
 - [x] 8.13 Model Demucs quality settings as bounded request parameters for Settings page control.
 - [x] 8.14 Resolve FFmpeg tools from `PATH`, `FLITZIS_FFMPEG_DIR`, or local WinGet `Gyan.FFmpeg*` installs before preflight.
 - [x] 8.15 Feed validated Settings page Demucs quality values into the backend request before generation starts.

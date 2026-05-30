@@ -54,6 +54,7 @@ class LoaderController(BaseController):
         self._on_stem_generation_success = on_stem_generation_success
         self._on_stem_generation_error = on_stem_generation_error
         self._on_stems_deleted = on_stems_deleted
+        self._on_restored_sample_loaded: Callable[[int], bool] | None = None
         self._on_new_sample_loaded: Callable[[int], None] | None = None
         self._load_request_ids: dict[int, int] = {}
         self._analysis_request_ids: dict[int, int] = {}
@@ -61,6 +62,10 @@ class LoaderController(BaseController):
     def set_new_sample_loaded_callback(self, callback: Callable[[int], None]) -> None:
         """Register behavior that runs after a newly assigned sample finishes loading."""
         self._on_new_sample_loaded = callback
+
+    def set_restored_sample_loaded_callback(self, callback: Callable[[int], bool]) -> None:
+        """Register behavior that runs after a restored sample finishes loading."""
+        self._on_restored_sample_loaded = callback
 
     def restore_samples_from_project_state(self) -> None:
         """Schedule async loads for cached samples referenced by `ProjectState`.
@@ -423,6 +428,7 @@ class LoaderController(BaseController):
 
         previous_path = self._project.sample_paths[sample_id]
         new_assignment = target_path is not None and previous_path != target_path
+        restored_assignment = target_path is not None and previous_path == target_path
         if new_assignment:
             self._project.sample_paths[sample_id] = target_path
             self._clear_stem_cache(sample_id)
@@ -446,6 +452,9 @@ class LoaderController(BaseController):
             self._on_pad_bpm_changed(sample_id)
 
         self._clear_analysis_task_state(sample_id)
+
+        if restored_assignment and self._on_restored_sample_loaded is not None:
+            self._on_restored_sample_loaded(sample_id)
 
     def _handle_loader_error(self, sample_id: int, event: dict[str, object]) -> None:
         if not self._matches_load_request(sample_id, event):

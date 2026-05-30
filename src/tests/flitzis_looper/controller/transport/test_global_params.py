@@ -455,20 +455,20 @@ def test_enable_trigger_quantization_updates_project_and_audio(
     controller.transport.global_params.set_trigger_quantization_enabled(enabled=True)
 
     assert controller.project.trigger_quantization_enabled is True
-    assert controller.project.trigger_quantization_step == "1_64"
-    audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_64")
+    assert controller.project.trigger_quantization_step == "1_32"
+    audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_32")
 
 
 def test_set_trigger_quantization_step_updates_audio_only_when_enabled(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
-    controller.transport.global_params.set_trigger_quantization_step("1_32")
+    controller.transport.global_params.set_trigger_quantization_step("1_16")
 
-    assert controller.project.trigger_quantization_step == "1_32"
+    assert controller.project.trigger_quantization_step == "1_16"
     audio_engine_mock.set_trigger_quantization.assert_not_called()
 
     controller.transport.global_params.set_trigger_quantization_enabled(enabled=True)
-    audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_32")
+    audio_engine_mock.set_trigger_quantization.assert_called_once_with("1_16")
 
     audio_engine_mock.reset_mock()
     controller.transport.global_params.set_trigger_quantization_step("1_64")
@@ -503,5 +503,5 @@ def test_set_trigger_quantization_rejects_invalid_mode(
         controller.transport.global_params.set_trigger_quantization("half_note")
 
     assert controller.project.trigger_quantization_enabled is False
-    assert controller.project.trigger_quantization_step == "1_64"
+    assert controller.project.trigger_quantization_step == "1_32"
     audio_engine_mock.set_trigger_quantization.assert_not_called()
