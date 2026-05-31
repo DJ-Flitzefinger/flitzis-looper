@@ -16,7 +16,7 @@ use crate::audio_engine::constants::{
 };
 use crate::audio_engine::dsp::{DspNodeSlot, DspParameterId, DspParameterSlot, PerPadDspChain};
 use crate::audio_engine::stretch_processor::DEFAULT_BLOCK_SAMPLES;
-use crate::audio_engine::voice_slot::{ExplicitSeekMode, PlaybackTimelineAnchor, VoiceSlot};
+use crate::audio_engine::voice_slot::{ExplicitSeekMode, PlaybackTimelineAnchor, VoiceSlot, VoiceStartConfig};
 use crate::messages::{
     PadTimingMetadata, PreparedStemSet, STEM_BUFFER_COUNT, STEM_COMPONENT_MASK, SampleBuffer,
     StemMixMode,
@@ -1009,12 +1009,14 @@ impl RtMixer {
                 self.stem_transitions[id].clear();
                 self.pad_dsp_chains[id].reset();
                 voice_slot.start_rt(
-                    id,
-                    sample.clone(),
-                    initial_frame_pos,
-                    velocity,
-                    tempo_ratio,
-                    start_output_frame,
+                    VoiceStartConfig {
+                        sample_id: id,
+                        sample: sample.clone(),
+                        initial_frame_pos,
+                        volume: velocity,
+                        initial_tempo_ratio: tempo_ratio,
+                        start_output_frame,
+                    },
                     retirement,
                 );
                 return true;

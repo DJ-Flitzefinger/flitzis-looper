@@ -5,6 +5,15 @@ use crate::messages::SampleBuffer;
 
 const KEY_LOCK_TEMPO_SMOOTHING_STEP: f32 = 0.05;
 
+pub(crate) struct VoiceStartConfig {
+    pub(crate) sample_id: usize,
+    pub(crate) sample: SampleBuffer,
+    pub(crate) initial_frame_pos: usize,
+    pub(crate) volume: f32,
+    pub(crate) initial_tempo_ratio: f32,
+    pub(crate) start_output_frame: Option<u64>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ExplicitSeekMode {
     Normal,
@@ -49,12 +58,7 @@ impl VoiceSlot {
 
     pub(crate) fn start_rt(
         &mut self,
-        sample_id: usize,
-        sample: SampleBuffer,
-        initial_frame_pos: usize,
-        volume: f32,
-        initial_tempo_ratio: f32,
-        start_output_frame: Option<u64>,
+        config: VoiceStartConfig,
         retirement: &mut impl AudioBufferRetirement,
     ) {
         if let Some(old_sample) = self.sample.take() {
@@ -62,12 +66,12 @@ impl VoiceSlot {
         }
 
         self.start_inner(
-            sample_id,
-            sample,
-            initial_frame_pos,
-            volume,
-            initial_tempo_ratio,
-            start_output_frame,
+            config.sample_id,
+            config.sample,
+            config.initial_frame_pos,
+            config.volume,
+            config.initial_tempo_ratio,
+            config.start_output_frame,
         );
     }
 
