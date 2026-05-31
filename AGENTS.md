@@ -79,6 +79,11 @@
   - Validate inputs before crossing FFI boundary
 - Error Handling
   - Use anyhow and thiserror
+- Clippy
+  - Never use blanket `#![allow(...)]` module-level suppressions.
+  - Prefer fixing the warning, or `#[cfg(test)]`-gating test-only code.
+  - If a suppression is truly necessary, use a targeted `#[allow(...)]` on the
+    specific item with a comment explaining why.
 
 ## Documentation
 Depending on the current task, consider reading specific documentation.
