@@ -328,23 +328,8 @@ impl ControlMessage {
     }
 }
 
-/// Beat grid with beat positions, downbeat positions, and bar start positions.
-#[derive(Debug, Clone)]
-pub(crate) struct BeatGrid {
-    /// Beat positions in seconds.
-    pub beats: Vec<f32>,
-    /// Downbeat positions in seconds (first beat of each bar).
-    pub downbeats: Vec<f32>,
-    /// Bar start positions in seconds.
-    pub bars: Vec<f32>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct SampleAnalysis {
-    pub bpm: f32,
-    pub key: String,
-    pub beat_grid: BeatGrid,
-}
+/// Re-export from the analysis crate.
+pub(crate) use flitzis_looper_analysis::SampleAnalysis;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BackgroundTaskKind {

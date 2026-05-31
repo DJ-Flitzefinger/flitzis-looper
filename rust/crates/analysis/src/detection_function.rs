@@ -4,10 +4,11 @@
 //! Uses Hann-windowed RFFT per frame, extracts magnitude and phase, and
 //! computes phase deviation (second-order phase derivative).
 
-use super::AnalysisConfig;
-use super::math_utils::principal_arg;
-use super::phase_vocoder::PhaseVocoder;
-use super::window::{apply_window, hann_window};
+use crate::math_utils::principal_arg;
+use crate::phase_vocoder::PhaseVocoder;
+use crate::window::{apply_window, hann_window};
+
+use crate::AnalysisConfig;
 
 /// Onset Detection Function processor.
 pub struct DetectionFunction {

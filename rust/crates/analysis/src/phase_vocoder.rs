@@ -7,7 +7,7 @@ use rustfft::FftPlanner;
 use rustfft::num_complex::Complex;
 use std::sync::Arc;
 
-use super::math_utils::principal_arg;
+use crate::math_utils::principal_arg;
 
 /// Phase vocoder for frame-by-frame FFT and phase tracking.
 pub struct PhaseVocoder {

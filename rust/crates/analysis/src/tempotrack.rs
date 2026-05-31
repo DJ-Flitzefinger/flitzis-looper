@@ -2,7 +2,7 @@
 //!
 //! Implements the qm-dsp TempoTrackV2 algorithm with configurable parameters.
 
-use super::math_utils::adaptive_threshold;
+use crate::math_utils::adaptive_threshold;
 
 /// Tempo tracker using Viterbi HMM for beat period estimation and
 /// dynamic programming for beat position tracking.
@@ -255,7 +255,7 @@ impl TempoTrackV2 {
                 old_period = period;
                 let prange_max = -(period as isize / 2);
 
-                txwt_len = (prange_max as isize - prange_min) as usize + 1;
+                txwt_len = (prange_max - prange_min) as usize + 1;
                 txwt.clear();
                 txwt.reserve(txwt_len);
 

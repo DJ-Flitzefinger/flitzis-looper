@@ -1,0 +1,13 @@
+[package]
+name = "flitzis-looper-analysis"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "flitzis_looper_analysis"
+
+[dependencies]
+rustfft = "6.2"
+
+[dev-dependencies]
+symphonia = { version = "0.5", features = ["all", "opt-simd", "default"] }

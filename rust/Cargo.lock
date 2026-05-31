@@ -393,7 +393,7 @@ dependencies = [
  "cpal",
  "cute-dsp",
  "env_logger",
- "flitzis-looper",
+ "flitzis-looper-analysis",
  "log",
  "midir",
  "numpy",
@@ -401,10 +401,17 @@ dependencies = [
  "pyo3",
  "rtrb",
  "rubato",
- "rustfft",
  "symphonia",
  "tempfile",
  "thiserror 2.0.17",
+]
+
+[[package]]
+name = "flitzis-looper-analysis"
+version = "0.1.0"
+dependencies = [
+ "rustfft",
+ "symphonia",
 ]
 
 [[package]]

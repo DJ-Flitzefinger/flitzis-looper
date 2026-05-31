@@ -6,7 +6,7 @@ use rustfft::FftPlanner;
 use rustfft::num_complex::Complex;
 use std::sync::Arc;
 
-use super::math_utils::adaptive_threshold;
+use crate::math_utils::adaptive_threshold;
 
 /// Downbeat detector using spectral difference between beat segments.
 pub struct DownBeat {

@@ -1,4 +1,3 @@
-use crate::audio_engine::analysis::analyze_sample;
 use crate::audio_engine::audio_stream::{AudioStreamHandle, create_audio_stream, start_stream};
 use crate::audio_engine::constants::{
     NUM_SAMPLES, PAD_EQ_DB_MAX, PAD_EQ_DB_MIN, PAD_GAIN_DB_MAX, PAD_GAIN_DB_MIN, SPEED_MAX,
@@ -15,10 +14,13 @@ use crate::audio_engine::stem_cache::{
     prepare_stem_buffers_from_cache, project_stem_cache_dir, source_version_hash,
     write_deterministic_stem_artifacts,
 };
+use flitzis_looper_analysis as analysis;
+
+use crate::audio_engine::channels::map_channels;
 use crate::messages::{
     AudioMessage, BackgroundTaskKind, ControlMessage, ControlParameterMessage, LoaderEvent,
-    PadTimingMetadata, STEM_COMPONENT_MASK, SampleBuffer, StemMixMode, TriggerQuantization,
-    task_to_str,
+    PadTimingMetadata, STEM_COMPONENT_MASK, SampleAnalysis, SampleBuffer, StemMixMode,
+    TriggerQuantization, task_to_str,
 };
 use numpy::{PyArray1, ToPyArray};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -33,10 +35,6 @@ use std::sync::{
 };
 use std::thread;
 
-#[cfg(not(feature = "test-helpers"))]
-mod analysis;
-#[cfg(feature = "test-helpers")]
-pub(crate) mod analysis;
 mod audio_stream;
 mod buffer_retirement;
 mod channels;
@@ -47,10 +45,7 @@ mod input_mapping;
 mod mixer;
 mod progress;
 mod rubberband_backend;
-#[cfg(not(feature = "test-helpers"))]
 mod sample_loader;
-#[cfg(feature = "test-helpers")]
-pub(crate) mod sample_loader;
 mod scheduler;
 mod stem_cache;
 mod stretch_processor;
@@ -204,6 +199,126 @@ fn publish_loaded_sample(
     }
 
     Ok(())
+}
+
+/// Return the next higher integer power of two from x (or x if already a power of two).
+fn next_power_of_two(x: usize) -> usize {
+    if x <= 1 {
+        return 1;
+    }
+    if x.is_power_of_two() {
+        return x;
+    }
+    let mut n = 1;
+    while n < x {
+        n <<= 1;
+    }
+    n
+}
+
+/// Analyze a sample buffer for BPM, beat grid, and key.
+///
+/// Runs the full qm-dsp pipeline: DetectionFunction → TempoTrackV2 → DownBeat.
+fn analyze_sample(sample: &SampleBuffer, sample_rate_hz: u32) -> Result<SampleAnalysis, String> {
+    let mono = map_channels(sample.samples.to_vec(), sample.channels, 1)
+        .map_err(|err| format!("analysis failed: {err}"))?;
+
+    if mono.is_empty() || sample_rate_hz == 0 {
+        return Err("analysis failed: empty sample or zero sample rate".to_string());
+    }
+
+    let config = analysis::AnalysisConfig::default();
+
+    // Convert to f64 for internal processing
+    let mono_f64: Vec<f64> = mono.iter().map(|s| *s as f64).collect();
+
+    // Step 1: Compute onset detection function
+    let mut df = analysis::DetectionFunction::new(sample_rate_hz, &config);
+
+    // Guard: need at least one full frame of audio
+    let frame_length = next_power_of_two((sample_rate_hz as f64 / config.max_bin_hz) as usize);
+    if mono_f64.len() < frame_length {
+        // Return default result for very short audio
+        return Ok(SampleAnalysis {
+            bpm: 0.0,
+            key: "unknown".to_string(),
+            beat_grid: analysis::BeatGrid {
+                beats: Vec::new(),
+                downbeats: Vec::new(),
+                bars: Vec::new(),
+            },
+        });
+    }
+    let odf = df.process(&mono_f64);
+
+    if odf.is_empty() {
+        return Err("analysis failed: no ODF values produced".to_string());
+    }
+
+    // Step 2: Estimate beat periods via Viterbi HMM
+    let mut beat_period = Vec::new();
+    let tracker = analysis::TempoTrackV2::new(sample_rate_hz as f64, config.step_secs);
+    tracker.calculate_beat_period(&odf, &mut beat_period, config.input_tempo, false);
+
+    // Step 3: Calculate beat positions via dynamic programming
+    let mut beats_frames = Vec::new();
+    tracker.calculate_beats(
+        &odf,
+        &beat_period,
+        &mut beats_frames,
+        config.alpha,
+        config.tightness,
+    );
+
+    // Step 4: Calculate BPM from beat intervals
+    let bpm = analysis::calculate_bpm(&beats_frames, config.step_secs);
+
+    // Step 5: Downbeat detection
+    let mut downbeat_indices = Vec::new();
+    let mut bar_indices = Vec::new();
+    if !beats_frames.is_empty() {
+        let mut downbeat =
+            analysis::DownBeat::new(sample_rate_hz as f64, 16, config.step_secs as usize);
+        downbeat.find_downbeats(
+            &mono_f64,
+            mono_f64.len(),
+            &beats_frames,
+            &mut downbeat_indices,
+        );
+
+        // Group downbeats into bars
+        bar_indices = downbeat_indices.clone();
+    }
+
+    // Convert beat positions from frames to seconds
+    let frame_duration = config.step_secs;
+    let beats: Vec<f32> = beats_frames
+        .iter()
+        .map(|f| (*f * frame_duration) as f32)
+        .collect();
+    let downbeats: Vec<f32> = downbeat_indices
+        .iter()
+        .filter_map(|idx| beats_frames.get(*idx))
+        .map(|f| (*f * frame_duration) as f32)
+        .collect();
+    let bars: Vec<f32> = bar_indices
+        .iter()
+        .filter_map(|idx| beats_frames.get(*idx))
+        .map(|f| (*f * frame_duration) as f32)
+        .collect();
+
+    let beat_grid = analysis::BeatGrid {
+        beats,
+        downbeats,
+        bars,
+    };
+
+    // Key detection is not yet ported; return placeholder
+    Ok(SampleAnalysis {
+        bpm,
+        key: "unknown".to_string(),
+        beat_grid,
+    })
 }
 
 /// AudioEngine provides minimal audio output capabilities using cpal
