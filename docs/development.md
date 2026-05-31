@@ -167,7 +167,7 @@ OpenSpec, bridge, or UI-control changes should run the full sequence:
 ```powershell
 uv sync
 uv run maturin develop
-uv run cargo check --manifest-path rust/Cargo.toml
+uv run cargo check --manifest-path rust/Cargo.toml --workspace
 .\scripts\run-rust-tests.ps1
 uv run pytest
 uv run ruff check src
@@ -179,13 +179,13 @@ On non-Windows platforms, or in a Windows shell where the required runtime DLLs
 are already visible to test executables, the Rust test command is:
 
 ```powershell
-uv run cargo test --manifest-path rust/Cargo.toml
+uv run cargo test --manifest-path rust/Cargo.toml --workspace
 ```
 
 Rust formatting:
 
 ```powershell
-uv run cargo fmt --manifest-path rust/Cargo.toml --check
+uv run cargo fmt --manifest-path rust/Cargo.toml --all --check
 ```
 
 Python formatting:

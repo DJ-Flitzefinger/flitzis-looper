@@ -196,7 +196,8 @@ The full architecture is documented in
 ```text
 src/flitzis_looper/        Python app package: UI, controllers, models, persistence
 src/flitzis_looper_audio/  Python wrapper and type stubs for the Rust extension
-rust/src/                  Rust audio engine, PyO3 bridge, DSP, transport, scheduler
+rust/crates/looper/        Rust audio engine, PyO3 bridge, DSP, transport, scheduler
+rust/crates/analysis/      Rust BPM analysis pipeline (standalone crate)
 src/tests/                 Python tests and native-extension integration tests
 docs/                      Maintained architecture, development, and setup docs
 openspec/                  Product/behavior contracts and change deltas
@@ -237,7 +238,7 @@ Common checks from the repository root:
 
 ```powershell
 uv run maturin develop
-uv run cargo check --manifest-path rust/Cargo.toml
+uv run cargo check --manifest-path rust/Cargo.toml --workspace
 .\scripts\run-rust-tests.ps1
 uv run pytest
 uv run ruff check src
@@ -247,7 +248,7 @@ uv run mypy src
 Use `uv run cargo ...`, not plain `cargo ...`, so PyO3 and maturin use the
 project Python environment consistently. On non-Windows platforms, or when a
 Windows shell already exposes the required runtime DLLs to test executables, use
-`uv run cargo test --manifest-path rust/Cargo.toml` directly.
+`uv run cargo test --manifest-path rust/Cargo.toml --workspace` directly.
 
 ## License
 

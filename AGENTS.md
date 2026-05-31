@@ -14,11 +14,12 @@
 - Generate `coverage.md`: `uv run pytest --cov --cov-report markdown`
 
 ### Rust
-- Check: `uv run cargo check --manifest-path rust/Cargo.toml`
-- Lint: `uv run cargo clippy --manifest-path ./rust/Cargo.toml`
-- Format (only check): `uv run cargo fmt --manifest-path rust/Cargo.toml --check`
-- Format: `uv run cargo fmt --manifest-path rust/Cargo.toml`
-- Tests: `uv run cargo test --manifest-path rust/Cargo.toml`
+- Check: `uv run cargo check --manifest-path rust/Cargo.toml --workspace`
+- Lint: `uv run cargo clippy --manifest-path rust/Cargo.toml --workspace`
+- Format (only check): `uv run cargo fmt --manifest-path rust/Cargo.toml --all --check`
+- Format: `uv run cargo fmt --manifest-path rust/Cargo.toml --all`
+- Tests: `uv run cargo test --manifest-path rust/Cargo.toml --workspace`
+- Tests (single crate): `uv run cargo test --manifest-path rust/Cargo.toml -p <crate-name>`
 
 ## Dependency Management
 
@@ -105,7 +106,7 @@ Fetch documentation directly from the web.
 
 ### Rust
 Find documentation for crate `CRATE` under `rust/target/doc/CRATE/index.html`. (You may need to
-generate the docs first using `cargo doc --manifest-path rust/Cargo.toml`.)
+generate the docs first using `cargo doc --manifest-path rust/Cargo.toml --workspace`.)
 
 ## Gen3 Audio Architecture Guardrails
 

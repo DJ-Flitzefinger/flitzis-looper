@@ -15,27 +15,42 @@ src/flitzis_looper_audio/
 ## Module Structure
 
 ```text
-rust/src/
-|-- lib.rs                         # PyO3 module export
-|-- messages.rs                    # fixed-size command/parameter/telemetry types
-`-- audio_engine/
-    |-- mod.rs                     # AudioEngine API and background orchestration
-    |-- audio_stream.rs            # CPAL callback and scheduler integration
-    |-- buffer_retirement.rs       # non-audio retirement of large handles
-    |-- constants.rs               # banks, slots, ranges, queue budgets
-    |-- dsp.rs                     # per-pad DSP chain and DJ isolator
-    |-- input_mapping.rs           # MIDI capture outside the audio callback
-    |-- mixer.rs                   # RtMixer, voices, loops, stems, gain, DSP
-    |-- scheduler.rs               # fixed-capacity output-frame scheduler
-    |-- transport.rs               # output-frame timeline and musical phase
-    |-- voice_slot.rs              # voice state and per-voice processing buffers
-    |-- stretch_processor.rs       # bounded Key Lock/master-tempo wrapper
-    |-- sample_loader.rs           # non-realtime decode/cache/resample
-    |-- analysis.rs                # non-realtime BPM/key/beat-grid analysis
-    |-- stem_cache.rs              # prepared-stem validation/loading
-    |-- progress.rs
-    |-- channels.rs
-    `-- errors.rs
+rust/
+|-- Cargo.toml                     # virtual workspace
+`-- crates/
+    |-- looper/                    # flitzis-looper (PyO3 + audio engine)
+    |   |-- Cargo.toml
+    |   |-- build.rs
+    |   `-- src/
+    |       |-- lib.rs             # PyO3 module export
+    |       |-- messages.rs        # fixed-size command/parameter/telemetry types
+    |       `-- audio_engine/
+    |           |-- mod.rs         # AudioEngine API and background orchestration
+    |           |-- audio_stream.rs
+    |           |-- buffer_retirement.rs
+    |           |-- constants.rs
+    |           |-- dsp.rs
+    |           |-- input_mapping.rs
+    |           |-- mixer.rs
+    |           |-- scheduler.rs
+    |           |-- transport.rs
+    |           |-- voice_slot.rs
+    |           |-- stretch_processor.rs
+    |           |-- sample_loader.rs
+    |           |-- stem_cache.rs
+    |           |-- progress.rs
+    |           |-- channels.rs
+    |           `-- errors.rs
+    `-- analysis/                  # flitzis-looper-analysis (BPM pipeline)
+        |-- Cargo.toml
+        `-- src/
+            |-- lib.rs
+            |-- detection_function.rs
+            |-- tempotrack.rs
+            |-- phase_vocoder.rs
+            |-- downbeat.rs
+            |-- math_utils.rs
+            `-- window.rs
 ```
 
 Most modules are `pub(crate)`. `lib.rs`, `audio_engine/mod.rs`, and
@@ -68,9 +83,9 @@ Run these from the repository root:
 
 ```powershell
 uv run maturin develop
-uv run cargo check --manifest-path rust/Cargo.toml
+uv run cargo check --manifest-path rust/Cargo.toml --workspace
 .\scripts\run-rust-tests.ps1
-uv run cargo fmt --manifest-path rust/Cargo.toml --check
+uv run cargo fmt --manifest-path rust/Cargo.toml --all --check
 ```
 
 Use `uv run cargo ...` so PyO3 and maturin use the project Python environment.
@@ -79,7 +94,7 @@ Band runtime directories to `PATH` before launching the standalone Rust test
 executable.
 On non-Windows platforms, or in a Windows shell where the Rubber Band runtime
 DLLs are already visible to standalone test executables, the Rust test command
-is `uv run cargo test --manifest-path rust/Cargo.toml`.
+is `uv run cargo test --manifest-path rust/Cargo.toml --workspace`.
 
 ## Design Notes
 
