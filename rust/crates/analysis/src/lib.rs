@@ -8,7 +8,7 @@
 
 mod detection_function;
 mod downbeat;
-mod key_detection;
+pub mod key_detection;
 mod phase_vocoder;
 mod tempotrack;
 

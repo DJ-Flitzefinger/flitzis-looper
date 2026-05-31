@@ -19,6 +19,7 @@
 
 mod cqt;
 mod inference;
+pub mod librosa_cqt;
 mod mapping;
 
 pub use cqt::CqtParams;
@@ -100,7 +101,7 @@ pub fn detect_key(samples: &[f32], sample_rate_hz: u32) -> Result<KeyResult, Key
     }
 
     // 4. Calculate number of time frames from CQT output shape.
-    let n_time_frames = cqt_data.len() / 104;
+    let n_time_frames = cqt_data.len() / 105;
     if n_time_frames == 0 {
         return Err(KeyError::InsufficientData);
     }

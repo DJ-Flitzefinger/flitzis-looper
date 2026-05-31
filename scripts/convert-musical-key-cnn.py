@@ -14,7 +14,7 @@ model.eval()
 
 # Dummy input: (batch, channel, freq, time)
 # Use a representative time dimension (~20s of audio at hop=8820 -> ~100 frames)
-dummy_input = torch.randn(1, 1, 104, 100)
+dummy_input = torch.randn(1, 1, 105, 100)
 
 torch.onnx.export(
     model,
