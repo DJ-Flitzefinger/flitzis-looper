@@ -115,5 +115,5 @@ if ($RuntimeDirs.Count -gt 0) {
 }
 
 $ManifestPath = Join-Path $RepoRoot "rust\Cargo.toml"
-& uv run cargo test --manifest-path $ManifestPath @CargoArgs
+& uv run cargo test --manifest-path $ManifestPath --workspace @CargoArgs
 exit $LASTEXITCODE

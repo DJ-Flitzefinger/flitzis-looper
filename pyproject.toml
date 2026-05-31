@@ -48,5 +48,8 @@ pythonpath = ["src"]
 testpaths = ["src/tests"]
 norecursedirs = ["old-project"]
 
+[tool.maturin]
+manifest-path = "rust/crates/looper/Cargo.toml"
+
 [tool.coverage.run]
 omit = ["src/tests/*", "src/flitzis_looper/ui/render/*"]

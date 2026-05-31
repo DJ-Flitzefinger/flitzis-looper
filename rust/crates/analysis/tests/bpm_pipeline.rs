@@ -26,8 +26,9 @@ fn decode_audio_to_mono_f64(
     use symphonia::default::get_codecs;
     use symphonia::default::get_probe;
 
-    let file = std::fs::File::open(path)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, format!("cannot open {e}")))?;
+    let file = std::fs::File::open(path).map_err(|e| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, format!("cannot open {e}"))
+    })?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut hint = Hint::new();
@@ -36,7 +37,12 @@ fn decode_audio_to_mono_f64(
     }
 
     let probed = get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("probe: {e}")))?;
     let mut format = probed.format;
 
@@ -53,10 +59,7 @@ fn decode_audio_to_mono_f64(
         })?;
 
     let src_rate = codec_params.sample_rate.unwrap_or(44100);
-    let channels = codec_params
-        .channels
-        .map(|c| c.count())
-        .unwrap_or(1);
+    let channels = codec_params.channels.map(|c| c.count()).unwrap_or(1);
 
     let mut mono_samples: Vec<f64> = Vec::new();
 
@@ -139,8 +142,7 @@ fn next_power_of_two(x: usize) -> usize {
 
 /// Run the full pipeline on the test fixture and return the analysis result.
 fn analyze_test_fixture() -> std::io::Result<SampleAnalysis> {
-    let manifest_dir =
-        std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
     let path = PathBuf::from(&manifest_dir).join("tests/fixtures/test_120bpm.mp3");
 
     let sample_rate = 44_100u32;
@@ -203,12 +205,7 @@ fn analyze_test_fixture() -> std::io::Result<SampleAnalysis> {
     let mut bar_indices = Vec::new();
     if !beats_frames.is_empty() {
         let mut downbeat = DownBeat::new(sample_rate as f64, 16, config.step_secs as usize);
-        downbeat.find_downbeats(
-            &audio,
-            audio.len(),
-            &beats_frames,
-            &mut downbeat_indices,
-        );
+        downbeat.find_downbeats(&audio, audio.len(), &beats_frames, &mut downbeat_indices);
         bar_indices = downbeat_indices.clone();
     }
 

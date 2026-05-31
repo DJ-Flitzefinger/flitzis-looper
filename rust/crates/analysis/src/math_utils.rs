@@ -2,7 +2,6 @@
 
 /// Map the phase angle `ang` into the range [-π, π).
 pub fn principal_arg(ang: f64) -> f64 {
-    
     mod_f64(ang + std::f64::consts::PI, -2.0 * std::f64::consts::PI) + std::f64::consts::PI
 }
 
