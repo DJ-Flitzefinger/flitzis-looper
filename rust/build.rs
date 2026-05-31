@@ -117,7 +117,7 @@ fn emit_vcpkg_link(vcpkg_root: &Path) {
 
 fn emit_manual_link(lib_dir: &Path) {
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
-    println!("cargo:rustc-link-lib={}={}", link_kind(), "rubberband");
+    println!("cargo:rustc-link-lib={}=rubberband", link_kind());
 
     if let Ok(extra_libs) = env::var("RUBBERBAND_EXTRA_LIBS") {
         for lib in extra_libs

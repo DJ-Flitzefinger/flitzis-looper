@@ -5,7 +5,6 @@
 
 use pyo3::prelude::*;
 use std::sync::Arc;
-use stratum_dsp::BeatGrid;
 
 pub(crate) const STEM_BUFFER_COUNT: usize = 5;
 pub(crate) const STEM_MASK_VOCALS: u8 = 1 << 0;
@@ -327,6 +326,17 @@ impl ControlMessage {
             | ControlMessage::UnloadSample { .. } => ControlMessageClass::OrderedState,
         }
     }
+}
+
+/// Beat grid with beat positions, downbeat positions, and bar start positions.
+#[derive(Debug, Clone)]
+pub(crate) struct BeatGrid {
+    /// Beat positions in seconds.
+    pub beats: Vec<f32>,
+    /// Downbeat positions in seconds (first beat of each bar).
+    pub downbeats: Vec<f32>,
+    /// Bar start positions in seconds.
+    pub bars: Vec<f32>,
 }
 
 #[derive(Debug, Clone)]
