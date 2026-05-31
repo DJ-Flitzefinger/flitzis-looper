@@ -135,23 +135,17 @@ impl InputRuntime {
         let (event_tx, event_rx) = sync_channel(INPUT_QUEUE_CAPACITY);
 
         let dispatcher = {
-            let enabled = enabled.clone();
-            let mappings = mappings.clone();
-            let runtime_state = runtime_state.clone();
-            let running = running.clone();
-            let learn_capture_active = learn_capture_active.clone();
-            thread::spawn(move || {
-                input_dispatch_loop(
-                    input_rx,
-                    event_tx,
-                    mappings,
-                    runtime_state,
-                    audio_producer,
-                    enabled,
-                    learn_capture_active,
-                    running,
-                );
-            })
+            let dispatcher = InputDispatcher {
+                input_rx,
+                event_tx,
+                mappings: mappings.clone(),
+                runtime_state: runtime_state.clone(),
+                audio_producer,
+                enabled: enabled.clone(),
+                learn_capture_active: learn_capture_active.clone(),
+                running: running.clone(),
+            };
+            thread::spawn(move || dispatcher.run())
         };
 
         Self {
@@ -317,7 +311,7 @@ impl Drop for InputRuntime {
     }
 }
 
-fn input_dispatch_loop(
+struct InputDispatcher {
     input_rx: Receiver<NormalizedMidiEvent>,
     event_tx: SyncSender<InputRuntimeEvent>,
     mappings: Arc<Mutex<Vec<InputMapping>>>,
@@ -326,40 +320,45 @@ fn input_dispatch_loop(
     enabled: Arc<AtomicBool>,
     learn_capture_active: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
-) {
-    while running.load(Ordering::Acquire) {
-        let event = match input_rx.recv_timeout(Duration::from_millis(10)) {
-            Ok(event) => event,
-            Err(RecvTimeoutError::Timeout) => continue,
-            Err(RecvTimeoutError::Disconnected) => break,
-        };
+}
 
-        let binding_key = event.binding.key();
-        let mapping =
-            if enabled.load(Ordering::Acquire) && !learn_capture_active.load(Ordering::Acquire) {
-                lookup_mapping(&mappings, &binding_key)
+impl InputDispatcher {
+    fn run(self) {
+        while self.running.load(Ordering::Acquire) {
+            let event = match self.input_rx.recv_timeout(Duration::from_millis(10)) {
+                Ok(event) => event,
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => break,
+            };
+
+            let binding_key = event.binding.key();
+            let mapping = if self.enabled.load(Ordering::Acquire)
+                && !self.learn_capture_active.load(Ordering::Acquire)
+            {
+                lookup_mapping(&self.mappings, &binding_key)
             } else {
                 None
             };
 
-        let mut dispatched = false;
-        let mut direct = false;
-        let action_key = mapping.as_ref().map(|mapping| mapping.action_key.clone());
+            let mut dispatched = false;
+            let mut direct = false;
+            let action_key = mapping.as_ref().map(|m| m.action_key.clone());
 
-        if let Some(mapping) = mapping {
-            let result = dispatch_action(&mapping.action, &runtime_state, &audio_producer);
-            dispatched = result.dispatched;
-            direct = result.direct;
+            if let Some(mapping) = mapping {
+                let result = dispatch_action(&mapping.action, &self.runtime_state, &self.audio_producer);
+                dispatched = result.dispatched;
+                direct = result.direct;
+            }
+
+            let _ = self.event_tx.try_send(InputRuntimeEvent {
+                binding_key,
+                value: event.value,
+                received_at_ns: event.received_at_ns,
+                action_key,
+                dispatched,
+                direct,
+            });
         }
-
-        let _ = event_tx.try_send(InputRuntimeEvent {
-            binding_key,
-            value: event.value,
-            received_at_ns: event.received_at_ns,
-            action_key,
-            dispatched,
-            direct,
-        });
     }
 }
 
