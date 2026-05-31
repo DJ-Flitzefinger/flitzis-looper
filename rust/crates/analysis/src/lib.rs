@@ -1,16 +1,21 @@
-//! qm-dsp BPM/beat-grid detection pipeline.
+//! Audio analysis: BPM/beat-grid detection and musical key detection.
 //!
-//! Pure-Rust crate that ports the Queen Mary University tempo tracking algorithm
-//! (qm-dsp). Pipeline: DetectionFunction → TempoTrackV2 → DownBeat → { bpm, beats, downbeats, bars }.
+//! **BPM pipeline** (qm-dsp): DetectionFunction → TempoTrackV2 → DownBeat
+//! → { bpm, beats, downbeats, bars }.
+//!
+//! **Key detection** (KeyNet CNN): mono audio → CQT spectrogram → ONNX inference
+//! → Camelot key string.
 
 mod detection_function;
 mod downbeat;
+mod key_detection;
 mod phase_vocoder;
 mod tempotrack;
 
 // Re-export public API surface
 pub use detection_function::DetectionFunction;
 pub use downbeat::DownBeat;
+pub use key_detection::{KeyError, KeyResult, camelot_index_to_key, detect_key};
 pub use tempotrack::TempoTrackV2;
 
 pub mod math_utils;

@@ -216,43 +216,127 @@ fn next_power_of_two(x: usize) -> usize {
     n
 }
 
-/// Analyze a sample buffer for BPM, beat grid, and key.
+/// Resample mono f32 audio to a target sample rate using rubato.
 ///
-/// Runs the full qm-dsp pipeline: DetectionFunction → TempoTrackV2 → DownBeat.
-fn analyze_sample(sample: &SampleBuffer, sample_rate_hz: u32) -> Result<SampleAnalysis, String> {
-    let mono = map_channels(sample.samples.to_vec(), sample.channels, 1)
-        .map_err(|err| format!("analysis failed: {err}"))?;
-
-    if mono.is_empty() || sample_rate_hz == 0 {
-        return Err("analysis failed: empty sample or zero sample rate".to_string());
+/// Returns the original buffer unchanged if `src_rate` already equals `target_rate`.
+fn resample_mono_to_target(
+    mono: Vec<f32>,
+    src_rate: u32,
+    target_rate: u32,
+) -> Result<Vec<f32>, String> {
+    if src_rate == target_rate {
+        return Ok(mono);
     }
 
+    use audioadapter_buffers::owned::InterleavedOwned;
+    use rubato::{Fft, FixedSync, Indexing, Resampler};
+
+    let input_frames = mono.len();
+    if input_frames == 0 {
+        return Ok(mono);
+    }
+
+    let channels = 1; // mono
+
+    // Create resampler.
+    let mut resampler = Fft::<f32>::new(
+        src_rate as usize,
+        target_rate as usize,
+        1024, // chunk_size
+        1,    // sub_chunks
+        channels,
+        FixedSync::Input,
+    )
+    .map_err(|e| format!("failed to create resampler: {e}"))?;
+
+    // Input buffer.
+    let input_buffer = InterleavedOwned::new_from(mono, channels, input_frames)
+        .map_err(|e| format!("failed to create input buffer adapter: {e}"))?;
+
+    // Output buffer sizing.
+    let expected_output_len = (resampler.resample_ratio() * input_frames as f64).ceil() as usize;
+    let output_frames = resampler
+        .output_delay()
+        .saturating_add(resampler.output_frames_max())
+        .saturating_add(expected_output_len);
+
+    let mut output_buffer = InterleavedOwned::new_from(
+        vec![0.0f32; output_frames * channels],
+        channels,
+        output_frames,
+    )
+    .map_err(|e| format!("failed to create output buffer adapter: {e}"))?;
+
+    let mut indexing = Indexing {
+        input_offset: 0,
+        output_offset: 0,
+        partial_len: None,
+        active_channels_mask: None,
+    };
+
+    let mut frames_left = input_frames;
+    let mut output_len: usize = 0;
+
+    let next_nbr_input_frames = resampler.input_frames_next();
+    while frames_left > next_nbr_input_frames {
+        let (_, nbr_out) = resampler
+            .process_into_buffer(&input_buffer, &mut output_buffer, Some(&indexing))
+            .map_err(|e| format!("resampling failed: {e}"))?;
+        output_len += nbr_out;
+        frames_left -= next_nbr_input_frames;
+    }
+
+    // Process remaining frames.
+    if frames_left > 0 {
+        indexing.partial_len = Some(frames_left);
+        let (_, nbr_out) = resampler
+            .process_into_buffer(&input_buffer, &mut output_buffer, Some(&indexing))
+            .map_err(|e| format!("resampling failed: {e}"))?;
+        output_len += nbr_out;
+    }
+
+    // Extract the resampled data.
+    let result_data = output_buffer.take_data();
+    let mut result = result_data[..output_len * channels].to_vec();
+
+    // Trim delay frames from the end.
+    let trim_frames = resampler.output_delay();
+    let trim_samples = trim_frames * channels;
+    if trim_samples > 0 && result.len() > trim_samples {
+        result.truncate(result.len() - trim_samples);
+    }
+
+    Ok(result)
+}
+
+/// Run the BPM detection pipeline on mono audio.
+///
+/// Returns `(bpm, beat_grid)` on success.
+fn run_bpm_pipeline(
+    mono_f64: Vec<f64>,
+    sample_rate_hz: u32,
+) -> Result<(f32, analysis::BeatGrid), String> {
     let config = analysis::AnalysisConfig::default();
-
-    // Convert to f64 for internal processing
-    let mono_f64: Vec<f64> = mono.iter().map(|s| *s as f64).collect();
-
-    // Step 1: Compute onset detection function
-    let mut df = analysis::DetectionFunction::new(sample_rate_hz, &config);
 
     // Guard: need at least one full frame of audio
     let frame_length = next_power_of_two((sample_rate_hz as f64 / config.max_bin_hz) as usize);
     if mono_f64.len() < frame_length {
-        // Return default result for very short audio
-        return Ok(SampleAnalysis {
-            bpm: 0.0,
-            key: "unknown".to_string(),
-            beat_grid: analysis::BeatGrid {
+        return Ok((
+            0.0,
+            analysis::BeatGrid {
                 beats: Vec::new(),
                 downbeats: Vec::new(),
                 bars: Vec::new(),
             },
-        });
+        ));
     }
+
+    // Step 1: Compute onset detection function
+    let mut df = analysis::DetectionFunction::new(sample_rate_hz, &config);
     let odf = df.process(&mono_f64);
 
     if odf.is_empty() {
-        return Err("analysis failed: no ODF values produced".to_string());
+        return Err("BPM pipeline: no ODF values produced".to_string());
     }
 
     // Step 2: Estimate beat periods via Viterbi HMM
@@ -285,8 +369,6 @@ fn analyze_sample(sample: &SampleBuffer, sample_rate_hz: u32) -> Result<SampleAn
             &beats_frames,
             &mut downbeat_indices,
         );
-
-        // Group downbeats into bars
         bar_indices = downbeat_indices.clone();
     }
 
@@ -307,16 +389,112 @@ fn analyze_sample(sample: &SampleBuffer, sample_rate_hz: u32) -> Result<SampleAn
         .map(|f| (*f * frame_duration) as f32)
         .collect();
 
-    let beat_grid = analysis::BeatGrid {
-        beats,
-        downbeats,
-        bars,
+    Ok((
+        bpm,
+        analysis::BeatGrid {
+            beats,
+            downbeats,
+            bars,
+        },
+    ))
+}
+
+/// Run the key detection pipeline on mono f32 audio at 44100 Hz.
+///
+/// Returns the key string (e.g., "Am", "C", or "unknown" on failure).
+fn run_key_detection(mono_44100: Vec<f32>) -> String {
+    #[cfg(debug_assertions)]
+    let _timer = std::time::Instant::now();
+
+    match analysis::detect_key(&mono_44100, 44_100) {
+        Ok(result) => {
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[analysis] key detection: {} ({:.0}%) in {:?}",
+                result.key_name,
+                result.confidence * 100.0,
+                _timer.elapsed()
+            );
+            result.key_name
+        }
+        Err(analysis::KeyError::InsufficientData) => "unknown".to_string(),
+        Err(analysis::KeyError::SilentAudio) => "unknown".to_string(),
+        Err(analysis::KeyError::ModelError(_msg)) => {
+            #[cfg(debug_assertions)]
+            eprintln!("[analysis] key detection model error: {_msg}");
+            "unknown".to_string()
+        }
+        Err(analysis::KeyError::CqtError(_msg)) => {
+            #[cfg(debug_assertions)]
+            eprintln!("[analysis] key detection CQT error: {_msg}");
+            "unknown".to_string()
+        }
+    }
+}
+
+/// Analyze a sample buffer for BPM, beat grid, and key.
+///
+/// Shared preprocessing (decode → mono → resample to 44100) runs once, then
+/// the BPM pipeline and key detection pipeline execute concurrently via
+/// `std::thread::scope`. Total analysis time is bounded by the slower pipeline.
+fn analyze_sample(sample: &SampleBuffer, sample_rate_hz: u32) -> Result<SampleAnalysis, String> {
+    if sample.samples.is_empty() || sample_rate_hz == 0 {
+        return Err("analysis failed: empty sample or zero sample rate".to_string());
+    }
+
+    // Shared preprocessing: convert to mono.
+    let mono = map_channels(sample.samples.to_vec(), sample.channels, 1)
+        .map_err(|err| format!("analysis failed: {err}"))?;
+
+    if mono.is_empty() {
+        return Err("analysis failed: mono conversion produced empty buffer".to_string());
+    }
+
+    // Resample to 44100 Hz if needed (shared step before fork).
+    let mono_44100 = resample_mono_to_target(mono, sample_rate_hz, 44_100)
+        .map_err(|e| format!("analysis failed: {e}"))?;
+
+    // Clone for parallel pipelines.
+    let mono_44100_bpm = mono_44100.clone();
+    let mono_44100_key = mono_44100;
+
+    // Convert BPM copy to f64 (qm-dsp expects f64).
+    let mono_f64: Vec<f64> = mono_44100_bpm.iter().map(|s| *s as f64).collect();
+
+    // Measure total analysis time in debug builds.
+    #[cfg(debug_assertions)]
+    let start = std::time::Instant::now();
+
+    // Launch BPM and key detection pipelines concurrently.
+    let (bpm_result, key_result) = {
+        let mut bpm_result = None;
+        let mut key_result = None;
+
+        std::thread::scope(|s| {
+            // BPM pipeline thread.
+            s.spawn(|| {
+                bpm_result = Some(run_bpm_pipeline(mono_f64, 44_100));
+            });
+
+            // Key detection thread.
+            s.spawn(|| {
+                key_result = Some(run_key_detection(mono_44100_key));
+            });
+        });
+
+        // Both threads have joined at this point.
+        (bpm_result.unwrap(), key_result.unwrap())
     };
 
-    // Key detection is not yet ported; return placeholder
+    #[cfg(debug_assertions)]
+    eprintln!("[analysis] total analysis time: {:?}", start.elapsed());
+
+    // Assemble result. Key detection failures already return "unknown".
+    let (bpm, beat_grid) = bpm_result?;
+
     Ok(SampleAnalysis {
         bpm,
-        key: "unknown".to_string(),
+        key: key_result,
         beat_grid,
     })
 }
