@@ -7,16 +7,14 @@ use crate::math_utils::adaptive_threshold;
 /// Tempo tracker using Viterbi HMM for beat period estimation and
 /// dynamic programming for beat position tracking.
 pub struct TempoTrackV2 {
-    /// Sample rate.
-    rate: f64,
     /// Detection function step in seconds.
     step_secs: f64,
 }
 
 impl TempoTrackV2 {
     /// Create a new TempoTrackV2.
-    pub fn new(rate: f64, step_secs: f64) -> Self {
-        Self { rate, step_secs }
+    pub fn new(_sample_rate: f64, step_secs: f64) -> Self {
+        Self { step_secs }
     }
 
     /// Estimate beat period sequence using Viterbi HMM over RCF bank.

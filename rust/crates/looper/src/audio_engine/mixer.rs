@@ -16,7 +16,9 @@ use crate::audio_engine::constants::{
 };
 use crate::audio_engine::dsp::{DspNodeSlot, DspParameterId, DspParameterSlot, PerPadDspChain};
 use crate::audio_engine::stretch_processor::DEFAULT_BLOCK_SAMPLES;
-use crate::audio_engine::voice_slot::{ExplicitSeekMode, PlaybackTimelineAnchor, VoiceSlot, VoiceStartConfig};
+use crate::audio_engine::voice_slot::{
+    ExplicitSeekMode, PlaybackTimelineAnchor, VoiceSlot, VoiceStartConfig,
+};
 use crate::messages::{
     PadTimingMetadata, PreparedStemSet, STEM_BUFFER_COUNT, STEM_COMPONENT_MASK, SampleBuffer,
     StemMixMode,
@@ -689,7 +691,7 @@ impl RtMixer {
             pad_gain_db: std::array::from_fn(|_| PAD_GAIN_DB_DEFAULT),
             pad_gain_smoothers: std::array::from_fn(|_| SmoothedGain::default()),
             pad_dsp_chains: (0..NUM_SAMPLES)
-                .map(|id| PerPadDspChain::new(id, sample_rate_hz, DEFAULT_BLOCK_SAMPLES, channels))
+                .map(|id| PerPadDspChain::new(id, sample_rate_hz, channels))
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
             pad_loop_start_frame: std::array::from_fn(|_| 0),
@@ -1109,7 +1111,6 @@ impl RtMixer {
             self.timing_anchor_frame_from_seconds(metadata.phase_anchor_s);
     }
 
-    #[allow(dead_code)]
     pub(crate) fn phase_aligned_initial_sample_frame(
         &self,
         id: usize,
@@ -3663,10 +3664,6 @@ mod tests {
         for (actual, expected) in output.iter().zip(samples.iter()) {
             assert!((*actual - *expected).abs() < 1e-5);
         }
-        assert_eq!(
-            mixer.pad_dsp_chains[0].prepared_state(),
-            (44_100.0, DEFAULT_BLOCK_SAMPLES, 2)
-        );
     }
 
     #[test]

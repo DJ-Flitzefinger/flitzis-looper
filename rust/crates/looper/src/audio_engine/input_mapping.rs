@@ -345,7 +345,8 @@ impl InputDispatcher {
             let action_key = mapping.as_ref().map(|m| m.action_key.clone());
 
             if let Some(mapping) = mapping {
-                let result = dispatch_action(&mapping.action, &self.runtime_state, &self.audio_producer);
+                let result =
+                    dispatch_action(&mapping.action, &self.runtime_state, &self.audio_producer);
                 dispatched = result.dispatched;
                 direct = result.direct;
             }

@@ -4,8 +4,6 @@
 //! accept or reject quantized events without heap allocation, blocking, or
 //! eviction of previously accepted events.
 
-#![allow(dead_code)]
-
 use crate::audio_engine::constants::MAX_SCHEDULED_EVENTS;
 
 pub(crate) type TransportScheduler = FixedCapacityScheduler<MAX_SCHEDULED_EVENTS>;
@@ -53,14 +51,17 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn capacity(&self) -> usize {
         CAPACITY
     }
 
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.len
     }
 
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.len == 0
     }

@@ -3,8 +3,6 @@
 //! The transport keeps sample-frame time in Rust so later Gen3 scheduling can
 //! target absolute output frames without relying on Python callback timing.
 
-#![allow(dead_code)]
-
 const DEFAULT_SAMPLE_RATE_HZ: u32 = 44_100;
 const DEFAULT_MASTER_BPM: f32 = 120.0;
 const BEATS_PER_BAR_4_4: u32 = 4;
@@ -24,18 +22,6 @@ impl QuantizeGrid {
             return None;
         }
         Some(Self { step_64ths })
-    }
-
-    pub(crate) fn beat() -> Self {
-        Self {
-            step_64ths: GRID_64THS_PER_BEAT,
-        }
-    }
-
-    pub(crate) fn bar() -> Self {
-        Self {
-            step_64ths: GRID_64THS_PER_BAR,
-        }
     }
 
     pub(crate) fn step_64ths(&self) -> u16 {
@@ -73,26 +59,33 @@ impl TransportTimeline {
         self.output_frame
     }
 
+    // --- Reserved getters/setters for future transport integration (UI display, scheduling) ---
+    #[allow(dead_code)]
     pub(crate) fn sample_rate_hz(&self) -> u32 {
         self.sample_rate_hz
     }
 
+    #[allow(dead_code)]
     pub(crate) fn master_bpm(&self) -> Option<f32> {
         self.master_bpm
     }
 
+    #[allow(dead_code)]
     pub(crate) fn beats_per_bar(&self) -> u32 {
         self.beats_per_bar
     }
 
+    #[allow(dead_code)]
     pub(crate) fn downbeat_frame(&self) -> u64 {
         self.downbeat_frame
     }
 
+    #[allow(dead_code)]
     pub(crate) fn set_downbeat_frame(&mut self, frame: u64) {
         self.downbeat_frame = frame;
     }
 
+    #[allow(dead_code)]
     pub(crate) fn anchor_downbeat_to_bar_phase(&mut self, bar_phase_beats: f64) -> bool {
         self.anchor_downbeat_to_bar_phase_at_frame(bar_phase_beats, self.output_frame)
     }
@@ -182,6 +175,7 @@ impl TransportTimeline {
         true
     }
 
+    #[allow(dead_code)]
     pub(crate) fn clear_master_bpm(&mut self) {
         self.master_bpm = None;
     }
@@ -203,6 +197,8 @@ impl TransportTimeline {
         Some(self.frames_per_beat()? * self.beats_per_bar as f64)
     }
 
+    // --- Reserved position queries for future UI/scheduling integration ---
+    #[allow(dead_code)]
     pub(crate) fn beat_position(&self) -> Option<f64> {
         self.beat_position_at_frame(self.output_frame)
     }
@@ -211,10 +207,12 @@ impl TransportTimeline {
         Some(self.relative_frames_from_downbeat_at_frame(output_frame) / self.frames_per_beat()?)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn beat_phase(&self) -> Option<f64> {
         Some(normalize_phase(self.beat_position()?, 1.0))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn bar_phase_beats(&self) -> Option<f64> {
         self.bar_phase_beats_at_frame(self.output_frame)
     }
@@ -226,17 +224,10 @@ impl TransportTimeline {
         ))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn current_beat_index_in_bar(&self) -> Option<u32> {
         let phase = self.bar_phase_beats()?;
         Some((phase.floor() as u32).min(self.beats_per_bar.saturating_sub(1)))
-    }
-
-    pub(crate) fn next_beat_frame(&self) -> Option<u64> {
-        self.next_grid_frame(QuantizeGrid::beat())
-    }
-
-    pub(crate) fn next_bar_frame(&self) -> Option<u64> {
-        self.next_grid_frame(QuantizeGrid::bar())
     }
 
     pub(crate) fn next_grid_frame(&self, grid: QuantizeGrid) -> Option<u64> {
@@ -377,7 +368,10 @@ mod tests {
 
         assert_eq!(transport.master_bpm(), None);
         assert_eq!(transport.frames_per_beat(), None);
-        assert_eq!(transport.next_beat_frame(), None);
+        assert_eq!(
+            transport.next_grid_frame(QuantizeGrid::from_step_64ths(16).unwrap()),
+            None
+        );
     }
 
     #[test]
@@ -481,7 +475,10 @@ mod tests {
 
         assert_eq!(transport.beat_position(), Some(1.0));
         assert_eq!(transport.bar_phase_beats(), Some(1.0));
-        assert_eq!(transport.next_beat_frame(), Some(25_000));
+        assert_eq!(
+            transport.next_grid_frame(QuantizeGrid::from_step_64ths(16).unwrap()),
+            Some(25_000)
+        );
     }
 
     #[test]
@@ -496,31 +493,43 @@ mod tests {
     }
 
     #[test]
-    fn next_beat_frame_uses_current_frame_on_grid_boundary() {
+    fn next_grid_frame_beat_uses_current_frame_on_grid_boundary() {
         let transport = transport_at(24_000);
 
-        assert_eq!(transport.next_beat_frame(), Some(24_000));
+        assert_eq!(
+            transport.next_grid_frame(QuantizeGrid::from_step_64ths(16).unwrap()),
+            Some(24_000)
+        );
     }
 
     #[test]
-    fn next_beat_frame_targets_next_boundary_between_beats() {
+    fn next_grid_frame_beat_targets_next_boundary_between_beats() {
         let transport = transport_at(24_001);
 
-        assert_eq!(transport.next_beat_frame(), Some(48_000));
+        assert_eq!(
+            transport.next_grid_frame(QuantizeGrid::from_step_64ths(16).unwrap()),
+            Some(48_000)
+        );
     }
 
     #[test]
-    fn next_bar_frame_uses_current_frame_on_bar_boundary() {
+    fn next_grid_frame_bar_uses_current_frame_on_bar_boundary() {
         let transport = transport_at(96_000);
 
-        assert_eq!(transport.next_bar_frame(), Some(96_000));
+        assert_eq!(
+            transport.next_grid_frame(QuantizeGrid::from_step_64ths(64).unwrap()),
+            Some(96_000)
+        );
     }
 
     #[test]
-    fn next_bar_frame_targets_next_boundary_between_bars() {
+    fn next_grid_frame_bar_targets_next_boundary_between_bars() {
         let transport = transport_at(24_000);
 
-        assert_eq!(transport.next_bar_frame(), Some(96_000));
+        assert_eq!(
+            transport.next_grid_frame(QuantizeGrid::from_step_64ths(64).unwrap()),
+            Some(96_000)
+        );
     }
 
     #[test]
@@ -529,10 +538,13 @@ mod tests {
         transport.set_downbeat_frame(1_000);
 
         assert_eq!(
-            transport.next_grid_frame(QuantizeGrid::beat()),
+            transport.next_grid_frame(QuantizeGrid::from_step_64ths(16).unwrap()),
             Some(25_000)
         );
-        assert_eq!(transport.next_grid_frame(QuantizeGrid::bar()), Some(97_000));
+        assert_eq!(
+            transport.next_grid_frame(QuantizeGrid::from_step_64ths(64).unwrap()),
+            Some(97_000)
+        );
     }
 
     #[test]
@@ -595,7 +607,13 @@ mod tests {
         assert_eq!(transport.beat_position(), None);
         assert_eq!(transport.bar_phase_beats_at_frame(48_000), None);
         assert_eq!(transport.bar_phase_beats(), None);
-        assert_eq!(transport.next_beat_frame(), None);
-        assert_eq!(transport.next_bar_frame(), None);
+        assert_eq!(
+            transport.next_grid_frame(QuantizeGrid::from_step_64ths(16).unwrap()),
+            None
+        );
+        assert_eq!(
+            transport.next_grid_frame(QuantizeGrid::from_step_64ths(64).unwrap()),
+            None
+        );
     }
 }

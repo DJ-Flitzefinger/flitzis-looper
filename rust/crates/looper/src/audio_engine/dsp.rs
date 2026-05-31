@@ -4,12 +4,9 @@
 //! Python-facing EQ calls remain compatible, while live audio state is owned by typed normalized
 //! DSP parameters and Rust-side smoothing.
 
-#![allow(dead_code)]
-
 use std::f32::consts::PI;
 
 const DEFAULT_SAMPLE_RATE_HZ: f32 = 44_100.0;
-const DEFAULT_MAX_BLOCK_FRAMES: usize = 1;
 const DEFAULT_CHANNELS: usize = 1;
 const DEFAULT_NORMALIZED_VALUE: f32 = 0.5;
 const DEFAULT_SMOOTHING_STEP: f32 = 0.01;
@@ -36,12 +33,13 @@ pub(crate) enum DspNodeSlot {
 }
 
 #[repr(u8)]
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DspParameterSlot {
     Slot0 = 0,
     Slot1 = 1,
     Slot2 = 2,
+    // Reserved for a future fourth DSP parameter (e.g., drive/distortion amount).
+    #[allow(dead_code)]
     Slot3 = 3,
 }
 
@@ -292,44 +290,31 @@ fn gains_are_equal(low: f32, mid: f32, high: f32) -> bool {
 #[derive(Debug, Clone)]
 pub(crate) struct PerPadDspChain {
     pad_id: u16,
-    sample_rate_hz: f32,
-    max_block_frames: usize,
     channels: usize,
     parameters: [SmoothedNormalizedValue; DSP_PARAMETER_SLOTS],
     isolator_node: DjIsolatorNode,
 }
 
 impl PerPadDspChain {
-    pub(crate) fn new(
-        pad_id: usize,
-        sample_rate_hz: f32,
-        max_block_frames: usize,
-        channels: usize,
-    ) -> Self {
+    pub(crate) fn new(pad_id: usize, sample_rate_hz: f32, channels: usize) -> Self {
         let sample_rate_hz = sanitize_sample_rate(sample_rate_hz);
-        let max_block_frames = max_block_frames.max(DEFAULT_MAX_BLOCK_FRAMES);
         let channels = channels.clamp(DEFAULT_CHANNELS, DSP_MAX_CHANNELS);
 
         Self {
             pad_id: u16::try_from(pad_id).unwrap_or(u16::MAX),
-            sample_rate_hz,
-            max_block_frames,
             channels,
             parameters: [SmoothedNormalizedValue::default(); DSP_PARAMETER_SLOTS],
             isolator_node: DjIsolatorNode::new(sample_rate_hz),
         }
     }
 
-    pub(crate) fn prepare(
-        &mut self,
-        sample_rate_hz: f32,
-        max_block_frames: usize,
-        channels: usize,
-    ) {
-        self.sample_rate_hz = sanitize_sample_rate(sample_rate_hz);
-        self.max_block_frames = max_block_frames.max(DEFAULT_MAX_BLOCK_FRAMES);
+    /// Reconfigure the chain for a new sample rate / channel count.
+    /// Reserved for future audio-device hot-reconfiguration.
+    #[allow(dead_code)]
+    pub(crate) fn prepare(&mut self, sample_rate_hz: f32, channels: usize) {
         self.channels = channels.clamp(DEFAULT_CHANNELS, DSP_MAX_CHANNELS);
-        self.isolator_node.prepare(self.sample_rate_hz);
+        self.isolator_node
+            .prepare(sanitize_sample_rate(sample_rate_hz));
         self.reset();
     }
 
@@ -356,6 +341,8 @@ impl PerPadDspChain {
         self.isolator_node.process_sample(channel, sample)
     }
 
+    /// Process an interleaved audio block. Reserved for future callback integration.
+    #[allow(dead_code)]
     pub(crate) fn process_interleaved_block(
         &mut self,
         buffer: &mut [f32],
@@ -365,7 +352,7 @@ impl PerPadDspChain {
             return false;
         }
         let frames = buffer.len() / channels;
-        if frames * channels != buffer.len() || frames > self.max_block_frames {
+        if frames * channels != buffer.len() {
             return false;
         }
 
@@ -394,11 +381,6 @@ impl PerPadDspChain {
     #[cfg(test)]
     pub(crate) fn parameter(&self, slot: DspParameterSlot) -> SmoothedNormalizedValue {
         self.parameters[slot.index()]
-    }
-
-    #[cfg(test)]
-    pub(crate) fn prepared_state(&self) -> (f32, usize, usize) {
-        (self.sample_rate_hz, self.max_block_frames, self.channels)
     }
 }
 
@@ -540,10 +522,10 @@ mod tests {
     }
 
     fn sine_rms_ratio_with_targets(frequency_hz: f32, low: f32, mid: f32, high: f32) -> f32 {
-        let mut neutral = PerPadDspChain::new(0, 48_000.0, 8192, 1);
+        let mut neutral = PerPadDspChain::new(0, 48_000.0, 1);
         let neutral_rms = sine_rms_after_processing(frequency_hz, &mut neutral);
 
-        let mut processed = PerPadDspChain::new(0, 48_000.0, 8192, 1);
+        let mut processed = PerPadDspChain::new(0, 48_000.0, 1);
         set_and_snap_parameter(&mut processed, DspParameterSlot::Slot0, low);
         set_and_snap_parameter(&mut processed, DspParameterSlot::Slot1, mid);
         set_and_snap_parameter(&mut processed, DspParameterSlot::Slot2, high);
@@ -572,7 +554,7 @@ mod tests {
     }
 
     fn process_samples_with_targets(samples: &[f32], low: f32, mid: f32, high: f32) -> Vec<f32> {
-        let mut chain = PerPadDspChain::new(0, 48_000.0, samples.len(), 1);
+        let mut chain = PerPadDspChain::new(0, 48_000.0, 1);
         set_and_snap_parameter(&mut chain, DspParameterSlot::Slot0, low);
         set_and_snap_parameter(&mut chain, DspParameterSlot::Slot1, mid);
         set_and_snap_parameter(&mut chain, DspParameterSlot::Slot2, high);
@@ -685,7 +667,7 @@ mod tests {
 
     #[test]
     fn isolator_chain_is_transparent_at_neutral() {
-        let mut chain = PerPadDspChain::new(0, 48_000.0, 8, 2);
+        let mut chain = PerPadDspChain::new(0, 48_000.0, 2);
         let mut buffer = vec![0.0, 0.5, -0.25, 1.0, -1.0, 0.25, 0.40, -0.35];
         let expected = buffer.clone();
 
@@ -698,11 +680,9 @@ mod tests {
 
     #[test]
     fn per_pad_chain_prepares_resets_and_rejects_wrong_parameter_identity() {
-        let mut chain = PerPadDspChain::new(2, f32::NAN, 0, 0);
-        assert_eq!(chain.prepared_state(), (DEFAULT_SAMPLE_RATE_HZ, 1, 1));
+        let mut chain = PerPadDspChain::new(2, f32::NAN, 0);
 
-        chain.prepare(96_000.0, 64, 2);
-        assert_eq!(chain.prepared_state(), (96_000.0, 64, 2));
+        chain.prepare(96_000.0, 2);
 
         let wrong_pad =
             DspParameterId::per_pad(3, DspNodeSlot::Slot0, DspParameterSlot::Slot1).unwrap();
@@ -718,28 +698,28 @@ mod tests {
     }
 
     #[test]
-    fn chain_rejects_mismatched_or_oversized_blocks_without_mutating_audio() {
-        let mut chain = PerPadDspChain::new(0, 48_000.0, 2, 2);
+    fn chain_rejects_mismatched_blocks_without_mutating_audio() {
+        let mut chain = PerPadDspChain::new(0, 48_000.0, 2);
         let mut buffer = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6];
         let expected = buffer.clone();
 
         assert!(!chain.process_interleaved_block(&mut buffer, 1));
         assert_eq!(buffer, expected);
-        assert!(!chain.process_interleaved_block(&mut buffer, 2));
-        assert_eq!(buffer, expected);
+        assert!(chain.process_interleaved_block(&mut buffer, 2));
+        // Buffer is processed (neutral isolator is transparent)
     }
 
     #[test]
     fn low_band_full_kill_reduces_low_content_but_preserves_high_content() {
-        let mut neutral_low = PerPadDspChain::new(0, 48_000.0, 8192, 1);
-        let mut killed_low = PerPadDspChain::new(0, 48_000.0, 8192, 1);
+        let mut neutral_low = PerPadDspChain::new(0, 48_000.0, 1);
+        let mut killed_low = PerPadDspChain::new(0, 48_000.0, 1);
         set_and_snap_parameter(&mut killed_low, DspParameterSlot::Slot0, 0.0);
 
         let neutral_low_rms = sine_rms_after_processing(20.0, &mut neutral_low);
         let killed_low_rms = sine_rms_after_processing(20.0, &mut killed_low);
 
-        let mut neutral_high = PerPadDspChain::new(0, 48_000.0, 8192, 1);
-        let mut killed_low_for_high = PerPadDspChain::new(0, 48_000.0, 8192, 1);
+        let mut neutral_high = PerPadDspChain::new(0, 48_000.0, 1);
+        let mut killed_low_for_high = PerPadDspChain::new(0, 48_000.0, 1);
         set_and_snap_parameter(&mut killed_low_for_high, DspParameterSlot::Slot0, 0.0);
 
         let neutral_high_rms = sine_rms_after_processing(8_000.0, &mut neutral_high);
@@ -751,8 +731,8 @@ mod tests {
 
     #[test]
     fn mid_band_boost_is_bounded_to_six_db() {
-        let mut neutral = PerPadDspChain::new(0, 48_000.0, 8192, 1);
-        let mut boosted = PerPadDspChain::new(0, 48_000.0, 8192, 1);
+        let mut neutral = PerPadDspChain::new(0, 48_000.0, 1);
+        let mut boosted = PerPadDspChain::new(0, 48_000.0, 1);
         set_and_snap_parameter(&mut boosted, DspParameterSlot::Slot1, 1.0);
 
         let neutral_rms = sine_rms_after_processing(1_000.0, &mut neutral);
@@ -826,7 +806,7 @@ mod tests {
 
     #[test]
     fn rapid_target_changes_are_smoothed_and_output_stays_finite() {
-        let mut chain = PerPadDspChain::new(0, 48_000.0, 512, 1);
+        let mut chain = PerPadDspChain::new(0, 48_000.0, 1);
         let low_id =
             DspParameterId::per_pad(0, DspNodeSlot::Slot0, DspParameterSlot::Slot0).unwrap();
 

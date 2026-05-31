@@ -10,6 +10,10 @@ use std::time::Duration;
 pub(crate) const RETIRED_AUDIO_BUFFER_QUEUE_CAPACITY: usize = 1024;
 const RETIRED_AUDIO_BUFFER_BACKLOG_CAPACITY: usize = 128;
 
+// The inner fields are never pattern-matched: the consumer thread simply drops
+// the enum to release Arc-backed audio memory off the realtime callback thread.
+// Clippy flags the fields as "never read", but they exist solely to transfer
+// ownership across the thread boundary.
 #[allow(dead_code)]
 pub(crate) enum RetiredAudioBuffer {
     Sample(SampleBuffer),

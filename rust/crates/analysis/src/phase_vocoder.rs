@@ -120,6 +120,7 @@ impl PhaseVocoder {
     }
 
     /// Reset stored phases to initial values.
+    #[cfg(test)]
     pub fn reset(&mut self) {
         for i in 0..self.half_n {
             let omega = (2.0 * std::f64::consts::PI * self.hop as f64 * i as f64) / self.n as f64;

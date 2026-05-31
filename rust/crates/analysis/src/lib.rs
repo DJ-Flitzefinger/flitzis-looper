@@ -1,5 +1,4 @@
 //! qm-dsp BPM/beat-grid detection pipeline.
-#![allow(dead_code, unused_variables, unused_mut)]
 //!
 //! Pure-Rust crate that ports the Queen Mary University tempo tracking algorithm
 //! (qm-dsp). Pipeline: DetectionFunction → TempoTrackV2 → DownBeat → { bpm, beats, downbeats, bars }.

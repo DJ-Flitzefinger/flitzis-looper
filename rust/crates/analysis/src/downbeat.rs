@@ -10,8 +10,6 @@ use crate::math_utils::adaptive_threshold;
 
 /// Downbeat detector using spectral difference between beat segments.
 pub struct DownBeat {
-    /// Original sample rate.
-    rate: f64,
     /// Decimation factor.
     factor: usize,
     /// Detection function increment.
@@ -28,15 +26,14 @@ pub struct DownBeat {
 
 impl DownBeat {
     /// Create a new DownBeat detector.
-    pub fn new(rate: f64, factor: usize, increment: usize) -> Self {
-        let decimated_rate = rate / factor as f64;
+    pub fn new(sample_rate: f64, factor: usize, increment: usize) -> Self {
+        let decimated_rate = sample_rate / factor as f64;
         let beat_frame_size = next_power_of_two((decimated_rate * 1.3) as usize).max(2);
 
         let mut planner = FftPlanner::<f64>::new();
         let fft_plan = planner.plan_fft_forward(beat_frame_size);
 
         Self {
-            rate,
             factor,
             increment,
             beat_frame_size,
