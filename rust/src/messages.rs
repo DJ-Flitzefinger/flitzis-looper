@@ -15,7 +15,7 @@ pub(crate) const STEM_COMPONENT_MASK: u8 =
     STEM_MASK_VOCALS | STEM_MASK_MELODY | STEM_MASK_BASS | STEM_MASK_DRUMS;
 
 #[derive(Debug, Clone)]
-pub(crate) struct SampleBuffer {
+pub struct SampleBuffer {
     pub channels: usize,
     pub samples: Arc<[f32]>,
 }

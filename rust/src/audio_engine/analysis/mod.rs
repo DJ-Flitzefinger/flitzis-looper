@@ -14,9 +14,20 @@ pub(crate) mod window;
 use crate::audio_engine::channels::map_channels;
 use crate::messages::{BeatGrid, SampleAnalysis, SampleBuffer};
 
+#[cfg(not(feature = "test-helpers"))]
 use self::detection_function::DetectionFunction;
+#[cfg(feature = "test-helpers")]
+pub(crate) use self::detection_function::DetectionFunction;
+
+#[cfg(not(feature = "test-helpers"))]
 use self::downbeat::DownBeat;
+#[cfg(feature = "test-helpers")]
+pub(crate) use self::downbeat::DownBeat;
+
+#[cfg(not(feature = "test-helpers"))]
 use self::tempotrack::TempoTrackV2;
+#[cfg(feature = "test-helpers")]
+pub(crate) use self::tempotrack::TempoTrackV2;
 
 /// Configuration for the analysis pipeline with Mixxx-matching defaults.
 #[derive(Debug, Clone)]
@@ -177,7 +188,17 @@ pub fn analyze_sample(
 }
 
 /// Calculate BPM from beat positions (in frames).
+#[cfg(not(feature = "test-helpers"))]
 fn calculate_bpm(beats_frames: &[f64], step_secs: f64) -> f32 {
+    _calculate_bpm(beats_frames, step_secs)
+}
+
+#[cfg(feature = "test-helpers")]
+pub(crate) fn calculate_bpm(beats_frames: &[f64], step_secs: f64) -> f32 {
+    _calculate_bpm(beats_frames, step_secs)
+}
+
+fn _calculate_bpm(beats_frames: &[f64], step_secs: f64) -> f32 {
     if beats_frames.len() < 2 {
         return 0.0;
     }

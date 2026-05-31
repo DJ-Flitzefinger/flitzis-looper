@@ -33,7 +33,10 @@ use std::sync::{
 };
 use std::thread;
 
+#[cfg(not(feature = "test-helpers"))]
 mod analysis;
+#[cfg(feature = "test-helpers")]
+pub(crate) mod analysis;
 mod audio_stream;
 mod buffer_retirement;
 mod channels;
@@ -44,7 +47,10 @@ mod input_mapping;
 mod mixer;
 mod progress;
 mod rubberband_backend;
+#[cfg(not(feature = "test-helpers"))]
 mod sample_loader;
+#[cfg(feature = "test-helpers")]
+pub(crate) mod sample_loader;
 mod scheduler;
 mod stem_cache;
 mod stretch_processor;

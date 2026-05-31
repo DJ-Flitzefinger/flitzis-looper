@@ -7,7 +7,7 @@ build = "build.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
 name = "flitzis_looper_audio"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 pyo3 = "0.27.0"
@@ -25,8 +25,12 @@ rustfft = "6.2.0"
 numpy = "0.27.1"
 cute-dsp = "0.0.40"
 
+[features]
+test-helpers = []
+
 [dev-dependencies]
 tempfile = "3"
+flitzis-looper = { path = ".", features = ["test-helpers"] }
 
 [build-dependencies]
 pkg-config = "0.3"

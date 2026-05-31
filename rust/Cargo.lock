@@ -393,6 +393,7 @@ dependencies = [
  "cpal",
  "cute-dsp",
  "env_logger",
+ "flitzis-looper",
  "log",
  "midir",
  "numpy",
