@@ -3,13 +3,14 @@
 ## Purpose
 To define background audio analysis for BPM, key, beat grid, and downbeat metadata used by UI display, snapping, and Rust timing metadata publication.
 ## Requirements
-
 ### Requirement: Analyze Audio For BPM, Key, And Beat Grid
 The system SHALL analyze a loaded audio sample to determine its BPM, musical key, and beat grid.
 
-The system SHALL use `stratum_dsp` for this analysis and SHALL use `AnalysisConfig::default()` as the configuration defaults.
+The system SHALL use the qm-dsp tempo tracking pipeline (DetectionFunction + TempoTrackV2 + DownBeat) for BPM and beat grid analysis. The system SHALL use `AnalysisConfig::default()` as the configuration defaults.
 
 The system SHALL represent the detected key as a musical-notation string (e.g., `"C#m"`) suitable for display in a professional audio application.
+
+The system SHALL produce a beat grid containing beat times, downbeat times, and bar start times. Downbeat and bar detection SHALL use the spectral difference method from the qm-dsp DownBeat module.
 
 #### Scenario: Analysis produces BPM, key, and beat grid
 - **GIVEN** a pad has a loaded audio file
@@ -18,6 +19,7 @@ The system SHALL represent the detected key as a musical-notation string (e.g., 
 - **AND** the system produces a musical key value in musical notation (e.g., `"C#m"`)
 - **AND** the system produces a beat grid containing beat times
 - **AND** the system produces downbeat times when they can be determined
+- **AND** the system produces bar start times when downbeats are detected
 
 #### Scenario: Analysis failure is reported
 - **GIVEN** a pad has a loaded audio file
@@ -53,3 +55,4 @@ Manual analysis SHALL enqueue an analysis-only background task and SHALL NOT re-
 - **WHEN** the user attempts to trigger "Analyze audio" for that pad
 - **THEN** the system blocks the request
 - **AND** no analysis-only job is started for that pad
+

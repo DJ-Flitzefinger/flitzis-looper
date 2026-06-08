@@ -26,8 +26,4 @@ The system SHALL produce a beat grid containing beat times, downbeat times, and 
 - **THEN** the system reports an error for that pad
 - **AND** the previously stored analysis result (if any) remains unchanged unless explicitly cleared
 
-## REMOVED Requirements
 
-### Requirement: stratum-dsp Backend
-**Reason**: Replaced by qm-dsp tempo tracking pipeline (DetectionFunction + TempoTrackV2 + DownBeat) which provides superior beat tracking via Viterbi HMM, explicit downbeat/bar detection, and gradual tempo change support.
-**Migration**: The `stratum-dsp` crate is removed from `Cargo.toml`. The `BeatGrid` struct is now a local Rust type with identical fields (`beats`, `downbeats`, `bars`). The `analyze_sample()` API surface is unchanged.
