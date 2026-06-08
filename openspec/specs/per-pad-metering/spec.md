@@ -77,3 +77,36 @@ for per-pad metering.
 - **WHEN** the performance view is rendered
 - **THEN** the UI draws meters using peak values already stored in state
 - **AND** no blocking operations occur in the UI render loop
+
+
+<!-- Added from rework-pad-gain-trim -->
+### Requirement: Meter is rendered in the gain area, not inside pads
+The UI SHALL render a horizontal Gain-area meter for the selected pad derived from the most recent
+peak update for that pad.
+
+The Gain-area meter SHALL render a two-zone scale where the first 80% is green and the remaining
+20% is yellow. The Gain-area meter SHALL NOT reserve a small red overload zone because clipping is
+shown by a dedicated clip indicator. The dedicated clip indicator SHALL activate when the pad peak
+reaches `1.0`, SHALL use a clearly perceptible bright red active state, and SHALL remain visibly
+held or afterglowing for about one second. Performance pad buttons SHALL NOT render the previous
+vertical right-edge pad level meter. Meter rendering SHALL use cached state and SHALL NOT derive
+the meter from the Gain/Trim knob position.
+
+#### Scenario: Gain-area meter reflects playing audio
+- **GIVEN** pad `id` is selected, playing, and producing non-silent output
+- **WHEN** the selected-pad sidebar is rendered
+- **THEN** the Gain-area meter shows a non-zero level derived from the cached pad peak
+
+#### Scenario: Performance pad omits vertical level meter
+- **GIVEN** pad `id` is loaded and has a recent peak update
+- **WHEN** the performance pad grid is rendered
+- **THEN** the pad button does not render the previous vertical right-edge level meter
+- **AND** the selected-pad Gain-area meter remains the pad level display
+
+#### Scenario: Gain-area clip indicator holds briefly
+- **GIVEN** pad `id` produces a peak that reaches `1.0`
+- **WHEN** the selected-pad sidebar is rendered immediately after the peak update
+- **THEN** the Gain-area clip indicator is visibly active
+- **WHEN** the hold time has elapsed without another clipping peak
+- **THEN** the Gain-area clip indicator is no longer active
+

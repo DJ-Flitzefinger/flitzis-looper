@@ -256,3 +256,217 @@ Note: `1/32` and `1/64` are shorthand for 1/32-note and 1/64-note subdivisions i
 - **WHEN** the waveform editor renders the grid
 - **THEN** it selects `1/16 beat` (1/64-note) as the visible subdivision
 - **AND** it renders 1/64-note minor lines
+
+
+<!-- Added from add-rust-transport-timeline -->
+### Requirement: Waveform Editor Shows A Zero-Amplitude Reference
+The waveform editor SHALL render a horizontal zero-amplitude reference line across the waveform
+plot.
+
+The zero-amplitude line SHALL remain visible alongside the waveform, loop region, playhead, and
+musical grid overlays without changing playback, loop marker, or audio-thread behavior.
+
+#### Scenario: Zero line is visible in the waveform plot
+- **GIVEN** the waveform editor is open for a loaded pad
+- **WHEN** the waveform plot is rendered
+- **THEN** a horizontal line is drawn at amplitude `0.0`
+- **AND** the line spans the currently visible time range
+
+
+<!-- Added from add-rust-transport-timeline -->
+### Requirement: Waveform Grid Shares The Trigger Quantization Basis
+The waveform editor SHALL render its musical grid and loop snapping on the same 1/64-note unit
+basis used by trigger quantization and Rust pad timing metadata.
+
+The finest loop editor musical grid line spacing SHALL be one sixteenth of a beat in 4/4. This is
+the same subdivision exposed as the minimum `1/64` trigger quantization grid step, while the
+default trigger quantization Settings value remains `1/16`.
+
+The waveform editor grid anchor SHALL be the same per-pad timing anchor published to Rust for
+pad timing metadata. Adjusting the per-pad Grid Offset SHALL update this published timing anchor
+so the visible loop-editor grid and Rust pad timing metadata stay aligned.
+
+The waveform editor grid anchor SHALL remain stable when other pads are started, stopped,
+paused, retriggered, or unloaded. Toggling trigger quantization, changing pitch/speed, enabling
+BPM lock, or enabling key lock SHALL NOT move the source-side loop editor grid unless the
+performer explicitly edits the pad's loop/grid settings.
+
+#### Scenario: Finest loop editor line spacing matches minimum quantization
+- **GIVEN** an effective BPM is available
+- **AND** the waveform editor is zoomed far enough for the finest musical grid to be readable
+- **WHEN** the waveform editor renders the musical grid
+- **THEN** adjacent finest grid lines are spaced one sixteenth of a beat apart
+- **AND** the `1/64` trigger quantization grid uses the same subdivision interval
+
+#### Scenario: Grid offset updates Rust pad timing metadata
+- **GIVEN** a loaded pad has an effective BPM
+- **WHEN** the performer adjusts the waveform editor Grid Offset
+- **THEN** the waveform editor grid lines move by that sample offset
+- **AND** the control layer publishes the shifted grid anchor as the pad timing metadata used by
+  Rust playback timing
+
+#### Scenario: Other pad playback does not move the editor grid
+- **GIVEN** the waveform editor is open for pad 2
+- **AND** pad 2 has a visible musical grid
+- **WHEN** pad 1 starts, stops, or is retriggered
+- **THEN** pad 2's waveform editor grid lines remain at the same source-side times
+
+#### Scenario: Quantize toggle does not move the editor grid
+- **GIVEN** the waveform editor is open for a loaded pad
+- **WHEN** trigger quantization is enabled or disabled
+- **THEN** the pad's waveform editor grid anchor remains unchanged
+
+
+<!-- Added from repair-multi-loop-bpm-sync -->
+### Requirement: Loop Editor Source Grid Remains Stable During Playback Sync Changes
+The system SHALL keep the Loop Editor source-side grid anchor and snapped loop markers stable when playback sync state changes.
+
+Changing global Pitch/Speed, enabling or disabling BPM Lock, recomputing master BPM, enabling or disabling Key Lock, toggling trigger quantization, changing the trigger quantization step, or starting/stopping/retriggering another pad SHALL NOT move a pad's Loop Editor Grid Offset anchor, snapped loop start, snapped loop end, or visible source-side grid lines unless the performer edits that pad's loop or grid settings.
+
+The Loop Editor grid SHALL remain a source-domain editing grid. The Rust transport timeline and trigger quantization grid MAY share the same 1/64-note unit basis, but they SHALL NOT reinterpret or move the source-side Loop Editor grid.
+
+#### Scenario: Snapped loop start stays on the shifted grid at 1.5x
+- **GIVEN** a pad has analysis downbeat metadata
+- **AND** the performer sets a non-zero Grid Offset
+- **AND** auto-loop snapping stores the loop start on the shifted 1/64-note source grid
+- **WHEN** global Pitch/Speed changes to `1.5x`
+- **AND** BPM Lock and Key Lock are toggled
+- **THEN** the stored loop start remains at the same source time
+- **AND** the visible Loop Editor grid anchor remains at the same source time
+
+#### Scenario: Other pad playback does not move the editor grid
+- **GIVEN** the Loop Editor is open for pad 1
+- **AND** pad 1 has a shifted source-side grid anchor and snapped loop start
+- **WHEN** pad 2 starts, stops, or is retriggered
+- **THEN** pad 1's grid anchor and snapped loop start remain unchanged
+
+#### Scenario: Trigger quantization does not redefine the source grid
+- **GIVEN** a pad has a visible Loop Editor musical grid
+- **WHEN** trigger quantization is enabled, disabled, or changed between supported grid steps
+- **THEN** the pad's Loop Editor source grid remains unchanged
+- **AND** future triggers still use the Rust transport grid only to choose output start time
+
+
+<!-- Added from rework-waveform-loop-editor -->
+### Requirement: Waveform editor provides bounded bar stepping controls
+The waveform editor SHALL provide per-pad auto-loop bar controls that support bounded musical bar
+stepping for the selected pad.
+
+Left mouse down on the decrement/increment arrows SHALL move to the previous/next value in the
+sequence `0.5, 1, 2, 4, 8, 16, 32, ...`.
+
+Right mouse down on the decrement/increment arrows SHALL subtract or add exactly `1.0` bar.
+
+The controls SHALL reject changes below `0.5` bars and changes above the maximum loop length that
+fits from the current loop start to the loaded track duration at the effective BPM.
+
+#### Scenario: Left-click arrows follow musical powers of two
+- **GIVEN** the selected pad is loaded
+- **AND** auto-loop is enabled
+- **AND** the effective BPM and loaded track duration allow at least 16 bars from the current loop
+  start
+- **AND** the current bar count is 8
+- **WHEN** the performer left-clicks the increment arrow
+- **THEN** the bar count becomes 16
+- **WHEN** the performer left-clicks the decrement arrow
+- **THEN** the bar count becomes 8
+
+#### Scenario: Right-click arrows change by exactly one bar
+- **GIVEN** the selected pad is loaded
+- **AND** the current bar count is 8
+- **WHEN** the performer right-clicks the decrement arrow
+- **THEN** the bar count becomes 7
+- **WHEN** the performer right-clicks the increment arrow
+- **THEN** the bar count becomes 8
+
+#### Scenario: Bar changes beyond fit bounds are no-ops
+- **GIVEN** the selected pad is loaded
+- **AND** the effective BPM and loaded track duration allow at most 6 bars from the current loop
+  start
+- **AND** the current bar count is 6
+- **WHEN** the performer activates an increment arrow
+- **THEN** the stored bar count remains 6
+- **AND** the loop region sent to the audio engine is unchanged
+
+
+<!-- Added from rework-waveform-loop-editor -->
+### Requirement: Waveform editor supports middle-click playback seek
+The waveform editor SHALL seek the selected pad's active or paused voice when the performer presses
+the middle mouse button over the waveform plot.
+
+The middle-click seek SHALL use the plot time under the cursor, clamped to the loaded track
+duration, and SHALL NOT change loop start, loop end, auto-loop state, bar count, or grid offset.
+
+If the selected pad has no active or paused voice, the seek SHALL be a no-op and SHALL NOT start
+playback.
+
+#### Scenario: Middle-click seek before loop plays into loop
+- **GIVEN** Pad A is selected and playing
+- **AND** Pad A has an active loop from 10.0 seconds to 18.0 seconds
+- **WHEN** the performer middle-clicks the waveform at 5.0 seconds
+- **THEN** Pad A seeks to approximately 5.0 seconds
+- **AND** playback continues forward until it reaches the loop start
+- **AND** subsequent playback loops between 10.0 seconds and 18.0 seconds
+- **AND** Pad A loop markers are unchanged
+
+#### Scenario: Middle-click seek inside loop keeps normal wrapping
+- **GIVEN** Pad A is selected and playing
+- **AND** Pad A has an active loop from 10.0 seconds to 18.0 seconds
+- **WHEN** the performer middle-clicks the waveform at 12.0 seconds
+- **THEN** Pad A seeks to approximately 12.0 seconds
+- **AND** playback wraps from the loop end back to 10.0 seconds
+
+#### Scenario: Middle-click seek after loop plays to track end
+- **GIVEN** Pad A is selected and playing
+- **AND** Pad A has an active loop from 10.0 seconds to 18.0 seconds
+- **AND** the loaded track duration is 30.0 seconds
+- **WHEN** the performer middle-clicks the waveform at 22.0 seconds
+- **THEN** Pad A seeks to approximately 22.0 seconds
+- **AND** playback continues forward until the track end
+- **AND** playback then jumps to 10.0 seconds and loops normally
+
+#### Scenario: Middle-click seek does not start a stopped pad
+- **GIVEN** Pad A is selected and loaded
+- **AND** Pad A is not active and not paused
+- **WHEN** the performer middle-clicks the waveform
+- **THEN** Pad A does not start playback
+- **AND** Pad A loop markers are unchanged
+
+
+<!-- Added from rework-waveform-loop-editor -->
+### Requirement: Waveform editor renders only in-frame with toolbar close
+The waveform editor SHALL render only in the Looper center surface and SHALL NOT open as a separate
+ImGui or platform window.
+
+The waveform editor SHALL replace the performance surface while it is open, similar to the
+Settings page, and SHALL resize with the Looper main window.
+
+The waveform editor SHALL NOT provide a title bar, floating-window presentation, maximize/restore
+control, or in-frame/floating mode toggle.
+
+The waveform editor toolbar SHALL provide an icon-only close `X` button at the far right of the
+same horizontal control area that contains the editor transport, view, and loop controls.
+
+Toolbar icon hit targets SHALL be at least 32 logical pixels on both axes and no smaller than
+1.5 times the current ImGui frame height.
+
+#### Scenario: Waveform editor opens in-frame
+- **GIVEN** the waveform editor is closed
+- **WHEN** the performer activates `Adjust Loop` for a loaded selected pad
+- **THEN** the editor replaces the Looper center performance surface
+- **AND** no separate waveform editor window is opened
+
+#### Scenario: Toolbar close button closes the editor
+- **GIVEN** the waveform editor is visible
+- **WHEN** the performer activates the toolbar close `X`
+- **THEN** the waveform editor closes
+- **AND** the Looper center performance surface is visible again
+
+#### Scenario: Toolbar hit targets are easier to press
+- **GIVEN** the waveform editor is visible
+- **WHEN** the toolbar is rendered
+- **THEN** Play, Pause, view-jump, bar-step, `ALL`, grid-offset, and close controls each expose hit
+  targets at least 32 logical pixels on both axes
+
+## MODIFIED Requirements
+

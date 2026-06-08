@@ -125,3 +125,88 @@ The waveform editor SHALL support changing loop start/end while the pad is activ
 - **GIVEN** a pad is playing
 - **WHEN** the performer changes loop start or loop end
 - **THEN** subsequent playback loops follow the updated region without stopping the pad
+
+
+<!-- Added from rework-waveform-loop-editor -->
+### Requirement: Loaded pad loop defaults use track start and 8 bars
+The system SHALL initialize loop intent for a newly loaded track with auto-loop enabled, an
+8.0-bar auto-loop count, and loop start at `0.0` seconds.
+
+The default loaded-track loop start SHALL NOT be replaced by analysis downbeat or beat onset.
+
+If no effective BPM is available, the system SHALL still store auto-loop enabled and `8.0` bars,
+but SHALL treat the effective loop end as unavailable until a BPM exists.
+
+#### Scenario: Newly loaded pad defaults to 8-bar auto-loop at track start
+- **GIVEN** a pad has just loaded audio
+- **AND** the pad has an effective BPM of 120
+- **WHEN** loop settings are first evaluated for that pad
+- **THEN** auto-loop is enabled
+- **AND** the bar count is 8.0
+- **AND** loop start is 0.0 seconds
+- **AND** loop end is approximately 16.0 seconds
+
+#### Scenario: Analysis onset does not move loaded loop default
+- **GIVEN** a newly loaded pad has analysis with `downbeats[0] = 2.0`
+- **WHEN** loop settings are first evaluated for that pad
+- **THEN** loop start is 0.0 seconds
+- **AND** the analysis onset remains available only for grid anchoring and snapping
+
+#### Scenario: Loaded default remains auto-looped without BPM
+- **GIVEN** a pad has just loaded audio
+- **AND** no effective BPM is available
+- **WHEN** loop settings are first evaluated for that pad
+- **THEN** auto-loop is enabled
+- **AND** the bar count is 8.0
+- **AND** loop start is 0.0 seconds
+- **AND** no musical loop end is computed
+
+
+<!-- Added from rework-waveform-loop-editor -->
+### Requirement: ALL sets explicit full-track loop region
+The system SHALL provide an `ALL` action that sets the selected pad loop region to the full loaded
+track duration.
+
+`ALL` SHALL store loop start `0.0`, loop end equal to the loaded track duration, and
+`auto_loop_enabled = false` so the full-track end is explicit rather than derived from bar count.
+
+`ALL` SHALL apply the effective full-track region to the audio engine immediately when the selected
+pad is loaded.
+
+#### Scenario: ALL stores full-track manual loop region
+- **GIVEN** a pad is loaded with duration 42.0 seconds
+- **AND** the pad currently has an auto-loop region
+- **WHEN** the performer activates `ALL`
+- **THEN** loop start is 0.0 seconds
+- **AND** loop end is 42.0 seconds
+- **AND** auto-loop is disabled
+- **AND** the audio engine receives the full-track loop region
+
+#### Scenario: ALL is unavailable without loaded duration
+- **GIVEN** a pad has no loaded track duration
+- **WHEN** the performer activates `ALL`
+- **THEN** loop settings remain unchanged
+- **AND** no loop-region update is sent to the audio engine
+
+
+<!-- Added from rework-waveform-loop-editor -->
+### Requirement: Loop bar count supports half-bar numeric values
+The system SHALL accept finite numeric auto-loop bar counts in 0.5-bar granularity with a minimum
+of 0.5 bars.
+
+Existing project files that contain integer bar counts SHALL load as equivalent numeric bar counts.
+
+#### Scenario: Half-bar value is valid
+- **GIVEN** a pad has a loaded track, effective BPM, and enough remaining duration
+- **WHEN** the bar count is set to 0.5
+- **THEN** the stored bar count is 0.5
+- **AND** the auto-loop duration is half of one 4/4 bar
+
+#### Scenario: Legacy integer bar count remains valid
+- **GIVEN** a project file stores `pad_loop_bars` for a pad as integer 4
+- **WHEN** the project is loaded
+- **THEN** the pad bar count is treated as 4.0
+- **AND** no migration changes the musical duration of that saved loop
+
+## MODIFIED Requirements
+

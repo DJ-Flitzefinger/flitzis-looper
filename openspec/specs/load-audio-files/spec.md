@@ -109,3 +109,116 @@ The persisted beat grid SHALL use a reduced representation consisting of beat ti
 - **WHEN** a different sample is loaded into slot `id` successfully
 - **THEN** analysis results for `id` correspond to the newly loaded sample
 
+
+<!-- Added from add-per-pad-key-lock -->
+### Requirement: Unload Clears Per-Pad Key Lock Intent
+The system SHALL reset a pad's per-pad Key Lock intent to disabled when audio is unloaded from that pad.
+
+Loading into an empty pad SHALL also clear any stale per-pad Key Lock intent before the new load is scheduled. The system SHALL publish the disabled per-pad Key Lock live default outside the audio callback so a later track loaded into the same pad cannot inherit stale Key Lock state.
+
+#### Scenario: Unload clears pad Key Lock
+- **GIVEN** Pad 3 has loaded audio
+- **AND** Pad 3 Key Lock is enabled
+- **WHEN** the performer unloads audio from Pad 3
+- **THEN** Pad 3 has no loaded audio
+- **AND** Pad 3's per-pad Key Lock value is disabled
+- **AND** the audio engine receives disabled live Key Lock state for Pad 3
+
+#### Scenario: Loading into empty pad clears stale Key Lock
+- **GIVEN** Pad 3 has no loaded audio
+- **AND** stale project data has Pad 3 Key Lock enabled
+- **WHEN** the performer loads new audio into Pad 3
+- **THEN** Pad 3's per-pad Key Lock value is disabled before the new load is scheduled
+- **AND** the audio engine receives disabled live Key Lock state for Pad 3
+
+
+<!-- Added from prepare-realtime-callback-safety -->
+### Requirement: Loaded Sample Replacement Retires Old Audio Handles Outside The Callback
+The system SHALL keep loaded sample replacement and unload operations real-time safe when old
+audio handles are released.
+
+When a loaded sample slot is replaced or unloaded in the audio callback, any old full-mix sample
+handle and associated prepared-stem handles SHALL be moved to bounded non-audio cleanup instead
+of being deallocated directly on the callback thread.
+
+#### Scenario: Replacing a loaded sample defers old handle cleanup
+- **GIVEN** a sample slot already contains a loaded full-mix buffer
+- **WHEN** a new loaded sample publication for the same slot reaches the audio callback
+- **THEN** the old buffer handle is retired through non-audio cleanup
+- **AND** the new buffer becomes the slot's loaded full-mix source
+- **AND** the callback performs no disk I/O, blocking wait, logging, Python/GIL access, neural
+  inference, plugin loading, or large audio-payload deallocation
+
+
+<!-- Added from reset-pad-settings-on-unload -->
+### Requirement: Unload Resets Track-Bound Pad Settings
+The system SHALL reset track-bound per-pad project settings to their default values when audio is
+unloaded from a pad.
+
+Track-bound settings SHALL include the pad's sample path, sample duration, analysis result, manual
+BPM override, manual key override, Gain/Trim, low/mid/high EQ, loop start, loop end, auto-loop
+state, auto-loop bar count, grid offset samples, stem cache metadata, stem mix preference, and
+per-pad Key Lock intent.
+
+The system SHALL publish neutral live defaults for pad BPM, Gain/Trim, EQ, loop region, and
+per-pad Key Lock outside the audio callback so a later track loaded into the same pad does not
+inherit stale live audio state.
+
+The system MUST NOT reset global project settings, input mappings, selected pad/bank, sidebar
+visibility, or other non-track-bound UI preferences as part of unloading a pad.
+
+#### Scenario: Unload clears persisted track settings
+- **GIVEN** pad `id` has loaded audio
+- **AND** pad `id` has non-default Gain/Trim, EQ, grid offset, loop, manual BPM, and manual key
+  settings
+- **WHEN** the performer unloads audio from pad `id`
+- **THEN** `ProjectState.sample_paths[id]` is `None`
+- **AND** the track-bound per-pad settings for `id` are reset to their default values
+
+#### Scenario: Later load starts from pad defaults
+- **GIVEN** pad `id` is empty
+- **AND** the persisted config still contains stale track-bound settings for `id`
+- **WHEN** the performer loads a new audio file into pad `id`
+- **THEN** the stale track-bound settings for `id` are cleared before the new load is scheduled
+- **AND** the newly loaded track starts from default pad Gain/Trim, EQ, grid offset, loop, BPM, and
+  key settings
+
+
+<!-- Added from tolerate-imperfect-mp3-loads -->
+### Requirement: Tolerate Imperfect MP3 Metadata And Frames
+The system SHALL load supported MP3 files that contain decodable audio even when track-level
+metadata is incomplete or isolated MP3 frames are malformed.
+
+The loader SHALL derive source channel count and sample rate from decoded audio buffers when that
+metadata is absent from the probed track.
+
+The loader SHALL skip isolated recoverable decode errors and continue decoding later packets when
+at least one valid audio frame can still be decoded.
+
+The loader MUST reject a file when no decodable audio frames are found, or when decoded buffers for
+one selected stream change sample rate or channel count mid-stream.
+
+Decoding tolerance SHALL remain outside the audio callback and MUST NOT add disk I/O, blocking
+waits, logging, Python/GIL access, neural inference, plugin loading, or unbounded work to the
+real-time path.
+
+#### Scenario: MP3 missing track channel metadata still loads
+- **GIVEN** an MP3 file has no channel count in the probed track metadata
+- **AND** decoding its audio packets yields buffers with a stable channel count and sample rate
+- **WHEN** `AudioEngine.load_sample_async(id, path)` loads the file
+- **THEN** the file is decoded and resampled for playback
+- **AND** the loaded sample uses the decoded buffer channel count for channel mapping
+
+#### Scenario: MP3 with isolated malformed frame still loads
+- **GIVEN** an MP3 file contains at least one malformed packet or frame
+- **AND** later packets still decode to valid audio buffers for the selected stream
+- **WHEN** `AudioEngine.load_sample_async(id, path)` loads the file
+- **THEN** the loader skips the recoverable decode error
+- **AND** the file is decoded and resampled for playback from the usable audio frames
+
+#### Scenario: MP3 with no decodable frames fails
+- **GIVEN** an MP3 file has no packets that decode to usable audio buffers
+- **WHEN** `AudioEngine.load_sample_async(id, path)` loads the file
+- **THEN** the load fails
+- **AND** no sample slot state is modified
+
