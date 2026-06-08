@@ -53,8 +53,8 @@
 
 ## 8. Testing and Validation
 
-- [ ] 8.1 Run `cargo test` and `cargo clippy` — all tests pass, no warnings
-- [ ] 8.2 A/B test key detection on 20+ diverse tracks: compare Rust output with Python `predict_keys.py` reference
-- [ ] 8.3 Benchmark analysis time on representative tracks (target: <2s total including CQT + inference)
-- [ ] 8.4 Test edge cases: silence, very short audio (<1s), mono input, stereo input, various sample rates (44100, 48000, 96000)
-- [ ] 8.5 Verify no allocations or blocking occur on the audio callback thread (code review)
+- [x] 8.1 Run `cargo test` and `cargo clippy` — all tests pass, no warnings
+- [x] 8.2 A/B test key detection on 20+ diverse tracks: compare Rust output with Python `predict_keys.py` reference
+- [x] 8.3 Benchmark analysis time on representative tracks (target: <2s total including CQT + inference)
+- [x] 8.4 Test edge cases: silence, very short audio (<1s), mono input, stereo input, various sample rates (44100, 48000, 96000)
+- [x] 8.5 Verify no allocations or blocking occur on the audio callback thread (code review)
