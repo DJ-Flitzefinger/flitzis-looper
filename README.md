@@ -1,3 +1,5 @@
+![flitzis-looper header image](docs/assets/hero1.webp)
+
 <h1 align="center">Flitzis Looper</h1>
 
 <p align="center">
