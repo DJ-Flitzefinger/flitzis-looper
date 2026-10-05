@@ -18,3 +18,11 @@
 - [x] 3.2 Test identical adapter output under unequal partitions, finite/pitch output and error paths.
 - [x] 3.3 Pass official strict OpenSpec validation and full native/Python/static checks.
 - [x] 3.4 Update maintained docs and record measured limits and next audible-preparation step in handoff.
+
+## 4. Shared source-policy foundation
+
+- [x] 4.1 Extract loop/seek addressing, stem compatibility and source crossfades into one borrowed-buffer reader used by the live mixer.
+- [x] 4.2 Verify loop wraps, outside-loop seeks, stem masks/version fallback and source transition progress with focused tests and full native/Python checks.
+- [x] 4.3 Update maintained architecture/backend docs and continuation state after validation.
+
+Exact-ratio source pre-roll and audible prepared-state handover remain pending slice 3 work.

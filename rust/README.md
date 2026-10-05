@@ -35,6 +35,7 @@ rust/
     |           |-- mixer.rs
     |           |-- scheduler.rs
     |           |-- source_grid.rs
+    |           |-- source_reader.rs
     |           |-- timing.rs
     |           |-- transport.rs
     |           |-- voice_slot.rs
@@ -141,6 +142,10 @@ is `uv run cargo test --manifest-path rust/Cargo.toml --workspace`.
   one bar or span whole bars, within one frame of rounding; musical wrapping
   precedes source rounding to avoid cycle drift. Unsupported physical loops
   retain bounded wrapping without a sustained synchronization claim.
+- `source_reader.rs` shares effective loop bounds, explicit seek progression, full-mix/stem
+  validation, integer source reads and source-selection crossfades. Voice state and mixer
+  rendering use the same policy; output-frame anchors and tempo-ratio selection remain
+  in the mixer. The reader does not own DSP state or perform source pre-roll.
 - Signed grid and loop-region seconds use `f64`, including MIDI runtime loop
   metadata, until source-frame conversion. Pad/master BPM remain native `f32`
   parameters promoted to `f64` for phase math. Long source markers retain frame

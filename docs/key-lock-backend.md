@@ -13,10 +13,16 @@ The active backend is implemented behind:
 rust/crates/looper/src/audio_engine/stretch_processor.rs
 rust/crates/looper/src/audio_engine/rubberband_backend.rs
 rust/crates/looper/src/audio_engine/key_lock_preparation.rs
+rust/crates/looper/src/audio_engine/source_reader.rs
 ```
 
 `RtMixer` owns tempo-ratio selection, per-pad Key Lock state, source-frame
-addressing, full-mix/stem source reads, and per-voice `StretchProcessor` calls.
+anchors, and per-voice `StretchProcessor` calls. `source_reader.rs` centralizes
+effective loop regions, explicit seek progression, full-mix/stem compatibility,
+integer source addressing and source-selection crossfades. It borrows accepted
+buffers and can be reused by background preparation without importing the mixer
+or native processor. The live path still uses the same integer source sequence
+and source-frame transition ramp.
 `VoiceSlot` owns the per-voice `StretchProcessor`, smoothed tempo ratio,
 explicit seek mode, and optional `PlaybackTimelineAnchor`. The mixer retains
 one preparation worker for its 32 voice lanes.
@@ -168,6 +174,17 @@ prepared results live in workspace `scratch/`, including
 `slice3-key-lock-latency-{baseline,prepared}.csv`; generated CSVs and logs are
 not repository artifacts. Reproduce the probe using
 [the development guide](development.md#offline-key-lock-measurement).
+
+The adapter partition test supplies identical already-varispeed samples. It
+does not prove that source resampling supplies identical samples: the current
+resampler interpolates each segment's endpoints using
+`(input_frames - 1) / (output_frames - 1)`. Different segment boundaries can
+therefore change fractional source positions even when BPMLOCK anchors reach
+the same next source frame. Without an output anchor, rounding each segment's
+source-frame count can also accumulate. Exact-source preparation needs a
+shared fractional source/resampling timeline before its worker output can be
+compared against callback output. The extracted integer reader preserves the
+existing behavior and makes no such resampling-equivalence claim.
 
 This preparation and adapter safety stage (slice 3a) does not perform track
 pre-roll, delay discarding, or a separate DSP feed-ahead cursor. Source playheads,

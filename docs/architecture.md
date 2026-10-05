@@ -85,6 +85,7 @@ rust/crates/looper/src/
     |-- mixer.rs                   # RtMixer, voices, loops, stems, gain, DSP
     |-- scheduler.rs               # fixed-capacity output-frame scheduler
     |-- source_grid.rs             # signed source beat/bar and loop-cycle mapping
+    |-- source_reader.rs           # shared loop/seek addressing and stem-source transitions
     |-- timing.rs                  # shared input epoch and estimated device clock diagnostics
     |-- transport.rs               # output-frame timeline and musical grid
     |-- voice_slot.rs              # voice state and per-voice DSP buffers
@@ -345,6 +346,14 @@ BPM-locked source addressing happens before full-mix/stem sample reads and
 before Key Lock processing. Full-mix and prepared-stem playback therefore feed
 the same source-frame sequence into Rubber Band, Gain/Trim, DSP, metering, and
 telemetry.
+
+`source_reader.rs` owns effective half-open loop regions, explicit before/after-loop
+seek progression, integer source reads, prepared-stem compatibility and source-selection
+crossfades. The mixer and voice state use these shared rules; the module borrows accepted
+immutable buffers and has no native DSP, transport, worker or persistence ownership.
+Output-frame anchors and tempo-ratio selection remain in the mixer. Extracting this policy
+provides the source boundary for later background preparation; it does not prime native
+state or compensate audible delay.
 
 `key_lock_preparation.rs` constructs two unique warmed native handles per voice
 before stream rendering: 64 handles for 32 voices, with one shared preparation

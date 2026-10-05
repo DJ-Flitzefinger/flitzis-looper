@@ -41,6 +41,24 @@ accepts only current on-time descriptors and retires stale state off-thread. Thi
 source-read policy and separating logical source telemetry from future DSP feed position. The
 current safety change establishes reusable ownership and delay measurement, not that activation.
 
+The source-policy foundation is now in `audio_engine/source_reader.rs`, shared by voice state
+and the mixer: effective half-open loop bounds, before/after-loop seek policy, integer addressing,
+prepared-stem layout/version validation and same-address source-selection crossfades. It borrows
+accepted immutable buffers, does not depend on native DSP or worker state, and preserves the
+existing source-frame ramp and integer reads. Output-frame anchors and ratio selection remain
+with the mixer. This extraction satisfies the first source-preparation prerequisite; exact-ratio
+source priming, independent feed-ahead and prepared-state adoption still require implementation
+and separate audible evidence. Existing behavior requirements are unchanged by this refactor.
+
+The existing per-segment varispeed interpolation is a remaining preparation dependency. It uses
+the segment's input/output endpoints, so equal output-anchored next positions do not prove equal
+native input samples under different callback partitions. Non-anchored per-segment frame rounding
+can also accumulate source-position error. Before source-aware DSP preparation is adopted, define
+one fractional source/resampling timeline and verify real source fixtures through that shared
+path across fixed/irregular partitions, loop wraps and seeks. The existing adapter test proves
+FIFO delay invariance only when already-varispeed samples are identical; it does not prove this
+earlier source-to-DSP property. Source-policy extraction intentionally preserves current behavior.
+
 ## References
 
 - https://raw.githubusercontent.com/breakfastquay/rubberband/v4.0.0/src/finer/R3LiveShifter.cpp

@@ -19,17 +19,26 @@ use crate::audio_engine::key_lock_preparation::{
     KeyLockPreparationError, KeyLockPreparationWorker, create_key_lock_preparation,
 };
 use crate::audio_engine::source_grid::SourceGrid;
+use crate::audio_engine::source_reader::{
+    FrameRange, STEM_TRANSITION_RAMP_FRAMES, SourceReadPlan, StemRenderSelection, StemTransition,
+    advance_playback_position, effective_loop_region, explicit_seek_mode_for_frame,
+    playhead_before_render, prepared_stem_set_for_render, prepared_stem_set_matches_sample,
+    source_frame_for_playback,
+};
+#[cfg(test)]
+use crate::audio_engine::source_reader::{
+    full_stem_available_mask, render_source_sample, stem_index_mask,
+};
 use crate::audio_engine::stretch_processor::DEFAULT_BLOCK_SAMPLES;
 use crate::audio_engine::voice_slot::{
     ExplicitSeekMode, PlaybackTimelineAnchor, VoiceSlot, VoiceStartConfig,
 };
+#[cfg(test)]
+use crate::messages::STEM_BUFFER_COUNT;
 use crate::messages::{
-    PadTimingMetadata, PreparedStemSet, STEM_BUFFER_COUNT, STEM_COMPONENT_MASK, SampleBuffer,
-    StemMixMode,
+    PadTimingMetadata, PreparedStemSet, STEM_COMPONENT_MASK, SampleBuffer, StemMixMode,
 };
 use cpal::Sample;
-
-const STEM_TRANSITION_RAMP_FRAMES: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RtRenderPadActivity {
@@ -160,117 +169,6 @@ impl SmoothedGain {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct FrameRange {
-    start: usize,
-    end: usize,
-}
-
-impl FrameRange {
-    fn len(self) -> usize {
-        self.end.saturating_sub(self.start)
-    }
-}
-
-fn playhead_before_render(frame: usize, region: FrameRange, mode: ExplicitSeekMode) -> usize {
-    if mode == ExplicitSeekMode::Normal && (frame < region.start || frame >= region.end) {
-        region.start
-    } else {
-        frame
-    }
-}
-
-fn explicit_seek_mode_for_frame(
-    frame: usize,
-    loop_region: FrameRange,
-    sample_frames: usize,
-) -> ExplicitSeekMode {
-    if frame < loop_region.start {
-        ExplicitSeekMode::BeforeLoop
-    } else if frame >= loop_region.end && loop_region.end < sample_frames {
-        ExplicitSeekMode::AfterLoop
-    } else {
-        ExplicitSeekMode::Normal
-    }
-}
-
-fn source_frame_for_playback(
-    frame_pos: usize,
-    offset: usize,
-    sample_frames: usize,
-    loop_region: FrameRange,
-    seek_mode: ExplicitSeekMode,
-) -> usize {
-    let loop_len = loop_region.len();
-    debug_assert!(loop_len > 0);
-
-    match seek_mode {
-        ExplicitSeekMode::Normal => {
-            let base = frame_pos.saturating_sub(loop_region.start);
-            loop_region.start + ((base + offset) % loop_len)
-        }
-        ExplicitSeekMode::BeforeLoop => {
-            let frame = frame_pos.saturating_add(offset);
-            if frame < loop_region.start {
-                frame
-            } else {
-                loop_region.start + ((frame - loop_region.start) % loop_len)
-            }
-        }
-        ExplicitSeekMode::AfterLoop => {
-            let frame = frame_pos.saturating_add(offset);
-            if frame < sample_frames {
-                frame
-            } else {
-                loop_region.start + ((frame - sample_frames) % loop_len)
-            }
-        }
-    }
-}
-
-fn advance_playback_position(
-    frame_pos: usize,
-    input_frames: usize,
-    sample_frames: usize,
-    loop_region: FrameRange,
-    seek_mode: ExplicitSeekMode,
-) -> (usize, ExplicitSeekMode) {
-    let loop_len = loop_region.len();
-    debug_assert!(loop_len > 0);
-
-    match seek_mode {
-        ExplicitSeekMode::Normal => {
-            let base = frame_pos.saturating_sub(loop_region.start);
-            (
-                loop_region.start + ((base + input_frames) % loop_len),
-                ExplicitSeekMode::Normal,
-            )
-        }
-        ExplicitSeekMode::BeforeLoop => {
-            let frame = frame_pos.saturating_add(input_frames);
-            if frame < loop_region.start {
-                (frame, ExplicitSeekMode::BeforeLoop)
-            } else {
-                (
-                    loop_region.start + ((frame - loop_region.start) % loop_len),
-                    ExplicitSeekMode::Normal,
-                )
-            }
-        }
-        ExplicitSeekMode::AfterLoop => {
-            let frame = frame_pos.saturating_add(input_frames);
-            if frame < sample_frames {
-                (frame, ExplicitSeekMode::AfterLoop)
-            } else {
-                (
-                    loop_region.start + ((frame - sample_frames) % loop_len),
-                    ExplicitSeekMode::Normal,
-                )
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct AnchoredPlaybackPosition {
     source_frame_pos: usize,
     input_frames: usize,
@@ -327,212 +225,6 @@ fn anchored_playback_position(
             ExplicitSeekMode::Normal,
         ),
     })
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct StemRenderSelection {
-    mode: StemMixMode,
-    source_version_hash: u64,
-    enabled_mask: u8,
-}
-
-impl StemRenderSelection {
-    fn full_mix() -> Self {
-        Self {
-            mode: StemMixMode::FullMix,
-            source_version_hash: 0,
-            enabled_mask: STEM_COMPONENT_MASK,
-        }
-    }
-
-    fn from_state(
-        mode: StemMixMode,
-        source_version_hash: u64,
-        enabled_mask: u8,
-    ) -> StemRenderSelection {
-        match mode {
-            StemMixMode::FullMix => StemRenderSelection::full_mix(),
-            StemMixMode::AllStems => StemRenderSelection {
-                mode,
-                source_version_hash,
-                enabled_mask: enabled_mask & STEM_COMPONENT_MASK,
-            },
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct StemTransition {
-    from: StemRenderSelection,
-    elapsed_frames: usize,
-    total_frames: usize,
-}
-
-impl StemTransition {
-    fn inactive() -> Self {
-        Self {
-            from: StemRenderSelection::full_mix(),
-            elapsed_frames: 0,
-            total_frames: 0,
-        }
-    }
-
-    fn start(from: StemRenderSelection, total_frames: usize) -> Self {
-        if total_frames == 0 {
-            return Self::inactive();
-        }
-
-        Self {
-            from,
-            elapsed_frames: 0,
-            total_frames,
-        }
-    }
-
-    fn is_active(self) -> bool {
-        self.total_frames > 0 && self.elapsed_frames < self.total_frames
-    }
-
-    fn gains_at(self, frame_offset: usize) -> (f32, f32) {
-        if !self.is_active() {
-            return (0.0, 1.0);
-        }
-
-        let elapsed = self
-            .elapsed_frames
-            .saturating_add(frame_offset)
-            .min(self.total_frames);
-        let to_gain = elapsed as f32 / self.total_frames as f32;
-        (1.0 - to_gain, to_gain)
-    }
-
-    fn advance(&mut self, frames: usize) {
-        if !self.is_active() {
-            return;
-        }
-
-        self.elapsed_frames = self.elapsed_frames.saturating_add(frames);
-        if self.elapsed_frames >= self.total_frames {
-            self.clear();
-        }
-    }
-
-    fn clear(&mut self) {
-        *self = Self::inactive();
-    }
-}
-
-impl Default for StemTransition {
-    fn default() -> Self {
-        Self::inactive()
-    }
-}
-
-fn full_stem_available_mask() -> u8 {
-    ((1_u16 << STEM_BUFFER_COUNT) - 1) as u8
-}
-
-fn stem_index_mask(index: usize) -> u8 {
-    if index >= u8::BITS as usize {
-        return 0;
-    }
-
-    1_u8 << index
-}
-
-fn prepared_stem_set_matches_sample(
-    stems: &PreparedStemSet,
-    sample: &SampleBuffer,
-    channels: usize,
-    sample_rate_hz: f32,
-    sample_frames: usize,
-) -> bool {
-    if channels == 0 || sample_frames == 0 || sample.samples.len() != sample_frames * channels {
-        return false;
-    }
-
-    let rounded_sample_rate_hz = sample_rate_hz.round();
-    if !rounded_sample_rate_hz.is_finite()
-        || rounded_sample_rate_hz <= 0.0
-        || stems.sample_rate_hz != rounded_sample_rate_hz as u32
-    {
-        return false;
-    }
-
-    if stems.channels != channels
-        || stems.frame_count != sample_frames
-        || stems.available_mask != full_stem_available_mask()
-        || stems.source_version_hash == 0
-    {
-        return false;
-    }
-
-    stems
-        .stems
-        .iter()
-        .all(|stem| stem.channels == channels && stem.samples.len() == sample.samples.len())
-}
-
-fn prepared_stem_set_for_render<'a>(
-    stems: Option<&'a PreparedStemSet>,
-    sample: &SampleBuffer,
-    channels: usize,
-    sample_rate_hz: f32,
-    sample_frames: usize,
-) -> Option<&'a PreparedStemSet> {
-    stems.filter(|stems| {
-        prepared_stem_set_matches_sample(stems, sample, channels, sample_rate_hz, sample_frames)
-    })
-}
-
-fn render_source_sample(
-    sample: &SampleBuffer,
-    stems: Option<&PreparedStemSet>,
-    enabled_stem_mask: u8,
-    frame: usize,
-    channels: usize,
-    channel: usize,
-) -> f32 {
-    let index = frame * channels + channel;
-    if let Some(stems) = stems {
-        let enabled_stem_mask = enabled_stem_mask & STEM_COMPONENT_MASK;
-        stems
-            .stems
-            .iter()
-            .enumerate()
-            .filter(|(stem_index, _)| enabled_stem_mask & stem_index_mask(*stem_index) != 0)
-            .map(|(_, stem)| stem.samples[index])
-            .sum()
-    } else {
-        sample.samples[index]
-    }
-}
-
-fn render_source_selection_sample(
-    sample: &SampleBuffer,
-    stems: Option<&PreparedStemSet>,
-    selection: StemRenderSelection,
-    frame: usize,
-    channels: usize,
-    channel: usize,
-) -> f32 {
-    match selection.mode {
-        StemMixMode::FullMix => sample.samples[frame * channels + channel],
-        StemMixMode::AllStems => {
-            let matching_stems = stems.filter(|stems| {
-                selection.source_version_hash != 0
-                    && stems.source_version_hash == selection.source_version_hash
-            });
-            render_source_sample(
-                sample,
-                matching_stems,
-                selection.enabled_mask,
-                frame,
-                channels,
-                channel,
-            )
-        }
-    }
 }
 
 /// Real-time mixer that handles sample loading and voice management.
@@ -1133,19 +825,11 @@ impl RtMixer {
             return None;
         }
 
-        let start = self.pad_loop_start_frame[id].min(sample_frames);
-        let end = self.pad_loop_end_frame[id]
-            .unwrap_or(sample_frames)
-            .min(sample_frames);
-
-        if end <= start {
-            Some(FrameRange {
-                start: 0,
-                end: sample_frames,
-            })
-        } else {
-            Some(FrameRange { start, end })
-        }
+        effective_loop_region(
+            self.pad_loop_start_frame[id],
+            self.pad_loop_end_frame[id],
+            sample_frames,
+        )
     }
 
     fn phase_alignment_loop_region(&self, id: usize, sample_frames: usize) -> Option<FrameRange> {
@@ -1762,23 +1446,16 @@ impl RtMixer {
                 let tempo_ratio = voice.smooth_tempo_ratio(target_tempo_ratio);
                 let tempo_ratio_changed = (tempo_ratio - previous_tempo_ratio).abs() > f32::EPSILON;
 
-                let mut loop_start = pad_loop_start_frame[voice.sample_id].min(sample_frames);
-                let mut loop_end = pad_loop_end_frame[voice.sample_id].unwrap_or(sample_frames);
-                loop_end = loop_end.min(sample_frames);
-                if loop_end <= loop_start {
-                    loop_start = 0;
-                    loop_end = sample_frames;
-                }
-                let loop_len = loop_end - loop_start;
-                if loop_len == 0 {
+                let Some(loop_region) = effective_loop_region(
+                    pad_loop_start_frame[voice.sample_id],
+                    pad_loop_end_frame[voice.sample_id],
+                    sample_frames,
+                ) else {
                     voice.stop_rt(retirement);
                     continue;
-                }
-
-                let loop_region = FrameRange {
-                    start: loop_start,
-                    end: loop_end,
                 };
+                let loop_start = loop_region.start;
+                let loop_end = loop_region.end;
                 let mut seek_mode = voice.explicit_seek_mode;
                 let mut timeline_anchor_needs_reset = tempo_ratio_changed;
                 let normalized_frame =
@@ -1839,47 +1516,21 @@ impl RtMixer {
                         (voice.frame_pos, input_frames, None)
                     };
 
-                let input_buffers = voice.stretch.input_buffers_mut(input_frames);
-                for (channel, buf) in input_buffers.iter_mut().enumerate().take(channels) {
-                    for (i, sample_ref) in buf.iter_mut().enumerate().take(input_frames) {
-                        let frame = source_frame_for_playback(
-                            source_frame_pos,
-                            i,
-                            sample_frames,
-                            loop_region,
-                            seek_mode,
-                        );
-                        *sample_ref = if stem_transition.is_active() {
-                            let from_sample = render_source_selection_sample(
-                                &sample,
-                                prepared_stem_set,
-                                stem_transition.from,
-                                frame,
-                                channels,
-                                channel,
-                            );
-                            let to_sample = render_source_selection_sample(
-                                &sample,
-                                prepared_stem_set,
-                                current_selection,
-                                frame,
-                                channels,
-                                channel,
-                            );
-                            let (from_gain, to_gain) = stem_transition.gains_at(i);
-                            from_sample * from_gain + to_sample * to_gain
-                        } else {
-                            render_source_selection_sample(
-                                &sample,
-                                prepared_stem_set,
-                                current_selection,
-                                frame,
-                                channels,
-                                channel,
-                            )
-                        };
-                    }
+                SourceReadPlan {
+                    channels,
+                    sample_frames,
+                    frame_pos: source_frame_pos,
+                    loop_region,
+                    seek_mode,
+                    selection: current_selection,
+                    transition: stem_transition,
                 }
+                .fill_buffers(
+                    &sample,
+                    prepared_stem_set,
+                    voice.stretch.input_buffers_mut(input_frames),
+                    input_frames,
+                );
                 stem_transitions[voice.sample_id].advance(input_frames);
 
                 voice.stretch.process(

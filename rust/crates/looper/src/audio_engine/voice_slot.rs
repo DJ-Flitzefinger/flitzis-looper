@@ -1,6 +1,7 @@
 use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 use crate::audio_engine::constants::{SPEED_MAX, SPEED_MIN};
 use crate::audio_engine::key_lock_preparation::KeyLockPreparationLane;
+pub(crate) use crate::audio_engine::source_reader::ExplicitSeekMode;
 use crate::audio_engine::stretch_processor::StretchProcessor;
 use crate::messages::SampleBuffer;
 
@@ -13,13 +14,6 @@ pub(crate) struct VoiceStartConfig {
     pub(crate) volume: f32,
     pub(crate) initial_tempo_ratio: f32,
     pub(crate) start_output_frame: Option<u64>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ExplicitSeekMode {
-    Normal,
-    BeforeLoop,
-    AfterLoop,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
