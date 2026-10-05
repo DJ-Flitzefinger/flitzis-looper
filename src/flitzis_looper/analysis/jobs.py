@@ -27,7 +27,7 @@ type JobStage = Literal["preparing", "running", "waiting_key", "retiring", "fini
 
 
 class NativeAnalysisJob(Protocol):
-    """Native reservation which owns loaded PCM until both branches retire."""
+    """Native reservation owning staged PCM until both branch readers retire."""
 
     def metadata(self) -> dict[str, object]: ...
 
@@ -40,6 +40,8 @@ class NativeAnalysisJob(Protocol):
     def cancel(self) -> None: ...
 
     def abort_unstarted(self) -> None: ...
+
+    def retire_pcm(self) -> None: ...
 
     def progress(self, stage: str) -> None: ...
 
@@ -290,6 +292,16 @@ class AnalysisJob:
             beat = replace(beat, resources_released=True)
         self._wait_for_key()
         key = key_results[0] if key_results else _key_failure("Key analysis did not start")
+        try:
+            self._native.retire_pcm()
+        except RuntimeError as error:
+            # A native refusal is not retirement. Keep admission and the files;
+            # closing readers is required before filesystem cleanup or publication.
+            self._set_stage("retiring", f"Native PCM retirement failed: {error}")
+            self._bridge_done.set()
+            if bridge_started:
+                bridge.join()
+            return
         self._cleanup(directory)
         self._bridge_done.set()
         if bridge_started:

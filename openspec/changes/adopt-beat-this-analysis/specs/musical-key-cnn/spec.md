@@ -11,6 +11,18 @@ it SHALL be skipped when the shared input already has that branch's required rat
 branch SHALL NOT consume Beat This's downsampled input, and the beat branch SHALL NOT require
 an intermediate key-input conversion. Shared inputs SHALL carry explicit rate/source identity.
 
+For diagnostic analysis, the shared mono source SHALL be a complete staged loaded-rate file.
+Key preparation SHALL read it through the retained native handle in bounded chunks and produce
+the complete 44100-Hz vector for the unchanged CQT/KeyNet implementation. Conversion SHALL use
+the existing Rubato FFT configuration, preserve time zero, remove leading algorithmic delay
+exactly once, flush the complete tail and return `ceil(source_frames * 44100 / loaded_rate)`
+frames. At 44100 Hz the staged f32 samples SHALL be read exactly without rate conversion.
+Chunking SHALL NOT introduce per-chunk origins, shortened inference, alternate key parameters
+or a second full loaded-rate PCM allocation.
+Diagnostic tail flushing SHALL allow valid zero-output padding calls within a finite bound
+derived from converter dimensions and the remaining required output. It SHALL check cancellation
+between calls and report a conversion failure if that bound cannot produce the complete tail.
+
 #### Scenario: Mono buffer is shared between pipelines
 - **GIVEN** immutable stereo loaded PCM at 48000 Hz
 - **WHEN** analysis prepares its inputs
@@ -24,6 +36,29 @@ an intermediate key-input conversion. Shared inputs SHALL carry explicit rate/so
 - **THEN** KeyNet uses that input without rate conversion
 - **AND** Beat This derives its required 22050-Hz input
 - **AND** the two pipelines do not share a falsely labeled common-rate buffer
+
+#### Scenario: Staged key input matches the complete prior conversion
+- **GIVEN** complete loaded-rate mono at 22050, 44100, 48000 or 96000 Hz with leading silence,
+  first/last impulses and a fractional resampled frame count
+- **WHEN** the native key branch reads and converts bounded chunks of the staged source
+- **THEN** the complete key vector preserves the prior mono/converter output and source origin
+- **AND** its length uses the ceiling rule with delay removed once and the tail retained
+- **AND** the unchanged full CQT/KeyNet path receives the same complete signal
+
+#### Scenario: A buffered FFT tail initially produces no output
+- **GIVEN** a valid 96000-Hz input ends with a fractional FFT/input-block remainder
+- **AND** the first zero-padding call produces no output while the converter accumulates its FFT unit
+- **WHEN** diagnostic key preparation flushes the tail
+- **THEN** it continues within the calculated finite call bound to obtain the complete output
+- **AND** source origin, ceiling frame count and existing FFT sample values remain preserved
+- **AND** a cancelled or exhausted flush fails explicitly rather than looping without a bound
+
+#### Scenario: A failed staged key read preserves independent beat output
+- **GIVEN** beat analysis succeeds but native key preparation encounters an invalid or
+  incomplete staged source read
+- **WHEN** both branches settle and the request is still current
+- **THEN** the key outcome explicitly fails with `unknown` while valid beat output survives
+- **AND** no shortened key vector is reported as a complete successful analysis
 
 ### Requirement: Parallel BPM and Key Detection
 The system SHALL execute available beat/BPM and key detection branches concurrently outside

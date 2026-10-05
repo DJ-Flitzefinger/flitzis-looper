@@ -4,7 +4,8 @@
 //! until both components settle. No queue and no replacement threads behind a busy slot.
 
 use super::analysis_pcm::{
-    KEY_PREPROCESSING, LoadedPcmSnapshot, MONO_RULE, PcmIdentity, SharedMono,
+    KEY_PREPROCESSING, LoadedPcmSnapshot, MONO_RULE, PcmIdentity, PcmStagingPlan,
+    key_input_from_f32_le,
 };
 use super::analysis_predictions::validate_predictions;
 use super::{current_pad_request_id, next_pad_request_id, pad_request_matches};
@@ -14,9 +15,9 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use serde_json::{Value, json};
-use std::fs::OpenOptions;
-use std::io::BufWriter;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::fs::{File, OpenOptions};
+use std::io::{Seek, SeekFrom};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak, mpsc::Sender};
 
 const MAX_PCM_BYTES: usize = 512 * 1024 * 1024;
@@ -76,10 +77,13 @@ impl OfflineJobs {
         // Validate before changing accepted request intent.
         let snapshot = LoadedPcmSnapshot::new(sample, rate, identity.clone(), MAX_PCM_BYTES)
             .map_err(|e| e.to_string())?;
-        if snapshot.working_pcm_bytes().map_err(|e| e.to_string())? > MAX_PCM_BYTES {
+        let staging = snapshot.staging_plan().map_err(|e| e.to_string())?;
+        if staging.export_peak_bytes.max(staging.key_peak_bytes) > MAX_PCM_BYTES
+            || staging.export_bytes > MAX_PCM_BYTES
+        {
             return Err("offline analysis PCM byte limit exceeded".into());
         }
-        let working_bytes = MAX_PCM_BYTES - snapshot.retained_bytes();
+        let retained_bytes = snapshot.retained_bytes();
         let request_id = next_pad_request_id(&request_ids, id)?;
         let identity = PcmIdentity {
             request_id,
@@ -90,9 +94,13 @@ impl OfflineJobs {
             rate,
             frames,
             channels: snapshot.source_channels(),
-            working_bytes,
+            staging,
             snapshot: Mutex::new(Some(snapshot)),
-            mono: Mutex::new(None),
+            staged_pcm: Mutex::new(None),
+            retained_source_bytes: AtomicUsize::new(retained_bytes),
+            observed_export_peak_bytes: AtomicUsize::new(0),
+            observed_key_peak_bytes: AtomicUsize::new(0),
+            pcm_retired: AtomicBool::new(false),
             request_ids,
             tx,
             cancelled: AtomicBool::new(false),
@@ -117,9 +125,13 @@ struct JobState {
     rate: u32,
     frames: usize,
     channels: usize,
-    working_bytes: usize,
+    staging: PcmStagingPlan,
     snapshot: Mutex<Option<LoadedPcmSnapshot>>,
-    mono: Mutex<Option<SharedMono>>,
+    staged_pcm: Mutex<Option<File>>,
+    retained_source_bytes: AtomicUsize,
+    observed_export_peak_bytes: AtomicUsize,
+    observed_key_peak_bytes: AtomicUsize,
+    pcm_retired: AtomicBool,
     request_ids: Arc<Mutex<Vec<u64>>>,
     tx: Sender<LoaderEvent>,
     cancelled: AtomicBool,
@@ -184,35 +196,40 @@ impl JobState {
         if self.finished.load(Ordering::Acquire)
             || self.cancelled()
             || self.retirement_started.load(Ordering::Acquire)
+            || self.pcm_retired.load(Ordering::Acquire)
             || self.preparing.swap(true, Ordering::AcqRel)
         {
             return Err("offline preparation is unavailable".into());
         }
         let _running = RunningGuard(&self.preparing);
         drop(transition);
-        let mut output = self.mono.lock().map_err(|_| "offline mono lock poisoned")?;
+        let mut output = self
+            .staged_pcm
+            .lock()
+            .map_err(|_| "offline staged PCM lock poisoned")?;
         if output.is_some() {
             return Err("offline PCM already prepared".into());
         }
-        let snapshot = self
+        let mut snapshot = self
             .snapshot
             .lock()
             .map_err(|_| "offline snapshot lock poisoned")?;
-        let snapshot = snapshot.as_ref().ok_or("offline PCM retired")?;
-        let mut mono = snapshot
-            .prepare_mono(MAX_PCM_BYTES, &|| self.cancelled())
+        let source = snapshot.as_ref().ok_or("offline PCM retired")?;
+        let mut file = create_staged_pcm(path).map_err(|e| e.to_string())?;
+        self.observed_export_peak_bytes
+            .store(self.staging.export_peak_bytes, Ordering::Release);
+        source
+            .stream_f32_le(&mut file, MAX_PCM_BYTES, MAX_PCM_BYTES, &|| {
+                self.cancelled()
+            })
             .map_err(|e| e.to_string())?;
-        mono.identity = self.identity.clone();
-        let file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(path)
-            .map_err(|e| e.to_string())?;
-        let mut writer = BufWriter::new(file);
-        mono.write_f32_le(&mut writer, MAX_PCM_BYTES, &|| self.cancelled())
-            .map_err(|e| e.to_string())?;
-        std::io::Write::flush(&mut writer).map_err(|e| e.to_string())?;
-        *output = Some(mono);
+        file.rewind().map_err(|e| e.to_string())?;
+        // The complete file now owns the common mono. Release only this analysis
+        // pin, on the preparation thread, before a complete key vector may exist.
+        // The playback engine retains its own immutable source independently.
+        snapshot.take();
+        self.retained_source_bytes.store(0, Ordering::Release);
+        *output = Some(file);
         Ok(())
     }
 
@@ -224,6 +241,7 @@ impl JobState {
         if self.finished.load(Ordering::Acquire)
             || self.cancelled()
             || self.retirement_started.load(Ordering::Acquire)
+            || self.pcm_retired.load(Ordering::Acquire)
             || self.key_started.swap(true, Ordering::AcqRel)
         {
             return Err("offline key branch already started or retired".into());
@@ -232,20 +250,31 @@ impl JobState {
         let _running = RunningGuard(&self.key_running);
         drop(transition);
         let result = (|| {
-            let mono = self
-                .mono
-                .lock()
-                .map_err(|_| "offline mono lock poisoned".to_owned())?;
-            let mono = mono.as_ref().ok_or("offline PCM not prepared")?;
-            let key_input = mono
-                .key_input(self.working_bytes, &|| self.cancelled())
-                .map_err(|e| e.to_string())?;
+            let key_input = {
+                let mut staged = self
+                    .staged_pcm
+                    .lock()
+                    .map_err(|_| "offline staged PCM lock poisoned".to_owned())?;
+                let file = staged.as_mut().ok_or("offline PCM not prepared")?;
+                if file.metadata().map_err(|e| e.to_string())?.len()
+                    != self.staging.export_bytes as u64
+                {
+                    return Err("staged analysis PCM length changed".to_owned());
+                }
+                file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+                key_input_from_f32_le(file, self.frames, self.rate, MAX_PCM_BYTES, &|| {
+                    self.cancelled()
+                })
+                .map_err(|e| e.to_string())?
+            };
+            self.observed_key_peak_bytes
+                .store(key_input.peak_bytes, Ordering::Release);
             if self.cancelled() {
                 return Err("cancelled".into());
             }
             // CQT and ORT are noninterruptible here. This lease remains running
             // until the actual call returns; cancellation only invalidates publication.
-            analysis::detect_key(&key_input, 44_100)
+            analysis::detect_key(&key_input.samples, 44_100)
                 .map(|r| r.key_name)
                 .map_err(|e| format!("{e:?}"))
         })();
@@ -280,14 +309,7 @@ impl JobState {
         }
         // Called by the supervisor only after process reaping and key join. Drop
         // all large native owners off-thread before releasing the admission slot.
-        self.mono
-            .lock()
-            .map_err(|_| "offline mono lock poisoned")?
-            .take();
-        self.snapshot
-            .lock()
-            .map_err(|_| "offline snapshot lock poisoned")?
-            .take();
+        self.drop_pcm();
         // Hold request identity through enqueue; invalidation and publication serialize.
         let requests = self
             .request_ids
@@ -306,6 +328,48 @@ impl JobState {
         self.release_reservation();
         Ok(accepted)
     }
+
+    fn drop_pcm(&self) {
+        // Cleanup only: even a poisoned mutex still owns valid Rust values.
+        // Recover it solely to destroy those owners on this background thread.
+        self.staged_pcm
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        self.snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        self.retained_source_bytes.store(0, Ordering::Release);
+    }
+
+    /// Close native PCM owners before filesystem cleanup, retaining admission.
+    /// The supervisor calls this only after both branch readers have stopped.
+    fn retire_pcm(&self) -> Result<(), String> {
+        let _transition = self
+            .transitions
+            .lock()
+            .map_err(|_| "offline transition lock poisoned")?;
+        if self.preparing.load(Ordering::Acquire) || self.key_running.load(Ordering::Acquire) {
+            return Err("offline native work is still retiring".into());
+        }
+        self.pcm_retired.store(true, Ordering::Release);
+        self.drop_pcm();
+        Ok(())
+    }
+}
+
+fn create_staged_pcm(path: &str) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.create_new(true).read(true).write(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_SHARE_READ: allow the beat worker to read, while preventing a
+        // writer or path replacement until both branches retire this handle.
+        options.share_mode(0x0000_0001);
+    }
+    options.open(path)
 }
 
 struct RunningGuard<'a>(&'a AtomicBool);
@@ -426,6 +490,37 @@ impl OfflineAnalysisJob {
         py.detach(|| self.state().prepare(&path))
             .map_err(PyRuntimeError::new_err)
     }
+    pub fn staging_stats(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let state = self.state();
+        let dict = PyDict::new(py);
+        dict.set_item("limit_bytes", MAX_PCM_BYTES)?;
+        dict.set_item("export_file_bytes", state.staging.export_bytes)?;
+        dict.set_item(
+            "admitted_export_peak_bytes",
+            state.staging.export_peak_bytes,
+        )?;
+        dict.set_item("admitted_key_peak_bytes", state.staging.key_peak_bytes)?;
+        dict.set_item(
+            "admitted_peak_bytes",
+            state
+                .staging
+                .export_peak_bytes
+                .max(state.staging.key_peak_bytes),
+        )?;
+        dict.set_item(
+            "observed_export_peak_bytes",
+            state.observed_export_peak_bytes.load(Ordering::Acquire),
+        )?;
+        dict.set_item(
+            "observed_key_peak_bytes",
+            state.observed_key_peak_bytes.load(Ordering::Acquire),
+        )?;
+        dict.set_item(
+            "retained_source_bytes",
+            state.retained_source_bytes.load(Ordering::Acquire),
+        )?;
+        Ok(dict.into_any().unbind())
+    }
     pub fn analyze_key(&self, py: Python<'_>) -> PyResult<String> {
         py.detach(|| self.state().key())
             .map_err(PyRuntimeError::new_err)
@@ -435,6 +530,10 @@ impl OfflineAnalysisJob {
     }
     pub fn cancel(&self) {
         self.state().cancel_request();
+    }
+    pub fn retire_pcm(&self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| self.state().retire_pcm())
+            .map_err(PyRuntimeError::new_err)
     }
     /// Retire admission after Python metadata/thread startup failure, off-thread.
     pub fn abort_unstarted(&self) -> PyResult<()> {
@@ -451,9 +550,9 @@ impl OfflineAnalysisJob {
             || state.key_started.load(Ordering::Acquire)
             || state.finished.load(Ordering::Acquire)
             || state
-                .mono
+                .staged_pcm
                 .lock()
-                .map_err(|_| PyRuntimeError::new_err("offline mono lock poisoned"))?
+                .map_err(|_| PyRuntimeError::new_err("offline staged PCM lock poisoned"))?
                 .is_some()
         {
             return Err(PyRuntimeError::new_err("offline work already started"));
@@ -502,12 +601,7 @@ impl Drop for OfflineAnalysisJob {
             }
             // Move the actual final owner, never race a cloned owner against UI Drop.
             std::thread::spawn(move || {
-                if let Ok(mut mono) = state.mono.lock() {
-                    mono.take();
-                }
-                if let Ok(mut snapshot) = state.snapshot.lock() {
-                    snapshot.take();
-                }
+                state.drop_pcm();
                 state.release_reservation();
                 drop(state);
             });

@@ -20,7 +20,11 @@ cancellation. Shutdown reports current state; it does not join native inference.
 The service obtains `AudioEngine.begin_offline_analysis(pad_id)` and an
 `OfflineAnalysisJob` reservation. Native methods expose metadata, prepare a
 temporary PCM export, run KeyNet, check cancellation, publish progress and finish
-one validated envelope. `finish()` returns whether the request was accepted under
+one validated envelope. After both branches actually settle, the supervisor calls
+`retire_pcm()` to close native PCM owners before removing the job directory.
+That call preserves admission until filesystem cleanup and `finish()` complete;
+a refusal keeps files, admission and unpublished results in the retiring state.
+`finish()` returns whether the request was accepted under
 the native identity lock, so cancellation cannot leave a stale local success snapshot.
 Heavy native calls release the GIL. No whole-track
 Python array or viewport waveform reconstruction is involved. Loaded-source
@@ -32,18 +36,29 @@ actual loaded rate. It validates complete frames, rates from 8000 through
 384000 Hz and 1 through 32 channels. One arithmetic channel mean, accumulated
 in f64 and stored as f32, creates shared mono. Nonfinite input is rejected.
 Frame zero, leading silence and the final frame remain part of the input.
-Mixing, copying and float32 little-endian export check cancellation between
-4096-frame chunks. The transfer describes a complete mono file at the loaded
-rate with origin `0.0`; JSON carries metadata, never PCM samples.
+Mixing and float32 little-endian export stream through bounded 4096-frame
+chunks with cancellation checks; no complete loaded-rate mono Vec or key-input
+copy is allocated. The transfer describes a complete mono file at the loaded
+rate with origin `0.0`; JSON carries metadata, never PCM samples. Only a complete
+flushed file with a retained readable native key handle becomes prepared. The
+analysis pin on the loaded source then drops off-thread before key allocation.
+Independent playback ownership keeps the original source alive and unchanged.
 
-The native key branch derives 44100-Hz mono directly from shared mono with the
-existing Rubato FFT converter. It skips conversion at equal rates, flushes the
-delayed tail, removes leading algorithmic delay once and returns
-`ceil(source_frames * 44100 / loaded_rate)` frames. The worker independently
+The native key branch reads that same staged file through its native handle in
+bounded chunks and derives a complete 44100-Hz mono vector with the existing
+Rubato FFT converter (`1024`, one subchunk/channel, `FixedSync::Input`). It reads
+exact f32 samples without conversion at equal rates, flushes the delayed tail,
+removes leading algorithmic delay once and returns
+`ceil(source_frames * 44100 / loaded_rate)` frames. A dimension-derived finite
+padding budget permits valid flush calls that emit zero frames while filling
+the converter's internal block; cancellation is checked between those calls.
+The worker independently
 derives 22050-Hz input with the pinned upstream soxr HQ/log-mel frontend,
 including the reference's rounded resampled length and centered STFT. No key
-input is derived from downsampled beat input; see the setup document for exact
-short-input and exclusive-end conventions.
+input is derived from downsampled beat input. KeyNet still receives the complete
+vector with unchanged CQT/ONNX parameters; chunking does not shorten analysis or
+reset the source-time origin. See the setup document for exact short-input and
+exclusive-end conventions.
 
 ## Admission and retirement limits
 
@@ -53,25 +68,58 @@ short-input and exclusive-end conventions.
 | Service jobs | One active or retiring request per service; zero pending queue. |
 | Beat worker trees | One active or retiring worker request globally, including launcher descendants; zero pending queue. |
 | Windows tree members | At most 64 simultaneous processes; child admission stops before terminal capture/termination. |
-| Native PCM staging | 512 MiB admission cap for retained source, shared mono, loaded-rate key copy and padded key output. |
+| Native PCM staging | 512 MiB maximum simultaneous PCM ownership across the export and key stages; includes all live analysis source pins and PCM buffers. |
 | Worker PCM | 512 MiB maximum complete exported input. |
 | Checkpoint | 256 MiB maximum local file, checked in cancellable 1-MiB hash chunks. |
 | Wire messages | 32 KiB request, 8 MiB worker response, 1 MiB final publication envelope. |
 | Prediction arrays | At most 250000 positions or logits per bounded array. |
 | Process timing | 120-second execution timeout; 5-second finite reap and output-reader join attempts. |
 
-These are provisional engineering limits, not measured Beat This acceptance
-limits. The PCM cap excludes Rubato FFT scratch, CQT/ORT allocations and worker
-model memory; it is not an RSS guarantee. Thread-count environment variables
-for common inference libraries and Torch intra/inter-op counts are set to one.
+Native admission reserves the larger of two non-overlapping stages: retained
+interleaved source plus bounded export buffers, or the complete key output
+allocation plus bounded file-read/resampler PCM buffers. The final vector contains
+exactly the ceiling-derived frame count; converter delay/tail handling uses
+bounded output buffers instead of a full delayed-output allocation. The source
+pin counts throughout export and can leave this accounting
+only after the analysis owner actually releases it. The exported file is
+independently capped at 512 MiB. Byte arithmetic and each required stage are
+checked before allocation; oversized work fails explicitly without truncation.
+
+These are engineering limits, not proof of complete resource acceptance. The
+PCM cap excludes Rubato FFT scratch, CQT/ORT allocations and worker model memory;
+it is not an RSS guarantee. Playback may continue owning the loaded source after
+the analysis pin drops; that memory still counts in actual application/combined
+RSS. Thread-count environment variables for common inference libraries and Torch
+intra/inter-op counts are set to one.
 [Reference evidence](beat-this-reference-evidence.md) records actual observations
 and their limits; these are not full live-performance acceptance.
+
+`OfflineAnalysisJob.staging_stats()` exposes the PCM reservation and stage
+accounting for diagnostic evidence. `limit_bytes` and `export_file_bytes` report
+the unchanged cap and complete file extent. `admitted_export_peak_bytes` and
+`admitted_key_peak_bytes` bound the respective stages; `admitted_peak_bytes` is
+their maximum. `observed_export_peak_bytes` records retained-source plus bounded
+export-buffer bytes when export starts; `observed_key_peak_bytes` records actual
+owned vector/adapter capacities plus the bounded read buffer after successful
+key preparation. These start at zero before their respective stages are reached;
+failed or cancelled key preparation may leave zero even after bounded temporary
+allocations. They do not claim a complete failed-job allocation history.
+`retained_source_bytes` tracks the remaining analysis source pin and becomes zero
+after successful export or retirement. These are software-accounted PCM byte
+capacities, not allocator profiling or process RSS measurements. Actual combined
+RSS still requires independent sampling of the application and live worker tree.
 
 Cancellation, unload, source replacement and engine shutdown invalidate the
 native request. Preparation and rate conversion check cancellation between
 controllable stages. A running CQT/ORT call remains non-preemptible and keeps
 its native slot and PCM until it returns; its stale output cannot publish.
 The UI never waits for that call.
+
+The native key handle stays open for actual key readers and closes off-thread
+before final file cleanup. The service retains the complete export and its job
+directory until both key work and the owned beat tree have stopped reading.
+Partial or unflushed exports never start either branch. Read/export failures
+retire the associated resources; a key-only failure preserves valid beat output.
 
 On Windows, the interpreter starts suspended, joins a non-inherited Job Object
 and resumes only after containment. Cancellation, timeout and launcher exit
@@ -149,15 +197,24 @@ manual maps, and it never relabels saved legacy analysis.
 
 ## Verification scope
 
-Deterministic tests cover source ownership, channel mean, full-track export,
-first/last impulses and silence at 22050/44100/48000 Hz, key resampling,
+Deterministic verification must cover source-pin release and independent playback
+ownership, channel-mean bit parity, complete bounded export, first/last impulses,
+silence and converter parity at 22050/44100/48000/96000 Hz, allocation limits,
 bounded cancellation/admission, missing/corrupt artifacts, malformed/stale
 responses, subprocess timeout/crash/output limits, a stalled key double,
-source replacement and shutdown. Existing resampling fixtures continue to
-exercise the shared converter. Separate worker tests and B1b observations cover
+source replacement and shutdown. Staged key conversion must match the prior
+full-buffer output, complete length, origin and tail. Where the old converter
+rejects a valid zero-output flush, compare with its explicitly zero-extended
+input and retain only the original ceiling-length output; preserve the failed
+case as evidence. File lifetime checks must
+include failed preparation/reads, cancellation with a running key reader and
+cleanup failure. Separate worker tests and B1b observations cover
 reference frontend/model parity and real lifecycle behavior. None of these
 certifies musical beat accuracy, callback deadlines or audible synchronization;
 see [reference evidence](beat-this-reference-evidence.md) and the B2/B8 gates.
+Full native T04/T05/R01 measurements, complete publication and natural retirement
+are tracked separately in [acceptance evidence](beat-this-acceptance.md); streamed
+staging or a worker-only result alone does not establish resource acceptance.
 
 Focused checks from the repository root:
 

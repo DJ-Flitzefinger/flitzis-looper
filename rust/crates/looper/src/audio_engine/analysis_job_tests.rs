@@ -72,6 +72,7 @@ fn retiring_key_retains_slot_and_pcm_until_actual_terminal() {
     job.state().key_running.store(true, Ordering::Release);
     jobs.cancel(Some(0));
     assert!(job.is_cancelled());
+    assert!(job.state().retire_pcm().unwrap_err().contains("retiring"));
     assert!(
         job.state()
             .finish(&envelope(&job))
@@ -82,14 +83,113 @@ fn retiring_key_retains_slot_and_pcm_until_actual_terminal() {
         jobs.begin(0, sample(), 48_000, 1, ids.clone(), tx.clone())
             .is_err()
     );
-    assert!(job.state().snapshot.lock().unwrap().is_some());
-    assert!(job.state().mono.lock().unwrap().is_some());
+    assert!(job.state().snapshot.lock().unwrap().is_none());
+    assert!(job.state().staged_pcm.lock().unwrap().is_some());
     job.state().key_running.store(false, Ordering::Release);
     job.state().finish(&envelope(&job)).unwrap();
     assert!(job.state().snapshot.lock().unwrap().is_none());
-    assert!(job.state().mono.lock().unwrap().is_none());
+    assert!(job.state().staged_pcm.lock().unwrap().is_none());
     assert_eq!(completions(&rx), 0);
     assert!(jobs.begin(0, sample(), 48_000, 1, ids, tx).is_ok());
+}
+
+#[test]
+fn complete_export_retires_analysis_source_pin_but_preserves_playback_owner() {
+    let jobs = OfflineJobs::default();
+    let ids = Arc::new(Mutex::new(vec![1]));
+    let (tx, _) = channel();
+    let source = sample();
+    let playback = source.samples.clone();
+    let weak = Arc::downgrade(&playback);
+    let job = jobs.begin(0, source, 96_000, 1, ids, tx).unwrap();
+    assert_eq!(Arc::strong_count(&playback), 2);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("mono.f32");
+    job.state().prepare(path.to_str().unwrap()).unwrap();
+    assert_eq!(Arc::strong_count(&playback), 1);
+    assert_eq!(playback.as_ref(), &[0.0; 2048]);
+    assert_eq!(job.state().retained_source_bytes.load(Ordering::Acquire), 0);
+    assert!(job.state().snapshot.lock().unwrap().is_none());
+    assert!(job.state().staged_pcm.lock().unwrap().is_some());
+    assert!(job.state().prepare(path.to_str().unwrap()).is_err());
+    drop(playback);
+    assert!(weak.upgrade().is_none());
+    // Key still has the complete staged source after all playback owners vanish.
+    let result: Value = serde_json::from_str(&job.state().key().unwrap()).unwrap();
+    assert_eq!(result["status"], "failed"); // intentionally too short for CQT
+    assert!(job.state().observed_key_peak_bytes.load(Ordering::Acquire) > 0);
+    job.state().retire_pcm().unwrap();
+    assert!(jobs.busy.load(Ordering::Acquire));
+    assert!(job.state().staged_pcm.lock().unwrap().is_none());
+    std::fs::remove_file(path).unwrap();
+    job.state().finish(&envelope(&job)).unwrap();
+    assert!(!jobs.busy.load(Ordering::Acquire));
+}
+
+#[test]
+fn failed_partial_export_retires_source_before_cleanup_without_publishing_pcm() {
+    let jobs = OfflineJobs::default();
+    let ids = Arc::new(Mutex::new(vec![1]));
+    let (tx, rx) = channel();
+    let mut samples = vec![0.25; 8193];
+    *samples.last_mut().unwrap() = f32::NAN;
+    let source = SampleBuffer {
+        samples: samples.into(),
+        channels: 1,
+    };
+    let weak = Arc::downgrade(&source.samples);
+    let job = jobs
+        .begin(0, source, 96_000, 1, ids.clone(), tx.clone())
+        .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("partial.f32");
+    assert!(
+        job.state()
+            .prepare(path.to_str().unwrap())
+            .unwrap_err()
+            .contains("non-finite")
+    );
+    assert!(path.metadata().unwrap().len() < 8193 * 4);
+    assert!(job.state().staged_pcm.lock().unwrap().is_none());
+    assert!(weak.upgrade().is_some());
+    assert!(
+        jobs.begin(0, sample(), 96_000, 2, ids.clone(), tx.clone())
+            .is_err()
+    );
+    job.cancel();
+    job.state().retire_pcm().unwrap();
+    assert!(weak.upgrade().is_none());
+    assert!(job.state().key().is_err());
+    assert!(job.state().prepare(path.to_str().unwrap()).is_err());
+    assert!(jobs.busy.load(Ordering::Acquire));
+    std::fs::remove_file(path).unwrap();
+    assert!(!job.state().finish(&envelope(&job)).unwrap());
+    assert_eq!(completions(&rx), 0);
+    assert!(jobs.begin(0, sample(), 96_000, 2, ids, tx).is_ok());
+}
+
+#[test]
+fn cancelled_prepared_file_closes_before_cleanup_without_key_start() {
+    let jobs = OfflineJobs::default();
+    let ids = Arc::new(Mutex::new(vec![1]));
+    let (tx, rx) = channel();
+    let job = begin(&jobs, &ids, &tx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("mono.f32");
+    job.state().prepare(path.to_str().unwrap()).unwrap();
+    #[cfg(windows)]
+    {
+        assert!(OpenOptions::new().write(true).open(&path).is_err());
+        assert!(std::fs::remove_file(&path).is_err());
+    }
+    assert_eq!(std::fs::read(&path).unwrap().len(), 4096);
+    job.cancel();
+    job.state().retire_pcm().unwrap();
+    job.state().retire_pcm().unwrap();
+    std::fs::remove_file(path).unwrap();
+    assert!(jobs.busy.load(Ordering::Acquire));
+    assert!(!job.state().finish(&envelope(&job)).unwrap());
+    assert_eq!(completions(&rx), 0);
 }
 
 #[test]
@@ -311,7 +411,7 @@ fn packed_long_result_publishes_once_without_expanding_or_changing_values() {
         .collect();
     assert_eq!(published, [ready]);
     assert!(job.state().snapshot.lock().unwrap().is_none());
-    assert!(job.state().mono.lock().unwrap().is_none());
+    assert!(job.state().staged_pcm.lock().unwrap().is_none());
     assert!(!jobs.busy.load(Ordering::Acquire));
     assert!(jobs.begin(0, sample(), 48_000, 1, ids, tx).is_ok());
 }

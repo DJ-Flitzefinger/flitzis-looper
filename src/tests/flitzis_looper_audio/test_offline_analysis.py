@@ -1,6 +1,7 @@
 import json
 import math
 import struct
+import sys
 import time
 from dataclasses import asdict
 from threading import Event
@@ -22,7 +23,7 @@ from tests.conftest import write_mono_pcm16_wav
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from flitzis_looper_audio import AudioEngine
+    from flitzis_looper_audio import AudioEngine, OfflineAnalysisJob
 
 
 def _wait_event(engine: AudioEngine, event_type: str) -> dict[str, object]:
@@ -155,6 +156,161 @@ def test_native_source_replacement_retains_busy_slot_and_rejects_stale_result(
     assert replacement.snapshot().identity.request_id != job.snapshot().identity.request_id
     completion = _wait_event(audio_engine, "offline_analysis_completed")
     assert completion["request_id"] == replacement.snapshot().identity.request_id
+
+
+def _cancelled_native_envelope(native: OfflineAnalysisJob) -> str:
+    metadata = native.metadata()
+    return json.dumps({
+        "schema_version": 1,
+        "identity": {
+            name: metadata[name]
+            for name in ("pad_id", "request_id", "source_id", "source_generation")
+        },
+        "beat": {"status": "cancelled"},
+        "key": {"status": "cancelled", "key": "unknown"},
+    })
+
+
+def test_native_staging_accounts_actual_source_and_complete_key_ownership(
+    audio_engine: AudioEngine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "source.wav"
+    write_mono_pcm16_wav(source, audio_engine.output_sample_rate())
+    audio_engine.load_sample_async(0, str(source), run_analysis=False)
+    _wait_event(audio_engine, "success")
+    original_shape = audio_engine.loaded_sample_shape(0)
+    loaded_rate, channels, frames = original_shape
+    native = audio_engine.begin_offline_analysis(0)
+    envelope = _cancelled_native_envelope(native)
+    pcm_path = tmp_path / "mono.f32le"
+
+    try:
+        initial = native.staging_stats()
+        source_bytes = channels * frames * 4
+        assert initial["retained_source_bytes"] == source_bytes
+        assert initial["observed_export_peak_bytes"] == 0
+        assert initial["observed_key_peak_bytes"] == 0
+        assert initial["limit_bytes"] == 512 * 1024 * 1024
+        assert initial["admitted_peak_bytes"] == max(
+            initial["admitted_export_peak_bytes"], initial["admitted_key_peak_bytes"]
+        )
+        assert initial["admitted_peak_bytes"] <= initial["limit_bytes"]
+
+        native.prepare_export(str(pcm_path))
+
+        prepared = native.staging_stats()
+        assert prepared["retained_source_bytes"] == 0
+        assert prepared["export_file_bytes"] == pcm_path.stat().st_size == frames * 4
+        assert source_bytes < prepared["observed_export_peak_bytes"]
+        assert prepared["observed_export_peak_bytes"] <= prepared["admitted_export_peak_bytes"]
+        assert prepared["observed_key_peak_bytes"] == 0
+        assert struct.unpack(f"<{frames}f", pcm_path.read_bytes()) == (0.25,) * frames
+        assert audio_engine.loaded_sample_shape(0) == original_shape
+
+        key = json.loads(native.analyze_key())
+        assert key["status"] == "failed"
+        assert key["key"] == "unknown"
+        assert "InsufficientData" in key["detail"]
+        converted = native.staging_stats()
+        complete_key_bytes = math.ceil(frames * 44100 / loaded_rate) * 4
+        assert complete_key_bytes <= converted["observed_key_peak_bytes"]
+        assert converted["observed_key_peak_bytes"] <= converted["admitted_key_peak_bytes"]
+        assert converted["retained_source_bytes"] == 0
+
+        native.retire_pcm()
+        pcm_path.unlink()
+        assert audio_engine.loaded_sample_shape(0) == original_shape
+        audio_engine.play_sample(0, 0.0)
+        audio_engine.stop_all()
+    finally:
+        native.cancel()
+        native.retire_pcm()
+        pcm_path.unlink(missing_ok=True)
+        assert not native.finish(envelope)
+
+    replacement = audio_engine.begin_offline_analysis(0)
+    replacement.abort_unstarted()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows staged-file sharing contract")
+def test_native_staged_file_blocks_writes_and_deletion_until_reader_retirement(
+    audio_engine: AudioEngine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "source.wav"
+    write_mono_pcm16_wav(source, audio_engine.output_sample_rate())
+    audio_engine.load_sample_async(0, str(source), run_analysis=False)
+    _wait_event(audio_engine, "success")
+    native = audio_engine.begin_offline_analysis(0)
+    envelope = _cancelled_native_envelope(native)
+    pcm_path = tmp_path / "mono.f32le"
+
+    try:
+        native.prepare_export(str(pcm_path))
+        original_pcm = pcm_path.read_bytes()
+        with pytest.raises(PermissionError), pcm_path.open("r+b"):
+            pytest.fail("another writer acquired staged PCM while native readers own it")
+        with pytest.raises(PermissionError):
+            pcm_path.unlink()
+        assert pcm_path.read_bytes() == original_pcm
+
+        # Retirement is also needed if cancellation arrives before key starts.
+        native.cancel()
+        native.retire_pcm()
+        assert pcm_path.exists()
+        with pytest.raises(RuntimeError, match="offline analysis busy"):
+            audio_engine.begin_offline_analysis(0)
+        with pcm_path.open("r+b") as output:
+            output.write(b"test")
+        pcm_path.unlink()
+        with pytest.raises(RuntimeError, match="retired"):
+            native.analyze_key()
+    finally:
+        native.cancel()
+        native.retire_pcm()
+        pcm_path.unlink(missing_ok=True)
+        assert not native.finish(envelope)
+
+    while (event := audio_engine.poll_loader_events()) is not None:
+        assert event.get("type") != "offline_analysis_completed"
+    replacement = audio_engine.begin_offline_analysis(0)
+    replacement.abort_unstarted()
+
+
+def test_native_prepare_failure_releases_source_without_ever_starting_key(
+    audio_engine: AudioEngine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "source.wav"
+    write_mono_pcm16_wav(source, audio_engine.output_sample_rate())
+    audio_engine.load_sample_async(0, str(source), run_analysis=False)
+    _wait_event(audio_engine, "success")
+    original_shape = audio_engine.loaded_sample_shape(0)
+    native = audio_engine.begin_offline_analysis(0)
+    envelope = _cancelled_native_envelope(native)
+    missing_parent = tmp_path / "nonexistent" / "mono.f32le"
+
+    try:
+        with pytest.raises(RuntimeError):
+            native.prepare_export(str(missing_parent))
+        assert not missing_parent.exists()
+        assert native.staging_stats()["retained_source_bytes"] > 0
+        native.retire_pcm()
+        assert native.staging_stats()["retained_source_bytes"] == 0
+        assert native.staging_stats()["observed_key_peak_bytes"] == 0
+        with pytest.raises(RuntimeError, match="retired"):
+            native.analyze_key()
+        with pytest.raises(RuntimeError, match="offline analysis busy"):
+            audio_engine.begin_offline_analysis(0)
+        assert audio_engine.loaded_sample_shape(0) == original_shape
+    finally:
+        native.cancel()
+        native.retire_pcm()
+        assert not native.finish(envelope)
+
+    replacement = audio_engine.begin_offline_analysis(0)
+    replacement.abort_unstarted()
 
 
 class _CompleteReadyAdapter:

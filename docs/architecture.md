@@ -77,7 +77,7 @@ rust/crates/looper/src/
 `-- audio_engine/
     |-- mod.rs                     # AudioEngine API and background orchestration
     |-- analysis_jobs.rs           # optional diagnostic analysis ownership and events
-    |-- analysis_pcm.rs            # immutable full-track mono/export/key input
+    |-- analysis_pcm.rs            # staged full-track mono/export/key input
     |-- analysis_predictions.rs    # bounded diagnostic prediction validation
     |-- audio_stream.rs            # CPAL callback and scheduler integration
     |-- buffer_retirement.rs       # non-audio retirement of large handles
@@ -240,10 +240,15 @@ analysis use the same preprocessing and detection path.
 
 The separate B1a/B1b diagnostic boundary exposes `begin_offline_analysis` and
 `OfflineAnalysisService`; it does not change that default routing or adopt new
-results into saved grids. Rust pins the immutable loaded source, prepares shared
-mono at its actual rate, exports complete float32-LE PCM and derives KeyNet's
-44100-Hz input directly. Python supervises the optional local beat process and
-publishes one independent-component envelope through loader events.
+results into saved grids. Rust pins the immutable loaded source and streams its
+f64 arithmetic channel mean to a complete loaded-rate float32-LE mono file in
+bounded chunks. After complete flush and retention of a readable native handle,
+the analysis source pin drops off-thread; independent playback ownership remains.
+The native key branch reads the same file in bounded chunks and derives the
+complete 44100-Hz vector with unchanged Rubato delay/tail handling and CQT/KeyNet
+parameters. No full loaded-rate mono/key-input copy is retained. Python supervises
+the optional local beat process and publishes one independent-component envelope
+through loader events.
 Ready diagnostic envelopes use inline uncompressed binary64/Base64 arrays;
 the native validator checks their complete finite/source/count contract before
 publication. The versioned Python reader reconstructs exact predictions from
@@ -254,10 +259,18 @@ reference frontend. [Explicit setup](beat-this-setup.md) verifies and installs
 its environment and checkpoint; normal analysis never performs acquisition.
 
 One native job per engine and one beat process globally retain their slots
-through cancellation and actual retirement. Native PCM staging is capped at
-512 MiB, excluding FFT/CQT/ORT/model workspace. Native key calls are not
-preemptible; a cancelled call stays retiring until it returns. Unconfigured
-beat analysis reports unavailable while key may succeed. All PCM preparation,
+through cancellation and actual retirement, with zero pending queues. Native PCM
+staging is capped at 512 MiB for the larger of source-plus-bounded-export buffers
+or complete-key-output-plus-bounded-read/conversion buffers. Delay/tail handling
+uses bounded converter output; the final vector has exactly the ceiling-derived
+frame count. Every still-owned analysis PCM allocation counts. The full exported file
+has its own unchanged 512-MiB cap. FFT/CQT/ORT/model workspace is excluded; source
+PCM retained by playback still counts in actual RSS. Native key calls are not
+preemptible; a cancelled call stays retiring until it returns. Read handles close
+off-thread through `retire_pcm()`, and the service retains the file/directory until
+both readers settle. `staging_stats()` exposes the stage reservations and accounted
+PCM capacities separately from process RSS.
+Unconfigured beat analysis reports unavailable while key may succeed. All PCM preparation,
 process management, validation and destruction stay outside the callback.
 See [Offline analysis boundary](offline-analysis.md) for the API, provisional
 limits and exact diagnostic-only scope.

@@ -19,15 +19,22 @@ from flitzis_looper.analysis.jobs import OfflineAnalysisService
 class _NativeJob:
     key_release: Event = field(default_factory=Event)
     key_started: Event = field(default_factory=Event)
+    key_finished: Event = field(default_factory=Event)
     cancelled: Event = field(default_factory=Event)
     finished: Event = field(default_factory=Event)
+    pcm_retired: Event = field(default_factory=Event)
+    retirement_attempted: Event = field(default_factory=Event)
+    retiring: Event = field(default_factory=Event)
+    beat_retired: Event | None = None
     pcm_path: Path | None = None
     result_json: str = ""
     key_running: bool = False
     export_thread: str = ""
     finish_thread: str = ""
+    retirement_thread: str = ""
     progress_stages: list[str] = field(default_factory=list)
     prepare_error: bool = False
+    retirement_error: bool = False
     key_result_json: str | None = None
     metadata_error: bool = False
     startup_abort_calls: int = 0
@@ -69,6 +76,7 @@ class _NativeJob:
             })
         finally:
             self.key_running = False
+            self.key_finished.set()
 
     def is_cancelled(self) -> bool:
         return self.cancelled.is_set()
@@ -84,9 +92,23 @@ class _NativeJob:
 
     def progress(self, stage: str) -> None:
         self.progress_stages.append(stage)
+        if stage == "retiring":
+            self.retiring.set()
+
+    def retire_pcm(self) -> None:
+        assert not self.key_running
+        assert self.beat_retired is None or self.beat_retired.is_set()
+        assert self.pcm_path is None or self.pcm_path.exists()
+        self.retirement_thread = current_thread().name
+        self.retirement_attempted.set()
+        if self.retirement_error:
+            msg = "native PCM reader still active"
+            raise RuntimeError(msg)
+        self.pcm_retired.set()
 
     def finish(self, result_json: str) -> bool:
         assert not self.key_running
+        assert self.pcm_retired.is_set()
         assert self.pcm_path is None or not self.pcm_path.exists()
         if self.cancellation_during_finish == "before_acceptance":
             self.cancelled.set()
@@ -177,6 +199,7 @@ def test_missing_optional_worker_preserves_native_key_and_retires_offthread(tmp_
     assert result["key"]["key"] == "C#m"
     assert native.export_thread == "offline-analysis-supervisor"
     assert native.finish_thread == "offline-analysis-supervisor"
+    assert native.retirement_thread == "offline-analysis-supervisor"
     assert list(tmp_path.iterdir()) == []
     assert service.snapshot() is not None
     assert job.snapshot().stage == "finished"
@@ -186,6 +209,7 @@ def test_cancelled_stalled_key_retains_pcm_and_capacity_until_key_returns(tmp_pa
     native = _NativeJob()
     engine = _Engine(native)
     adapter = _ControlledAdapter(wait_for_cancel=True)
+    native.beat_retired = adapter.retired
     service = OfflineAnalysisService()
     job = service.start(engine, 0, tmp_path, model=BeatModelIdentity(), adapter=adapter)
     assert native.key_started.wait(5)
@@ -198,6 +222,7 @@ def test_cancelled_stalled_key_retains_pcm_and_capacity_until_key_returns(tmp_pa
         assert not native.finished.is_set()
         assert native.pcm_path is not None
         assert native.pcm_path.exists()
+        assert not native.retirement_attempted.is_set()
         with pytest.raises(RuntimeError, match="resources are still occupied"):
             service.start(engine, 0, tmp_path, model=BeatModelIdentity())
         assert engine.admissions == 1
@@ -209,6 +234,7 @@ def test_cancelled_stalled_key_retains_pcm_and_capacity_until_key_returns(tmp_pa
 
     assert job.done.wait(5)
     assert not native.pcm_path.exists()
+    assert native.pcm_retired.is_set()
     assert "retiring" in native.progress_stages
     result = json.loads(native.result_json)
     assert result["beat"]["status"] == "cancelled"
@@ -261,21 +287,25 @@ def test_late_beat_process_retirement_holds_pcm_and_prevents_terminal_result(
     native = _NativeJob()
     native.key_release.set()
     adapter = _ControlledAdapter(late_retirement=True)
+    native.beat_retired = adapter.retired
     job = OfflineAnalysisService().start(
         _Engine(native), 0, tmp_path, model=BeatModelIdentity(), adapter=adapter
     )
     assert adapter.returned.wait(5)
+    assert native.key_finished.wait(5)
 
     try:
         assert not job.done.is_set()
         assert not native.finished.is_set()
         assert native.pcm_path is not None
         assert native.pcm_path.exists()
+        assert not native.retirement_attempted.is_set()
     finally:
         adapter.retired.set()
 
     assert job.done.wait(5)
     assert not native.pcm_path.exists()
+    assert native.pcm_retired.is_set()
     assert json.loads(native.result_json)["beat"]["resources_released"]
 
 
@@ -291,6 +321,8 @@ def test_export_failure_does_not_launch_either_model_and_retires_partial_file(
     assert job.done.wait(5)
     assert not native.key_started.is_set()
     assert not adapter.started.is_set()
+    assert native.pcm_retired.is_set()
+    assert native.retirement_thread == "offline-analysis-supervisor"
     assert json.loads(native.result_json)["beat"]["status"] == "failed"
     assert list(tmp_path.iterdir()) == []
 
@@ -356,6 +388,7 @@ def test_locked_pcm_cleanup_retains_reservation_and_retries_offthread(
 
     def retire(directory: Path) -> None:
         assert current_thread().name == "offline-analysis-supervisor"
+        assert native.pcm_retired.is_set()
         attempted_cleanup.set()
         if not release_cleanup.is_set():
             msg = "PCM still mapped by operating system"
@@ -381,6 +414,41 @@ def test_locked_pcm_cleanup_retains_reservation_and_retries_offthread(
     assert job.done.wait(5)
     assert "retiring" in native.progress_stages
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("prepare_error", [False, True])
+def test_native_pcm_retirement_refusal_preserves_files_slot_and_unpublished_result(
+    tmp_path: Path, *, prepare_error: bool
+) -> None:
+    native = _NativeJob(prepare_error=prepare_error, retirement_error=True)
+    native.key_release.set()
+    engine = _Engine(native)
+    adapter = _ControlledAdapter()
+    native.beat_retired = adapter.retired
+    service = OfflineAnalysisService()
+
+    job = service.start(engine, 0, tmp_path, model=BeatModelIdentity(), adapter=adapter)
+
+    assert native.retirement_attempted.wait(5)
+    assert native.retiring.wait(5)
+    snapshot = job.snapshot()
+    assert snapshot.stage == "retiring"
+    assert "native PCM reader still active" in snapshot.detail
+    assert snapshot.result_json is None
+    assert not job.done.is_set()
+    assert not native.finished.is_set()
+    assert not native.pcm_retired.is_set()
+    assert not native.result_json
+    assert native.pcm_path is not None
+    assert native.pcm_path.exists()
+    assert native.pcm_path.parent.exists()
+    assert native.key_started.is_set() is not prepare_error
+    assert adapter.started.is_set() is not prepare_error
+    with pytest.raises(RuntimeError, match="resources are still occupied"):
+        service.start(engine, 0, tmp_path, model=BeatModelIdentity())
+    with pytest.raises(RuntimeError, match="native analysis slot"):
+        OfflineAnalysisService().start(engine, 0, tmp_path, model=BeatModelIdentity())
+    assert engine.admissions == 1
 
 
 def test_metadata_failure_aborts_native_admission(tmp_path: Path) -> None:

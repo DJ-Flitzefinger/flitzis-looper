@@ -7,9 +7,10 @@ alternative; it is never a silent fallback. A failed gate postpones cutover with
 remediation; it does not reopen model choice automatically. Corrected qm-dsp output remains
 comparison/legacy evidence, not an implicit substitute when the selected worker is unavailable.
 
-The new `begin_offline_analysis`/`OfflineAnalysisService` boundary pins immutable loaded
-`SampleBuffer.samples: Arc<[f32]>` with actual rate and source/request generation, prepares shared
-mono and exports complete float32-LE audio without another decode. It leaves existing automatic
+The `begin_offline_analysis`/`OfflineAnalysisService` boundary pins immutable loaded
+`SampleBuffer.samples: Arc<[f32]>` with actual rate and source/request generation, streams shared
+mono to a complete float32-LE file and releases that analysis pin before key preparation.
+Both branches read the same loaded-rate mono without another decode. It leaves existing automatic
 and manual `analyze_sample` routing intact. JSON diagnostic envelopes are not adopted into saved
 analysis or manual grids. B1b adds explicit setup, an accepted final0 checksum, a separate
 locked Windows CPU environment and the pinned 22050-Hz reference frontend. See
@@ -22,9 +23,9 @@ Contracts implemented by the B1a records, plus explicitly deferred model/map lay
 | Record | Contract |
 | --- | --- |
 | Loaded PCM snapshot | Interleaved f32, loaded rate u32, channel/frame counts, source identity and generation, pad/request ID. This is the loaded playback-buffer domain, not compressed-file samples or output-device position. |
-| Shared mono input | One full-track mono conversion from that immutable snapshot; same time-zero and duration, with explicit channel-mix rule. No silence trim or per-chunk time reset. |
+| Shared mono input | One complete loaded-rate f32-LE file streamed from that immutable snapshot; arithmetic channel mean accumulated in f64 and rounded to f32 once per frame. Same time-zero and duration, no silence trim or per-chunk time reset. |
 | Beat worker input | Complete loaded-rate mono PCM plus metadata in `MonoPcmInput`/`BeatWorkerRequest`. B1b derives 22,050-Hz mono directly with pinned soxr HQ and centered log-mel preprocessing, preserving reference origin/rounded tail. |
-| Key input | Derive 44,100-Hz mono directly from shared mono for the existing Rust CQT/KeyNet path; do not feed the Beat This downsampled signal into KeyNet. |
+| Key input | Read the staged mono through a retained native file handle in bounded chunks; derive a complete 44,100-Hz vector with the existing Rubato configuration for unchanged Rust CQT/KeyNet. No complete loaded-rate key copy or conversion through beat input. |
 | Raw predictions | Beat/downbeat logits and detected f64 seconds with model/configuration/preprocessing identity. Nominal model frame k means k*441/22050 seconds; verify origin against preprocessing fixtures. |
 | Accepted map | Separate reviewed anchors, beat units/counts, coverage and corrections under the versioned-map change. Loaded-frame positions are derived from seconds times the active loaded rate. |
 
@@ -34,17 +35,18 @@ or reuse derived analysis inputs; it must not re-run file decode, playback resam
 mapping or sample publication. No path reconstructs audio from waveform min/max buckets.
 
 Verify first/last impulses, silence, stereo conversion, fractional positions and complete tails
-at 22.05/44.1/48 kHz. Model preprocessing and any resampler delay are accounted once. Retaining
+at 22.05/44.1/48/96 kHz. Model preprocessing and any resampler delay are accounted once. Retaining
 f64 seconds preserves coordinate precision, not stronger detector accuracy. Cache provenance
 includes loaded input rate and preprocessing identity because rate-dependent PCM can alter
 inference even when the musical source is unchanged.
 
 ## Worker and job ownership
 
-B1a implements one native request per engine, one request per service and one process globally,
-with zero pending queues. Native retained-source/shared-mono/key PCM admission is capped at
-512 MiB; this excludes FFT scratch, CQT/ORT workspace and worker model memory. The adapter also
-bounds request/response/checkpoint sizes and prediction counts. Its provisional process timeout
+The boundary admits one native request per engine, one request per service and one process globally,
+with zero pending queues. Native PCM admission is capped at 512 MiB for the maximum simultaneous
+ownership in either export or key-preparation stage, as detailed in B2b2 below. The complete mono
+file has an independent 512-MiB limit. This excludes FFT scratch, CQT/ORT workspace and worker
+model memory. The adapter also bounds request/response/checkpoint sizes and prediction counts. Its provisional process timeout
 is 120 seconds, followed by finite 5-second reap/reader-join attempts. Failed reaping retains
 the process slot and PCM until actual retirement. Key CQT/ORT calls remain non-preemptible.
 See [boundary reference](../../../docs/offline-analysis.md) for the complete implemented limits.
@@ -52,7 +54,7 @@ Those limits and test doubles are not real-model performance/quality acceptance.
 
 Extend the existing analysis request lifecycle with a narrow beat-analysis adapter; do not put
 process supervision in the large UI controller or add a competing scheduler. Rust control/
-background code pins the immutable source and prepares a read-only temporary PCM mapping in
+background code pins the immutable source and prepares a temporary shared PCM file in
 bounded chunks. A small versioned request carries path/handle, exact dtype/endianness, rate,
 frames, source/request IDs and selected model identity. Validate lengths/ranges before mapping.
 Do not serialize full PCM as JSON or acquire Python objects from the callback.
@@ -61,7 +63,7 @@ Use a lazily started isolated local worker with a separately locked compatible i
 dependency set. Windows launches it without a console window. Initial policy is one inference
 job at a time, bounded pending requests, explicit input/output byte limits and bounded worker
 thread count; measure and freeze limits in B1b. KeyNet stays on its Rust background thread and
-can finish while the beat worker is queued or unavailable. No arithmetic promise that total
+can finish while the beat worker starts or is unavailable. No arithmetic promise that total
 wall time equals the slower kernel ignores setup, IPC, queueing or publication overhead.
 
 Progress and stale-result rejection reuse existing tracking. Current rejection after analysis
@@ -81,8 +83,8 @@ preempted. Cancel queued key work and add cooperative checks between controllabl
 already-running native inference call may continue. Track it as retiring until it actually
 returns, reject its stale output and bound concurrent/retiring key slots plus retained PCM bytes.
 Use backpressure when slots remain occupied; never spawn replacement threads without a limit.
-Shared PCM remains reference-owned until all readers finish. Whole-request cancellation is not
-complete merely because the beat process exited: both branches must actually be terminal.
+The shared file and any in-flight key PCM remain owned until their readers finish. Whole-request
+cancellation is not complete merely because the beat process exited: both branches must actually be terminal.
 No hard whole-request cancellation latency is promised for a noninterruptible key call. Test a
 stalled key double, unload/reload and shutdown reporting/resource ownership without blocking UI
 or treating live key resources as released. A later hard deadline would require its own key
@@ -191,10 +193,71 @@ source identity and actual worker/key retirement retain their existing authority
 
 Packing is representation remediation, not permission to publish every possible
 worker response. Oversize packed envelopes still report explicit beat failure
-and preserve independent key output. Native long-track staging remains B2b2;
+and preserve independent key output. Native long-track staging is addressed by B2b2 below;
 independent labels, default adoption, saved-analysis restore and live SYNC remain
 pending. Preserve the failed v1 evidence and report post-remediation worker-only
 measurements with exact source/PCM/model lineage separately.
+
+## B2b2: Complete staged PCM with separate source and key ownership
+
+The frozen native 96-kHz T04/T05/R01 cases exceed the 512-MiB admission limit
+when retained source, full mono, another loaded-rate key copy and key output are
+counted together. Removing only the key copy is insufficient for the longest
+source. Keep the cap and full-track algorithms; separate the ownership stages.
+
+During export, native analysis pins all interleaved source channels and streams
+the existing f64 arithmetic mean, rounded once to f32, through bounded buffers
+to the complete loaded-rate little-endian mono file. No whole-track mono Vec,
+second decode, silence trim or sample conversion through 44100/22050 Hz occurs.
+Each exported frame must be bit-identical to the prior mono rule. Only a fully
+written and flushed file with a readable retained native handle becomes prepared.
+The analysis source pin then drops off-thread before key allocation; independent
+loader/playback owners keep their original source and remain visible in RSS.
+
+The native key reader consumes that same staged file in bounded chunks. At
+44100 Hz it reads the exact mono values into one full vector. Other rates reuse
+the existing `Fft<f32>` configuration (`1024`, one subchunk, one mono channel,
+`FixedSync::Input`), continuous converter state and prior partial-input/tail
+handling. Preserve the full output, remove leading delay exactly once and return
+`ceil(source_frames * 44100 / loaded_rate)` frames. Compare every output sample
+against the former full-buffer converter, including first/last impulses,
+silence, chunk boundaries and fractional output lengths. CQT, ONNX inference,
+KeyNet parameters, model identity and key outcome semantics stay unchanged.
+At some fixed-input/FFT remainders a valid padding call initially emits zero frames.
+Flush calls therefore use a finite dimension-derived allowance, with cancellation
+between calls. The original full-buffer oracle rejects some such tails; those
+newly supported cases compare against its explicitly zero-extended signal, cut
+back to the original exact ceiling length. Keep the recorded original failure.
+The worker independently reads the full loaded-rate file and retains its pinned
+soxr HQ/log-mel/model pipeline.
+
+Admission uses `max(export_stage_bytes, key_stage_bytes)` rather than summing
+allocations that no longer coexist. Export includes the complete retained source
+and every bounded export PCM buffer. Key preparation includes its complete output
+allocation and all bounded read/conversion PCM buffers. Delay removal and tail
+flushing operate through bounded converter output; the final vector has exactly
+the ceiling-derived length and needs no full delayed-output allocation.
+No live analysis pin or PCM allocation may disappear from the stage accounting.
+Byte/frame arithmetic must check overflow and reject oversize work before the
+corresponding allocation; the complete file is separately limited to 512 MiB.
+Existing FFT scratch, CQT/ORT workspace and worker/model-memory exclusions stay
+explicit. This reservation remains a PCM ownership bound, not a total-RSS claim.
+
+Preparation failure/cancellation cannot expose a partial file to either reader.
+Once prepared, key and beat work may run concurrently. Retain native read handles
+through their actual key-reader lifetime and close them off-thread before final
+file cleanup. The service retains the export and job directory until both key
+and owned beat-process readers settle. Failed cleanup remains retiring. Native
+KeyNet is still non-preemptible; cancellation/source replacement invalidates
+publication immediately but cannot release a live key call or its slot. The
+one-job/zero-queue policy, final identity lock and one-completion rule remain.
+
+Non-goals: no default-analysis switch, saved-analysis adoption, live timing change,
+new model/setup, alternate preprocessing, lossy publication, increased limits or
+callback work. Full native T04/T05/R01 reruns must measure actual application plus
+live worker RSS, complete output/publication, natural retirement and re-admission.
+Preserve prior failures and frozen corpus/model/limits. Worker-only successes do
+not close native resource acceptance; labels and default cutover remain separate.
 
 ## Primary evidence
 

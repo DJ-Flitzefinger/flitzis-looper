@@ -54,7 +54,34 @@
   642053 bytes and pass actual native validation. Full checks pass (477 ordinary Rust tests,
   separate private-evidence test, 1025 Python tests, debug/release builds, Ruff/mypy and strict
   validation); three release native lifecycle tests pass. This addresses final publication
-  only; native long-track staging remains separate B2b2 and overall resource acceptance FAIL.
+  only; overall resource acceptance still failed at the end of B2b1. Native long-track
+  staging is addressed by the completed B2b2 tasks below.
+- [x] B2b2: stream complete loaded-rate f32-LE shared mono with the unchanged f64 channel
+  mean, bounded buffers and a retained readable native file handle; release the analysis
+  source pin off-thread only after successful complete flush, preserving playback ownership.
+- [x] B2b2: derive the complete native 44100-Hz key vector from staged mono in bounded chunks
+  with the same Rubato configuration, delay/tail/ceiling-count rules and full CQT/KeyNet path.
+  Account for actual simultaneous source/export or key/output-buffer ownership under the
+  unchanged 512-MiB cap, plus the independent complete-file cap; reject overflow/oversize.
+- [x] B2b2: prove mono bit parity and full key-converter parity at 22050/44100/48000/96000 Hz,
+  including silence, first/last impulses, chunk boundaries and fractional output lengths.
+  Cover cancellation, partial/read/export failures, source replacement, stale publication,
+  non-preemptible key/file lifetime, cleanup failures and one-job/zero-queue backpressure.
+  Include all 5120 96-kHz remainders and the valid zero-output tail case exposed by R01;
+  retain its failed first attempt and compare newly supported tails to the zero-extended oracle.
+- [x] B2b2: rerun complete native T04/T05/R01 at their real 96000-Hz loaded rate with actual
+  KeyNet and the frozen selected worker; measure live-process RSS, full publication, natural
+  retirement and re-admission. Preserve frozen corpus/model/limits and historical failures.
+  Do not count worker-only results as native/full-job resource acceptance.
+  Final release passes at 24.943/33.930/38.581 seconds and staged PCM peaks
+  274786096/398247896/461222648 bytes. See docs/beat-this-acceptance.md for all gates,
+  source/revision lineage and the separately retained earlier short-track evidence.
+- [x] B2b2: update maintained ownership/architecture docs, pass full build/Rust/Python/lint/type
+  checks and official strict validation; report remaining resource/quality gates separately
+  without enabling default analysis, saved-data adoption or live timing behavior.
+  Final checks pass: 495 Rust tests, 1030 Python tests, six release native lifecycle tests,
+  debug/release builds, cargo check, production Clippy, Ruff/mypy, formatting and strict
+  validation. All three real cancel/unload probes retire without stale publication.
 - [x] Freeze the finite private pilot corpus, annotation uncertainty policy, held-out
   correction-burden gates, critical-downbeat criteria and local memory/time limits before
   new inference/tuning. See docs/beat-this-acceptance.md and the hashed local v1 manifest.
@@ -64,7 +91,7 @@
 - [x] Measure every frozen complete track's admission, raw response and final publication,
   time and actual live-process memory. Preserve full raw output even on publication failure;
   explicit size/admission rejection remains an acceptance failure, not a truncated success.
-  B2a resource gate fails: three native staging rejections and two oversize worker-only
+  Historical B2a resource gate failed: three native staging rejections and two oversize worker-only
   publication probes. T03 key-name validation was corrected and the release rerun retired
   naturally. Musical labels/correction comparison and default cutover remain pending.
 - [ ] Compare corrected legacy results as evidence, not a model vote; record pass/fail and

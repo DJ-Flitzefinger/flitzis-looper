@@ -6,8 +6,13 @@
 //! 22050-Hz conversion; the existing key frontend derives 44100 Hz directly here.
 
 use crate::messages::SampleBuffer;
+#[cfg(test)]
 use std::io::Write;
+#[cfg(test)]
 use std::sync::Arc;
+
+mod streamed;
+pub(crate) use streamed::{PcmStagingPlan, key_input_from_f32_le};
 
 pub(crate) const MONO_RULE: &str = "arithmetic-channel-mean-f64-v1";
 pub(crate) const KEY_PREPROCESSING: &str = "rubato-fft-1.0-44100-delay-trim-tail-flush-v1";
@@ -42,6 +47,7 @@ pub(crate) enum PcmError {
 pub(crate) struct LoadedPcmSnapshot {
     sample: SampleBuffer,
     rate_hz: u32,
+    #[cfg(test)]
     identity: PcmIdentity,
     frame_count: usize,
     retained_bytes: usize,
@@ -78,6 +84,7 @@ impl LoadedPcmSnapshot {
         Ok(Self {
             sample,
             rate_hz,
+            #[cfg(test)]
             identity,
             frame_count,
             retained_bytes,
@@ -92,21 +99,14 @@ impl LoadedPcmSnapshot {
         self.sample.channels
     }
 
-    /// Conservative admission size for source + shared mono + key input/output.
-    /// The actual resampler checks its padded allocation again before allocating.
+    /// Peak of separate source-export and file-to-key stages, without FFT setup.
+    #[cfg(test)]
     pub(crate) fn working_pcm_bytes(&self) -> Result<usize, PcmError> {
-        let mono_bytes = pcm_bytes(self.frame_count)?;
-        let key_frames = (self.frame_count as u128 * 44_100).div_ceil(u128::from(self.rate_hz));
-        let key_frames = usize::try_from(key_frames)
-            .map_err(|_| PcmError::Limit("key output frame count overflow"))?;
-        self.retained_bytes
-            .checked_add(mono_bytes)
-            .and_then(|total| total.checked_add(mono_bytes))
-            .and_then(|total| total.checked_add(key_frames.checked_mul(size_of::<f32>())?))
-            .and_then(|total| total.checked_add(1024 * 1024))
-            .ok_or(PcmError::Limit("analysis PCM reservation overflow"))
+        let plan = self.staging_plan()?;
+        Ok(plan.export_peak_bytes.max(plan.key_peak_bytes))
     }
 
+    #[cfg(test)]
     pub(crate) fn prepare_mono(
         &self,
         max_pcm_bytes: usize,
@@ -145,8 +145,9 @@ impl LoadedPcmSnapshot {
     }
 }
 
-/// Both branches share this exact mono source, before either rate conversion.
+/// Full-buffer test oracle retained for streamed preparation parity checks.
 #[derive(Clone)]
+#[cfg(test)]
 pub(crate) struct SharedMono {
     // Arc<Vec<_>> avoids a second full-track allocation when preparing the Arc.
     samples: Arc<Vec<f32>>,
@@ -157,6 +158,7 @@ pub(crate) struct SharedMono {
     pub origin_seconds: f64,
 }
 
+#[cfg(test)]
 impl SharedMono {
     pub(crate) fn samples(&self) -> &[f32] {
         &self.samples
@@ -494,12 +496,12 @@ mod tests {
     }
 
     #[test]
-    fn admission_counts_loaded_rate_key_copy_and_all_source_channels() {
+    fn admission_counts_separate_source_export_and_key_stages() {
         let loaded = snapshot(vec![0.0; 96_000], 2, 48_000);
         assert_eq!(loaded.source_channels(), 2);
         assert_eq!(
             loaded.working_pcm_bytes().unwrap(),
-            96_000 * 4 + 48_000 * 8 + 44_100 * 4 + 1024 * 1024
+            96_000 * 4 + CHUNK_FRAMES * 4
         );
         let insufficient = LoadedPcmSnapshot::new(
             loaded.sample.clone(),

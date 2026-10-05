@@ -67,6 +67,9 @@ without consulting the waveform envelope or another file decoder. Its non-realti
 prepares one arithmetic mono source, exports complete float32-LE audio at the actual loaded rate
 and derives the existing key detector's 44,100-Hz input directly. The B1b worker independently
 derives Beat This's 22,050-Hz input using its pinned soxr HQ/log-mel frontend.
+B2b2 streams the common mono to a complete temporary file, releases the analysis
+source pin and then reads bounded chunks into the complete key vector. Separate
+export/key ownership stages enforce the same cap; see [the boundary](offline-analysis.md).
 Preserve origin/tail and record preprocessing identity; do not cascade through the other model's
 sample rate or repair unexplained offsets with a fitted constant.
 

@@ -119,12 +119,15 @@ acceptance case. Do not truncate, drop logits or relax limits to make it pass.
 Keep raw worker output before the final envelope merge so an oversize rejection
 does not erase diagnostic evidence.
 
-The native staging formula is
+The original B1a/B2a native staging formula was
 `4*N*(channels+2) + 4*ceil(N*44100/rate) + 1 MiB`, for loaded frame count N.
-It counts the retained source and PCM copies, excludes FFT/CQT/ORT/model workspace,
+It counted the retained source and PCM copies, excluding FFT/CQT/ORT/model workspace,
 and is not an RSS guarantee. At 96 kHz stereo its admission ceiling is approximately
 312.9 seconds, before the resampler's padded-allocation checks. Do not present
 a 48-kHz file as a 48-kHz loaded source when the device actually runs at 96 kHz.
+B2b2 replaces these simultaneous copies with separately owned export/key stages;
+the 512-MiB cap and the independent complete worker-file limit remain unchanged.
+The current stage accounting is specified in [Offline analysis](offline-analysis.md).
 
 The 120-second worker timeout excludes preflight/startup, native key work and
 retirement. A running key call has no hard cancellation deadline; actual resource
@@ -142,9 +145,10 @@ and must not be used to pass this gate. Per-process recorded peaks remain separa
 Muted clock/playhead/ping telemetry does not establish callback-duration percentiles,
 driver underruns, acoustic synchronization, multi-pad behavior or B8 acceptance.
 
-## Measured resource decision
+## Historical B2a resource decision
 
-The 2026-10-05 resource gate **fails**. Musical acceptance remains **pending**.
+The 2026-10-05 resource gate **failed**. The B2b1/B2b2 remediation below retains
+these failures and records new measurements. Musical acceptance remains **pending**.
 The complete local export is `exports/b2a-acceptance-20261005.json`; individual
 raw worker responses, pre-limit envelopes, process samples and sealed identities
 remain in `scratch/b2a/`. No acceptance limit or selected model was changed.
@@ -226,13 +230,82 @@ validation from the same retained output without another inference. T05/R01
 completed directly. Timings are fresh-process observations with uncontrolled
 disk caches and concurrent project checks, not isolated speed comparisons.
 
-The measured final-publication failure is remediated. Native 96-kHz staging
-still fails for T04/T05/R01 under the unchanged 512-MiB cap; B2b2 is next.
-Overall resource acceptance therefore remains **FAIL**, musical acceptance
-remains **pending**, and default/new-analysis adoption stays disabled. Packed
+At the end of B2b1, the measured final-publication failure was remediated, while
+native 96-kHz staging still failed for T04/T05/R01 under the unchanged 512-MiB cap.
+Overall resource acceptance was therefore **FAIL**, musical acceptance
+remained **pending**, and default/new-analysis adoption stayed disabled. Packed
 results that still exceed 1 MiB continue to fail explicitly with independent
 key output preserved; the allowed 250000-logit cap is not a promise that every
 possible complete worker response fits final publication.
+
+## B2b2 complete native staging remediation
+
+On 2026-10-06, complete native T04/T05/R01 jobs passed the frozen resource gates
+with real KeyNet and the same selected Beat This worker. The actual loaded rate
+was 96000 Hz, stereo. The final locked release SHA-256 is
+`f751ab86a38eb42829e61a9dd2f986686207608686db8d7fa8e45af6e9a54548`.
+Evidence is `exports/b2b2-staging-20261006.json` and
+`scratch/b2b2/native-{T04,T05,R01}-final/`; private source, PCM, prediction and
+implementation hashes remain there. The corpus, model/environment and limits
+are unchanged.
+
+| ID | Loaded duration (s) | Complete job (s) | Peak staged PCM (bytes) | Final bytes | Logits/channel | Model peak (MiB) | Sampled live combined peak (MiB) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| T04 | 357.773 | 24.943 | 274786096 | 391661 | 17889 | 819.3 | 1661.8 |
+| T05 | 518.531 | 33.930 | 398247896 | 570980 | 25927 | 1016.1 | 2238.3 |
+| R01 | 600.529 | 38.581 | 461222648 | 648180 | 30027 | 1116.1 | 2531.4 |
+
+Native export streams the unchanged f64 channel mean to the complete f32-LE
+file through a 16-KiB buffer. The analysis source pin actually drops off-thread
+after complete export, before allocation of the full key vector. Playback keeps
+its independent source owner. Key preparation reads the same file in bounded
+chunks with the unchanged converter configuration and CQT/KeyNet path. The
+observed source pin is zero after preparation and before key work. Actual key
+PCM capacities plus bounded buffers are 63134004/91491636/105956148 bytes.
+The larger export-stage values in the table are below 512 MiB; complete files
+also pass their separate 512-MiB cap. These are PCM ownership accounts, not RSS;
+the separately sampled application/worker total includes retained playback PCM.
+
+All three jobs retain every prediction, pass common-reader binary64 bit parity,
+publish exactly one matching snapshot/event, clean up both branches and files,
+and naturally permit the next native reservation. Native keys are G#m/Cm/Am;
+this proves key completion, not independently verified key accuracy. The worker
+and final-envelope limits remain 8 MiB and 1 MiB. These complete loaded-source
+runs have different PCM lineage from the earlier original-decode worker-only
+probes, so their counts and predictions need not equal those earlier outputs.
+Timings include evidence instrumentation and uncontrolled disk caches; they
+are gate observations, not isolated speed comparisons.
+
+The first B2b2 release (`933c0621a3253558eca0e4c1f85df28dc06d05539d9943aab4bb7f805dd31e25`)
+passed T04/T05 but failed R01 key preparation on a valid zero-output padding
+call. Its full ready beat result and key failure remain in `native-R01/`;
+no successful key or subsequent-admission claim is made for that failed attempt.
+Both the original full-buffer helper and initial streamed converter rejected
+this remainder. The streamed path now permits a finite, dimension-derived
+number of padding calls, each cancellable, until the exact delayed tail exists.
+The legacy/default helper is unchanged. Tests cover every one of the 5120
+96-kHz input remainders and bit-exact comparison with the prior successful
+output or its explicitly zero-extended reference at the original ceiling length.
+The final table reruns all three tracks after that correction.
+
+Real preparation-cancel, worker-launch cancellation and unload probes also retire
+without stale publication and allow natural re-admission. They complement
+deterministic stalled-key, partial-file, read/error, file-sharing, cleanup-failure
+and source-ownership tests. These observations cover preparation/launcher phases,
+not a running-model deadline; the non-preemptible native CQT/ORT call still has
+no hard retirement deadline.
+
+Validation passed: sync, debug/locked release builds, cargo check, 495 Rust tests
+(one opt-in evidence test and one doctest ignored), 1030 Python tests, six release
+native lifecycle tests, production Clippy, Ruff/mypy, formatting and official
+strict `adopt-beat-this-analysis` validation. Logs remain in `scratch/b2b2/`.
+
+The recorded staging/publication resource blockers are now closed using the
+new long-track runs and the retained B2a short-track/installation evidence.
+This combines explicitly identified revisions; T01/T02/T03 and installation
+footprint were not remeasured on this final binary. Independent full-span labels,
+recording-group/class certification and paired correction burden remain pending.
+Default cutover, saved-analysis adoption and live timing/SYNC remain disabled.
 
 ## Native key completion correction
 

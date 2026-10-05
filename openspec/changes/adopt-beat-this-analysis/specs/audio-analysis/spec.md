@@ -189,6 +189,67 @@ is released. Launcher exit or a closed stdout pipe alone SHALL NOT prove worker 
 - **AND** it does not analyze a shortened file as if it were the whole track
 - **AND** successfully loaded audio remains playable
 
+### Requirement: Diagnostic PCM Staging Bounds Each Actual Ownership Stage
+The system SHALL stream the complete immutable loaded source to one shared loaded-rate mono
+float32 little-endian file, using an arithmetic channel mean accumulated in f64 and rounded
+to f32 once per frame, without allocating a complete loaded-rate mono or key-input copy.
+
+The export SHALL preserve frame zero, leading silence, every source frame and request/source
+identity. Nonfinite input, incomplete frames, invalid metadata, I/O failure or cancellation
+SHALL prevent a prepared-success outcome. The native analysis owner SHALL retain the source
+pin throughout export and release it outside the callback only after a complete flushed file
+and a readable native key handle are available. Releasing this analysis pin SHALL NOT replace,
+mutate or release independent playback ownership.
+
+Native PCM admission SHALL enforce the unchanged 512-MiB cap against the maximum simultaneous
+ownership at either stage: retained interleaved source plus bounded export buffers, or complete
+44100-Hz key output plus bounded read/resampler PCM buffers including converter delay/tail
+capacity. The final key vector SHALL contain exactly the ceiling-derived frame count without
+a second full delayed-output allocation. Every still-owned PCM allocation or source pin SHALL count in its live stage; none
+SHALL be excluded merely because the data is immutable or shared. The complete exported file
+SHALL independently remain at most 512 MiB. FFT scratch, CQT/ORT workspace and worker model
+memory remain outside this PCM-only cap; playback ownership remaining after pin release SHALL
+remain part of actual application/combined RSS measurements.
+
+The job SHALL retain one active-or-retiring admission and zero pending queue. Native file
+handles SHALL close outside the callback after key readers settle; the export and containing
+job directory SHALL remain owned until both native key and the owned beat process tree have
+actually stopped reading. Cancellation or stale source identity SHALL immediately invalidate
+publication while a non-preemptible KeyNet call, worker or failed cleanup remains retiring.
+Preparation, resampling, file cleanup and final publication SHALL remain outside the callback.
+
+#### Scenario: Long loaded track fits only with separate ownership stages
+- **GIVEN** a complete 96000-Hz stereo source would exceed 512 MiB if retained with full mono
+  and key-input copies
+- **AND** its source-plus-export-buffer stage, key-output-plus-bounded-buffer stage and complete
+  export each fit their unchanged limits
+- **WHEN** diagnostic preparation and key analysis run
+- **THEN** bounded export creates every mono frame with the existing channel-mean bits
+- **AND** native source ownership ends after successful export before key output is allocated
+- **AND** both branches consume that complete mono source without shortening the track
+- **AND** independent playback remains valid and its memory stays visible in RSS evidence
+
+#### Scenario: Live ownership cannot evade the PCM cap
+- **GIVEN** retained source plus bounded export buffers or full key output plus bounded buffers
+  exceeds 512 MiB, or the complete mono file exceeds its independent 512-MiB limit
+- **WHEN** native admission checks the required stages
+- **THEN** it rejects the complete request explicitly before unbounded preparation
+- **AND** it does not remove live source ownership from accounting, raise the cap or trim audio
+
+#### Scenario: Export failure never starts readers on a partial source
+- **GIVEN** an export fails or is cancelled before the complete file has been flushed
+- **WHEN** the request retires
+- **THEN** neither branch receives a successful prepared input for the partial file
+- **AND** partial files and analysis ownership retire outside the callback
+- **AND** playback and saved analysis remain unchanged
+
+#### Scenario: Cancelled key reader retains its file and admission
+- **GIVEN** both branches started from the complete staged file and KeyNet is still running
+- **WHEN** the source is replaced or the request is cancelled after the beat worker retires
+- **THEN** late publication is rejected while the key call and its PCM remain owned
+- **AND** the file and job directory remain until the key reader has also settled
+- **AND** subsequent work remains blocked by the occupied slot until actual cleanup completes
+
 ### Requirement: Diagnostic Publication Preserves Complete Predictions Losslessly
 The system SHALL publish every successful diagnostic beat result with all raw beat/downbeat
 positions and logits, preserving each validated binary64 value and the component's identity,
