@@ -223,6 +223,24 @@ buffers; asynchronous live adoption is excluded. The nominal delay is only an
 experimental discard. Assess uncropped residuals and clipping alongside retained
 output before selecting compensation; this run provides no device/deadline evidence.
 
+Run the explicit-history impulse/tone/percussion sweep separately:
+
+```powershell
+$env:FLITZIS_KEY_LOCK_HISTORY_PROBE_CSV = (Join-Path (Split-Path -Parent (Get-Location).Path) 'scratch/slice3e-source-history.csv')
+.\scripts\run-rust-tests.ps1 --release --lib history_probe
+Remove-Item Env:\FLITZIS_KEY_LOCK_HISTORY_PROBE_CSV
+```
+
+The absolute optional path writes the per-candidate/partition CSV and a companion
+`slice3e-source-history.summary.csv`. The summary intersects timing and exact
+energy/peak retention bounds for one common integer translation across all
+tested phases/signals at each rate/ratio/history. Ordinary tests export nothing.
+History H and raw discard D are separate; CSV candidate offset is D-H, and raw
+residuals compare against the actual dry response. The declared q10/q50 two-ms
+engineering budget, retained peak/energy checks and capture-tail bounds are
+explained in the backend guide. A failed intersection is preserved as evidence;
+neither reference equality nor a sampled candidate selects live compensation.
+
 ### Nuitka Installer Direction
 
 The later Windows installer should be built so non-technical users do not need

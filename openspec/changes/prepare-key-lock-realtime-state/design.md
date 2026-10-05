@@ -140,6 +140,73 @@ identity, fixed future handover frames, render splitting, stale/late rejection, 
 retirement, and source-aligned wet/dry/neutral transitions. The test-only fixture cannot be
 adopted by `RtMixer` and changes no scheduler, transport, persisted marker or runtime fallback.
 
+## Explicit source history and musical timing gate
+
+The test-only request optionally declares `SourceHistory { origin, output_frames: H }`. This
+origin is a prior constant-ratio source epoch, not a reverse seek inferred from the logical
+position. Advance it H output frames through the shared loop/intro/tail policy; require exact
+logical frame, fractional remainder and seek-mode equality before native pitch/reset/source
+processing. An intro or tail may have ended before the logical cursor becomes Normal. That
+endpoint cannot recover the earlier path, so the explicit origin is essential. Positive history
+rejects active stem-selection transitions because their earlier ramp state was not supplied.
+Zero history preserves the original proof. The declared path is hypothetical prepared content,
+not evidence of which source or controls actually played previously.
+
+H and D are independently bounded to the proof's existing 131072-frame scale. Native processing
+starts at the history origin. The same P/Q/FIFO equations apply from that origin; the logical
+cursor starts at H, while the feed cursor is at P. D-H is the experimental effective translation.
+For raw marker time R and actual dry time T measured from the history origin, the translated
+residual is `R - D - (T - H)`. D need not equal H plus API delay. Never confuse reference-suffix
+equality with musical alignment or constrain experimental D to conceal failed measurements.
+
+Keep isolated response fixtures separate from rich nonconstant loop/stem continuity fixtures.
+The latter verify the shared addressing and continuation; the former measure one impulse,
+8-ms source tone or damped percussion burst without subtracting native output or overlapping
+loop responses. Sweep H=0/8192/16384 output frames, marker phases 0/17/511, all existing five
+ratios and 44.1/48/96 kHz. Candidate translations C=D-H are API-2B, API-B, API and API+B.
+All four callback partitions must equal the same independent raw suffix, including the ready
+FIFO/continuation join. These three phases are a bounded diagnostic sample, not exhaustive
+block-phase coverage.
+
+Predeclare the musical engineering criterion: use pooled stereo squared energy, smoothed with a
+centered 0.5-ms box window and zero extension, to report cumulative-energy q10/q50/q90 on the
+original sample timeline. Centering introduces no causal-window delay. Require uncropped q10
+and q50 residuals each within two ms (rounded up to an output frame), original peak retained,
+at most 0.1% discarded target-response energy and at most 0.0001% energy in the capture's final
+20 ms. The two-ms budget is an exploratory product gate, not a psychoacoustic universal.
+Energy-envelope timing compares attack/body without correlating pitch-changing dry/wet carriers;
+both q10 and q50 constrain a translation that might otherwise align only one smeared peak.
+Preserve absolute/1%-of-original-peak onset, waveform peak, q90, negative residuals, cut-to-silence
+jump and ready-FIFO/continuation join jump. These jumps diagnose a raw cut/join, not a click-safe
+mode crossfade. Capture silence long enough to reveal response tail rather than truncating it.
+
+Intersect timing and energy/peak retention bounds for a common C at each fixed rate/ratio/history
+over every marker and burst. An empty intersection rejects even an unswept integer translation
+within this criterion; it does not prove that a different onset/content policy is impossible.
+Report failed criteria without changing thresholds or fitting one compensation per signal.
+No selected compensation, source-aware live handover or device/deadline acceptance follows from
+this non-live gate.
+
+### Release result and prerequisite for live adoption
+
+The bounded Windows release sweep passes 6480 exact-suffix comparisons and all 1620 groups have
+identical partition metrics. No coarse candidate passes every fixture in any rate/ratio/history
+group. Exact interval bounds are empty for all 36 nonneutral groups; nine ratio-1 groups alone
+have feasible unswept integers. Twenty groups already fail the joint q10/q50 timing bounds before
+retention is considered. All capture-tail bounds pass. At 48 kHz/ratio2/H16384, timing requires
+C>=3240 and C<=2867, while energy/peak retention imposes C<=2080. API C3678 discards 96.714% of
+the impulse energy, clips its original peak and yields q10/q50 residuals -907/-420 frames.
+
+This is an engineering-criterion failure, not failed FIFO/source preparation. The independently
+measured native response is intrinsically spread; adding history or translating the same response
+does not remove that spread. Before source-aware live identity/adoption, resolve which musical
+attack/body property must be anchored and how target onset content survives a cut or transition.
+Separate additional launch-induced displacement from inherent continuous Key Lock response using
+a longer-history steady reference and actual musical attack fixtures. Any new acceptance policy
+needs evidence and an explicit rationale; do not merely loosen these bounds until nominal
+discard passes. Preserve Rubber Band, source grid, quality/options, clocks and markers. No device
+or live compensation conclusion follows from these isolated test responses.
+
 ## References
 
 - https://raw.githubusercontent.com/breakfastquay/rubberband/v4.0.0/src/finer/R3LiveShifter.cpp

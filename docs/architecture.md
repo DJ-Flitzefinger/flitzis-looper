@@ -390,7 +390,15 @@ native/FIFO continuation at an explicit discard index. Its independent algebraic
 source/raw-native oracle covers retained output and later blocks. The fixture is
 absent from production builds. Uncropped and retained transient measurements expose
 discarded startup peaks; equality and nominal delay are not audible acceptance.
-Generation identity, timed live handover/retirement and transitions remain pending.
+The test-only request can also declare an earlier source epoch and bounded output-frame history H.
+Forward progression must reach the exact requested logical phase; it never infers a backward
+loop/intro/tail path. Native feed begins at that origin and raw discard D remains independent,
+with effective translation D-H. Positive history rejects active source-selection ramps whose
+earlier state is unavailable. The caller's logical state and markers remain unchanged.
+Independent history tests cover fractional origins, loops, intro/tail and full-mix/stems;
+isolated impulse/short-burst sweeps report timing and energy retention under a predeclared
+engineering criterion. Generation identity, timed live handover/retirement and transitions
+remain pending.
 
 Project persistence stores global Key Lock control intent and per-pad Key Lock
 booleans for loaded-pad intent, with unloaded pads saved and restored as

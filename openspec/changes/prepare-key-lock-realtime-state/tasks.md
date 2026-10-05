@@ -45,10 +45,11 @@
 
 ## 7. Pending live audible preparation
 
-- [ ] 7.1 Anchor explicit source history before the requested logical phase; sweep bounded discard/marker-phase/short-burst fixtures and define the musical timing criterion before choosing compensation.
-- [ ] 7.2 Implement source/generation/loop/seek/stem/exact-ratio identity with fixed future handover frames and stale/late rejection.
-- [ ] 7.3 Adopt coherent native/FIFO/feed state at the accepted render frame and retire replaced or stale ownership off-thread.
-- [ ] 7.4 Verify source-aligned start/retrigger/seek, pause/resume and click-safe wet/dry/neutral/global/per-pad transitions, including queue/failure paths.
-- [ ] 7.5 Validate audible compensation and obtain release/device acceptance before synchronized Quantize activation.
+- [x] 7.1 Anchor explicit source history before the requested logical phase; sweep bounded discard/marker-phase/short-burst fixtures and define/report the musical timing criterion before choosing compensation.
+- [ ] 7.2 Resolve the failed nonneutral common-translation criterion using steady Key Lock and musical attack references; justify an onset/content policy before selecting compensation without hiding inherent transient spread or cut loss.
+- [ ] 7.3 Implement source/generation/loop/seek/stem/exact-ratio identity with fixed future handover frames and stale/late rejection.
+- [ ] 7.4 Adopt coherent native/FIFO/feed state at the accepted render frame and retire replaced or stale ownership off-thread.
+- [ ] 7.5 Verify source-aligned start/retrigger/seek, pause/resume and click-safe wet/dry/neutral/global/per-pad transitions, including queue/failure paths.
+- [ ] 7.6 Validate audible compensation and obtain release/device acceptance before synchronized Quantize activation.
 
 Non-live preparation and reference equality alone do not certify audible synchronization.

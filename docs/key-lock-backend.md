@@ -251,6 +251,67 @@ lead and device delay. They reject nominal discard alone as a startup rule and
 motivate explicit source history plus a separately justified musical timing
 criterion. Local evidence is `scratch/slice3d-{source-preparation.csv,validation-summary.json}`.
 
+### Explicit Source History And Musical Criterion
+
+The test-only request now accepts a declared earlier source epoch and history H
+in output frames. Forward progression at the exact requested ratio must reach
+the logical frame, fraction and seek mode. This preserves intro/tail provenance
+after entering the loop without guessing a backward path. Positive history
+rejects active stem-selection ramps because their earlier state is unavailable;
+zero history preserves the original fixture. The path declares hypothetical
+prepared content, not an actual record of previously played controls.
+
+Native processing starts at that history origin. Raw discard D remains an
+independent experiment; effective translation is D-H. With raw transient time R
+and independently resampled dry time T, both measured from the history origin,
+the residual is R-D-(T-H). The logical cursor begins at H while feed begins at
+the processed P. Some diagnostic requests allow P<H; live source alignment is
+a separate gate. Ready FIFO/native continuation accounting remains unchanged.
+
+The bounded sweep uses H=0/8192/16384, phases 0/17/511, impulse, 8-ms source tone
+and damped percussion bursts at the existing five ratios and all three rates.
+Translations are API-2B, API-B, API and API+B; each compares all four render
+partitions to the same independent raw suffix. Isolated responses contain no
+overlapping loop transient. Separate nonconstant source tests cover loops,
+intro/tail and full-mix/subset/all-component stems with fractional origins.
+
+Before measurement, the exploratory engineering budget is set to two ms for
+both q10 attack and q50 body timing: pooled stereo squared energy, smoothed by
+a centered 0.5-ms box, defines cumulative-energy q10/q50/q90. Signed envelope
+centers before frame zero preserve startup-reference energy without adding
+causal filter delay. Candidates must retain the original response peak, discard
+at most 0.1% response energy and leave at most 0.0001% in the capture's final
+20 ms. These are engineering budgets, not universal perception thresholds.
+Both attack and body constrain alignment without correlating different dry/wet
+carrier pitches. Uncropped onset/1%-of-original-peak onset, peak and q90 remain
+visible, including negative residuals. Retained onset uses that same original
+peak threshold. Cut-to-silence and ready-FIFO/native-continuation jumps expose
+cut/join continuity; they do not prove click-safe mode transitions.
+
+The exported summary intersects integer timing and exact energy/peak retention
+bounds across all nine phase/signal fixtures for each fixed rate/ratio/history.
+An empty interval rejects constant translation under this declared criterion,
+including untested integers; it does not rule out a different content/onset
+policy. Three sampled phases are diagnostic coverage, not exhaustive phase
+acceptance. Reproduction commands and both CSV exports are in the development
+guide. No compensation is selected by the fixture.
+
+The optimized Windows sweep passes 6480 exact-suffix comparisons; all 1620
+candidate/fixture groups have identical metrics across four partitions. None
+of the four tested translations passes all nine fixtures at any fixed
+rate/ratio/history. The interval check also rejects every integer translation
+for all 36 nonneutral groups under the declared criterion. Only the nine
+ratio-1 groups have feasible unswept intervals; live ratio-1 already bypasses
+shifted processing. Twenty groups fail timing alone, and all captures meet the
+tail bound. For 48 kHz/ratio 2/H16384, common timing bounds [3240,2867] are
+already empty, and retention limits C to at most 2080. Nominal C3678 clips the
+original impulse peak and discards 96.714% energy; q10/q50 residuals are
+-907/-420 frames. Source history therefore establishes coherent provenance,
+but cannot by itself make an intrinsically spread transient fit both timing
+budgets. Resolve the onset/content policy before choosing compensation or live
+adoption. Local measurements are `scratch/slice3e-source-history{,.summary}.csv`;
+these isolated fixtures do not measure busy musical context or a device.
+
 Live source/generation/loop/seek/stem/ratio identity, fixed handover frames,
 stale/late rejection, off-thread retirement and source-aligned mode transitions
 remain pending. No transport, marker, launch policy or live fallback changes in

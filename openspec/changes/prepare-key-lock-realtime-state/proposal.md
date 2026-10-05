@@ -24,6 +24,9 @@ source pre-roll and synchronized audible launches can be enabled.
 - Verify an exact-ratio source-preparation fixture against an independently resampled contiguous
   native reference, keeping logical and future feed cursors separate. Record transient clipping
   and uncropped residuals before selecting an audible discard rule. The fixture is test-only.
+- Extend that proof with an explicit forward source-history origin, preserving logical phase
+  separately from raw discard and feed. Measure impulse/tone/percussion timing and retention
+  against predeclared stereo-energy criteria before choosing compensation; report failure too.
 
 ## Capabilities
 

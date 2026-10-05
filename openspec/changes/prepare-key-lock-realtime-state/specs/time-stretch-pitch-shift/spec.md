@@ -164,3 +164,52 @@ retirement and click-safe transitions SHALL remain separate acceptance gates.
 - **WHEN** a proof request has invalid layout, ratio, discard arithmetic or render capacity
 - **THEN** it returns a bounded explicit error without reading outside accepted source buffers
 - **AND** an oversized render request leaves the prepared state available for a valid continuation
+
+### Requirement: Source History Has Explicit Forward Provenance
+The system SHALL prove non-live source preparation from an explicitly declared earlier source
+origin and bounded output-frame history before the requested logical source phase.
+
+The constant-ratio history origin SHALL advance through the canonical loop/intro/tail policy to
+the requested logical frame, fractional remainder and seek mode. The proof SHALL reject a
+mismatched history or, for nonzero history, an active source-selection transition whose earlier state was not supplied.
+It SHALL preserve the caller's logical cursor and markers. History length H and raw native discard
+D SHALL remain separate coordinates; retained output SHALL equal the independent raw reference
+suffix at D, and its effective source-relative translation SHALL be D-H. Zero history SHALL
+preserve the existing proof. Bounds SHALL be checked before native pitch/reset/source processing.
+
+#### Scenario: Earlier intro or tail history reaches a looping logical phase
+- **GIVEN** an explicit origin in the intro or tail and a bounded history at an exact ratio
+- **WHEN** that origin advances into the loop before the requested logical phase
+- **THEN** preparation reads the declared intro or tail exactly once before looping
+- **AND** logical playback starts at the requested phase while the native feed continues from the history origin
+
+#### Scenario: Ambiguous or unsupported history is rejected
+- **WHEN** declared history does not reach the requested fractional phase or nonzero history contains an active stem transition
+- **THEN** the proof returns an explicit error before processing native source content
+- **AND** it does not infer a backward loop, intro, tail or transition path from the logical phase
+
+### Requirement: Musical Timing Candidates Use Uncropped Content Evidence
+The system SHALL evaluate source-history discard candidates with uncropped impulse, short-tone
+and percussion-burst evidence before choosing live audible compensation.
+
+The non-live engineering criterion SHALL use stereo energy-envelope 10% and 50% cumulative-energy
+times relative to the actual independently resampled dry reference, with an exploratory two-ms
+maximum absolute residual for each. A candidate SHALL also retain the original response peak,
+discard at most 0.1% of target-response energy, and leave at most 0.0001% of measured energy in the
+last 20 ms of the capture. This budget SHALL be identified as an engineering gate, not a universal
+perceptual threshold. Absolute/1%-peak onset, peak, 90% energy time, retained metrics and cut/join
+discontinuity SHALL remain visible alongside the criterion. The proof SHALL evaluate block phases,
+history lengths and 44.1/48/96 kHz ratios without fitting separate compensation to each marker or
+signal. Failure SHALL remain reported as failure; cropping, a fitted signal-specific index, or
+exact reference equality SHALL NOT establish live/device acceptance.
+
+#### Scenario: A retained response hides an early lost attack
+- **GIVEN** the original response begins or peaks before a candidate discard
+- **WHEN** retained output alone appears near the target
+- **THEN** the report still records uncropped residuals, lost energy and the original peak
+- **AND** the candidate fails the content criterion if its declared retention bounds are exceeded
+
+#### Scenario: No single candidate meets every fixture
+- **WHEN** the tested history, marker phases and burst types have incompatible timing or retention bounds
+- **THEN** the proof records the failed common compensation gate
+- **AND** live adoption and synchronized Quantize remain pending

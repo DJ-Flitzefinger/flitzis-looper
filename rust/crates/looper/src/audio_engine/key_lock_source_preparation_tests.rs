@@ -56,6 +56,7 @@ impl Fixture {
             logical,
             tempo_ratio: self.ratio,
             discard_output_frames: discard,
+            source_history: None,
         }
     }
 
@@ -613,3 +614,6 @@ fn exact_ratio_discard_reports_startup_settled_and_off_block_transients() {
     );
     csv.save_if_requested();
 }
+
+#[path = "key_lock_source_history_probe.rs"]
+mod history_probe;

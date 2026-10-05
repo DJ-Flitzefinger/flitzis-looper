@@ -4,6 +4,10 @@
 //! owns coherent native state and fixed FIFOs, borrows immutable accepted sources, and keeps the
 //! logical source cursor separate from future DSP feed. An explicit discard index is an experiment,
 //! not a certified audible compensation rule. No mixer, scheduler or callback uses this fixture.
+//! Nonzero history declares a prior source origin and an exact output-frame distance H to the
+//! requested logical phase. Native input starts at that origin; raw discard D and feed length P
+//! are measured from it independently of H. History accepts only a fixed source selection: an
+//! active transition lacks its prior gains and cannot be reconstructed by reversing this plan.
 
 use super::constants::{SPEED_MAX, SPEED_MIN};
 use super::rubberband_backend::{
@@ -15,6 +19,7 @@ use super::stretch_processor::{DEFAULT_BLOCK_SAMPLES, FixedFifo};
 use crate::messages::{PreparedStemSet, SampleBuffer};
 
 const MAX_PREPARATION_OUTPUT_FRAMES: usize = 131_072;
+const MAX_HISTORY_OUTPUT_FRAMES: usize = 131_072;
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum PreparationError {
@@ -24,6 +29,8 @@ pub(super) enum PreparationError {
     InvalidRatio,
     #[error("explicit preparation discard exceeds the bounded proof fixture")]
     InvalidDiscard,
+    #[error("source history is unbounded, invalid or does not reach the requested logical phase")]
+    InvalidHistory,
     #[error("render exceeds fixed proof-fixture capacity")]
     InvalidRenderFrames,
     #[error("prepared FIFO accounting failed; state cannot be reused")]
@@ -33,11 +40,20 @@ pub(super) enum PreparationError {
 }
 
 #[derive(Clone, Copy)]
+pub(super) struct SourceHistory {
+    /// Explicit prior source epoch; preparation never guesses a reverse loop/seek traversal.
+    pub(super) origin: SourcePlayback,
+    /// Output-domain frames at the requested exact ratio from origin to logical playback.
+    pub(super) output_frames: usize,
+}
+
+#[derive(Clone, Copy)]
 pub(super) struct SourcePreparation {
     pub(super) plan: SourceReadPlan,
     pub(super) logical: SourcePlayback,
     pub(super) tempo_ratio: f32,
     pub(super) discard_output_frames: usize,
+    pub(super) source_history: Option<SourceHistory>,
 }
 
 pub(super) struct PreparedSourceStream<'a> {
@@ -56,6 +72,8 @@ pub(super) struct PreparedSourceStream<'a> {
     discard: usize,
     prepared_feed: usize,
     retained: usize,
+    history_output_frames: usize,
+    history_origin: FractionalSourcePosition,
     valid: bool,
 }
 
@@ -101,12 +119,54 @@ impl<'a> PreparedSourceStream<'a> {
             .ok_or(PreparationError::InvalidDiscard)?;
         let retained = prepared_feed - discard;
 
+        let mut logical = request.logical.at_constant_ratio(request.tempo_ratio);
+        logical.configure(plan.sample_frames, plan.loop_region);
+        let history_output_frames = request
+            .source_history
+            .map_or(0, |history| history.output_frames);
+        let feed = if history_output_frames == 0 {
+            // Zero history is the existing exact-phase experiment, including active transitions.
+            logical
+        } else {
+            if history_output_frames > MAX_HISTORY_OUTPUT_FRAMES || plan.transition.is_active() {
+                return Err(PreparationError::InvalidHistory);
+            }
+            let history = request.source_history.unwrap();
+            let requested_position = request.logical.position();
+            let origin_position = history.origin.position();
+            if !valid_history_position(requested_position, plan)
+                || !valid_history_position(origin_position, plan)
+                || logical.position() != requested_position
+            {
+                return Err(PreparationError::InvalidHistory);
+            }
+            let mut origin = history.origin.at_constant_ratio(request.tempo_ratio);
+            origin.configure(plan.sample_frames, plan.loop_region);
+            if origin.position() != origin_position {
+                return Err(PreparationError::InvalidHistory);
+            }
+            let source_distance = origin_position.fraction
+                + history_output_frames as f64 * f64::from(request.tempo_ratio);
+            if !source_distance.is_finite()
+                || origin_position
+                    .frame
+                    .checked_add(source_distance.floor() as usize)
+                    .is_none()
+            {
+                return Err(PreparationError::InvalidHistory);
+            }
+            let mut anchor = origin;
+            anchor.advance(history_output_frames);
+            if anchor.position() != requested_position {
+                return Err(PreparationError::InvalidHistory);
+            }
+            origin
+        };
+        let history_origin = feed.position();
+
         // Set pitch before reset: native reset initializes its previous output hop at that pitch.
         // First shift processes actual source content; no neutral silent warming precedes it.
         native.prepare_exact_pitch(pitch_scale_for_tempo_ratio(request.tempo_ratio))?;
-        let mut logical = request.logical.at_constant_ratio(request.tempo_ratio);
-        logical.configure(plan.sample_frames, plan.loop_region);
-        let feed = logical;
         let mut stream = Self {
             sample,
             stems,
@@ -127,6 +187,8 @@ impl<'a> PreparedSourceStream<'a> {
             discard,
             prepared_feed,
             retained,
+            history_output_frames,
+            history_origin,
             valid: true,
         };
         for start in (0..prepared_feed).step_by(block) {
@@ -237,6 +299,14 @@ impl<'a> PreparedSourceStream<'a> {
         self.prepared_feed
     }
 
+    pub(super) fn history_output_frames(&self) -> usize {
+        self.history_output_frames
+    }
+
+    pub(super) fn history_origin_position(&self) -> FractionalSourcePosition {
+        self.history_origin
+    }
+
     pub(super) fn fifo_occupancy(&self) -> usize {
         self.output_fifo[0].len()
     }
@@ -246,8 +316,27 @@ impl<'a> PreparedSourceStream<'a> {
     }
 }
 
+fn valid_history_position(position: FractionalSourcePosition, plan: SourceReadPlan) -> bool {
+    use super::source_reader::ExplicitSeekMode;
+
+    position.fraction.is_finite()
+        && (0.0..1.0).contains(&position.fraction)
+        && match position.seek_mode {
+            ExplicitSeekMode::Normal => {
+                (plan.loop_region.start..plan.loop_region.end).contains(&position.frame)
+            }
+            ExplicitSeekMode::BeforeLoop => position.frame < plan.loop_region.start,
+            ExplicitSeekMode::AfterLoop => {
+                (plan.loop_region.end..plan.sample_frames).contains(&position.frame)
+            }
+        }
+}
+
 #[path = "key_lock_source_preparation_tests.rs"]
 mod tests;
+
+#[path = "key_lock_source_history_tests.rs"]
+mod history_tests;
 
 #[cfg(test)]
 mod bounds {
@@ -281,6 +370,7 @@ mod bounds {
                 logical,
                 tempo_ratio: 0.73,
                 discard_output_frames: 1031,
+                source_history: None,
             },
         )
     }
