@@ -185,10 +185,10 @@ impl StemRenderSelection {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct StemTransition {
     from: StemRenderSelection,
-    elapsed_frames: usize,
+    elapsed_frames: f64,
     total_frames: usize,
 }
 
@@ -196,7 +196,7 @@ impl StemTransition {
     fn inactive() -> Self {
         Self {
             from: StemRenderSelection::full_mix(),
-            elapsed_frames: 0,
+            elapsed_frames: 0.0,
             total_frames: 0,
         }
     }
@@ -208,35 +208,37 @@ impl StemTransition {
 
         Self {
             from,
-            elapsed_frames: 0,
+            elapsed_frames: 0.0,
             total_frames,
         }
     }
 
     pub(crate) fn is_active(self) -> bool {
-        self.total_frames > 0 && self.elapsed_frames < self.total_frames
+        self.total_frames > 0 && self.elapsed_frames < self.total_frames as f64
     }
 
-    fn gains_at(self, frame_offset: usize) -> (f32, f32) {
+    fn gains_at(self, frame_offset: f64) -> (f32, f32) {
         if !self.is_active() {
             return (0.0, 1.0);
         }
 
-        let elapsed = self
-            .elapsed_frames
-            .saturating_add(frame_offset)
-            .min(self.total_frames);
+        let elapsed = (self.elapsed_frames + frame_offset).min(self.total_frames as f64);
         let to_gain = elapsed as f32 / self.total_frames as f32;
         (1.0 - to_gain, to_gain)
     }
 
+    #[cfg(test)]
     pub(crate) fn advance(&mut self, frames: usize) {
+        self.advance_fractional(frames as f64);
+    }
+
+    pub(crate) fn advance_fractional(&mut self, frames: f64) {
         if !self.is_active() {
             return;
         }
 
-        self.elapsed_frames = self.elapsed_frames.saturating_add(frames);
-        if self.elapsed_frames >= self.total_frames {
+        self.elapsed_frames += frames;
+        if self.elapsed_frames >= self.total_frames as f64 {
             self.clear();
         }
     }
@@ -375,11 +377,29 @@ pub(crate) struct SourceReadPlan {
 }
 
 impl SourceReadPlan {
+    #[cfg(test)]
     pub(crate) fn sample_at_offset(
         self,
         sample: &SampleBuffer,
         stems: Option<&PreparedStemSet>,
         source_offset: usize,
+        channel: usize,
+    ) -> f32 {
+        self.sample_at_offset_with_progress(
+            sample,
+            stems,
+            source_offset,
+            source_offset as f64,
+            channel,
+        )
+    }
+
+    fn sample_at_offset_with_progress(
+        self,
+        sample: &SampleBuffer,
+        stems: Option<&PreparedStemSet>,
+        source_offset: usize,
+        transition_progress: f64,
         channel: usize,
     ) -> f32 {
         let frame = source_frame_for_playback(
@@ -406,7 +426,7 @@ impl SourceReadPlan {
                 self.channels,
                 channel,
             );
-            let (from_gain, to_gain) = self.transition.gains_at(source_offset);
+            let (from_gain, to_gain) = self.transition.gains_at(transition_progress);
             from_sample * from_gain + to_sample * to_gain
         } else {
             render_source_selection_sample(
@@ -420,11 +440,32 @@ impl SourceReadPlan {
         }
     }
 
+    /// Interpolate two independently addressed source taps at the same crossfade progress.
+    /// Lookahead follows loop/intro/tail policy without advancing playback or the ramp.
+    pub(crate) fn sample_fractional(
+        self,
+        sample: &SampleBuffer,
+        stems: Option<&PreparedStemSet>,
+        fraction: f64,
+        transition_progress: f64,
+        channel: usize,
+    ) -> f32 {
+        let left =
+            self.sample_at_offset_with_progress(sample, stems, 0, transition_progress, channel);
+        if fraction == 0.0 {
+            return left;
+        }
+        let right =
+            self.sample_at_offset_with_progress(sample, stems, 1, transition_progress, channel);
+        left + (right - left) * fraction as f32
+    }
+
     /// Fills preallocated planar buffers with integer source-frame reads, before varispeed.
     ///
     /// The sample and optional stem set must have the validated channel/frame layout, and every
     /// channel buffer must have room for `input_frames`. No interpolation or timeline advancement
     /// is performed here; those keep their existing processor/mixer ownership.
+    #[cfg(test)]
     pub(crate) fn fill_buffers(
         self,
         sample: &SampleBuffer,

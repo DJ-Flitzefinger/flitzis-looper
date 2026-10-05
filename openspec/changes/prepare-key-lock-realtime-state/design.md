@@ -41,23 +41,67 @@ accepts only current on-time descriptors and retires stale state off-thread. Thi
 source-read policy and separating logical source telemetry from future DSP feed position. The
 current safety change establishes reusable ownership and delay measurement, not that activation.
 
-The source-policy foundation is now in `audio_engine/source_reader.rs`, shared by voice state
-and the mixer: effective half-open loop bounds, before/after-loop seek policy, integer addressing,
-prepared-stem layout/version validation and same-address source-selection crossfades. It borrows
-accepted immutable buffers, does not depend on native DSP or worker state, and preserves the
-existing source-frame ramp and integer reads. Output-frame anchors and ratio selection remain
-with the mixer. This extraction satisfies the first source-preparation prerequisite; exact-ratio
-source priming, independent feed-ahead and prepared-state adoption still require implementation
-and separate audible evidence. Existing behavior requirements are unchanged by this refactor.
+## Canonical fractional source progression
 
-The existing per-segment varispeed interpolation is a remaining preparation dependency. It uses
-the segment's input/output endpoints, so equal output-anchored next positions do not prove equal
-native input samples under different callback partitions. Non-anchored per-segment frame rounding
-can also accumulate source-position error. Before source-aware DSP preparation is adopted, define
-one fractional source/resampling timeline and verify real source fixtures through that shared
-path across fixed/irregular partitions, loop wraps and seeks. The existing adapter test proves
-FIFO delay invariance only when already-varispeed samples are identical; it does not prove this
-earlier source-to-DSP property. Source-policy extraction intentionally preserves current behavior.
+`audio_engine/source_reader.rs` shares effective half-open loop bounds, before/after-loop seek
+policy, integer addressing, prepared-stem layout/version validation and same-address source
+selection. It borrows accepted immutable buffers without native DSP or worker ownership.
+`source_playback.rs` adds reusable scalar source progression above that policy; the mixer owns
+control intent and the per-voice playback state. This path can be used by later source preparation
+without importing the mixer or creating another resampling implementation.
+
+The former interpolation scaled each render segment's input/output endpoints. Its ratio depended
+on segment length, so output-anchored integer cursor equality did not imply equal samples supplied
+to Rubber Band. Unanchored segment-level frame rounding also accumulated source error.
+Replace both paths with an epoch containing fractional source position, actual accepted native
+`f32` ratio promoted to `f64`, and active output-frame progress. Each read derives source progress
+from the epoch's integer active-frame count times that ratio, rather than repeatedly adding or
+rounding segment lengths. Rebase only when source/rate policy changes, preserving the fractional
+remainder. Pause freezes active progress; resume retains the cursor. An in-range live loop edit
+retains the source cursor, while an out-of-range edit keeps the existing loop-start clamp.
+Seek/retrigger remain explicit discontinuities. Ordinary wrapping does not reset native DSP.
+
+For each output sample, read the two integer neighbors through the shared loop/seek policy and
+linearly interpolate their values. The lookahead neighbor wraps at the effective loop end; a seek
+before the loop traverses the intro, and a seek after the loop traverses the tail until track end
+before entering the loop. Neither interpolation tap escapes the accepted source layout.
+Full-mix and prepared-stem selections share addresses and fractional source-domain transition
+progress. A transition advances by consumed source distance, independent of callback count.
+Integer playhead telemetry floors the next source cursor; no persisted marker, master clock or
+scheduled launch target is moved.
+
+`StretchProcessor` accepts these already-resampled planar samples directly as dry output or as
+the fixed Rubber Band adapter input. It no longer performs endpoint interpolation. Its native
+buffers, inverse-pitch selection, fixed-block FIFO lead and warm ownership exchange are retained.
+The canonical source reader performs bounded two-tap/channel work into preallocated buffers.
+No source pre-roll, future DSP feed cursor or source-prepared handle is adopted in this step.
+
+## Output-frame tempo smoothing
+
+The per-voice maximum ratio step remains `0.05` in dry and Key Lock modes, but its cadence is one step per `512`
+active output frames instead of one step per render segment. A newly accepted target initiates
+the first step immediately; subsequent steps consume fixed active-frame intervals. Render work
+splits at these interval boundaries before source generation and native pitch application.
+Equivalent control events therefore produce the same source ratio history under fixed,
+irregular or one-frame partitions. Native pitch-update order is also equivalent when initialized
+native/preparation state and prepared-reserve availability match. Asynchronous reserve starvation
+still uses bounded silence; canonical source-feed equality does not depend on that availability.
+Pause does not consume the interval.
+Rate epochs carry their fractional source remainder into each new accepted ratio in every mode.
+
+## Fractional feed verification and remaining gate
+
+Use immutable nonconstant source fixtures with a separately derived continuous reference at
+44.1/48/96 kHz, fractional ratios/BPM, normal wraps, intro/tail seeks, prepared-stem sums, source
+selection transitions, ratio changes and pause/resume. Compare sample sequences and next
+fractional cursors through fixed, irregular and one-frame partitions. The existing adapter test
+only supplied identical already-varispeed samples; source tests must prove that earlier equality.
+Preserve native processing and adapter-delay evidence by comparing the same canonical feed under
+different partitions. Callback work remains bounded and uses accepted buffers and scalar state.
+
+This foundation does not prove audible transient alignment. Exact-ratio source priming,
+independent logical/feed cursors, explicit delay discard, stale/late prepared-state rejection and
+source-aligned activation/crossfades remain pending with separate audible evidence.
 
 ## References
 

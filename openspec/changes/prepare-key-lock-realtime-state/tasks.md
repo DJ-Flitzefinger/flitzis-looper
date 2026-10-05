@@ -25,4 +25,15 @@
 - [x] 4.2 Verify loop wraps, outside-loop seeks, stem masks/version fallback and source transition progress with focused tests and full native/Python checks.
 - [x] 4.3 Update maintained architecture/backend docs and continuation state after validation.
 
-Exact-ratio source pre-roll and audible prepared-state handover remain pending slice 3 work.
+## 5. Fractional source and rate progression
+
+- [x] 5.1 Implement a reusable scalar fractional source epoch and linear two-tap reads through the shared integer loop/seek policy for every playback mode.
+- [x] 5.2 Preserve fractional carry across rate rebases, pause/resume and in-range loop edits; keep explicit seek/retrigger/out-of-range edit behavior.
+- [x] 5.3 Track source-domain stem transition progress fractionally and feed already-resampled canonical samples into the fixed native adapter.
+- [x] 5.4 Apply per-voice ratio steps in every lock mode on fixed 512-active-output-frame intervals and split bounded rendering at rate boundaries.
+- [x] 5.5 Verify immutable nonconstant sources, fractional ratios/BPM, loop wraps, explicit intro/tail seeks and prepared-stem sums across fixed/irregular/one-frame partitions at 44.1/48/96 kHz.
+- [x] 5.6 Verify rate changes, pause/resume, source rebases and equal native input/output sequences without callback allocation or changed adapter delay.
+- [x] 5.7 Pass official strict OpenSpec validation and full native/Python/static checks; update maintained docs and continuation state with evidence and remaining limits.
+
+Exact-ratio source pre-roll, independent DSP feed-ahead and audible prepared-state handover remain
+pending slice 3 work. Fractional feed equivalence alone does not certify audible synchronization.

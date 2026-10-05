@@ -32,7 +32,7 @@ Python UI / controllers / persistence / background workers
 -> bounded command drain and parameter coalescing
 -> TransportTimeline + TransportScheduler
 -> RtMixer voice slots
--> output-frame anchored voice timing for BPM-locked pads
+-> canonical fractional voice source progression
 -> full-mix or prepared-stem source selection
 -> source-frame loop wrap and playhead telemetry
 -> playback-rate / BPM Lock / Key Lock processing
@@ -85,6 +85,7 @@ rust/crates/looper/src/
     |-- mixer.rs                   # RtMixer, voices, loops, stems, gain, DSP
     |-- scheduler.rs               # fixed-capacity output-frame scheduler
     |-- source_grid.rs             # signed source beat/bar and loop-cycle mapping
+    |-- source_playback.rs         # fractional source epochs and output-frame ratio smoothing
     |-- source_reader.rs           # shared loop/seek addressing and stem-source transitions
     |-- timing.rs                  # shared input epoch and estimated device clock diagnostics
     |-- transport.rs               # output-frame timeline and musical grid
@@ -195,12 +196,12 @@ and BPM metadata. Stop/unload and missing-source safety behavior is unchanged;
 this foundation does not add pending-start cancellation.
 
 Scheduled render segments pass their absolute output-frame bounds into the
-mixer. BPM-locked active voices with valid master and pad BPM metadata store
-fixed output-frame/source-frame anchors. During rendering, `RtMixer` maps the
-absolute output-frame delta through the active tempo ratio to a source loop
-position, so pads that represent the same musical loop length share the same
-output-frame loop boundaries. Pads without valid BPM metadata use global-speed
-tempo resolution and do not define or alter the BPM-locked phase path.
+mixer. Every active voice derives fractional source progress from its active
+output-frame count within the current rate epoch, using the actual bounded
+native `f32` ratio promoted to `f64`. This model avoids segment-level source
+rounding with or without BPM Lock. BPM-locked voices with valid master/pad
+metadata use the BPM ratio; missing metadata resolves to global speed without
+redefining another pad's phase or the shared transport timeline.
 
 ## Sample Loading
 
@@ -259,17 +260,20 @@ The runtime keeps two time domains separate:
 
 Loaded full-mix buffers and prepared stems use the engine output rate, so their
 source-frame domain and the editor's sample-offset units use that loaded-buffer
-rate rather than the original file rate.
+rate rather than the original file rate. Runtime source cursors retain a
+fractional remainder; integer playhead telemetry floors the next source cursor.
 
 Python persists loop intent in seconds. Native loop-region commands and MIDI
 runtime loop metadata retain `f64` seconds until conversion to half-open integer
 source-frame ranges, preserving editor frame markers even at long source
-positions. Rust owns live playhead wrapping. Live loop edits invalidate the
-old voice timeline anchor; an in-range playhead is preserved and a normal
-out-of-range playhead is clamped to the new loop start. Bootstrap and rendering
-share `playhead_before_render`, so phase anchoring observes the same first source
-frame that rendering will read, including explicit seek semantics. There is no
-live loop-edit crossfade yet.
+positions. Rust owns live playhead wrapping. Live loop edits rebase source
+progression while preserving an in-range fractional cursor; a normal
+out-of-range playhead is clamped to the new loop start. Bootstrap configures a
+copy of the canonical source cursor against the current effective loop, then
+uses its integer frame plus fractional remainder for source beat mapping.
+It therefore observes the same fractional source position as rendering,
+including live-loop normalization and explicit seek semantics, without advancing
+the live cursor. There is no live loop-edit crossfade yet.
 
 The Loop Editor grid is source-domain editing state. Python derives the visible
 grid anchor from analysis onset/downbeat metadata plus the per-pad
@@ -332,8 +336,8 @@ Speed and BPM Lock resolve to one Rust mixer tempo ratio per active voice:
 Key Lock selects rendering semantics per pad:
 
 - Off: varispeed playback, so pitch follows playback speed.
-- On: `stretch_processor.rs` keeps the source-frame tempo progression and sends
-  the varispeed block through a per-voice Rubber Band LiveShifter with pitch
+- On: `stretch_processor.rs` sends the canonical already-resampled source
+  block through a per-voice Rubber Band LiveShifter with pitch
   scale derived from the inverse tempo ratio, so tempo changes remain while
   perceived pitch stays approximately stable.
 
@@ -342,18 +346,22 @@ per-pad Key Lock entries. Unloaded pads are normalized to disabled Key Lock
 intent and do not receive selected-pad Key Lock controls. After a global update,
 individual loaded-pad controls can change one pad without changing other pads.
 
-BPM-locked source addressing happens before full-mix/stem sample reads and
-before Key Lock processing. Full-mix and prepared-stem playback therefore feed
-the same source-frame sequence into Rubber Band, Gain/Trim, DSP, metering, and
-telemetry.
+Fractional source addressing happens before Key Lock processing. Full-mix
+and prepared-stem playback use the same source progression and interpolation
+path before Rubber Band, Gain/Trim, DSP, metering and telemetry.
 
 `source_reader.rs` owns effective half-open loop regions, explicit before/after-loop
 seek progression, integer source reads, prepared-stem compatibility and source-selection
 crossfades. The mixer and voice state use these shared rules; the module borrows accepted
 immutable buffers and has no native DSP, transport, worker or persistence ownership.
-Output-frame anchors and tempo-ratio selection remain in the mixer. Extracting this policy
-provides the source boundary for later background preparation; it does not prime native
-state or compensate audible delay.
+`source_playback.rs` owns scalar fractional source epochs and rate smoothing. Each
+output sample uses two integer reads through the reader and linear interpolation;
+both taps obey loop wrap and explicit intro/tail seek policy. Rate changes, pause/resume
+and in-range loop edits preserve fractional carry. Source-selection ramps advance by
+fractional source distance. The mixer fills fixed planar buffers with canonical samples;
+`StretchProcessor` consumes them directly instead of interpolating segment endpoints.
+These shared rules provide the source boundary for later background preparation;
+they do not prime native state or compensate audible delay.
 
 `key_lock_preparation.rs` constructs two unique warmed native handles per voice
 before stream rendering: 64 handles for 32 voices, with one shared preparation
@@ -386,8 +394,14 @@ booleans for loaded-pad intent, with unloaded pads saved and restored as
 disabled. Rubber Band handles, runtime paths, buffers, measured latency,
 algorithmic delay, and backend tuning parameters are not persisted, exposed in
 performer settings, or sent through Python/Rust control messages. Active
-tempo-ratio changes use a fixed internal Rust smoothing step so the callback
-receives only bounded mode changes.
+tempo-ratio changes use a maximum internal step of `0.05` every `512` active
+output frames in dry and Key Lock modes. A newly accepted target initiates its
+first step immediately, and rendering splits at subsequent interval boundaries.
+Pause freezes that interval, so callback partitions do not change the source
+ratio sequence. Native pitch-update order is also equivalent with matching
+initialized native/preparation state and reserve availability; reserve starvation
+retains bounded silence without changing canonical source progression.
+This state is not persisted.
 
 ## Per-Pad DSP And EQ
 

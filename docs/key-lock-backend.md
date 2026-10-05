@@ -13,19 +13,21 @@ The active backend is implemented behind:
 rust/crates/looper/src/audio_engine/stretch_processor.rs
 rust/crates/looper/src/audio_engine/rubberband_backend.rs
 rust/crates/looper/src/audio_engine/key_lock_preparation.rs
+rust/crates/looper/src/audio_engine/source_playback.rs
 rust/crates/looper/src/audio_engine/source_reader.rs
 ```
 
-`RtMixer` owns tempo-ratio selection, per-pad Key Lock state, source-frame
-anchors, and per-voice `StretchProcessor` calls. `source_reader.rs` centralizes
+`RtMixer` owns tempo-ratio target selection, per-pad Key Lock state and per-voice
+source/processor calls. `source_reader.rs` centralizes
 effective loop regions, explicit seek progression, full-mix/stem compatibility,
 integer source addressing and source-selection crossfades. It borrows accepted
 buffers and can be reused by background preparation without importing the mixer
-or native processor. The live path still uses the same integer source sequence
-and source-frame transition ramp.
-`VoiceSlot` owns the per-voice `StretchProcessor`, smoothed tempo ratio,
-explicit seek mode, and optional `PlaybackTimelineAnchor`. The mixer retains
-one preparation worker for its 32 voice lanes.
+or native processor. `source_playback.rs` owns scalar fractional source epochs
+and active-output-frame ratio smoothing. The mixer uses that cursor with the
+reader's linear interpolation taps and advances stem transition ramps by
+fractional source distance.
+`VoiceSlot` owns the per-voice source playback state, `StretchProcessor` and
+explicit seek mode. The mixer retains one preparation worker for its 32 voice lanes.
 
 ## Playback Semantics
 
@@ -44,28 +46,31 @@ one preparation worker for its 32 voice lanes.
 - Full-mix and prepared-stem playback share the same source addressing and Key
   Lock path.
 
-## BPM-Locked Timing
+## Source Timing And Resampling
 
 Scheduled render segments carry absolute output-frame positions from
 `audio_stream.rs` into `RtMixer::render_rt_at_output_frame(...)`.
 
-BPM-locked active voices with valid master and pad BPM metadata store a fixed
-`PlaybackTimelineAnchor` containing:
+Every playback mode uses `SourcePlayback` to derive fractional source progress
+from a scalar source epoch plus active output-frame count times the actual native
+`f32` tempo ratio promoted to `f64`. Reads linearly interpolate two integer
+neighbors through the shared half-open loop/seek policy. The lookahead tap wraps
+at loop end; explicit intro seeks play into the loop, and tail seeks play to
+track end before wrapping into the loop. Both channels and prepared-stem
+selections use the same addresses and fractional source transition progress.
 
-- the absolute output frame where the current voice timeline is anchored,
-- the source frame corresponding to that output frame.
+Rate changes rebase from the current fractional position instead of independently
+rounding source consumption per segment. Pause freezes source and smoothing
+progress; resume continues them. In-range loop edits retain fractional carry,
+while out-of-range edits retain the existing loop-start clamp. Explicit seeks
+and retriggers start a new source epoch. Integer telemetry floors the next
+source cursor. Ordinary wrapping does not redefine the Rust master output
+timeline, Rubber Band state, editor source grid or prepared-stem alignment.
 
-For each rendered segment, `RtMixer` maps absolute output-frame delta through
-the active tempo ratio, converts that non-cumulative source offset into the
-voice's half-open source-frame loop region, and records the next anchored source
-frame for playhead telemetry. Pads that represent the same musical loop length
-therefore share the same output-frame loop boundaries across repeated loop
-wraps.
-
-START/STOP, explicit retrigger, seek, pause/resume, and loop-boundary state
-changes refresh the voice timeline anchor. Ordinary loop wrapping does not
-redefine the Rust master output timeline, Rubber Band state, the Loop Editor
-source grid, or prepared-stem alignment.
+The same source feed supplies dry varispeed output and the Rubber Band adapter.
+`StretchProcessor` no longer interpolates render-segment endpoints. This makes
+source/native input independent of fixed, irregular and one-frame partitions
+when source state and accepted control events are equivalent.
 
 The separate `source_grid.rs` foundation derives source beat/bar and loop-cycle
 phase from the editor's signed origin. Transport retains complete beat position
@@ -74,10 +79,12 @@ reference. These operations preserve voice read positions and Rubber Band
 ownership. The master-to-source mapping helper is internal and tested; normal
 starts still read the effective loop beginning. Neither that helper nor the
 one-time bootstrap compensates audible Rubber Band/device delay.
-Loop edits clear the old source/output anchor before rendering reestablishes
-it. Bootstrap and rendering use the same bounded playhead normalization so a
-changed loop cannot anchor the master to a source frame that will be clamped
-before the next read. These changes do not reconstruct Rubber Band state.
+Bootstrap queries a copy of the canonical source cursor configured against the
+current effective loop. It maps the integer source frame plus its fractional
+remainder to beats, matching the position rendering will read after loop/seek
+normalization without advancing the live cursor. A changed loop cannot anchor
+the master to a source position that will be clamped before the next read.
+These changes do not reconstruct Rubber Band state.
 
 ## Rubber Band Processing
 
@@ -175,16 +182,15 @@ prepared results live in workspace `scratch/`, including
 not repository artifacts. Reproduce the probe using
 [the development guide](development.md#offline-key-lock-measurement).
 
-The adapter partition test supplies identical already-varispeed samples. It
-does not prove that source resampling supplies identical samples: the current
-resampler interpolates each segment's endpoints using
-`(input_frames - 1) / (output_frames - 1)`. Different segment boundaries can
-therefore change fractional source positions even when BPMLOCK anchors reach
-the same next source frame. Without an output anchor, rounding each segment's
-source-frame count can also accumulate. Exact-source preparation needs a
-shared fractional source/resampling timeline before its worker output can be
-compared against callback output. The extracted integer reader preserves the
-existing behavior and makes no such resampling-equivalence claim.
+The adapter partition test supplies identical already-varispeed samples. The
+fractional source foundation also compares immutable nonconstant sources,
+loop/intro/tail boundaries and prepared-stem sums through the common source
+path at 44.1/48/96 kHz. Rate changes and pause/resume use active-frame progress,
+so their source feed does not change with render partition sizes. This proves
+the source-to-adapter prerequisite independently of the adapter FIFO property;
+it does not prove source priming, transient compensation or audible hardware
+alignment. Exact-source preparation can reuse this source path, but its native
+pre-roll and prepared-state activation are still pending.
 
 This preparation and adapter safety stage (slice 3a) does not perform track
 pre-roll, delay discarding, or a separate DSP feed-ahead cursor. Source playheads,
@@ -209,8 +215,13 @@ Band handles, DLL/shared-library paths, runtime buffers, measured latency,
 algorithmic delay, or callback-internal backend state.
 
 The performer Settings UI exposes no Rubber Band backend tuning surface. Rust
-uses a fixed internal tempo-ratio smoothing step for active voices; that value is
-not persisted or user-tunable.
+uses a maximum tempo-ratio step of `0.05` every `512` active output frames in
+dry and Key Lock modes. A newly accepted target initiates its first step
+immediately. Rendering splits at later step boundaries so source ratios remain
+independent of callback partitions; paused output does not consume an interval.
+Native pitch-update order also matches with equivalent initialized native/preparation
+state and reserve availability. Missing reserves retain bounded silence without
+changing the canonical source feed. These values are not persisted or user-tunable.
 
 ## Realtime Constraints
 

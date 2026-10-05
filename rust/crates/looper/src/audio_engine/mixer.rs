@@ -21,18 +21,17 @@ use crate::audio_engine::key_lock_preparation::{
 use crate::audio_engine::source_grid::SourceGrid;
 use crate::audio_engine::source_reader::{
     FrameRange, STEM_TRANSITION_RAMP_FRAMES, SourceReadPlan, StemRenderSelection, StemTransition,
-    advance_playback_position, effective_loop_region, explicit_seek_mode_for_frame,
-    playhead_before_render, prepared_stem_set_for_render, prepared_stem_set_matches_sample,
-    source_frame_for_playback,
+    effective_loop_region, explicit_seek_mode_for_frame, prepared_stem_set_for_render,
+    prepared_stem_set_matches_sample,
 };
 #[cfg(test)]
 use crate::audio_engine::source_reader::{
     full_stem_available_mask, render_source_sample, stem_index_mask,
 };
 use crate::audio_engine::stretch_processor::DEFAULT_BLOCK_SAMPLES;
-use crate::audio_engine::voice_slot::{
-    ExplicitSeekMode, PlaybackTimelineAnchor, VoiceSlot, VoiceStartConfig,
-};
+#[cfg(test)]
+use crate::audio_engine::voice_slot::ExplicitSeekMode;
+use crate::audio_engine::voice_slot::{VoiceSlot, VoiceStartConfig};
 #[cfg(test)]
 use crate::messages::STEM_BUFFER_COUNT;
 use crate::messages::{
@@ -166,65 +165,6 @@ impl SmoothedGain {
     fn current(&self) -> f32 {
         self.current
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct AnchoredPlaybackPosition {
-    source_frame_pos: usize,
-    input_frames: usize,
-    next_frame_pos: usize,
-}
-
-fn rounded_source_offset(
-    anchor: PlaybackTimelineAnchor,
-    output_frame: u64,
-    tempo_ratio: f32,
-) -> Option<usize> {
-    if output_frame < anchor.output_frame || !tempo_ratio.is_finite() || tempo_ratio <= 0.0 {
-        return None;
-    }
-
-    let output_delta = output_frame - anchor.output_frame;
-    let source_delta = (output_delta as f64 * f64::from(tempo_ratio)).round();
-    if !source_delta.is_finite() || source_delta < 0.0 || source_delta > usize::MAX as f64 {
-        return None;
-    }
-
-    Some(source_delta as usize)
-}
-
-fn anchored_playback_position(
-    anchor: PlaybackTimelineAnchor,
-    output_start_frame: u64,
-    output_frames: usize,
-    tempo_ratio: f32,
-    sample_frames: usize,
-    loop_region: FrameRange,
-) -> Option<AnchoredPlaybackPosition> {
-    let output_end_frame = output_start_frame.checked_add(output_frames as u64)?;
-    let start_offset = rounded_source_offset(anchor, output_start_frame, tempo_ratio)?;
-    let end_offset = rounded_source_offset(anchor, output_end_frame, tempo_ratio)?;
-    let input_frames = end_offset
-        .saturating_sub(start_offset)
-        .clamp(1, DEFAULT_BLOCK_SAMPLES);
-
-    Some(AnchoredPlaybackPosition {
-        source_frame_pos: source_frame_for_playback(
-            anchor.source_frame,
-            start_offset,
-            sample_frames,
-            loop_region,
-            ExplicitSeekMode::Normal,
-        ),
-        input_frames,
-        next_frame_pos: source_frame_for_playback(
-            anchor.source_frame,
-            end_offset,
-            sample_frames,
-            loop_region,
-            ExplicitSeekMode::Normal,
-        ),
-    })
 }
 
 /// Real-time mixer that handles sample loading and voice management.
@@ -948,9 +888,6 @@ impl RtMixer {
         for voice_slot in &mut self.voices {
             if voice_slot.is_playing_sample(id) {
                 voice_slot.clear_explicit_seek();
-                // The old anchor describes the old loop. Retain the read position
-                // and let the next segment establish its anchor in the new region.
-                voice_slot.timeline_anchor = None;
             }
         }
     }
@@ -1079,10 +1016,11 @@ impl RtMixer {
             .find(|voice| voice.active && !voice.paused && voice.sample_id == id)?;
         let sample_frames = voice.sample.as_ref()?.samples.len() / self.channels;
         let region = self.effective_loop_region(id, sample_frames)?;
-        let frame = playhead_before_render(voice.frame_pos, region, voice.explicit_seek_mode);
-        let frame =
-            source_frame_for_playback(frame, 0, sample_frames, region, voice.explicit_seek_mode);
-        self.source_grid(id)?.beat_at_source(frame as f64)
+        let mut playback = voice.source_playback;
+        playback.configure(sample_frames, region);
+        let position = playback.position();
+        self.source_grid(id)?
+            .beat_at_source(position.frame as f64 + position.fraction)
     }
 
     fn tempo_ratio_for_sample_id(&self, sample_id: usize) -> f32 {
@@ -1141,16 +1079,13 @@ impl RtMixer {
         self.pause_sample_with_output_frame(id, Some(output_frame));
     }
 
-    fn pause_sample_with_output_frame(&mut self, id: usize, output_frame: Option<u64>) {
+    fn pause_sample_with_output_frame(&mut self, id: usize, _output_frame: Option<u64>) {
         if id >= NUM_SAMPLES {
             return;
         }
 
         for voice_slot in &mut self.voices {
             if voice_slot.is_playing_sample(id) {
-                if let Some(output_frame) = output_frame {
-                    voice_slot.anchor_timeline(output_frame);
-                }
                 voice_slot.pause();
             }
         }
@@ -1169,16 +1104,13 @@ impl RtMixer {
         self.resume_sample_with_output_frame(id, Some(output_frame));
     }
 
-    fn resume_sample_with_output_frame(&mut self, id: usize, output_frame: Option<u64>) {
+    fn resume_sample_with_output_frame(&mut self, id: usize, _output_frame: Option<u64>) {
         if id >= NUM_SAMPLES {
             return;
         }
 
         for voice_slot in &mut self.voices {
             if voice_slot.is_playing_sample(id) {
-                if let Some(output_frame) = output_frame {
-                    voice_slot.anchor_timeline(output_frame);
-                }
                 voice_slot.resume();
             }
         }
@@ -1358,7 +1290,7 @@ impl RtMixer {
         &mut self,
         output: &mut [f32],
         pad_peaks: &mut [f32; NUM_SAMPLES],
-        output_start_frame: Option<u64>,
+        _output_start_frame: Option<u64>,
         pad_activity: &mut RtRenderPadActivity,
         retirement: &mut impl AudioBufferRetirement,
     ) {
@@ -1423,28 +1355,15 @@ impl RtMixer {
                     stem_mix_source_version_hash[voice.sample_id],
                     stem_enabled_mask[voice.sample_id],
                 );
-                let stem_transition = stem_transitions[voice.sample_id];
-
-                let pad_bpm_for_voice = pad_bpm[voice.sample_id];
-                let bpm_locked_phase = bpm_lock_enabled
-                    && master_bpm.is_some_and(|bpm| bpm.is_finite() && bpm > 0.0)
-                    && pad_bpm_for_voice.is_some_and(|bpm| bpm.is_finite() && bpm > 0.0);
 
                 let mut target_tempo_ratio = speed;
                 if bpm_lock_enabled
-                    && let (Some(master_bpm), Some(pad_bpm)) = (master_bpm, pad_bpm_for_voice)
+                    && let (Some(master_bpm), Some(pad_bpm)) =
+                        (master_bpm, pad_bpm[voice.sample_id])
                 {
                     target_tempo_ratio = master_bpm / pad_bpm;
                 }
-
-                if !target_tempo_ratio.is_finite() {
-                    target_tempo_ratio = 1.0;
-                }
-                target_tempo_ratio = target_tempo_ratio.clamp(SPEED_MIN, SPEED_MAX);
-
-                let previous_tempo_ratio = voice.tempo_ratio_smoothed();
-                let tempo_ratio = voice.smooth_tempo_ratio(target_tempo_ratio);
-                let tempo_ratio_changed = (tempo_ratio - previous_tempo_ratio).abs() > f32::EPSILON;
+                voice.source_playback.set_target(target_tempo_ratio);
 
                 let Some(loop_region) = effective_loop_region(
                     pad_loop_start_frame[voice.sample_id],
@@ -1454,156 +1373,79 @@ impl RtMixer {
                     voice.stop_rt(retirement);
                     continue;
                 };
-                let loop_start = loop_region.start;
-                let loop_end = loop_region.end;
-                let mut seek_mode = voice.explicit_seek_mode;
-                let mut timeline_anchor_needs_reset = tempo_ratio_changed;
-                let normalized_frame =
-                    playhead_before_render(voice.frame_pos, loop_region, seek_mode);
-                if normalized_frame != voice.frame_pos {
-                    voice.frame_pos = normalized_frame;
-                    timeline_anchor_needs_reset = true;
-                }
-                if voice.frame_pos > sample_frames {
-                    voice.frame_pos = sample_frames;
-                    timeline_anchor_needs_reset = true;
-                }
-                if seek_mode == ExplicitSeekMode::BeforeLoop && voice.frame_pos >= loop_start {
-                    seek_mode = ExplicitSeekMode::Normal;
-                    voice.explicit_seek_mode = ExplicitSeekMode::Normal;
-                    timeline_anchor_needs_reset = true;
-                }
-                if seek_mode == ExplicitSeekMode::AfterLoop && voice.frame_pos < loop_end {
-                    seek_mode = ExplicitSeekMode::Normal;
-                    voice.explicit_seek_mode = ExplicitSeekMode::Normal;
-                    timeline_anchor_needs_reset = true;
-                }
-
-                if let Some(segment_start_frame) = output_start_frame
-                    && (timeline_anchor_needs_reset || voice.timeline_anchor.is_none())
-                {
-                    voice.anchor_timeline(segment_start_frame);
-                }
-
-                let anchored_position = if bpm_locked_phase && seek_mode == ExplicitSeekMode::Normal
-                {
-                    output_start_frame.zip(voice.timeline_anchor).and_then(
-                        |(segment_start_frame, anchor)| {
-                            anchored_playback_position(
-                                anchor,
-                                segment_start_frame,
-                                frames,
-                                tempo_ratio,
-                                sample_frames,
-                                loop_region,
-                            )
-                        },
-                    )
-                } else {
-                    None
-                };
-
-                let (source_frame_pos, input_frames, anchored_next_frame_pos) =
-                    if let Some(position) = anchored_position {
-                        (
-                            position.source_frame_pos,
-                            position.input_frames,
-                            Some(position.next_frame_pos),
-                        )
-                    } else {
-                        let mut input_frames = ((frames as f32) * tempo_ratio).round() as usize;
-                        input_frames = input_frames.clamp(1, DEFAULT_BLOCK_SAMPLES);
-                        (voice.frame_pos, input_frames, None)
-                    };
-
-                SourceReadPlan {
-                    channels,
-                    sample_frames,
-                    frame_pos: source_frame_pos,
-                    loop_region,
-                    seek_mode,
-                    selection: current_selection,
-                    transition: stem_transition,
-                }
-                .fill_buffers(
-                    &sample,
-                    prepared_stem_set,
-                    voice.stretch.input_buffers_mut(input_frames),
-                    input_frames,
-                );
-                stem_transitions[voice.sample_id].advance(input_frames);
-
-                voice.stretch.process(
-                    input_frames,
-                    frames,
-                    tempo_ratio,
-                    pad_key_lock_enabled[voice.sample_id],
-                );
-
-                let pad_dsp_chain = &mut pad_dsp_chains[voice.sample_id];
-                let pad_gain_smoother = &mut pad_gain_smoothers[voice.sample_id];
-
-                let output_buffers = voice.stretch.output_buffers();
-                for frame in 0..frames {
-                    let out_base = frame * channels;
-                    let trim_gain = pad_gain_smoother.next();
-                    pad_dsp_chain.begin_frame();
-                    for (channel, buffer) in output_buffers.iter().enumerate().take(channels) {
-                        let sample = buffer[frame] * trim_gain;
-                        let sample = pad_dsp_chain.process_sample(channel, sample);
-                        let contribution = sample * voice.volume;
-                        let mixed = contribution * volume;
-                        output[out_base + channel] += mixed;
-
-                        let peak = contribution.abs();
-                        if peak > pad_peaks[voice.sample_id] {
-                            pad_peaks[voice.sample_id] = peak;
+                voice.source_playback.configure(sample_frames, loop_region);
+                let mut rendered = 0;
+                // Each iteration consumes output frames and crosses at most one fixed rate step.
+                // The enclosing render chunk is bounded by max_realtime_render_frames().
+                while rendered < frames {
+                    let (chunk_frames, tempo_ratio) =
+                        voice.source_playback.chunk(frames - rendered);
+                    let stem_transition = stem_transitions[voice.sample_id];
+                    let buffers = voice.stretch.resampled_buffers_mut(chunk_frames);
+                    for frame in 0..chunk_frames {
+                        let position = voice.source_playback.position_at(frame);
+                        let plan = SourceReadPlan {
+                            channels,
+                            sample_frames,
+                            frame_pos: position.frame,
+                            loop_region,
+                            seek_mode: position.seek_mode,
+                            selection: current_selection,
+                            transition: stem_transition,
+                        };
+                        let source_progress = frame as f64 * f64::from(tempo_ratio);
+                        for (channel, buffer) in buffers.iter_mut().enumerate().take(channels) {
+                            buffer[frame] = plan.sample_fractional(
+                                &sample,
+                                prepared_stem_set,
+                                position.fraction,
+                                source_progress,
+                                channel,
+                            );
                         }
                     }
-                }
+                    stem_transitions[voice.sample_id]
+                        .advance_fractional(chunk_frames as f64 * f64::from(tempo_ratio));
+                    voice.stretch.process_resampled(
+                        chunk_frames,
+                        tempo_ratio,
+                        pad_key_lock_enabled[voice.sample_id],
+                    );
 
-                let (next_frame_pos, next_seek_mode) =
-                    if let Some(next_frame_pos) = anchored_next_frame_pos {
-                        (next_frame_pos, ExplicitSeekMode::Normal)
-                    } else {
-                        advance_playback_position(
-                            source_frame_pos,
-                            input_frames,
-                            sample_frames,
-                            loop_region,
-                            seek_mode,
-                        )
-                    };
-                voice.frame_pos = next_frame_pos;
-                voice.explicit_seek_mode = next_seek_mode;
-                if anchored_next_frame_pos.is_none()
-                    && let Some(segment_start_frame) = output_start_frame
-                {
-                    voice.timeline_anchor.replace(PlaybackTimelineAnchor {
-                        output_frame: segment_start_frame.saturating_add(frames as u64),
-                        source_frame: next_frame_pos,
-                    });
+                    let pad_dsp_chain = &mut pad_dsp_chains[voice.sample_id];
+                    let pad_gain_smoother = &mut pad_gain_smoothers[voice.sample_id];
+                    let output_buffers = voice.stretch.output_buffers();
+                    for frame in 0..chunk_frames {
+                        let out_base = (rendered + frame) * channels;
+                        let trim_gain = pad_gain_smoother.next();
+                        pad_dsp_chain.begin_frame();
+                        for (channel, buffer) in output_buffers.iter().enumerate().take(channels) {
+                            let sample = buffer[frame] * trim_gain;
+                            let sample = pad_dsp_chain.process_sample(channel, sample);
+                            let contribution = sample * voice.volume;
+                            output[out_base + channel] += contribution * volume;
+                            pad_peaks[voice.sample_id] =
+                                pad_peaks[voice.sample_id].max(contribution.abs());
+                        }
+                    }
+                    voice.source_playback.advance(chunk_frames);
+                    rendered += chunk_frames;
                 }
+                let position = voice.source_playback.position();
+                voice.frame_pos = position.frame;
+                voice.explicit_seek_mode = position.seek_mode;
             } else {
-                let sample_frames = sample.samples.len() / channels;
-                let loop_start = pad_loop_start_frame[voice.sample_id].min(sample_frames);
-
-                let mut loop_end = pad_loop_end_frame[voice.sample_id].unwrap_or(sample_frames);
-                loop_end = loop_end.min(sample_frames);
-                if loop_end <= loop_start {
-                    // Invalid loop; but voice is paused; skip.
-                } else if voice.explicit_seek_mode == ExplicitSeekMode::Normal
-                    && (voice.frame_pos < loop_start || voice.frame_pos >= loop_end)
-                {
-                    voice.frame_pos = loop_start;
-                } else if voice.frame_pos > sample_frames {
-                    voice.frame_pos = sample_frames;
-                }
-                if let Some(segment_start_frame) = output_start_frame {
-                    voice.timeline_anchor.replace(PlaybackTimelineAnchor {
-                        output_frame: segment_start_frame.saturating_add(frames as u64),
-                        source_frame: voice.frame_pos,
-                    });
+                if let Some(region) = effective_loop_region(
+                    pad_loop_start_frame[voice.sample_id],
+                    pad_loop_end_frame[voice.sample_id],
+                    sample.samples.len() / channels,
+                ) {
+                    voice
+                        .source_playback
+                        .configure(sample.samples.len() / channels, region);
+                    let position = voice.source_playback.position();
+                    voice.frame_pos = position.frame;
+                    voice.explicit_seek_mode = position.seek_mode;
                 }
             }
             pad_playhead_frame[voice.sample_id] = Some(voice.frame_pos);
@@ -3825,3 +3667,7 @@ mod tests {
         assert_eq!(frame_after_resume, frame_after_pause + 20);
     }
 }
+
+#[cfg(test)]
+#[path = "mixer_source_tests.rs"]
+mod source_tests;

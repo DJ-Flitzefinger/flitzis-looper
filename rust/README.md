@@ -35,6 +35,7 @@ rust/
     |           |-- mixer.rs
     |           |-- scheduler.rs
     |           |-- source_grid.rs
+    |           |-- source_playback.rs
     |           |-- source_reader.rs
     |           |-- timing.rs
     |           |-- transport.rs
@@ -70,7 +71,7 @@ Python controllers
 -> CPAL callback
 -> TransportTimeline + TransportScheduler
 -> RtMixer
--> output-frame anchored BPM Lock timing
+-> canonical fractional source progression
 -> source selection, loop wrap, playback-rate / Key Lock
 -> smoothed per-pad Gain/Trim
 -> per-pad DSP chain
@@ -132,10 +133,10 @@ is `uv run cargo test --manifest-path rust/Cargo.toml --workspace`.
 - Pad peak/playhead telemetry is cadence-gated and published only for pads
   touched by rendering in that callback; inactive bank slots are not scanned for
   telemetry.
-- Scheduled mixer segments carry absolute output-frame positions. BPM-locked
-  active voices with valid master and pad BPM metadata use fixed
-  output-frame/source-frame anchors to derive source loop phase from the Rust
-  transport timeline.
+- Scheduled mixer segments carry absolute output-frame positions. Every active
+  voice derives fractional source progress from its active-output-frame count
+  within a rate epoch, using the actual native `f32` ratio promoted to `f64`.
+  This avoids cumulative segment rounding in all lock modes.
 - `source_grid.rs` owns signed source beat/bar, loop-start phase and internal
   master-beat-to-loop mapping. The editor origin is published as `f64` seconds
   and retained as a signed virtual source frame. Compatible tick periods divide
@@ -144,8 +145,15 @@ is `uv run cargo test --manifest-path rust/Cargo.toml --workspace`.
   retain bounded wrapping without a sustained synchronization claim.
 - `source_reader.rs` shares effective loop bounds, explicit seek progression, full-mix/stem
   validation, integer source reads and source-selection crossfades. Voice state and mixer
-  rendering use the same policy; output-frame anchors and tempo-ratio selection remain
-  in the mixer. The reader does not own DSP state or perform source pre-roll.
+  rendering use the same policy. `source_playback.rs` adds scalar fractional epochs
+  and fixed active-frame ratio smoothing; the reader provides linear two-tap reads.
+  Both taps obey the
+  loop/intro/tail seek policy; source-selection ramps advance by fractional source
+  distance. `StretchProcessor` receives the canonical already-resampled feed directly.
+  These modules do not own native DSP state or perform source pre-roll.
+  The maximum per-voice ratio step remains `0.05`, now every `512` active output frames
+  in dry and Key Lock modes, with the first step at a newly accepted target. Render
+  work splits at rate boundaries; pause freezes source and smoothing progress.
 - Signed grid and loop-region seconds use `f64`, including MIDI runtime loop
   metadata, until source-frame conversion. Pad/master BPM remain native `f32`
   parameters promoted to `f64` for phase math. Long source markers retain frame
@@ -155,9 +163,11 @@ is `uv run cargo test --manifest-path rust/Cargo.toml --workspace`.
   reference once per stream, waits for valid active source state and consumes
   the opportunity on success or deliberate explicit sync. Silence cannot rearm
   it. Active source playheads and the monotonic output-frame clock are preserved.
-- Loop edits invalidate old voice timing anchors. Bootstrap and rendering share
-  bounded `playhead_before_render` normalization, keeping their first source
-  frame coherent after clamping or explicit seek.
+- Rate changes and in-range loop edits preserve fractional source carry.
+  Out-of-range edits retain the loop-start clamp. Bootstrap configures a copy of
+  the canonical cursor against the current effective loop and maps frame plus
+  fractional remainder to beats. It matches rendering after loop/seek normalization
+  without advancing the live cursor.
 - Already accepted starts retain output target/order/timestamp across BPM and
   metadata updates; current execution uses the latest effective loop start.
   Source-phase mapping remains an internal foundation, with ordinary immediate

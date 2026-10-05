@@ -202,19 +202,21 @@ fn measure_preparation(rate: u32, ratio: f32, trials: usize) {
             native.shift(&input, &mut output).unwrap()
         });
         let (mut adapter, _worker) = case.measure("adapter_construct", || new_processor(rate));
-        let input_samples = (512.0 * ratio).round() as usize;
-        for channel in adapter.input_buffers_mut(input_samples) {
+        for channel in adapter.resampled_buffers_mut(512) {
             channel.fill(0.25);
         }
         case.measure("adapter_first_activate_and_process", || {
-            adapter.process(input_samples, 512, ratio, true)
+            adapter.process_resampled(512, ratio, true)
         });
         case.measure("adapter_reset_after_process", || adapter.reset());
+        for channel in adapter.resampled_buffers_mut(512) {
+            channel.fill(0.25);
+        }
         case.measure("adapter_activate_after_reset", || {
-            adapter.process(input_samples, 512, ratio, true)
+            adapter.process_resampled(512, ratio, true)
         });
         case.measure("adapter_warm_process", || {
-            adapter.process(input_samples, 512, ratio, true)
+            adapter.process_resampled(512, ratio, true)
         });
     }
 }
@@ -276,27 +278,28 @@ fn adapter_response(
     key_lock: bool,
 ) -> Vec<f32> {
     let (mut adapter, _worker) = new_processor(rate);
+    let total_frames = marker + rate as usize / 3;
+    let source_rate = f64::from(ratio);
+    // One immutable source-domain impulse is linearly sampled at each absolute output frame.
+    // Callback boundaries do not relocate its marker or choose its interpolation endpoints.
+    let source_frames = (total_frames as f64 * source_rate).ceil() as usize + 2;
+    let mut source = vec![0.0; source_frames];
+    source[(marker as f64 * source_rate).round() as usize] = 1.0;
     let mut offset = 0;
     let mut index = 0;
     let mut rendered = Vec::new();
-    while offset < marker + rate as usize / 3 {
-        let output_samples = pattern[index % pattern.len()];
-        let input_samples =
-            ((output_samples as f32 * ratio).round() as usize).clamp(1, DEFAULT_BLOCK_SAMPLES);
-        for channel in adapter.input_buffers_mut(input_samples) {
-            channel.fill(0.0);
-            if (offset..offset + output_samples).contains(&marker) {
-                let local = marker - offset;
-                let position = if output_samples > 1 {
-                    (local as f64 * (input_samples - 1) as f64 / (output_samples - 1) as f64)
-                        .round() as usize
-                } else {
-                    0
-                };
-                channel[position] = 1.0;
+    while offset < total_frames {
+        let output_samples = pattern[index % pattern.len()].min(total_frames - offset);
+        for channel in adapter.resampled_buffers_mut(output_samples) {
+            for (index, sample) in channel[..output_samples].iter_mut().enumerate() {
+                let position = (offset + index) as f64 * source_rate;
+                let source_index = position.floor() as usize;
+                let fraction = (position - source_index as f64) as f32;
+                *sample = source[source_index]
+                    + (source[source_index + 1] - source[source_index]) * fraction;
             }
         }
-        adapter.process(input_samples, output_samples, ratio, key_lock);
+        adapter.process_resampled(output_samples, ratio, key_lock);
         rendered.extend_from_slice(&adapter.output_buffers()[0][..output_samples]);
         offset += output_samples;
         index += 1;

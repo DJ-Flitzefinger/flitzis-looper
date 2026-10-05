@@ -152,6 +152,10 @@ The standalone `key_lock_latency_probe` example imports the production backend,
 processor, and preparation pool. It reports construction/reset/warming costs,
 Rust allocations, nominal native delay, and synthetic impulse response across
 44.1/48/96 kHz, ratios 0.5/0.75/1/1.5/2, and fixed/irregular callback partitions.
+The adapter probe samples one immutable source-domain impulse at absolute output-frame
+positions, so callback partitions do not relocate markers or interpolation endpoints.
+It measures startup and settled markers separately; the production source-path tests
+add fractional BPM, loops, seeks and prepared stems.
 The current engine prepares 64 unique handles for 32 voices and adds a fixed
 511-frame wet adapter lead. Native reset/cold pitch work stays off the callback;
 reserve starvation produces bounded wet silence, while dry processing remains

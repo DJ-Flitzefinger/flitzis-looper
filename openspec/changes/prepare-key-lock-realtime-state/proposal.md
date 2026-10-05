@@ -16,6 +16,10 @@ source pre-roll and synchronized audible launches can be enabled.
 - Give the fixed-block adapter a deterministic block-size-minus-one frame lead independent of
   callback partitioning. Record native, adapter and device-estimate delays separately.
 - Preserve Rubber Band history across the existing source-domain stem crossfade.
+- Generate dry varispeed and native input from one reusable fractional source timeline,
+  preserving source carry and sample sequences across callback partitions in every playback mode.
+- Advance per-voice tempo smoothing on fixed active-output-frame intervals instead of callback
+  counts, and split bounded rendering at those rate changes.
 - Add a reproducible release probe for cold/warmed preparation and impulse timing.
 
 ## Capabilities
@@ -27,11 +31,12 @@ None.
 ### Modified Capabilities
 
 - `time-stretch-pitch-shift`: preparation ownership, bounded reserve fallback, deterministic
-  adapter latency and continuous stem processing.
+  adapter latency, continuous stem processing and partition-independent fractional source reads.
 
 ## Impact
 
-Rust backend, preparation worker, per-voice processor, mixer construction and native stream startup;
+Rust backend, preparation worker, source reader/timeline, per-voice processor, mixer construction
+and native stream startup;
 Rust tests, release measurement example and maintained native/architecture documentation.
 No project format, Python API, dependency, control or loop-marker changes.
 
@@ -50,4 +55,6 @@ plugin host, new FX or variable-tempo warp engine are included.
 Construction, native reset, cold pitch updates, first shift, scratch allocation and recycling run
 outside the callback. The callback owns each active handle exclusively, exchanges unique handles
 through preallocated lanes, and never waits, locks, logs, performs disk/GIL work or primes many
-native blocks. Queue saturation retains ownership; it never discards native state in realtime.
+native blocks. Fractional source interpolation uses two bounded reads per channel through the
+accepted integer source policy. Rate-interval splitting reuses fixed processor storage.
+Queue saturation retains ownership; it never discards native state in realtime.

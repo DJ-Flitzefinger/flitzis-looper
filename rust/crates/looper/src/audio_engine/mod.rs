@@ -51,6 +51,7 @@ mod rubberband_backend;
 mod sample_loader;
 mod scheduler;
 mod source_grid;
+mod source_playback;
 mod source_reader;
 mod stem_cache;
 mod stretch_processor;

@@ -1,11 +1,9 @@
 use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
-use crate::audio_engine::constants::{SPEED_MAX, SPEED_MIN};
 use crate::audio_engine::key_lock_preparation::KeyLockPreparationLane;
+use crate::audio_engine::source_playback::SourcePlayback;
 pub(crate) use crate::audio_engine::source_reader::ExplicitSeekMode;
 use crate::audio_engine::stretch_processor::StretchProcessor;
 use crate::messages::SampleBuffer;
-
-const KEY_LOCK_TEMPO_SMOOTHING_STEP: f32 = 0.05;
 
 pub(crate) struct VoiceStartConfig {
     pub(crate) sample_id: usize,
@@ -16,23 +14,16 @@ pub(crate) struct VoiceStartConfig {
     pub(crate) start_output_frame: Option<u64>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PlaybackTimelineAnchor {
-    pub(crate) output_frame: u64,
-    pub(crate) source_frame: usize,
-}
-
 pub struct VoiceSlot {
     pub active: bool,
     pub sample_id: usize,
     pub sample: Option<SampleBuffer>,
     pub frame_pos: usize,
     pub volume: f32,
-    tempo_ratio_smoothed: f32,
+    pub(crate) source_playback: SourcePlayback,
     pub stretch: StretchProcessor,
     pub paused: bool,
     pub(crate) explicit_seek_mode: ExplicitSeekMode,
-    pub(crate) timeline_anchor: Option<PlaybackTimelineAnchor>,
 }
 
 impl VoiceSlot {
@@ -46,11 +37,10 @@ impl VoiceSlot {
             sample: None,
             frame_pos: 0,
             volume: 0.0,
-            tempo_ratio_smoothed: 1.0,
+            source_playback: SourcePlayback::new(0, ExplicitSeekMode::Normal, 1.0),
             stretch: StretchProcessor::with_preparation_lane(channels, preparation),
             paused: false,
             explicit_seek_mode: ExplicitSeekMode::Normal,
-            timeline_anchor: None,
         }
     }
 
@@ -80,20 +70,20 @@ impl VoiceSlot {
         initial_frame_pos: usize,
         volume: f32,
         initial_tempo_ratio: f32,
-        start_output_frame: Option<u64>,
+        _start_output_frame: Option<u64>,
     ) {
         self.active = true;
         self.sample_id = sample_id;
         self.sample = Some(sample);
         self.frame_pos = initial_frame_pos;
         self.volume = volume;
-        self.tempo_ratio_smoothed = initial_tempo_ratio;
+        self.source_playback = SourcePlayback::new(
+            initial_frame_pos,
+            ExplicitSeekMode::Normal,
+            initial_tempo_ratio,
+        );
         self.paused = false;
         self.explicit_seek_mode = ExplicitSeekMode::Normal;
-        self.timeline_anchor = start_output_frame.map(|output_frame| PlaybackTimelineAnchor {
-            output_frame,
-            source_frame: initial_frame_pos,
-        });
         self.stretch.reset();
     }
 
@@ -115,10 +105,9 @@ impl VoiceSlot {
         self.active = false;
         self.frame_pos = 0;
         self.volume = 0.0;
-        self.tempo_ratio_smoothed = 1.0;
+        self.source_playback = SourcePlayback::new(0, ExplicitSeekMode::Normal, 1.0);
         self.paused = false;
         self.explicit_seek_mode = ExplicitSeekMode::Normal;
-        self.timeline_anchor = None;
         self.stretch.reset();
     }
 
@@ -127,17 +116,17 @@ impl VoiceSlot {
         initial_frame_pos: usize,
         volume: f32,
         initial_tempo_ratio: f32,
-        start_output_frame: Option<u64>,
+        _start_output_frame: Option<u64>,
     ) {
         self.frame_pos = initial_frame_pos;
         self.volume = volume;
-        self.tempo_ratio_smoothed = initial_tempo_ratio;
+        self.source_playback = SourcePlayback::new(
+            initial_frame_pos,
+            ExplicitSeekMode::Normal,
+            initial_tempo_ratio,
+        );
         self.paused = false;
         self.explicit_seek_mode = ExplicitSeekMode::Normal;
-        self.timeline_anchor = start_output_frame.map(|output_frame| PlaybackTimelineAnchor {
-            output_frame,
-            source_frame: initial_frame_pos,
-        });
         self.stretch.reset();
     }
 
@@ -145,49 +134,18 @@ impl VoiceSlot {
         &mut self,
         frame_pos: usize,
         mode: ExplicitSeekMode,
-        output_frame: Option<u64>,
+        _output_frame: Option<u64>,
     ) {
         self.frame_pos = frame_pos;
         self.explicit_seek_mode = mode;
-        self.timeline_anchor = output_frame.map(|output_frame| PlaybackTimelineAnchor {
-            output_frame,
-            source_frame: frame_pos,
-        });
+        // Seek is an explicit discontinuity: retain rate, discard only the old source phase.
+        self.source_playback.seek(frame_pos, mode);
         self.stretch.reset();
     }
 
     pub(crate) fn clear_explicit_seek(&mut self) {
         self.explicit_seek_mode = ExplicitSeekMode::Normal;
-    }
-
-    pub fn smooth_tempo_ratio(&mut self, target: f32) -> f32 {
-        if !target.is_finite() {
-            return self.tempo_ratio_smoothed;
-        }
-
-        let mut target = target.clamp(SPEED_MIN, SPEED_MAX);
-        if !self.tempo_ratio_smoothed.is_finite() {
-            self.tempo_ratio_smoothed = target;
-            return self.tempo_ratio_smoothed;
-        }
-
-        let max_step = KEY_LOCK_TEMPO_SMOOTHING_STEP;
-        let delta = (target - self.tempo_ratio_smoothed).clamp(-max_step, max_step);
-        self.tempo_ratio_smoothed = (self.tempo_ratio_smoothed + delta).clamp(SPEED_MIN, SPEED_MAX);
-        target = self.tempo_ratio_smoothed;
-
-        target
-    }
-
-    pub(crate) fn tempo_ratio_smoothed(&self) -> f32 {
-        self.tempo_ratio_smoothed
-    }
-
-    pub(crate) fn anchor_timeline(&mut self, output_frame: u64) {
-        self.timeline_anchor = Some(PlaybackTimelineAnchor {
-            output_frame,
-            source_frame: self.frame_pos,
-        });
+        self.source_playback.clear_explicit_seek();
     }
 
     pub fn is_playing_sample(&self, sample_id: usize) -> bool {

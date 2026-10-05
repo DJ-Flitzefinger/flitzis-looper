@@ -5,9 +5,8 @@ use crate::audio_engine::rubberband_backend::RubberBandLiveShifter;
 
 /// Default maximum block size handled by the per-voice DSP wrapper.
 ///
-/// The CPAL stream currently requests 512 output frames. At the maximum supported tempo ratio of
-/// 2.0x this needs 1024 source frames, so this bound covers the real-time callback path without
-/// resizing.
+/// Source playback fills these fixed output-domain buffers before Key Lock processing. The bound
+/// covers the 512-frame CPAL callback and bounded internal segments without resizing.
 pub const DEFAULT_BLOCK_SAMPLES: usize = 1024;
 
 #[cfg(test)]
@@ -18,7 +17,6 @@ const PITCH_SCALE_EPSILON: f64 = 0.001;
 
 pub struct StretchProcessor {
     channels: usize,
-    input: Vec<Vec<f32>>,
     varispeed: Vec<Vec<f32>>,
     output: Vec<Vec<f32>>,
     rubberband: Option<RubberBandLiveShifter>,
@@ -58,9 +56,6 @@ impl StretchProcessor {
         channels: usize,
         mut preparation: KeyLockPreparationLane,
     ) -> Self {
-        let input = (0..channels)
-            .map(|_| vec![0.0; DEFAULT_BLOCK_SAMPLES])
-            .collect();
         let varispeed = (0..channels)
             .map(|_| vec![0.0; DEFAULT_BLOCK_SAMPLES])
             .collect();
@@ -77,7 +72,6 @@ impl StretchProcessor {
 
         Self {
             channels,
-            input,
             varispeed,
             output,
             rubberband,
@@ -113,15 +107,16 @@ impl StretchProcessor {
         self.reset_rubberband_state();
     }
 
-    pub fn input_buffers_mut(&mut self, input_samples: usize) -> &mut [Vec<f32>] {
-        debug_assert!(input_samples <= DEFAULT_BLOCK_SAMPLES);
-        &mut self.input
+    /// Returns fixed feed storage whose first `output_frames` samples the source reader fills.
+    pub fn resampled_buffers_mut(&mut self, output_frames: usize) -> &mut [Vec<f32>] {
+        debug_assert!(output_frames <= DEFAULT_BLOCK_SAMPLES);
+        &mut self.varispeed
     }
 
-    pub fn process(
+    /// Applies Key Lock or dry bypass to the already resampled output-domain feed.
+    pub fn process_resampled(
         &mut self,
-        input_samples: usize,
-        output_samples: usize,
+        output_frames: usize,
         tempo_ratio: f32,
         preserve_pitch: bool,
     ) {
@@ -129,16 +124,8 @@ impl StretchProcessor {
             return;
         }
 
-        let input_samples = input_samples.clamp(1, DEFAULT_BLOCK_SAMPLES);
-        let output_samples = output_samples.min(DEFAULT_BLOCK_SAMPLES);
+        let output_samples = output_frames.min(DEFAULT_BLOCK_SAMPLES);
         let pitch_scale = rubberband_pitch_scale(tempo_ratio);
-
-        for channel in 0..self.channels {
-            render_varispeed(
-                &self.input[channel][..input_samples],
-                &mut self.varispeed[channel][..output_samples],
-            );
-        }
 
         if preserve_pitch
             && (pitch_scale - 1.0).abs() > PITCH_SCALE_EPSILON
@@ -301,7 +288,12 @@ impl StretchProcessor {
 
     #[cfg(test)]
     pub(crate) fn processing_capacity(&self) -> usize {
-        self.input.first().map_or(0, Vec::len)
+        self.varispeed.first().map_or(0, Vec::len)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn varispeed_buffers(&self) -> &[Vec<f32>] {
+        &self.varispeed
     }
 
     #[cfg(test)]
@@ -353,41 +345,6 @@ fn rubberband_pitch_scale(tempo_ratio: f32) -> f64 {
     }
 
     f64::from((1.0 / tempo_ratio).clamp(0.5, 2.0))
-}
-
-fn render_varispeed(input: &[f32], output: &mut [f32]) {
-    if input.is_empty() || output.is_empty() {
-        return;
-    }
-
-    if output.len() == 1 {
-        output[0] = input[0];
-        return;
-    }
-
-    if input.len() == 1 {
-        output.fill(input[0]);
-        return;
-    }
-
-    let scale = (input.len() - 1) as f32 / (output.len() - 1) as f32;
-    for (index, sample) in output.iter_mut().enumerate() {
-        let pos = index as f32 * scale;
-        *sample = read_linear_slice(input, pos);
-    }
-}
-
-fn read_linear_slice(input: &[f32], pos: f32) -> f32 {
-    if input.is_empty() {
-        return 0.0;
-    }
-
-    let pos = pos.clamp(0.0, (input.len() - 1) as f32);
-    let index = pos.floor() as usize;
-    let next = (index + 1).min(input.len() - 1);
-    let frac = pos - index as f32;
-
-    input[index] + (input[next] - input[index]) * frac
 }
 
 struct FixedFifo {
@@ -515,12 +472,12 @@ mod tests {
     #[test]
     fn neutral_key_lock_is_transparent() {
         let mut processor = StretchProcessor::new(1);
-        let input = processor.input_buffers_mut(256);
+        let input = processor.resampled_buffers_mut(256);
         for (index, sample) in input[0].iter_mut().take(256).enumerate() {
             *sample = (index as f32 * 0.01).sin();
         }
 
-        processor.process(256, 256, 1.0, true);
+        processor.process_resampled(256, 1.0, true);
         let output = &processor.output_buffers()[0][..256];
 
         for (index, sample) in output.iter().enumerate() {
@@ -530,17 +487,20 @@ mod tests {
     }
 
     #[test]
-    fn key_lock_off_is_varispeed() {
+    fn key_lock_off_copies_already_resampled_input() {
         let mut processor = StretchProcessor::new(1);
-        let input = processor.input_buffers_mut(1024);
-        for (index, sample) in input[0].iter_mut().take(1024).enumerate() {
-            *sample = index as f32;
+        let input = processor.resampled_buffers_mut(512);
+        for (index, sample) in input[0].iter_mut().take(512).enumerate() {
+            *sample = index as f32 * 2.0;
         }
 
-        processor.process(1024, 512, 2.0, false);
+        processor.process_resampled(512, 2.0, false);
 
-        assert_eq!(processor.output_buffers()[0][0], 0.0);
-        assert!((processor.output_buffers()[0][511] - 1023.0).abs() < 1.0e-3);
+        assert_eq!(
+            &processor.output_buffers()[0][..512],
+            &processor.varispeed_buffers()[0][..512]
+        );
+        assert_eq!(processor.output_buffers()[0][511], 1022.0);
     }
 
     #[test]
@@ -550,13 +510,12 @@ mod tests {
             .rubberband_block_size()
             .saturating_sub(1)
             .clamp(1, DEFAULT_BLOCK_SAMPLES);
-        let input_samples = (output_samples * 2).min(DEFAULT_BLOCK_SAMPLES);
-        let input = processor.input_buffers_mut(input_samples);
-        for sample in input[0].iter_mut().take(input_samples) {
+        let input = processor.resampled_buffers_mut(output_samples);
+        for sample in input[0].iter_mut().take(output_samples) {
             *sample = 0.5;
         }
 
-        processor.process(input_samples, output_samples, 2.0, true);
+        processor.process_resampled(output_samples, 2.0, true);
 
         assert!(
             processor.output_buffers()[0][..output_samples]
@@ -570,21 +529,21 @@ mod tests {
         let mut processor = StretchProcessor::new(1);
         let block_size = processor.rubberband_block_size().min(DEFAULT_BLOCK_SAMPLES);
         for chunk in 0..4 {
-            let input = processor.input_buffers_mut(block_size);
+            let input = processor.resampled_buffers_mut(block_size);
             for (index, sample) in input[0].iter_mut().take(block_size).enumerate() {
                 *sample = ((chunk * block_size + index) as f32 * 0.031).sin();
             }
-            processor.process(block_size, block_size, 2.0, true);
+            processor.process_resampled(block_size, 2.0, true);
         }
 
         processor.reset();
 
         let output_samples = block_size.saturating_sub(1).max(1);
-        let input = processor.input_buffers_mut(output_samples);
+        let input = processor.resampled_buffers_mut(output_samples);
         for sample in input[0].iter_mut().take(output_samples) {
             *sample = 0.5;
         }
-        processor.process(output_samples, output_samples, 2.0, true);
+        processor.process_resampled(output_samples, 2.0, true);
 
         assert!(
             processor.output_buffers()[0][..output_samples]
@@ -601,29 +560,26 @@ mod tests {
         let mut varispeed = Vec::new();
         let mut locked = Vec::new();
 
-        for chunk in 0..48 {
-            let input = processor.input_buffers_mut(1024);
-            for (index, sample) in input[0].iter_mut().take(1024).enumerate() {
-                let absolute_index = chunk * 1024 + index;
-                let phase =
-                    absolute_index as f32 * input_hz * std::f32::consts::TAU / sample_rate_hz;
-                *sample = phase.sin();
-            }
-            processor.process(1024, 512, 2.0, false);
-            varispeed.extend_from_slice(&processor.output_buffers()[0][..512]);
+        // The source reader has already applied a 2x source rate to this immutable feed.
+        let feed = (0..48 * 512)
+            .map(|output_frame| {
+                let source_frame = output_frame as f64 * 2.0;
+                (source_frame * f64::from(input_hz) * std::f64::consts::TAU
+                    / f64::from(sample_rate_hz))
+                .sin() as f32
+            })
+            .collect::<Vec<_>>();
+        for input in feed.chunks(512) {
+            processor.resampled_buffers_mut(input.len())[0][..input.len()].copy_from_slice(input);
+            processor.process_resampled(input.len(), 2.0, false);
+            varispeed.extend_from_slice(&processor.output_buffers()[0][..input.len()]);
         }
 
         processor.reset();
-        for chunk in 0..48 {
-            let input = processor.input_buffers_mut(1024);
-            for (index, sample) in input[0].iter_mut().take(1024).enumerate() {
-                let absolute_index = chunk * 1024 + index;
-                let phase =
-                    absolute_index as f32 * input_hz * std::f32::consts::TAU / sample_rate_hz;
-                *sample = phase.sin();
-            }
-            processor.process(1024, 512, 2.0, true);
-            locked.extend_from_slice(&processor.output_buffers()[0][..512]);
+        for input in feed.chunks(512) {
+            processor.resampled_buffers_mut(input.len())[0][..input.len()].copy_from_slice(input);
+            processor.process_resampled(input.len(), 2.0, true);
+            locked.extend_from_slice(&processor.output_buffers()[0][..input.len()]);
         }
 
         let skip = processor.rubberband_start_delay() + processor.rubberband_block_size() * 2;
@@ -638,13 +594,13 @@ mod tests {
     fn rubberband_key_lock_renders_finite_output() {
         let mut processor = StretchProcessor::new(1);
         for chunk in 0..8 {
-            let input = processor.input_buffers_mut(1024);
-            for (index, sample) in input[0].iter_mut().take(1024).enumerate() {
-                let phase = (chunk * 1024 + index) as f32 * 0.031;
+            let input = processor.resampled_buffers_mut(512);
+            for (index, sample) in input[0].iter_mut().take(512).enumerate() {
+                let phase = (chunk * 512 + index) as f32 * 1.5 * 0.031;
                 *sample = phase.sin() * 0.5;
             }
 
-            processor.process(1024, 512, 1.5, true);
+            processor.process_resampled(512, 1.5, true);
 
             assert!(
                 processor.output_buffers()[0][..512]
@@ -660,20 +616,24 @@ mod tests {
             processor.adapter_delay_frames(),
             processor.rubberband_block_size() - 1
         );
+        let feed = (0..total_frames)
+            .map(|position| {
+                let signal = (position as f32 * 0.057).sin() * 0.2;
+                if position == 2000 {
+                    signal + 0.7
+                } else {
+                    signal
+                }
+            })
+            .collect::<Vec<_>>();
         let mut output = Vec::with_capacity(total_frames);
         let mut cursor = 0;
         let mut partition = 0;
         while cursor < total_frames {
             let frames = partitions[partition % partitions.len()].min(total_frames - cursor);
-            let input = processor.input_buffers_mut(frames);
-            for (index, sample) in input[0].iter_mut().take(frames).enumerate() {
-                let position = cursor + index;
-                *sample = (position as f32 * 0.057).sin() * 0.2;
-                if position == 2000 {
-                    *sample += 0.7;
-                }
-            }
-            processor.process(frames, frames, 2.0, true);
+            processor.resampled_buffers_mut(frames)[0][..frames]
+                .copy_from_slice(&feed[cursor..cursor + frames]);
+            processor.process_resampled(frames, 2.0, true);
             output.extend_from_slice(&processor.output_buffers()[0][..frames]);
             // Output always drains completely; no segment can insert extra silence/latency.
             let pending_input = processor.rubberband_input_fifo[0].len();
@@ -706,18 +666,18 @@ mod tests {
         let mut processor = StretchProcessor::new(1);
         // Stop the owned test worker outside rendering. Exactly one startup reserve remains.
         drop(processor._preparation_worker.take());
-        processor.input_buffers_mut(512)[0][..512].fill(0.5);
-        processor.process(512, 512, 2.0, true);
+        processor.resampled_buffers_mut(512)[0][..512].fill(0.5);
+        processor.process_resampled(512, 2.0, true);
         processor.reset();
-        processor.input_buffers_mut(512)[0][..512].fill(0.5);
-        processor.process(512, 512, 2.0, true);
+        processor.resampled_buffers_mut(512)[0][..512].fill(0.5);
+        processor.process_resampled(512, 2.0, true);
         assert!(!processor.rubberband_dirty);
         assert!(processor.rubberband_used);
 
         processor.reset();
         for _ in 0..4 {
-            processor.input_buffers_mut(512)[0][..512].fill(0.5);
-            processor.process(512, 512, 2.0, true);
+            processor.resampled_buffers_mut(512)[0][..512].fill(0.5);
+            processor.process_resampled(512, 2.0, true);
             assert!(processor.rubberband_dirty);
             assert!(!processor.rubberband_active);
             assert!(processor.rubberband.is_some());
@@ -727,7 +687,7 @@ mod tests {
                     .all(|sample| *sample == 0.0)
             );
         }
-        processor.process(512, 512, 2.0, false);
+        processor.process_resampled(512, 2.0, false);
         assert!(
             processor.output_buffers()[0][..512]
                 .iter()
@@ -743,8 +703,8 @@ mod tests {
             processor.reset();
             assert!(!processor.rubberband_dirty);
         }
-        processor.input_buffers_mut(512)[0][..512].fill(0.2);
-        processor.process(512, 512, 2.0, true);
+        processor.resampled_buffers_mut(512)[0][..512].fill(0.2);
+        processor.process_resampled(512, 2.0, true);
         assert!(processor.rubberband_used);
         assert!(!processor.rubberband_dirty);
     }
