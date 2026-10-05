@@ -112,6 +112,14 @@ src/flitzis_looper_audio/
 
 ## State Ownership
 
+New-track loop initialization happens through the loader/controller boundary,
+using an optional first-signal candidate computed on loaded PCM off-thread.
+It retains an 8-bar auto-loop and up to 5 ms preceding the detected activity;
+silence or absent metadata uses source zero. The automatic marker is not
+musically snapped. BPM and the signed grid remain independent, and restore or
+Analyze do not replace saved/manual markers. Performers can correct pickups,
+noise and fade-ins in Adjust Loop; first waveform activity need not be a beat.
+
 | Layer | Owns | Must not own |
 | --- | --- | --- |
 | Render functions | Layout, widget composition, stable IDs, local visual gestures, input-to-action mapping. | Business rules, persistence, file I/O, audio engine calls, background jobs. |

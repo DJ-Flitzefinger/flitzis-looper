@@ -47,8 +47,18 @@
 
 ## B2: Quality acceptance and separate default cutover
 
-- [ ] Freeze the private-track corpus, annotation uncertainty, held-out correction-burden gates,
-  critical-downbeat criteria and local memory/time limits before tuning. Record raw results.
+- [x] Freeze the finite private pilot corpus, annotation uncertainty policy, held-out
+  correction-burden gates, critical-downbeat criteria and local memory/time limits before
+  new inference/tuning. See docs/beat-this-acceptance.md and the hashed local v1 manifest.
+- [ ] Obtain independent full-span labels, certify recording groups/class coverage and
+  measure paired held-out correction burden. Sparse manually verified grids alone do not
+  satisfy whole-track quality/count continuity; raw predictions never serve as labels.
+- [x] Measure every frozen complete track's admission, raw response and final publication,
+  time and actual live-process memory. Preserve full raw output even on publication failure;
+  explicit size/admission rejection remains an acceptance failure, not a truncated success.
+  B2a resource gate fails: three native staging rejections and two oversize worker-only
+  publication probes. T03 key-name validation was corrected and the release rerun retired
+  naturally. Musical labels/correction comparison and default cutover remain pending.
 - [ ] Compare corrected legacy results as evidence, not a model vote; record pass/fail and
   bounded remediation. Do not claim sample accuracy from 20-ms detections or 70-ms F1.
 - [ ] After B1b and B2 acceptance pass, make `final0`/minimal the default for NEW beat analysis;

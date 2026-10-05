@@ -83,6 +83,7 @@ rust/crates/looper/src/
     |-- constants.rs               # banks, grid size, slot count, ranges
     |-- dsp.rs                     # per-pad DSP chain and DJ isolator node
     |-- input_mapping.rs           # Rust MIDI capture outside callback
+    |-- initial_loop_start.rs      # off-thread first-activity suggestion for new loads
     |-- key_lock_preparation.rs    # warmed native-state ownership lanes and worker
     |-- mixer.rs                   # RtMixer, voices, loops, stems, gain, DSP
     |-- scheduler.rs               # fixed-capacity output-frame scheduler
@@ -289,6 +290,18 @@ uses its integer frame plus fractional remainder for source beat mapping.
 It therefore observes the same fractional source position as rendering,
 including live-loop normalization and explicit seek semantics, without advancing
 the live cursor. There is no live loop-edit crossfade yet.
+
+New track assignments initialize their 8-bar auto-loop from first detected
+waveform activity, with up to 5 ms of preceding audio. `initial_loop_start.rs`
+scans complete loaded PCM in the existing background loader, using the first
+individual channel frame reaching max(1e-5 full scale, 0.001 * global peak).
+It uses two borrowed passes and no extra PCM allocation; opposite-polarity stereo
+does not cancel detection. The load success carries an optional `f64` start
+candidate under the existing request identity. Silence/sub-threshold activity
+falls back to zero. Python applies it only to a new assignment, without musical
+snapping. Saved/manual regions survive restore and reanalysis. A pickup or noise
+may be selected, and the quietest part of a long fade may precede the threshold;
+the candidate is editable physical loop intent, not a certified musical anchor.
 
 The Loop Editor grid is source-domain editing state. Python derives the visible
 grid anchor from analysis onset/downbeat metadata plus the per-pad

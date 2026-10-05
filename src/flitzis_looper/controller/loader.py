@@ -55,11 +55,11 @@ class LoaderController(BaseController):
         self._on_stem_generation_error = on_stem_generation_error
         self._on_stems_deleted = on_stems_deleted
         self._on_restored_sample_loaded: Callable[[int], bool] | None = None
-        self._on_new_sample_loaded: Callable[[int], None] | None = None
+        self._on_new_sample_loaded: Callable[[int, float | None], None] | None = None
         self._load_request_ids: dict[int, int] = {}
         self._analysis_request_ids: dict[int, int] = {}
 
-    def set_new_sample_loaded_callback(self, callback: Callable[[int], None]) -> None:
+    def set_new_sample_loaded_callback(self, callback: Callable[[int, float | None], None]) -> None:
         """Register behavior that runs after a newly assigned sample finishes loading."""
         self._on_new_sample_loaded = callback
 
@@ -445,7 +445,10 @@ class LoaderController(BaseController):
             self._project.sample_durations[sample_id] = duration_s
 
         if new_assignment and self._on_new_sample_loaded is not None:
-            self._on_new_sample_loaded(sample_id)
+            detected_start = event.get("detected_loop_start_s")
+            self._on_new_sample_loaded(
+                sample_id, detected_start if isinstance(detected_start, float) else None
+            )
 
         # If analysis is provided in the event (from normal loading), store it
         analysis = event.get("analysis")

@@ -150,8 +150,11 @@ Optional worker installation is therefore not evidence of a small base app.
 
 ## Remaining gates
 
-Freeze private annotations, count/downbeat error limits, correction burden and
-resource criteria before B2 tuning/cutover. Source-generation identity is still
+The [B2a protocol](beat-this-acceptance.md) freezes the six-file private corpus,
+count/downbeat/correction limits and resource criteria before new inference/tuning.
+Independent full-span annotations are still required. The B1b combined-RSS monitor
+retained exited-process samples, so its combined figures above are provisional;
+B2 must sum live samples only. Source-generation identity is still
 engine-local; persisted source content identity and cached new-analysis restore
 belong to subsequent adoption work. The known legacy downbeat-unit defect must
 be addressed if its output is used as a comparator.

@@ -107,8 +107,12 @@ calibrated correctness probabilities.
 
 Beat and key attempts have separate `ready`, `unavailable`, `failed` or
 `cancelled` statuses. Missing beat support can settle alongside a valid musical
-key; key failure uses `unknown` without replacing valid beat output. The
-supervisor emits one JSON envelope through the existing native loader-event
+key; key failure uses `unknown` without replacing valid beat output. The native
+publication validator uses the same authoritative 24 KeyNet names as
+the detector, including sharp spellings such as `G#m`. Legacy flat enharmonic
+aliases remain valid and retain their submitted spelling. Invalid key values
+remain rejected; a valid producer label must not leave the request retiring.
+The supervisor emits one JSON envelope through the existing native loader-event
 path only after resources settle. `offline_analysis_completed` is diagnostic
 data: it is not adopted into project analysis, BPM, grids, loop markers or
 manual maps, and it never relabels saved legacy analysis.

@@ -4,6 +4,7 @@ use crate::audio_engine::constants::{
     SPEED_MIN, VOLUME_MAX, VOLUME_MIN,
 };
 use crate::audio_engine::errors::SampleLoadError;
+use crate::audio_engine::initial_loop_start::detect_initial_loop_start;
 use crate::audio_engine::input_mapping::InputRuntime;
 use crate::audio_engine::progress::{LoadProgressStage, ProgressReporter};
 use crate::audio_engine::sample_loader::{
@@ -46,6 +47,7 @@ mod channels;
 mod constants;
 mod dsp;
 mod errors;
+mod initial_loop_start;
 mod input_mapping;
 mod key_lock_preparation;
 #[cfg(test)]
@@ -767,6 +769,7 @@ impl AudioEngine {
             };
 
             let resampling_required = progress.resampling_required.unwrap_or(true);
+            let detected_loop_start_s = detect_initial_loop_start(&sample, output_sample_rate);
 
             let cached_path = if path.starts_with("samples/") {
                 // When restoring from cache (path already in samples directory), use original path without copying
@@ -847,6 +850,7 @@ impl AudioEngine {
                 id,
                 request_id,
                 duration_s,
+                detected_loop_start_s,
                 cached_path,
                 analysis,
             });
@@ -1350,6 +1354,7 @@ impl AudioEngine {
                 id,
                 request_id,
                 duration_s,
+                detected_loop_start_s,
                 cached_path,
                 analysis,
             } => {
@@ -1357,6 +1362,7 @@ impl AudioEngine {
                 dict.set_item("id", id)?;
                 dict.set_item("request_id", request_id)?;
                 dict.set_item("duration_s", duration_s)?;
+                dict.set_item("detected_loop_start_s", detected_loop_start_s)?;
                 dict.set_item("cached_path", cached_path)?;
 
                 if let Some(analysis) = analysis {
@@ -2285,6 +2291,52 @@ impl AudioEngine {
 mod tests {
     use super::*;
     use rtrb::RingBuffer;
+
+    #[test]
+    fn load_success_preserves_request_identity_and_f64_activity_without_analysis() {
+        Python::initialize();
+        Python::attach(|py| {
+            let engine = AudioEngine::new().unwrap();
+            let detected_start = 1_000_003.0 / 96_000.0;
+            assert_ne!(f64::from(detected_start as f32), detected_start);
+            for suggestion in [Some(detected_start), None] {
+                engine
+                    .loader_tx
+                    .send(LoaderEvent::Success {
+                        id: 3,
+                        request_id: 7,
+                        duration_s: 20.0,
+                        detected_loop_start_s: suggestion,
+                        cached_path: "samples/new.wav".to_owned(),
+                        analysis: None,
+                    })
+                    .unwrap();
+                let event = engine.poll_loader_events(py).unwrap().unwrap();
+                let event = event.bind(py).cast::<PyDict>().unwrap();
+                assert_eq!(
+                    event
+                        .get_item("request_id")
+                        .unwrap()
+                        .unwrap()
+                        .extract::<u64>()
+                        .unwrap(),
+                    7
+                );
+                assert_eq!(
+                    event
+                        .get_item("id")
+                        .unwrap()
+                        .unwrap()
+                        .extract::<usize>()
+                        .unwrap(),
+                    3
+                );
+                let value = event.get_item("detected_loop_start_s").unwrap().unwrap();
+                assert_eq!(value.extract::<Option<f64>>().unwrap(), suggestion);
+                assert!(event.get_item("analysis").unwrap().is_none());
+            }
+        });
+    }
 
     #[test]
     fn analysis_resampling_keeps_late_music_after_a_silent_intro() {

@@ -386,6 +386,9 @@ pub enum LoaderEvent {
         id: usize,
         request_id: u64,
         duration_s: f32,
+        /// First waveform activity minus conservative pre-roll, in loaded-source seconds.
+        /// Independent of beat/downbeat analysis; `None` means no physical suggestion.
+        detected_loop_start_s: Option<f64>,
         cached_path: String,
         analysis: Option<SampleAnalysis>,
     },

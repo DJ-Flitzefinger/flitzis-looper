@@ -197,3 +197,66 @@ fn nested_stale_nonterminal_or_missing_ready_components_are_rejected() {
     assert!(job.state().finish(&invalid_key.to_string()).is_err());
     job.state().finish(&envelope(&job)).unwrap();
 }
+
+#[test]
+fn producer_keys_and_legacy_flat_aliases_retire_and_publish_unchanged() {
+    let jobs = OfflineJobs::default();
+    let ids = Arc::new(Mutex::new(vec![1]));
+    let (tx, rx) = channel();
+    let producer_keys = (0..24).map(|index| analysis::camelot_index_to_key(index).unwrap());
+    let legacy_aliases = ["Abm", "Ebm", "Bbm", "Ab", "Eb", "Bb"];
+    for key in producer_keys.chain(legacy_aliases) {
+        let job = begin(&jobs, &ids, &tx);
+        assert!(job.state().snapshot.lock().unwrap().is_some());
+        let mut ready: Value = serde_json::from_str(&envelope(&job)).unwrap();
+        ready["key"] = json!({"status": "ready", "key": key});
+        assert!(job.state().finish(&ready.to_string()).unwrap(), "{key}");
+        assert!(job.state().finished.load(Ordering::Acquire), "{key}");
+        assert!(!jobs.busy.load(Ordering::Acquire), "{key}");
+        assert!(job.state().snapshot.lock().unwrap().is_none(), "{key}");
+        let completed: Vec<_> = rx
+            .try_iter()
+            .filter_map(|event| match event {
+                LoaderEvent::OfflineAnalysisCompleted { result_json, .. } => Some(result_json),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(completed.len(), 1, "{key}");
+        let published: Value = serde_json::from_str(&completed[0]).unwrap();
+        assert_eq!(published["key"]["key"], key);
+    }
+}
+
+#[test]
+fn malformed_ready_keys_do_not_publish_or_release_reservation() {
+    let jobs = OfflineJobs::default();
+    let ids = Arc::new(Mutex::new(vec![1]));
+    let (tx, rx) = channel();
+    let job = begin(&jobs, &ids, &tx);
+    for key in [
+        json!(""),
+        json!("unknown"),
+        json!("g#m"),
+        json!("G#m "),
+        json!("G##m"),
+        json!("Cmajor"),
+        json!("Db"),
+        json!("G♯m"),
+        json!(null),
+        json!(24),
+        json!(true),
+    ] {
+        let mut invalid: Value = serde_json::from_str(&envelope(&job)).unwrap();
+        invalid["key"] = json!({"status": "ready", "key": key});
+        assert_eq!(
+            job.state().finish(&invalid.to_string()).unwrap_err(),
+            "invalid ready key component",
+            "{key}"
+        );
+        assert!(!job.state().finished.load(Ordering::Acquire), "{key}");
+        assert!(jobs.busy.load(Ordering::Acquire), "{key}");
+        assert!(job.state().snapshot.lock().unwrap().is_some(), "{key}");
+        assert_eq!(completions(&rx), 0, "{key}");
+    }
+    job.state().finish(&envelope(&job)).unwrap();
+}

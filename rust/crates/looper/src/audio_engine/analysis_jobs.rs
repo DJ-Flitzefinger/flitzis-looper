@@ -346,19 +346,27 @@ fn validate_envelope(result: &str, identity: &PcmIdentity, duration: f64) -> Res
     if beat["status"] == "ready" {
         validate_ready_beats(beat, got, duration)?;
     }
-    if parsed["key"]["status"] == "ready" {
-        const KEYS: [&str; 24] = [
-            "Abm", "Ebm", "Bbm", "Fm", "Cm", "Gm", "Dm", "Am", "Em", "Bm", "F#m", "C#m", "B", "F#",
-            "C#", "Ab", "Eb", "Bb", "F", "C", "G", "D", "A", "E",
-        ];
-        if !parsed["key"]["key"]
-            .as_str()
-            .is_some_and(|key| KEYS.contains(&key))
-        {
-            return Err("invalid ready key component".into());
-        }
+    if parsed["key"]["status"] == "ready"
+        && !parsed["key"]["key"].as_str().is_some_and(valid_key_name)
+    {
+        return Err("invalid ready key component".into());
     }
     Ok(parsed)
+}
+
+fn valid_key_name(key: &str) -> bool {
+    // Preserve previously accepted flat aliases while using the producer's
+    // authoritative key names. The published result retains its supplied name.
+    let canonical = match key {
+        "Abm" => "G#m",
+        "Ebm" => "D#m",
+        "Bbm" => "A#m",
+        "Ab" => "G#",
+        "Eb" => "D#",
+        "Bb" => "A#",
+        key => key,
+    };
+    (0..24).any(|index| analysis::camelot_index_to_key(index) == Some(canonical))
 }
 
 fn validate_ready_beats(beat: &Value, identity: &Value, duration: f64) -> Result<(), String> {

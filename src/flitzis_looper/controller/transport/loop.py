@@ -31,18 +31,21 @@ class PadLoopController:
         """
         self.set_full_track_region(sample_id)
 
-    def initialize_loaded_pad_defaults(self, sample_id: int) -> None:
-        """Initialize loop intent for a newly loaded track."""
+    def initialize_loaded_pad_defaults(
+        self, sample_id: int, detected_loop_start_s: float | None = None
+    ) -> None:
+        """Initialize a new track's loop at its sample-domain activity candidate."""
         validate_sample_id(sample_id)
+        start_s = self._loaded_default_start_s(sample_id, detected_loop_start_s)
 
         changed = (
-            self._project.pad_loop_start_s[sample_id] != 0.0
+            self._project.pad_loop_start_s[sample_id] != start_s
             or self._project.pad_loop_end_s[sample_id] is not None
             or not self._project.pad_loop_auto[sample_id]
             or self._project.pad_loop_bars[sample_id] != PAD_LOOP_BARS_DEFAULT
         )
 
-        self._project.pad_loop_start_s[sample_id] = 0.0
+        self._project.pad_loop_start_s[sample_id] = start_s
         self._project.pad_loop_end_s[sample_id] = None
         self._project.pad_loop_auto[sample_id] = True
         self._project.pad_loop_bars[sample_id] = PAD_LOOP_BARS_DEFAULT
@@ -51,6 +54,27 @@ class PadLoopController:
 
         self.apply_grid_anchor_to_audio(sample_id)
         self._apply_effective_pad_loop_region_to_audio(sample_id)
+
+    def _loaded_default_start_s(self, sample_id: int, detected_loop_start_s: float | None) -> float:
+        if (
+            detected_loop_start_s is None
+            or not math.isfinite(detected_loop_start_s)
+            or detected_loop_start_s < 0.0
+        ):
+            return 0.0
+
+        duration_s = self._project.sample_durations[sample_id]
+        if (
+            duration_s is None
+            or not math.isfinite(duration_s)
+            or duration_s <= 0.0
+            or detected_loop_start_s >= duration_s
+        ):
+            return 0.0
+
+        # This candidate protects the source attack; musical snapping could trim it.
+        start_s = self._quantize_time_to_cached_samples(detected_loop_start_s)
+        return start_s if start_s < duration_s else 0.0
 
     def set_full_track_region(self, sample_id: int) -> None:
         """Store and publish an explicit full-track loop region for a loaded pad."""
