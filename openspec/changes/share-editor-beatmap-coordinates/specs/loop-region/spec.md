@@ -42,7 +42,7 @@ The system SHALL snap auto-loop marker edits to the nearest 1/16-beat point in t
 editor timing mode and then quantize the chosen source position to an integer loaded-frame index.
 
 Scalar mode SHALL retain `beat_sec=60/effective_bpm`, `grid_step_sec=beat_sec/16` and signed
-origin `default_onset_sec+grid_offset_sec`, with manual BPM before analysis. Without valid
+origin `persisted_base_or_legacy_onset_sec+grid_offset_sec`, with manual BPM before analysis. Without valid
 scalar BPM it SHALL perform no musical snap.
 
 Accepted variable-map mode SHALL evaluate B(marker), select the nearest musical 1/16-beat point

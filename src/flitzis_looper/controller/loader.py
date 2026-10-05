@@ -370,6 +370,11 @@ class LoaderController(BaseController):
                 sample_id,
                 defaults.pad_grid_offset_samples[sample_id],
             ),
+            _reset_pad_value(
+                self._project.pad_grid_anchor_s,
+                sample_id,
+                defaults.pad_grid_anchor_s[sample_id],
+            ),
         ))
 
     def _publish_unloaded_pad_audio_defaults(self, sample_id: int, defaults: ProjectState) -> None:
@@ -460,6 +465,7 @@ class LoaderController(BaseController):
             self._project.sample_analysis[sample_id] is not None
             or self._project.manual_bpm[sample_id] is not None
             or self._project.pad_grid_offset_samples[sample_id] != 0
+            or self._project.pad_grid_anchor_s[sample_id] is not None
         ):
             # Restore the persisted source grid after native sample publication.
             self._on_pad_bpm_changed(sample_id)

@@ -218,6 +218,10 @@ def _default_pad_grid_offset_samples() -> list[int]:
     return [0] * NUM_SAMPLES
 
 
+def _default_pad_grid_anchor_s() -> list[float | None]:
+    return [None] * NUM_SAMPLES
+
+
 def _migrate_legacy_pad_gain_field(data: dict[str, object]) -> None:
     if "pad_gain_db" not in data and "pad_gain" in data:
         legacy_pad_gain = data.pop("pad_gain")
@@ -337,6 +341,9 @@ class ProjectState(BaseModel):
 
     pad_grid_offset_samples: list[int] = Field(default_factory=_default_pad_grid_offset_samples)
     """Per-pad sample offset applied to the musical grid anchor."""
+
+    pad_grid_anchor_s: list[float | None] = Field(default_factory=_default_pad_grid_anchor_s)
+    """Per-pad source grid base in seconds, or None for the legacy analysis anchor."""
 
     # Global Audio Settings
     multi_loop: bool = False
@@ -505,6 +512,18 @@ class ProjectState(BaseModel):
         if len(value) != NUM_SAMPLES:
             msg = f"pad_grid_offset_samples must have length {NUM_SAMPLES}, got {len(value)}"
             raise ValueError(msg)
+        return value
+
+    @field_validator("pad_grid_anchor_s", mode="after")
+    @classmethod
+    def _validate_pad_grid_anchor_s(cls, value: list[float | None]) -> list[float | None]:
+        if len(value) != NUM_SAMPLES:
+            msg = f"pad_grid_anchor_s must have length {NUM_SAMPLES}, got {len(value)}"
+            raise ValueError(msg)
+        for anchor_s in value:
+            if anchor_s is not None and (not math.isfinite(anchor_s) or anchor_s < 0.0):
+                msg = f"pad_grid_anchor_s values must be None or finite and >= 0.0, got {anchor_s}"
+                raise ValueError(msg)
         return value
 
 

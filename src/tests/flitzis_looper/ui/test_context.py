@@ -1011,3 +1011,81 @@ class TestWaveformEditorTransportControls:
             call(0, 320, 0.0, 10.0),
             call(0, 320, 0.0, 10.0),
         ]
+
+    def test_waveform_view_has_a_hidden_beat_before_loop_without_changing_audio(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+        controller.project.sample_paths[0] = "samples/activity.wav"
+        controller.project.sample_durations[0] = 40.0
+        controller.project.manual_bpm[0] = 120.0
+        controller.project.pad_loop_start_s[0] = 0.025
+        controller.project.pad_loop_end_s[0] = 16.025
+        audio_engine_mock.output_sample_rate.return_value = 48_000
+        audio_engine_mock.reset_mock()
+
+        assert ctx.ui.waveform.view_limits(0) == pytest.approx((-0.475, 40.0))
+        assert ctx.ui.waveform.view_limits(0, loop_only=True) == pytest.approx((-0.475, 16.025))
+        assert controller.project.pad_loop_start_s[0] == 0.025
+        assert controller.project.pad_grid_offset_samples[0] == 0
+        assert all(method[0] == "output_sample_rate" for method in audio_engine_mock.method_calls)
+
+    def test_late_loop_initial_view_keeps_earlier_source_accessible(
+        self, controller: AppController
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+        controller.project.sample_durations[0] = 40.0
+        controller.project.manual_bpm[0] = 120.0
+        controller.project.pad_loop_start_s[0] = 10.0
+        controller.project.pad_loop_end_s[0] = 26.0
+
+        assert ctx.ui.waveform.view_limits(0) == pytest.approx((9.5, 40.0))
+        assert ctx.ui.waveform.view_limits(0, include_source_start=True) == (0.0, 40.0)
+        ctx.ui.waveform.record_view_range(0, 9.5, 26.0)
+        assert ctx.ui.waveform.view_jump_start_selected_pad_on_press() == (0.0, 16.5)
+
+    def test_virtual_waveform_margin_never_requests_negative_source_frames(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+        controller.project.sample_paths[0] = "samples/activity.wav"
+        controller.project.sample_durations[0] = 10.0
+
+        ctx.ui.waveform.get_render_data(0, 1100, -1.0, 10.0)
+        audio_engine_mock.get_waveform_render_data.assert_called_once_with(0, 1000, 0.0, 10.0)
+        audio_engine_mock.reset_mock()
+        assert ctx.ui.waveform.get_render_data(0, 100, -1.0, -0.5) is None
+        assert ctx.ui.waveform.get_render_data(0, 100, 10.5, 11.0) is None
+        audio_engine_mock.get_waveform_render_data.assert_not_called()
+
+    def test_clicking_virtual_margin_keeps_loop_and_seek_in_source_audio(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+        controller.project.sample_paths[0] = "samples/activity.wav"
+        controller.project.sample_durations[0] = 10.0
+        controller.session.active_sample_ids.add(0)
+
+        ctx.ui.waveform.set_loop_start_and_play_selected_pad(-0.5)
+        assert controller.project.pad_loop_start_s[0] == 0.0
+        ctx.ui.waveform.seek_selected_pad_to_position(-0.5)
+        audio_engine_mock.seek_sample.assert_called_once_with(0, 0.0)
+
+    def test_source_replacement_resets_view_but_loop_edits_and_reopen_preserve_it(
+        self, controller: AppController
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+        controller.project.sample_paths[0] = "samples/first.wav"
+        controller.project.sample_durations[0] = 10.0
+
+        assert ctx.ui.waveform.consume_source_view_reset(0)
+        ctx.ui.waveform.record_view_range(0, 2.0, 4.0)
+        controller.project.pad_loop_start_s[0] = 2.0
+        ctx.ui.waveform.close()
+        ctx.ui.waveform.open(0)
+        assert not ctx.ui.waveform.consume_source_view_reset(0)
+        assert ctx.ui.waveform.view_jump_start_selected_pad_on_press() == (0.0, 2.0)
+
+        controller.project.sample_paths[0] = "samples/replacement.wav"
+        assert ctx.ui.waveform.consume_source_view_reset(0)
+        assert ctx.ui.waveform.view_jump_start_selected_pad_on_press() == (0.0, 10.0)

@@ -225,6 +225,11 @@ Their legacy BPM values remain 93.98298645 and 94.01548004, with no manual BPM
 override. These are sparse human-approved start/grid intents, not independently
 verified full-span beat/downbeat labels or additional held-out recordings.
 
+The following smoke and validation record is the historical baseline committed
+as `2c87137`. Its 5-ms pre-roll was subsequently replaced by the near-zero boundary
+and matching independent grid base documented in [architecture.md](architecture.md).
+The B2a evidence below remains unchanged and is not a current runtime description.
+
 The user subsequently requested automatic first-waveform loop placement on new
 loads. That separate [change](../openspec/changes/auto-place-new-track-loop-start/proposal.md)
 does not reinterpret the manually verified grids or complete Beat This acceptance.
@@ -238,7 +243,7 @@ Full validation passed: environment sync, debug and locked-release builds, cargo
 check, 462 Rust tests (one ignored doc test), 921 application Python tests,
 Ruff/mypy, formatting/whitespace and official strict validation of
 `auto-place-new-track-loop-start`, `adopt-beat-this-analysis` and
-`share-editor-beatmap-coordinates`. The installed release SHA-256 is
+`share-editor-beatmap-coordinates`. That baseline release SHA-256 was
 `c025b50b2c263872fefd4f98322200a2e154c1126df313eec67560a7c65d8cd1`;
 earlier B2 native measurements used the original frozen B1b release except for
 the explicitly labeled post-fix T03 rerun.

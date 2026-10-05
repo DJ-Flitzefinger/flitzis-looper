@@ -34,34 +34,41 @@ class PadLoopController:
     def initialize_loaded_pad_defaults(
         self, sample_id: int, detected_loop_start_s: float | None = None
     ) -> None:
-        """Initialize a new track's loop at its sample-domain activity candidate."""
+        """Initialize a new track's loop and grid at the same source activity boundary."""
         validate_sample_id(sample_id)
-        start_s = self._loaded_default_start_s(sample_id, detected_loop_start_s)
+        anchor_s = self._loaded_activity_anchor_s(sample_id, detected_loop_start_s)
+        start_s = anchor_s if anchor_s is not None else 0.0
 
         changed = (
             self._project.pad_loop_start_s[sample_id] != start_s
             or self._project.pad_loop_end_s[sample_id] is not None
             or not self._project.pad_loop_auto[sample_id]
             or self._project.pad_loop_bars[sample_id] != PAD_LOOP_BARS_DEFAULT
+            or self._project.pad_grid_anchor_s[sample_id] != anchor_s
+            or self._project.pad_grid_offset_samples[sample_id] != 0
         )
 
         self._project.pad_loop_start_s[sample_id] = start_s
         self._project.pad_loop_end_s[sample_id] = None
         self._project.pad_loop_auto[sample_id] = True
         self._project.pad_loop_bars[sample_id] = PAD_LOOP_BARS_DEFAULT
+        self._project.pad_grid_anchor_s[sample_id] = anchor_s
+        self._project.pad_grid_offset_samples[sample_id] = 0
         if changed:
             self._transport._mark_project_changed()
 
         self.apply_grid_anchor_to_audio(sample_id)
         self._apply_effective_pad_loop_region_to_audio(sample_id)
 
-    def _loaded_default_start_s(self, sample_id: int, detected_loop_start_s: float | None) -> float:
+    def _loaded_activity_anchor_s(
+        self, sample_id: int, detected_loop_start_s: float | None
+    ) -> float | None:
         if (
             detected_loop_start_s is None
             or not math.isfinite(detected_loop_start_s)
             or detected_loop_start_s < 0.0
         ):
-            return 0.0
+            return None
 
         duration_s = self._project.sample_durations[sample_id]
         if (
@@ -70,11 +77,11 @@ class PadLoopController:
             or duration_s <= 0.0
             or detected_loop_start_s >= duration_s
         ):
-            return 0.0
+            return None
 
         # This candidate protects the source attack; musical snapping could trim it.
         start_s = self._quantize_time_to_cached_samples(detected_loop_start_s)
-        return start_s if start_s < duration_s else 0.0
+        return start_s if start_s < duration_s else None
 
     def set_full_track_region(self, sample_id: int) -> None:
         """Store and publish an explicit full-track loop region for a loaded pad."""
@@ -123,12 +130,15 @@ class PadLoopController:
     def _grid_offset_samples(self, sample_id: int) -> int:
         return int(self._project.pad_grid_offset_samples[sample_id])
 
-    def _default_onset_sec(self, sample_id: int) -> float:
+    def _base_grid_anchor_sec(self, sample_id: int) -> float:
+        anchor_s = self._project.pad_grid_anchor_s[sample_id]
+        if anchor_s is not None and math.isfinite(anchor_s) and anchor_s >= 0.0:
+            return anchor_s
         return timing_anchor_sec_from_analysis(self._project.sample_analysis[sample_id])
 
-    def _default_onset_sample(self, sample_id: int, *, sample_rate_hz: int) -> int:
-        onset_sec = self._default_onset_sec(sample_id)
-        frames = round(onset_sec * sample_rate_hz)
+    def _base_grid_anchor_sample(self, sample_id: int, *, sample_rate_hz: int) -> int:
+        anchor_s = self._base_grid_anchor_sec(sample_id)
+        frames = round(anchor_s * sample_rate_hz)
         if not isinstance(frames, int):
             return 0
         return max(frames, 0)
@@ -183,7 +193,7 @@ class PadLoopController:
         self._apply_effective_pad_loop_region_to_audio(sample_id)
 
     def grid_anchor_sec(self, sample_id: int) -> float:
-        """Grid anchor time in seconds (default onset + per-pad sample offset)."""
+        """Grid anchor in source seconds (persisted or legacy base plus sample offset)."""
         validate_sample_id(sample_id)
         return self._grid_anchor_sec(sample_id)
 
@@ -191,10 +201,10 @@ class PadLoopController:
         sample_rate_hz = self._transport._output_sample_rate_hz()
         if sample_rate_hz is None or sample_rate_hz <= 0:
             # Without a sample rate, we can't express a sample offset in seconds.
-            return self._default_onset_sec(sample_id)
+            return self._base_grid_anchor_sec(sample_id)
 
-        onset_sample = self._default_onset_sample(sample_id, sample_rate_hz=sample_rate_hz)
-        anchor_sample = onset_sample + self._grid_offset_samples(sample_id)
+        base_sample = self._base_grid_anchor_sample(sample_id, sample_rate_hz=sample_rate_hz)
+        anchor_sample = base_sample + self._grid_offset_samples(sample_id)
         return anchor_sample / sample_rate_hz
 
     @staticmethod

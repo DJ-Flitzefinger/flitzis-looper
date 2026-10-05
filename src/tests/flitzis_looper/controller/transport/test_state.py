@@ -284,6 +284,23 @@ def test_apply_pad_bpm_settings_skips_unloaded_pad_metadata(
         mock_method.assert_not_called()
 
 
+def test_startup_publishes_persisted_grid_base_without_analysis_or_bpm(
+    transport_controller: TransportController,
+    apply_project_state: ApplyProjectState,
+    audio_engine_mock: Mock,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    project = transport_controller._project
+    project.sample_paths[0] = "samples/foo.wav"
+    project.pad_grid_anchor_s[0] = 1_151 / 48_000
+
+    apply_project_state.apply_project_state_to_audio()
+
+    audio_engine_mock.set_pad_timing_metadata.assert_called_once_with(0, 1_151 / 48_000)
+    audio_engine_mock.set_pad_bpm.assert_called_once_with(0, None)
+    assert project.pad_loop_start_s[0] == 0.0
+
+
 def test_apply_bpm_lock_settings_enabled(
     transport_controller: TransportController,
     apply_project_state: ApplyProjectState,

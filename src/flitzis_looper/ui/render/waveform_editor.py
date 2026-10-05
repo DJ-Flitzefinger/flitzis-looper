@@ -17,6 +17,11 @@ from flitzis_looper.ui.constants import (
     TEXT_RGBA,
 )
 from flitzis_looper.ui.contextmanager import implot_style_color, implot_style_var
+from flitzis_looper.ui.waveform_grid import (
+    WaveformGridLine,
+    loop_beat_label,
+    visible_grid_lines,
+)
 
 if TYPE_CHECKING:
     import numpy as np
@@ -27,7 +32,6 @@ if TYPE_CHECKING:
 _LOOP_START_DRAG_LINE_ID = 0
 _LOOP_END_DRAG_LINE_ID = 1
 
-_GRID_MIN_MINOR_STEP_PX = 12.0
 _TOOLBAR_MIN_HIT_TARGET_PX = 32.0
 _TOOLBAR_FRAME_HEIGHT_MULTIPLIER = 1.5
 
@@ -203,17 +207,15 @@ def _render_playback_controls(ctx: UiContext, height: float) -> None:
 def _render_zoom_buttons(ctx: UiContext, pad_id: int, height: float) -> None:
     imgui.same_line(spacing=SPACING)
     if _render_text_button("Reset Zoom", height):
-        dur_s = ctx.state.project.sample_durations[pad_id]
-        if dur_s is not None:
-            implot.set_next_axis_limits(implot.ImAxis_.x1, 0.0, dur_s, imgui.Cond_.always)
+        limits = ctx.ui.waveform.view_limits(pad_id)
+        if limits is not None:
+            implot.set_next_axis_limits(implot.ImAxis_.x1, *limits, imgui.Cond_.always)
 
     imgui.same_line(spacing=SPACING)
     if _render_text_button("Zoom to Loop", height):
-        loop_start_s, loop_end_s = ctx.state.pads.effective_loop_region(pad_id)
-        if loop_end_s:
-            implot.set_next_axis_limits(
-                implot.ImAxis_.x1, loop_start_s, loop_end_s, imgui.Cond_.always
-            )
+        limits = ctx.ui.waveform.view_limits(pad_id, loop_only=True)
+        if limits is not None:
+            implot.set_next_axis_limits(implot.ImAxis_.x1, *limits, imgui.Cond_.always)
 
 
 def _render_view_jump_buttons(ctx: UiContext, height: float) -> None:
@@ -458,34 +460,6 @@ def _plot_shaded(
         implot.plot_shaded("wave", xs, y_min, y_max)
 
 
-def _grid_anchor_sec(ctx: UiContext, pad_id: int) -> float:
-    """Match loop-region snapping's grid anchor (default onset + offset)."""
-    return ctx._controller.transport.loop.grid_anchor_sec(pad_id)
-
-
-def _select_minor_step_64ths(beat_sec: float, *, px_per_sec: float) -> int:
-    """Choose the finest readable subdivision in 1/64-note units."""
-    grid_64th_sec = beat_sec / 16.0
-
-    # Finest -> coarsest candidates, all aligned to the 1/64-note snapping grid.
-    candidates_64ths = [
-        1,  # 1/16 beat (1/64-note)
-        2,  # 1/8 beat (1/32-note)
-        4,  # 1/4 beat (1/16-note)
-        8,  # 1/2 beat (1/8-note)
-        16,  # 1 beat
-        64,  # 1 bar (4 beats)
-        256,  # 4 bars (16 beats)
-    ]
-
-    for step_64ths in candidates_64ths:
-        step_px = step_64ths * grid_64th_sec * px_per_sec
-        if step_px >= _GRID_MIN_MINOR_STEP_PX:
-            return step_64ths
-
-    return 256
-
-
 def _plot_px_per_sec(*, start_s: float, end_s: float) -> float | None:
     px_start = implot.plot_to_pixels(start_s, 0.0)
     px_end = implot.plot_to_pixels(end_s, 0.0)
@@ -496,53 +470,48 @@ def _plot_px_per_sec(*, start_s: float, end_s: float) -> float | None:
     return range_px / range_sec
 
 
-def _grid_render_params(
-    beat_sec: float, *, px_per_sec: float
-) -> tuple[float, int, int, int] | None:
-    minor_step_64ths = _select_minor_step_64ths(beat_sec, px_per_sec=px_per_sec)
-    minor_step_sec = (beat_sec / 16.0) * minor_step_64ths
-    if minor_step_sec <= 0.0:
-        return None
-
-    # Major emphasis rules (see delta spec).
-    if minor_step_64ths in {64, 16}:
-        major_every = 4  # minor=1 bar or 1 beat; major emphasizes 4x
-    elif minor_step_64ths < 16:
-        major_every = 16 // minor_step_64ths  # minor<1 beat, major=1 beat
-    else:
-        major_every = 1  # minor>=4 bars, all visible lines are major
-
-    base = TEXT_MUTED_RGBA
-    minor_rgba = ImVec4(base.x, base.y, base.z, 0.08)
-    major_rgba = ImVec4(base.x, base.y, base.z, 0.18)
-    minor_col = imgui.get_color_u32(minor_rgba)
-    major_col = imgui.get_color_u32(major_rgba)
-
-    return (minor_step_sec, major_every, minor_col, major_col)
-
-
 def _draw_musical_grid_lines(
     draw_list: imgui.ImDrawList,
+    lines: tuple[WaveformGridLine, ...],
+) -> None:
+    base = TEXT_MUTED_RGBA
+    minor_col = imgui.get_color_u32(ImVec4(base.x, base.y, base.z, 0.08))
+    major_col = imgui.get_color_u32(ImVec4(base.x, base.y, base.z, 0.18))
+    for line in lines:
+        p1 = implot.plot_to_pixels(line.source_s, 1.0)
+        p2 = implot.plot_to_pixels(line.source_s, -1.0)
+        col = major_col if line.major else minor_col
+        draw_list.add_line(p1, p2, col)
+
+
+def _draw_musical_grid_labels(
+    draw_list: imgui.ImDrawList,
+    lines: tuple[WaveformGridLine, ...],
+    *,
+    loop_start_s: float,
     start_s: float,
     end_s: float,
-    grid_anchor_sec: float,
-    minor_step_sec: float,
-    major_every: int,
-    minor_col: int,
-    major_col: int,
 ) -> None:
-    n_start = math.floor((start_s - grid_anchor_sec) / minor_step_sec)
-    n_end = math.ceil((end_s - grid_anchor_sec) / minor_step_sec)
-
-    for n in range(int(n_start), int(n_end) + 1):
-        t = grid_anchor_sec + n * minor_step_sec
-        if t < start_s or t > end_s:
+    candidates = [(line.source_s, loop_beat_label(line.loop_beat)) for line in lines if line.major]
+    # A free loop start is a reference, not a newly invented beat-grid position.
+    if start_s <= loop_start_s <= end_s:
+        candidates.insert(0, (loop_start_s, "Loop 1"))
+    occupied: list[tuple[float, float]] = []
+    minimum_x = implot.plot_to_pixels(start_s, 1.0).x
+    maximum_x = implot.plot_to_pixels(end_s, 1.0).x
+    color = imgui.get_color_u32(TEXT_MUTED_RGBA)
+    for source_s, label in candidates:
+        position = implot.plot_to_pixels(source_s, 1.0)
+        label_width = imgui.calc_text_size(label).x
+        left = max(minimum_x + 3.0, min(position.x + 3.0, maximum_x - label_width - 3.0))
+        right = left + label_width
+        if any(
+            left < previous_right + 8.0 and right > previous_left - 8.0
+            for previous_left, previous_right in occupied
+        ):
             continue
-
-        p1 = implot.plot_to_pixels(t, 1.0)
-        p2 = implot.plot_to_pixels(t, -1.0)
-        col = major_col if (n % major_every == 0) else minor_col
-        draw_list.add_line(p1, p2, col)
+        draw_list.add_text((left, position.y + 4.0), color, label)
+        occupied.append((left, right))
 
 
 def _draw_zero_line(draw_list: imgui.ImDrawList, start_s: float, end_s: float) -> None:
@@ -562,21 +531,18 @@ def _plot_musical_grid(
     if px_per_sec is None:
         return
 
-    params = _grid_render_params(60.0 / bpm, px_per_sec=px_per_sec)
-    if params is None:
-        return
-
-    minor_step_sec, major_every, minor_col, major_col = params
-
-    _draw_musical_grid_lines(
-        draw_list,
-        start_s,
-        end_s,
-        _grid_anchor_sec(ctx, pad_id),
-        minor_step_sec,
-        major_every,
-        minor_col,
-        major_col,
+    loop_start_s, _ = ctx.state.pads.effective_loop_region(pad_id)
+    lines = visible_grid_lines(
+        start_s=start_s,
+        end_s=end_s,
+        anchor_s=ctx.state.pads.grid_anchor_s(pad_id),
+        loop_start_s=loop_start_s,
+        bpm=bpm,
+        px_per_s=px_per_sec,
+    )
+    _draw_musical_grid_lines(draw_list, lines)
+    _draw_musical_grid_labels(
+        draw_list, lines, loop_start_s=loop_start_s, start_s=start_s, end_s=end_s
     )
 
 
@@ -637,13 +603,29 @@ def _handle_clicks(ctx: UiContext, pad_id: int, sample_duration_s: float) -> Non
     imgui.reset_mouse_drag_delta(imgui.MouseButton_.right)
 
 
+def _setup_plot_axes(ctx: UiContext, pad_id: int) -> None:
+    axis_no_grid = getattr(implot.AxisFlags_, "no_grid_lines", 0)
+    y_flags = implot.AxisFlags_.no_highlight | axis_no_grid
+    implot.setup_axis(implot.ImAxis_.y1, None, y_flags)
+    if axis_no_grid:
+        implot.setup_axis(implot.ImAxis_.x1, None, axis_no_grid)
+
+    limits = ctx.ui.waveform.view_limits(pad_id)
+    bounds = ctx.ui.waveform.view_limits(pad_id, include_source_start=True)
+    if limits is not None and bounds is not None:
+        implot.setup_axis_limits_constraints(implot.ImAxis_.x1, *bounds)
+        implot.setup_axis_limits(implot.ImAxis_.x1, *limits, imgui.Cond_.once)
+    implot.setup_axis_limits(implot.ImAxis_.y1, -1.0, 1.0, imgui.Cond_.always)
+    implot.setup_finish()
+
+
 def _render_plot(ctx: UiContext, pad_id: int) -> None:
     sample_duration_s = ctx.state.project.sample_durations[pad_id]
     if sample_duration_s is None:
         return
 
     if not implot.begin_plot(
-        "##waveform",
+        f"##waveform-{pad_id}",
         (-1, -1),
         implot.Flags_.no_title
         | implot.Flags_.no_legend
@@ -652,20 +634,11 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
     ):
         return
 
-    axis_no_grid = getattr(implot.AxisFlags_, "no_grid_lines", 0)
-    y_flags = implot.AxisFlags_.no_highlight | axis_no_grid
-    implot.setup_axis(implot.ImAxis_.y1, None, y_flags)
-    if axis_no_grid:
-        implot.setup_axis(implot.ImAxis_.x1, None, axis_no_grid)
-
-    implot.setup_axis_limits_constraints(implot.ImAxis_.x1, 0.0, sample_duration_s)
-    implot.setup_axis_limits(implot.ImAxis_.x1, 0.0, sample_duration_s, imgui.Cond_.once)
-    implot.setup_axis_limits(implot.ImAxis_.y1, -1.0, 1.0, imgui.Cond_.always)
-    implot.setup_finish()
+    _setup_plot_axes(ctx, pad_id)
 
     # Get view limits
     plot_limits = implot.get_plot_limits()
-    start_s = max(0.0, plot_limits.x.min)
+    start_s = plot_limits.x.min
     end_s = plot_limits.x.max
     ctx.ui.waveform.record_view_range(pad_id, start_s, end_s)
 
@@ -685,10 +658,9 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
         else:
             typed_y2 = cast("NDArray[np.float32]", y2)  # y2 is set in this branch
             _plot_shaded(xs, y1, typed_y2)
-        _plot_overlay_loop_region(ctx, pad_id, start_s, end_s, draw_list, sample_duration_s)
-        _handle_clicks(ctx, pad_id, sample_duration_s)
-
-        _plot_musical_grid(ctx, pad_id, draw_list, start_s, end_s)
+    _plot_overlay_loop_region(ctx, pad_id, start_s, end_s, draw_list, sample_duration_s)
+    _handle_clicks(ctx, pad_id, sample_duration_s)
+    _plot_musical_grid(ctx, pad_id, draw_list, start_s, end_s)
 
     _draw_zero_line(draw_list, start_s, end_s)
 
@@ -696,6 +668,12 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
 
 
 def _render_editor_body(ctx: UiContext, pad_id: int) -> None:
+    if ctx.ui.waveform.consume_source_view_reset(pad_id):
+        limits = ctx.ui.waveform.view_limits(pad_id)
+        if limits is not None:
+            implot.set_next_axis_limits(implot.ImAxis_.x1, *limits, imgui.Cond_.always)
+
+    # Toolbar navigation runs after the initial view so explicit user intent wins.
     with imgui_ctx.begin_group():
         toolbar_height = toolbar_control_size(imgui.get_frame_height())
 

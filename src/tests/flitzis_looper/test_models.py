@@ -341,6 +341,37 @@ def test_pad_loop_bars_accepts_half_bar_and_legacy_integer_values() -> None:
     assert project.pad_loop_bars[0] == PAD_LOOP_BARS_MIN
 
 
+def test_grid_base_round_trips_independently_of_manual_grid_offset() -> None:
+    project = ProjectState()
+    project.pad_grid_anchor_s[0] = 1_151 / 48_000
+    project.pad_grid_anchor_s[1] = 0.0
+    project.pad_grid_anchor_s[2] = 3600.0
+    project.pad_grid_offset_samples[0] = -1200
+
+    restored = ProjectState.model_validate_json(project.model_dump_json())
+
+    assert restored.pad_grid_anchor_s == project.pad_grid_anchor_s
+    assert restored.pad_grid_offset_samples == project.pad_grid_offset_samples
+
+
+def test_legacy_project_defaults_to_analysis_grid_base() -> None:
+    project = ProjectState.model_validate({"pad_grid_offset_samples": [-240] * NUM_SAMPLES})
+
+    assert project.pad_grid_anchor_s == [None] * NUM_SAMPLES
+    assert project.pad_grid_offset_samples[0] == -240
+
+
+@pytest.mark.parametrize("anchor_s", [-0.1, float("nan"), float("inf"), float("-inf")])
+def test_grid_base_rejects_negative_or_nonfinite_values(anchor_s: float) -> None:
+    with pytest.raises(ValidationError, match="pad_grid_anchor_s"):
+        ProjectState(pad_grid_anchor_s=[anchor_s] * NUM_SAMPLES)
+
+
+def test_grid_base_requires_one_entry_per_pad() -> None:
+    with pytest.raises(ValidationError, match="pad_grid_anchor_s"):
+        ProjectState(pad_grid_anchor_s=[None])
+
+
 def test_pad_loop_bars_validation_rejects_invalid_values() -> None:
     with pytest.raises(ValidationError, match="pad_loop_bars"):
         ProjectState(pad_loop_bars=[0.0] * NUM_SAMPLES)

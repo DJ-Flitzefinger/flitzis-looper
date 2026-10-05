@@ -18,6 +18,12 @@ r_i(n) = ds_i/dn              (source frames per output frame; outside explicit 
 h_i(n) = 2^(k_i(n)/12)        (KEY semitones, positive means upward)
 ```
 
+Here phi_i is absolute-source phase notation. For the requested loop-relative
+alignment, use phi_i=b0+phi_loop_i, giving S_i(b0+mod(M+phi_loop_i,L)). Displayed
+coordinates are 1+B_i(s)-b0; integer labels are never scheduling identities.
+Changing loop selection updates b0 without translating B/S or the master clock.
+This follows beatmap-sync-design.md and does not change current scalar live phase.
+
 k never enters M, phi, B/S, loop selection or source progression. KEYLOCK holds intended source
 pitch plus k while tempo follows the source map/master; it does not undo deliberate k. The
 source's detected/manual key remains metadata, not an instruction to change r or M.

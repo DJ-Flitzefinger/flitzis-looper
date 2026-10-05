@@ -7,6 +7,7 @@
 
 - [ ] Expose bounded visible-range native projections keyed by map/rate/viewport identity.
 - [ ] Route display and snap operations through that evaluator via existing UiContext/controllers.
+- [ ] Preserve scalar activity-base intent and loop-relative map numbering; keep continuous native phase independent of UI labels.
 - [ ] Display current local source BPM at the retained/live playhead through that evaluator;
   distinguish master target and optional track summary, including seeks, wraps and uncertain coverage.
 - [ ] Compute explicit map-mode auto-loop operations in beat space while preserving stored markers on map edits.

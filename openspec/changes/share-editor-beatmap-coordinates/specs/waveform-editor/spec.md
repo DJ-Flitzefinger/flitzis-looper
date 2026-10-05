@@ -5,7 +5,7 @@ The system SHALL render one musical grid aligned to the current editor timing mo
 coordinates, without a concurrent non-musical time grid.
 
 Scalar mode SHALL retain manual BPM before analysis BPM, `beat_sec=60/effective_bpm`, and the
-signed source origin `default_onset_sec + grid_offset_sec`. Its lines SHALL use
+signed source origin `persisted_base_or_legacy_onset_sec + grid_offset_sec`. Its lines SHALL use
 `origin + n*minor_step_sec`. Missing effective BPM SHALL disable the scalar musical grid.
 
 Explicitly accepted variable-map mode SHALL derive line source positions from the shared
@@ -48,7 +48,7 @@ the readability constraint permits.
 The system SHALL keep scalar and accepted variable-map editor grids on the same quarter-note
 beat unit and 1/64-note subdivision basis as Rust timing and trigger quantization.
 
-Scalar mode SHALL retain the manual-before-analysis BPM, analysis onset rounded at loaded rate,
+Scalar mode SHALL retain the manual-before-analysis BPM, optional persisted base (otherwise legacy analysis onset) rounded at loaded rate,
 and persisted signed grid offset. The same finite signed scalar origin SHALL be published to
 Rust without negative clamping. Invalid onset metadata SHALL retain downbeat/beat/zero fallback
 before applying the offset. That virtual origin need not be a readable audio frame.
@@ -183,3 +183,16 @@ transposition SHALL NOT move accepted anchors or change their map revision.
 #### Scenario: An ambiguous beat has no reliable onset
 - **WHEN** local refinement lacks convincing evidence for a supported new position
 - **THEN** it retains uncertainty and does not force that beat onto a nearby transient
+
+### Requirement: Variable Map Numbering Uses The Selected Loop Reference
+The system SHALL display supported variable-map musical coordinates as
+1+B(source)-B(loop_start), preserving the source map when the loop is moved.
+Future SYNC SHALL use continuous native loop-relative musical phase and the
+master timeline rather than integer UI line labels or display refresh cadence.
+Unsupported coverage SHALL remain unavailable rather than invent an initial beat.
+
+#### Scenario: A later loop is chosen on a variable map
+- **GIVEN** supported map coverage at the new loop start
+- **WHEN** the performer moves the loop to that position
+- **THEN** the new loop reference is displayed as 1 without translating the map
+- **AND** other pads retain their own maps and the shared master timeline

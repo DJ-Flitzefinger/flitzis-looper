@@ -112,13 +112,24 @@ src/flitzis_looper_audio/
 
 ## State Ownership
 
-New-track loop initialization happens through the loader/controller boundary,
-using an optional first-signal candidate computed on loaded PCM off-thread.
-It retains an 8-bar auto-loop and up to 5 ms preceding the detected activity;
-silence or absent metadata uses source zero. The automatic marker is not
-musically snapped. BPM and the signed grid remain independent, and restore or
-Analyze do not replace saved/manual markers. Performers can correct pickups,
-noise and fade-ins in Adjust Loop; first waveform activity need not be a beat.
+New-track loading initializes loop and an independent persisted scalar grid base
+at the loaded frame immediately before the first crossing of the symmetric
+fixed deadzone [-0.01, +0.01] full scale, without millisecond pre-roll or scaling
+the threshold to track peak. This widened value follows the user's screenshot
+test; tracks entirely inside the band use the existing no-candidate fallback.
+The background native candidate keeps Auto 8 bars; missing activity retains loop
+zero and legacy grid fallback. BPM and raw analysis remain independent. Restore,
+same-path reload and Analyze preserve saved/manual grid and loop intent.
+
+The editor starts initial/reset and loop-focused views one beat before the loop
+reference 1. Line 0 is the invisible left view edge; line 1 is one regular beat
+to its right for a newly aligned track. Negative space is a display range, not
+padded audio. Earlier source audio remains reachable by panning/Jump to start;
+PCM reads, seeks and physical markers stay inside source bounds. Coordinates use
+beat distance from current loop start, with fractional labels for off-grid loops;
+moving the loop does not move the physical grid. Labels are bounded and thinned
+at distant zoom. These numbers do not drive native SYNC. Performers can correct
+noise, pickups and fades; the initial seed does not certify a musical downbeat.
 
 | Layer | Owns | Must not own |
 | --- | --- | --- |
@@ -303,8 +314,8 @@ needed. Its pattern is:
 - playback controls in the editor go through playback actions.
 
 The editor grid uses effective pad BPM (manual override before analysis) and
-the analysis onset rounded at the loaded-buffer rate plus the persisted signed
-sample offset. Loop control publishes that same signed origin as precise native
+the persisted activity base (or legacy analysis onset when absent) rounded at
+the loaded-buffer rate plus the persisted signed sample offset. Loop control publishes that same signed origin as precise native
 timing metadata, including origins before source zero. Global playback modes and
 other-pad actions do not move the source grid or persisted markers.
 Native loop-region seconds remain `f64` through ordinary and direct-MIDI paths

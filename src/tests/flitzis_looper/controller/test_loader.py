@@ -93,6 +93,7 @@ def test_load_sample_async_resets_stale_empty_pad_settings(
     controller.project.pad_loop_end_s[sample_id] = 10.0
     controller.project.pad_loop_bars[sample_id] = 2.0
     controller.project.pad_grid_offset_samples[sample_id] = -240
+    controller.project.pad_grid_anchor_s[sample_id] = 0.024
 
     controller.loader.load_sample_async(sample_id, "/path/to/new.wav")
 
@@ -107,6 +108,7 @@ def test_load_sample_async_resets_stale_empty_pad_settings(
     assert controller.project.pad_loop_start_s[sample_id] == defaults.pad_loop_start_s[sample_id]
     assert controller.project.pad_loop_end_s[sample_id] == defaults.pad_loop_end_s[sample_id]
     assert controller.project.pad_loop_bars[sample_id] == defaults.pad_loop_bars[sample_id]
+    assert controller.project.pad_grid_anchor_s[sample_id] is None
     assert (
         controller.project.pad_grid_offset_samples[sample_id]
         == defaults.pad_grid_offset_samples[sample_id]
@@ -236,16 +238,20 @@ def test_loader_success_initializes_new_sample_loop_defaults(
     audio_engine_mock.set_pad_loop_region.assert_called_with(0, 0.0, 16.0)
 
 
+@pytest.mark.parametrize("anchor_s", [None, 0.0, 1_151 / 48_000])
 def test_restored_sample_success_preserves_existing_loop_settings(
     controller: AppController,
     audio_engine_mock: Mock,
+    anchor_s: float | None,
 ) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
     controller.project.sample_paths[0] = "samples/foo.wav"
     controller.session.pending_sample_paths[0] = "samples/foo.wav"
     controller.project.pad_loop_auto[0] = False
     controller.project.pad_loop_start_s[0] = 5.0
     controller.project.pad_loop_end_s[0] = 10.0
     controller.project.pad_loop_bars[0] = 2.0
+    controller.project.pad_grid_anchor_s[0] = anchor_s
 
     audio_engine_mock.poll_loader_events.side_effect = [
         {
@@ -264,6 +270,9 @@ def test_restored_sample_success_preserves_existing_loop_settings(
     assert controller.project.pad_loop_bars[0] == 2.0
     assert controller.project.pad_loop_start_s[0] == pytest.approx(5.0)
     assert controller.project.pad_loop_end_s[0] == pytest.approx(10.0)
+    assert controller.project.pad_grid_anchor_s[0] == anchor_s
+    if anchor_s is not None:
+        audio_engine_mock.set_pad_timing_metadata.assert_called_once_with(0, anchor_s)
 
 
 @pytest.mark.parametrize("analysis_bpm", [None, 123.456])
@@ -275,7 +284,7 @@ def test_loader_success_initializes_activity_candidate_with_or_without_bpm(
     audio_engine_mock.output_sample_rate.return_value = 48_000
     audio_engine_mock.load_sample_async.return_value = 3
     controller.loader.load_sample_async(0, "/path/to/original.wav")
-    start_s = 48_153 / 48_000
+    start_s = 1_151 / 48_000
     analysis = (
         {
             "bpm": analysis_bpm,
@@ -303,6 +312,10 @@ def test_loader_success_initializes_activity_candidate_with_or_without_bpm(
     assert controller.project.pad_loop_start_s[0] == start_s
     assert controller.project.pad_loop_auto[0] is True
     assert controller.project.pad_loop_bars[0] == 8.0
+    assert controller.project.pad_grid_anchor_s[0] == start_s
+    assert controller.transport.loop.grid_anchor_sec(0) == start_s
+    assert controller.project.pad_grid_offset_samples[0] == 0
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(0, start_s)
     expected_end_s = (
         round((start_s + 32 * 60 / analysis_bpm) * 48_000) / 48_000
         if analysis_bpm is not None
@@ -334,16 +347,19 @@ def test_loader_success_invalid_activity_candidate_keeps_track_start_fallback(
     assert controller.project.pad_loop_start_s[0] == 0.0
     assert controller.project.pad_loop_auto[0] is True
     assert controller.project.pad_loop_bars[0] == 8.0
+    assert controller.project.pad_grid_anchor_s[0] is None
 
 
 def test_manual_reanalysis_does_not_apply_activity_candidate_or_move_markers(
     controller: AppController,
     audio_engine_mock: Mock,
 ) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
     controller.project.sample_paths[0] = "samples/foo.wav"
     controller.project.sample_durations[0] = 32.0
     controller.project.manual_bpm[0] = 123.456
     controller.project.pad_grid_offset_samples[0] = -240
+    controller.project.pad_grid_anchor_s[0] = 1_151 / 48_000
     controller.project.pad_loop_auto[0] = False
     controller.project.pad_loop_start_s[0] = 5.0
     controller.project.pad_loop_end_s[0] = 10.0
@@ -372,6 +388,41 @@ def test_manual_reanalysis_does_not_apply_activity_candidate_or_move_markers(
     assert controller.project.pad_loop_auto[0] is False
     assert controller.project.manual_bpm[0] == 123.456
     assert controller.project.pad_grid_offset_samples[0] == -240
+    assert controller.project.pad_grid_anchor_s[0] == 1_151 / 48_000
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(0, 911 / 48_000)
+
+
+def test_same_assignment_load_success_preserves_base_when_new_analysis_arrives(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    controller.project.sample_paths[0] = "samples/foo.wav"
+    controller.project.pad_grid_anchor_s[0] = 1_151 / 48_000
+    controller.project.pad_grid_offset_samples[0] = -240
+    controller.project.pad_loop_start_s[0] = 4.0
+    audio_engine_mock.poll_loader_events.side_effect = [
+        {
+            "type": "success",
+            "id": 0,
+            "duration_s": 32.0,
+            "cached_path": "samples/foo.wav",
+            "detected_loop_start_s": 1.0,
+            "analysis": {
+                "bpm": 120.0,
+                "key": "C#m",
+                "beat_grid": {"beats": [2.0], "downbeats": [2.0], "bars": [2.0]},
+            },
+        },
+        None,
+    ]
+
+    controller.loader.poll_loader_events()
+
+    assert controller.project.pad_loop_start_s[0] == 4.0
+    assert controller.project.pad_grid_anchor_s[0] == 1_151 / 48_000
+    assert controller.project.pad_grid_offset_samples[0] == -240
+    audio_engine_mock.set_pad_timing_metadata.assert_called_once_with(0, 911 / 48_000)
 
 
 def test_restored_sample_success_publishes_available_stems(
@@ -558,6 +609,7 @@ def test_unload_sample_resets_track_bound_pad_settings(
     controller.project.pad_loop_end_s[sample_id] = 14.0
     controller.project.pad_loop_bars[sample_id] = 2.0
     controller.project.pad_grid_offset_samples[sample_id] = 512
+    controller.project.pad_grid_anchor_s[sample_id] = 0.024
 
     controller.loader.unload_sample(sample_id)
 
@@ -577,6 +629,7 @@ def test_unload_sample_resets_track_bound_pad_settings(
     assert controller.project.pad_loop_start_s[sample_id] == defaults.pad_loop_start_s[sample_id]
     assert controller.project.pad_loop_end_s[sample_id] == defaults.pad_loop_end_s[sample_id]
     assert controller.project.pad_loop_bars[sample_id] == defaults.pad_loop_bars[sample_id]
+    assert controller.project.pad_grid_anchor_s[sample_id] is None
     assert (
         controller.project.pad_grid_offset_samples[sample_id]
         == defaults.pad_grid_offset_samples[sample_id]

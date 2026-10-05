@@ -76,9 +76,11 @@ def test_initialize_loaded_pad_defaults_uses_track_start_and_eight_bars(
     audio_engine_mock.set_pad_loop_region.assert_called_with(sample_id, 0.0, 16.0)
 
 
-def test_initialize_loaded_pad_defaults_preserves_activity_attack_and_signed_grid(
+@pytest.mark.parametrize("start_frame", [0, 1_151, 480_153])
+def test_initialize_loaded_pad_defaults_aligns_grid_and_loop_to_activity_boundary(
     controller: AppController,
     audio_engine_mock: Mock,
+    start_frame: int,
 ) -> None:
     audio_engine_mock.output_sample_rate.return_value = 48_000
     sample_id = 0
@@ -91,7 +93,7 @@ def test_initialize_loaded_pad_defaults_preserves_activity_attack_and_signed_gri
         key="C",
         beat_grid=BeatGrid(beats=[0.0], downbeats=[0.0], bars=[0.0]),
     )
-    start_s = 48_153 / 48_000
+    start_s = start_frame / 48_000
 
     controller.transport.loop.initialize_loaded_pad_defaults(sample_id, start_s)
 
@@ -99,11 +101,12 @@ def test_initialize_loaded_pad_defaults_preserves_activity_attack_and_signed_gri
     assert controller.project.pad_loop_auto[sample_id] is True
     assert controller.project.pad_loop_bars[sample_id] == 8.0
     assert controller.project.manual_bpm[sample_id] == 123.456
-    assert controller.project.pad_grid_offset_samples[sample_id] == -480
-    assert controller.transport.loop.grid_anchor_sec(sample_id) == -0.01
+    assert controller.project.pad_grid_anchor_s[sample_id] == start_s
+    assert controller.project.pad_grid_offset_samples[sample_id] == 0
+    assert controller.transport.loop.grid_anchor_sec(sample_id) == start_s
     expected_end_s = round((start_s + 32 * 60 / 123.456) * 48_000) / 48_000
     audio_engine_mock.set_pad_loop_region.assert_called_with(sample_id, start_s, expected_end_s)
-    audio_engine_mock.set_pad_timing_metadata.assert_called_with(sample_id, -0.01)
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(sample_id, start_s)
 
 
 def test_initialize_loaded_pad_defaults_uses_activity_candidate_without_bpm(
@@ -122,6 +125,8 @@ def test_initialize_loaded_pad_defaults_uses_activity_candidate_without_bpm(
     assert controller.project.pad_loop_auto[sample_id] is True
     assert controller.project.pad_loop_bars[sample_id] == 8.0
     assert controller.transport.loop.effective_region(sample_id) == (start_s, None)
+    assert controller.project.pad_grid_anchor_s[sample_id] == start_s
+    assert controller.transport.loop.grid_anchor_sec(sample_id) == start_s
     audio_engine_mock.set_pad_loop_region.assert_called_with(sample_id, start_s, None)
 
 
@@ -134,12 +139,86 @@ def test_initialize_loaded_pad_defaults_falls_back_for_unusable_activity_candida
     audio_engine_mock.output_sample_rate.return_value = 48_000
     controller.project.sample_paths[0] = "samples/foo.wav"
     controller.project.sample_durations[0] = 3.0
+    controller.project.pad_grid_anchor_s[0] = 1.0
+    controller.project.pad_grid_offset_samples[0] = 480
+    controller.project.sample_analysis[0] = SampleAnalysis(
+        bpm=120.0,
+        key="C",
+        beat_grid=BeatGrid(beats=[0.5], downbeats=[0.5], bars=[0.5]),
+    )
 
     controller.transport.loop.initialize_loaded_pad_defaults(0, candidate_s)
 
     assert controller.project.pad_loop_start_s[0] == 0.0
     assert controller.project.pad_loop_auto[0] is True
     assert controller.project.pad_loop_bars[0] == 8.0
+    assert controller.project.pad_grid_anchor_s[0] is None
+    assert controller.project.pad_grid_offset_samples[0] == 0
+    assert controller.transport.loop.grid_anchor_sec(0) == 0.5
+
+
+def test_activity_grid_base_survives_bpm_clamp_and_later_loop_edits(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    controller.project.sample_paths[0] = "samples/foo.wav"
+    controller.project.sample_durations[0] = 60.0
+    base_s = 480_153 / 48_000
+    controller.transport.loop.initialize_loaded_pad_defaults(0, base_s)
+    controller.transport.bpm.set_manual_bpm(0, 120.0)
+    controller.transport.loop.set_grid_offset_samples(0, 96_000)
+
+    controller.transport.bpm.set_manual_bpm(0, 240.0)
+
+    assert controller.project.pad_grid_anchor_s[0] == base_s
+    assert controller.project.pad_grid_offset_samples[0] == 48_000
+    assert controller.transport.loop.grid_anchor_sec(0) == base_s + 1.0
+    assert controller.project.pad_loop_start_s[0] == base_s
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(0, base_s + 1.0)
+
+    controller.transport.loop.set_start(0, base_s + 4.0)
+
+    assert controller.project.pad_loop_start_s[0] == base_s + 4.0
+    assert controller.project.pad_grid_anchor_s[0] == base_s
+    assert controller.transport.loop.grid_anchor_sec(0) == base_s + 1.0
+
+
+def test_activity_grid_supports_negative_signed_offset_without_near_start_snap(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    controller.project.sample_paths[0] = "samples/foo.wav"
+    controller.project.sample_durations[0] = 3.0
+    controller.transport.loop.initialize_loaded_pad_defaults(0, 1_151 / 48_000)
+
+    controller.transport.loop.set_grid_offset_samples(0, -1_200)
+
+    assert controller.project.pad_grid_anchor_s[0] == 1_151 / 48_000
+    assert controller.transport.loop.grid_anchor_sec(0) == -49 / 48_000
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(0, -49 / 48_000)
+
+
+@pytest.mark.parametrize("anchor_s", [math.nan, math.inf, -0.1])
+def test_invalid_in_place_grid_base_uses_legacy_analysis_fallback(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    anchor_s: float,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    controller.project.sample_paths[0] = "samples/foo.wav"
+    controller.project.pad_grid_anchor_s[0] = anchor_s
+    controller.project.sample_analysis[0] = SampleAnalysis(
+        bpm=120.0,
+        key="C",
+        beat_grid=BeatGrid(beats=[0.5], downbeats=[0.5], bars=[0.5]),
+    )
+
+    controller.transport.loop.apply_grid_anchor_to_audio(0)
+
+    assert controller.transport.loop.grid_anchor_sec(0) == 0.5
+    audio_engine_mock.set_pad_timing_metadata.assert_called_once_with(0, 0.5)
 
 
 def test_set_loop_start_snaps_to_64th_grid_and_quantizes_to_samples_when_auto_enabled(

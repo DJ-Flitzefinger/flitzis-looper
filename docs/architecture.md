@@ -261,10 +261,10 @@ math. Near-integer tempos are not snapped to integer BPM solely for display
 readability; compact pad overlays may round for scanning, while editable BPM
 fields and the Loop Editor grid use the underlying effective BPM.
 
-Beat/downbeat anchors reported very close to file start are normalized to
-`0.0` before deriving the Loop Editor grid anchor and pad timing metadata. This
-keeps the first bar line at the track start when the analyzer only reported hop
-latency rather than a musical offset.
+In the legacy grid fallback, beat/downbeat anchors reported very close to file
+start are normalized to `0.0` before deriving editor/native timing. An explicit
+persisted activity base bypasses this normalization and retains its loaded-frame
+position even within that near-start interval.
 
 ## Playback, Loops, And Stems
 
@@ -291,27 +291,35 @@ It therefore observes the same fractional source position as rendering,
 including live-loop normalization and explicit seek semantics, without advancing
 the live cursor. There is no live loop-edit crossfade yet.
 
-New track assignments initialize their 8-bar auto-loop from first detected
-waveform activity, with up to 5 ms of preceding audio. `initial_loop_start.rs`
-scans complete loaded PCM in the existing background loader, using the first
-individual channel frame reaching max(1e-5 full scale, 0.001 * global peak).
-It uses two borrowed passes and no extra PCM allocation; opposite-polarity stereo
-does not cancel detection. The load success carries an optional `f64` start
-candidate under the existing request identity. Silence/sub-threshold activity
-falls back to zero. Python applies it only to a new assignment, without musical
-snapping. Saved/manual regions survive restore and reanalysis. A pickup or noise
-may be selected, and the quietest part of a long fade may precede the threshold;
-the candidate is editable physical loop intent, not a certified musical anchor.
+New track assignments initialize their 8-bar auto-loop and an independent scalar
+grid base at the last loaded frame before first finite any-channel amplitude
+strictly exceeding 0.01 full scale. Both boundaries of the fixed [-0.01, +0.01]
+deadzone count as near-zero. `initial_loop_start.rs` uses one borrowed background
+scan without extra PCM allocation or mono cancellation. No fixed 5-ms pre-roll
+remains. The optional f64 candidate shares existing load/request identity guards.
+The widened tolerance is a screenshot-informed user-test value, independent of
+track peak; noise, pickups and soft fades remain heuristic limits rather than
+certified musical downbeats. Tracks entirely inside this band and invalid candidates retain loop
+zero and legacy grid fallback. Raw analysis and BPM are not rewritten.
 
-The Loop Editor grid is source-domain editing state. Python derives the visible
-grid anchor from analysis onset/downbeat metadata plus the per-pad
-`pad_grid_offset_samples` value, stores snapped loop markers in source time, and
-publishes the same signed origin to Rust as `f64` seconds timing metadata. The
-origin is a virtual source reference and may be before frame zero or beyond the
-audio interval; Rust converts it to a signed `f64` source frame and never uses
-it as an unchecked buffer index. Global speed, BPM
-Lock, Key Lock, trigger quantization, and other-pad playback do not move a
-pad's source grid or snapped loop markers.
+The source-time `pad_grid_anchor_s` is optional persisted intent, separate from
+the signed `pad_grid_offset_samples` manual correction. Display, snapping and
+native timing share the rounded base plus offset; when base is absent, legacy
+analysis downbeat/beat/zero fallback applies. This avoids clamping a long-silence
+base to the offset's one-bar range on BPM changes. Restore publishes a base even
+without analysis/BPM; reanalysis and manual loop edits preserve it. New assignment
+or unload clears the old base. Legacy JSON remains compatible.
+
+The resulting source-grid origin is a signed virtual reference, possibly outside
+the audio interval; Rust never uses it as an unchecked buffer index. The editor's
+initial/reset and loop-focused view starts one beat before the selected loop,
+whose displayed beat coordinate is 1. Coordinate 0 is the invisible left reference;
+negative display space adds no source audio. Earlier physical audio remains
+reachable by panning. Numbering is loop-relative and may be fractional for off-grid
+loops; adaptive zoom subdivision indices are not beat identities. Global speed,
+BPMLOCK, KEYLOCK, quantization and other-pad playback do not move source grid or
+stored markers. Existing live source-phase behavior is unchanged; future mapped
+SYNC uses the loop-relative contract in beatmap-sync-design.md.
 
 `source_grid.rs` centralizes bounded source beat/bar, loop-start phase and
 master-beat-to-loop mapping. Source beat is `(frame - origin) / frames_per_beat`;

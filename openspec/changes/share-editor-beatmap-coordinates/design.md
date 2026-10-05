@@ -55,3 +55,10 @@ publish physical regions immediately; this is distinct from adopting mapped play
 Use controller/evaluator tests for line/snap agreement, signed offsets, missing coverage,
 meter ambiguity, stale viewport data and preserved master/other-pad state. Keep visual QA focused
 on labels and pending revision state. Rollback selects the preserved scalar view/intent.
+
+Preserve the scalar activity-base revision from auto-place-new-track-loop-start:
+optional persisted base plus manual offset, with legacy analysis fallback. Carry
+loop-relative display coordinate 1+B(s)-B(loop_start) into map mode. Grid0 is an
+invisible preceding reference, not an invented beat between file start and attack.
+The future SYNC contract uses continuous native q and phi_loop, as described in
+beatmap-sync-design.md, without changing current scalar live phase in this slice.

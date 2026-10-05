@@ -117,15 +117,25 @@ broken downbeat output as if it were a valid baseline.
 
 For a supported loop, B maps source seconds to beats and S maps beats to source seconds.
 Define b0=B(loop_start_seconds), L=B(loop_end_seconds)-b0>0, loaded source rate Fs and
-intentional phase phi:
+intentional loop-relative phase phi_loop:
 
 ```text
-s(n) = Fs * S(b0 + euclidean_mod(M(n) + phi - b0, L))  (loaded source frames)
+q(s) = B(s) - b0  (musical progress relative to the chosen loop start)
+s(n) = Fs * S(b0 + euclidean_mod(M(n) + phi_loop, L))  (loaded source frames)
 r(n) = ds/dn  (source frames per output frame, excluding loop wraps)
 h(k) = 2^(k/12), where k is signed semitones
 ```
 
-Changing k cannot change s(n), r(n), M(n), phi, B/S or the scheduled output-frame range.
+Displayed beat numbers are 1+q(s), restarting at the selected loop, not permanent
+source-start identities. Future B3/B7 retain continuous q and native master phase;
+UI labels, zoom and refresh never drive scheduling. A later selected loop changes
+b0 without moving the source map. The former absolute-source phase expression is
+equivalent only with phi=b0+phi_loop; do not carry an unadjusted absolute phase
+into the requested loop-relative alignment. This updates the future design, not
+the current live SourceGrid behavior. The new activity seed is editable scalar
+intent and never substitutes for accepted variable-map coverage or musical labels.
+
+Changing k cannot change s(n), r(n), M(n), phi_loop, B/S or the scheduled output-frame range.
 Different pads use different maps and k values but the same master/output frame. Stems of one
 pad share that pad's source trajectory, pitch intent, wrap decisions and preparation identity.
 

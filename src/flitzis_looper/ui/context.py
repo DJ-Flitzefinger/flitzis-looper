@@ -19,6 +19,7 @@ from flitzis_looper.input_mapping import (
     start_stop_action,
 )
 from flitzis_looper.input_timing import validate_input_timestamp_ns
+from flitzis_looper.ui.waveform_grid import beat_duration_s, waveform_view_start
 
 if TYPE_CHECKING:
     from imgui_bundle import imgui
@@ -110,6 +111,10 @@ class PadSelectors:  # noqa: PLR0904 - selector facade intentionally mirrors pad
 
     def effective_loop_region(self, pad_id: int) -> tuple[float, float | None]:
         return self._controller.transport.loop.effective_region(pad_id)
+
+    def grid_anchor_s(self, pad_id: int) -> float:
+        """Return the same signed source origin used by snapping and native timing."""
+        return self._controller.transport.loop.grid_anchor_sec(pad_id)
 
     def max_auto_loop_bars(self, pad_id: int) -> float | None:
         return self._controller.transport.loop.max_auto_loop_bars(pad_id)
@@ -554,6 +559,7 @@ class WaveformEditorActions:
 
         # Per-pad view state for the waveform editor plot (seconds).
         self._pad_view_ranges: dict[int, tuple[float, float]] = {}
+        self._pad_view_sources: dict[int, tuple[str | None, float | None]] = {}
 
     def _selected_pad_id(self) -> int | None:
         return self._controller.session.waveform_editor_pad_id
@@ -686,20 +692,49 @@ class WaveformEditorActions:
         """Record the plot's current visible X-range for a pad."""
         self._pad_view_ranges[int(pad_id)] = (float(start_s), float(end_s))
 
+    def consume_source_view_reset(self, pad_id: int) -> bool:
+        """Reset the first view of a newly assigned source, preserving later navigation."""
+        identity = self._waveform_source_identity(pad_id)
+        if self._pad_view_sources.get(pad_id) == identity:
+            return False
+        self._pad_view_sources[pad_id] = identity
+        self._pad_view_ranges.pop(pad_id, None)
+        return True
+
+    def view_limits(
+        self, pad_id: int, *, loop_only: bool = False, include_source_start: bool = False
+    ) -> tuple[float, float] | None:
+        """Project source bounds with virtual room for the beat preceding the loop."""
+        duration_s = self._controller.project.sample_durations[pad_id]
+        if duration_s is None or duration_s <= 0.0:
+            return None
+        loop_start_s = self._controller.project.pad_loop_start_s[pad_id]
+        bpm = self._controller.transport.bpm.effective_bpm(pad_id)
+        start_s = waveform_view_start(loop_start_s, bpm)
+        if loop_only:
+            _, loop_end_s = self._controller.transport.loop.effective_region(pad_id)
+            end_s = min(duration_s, loop_end_s) if loop_end_s is not None else duration_s
+            return (start_s, end_s)
+        if include_source_start or beat_duration_s(bpm) is None:
+            start_s = min(0.0, start_s)
+        return (start_s, duration_s)
+
     def _current_view_width_s(self, pad_id: int, *, sample_duration_s: float) -> float:
         if sample_duration_s <= 0.0:
             return 0.0
 
+        limits = self.view_limits(pad_id, include_source_start=True)
+        total_width_s = limits[1] - limits[0] if limits is not None else sample_duration_s
         current = self._pad_view_ranges.get(pad_id)
         if current is None:
-            return float(sample_duration_s)
+            return total_width_s
 
         start_s, end_s = current
         width = max(0.0, float(end_s) - float(start_s))
         if width <= 0.0:
-            return float(sample_duration_s)
+            return total_width_s
 
-        return min(width, float(sample_duration_s))
+        return min(width, total_width_s)
 
     def view_jump_start_selected_pad_on_press(self) -> tuple[float, float] | None:
         """Jump the waveform editor view to the start (selected pad)."""
@@ -713,7 +748,8 @@ class WaveformEditorActions:
 
         dur_s = float(dur_s)
         width_s = self._current_view_width_s(pad_id, sample_duration_s=dur_s)
-        start_s = 0.0
+        limits = self.view_limits(pad_id, include_source_start=True)
+        start_s = limits[0] if limits is not None else 0.0
         end_s = min(dur_s, start_s + width_s)
 
         self._pad_view_ranges[pad_id] = (start_s, end_s)
@@ -732,7 +768,9 @@ class WaveformEditorActions:
         dur_s = float(dur_s)
         width_s = self._current_view_width_s(pad_id, sample_duration_s=dur_s)
         end_s = dur_s
-        start_s = max(0.0, end_s - width_s)
+        limits = self.view_limits(pad_id, include_source_start=True)
+        minimum_s = limits[0] if limits is not None else 0.0
+        start_s = max(minimum_s, end_s - width_s)
 
         self._pad_view_ranges[pad_id] = (start_s, end_s)
         return (start_s, end_s)
