@@ -35,6 +35,7 @@ For focused areas:
 | `ui-toolkit.md` | Project-specific Dear ImGui design and state-flow rules. |
 | `stem-generation-setup.md` | External requirements for offline Demucs stem generation. |
 | `key-lock-backend.md` | Current Rubber Band Key Lock backend, timing semantics, realtime constraints, and native dependency requirements. |
+| `offline-analysis.md` | B1a diagnostic PCM/worker API, resource ownership and limits; real Beat This inference and default cutover remain gated. |
 | `beatmap-sync-research.md` | Sourced feasibility decision for variable beatmaps and independent Quantize/SYNC; proposals and evidence limits, not current runtime behavior. |
 | `beatmap-sync-design.md` | Selected Beat This migration and staged shared-grid/SYNC design, including the future independent per-pad KEY contract and validation gates. |
 | `todos.md` | Explicit user-requested TODO notes; not an automatic work queue. |

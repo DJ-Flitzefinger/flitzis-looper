@@ -1,25 +1,28 @@
 ## Status and selected target
 
-Planning only. The target for future new analyses is `beat-this==1.1.0`, checkpoint `final0`,
+B1a's diagnostic boundary is implemented and validated. Model inference remains B1b work.
+The target for future new analyses is `beat-this==1.1.0`, checkpoint `final0`,
 minimal postprocessing (`dbn=False`). `small0` may be evaluated as an explicitly selected
 alternative; it is never a silent fallback. A failed gate postpones cutover with recorded
 remediation; it does not reopen model choice automatically. Corrected qm-dsp output remains
 comparison/legacy evidence, not an implicit substitute when the selected worker is unavailable.
 
-Current `analyze_sample` receives immutable loaded `SampleBuffer.samples: Arc<[f32]>` and
-the actual output sample rate. Python's existing waveform access is viewport/bucket oriented;
-there is no assumed full-track PCM accessor. B1a must introduce and validate a focused
-non-realtime full-track handoff, reusing Rust loader/request ownership.
+The new `begin_offline_analysis`/`OfflineAnalysisService` boundary pins immutable loaded
+`SampleBuffer.samples: Arc<[f32]>` with actual rate and source/request generation, prepares shared
+mono and exports complete float32-LE audio without another decode. It leaves existing automatic
+and manual `analyze_sample` routing intact. JSON diagnostic envelopes are not adopted into saved
+analysis or manual grids. There is no B1a inference script, accepted final0 checksum or weight
+acquisition. The worker's 22050-Hz frontend and real model execution remain B1b work.
 
 ## Input domains and preprocessing
 
-Proposed logical records, with final names to follow the existing native API conventions:
+Contracts implemented by the B1a records, plus explicitly deferred model/map layers:
 
 | Record | Contract |
 | --- | --- |
 | Loaded PCM snapshot | Interleaved f32, loaded rate u32, channel/frame counts, source identity and generation, pad/request ID. This is the loaded playback-buffer domain, not compressed-file samples or output-device position. |
 | Shared mono input | One full-track mono conversion from that immutable snapshot; same time-zero and duration, with explicit channel-mix rule. No silence trim or per-chunk time reset. |
-| Beat worker input | Read-only mono PCM plus metadata. Derive 22,050-Hz mono directly using the pinned front end/resampler; skip rate conversion when already equal. Record padding/delay/tail conventions. |
+| Beat worker input | Complete loaded-rate mono PCM plus metadata in `MonoPcmInput`/`BeatWorkerRequest`. B1b must derive 22,050-Hz mono directly using the pinned frontend/resampler, preserving origin/tail and recording padding/delay conventions. |
 | Key input | Derive 44,100-Hz mono directly from shared mono for the existing Rust CQT/KeyNet path; do not feed the Beat This downsampled signal into KeyNet. |
 | Raw predictions | Beat/downbeat logits and detected f64 seconds with model/configuration/preprocessing identity. Nominal model frame k means k*441/22050 seconds; verify origin against preprocessing fixtures. |
 | Accepted map | Separate reviewed anchors, beat units/counts, coverage and corrections under the versioned-map change. Loaded-frame positions are derived from seconds times the active loaded rate. |
@@ -36,6 +39,15 @@ includes loaded input rate and preprocessing identity because rate-dependent PCM
 inference even when the musical source is unchanged.
 
 ## Worker and job ownership
+
+B1a implements one native request per engine, one request per service and one process globally,
+with zero pending queues. Native retained-source/shared-mono/key PCM admission is capped at
+512 MiB; this excludes FFT scratch, CQT/ORT workspace and worker model memory. The adapter also
+bounds request/response/checkpoint sizes and prediction counts. Its provisional process timeout
+is 120 seconds, followed by finite 5-second reap/reader-join attempts. Failed reaping retains
+the process slot and PCM until actual retirement. Key CQT/ORT calls remain non-preemptible.
+See [boundary reference](../../../docs/offline-analysis.md) for the complete implemented limits.
+Those limits and test doubles are not real-model performance/quality acceptance.
 
 Extend the existing analysis request lifecycle with a narrow beat-analysis adapter; do not put
 process supervision in the large UI controller or add a competing scheduler. Rust control/
@@ -135,8 +147,9 @@ timing adjustment are distinct operations. Automatic refinement is not activated
 
 ## Finite acceptance and cutover
 
-B1a proves the adapter/PCM contract, job identities and missing-checkpoint tests without
-weights/default activation. B1b performs explicit setup and real Windows CPU reference
+B1a supplies the diagnostic adapter/PCM contract, job identities and missing-checkpoint tests
+without weights/default activation. Full project checks and strict change validation passed
+for this slice. B1b performs explicit setup and real Windows CPU reference
 inference. B2 performs frozen private-track quality/resource acceptance and default cutover.
 Freeze corpus, annotation uncertainty, correction-burden criteria and local resource limits
 before tuning; report 10/20/40/70-ms errors, missing/extra beats, downbeat mistakes and long-track

@@ -445,6 +445,7 @@ dependencies = [
  "pyo3",
  "rtrb",
  "rubato 1.0.0",
+ "serde_json",
  "symphonia",
  "tempfile",
  "thiserror 2.0.17",

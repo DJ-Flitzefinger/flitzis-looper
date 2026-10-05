@@ -308,6 +308,13 @@ intended distribution model.
 
 ## Validation
 
+The optional Beat This B1a boundary is available only through explicit diagnostic
+API calls. It requires no Beat This dependency or weight installation and does
+not change normal load/manual analysis routing. Use the existing project build
+for its native PCM/KeyNet methods. [Offline analysis boundary](offline-analysis.md)
+documents the API, focused tests, provisional resource bounds and remaining B1b
+setup/inference work. No accepted final0 checksum ships in B1a.
+
 Focused changes should run focused tests. Broader Rust/audio, persistence,
 OpenSpec, bridge, or UI-control changes should run the full sequence:
 

@@ -346,12 +346,14 @@ pub(crate) use flitzis_looper_analysis::SampleAnalysis;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BackgroundTaskKind {
     Analysis,
+    OfflineAnalysis,
     StemGeneration,
 }
 
 pub fn task_to_str(task: BackgroundTaskKind) -> &'static str {
     match task {
         BackgroundTaskKind::Analysis => "analysis",
+        BackgroundTaskKind::OfflineAnalysis => "offline_analysis",
         BackgroundTaskKind::StemGeneration => "stem_generation",
     }
 }
@@ -359,6 +361,12 @@ pub fn task_to_str(task: BackgroundTaskKind) -> &'static str {
 /// Events emitted from background work (loading and per-pad tasks).
 #[derive(Debug, Clone)]
 pub enum LoaderEvent {
+    /// Validated diagnostic components; never implicitly adopted into a saved grid.
+    OfflineAnalysisCompleted {
+        id: usize,
+        request_id: u64,
+        result_json: String,
+    },
     /// Loading started for the given sample slot id.
     Started { id: usize, request_id: u64 },
 

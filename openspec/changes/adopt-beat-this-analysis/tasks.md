@@ -1,21 +1,28 @@
 ## B1a: First implementation slice, no weights or default switch
 
-- [ ] Freeze typed PCM/request/component-result contracts and existing job ownership integration.
-- [ ] Add the non-realtime immutable full-track PCM export/worker boundary; do not use viewport
+- [x] Freeze typed PCM/request/component-result contracts and existing request/event integration
+  for the explicitly invoked diagnostic boundary; leave normal routing and persistence intact.
+- [x] Add the non-realtime immutable full-track PCM export/worker boundary; do not use viewport
   waveform summaries. Bound queue, transfer chunks, sizes and off-thread resource retirement.
-- [ ] Implement lazy adapter preflight and explicit unavailable/corrupt/mismatched-checkpoint
+- [x] Implement lazy adapter preflight and explicit unavailable/corrupt/mismatched-checkpoint
   outcomes with an injected worker test double; no model acquisition during these tests.
-- [ ] Reuse request IDs/progress/stale-result rejection. Add bounded cancellation, timeout,
+- [x] Reuse request IDs/progress/stale-result rejection. Add bounded cancellation, timeout,
   process teardown and off-thread PCM cleanup; stale-result rejection alone does not stop work.
   Reject late responses after unload, source replacement, timeout or cancellation. Publish
-  validated components atomically.
-- [ ] Separate bounded beat-process termination from non-preemptible Rust KeyNet calls. Track
+  validated diagnostic components atomically, without adopting saved analysis/maps.
+- [x] Separate bounded beat-process termination from non-preemptible Rust KeyNet calls. Track
   in-flight key work as retiring; cap key/retirement slots and retained PCM with backpressure.
   Test stalled key work: whole-request cancellation/resource release remains incomplete until
   both branches actually settle, while stale publication and further unbounded work are blocked.
-- [ ] Test no double decode, correct mono/time origin, rate metadata and terminal independent
-  beat/key outcomes; valid audio remains loadable/playable when optional analysis is absent.
-- [ ] Keep current new-analysis default unchanged and mark this slice as adapter-only.
+- [x] Exercise immutable loaded PCM without a decoder, mono/time origin, complete tails and
+  loaded-rate metadata; derive key input directly at 44100 Hz and test independent terminal
+  beat/key outcomes. Optional diagnostic failures do not replace playback buffers or saved data.
+- [x] Keep current new-analysis default unchanged and document this slice as adapter-only;
+  defer actual 22050-Hz frontend parity and model inference to B1b.
+- [x] Complete full project build/Rust/Python/lint/type checks and official strict validation
+  of this change: 450 Rust tests (one ignored doc test), 877 Python tests, development build,
+  cargo check, production Clippy, Ruff/mypy and formatting passed. Final native publication
+  acceptance refinement also passed all eight focused lifecycle tests.
 
 ## B1b: Explicit setup and real reference inference
 

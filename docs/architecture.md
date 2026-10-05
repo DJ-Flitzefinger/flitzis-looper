@@ -76,6 +76,8 @@ rust/crates/looper/src/
 |-- messages.rs                    # fixed-size messages and shared descriptors
 `-- audio_engine/
     |-- mod.rs                     # AudioEngine API and background orchestration
+    |-- analysis_jobs.rs           # optional diagnostic analysis ownership and events
+    |-- analysis_pcm.rs            # immutable full-track mono/export/key input
     |-- audio_stream.rs            # CPAL callback and scheduler integration
     |-- buffer_retirement.rs       # non-audio retirement of large handles
     |-- constants.rs               # banks, grid size, slot count, ranges
@@ -221,8 +223,8 @@ changes mid-file.
 
 ## Audio Analysis And Timing Metadata
 
-Audio analysis runs on non-realtime worker threads after a sample is decoded and
-published. The loaded buffer is mixed to mono and resampled once to 44100 Hz,
+Default audio analysis runs on non-realtime worker threads during sample loading
+and manual analysis. The loaded buffer is mixed to mono and resampled once to 44100 Hz,
 then shared by concurrent BPM and key workers. Analysis resampling processes the
 complete track, removes the FFT resampler's leading delay, and flushes its tail
 to preserve duration and transient times at every supported output rate.
@@ -233,6 +235,23 @@ Key detection computes the librosa-compatible CQT and runs the KeyNet ONNX
 model; see [Key detection](key-detection.md). A key detection failure returns
 `unknown` without discarding the BPM result. Automatic loading and manual
 analysis use the same preprocessing and detection path.
+
+The separate B1a diagnostic boundary exposes `begin_offline_analysis` and
+`OfflineAnalysisService`; it does not change that default routing or adopt new
+results into saved grids. Rust pins the immutable loaded source, prepares shared
+mono at its actual rate, exports complete float32-LE PCM and derives KeyNet's
+44100-Hz input directly. Python supervises the optional local beat process and
+publishes one independent-component envelope through loader events. B1b still
+owns the actual 22050-Hz Beat This frontend, environment and weights.
+
+One native job per engine and one beat process globally retain their slots
+through cancellation and actual retirement. Native PCM staging is capped at
+512 MiB, excluding FFT/CQT/ORT/model workspace. Native key calls are not
+preemptible; a cancelled call stays retiring until it returns. Unconfigured
+beat analysis reports unavailable while key may succeed. All PCM preparation,
+process management, validation and destruction stay outside the callback.
+See [Offline analysis boundary](offline-analysis.md) for the API, provisional
+limits and exact diagnostic-only scope.
 
 Published analysis BPM values preserve fractional precision for timing and grid
 math. Near-integer tempos are not snapped to integer BPM solely for display

@@ -1,6 +1,7 @@
 # Beat This migration and independent pad pitch: implementation design
 
-Decision date: 2026-10-05. Status: planned; no production implementation in this revision.
+Decision date: 2026-10-05. Status: B1a diagnostic PCM/job boundary implemented;
+real Beat This inference, default cutover and live map/pitch stages remain pending.
 This document adopts the user's selected direction: **Beat This! 1.1.0, final0, minimal
 postprocessing** replaces the normal beat/downbeat analyzer after the stated acceptance gates.
 It is no longer an open model shortlist. `small0` is a later explicit footprint option.
@@ -61,17 +62,20 @@ Manual sample-domain anchors and explicit count correction remain available and 
 
 ## Analysis migration
 
-Use the existing loaded immutable PCM and source/request generation, not the waveform envelope
-or another file decoder. A full-track non-realtime PCM snapshot/export boundary must be added;
-the existing viewport waveform API is not such a boundary. Share canonical mono preparation,
-then derive Beat This's 22,050-Hz input and the existing key detector's 44,100-Hz input separately.
+The B1a diagnostic boundary uses existing loaded immutable PCM and source/request generation,
+without consulting the waveform envelope or another file decoder. Its non-realtime snapshot
+prepares one arithmetic mono source, exports complete float32-LE audio at the actual loaded rate
+and derives the existing key detector's 44,100-Hz input directly. B1b must independently derive
+Beat This's 22,050-Hz input using its pinned frontend; that conversion is not implemented yet.
 Preserve origin/tail and record preprocessing identity; do not cascade through the other model's
 sample rate or repair unexplained offsets with a fitted constant.
 
-Reuse current request IDs, progress events and stale-result rejection. Existing rejection of a
-completed stale job is not cancellation of its computation: B1a must add bounded cancellation,
-timeout/process teardown and off-thread PCM cleanup. A bounded lazy offline worker owns model
-loading/inference and can use read-only mapped PCM plus small messages. Version-pin
+The adapter reuses current request IDs, progress events and stale-result rejection. B1a adds
+cooperative preparation cancellation, subprocess timeout/reaping and off-thread PCM cleanup.
+One native slot per engine and one process globally remain occupied while work is retiring;
+there is no pending queue. The native PCM staging cap is 512 MiB, excluding FFT/CQT/model
+workspace. Small versioned messages describe the full-track file. A real lazy offline worker
+will own model loading/inference in B1b. Version-pin
 its environment separately if the app's Python >=3.14 environment is incompatible. CPU operation
 is required; GPU is optional. No Python inference or PCM export occurs in the audio callback.
 Worker count, Torch thread count, queued bytes and retained snapshots need explicit limits.
@@ -83,6 +87,9 @@ retirement slots and retained PCM bytes, applying backpressure rather than creat
 threads without limits. Shared PCM stays alive until its last reader releases it. A whole request
 is terminal only after both branches settle; beat-process exit alone cannot certify complete
 analysis cancellation or resource release. B1a tests this distinction with a stalled key double.
+See [Offline analysis boundary](offline-analysis.md) for the actual APIs, provisional limits
+and verification scope. Its JSON completion event is diagnostic only: UI routing, normal
+automatic/manual analysis, saved grids and manual maps are unchanged.
 
 Acquire `final0` through explicit setup into local model storage, verify actual SHA-256 and
 save a manifest with package/checkpoint/configuration/license/source URL and byte length.
@@ -208,7 +215,7 @@ changes. Keep generated/private evidence outside the repository.
 
 | Slice | Concrete output and dependencies | Acceptance and rollback |
 | --- | --- | --- |
-| B1a: offline boundary | Selected Beat This adapter/job DTO, immutable full-track non-RT PCM boundary, optional worker discovery, cancellation/stale-ID handling, local-checkpoint-only guard. No default switch. | Missing model/runtime cannot break loading/playback; tested source origin, worker limits, shutdown and stale completion. Existing analyzer remains until cutover. |
+| B1a: offline boundary | Implemented and validated diagnostic adapter/job DTO, immutable full-track PCM export, optional worker discovery, cancellation/stale-ID handling and local-checkpoint-only guard. | Synthetic protocol/ownership and native integration tests cover source origin, worker limits, stalled key, shutdown and stale completion. Existing analyzer and saved data remain selected; real frontend/model evidence belongs to B1b. |
 | B1b: real reference | Explicit final0 acquisition with hash manifest, pinned Windows CPU worker, whole-track oracle output from shared PCM. Raw logits/predictions retained locally. | Actual inference, not mocks; resampler/chunk-boundary parity, offline rerun, duration/origin, cold/warm RAM/time, cancellation. Failed setup produces a precise repair task. |
 | B2: accepted new default | Freeze local annotation/quality/resource criteria before tuning; measure raw Beat This on all available benchmark classes, repair qm comparator only as needed; switch NEW automatic/manual analysis after gates. | Published quality/error/uncertainty report, no unflagged count errors in accepted regions, corrected-grid effort and critical downbeats assessed; old projects untouched. Rollback selects legacy backend explicitly and preserves provenance. |
 | B3: shared map | Versioned raw/accepted records, precise anchors, monotone B/S with bounded lookup, explicit gaps/beat units, legacy scalar mode and persistence. Can be built against exact fixtures in parallel with B1. | Identity/restore/round-trip/long-loop/rate tests; no silent variable playback activation. Scalar mode remains intact. |
@@ -220,9 +227,9 @@ changes. Keep generated/private evidence outside the repository.
 | K1: later user feature | Actual per-pad KEY controls, mappings, persistence and output-key display, using already proven k contract. Not implemented by this planning request. | Confirm range/KEYLOCK-off/formant UX, test all B5 transitions through real controls; never reuse metadata-key setter or speed control. |
 | Existing remaining program | Separator replacement/optional inference slice 7, then full Rust-port PLAN slice 8 remain after live acceptance. | Beat analysis native export is a separate parity task. Full application port still needs the user's explicit post-bugfix authorization. |
 
-The immediate next implementation slice is B1a. Model choice is settled; do not reopen the general
-survey or let the known legacy detector defect become a prerequisite for the new worker boundary.
-Acquisition/inference B1b is explicit setup work and cannot happen incidentally during B1a tests.
+With B1a validated, the next implementation slice is explicit acquisition and real
+reference inference B1b. Model choice is settled; do not reopen the general survey or let the known
+legacy detector defect become a prerequisite. Acquisition cannot happen incidentally during B1a tests.
 Later launch tolerance and future KEY UI choices do not block B1-B6 contract/feasibility work.
 
 ## Required joint validation matrix
@@ -255,12 +262,14 @@ Freeze expected coordinates and original acoustic gates before running candidate
 
 The active planned changes are `adopt-beat-this-analysis`, `prepare-versioned-source-beatmaps`,
 `share-editor-beatmap-coordinates`, `evaluate-variable-tempo-rendering`, and
-`prepare-independent-pitch-timing`. Their implementation tasks remain unchecked. Later live
+`prepare-independent-pitch-timing`. Only B1a in the analysis change is implemented;
+all other implementation tasks remain pending. Later live
 ownership and Quantize/SYNC activation need their own focused deltas after B5 measurements;
 future KEY UI needs its own user-facing delta. Current runtime docs remain accurate until an
 implementation slice changes behavior, at which point that slice updates them too.
 
-Public evidence establishes model/API feasibility, not successful execution here. No model has
-been acquired or run, no new native render performed and no production behavior changed in this
-planning revision. The selected design is deliberately testable before any claim of perfect
+Public evidence establishes model/API feasibility, not successful Beat This execution here.
+No Beat This model has been acquired or run and no new live render strategy has been activated.
+B1a supplies the diagnostic offline boundary; the normal analyzer and playback behavior remain
+unchanged. The selected design is deliberately testable before any claim of perfect
 musical grids or audibly sample-exact independent transposition is made.

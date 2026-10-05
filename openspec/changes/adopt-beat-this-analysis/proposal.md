@@ -8,7 +8,8 @@ quality and resource measurements remain acceptance work, not an open-ended mode
 
 ## What Changes
 
-- Plan an isolated, lazy offline Beat This worker behind the existing analysis job lifecycle.
+- Add a diagnostic PCM/job boundary and lazy local worker adapter behind the existing request
+  lifecycle; real Beat This frontend/inference follows in B1b.
 - Reuse decoded PCM and one source origin; derive 22.05-kHz beat and 44.1-kHz KeyNet inputs
   from shared mono audio without re-decoding or cascading the two analysis resamplers.
 - Define explicit setup, verified model provenance, offline loading and independent beat/key
@@ -17,9 +18,11 @@ quality and resource measurements remain acceptance work, not an open-ended mode
   new analysis only in a separate, finite acceptance/cutover task.
 - Retain raw detections and uncertainty; a 20-ms prediction interval is not sample accuracy.
 
-Status: planning only. No runtime change, dependency installation or model acquisition is
-performed by this change. B1a is the first future implementation slice: PCM/job adapter and
-missing-checkpoint behavior, without default activation. Versioned trusted-map storage is
+Status: B1a's explicitly invoked diagnostic boundary is implemented and validated.
+There is no UI/default-routing or saved-analysis adoption change.
+No Beat This runtime, inference script, accepted checkpoint manifest or weights are installed.
+The unconfigured adapter reports beat-unavailable while native KeyNet can finish independently.
+Real setup/inference is B1b, default cutover is B2, and versioned trusted-map storage remains
 coordinated with `prepare-versioned-source-beatmaps`.
 
 ## Non-goals
@@ -41,6 +44,7 @@ request identities; live audio receives only existing safe metadata/state bounda
 Modify `audio-analysis` and the shared-preprocessing/parallelism requirements in
 `musical-key-cnn`; scope `qm-dsp-bpm-detection` to explicitly selected legacy/diagnostic
 use; add optional analyzer setup requirements to `distribution-setup`.
-Future implementation affects focused analysis/job/PCM-boundary modules, loader outcomes,
-typed result/provenance storage and setup documentation. KeyNet computation remains in Rust.
+The current implementation adds focused Rust PCM/job modules and Python contracts, process
+supervision and diagnostic result events. Normal analysis routing and persistence remain intact.
+Future stages add real inference/setup, result adoption and provenance storage. KeyNet stays in Rust.
 See [research decision](../../../docs/beatmap-sync-research.md) and the pinned sources in design.

@@ -22,6 +22,7 @@ rubato = { version = "1.0", features = ["fft_resampler"] }
 audioadapter = "2.0"
 audioadapter-buffers = "2.0"
 numpy = "0.27.1"
+serde_json = "1"
 cute-dsp = "0.0.40"
 
 [dev-dependencies]

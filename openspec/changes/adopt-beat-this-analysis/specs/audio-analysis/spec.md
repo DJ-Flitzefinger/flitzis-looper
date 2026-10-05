@@ -92,6 +92,30 @@ reanalysis SHALL create a new raw result without silently overwriting an accepte
 
 ## ADDED Requirements
 
+### Requirement: Diagnostic Boundary Precedes Model And Default Activation
+The system SHALL expose the B1a loaded-PCM and worker boundary only through explicitly invoked
+diagnostic analysis until real-model and default-cutover gates are satisfied.
+
+The diagnostic boundary SHALL preserve normal automatic/manual analysis routing, project
+persistence, manual grids and playback buffers. It SHALL export complete mono float32-LE PCM
+at the loaded sample rate with origin zero, derive key input directly at 44100 Hz and leave
+the actual Beat This 22050-Hz frontend to the real-reference stage. An unconfigured worker
+SHALL report unavailable without acquiring dependencies or weights. A diagnostic completion
+envelope SHALL NOT be adopted as accepted project analysis or relabel legacy saved results.
+
+#### Scenario: Diagnostic request has no installed beat worker
+- **GIVEN** an already-loaded pad and no configured optional beat runtime
+- **WHEN** an explicit diagnostic request starts
+- **THEN** native shared-mono preparation reuses the immutable loaded source
+- **AND** beat status is unavailable while key analysis may finish independently
+- **AND** normal analysis routing, playback buffers and saved grids remain unchanged
+
+#### Scenario: Diagnostic output does not activate the selected backend
+- **GIVEN** a validated diagnostic component-result envelope
+- **WHEN** the existing background event path reports completion
+- **THEN** the envelope remains diagnostic data
+- **AND** no model acquisition, default routing switch or accepted-map adoption occurs
+
 ### Requirement: Beat Analysis Jobs Preserve Identity And Independent Outcomes
 The system SHALL validate request, source, generation and model identities before atomically
 publishing component outcomes through the existing background event path. It SHALL distinguish

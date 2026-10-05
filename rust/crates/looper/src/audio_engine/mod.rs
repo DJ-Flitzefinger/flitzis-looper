@@ -37,7 +37,10 @@ use std::sync::{
 };
 use std::thread;
 
+mod analysis_jobs;
+mod analysis_pcm;
 mod audio_stream;
+pub use analysis_jobs::OfflineAnalysisJob;
 mod buffer_retirement;
 mod channels;
 mod constants;
@@ -233,96 +236,9 @@ fn resample_mono_to_target(
     src_rate: u32,
     target_rate: u32,
 ) -> Result<Vec<f32>, String> {
-    if src_rate == target_rate {
-        return Ok(mono);
-    }
-
-    use audioadapter_buffers::owned::InterleavedOwned;
-    use rubato::{Fft, FixedSync, Indexing, Resampler};
-
-    let input_frames = mono.len();
-    if input_frames == 0 {
-        return Ok(mono);
-    }
-
-    let channels = 1; // mono
-
-    // Create resampler.
-    let mut resampler = Fft::<f32>::new(
-        src_rate as usize,
-        target_rate as usize,
-        1024, // chunk_size
-        1,    // sub_chunks
-        channels,
-        FixedSync::Input,
-    )
-    .map_err(|e| format!("failed to create resampler: {e}"))?;
-
-    // Input buffer.
-    let input_buffer = InterleavedOwned::new_from(mono, channels, input_frames)
-        .map_err(|e| format!("failed to create input buffer adapter: {e}"))?;
-
-    // Output buffer sizing.
-    let expected_output_len = (resampler.resample_ratio() * input_frames as f64).ceil() as usize;
-    let output_frames = resampler
-        .output_delay()
-        .saturating_add(resampler.output_frames_max())
-        .saturating_add(expected_output_len);
-
-    let mut output_buffer = InterleavedOwned::new_from(
-        vec![0.0f32; output_frames * channels],
-        channels,
-        output_frames,
-    )
-    .map_err(|e| format!("failed to create output buffer adapter: {e}"))?;
-
-    let mut indexing = Indexing {
-        input_offset: 0,
-        output_offset: 0,
-        partial_len: None,
-        active_channels_mask: None,
-    };
-
-    let mut frames_left = input_frames;
-    let mut output_len: usize = 0;
-
-    while frames_left >= resampler.input_frames_next() {
-        let (nbr_in, nbr_out) = resampler
-            .process_into_buffer(&input_buffer, &mut output_buffer, Some(&indexing))
-            .map_err(|e| format!("resampling failed: {e}"))?;
-        output_len += nbr_out;
-        frames_left -= nbr_in;
-        indexing.input_offset += nbr_in;
-        indexing.output_offset += nbr_out;
-    }
-
-    // Process remaining frames.
-    if frames_left > 0 {
-        indexing.partial_len = Some(frames_left);
-        let (_, nbr_out) = resampler
-            .process_into_buffer(&input_buffer, &mut output_buffer, Some(&indexing))
-            .map_err(|e| format!("resampling failed: {e}"))?;
-        output_len += nbr_out;
-        indexing.output_offset += nbr_out;
-    }
-
-    // Flush the delayed tail, then remove the leading algorithmic delay so
-    // analysis keeps the same source-time origin and duration as playback.
-    let delay_frames = resampler.output_delay();
-    let required_output_len = delay_frames + expected_output_len;
-    indexing.partial_len = Some(0);
-    while output_len < required_output_len {
-        let (_, nbr_out) = resampler
-            .process_into_buffer(&input_buffer, &mut output_buffer, Some(&indexing))
-            .map_err(|e| format!("resampling flush failed: {e}"))?;
-        output_len += nbr_out;
-        indexing.output_offset += nbr_out;
-    }
-
-    let result_data = output_buffer.take_data();
-    Ok(result_data[delay_frames..required_output_len].to_vec())
+    analysis_pcm::resample_mono_cancellable(mono, src_rate, target_rate, usize::MAX, &|| false)
+        .map_err(|error| error.to_string())
 }
-
 /// Run the BPM detection pipeline on mono audio.
 ///
 /// Returns `(bpm, beat_grid)` on success.
@@ -540,6 +456,8 @@ pub struct AudioEngine {
     loading_sample_ids: Arc<Mutex<HashSet<usize>>>,
     active_tasks: Arc<Mutex<HashSet<(usize, BackgroundTaskKind)>>>,
     pad_request_ids: Arc<Mutex<Vec<u64>>>,
+    loaded_source_generations: Arc<Mutex<Vec<(u64, u32)>>>,
+    offline_jobs: analysis_jobs::OfflineJobs,
     input_runtime: Option<InputRuntime>,
     input_clock: InputClock,
 }
@@ -560,6 +478,8 @@ impl AudioEngine {
             loading_sample_ids: Arc::new(Mutex::new(HashSet::new())),
             active_tasks: Arc::new(Mutex::new(HashSet::new())),
             pad_request_ids: Arc::new(Mutex::new(vec![0; NUM_SAMPLES])),
+            loaded_source_generations: Arc::new(Mutex::new(vec![(0, 0); NUM_SAMPLES])),
+            offline_jobs: analysis_jobs::OfflineJobs::default(),
             input_runtime: None,
             input_clock: InputClock::new(),
         })
@@ -672,6 +592,7 @@ impl AudioEngine {
 
     /// Shut down the audio engine.
     pub fn shut_down(&mut self) -> PyResult<()> {
+        self.offline_jobs.cancel(None);
         self.input_runtime = None;
         self.stream_handle = None;
         self.is_playing = false;
@@ -777,6 +698,7 @@ impl AudioEngine {
         let sample_cache = self.sample_cache.clone();
         let loading_sample_ids = self.loading_sample_ids.clone();
         let pad_request_ids = self.pad_request_ids.clone();
+        let loaded_source_generations = self.loaded_source_generations.clone();
         let run_analysis = run_analysis.unwrap_or(true);
 
         {
@@ -790,6 +712,7 @@ impl AudioEngine {
 
         let request_id =
             next_pad_request_id(&pad_request_ids, id).map_err(PyRuntimeError::new_err)?;
+        self.offline_jobs.cancel(Some(id));
 
         {
             let mut cache = sample_cache
@@ -894,7 +817,10 @@ impl AudioEngine {
             let frames = sample.samples.len() / sample.channels;
             let duration_s = frames as f32 / output_sample_rate as f32;
 
-            if !pad_request_matches(&pad_request_ids, id, request_id) {
+            let Ok(requests) = pad_request_ids.lock() else {
+                return;
+            };
+            if requests.get(id) != Some(&request_id) {
                 return;
             }
 
@@ -906,6 +832,10 @@ impl AudioEngine {
                 });
                 return;
             }
+            if let Ok(mut generations) = loaded_source_generations.lock() {
+                generations[id] = (request_id, output_sample_rate);
+            }
+            drop(requests);
 
             progress.emit(
                 LoadProgressStage::Publishing,
@@ -925,8 +855,61 @@ impl AudioEngine {
         Ok(request_id)
     }
 
+    /// Pin loaded PCM for the optional diagnostic adapter (not the default analyzer).
+    pub fn begin_offline_analysis(&self, id: usize) -> PyResult<OfflineAnalysisJob> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+        self.stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        if self
+            .loading_sample_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("loading lock poisoned"))?
+            .contains(&id)
+        {
+            return Err(PyValueError::new_err("sample is currently loading"));
+        }
+        if has_active_task_for_id(
+            &*self
+                .active_tasks
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("task lock poisoned"))?,
+            id,
+        ) {
+            return Err(PyValueError::new_err("sample task already running"));
+        }
+        let sample = self
+            .sample_cache
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?
+            .get(id)
+            .and_then(Clone::clone)
+            .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?;
+        let (generation, loaded_rate) = self
+            .loaded_source_generations
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("source generation lock poisoned"))?[id];
+        self.offline_jobs
+            .begin(
+                id,
+                sample,
+                loaded_rate,
+                generation,
+                self.pad_request_ids.clone(),
+                self.loader_tx.clone(),
+            )
+            .map_err(PyRuntimeError::new_err)
+    }
+
     /// Analyze a previously loaded sample on a background thread.
     pub fn analyze_sample_async(&self, id: usize) -> PyResult<u64> {
+        if self.offline_jobs.has_pad(id) {
+            return Err(PyValueError::new_err(
+                "offline analysis is running or retiring",
+            ));
+        }
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err(format!(
                 "id out of range (expected 0..{}, got {id})",
@@ -1049,6 +1032,11 @@ impl AudioEngine {
         source_version: String,
         cache_dir: String,
     ) -> PyResult<()> {
+        if self.offline_jobs.has_pad(id) {
+            return Err(PyValueError::new_err(
+                "offline analysis is running or retiring",
+            ));
+        }
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err(format!(
                 "id out of range (expected 0..{}, got {id})",
@@ -1328,6 +1316,19 @@ impl AudioEngine {
 
         let dict = PyDict::new(py);
         match event {
+            LoaderEvent::OfflineAnalysisCompleted {
+                id,
+                request_id,
+                result_json,
+            } => {
+                if !pad_request_matches(&self.pad_request_ids, id, request_id) {
+                    return Ok(None);
+                }
+                dict.set_item("type", "offline_analysis_completed")?;
+                dict.set_item("id", id)?;
+                dict.set_item("request_id", request_id)?;
+                dict.set_item("result_json", result_json)?;
+            }
             LoaderEvent::Started { id, request_id } => {
                 dict.set_item("type", "started")?;
                 dict.set_item("id", id)?;
@@ -2043,6 +2044,7 @@ impl AudioEngine {
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
 
         let _ = next_pad_request_id(&self.pad_request_ids, id).map_err(PyRuntimeError::new_err)?;
+        self.offline_jobs.cancel(Some(id));
 
         let mut producer_guard = handle
             .producer

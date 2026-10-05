@@ -26,6 +26,8 @@ rust/
     |       |-- messages.rs        # fixed-size command/parameter/telemetry types
     |       `-- audio_engine/
     |           |-- mod.rs         # AudioEngine API and background orchestration
+    |           |-- analysis_jobs.rs # optional diagnostic request/retirement ownership
+    |           |-- analysis_pcm.rs  # immutable source, shared mono, export and key input
     |           |-- audio_stream.rs
     |           |-- buffer_retirement.rs
     |           |-- constants.rs
@@ -84,6 +86,14 @@ logging, plugin loading, neural inference, blocking waits, unbounded loops, or
 heavy allocation.
 
 ## Development Commands
+
+The optional `AudioEngine.begin_offline_analysis` boundary pins loaded PCM for
+the Python diagnostic supervisor. It retains one native reservation per engine
+until preparation/key work and resource retirement finish. All export,
+resampling, key inference and JSON event publication run outside the callback;
+the existing automatic/manual analyzer remains selected. See
+[Offline analysis boundary](../docs/offline-analysis.md) for limits, terminal
+component semantics and remaining Beat This setup/inference work.
 
 Run these from the repository root:
 
