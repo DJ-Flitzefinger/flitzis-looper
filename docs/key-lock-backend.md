@@ -426,12 +426,94 @@ At 120 BPM a nearest future 1/64 boundary offers at most 15.625 ms, before devic
 many future targets offer less and past targets offer none. Across the prior matrices, maximum
 necessary headroom is 36.875 ms (slice3e) and 34.286 ms (slice3f). These bounds use isolated raw
 responses, not background-dominated mixture energy or nonlinear subtraction.
+At fractional grid-frame coordinates, integer target rounding can add less than one frame to
+the continuous half-step bound (with the timing helper's small integer/tie tolerance); the
+48-kHz/120-BPM example has exact integer grid frames. No such rounding resolves the deficit.
 
-Emitting before a quantized target would change the audible-start contract, and even sufficient
-headroom does not remove the failed intrinsic q10/q50 timing intervals. Resolve controllable
-pre-target content, musical anchoring and explicit missed-content accounting for authorized late
-catch-up before selecting a live policy. Another fitted bridge or lower retention budget cannot
-resolve this causal limit. The unchanged strict criterion remains unaccepted.
+### Explicit Frame Mapping And Policy Alternatives
+
+The test-only causal probe fixes the coordinate system before comparing policies. H is the
+declared output-frame source history, n is an index in that fixture's uncropped native output,
+C is a declared translation, T is the timestamp-selected musical target, and E is the earliest
+controllable estimated audible frame. The hypothetical mapping is `t = T + n - H - C`.
+The probe uses native API delay for C as an illustrative anchor, not an accepted acoustic or
+musical compensation. Neither raw peak nor dry q50 is silently substituted for that anchor.
+CPAL buffering, dispatch and preparation readiness constrain E; count each constraint once.
+Unknown later hardware delay remains outside the current estimate.
+Invalid or unavailable clock/readiness mapping supplies no certified E or feasibility result.
+The probe assumes valid finite coordinates and enough declared history; it does not implement
+production fallback or infer unavailable source history backwards.
+Both raw discard H+k and logical coordinate H+S-T must lie in their bounded preparation/source
+domains, and the coherent suffix must actually be ready; arithmetic alone cannot supply it.
+
+If emission starts at S, the first retained native index is `n = H + C + S - T`; write
+`k = n-H = C+S-T`. U is the largest k retaining the original isolated native peak and at least
+99.9% of its original response energy. Cutting at U can still omit up to 0.1% energy; it does
+not preserve every nonzero sample or define the first acoustic onset. U is not derived from a
+background mixture, cropped response, supplied dry audio or attack-minus-background difference.
+With `L=max(0,C-U)`:
+
+| Alternative | First permitted emitted frame S | First retained k | Content consequence |
+| --- | --- | --- | --- |
+| Strict first sound at/after T | `max(E,T)` | `C+max(0,E-T)` | All mapped pre-target native output is omitted even when it was controllable. |
+| Hypothetical early native content | `max(E,T-L)` | `C+max(E-T,-L)` | May emit before T; for C>U, isolated retention requires `E<=T-L`. |
+| Late entry, E>T | E in both alternatives | `C+E-T` | `[T,E)` is unavailable; preserve the original chosen T and advance musical/source phase. |
+
+For C>U, strict on-time gating fails the original retention bound even with unlimited offline
+preparation. Headroom helps only the alternative that permits earlier sound. If C<=U, strict
+retention additionally requires `max(0,E-T)<=U-C`; late entry is not automatically a retained
+attack. At C>U, `T-L<E<T` permits some early output but cannot satisfy the original bound.
+At E=T the two alternatives coincide. Postponing the target could buy preparation time, but
+changes the authorized nearest-boundary contract and is not an automatic fallback.
+
+For the illustrative 48-kHz impulse, T-E=750 frames at the best 1/64 midpoint still leaves
+848 frames less headroom than the required 1598. At E=T the strict/early cut is k3678;
+at E=T+240 (five ms late) it is k3918. Sufficient headroom permits k2080 in the early
+alternative, while strict gating still cuts at k3678. The original failed dry q10/q50 interval
+does not become feasible in any of these cases. Earlier emission cannot undo native deformation.
+
+The causal probe uses the same canonical source reader and independently initialized continuous
+native reference for each history, exact ratio, pitch/reset order and native block phase.
+Emission at S advances the logical source by `r*(S-T)` from the declared target position for
+constant ratio r; negative offsets use the explicitly available forward history. A production
+tempo-changing path would need musical-time integration and effective-loop wrapping instead.
+The prepared continuation must match the reference suffix exactly under unequal partitions.
+This verifies no extra waveform deformation after the cut, not correct audible timing or pitch.
+
+The fixed synthetic matrix covers 44.1/48/96 kHz, ratios0.5/1/2, H32768/65536, marker0 and
+two existing tone/percussion attacks, with separate isolated and actual nonzero stereo mixtures.
+It compares E at 40 ms and 15.625 ms before T, at T, and five ms after T. These are declared
+causal cases, not a fitted translation sweep. In a fixed mapped [-40,+40)-ms mixture window W
+relative to T, omission intervals are W intersected with `(-infinity,min(E,T))`,
+`[min(E,T),min(S,T))`, and `[T,E)` when E>T. These represent unavailable pre-target content,
+controllable pre-target gate crop and authorized late content respectively, and are disjoint.
+Their sum is the total omitted window prefix; no late interval is counted twice. Finite mixture energy
+describes actual missing context; it is not isolated attack retention or a perception threshold.
+Suffix equality cannot certify the discontinuity between silence and its first retained sample.
+
+The release proof passes 576 exact suffix comparisons across 36 mixtures/288 policy cases.
+All 24 nonneutral fixtures still fail the original nominal complete criterion. Strict gating
+retains the original isolated peak/99.9%-energy budget in none of those 24 fixtures, even with
+40-ms headroom; the hypothetical earlier gate retains it in all 24 with that headroom. With
+the illustrative 1/64 future interval, it retains all 12 ratio0.5 fixtures and none of the 12
+ratio2 fixtures despite emitting before T. These are measured isolated cutoff predicates,
+not accepted musical timing or evidence that all mixture context is preserved.
+
+### Product Decision And Acceptance Boundary
+
+The outstanding decision is whether T means the first permitted sound, or a musical/source
+anchor that permits earlier native content. The latter needs an explicit insufficient-headroom
+rule: the current nearest target and phase catch-up can preserve available continuation while
+reporting unavailable content, but cannot promise complete transient retention for every press.
+The former preserves silence until T while accepting a separate pre-target crop; authorized
+late catch-up alone does not authorize that on-time crop. Neither alternative currently meets
+the unchanged strict dry-timing/retention criterion.
+
+Before live adoption, an accepted musical anchor must be justified on matched continuous
+recorded-track references and listening evidence, with click-safe entry and device/deadline
+checks. Continuous-native conformance can supply an additional no-extra-deformation check;
+it cannot retroactively turn the failed two-ms/peak/0.1%-energy gate into a pass. No new threshold,
+anchor, target delay, live scheduler policy or backend option is selected by this proof.
 
 ## Settings Contract
 

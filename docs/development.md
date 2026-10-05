@@ -278,6 +278,21 @@ the original raw-native retention/timing gates. A unit-rate source branch preser
 pitch while departing from canonical tempo progression; it is not selected live behavior.
 Ordinary tests export no audio or CSV and start no device.
 
+Run the fixed causal scheduling/content proof separately:
+
+```powershell
+$env:FLITZIS_KEY_LOCK_CAUSAL_PROBE_CSV = (Join-Path (Split-Path -Parent (Get-Location).Path) 'scratch/slice3h-causal.csv')
+.\scripts\run-rust-tests.ps1 --release --lib causal_probe
+Remove-Item Env:\FLITZIS_KEY_LOCK_CAUSAL_PROBE_CSV
+```
+
+The optional path must be absolute. The probe reuses existing source/history/native fixtures
+and compares strict first-sound gating with hypothetical earlier native emission for fixed
+E/T cases. Actual nonzero-mixture content accounting remains separate from original isolated
+peak/99.9%-energy retention. Unequal partitions must retain exact canonical native suffixes.
+No fitted bridge, new acceptance threshold, live policy, device or ordinary-test export is added.
+The backend guide defines the raw coordinate mapping, causal bounds and pending product decision.
+
 ### Nuitka Installer Direction
 
 The later Windows installer should be built so non-technical users do not need

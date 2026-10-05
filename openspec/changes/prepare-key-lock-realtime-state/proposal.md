@@ -30,6 +30,9 @@ source pre-roll and synchronized audible launches can be enabled.
 - Evaluate a fixed unity-source attack branch against matched continuous native histories and
   target-local actual mixtures; report its source-phase cost and interference without replacing
   the existing failed retention/timing gate. This remains a test-only content experiment.
+- Prove causal emission/content accounting against matched continuous native references for fixed
+  early/on-time/late cases. Separate unavailable content, controllable pre-target crop and late
+  phase catch-up; present the audible-start tradeoff before selecting any live contract.
 
 ## Capabilities
 

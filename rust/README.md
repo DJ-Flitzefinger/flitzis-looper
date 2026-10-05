@@ -139,6 +139,11 @@ is `uv run cargo test --manifest-path rust/Cargo.toml --workspace`.
   background sensitivity and temporary varispeed pitch remain visible; that bridge
   is not a selected live strategy. Production builds exclude this fixture. Timed live
   adoption, identity, retirement, transitions and audible compensation remain pending.
+- `key_lock_source_causal_probe.rs` is a test-only fixed-case proof of strict versus hypothetical
+  early emission against identical continuous source/native histories. It checks canonical phase,
+  exact retained continuation and disjoint missing-content intervals. Nominal translation remains
+  illustrative; omitted mixture context is not isolated attack retention, and the audible-start
+  product decision remains pending. Reproduction is in the development guide.
 - Parameter messages are coalesced by identity in the callback before applying
   the latest drained value. The callback applies only identities touched by the
   drained batch instead of sweeping every pad slot.

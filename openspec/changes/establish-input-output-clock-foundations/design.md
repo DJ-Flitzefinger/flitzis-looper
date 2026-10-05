@@ -72,6 +72,14 @@ Activation will replace the existing future-only/always-loop-start contract in a
 Signed phase/bootstrap and pending starts across BPM/metadata changes must be specified/tested in
 slice 2; safe Rubber Band pre-roll and measured audible delays in slice 3 precede activation in 4.
 
+The subsequent causal content proof distinguishes the selected musical target T, earliest
+controllable estimated audible frame E (including preparation readiness), and first permitted
+emission S. They are not interchangeable: strict first-sound gating uses max(E,T), while preserving
+some continuous native pre-target content requires S<T. Earlier audible emission is an unresolved
+product decision, not an authorization implied by captured timestamps or late phase catch-up.
+Insufficient headroom cannot silently move T to a later boundary. See the Key-Lock preparation
+change and backend guide for the fixed-case evidence. Foundation diagnostics/execution stay intact.
+
 ## Risks / Trade-offs
 
 - Driver timestamp jitter or discontinuity → validity/freshness checks, diagnostics labelled

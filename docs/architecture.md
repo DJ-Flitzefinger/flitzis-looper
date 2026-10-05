@@ -412,6 +412,13 @@ origins, source-phase discrepancy and weighted source/wet interference remain ex
 Independent source and wet-suffix equality verify the implementation, not attack acceptance.
 The original failed timing/retention gates and live adoption boundary remain unchanged.
 
+A test-only causal probe maps each fixture's raw native output to a declared target and checks
+fixed early/on-time/late emission boundaries against the same continuous history. It verifies
+canonical source phase and exact prepared continuation while separating unavailable pre-target
+content, controllable gate crop and late missed content. Nominal API translation remains an
+illustrative anchor; neither earlier audible emission nor on-time cropping is an accepted live
+content policy. The backend guide records the policy table and required product decision.
+
 Project persistence stores global Key Lock control intent and per-pad Key Lock
 booleans for loaded-pad intent, with unloaded pads saved and restored as
 disabled. Rubber Band handles, runtime paths, buffers, measured latency,

@@ -1,5 +1,48 @@
 ## ADDED Requirements
 
+### Requirement: Causal Launch Evidence Separates Emission And Musical Anchoring
+The system SHALL verify causal launch feasibility offline using a declared mapping from each
+fixture's uncropped continuous native output to its chosen musical target before selecting a
+live audible-start or content contract.
+
+The evidence SHALL distinguish earliest controllable estimated audible frame E, chosen target T,
+declared translation C, source history H and original isolated retention bound U. It SHALL report
+strict first-sound gating and hypothetical earlier-content emission separately, including their
+first retained native indices, canonical source progression and necessary headroom. API delay
+SHALL remain an illustrative anchor unless separate musical evidence accepts it. Earlier output,
+moving the nearest target or accepting on-time native cropping SHALL NOT be silently activated.
+
+Each emitted continuation SHALL be checked against an independently initialized reference with
+the same source origin, history, exact ratio, pitch/reset order and native block phase under
+unequal partitions. Actual-mixture omitted-content intervals SHALL separate unavailable
+pre-target content, controllable pre-target gate crop and authorized late missed content without
+double counting. Isolated retention SHALL retain the original uncropped denominator and peak;
+mixture energy, nonlinear subtraction or supplied source audio SHALL NOT replace it.
+
+The evidence SHALL preserve failed dry-timing/retention bounds. Exact retained continuation
+SHALL NOT establish accepted musical anchoring, click-safe entry, device accuracy or recovered
+omitted content. The proof SHALL remain test-only, perform no device rendering and leave live
+identity/adoption and synchronized Quantize pending until the product/content decision is resolved.
+
+#### Scenario: Strict gating removes controllable pre-target native content
+- **GIVEN** declared translation C exceeds original isolated retention bound U
+- **AND** the earliest controllable frame precedes T by enough time for earlier output
+- **WHEN** the offline strict policy permits first sound only at T
+- **THEN** the first retained relative native index is C and the original retention failure remains
+- **AND** the report separates controllable pre-target crop from unavailable content
+
+#### Scenario: Earlier emission lacks sufficient causal headroom
+- **GIVEN** C exceeds U and E is later than T-(C-U)
+- **WHEN** hypothetical earlier output starts no earlier than E
+- **THEN** the report identifies insufficient headroom for original isolated retention
+- **AND** it does not defer T or reinterpret suffix equality as retained attack acceptance
+
+#### Scenario: Late catch-up preserves the selected target
+- **GIVEN** the earliest controllable frame E is after the captured-input-selected target T
+- **WHEN** the offline continuation begins at E
+- **THEN** source phase includes progression from T to E and the retained suffix matches its reference
+- **AND** unavailable content in [T,E) is reported separately without changing T or hiding earlier crop
+
 ### Requirement: Rubber Band Cold State Is Prepared Outside The Callback
 The system SHALL construct, reset and silence-warm reusable Rubber Band LiveShifter state outside
 the audio callback, including its allocating initial pitch setup and first processing call.

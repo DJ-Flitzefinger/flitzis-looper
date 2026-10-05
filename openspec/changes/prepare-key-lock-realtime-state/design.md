@@ -1,5 +1,36 @@
 ## Safety gate and remaining audible work
 
+### Causal emission and content decision
+
+The non-live causal proof fixes `t=T+n-H-C`: n is uncropped native output, H the declared
+source history, C the illustrative nominal API translation, T the captured-input-selected
+target and E the earliest controllable estimated audible frame. C is not an accepted acoustic
+anchor. At emission S, the first retained relative index is `k=C+S-T`. Original isolated peak
+and 99.9% response-energy retention give k<=U; L=max(0,C-U).
+
+Strict first-sound gating uses S=max(E,T). It deletes pre-target content even if rendering it
+would have been possible; when C>U, more preparation cannot make that gate retain the attack.
+The hypothetical earlier-content gate uses S=max(E,T-L). For C>U it can satisfy the isolated
+retention bound only with E<=T-L, and it changes the audible-start contract. Insufficient
+headroom and late targets preserve the chosen T in the proof, report unavailable content and
+advance canonical source phase. Moving to a later boundary would be a separate contract change.
+
+The fixed cases are E=T-40ms, E=T-15.625ms, E=T, E=T+5ms; no translation search, source bridge
+or threshold fit is added. Independent continuous native references verify exact suffixes
+under unequal partitions using the same source origin/history/ratio/reset order/block phase.
+Separate actual-mixture omission intervals and original isolated retention expose unavailable
+pre-target content, controllable gate crop and authorized late missed content without double
+counting. Retained suffix equality proves only no extra post-cut deformation, not click safety,
+musical anchoring or device alignment. Detailed coordinate/policy tables are in the backend doc.
+
+The required product decision is first permitted sound at T versus musical anchoring at T
+with earlier native content allowed. Insufficient headroom cannot be promised away. The
+recorded nearest/catch-up contract permits late missed content, but does not silently accept
+on-time native cropping or pre-target emission. Keep task7.2 pending until that decision and
+recorded-track musical evidence justify the anchor/content criterion. Existing dry q10/q50,
+peak and 0.1%-energy failures remain unchanged. No live adoption or Quantize activation follows
+from this proof. All allocation, DSP preparation and measurements remain cfg(test)/offline.
+
 ### Fixed unity-source attack experiment
 
 The bounded test-only gate copies the logical fractional source phase p into a constant
