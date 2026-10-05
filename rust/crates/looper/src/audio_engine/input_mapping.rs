@@ -1,4 +1,5 @@
 use crate::audio_engine::constants::NUM_SAMPLES;
+use crate::audio_engine::timing::InputClock;
 use crate::messages::ControlMessage;
 use midir::{Ignore, MidiInput, MidiInputConnection};
 use rtrb::Producer;
@@ -6,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const INPUT_QUEUE_CAPACITY: usize = 1024;
 const MIDI_NRPN_MSB_CC: u8 = 99;
@@ -110,7 +111,7 @@ pub(crate) struct InputRuntimeEvent {
 }
 
 pub(crate) struct InputRuntime {
-    origin: Instant,
+    clock: InputClock,
     enabled: Arc<AtomicBool>,
     learn_capture_active: Arc<AtomicBool>,
     input_tx: SyncSender<NormalizedMidiEvent>,
@@ -124,8 +125,7 @@ pub(crate) struct InputRuntime {
 }
 
 impl InputRuntime {
-    pub fn new(audio_producer: Arc<Mutex<Producer<ControlMessage>>>) -> Self {
-        let origin = Instant::now();
+    pub fn new(audio_producer: Arc<Mutex<Producer<ControlMessage>>>, clock: InputClock) -> Self {
         let enabled = Arc::new(AtomicBool::new(false));
         let learn_capture_active = Arc::new(AtomicBool::new(false));
         let mappings = Arc::new(Mutex::new(Vec::new()));
@@ -149,7 +149,7 @@ impl InputRuntime {
         };
 
         Self {
-            origin,
+            clock,
             enabled,
             learn_capture_active,
             input_tx,
@@ -251,14 +251,14 @@ impl InputRuntime {
             };
 
             let input_tx = self.input_tx.clone();
-            let origin = self.origin;
+            let clock = self.clock;
             let mut normalizer = MidiNormalizer::default();
             let connection = midi_in
                 .connect(
                     port,
                     &format!("flitzis-looper-input-{index}"),
                     move |_backend_stamp, message, _| {
-                        let received_at_ns = monotonic_ns_since(origin);
+                        let received_at_ns = clock.capture_ns();
                         if let Some(event) = normalizer.normalize(message, received_at_ns) {
                             let _ = input_tx.try_send(event);
                         }
@@ -279,7 +279,7 @@ impl InputRuntime {
     }
 
     pub fn inject_midi_message(&self, message: &[u8]) -> bool {
-        let received_at_ns = monotonic_ns_since(self.origin);
+        let received_at_ns = self.clock.capture_ns();
         let Ok(mut normalizer) = self.test_normalizer.lock() else {
             return false;
         };
@@ -345,8 +345,12 @@ impl InputDispatcher {
             let action_key = mapping.as_ref().map(|m| m.action_key.clone());
 
             if let Some(mapping) = mapping {
-                let result =
-                    dispatch_action(&mapping.action, &self.runtime_state, &self.audio_producer);
+                let result = dispatch_action(
+                    &mapping.action,
+                    event.received_at_ns,
+                    &self.runtime_state,
+                    &self.audio_producer,
+                );
                 dispatched = result.dispatched;
                 direct = result.direct;
             }
@@ -384,11 +388,14 @@ struct DispatchResult {
 
 fn dispatch_action(
     action: &InputAction,
+    received_at_ns: u64,
     runtime_state: &Arc<Mutex<RuntimeState>>,
     audio_producer: &Arc<Mutex<Producer<ControlMessage>>>,
 ) -> DispatchResult {
     match action {
-        InputAction::TriggerPad { id } => dispatch_trigger_pad(*id, runtime_state, audio_producer),
+        InputAction::TriggerPad { id } => {
+            dispatch_trigger_pad(*id, received_at_ns, runtime_state, audio_producer)
+        }
         InputAction::StopPad { id } => {
             dispatch_audio_messages(audio_producer, [ControlMessage::StopSample { id: *id }])
         }
@@ -407,6 +414,7 @@ fn dispatch_action(
 
 fn dispatch_trigger_pad(
     id: usize,
+    received_at_ns: u64,
     runtime_state: &Arc<Mutex<RuntimeState>>,
     audio_producer: &Arc<Mutex<Producer<ControlMessage>>>,
 ) -> DispatchResult {
@@ -430,9 +438,17 @@ fn dispatch_trigger_pad(
     }
 
     let play = if state.multi_loop {
-        ControlMessage::PlaySample { id, volume: 1.0 }
+        ControlMessage::PlaySample {
+            id,
+            volume: 1.0,
+            received_at_ns: Some(received_at_ns),
+        }
     } else {
-        ControlMessage::PlaySampleExclusive { id, volume: 1.0 }
+        ControlMessage::PlaySampleExclusive {
+            id,
+            volume: 1.0,
+            received_at_ns: Some(received_at_ns),
+        }
     };
     let loop_region = ControlMessage::SetPadLoopRegion {
         id,
@@ -639,11 +655,6 @@ impl NrpnParameter {
     }
 }
 
-fn monotonic_ns_since(origin: Instant) -> u64 {
-    let nanos = origin.elapsed().as_nanos();
-    nanos.min(u128::from(u64::MAX)) as u64
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -826,7 +837,7 @@ mod tests {
             };
         }
 
-        let result = dispatch_trigger_pad(3, &state, &producer);
+        let result = dispatch_trigger_pad(3, 42, &state, &producer);
 
         assert_eq!(
             result,
@@ -845,7 +856,11 @@ mod tests {
         ));
         assert!(matches!(
             consumer.pop().unwrap(),
-            ControlMessage::PlaySampleExclusive { id: 3, volume: 1.0 }
+            ControlMessage::PlaySampleExclusive {
+                id: 3,
+                volume: 1.0,
+                received_at_ns: Some(42)
+            }
         ));
     }
 
@@ -860,7 +875,7 @@ mod tests {
             guard.pads[1].loaded = true;
         }
 
-        let result = dispatch_trigger_pad(1, &state, &producer);
+        let result = dispatch_trigger_pad(1, 42, &state, &producer);
 
         assert!(result.dispatched);
         assert!(matches!(
@@ -869,7 +884,11 @@ mod tests {
         ));
         assert!(matches!(
             consumer.pop().unwrap(),
-            ControlMessage::PlaySample { id: 1, volume: 1.0 }
+            ControlMessage::PlaySample {
+                id: 1,
+                volume: 1.0,
+                received_at_ns: Some(42)
+            }
         ));
     }
 
@@ -884,7 +903,7 @@ mod tests {
             guard.pads[1].loaded = true;
         }
 
-        let result = dispatch_trigger_pad(1, &state, &producer);
+        let result = dispatch_trigger_pad(1, 42, &state, &producer);
 
         assert_eq!(
             result,
@@ -902,7 +921,7 @@ mod tests {
         let producer = Arc::new(Mutex::new(producer));
         let state = Arc::new(Mutex::new(RuntimeState::default()));
 
-        let result = dispatch_trigger_pad(1, &state, &producer);
+        let result = dispatch_trigger_pad(1, 42, &state, &producer);
 
         assert_eq!(
             result,
@@ -917,7 +936,7 @@ mod tests {
     #[test]
     fn learn_capture_suppresses_direct_dispatch_and_mapping_action() {
         let (producer, mut consumer) = RingBuffer::<ControlMessage>::new(8);
-        let runtime = InputRuntime::new(Arc::new(Mutex::new(producer)));
+        let runtime = InputRuntime::new(Arc::new(Mutex::new(producer)), InputClock::new());
         runtime.set_enabled(true);
         runtime.replace_mappings(vec![(
             "midi:note:1:60".to_string(),
@@ -947,7 +966,7 @@ mod tests {
     #[test]
     fn failed_direct_dispatch_event_keeps_action_for_python_fallback() {
         let (producer, mut consumer) = RingBuffer::<ControlMessage>::new(8);
-        let runtime = InputRuntime::new(Arc::new(Mutex::new(producer)));
+        let runtime = InputRuntime::new(Arc::new(Mutex::new(producer)), InputClock::new());
         runtime.set_enabled(true);
         runtime.replace_mappings(vec![(
             "midi:note:1:60".to_string(),
@@ -962,6 +981,71 @@ mod tests {
         assert!(!event.dispatched);
         assert!(event.direct);
         assert!(consumer.pop().is_err());
+    }
+
+    #[test]
+    fn queue_failure_preserves_captured_timestamp_without_partial_publication() {
+        let (producer, mut consumer) = RingBuffer::<ControlMessage>::new(1);
+        let runtime = InputRuntime::new(Arc::new(Mutex::new(producer)), InputClock::new());
+        runtime.set_enabled(true);
+        runtime.replace_mappings(vec![(
+            "midi:note:1:60".to_string(),
+            "pad.trigger:0".to_string(),
+        )]);
+        runtime
+            .set_runtime_state(
+                true,
+                vec![true; NUM_SAMPLES],
+                vec![0.0; NUM_SAMPLES],
+                vec![None; NUM_SAMPLES],
+            )
+            .unwrap();
+        runtime
+            .input_tx
+            .try_send(normalize_midi_message(&[0x90, 60, 100], 42).unwrap())
+            .unwrap();
+
+        let event = wait_for_input_event(&runtime);
+        assert_eq!(event.received_at_ns, 42);
+        assert_eq!(event.action_key.as_deref(), Some("pad.trigger:0"));
+        assert!(event.direct);
+        assert!(!event.dispatched);
+        assert!(consumer.pop().is_err());
+    }
+
+    #[test]
+    fn direct_and_reported_midi_commands_share_engine_epoch_capture() {
+        let (producer, mut consumer) = RingBuffer::<ControlMessage>::new(8);
+        let clock = InputClock::new();
+        std::thread::sleep(Duration::from_millis(2));
+        let before = clock.capture_ns();
+        let runtime = InputRuntime::new(Arc::new(Mutex::new(producer)), clock);
+        runtime.set_enabled(true);
+        runtime.replace_mappings(vec![(
+            "midi:note:1:60".to_string(),
+            "pad.trigger:0".to_string(),
+        )]);
+        runtime
+            .set_runtime_state(
+                true,
+                vec![true; NUM_SAMPLES],
+                vec![0.0; NUM_SAMPLES],
+                vec![None; NUM_SAMPLES],
+            )
+            .unwrap();
+        assert!(runtime.inject_midi_message(&[0x90, 60, 100]));
+        let event = wait_for_input_event(&runtime);
+        assert!(event.received_at_ns >= before);
+        assert!(event.received_at_ns <= clock.capture_ns());
+        assert!(event.dispatched);
+        assert!(matches!(
+            consumer.pop().unwrap(),
+            ControlMessage::SetPadLoopRegion { .. }
+        ));
+        assert!(
+            matches!(consumer.pop().unwrap(), ControlMessage::PlaySample { received_at_ns: Some(timestamp), .. }
+            if timestamp == event.received_at_ns)
+        );
     }
 
     #[test]
@@ -980,7 +1064,7 @@ mod tests {
         let state = Arc::new(Mutex::new(RuntimeState::default()));
         let action = parse_input_action("dsp.pad.parameter.delta:0:filter.cutoff");
 
-        let result = dispatch_action(&action, &state, &producer);
+        let result = dispatch_action(&action, 42, &state, &producer);
 
         assert_eq!(
             result,

@@ -18,6 +18,7 @@ from flitzis_looper.input_mapping import (
     selected_tap_bpm_action,
     start_stop_action,
 )
+from flitzis_looper.input_timing import validate_input_timestamp_ns
 
 if TYPE_CHECKING:
     from imgui_bundle import imgui
@@ -250,10 +251,13 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
     def __init__(self, controller: AppController):
         self._controller = controller
 
-    def trigger_pad(self, pad_id: int) -> None:
+    def trigger_pad(self, pad_id: int, *, received_at_ns: int | None = None) -> None:
+        """Trigger or learn a pad action, retaining its captured Rust input timestamp."""
         self._controller.input_mapping.perform_learnable_action(
             LooperAction.trigger_pad(pad_id),
-            lambda: self._controller.transport.playback.trigger_pad(pad_id),
+            lambda: self._controller.transport.playback.trigger_pad(
+                pad_id, received_at_ns=received_at_ns
+            ),
         )
 
     def stop_pad(self, pad_id: int) -> None:
@@ -429,10 +433,13 @@ class GlobalAudioActions:
     def set_momentary_output_mute(self, *, enabled: bool) -> None:
         self._controller.transport.global_params.set_momentary_output_mute(enabled=enabled)
 
-    def start_or_restart_start_stop(self) -> None:
+    def start_or_restart_start_stop(self, *, received_at_ns: int | None = None) -> None:
+        """Restart loops with one captured Rust input timestamp shared by all pads."""
         self._controller.input_mapping.perform_learnable_action(
             start_stop_action(),
-            self._controller.transport.playback.start_or_restart_global_start_stop,
+            lambda: self._controller.transport.playback.start_or_restart_global_start_stop(
+                received_at_ns=received_at_ns
+            ),
         )
 
     def stop_start_stop(self) -> None:
@@ -573,8 +580,9 @@ class WaveformEditorActions:
 
         self.open(pad_id)
 
-    def play_restart_selected_pad_on_press(self) -> None:
-        """Restart playback for the selected pad (waveform editor)."""
+    def play_restart_selected_pad_on_press(self, *, received_at_ns: int | None = None) -> None:
+        """Restart the selected pad, retaining its captured Rust input timestamp."""
+        received_at_ns = validate_input_timestamp_ns(received_at_ns)
         pad_id = self._selected_pad_id()
         if pad_id is None:
             return
@@ -588,7 +596,9 @@ class WaveformEditorActions:
         self._controller.session.pad_playhead_s[pad_id] = loop_start_s
 
         # Trigger without stopping other pads (ignores multi_loop setting).
-        self._controller.transport.playback.trigger_pad_keep_others(pad_id)
+        self._controller.transport.playback.trigger_pad_keep_others(
+            pad_id, received_at_ns=received_at_ns
+        )
         self._controller.session.paused_sample_ids.discard(pad_id)
 
     def pause_selected_pad_on_press(self) -> None:
@@ -660,14 +670,17 @@ class WaveformEditorActions:
 
         self._controller.transport.playback.seek_pad(pad_id, position_s)
 
-    def set_loop_start_and_play_selected_pad(self, start_s: float) -> None:
-        """Set the selected pad loop start, then retrigger it from the accepted start."""
+    def set_loop_start_and_play_selected_pad(
+        self, start_s: float, *, received_at_ns: int | None = None
+    ) -> None:
+        """Edit loop start and restart using the Rust timestamp captured before the edit."""
+        received_at_ns = validate_input_timestamp_ns(received_at_ns)
         pad_id = self._selected_pad_id()
         if pad_id is None:
             return
 
         self._controller.transport.loop.set_start(pad_id, start_s)
-        self.play_restart_selected_pad_on_press()
+        self.play_restart_selected_pad_on_press(received_at_ns=received_at_ns)
 
     def record_view_range(self, pad_id: int, start_s: float, end_s: float) -> None:
         """Record the plot's current visible X-range for a pad."""
@@ -866,6 +879,10 @@ class InputMappingActions:
     def toggle_learn(self) -> None:
         self._controller.input_mapping.toggle_learn()
 
+    def capture_timestamp_ns(self) -> int:
+        """Capture an observed UI input in the shared Rust input clock domain."""
+        return self._controller.input_mapping.capture_input_timestamp_ns()
+
     def capture_keyboard(
         self,
         key_name: str,
@@ -875,7 +892,9 @@ class InputMappingActions:
         shift: bool = False,
         super_: bool = False,
         text_input_focused: bool = False,
+        received_at_ns: int | None = None,
     ) -> bool:
+        """Dispatch an observed key while retaining its captured Rust input timestamp."""
         binding = KeyboardBinding(
             key_name=key_name,
             ctrl=ctrl,
@@ -886,6 +905,7 @@ class InputMappingActions:
         return self._controller.input_mapping.capture_keyboard_input(
             binding,
             text_input_focused=text_input_focused,
+            received_at_ns=received_at_ns,
         )
 
 

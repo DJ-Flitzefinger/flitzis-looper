@@ -240,6 +240,13 @@ After `uv run maturin develop`, a generated platform extension such as
 `src/flitzis_looper_audio/`. This is a build artifact, not hand-written source.
 Do not edit, move, or delete the package directory as a cleanup step.
 
+On Windows, finish Python tests and app processes using that extension before
+installing another debug/release build. A loaded `.pyd` cannot be replaced;
+overlapping `maturin develop` installation fails with file-in-use error 32.
+Build/install and runtime tests are serial steps; static source checks can run
+in parallel. After `uv sync`, `uv run --no-sync ...` avoids redundant environment
+resolution during one validation batch.
+
 ## Runtime Local Data
 
 The app may create local runtime files:

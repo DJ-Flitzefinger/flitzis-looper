@@ -2,6 +2,7 @@ import math
 from typing import TYPE_CHECKING
 
 from flitzis_looper.controller.validation import ensure_finite
+from flitzis_looper.input_timing import validate_input_timestamp_ns
 from flitzis_looper.models import validate_sample_id
 
 if TYPE_CHECKING:
@@ -23,45 +24,61 @@ class PadPlaybackController:
         self._session.global_stop_engaged = False
         self._session.global_stop_restore_sample_ids = set()
 
-    def trigger_pad(self, sample_id: int) -> None:
+    def trigger_pad(self, sample_id: int, *, received_at_ns: int | None = None) -> None:
         """Trigger or retrigger a pad's loop.
 
         When Multi Loop is disabled, all other active pads are stopped first.
 
         Args:
             sample_id: Sample slot identifier.
+            received_at_ns: Original input timestamp from the Rust engine epoch.
         """
         validate_sample_id(sample_id)
+        received_at_ns = validate_input_timestamp_ns(received_at_ns)
 
         if self._project.sample_paths[sample_id] is None:
             return
 
-        start_s, end_s = self._loop.effective_region(sample_id)
-        self._audio.set_pad_loop_region(sample_id, start_s, end_s)
-
-        if not self._project.multi_loop:
-            self._audio.play_sample_exclusive(sample_id, 1.0)
-            self._forget_global_start_stop_restore()
-            return
-
-        self._audio.play_sample(sample_id, 1.0)
+        self._start_pad(
+            sample_id,
+            exclusive=not self._project.multi_loop,
+            received_at_ns=received_at_ns,
+        )
         self._forget_global_start_stop_restore()
 
-    def trigger_pad_keep_others(self, sample_id: int) -> None:
+    def trigger_pad_keep_others(self, sample_id: int, *, received_at_ns: int | None = None) -> None:
         """Trigger or retrigger a pad's loop without stopping other pads.
 
         This is intended for workflows like the waveform editor where starting
         playback must not affect other currently-playing pads.
+
+        Args:
+            sample_id: Sample slot identifier.
+            received_at_ns: Original input timestamp from the Rust engine epoch.
         """
         validate_sample_id(sample_id)
+        received_at_ns = validate_input_timestamp_ns(received_at_ns)
 
         if self._project.sample_paths[sample_id] is None:
             return
 
+        self._start_pad(sample_id, received_at_ns=received_at_ns)
+        self._forget_global_start_stop_restore()
+
+    def _start_pad(
+        self,
+        sample_id: int,
+        *,
+        exclusive: bool = False,
+        received_at_ns: int | None = None,
+    ) -> None:
         start_s, end_s = self._loop.effective_region(sample_id)
         self._audio.set_pad_loop_region(sample_id, start_s, end_s)
-        self._audio.play_sample(sample_id, 1.0)
-        self._forget_global_start_stop_restore()
+        play = self._audio.play_sample_exclusive if exclusive else self._audio.play_sample
+        if received_at_ns is None:
+            play(sample_id, 1.0)
+        else:
+            play(sample_id, 1.0, received_at_ns=received_at_ns)
 
     def stop_pad(self, sample_id: int) -> None:
         """Stop a pad if it is currently active."""
@@ -76,8 +93,13 @@ class PadPlaybackController:
         """Stop all currently active pads."""
         self._audio.stop_all()
 
-    def start_or_restart_global_start_stop(self) -> None:
-        """Start remembered loops or restart active loops from their loop starts."""
+    def start_or_restart_global_start_stop(self, *, received_at_ns: int | None = None) -> None:
+        """Start remembered loops or restart active loops from their loop starts.
+
+        Args:
+            received_at_ns: One captured Rust input timestamp shared by every pad.
+        """
+        received_at_ns = validate_input_timestamp_ns(received_at_ns)
         if self._session.global_stop_engaged:
             target_sample_ids = sorted(self._session.global_stop_restore_sample_ids)
             self._session.global_stop_engaged = False
@@ -94,9 +116,7 @@ class PadPlaybackController:
         for sample_id in target_sample_ids:
             if self._project.sample_paths[sample_id] is None:
                 continue
-            start_s, end_s = self._loop.effective_region(sample_id)
-            self._audio.set_pad_loop_region(sample_id, start_s, end_s)
-            self._audio.play_sample(sample_id, 1.0)
+            self._start_pad(sample_id, received_at_ns=received_at_ns)
             started_sample_ids.add(sample_id)
 
         self._session.active_sample_ids.update(started_sample_ids)

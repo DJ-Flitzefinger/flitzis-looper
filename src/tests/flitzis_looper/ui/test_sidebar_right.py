@@ -3,14 +3,16 @@ from imgui_bundle import imgui
 
 from flitzis_looper.constants import PITCH_BPM_COARSE_STEPS
 from flitzis_looper.ui.constants import CONTROL_ACTIVE_BORDER_RGBA, CONTROL_BORDER_RGBA
-from flitzis_looper.ui.render.sidebar_right import (
-    PITCH_SLIDER_GRAB_MIN_SIZE,
+from flitzis_looper.ui.render.bpm_entry import (
     filtered_bpm_entry_char,
     parse_bpm_entry_text,
+    sanitize_bpm_entry_text,
+)
+from flitzis_looper.ui.render.sidebar_right import (
+    PITCH_SLIDER_GRAB_MIN_SIZE,
     pitch_center_indicator_color,
     pitch_center_indicator_y,
     pitch_wheel_bpm_steps,
-    sanitize_bpm_entry_text,
     snap_bpm_to_grid,
 )
 

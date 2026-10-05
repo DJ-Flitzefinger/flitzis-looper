@@ -255,14 +255,22 @@ pub enum ControlMessage {
     /// # Parameters
     /// * `id` - Identifier of the sample to play
     /// * `volume` - Playback volume (0.0 to 1.0)
-    PlaySample { id: usize, volume: f32 },
+    PlaySample {
+        id: usize,
+        volume: f32,
+        received_at_ns: Option<u64>,
+    },
 
     /// Stop all active voices, then play a loaded sample as one audio-thread command.
     ///
     /// # Parameters
     /// * `id` - Identifier of the sample to play
     /// * `volume` - Playback volume (0.0 to 1.0)
-    PlaySampleExclusive { id: usize, volume: f32 },
+    PlaySampleExclusive {
+        id: usize,
+        volume: f32,
+        received_at_ns: Option<u64>,
+    },
 
     /// Stop all active voices for a sample.
     ///
@@ -439,11 +447,12 @@ mod tests {
         let message = ControlMessage::PlaySampleExclusive {
             id: 3,
             volume: 0.75,
+            received_at_ns: None,
         };
 
         assert!(matches!(
             message,
-            ControlMessage::PlaySampleExclusive { id: 3, volume } if volume == 0.75
+            ControlMessage::PlaySampleExclusive { id: 3, volume, received_at_ns: None } if volume == 0.75
         ));
     }
 
@@ -592,7 +601,12 @@ mod tests {
     #[test]
     fn control_messages_classify_ordered_and_parameter_semantics() {
         assert_eq!(
-            ControlMessage::PlaySample { id: 1, volume: 1.0 }.class(),
+            ControlMessage::PlaySample {
+                id: 1,
+                volume: 1.0,
+                received_at_ns: None
+            }
+            .class(),
             ControlMessageClass::PlaybackEvent
         );
         assert_eq!(

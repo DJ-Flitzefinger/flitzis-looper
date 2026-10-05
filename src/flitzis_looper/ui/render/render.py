@@ -199,13 +199,17 @@ def _poll_keyboard_input(ctx: UiContext) -> None:
     super_ = imgui.is_key_down(imgui.Key.mod_super)
 
     for key_name, key in KEYBOARD_INPUT_KEYS:
-        if imgui.is_key_pressed(key, repeat=False) and ctx.input.capture_keyboard(
+        if not imgui.is_key_pressed(key, repeat=False):
+            continue
+        received_at_ns = ctx.input.capture_timestamp_ns()
+        if ctx.input.capture_keyboard(
             key_name,
             ctrl=ctrl,
             alt=alt,
             shift=shift,
             super_=super_,
             text_input_focused=text_input_focused,
+            received_at_ns=received_at_ns,
         ):
             break
 

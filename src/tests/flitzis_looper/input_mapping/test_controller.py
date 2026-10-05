@@ -1243,6 +1243,112 @@ def test_failed_direct_rust_midi_event_executes_python_fallback(
     audio_engine_mock.play_sample_exclusive.assert_called_once_with(0, 1.0)
 
 
+@pytest.mark.parametrize("received_at_ns", [0, 12_345_678])
+@pytest.mark.parametrize(("direct", "dispatched"), [(True, False), (False, False), (False, True)])
+def test_midi_fallback_preserves_original_timestamp(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    received_at_ns: int,
+    *,
+    direct: bool,
+    dispatched: bool,
+) -> None:
+    controller.input_mapping.set_enabled(enabled=True)
+    controller.project.sample_paths[0] = "samples/foo.wav"
+
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:note:1:60",
+        "action_key": "pad.trigger:0",
+        "received_at_ns": received_at_ns,
+        "direct": direct,
+        "dispatched": dispatched,
+    })
+
+    audio_engine_mock.play_sample_exclusive.assert_called_once_with(
+        0, 1.0, received_at_ns=received_at_ns
+    )
+
+
+@pytest.mark.parametrize("received_at_ns", [-1, True, 1.5, "12", 1 << 64])
+def test_invalid_midi_timestamp_reports_error_and_keeps_legacy_fallback(
+    controller: AppController, audio_engine_mock: Mock, received_at_ns: object
+) -> None:
+    controller.input_mapping.set_enabled(enabled=True)
+    controller.project.sample_paths[0] = "samples/foo.wav"
+
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:note:1:60",
+        "action_key": "pad.trigger:0",
+        "received_at_ns": received_at_ns,
+        "direct": True,
+        "dispatched": False,
+    })
+
+    audio_engine_mock.play_sample_exclusive.assert_called_once_with(0, 1.0)
+    assert "received_at_ns" in str(controller.session.input_mapping_error)
+
+
+def test_successful_direct_midi_dispatch_is_not_replayed_even_with_invalid_timestamp(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.input_mapping.set_enabled(enabled=True)
+    controller.project.sample_paths[0] = "samples/foo.wav"
+    audio_engine_mock.reset_mock()
+
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:note:1:60",
+        "action_key": "pad.trigger:0",
+        "received_at_ns": -1,
+        "direct": True,
+        "dispatched": True,
+    })
+
+    assert audio_engine_mock.method_calls == []
+
+
+def test_keyboard_mapping_preserves_captured_input_time(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.input_mapping.set_enabled(enabled=True)
+    controller.project.sample_paths[0] = "samples/foo.wav"
+    binding = KeyboardBinding(key_name="B")
+    controller.input_mapping.save_mapping("keyboard", binding.key, LooperAction.trigger_pad(0))
+
+    handled = controller.input_mapping.capture_keyboard_input(
+        binding, text_input_focused=False, received_at_ns=41
+    )
+
+    assert handled is True
+    audio_engine_mock.play_sample_exclusive.assert_called_once_with(0, 1.0, received_at_ns=41)
+
+
+def test_midi_controller_owned_global_restart_preserves_timestamp_for_batch(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.input_mapping.set_enabled(enabled=True)
+    for pad_id in (0, 1):
+        controller.project.sample_paths[pad_id] = f"samples/{pad_id}.wav"
+    controller.session.active_sample_ids.update({0, 1})
+
+    controller.input_mapping._handle_rust_input_event({
+        "source": "midi",
+        "binding_key": "midi:note:1:63",
+        "action_key": "global.start_stop",
+        "received_at_ns": 19,
+        "direct": False,
+        "dispatched": True,
+    })
+
+    assert audio_engine_mock.play_sample.call_count == 2
+    assert all(
+        invocation.kwargs == {"received_at_ns": 19}
+        for invocation in audio_engine_mock.play_sample.call_args_list
+    )
+
+
 def test_future_dsp_midi_event_does_not_call_audio_without_explicit_handler(
     controller: AppController,
     audio_engine_mock: Mock,

@@ -545,7 +545,10 @@ def test_restore_sample_does_not_copy_file(tmp_path: Path, monkeypatch: pytest.M
         assert len(sample_files) == 1
         assert sample_files[0].name == "test.wav"
         assert project.sample_paths[0] == "samples/test.wav"
-        assert project.sample_durations[0] == pytest.approx(0.0029, rel=1e-3)
+        # Resampling quantizes the 128-frame fixture to whole output frames.
+        assert project.sample_durations[0] == pytest.approx(
+            128 / 44_100, abs=1 / audio.output_sample_rate()
+        )
 
     finally:
         audio.shut_down()
@@ -587,7 +590,10 @@ def test_load_new_sample_copies_file(tmp_path: Path, monkeypatch: pytest.MonkeyP
         assert len(sample_files) == 1
         assert sample_files[0].name == "test.wav"
         assert project.sample_paths[0] == "samples/test.wav"
-        assert project.sample_durations[0] == pytest.approx(0.0029, rel=1e-3)
+        # Resampling quantizes the 128-frame fixture to whole output frames.
+        assert project.sample_durations[0] == pytest.approx(
+            128 / 44_100, abs=1 / audio.output_sample_rate()
+        )
 
     finally:
         audio.shut_down()

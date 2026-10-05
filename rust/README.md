@@ -33,6 +33,7 @@ rust/
     |           |-- input_mapping.rs
     |           |-- mixer.rs
     |           |-- scheduler.rs
+    |           |-- timing.rs
     |           |-- transport.rs
     |           |-- voice_slot.rs
     |           |-- stretch_processor.rs
@@ -124,6 +125,14 @@ is `uv run cargo test --manifest-path rust/Cargo.toml --workspace`.
   input-runtime pad state, and Learn/capture state from Python. Direct MIDI
   command dispatch is all-or-nothing; failed direct attempts are reported back
   to Python for controller-owned fallback outside the MIDI dispatcher.
+- `timing.rs` owns the shared engine monotonic epoch, coherent bounded clock
+  observations and captured-input nearest-grid diagnostic math. MIDI/UI launch
+  time survives fixed-size commands and scheduled events. Callback publication
+  uses atomics without locks or retry loops; readers attempt one coherent read.
+  `AudioEngine.output_clock_snapshot()` reports `valid`/`fresh` and estimated
+  frame/time/rate/grid metadata; `input_clock_target_frame(...)` returns no target
+  for unavailable mapping. Current launch behavior is unchanged. CPAL's WASAPI
+  delay estimate and unmeasured DSP delay do not establish hardware accuracy.
 - Sample and prepared-stem handles removed from callback-owned state are retired
   through a bounded non-audio worker to avoid large final drops on the audio
   thread.

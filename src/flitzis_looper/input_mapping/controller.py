@@ -23,6 +23,7 @@ from flitzis_looper.input_mapping.storage import (
     save_keyboard_mapping_file,
     save_midi_mapping_file,
 )
+from flitzis_looper.input_timing import validate_input_timestamp_ns
 from flitzis_looper.models import (
     STEM_MASK_DISPLAY_MODES,
     STEM_MIX_MODES,
@@ -202,8 +203,27 @@ class InputMappingController(BaseController):
         self._midi = clear_midi_mappings()
         self._sync_rust_mapping_snapshot()
 
-    def capture_keyboard_input(self, binding: KeyboardBinding, *, text_input_focused: bool) -> bool:
-        """Capture or dispatch one normalized keyboard input."""
+    def capture_input_timestamp_ns(self) -> int:
+        """Capture UI input time using the same Rust epoch as native MIDI."""
+        return self._audio.capture_input_timestamp_ns()
+
+    def capture_keyboard_input(
+        self,
+        binding: KeyboardBinding,
+        *,
+        text_input_focused: bool,
+        received_at_ns: int | None = None,
+    ) -> bool:
+        """Capture or dispatch one normalized keyboard input.
+
+        Args:
+            binding: Normalized key and modifier combination.
+            text_input_focused: Whether keyboard input belongs to a text editor.
+            received_at_ns: Original observed input time from the Rust engine epoch.
+
+        Returns:
+            Whether Learn or an existing mapping accepted the input.
+        """
         if not self._project.input_mapping_enabled:
             return False
         if self._keyboard.ignore_when_typing and text_input_focused:
@@ -221,39 +241,59 @@ class InputMappingController(BaseController):
         action = self._keyboard_action_for(binding.key)
         if action is None:
             return False
-        self.execute_action(action)
+        self.execute_action(action, received_at_ns=received_at_ns)
         return True
 
-    def execute_action(self, action: LooperAction) -> bool:
-        """Execute a mapped action through controller semantics."""
+    def execute_action(self, action: LooperAction, *, received_at_ns: int | None = None) -> bool:
+        """Execute a mapped action through controller semantics.
+
+        Args:
+            action: Stable performer action.
+            received_at_ns: Original Rust input timestamp to retain for launch actions.
+
+        Returns:
+            Whether the action has an accepted controller handler.
+        """
+        received_at_ns = validate_input_timestamp_ns(received_at_ns)
         key = action.key
-        exact_handler = self._exact_action_handlers().get(key)
+        exact_handler = self._exact_action_handlers(received_at_ns=received_at_ns).get(key)
         if exact_handler is not None:
             exact_handler()
             return True
 
-        for prefix, handler in self._prefix_action_handlers():
+        for prefix, handler in self._prefix_action_handlers(received_at_ns=received_at_ns):
             if key.startswith(prefix):
                 return handler(key)
         return False
 
-    def _exact_action_handlers(self) -> dict[str, Callable[[], None]]:
+    def _exact_action_handlers(
+        self, *, received_at_ns: int | None = None
+    ) -> dict[str, Callable[[], None]]:
         return {
             "global.multi_loop.toggle": self._toggle_multi_loop,
             "global.key_lock.toggle": self._toggle_key_lock,
             "global.bpm_lock.toggle": self._toggle_bpm_lock,
             "global.trigger_quantization.toggle": self._toggle_trigger_quantization,
             "global.stop_all": self._app.transport.playback.stop_all_pads,
-            "global.start_stop": self._app.transport.playback.start_or_restart_global_start_stop,
+            "global.start_stop": lambda: (
+                self._app.transport.playback.start_or_restart_global_start_stop(
+                    received_at_ns=received_at_ns
+                )
+            ),
             "global.speed.increase": self._increase_speed,
             "global.speed.decrease": self._decrease_speed,
             "global.speed.reset": self._app.transport.global_params.reset_speed,
             "pad.tap_bpm.selected": self._execute_selected_tap_bpm,
         }
 
-    def _prefix_action_handlers(self) -> tuple[tuple[str, Callable[[str], bool]], ...]:
+    def _prefix_action_handlers(
+        self, *, received_at_ns: int | None = None
+    ) -> tuple[tuple[str, Callable[[str], bool]], ...]:
         return (
-            ("pad.trigger:", self._execute_trigger_pad),
+            (
+                "pad.trigger:",
+                lambda key: self._execute_trigger_pad(key, received_at_ns=received_at_ns),
+            ),
             ("pad.stop:", self._execute_stop_pad),
             ("pad.unload:", self._execute_unload_pad),
             ("pad.analyze:", self._execute_analyze_pad),
@@ -325,7 +365,12 @@ class InputMappingController(BaseController):
                 _midi_event_value(event),
             ):
                 return
-            self.execute_action(LooperAction.from_key(action_key))
+            try:
+                received_at_ns = validate_input_timestamp_ns(event.get("received_at_ns"))
+            except ValueError as err:
+                self._session.input_mapping_error = str(err)
+                received_at_ns = None
+            self.execute_action(LooperAction.from_key(action_key), received_at_ns=received_at_ns)
 
     def _record_midi_cc_value(self, binding_key: str, value: int | None) -> None:
         if value is None or not _is_relative_midi_binding_key(binding_key):
@@ -536,10 +581,10 @@ class InputMappingController(BaseController):
     def _decrease_speed(self) -> None:
         self._app.transport.global_params.nudge_speed_by_bpm_step(-1)
 
-    def _execute_trigger_pad(self, key: str) -> bool:
+    def _execute_trigger_pad(self, key: str, *, received_at_ns: int | None = None) -> bool:
         if (pad_id := _parse_prefixed_sample_id(key, "pad.trigger:")) is None:
             return False
-        self._app.transport.playback.trigger_pad(pad_id)
+        self._app.transport.playback.trigger_pad(pad_id, received_at_ns=received_at_ns)
         return True
 
     def _execute_stop_pad(self, key: str) -> bool:

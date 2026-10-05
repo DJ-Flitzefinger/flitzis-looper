@@ -10,8 +10,8 @@ plugin hosting, a separate FX graph, or realtime stem generation.
 The active backend is implemented behind:
 
 ```text
-rust/src/audio_engine/stretch_processor.rs
-rust/src/audio_engine/rubberband_backend.rs
+rust/crates/looper/src/audio_engine/stretch_processor.rs
+rust/crates/looper/src/audio_engine/rubberband_backend.rs
 ```
 
 `RtMixer` owns tempo-ratio selection, per-pad Key Lock state, source-frame
@@ -70,6 +70,11 @@ LiveShifter block size and a 3678-sample start delay at 48 kHz stereo. Playhead
 telemetry and loop ownership remain source-frame based. Rubber Band output
 latency does not shift trigger quantization, transport scheduling, or source
 loop ownership.
+
+The engine's output-clock snapshots estimate device buffering from CPAL callback
+timestamps. They do not include Rubber Band start delay or prove audible onset
+alignment. Captured-input nearest-grid diagnostics remain separate from current
+launch execution until phase mapping and safe DSP preparation are validated.
 
 If shifted output is unavailable for part of a callback block, the processor
 fills the missing frames with silence as a deterministic bounded result and

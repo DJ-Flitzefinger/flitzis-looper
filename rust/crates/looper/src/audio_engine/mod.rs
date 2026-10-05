@@ -14,6 +14,8 @@ use crate::audio_engine::stem_cache::{
     prepare_stem_buffers_from_cache, project_stem_cache_dir, source_version_hash,
     write_deterministic_stem_artifacts,
 };
+use crate::audio_engine::timing::{InputClock, validated_input_timestamp};
+use crate::audio_engine::transport::QuantizeGrid;
 use flitzis_looper_analysis as analysis;
 
 use crate::audio_engine::channels::map_channels;
@@ -23,9 +25,9 @@ use crate::messages::{
     TriggerQuantization, task_to_str,
 };
 use numpy::{PyArray1, ToPyArray};
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyBool, PyDict, PyInt};
 use rtrb::Producer;
 use std::collections::HashSet;
 use std::path::Path;
@@ -49,6 +51,7 @@ mod sample_loader;
 mod scheduler;
 mod stem_cache;
 mod stretch_processor;
+mod timing;
 mod transport;
 mod voice_slot;
 
@@ -499,7 +502,23 @@ fn analyze_sample(sample: &SampleBuffer, sample_rate_hz: u32) -> Result<SampleAn
     })
 }
 
-/// AudioEngine provides minimal audio output capabilities using cpal
+/// Reject malformed Python values before they cross the bounded command boundary.
+fn parse_input_timestamp(received_at_ns: Option<&Bound<'_, PyAny>>) -> PyResult<Option<u64>> {
+    let Some(value) = received_at_ns else {
+        return Ok(None);
+    };
+    if value.is_instance_of::<PyBool>() || !value.is_instance_of::<PyInt>() {
+        return Err(PyTypeError::new_err(
+            "received_at_ns must be an integer or None",
+        ));
+    }
+    value
+        .extract::<u64>()
+        .map(Some)
+        .map_err(|_| PyValueError::new_err("received_at_ns must be in 0..=18446744073709551615"))
+}
+
+/// AudioEngine provides audio output and non-realtime control through CPAL.
 #[pyclass]
 pub struct AudioEngine {
     stream_handle: Option<AudioStreamHandle>,
@@ -511,6 +530,7 @@ pub struct AudioEngine {
     active_tasks: Arc<Mutex<HashSet<(usize, BackgroundTaskKind)>>>,
     pad_request_ids: Arc<Mutex<Vec<u64>>>,
     input_runtime: Option<InputRuntime>,
+    input_clock: InputClock,
 }
 
 #[pymethods]
@@ -530,6 +550,7 @@ impl AudioEngine {
             active_tasks: Arc::new(Mutex::new(HashSet::new())),
             pad_request_ids: Arc::new(Mutex::new(vec![0; NUM_SAMPLES])),
             input_runtime: None,
+            input_clock: InputClock::new(),
         })
     }
 
@@ -539,12 +560,13 @@ impl AudioEngine {
             return Err(PyRuntimeError::new_err("AudioEngine already running"));
         }
 
-        match create_audio_stream() {
+        match create_audio_stream(self.input_clock) {
             Ok(handle) => {
                 start_stream(&handle.stream).map_err(|e| {
                     PyRuntimeError::new_err(format!("Failed to start audio stream: {e}"))
                 })?;
-                self.input_runtime = Some(InputRuntime::new(handle.producer.clone()));
+                self.input_runtime =
+                    Some(InputRuntime::new(handle.producer.clone(), self.input_clock));
                 self.stream_handle = Some(handle);
                 self.is_playing = true;
                 Ok(())
@@ -561,6 +583,52 @@ impl AudioEngine {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
         Ok(handle.output_sample_rate)
+    }
+
+    /// Capture observable input time in the engine epoch shared with native MIDI.
+    pub fn capture_input_timestamp_ns(&self) -> u64 {
+        self.input_clock.capture_ns()
+    }
+
+    /// Return a coherent device-clock estimate without waiting for the callback.
+    /// `valid` and `fresh` must both be true before using it for timestamp mapping.
+    pub fn output_clock_snapshot(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        let Some(snapshot) = handle.output_clock.read() else {
+            return Ok(None);
+        };
+        let dict = PyDict::new(py);
+        dict.set_item("valid", snapshot.valid)?;
+        dict.set_item("fresh", snapshot.is_fresh(self.input_clock.capture_ns()))?;
+        dict.set_item("observed_at_ns", snapshot.observed_at_ns)?;
+        dict.set_item("audible_at_ns", snapshot.audible_at_ns)?;
+        dict.set_item("output_frame", snapshot.output_frame)?;
+        dict.set_item("sample_rate_hz", snapshot.sample_rate_hz)?;
+        dict.set_item("master_bpm", snapshot.master_bpm)?;
+        dict.set_item("downbeat_frame", snapshot.downbeat_frame)?;
+        Ok(Some(dict.into_any().unbind()))
+    }
+
+    /// Diagnostic nearest-grid target. This does not schedule or start playback.
+    #[pyo3(signature = (received_at_ns, step_64ths=4))]
+    pub fn input_clock_target_frame(
+        &self,
+        received_at_ns: Option<&Bound<'_, PyAny>>,
+        step_64ths: u16,
+    ) -> PyResult<Option<u64>> {
+        let received_at_ns = parse_input_timestamp(received_at_ns)?;
+        let grid = QuantizeGrid::from_step_64ths(step_64ths)
+            .ok_or_else(|| PyValueError::new_err("step_64ths must be in 1..=64"))?;
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        Ok(handle.output_clock.read().and_then(|snapshot| {
+            snapshot.input_target_frame(received_at_ns, self.input_clock.capture_ns(), grid)
+        }))
     }
 
     pub fn loaded_sample_shape(&self, id: usize) -> PyResult<(u32, usize, usize)> {
@@ -1397,7 +1465,17 @@ impl AudioEngine {
     }
 
     /// Trigger playback of a previously loaded sample.
-    pub fn play_sample(&mut self, id: usize, volume: f32) -> PyResult<()> {
+    #[pyo3(signature = (id, volume, *, received_at_ns=None))]
+    pub fn play_sample(
+        &mut self,
+        id: usize,
+        volume: f32,
+        received_at_ns: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let received_at_ns = validated_input_timestamp(
+            parse_input_timestamp(received_at_ns)?,
+            self.input_clock.capture_ns(),
+        );
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
         }
@@ -1417,12 +1495,26 @@ impl AudioEngine {
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
         producer_guard
-            .push(ControlMessage::PlaySample { id, volume })
+            .push(ControlMessage::PlaySample {
+                id,
+                volume,
+                received_at_ns,
+            })
             .map_err(|_| PyRuntimeError::new_err("Failed to send PlaySample - buffer may be full"))
     }
 
     /// Stop all active voices and play a sample as one audio-thread command.
-    pub fn play_sample_exclusive(&mut self, id: usize, volume: f32) -> PyResult<()> {
+    #[pyo3(signature = (id, volume, *, received_at_ns=None))]
+    pub fn play_sample_exclusive(
+        &mut self,
+        id: usize,
+        volume: f32,
+        received_at_ns: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let received_at_ns = validated_input_timestamp(
+            parse_input_timestamp(received_at_ns)?,
+            self.input_clock.capture_ns(),
+        );
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
         }
@@ -1442,7 +1534,11 @@ impl AudioEngine {
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
         producer_guard
-            .push(ControlMessage::PlaySampleExclusive { id, volume })
+            .push(ControlMessage::PlaySampleExclusive {
+                id,
+                volume,
+                received_at_ns,
+            })
             .map_err(|_| {
                 PyRuntimeError::new_err("Failed to send PlaySampleExclusive - buffer may be full")
             })
@@ -2156,6 +2252,31 @@ impl AudioEngine {
 mod tests {
     use super::*;
     use rtrb::RingBuffer;
+
+    #[test]
+    fn input_timestamp_accepts_zero_and_none_and_rejects_malformed_python_values() {
+        Python::initialize();
+        Python::attach(|py| {
+            assert_eq!(parse_input_timestamp(None).unwrap(), None);
+            let zero = PyInt::new(py, 0_u64).into_any();
+            assert_eq!(parse_input_timestamp(Some(&zero)).unwrap(), Some(0));
+            let maximum = PyInt::new(py, u64::MAX).into_any();
+            assert_eq!(
+                parse_input_timestamp(Some(&maximum)).unwrap(),
+                Some(u64::MAX)
+            );
+            for expression in [c"True", c"False", c"1.5", c"'42'"] {
+                let value = py.eval(expression, None, None).unwrap();
+                let error = parse_input_timestamp(Some(&value)).unwrap_err();
+                assert!(error.is_instance_of::<PyTypeError>(py));
+            }
+            for expression in [c"-1", c"18446744073709551616"] {
+                let value = py.eval(expression, None, None).unwrap();
+                let error = parse_input_timestamp(Some(&value)).unwrap_err();
+                assert!(error.is_instance_of::<PyValueError>(py));
+            }
+        });
+    }
 
     #[test]
     fn push_control_message_reports_full_queue() {

@@ -48,6 +48,71 @@ def test_trigger_pad_multi_loop(controller: AppController, audio_engine_mock: Mo
     audio_engine_mock.play_sample.assert_called_with(sample_id, 1.0)
 
 
+@pytest.mark.parametrize("received_at_ns", [0, 123_456_789])
+@pytest.mark.parametrize("multi_loop", [False, True])
+def test_trigger_preserves_captured_input_time_through_loop_publication(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    received_at_ns: int,
+    *,
+    multi_loop: bool,
+) -> None:
+    controller.project.sample_paths[0] = "/path/to/sample.wav"
+    controller.project.multi_loop = multi_loop
+    controller.project.pad_loop_start_s[0] = 2.0
+    controller.project.pad_loop_end_s[0] = 4.0
+    audio_engine_mock.reset_mock()
+
+    controller.transport.playback.trigger_pad(0, received_at_ns=received_at_ns)
+
+    play = call.play_sample if multi_loop else call.play_sample_exclusive
+    assert audio_engine_mock.method_calls[-2:] == [
+        call.set_pad_loop_region(0, 2.0, 4.0),
+        play(0, 1.0, received_at_ns=received_at_ns),
+    ]
+
+
+def test_keep_others_trigger_preserves_input_time(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.project.sample_paths[0] = "/path/to/sample.wav"
+    controller.project.multi_loop = False
+
+    controller.transport.playback.trigger_pad_keep_others(0, received_at_ns=31)
+
+    audio_engine_mock.play_sample.assert_called_once_with(0, 1.0, received_at_ns=31)
+    audio_engine_mock.play_sample_exclusive.assert_not_called()
+
+
+def test_global_restart_preserves_one_input_timestamp_for_every_pad(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.project.sample_paths[0] = "/path/to/sample-a.wav"
+    controller.project.sample_paths[2] = "/path/to/sample-b.wav"
+    controller.session.global_stop_engaged = True
+    controller.session.global_stop_restore_sample_ids = {0, 2}
+
+    controller.transport.playback.start_or_restart_global_start_stop(received_at_ns=0)
+
+    assert audio_engine_mock.play_sample.call_args_list == [
+        call(0, 1.0, received_at_ns=0),
+        call(2, 1.0, received_at_ns=0),
+    ]
+    assert controller.session.active_sample_ids == {0, 2}
+
+
+def test_invalid_trigger_timestamp_is_rejected_before_loop_publication(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.project.sample_paths[0] = "/path/to/sample.wav"
+    audio_engine_mock.reset_mock()
+
+    with pytest.raises(ValueError, match="received_at_ns"):
+        controller.transport.playback.trigger_pad(0, received_at_ns=-1)
+
+    assert audio_engine_mock.method_calls == []
+
+
 def test_trigger_pad_not_loaded(controller: AppController, audio_engine_mock: Mock) -> None:
     """Test triggering an unloaded pad does nothing."""
     sample_id = 0

@@ -185,7 +185,8 @@ def _render_playback_controls(ctx: UiContext, height: float) -> None:
         f"{icons_fontawesome_6.ICON_FA_PLAY}##wf_play", height
     )
     if play_left:
-        ctx.ui.waveform.play_restart_selected_pad_on_press()
+        received_at_ns = ctx.input.capture_timestamp_ns()
+        ctx.ui.waveform.play_restart_selected_pad_on_press(received_at_ns=received_at_ns)
     elif play_right:
         ctx.ui.waveform.stop_selected_pad_on_press()
 
@@ -597,6 +598,7 @@ def _handle_clicks(ctx: UiContext, pad_id: int, sample_duration_s: float) -> Non
     if not (left_released or right_released):
         return
 
+    received_at_ns = ctx.input.capture_timestamp_ns() if left_released else None
     mouse_pos = imgui.get_mouse_pos()
     mouse_plot_pos = implot.pixels_to_plot(mouse_pos.x, mouse_pos.y)
     click_x = float(mouse_plot_pos.x)
@@ -611,7 +613,9 @@ def _handle_clicks(ctx: UiContext, pad_id: int, sample_duration_s: float) -> Non
         new_start = max(0.0, min(float(sample_duration_s), click_x))
         if loop_end_s is not None:
             new_start = min(new_start, loop_end_s)
-        ctx.ui.waveform.set_loop_start_and_play_selected_pad(new_start)
+        ctx.ui.waveform.set_loop_start_and_play_selected_pad(
+            new_start, received_at_ns=received_at_ns
+        )
         imgui.reset_mouse_drag_delta(imgui.MouseButton_.left)
 
     if not right_released:

@@ -314,6 +314,13 @@ Rules:
 - Direct Rust MIDI events with `dispatched=True` must not be executed again in
   Python; direct events with `dispatched=False` use the same controller fallback
   path as non-direct MIDI actions.
+- Capture launch time through `ctx.input.capture_timestamp_ns()` immediately
+  after an accepted keyboard/mouse input condition. Pass `received_at_ns` through
+  action facades/controllers before loop preparation; global restart batches
+  reuse one captured value. Waveform restart uses the same timestamp path.
+- MIDI fallback preserves the event's original Rust timestamp. Never recapture
+  a delayed event or mix Python monotonic time with the Rust engine epoch.
+  Timestamp metadata stays transient and current launch behavior is unchanged.
 - High-rate continuous parameters should be routed through controller/action
   paths that can choose safe Rust parameter-ring updates and smoothing.
 

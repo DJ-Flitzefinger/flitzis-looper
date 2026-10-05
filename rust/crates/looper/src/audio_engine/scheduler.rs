@@ -10,9 +10,19 @@ pub(crate) type TransportScheduler = FixedCapacityScheduler<MAX_SCHEDULED_EVENTS
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum ScheduledCommand {
-    PlaySample { id: usize, volume: f32 },
-    StopAllThenPlaySample { id: usize, volume: f32 },
-    StopSample { id: usize },
+    PlaySample {
+        id: usize,
+        volume: f32,
+        received_at_ns: Option<u64>,
+    },
+    StopAllThenPlaySample {
+        id: usize,
+        volume: f32,
+        received_at_ns: Option<u64>,
+    },
+    StopSample {
+        id: usize,
+    },
     StopAll,
 }
 
@@ -176,7 +186,11 @@ mod tests {
     use super::*;
 
     fn play(id: usize) -> ScheduledCommand {
-        ScheduledCommand::PlaySample { id, volume: 1.0 }
+        ScheduledCommand::PlaySample {
+            id,
+            volume: 1.0,
+            received_at_ns: None,
+        }
     }
 
     fn drain_commands<const CAPACITY: usize>(
@@ -225,7 +239,11 @@ mod tests {
         scheduler
             .schedule(
                 10,
-                ScheduledCommand::StopAllThenPlaySample { id: 3, volume: 1.0 },
+                ScheduledCommand::StopAllThenPlaySample {
+                    id: 3,
+                    volume: 1.0,
+                    received_at_ns: None,
+                },
             )
             .unwrap();
 
@@ -235,7 +253,11 @@ mod tests {
                 play(1),
                 ScheduledCommand::StopSample { id: 2 },
                 ScheduledCommand::StopAll,
-                ScheduledCommand::StopAllThenPlaySample { id: 3, volume: 1.0 },
+                ScheduledCommand::StopAllThenPlaySample {
+                    id: 3,
+                    volume: 1.0,
+                    received_at_ns: None
+                },
             ]
         );
     }

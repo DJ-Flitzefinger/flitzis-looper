@@ -5,14 +5,13 @@ import pytest
 from imgui_bundle import imgui
 
 from flitzis_looper.ui.render import sidebar_left
+from flitzis_looper.ui.render.bpm_entry import filtered_bpm_entry_char, sanitize_bpm_entry_text
 from flitzis_looper.ui.render.sidebar_left import (
     MANUAL_BPM_ENTRY_MAX,
     MANUAL_BPM_ENTRY_MIN,
-    filtered_bpm_entry_char,
     filtered_eq_entry_char,
     parse_eq_entry_text,
     parse_manual_bpm_entry_text,
-    sanitize_bpm_entry_text,
     sanitize_eq_entry_text,
 )
 

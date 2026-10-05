@@ -226,7 +226,8 @@ def _pad_button_input(ctx: UiContext, pad_id: int, *, is_loaded: bool) -> None:
     if imgui.is_mouse_down(imgui.MouseButton_.left):
         if not ctx.state.pads.is_pressed(pad_id):
             if is_loaded:
-                ctx.audio.pads.trigger_pad(pad_id)
+                received_at_ns = ctx.input.capture_timestamp_ns()
+                ctx.audio.pads.trigger_pad(pad_id, received_at_ns=received_at_ns)
             ctx.ui.select_pad(pad_id)
         ctx.ui.store_pressed_pad_state(pad_id, pressed=True)
     else:
