@@ -11,7 +11,7 @@ use ort::{
     value::{TensorElementType, TensorRef, ValueType},
 };
 
-use crate::key_detection::KeyError;
+use crate::key_detection::{KEYNET_INPUT_BINS, KeyError};
 
 /// Path to the KeyNet ONNX model file.
 const MODEL_FILENAME: &str = "keynet.onnx";
@@ -26,7 +26,7 @@ static SESSION: OnceLock<Mutex<Option<Session>>> = OnceLock::new();
 /// Validate the loaded model's input/output signature.
 ///
 /// Checks that the model has:
-/// - Exactly 1 input with f32 dtype and 4 dimensions, dim[2] == 105
+/// - Exactly 1 input with f32 dtype and 4 dimensions, dim[2] == 104
 /// - An output named "logits" with shape containing 24
 fn validate_session(session: &Session) -> Result<(), KeyError> {
     // Check input.
@@ -58,11 +58,11 @@ fn validate_session(session: &Session) -> Result<(), KeyError> {
                 )));
             }
 
-            // dim[2] must be 105 (frequency bins).
+            // The bundled model expects the 104 retained CQT frequency rows.
             let freq_dim = shape[2];
-            if freq_dim >= 0 && freq_dim != 105 {
+            if freq_dim >= 0 && freq_dim != KEYNET_INPUT_BINS as i64 {
                 return Err(KeyError::ModelError(format!(
-                    "model input dim[2] expected 105 (freq bins), got {}",
+                    "model input dim[2] expected {KEYNET_INPUT_BINS} (freq bins), got {}",
                     freq_dim
                 )));
             }
@@ -211,22 +211,22 @@ fn resolve_model_path() -> Option<std::path::PathBuf> {
 
 /// Create an ONNX input tensor from a CQT spectrogram.
 ///
-/// The CQT data is expected to be in shape `(105, T)` (row-major, frequency
-/// bins major). This function reshapes it to `(1, 1, 105, T)` for the model.
+/// The CQT data is expected to be in shape `(104, T)` (row-major, frequency
+/// bins major). This function reshapes it to `(1, 1, 104, T)` for the model.
 fn create_input_tensor(
     cqt_data: &[f32],
     n_time_frames: usize,
 ) -> Result<TensorRef<'_, f32>, KeyError> {
-    let expected_len = 105 * n_time_frames;
+    let expected_len = KEYNET_INPUT_BINS * n_time_frames;
     if cqt_data.len() != expected_len {
         return Err(KeyError::ModelError(format!(
-            "CQT tensor size mismatch: expected {expected_len} (105 × {n_time_frames}), got {}",
+            "CQT tensor size mismatch: expected {expected_len} ({KEYNET_INPUT_BINS} × {n_time_frames}), got {}",
             cqt_data.len()
         )));
     }
 
-    // Shape: (batch=1, channels=1, freq_bins=105, time=T)
-    TensorRef::from_array_view(([1usize, 1, 105, n_time_frames], cqt_data))
+    // Shape: (batch=1, channels=1, freq_bins=104, time=T)
+    TensorRef::from_array_view(([1usize, 1, KEYNET_INPUT_BINS, n_time_frames], cqt_data))
         .map_err(|e| KeyError::ModelError(format!("failed to create input tensor: {e}")))
 }
 
@@ -242,7 +242,7 @@ fn argmax(slice: &[f32]) -> Option<usize> {
 /// Run ONNX inference on a CQT spectrogram.
 ///
 /// # Arguments
-/// * `cqt_tensor` - Flattened CQT spectrogram in shape `(105, T)` row-major.
+/// * `cqt_tensor` - Flattened CQT spectrogram in shape `(104, T)` row-major.
 /// * `n_time_frames` - Number of time frames (T dimension).
 ///
 /// # Returns
@@ -264,6 +264,15 @@ pub fn run_inference(
         .as_mut()
         .ok_or_else(|| KeyError::ModelError("session not initialized".into()))?;
 
+    run_inference_with_session(session, cqt_tensor, n_time_frames)
+}
+
+/// Execute the model with a validated session and preprocessed CQT rows.
+fn run_inference_with_session(
+    session: &mut Session,
+    cqt_tensor: &[f32],
+    n_time_frames: usize,
+) -> Result<(usize, Vec<f32>), KeyError> {
     let input = create_input_tensor(cqt_tensor, n_time_frames)?;
 
     let outputs = session
@@ -321,40 +330,68 @@ mod tests {
 
     #[test]
     fn test_load_session_validates_model() {
-        // When the model file is present, load_session should succeed
-        // (including validation). When absent, it should return ModelError.
-        // Reset session cache for this test.
-        let result = load_session();
-        match result {
-            Ok(()) => {
-                // Model loaded and validated successfully.
-                let guard = SESSION.get().unwrap().lock().unwrap();
-                assert!(
-                    guard.is_some(),
-                    "session should be cached after successful load"
-                );
-            }
-            Err(KeyError::ModelError(msg)) => {
-                // Model not found — acceptable in environments without the model file.
-                assert!(
-                    msg.contains("not found") || msg.contains("failed to load"),
-                    "unexpected error: {msg}"
-                );
-            }
-            other => panic!("unexpected result: {other:?}"),
+        if resolve_model_path().is_none() {
+            assert!(matches!(
+                load_session(),
+                Err(KeyError::ModelError(message)) if message.contains("not found")
+            ));
+            return;
         }
+
+        load_session().expect("a resolved KeyNet model must load and validate successfully");
+        let guard = SESSION.get().unwrap().lock().unwrap();
+        assert!(
+            guard.is_some(),
+            "session should be cached after successful load"
+        );
+    }
+
+    #[test]
+    fn test_bundled_model_accepts_cqt_preprocessing() {
+        // Cargo runs unit tests from the crate directory. Locate the tracked asset
+        // without changing cwd or populating the process-global session cache.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../assets/models")
+            .join(MODEL_FILENAME);
+        if !path.exists() {
+            // Source-only CI distributions may omit the binary model asset.
+            return;
+        }
+
+        let mut session = Session::builder()
+            .expect("create bundled KeyNet session")
+            .commit_from_file(&path)
+            .expect("a present bundled KeyNet must load successfully");
+        validate_session(&session)
+            .expect("bundled KeyNet signature must accept 104 frequency rows");
+
+        let samples: Vec<f32> = (0..44_100 * 5)
+            .map(|index| (std::f32::consts::TAU * 440.0 * index as f32 / 44_100.0).sin())
+            .collect();
+        let cqt = crate::key_detection::cqt::compute_cqt(&samples, 44_100, &Default::default());
+        assert!(!cqt.is_empty());
+        assert_eq!(cqt.len() % KEYNET_INPUT_BINS, 0);
+        let n_time_frames = cqt.len() / KEYNET_INPUT_BINS;
+        let (predicted_class, logits) =
+            run_inference_with_session(&mut session, &cqt, n_time_frames)
+                .expect("bundled KeyNet must infer from the trimmed CQT");
+
+        assert!(predicted_class < 24);
+        assert_eq!(logits.len(), 24);
+        assert!(logits.iter().all(|value| value.is_finite()));
+        assert!(crate::key_detection::camelot_index_to_key(predicted_class).is_some());
     }
 
     #[test]
     fn test_create_input_tensor_wrong_size() {
-        let data = vec![1.0f32; 100]; // Wrong size for (105, 2)
+        let data = vec![1.0f32; 100]; // Wrong size for (104, 2)
         let result = create_input_tensor(&data, 2);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_create_input_tensor_correct_size() {
-        let data = vec![0.5f32; 105 * 10]; // Correct size for (105, 10)
+        let data = vec![0.5f32; KEYNET_INPUT_BINS * 10]; // Correct size for (104, 10)
         let result = create_input_tensor(&data, 10);
         assert!(result.is_ok());
     }
@@ -374,21 +411,21 @@ mod tests {
     #[test]
     fn test_run_inference_wrong_tensor_size() {
         // Wrong size triggers error before model load
-        let data = vec![0.0f32; 500]; // Not 105 * T for any valid T
-        let result = run_inference(&data, 10); // 105*10 = 1050, but we have 500
+        let data = vec![0.0f32; 500]; // Not 104 * T for any valid T
+        let result = run_inference(&data, 10); // 104*10 = 1040, but we have 500
         assert!(result.is_err());
     }
 
     #[test]
     fn test_run_inference_no_model() {
         // Without a model file, inference should fail gracefully
-        let data = vec![0.0f32; 105 * 10];
+        let data = vec![0.0f32; KEYNET_INPUT_BINS * 10];
         let result = run_inference(&data, 10);
         // Should be ModelError, not a panic
         match result {
             Err(KeyError::ModelError(msg)) => {
                 assert!(
-                    msg.contains("not found") || msg.contains("failed to load"),
+                    resolve_model_path().is_none() && msg.contains("not found"),
                     "expected model error, got: {msg}"
                 );
             }

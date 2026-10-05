@@ -3,7 +3,7 @@
 //! Produces a CQT spectrogram from mono audio and applies log1p magnitude
 //! compression to match the KeyNet model's expected input format.
 //!
-//! Pipeline: mono f32 samples → CQT magnitude (105 bins) → log1p → (105, T) tensor.
+//! Pipeline: mono f32 samples → CQT magnitude (105 bins) → log1p → trim → (104, T).
 //!
 //! Uses librosa-compatible CQT (`librosa_cqt` module) for numerical accuracy.
 
@@ -35,12 +35,12 @@ impl Default for CqtParams {
 
 /// Compute the CQT spectrogram from mono audio samples.
 ///
-/// Returns a flattened `Vec<f32>` of shape `(105, n_time_frames)` in row-major
+/// Returns a flattened `Vec<f32>` of shape `(104, n_time_frames)` in row-major
 /// order. The pipeline:
 /// 1. Convert f32 → f64 for librosa-compatible CQT computation
 /// 2. Compute CQT magnitude with librosa_cqt (produces 105 × T)
 /// 3. Apply `log1p` magnitude compression
-/// 4. Convert f64 → f32
+/// 4. Remove the highest frequency bin and convert f64 → f32
 ///
 /// Returns empty vec if the signal is too short to produce any frames.
 pub fn compute_cqt(samples: &[f32], sample_rate: u32, params: &CqtParams) -> Vec<f32> {
@@ -73,11 +73,12 @@ pub fn compute_cqt(samples: &[f32], sample_rate: u32, params: &CqtParams) -> Vec
 
     let n_frames = magnitude.len() / params.n_bins;
 
-    // Convert to f32 with log1p. Keep all 105 frequency bins.
+    // Match the training pipeline: omit the final frequency row (105 → 104).
     // Input layout: (n_bins) × (n_frames), row-major.
-    let mut output = Vec::with_capacity(params.n_bins * n_frames);
+    let output_bins = params.n_bins - 1;
+    let mut output = Vec::with_capacity(output_bins * n_frames);
 
-    for bin in 0..params.n_bins {
+    for bin in 0..output_bins {
         for frame in 0..n_frames {
             let val = magnitude[bin * n_frames + frame];
             output.push((1.0f64 + val).ln() as f32);
@@ -90,6 +91,7 @@ pub fn compute_cqt(samples: &[f32], sample_rate: u32, params: &CqtParams) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::key_detection::KEYNET_INPUT_BINS;
 
     fn sine_wave(freq_hz: f32, sample_rate: u32, duration_secs: f32) -> Vec<f32> {
         let n = (sample_rate as f32 * duration_secs) as usize;
@@ -112,8 +114,8 @@ mod tests {
             "CQT should produce frames for 10s audio"
         );
         assert!(
-            output.len() % 105 == 0,
-            "output length {} should be divisible by 105",
+            output.len() % KEYNET_INPUT_BINS == 0,
+            "output length {} should be divisible by 104",
             output.len()
         );
     }
@@ -126,7 +128,7 @@ mod tests {
         let output = compute_cqt(&samples, 44_100, &params);
 
         assert!(!output.is_empty());
-        assert!(output.len() % 105 == 0);
+        assert!(output.len() % KEYNET_INPUT_BINS == 0);
     }
 
     #[test]
@@ -161,7 +163,7 @@ mod tests {
         // (librosa pads n_fft/2 on each side)
         // If truly too short, returns empty
         if !output.is_empty() {
-            assert!(output.len() % 105 == 0);
+            assert!(output.len() % KEYNET_INPUT_BINS == 0);
         }
     }
 
@@ -176,7 +178,7 @@ mod tests {
             !output.is_empty(),
             "CQT should produce frames for 5s sine wave"
         );
-        assert!(output.len() % 105 == 0);
+        assert!(output.len() % KEYNET_INPUT_BINS == 0);
 
         // 440 Hz should produce energy in some frequency bins
         let max_val = output.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
@@ -194,8 +196,7 @@ mod tests {
 
     /// Verify CQT output is structurally correct on a real audio file.
     ///
-    /// cqt-rs and librosa use different windowing/bin-centering, so per-value
-    /// comparison is not feasible.  Instead we verify:
+    /// Verify the trimmed librosa CQT preprocessing used by the bundled model:
     /// - Shape matches expected (104, T)
     /// - Peak energy is at a frequency bin consistent with the audio content
     /// - All values are finite and in a reasonable range
@@ -214,7 +215,8 @@ mod tests {
             !output.is_empty(),
             "CQT should produce frames for real audio"
         );
-        let n_frames = output.len() / 104;
+        assert_eq!(output.len() % KEYNET_INPUT_BINS, 0);
+        let n_frames = output.len() / KEYNET_INPUT_BINS;
 
         // All values must be finite.
         assert!(
@@ -223,12 +225,14 @@ mod tests {
         );
 
         // Per-bin mean energy should show a plausible peak.
-        let n_bins = 104;
+        let n_bins = KEYNET_INPUT_BINS;
         let mut max_bin = 0;
         let mut max_mean = f32::NEG_INFINITY;
         for bin in 0..n_bins {
-            let mean: f32 =
-                (0..n_frames).map(|t| output[bin + t * n_bins]).sum::<f32>() / n_frames as f32;
+            let mean: f32 = (0..n_frames)
+                .map(|t| output[bin * n_frames + t])
+                .sum::<f32>()
+                / n_frames as f32;
             if mean > max_mean {
                 max_mean = mean;
                 max_bin = bin;

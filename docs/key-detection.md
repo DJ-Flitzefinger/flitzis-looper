@@ -9,7 +9,7 @@ Key detection in Flitzis-Looper uses a CNN-based approach, adapted from [Musical
 ## Architecture
 
 ```
-mono f32 samples → CQT (105 bins, librosa-compatible) → log1p compression
+mono f32 samples → CQT (105 bins, librosa-compatible) → log1p compression → trim to 104 bins
   → ONNX inference (keynet.onnx, 24-class softmax)
   → argmax → Camelot index → key string (e.g. "Fm", "C#")
 ```
@@ -29,12 +29,16 @@ The CQT implementation is a Rust port of librosa's pipeline (extracted from the 
 ### ONNX Model
 
 - **File**: `keynet.onnx`
-- **Input shape**: `(1, 1, 105, T)` — batch, channels, frequency bins, time frames
+- **Input shape**: `(1, 1, 104, T)` — batch, channels, frequency bins, time frames
 - **Output shape**: `(1, 24)` — logits for 24 Camelot keys
 - **Search paths**: exe dir → cwd → `assets/models/` → `models/` → `assets/`
 - **Session caching**: lazy-loaded via `OnceLock<Mutex<Option<Session>>>`
 
-The model was originally trained on the GiantSteps key dataset and exported from PyTorch with `torch.onnx.export` (opset 20, `dynamo=False`).
+The model was originally trained on the GiantSteps key dataset and exported from
+PyTorch with `torch.onnx.export` (opset 20, `dynamo=False`). Its training preprocessing
+computes 105 CQT bins and removes the final, highest-frequency row before inference.
+The Rust preprocessing and export script preserve this 104-bin input contract; the
+full 105-bin transform remains available for numerical CQT validation.
 
 ### API
 

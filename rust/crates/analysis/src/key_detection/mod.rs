@@ -25,6 +25,9 @@ mod mapping;
 pub use cqt::CqtParams;
 pub use mapping::camelot_index_to_key;
 
+/// Frequency rows accepted by the bundled KeyNet model after trimming the CQT.
+const KEYNET_INPUT_BINS: usize = 104;
+
 /// Result of key detection.
 #[derive(Debug, Clone)]
 pub struct KeyResult {
@@ -101,7 +104,7 @@ pub fn detect_key(samples: &[f32], sample_rate_hz: u32) -> Result<KeyResult, Key
     }
 
     // 4. Calculate number of time frames from CQT output shape.
-    let n_time_frames = cqt_data.len() / 105;
+    let n_time_frames = cqt_data.len() / KEYNET_INPUT_BINS;
     if n_time_frames == 0 {
         return Err(KeyError::InsufficientData);
     }

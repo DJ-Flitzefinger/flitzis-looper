@@ -284,13 +284,14 @@ fn resample_mono_to_target(
     let mut frames_left = input_frames;
     let mut output_len: usize = 0;
 
-    let next_nbr_input_frames = resampler.input_frames_next();
-    while frames_left > next_nbr_input_frames {
-        let (_, nbr_out) = resampler
+    while frames_left >= resampler.input_frames_next() {
+        let (nbr_in, nbr_out) = resampler
             .process_into_buffer(&input_buffer, &mut output_buffer, Some(&indexing))
             .map_err(|e| format!("resampling failed: {e}"))?;
         output_len += nbr_out;
-        frames_left -= next_nbr_input_frames;
+        frames_left -= nbr_in;
+        indexing.input_offset += nbr_in;
+        indexing.output_offset += nbr_out;
     }
 
     // Process remaining frames.
@@ -300,20 +301,24 @@ fn resample_mono_to_target(
             .process_into_buffer(&input_buffer, &mut output_buffer, Some(&indexing))
             .map_err(|e| format!("resampling failed: {e}"))?;
         output_len += nbr_out;
+        indexing.output_offset += nbr_out;
     }
 
-    // Extract the resampled data.
+    // Flush the delayed tail, then remove the leading algorithmic delay so
+    // analysis keeps the same source-time origin and duration as playback.
+    let delay_frames = resampler.output_delay();
+    let required_output_len = delay_frames + expected_output_len;
+    indexing.partial_len = Some(0);
+    while output_len < required_output_len {
+        let (_, nbr_out) = resampler
+            .process_into_buffer(&input_buffer, &mut output_buffer, Some(&indexing))
+            .map_err(|e| format!("resampling flush failed: {e}"))?;
+        output_len += nbr_out;
+        indexing.output_offset += nbr_out;
+    }
+
     let result_data = output_buffer.take_data();
-    let mut result = result_data[..output_len * channels].to_vec();
-
-    // Trim delay frames from the end.
-    let trim_frames = resampler.output_delay();
-    let trim_samples = trim_frames * channels;
-    if trim_samples > 0 && result.len() > trim_samples {
-        result.truncate(result.len() - trim_samples);
-    }
-
-    Ok(result)
+    Ok(result_data[delay_frames..required_output_len].to_vec())
 }
 
 /// Run the BPM detection pipeline on mono audio.
@@ -2276,6 +2281,101 @@ impl AudioEngine {
 mod tests {
     use super::*;
     use rtrb::RingBuffer;
+
+    #[test]
+    fn analysis_resampling_keeps_late_music_after_a_silent_intro() {
+        let source_rate = 96_000;
+        let target_rate = 44_100;
+        let input: Vec<f32> = (0..source_rate * 2)
+            .map(|frame| {
+                if frame < source_rate / 2 {
+                    0.0
+                } else {
+                    (2.0 * std::f32::consts::PI * 440.0 * frame as f32 / source_rate as f32).sin()
+                        * 0.5
+                }
+            })
+            .collect();
+
+        let output = resample_mono_to_target(input, source_rate, target_rate).unwrap();
+
+        assert_eq!(output.len(), target_rate as usize * 2);
+        assert!(
+            output[..target_rate as usize / 4]
+                .iter()
+                .all(|v| v.abs() < 1e-5)
+        );
+        let last_second = &output[target_rate as usize..];
+        let rms =
+            (last_second.iter().map(|v| v * v).sum::<f32>() / last_second.len() as f32).sqrt();
+        assert!(rms > 0.3, "late music was lost: RMS={rms}");
+    }
+
+    #[test]
+    fn analysis_resampling_preserves_transient_times_and_flushes_the_tail() {
+        use rubato::{Fft, FixedSync, Resampler};
+
+        let source_rate = 48_000;
+        let target_rate = 44_100;
+        let chunk = Fft::<f32>::new(
+            source_rate as usize,
+            target_rate as usize,
+            1024,
+            1,
+            1,
+            FixedSync::Input,
+        )
+        .unwrap()
+        .input_frames_next();
+
+        // Short, exact, partial, and many-chunk inputs exercise the delayed
+        // tail without assuming rubato's actual FFT chunk size is 1024.
+        for input_len in [chunk - 1, chunk, chunk + 1, chunk * 2, chunk * 40 + 17] {
+            let impulses = [(0, 0.5), (input_len / 2, -0.7), (input_len - 65, 0.9)];
+            let mut input = vec![0.0; input_len];
+            for (frame, amplitude) in impulses {
+                input[frame] = amplitude;
+            }
+
+            let output = resample_mono_to_target(input, source_rate, target_rate).unwrap();
+            let ratio = target_rate as f64 / source_rate as f64;
+            assert_eq!(output.len(), (input_len as f64 * ratio).ceil() as usize);
+
+            for (source_frame, amplitude) in impulses {
+                let expected_frame = (source_frame as f64 * ratio).round() as usize;
+                let start = expected_frame.saturating_sub(2);
+                let end = (expected_frame + 3).min(output.len());
+                let (offset, peak) = output[start..end]
+                    .iter()
+                    .enumerate()
+                    .max_by(|(_, a), (_, b)| a.abs().total_cmp(&b.abs()))
+                    .unwrap();
+                assert_eq!(peak.is_sign_positive(), amplitude.is_sign_positive());
+                assert!(
+                    peak.abs() > amplitude.abs() * 0.5,
+                    "transient lost for {input_len} frames at {source_frame}: peak={peak}"
+                );
+                assert!(
+                    (start + offset).abs_diff(expected_frame) <= 1,
+                    "transient shifted for {input_len} frames at {source_frame}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn analysis_resampling_preserves_same_rate_and_empty_input() {
+        let input = vec![0.0, 0.25, -0.75, 1.0];
+        assert_eq!(
+            resample_mono_to_target(input.clone(), 44_100, 44_100).unwrap(),
+            input
+        );
+        assert!(
+            resample_mono_to_target(Vec::new(), 48_000, 44_100)
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     #[test]
     fn input_timestamp_accepts_zero_and_none_and_rejects_malformed_python_values() {

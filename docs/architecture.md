@@ -222,28 +222,22 @@ changes mid-file.
 ## Audio Analysis And Timing Metadata
 
 Audio analysis runs on non-realtime worker threads after a sample is decoded and
-published. `stratum_dsp` provides the primary BPM, key, beat-grid, downbeat, and
-tempogram-candidate data. The Rust analysis post-process then assumes fixed
-tempo material and may refine the published BPM when the primary candidate is
-weak or lands on a subdivision.
+published. The loaded buffer is mixed to mono and resampled once to 44100 Hz,
+then shared by concurrent BPM and key workers. Analysis resampling processes the
+complete track, removes the FFT resampler's leading delay, and flushes its tail
+to preserve duration and transient times at every supported output rate.
 
-The fixed-tempo refinement layers are bounded worker-side checks:
-
-- candidate-family consensus groups octave-related tempogram candidates and can
-  choose the stronger performer-tempo family,
-- decoded strong transients can fit one stable constant-tempo grid near the
-  chosen candidate-family BPM,
-- full-track spectral autocorrelation can validate supported common-ratio
-  performer tempos, including 3/4 subdivision corrections and strongly
-  dominant 4/5 corrections.
+The Rust analysis crate uses the qm-dsp-derived `DetectionFunction`,
+`TempoTrackV2`, and `DownBeat` pipeline for BPM and beat/downbeat positions.
+Key detection computes the librosa-compatible CQT and runs the KeyNet ONNX
+model; see [Key detection](key-detection.md). A key detection failure returns
+`unknown` without discarding the BPM result. Automatic loading and manual
+analysis use the same preprocessing and detection path.
 
 Published analysis BPM values preserve fractional precision for timing and grid
 math. Near-integer tempos are not snapped to integer BPM solely for display
 readability; compact pad overlays may round for scanning, while editable BPM
-fields and the Loop Editor grid use the underlying effective BPM. Stable
-transient fits take precedence over tiny spectral offsets, so exact metronome
-material can remain exact while difficult performer-tempo tracks still benefit
-from spectral common-ratio correction.
+fields and the Loop Editor grid use the underlying effective BPM.
 
 Beat/downbeat anchors reported very close to file start are normalized to
 `0.0` before deriving the Loop Editor grid anchor and pad timing metadata. This
