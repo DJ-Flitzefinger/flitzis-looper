@@ -1,5 +1,28 @@
 ## Safety gate and remaining audible work
 
+The next non-live onset experiment compares H32768/H65536 output-frame histories at exact
+ratios 0.5/1/2 and 44.1/48/96 kHz. Target-relative background phase and attack content are held
+constant across histories; varied short tonal/percussive attacks include different block phases.
+For a raw quantile displacement a_p = raw_qp - dry_qp, deformation is a_j-a_i and the best
+unconstrained scalar minimax error is (max(a)-min(a))/2. Integer translations round this bound
+up. More history or denser discard sampling cannot remove a measured translation-invariant spread.
+
+With nonzero preceding content, separately process the mixture and background-only control.
+Their output difference is a nonlinear incremental-response diagnostic, not a linear decomposition.
+Keep actual mixture quantiles/discontinuities and deviation from isolated response alongside it.
+This does not prove stem additivity, perceptual onset or musical alignment on real recordings.
+
+One fixed offline content candidate uses canonical source-aligned dry varispeed for 2 ms, followed
+by a 5-ms raised-cosine fade into nominally translated continuous wet output. The timings are fixed
+in seconds before measurement, with one coefficient shared by stereo channels and absolute
+output frame addressing. Beyond the transition the original wet suffix must be unchanged. This
+candidate deliberately exposes temporary pitch-changing content; it is a feasibility diagnostic,
+not an accepted product policy. Preserve the existing engineering budgets and report clipping,
+dry contribution and cut/adjacent discontinuities. A negative result remains a negative result.
+Non-goals are live mixer/worker adoption, a new resampler/backend/quality option, changed clocks
+or markers, synchronized Quantize, and full application Rust migration. All preparation and
+measurement allocations stay in cfg(test) offline code; no callback calls the experiment.
+
 Pinned upstream `R3LiveShifter.cpp` v4.0.0 calls `measureResamplerDelay()` from reset and from
 setPitchScale while firstProcess is true. That routine allocates two vectors. The documented
 steady processing/ratio-update safety therefore does not cover our cold/reset call sites.

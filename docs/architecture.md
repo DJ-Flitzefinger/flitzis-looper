@@ -397,8 +397,12 @@ with effective translation D-H. Positive history rejects active source-selection
 earlier state is unavailable. The caller's logical state and markers remain unchanged.
 Independent history tests cover fractional origins, loops, intro/tail and full-mix/stems;
 isolated impulse/short-burst sweeps report timing and energy retention under a predeclared
-engineering criterion. Generation identity, timed live handover/retirement and transitions
-remain pending.
+engineering criterion. A further offline onset gate holds target-relative source content
+constant across longer silent/nonzero histories, measures translation-invariant response
+deformation, and tests a fixed short dry-to-wet bridge. Paired mixture-minus-background
+responses are nonlinear diagnostics; raw native cut loss and temporary varispeed pitch
+remain explicit. The bridge is not a selected live policy. Generation identity, timed
+live handover/retirement and transitions remain pending.
 
 Project persistence stores global Key Lock control intent and per-pad Key Lock
 booleans for loaded-pad intent, with unloaded pads saved and restored as

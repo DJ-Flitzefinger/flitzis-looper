@@ -317,6 +317,64 @@ stale/late rejection, off-thread retirement and source-aligned mode transitions
 remain pending. No transport, marker, launch policy or live fallback changes in
 this proof gate, and no device measurement is claimed.
 
+## Continuous Onset And Content Feasibility
+
+A test-only gate separates native envelope deformation from a launch cut. If
+`a_p = raw_qp - dry_qp`, then `a50-a10` and `a90-a50` do not depend on translation.
+For integer output-frame times, the best unconstrained scalar minimax error is
+`ceil((max(a)-min(a))/2)`. With a permitted integer interval `[L,U]`, the minimum is
+`max(ceil((max(a)-min(a))/2), max(a)-U, L-min(a))`, provided `L <= U`.
+The uncropped original peak and 0.1% energy budget impose the retention upper bound;
+the reference is never recomputed after cropping. q90 remains diagnostic, outside the
+existing q10/q50 acceptance criterion.
+
+The unchanged isolated sweep contains 405 unique fixtures, 324 at nonneutral ratios.
+The q10/q50 scalar lower bound exceeds the original two-ms budget in 82 of these
+324 fixtures; preserving peak/energy raises that count to 234. At 48 kHz/ratio2/
+H16384/marker0, the impulse displacement centers are 2771/3258/3317 frames. The
+q10/q50 integer bound is 244 frames (5.083 ms), and retention requires C<=2080.
+These are bounds for the measured responses, not a claim about every musical signal.
+
+The longer-history experiment holds target-relative source content and native block
+phase constant across H32768/H65536, with silent or nonzero periodic stereo history.
+Varied tonal and percussive attacks probe exact ratios 0.5/1/2 at 44.1/48/96 kHz.
+An attack-minus-background output is a nonlinear sensitivity diagnostic; it can
+include changes to subsequent background processing. Compare it with the isolated
+native attack and report actual mixture metrics too. Whole-history energy quantiles
+can be dominated by background and are not an attack acceptance criterion.
+
+One fixed offline candidate starts with canonical dry varispeed for 2 ms and then
+uses a 5-ms raised-cosine transition into nominally translated continuous wet output.
+Both channels share the coefficient at each absolute output frame, and the wet suffix
+after the transition must remain exact. At ratios2/0.5 the dry portion changes pitch
+by +12/-12 semitones; a timing result cannot certify Key Lock quality. Retain raw wet
+clipping/energy evidence even if the added dry content makes a cropped envelope look
+better. This is a falsification experiment, with unchanged budgets and no live policy
+selected. It starts no device and changes no source grid, clock, marker, backend option
+or runtime ownership. Task7.2 remains pending until an acceptable content policy is
+justified; identity/adoption and synchronized Quantize must wait.
+
+The release matrix contains 432 actual fixtures and passes 864 exact nominal-suffix
+comparisons. Every nonneutral common-translation group remains infeasible. At ratio2
+all 72 isolated cases fail nominal timing/retention; the bridge improves timing alone
+in 46 cases but passes the complete criterion in none. Nominal cut loss reaches 99.9825%
+of isolated response energy. At ratio0.5 only 10 of 72 isolated bridge cases pass the
+complete criterion. Neither nonneutral background paired group has an individual full
+pass. Ratio1 gives the passing neutral control in both scopes.
+
+Isolated PCM, energy times and deformation are identical across the two histories.
+Matching raw output windows from H-2048 through H+delay+capture differ for the actual
+nonneutral mixture, with relative L2 up to 1.95859/1.88705 at ratios0.5/2. Paired
+diagnostic q times change by up to 10339/20321 frames at ratios0.5/2, with relative
+nonadditivity L2 up to 13.3664. Such long-tail context sensitivity cannot establish a
+converged attack metric or be reduced to additive target energy. Duration, frequency
+and phase are varied jointly; no marker0 or exhaustive musical content is covered.
+The declared markers17/511 are mapped to rounded source frames (at ratio0.5 those
+source coordinates correspond to output18/512). The independently read dry reference
+supplies actual timing, including interpolation and the attack envelope.
+The next content gate needs actual target-local continuous musical references and a
+pitch-preserving policy; neither more scalar fitting nor this dry bridge is sufficient.
+
 ## Settings Contract
 
 Project persistence stores the global `key_lock` boolean as global-control

@@ -213,3 +213,35 @@ exact reference equality SHALL NOT establish live/device acceptance.
 - **WHEN** the tested history, marker phases and burst types have incompatible timing or retention bounds
 - **THEN** the proof records the failed common compensation gate
 - **AND** live adoption and synchronized Quantize remain pending
+
+### Requirement: Onset Content Feasibility Separates Native Deformation From Launch Loss
+The system SHALL evaluate longer-history continuous Key Lock and one fixed offline onset-content
+transition before selecting live compensation after a failed common-translation criterion.
+
+The proof SHALL report translation-invariant q10/q50/q90 deformation and scalar minimax timing
+bounds, vary attack duration, frequency, carrier phase and native block phase, and compare silent
+history with nonzero preceding stereo content. Histories SHALL supply the same source content
+around the target when their lengths differ. An attack-minus-control native response SHALL be
+identified as a paired nonlinear diagnostic, with actual mixture metrics and deviation from the
+isolated response also reported; it SHALL NOT be treated as additive stem or audible attack proof.
+The fixed transition SHALL use the existing source reader and native options without per-fixture
+fitting or a second resampler. Dry varispeed content, cut loss, discontinuity and unchanged wet
+continuation SHALL be reported explicitly. The existing timing/content budgets SHALL remain
+unchanged; unsuccessful evidence SHALL leave live compensation and adoption pending.
+
+#### Scenario: More history preserves the same local source context
+- **GIVEN** two bounded history lengths and the same target-relative source content
+- **WHEN** their continuous native responses are measured at the same exact ratio
+- **THEN** the report compares deformation and residual displacement separately
+- **AND** native/source continuation equality does not imply audible timing acceptance
+
+#### Scenario: A preceding signal changes the attack response
+- **GIVEN** paired continuous inputs with and without a target attack over nonzero history
+- **WHEN** the native output difference is measured
+- **THEN** it is labeled a nonlinear diagnostic and compared with isolated attack output
+- **AND** the actual complete mixture remains visible in the report
+
+#### Scenario: A short dry-to-wet transition misses the content gate
+- **WHEN** a fixed source-aligned dry attack and short native transition fails the declared criterion
+- **THEN** the failure, remaining pitch-changing dry content and discontinuity are recorded
+- **AND** no live onset strategy, compensation constant or synchronized launch is selected

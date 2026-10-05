@@ -46,7 +46,7 @@
 ## 7. Pending live audible preparation
 
 - [x] 7.1 Anchor explicit source history before the requested logical phase; sweep bounded discard/marker-phase/short-burst fixtures and define/report the musical timing criterion before choosing compensation.
-- [ ] 7.2 Resolve the failed nonneutral common-translation criterion using steady Key Lock and musical attack references; justify an onset/content policy before selecting compensation without hiding inherent transient spread or cut loss.
+- [ ] 7.2 Resolve the failed nonneutral common-translation criterion using steady Key Lock and musical attack references; justify an onset/content policy before selecting compensation without hiding inherent transient spread or cut loss. The bounded longer-history/nonzero-content matrix and fixed dry-to-wet bridge are measured; all nonneutral common groups still fail, paired response sensitivity is not an attack oracle, and an acceptable pitch-preserving content policy remains pending.
 - [ ] 7.3 Implement source/generation/loop/seek/stem/exact-ratio identity with fixed future handover frames and stale/late rejection.
 - [ ] 7.4 Adopt coherent native/FIFO/feed state at the accepted render frame and retire replaced or stale ownership off-thread.
 - [ ] 7.5 Verify source-aligned start/retrigger/seek, pause/resume and click-safe wet/dry/neutral/global/per-pad transitions, including queue/failure paths.

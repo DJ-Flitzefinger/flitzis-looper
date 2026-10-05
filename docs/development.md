@@ -241,6 +241,26 @@ engineering budget, retained peak/energy checks and capture-tail bounds are
 explained in the backend guide. A failed intersection is preserved as evidence;
 neither reference equality nor a sampled candidate selects live compensation.
 
+Run the longer-history onset/content diagnostic independently:
+
+```powershell
+$env:FLITZIS_KEY_LOCK_ONSET_PROBE_CSV = (Join-Path (Split-Path -Parent (Get-Location).Path) 'scratch/slice3f-onset.csv')
+.\scripts\run-rust-tests.ps1 --release --lib onset_probe
+Remove-Item Env:\FLITZIS_KEY_LOCK_ONSET_PROBE_CSV
+```
+
+The optional absolute path writes named metric rows plus a companion group summary.
+The bounded matrix uses H32768/H65536, ratios0.5/1/2, phases17/511, six jointly varied
+tone/percussion duration/frequency/carrier-phase combinations, and silent/nonzero
+periodic stereo history. Ordinary tests export nothing. Independently initialized
+native/source references prove nominal continuation under 512/irregular partitions.
+Raw and launched quantiles, peak/energy retention, nonlinear background sensitivity,
+history stability, fixed 2-ms dry plus 5-ms fade diagnostics and unchanged wet suffixes
+remain separate. Whole-history mixtures and paired differences are labeled context
+or nonlinear diagnostics; their numerical verdicts are not audible attack acceptance.
+The bridge changes pitch briefly and is not selected live behavior. See the backend
+guide for the unchanged budgets, mathematical lower bounds and remaining content gate.
+
 ### Nuitka Installer Direction
 
 The later Windows installer should be built so non-technical users do not need

@@ -134,8 +134,11 @@ is `uv run cargo test --manifest-path rust/Cargo.toml --workspace`.
   residuals. Optional explicit forward source history must reach the requested fractional
   logical phase; raw discard and history remain distinct. Isolated impulse/tone/percussion
   sweeps assess stereo energy timing, clipping and cut/join continuity before compensation.
-  Production builds exclude this fixture. Timed live adoption, identity,
-  retirement, transitions and audible compensation remain pending.
+  Longer-history silent/nonzero-content probes measure translation-invariant onset
+  deformation and one fixed offline dry-to-wet bridge. Native clipping, nonlinear
+  background sensitivity and temporary varispeed pitch remain visible; that bridge
+  is not a selected live strategy. Production builds exclude this fixture. Timed live
+  adoption, identity, retirement, transitions and audible compensation remain pending.
 - Parameter messages are coalesced by identity in the callback before applying
   the latest drained value. The callback applies only identities touched by the
   drained batch instead of sweeping every pad slot.

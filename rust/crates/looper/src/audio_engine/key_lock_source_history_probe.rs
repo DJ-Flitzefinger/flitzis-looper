@@ -398,3 +398,6 @@ fn centered_envelope_has_no_causal_delay_and_stereo_energy_uses_both_channels() 
     assert!(at_start[0] < 0 && at_start[2] > 0);
     assert_eq!(maximum_energy_discard(&[0.001, 0.999]), 1);
 }
+
+#[path = "key_lock_source_onset_probe.rs"]
+mod onset_probe;
