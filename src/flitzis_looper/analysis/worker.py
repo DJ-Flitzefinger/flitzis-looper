@@ -1,4 +1,4 @@
-"""Lazy Beat This adapter scaffolding, without weights, inference or activation."""
+"""Lazy local Beat This adapter; installation remains an explicit separate operation."""
 
 import hashlib
 import re
@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from threading import Event, current_thread, main_thread
 from typing import TYPE_CHECKING
 
+from flitzis_looper.analysis.artifacts import verify_installation
 from flitzis_looper.analysis.contracts import (
     BeatComponentResult,
     BeatModelIdentity,
@@ -25,22 +26,23 @@ _HASH_CHUNK_BYTES = 1024 * 1024
 
 @dataclass(frozen=True, slots=True)
 class WorkerConfiguration:
-    """Previously installed local artifacts, supplied by a later explicit setup step."""
+    """Local artifacts supplied by explicit setup or a protocol-test configuration."""
 
     interpreter: Path
     script: Path
     checkpoint: Path
     scratch_dir: Path
     model: BeatModelIdentity
+    manifest: Path | None = None
 
 
 class BeatWorkerAdapter:
     """Validate a borrowed request and supervise its optional local worker off-thread.
 
     Construction has no filesystem, process, network or optional-library activity.
-    ``run`` is a blocking primitive for the existing background job owner. B1a ships
-    no worker inference script or accepted checkpoint manifest, so an unconfigured
-    adapter returns unavailable. The supplied script protocol is exercised by doubles.
+    ``run`` is a blocking primitive for the existing background job owner. An
+    unconfigured adapter returns unavailable; configured reference workers require
+    their setup receipt in addition to a matching checkpoint digest.
     """
 
     def __init__(
@@ -117,7 +119,31 @@ class BeatWorkerAdapter:
             return "worker_paths_must_be_absolute"
         if not configuration.interpreter.is_file() or not configuration.script.is_file():
             return "missing_worker"
+        reason = self._verify_installation(configuration, cancel)
+        if reason is not None:
+            return reason
         return self._verify_checkpoint(configuration, cancel)
+
+    @staticmethod
+    def _verify_installation(configuration: WorkerConfiguration, cancel: Event) -> str | None:
+        manifest = configuration.manifest
+        if manifest is None:
+            if configuration.model.environment_id.startswith("uv-lock-sha256:"):
+                return "missing_installation_manifest"
+            return None
+        expected = (
+            manifest.parent / ".venv" / "Scripts" / "python.exe",
+            manifest.parent / "worker.py",
+            manifest.parent / "final0.ckpt",
+        )
+        actual = (configuration.interpreter, configuration.script, configuration.checkpoint)
+        if not manifest.is_absolute() or actual != expected:
+            return "installation_paths_mismatch"
+        try:
+            verify_installation(manifest, configuration.model, cancel)
+        except OSError, ValueError:
+            return "cancelled" if cancel.is_set() else "installation_provenance_mismatch"
+        return None
 
     def _verify_checkpoint(self, configuration: WorkerConfiguration, cancel: Event) -> str | None:
         try:

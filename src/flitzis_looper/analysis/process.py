@@ -9,6 +9,8 @@ from pathlib import Path
 from threading import Event, Semaphore, Thread
 from typing import IO, TYPE_CHECKING
 
+from flitzis_looper.analysis.windows_job import CREATE_SUSPENDED, WindowsJob
+
 if TYPE_CHECKING:
     from flitzis_looper.analysis.contracts import WorkerLimits
 
@@ -34,6 +36,61 @@ class WorkerCommand:
     script: Path
     checkpoint: Path
     scratch_dir: Path
+
+
+class _WorkerProcess(subprocess.Popen[bytes]):
+    """Popen-compatible worker with explicit ownership of Windows launcher descendants."""
+
+    def __init__(self, arguments: list[str], command: WorkerCommand) -> None:
+        self._job = WindowsJob() if os.name == "nt" else None
+        started = False
+        try:
+            super().__init__(
+                arguments,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                cwd=command.scratch_dir,
+                env=_environment(),
+                creationflags=(
+                    subprocess.CREATE_NO_WINDOW | CREATE_SUSPENDED if self._job is not None else 0
+                ),
+            )
+            started = True
+        finally:
+            if not started and self._job is not None:
+                self._job.close()
+
+    def activate(self) -> None:
+        """Associate and resume only after the supervisor owns teardown on every failure."""
+        if self._job is not None:
+            self._job.assign_suspended(self.pid)
+
+    def kill(self) -> None:
+        """Terminate the whole owned Windows job, or the directly owned POSIX process."""
+        if self._job is not None:
+            try:
+                self._job.terminate()
+            finally:
+                # Assignment failures leave the newly created root suspended outside
+                # the job. Keep its direct Popen handle covered by the same teardown.
+                super().kill()
+        else:
+            super().kill()
+
+    def tree_active(self) -> bool:
+        """Return actual tree ownership after launcher exit, including silent descendants."""
+        return self._job.active() if self._job is not None else self.poll() is None
+
+    def observe_tree(self) -> None:
+        """Retain actual descendant handles while the worker is running."""
+        if self._job is not None:
+            self._job.observe_members()
+
+    def close_tree(self) -> None:
+        """Release the owning job handle after the supervisor has observed an empty tree."""
+        if self._job is not None:
+            self._job.close()
 
 
 class _ResponseReader:
@@ -73,6 +130,8 @@ class _OwnedProcess:
 
     def release(self) -> bool:
         try:
+            if isinstance(self.process, _WorkerProcess):
+                self.process.close_tree()
             self.reader.stream.close()
         except OSError:
             return False
@@ -82,15 +141,34 @@ class _OwnedProcess:
         # A failed finite reap must retain ownership; never pretend the PCM reader is gone.
         while True:
             try:
+                self.terminate_tree()
                 self.process.wait()
-                break
+                if self.wait_tree(_POLL_SECONDS):
+                    break
             except OSError:
-                Event().wait(_POLL_SECONDS)
+                pass
+            Event().wait(_POLL_SECONDS)
         if self.reader.thread.ident is not None:
             self.reader.thread.join()
         while not self.release():
             # An OS-level file lock must not release the process/temporary-resource slot.
             Event().wait(_POLL_SECONDS)
+
+    def terminate_tree(self) -> None:
+        """Also terminate descendants when the launcher already returned success or crashed."""
+        if isinstance(self.process, _WorkerProcess) or self.process.poll() is None:
+            self.process.kill()
+
+    def wait_tree(self, timeout: float) -> bool:
+        """Retain admission until the job's active-process count is zero."""
+        if not isinstance(self.process, _WorkerProcess):
+            return self.process.poll() is not None
+        deadline = time.monotonic() + timeout
+        while self.process.tree_active():
+            if time.monotonic() >= deadline:
+                return False
+            Event().wait(_POLL_SECONDS)
+        return True
 
 
 def _environment() -> dict[str, str]:
@@ -108,7 +186,7 @@ def _environment() -> dict[str, str]:
 
 
 def _start(command: WorkerCommand, request_path: Path) -> subprocess.Popen[bytes]:
-    return subprocess.Popen(
+    return _WorkerProcess(
         [
             str(command.interpreter),
             "-I",
@@ -118,18 +196,15 @@ def _start(command: WorkerCommand, request_path: Path) -> subprocess.Popen[bytes
             "--checkpoint",
             str(command.checkpoint),
         ],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        cwd=command.scratch_dir,
-        env=_environment(),
-        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        command,
     )
 
 
 def _monitor(owned: _OwnedProcess, cancel: Event, limits: WorkerLimits) -> str:
     deadline = time.monotonic() + limits.timeout_seconds
     while True:
+        if isinstance(owned.process, _WorkerProcess):
+            owned.process.observe_tree()
         if cancel.is_set():
             return "cancelled"
         if owned.reader.overflow.is_set():
@@ -145,13 +220,11 @@ def _monitor(owned: _OwnedProcess, cancel: Event, limits: WorkerLimits) -> str:
 
 
 def _finish(owned: _OwnedProcess, reason: str, limits: WorkerLimits) -> ProcessResult:
-    if owned.process.poll() is None:
-        try:
-            owned.process.kill()
-        except OSError:
-            return _retire_later(owned)
     try:
+        owned.terminate_tree()
         owned.process.wait(timeout=limits.reap_timeout_seconds)
+        if not owned.wait_tree(limits.reap_timeout_seconds):
+            return _retire_later(owned)
     except OSError, subprocess.TimeoutExpired:
         return _retire_later(owned)
     if owned.reader.thread.ident is not None:
@@ -240,6 +313,8 @@ def run_process(
     reader = _ResponseReader(process.stdout, limits.max_response_bytes)
     owned = _OwnedProcess(process, reader, temporary, retired)
     try:
+        if isinstance(process, _WorkerProcess):
+            process.activate()
         reader.thread.start()
         reason = _monitor(owned, cancel, limits)
     except OSError, RuntimeError:

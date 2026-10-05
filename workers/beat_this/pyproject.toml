@@ -1,0 +1,41 @@
+[project]
+name = "flitzis-beat-this-worker"
+version = "1.0.0"
+requires-python = "==3.12.13"
+dependencies = [
+    "beat-this==1.1.0",
+    "torch==2.8.0+cpu",
+    "torchaudio==2.8.0+cpu",
+    "numpy==2.2.6",
+    "soxr==0.5.0.post1",
+    "einops==0.8.1",
+    "rotary-embedding-torch==0.8.9",
+]
+
+[dependency-groups]
+dev = ["pytest==8.4.2"]
+
+[tool.uv]
+package = false
+environments = ["sys_platform == 'win32' and platform_machine == 'AMD64'"]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchaudio = { index = "pytorch-cpu" }
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+extend = "../../ruff_defaults.toml"
+target-version = "py312"
+
+[tool.ruff.lint.per-file-ignores]
+"worker.py" = ["INP001"]
+"tests/*.py" = ["INP001"]

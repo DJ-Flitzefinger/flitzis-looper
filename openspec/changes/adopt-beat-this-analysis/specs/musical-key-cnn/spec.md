@@ -11,14 +11,14 @@ it SHALL be skipped when the shared input already has that branch's required rat
 branch SHALL NOT consume Beat This's downsampled input, and the beat branch SHALL NOT require
 an intermediate key-input conversion. Shared inputs SHALL carry explicit rate/source identity.
 
-#### Scenario: A 48000-Hz loaded source feeds both branches
+#### Scenario: Mono buffer is shared between pipelines
 - **GIVEN** immutable stereo loaded PCM at 48000 Hz
 - **WHEN** analysis prepares its inputs
 - **THEN** one mono conversion supplies both branches
 - **AND** the key branch derives 44100-Hz mono and the beat branch derives 22050-Hz mono
 - **AND** both retain the same source-time origin without another file decode
 
-#### Scenario: Native key rate does not bypass beat conversion
+#### Scenario: Mono buffer at native 44100 Hz skips resampling
 - **GIVEN** loaded mono PCM at 44100 Hz
 - **WHEN** analysis prepares its inputs
 - **THEN** KeyNet uses that input without rate conversion
@@ -44,13 +44,13 @@ Beat-worker termination SHALL NOT be reported as completed whole-request cancell
 key branch remains active. Whole-request terminal status SHALL require both branches to settle;
 bounded beat-process termination SHALL NOT imply a hard deadline for native key cancellation.
 
-#### Scenario: Both available branches execute concurrently
+#### Scenario: Both pipelines run concurrently
 - **GIVEN** shared mono PCM and an available selected beat worker
 - **WHEN** an analysis request runs
 - **THEN** Rust key detection and the isolated beat job can execute concurrently
 - **AND** result assembly waits for terminal states without blocking the callback or UI
 
-#### Scenario: Result combines successful component outputs
+#### Scenario: Analysis result combines both pipeline outputs
 - **GIVEN** beat and key branches have succeeded for the same source/request
 - **WHEN** the result is assembled
 - **THEN** it contains beat-derived BPM/grid and the musical key string

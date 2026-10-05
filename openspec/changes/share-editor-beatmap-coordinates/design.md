@@ -7,6 +7,16 @@ Render visible musical lines from bounded native queries keyed by map revision, 
 viewport and resolution. Snapping and beat labels use that same evaluator. Python chooses UI
 intent and persists accepted records, not an independent interpolation implementation.
 
+The user confirmed that a variable track needs a current local BPM display (2026-10-05).
+Query local quarter-note slope at the current/retained source playhead from the same native
+map evaluator: source BPM = 60 * dB/ds, with s in seconds. Segment selection at exact anchors
+follows that evaluator's versioned boundary convention. Distinguish source-local BPM, master
+target BPM and an optional track summary. Unsupported/uncertain coverage stays explicit.
+Under future SYNC, source-local tempo can differ from rendered target tempo; label those
+domains instead of implying two conflicting current output tempos. Display cadence/rounding
+is presentation only and never drives the map-based source trajectory. Tests cover segment
+crossings, seeks, wraps, paused playheads and pending versus live map revisions.
+
 The common coordinate is musical beat position, not identical horizontal pixels. In a musical
 view, source position is projected relative to fixed beat lines. Existing source-time waveform
 views may show nonuniform line spacing. Both use the same transform and explicitly identified

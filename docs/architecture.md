@@ -236,13 +236,15 @@ model; see [Key detection](key-detection.md). A key detection failure returns
 `unknown` without discarding the BPM result. Automatic loading and manual
 analysis use the same preprocessing and detection path.
 
-The separate B1a diagnostic boundary exposes `begin_offline_analysis` and
+The separate B1a/B1b diagnostic boundary exposes `begin_offline_analysis` and
 `OfflineAnalysisService`; it does not change that default routing or adopt new
 results into saved grids. Rust pins the immutable loaded source, prepares shared
 mono at its actual rate, exports complete float32-LE PCM and derives KeyNet's
 44100-Hz input directly. Python supervises the optional local beat process and
-publishes one independent-component envelope through loader events. B1b still
-owns the actual 22050-Hz Beat This frontend, environment and weights.
+publishes one independent-component envelope through loader events. The optional
+locked Windows CPU worker derives 22050-Hz input directly with the pinned
+reference frontend. [Explicit setup](beat-this-setup.md) verifies and installs
+its environment and checkpoint; normal analysis never performs acquisition.
 
 One native job per engine and one beat process globally retain their slots
 through cancellation and actual retirement. Native PCM staging is capped at

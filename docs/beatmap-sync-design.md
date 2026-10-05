@@ -1,7 +1,7 @@
 # Beat This migration and independent pad pitch: implementation design
 
-Decision date: 2026-10-05. Status: B1a diagnostic PCM/job boundary implemented;
-real Beat This inference, default cutover and live map/pitch stages remain pending.
+Decision date: 2026-10-05. Status: diagnostic PCM/job boundary and optional B1b
+reference worker implemented; default cutover and live map/pitch stages remain pending.
 This document adopts the user's selected direction: **Beat This! 1.1.0, final0, minimal
 postprocessing** replaces the normal beat/downbeat analyzer after the stated acceptance gates.
 It is no longer an open model shortlist. `small0` is a later explicit footprint option.
@@ -65,8 +65,8 @@ Manual sample-domain anchors and explicit count correction remain available and 
 The B1a diagnostic boundary uses existing loaded immutable PCM and source/request generation,
 without consulting the waveform envelope or another file decoder. Its non-realtime snapshot
 prepares one arithmetic mono source, exports complete float32-LE audio at the actual loaded rate
-and derives the existing key detector's 44,100-Hz input directly. B1b must independently derive
-Beat This's 22,050-Hz input using its pinned frontend; that conversion is not implemented yet.
+and derives the existing key detector's 44,100-Hz input directly. The B1b worker independently
+derives Beat This's 22,050-Hz input using its pinned soxr HQ/log-mel frontend.
 Preserve origin/tail and record preprocessing identity; do not cascade through the other model's
 sample rate or repair unexplained offsets with a fitted constant.
 
@@ -75,9 +75,9 @@ cooperative preparation cancellation, subprocess timeout/reaping and off-thread 
 One native slot per engine and one process globally remain occupied while work is retiring;
 there is no pending queue. The native PCM staging cap is 512 MiB, excluding FFT/CQT/model
 workspace. Small versioned messages describe the full-track file. A real lazy offline worker
-will own model loading/inference in B1b. Version-pin
-its environment separately if the app's Python >=3.14 environment is incompatible. CPU operation
-is required; GPU is optional. No Python inference or PCM export occurs in the audio callback.
+owns model loading/inference. Its locked Python 3.12.13 Windows CPU environment is separate
+from the app's Python >=3.14 environment. CPU FP32 is the reference; GPU is not enabled.
+No Python inference or PCM export occurs in the audio callback.
 Worker count, Torch thread count, queued bytes and retained snapshots need explicit limits.
 
 The bounded termination deadline applies to the isolated beat job. Existing Rust KeyNet/ORT
@@ -93,7 +93,9 @@ automatic/manual analysis, saved grids and manual maps are unchanged.
 
 Acquire `final0` through explicit setup into local model storage, verify actual SHA-256 and
 save a manifest with package/checkpoint/configuration/license/source URL and byte length.
-The author host previously advertised 81,058,141 bytes; this is not a verified checksum.
+The accepted 81,058,141-byte artifact and verified SHA-256 are recorded in
+[worker setup](beat-this-setup.md); [reference evidence](beat-this-reference-evidence.md)
+separates model execution/resource observations from musical-quality acceptance.
 Normal startup/load/analysis never downloads. Fail before upstream loader invocation if the local
 file is absent because upstream accepts names/URLs that can trigger downloads.
 [Upstream loader](https://github.com/CPJKU/beat_this/blob/b95c8ab0c58c2d9fcfd40508ae8dffbc05ac4f5c/beat_this/inference.py).
@@ -227,10 +229,17 @@ changes. Keep generated/private evidence outside the repository.
 | K1: later user feature | Actual per-pad KEY controls, mappings, persistence and output-key display, using already proven k contract. Not implemented by this planning request. | Confirm range/KEYLOCK-off/formant UX, test all B5 transitions through real controls; never reuse metadata-key setter or speed control. |
 | Existing remaining program | Separator replacement/optional inference slice 7, then full Rust-port PLAN slice 8 remain after live acceptance. | Beat analysis native export is a separate parity task. Full application port still needs the user's explicit post-bugfix authorization. |
 
-With B1a validated, the next implementation slice is explicit acquisition and real
-reference inference B1b. Model choice is settled; do not reopen the general survey or let the known
-legacy detector defect become a prerequisite. Acquisition cannot happen incidentally during B1a tests.
+The B1b setup/reference implementation precedes B2's frozen quality/resource acceptance.
+Model choice is settled; do not reopen the general survey or let the known legacy detector
+defect become a prerequisite. Acquisition happens only through explicit setup.
 Later launch tolerance and future KEY UI choices do not block B1-B6 contract/feasibility work.
+
+User clarification (2026-10-05) for B4: show local source BPM at the current/retained pad
+playhead, computed as `60*dB/ds` from the same native evaluator, rather than a static first
+or average BPM. Label master target BPM separately; an optional track summary is additional
+information. Unsupported coverage remains unavailable/uncertain. Future SYNC follows full
+B/S and M continuously, independent of display rounding or refresh cadence. Under SYNC,
+source-local tempo may differ from rendered target tempo; those domains remain explicit.
 
 ## Required joint validation matrix
 
@@ -262,14 +271,14 @@ Freeze expected coordinates and original acoustic gates before running candidate
 
 The active planned changes are `adopt-beat-this-analysis`, `prepare-versioned-source-beatmaps`,
 `share-editor-beatmap-coordinates`, `evaluate-variable-tempo-rendering`, and
-`prepare-independent-pitch-timing`. Only B1a in the analysis change is implemented;
+`prepare-independent-pitch-timing`. B1a/B1b in the analysis change implement the diagnostic path;
 all other implementation tasks remain pending. Later live
 ownership and Quantize/SYNC activation need their own focused deltas after B5 measurements;
 future KEY UI needs its own user-facing delta. Current runtime docs remain accurate until an
 implementation slice changes behavior, at which point that slice updates them too.
 
-Public evidence establishes model/API feasibility, not successful Beat This execution here.
-No Beat This model has been acquired or run and no new live render strategy has been activated.
-B1a supplies the diagnostic offline boundary; the normal analyzer and playback behavior remain
+Public source evidence is supplemented by [local reference checks](beat-this-reference-evidence.md).
+No new live render strategy has been activated. B1a/B1b supply the diagnostic offline boundary
+and optional real worker; the normal analyzer and playback behavior remain
 unchanged. The selected design is deliberately testable before any claim of perfect
 musical grids or audibly sample-exact independent transposition is made.

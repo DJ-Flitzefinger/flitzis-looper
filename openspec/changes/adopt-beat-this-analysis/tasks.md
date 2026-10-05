@@ -26,16 +26,24 @@
 
 ## B1b: Explicit setup and real reference inference
 
-- [ ] Implement separately invoked worker setup and locked compatible runtime; pin Beat This
+- [x] Implement separately invoked worker setup and locked compatible runtime; pin Beat This
   1.1.0, `final0`, minimal postprocessor, FP32 front end/configuration and full provenance.
-- [ ] Acquire the selected model only through the explicit setup operation; establish the
+- [x] Acquire the selected model only through the explicit setup operation; establish the
   accepted manifest/checksum, verify SHA-256 and install atomically. Block inference downloads.
-- [ ] Derive 22.05-kHz Beat This and 44.1-kHz KeyNet inputs from shared mono, preserving origin
+- [x] Derive 22.05-kHz Beat This and 44.1-kHz KeyNet inputs from shared mono, preserving origin
   and tails. Retain KeyNet computation and error behavior; keep runtime provenance per branch.
-- [ ] Test offline CPU operation, missing worker/model, corrupted model, wrong hash, cancellation,
-  worker crash, stale response, cache restore without optional runtime and independent outcomes.
-- [ ] Measure full-track cold/warm time, installed/model/cache size, RAM/VRAM, cancellation and
-  concurrent playback impact with real selected-model inference and record raw results.
+- [x] Test offline CPU operation, missing worker/model, corrupted model, wrong hash, cancellation,
+  worker crash, stale response and independent outcomes. Existing legacy restore remains covered;
+  persisted new-analysis cache restore belongs to B2, since diagnostics are not adopted here.
+- [x] Measure full-track first/repeat fresh-process time, installed/model footprint, RAM,
+  CPU-only VRAM policy, cancellation and concurrent playback telemetry with real inference.
+  Cold-disk cache, shared uv cache/base Python size and callback/acoustic acceptance are not
+  claimed. See docs/beat-this-reference-evidence.md for raw-evidence paths and exact limits.
+- [x] Contain Windows launcher descendants before execution; retire process handles, output
+  readers and PCM after cancellation/timeout/crash, including kernel exit-signaling delay.
+- [x] Pass full project validation: 450 Rust tests, 904 application Python tests, 35 worker
+  tests including real short/chunk-boundary parity, debug/release builds, lint/types/format
+  and official strict validation. Default routing and live map/pitch activation remain off.
 
 ## B2: Quality acceptance and separate default cutover
 

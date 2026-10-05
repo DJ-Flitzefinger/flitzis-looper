@@ -23,20 +23,23 @@ Major emphasis SHALL remain every four bars for one-bar minor steps, every bar f
 minor steps, and every beat for finer steps. Extreme zoom SHALL support 1/64-note lines when
 the readability constraint permits.
 
-#### Scenario: Scalar default zoom retains bar emphasis
+#### Scenario: Default zoom shows bars only with stronger 4-bar lines
 - **GIVEN** scalar mode with valid BPM and one-beat lines closer than 12 pixels
 - **AND** one-bar lines are at least 12 pixels apart
 - **WHEN** the grid is rendered
 - **THEN** one-bar minor lines and stronger four-bar lines are shown without a second grid
 
-#### Scenario: Scalar medium and close zoom retain subdivision selection
+#### Scenario: Medium zoom shows beats with stronger bar lines
 - **GIVEN** scalar mode and valid BPM
 - **WHEN** one beat is the finest readable subdivision
 - **THEN** beats are minor lines and bars are major lines
+
+#### Scenario: Close zoom shows 1/16-note lines with stronger beat lines
+- **GIVEN** scalar mode and valid BPM
 - **WHEN** one-quarter beat is the finest readable subdivision
 - **THEN** 1/16-note lines are minor and beats are major
 
-#### Scenario: Extreme zoom shows the finest grid
+#### Scenario: Extreme zoom shows 1/64-note lines
 - **GIVEN** supported timing coverage and readable 1/16-beat projected spacing
 - **WHEN** the grid is rendered
 - **THEN** 1/64-note minor lines are shown using that mode's source coordinates
@@ -59,18 +62,63 @@ Scalar offset/BPM changes and restore SHALL retain bounded native scalar publica
 speed, BPMLOCK, KEYLOCK, quantization and other-pad playback SHALL NOT move source grid lines or
 persisted markers. Accepting a new variable-map revision SHALL NOT by itself move markers.
 
+#### Scenario: Finest loop editor line spacing matches minimum quantization
+- **GIVEN** supported scalar or accepted variable-map timing coverage
+- **AND** the finest grid is readable at the current zoom
+- **WHEN** the grid is rendered
+- **THEN** adjacent finest lines differ by one sixteenth of a quarter-note beat
+- **AND** trigger quantization uses the same musical subdivision for its `1/64` setting
+- **AND** shared units do not claim that variable-map playback has been activated
+
+#### Scenario: Grid offset updates Rust pad timing metadata
+- **GIVEN** a loaded pad in scalar mode with valid effective BPM
+- **WHEN** the performer changes its Grid Offset
+- **THEN** source grid lines shift by that loaded-sample offset
+- **AND** the identical finite signed origin is published as bounded Rust pad timing metadata
+
 #### Scenario: Negative scalar origin survives publication and restore
 - **GIVEN** a legacy project with zero onset, -4800 sample offset at 48 kHz and manual BPM
 - **WHEN** its state is published or restored
 - **THEN** scalar native origin is -0.1 seconds and manual BPM is preserved
 - **AND** persisted markers are unchanged; missing legacy offset defaults to zero
 
-#### Scenario: Global controls preserve both editor modes
+#### Scenario: Other pad playback does not move the editor grid
 - **GIVEN** an accepted scalar or variable source grid and saved loop markers
-- **WHEN** global controls or another pad's playback change
+- **WHEN** another pad starts, stops, pauses, retriggers or unloads
+- **THEN** the edited pad's source grid and markers remain at the same source positions
+
+#### Scenario: Quantize toggle does not move the editor grid
+- **GIVEN** an accepted scalar or variable source grid and saved loop markers
+- **WHEN** quantization is enabled, disabled or changed between supported subdivisions
+- **OR** global speed, BPMLOCK or KEYLOCK changes
 - **THEN** that source grid and its markers remain at the same source positions
 
 ## ADDED Requirements
+
+### Requirement: Current Pad Tempo Is Distinct From Master And Track Summary
+The system SHALL display the local source tempo at the current pad playhead in accepted
+variable-map mode, derived from the same Rust evaluator and map revision as the grid.
+It SHALL distinguish this source-tempo value from master target BPM and any whole-track BPM
+summary. A summary or first detected BPM SHALL NOT be presented as current local tempo.
+
+The local source tempo SHALL follow the map's quarter-note slope at the reported source
+position, including after seeks and loop wraps. Missing or uncertain coverage SHALL be
+identified explicitly instead of silently substituting a track summary. A stopped pad SHALL
+use its retained playhead position. Display rounding or refresh cadence SHALL NOT drive SYNC;
+future SYNC SHALL use the complete map and master timeline independently of UI updates.
+
+#### Scenario: A variable track reaches a faster segment
+- **GIVEN** an accepted map whose local source tempo changes from 100 to 110 BPM
+- **AND** master target tempo is 120 BPM
+- **WHEN** the pad playhead crosses into the faster segment
+- **THEN** local source BPM reflects 110 rather than the initial or whole-track BPM
+- **AND** master target BPM remains separately identifiable as 120
+- **AND** the display does not claim the source tempo equals the future synchronized output tempo
+
+#### Scenario: Playhead enters unsupported map coverage
+- **WHEN** the current source position has no supported local tempo estimate
+- **THEN** the local tempo display reports unavailable or uncertain coverage
+- **AND** it does not label a saved summary as the current tempo
 
 ### Requirement: Accepted Variable Maps Use One Editor Coordinate Evaluator
 The system SHALL derive visible beat coordinates and snap positions for an explicitly accepted

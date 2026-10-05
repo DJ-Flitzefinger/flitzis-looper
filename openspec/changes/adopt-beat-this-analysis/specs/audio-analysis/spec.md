@@ -21,7 +21,7 @@ model/preprocessing identity and distinguish raw predictions from accepted/manua
 It SHALL NOT claim sample-accurate musical timing from the model's 20-ms prediction grid.
 An unavailable selected backend SHALL NOT silently invoke qm-dsp or another checkpoint.
 
-#### Scenario: Selected analysis produces independent beat and key results
+#### Scenario: Analysis produces BPM, key, and beat grid
 - **GIVEN** valid loaded PCM and the verified selected worker/model are available
 - **WHEN** new analysis runs after the default cutover
 - **THEN** shared mono feeds the 22050-Hz Beat This and 44100-Hz Rust KeyNet branches
@@ -29,13 +29,13 @@ An unavailable selected backend SHALL NOT silently invoke qm-dsp or another chec
 - **AND** each component records its own status and provenance
 - **AND** neither pipeline re-decodes the file
 
-#### Scenario: Invalid shared audio retains previous analysis
+#### Scenario: Analysis failure is reported
 - **GIVEN** a pad has previously stored analysis
 - **WHEN** empty or invalid shared audio prevents analysis
 - **THEN** the request reports an error
 - **AND** the previously stored result remains unchanged unless explicitly cleared
 
-#### Scenario: Key failure does not discard valid beats
+#### Scenario: Key detection failure does not block BPM results
 - **GIVEN** the beat branch succeeds
 - **WHEN** key detection fails or has insufficient audio
 - **THEN** the beat result remains available
@@ -63,6 +63,13 @@ automatic reanalysis. Valid saved results SHALL remain usable without optional i
 runtime/model files; legacy results SHALL retain their legacy identity and precision. Manual
 reanalysis SHALL create a new raw result without silently overwriting an accepted manual map.
 
+#### Scenario: Automatic analysis runs on load
+- **GIVEN** a valid sample has decoded successfully after the default cutover
+- **WHEN** normal loading requests analysis
+- **THEN** the same selected-backend job path analyzes its immutable loaded PCM
+- **AND** beat and key components settle independently before analysis is complete
+- **AND** loading or playing valid audio does not require installing optional beat support
+
 #### Scenario: Automatic request settles without optional model
 - **GIVEN** a valid sample decodes but the selected beat model is absent
 - **WHEN** normal loading requests analysis
@@ -70,14 +77,14 @@ reanalysis SHALL create a new raw result without silently overwriting an accepte
 - **AND** the analysis request settles with explicit beat-unavailable status
 - **AND** no setup/download or silent legacy-detector fallback occurs
 
-#### Scenario: Stored results restore without model installation
+#### Scenario: Analysis results are restored from project state
 - **GIVEN** a project contains analysis for its matching sample source
 - **AND** optional Beat This runtime/model files are absent
 - **WHEN** the project is restored
 - **THEN** stored beat/key results and manual intent are restored without inference
 - **AND** new-model provenance is not invented for legacy analysis
 
-#### Scenario: Manual analysis preserves playback and manual map
+#### Scenario: Manual analysis re-runs detection
 - **GIVEN** a pad is loaded and has an accepted manually corrected map
 - **WHEN** the user triggers analysis
 - **THEN** an analysis-only job reuses immutable loaded PCM
@@ -93,13 +100,13 @@ reanalysis SHALL create a new raw result without silently overwriting an accepte
 ## ADDED Requirements
 
 ### Requirement: Diagnostic Boundary Precedes Model And Default Activation
-The system SHALL expose the B1a loaded-PCM and worker boundary only through explicitly invoked
-diagnostic analysis until real-model and default-cutover gates are satisfied.
+The system SHALL expose the loaded-PCM and real local worker boundary only through explicitly
+invoked diagnostic analysis until the separate default-cutover acceptance gate is satisfied.
 
 The diagnostic boundary SHALL preserve normal automatic/manual analysis routing, project
 persistence, manual grids and playback buffers. It SHALL export complete mono float32-LE PCM
-at the loaded sample rate with origin zero, derive key input directly at 44100 Hz and leave
-the actual Beat This 22050-Hz frontend to the real-reference stage. An unconfigured worker
+at the loaded sample rate with origin zero, derive key input directly at 44100 Hz and derive
+Beat This input independently at 22050 Hz using its pinned reference frontend. An unconfigured worker
 SHALL report unavailable without acquiring dependencies or weights. A diagnostic completion
 envelope SHALL NOT be adopted as accepted project analysis or relabel legacy saved results.
 
@@ -116,6 +123,15 @@ envelope SHALL NOT be adopted as accepted project analysis or relabel legacy sav
 - **THEN** the envelope remains diagnostic data
 - **AND** no model acquisition, default routing switch or accepted-map adoption occurs
 
+#### Scenario: Real worker preserves reference preprocessing and source extent
+- **GIVEN** complete shared mono at its actual loaded rate and a verified local worker
+- **WHEN** diagnostic beat inference runs
+- **THEN** direct full-buffer soxr HQ conversion and the pinned centered log-mel frontend
+  preserve the reference time-zero and rounded resampled tail without fitted offsets or trimming
+- **AND** all model logits are retained within declared size limits
+- **AND** detected positions at or beyond the exclusive original source end are omitted
+- **AND** clips too short for reference reflect padding fail explicitly without alternate preprocessing
+
 ### Requirement: Beat Analysis Jobs Preserve Identity And Independent Outcomes
 The system SHALL validate request, source, generation and model identities before atomically
 publishing component outcomes through the existing background event path. It SHALL distinguish
@@ -125,6 +141,11 @@ The system SHALL bound pending jobs, PCM transfer/output sizes and worker resour
 oversize work explicitly; and support cancellation/timeout without blocking UI or callback.
 Stale results SHALL NOT overwrite a replacement source or restored/manual state. Temporary PCM,
 worker shutdown and final resource destruction SHALL be handled outside the callback.
+
+Worker ownership SHALL include interpreter-launcher descendants. On Windows, the process tree
+SHALL be contained before worker code starts. Cancellation, timeout, failure and normal launcher
+exit SHALL retire every remaining owned descendant before the beat process slot or borrowed PCM
+is released. Launcher exit or a closed stdout pipe alone SHALL NOT prove worker retirement.
 
 #### Scenario: Unresponsive cancelled beat work is retired within a bounded lifecycle
 - **GIVEN** a cancelled beat job does not acknowledge cooperative cancellation
@@ -141,6 +162,13 @@ worker shutdown and final resource destruction SHALL be handled outside the call
 - **AND** the whole request is not reported terminal until both branches actually settle
 - **AND** bounded key slots and retained-byte limits apply backpressure to subsequent work
 - **AND** stale key output cannot publish and the UI/audio callback does not wait for that call
+
+#### Scenario: Windows interpreter launcher owns an inference child
+- **GIVEN** the optional environment's launcher starts inference in a child process
+- **WHEN** analysis is cancelled, times out or the launcher exits
+- **THEN** the supervisor terminates any remaining worker-owned descendants
+- **AND** process-tree exit is confirmed before releasing beat admission and borrowed PCM
+- **AND** unrelated application processes remain outside that ownership
 
 #### Scenario: Cancelled worker completion cannot overwrite a new source
 - **GIVEN** a beat job is cancelled because its pad was unloaded or replaced

@@ -16,7 +16,7 @@ Existing half-bar granularity SHALL remain available. Accepting/editing a map re
 SHALL preserve already stored source-time markers; variable-map recomputation SHALL require
 explicit loop start/bar-count/reset/resnap intent. This SHALL NOT activate variable-map audio progression.
 
-#### Scenario: Scalar auto-loop retains its duration
+#### Scenario: Auto-loop computes loop end from BPM
 - **GIVEN** scalar mode at 120 BPM with start 10 seconds
 - **WHEN** an auto-loop operation requests four bars
 - **THEN** its end is 18 seconds subject to available source duration
@@ -27,8 +27,13 @@ explicit loop start/bar-count/reset/resnap intent. This SHALL NOT activate varia
 - **THEN** the end is the loaded-frame-quantized position corresponding to 19.2 seconds
 - **AND** average BPM does not determine the result
 
+#### Scenario: Auto-loop is unavailable without BPM
+- **GIVEN** scalar mode without valid manual or analysis BPM
+- **WHEN** auto-loop controls are evaluated
+- **THEN** musical duration is unavailable and saved source markers remain intact
+
 #### Scenario: Unsupported coverage does not invent a musical duration
-- **GIVEN** missing scalar BPM or insufficient variable-map coverage for the requested interval
+- **GIVEN** insufficient variable-map coverage for the requested interval
 - **WHEN** auto-loop controls are evaluated
 - **THEN** the operation is indicated as unavailable and saved source markers remain intact
 
@@ -50,11 +55,17 @@ no musical snap SHALL be applied and the existing sample-accurate marker contrac
 Explicit marker changes SHALL retain immediate physical-loop publication; accepting a new map
 alone SHALL NOT resnap or republish a moved region.
 
-#### Scenario: Scalar sample-accurate snapping is preserved
+#### Scenario: Auto-loop enabled loop start is exactly sample-accurate on 1/64 grid
 - **GIVEN** auto-loop, 120 BPM, origin 10 seconds and loaded rate 48000 Hz
-- **WHEN** start is set near 10.031 seconds and end near 10.062 seconds
-- **THEN** snapped positions are 10.03125 and 10.0625 seconds respectively
-- **AND** their indices are 481500 and 483000
+- **WHEN** start is set near 10.031 seconds
+- **THEN** its snapped position is 10.03125 seconds
+- **AND** its sample index is 481500
+
+#### Scenario: Auto-loop enabled loop end is exactly sample-accurate on 1/64 grid
+- **GIVEN** auto-loop, 120 BPM, origin 10 seconds and loaded rate 48000 Hz
+- **WHEN** end is set near 10.062 seconds
+- **THEN** its snapped position is 10.0625 seconds
+- **AND** its sample index is 483000
 
 #### Scenario: Variable map snap agrees with the displayed point
 - **GIVEN** supported variable-map coverage and an auto-loop marker edit
@@ -62,7 +73,7 @@ alone SHALL NOT resnap or republish a moved region.
 - **THEN** the stored loaded-frame position equals that displayed point's rounded source position
 - **AND** both operations use one map revision
 
-#### Scenario: Manual loop editing remains unsnapped
+#### Scenario: Auto-loop disabled does not snap
 - **GIVEN** auto-loop is disabled
 - **WHEN** a marker is edited
 - **THEN** the existing physical sample-accurate operation is used without musical snapping

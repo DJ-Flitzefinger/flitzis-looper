@@ -9,6 +9,8 @@ snapping and diagnostic phase. Otherwise a correct analysis can still disagree w
 - Use the accepted map revision through one Rust evaluator for variable-map editor coordinates.
 - Keep scalar mode and existing projects stable; make map acceptance and corrections explicit.
 - Separate alignment correction, individual beat edits and creative playback phase.
+- Show current local source BPM from the map at the pad playhead, distinct from master
+  target BPM and an optional whole-track summary (user clarification, 2026-10-05).
 
 Status: proposed only; depends on `prepare-versioned-source-beatmaps` and accepted map-quality
 evidence. Rendering/SYNC activation remains a later change. See the research report in docs.

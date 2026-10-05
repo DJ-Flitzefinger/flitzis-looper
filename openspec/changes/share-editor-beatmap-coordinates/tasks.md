@@ -7,6 +7,8 @@
 
 - [ ] Expose bounded visible-range native projections keyed by map/rate/viewport identity.
 - [ ] Route display and snap operations through that evaluator via existing UiContext/controllers.
+- [ ] Display current local source BPM at the retained/live playhead through that evaluator;
+  distinguish master target and optional track summary, including seeks, wraps and uncertain coverage.
 - [ ] Compute explicit map-mode auto-loop operations in beat space while preserving stored markers on map edits.
 - [ ] Implement distinct global alignment and local beat-correction actions with undoable revisions.
 - [ ] Add sample-domain anchor edits, separate count/downbeat repair and explicit uncertainty; evaluate optional onset refinement separately from raw Beat This.

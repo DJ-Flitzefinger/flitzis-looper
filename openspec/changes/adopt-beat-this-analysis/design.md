@@ -1,6 +1,6 @@
 ## Status and selected target
 
-B1a's diagnostic boundary is implemented and validated. Model inference remains B1b work.
+B1a's diagnostic boundary and B1b's optional local reference worker are implemented.
 The target for future new analyses is `beat-this==1.1.0`, checkpoint `final0`,
 minimal postprocessing (`dbn=False`). `small0` may be evaluated as an explicitly selected
 alternative; it is never a silent fallback. A failed gate postpones cutover with recorded
@@ -11,8 +11,9 @@ The new `begin_offline_analysis`/`OfflineAnalysisService` boundary pins immutabl
 `SampleBuffer.samples: Arc<[f32]>` with actual rate and source/request generation, prepares shared
 mono and exports complete float32-LE audio without another decode. It leaves existing automatic
 and manual `analyze_sample` routing intact. JSON diagnostic envelopes are not adopted into saved
-analysis or manual grids. There is no B1a inference script, accepted final0 checksum or weight
-acquisition. The worker's 22050-Hz frontend and real model execution remain B1b work.
+analysis or manual grids. B1b adds explicit setup, an accepted final0 checksum, a separate
+locked Windows CPU environment and the pinned 22050-Hz reference frontend. See
+[setup](../../../docs/beat-this-setup.md) and [evidence](../../../docs/beat-this-reference-evidence.md).
 
 ## Input domains and preprocessing
 
@@ -22,7 +23,7 @@ Contracts implemented by the B1a records, plus explicitly deferred model/map lay
 | --- | --- |
 | Loaded PCM snapshot | Interleaved f32, loaded rate u32, channel/frame counts, source identity and generation, pad/request ID. This is the loaded playback-buffer domain, not compressed-file samples or output-device position. |
 | Shared mono input | One full-track mono conversion from that immutable snapshot; same time-zero and duration, with explicit channel-mix rule. No silence trim or per-chunk time reset. |
-| Beat worker input | Complete loaded-rate mono PCM plus metadata in `MonoPcmInput`/`BeatWorkerRequest`. B1b must derive 22,050-Hz mono directly using the pinned frontend/resampler, preserving origin/tail and recording padding/delay conventions. |
+| Beat worker input | Complete loaded-rate mono PCM plus metadata in `MonoPcmInput`/`BeatWorkerRequest`. B1b derives 22,050-Hz mono directly with pinned soxr HQ and centered log-mel preprocessing, preserving reference origin/rounded tail. |
 | Key input | Derive 44,100-Hz mono directly from shared mono for the existing Rust CQT/KeyNet path; do not feed the Beat This downsampled signal into KeyNet. |
 | Raw predictions | Beat/downbeat logits and detected f64 seconds with model/configuration/preprocessing identity. Nominal model frame k means k*441/22050 seconds; verify origin against preprocessing fixtures. |
 | Accepted map | Separate reviewed anchors, beat units/counts, coverage and corrections under the versioned-map change. Loaded-frame positions are derived from seconds times the active loaded rate. |
@@ -115,10 +116,11 @@ accepted manual maps. Map adoption/edit migration belongs to the versioned-map/e
 
 Setup is an explicit operation, separate from startup, loading, restore and inference. Pin the
 package/environment lock, checkpoint `final0`, postprocessor/configuration and front-end
-versions. Author-host HEAD advertised 81,058,141 bytes on 2026-10-05; no checkpoint was fetched
-and no SHA-256 was verified in this planning step. The setup implementation must establish an
-accepted artifact manifest, calculate and verify its exact SHA-256, retain origin/license
-evidence and install atomically. Never treat length or an HTTP ETag as the content hash.
+versions. Explicit author-host acquisition on 2026-10-05 produced 81,058,141 bytes, independently
+hashed as `8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331`.
+The accepted manifest retains origin/license evidence. Setup stages a verified runtime/model
+and atomically selects it without removing earlier installations. This is an observed artifact
+digest, not an author-signed checksum. Neither length nor HTTP ETag establishes integrity.
 
 Normal analysis requires a verified local file and rejects missing/corrupt/mismatched weights
 before calling upstream loading code, whose path/shortname fallback downloads. Do not allow
@@ -175,6 +177,6 @@ ordering in [selected design](../../../docs/beatmap-sync-design.md).
 - [22.05-kHz front end](https://github.com/CPJKU/beat_this/blob/b95c8ab0c58c2d9fcfd40508ae8dffbc05ac4f5c/beat_this/preprocessing.py)
 - [Minimal postprocessor](https://github.com/CPJKU/beat_this/blob/b95c8ab0c58c2d9fcfd40508ae8dffbc05ac4f5c/beat_this/model/postprocessor.py)
 
-These are inspected source contracts, not executed Windows/model acceptance. Package version
-and inspected source revision must be reconciled in the implementation lock before claiming
-that a particular installed artifact matches this source inspection.
+The [B1b report](../../../docs/beat-this-reference-evidence.md) records installed-source
+reconciliation, executed Windows/reference checks and remaining quality/resource limits.
+Source inspection and model parity do not certify musical accuracy or live synchronization.
