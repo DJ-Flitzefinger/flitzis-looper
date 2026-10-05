@@ -44,6 +44,7 @@ mod constants;
 mod dsp;
 mod errors;
 mod input_mapping;
+mod key_lock_preparation;
 mod mixer;
 mod progress;
 mod rubberband_backend;

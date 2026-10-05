@@ -15,6 +15,9 @@ use crate::audio_engine::constants::{
     PAD_GAIN_DB_MIN, PAD_GAIN_SMOOTH_MS, SPEED_MAX, SPEED_MIN, VOLUME_MAX, VOLUME_MIN,
 };
 use crate::audio_engine::dsp::{DspNodeSlot, DspParameterId, DspParameterSlot, PerPadDspChain};
+use crate::audio_engine::key_lock_preparation::{
+    KeyLockPreparationError, KeyLockPreparationWorker, create_key_lock_preparation,
+};
 use crate::audio_engine::source_grid::SourceGrid;
 use crate::audio_engine::stretch_processor::DEFAULT_BLOCK_SAMPLES;
 use crate::audio_engine::voice_slot::{
@@ -603,6 +606,8 @@ pub struct RtMixer {
 
     /// Active voices with MAX_VOICES slots.
     pub voices: [VoiceSlot; MAX_VOICES],
+    // Dropped after voices/lanes at stream teardown, outside callback rendering.
+    _key_lock_preparation_worker: KeyLockPreparationWorker,
 }
 
 impl RtMixer {
@@ -615,14 +620,26 @@ impl RtMixer {
     /// # Returns
     ///
     /// A new `RtMixer` instance with empty sample bank and no active voices.
+    #[cfg(test)]
     pub fn new(channels: usize, sample_rate_hz: f32) -> Self {
+        Self::try_new(channels, sample_rate_hz).expect("failed to prepare test mixer")
+    }
+
+    pub(crate) fn try_new(
+        channels: usize,
+        sample_rate_hz: f32,
+    ) -> Result<Self, KeyLockPreparationError> {
         let sample_rate_hz = if sample_rate_hz.is_finite() && sample_rate_hz > 0.0 {
             sample_rate_hz
         } else {
             44_100.0
         };
 
-        Self {
+        let preparation_rate = sample_rate_hz.round().clamp(8_000.0, u32::MAX as f32) as u32;
+        let (lanes, worker) = create_key_lock_preparation(channels, preparation_rate, MAX_VOICES)?;
+        let mut lanes = lanes.into_iter();
+
+        Ok(Self {
             channels,
             sample_rate_hz,
             volume: VOLUME_MAX,
@@ -647,8 +664,14 @@ impl RtMixer {
             stem_mix_source_version_hash: std::array::from_fn(|_| 0),
             stem_enabled_mask: std::array::from_fn(|_| STEM_COMPONENT_MASK),
             stem_transitions: std::array::from_fn(|_| StemTransition::default()),
-            voices: std::array::from_fn(|_| VoiceSlot::with_sample_rate(channels, sample_rate_hz)),
-        }
+            voices: std::array::from_fn(|_| {
+                VoiceSlot::with_preparation_lane(
+                    channels,
+                    lanes.next().expect("one lane per voice"),
+                )
+            }),
+            _key_lock_preparation_worker: worker,
+        })
     }
 
     /// Loads a sample into the sample bank at the specified slot.
@@ -806,19 +829,10 @@ impl RtMixer {
         }
 
         if self.sample_is_active(id) {
-            self.reset_voice_stretch_for_sample(id);
             self.stem_transitions[id] =
                 StemTransition::start(previous, STEM_TRANSITION_RAMP_FRAMES);
         } else {
             self.stem_transitions[id].clear();
-        }
-    }
-
-    fn reset_voice_stretch_for_sample(&mut self, id: usize) {
-        for voice in &mut self.voices {
-            if voice.active && voice.sample_id == id {
-                voice.stretch.reset();
-            }
         }
     }
 
@@ -2479,6 +2493,36 @@ mod tests {
         assert!(mixer.play_sample(0, 1.0));
         let reload_output = render_chunks(&mut mixer, 1, fallback_frames);
         assert!(reload_output.iter().all(|sample| sample.abs() < 1.0e-6));
+    }
+
+    #[test]
+    fn stem_selection_and_pause_resume_retain_warm_key_lock_history() {
+        let mut mixer = RtMixer::new(1, 48_000.0);
+        mixer.load_sample(0, create_sine_sample(48_000.0, 96_000, 440.0));
+        assert!(mixer.publish_prepared_stems(0, create_test_prepared_stems(1, 48_000, 96_000)));
+        mixer.set_speed(2.0);
+        mixer.set_key_lock(true);
+        assert!(mixer.play_sample(0, 1.0));
+        let warm = render_chunks(&mut mixer, 24, 512);
+        assert!(warm.iter().any(|sample| sample.abs() > 0.05));
+
+        let before_pause = active_voice_frame(&mixer, 0);
+        mixer.pause_sample(0);
+        assert!(
+            render_chunks(&mut mixer, 2, 512)
+                .iter()
+                .all(|sample| *sample == 0.0)
+        );
+        assert_eq!(active_voice_frame(&mixer, 0), before_pause);
+        mixer.resume_sample(0);
+        let resumed = render_chunks(&mut mixer, 1, 512);
+        assert!(resumed.iter().any(|sample| sample.abs() > 0.05));
+
+        let before_switch = active_voice_frame(&mixer, 0).unwrap();
+        assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
+        let switched = render_chunks(&mut mixer, 1, 512);
+        assert!(switched.iter().any(|sample| sample.abs() > 0.05));
+        assert_eq!(active_voice_frame(&mixer, 0), Some(before_switch + 1024));
     }
 
     #[test]

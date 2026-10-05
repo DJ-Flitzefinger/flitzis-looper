@@ -1003,7 +1003,7 @@ pub fn create_audio_stream(
     // Create ring buffer for outgoing messages (Rust->Python)
     let (mut producer_out, consumer_out) = RingBuffer::new(1024);
 
-    let mut mixer = RtMixer::new(channels as usize, sample_rate_hz as f32);
+    let mut mixer = RtMixer::try_new(channels as usize, sample_rate_hz as f32)?;
     let mut transport = TransportTimeline::new(sample_rate_hz);
     let mut scheduler = TransportScheduler::new();
     let mut trigger_quantization = TriggerQuantization::Immediate;

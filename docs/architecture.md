@@ -81,6 +81,7 @@ rust/crates/looper/src/
     |-- constants.rs               # banks, grid size, slot count, ranges
     |-- dsp.rs                     # per-pad DSP chain and DJ isolator node
     |-- input_mapping.rs           # Rust MIDI capture outside callback
+    |-- key_lock_preparation.rs    # warmed native-state ownership lanes and worker
     |-- mixer.rs                   # RtMixer, voices, loops, stems, gain, DSP
     |-- scheduler.rs               # fixed-capacity output-frame scheduler
     |-- source_grid.rs             # signed source beat/bar and loop-cycle mapping
@@ -345,14 +346,31 @@ before Key Lock processing. Full-mix and prepared-stem playback therefore feed
 the same source-frame sequence into Rubber Band, Gain/Trim, DSP, metering, and
 telemetry.
 
-Rubber Band handles, block buffers, input/output FIFOs, and channel staging
-arrays are allocated with each voice slot before callback rendering and reused.
-The callback never constructs handles, discovers libraries, resizes these
-buffers, or waits for shifted output. If a fixed-size Rubber Band block is not
-available for part of a callback block, the processor fills that missing output
-with silence and continues with bounded work. Playhead telemetry remains
-source-frame based; Rubber Band output latency does not shift loop ownership or
-transport scheduling.
+`key_lock_preparation.rs` constructs two unique warmed native handles per voice
+before stream rendering: 64 handles for 32 voices, with one shared preparation
+worker. On the measured Windows system, cold stereo pool setup took 151.35 ms
+at 48 kHz with 146.67 MiB additional private memory, and 270.09 ms at 96 kHz
+with 230.72 MiB additional private memory. These process deltas belong to
+startup/resource profiling, not the callback budget. Native reset and cold
+pitch setup allocate inside Rubber Band 4.0.0, so only setup/worker preparation
+calls them. Start/retrigger, stop, seek, and leaving wet processing clear adapter
+storage and mark used native state dirty.
+The callback exchanges it for a warmed reserve only when its bounded return
+lane has capacity. The worker resets and warms returned state; the callback
+never waits, constructs or destroys native handles, or resizes buffers. Wet
+segments use silence while a reserve is unavailable; dry varispeed remains
+reactive. Pause/resume retain native state. Stem mode/mask source crossfades
+retain native history.
+
+Wet activation gives the adapter a fixed `block_size - 1` output lead: 511
+frames for the 512-frame backend, independent of callback partitions. This lead
+and Rubber Band signal delay are still uncompensated. Native API delay is a
+nominal initial alignment value; warmed/dynamic state and transient peaks need
+independent measurement. Source telemetry, loop markers, and the shared clock
+remain unchanged. Source pre-roll, a separate feed-ahead cursor, and click-safe
+wet/bypass transitions, including ratio 1.0 and mode toggles, remain the next
+audible-alignment stage. See [Key Lock backend](key-lock-backend.md) for the
+pinned allocation audit, offline baseline, and measurement limits.
 
 Project persistence stores global Key Lock control intent and per-pad Key Lock
 booleans for loaded-pad intent, with unloaded pads saved and restored as

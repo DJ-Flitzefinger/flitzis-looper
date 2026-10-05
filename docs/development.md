@@ -146,6 +146,40 @@ Observed vcpkg runtime DLLs for the current branch are `rubberband-3.dll`,
 `sleefdft.dll`, `sleef.dll`, and `samplerate.dll`. Packaging scripts may copy
 those DLLs next to the built native extension instead of requiring `PATH`.
 
+### Offline Key Lock Measurement
+
+The standalone `key_lock_latency_probe` example imports the production backend,
+processor, and preparation pool. It reports construction/reset/warming costs,
+Rust allocations, nominal native delay, and synthetic impulse response across
+44.1/48/96 kHz, ratios 0.5/0.75/1/1.5/2, and fixed/irregular callback partitions.
+The current engine prepares 64 unique handles for 32 voices and adds a fixed
+511-frame wet adapter lead. Native reset/cold pitch work stays off the callback;
+reserve starvation produces bounded wet silence, while dry processing remains
+reactive. See [Key Lock backend](key-lock-backend.md) for the allocation audit
+and the pending source pre-roll and mode-transition work.
+
+From the repository root, with the documented runtime override set to the
+actual Rubber Band DLL directory, run:
+
+```powershell
+$env:RUBBERBAND_DLL_DIR = "$env:VCPKG_ROOT\installed\x64-windows\bin"
+$env:PATH = "$env:RUBBERBAND_DLL_DIR;$env:PATH"
+uv run cargo run --release --locked --manifest-path rust/Cargo.toml -p flitzis-looper --example key_lock_latency_probe -- 24 |
+    Set-Content -Encoding utf8 ..\scratch\slice3-key-lock-latency.csv
+uv run cargo run --release --locked --manifest-path rust/Cargo.toml -p flitzis-looper --example key_lock_latency_probe -- pool 48000 32 |
+    Set-Content -Encoding utf8 ..\scratch\slice3-key-lock-pool.csv
+```
+
+Use the applicable triplet or an explicit installed directory when `VCPKG_ROOT`
+is unset. Keep generated measurements in workspace `scratch/` or `exports/`.
+The first command accepts a preparation repetition count; the second measures
+the bounded pool at a chosen sample rate and voice count. It starts no audio
+device. Calling-thread Rust counters exclude worker and C/C++/FFT allocations,
+API delay does not equal every transient peak, and offline timings do not prove
+live deadlines or hardware alignment. Record startup and settled response
+separately; the local baseline and final prepared results are recorded in
+`scratch/slice3-key-lock-latency-findings.md`.
+
 ### Nuitka Installer Direction
 
 The later Windows installer should be built so non-technical users do not need

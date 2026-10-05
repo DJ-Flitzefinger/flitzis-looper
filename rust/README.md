@@ -31,6 +31,7 @@ rust/
     |           |-- constants.rs
     |           |-- dsp.rs
     |           |-- input_mapping.rs
+    |           |-- key_lock_preparation.rs
     |           |-- mixer.rs
     |           |-- scheduler.rs
     |           |-- source_grid.rs
@@ -38,6 +39,7 @@ rust/
     |           |-- transport.rs
     |           |-- voice_slot.rs
     |           |-- stretch_processor.rs
+    |           |-- rubberband_backend.rs
     |           |-- sample_loader.rs
     |           |-- stem_cache.rs
     |           |-- progress.rs
@@ -109,6 +111,20 @@ is `uv run cargo test --manifest-path rust/Cargo.toml --workspace`.
 - PyO3 setters for must-apply command and parameter publications report full
   queues as caller-visible `RuntimeError`s instead of silently accepting the
   write.
+- Key Lock setup warms 64 unique native handles for 32 voices. A shared
+  `key_lock_preparation.rs` worker resets and warms recycled handles; bounded
+  per-voice SPSC lanes exchange ownership without callback waits or native
+  destruction. Native reset/cold pitch setup allocate in the pinned backend.
+  Wet rendering uses silence if a reserve is unavailable; dry playback remains
+  reactive. Pause/resume and stem source crossfades retain native history.
+- The wet adapter has a fixed 511-frame lead at the 512-frame block size.
+  Algorithmic/adapter delay remains uncompensated and native nominal delay is
+  distinct from measured transient peaks. Source pre-roll, DSP feed-ahead, and
+  click-safe wet/bypass transitions (including ratio 1.0 and toggles) remain
+  pending. Existing clock, markers, source playheads, and launch policy are
+  preserved. The release `key_lock_latency_probe` example measures synthetic
+  responses and preparation costs without a device; run it using the Windows
+  DLL override in [the development guide](../docs/development.md#offline-key-lock-measurement).
 - Parameter messages are coalesced by identity in the callback before applying
   the latest drained value. The callback applies only identities touched by the
   drained batch instead of sweeping every pad slot.

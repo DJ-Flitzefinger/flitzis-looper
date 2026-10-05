@@ -1,5 +1,6 @@
 use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 use crate::audio_engine::constants::{SPEED_MAX, SPEED_MIN};
+use crate::audio_engine::key_lock_preparation::KeyLockPreparationLane;
 use crate::audio_engine::stretch_processor::StretchProcessor;
 use crate::messages::SampleBuffer;
 
@@ -41,7 +42,10 @@ pub struct VoiceSlot {
 }
 
 impl VoiceSlot {
-    pub fn with_sample_rate(channels: usize, sample_rate_hz: f32) -> Self {
+    pub(crate) fn with_preparation_lane(
+        channels: usize,
+        preparation: KeyLockPreparationLane,
+    ) -> Self {
         Self {
             active: false,
             sample_id: 0,
@@ -49,7 +53,7 @@ impl VoiceSlot {
             frame_pos: 0,
             volume: 0.0,
             tempo_ratio_smoothed: 1.0,
-            stretch: StretchProcessor::with_sample_rate(channels, sample_rate_hz),
+            stretch: StretchProcessor::with_preparation_lane(channels, preparation),
             paused: false,
             explicit_seek_mode: ExplicitSeekMode::Normal,
             timeline_anchor: None,

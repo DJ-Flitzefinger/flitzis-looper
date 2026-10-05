@@ -1,11 +1,12 @@
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::os::raw::{c_double, c_float, c_int, c_uint};
 use std::ptr::NonNull;
 
+#[cfg(test)]
 pub(crate) const RUBBERBAND_API_MAJOR_VERSION: u32 = 3;
+#[cfg(test)]
 pub(crate) const RUBBERBAND_API_MINOR_VERSION: u32 = 0;
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RubberBandApiVersion {
     pub major: u32,
@@ -17,9 +18,13 @@ pub(crate) struct RubberBandLiveOptions(c_int);
 
 impl RubberBandLiveOptions {
     pub const WINDOW_SHORT: Self = Self(0x00000000);
+    #[cfg(test)]
     pub const WINDOW_MEDIUM: Self = Self(0x00100000);
+    #[cfg(test)]
     pub const FORMANT_SHIFTED: Self = Self(0x00000000);
+    #[cfg(test)]
     pub const FORMANT_PRESERVED: Self = Self(0x01000000);
+    #[cfg(test)]
     pub const CHANNELS_APART: Self = Self(0x00000000);
     pub const CHANNELS_TOGETHER: Self = Self(0x10000000);
 
@@ -31,6 +36,7 @@ impl RubberBandLiveOptions {
         self.0
     }
 
+    #[cfg(test)]
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
@@ -133,6 +139,7 @@ impl RubberBandLiveShifter {
         Ok(shifter)
     }
 
+    #[cfg(test)]
     pub(crate) const fn api_version() -> RubberBandApiVersion {
         RubberBandApiVersion {
             major: RUBBERBAND_API_MAJOR_VERSION,
@@ -148,10 +155,15 @@ impl RubberBandLiveShifter {
         self.block_size
     }
 
+    /// Nominal backend delay for the current ratio, using the most recent reset's resampler state.
+    ///
+    /// Dynamic pitch updates do not remeasure native resampler delay after processing has begun.
+    /// This value alone therefore does not establish audible alignment after a live ratio update.
     pub(crate) fn start_delay(&self) -> usize {
         self.start_delay
     }
 
+    #[cfg(test)]
     pub(crate) fn pitch_scale(&self) -> f64 {
         unsafe { rubberband_live_get_pitch_scale(self.handle.as_ptr()) as f64 }
     }
@@ -168,10 +180,41 @@ impl RubberBandLiveShifter {
         Ok(())
     }
 
-    pub(crate) fn reset(&mut self) {
+    /// Reset cold native state outside the audio callback.
+    ///
+    /// Rubber Band 4.0.0 reset allocates temporary measurement buffers and re-arms its first-process
+    /// path. Call `prepare_for_reuse` before handing this instance to realtime processing.
+    pub(crate) fn reset_for_preparation(&mut self) {
         unsafe {
             rubberband_live_reset(self.handle.as_ptr());
         }
+        self.start_delay = self.query_start_delay();
+    }
+
+    /// Restore a silent, neutral instance for an ownership handover to the audio callback.
+    ///
+    /// Construction, native reset, cold pitch updates, and staging allocation are preparation work.
+    /// The silent shifts complete the native first-process path and replace its history with zeros;
+    /// the callback must not reset the prepared handle again. This does not prime track content or
+    /// compensate the signal's algorithmic delay.
+    pub(crate) fn prepare_for_reuse(&mut self) -> Result<(), RubberBandError> {
+        self.set_pitch_scale(1.0)?;
+        self.reset_for_preparation();
+
+        let input = (0..self.channels)
+            .map(|_| vec![0.0; self.block_size])
+            .collect::<Vec<_>>();
+        let mut output = (0..self.channels)
+            .map(|_| vec![0.0; self.block_size])
+            .collect::<Vec<_>>();
+        let silent_blocks = self
+            .start_delay()
+            .div_ceil(self.block_size)
+            .saturating_add(2);
+        for _ in 0..silent_blocks {
+            self.shift(&input, &mut output)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn shift(
@@ -270,6 +313,7 @@ unsafe extern "C" {
     fn rubberband_live_delete(state: *mut RubberBandLiveStateOpaque);
     fn rubberband_live_reset(state: *mut RubberBandLiveStateOpaque);
     fn rubberband_live_set_pitch_scale(state: *mut RubberBandLiveStateOpaque, scale: c_double);
+    #[cfg(test)]
     fn rubberband_live_get_pitch_scale(state: *mut RubberBandLiveStateOpaque) -> c_double;
     fn rubberband_live_get_start_delay(state: *mut RubberBandLiveStateOpaque) -> c_uint;
     fn rubberband_live_get_block_size(state: *mut RubberBandLiveStateOpaque) -> c_uint;
@@ -342,7 +386,7 @@ mod tests {
         shifter.set_pitch_scale(0.5).unwrap();
         assert!((shifter.pitch_scale() - 0.5).abs() < 1.0e-12);
         assert!(shifter.start_delay() > 0);
-        shifter.reset();
+        shifter.reset_for_preparation();
     }
 
     #[test]
@@ -420,5 +464,39 @@ mod tests {
             energy_after_delay > 0.0,
             "Rubber Band returned only silence after its reported start delay"
         );
+    }
+
+    #[test]
+    fn prepared_reuse_clears_previous_audio_and_accepts_live_pitch_updates() {
+        let mut shifter = RubberBandLiveShifter::new(48_000, 2).unwrap();
+        shifter.set_pitch_scale(0.5).unwrap();
+        let block_size = shifter.block_size();
+        let mut output = vec![vec![0.0; block_size]; 2];
+        for block_index in 0..16 {
+            shifter
+                .shift(
+                    &sine_block(2, block_size, block_index, 48_000.0),
+                    &mut output,
+                )
+                .unwrap();
+        }
+        assert!(output.iter().flatten().any(|sample| sample.abs() > 0.01));
+
+        shifter.prepare_for_reuse().unwrap();
+        assert_eq!(shifter.pitch_scale(), 1.0);
+        let silent_input = vec![vec![0.0; block_size]; 2];
+        for pitch_scale in [0.5, 2.0, 1.25, 1.0] {
+            shifter.set_pitch_scale(pitch_scale).unwrap();
+            for _ in 0..16 {
+                shifter.shift(&silent_input, &mut output).unwrap();
+                assert!(
+                    output
+                        .iter()
+                        .flatten()
+                        .all(|sample| sample.is_finite() && sample.abs() < 1.0e-6),
+                    "recycled handle leaked previous audio at pitch scale {pitch_scale}"
+                );
+            }
+        }
     }
 }

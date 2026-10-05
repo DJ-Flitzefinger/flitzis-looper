@@ -12,12 +12,14 @@ The active backend is implemented behind:
 ```text
 rust/crates/looper/src/audio_engine/stretch_processor.rs
 rust/crates/looper/src/audio_engine/rubberband_backend.rs
+rust/crates/looper/src/audio_engine/key_lock_preparation.rs
 ```
 
 `RtMixer` owns tempo-ratio selection, per-pad Key Lock state, source-frame
 addressing, full-mix/stem source reads, and per-voice `StretchProcessor` calls.
 `VoiceSlot` owns the per-voice `StretchProcessor`, smoothed tempo ratio,
-explicit seek mode, and optional `PlaybackTimelineAnchor`.
+explicit seek mode, and optional `PlaybackTimelineAnchor`. The mixer retains
+one preparation worker for its 32 voice lanes.
 
 ## Playback Semantics
 
@@ -73,26 +75,113 @@ before the next read. These changes do not reconstruct Rubber Band state.
 
 ## Rubber Band Processing
 
-Each voice slot prepares its Rubber Band handle, fixed block-size metadata,
-input buffers, channel pointer arrays, shifted-output buffers, and bounded FIFOs
-outside the per-sample render work. The audio callback reuses that state.
+### Preparation Ownership
 
-The tested Windows vcpkg Rubber Band 4.0.0 package reports a 512-frame
-LiveShifter block size and a 3678-sample start delay at 48 kHz stereo. Playhead
-telemetry and loop ownership remain source-frame based. Rubber Band output
-latency does not shift trigger quantization, transport scheduling, or source
-loop ownership.
+Stream setup constructs 64 unique native handles: one current handle and one
+reserve for each of 32 voices. Every handle is warmed with neutral silent
+blocks before callback rendering. Fixed block buffers, channel pointer arrays,
+and bounded FIFOs are also allocated before rendering. Preparation failures,
+including failure to start the worker, reject stream setup.
 
-The engine's output-clock snapshots estimate device buffering from CPAL callback
-timestamps. They do not include Rubber Band start delay or prove audible onset
-alignment. Captured-input nearest-grid diagnostics remain separate from current
-launch execution. Signed source-phase mapping is now a tested foundation;
-safe DSP preparation and audible-device validation are still required before
-phase-based synchronized starts are activated.
+The two-handle pool has a measurable startup/memory cost. Cold standalone
+Windows measurements for 32 stereo voices observed:
 
-If shifted output is unavailable for part of a callback block, the processor
-fills the missing frames with silence as a deterministic bounded result and
-continues rendering.
+| Output rate | Pool setup | Working-set increase | Private-committed increase |
+| --- | --- | --- | --- |
+| 48 kHz | 151.347 ms | 137.477 MiB | 146.668 MiB |
+| 96 kHz | 270.090 ms | 205.965 MiB | 230.719 MiB |
+
+These are single-run process deltas on the measured system, not portable memory
+limits or live callback costs. The fixed reserve preserves quality/options and bounds
+ownership exchange; its resource cost remains part of later profiling.
+
+The pinned Rubber Band 4.0.0 source audit found that native `reset()` and a
+pitch change before the first `shift()` call `measureResamplerDelay()`, which
+creates two temporary `std::vector<float>` buffers. The probe's calling-thread
+Rust allocator counter does not observe these C++ allocations. Construction,
+native reset, cold pitch setup, and silent warming therefore run only during
+setup or on the preparation worker. The callback applies pitch changes to an
+already warmed uniquely owned
+handle. See the [pinned native implementation](https://github.com/breakfastquay/rubberband/blob/v4.0.0/src/finer/R3LiveShifter.cpp).
+
+Start/retrigger, stop, seek, and leaving wet processing clear only the adapter's
+own bounded storage and mark used native state dirty. On the next wet render,
+the voice exchanges that state for its warmed reserve through two bounded SPSC
+queues. The worker resets and warms the returned handle. The exchange reserves
+return capacity first and never destroys native state, waits, or prepares DSP
+inside rendering. Teardown releases the worker after voice rendering stops.
+
+When no reserve is ready or the recycle lane is full, wet rendering returns
+silence for that segment and retries later; the source timeline continues.
+Dry varispeed and the approximately neutral ratio remain immediate. Pause/resume
+retain the current native state. Stem mode/mask transitions retain native
+history and use the existing source crossfade instead of resetting Rubber Band.
+
+### Adapter And Measured Delay
+
+The tested SHORT + CHANNELS_TOGETHER backend uses 512-frame blocks. Wet
+activation seeds the output FIFO with `block_size - 1` silent frames, so the
+adapter adds a fixed 511-frame lead (10.646 ms at 48 kHz), independent of callback
+partitioning. This removes the previous growing offset from underflow silence;
+the lead is currently uncompensated. Missing shifted output still uses bounded
+silence, with no refill spin.
+
+Native nominal delay, measured transient onset/peak, adapter lead, and device
+buffering are separate quantities. The initial optimized offline baseline used
+cold ratio-specific native state and isolated impulses at output-domain frame
+8192:
+
+| Output rate | Tempo ratio | API delay frames | Impulse peak delay frames |
+| --- | --- | --- | --- |
+| 48 kHz | 0.5 | 2909 | 2909 |
+| 48 kHz | 2.0 | 3678 | 3260 |
+| 96 kHz | 2.0 | 7774 | 6844 |
+
+These baseline values are not correction constants for music. In the final
+warmed-pool probe, the 48 kHz ratio-2 adapter impulse peak was 3771 frames after
+its reference: a 3260-frame native peak plus the fixed 511-frame adapter lead.
+Fixed 64/128/256/512-frame callbacks and the irregular
+`[64,96,257,512,31,1]` pattern produced the same peak for this fixture. The
+nominal native API delay was still 3678 frames. The independent fixed-lead FIFO
+model reported no underflow across 2048 calls per tested pattern.
+
+Final optimized 48 kHz ratio-2 measurements, using 24 repetitions, observed:
+
+| Operation | Median us | p95 us | Maximum us |
+| --- | --- | --- | --- |
+| Native preparation for reuse | 1250.25 | 1578.50 | 1742.60 |
+| Adapter first activation and processing | 215.90 | 531.30 | 534.50 |
+| Adapter Rust-only reset | 0.90 | 1.30 | 2.60 |
+
+The baseline adapter reset median was 105.35 us and first activation median was
+800.40 us. Moving preparation changes where work happens; it does not remove
+the native preparation cost. Calling-thread Rust allocation counts were zero
+for measured first activation, reset, reactivation, and warm processing; worker
+and C/C++ allocations are outside that counter.
+
+A handle warmed at neutral pitch retains different startup history when its
+ratio changes. The API delay getter remains nominal; it does not prove the
+output transient's location for that history or a changing ratio. Startup and
+settled responses need separate measurement. The local baseline and final
+prepared results live in workspace `scratch/`, including
+`slice3-key-lock-latency-findings.md` and
+`slice3-key-lock-latency-{baseline,prepared}.csv`; generated CSVs and logs are
+not repository artifacts. Reproduce the probe using
+[the development guide](development.md#offline-key-lock-measurement).
+
+This preparation and adapter safety stage (slice 3a) does not perform track
+pre-roll, delay discarding, or a separate DSP feed-ahead cursor. Source playheads,
+persisted markers, the shared clock, and launch scheduling keep their existing
+meaning. Source-aware prepared handover, audible phase compensation, and short
+wet/bypass transitions, including ratio 1.0 and global/per-pad toggles, remain
+slice 3b work. Current mode changes can still switch between delayed wet output
+and immediate dry output without that transition compensation.
+
+Output-clock snapshots estimate device buffering from CPAL callback timestamps.
+They do not include native/adapter signal delay or unknown latency after the
+device buffer. Offline impulse measurements and Rust allocation telemetry do
+not establish hardware onset precision or live callback deadlines. Captured-input
+nearest-grid diagnostics remain separate from current launch execution.
 
 ## Settings Contract
 

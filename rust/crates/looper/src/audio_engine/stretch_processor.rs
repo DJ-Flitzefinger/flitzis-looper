@@ -1,3 +1,6 @@
+#[cfg(test)]
+use crate::audio_engine::key_lock_preparation::create_key_lock_preparation;
+use crate::audio_engine::key_lock_preparation::{KeyLockPreparationLane, KeyLockPreparationWorker};
 use crate::audio_engine::rubberband_backend::RubberBandLiveShifter;
 
 /// Default maximum block size handled by the per-voice DSP wrapper.
@@ -7,7 +10,9 @@ use crate::audio_engine::rubberband_backend::RubberBandLiveShifter;
 /// resizing.
 pub const DEFAULT_BLOCK_SAMPLES: usize = 1024;
 
+#[cfg(test)]
 const DEFAULT_SAMPLE_RATE_HZ: f32 = 48_000.0;
+#[cfg(test)]
 const RUBBERBAND_MIN_SAMPLE_RATE_HZ: f32 = 8_000.0;
 const PITCH_SCALE_EPSILON: f64 = 0.001;
 
@@ -24,6 +29,11 @@ pub struct StretchProcessor {
     rubberband_output_fifo: Vec<FixedFifo>,
     rubberband_active: bool,
     rubberband_pitch_scale: f64,
+    rubberband_dirty: bool,
+    rubberband_used: bool,
+    preparation: KeyLockPreparationLane,
+    // Standalone processors retain their worker. Mixer processors share an engine worker.
+    _preparation_worker: Option<KeyLockPreparationWorker>,
 }
 
 unsafe impl Send for StretchProcessor {}
@@ -34,7 +44,20 @@ impl StretchProcessor {
         Self::with_sample_rate(channels, DEFAULT_SAMPLE_RATE_HZ)
     }
 
+    #[cfg(test)]
     pub fn with_sample_rate(channels: usize, sample_rate_hz: f32) -> Self {
+        let (mut lanes, worker) =
+            create_key_lock_preparation(channels, sample_rate_to_u32(sample_rate_hz), 1)
+                .expect("failed to prepare standalone Key Lock processor");
+        let mut processor = Self::with_preparation_lane(channels, lanes.remove(0));
+        processor._preparation_worker = Some(worker);
+        processor
+    }
+
+    pub(crate) fn with_preparation_lane(
+        channels: usize,
+        mut preparation: KeyLockPreparationLane,
+    ) -> Self {
         let input = (0..channels)
             .map(|_| vec![0.0; DEFAULT_BLOCK_SAMPLES])
             .collect();
@@ -45,16 +68,7 @@ impl StretchProcessor {
             .map(|_| vec![0.0; DEFAULT_BLOCK_SAMPLES])
             .collect();
 
-        let rubberband = if channels == 0 {
-            None
-        } else {
-            Some(
-                RubberBandLiveShifter::new(sample_rate_to_u32(sample_rate_hz), channels)
-                    .unwrap_or_else(|err| {
-                        panic!("failed to initialize Rubber Band LiveShifter: {err}")
-                    }),
-            )
-        };
+        let rubberband = preparation.take_initial();
         let rubberband_block_size = rubberband
             .as_ref()
             .map_or(DEFAULT_BLOCK_SAMPLES, RubberBandLiveShifter::block_size);
@@ -82,6 +96,10 @@ impl StretchProcessor {
                 .collect(),
             rubberband_active: false,
             rubberband_pitch_scale: 1.0,
+            rubberband_dirty: false,
+            rubberband_used: false,
+            preparation,
+            _preparation_worker: None,
         }
     }
 
@@ -139,7 +157,20 @@ impl StretchProcessor {
 
     fn process_rubberband(&mut self, output_samples: usize, pitch_scale: f64) {
         if !self.rubberband_active {
-            self.reset_rubberband_state();
+            if self.rubberband_dirty {
+                if !self.preparation.exchange(&mut self.rubberband) {
+                    self.silence_output(output_samples);
+                    return;
+                }
+                self.rubberband_dirty = false;
+                self.rubberband_used = false;
+                self.rubberband_pitch_scale = 1.0;
+            }
+            // A fixed B-1 frame lead guarantees output for every bounded input partition.
+            // With r pending input frames, the remaining output occupancy is B-1-r.
+            for fifo in &mut self.rubberband_output_fifo {
+                fifo.push_silence(self.rubberband_block_size.saturating_sub(1));
+            }
             self.rubberband_active = true;
         }
 
@@ -150,7 +181,7 @@ impl StretchProcessor {
             };
             if rubberband.set_pitch_scale(pitch_scale).is_err() {
                 self.reset_rubberband_state();
-                self.copy_varispeed_output(output_samples);
+                self.silence_output(output_samples);
                 return;
             }
             self.rubberband_pitch_scale = pitch_scale;
@@ -161,14 +192,14 @@ impl StretchProcessor {
                 .push_slice(&self.varispeed[channel][..output_samples]);
             if written != output_samples {
                 self.reset_rubberband_state();
-                self.copy_varispeed_output(output_samples);
+                self.silence_output(output_samples);
                 return;
             }
         }
 
         if !self.shift_available_rubberband_blocks() {
             self.reset_rubberband_state();
-            self.copy_varispeed_output(output_samples);
+            self.silence_output(output_samples);
             return;
         }
 
@@ -213,6 +244,7 @@ impl StretchProcessor {
             {
                 return false;
             }
+            self.rubberband_used = true;
 
             for channel in 0..self.channels {
                 let written = self.rubberband_output_fifo[channel]
@@ -235,6 +267,12 @@ impl StretchProcessor {
         }
     }
 
+    fn silence_output(&mut self, output_samples: usize) {
+        for channel in &mut self.output {
+            channel[..output_samples].fill(0.0);
+        }
+    }
+
     fn deactivate_rubberband_if_needed(&mut self) {
         if self.rubberband_active {
             self.reset_rubberband_state();
@@ -242,9 +280,9 @@ impl StretchProcessor {
     }
 
     fn reset_rubberband_state(&mut self) {
-        if let Some(rubberband) = self.rubberband.as_mut() {
-            rubberband.reset();
-        }
+        // Rubber Band 4.0.0 reset/cold pitch setup allocate internally. Only the worker may
+        // perform those operations. An unused prepared handle is already clean.
+        self.rubberband_dirty |= self.rubberband_used;
         for channel in &mut self.rubberband_input {
             channel.fill(0.0);
         }
@@ -279,6 +317,11 @@ impl StretchProcessor {
     }
 
     #[cfg(test)]
+    pub(crate) fn adapter_delay_frames(&self) -> usize {
+        self.rubberband_block_size.saturating_sub(1)
+    }
+
+    #[cfg(test)]
     pub(crate) fn rubberband_input_fifo_capacity(&self) -> usize {
         self.rubberband_input_fifo
             .first()
@@ -293,6 +336,7 @@ impl StretchProcessor {
     }
 }
 
+#[cfg(test)]
 fn sample_rate_to_u32(sample_rate_hz: f32) -> u32 {
     if !sample_rate_hz.is_finite() || sample_rate_hz <= 0.0 {
         return DEFAULT_SAMPLE_RATE_HZ as u32;
@@ -391,6 +435,15 @@ impl FixedFifo {
             written += 1;
         }
         written
+    }
+
+    fn push_silence(&mut self, frames: usize) {
+        debug_assert!(self.len + frames <= self.buffer.len());
+        for _ in 0..frames.min(self.buffer.len().saturating_sub(self.len)) {
+            self.buffer[self.write_pos] = 0.0;
+            self.write_pos = (self.write_pos + 1) % self.buffer.len();
+            self.len += 1;
+        }
     }
 
     fn pop_into(&mut self, output: &mut [f32]) -> usize {
@@ -599,5 +652,100 @@ mod tests {
                     .all(|sample| sample.is_finite())
             );
         }
+    }
+
+    fn shifted_sequence(partitions: &[usize], total_frames: usize) -> Vec<f32> {
+        let mut processor = StretchProcessor::new(1);
+        assert_eq!(
+            processor.adapter_delay_frames(),
+            processor.rubberband_block_size() - 1
+        );
+        let mut output = Vec::with_capacity(total_frames);
+        let mut cursor = 0;
+        let mut partition = 0;
+        while cursor < total_frames {
+            let frames = partitions[partition % partitions.len()].min(total_frames - cursor);
+            let input = processor.input_buffers_mut(frames);
+            for (index, sample) in input[0].iter_mut().take(frames).enumerate() {
+                let position = cursor + index;
+                *sample = (position as f32 * 0.057).sin() * 0.2;
+                if position == 2000 {
+                    *sample += 0.7;
+                }
+            }
+            processor.process(frames, frames, 2.0, true);
+            output.extend_from_slice(&processor.output_buffers()[0][..frames]);
+            // Output always drains completely; no segment can insert extra silence/latency.
+            let pending_input = processor.rubberband_input_fifo[0].len();
+            let pending_output = processor.rubberband_output_fifo[0].len();
+            assert_eq!(
+                pending_input + pending_output,
+                processor.adapter_delay_frames()
+            );
+            cursor += frames;
+            partition += 1;
+        }
+        output
+    }
+
+    #[test]
+    fn fixed_adapter_delay_preserves_output_under_irregular_partitions() {
+        let regular = shifted_sequence(&[512], 24_000);
+        assert!(regular.iter().any(|sample| sample.abs() > 0.05));
+        for partitions in [&[64][..], &[128][..], &[1, 127, 384, 96, 257, 512, 31][..]] {
+            let irregular = shifted_sequence(partitions, regular.len());
+            assert_eq!(
+                regular, irregular,
+                "adapter changed output for {partitions:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn exhausted_preparation_retains_dirty_state_and_silences_only_shifted_audio() {
+        let mut processor = StretchProcessor::new(1);
+        // Stop the owned test worker outside rendering. Exactly one startup reserve remains.
+        drop(processor._preparation_worker.take());
+        processor.input_buffers_mut(512)[0][..512].fill(0.5);
+        processor.process(512, 512, 2.0, true);
+        processor.reset();
+        processor.input_buffers_mut(512)[0][..512].fill(0.5);
+        processor.process(512, 512, 2.0, true);
+        assert!(!processor.rubberband_dirty);
+        assert!(processor.rubberband_used);
+
+        processor.reset();
+        for _ in 0..4 {
+            processor.input_buffers_mut(512)[0][..512].fill(0.5);
+            processor.process(512, 512, 2.0, true);
+            assert!(processor.rubberband_dirty);
+            assert!(!processor.rubberband_active);
+            assert!(processor.rubberband.is_some());
+            assert!(
+                processor.output_buffers()[0][..512]
+                    .iter()
+                    .all(|sample| *sample == 0.0)
+            );
+        }
+        processor.process(512, 512, 2.0, false);
+        assert!(
+            processor.output_buffers()[0][..512]
+                .iter()
+                .all(|sample| *sample == 0.5)
+        );
+        assert!(processor.rubberband_dirty);
+    }
+
+    #[test]
+    fn unused_warm_state_survives_repeated_start_invalidations() {
+        let mut processor = StretchProcessor::new(1);
+        for _ in 0..10 {
+            processor.reset();
+            assert!(!processor.rubberband_dirty);
+        }
+        processor.input_buffers_mut(512)[0][..512].fill(0.2);
+        processor.process(512, 512, 2.0, true);
+        assert!(processor.rubberband_used);
+        assert!(!processor.rubberband_dirty);
     }
 }
