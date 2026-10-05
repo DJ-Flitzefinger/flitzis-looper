@@ -6,6 +6,7 @@
 use super::analysis_pcm::{
     KEY_PREPROCESSING, LoadedPcmSnapshot, MONO_RULE, PcmIdentity, SharedMono,
 };
+use super::analysis_predictions::validate_predictions;
 use super::{current_pad_request_id, next_pad_request_id, pad_request_matches};
 use crate::messages::{BackgroundTaskKind, LoaderEvent, SampleBuffer};
 use flitzis_looper_analysis as analysis;
@@ -319,9 +320,12 @@ fn validate_envelope(result: &str, identity: &PcmIdentity, duration: f64) -> Res
         return Err("offline result limit exceeded".into());
     }
     let parsed: Value = serde_json::from_str(result).map_err(|e| e.to_string())?;
+    let schema_version = parsed["schema_version"]
+        .as_u64()
+        .filter(|version| matches!(version, 1 | 2))
+        .ok_or("unsupported offline result schema")?;
     let got = &parsed["identity"];
-    if parsed["schema_version"] != 1
-        || got["pad_id"] != identity.pad_id
+    if got["pad_id"] != identity.pad_id
         || got["request_id"] != identity.request_id
         || got["source_id"] != identity.source_id
         || got["source_generation"] != identity.source_generation
@@ -344,7 +348,9 @@ fn validate_envelope(result: &str, identity: &PcmIdentity, duration: f64) -> Res
         return Err("offline beat resources are still retiring".into());
     }
     if beat["status"] == "ready" {
-        validate_ready_beats(beat, got, duration)?;
+        validate_ready_beats(beat, got, schema_version, duration)?;
+    } else if schema_version == 2 && !beat["predictions"].is_null() {
+        return Err("unsuccessful beat component has predictions".into());
     }
     if parsed["key"]["status"] == "ready"
         && !parsed["key"]["key"].as_str().is_some_and(valid_key_name)
@@ -369,7 +375,12 @@ fn valid_key_name(key: &str) -> bool {
     (0..24).any(|index| analysis::camelot_index_to_key(index) == Some(canonical))
 }
 
-fn validate_ready_beats(beat: &Value, identity: &Value, duration: f64) -> Result<(), String> {
+fn validate_ready_beats(
+    beat: &Value,
+    identity: &Value,
+    schema_version: u64,
+    duration: f64,
+) -> Result<(), String> {
     let model = &beat["model"];
     if beat["identity"] != *identity
         || beat["resources_released"] != true
@@ -387,40 +398,7 @@ fn validate_ready_beats(beat: &Value, identity: &Value, duration: f64) -> Result
     {
         return Err("invalid ready beat identity/model/resources".into());
     }
-    let predictions = &beat["predictions"];
-    let mut logit_len = None;
-    for name in [
-        "beat_seconds",
-        "downbeat_seconds",
-        "beat_logits",
-        "downbeat_logits",
-    ] {
-        let values = predictions[name]
-            .as_array()
-            .ok_or("missing beat prediction array")?;
-        if values.len() > 250_000 {
-            return Err("beat prediction limit exceeded".into());
-        }
-        let mut previous = -1.0_f64;
-        for value in values {
-            let value = value
-                .as_f64()
-                .filter(|v| v.is_finite())
-                .ok_or("nonfinite beat prediction")?;
-            if name.ends_with("seconds") && (value < 0.0 || value >= duration || value <= previous)
-            {
-                return Err("invalid beat source positions".into());
-            }
-            previous = value;
-        }
-        if name.ends_with("logits") {
-            if logit_len.is_some_and(|count| count != values.len()) {
-                return Err("beat logit count mismatch".into());
-            }
-            logit_len = Some(values.len());
-        }
-    }
-    Ok(())
+    validate_predictions(&beat["predictions"], schema_version, duration)
 }
 
 /// Diagnostic adapter handle; all heavyweight methods release the GIL.

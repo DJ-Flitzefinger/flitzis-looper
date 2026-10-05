@@ -78,6 +78,7 @@ rust/crates/looper/src/
     |-- mod.rs                     # AudioEngine API and background orchestration
     |-- analysis_jobs.rs           # optional diagnostic analysis ownership and events
     |-- analysis_pcm.rs            # immutable full-track mono/export/key input
+    |-- analysis_predictions.rs    # bounded diagnostic prediction validation
     |-- audio_stream.rs            # CPAL callback and scheduler integration
     |-- buffer_retirement.rs       # non-audio retirement of large handles
     |-- constants.rs               # banks, grid size, slot count, ranges
@@ -242,8 +243,13 @@ The separate B1a/B1b diagnostic boundary exposes `begin_offline_analysis` and
 results into saved grids. Rust pins the immutable loaded source, prepares shared
 mono at its actual rate, exports complete float32-LE PCM and derives KeyNet's
 44100-Hz input directly. Python supervises the optional local beat process and
-publishes one independent-component envelope through loader events. The optional
-locked Windows CPU worker derives 22050-Hz input directly with the pinned
+publishes one independent-component envelope through loader events.
+Ready diagnostic envelopes use inline uncompressed binary64/Base64 arrays;
+the native validator checks their complete finite/source/count contract before
+publication. The versioned Python reader reconstructs exact predictions from
+events or snapshots after PCM cleanup, without optional runtime/model files.
+The final 1-MiB bound remains unchanged; worker wire responses retain version 1.
+The optional locked Windows CPU worker derives 22050-Hz input directly with the pinned
 reference frontend. [Explicit setup](beat-this-setup.md) verifies and installs
 its environment and checkpoint; normal analysis never performs acquisition.
 

@@ -434,6 +434,7 @@ version = "0.1.0"
 dependencies = [
  "audioadapter",
  "audioadapter-buffers",
+ "base64",
  "cpal",
  "cute-dsp",
  "env_logger",

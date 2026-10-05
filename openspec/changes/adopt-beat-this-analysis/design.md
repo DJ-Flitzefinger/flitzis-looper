@@ -169,6 +169,33 @@ algorithm contracts without mandating the old backend for new analysis. Repair i
 bug when obtaining a trustworthy comparison; that does not block B1a. See the shared slice
 ordering in [selected design](../../../docs/beatmap-sync-design.md).
 
+## B2b1: Lossless bounded final publication
+
+The B2a T05/R01 worker-only cases retained complete predictions but failed the
+1-MiB final envelope cap because binary floating-point evidence was printed as
+decimal JSON arrays. Final ready envelope version 2 uses four inline canonical
+padded standard Base64 strings of uncompressed little-endian binary64 values,
+with encoding `float64-le/base64`. This preserves arbitrary validated doubles
+exactly; restricting the representation to float32 would quantize injected or
+future valid binary64 values. Worker version 1, the 8-MiB response bound, the
+250000-value array cap and the 1-MiB final bound remain unchanged.
+
+The existing supervisor packs already validated terminal components outside the
+callback. Rust bounds and decodes one array at a time, validates finite values,
+source times and counts, then retains the compact envelope for the existing
+atomic event path. It never expands numeric JSON at enqueue. The common Python
+diagnostic reader accepts both final versions and reconstructs the full typed
+predictions without PCM or model files. No external artifact, compression,
+extra lifetime owner or alternate inference pipeline is introduced. Cancellation,
+source identity and actual worker/key retirement retain their existing authority.
+
+Packing is representation remediation, not permission to publish every possible
+worker response. Oversize packed envelopes still report explicit beat failure
+and preserve independent key output. Native long-track staging remains B2b2;
+independent labels, default adoption, saved-analysis restore and live SYNC remain
+pending. Preserve the failed v1 evidence and report post-remediation worker-only
+measurements with exact source/PCM/model lineage separately.
+
 ## Primary evidence
 
 - [Upstream release, weight license and training-data caveat](https://github.com/CPJKU/beat_this/tree/b95c8ab0c58c2d9fcfd40508ae8dffbc05ac4f5c)

@@ -105,6 +105,36 @@ source-relative beat/downbeat seconds within the full source extent. Logit
 counts and all message sizes are bounded. Logits are raw evidence, not
 calibrated correctness probabilities.
 
+The final diagnostic envelope is separate from the unchanged version-1 worker
+wire response. Ready results use final schema version 2: `beat.predictions`
+contains `encoding: "float64-le/base64"` and four strings named `beat_seconds`,
+`downbeat_seconds`, `beat_logits` and `downbeat_logits`. Each string is canonical
+padded standard Base64 of uncompressed IEEE-754 little-endian binary64 values.
+Its decoded byte length divided by eight is the array count. Packing preserves
+every validated value exactly, including signed zero; it neither downcasts
+model evidence nor drops events or logits. There are no sidecar artifacts or
+compressed-data allocations. Non-ready outcomes retain final schema version 1.
+
+Both final versions are validated by Rust before enqueue. The packed validator
+bounds text before decoding, rejects partial values, malformed/noncanonical
+Base64, extra/missing prediction fields, unknown encodings, nonfinite values,
+invalid source positions and unequal logit lengths. The 1-MiB envelope and
+250000-value array limits remain hard bounds. Some complete results can still
+exceed 1 MiB even when packed; they report an explicit beat publication failure
+with the independent key outcome preserved. This is not a promise that every
+allowed worker array count fits the final publication limit.
+
+Diagnostic consumers use
+`flitzis_looper.analysis.publication.decode_result(result_json, request)` for
+either an event or job snapshot. It returns `PublishedAnalysisResult` with a
+normal `BeatComponentResult` and full `BeatPredictions`. The retained request
+provides expected identity/model and source duration; its PCM path need not
+exist. Reading an exported envelope requires neither scratch files nor installed
+models. Legacy final version-1 numeric arrays remain readable. This reader does
+not restore or adopt project analysis: that behavior remains a later B2 gate.
+Native publication remains authoritative for musical key spellings; the
+diagnostic reader checks key component shape/status and preserves its outcome.
+
 Beat and key attempts have separate `ready`, `unavailable`, `failed` or
 `cancelled` statuses. Missing beat support can settle alongside a valid musical
 key; key failure uses `unknown` without replacing valid beat output. The native

@@ -28,6 +28,7 @@ rust/
     |           |-- mod.rs         # AudioEngine API and background orchestration
     |           |-- analysis_jobs.rs # optional diagnostic request/retirement ownership
     |           |-- analysis_pcm.rs  # immutable source, shared mono, export and key input
+    |           |-- analysis_predictions.rs # bounded lossless diagnostic envelope validation
     |           |-- audio_stream.rs
     |           |-- buffer_retirement.rs
     |           |-- constants.rs

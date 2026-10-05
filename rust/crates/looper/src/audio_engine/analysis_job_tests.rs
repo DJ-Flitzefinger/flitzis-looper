@@ -1,4 +1,5 @@
 use super::*;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::sync::mpsc::{Receiver, channel};
 
 fn sample() -> SampleBuffer {
@@ -29,6 +30,33 @@ fn completions(rx: &Receiver<LoaderEvent>) -> usize {
     rx.try_iter()
         .filter(|e| matches!(e, LoaderEvent::OfflineAnalysisCompleted { .. }))
         .count()
+}
+
+fn encoded_predictions(values: &[f64]) -> String {
+    STANDARD.encode(
+        values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn ready_envelope(job: &OfflineAnalysisJob, logit_count: usize) -> Value {
+    let mut ready: Value = serde_json::from_str(&envelope(job)).unwrap();
+    ready["schema_version"] = json!(2);
+    ready["beat"] = json!({
+        "identity": ready["identity"], "status": "ready", "reason": "ready",
+        "resources_released": true,
+        "model": {"sha256": "a".repeat(64), "frontend_id": "fixture", "environment_id": "fixture",
+            "package_version": "1.1.0", "checkpoint": "final0", "postprocessor": "minimal",
+            "device": "cpu", "precision": "float32"},
+        "predictions": {"encoding": "float64-le/base64",
+            "beat_seconds": encoded_predictions(&[0.0, 0.001, 0.02]),
+            "downbeat_seconds": encoded_predictions(&[0.001]),
+            "beat_logits": encoded_predictions(&vec![1.0000000000000002; logit_count]),
+            "downbeat_logits": encoded_predictions(&vec![-0.0; logit_count])},
+    });
+    ready
 }
 
 #[test]
@@ -259,4 +287,194 @@ fn malformed_ready_keys_do_not_publish_or_release_reservation() {
         assert_eq!(completions(&rx), 0, "{key}");
     }
     job.state().finish(&envelope(&job)).unwrap();
+}
+
+#[test]
+fn packed_long_result_publishes_once_without_expanding_or_changing_values() {
+    let jobs = OfflineJobs::default();
+    let ids = Arc::new(Mutex::new(vec![1]));
+    let (tx, rx) = channel();
+    let job = begin(&jobs, &ids, &tx);
+    let ready = ready_envelope(&job, 30_000);
+    let wire = ready.to_string();
+    assert!(wire.len() < MAX_RESULT_BYTES);
+    assert!(job.state().finish(&wire).unwrap());
+    assert!(job.state().finish(&wire).is_err());
+    let published: Vec<Value> = rx
+        .try_iter()
+        .filter_map(|event| match event {
+            LoaderEvent::OfflineAnalysisCompleted { result_json, .. } => {
+                Some(serde_json::from_str(&result_json).unwrap())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(published, [ready]);
+    assert!(job.state().snapshot.lock().unwrap().is_none());
+    assert!(job.state().mono.lock().unwrap().is_none());
+    assert!(!jobs.busy.load(Ordering::Acquire));
+    assert!(jobs.begin(0, sample(), 48_000, 1, ids, tx).is_ok());
+}
+
+#[test]
+fn invalid_packed_result_keeps_native_admission_until_valid_retirement() {
+    let jobs = OfflineJobs::default();
+    let ids = Arc::new(Mutex::new(vec![1]));
+    let (tx, rx) = channel();
+    let job = begin(&jobs, &ids, &tx);
+    let mut invalid = ready_envelope(&job, 1);
+    invalid["beat"]["predictions"]["beat_logits"] = json!("AAAAAAAAAAB=");
+    assert!(job.state().finish(&invalid.to_string()).is_err());
+    assert!(jobs.busy.load(Ordering::Acquire));
+    assert!(job.state().snapshot.lock().unwrap().is_some());
+    assert!(!job.state().finished.load(Ordering::Acquire));
+    assert_eq!(completions(&rx), 0);
+    assert!(jobs.begin(0, sample(), 48_000, 1, ids, tx).is_err());
+    assert!(
+        job.state()
+            .finish(&ready_envelope(&job, 1).to_string())
+            .unwrap()
+    );
+    assert_eq!(completions(&rx), 1);
+}
+
+#[test]
+fn cancelled_or_stale_packed_result_retires_without_publication() {
+    for cancelled in [false, true] {
+        let jobs = OfflineJobs::default();
+        let ids = Arc::new(Mutex::new(vec![1]));
+        let (tx, rx) = channel();
+        let job = begin(&jobs, &ids, &tx);
+        if cancelled {
+            job.cancel();
+        } else {
+            next_pad_request_id(&ids, 0).unwrap();
+        }
+        let ready = ready_envelope(&job, 1).to_string();
+        job.state().key_running.store(true, Ordering::Release);
+        assert!(job.state().finish(&ready).is_err());
+        assert!(jobs.busy.load(Ordering::Acquire));
+        assert!(job.state().snapshot.lock().unwrap().is_some());
+        job.state().key_running.store(false, Ordering::Release);
+        assert!(!job.state().finish(&ready).unwrap());
+        assert_eq!(completions(&rx), 0);
+        assert!(job.state().snapshot.lock().unwrap().is_none());
+        assert!(jobs.begin(0, sample(), 48_000, 2, ids, tx).is_ok());
+    }
+}
+
+#[test]
+fn packed_result_still_obeys_final_byte_cap() {
+    let jobs = OfflineJobs::default();
+    let ids = Arc::new(Mutex::new(vec![1]));
+    let (tx, rx) = channel();
+    let job = begin(&jobs, &ids, &tx);
+    let oversized = ready_envelope(&job, 150_000).to_string();
+    assert!(oversized.len() > MAX_RESULT_BYTES);
+    assert_eq!(
+        job.state().finish(&oversized).unwrap_err(),
+        "offline result limit exceeded"
+    );
+    assert!(jobs.busy.load(Ordering::Acquire));
+    assert_eq!(completions(&rx), 0);
+    job.cancel();
+    job.state().finish(&envelope(&job)).unwrap();
+}
+
+#[test]
+fn schema_versions_and_nonready_packed_predictions_are_explicit() {
+    let jobs = OfflineJobs::default();
+    let ids = Arc::new(Mutex::new(vec![1]));
+    let (tx, rx) = channel();
+    let job = begin(&jobs, &ids, &tx);
+    let original = ready_envelope(&job, 1);
+    for version in [
+        json!(0),
+        json!(3),
+        json!(2.0),
+        json!("2"),
+        json!(true),
+        json!(null),
+    ] {
+        let mut invalid = original.clone();
+        invalid["schema_version"] = version;
+        assert!(job.state().finish(&invalid.to_string()).is_err());
+    }
+    for status in ["failed", "unavailable", "cancelled"] {
+        let mut invalid = original.clone();
+        invalid["beat"]["status"] = json!(status);
+        assert_eq!(
+            job.state().finish(&invalid.to_string()).unwrap_err(),
+            "unsuccessful beat component has predictions"
+        );
+    }
+    let mut legacy = original;
+    legacy["schema_version"] = json!(1);
+    legacy["beat"]["predictions"] = json!({"beat_seconds": [0.0, 0.001, 0.02],
+        "downbeat_seconds": [0.001], "beat_logits": [0.5], "downbeat_logits": [0.1]});
+    assert!(job.state().finish(&legacy.to_string()).unwrap());
+    assert_eq!(completions(&rx), 1);
+}
+
+#[test]
+#[ignore = "requires private complete worker evidence"]
+fn complete_private_worker_envelopes_pass_native_publication_validation() {
+    let evidence_dir = std::path::PathBuf::from(
+        std::env::var_os("FLITZIS_PUBLICATION_EVIDENCE_DIR")
+            .expect("FLITZIS_PUBLICATION_EVIDENCE_DIR must identify complete private evidence"),
+    );
+    assert!(
+        evidence_dir.is_absolute(),
+        "evidence directory must be absolute"
+    );
+    for track_id in ["T04", "T05", "R01"] {
+        let directory = evidence_dir.join(format!("worker-{track_id}"));
+        let request_path = directory.join("worker-request.json");
+        assert!(std::fs::metadata(&request_path).unwrap().len() <= 32 * 1024);
+        let request: Value =
+            serde_json::from_str(&std::fs::read_to_string(request_path).unwrap()).unwrap();
+        assert_eq!(request["schema_version"], 1, "{track_id}");
+        assert_eq!(request["pcm"]["origin_seconds"], 0.0, "{track_id}");
+        let id = &request["identity"];
+        let identity = PcmIdentity {
+            pad_id: usize::try_from(id["pad_id"].as_u64().unwrap()).unwrap(),
+            request_id: id["request_id"].as_u64().unwrap(),
+            source_id: id["source_id"].as_str().unwrap().to_owned(),
+            source_generation: id["source_generation"].as_u64().unwrap(),
+        };
+        let frames = request["pcm"]["frame_count"].as_u64().unwrap();
+        let rate = request["pcm"]["sample_rate_hz"].as_u64().unwrap();
+        assert!(frames > 0 && rate > 0, "{track_id}");
+        let duration = frames as f64 / rate as f64;
+        let envelope_path = directory.join("final-envelope.actual-probe.json");
+        assert!(std::fs::metadata(&envelope_path).unwrap().len() <= MAX_RESULT_BYTES as u64);
+        let wire = std::fs::read_to_string(envelope_path).unwrap();
+        let original: Value = serde_json::from_str(&wire).unwrap();
+        let validated = validate_envelope(&wire, &identity, duration).unwrap();
+        assert_eq!(validated["schema_version"], 2, "{track_id}");
+        assert_eq!(validated["beat"]["status"], "ready", "{track_id}");
+        assert_eq!(validated["beat"]["model"], request["model"], "{track_id}");
+        assert_eq!(
+            validated["beat"]["predictions"], original["beat"]["predictions"],
+            "{track_id}"
+        );
+        for name in [
+            "beat_seconds",
+            "downbeat_seconds",
+            "beat_logits",
+            "downbeat_logits",
+        ] {
+            assert!(
+                validated["beat"]["predictions"][name].is_string(),
+                "{track_id}/{name}"
+            );
+        }
+        let republished = validated.to_string();
+        assert!(republished.len() <= MAX_RESULT_BYTES, "{track_id}");
+        assert_eq!(
+            validate_envelope(&republished, &identity, duration).unwrap(),
+            validated,
+            "{track_id}"
+        );
+    }
 }

@@ -316,6 +316,19 @@ existing project build for native PCM/KeyNet methods. [Offline analysis
 boundary](offline-analysis.md) documents the API, focused tests and resource
 bounds. Keep installed runtime/model files outside the Git repository.
 
+The lossless diagnostic reader and native codec have deterministic regression
+coverage in the normal suite. An additional ignored private-evidence test checks
+complete real worker envelopes from the workspace without copying them into Git:
+
+```powershell
+$env:FLITZIS_PUBLICATION_EVIDENCE_DIR = (Resolve-Path -LiteralPath '..\scratch\b2b1').Path
+.\scripts\run-rust-tests.ps1 -CargoArgs @('complete_private_worker_envelopes_pass_native_publication_validation', '--', '--ignored')
+```
+
+That test requires the recorded `worker-T04`, `worker-T05` and `worker-R01`
+request/final-envelope files. It proves native result validation, independently
+of native long-track PCM admission and complete-job acceptance.
+
 Focused changes should run focused tests. Broader Rust/audio, persistence,
 OpenSpec, bridge, or UI-control changes should run the full sequence:
 

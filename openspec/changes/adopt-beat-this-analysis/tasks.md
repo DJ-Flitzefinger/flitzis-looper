@@ -47,6 +47,14 @@
 
 ## B2: Quality acceptance and separate default cutover
 
+- [x] B2b1: implement lossless inline binary64/Base64 full-result publication under the
+  unchanged final/worker/count limits; validate both final schema versions and adversarial
+  bounds/lifecycle cases; rerun complete T04/T05/R01 worker cases with preserved v1 lineage.
+  All four arrays/raw wire/PCM are bit/byte-identical; full v2 envelopes are 391849/571105/
+  642053 bytes and pass actual native validation. Full checks pass (477 ordinary Rust tests,
+  separate private-evidence test, 1025 Python tests, debug/release builds, Ruff/mypy and strict
+  validation); three release native lifecycle tests pass. This addresses final publication
+  only; native long-track staging remains separate B2b2 and overall resource acceptance FAIL.
 - [x] Freeze the finite private pilot corpus, annotation uncertainty policy, held-out
   correction-burden gates, critical-downbeat criteria and local memory/time limits before
   new inference/tuning. See docs/beat-this-acceptance.md and the hashed local v1 manifest.

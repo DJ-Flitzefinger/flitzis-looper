@@ -40,6 +40,7 @@ use std::thread;
 
 mod analysis_jobs;
 mod analysis_pcm;
+mod analysis_predictions;
 mod audio_stream;
 pub use analysis_jobs::OfflineAnalysisJob;
 mod buffer_retirement;

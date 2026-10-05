@@ -1,6 +1,8 @@
 import json
+import math
 import struct
 import time
+from dataclasses import asdict
 from threading import Event
 from typing import TYPE_CHECKING
 
@@ -9,9 +11,11 @@ import pytest
 from flitzis_looper.analysis.contracts import (
     BeatComponentResult,
     BeatModelIdentity,
+    BeatPredictions,
     BeatWorkerRequest,
 )
 from flitzis_looper.analysis.jobs import OfflineAnalysisService
+from flitzis_looper.analysis.publication import MAX_ENVELOPE_BYTES, decode_result
 from flitzis_looper.analysis.worker import BeatWorkerAdapter
 from tests.conftest import write_mono_pcm16_wav
 
@@ -151,3 +155,114 @@ def test_native_source_replacement_retains_busy_slot_and_rejects_stale_result(
     assert replacement.snapshot().identity.request_id != job.snapshot().identity.request_id
     completion = _wait_event(audio_engine, "offline_analysis_completed")
     assert completion["request_id"] == replacement.snapshot().identity.request_id
+
+
+class _CompleteReadyAdapter:
+    def __init__(self) -> None:
+        self.retired = Event()
+        self.retired.set()
+        self.request: BeatWorkerRequest | None = None
+        self.result: BeatComponentResult | None = None
+
+    def run(self, request: BeatWorkerRequest, cancel: Event) -> BeatComponentResult:
+        assert not cancel.is_set()
+        assert request.pcm.path.stat().st_size == 128 * 4
+        self.request = request
+        # Ordinary nontrivial doubles make JSON larger than 1 MiB; complete binary64 fits.
+        logits = tuple(math.sin(index + 0.12345678901234568) for index in range(30_000))
+        rate = request.pcm.sample_rate_hz
+        self.result = BeatComponentResult(
+            identity=request.identity,
+            model=request.model,
+            status="ready",
+            reason="",
+            predictions=BeatPredictions(
+                beat_seconds=(-0.0, 1 / rate, 127 / rate),
+                downbeat_seconds=(0.0, 127 / rate),
+                beat_logits=logits,
+                downbeat_logits=logits[::-1],
+            ),
+        )
+        return self.result
+
+
+def _assert_exact_predictions(actual: BeatComponentResult, expected: BeatComponentResult) -> None:
+    assert actual.identity == expected.identity
+    assert actual.model == expected.model
+    assert actual.status == "ready"
+    assert actual.resources_released
+    assert actual.predictions is not None
+    assert expected.predictions is not None
+    for name in ("beat_seconds", "downbeat_seconds", "beat_logits", "downbeat_logits"):
+        expected_values = getattr(expected.predictions, name)
+        actual_values = getattr(actual.predictions, name)
+        assert struct.pack(f"<{len(actual_values)}d", *actual_values) == struct.pack(
+            f"<{len(expected_values)}d", *expected_values
+        )
+
+
+def test_native_complete_v2_publication_retires_pcm_and_reopens_admission(
+    audio_engine: AudioEngine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "source.wav"
+    write_mono_pcm16_wav(source, audio_engine.output_sample_rate())
+    audio_engine.load_sample_async(0, str(source), run_analysis=False)
+    loaded = _wait_event(audio_engine, "success")
+    original_shape = audio_engine.loaded_sample_shape(0)
+    assert original_shape[2] == 128
+    adapter = _CompleteReadyAdapter()
+    model = BeatModelIdentity(
+        sha256="a" * 64,
+        frontend_id="fixture-reference-frontend",
+        environment_id="fixture-locked-cpu-environment",
+    )
+    service = OfflineAnalysisService()
+
+    job = service.start(audio_engine, 0, tmp_path / "analysis", model=model, adapter=adapter)
+
+    assert job.done.wait(5), job.snapshot()
+    completion = _wait_event(audio_engine, "offline_analysis_completed")
+    assert adapter.request is not None
+    assert adapter.result is not None
+    assert adapter.result.predictions is not None
+    assert not adapter.request.pcm.path.exists()
+    assert list((tmp_path / "analysis").iterdir()) == []
+    legacy = {
+        "schema_version": 1,
+        "identity": asdict(adapter.request.identity),
+        "beat": asdict(adapter.result),
+        "key": {"status": "failed", "key": "unknown"},
+    }
+    assert len(json.dumps(legacy).encode("utf-8")) > MAX_ENVELOPE_BYTES
+    payload = completion["result_json"]
+    assert isinstance(payload, str)
+    assert len(payload.encode("utf-8")) <= MAX_ENVELOPE_BYTES
+    snapshot = job.snapshot()
+    assert snapshot.stage == "finished"
+    assert snapshot.result_json is not None
+    assert completion["request_id"] == adapter.request.identity.request_id
+    decoded = decode_result(payload, adapter.request)
+    snapshot_result = decode_result(snapshot.result_json, adapter.request)
+    assert decoded.schema_version == 2
+    assert decoded.identity.source_generation == adapter.request.identity.source_generation
+    _assert_exact_predictions(decoded.beat, adapter.result)
+    _assert_exact_predictions(snapshot_result.beat, adapter.result)
+    assert snapshot_result.key == decoded.key
+    assert decoded.key["status"] == "failed"
+    assert decoded.key["key"] == "unknown"
+    assert "InsufficientData" in str(decoded.key["detail"])
+    assert audio_engine.loaded_sample_shape(0) == original_shape
+    assert source.exists()
+    assert "analysis" not in loaded
+    while (event := audio_engine.poll_loader_events()) is not None:
+        assert event.get("type") != "offline_analysis_completed"
+
+    # The real native finish released admission; a subsequent service request can complete.
+    replacement = service.start(audio_engine, 0, tmp_path / "analysis", model=BeatModelIdentity())
+    assert replacement.done.wait(5), replacement.snapshot()
+    subsequent = _wait_event(audio_engine, "offline_analysis_completed")
+    assert subsequent["request_id"] != completion["request_id"]
+    assert replacement.snapshot().identity.source_generation == snapshot.identity.source_generation
+    assert audio_engine.loaded_sample_shape(0) == original_shape
+    assert list((tmp_path / "analysis").iterdir()) == []

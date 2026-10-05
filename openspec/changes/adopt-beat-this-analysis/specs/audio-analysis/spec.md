@@ -188,3 +188,53 @@ is released. Launcher exit or a closed stdout pipe alone SHALL NOT prove worker 
 - **THEN** analysis reports an explicit limit failure
 - **AND** it does not analyze a shortened file as if it were the whole track
 - **AND** successfully loaded audio remains playable
+
+### Requirement: Diagnostic Publication Preserves Complete Predictions Losslessly
+The system SHALL publish every successful diagnostic beat result with all raw beat/downbeat
+positions and logits, preserving each validated binary64 value and the component's identity,
+model provenance and independent key outcome.
+
+The final schema-version-2 envelope SHALL store the four prediction arrays inline as canonical
+padded standard Base64 of uncompressed IEEE-754 little-endian binary64 bytes, identified by
+`float64-le/base64`. The worker request/response SHALL remain schema version 1. Readers SHALL
+retain support for schema-version-1 final envelopes containing numeric arrays. The complete
+final envelope SHALL remain limited to 1 MiB, worker responses to 8 MiB and each prediction
+array to 250000 values. No truncation, downcasting, quantization, compression or external
+artifact reference SHALL be used to bypass these limits.
+
+Validation SHALL bound encoded and decoded extents, reject malformed/noncanonical Base64,
+partial binary64 values, unknown encodings, nonfinite values, mismatched logit lengths and
+positions outside the source or not strictly increasing before atomic native publication.
+Packing, decoding, validation and cleanup SHALL execute outside the audio callback. The
+existing request identity lock, actual worker/key retirement and single-admission policy SHALL
+remain authoritative. A final result that still exceeds 1 MiB SHALL report an explicit beat
+failure while preserving the independent key result; successful publication SHALL never
+mean that any arrays were discarded. Diagnostic snapshot/event decoding SHALL use the same
+versioned reader without requiring the retired PCM file or optional model installation.
+
+#### Scenario: Complete long-worker result fits the unchanged final limit
+- **GIVEN** complete validated worker predictions exceed 1 MiB as JSON numeric text
+- **AND** their complete binary64/Base64 final envelope fits within 1 MiB
+- **WHEN** both analysis branches and their resources retire
+- **THEN** one validated completion publishes all positions and logits losslessly
+- **AND** the event and snapshot retain model/source/request identity and independent key status
+- **AND** default analysis routing and saved/manual grids remain unchanged
+
+#### Scenario: Packed output remains oversize
+- **GIVEN** complete packed predictions still exceed the 1-MiB final envelope limit
+- **WHEN** the supervisor assembles the final result
+- **THEN** beat status reports an explicit publication-limit failure
+- **AND** independent key output is retained without a truncated beat success
+
+#### Scenario: Corrupt or stale packed results cannot publish
+- **GIVEN** a final packed envelope has malformed bytes, invalid values or stale identity
+- **WHEN** native publication validates it
+- **THEN** no successful completion for that result is emitted
+- **AND** cancellation/source replacement still suppresses otherwise valid late results
+- **AND** admission remains occupied until actual resources retire
+
+#### Scenario: Diagnostic result remains readable after scratch cleanup
+- **GIVEN** a complete diagnostic result has published and temporary PCM has been removed
+- **WHEN** the versioned reader reads the snapshot or exported envelope without model files
+- **THEN** all prediction values and component provenance are recovered exactly
+- **AND** no scratch artifact, inference or reanalysis is required

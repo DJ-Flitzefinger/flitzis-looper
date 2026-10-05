@@ -193,6 +193,47 @@ bounded remediation before B2 can pass. Address full, lossless publication first
 as a separate slice, then native long-track staging; preserve the frozen limits,
 corpus and raw evidence throughout.
 
+## B2b1 lossless publication remediation
+
+The failed v1 cases above remain frozen evidence. On 2026-10-05, complete
+T04/T05/R01 original-decode worker cases were rerun with the same source/PCM,
+model, checkpoint, environment and limits. Final ready envelope version 2 uses
+uncompressed little-endian binary64/Base64 arrays; see
+[the boundary contract](offline-analysis.md). All four arrays recover bit for
+bit through the common diagnostic reader, and the raw worker responses and PCM
+are byte-identical to v1. No logits, events or provenance were removed.
+
+| ID | Adapter time (s) | V1 unlimited final bytes | V2 full final bytes | Logits/channel |
+| --- | ---: | ---: | ---: | ---: |
+| T04 | 31.398 | 744349 | 391849 | 17889 |
+| T05 | 41.243 | 1078513 | 571105 | 25927 |
+| R01 | 45.324 | 1254142 | 642053 | 30026 |
+
+All three full envelopes pass the unchanged 1-MiB final cap and the actual Rust
+native envelope validator, including canonical native reserialization. A
+separate real native short-source regression publishes 30000 logits/channel
+exactly once, decodes snapshot and event losslessly after PCM cleanup, preserves
+the loaded buffer and permits subsequent admission. The complete worker probes
+carry an explicit unavailable/not-run key component; they do not claim native
+KeyNet, native loaded-PCM parity or whole-job resource acceptance for those long
+sources. Native validation alone does not bypass staging admission.
+
+Complete post-remediation evidence is `exports/b2b1-publication-20261005.json`
+and `scratch/b2b1/`. T04's first harness attempt ran the real worker once and
+wrote full raw/v2 output, then failed only because it passed bytes to the string
+reader. That failure is retained; `worker-T04-postprocess/summary.json` completes
+validation from the same retained output without another inference. T05/R01
+completed directly. Timings are fresh-process observations with uncontrolled
+disk caches and concurrent project checks, not isolated speed comparisons.
+
+The measured final-publication failure is remediated. Native 96-kHz staging
+still fails for T04/T05/R01 under the unchanged 512-MiB cap; B2b2 is next.
+Overall resource acceptance therefore remains **FAIL**, musical acceptance
+remains **pending**, and default/new-analysis adoption stays disabled. Packed
+results that still exceed 1 MiB continue to fail explicitly with independent
+key output preserved; the allowed 250000-logit cap is not a promise that every
+possible complete worker response fits final publication.
+
 ## Native key completion correction
 
 The original T03 run produced a ready Beat This response but could not retire

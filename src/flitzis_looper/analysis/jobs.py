@@ -4,7 +4,7 @@ import json
 import math
 import shutil
 import tempfile
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Literal, Protocol
@@ -18,11 +18,11 @@ from flitzis_looper.analysis.contracts import (
     WorkerLimits,
     validate_component_result,
 )
+from flitzis_looper.analysis.publication import encode_result
 from flitzis_looper.analysis.worker import BeatWorkerAdapter
 
 _POLL_SECONDS = 0.02
 _MAX_KEY_JSON_BYTES = 16_384
-_MAX_ENVELOPE_BYTES = 1024 * 1024
 type JobStage = Literal["preparing", "running", "waiting_key", "retiring", "finished"]
 
 
@@ -318,23 +318,7 @@ class AnalysisJob:
         self.done.set()
 
     def _encode_result(self, beat: BeatComponentResult, key: dict[str, object]) -> str:
-        envelope = {
-            "schema_version": 1,
-            "identity": asdict(self._loaded.identity),
-            "beat": asdict(beat),
-            "key": key,
-        }
-        encoded = json.dumps(envelope, allow_nan=False)
-        if len(encoded.encode("utf-8")) <= _MAX_ENVELOPE_BYTES:
-            return encoded
-        # Preserve independent key output, and explicitly reject excess beat output.
-        return json.dumps(
-            {
-                **envelope,
-                "beat": asdict(self._failed_beats("Beat result exceeds publication size limit")),
-            },
-            allow_nan=False,
-        )
+        return encode_result(beat, key)
 
 
 class OfflineAnalysisService:
