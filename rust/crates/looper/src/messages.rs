@@ -105,7 +105,7 @@ pub enum StemMixMode {
 /// Bounded per-pad timing metadata prepared outside the audio callback.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct PadTimingMetadata {
-    pub phase_anchor_s: f32,
+    pub phase_anchor_s: f64,
 }
 
 /// High-level semantics for ordered control messages.
@@ -204,13 +204,16 @@ pub enum ControlMessage {
     /// Request transport downbeat anchoring from a selected playing pad.
     AnchorTransportPhaseFromPad { id: usize },
 
+    /// Arm one selected reference for one-time session grid bootstrap.
+    BootstrapTransportFromPad { id: usize },
+
     /// Set per-pad loop region in seconds.
     ///
     /// If `end_s` is None, the loop end defaults to the full sample length.
     SetPadLoopRegion {
         id: usize,
-        start_s: f32,
-        end_s: Option<f32>,
+        start_s: f64,
+        end_s: Option<f64>,
     },
 
     /// Set Rust-side trigger quantization mode for future pad triggers.
@@ -327,6 +330,7 @@ impl ControlMessage {
             | ControlMessage::SetPadKeyLock { .. }
             | ControlMessage::SetPadTimingMetadata { .. }
             | ControlMessage::AnchorTransportPhaseFromPad { .. }
+            | ControlMessage::BootstrapTransportFromPad { .. }
             | ControlMessage::SetPadLoopRegion { .. }
             | ControlMessage::SetTriggerQuantization(_)
             | ControlMessage::SetStemMixMode { .. }

@@ -33,6 +33,7 @@ rust/
     |           |-- input_mapping.rs
     |           |-- mixer.rs
     |           |-- scheduler.rs
+    |           |-- source_grid.rs
     |           |-- timing.rs
     |           |-- transport.rs
     |           |-- voice_slot.rs
@@ -118,6 +119,28 @@ is `uv run cargo test --manifest-path rust/Cargo.toml --workspace`.
   active voices with valid master and pad BPM metadata use fixed
   output-frame/source-frame anchors to derive source loop phase from the Rust
   transport timeline.
+- `source_grid.rs` owns signed source beat/bar, loop-start phase and internal
+  master-beat-to-loop mapping. The editor origin is published as `f64` seconds
+  and retained as a signed virtual source frame. Compatible tick periods divide
+  one bar or span whole bars, within one frame of rounding; musical wrapping
+  precedes source rounding to avoid cycle drift. Unsupported physical loops
+  retain bounded wrapping without a sustained synchronization claim.
+- Signed grid and loop-region seconds use `f64`, including MIDI runtime loop
+  metadata, until source-frame conversion. Pad/master BPM remain native `f32`
+  parameters promoted to `f64` for phase math. Long source markers retain frame
+  precision; this does not imply arbitrary decimal BPM exactness.
+- Transport stores complete musical position across BPM changes. The dedicated
+  `bootstrap_transport_from_pad(id)` request latches the selected BPMLOCK
+  reference once per stream, waits for valid active source state and consumes
+  the opportunity on success or deliberate explicit sync. Silence cannot rearm
+  it. Active source playheads and the monotonic output-frame clock are preserved.
+- Loop edits invalidate old voice timing anchors. Bootstrap and rendering share
+  bounded `playhead_before_render` normalization, keeping their first source
+  frame coherent after clamping or explicit seek.
+- Already accepted starts retain output target/order/timestamp across BPM and
+  metadata updates; current execution uses the latest effective loop start.
+  Source-phase mapping remains an internal foundation, with ordinary immediate
+  or future-grid loop-start launches still active.
 - Per-pad load and analysis work carries request identity across the PyO3
   boundary. Rust rejects stale sample publication after unload or replacement,
   and Python ignores stale progress, error, success, and analysis events.

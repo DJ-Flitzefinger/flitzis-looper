@@ -36,6 +36,10 @@ pub(crate) struct TransportTimeline {
     master_bpm: Option<f32>,
     beats_per_bar: u32,
     downbeat_frame: u64,
+    beat_anchor_frame: u64,
+    beat_anchor_position: f64,
+    bootstrap_reference: Option<usize>,
+    bootstrap_complete: bool,
 }
 
 impl TransportTimeline {
@@ -52,6 +56,10 @@ impl TransportTimeline {
             master_bpm: Some(DEFAULT_MASTER_BPM),
             beats_per_bar: BEATS_PER_BAR_4_4,
             downbeat_frame: 0,
+            beat_anchor_frame: 0,
+            beat_anchor_position: 0.0,
+            bootstrap_reference: None,
+            bootstrap_complete: false,
         }
     }
 
@@ -83,6 +91,8 @@ impl TransportTimeline {
     #[allow(dead_code)]
     pub(crate) fn set_downbeat_frame(&mut self, frame: u64) {
         self.downbeat_frame = frame;
+        self.beat_anchor_frame = frame;
+        self.beat_anchor_position = 0.0;
     }
 
     #[allow(dead_code)]
@@ -95,13 +105,30 @@ impl TransportTimeline {
         bar_phase_beats: f64,
         output_frame: u64,
     ) -> bool {
+        if !bar_phase_beats.is_finite() {
+            return false;
+        }
+        self.anchor_beat_position_at_frame(
+            normalize_phase(bar_phase_beats, self.beats_per_bar as f64),
+            output_frame,
+        )
+    }
+
+    pub(crate) fn anchor_beat_position_at_frame(
+        &mut self,
+        beat_position: f64,
+        output_frame: u64,
+    ) -> bool {
+        if !beat_position.is_finite() {
+            return false;
+        }
         let Some(frames_per_beat) = self.frames_per_beat() else {
             return false;
         };
         let Some(frames_per_bar) = self.frames_per_bar() else {
             return false;
         };
-        let bar_phase_beats = normalize_phase(bar_phase_beats, self.beats_per_bar as f64);
+        let bar_phase_beats = normalize_phase(beat_position, self.beats_per_bar as f64);
 
         if !frames_per_beat.is_finite()
             || frames_per_beat <= 0.0
@@ -124,33 +151,33 @@ impl TransportTimeline {
         }
 
         self.downbeat_frame = downbeat_frame.round() as u64;
+        self.beat_anchor_frame = output_frame;
+        self.beat_anchor_position = beat_position;
         true
     }
 
-    pub(crate) fn set_master_bpm_and_anchor_bar_phase_at_frame(
+    pub(crate) fn set_master_bpm_and_anchor_beat_position_at_frame(
         &mut self,
         bpm: f32,
-        bar_phase_beats: f64,
+        beat_position: f64,
         output_frame: u64,
     ) -> bool {
         if !is_valid_bpm(bpm) {
             return false;
         }
 
-        let previous_bpm = self.master_bpm;
-        let previous_downbeat = self.downbeat_frame;
+        let previous = *self;
         self.master_bpm = Some(bpm);
 
-        if self.anchor_downbeat_to_bar_phase_at_frame(bar_phase_beats, output_frame) {
+        if self.anchor_beat_position_at_frame(beat_position, output_frame) {
             return true;
         }
 
-        self.master_bpm = previous_bpm;
-        self.downbeat_frame = previous_downbeat;
+        *self = previous;
         false
     }
 
-    pub(crate) fn set_master_bpm_preserving_bar_phase_at_frame(
+    pub(crate) fn set_master_bpm_preserving_beat_position_at_frame(
         &mut self,
         bpm: f32,
         output_frame: u64,
@@ -159,11 +186,59 @@ impl TransportTimeline {
             return false;
         }
 
-        let Some(bar_phase_beats) = self.bar_phase_beats_at_frame(output_frame) else {
+        let Some(beat_position) = self.beat_position_at_frame(output_frame) else {
             return self.set_master_bpm(bpm);
         };
+        let previous = *self;
+        self.master_bpm = Some(bpm);
+        if self.anchor_beat_position_at_frame(beat_position, output_frame) {
+            true
+        } else {
+            *self = previous;
+            false
+        }
+    }
 
-        self.set_master_bpm_and_anchor_bar_phase_at_frame(bpm, bar_phase_beats, output_frame)
+    pub(crate) fn request_bootstrap(&mut self, id: usize) {
+        if !self.bootstrap_complete && self.bootstrap_reference.is_none() {
+            self.bootstrap_reference = Some(id);
+        }
+    }
+
+    pub(crate) fn bootstrap_reference(&self) -> Option<usize> {
+        self.bootstrap_reference
+            .filter(|_| !self.bootstrap_complete)
+    }
+
+    pub(crate) fn clear_pending_bootstrap_for_pad(&mut self, id: usize) {
+        if self.bootstrap_reference == Some(id) {
+            self.bootstrap_reference = None;
+        }
+    }
+
+    pub(crate) fn complete_bootstrap(&mut self) {
+        self.bootstrap_complete = true;
+        self.bootstrap_reference = None;
+    }
+
+    pub(crate) fn bootstrap_from_source_at_frame(
+        &mut self,
+        bpm: f32,
+        source_beat: f64,
+        frame: u64,
+    ) -> bool {
+        if self.bootstrap_complete || !is_valid_bpm(bpm) {
+            return false;
+        }
+        let previous = *self;
+        self.master_bpm = Some(bpm);
+        if self.anchor_beat_position_at_frame(source_beat, frame) {
+            self.complete_bootstrap();
+            true
+        } else {
+            *self = previous;
+            false
+        }
     }
 
     pub(crate) fn set_master_bpm(&mut self, bpm: f32) -> bool {
@@ -204,7 +279,10 @@ impl TransportTimeline {
     }
 
     pub(crate) fn beat_position_at_frame(&self, output_frame: u64) -> Option<f64> {
-        Some(self.relative_frames_from_downbeat_at_frame(output_frame) / self.frames_per_beat()?)
+        Some(
+            self.beat_anchor_position
+                + (output_frame as f64 - self.beat_anchor_frame as f64) / self.frames_per_beat()?,
+        )
     }
 
     #[allow(dead_code)]
@@ -238,8 +316,8 @@ impl TransportTimeline {
             return None;
         }
 
-        let relative_frames = self.relative_frames_from_downbeat();
-        let grid_position = relative_frames / frames_per_grid;
+        let grid_position =
+            self.beat_position()? * GRID_64THS_PER_BEAT as f64 / grid.step_64ths() as f64;
         let rounded_grid = grid_position.round();
         let distance_frames = (grid_position - rounded_grid).abs() * frames_per_grid;
 
@@ -249,16 +327,9 @@ impl TransportTimeline {
             grid_position.floor() + 1.0
         };
 
-        let target_frame = self.downbeat_frame as f64 + target_grid * frames_per_grid;
+        let target_frame =
+            self.output_frame as f64 + (target_grid - grid_position) * frames_per_grid;
         Some(frame_at_or_after(target_frame, self.output_frame))
-    }
-
-    fn relative_frames_from_downbeat(&self) -> f64 {
-        self.relative_frames_from_downbeat_at_frame(self.output_frame)
-    }
-
-    fn relative_frames_from_downbeat_at_frame(&self, output_frame: u64) -> f64 {
-        output_frame as f64 - self.downbeat_frame as f64
     }
 }
 
@@ -288,7 +359,9 @@ fn frame_at_or_after(target_frame: f64, current_frame: u64) -> u64 {
         return u64::MAX;
     }
 
-    (target_frame.ceil() as u64).max(current_frame)
+    // Floating beat arithmetic can put an exact integer boundary a tiny
+    // fraction of a frame above itself. Preserve that boundary consistently.
+    ((target_frame - GRID_EPSILON_FRAMES).ceil() as u64).max(current_frame)
 }
 
 #[cfg(test)]
@@ -569,7 +642,7 @@ mod tests {
     fn master_bpm_anchor_can_use_arbitrary_output_frame() {
         let mut transport = TransportTimeline::new(48_000);
 
-        assert!(transport.set_master_bpm_and_anchor_bar_phase_at_frame(60.0, 2.5, 60_000));
+        assert!(transport.set_master_bpm_and_anchor_beat_position_at_frame(60.0, 2.5, 60_000));
 
         assert_eq!(transport.master_bpm(), Some(60.0));
         assert_eq!(transport.downbeat_frame(), 132_000);
@@ -585,7 +658,8 @@ mod tests {
         assert_eq!(transport.bar_phase_beats(), Some(1.0));
 
         assert!(
-            transport.set_master_bpm_preserving_bar_phase_at_frame(120.0, transport.output_frame())
+            transport
+                .set_master_bpm_preserving_beat_position_at_frame(120.0, transport.output_frame())
         );
 
         assert_eq!(transport.master_bpm(), Some(120.0));
@@ -615,5 +689,66 @@ mod tests {
             transport.next_grid_frame(QuantizeGrid::from_step_64ths(64).unwrap()),
             None
         );
+    }
+
+    #[test]
+    fn bpm_changes_preserve_whole_bars_and_fractional_beats() {
+        for rate in [44_100, 48_000] {
+            let mut transport = TransportTimeline::new(rate);
+            transport.set_master_bpm(123.45);
+            transport.advance_by_rendered_frames(rate as usize * 17 + 137);
+            let before = transport.beat_position().unwrap();
+            assert!(before > 32.0);
+            let frame = transport.output_frame();
+            for bpm in [87.65, 155.25, 123.45] {
+                assert!(transport.set_master_bpm_preserving_beat_position_at_frame(bpm, frame));
+                assert!((transport.beat_position().unwrap() - before).abs() < 1e-12);
+                assert_eq!(transport.output_frame(), frame);
+            }
+            transport.advance_by_rendered_frames(rate as usize);
+            assert!(
+                (transport.beat_position().unwrap() - before - 123.45_f32 as f64 / 60.0).abs()
+                    < 1e-12
+            );
+        }
+    }
+
+    #[test]
+    fn virtual_negative_and_fractional_origin_controls_exact_grid() {
+        let mut transport = TransportTimeline::new(48_000);
+        assert!(transport.anchor_beat_position_at_frame(0.125_02, 0));
+        let grid = QuantizeGrid::from_step_64ths(4).unwrap();
+        assert_eq!(transport.next_grid_frame(grid), Some(3_000));
+        let phase = transport.beat_position().unwrap();
+        assert!(!transport.anchor_beat_position_at_frame(f64::NAN, 7));
+        assert_eq!(transport.beat_position(), Some(phase));
+    }
+
+    #[test]
+    fn selected_reference_bootstraps_once_without_resetting_output_clock() {
+        let mut transport = transport_at(96_007);
+        transport.request_bootstrap(3);
+        transport.request_bootstrap(9);
+        assert_eq!(transport.bootstrap_reference(), Some(3));
+        assert!(!transport.bootstrap_from_source_at_frame(120.0, f64::NAN, 96_007));
+        assert_eq!(transport.bootstrap_reference(), Some(3));
+        assert!(transport.bootstrap_from_source_at_frame(90.0, -5.25, 96_007));
+        assert_eq!(transport.beat_position(), Some(-5.25));
+        assert_eq!(transport.output_frame(), 96_007);
+        transport.request_bootstrap(9);
+        assert_eq!(transport.bootstrap_reference(), None);
+        assert!(!transport.bootstrap_from_source_at_frame(120.0, 8.0, 96_007));
+        assert_eq!(transport.beat_position(), Some(-5.25));
+    }
+
+    #[test]
+    fn unloading_pending_reference_releases_unused_bootstrap() {
+        let mut transport = transport_at(100);
+        transport.request_bootstrap(3);
+        transport.clear_pending_bootstrap_for_pad(2);
+        assert_eq!(transport.bootstrap_reference(), Some(3));
+        transport.clear_pending_bootstrap_for_pad(3);
+        transport.request_bootstrap(9);
+        assert_eq!(transport.bootstrap_reference(), Some(9));
     }
 }

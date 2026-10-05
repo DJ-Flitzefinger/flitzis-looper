@@ -453,8 +453,12 @@ class LoaderController(BaseController):
         if analysis is not None:
             self._store_sample_analysis(sample_id, analysis)
         # If no analysis in event (from restoration), keep existing analysis from project state
-        elif self._project.sample_analysis[sample_id] is not None:
-            # Analysis was already restored from project state, just trigger BPM update
+        elif (
+            self._project.sample_analysis[sample_id] is not None
+            or self._project.manual_bpm[sample_id] is not None
+            or self._project.pad_grid_offset_samples[sample_id] != 0
+        ):
+            # Restore the persisted source grid after native sample publication.
             self._on_pad_bpm_changed(sample_id)
 
         self._clear_analysis_task_state(sample_id)

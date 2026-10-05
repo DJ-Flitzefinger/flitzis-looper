@@ -131,6 +131,9 @@ def test_transport_slot_id_range_rejects_project_slot_count(audio_engine: AudioE
         audio_engine.anchor_transport_phase_from_pad(invalid_id)
 
     with pytest.raises(ValueError, match=r"id out of range"):
+        audio_engine.bootstrap_transport_from_pad(invalid_id)
+
+    with pytest.raises(ValueError, match=r"id out of range"):
         audio_engine.set_pad_bpm(invalid_id, 120.0)
 
     with pytest.raises(ValueError, match=r"id out of range"):
@@ -197,6 +200,7 @@ def test_last_sample_slot_accepts_control_messages(audio_engine: AudioEngine) ->
     audio_engine.set_pad_gain(valid_last_id, 0.0)
     audio_engine.set_pad_eq(valid_last_id, 0.0, 0.0, 0.0)
     audio_engine.anchor_transport_phase_from_pad(valid_last_id)
+    audio_engine.bootstrap_transport_from_pad(valid_last_id)
     audio_engine.play_sample(valid_last_id, 1.0)
     audio_engine.play_sample_exclusive(valid_last_id, 1.0)
     audio_engine.pause_sample(valid_last_id)
@@ -522,16 +526,20 @@ def test_set_stem_enabled_mask_requires_initialized_engine() -> None:
         engine.set_stem_enabled_mask(0, 0b1111, "source-version")
 
 
-def test_set_pad_timing_metadata_accepts_finite_anchor(audio_engine: AudioEngine) -> None:
-    audio_engine.set_pad_timing_metadata(0, 1.25)
+@pytest.mark.parametrize("anchor_s", [-1.25, -1.0 / 48_000, 0.0, 1.25])
+def test_set_pad_timing_metadata_accepts_finite_signed_anchor(
+    audio_engine: AudioEngine, anchor_s: float
+) -> None:
+    audio_engine.set_pad_timing_metadata(0, anchor_s)
 
 
 def test_set_pad_timing_metadata_rejects_invalid_anchor(audio_engine: AudioEngine) -> None:
     with pytest.raises(ValueError, match=r"phase_anchor_s out of range"):
         audio_engine.set_pad_timing_metadata(0, float("nan"))
 
-    with pytest.raises(ValueError, match=r"phase_anchor_s out of range"):
-        audio_engine.set_pad_timing_metadata(0, -1.0)
+    for anchor_s in [float("inf"), float("-inf")]:
+        with pytest.raises(ValueError, match=r"phase_anchor_s out of range"):
+            audio_engine.set_pad_timing_metadata(0, anchor_s)
 
 
 def test_set_pad_timing_metadata_requires_initialized_engine() -> None:
@@ -546,6 +554,13 @@ def test_anchor_transport_phase_from_pad_requires_initialized_engine() -> None:
 
     with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
         engine.anchor_transport_phase_from_pad(0)
+
+
+def test_bootstrap_transport_from_pad_requires_initialized_engine() -> None:
+    engine = AudioEngine()
+
+    with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
+        engine.bootstrap_transport_from_pad(0)
 
 
 def test_generate_stems_async_requires_initialized_engine() -> None:

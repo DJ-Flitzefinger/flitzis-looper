@@ -14,7 +14,8 @@ const MAX_DEVICE_DELAY_NS: u64 = 2_000_000_000;
 const MAX_EXTRAPOLATION_NS: u64 = 2_000_000_000;
 const MIN_FRESHNESS_NS: u64 = 100_000_000;
 const MIN_DISCONTINUITY_TOLERANCE_NS: u64 = 20_000_000;
-const SNAPSHOT_FIELDS: usize = 8;
+const SNAPSHOT_FIELDS: usize = 9;
+const GRID_ROUNDING_EPSILON_FRAMES: f64 = 1.0e-6;
 
 /// One origin shared by UI capture, native MIDI and the output callback.
 #[derive(Debug, Clone, Copy)]
@@ -48,6 +49,7 @@ pub(crate) struct OutputClockSnapshot {
     pub(crate) sample_rate_hz: u32,
     pub(crate) master_bpm: Option<f32>,
     pub(crate) downbeat_frame: u64,
+    pub(crate) master_beat: f64,
     pub(crate) freshness_ns: u64,
 }
 
@@ -80,7 +82,8 @@ impl OutputClockSnapshot {
             input_frame,
             self.sample_rate_hz,
             self.master_bpm?,
-            self.downbeat_frame,
+            self.output_frame as f64,
+            self.master_beat,
             grid,
         )
     }
@@ -90,12 +93,15 @@ fn nearest_grid_frame(
     input_frame: f64,
     sample_rate_hz: u32,
     master_bpm: f32,
-    downbeat_frame: u64,
+    reference_frame: f64,
+    reference_beat: f64,
     grid: QuantizeGrid,
 ) -> Option<u64> {
     if !input_frame.is_finite()
         || input_frame < 0.0
         || sample_rate_hz == 0
+        || !reference_frame.is_finite()
+        || !reference_beat.is_finite()
         || !master_bpm.is_finite()
         || master_bpm <= 0.0
     {
@@ -104,13 +110,40 @@ fn nearest_grid_frame(
     let frames_per_grid = f64::from(sample_rate_hz) * 60.0 / f64::from(master_bpm)
         * f64::from(grid.step_64ths())
         / f64::from(GRID_64THS_PER_BEAT);
-    let position = (input_frame - downbeat_frame as f64) / frames_per_grid;
-    let target = downbeat_frame as f64 + (position + 0.5).floor() * frames_per_grid;
-    if !target.is_finite() || target < 0.0 || target >= u64::MAX as f64 {
+    if !frames_per_grid.is_finite() || frames_per_grid <= 0.0 {
         return None;
     }
-    // Fractional grid boundaries become the first frame at/after that boundary.
-    Some(target.ceil() as u64)
+    // Use nearby frame/beat references rather than reconstructing a distant
+    // zero-beat frame and subtracting it again. Floating-point noise at a tie
+    // must not select the past boundary or add a frame to an integer target.
+    let reference_grid_position =
+        reference_beat * f64::from(GRID_64THS_PER_BEAT) / f64::from(grid.step_64ths());
+    let position = reference_grid_position + (input_frame - reference_frame) / frames_per_grid;
+    if !position.is_finite() {
+        return None;
+    }
+    let previous_grid = position.floor();
+    let distance_from_midpoint_frames = (position - previous_grid - 0.5) * frames_per_grid;
+    let nearest_grid = if distance_from_midpoint_frames >= -GRID_ROUNDING_EPSILON_FRAMES {
+        previous_grid + 1.0
+    } else {
+        previous_grid
+    };
+    let target = reference_frame + (nearest_grid - reference_grid_position) * frames_per_grid;
+    if !target.is_finite() || target < -GRID_ROUNDING_EPSILON_FRAMES {
+        return None;
+    }
+    let rounded_target = target.round();
+    let target = if (target - rounded_target).abs() <= GRID_ROUNDING_EPSILON_FRAMES {
+        rounded_target
+    } else {
+        // Genuine fractional boundaries use the first frame at/after them.
+        target.ceil()
+    };
+    if target < 0.0 || target >= u64::MAX as f64 {
+        return None;
+    }
+    Some(target as u64)
 }
 
 /// Callback-owned mapper; all storage and work is fixed-size.
@@ -234,6 +267,7 @@ impl SharedOutputClock {
             u64::from(snapshot.master_bpm.map_or(0, f32::to_bits)),
             snapshot.downbeat_frame,
             snapshot.freshness_ns,
+            snapshot.master_beat.to_bits(),
         ];
         for (field, value) in self.fields.iter().zip(fields) {
             field.store(value, Ordering::SeqCst);
@@ -264,6 +298,7 @@ impl SharedOutputClock {
             master_bpm: (bpm.is_finite() && bpm > 0.0).then_some(bpm),
             downbeat_frame: fields[6],
             freshness_ns: fields[7],
+            master_beat: f64::from_bits(fields[8]),
         })
     }
 }
@@ -271,6 +306,22 @@ impl SharedOutputClock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nearest_diagnostic_retains_exact_fractional_signed_grid_origin() {
+        let grid = QuantizeGrid::from_step_64ths(4).unwrap();
+        let mut clock = snapshot(0, 1_000_000_000);
+        clock.master_beat = 0.125_02;
+        // The legacy diagnostic downbeat is rounded; nearest math uses exact beat position.
+        clock.downbeat_frame = 92_999;
+        assert_eq!(
+            clock.input_target_frame(Some(clock.audible_at_ns), clock.audible_at_ns, grid),
+            Some(3_000)
+        );
+        let shared = SharedOutputClock::new();
+        shared.publish(clock);
+        assert_eq!(shared.read(), Some(clock));
+    }
 
     fn snapshot(frame: u64, observed_at_ns: u64) -> OutputClockSnapshot {
         OutputClockSnapshot {
@@ -281,6 +332,7 @@ mod tests {
             sample_rate_hz: 48_000,
             master_bpm: Some(120.0),
             downbeat_frame: 0,
+            master_beat: frame as f64 / 24_000.0,
             freshness_ns: MIN_FRESHNESS_NS,
         }
     }
@@ -296,15 +348,81 @@ mod tests {
             (9_001.0, 12_000),
         ] {
             assert_eq!(
-                nearest_grid_frame(input, 48_000, 120.0, 0, grid),
+                nearest_grid_frame(input, 48_000, 120.0, 0.0, 0.0, grid),
                 Some(target)
             );
         }
         // Signed distance before a positive anchor follows the same tie rule.
         assert_eq!(
-            nearest_grid_frame(3_000.0, 48_000, 120.0, 12_000, grid),
+            nearest_grid_frame(3_000.0, 48_000, 120.0, 12_000.0, 0.0, grid),
             Some(6_000)
         );
+    }
+
+    #[test]
+    fn equivalent_snapshot_references_preserve_integer_boundaries_and_future_ties() {
+        let grid = QuantizeGrid::from_step_64ths(4).unwrap();
+        // These two frames previously reconstructed a tiny positive origin:
+        // 6005 rounded an integer target upward and 12010 broke midpoint ties.
+        for frame in [0, 6_000, 6_005, 12_010, 24_000] {
+            let clock = snapshot(frame, 1_000_000_000);
+            for (input_frame, expected_target) in [(6_000.0, 6_000), (9_000.0, 12_000)] {
+                assert_eq!(
+                    nearest_grid_frame(
+                        input_frame,
+                        clock.sample_rate_hz,
+                        clock.master_bpm.unwrap(),
+                        clock.output_frame as f64,
+                        clock.master_beat,
+                        grid,
+                    ),
+                    Some(expected_target),
+                    "reference frame={frame}, input frame={input_frame}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn captured_integer_boundary_uses_same_target_from_sensitive_snapshot_frames() {
+        let grid = QuantizeGrid::from_step_64ths(4).unwrap();
+        let epoch_ns = 1_000_000_000;
+        let captured_ns = epoch_ns + 125_000_000; // Output frame 6000 at 48 kHz.
+        for frame in [6_005, 12_010] {
+            let audible_ns = epoch_ns + (frame as f64 * NS_PER_SECOND / 48_000.0).round() as u64;
+            let clock = snapshot(frame, audible_ns - 10_000_000);
+            let now_ns = clock.observed_at_ns.max(captured_ns) + 1_000_000;
+            assert_eq!(
+                clock.input_target_frame(Some(captured_ns), now_ns, grid),
+                Some(6_000)
+            );
+        }
+    }
+
+    #[test]
+    fn fractional_boundaries_and_inputs_outside_tie_tolerance_are_preserved() {
+        let grid = QuantizeGrid::from_step_64ths(4).unwrap();
+        // A real +0.48-frame grid origin must not be rounded down to zero.
+        let reference_beat = -0.48 / 24_000.0;
+        assert_eq!(
+            nearest_grid_frame(6_000.0, 48_000, 120.0, 0.0, reference_beat, grid),
+            Some(6_001)
+        );
+        // A real -0.48-frame origin places this boundary before frame 6000.
+        assert_eq!(
+            nearest_grid_frame(6_000.0, 48_000, 120.0, 0.0, -reference_beat, grid),
+            Some(6_000)
+        );
+        assert_eq!(
+            nearest_grid_frame(0.0, 48_000, 120.0, 0.0, -reference_beat, grid),
+            None
+        );
+        for (input, target) in [(8_999.999_99, 6_000), (9_000.000_01, 12_000)] {
+            assert_eq!(
+                nearest_grid_frame(input, 48_000, 120.0, 12_010.0, 12_010.0 / 24_000.0, grid),
+                Some(target)
+            );
+        }
     }
 
     #[test]

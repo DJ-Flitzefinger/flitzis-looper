@@ -74,6 +74,7 @@ class GlobalParametersController:
             anchor_bpm = normalize_bpm(self._bpm.effective_bpm(anchor_pad_id))
             self._session.bpm_lock_anchor_pad_id = anchor_pad_id
             self._session.bpm_lock_anchor_bpm = anchor_bpm
+            self._transport.loop.apply_grid_anchor_to_audio(anchor_pad_id)
         else:
             self._session.bpm_lock_anchor_pad_id = None
             self._session.bpm_lock_anchor_bpm = None

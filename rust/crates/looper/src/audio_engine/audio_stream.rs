@@ -219,14 +219,38 @@ fn anchor_transport_phase_from_pad_at_frame(
     id: usize,
     output_frame: u64,
 ) -> bool {
-    let Some(bar_phase_beats) = mixer.active_pad_bar_phase_beats(id) else {
+    let Some(source_beat) = mixer.active_pad_beat_position(id) else {
         return false;
     };
-    let Some(bpm) = mixer.output_bpm_for_sample_id(id) else {
-        return transport.anchor_downbeat_to_bar_phase_at_frame(bar_phase_beats, output_frame);
+    let Some(bpm) = mixer.transport_reference_bpm_for_sample_id(id) else {
+        return false;
     };
 
-    transport.set_master_bpm_and_anchor_bar_phase_at_frame(bpm, bar_phase_beats, output_frame)
+    let anchored =
+        transport.set_master_bpm_and_anchor_beat_position_at_frame(bpm, source_beat, output_frame);
+    if anchored {
+        transport.complete_bootstrap();
+    }
+    anchored
+}
+
+/// Called after both command/parameter batches and at render segment boundaries.
+/// The source position and output frame therefore describe the same instant.
+fn try_bootstrap_transport_from_reference(
+    mixer: &RtMixer,
+    transport: &mut TransportTimeline,
+    output_frame: u64,
+) -> bool {
+    let Some(id) = transport.bootstrap_reference() else {
+        return false;
+    };
+    let Some(source_beat) = mixer.active_pad_beat_position(id) else {
+        return false;
+    };
+    let Some(bpm) = mixer.transport_reference_bpm_for_sample_id(id) else {
+        return false;
+    };
+    transport.bootstrap_from_source_at_frame(bpm, source_beat, output_frame)
 }
 
 fn drain_scheduler_due_at_callback_start<
@@ -391,6 +415,7 @@ fn render_scheduled_audio_tracking_pads<
     let mut segment_peaks = [0.0_f32; NUM_SAMPLES];
 
     while rendered_until_frame < callback_end_frame {
+        try_bootstrap_transport_from_reference(mixer, transport, rendered_until_frame);
         let Some(next_target_frame) = scheduler.peek_next_target_frame() else {
             render_mixer_segment(
                 mixer,
@@ -760,7 +785,8 @@ impl PendingControlParameters {
         }
         if let Some(bpm) = self.master_bpm {
             mixer.set_master_bpm(bpm);
-            transport.set_master_bpm_preserving_bar_phase_at_frame(bpm, transport.output_frame());
+            transport
+                .set_master_bpm_preserving_beat_position_at_frame(bpm, transport.output_frame());
             applied += 1;
         }
         for pending in self.pad_bpm[..self.pad_bpm_count].iter().copied() {
@@ -899,6 +925,7 @@ fn process_control_message<const CAPACITY: usize, S: AudioMessageSink, R: AudioB
         }
         ControlMessage::UnloadSample { id } => {
             mixer.unload_sample_rt(id, retirement);
+            transport.clear_pending_bootstrap_for_pad(id);
         }
         ControlMessage::SetBpmLock(enabled) => {
             mixer.set_bpm_lock(enabled);
@@ -911,6 +938,11 @@ fn process_control_message<const CAPACITY: usize, S: AudioMessageSink, R: AudioB
         }
         ControlMessage::SetPadTimingMetadata { id, metadata } => {
             mixer.set_pad_timing_metadata(id, metadata);
+        }
+        ControlMessage::BootstrapTransportFromPad { id } => {
+            if id < NUM_SAMPLES {
+                transport.request_bootstrap(id);
+            }
         }
         ControlMessage::AnchorTransportPhaseFromPad { id } => {
             anchor_transport_phase_from_pad(mixer, transport, id);
@@ -1010,6 +1042,9 @@ pub fn create_audio_stream(
                     sample_rate_hz,
                     master_bpm: transport.master_bpm(),
                     downbeat_frame: transport.downbeat_frame(),
+                    master_beat: transport
+                        .beat_position_at_frame(buffer_start_frame)
+                        .unwrap_or(0.0),
                     freshness_ns: 0,
                 },
                 data.len() / channels as usize,
@@ -1028,10 +1063,15 @@ pub fn create_audio_stream(
 
             drain_parameter_messages(&mut parameter_consumer_in, &mut mixer, &mut transport);
 
+            try_bootstrap_transport_from_reference(&mixer, &mut transport, buffer_start_frame);
+
             // Publish the same clock estimate with the accepted current grid.
             callback_clock.publish(OutputClockSnapshot {
                 master_bpm: transport.master_bpm(),
                 downbeat_frame: transport.downbeat_frame(),
+                master_beat: transport
+                    .beat_position_at_frame(buffer_start_frame)
+                    .unwrap_or(0.0),
                 ..snapshot
             });
 
@@ -2147,6 +2187,288 @@ mod tests {
         }
         assert_eq!(active_voice_frame(&mixer, 2), None);
         assert_eq!(active_voice_frame(&mixer, 5), None);
+    }
+
+    #[test]
+    fn bootstrap_retains_accepted_master_bpm_even_when_reference_rate_is_clipped() {
+        for master_bpm in [123.45, 400.0] {
+            let mut mixer = RtMixer::new(1, 10.0);
+            mixer.load_sample(0, create_test_sample(1, 200, 0.5));
+            mixer.set_pad_bpm(0, Some(87.65));
+            mixer.set_master_bpm(master_bpm);
+            mixer.set_bpm_lock(true);
+            assert!(mixer.play_sample(0, 1.0));
+            let mut transport = TransportTimeline::new(10);
+            transport.request_bootstrap(0);
+            assert!(try_bootstrap_transport_from_reference(
+                &mixer,
+                &mut transport,
+                0
+            ));
+            assert_eq!(transport.master_bpm(), Some(master_bpm));
+        }
+    }
+
+    #[test]
+    fn deliberate_sync_retains_complete_source_beat_and_consumes_bootstrap() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_test_sample(1, 200, 0.5));
+        mixer.set_pad_bpm(0, Some(60.0));
+        mixer.set_pad_loop_region(0, 18.5, Some(19.0));
+        assert!(mixer.play_sample(0, 1.0));
+        let mut transport = TransportTimeline::new(10);
+        transport.advance_by_rendered_frames(100);
+        transport.request_bootstrap(1);
+        assert!(anchor_transport_phase_from_pad(&mixer, &mut transport, 0));
+        assert_eq!(transport.beat_position(), Some(18.5));
+        assert_eq!(transport.bar_phase_beats(), Some(2.5));
+        transport.request_bootstrap(0);
+        assert_eq!(transport.bootstrap_reference(), None);
+        assert!(!try_bootstrap_transport_from_reference(
+            &mixer,
+            &mut transport,
+            100
+        ));
+    }
+
+    #[test]
+    fn reference_bootstrap_uses_same_loop_edit_position_as_renderer() {
+        for (rendered, expected_start) in [(30, 30), (80, 20)] {
+            let mut mixer = RtMixer::new(1, 10.0);
+            mixer.load_sample(0, create_test_sample(1, 200, 0.5));
+            mixer.set_master_bpm(60.0);
+            mixer.set_pad_bpm(0, Some(60.0));
+            mixer.set_bpm_lock(true);
+            assert!(mixer.play_sample_at_output_frame(0, 1.0, 0));
+            let mut scheduler = FixedCapacityScheduler::<8>::new();
+            let mut transport = TransportTimeline::new(10);
+            transport.set_master_bpm(60.0);
+            let mut messages = Vec::new();
+            let mut peaks = [0.0; NUM_SAMPLES];
+            render_scheduled_audio(
+                &mut mixer,
+                &mut scheduler,
+                &mut vec![0.0; rendered],
+                &mut peaks,
+                0,
+                1,
+                &mut transport,
+                &mut messages,
+                &mut ImmediateAudioBufferRetirement,
+            );
+            assert_eq!(active_voice_frame(&mixer, 0), Some(rendered));
+            mixer.set_pad_loop_region(0, 2.0, Some(6.0));
+            transport.request_bootstrap(0);
+            assert!(try_bootstrap_transport_from_reference(
+                &mixer,
+                &mut transport,
+                rendered as u64
+            ));
+            assert_eq!(
+                transport.beat_position_at_frame(rendered as u64),
+                Some(expected_start as f64 / 10.0)
+            );
+            render_scheduled_audio(
+                &mut mixer,
+                &mut scheduler,
+                &mut [0.0; 1],
+                &mut peaks,
+                rendered as u64,
+                1,
+                &mut transport,
+                &mut messages,
+                &mut ImmediateAudioBufferRetirement,
+            );
+            assert_eq!(active_voice_frame(&mixer, 0), Some(expected_start + 1));
+        }
+    }
+
+    #[test]
+    fn selected_bootstrap_waits_for_parameter_batch_and_keeps_other_playheads() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_test_sample(1, 200, 0.5));
+        mixer.load_sample(1, create_test_sample(1, 200, 0.25));
+        mixer.set_pad_loop_region(0, 1.0, Some(9.0));
+        mixer.set_pad_loop_region(1, 2.0, Some(10.0));
+        assert!(mixer.play_sample(0, 1.0));
+        assert!(mixer.play_sample(1, 1.0));
+        let mut transport = TransportTimeline::new(10);
+        transport.advance_by_rendered_frames(100);
+        let mut scheduler = FixedCapacityScheduler::<8>::new();
+        let mut quantization = TriggerQuantization::Immediate;
+        let mut messages = Vec::new();
+        for command in [
+            ControlMessage::SetBpmLock(true),
+            ControlMessage::SetPadTimingMetadata {
+                id: 0,
+                metadata: PadTimingMetadata {
+                    phase_anchor_s: -0.5,
+                },
+            },
+            ControlMessage::BootstrapTransportFromPad { id: 0 },
+        ] {
+            process_control_message(
+                command,
+                &mut scheduler,
+                100,
+                &mut quantization,
+                &mut transport,
+                &mut mixer,
+                &mut messages,
+                &mut ImmediateAudioBufferRetirement,
+            );
+        }
+        assert_eq!(transport.master_bpm(), Some(120.0));
+        assert_eq!(transport.beat_position(), Some(20.0));
+        assert!(!try_bootstrap_transport_from_reference(
+            &mixer,
+            &mut transport,
+            100
+        ));
+        let (mut parameters, mut consumer) = RingBuffer::new(8);
+        parameters
+            .push(ControlParameterMessage::SetPadBpm {
+                id: 0,
+                bpm: Some(60.0),
+            })
+            .unwrap();
+        parameters
+            .push(ControlParameterMessage::SetMasterBpm(90.0))
+            .unwrap();
+        drain_parameter_messages(&mut consumer, &mut mixer, &mut transport);
+        assert!(try_bootstrap_transport_from_reference(
+            &mixer,
+            &mut transport,
+            100
+        ));
+        assert_eq!(transport.master_bpm(), Some(90.0));
+        assert_eq!(transport.beat_position(), Some(1.5));
+        assert_eq!(active_voice_frame(&mixer, 0), Some(10));
+        assert_eq!(active_voice_frame(&mixer, 1), Some(20));
+        // Subsequent edits, silence and restarts cannot consume another bootstrap.
+        mixer.set_pad_timing_metadata(
+            0,
+            PadTimingMetadata {
+                phase_anchor_s: 8.0,
+            },
+        );
+        mixer.stop_sample(0);
+        mixer.stop_sample(1);
+        assert!(mixer.play_sample(0, 1.0));
+        transport.request_bootstrap(0);
+        assert!(!try_bootstrap_transport_from_reference(
+            &mixer,
+            &mut transport,
+            100
+        ));
+        assert_eq!(transport.beat_position(), Some(1.5));
+    }
+
+    #[test]
+    fn stopped_selected_reference_bootstraps_at_its_scheduled_start_frame() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_test_sample(1, 200, 0.5));
+        mixer.set_pad_bpm(0, Some(60.0));
+        mixer.set_master_bpm(60.0);
+        mixer.set_bpm_lock(true);
+        mixer.set_pad_loop_region(0, 3.0, Some(11.0));
+        mixer.set_pad_timing_metadata(
+            0,
+            PadTimingMetadata {
+                phase_anchor_s: -0.5,
+            },
+        );
+        let mut transport = TransportTimeline::new(10);
+        transport.set_master_bpm(60.0);
+        transport.advance_by_rendered_frames(4);
+        transport.request_bootstrap(0);
+        assert!(!try_bootstrap_transport_from_reference(
+            &mixer,
+            &mut transport,
+            4
+        ));
+        let mut scheduler = FixedCapacityScheduler::<8>::new();
+        scheduler
+            .schedule(
+                10,
+                ScheduledCommand::PlaySample {
+                    id: 0,
+                    volume: 1.0,
+                    received_at_ns: Some(123),
+                },
+            )
+            .unwrap();
+        let mut output = [0.0; 8];
+        let mut peaks = [0.0; NUM_SAMPLES];
+        let mut messages = Vec::new();
+        render_scheduled_audio(
+            &mut mixer,
+            &mut scheduler,
+            &mut output,
+            &mut peaks,
+            4,
+            1,
+            &mut transport,
+            &mut messages,
+            &mut ImmediateAudioBufferRetirement,
+        );
+        assert_eq!(transport.beat_position_at_frame(10), Some(3.5));
+        assert_eq!(transport.output_frame(), 4);
+        assert_eq!(active_voice_frame(&mixer, 0), Some(32));
+        assert_eq!(transport.bootstrap_reference(), None);
+    }
+
+    #[test]
+    fn pending_start_retains_target_and_capture_across_bpm_and_grid_edits() {
+        let mut mixer = RtMixer::new(1, 10.0);
+        mixer.load_sample(0, create_test_sample(1, 200, 0.5));
+        mixer.set_pad_loop_region(0, 2.0, Some(10.0));
+        let mut transport = TransportTimeline::new(10);
+        transport.set_master_bpm(60.0);
+        transport.advance_by_rendered_frames(4);
+        let mut scheduler = FixedCapacityScheduler::<8>::new();
+        let command = ScheduledCommand::PlaySample {
+            id: 0,
+            volume: 1.0,
+            received_at_ns: Some(123),
+        };
+        let accepted = scheduler
+            .schedule(
+                transport
+                    .next_grid_frame(QuantizeGrid::from_step_64ths(16).unwrap())
+                    .unwrap(),
+                command,
+            )
+            .unwrap();
+        assert_eq!(accepted.target_frame, 10);
+        assert!(transport.set_master_bpm_preserving_beat_position_at_frame(120.0, 4));
+        mixer.set_master_bpm(120.0);
+        mixer.set_pad_bpm(0, Some(80.0));
+        mixer.set_pad_timing_metadata(
+            0,
+            PadTimingMetadata {
+                phase_anchor_s: -0.5,
+            },
+        );
+        mixer.set_pad_loop_region(0, 1.0, Some(9.0));
+        assert_eq!(scheduler.peek_next_target_frame(), Some(10));
+        assert_eq!(
+            transport.next_grid_frame(QuantizeGrid::from_step_64ths(16).unwrap()),
+            Some(7)
+        );
+        let due = scheduler.pop_due_through(4, 10).unwrap();
+        assert_eq!(due.target_frame, accepted.target_frame);
+        assert_eq!(due.command, command);
+        let mut messages = Vec::new();
+        execute_scheduled_command(
+            &mut mixer,
+            &mut transport,
+            due.execution_frame,
+            due.command,
+            &mut messages,
+            &mut ImmediateAudioBufferRetirement,
+        );
+        assert_eq!(active_voice_frame(&mixer, 0), Some(10));
     }
 
     #[test]

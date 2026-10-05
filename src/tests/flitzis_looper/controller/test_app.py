@@ -11,7 +11,8 @@ from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.controller.stems import StemController
 from flitzis_looper.controller.transport import TransportController
 from flitzis_looper.input_mapping import InputMappingController
-from flitzis_looper.models import ProjectState
+from flitzis_looper.models import BeatGrid, ProjectState, SampleAnalysis
+from tests.conftest import write_mono_pcm16_wav
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -173,6 +174,78 @@ def test_controller_clears_missing_restored_sample_before_audio_projection(
         defaults.pad_eq_high_db[0],
     )
     audio_engine_mock.set_pad_bpm.assert_any_call(0, None)
+
+
+@pytest.mark.parametrize(
+    ("has_analysis", "manual_bpm"), [(False, None), (False, 123.5), (True, 123.5)]
+)
+def test_restore_republishes_signed_grid_and_preserves_loop_markers(
+    audio_engine_mock: Mock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    has_analysis: bool,
+    manual_bpm: float | None,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    sample_path = tmp_path / "samples" / "reference.wav"
+    sample_path.parent.mkdir()
+    write_mono_pcm16_wav(sample_path, 48_000)
+    project = ProjectState(bpm_lock=True, selected_pad=1)
+    project.sample_paths[1] = "samples/reference.wav"
+    project.manual_bpm[1] = manual_bpm
+    project.pad_grid_offset_samples[1] = -18_000
+    project.pad_loop_auto[1] = False
+    project.pad_loop_start_s[1] = 1.0
+    project.pad_loop_end_s[1] = 9.0
+    if has_analysis:
+        project.sample_analysis[1] = SampleAnalysis(
+            bpm=90.0,
+            key="C",
+            beat_grid=BeatGrid(beats=[0.25], downbeats=[0.25], bars=[0.25]),
+        )
+    persistence = ProjectPersistence(project)
+    persistence.mark_dirty()
+    persistence.flush(now=0.0)
+
+    restored = app_module.AppController()
+
+    expected_origin_s = -0.125 if has_analysis else -0.375
+    audio_engine_mock.set_pad_bpm.assert_called_with(1, manual_bpm)
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(1, expected_origin_s)
+    if manual_bpm is None:
+        audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
+    else:
+        audio_engine_mock.bootstrap_transport_from_pad.assert_called_with(1)
+    assert restored.transport.loop.grid_anchor_sec(1) == expected_origin_s
+    audio_engine_mock.reset_mock()
+    audio_engine_mock.poll_loader_events.side_effect = [
+        {
+            "type": "success",
+            "id": 1,
+            "duration_s": 32.0,
+            "cached_path": "samples/reference.wav",
+        },
+        None,
+    ]
+
+    restored.loader.poll_loader_events()
+
+    assert restored.project.pad_grid_offset_samples[1] == -18_000
+    assert restored.project.manual_bpm[1] == manual_bpm
+    assert restored.project.pad_loop_auto[1] is False
+    assert restored.project.pad_loop_start_s[1] == 1.0
+    assert restored.project.pad_loop_end_s[1] == 9.0
+    assert restored.transport.loop.grid_anchor_sec(1) == expected_origin_s
+    audio_engine_mock.set_pad_bpm.assert_called_with(1, manual_bpm)
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(1, expected_origin_s)
+    audio_engine_mock.set_pad_loop_region.assert_called_with(1, 1.0, 9.0)
+    if manual_bpm is None:
+        audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
+    else:
+        audio_engine_mock.bootstrap_transport_from_pad.assert_called_with(1)
+    audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
 
 
 def test_controller_shut_down_flushes_persistence(controller: AppController) -> None:

@@ -294,6 +294,23 @@ needed. Its pattern is:
 - loop edits still go through transport loop actions,
 - playback controls in the editor go through playback actions.
 
+The editor grid uses effective pad BPM (manual override before analysis) and
+the analysis onset rounded at the loaded-buffer rate plus the persisted signed
+sample offset. Loop control publishes that same signed origin as precise native
+timing metadata, including origins before source zero. Global playback modes and
+other-pad actions do not move the source grid or persisted markers.
+Native loop-region seconds remain `f64` through ordinary and direct-MIDI paths
+until integer source-frame conversion, keeping long-position editor markers
+sample-accurate. Native BPM parameters retain their existing `f32` precision.
+
+BPMLOCK enable/restore uses the existing selected-pad reference setup.
+`BpmController.recompute_master_bpm()` publishes a valid master tempo and the
+dedicated native bootstrap request for that reference. Rust latches and completes
+bootstrap once per stream when the reference is active and valid. Repeated
+controller publications do not reanchor an established clock; no additional
+SYNC/MASTER UI or persistent bootstrap state is introduced. Normal launch
+actions continue to use the existing future-grid/effective-loop-start policy.
+
 Do not move waveform decoding, sample scanning, or source-buffer access into
 render functions.
 

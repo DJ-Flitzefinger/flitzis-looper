@@ -1,5 +1,6 @@
 import math
 from typing import TYPE_CHECKING
+from unittest.mock import call
 
 import pytest
 
@@ -331,6 +332,42 @@ def test_set_bpm_lock_disable(controller: AppController, audio_engine_mock: Mock
     assert controller.project.bpm_lock is False
 
 
+def test_bpm_lock_publishes_signed_selected_reference_before_session_bootstrap(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    controller.project.selected_pad = 1
+    controller.project.sample_paths[1] = "samples/reference.wav"
+    controller.project.pad_grid_offset_samples[1] = -240
+    controller.transport.bpm.set_manual_bpm(1, 123.5)
+    audio_engine_mock.reset_mock()
+
+    controller.transport.global_params.set_bpm_lock(enabled=True)
+
+    assert controller.session.bpm_lock_anchor_pad_id == 1
+    assert controller.session.bpm_lock_anchor_bpm == 123.5
+    audio_engine_mock.set_pad_timing_metadata.assert_called_once_with(1, -0.005)
+    audio_engine_mock.bootstrap_transport_from_pad.assert_called_once_with(1)
+    calls = audio_engine_mock.mock_calls
+    assert calls.index(call.set_pad_timing_metadata(1, -0.005)) < calls.index(
+        call.bootstrap_transport_from_pad(1)
+    )
+    assert calls.index(call.set_master_bpm(123.5)) < calls.index(
+        call.bootstrap_transport_from_pad(1)
+    )
+    audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
+
+    controller.project.selected_pad = 2
+    controller.transport.bpm.set_manual_bpm(2, 90.0)
+    audio_engine_mock.reset_mock()
+    controller.transport.global_params.set_speed(1.25)
+
+    audio_engine_mock.set_master_bpm.assert_called_once_with(123.5 * 1.25)
+    audio_engine_mock.bootstrap_transport_from_pad.assert_called_once_with(1)
+    audio_engine_mock.set_pad_timing_metadata.assert_not_called()
+    audio_engine_mock.anchor_transport_phase_from_pad.assert_not_called()
+
+
 def test_bpm_lock_anchors_master_bpm_to_selected_pad(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
@@ -421,6 +458,7 @@ def test_set_bpm_lock_none_effective_bpm(
 
     assert controller.session.bpm_lock_anchor_pad_id == 1
     assert controller.session.bpm_lock_anchor_bpm is None
+    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
 
 
 def test_set_bpm_lock_non_finite_effective_bpm(
@@ -433,6 +471,7 @@ def test_set_bpm_lock_non_finite_effective_bpm(
 
     assert controller.session.bpm_lock_anchor_pad_id == 1
     assert controller.session.bpm_lock_anchor_bpm is None
+    audio_engine_mock.bootstrap_transport_from_pad.assert_not_called()
 
 
 def test_set_bpm_lock_disable_clears_anchor(

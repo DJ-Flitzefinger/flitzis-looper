@@ -83,6 +83,7 @@ rust/crates/looper/src/
     |-- input_mapping.rs           # Rust MIDI capture outside callback
     |-- mixer.rs                   # RtMixer, voices, loops, stems, gain, DSP
     |-- scheduler.rs               # fixed-capacity output-frame scheduler
+    |-- source_grid.rs             # signed source beat/bar and loop-cycle mapping
     |-- timing.rs                  # shared input epoch and estimated device clock diagnostics
     |-- transport.rs               # output-frame timeline and musical grid
     |-- voice_slot.rs              # voice state and per-voice DSP buffers
@@ -126,15 +127,27 @@ Only explicitly classified best-effort paths may drop queue failures.
 ## Transport And Scheduling
 
 `TransportTimeline` is the Rust-owned output-frame clock. It advances by
-rendered output frames and derives musical phase from sample rate, master BPM,
-and downbeat anchor.
+rendered output frames, including silence. A complete beat-position/output-frame
+reference derives musical progression from sample rate and master BPM; beat/bar
+phase and the compatibility downbeat frame are derived views.
 
 `TransportScheduler` stores bounded events by absolute output frame. Immediate
 and quantized play/stop paths both execute through scheduler logic.
 
 Quantization chooses the output-frame start time. It does not seek inside the
-source loop. Explicit pad-derived sync uses
-`AudioEngine.anchor_transport_phase_from_pad(id)`.
+source loop. Explicit repeatable pad-derived sync uses
+`AudioEngine.anchor_transport_phase_from_pad(id)`. The separate
+`AudioEngine.bootstrap_transport_from_pad(id)` selects a one-time reference for
+the stream through existing selected-pad/BPMLOCK setup. The first request
+latches its reference; unavailable source/BPM metadata defers completion until
+that reference is active and valid. Successful bootstrap anchors complete master
+beat position to the reference source beat without resetting output-frame time
+or moving active source playheads. Callback batch completion and successful
+scheduled starts provide bounded retry points. Further reference requests cannot
+replace the latch. Unloading an incomplete reference clears the pending id so
+a later request can select another; successful bootstrap or deliberate sync
+consumes the opportunity until a new stream. Silence, wraps and stem controls
+never rearm it. Bootstrap state is transient and introduces no performer control.
 
 Launch inputs also carry optional `received_at_ns` metadata from one Rust engine
 monotonic epoch created before stream startup. Native MIDI captures at callback
@@ -152,8 +165,10 @@ coherent snapshots expose validity/freshness and map captured inputs to nearest
 grid targets, with midpoint ties toward the future. Unavailable observations
 return no diagnostic target and never reset transport. Driver jitter, device
 precision and unaccounted Rubber Band delay limit these estimates; they are not
-measured audible alignment. Phase mapping and DSP preparation must be validated
-before that diagnostic policy is activated for launch execution.
+measured audible alignment. The source-grid mapping foundation is internal and
+tested; current launches still use the effective loop start. Audible DSP/device
+preparation and the explicit synchronized-launch contract must be validated
+before nearest-target diagnostics or source-phase mapping drive launch execution.
 
 In CPAL 0.17's Windows WASAPI backend, playback time is an estimate based on
 available buffer frames; additional latency after the device buffer is unknown.
@@ -162,7 +177,20 @@ acceptance stage must verify this driver-specific estimate before relying on it
 for audible launch alignment.
 
 Accepted master-BPM updates apply to both transport-grid timing and BPM-lock
-tempo matching while preserving current transport bar phase.
+tempo matching while preserving complete current transport beat position, not
+only modulo-four phase. Future progression uses the new tempo. Internal clock
+snapshots retain that complete beat reference so target diagnostics do not
+derive phase from a rounded downbeat frame; the public snapshot shape is unchanged.
+Pad/master BPM retain the established native `f32` parameter representation;
+phase arithmetic promotes those accepted values to `f64`. Fractional BPM is
+preserved within that representation, without promising exact decimal values.
+
+Accepted scheduler events retain their absolute output targets, stable order
+and original optional timestamps across BPM, bootstrap and pad metadata updates.
+They are not rerounded or rescheduled. New requests use the updated grid. At
+execution, current loop-start launches use the latest accepted effective loop
+and BPM metadata. Stop/unload and missing-source safety behavior is unchanged;
+this foundation does not add pending-start cancellation.
 
 Scheduled render segments pass their absolute output-frame bounds into the
 mixer. BPM-locked active voices with valid master and pad BPM metadata store
@@ -227,17 +255,42 @@ The runtime keeps two time domains separate:
 - Source frames: loaded full-mix buffers, prepared stems, loop regions, and
   voice playheads.
 
-Python persists loop intent in seconds. Rust converts accepted loop regions to
-half-open source-frame ranges and owns live playhead wrapping. Live loop edits
-apply immediately: an in-range playhead is preserved; an out-of-range playhead
-is clamped to the new loop start. There is no live loop-edit crossfade yet.
+Loaded full-mix buffers and prepared stems use the engine output rate, so their
+source-frame domain and the editor's sample-offset units use that loaded-buffer
+rate rather than the original file rate.
+
+Python persists loop intent in seconds. Native loop-region commands and MIDI
+runtime loop metadata retain `f64` seconds until conversion to half-open integer
+source-frame ranges, preserving editor frame markers even at long source
+positions. Rust owns live playhead wrapping. Live loop edits invalidate the
+old voice timeline anchor; an in-range playhead is preserved and a normal
+out-of-range playhead is clamped to the new loop start. Bootstrap and rendering
+share `playhead_before_render`, so phase anchoring observes the same first source
+frame that rendering will read, including explicit seek semantics. There is no
+live loop-edit crossfade yet.
 
 The Loop Editor grid is source-domain editing state. Python derives the visible
 grid anchor from analysis onset/downbeat metadata plus the per-pad
 `pad_grid_offset_samples` value, stores snapped loop markers in source time, and
-publishes the same anchor to Rust as pad timing metadata. Global speed, BPM
+publishes the same signed origin to Rust as `f64` seconds timing metadata. The
+origin is a virtual source reference and may be before frame zero or beyond the
+audio interval; Rust converts it to a signed `f64` source frame and never uses
+it as an unchecked buffer index. Global speed, BPM
 Lock, Key Lock, trigger quantization, and other-pad playback do not move a
 pad's source grid or snapped loop markers.
+
+`source_grid.rs` centralizes bounded source beat/bar, loop-start phase and
+master-beat-to-loop mapping. Source beat is `(frame - origin) / frames_per_beat`;
+Euclidean modulo handles positions before the signed origin. Compatible loops
+have a positive 1/64-note tick count that divides 64 or spans whole bars, with
+at most one source frame of duration rounding. Mapping wraps by the exact
+musical period before frame conversion, so fractional-BPM marker rounding does
+not accumulate each cycle. Short loops repeat evenly within a master bar;
+whole-bar loops retain beat/bar phase across wraps. Arbitrary physical loops
+remain playable and have bounded physical wrapping, with compatibility false
+and no sustained synchronization guarantee. Tempo ratios clipped outside the
+engine's `0.5..2.0` range also fall outside that guarantee. This helper prepares
+the phase contract; it does not yet change normal source-start reads.
 
 Stem generation is offline/background work. Rust accepts prepared immutable stem
 buffers only after non-realtime validation. Prepared stems must match the loaded

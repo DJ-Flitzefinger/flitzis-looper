@@ -64,8 +64,8 @@ struct InputMapping {
 #[derive(Debug, Clone)]
 struct RuntimePadState {
     loaded: bool,
-    loop_start_s: f32,
-    loop_end_s: Option<f32>,
+    loop_start_s: f64,
+    loop_end_s: Option<f64>,
 }
 
 impl Default for RuntimePadState {
@@ -193,8 +193,8 @@ impl InputRuntime {
         &self,
         multi_loop: bool,
         loaded: Vec<bool>,
-        loop_starts: Vec<f32>,
-        loop_ends: Vec<Option<f32>>,
+        loop_starts: Vec<f64>,
+        loop_ends: Vec<Option<f64>>,
     ) -> Result<(), String> {
         if loaded.len() != NUM_SAMPLES
             || loop_starts.len() != NUM_SAMPLES

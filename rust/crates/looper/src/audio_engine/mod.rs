@@ -49,6 +49,7 @@ mod progress;
 mod rubberband_backend;
 mod sample_loader;
 mod scheduler;
+mod source_grid;
 mod stem_cache;
 mod stretch_processor;
 mod timing;
@@ -698,8 +699,8 @@ impl AudioEngine {
         &self,
         multi_loop: bool,
         loaded: Vec<bool>,
-        loop_starts: Vec<f32>,
-        loop_ends: Vec<Option<f32>>,
+        loop_starts: Vec<f64>,
+        loop_ends: Vec<Option<f64>>,
     ) -> PyResult<()> {
         let runtime = self
             .input_runtime
@@ -1713,12 +1714,12 @@ impl AudioEngine {
         )
     }
 
-    pub fn set_pad_timing_metadata(&mut self, id: usize, phase_anchor_s: f32) -> PyResult<()> {
+    pub fn set_pad_timing_metadata(&mut self, id: usize, phase_anchor_s: f64) -> PyResult<()> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
         }
 
-        if !phase_anchor_s.is_finite() || phase_anchor_s < 0.0 {
+        if !phase_anchor_s.is_finite() {
             return Err(PyValueError::new_err("phase_anchor_s out of range"));
         }
 
@@ -1761,6 +1762,26 @@ impl AudioEngine {
             &mut producer_guard,
             ControlMessage::AnchorTransportPhaseFromPad { id },
             "AnchorTransportPhaseFromPad",
+        )
+    }
+
+    /// Arm the selected BPM-lock reference once per audio-stream session.
+    pub fn bootstrap_transport_from_pad(&mut self, id: usize) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        let mut producer = handle
+            .producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+        push_control_message(
+            &mut producer,
+            ControlMessage::BootstrapTransportFromPad { id },
+            "BootstrapTransportFromPad",
         )
     }
 
@@ -1834,8 +1855,8 @@ impl AudioEngine {
     pub fn set_pad_loop_region(
         &mut self,
         id: usize,
-        start_s: f32,
-        end_s: Option<f32>,
+        start_s: f64,
+        end_s: Option<f64>,
     ) -> PyResult<()> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));

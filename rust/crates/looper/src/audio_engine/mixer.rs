@@ -15,6 +15,7 @@ use crate::audio_engine::constants::{
     PAD_GAIN_DB_MIN, PAD_GAIN_SMOOTH_MS, SPEED_MAX, SPEED_MIN, VOLUME_MAX, VOLUME_MIN,
 };
 use crate::audio_engine::dsp::{DspNodeSlot, DspParameterId, DspParameterSlot, PerPadDspChain};
+use crate::audio_engine::source_grid::SourceGrid;
 use crate::audio_engine::stretch_processor::DEFAULT_BLOCK_SAMPLES;
 use crate::audio_engine::voice_slot::{
     ExplicitSeekMode, PlaybackTimelineAnchor, VoiceSlot, VoiceStartConfig,
@@ -25,8 +26,6 @@ use crate::messages::{
 };
 use cpal::Sample;
 
-const BEATS_PER_BAR_4_4: f64 = 4.0;
-const BAR_PHASE_EPSILON: f64 = 1.0e-9;
 const STEM_TRANSITION_RAMP_FRAMES: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,6 +165,14 @@ struct FrameRange {
 impl FrameRange {
     fn len(self) -> usize {
         self.end.saturating_sub(self.start)
+    }
+}
+
+fn playhead_before_render(frame: usize, region: FrameRange, mode: ExplicitSeekMode) -> usize {
+    if mode == ExplicitSeekMode::Normal && (frame < region.start || frame >= region.end) {
+        region.start
+    } else {
+        frame
     }
 }
 
@@ -418,69 +425,6 @@ impl Default for StemTransition {
     }
 }
 
-fn phase_aligned_initial_frame(
-    sample_rate_hz: f32,
-    pad_bpm: Option<f32>,
-    phase_anchor_frame: Option<usize>,
-    target_bar_phase_beats: f64,
-    loop_region: Option<FrameRange>,
-    fallback_frame: usize,
-) -> usize {
-    let Some(region) = loop_region.filter(|region| region.end > region.start) else {
-        return fallback_frame;
-    };
-    let Some(anchor_frame) = phase_anchor_frame else {
-        return fallback_frame;
-    };
-    let Some(pad_bpm) = pad_bpm.filter(|bpm| bpm.is_finite() && *bpm > 0.0) else {
-        return fallback_frame;
-    };
-    let Some(target_bar_phase_beats) = normalize_bar_phase_beats(target_bar_phase_beats) else {
-        return fallback_frame;
-    };
-    if !sample_rate_hz.is_finite() || sample_rate_hz <= 0.0 {
-        return fallback_frame;
-    }
-
-    let frames_per_beat = sample_rate_hz as f64 * 60.0 / pad_bpm as f64;
-    if !frames_per_beat.is_finite() || frames_per_beat <= 0.0 {
-        return fallback_frame;
-    }
-
-    let desired_frame = anchor_frame as f64 + target_bar_phase_beats * frames_per_beat;
-    wrap_frame_into_region(desired_frame, region).unwrap_or(fallback_frame)
-}
-
-fn normalize_bar_phase_beats(phase: f64) -> Option<f64> {
-    if !phase.is_finite() {
-        return None;
-    }
-
-    let phase = phase.rem_euclid(BEATS_PER_BAR_4_4);
-    if phase <= BAR_PHASE_EPSILON || (BEATS_PER_BAR_4_4 - phase) <= BAR_PHASE_EPSILON {
-        Some(0.0)
-    } else {
-        Some(phase)
-    }
-}
-
-fn wrap_frame_into_region(frame: f64, region: FrameRange) -> Option<usize> {
-    if !frame.is_finite() || region.end <= region.start {
-        return None;
-    }
-
-    let len = region.len() as f64;
-    if !len.is_finite() || len <= 0.0 {
-        return None;
-    }
-
-    let relative = (frame - region.start as f64).rem_euclid(len);
-    let rounded = relative.round();
-    let offset = if rounded >= len { 0 } else { rounded as usize };
-
-    Some(region.start + offset)
-}
-
 fn full_stem_available_mask() -> u8 {
     ((1_u16 << STEM_BUFFER_COUNT) - 1) as u8
 }
@@ -619,7 +563,7 @@ pub struct RtMixer {
     pad_bpm: [Option<f32>; NUM_SAMPLES],
 
     /// Per-pad musical phase anchor derived from bounded beatgrid/downbeat metadata.
-    pad_phase_anchor_frame: [usize; NUM_SAMPLES],
+    pad_phase_anchor_frame: [f64; NUM_SAMPLES],
 
     /// Per-pad Gain/Trim target in dB.
     pad_gain_db: [f32; NUM_SAMPLES],
@@ -687,7 +631,7 @@ impl RtMixer {
             pad_key_lock_enabled: std::array::from_fn(|_| false),
             master_bpm: None,
             pad_bpm: std::array::from_fn(|_| None),
-            pad_phase_anchor_frame: std::array::from_fn(|_| 0),
+            pad_phase_anchor_frame: std::array::from_fn(|_| 0.0),
             pad_gain_db: std::array::from_fn(|_| PAD_GAIN_DB_DEFAULT),
             pad_gain_smoothers: std::array::from_fn(|_| SmoothedGain::default()),
             pad_dsp_chains: (0..NUM_SAMPLES)
@@ -960,13 +904,13 @@ impl RtMixer {
         &mut self,
         id: usize,
         velocity: f32,
-        target_bar_phase_beats: f64,
+        target_master_beat: f64,
     ) -> bool {
         let mut retirement = ImmediateAudioBufferRetirement;
         self.play_sample_with_phase_rt(
             id,
             velocity,
-            Some(target_bar_phase_beats),
+            Some(target_master_beat),
             None,
             &mut retirement,
         )
@@ -976,7 +920,7 @@ impl RtMixer {
         &mut self,
         id: usize,
         velocity: f32,
-        target_bar_phase_beats: Option<f64>,
+        target_master_beat: Option<f64>,
         start_output_frame: Option<u64>,
         retirement: &mut impl AudioBufferRetirement,
     ) -> bool {
@@ -992,7 +936,7 @@ impl RtMixer {
         let tempo_ratio = self.tempo_ratio_for_sample_id(id);
 
         let sample_frames = sample.samples.len() / self.channels;
-        let initial_frame_pos = target_bar_phase_beats
+        let initial_frame_pos = target_master_beat
             .map(|phase| self.phase_aligned_initial_sample_frame(id, sample_frames, phase))
             .unwrap_or_else(|| self.effective_loop_start_frame(id, sample_frames));
 
@@ -1107,59 +1051,44 @@ impl RtMixer {
             return;
         }
 
-        self.pad_phase_anchor_frame[id] =
-            self.timing_anchor_frame_from_seconds(metadata.phase_anchor_s);
+        let frame = metadata.phase_anchor_s * self.sample_rate_hz as f64;
+        if frame.is_finite() {
+            self.pad_phase_anchor_frame[id] = frame.round();
+        }
     }
 
     pub(crate) fn phase_aligned_initial_sample_frame(
         &self,
         id: usize,
         sample_frames: usize,
-        target_bar_phase_beats: f64,
+        target_master_beat: f64,
     ) -> usize {
         if id >= NUM_SAMPLES {
             return 0;
         }
 
         let fallback_frame = self.effective_loop_start_frame(id, sample_frames);
-        let phase_anchor_frame =
-            Some(self.pad_phase_anchor_frame[id]).filter(|frame| *frame < sample_frames);
+        let Some(grid) = self.source_grid(id) else {
+            return fallback_frame;
+        };
+        let Some(region) = self.phase_alignment_loop_region(id, sample_frames) else {
+            return fallback_frame;
+        };
+        grid.source_at_master_beat(target_master_beat, region.start, region.end)
+            .unwrap_or(fallback_frame)
+    }
 
-        phase_aligned_initial_frame(
-            self.sample_rate_hz,
-            self.pad_bpm[id],
-            phase_anchor_frame,
-            target_bar_phase_beats,
-            self.phase_alignment_loop_region(id, sample_frames),
-            fallback_frame,
+    fn source_grid(&self, id: usize) -> Option<SourceGrid> {
+        SourceGrid::new(
+            self.sample_rate_hz as f64,
+            self.pad_bpm[id]?,
+            self.pad_phase_anchor_frame[id],
         )
     }
 
     #[cfg(test)]
-    fn pad_phase_anchor_frame(&self, id: usize) -> Option<usize> {
-        if id >= NUM_SAMPLES {
-            return None;
-        }
-
-        Some(self.pad_phase_anchor_frame[id])
-    }
-
-    fn timing_anchor_frame_from_seconds(&self, phase_anchor_s: f32) -> usize {
-        if !phase_anchor_s.is_finite() || phase_anchor_s < 0.0 {
-            return 0;
-        }
-
-        let frame = phase_anchor_s as f64 * self.sample_rate_hz as f64;
-        if !frame.is_finite() || frame < 0.0 {
-            return 0;
-        }
-
-        let max = usize::MAX as f64;
-        if frame >= max {
-            return usize::MAX;
-        }
-
-        frame.round() as usize
+    fn pad_phase_anchor_frame(&self, id: usize) -> Option<f64> {
+        self.pad_phase_anchor_frame.get(id).copied()
     }
 
     fn source_frame_from_seconds(&self, position_s: f32, sample_frames: usize) -> usize {
@@ -1278,7 +1207,7 @@ impl RtMixer {
         self.pad_dsp_chains[id].set_parameter(parameter_id, normalized_target)
     }
 
-    pub fn set_pad_loop_region(&mut self, id: usize, start_s: f32, end_s: Option<f32>) {
+    pub fn set_pad_loop_region(&mut self, id: usize, start_s: f64, end_s: Option<f64>) {
         if id >= NUM_SAMPLES {
             return;
         }
@@ -1287,7 +1216,7 @@ impl RtMixer {
             return;
         }
 
-        let start_frame = (start_s * self.sample_rate_hz).round();
+        let start_frame = (start_s * self.sample_rate_hz as f64).round();
         let start_frame = if start_frame.is_finite() && start_frame >= 0.0 {
             start_frame as usize
         } else {
@@ -1298,7 +1227,7 @@ impl RtMixer {
             if !end_s.is_finite() || end_s < 0.0 {
                 return None;
             }
-            let end_frame = (end_s * self.sample_rate_hz).round();
+            let end_frame = (end_s * self.sample_rate_hz as f64).round();
             if !end_frame.is_finite() || end_frame < 0.0 {
                 None
             } else {
@@ -1321,6 +1250,9 @@ impl RtMixer {
         for voice_slot in &mut self.voices {
             if voice_slot.is_playing_sample(id) {
                 voice_slot.clear_explicit_seek();
+                // The old anchor describes the old loop. Retain the read position
+                // and let the next segment establish its anchor in the new region.
+                voice_slot.timeline_anchor = None;
             }
         }
     }
@@ -1386,6 +1318,7 @@ impl RtMixer {
         Some(frame as f32 / self.sample_rate_hz)
     }
 
+    #[cfg(test)]
     pub(crate) fn active_pad_bar_phase_beats(&self, id: usize) -> Option<f64> {
         if id >= NUM_SAMPLES || self.channels == 0 {
             return None;
@@ -1415,6 +1348,17 @@ impl RtMixer {
         }
     }
 
+    pub(crate) fn transport_reference_bpm_for_sample_id(&self, id: usize) -> Option<f32> {
+        if self.bpm_lock_enabled {
+            // Keep the same accepted master value in transport and mixer. A
+            // clipped pad rate is an unsupported sync ratio, not a new master BPM.
+            self.master_bpm.filter(|bpm| bpm.is_finite() && *bpm > 0.0)
+        } else {
+            self.output_bpm_for_sample_id(id)
+        }
+    }
+
+    #[cfg(test)]
     fn pad_bar_phase_beats_at_frame(
         &self,
         id: usize,
@@ -1424,24 +1368,23 @@ impl RtMixer {
         if id >= NUM_SAMPLES || sample_frames == 0 || frame_pos >= sample_frames {
             return None;
         }
+        self.source_grid(id)?.bar_phase_at_source(frame_pos as f64)
+    }
 
-        let pad_bpm = self.pad_bpm[id].filter(|bpm| bpm.is_finite() && *bpm > 0.0)?;
-        if !self.sample_rate_hz.is_finite() || self.sample_rate_hz <= 0.0 {
+    pub(crate) fn active_pad_beat_position(&self, id: usize) -> Option<f64> {
+        if id >= NUM_SAMPLES || self.channels == 0 {
             return None;
         }
-
-        let anchor_frame = self.pad_phase_anchor_frame[id];
-        if anchor_frame >= sample_frames {
-            return None;
-        }
-
-        let frames_per_beat = self.sample_rate_hz as f64 * 60.0 / pad_bpm as f64;
-        if !frames_per_beat.is_finite() || frames_per_beat <= 0.0 {
-            return None;
-        }
-
-        let pad_phase_beats = (frame_pos as f64 - anchor_frame as f64) / frames_per_beat;
-        normalize_bar_phase_beats(pad_phase_beats)
+        let voice = self
+            .voices
+            .iter()
+            .find(|voice| voice.active && !voice.paused && voice.sample_id == id)?;
+        let sample_frames = voice.sample.as_ref()?.samples.len() / self.channels;
+        let region = self.effective_loop_region(id, sample_frames)?;
+        let frame = playhead_before_render(voice.frame_pos, region, voice.explicit_seek_mode);
+        let frame =
+            source_frame_for_playback(frame, 0, sample_frames, region, voice.explicit_seek_mode);
+        self.source_grid(id)?.beat_at_source(frame as f64)
     }
 
     fn tempo_ratio_for_sample_id(&self, sample_id: usize) -> f32 {
@@ -1574,7 +1517,7 @@ impl RtMixer {
         }
         self.stem_enabled_mask[id] = STEM_COMPONENT_MASK;
         self.stem_transitions[id].clear();
-        self.pad_phase_anchor_frame[id] = 0;
+        self.pad_phase_anchor_frame[id] = 0.0;
         true
     }
 
@@ -1824,10 +1767,10 @@ impl RtMixer {
                 };
                 let mut seek_mode = voice.explicit_seek_mode;
                 let mut timeline_anchor_needs_reset = tempo_ratio_changed;
-                if seek_mode == ExplicitSeekMode::Normal
-                    && (voice.frame_pos < loop_start || voice.frame_pos >= loop_end)
-                {
-                    voice.frame_pos = loop_start;
+                let normalized_frame =
+                    playhead_before_render(voice.frame_pos, loop_region, seek_mode);
+                if normalized_frame != voice.frame_pos {
+                    voice.frame_pos = normalized_frame;
                     timeline_anchor_needs_reset = true;
                 }
                 if voice.frame_pos > sample_frames {
@@ -2648,7 +2591,7 @@ mod tests {
                         mixer.set_pad_loop_region(
                             id,
                             0.0,
-                            Some(loop_frames as f32 / SAMPLE_RATE_HZ),
+                            Some(loop_frames as f64 / SAMPLE_RATE_HZ as f64),
                         );
                         assert!(mixer.play_sample_at_output_frame(id, 1.0, output_frame));
                     }
@@ -2760,7 +2703,11 @@ mod tests {
         let full_mix_loop_frames = four_bar_loop_frames(SAMPLE_RATE_HZ, ANCHOR_BPM);
         mixer.load_sample(0, create_test_sample(1, full_mix_loop_frames, 0.2));
         mixer.set_pad_bpm(0, Some(ANCHOR_BPM));
-        mixer.set_pad_loop_region(0, 0.0, Some(full_mix_loop_frames as f32 / SAMPLE_RATE_HZ));
+        mixer.set_pad_loop_region(
+            0,
+            0.0,
+            Some(full_mix_loop_frames as f64 / SAMPLE_RATE_HZ as f64),
+        );
 
         let stem_loop_frames = four_bar_loop_frames(SAMPLE_RATE_HZ, STEM_PAD_BPM);
         mixer.load_sample(1, create_test_sample(1, stem_loop_frames, 0.0));
@@ -2775,7 +2722,11 @@ mod tests {
         ));
         assert!(mixer.set_stem_mix_mode(1, StemMixMode::AllStems, 42));
         mixer.set_pad_bpm(1, Some(STEM_PAD_BPM));
-        mixer.set_pad_loop_region(1, 0.0, Some(stem_loop_frames as f32 / SAMPLE_RATE_HZ));
+        mixer.set_pad_loop_region(
+            1,
+            0.0,
+            Some(stem_loop_frames as f64 / SAMPLE_RATE_HZ as f64),
+        );
 
         assert!(mixer.play_sample_at_output_frame(0, 1.0, output_frame));
         assert!(mixer.play_sample_at_output_frame(1, 1.0, output_frame));
@@ -2820,7 +2771,7 @@ mod tests {
             let loop_frames = four_bar_loop_frames(SAMPLE_RATE_HZ, loop_bpm);
             mixer.load_sample(id, create_test_sample(1, loop_frames, 0.2));
             mixer.set_pad_bpm(id, bpm);
-            mixer.set_pad_loop_region(id, 0.0, Some(loop_frames as f32 / SAMPLE_RATE_HZ));
+            mixer.set_pad_loop_region(id, 0.0, Some(loop_frames as f64 / SAMPLE_RATE_HZ as f64));
             assert!(mixer.play_sample_at_output_frame(id, 1.0, output_frame));
         }
 
@@ -2849,6 +2800,29 @@ mod tests {
     }
 
     #[test]
+    fn test_long_editor_markers_and_signed_origins_retain_individual_source_frames() {
+        for rate in [44_100.0, 48_000.0, 96_000.0] {
+            let mut mixer = RtMixer::new(1, rate);
+            let start_frame = rate as usize * 3_600 + 137;
+            let end_frame = start_frame + 23;
+            mixer.set_pad_loop_region(
+                0,
+                start_frame as f64 / rate as f64,
+                Some(end_frame as f64 / rate as f64),
+            );
+            assert_eq!(mixer.pad_loop_start_frame[0], start_frame);
+            assert_eq!(mixer.pad_loop_end_frame[0], Some(end_frame));
+            mixer.set_pad_timing_metadata(
+                0,
+                PadTimingMetadata {
+                    phase_anchor_s: -(start_frame as f64 / rate as f64),
+                },
+            );
+            assert_eq!(mixer.pad_phase_anchor_frame(0), Some(-(start_frame as f64)));
+        }
+    }
+
+    #[test]
     fn test_pad_timing_metadata_stores_sample_accurate_anchor_frame() {
         let mut mixer = RtMixer::new(1, 10.0);
 
@@ -2859,11 +2833,11 @@ mod tests {
             },
         );
 
-        assert_eq!(mixer.pad_phase_anchor_frame(0), Some(12));
+        assert_eq!(mixer.pad_phase_anchor_frame(0), Some(12.0));
     }
 
     #[test]
-    fn test_pad_timing_metadata_invalid_values_fall_back_to_zero() {
+    fn test_pad_timing_metadata_invalid_values_preserve_previous_origin() {
         let mut mixer = RtMixer::new(1, 10.0);
         mixer.set_pad_timing_metadata(
             0,
@@ -2872,9 +2846,9 @@ mod tests {
             },
         );
 
-        for phase_anchor_s in [f32::NAN, f32::INFINITY, -1.0] {
+        for phase_anchor_s in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             mixer.set_pad_timing_metadata(0, PadTimingMetadata { phase_anchor_s });
-            assert_eq!(mixer.pad_phase_anchor_frame(0), Some(0));
+            assert_eq!(mixer.pad_phase_anchor_frame(0), Some(12.0));
         }
     }
 
@@ -2889,7 +2863,7 @@ mod tests {
             },
         );
 
-        assert_eq!(mixer.pad_phase_anchor_frame(0), Some(0));
+        assert_eq!(mixer.pad_phase_anchor_frame(0), Some(0.0));
         assert_eq!(mixer.pad_phase_anchor_frame(NUM_SAMPLES + 1), None);
     }
 
@@ -2906,7 +2880,7 @@ mod tests {
 
         mixer.unload_sample(0);
 
-        assert_eq!(mixer.pad_phase_anchor_frame(0), Some(0));
+        assert_eq!(mixer.pad_phase_anchor_frame(0), Some(0.0));
     }
 
     #[test]
@@ -2980,7 +2954,7 @@ mod tests {
         let mut mixer = RtMixer::new(1, 10.0);
         mixer.set_pad_bpm(0, Some(60.0));
         mixer.set_pad_loop_region(0, 0.5, Some(2.0));
-        mixer.pad_phase_anchor_frame[0] = 50;
+        mixer.pad_phase_anchor_frame[0] = f64::NAN;
 
         let frame = mixer.phase_aligned_initial_sample_frame(0, 20, 2.0);
 
@@ -3086,7 +3060,7 @@ mod tests {
         assert_eq!(mixer.active_pad_bar_phase_beats(0), None);
 
         mixer.set_pad_bpm(0, Some(60.0));
-        mixer.pad_phase_anchor_frame[0] = 20;
+        mixer.pad_phase_anchor_frame[0] = f64::NAN;
         assert_eq!(mixer.active_pad_bar_phase_beats(0), None);
     }
 

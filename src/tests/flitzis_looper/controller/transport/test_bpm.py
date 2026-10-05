@@ -298,6 +298,42 @@ def test_on_pad_bpm_changed_publishes_shifted_grid_anchor(
     audio_engine_mock.set_pad_timing_metadata.assert_called_with(sample_id, 2.01)
 
 
+def test_manual_bpm_override_keeps_signed_grid_and_explicit_loop_markers(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    sample_id = 0
+    controller.project.sample_paths[sample_id] = "samples/foo.wav"
+    controller.project.pad_grid_offset_samples[sample_id] = -18_000
+    controller.project.sample_analysis[sample_id] = SampleAnalysis(
+        bpm=90.0,
+        key="C",
+        beat_grid=BeatGrid(beats=[0.25], downbeats=[0.25], bars=[0.25]),
+    )
+    controller.project.pad_loop_auto[sample_id] = False
+    controller.project.pad_loop_start_s[sample_id] = 1.0
+    controller.project.pad_loop_end_s[sample_id] = 9.0
+
+    controller.transport.bpm.set_manual_bpm(sample_id, 123.5)
+
+    assert controller.transport.bpm.effective_bpm(sample_id) == 123.5
+    audio_engine_mock.set_pad_bpm.assert_called_with(sample_id, 123.5)
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(sample_id, -0.125)
+    assert controller.transport.loop.grid_anchor_sec(sample_id) == -0.125
+    assert controller.project.pad_loop_start_s[sample_id] == 1.0
+    assert controller.project.pad_loop_end_s[sample_id] == 9.0
+    audio_engine_mock.set_pad_loop_region.assert_called_with(sample_id, 1.0, 9.0)
+
+    controller.transport.bpm.clear_manual_bpm(sample_id)
+
+    assert controller.transport.bpm.effective_bpm(sample_id) == 90.0
+    assert controller.project.pad_grid_offset_samples[sample_id] == -18_000
+    audio_engine_mock.set_pad_bpm.assert_called_with(sample_id, 90.0)
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(sample_id, -0.125)
+    assert controller.project.pad_loop_start_s[sample_id] == 1.0
+    assert controller.project.pad_loop_end_s[sample_id] == 9.0
+
+
 def test_on_pad_bpm_changed_publishes_beat_fallback_timing_metadata(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:

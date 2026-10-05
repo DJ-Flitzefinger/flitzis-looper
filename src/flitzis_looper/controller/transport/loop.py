@@ -89,12 +89,12 @@ class PadLoopController:
         self._audio.set_pad_loop_region(sample_id, start_s, end_s)
 
     def apply_grid_anchor_to_audio(self, sample_id: int) -> None:
-        """Publish the same per-pad grid anchor used by the waveform editor."""
+        """Publish the waveform editor's signed source-grid origin unchanged."""
         validate_sample_id(sample_id)
         if self._project.sample_paths[sample_id] is None:
             return
 
-        self._audio.set_pad_timing_metadata(sample_id, max(0.0, self._grid_anchor_sec(sample_id)))
+        self._audio.set_pad_timing_metadata(sample_id, self._grid_anchor_sec(sample_id))
 
     def _grid_offset_samples(self, sample_id: int) -> int:
         return int(self._project.pad_grid_offset_samples[sample_id])

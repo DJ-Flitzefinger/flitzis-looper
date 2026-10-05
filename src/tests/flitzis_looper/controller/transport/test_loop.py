@@ -250,19 +250,25 @@ def test_set_grid_offset_samples_publishes_shifted_grid_anchor(
     audio_engine_mock.set_pad_loop_region.assert_called()
 
 
-def test_apply_grid_anchor_to_audio_clamps_negative_anchor(
+@pytest.mark.parametrize("sample_rate_hz", [44_100, 48_000])
+@pytest.mark.parametrize("offset_samples", [-1, -1_500])
+def test_apply_grid_anchor_to_audio_preserves_negative_editor_origin(
     controller: AppController,
     audio_engine_mock: Mock,
+    sample_rate_hz: int,
+    offset_samples: int,
 ) -> None:
-    audio_engine_mock.output_sample_rate.return_value = 48_000
+    audio_engine_mock.output_sample_rate.return_value = sample_rate_hz
 
     sample_id = 0
     controller.project.sample_paths[sample_id] = "samples/foo.wav"
-    controller.project.pad_grid_offset_samples[sample_id] = -1
+    controller.project.pad_grid_offset_samples[sample_id] = offset_samples
 
     controller.transport.loop.apply_grid_anchor_to_audio(sample_id)
 
-    audio_engine_mock.set_pad_timing_metadata.assert_called_once_with(sample_id, 0.0)
+    expected_origin_s = offset_samples / sample_rate_hz
+    assert controller.transport.loop.grid_anchor_sec(sample_id) == expected_origin_s
+    audio_engine_mock.set_pad_timing_metadata.assert_called_once_with(sample_id, expected_origin_s)
 
 
 def test_apply_grid_anchor_to_audio_skips_unloaded_pad(
@@ -278,6 +284,25 @@ def test_apply_grid_anchor_to_audio_skips_unloaded_pad(
     controller.transport.loop.apply_grid_anchor_to_audio(sample_id)
 
     audio_engine_mock.set_pad_timing_metadata.assert_not_called()
+
+
+def test_negative_grid_origin_drives_editor_snapping_and_native_metadata(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    sample_id = 0
+    controller.project.sample_paths[sample_id] = "samples/foo.wav"
+    controller.project.pad_loop_auto[sample_id] = True
+    controller.project.pad_loop_bars[sample_id] = 8.0
+    controller.transport.bpm.set_manual_bpm(sample_id, 120.0)
+
+    controller.transport.loop.set_grid_offset_samples(sample_id, -240)
+    controller.transport.loop.set_start(sample_id, 0.031)
+
+    assert controller.transport.loop.grid_anchor_sec(sample_id) == -0.005
+    assert controller.project.pad_loop_start_s[sample_id] == 1_260 / 48_000
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(sample_id, -0.005)
+    audio_engine_mock.set_pad_loop_region.assert_called_with(sample_id, 1_260 / 48_000, 16.02625)
 
 
 def test_effective_bpm_change_reclamps_grid_offset_samples(
@@ -329,7 +354,7 @@ def test_grid_anchor_and_snapped_start_stay_stable_under_global_modes(
             snapped_start_s=snapped_start_s,
         )
 
-    audio_engine_mock.set_pad_timing_metadata.assert_not_called()
+    audio_engine_mock.set_pad_timing_metadata.assert_called_once_with(sample_id, anchor_s)
 
 
 def test_grid_anchor_and_snapped_start_stay_stable_when_other_pad_plays(
@@ -696,6 +721,34 @@ def test_set_start_quantizes(controller: AppController, audio_engine_mock: Mock)
     frames = start_s * 48_000
     assert frames == pytest.approx(1.04 * 48_000, 0.5)
     assert controller.project.pad_loop_start_s[sample_id] == pytest.approx(1.04, 0.01)
+
+
+@pytest.mark.parametrize("sample_rate_hz", [44_100, 48_000])
+def test_long_source_markers_publish_exact_frames_to_audio_and_direct_input(
+    controller: AppController, audio_engine_mock: Mock, sample_rate_hz: int
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = sample_rate_hz
+    sample_id = 0
+    controller.project.sample_paths[sample_id] = "samples/long-source.wav"
+    controller.project.pad_loop_auto[sample_id] = False
+    start_frame = 16_777_217
+    end_frame = start_frame + 17
+    start_s = start_frame / sample_rate_hz
+    end_s = end_frame / sample_rate_hz
+
+    controller.transport.loop.set_start(sample_id, start_s)
+    controller.transport.loop.set_end(sample_id, end_s)
+    controller.input_mapping.on_frame_render()
+
+    assert controller.project.pad_loop_start_s[sample_id] == start_s
+    assert controller.project.pad_loop_end_s[sample_id] == end_s
+    audio_engine_mock.set_pad_loop_region.assert_called_with(sample_id, start_s, end_s)
+    _, loaded, loop_starts, loop_ends = audio_engine_mock.set_input_runtime_state.call_args.args
+    assert loaded[sample_id] is True
+    assert loop_starts[sample_id] == start_s
+    assert loop_ends[sample_id] == end_s
+    assert round(loop_starts[sample_id] * sample_rate_hz) == start_frame
+    assert round(loop_ends[sample_id] * sample_rate_hz) == end_frame
 
 
 def test_set_end_none(controller: AppController, audio_engine_mock: Mock) -> None:

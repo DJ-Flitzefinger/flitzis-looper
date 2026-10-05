@@ -59,6 +59,18 @@ changes refresh the voice timeline anchor. Ordinary loop wrapping does not
 redefine the Rust master output timeline, Rubber Band state, the Loop Editor
 source grid, or prepared-stem alignment.
 
+The separate `source_grid.rs` foundation derives source beat/bar and loop-cycle
+phase from the editor's signed origin. Transport retains complete beat position
+across master-BPM changes and can bootstrap once from the selected BPMLOCK
+reference. These operations preserve voice read positions and Rubber Band
+ownership. The master-to-source mapping helper is internal and tested; normal
+starts still read the effective loop beginning. Neither that helper nor the
+one-time bootstrap compensates audible Rubber Band/device delay.
+Loop edits clear the old source/output anchor before rendering reestablishes
+it. Bootstrap and rendering use the same bounded playhead normalization so a
+changed loop cannot anchor the master to a source frame that will be clamped
+before the next read. These changes do not reconstruct Rubber Band state.
+
 ## Rubber Band Processing
 
 Each voice slot prepares its Rubber Band handle, fixed block-size metadata,
@@ -74,7 +86,9 @@ loop ownership.
 The engine's output-clock snapshots estimate device buffering from CPAL callback
 timestamps. They do not include Rubber Band start delay or prove audible onset
 alignment. Captured-input nearest-grid diagnostics remain separate from current
-launch execution until phase mapping and safe DSP preparation are validated.
+launch execution. Signed source-phase mapping is now a tested foundation;
+safe DSP preparation and audible-device validation are still required before
+phase-based synchronized starts are activated.
 
 If shifted output is unavailable for part of a callback block, the processor
 fills the missing frames with silence as a deterministic bounded result and
