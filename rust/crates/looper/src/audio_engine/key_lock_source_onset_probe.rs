@@ -1255,3 +1255,6 @@ fn centered_energy_and_integer_minimax_preserve_translation_and_spread() {
         }));
     }
 }
+
+#[path = "key_lock_source_pitch_probe.rs"]
+mod pitch_probe;

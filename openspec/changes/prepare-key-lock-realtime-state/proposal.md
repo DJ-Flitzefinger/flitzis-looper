@@ -27,6 +27,9 @@ source pre-roll and synchronized audible launches can be enabled.
 - Extend that proof with an explicit forward source-history origin, preserving logical phase
   separately from raw discard and feed. Measure impulse/tone/percussion timing and retention
   against predeclared stereo-energy criteria before choosing compensation; report failure too.
+- Evaluate a fixed unity-source attack branch against matched continuous native histories and
+  target-local actual mixtures; report its source-phase cost and interference without replacing
+  the existing failed retention/timing gate. This remains a test-only content experiment.
 
 ## Capabilities
 

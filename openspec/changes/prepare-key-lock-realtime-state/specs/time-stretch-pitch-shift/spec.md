@@ -245,3 +245,44 @@ unchanged; unsuccessful evidence SHALL leave live compensation and adoption pend
 - **WHEN** a fixed source-aligned dry attack and short native transition fails the declared criterion
 - **THEN** the failure, remaining pitch-changing dry content and discontinuity are recorded
 - **AND** no live onset strategy, compensation constant or synchronized launch is selected
+
+### Requirement: Pitch-Preserving Attack Candidates Expose Source-Phase Costs
+The system SHALL evaluate a fixed non-live source-pitch attack candidate on actual target-local
+stereo mixtures against its own continuous native reference before accepting live onset content.
+
+The candidate SHALL copy the declared logical fractional source phase, read the initial branch
+at constant source ratio 1.0 through the existing source reader, and use the existing fixed two-ms
+hold plus five-ms raised-cosine transition into nominally translated wet output. The native
+reference SHALL use the same source origin, history, exact ratio, initial pitch/reset order and
+block phase as that fixture. Different history lengths SHALL NOT be substituted as references.
+Independent algebraic source reads SHALL verify the unity branch under unequal partitions,
+including fractional loop/intro/tail and prepared-stem addressing. The later wet suffix SHALL
+remain bit-exact. No additional resampler, native option change or per-signal fit is permitted.
+
+The report SHALL separate launch-local and independently declared target-local windows, identify
+undefined or background-dominated attack evidence, and retain native deformation and discarded
+content evidence from the existing unchanged criterion. Window energy/envelope diagnostics SHALL
+NOT replace that criterion or treat supplied source audio as restored native energy. The branch
+source progression p+n and canonical progression p+r*n SHALL remain explicit, including their
+phase discrepancy at the transition end and interference between weighted source and wet content.
+Preservation of branch source pitch SHALL NOT imply correct rhythmic phase, accepted mixed-output
+pitch, click-safe handover or device alignment. Failed or ambiguous evidence SHALL leave live
+identity/adoption and synchronized Quantize pending.
+
+#### Scenario: Unity source reading preserves pitch but diverges in phase
+- **GIVEN** a fixed bridge starts at logical source phase p with nonneutral canonical ratio r
+- **WHEN** its source branch reads at ratio 1.0 for n output frames
+- **THEN** the report records source-phase discrepancy (1-r)*n separately from native delay
+- **AND** it does not accelerate the branch to conceal that discrepancy
+
+#### Scenario: A local window does not identify the target attack
+- **GIVEN** a known source event lies outside a launch-local window or background dominates it
+- **WHEN** local mixture energy and envelope diagnostics are reported
+- **THEN** the window origin and independently mapped event time remain explicit
+- **AND** the diagnostics do not certify attack acceptance or replace raw-native retention bounds
+
+#### Scenario: Matched continuous history proves only continuation
+- **GIVEN** a candidate and a continuous native reference share their declared source history
+- **WHEN** their post-transition wet samples match exactly
+- **THEN** the report verifies continuation while measuring the replaced local content separately
+- **AND** earlier discarded native energy and failed original timing bounds remain visible

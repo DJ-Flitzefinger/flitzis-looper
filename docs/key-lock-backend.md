@@ -372,8 +372,66 @@ and phase are varied jointly; no marker0 or exhaustive musical content is covere
 The declared markers17/511 are mapped to rounded source frames (at ratio0.5 those
 source coordinates correspond to output18/512). The independently read dry reference
 supplies actual timing, including interpolation and the attack envelope.
-The next content gate needs actual target-local continuous musical references and a
-pitch-preserving policy; neither more scalar fitting nor this dry bridge is sufficient.
+These results require actual target-local continuous musical references and a pitch-preserving
+policy; neither more scalar fitting nor this dry bridge is sufficient.
+
+### Fixed Unity-Source Attack Candidate
+
+The separate `key_lock_source_pitch_probe.rs` test module evaluates the same two-ms hold and
+five-ms raised-cosine transition with a constant ratio-1 source branch. It copies the exact
+logical fractional source phase and uses the existing reader; independent algebraic taps
+verify its samples, including loop/intro/tail and prepared-stem addressing. Every fixture uses
+its own continuous raw-native reference with matched origin, history, exact ratio and initial
+pitch/reset order. H32768 and H65536 remain separate contexts, not interchangeable references.
+The original wet suffix must remain bit-exact after the finite transition.
+
+This branch preserves source carrier pitch by reading p+n, but the canonical tempo path reads
+p+r*n. At 48 kHz the seven-ms endpoint is 336 output frames: ratio0.5 is 168 source frames ahead
+(3.5 ms of source, seven ms of canonical output); ratio2 is 336 source frames behind (seven ms
+of source, 3.5 ms of canonical output). No compensating rate ramp hides that discrepancy.
+The mixed transition can still interfere, alter an attack envelope or miss a later target.
+Mathematical source-rate preservation alone cannot establish perceived mixed-output pitch.
+
+The nonzero-history matrix covers ratios0.5/1/2, 44.1/48/96 kHz, markers0/17/511 and the six
+existing tone/percussion variations. Launch-local and independently source-mapped target-local
+seven/40-ms windows report actual mixture energy/envelope differences and q10/q50 displacement
+against matched wet and source references. Known event coordinates include source rounding.
+Background can dominate a nonzero window; a launch window excluding the attack is not attack
+evidence. Weighted source/wet energy and their signed cross-term expose interference. These
+are diagnostics with no newly invented passing threshold. A short envelope also retains carrier
+phase; a two-ms source excerpt cannot support a general spectral pitch estimate.
+
+The earlier native q10/q50 two-ms, peak and 0.1%-energy bounds remain failed and unchanged.
+Added source content cannot count as retained discarded native content. No live compensation,
+identity/adoption, transition or synchronized Quantize policy follows from this offline candidate.
+Reproduction is documented in the development guide; generated evidence stays in workspace scratch.
+
+The release probe passes 648 independent unity-reader and 648 exact native-suffix comparisons
+across 324 actual mixtures; all later wet suffixes remain exact. In the finite target40-ms
+windows, native-relative q50 differences reach 15.927 ms at ratio0.5 and 28.027 ms at ratio2.
+At ratio2 the target7-ms candidate/native energy ratio ranges from 0.227 to 271.319. These
+background-containing, independently normalized window diagnostics describe substantial local
+replacement/interference, not isolated attack timing or a newly defined pass/fail budget.
+Seventy-two targets lie after the fixed bridge; exact target-window output there proves only
+unchanged wet continuation. The unity-source bridge is not accepted as a general onset policy.
+
+### Causal Scheduling Limit
+
+The prior isolated raw retention bounds also define a necessary scheduling condition. With
+nominal translation C and maximum translation U retaining the original peak and at least 99.9%
+of raw target-response energy, preserving that content needs at least max(0,C-U) frames before
+the nominal musical anchor. This is not the first infinitesimal onset and selects no correction.
+For the 48 kHz/ratio2/H16384 impulse, C3678 and U2080 require 1598 frames (33.292 ms).
+At 120 BPM a nearest future 1/64 boundary offers at most 15.625 ms, before device/control lead;
+many future targets offer less and past targets offer none. Across the prior matrices, maximum
+necessary headroom is 36.875 ms (slice3e) and 34.286 ms (slice3f). These bounds use isolated raw
+responses, not background-dominated mixture energy or nonlinear subtraction.
+
+Emitting before a quantized target would change the audible-start contract, and even sufficient
+headroom does not remove the failed intrinsic q10/q50 timing intervals. Resolve controllable
+pre-target content, musical anchoring and explicit missed-content accounting for authorized late
+catch-up before selecting a live policy. Another fitted bridge or lower retention budget cannot
+resolve this causal limit. The unchanged strict criterion remains unaccepted.
 
 ## Settings Contract
 

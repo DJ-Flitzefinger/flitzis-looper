@@ -404,6 +404,14 @@ responses are nonlinear diagnostics; raw native cut loss and temporary varispeed
 remain explicit. The bridge is not a selected live policy. Generation identity, timed
 live handover/retirement and transitions remain pending.
 
+A separate test-only unity-source bridge copies the logical fractional phase into a constant
+ratio-1 source epoch through the same borrowed-buffer reader. Its fixed two-ms hold/five-ms fade
+preserves branch source pitch, while source progression p+n departs from canonical p+r*n.
+Actual-mixture windows use each fixture's own continuous native history; launch and target
+origins, source-phase discrepancy and weighted source/wet interference remain explicit.
+Independent source and wet-suffix equality verify the implementation, not attack acceptance.
+The original failed timing/retention gates and live adoption boundary remain unchanged.
+
 Project persistence stores global Key Lock control intent and per-pad Key Lock
 booleans for loaded-pad intent, with unloaded pads saved and restored as
 disabled. Rubber Band handles, runtime paths, buffers, measured latency,

@@ -1,6 +1,48 @@
 ## Safety gate and remaining audible work
 
-The next non-live onset experiment compares H32768/H65536 output-frame histories at exact
+### Fixed unity-source attack experiment
+
+The bounded test-only gate copies the logical fractional source phase p into a constant
+ratio-1 source epoch. It reuses the production reader and the previously fixed two-ms hold plus
+five-ms raised-cosine coefficient, then hands over to that fixture's nominally translated native
+suffix. No branch catch-up is allowed: p+n preserves source pitch whereas p+r*n is the canonical
+tempo progression. At the fade end T, their discrepancy is (1-r)*T source frames. At 48 kHz T=336:
+ratio0.5 is 168 source frames ahead, ratio2 is 336 behind. These correspond to seven/3.5 ms of
+canonical output progression. This is a falsification candidate, not a selected live policy.
+
+Predeclare actual-mixture diagnostics in launch-local and target-local seven/40-ms windows.
+The target is mapped from the known source-event coordinate, including source rounding, before
+rendering; marker511 can fall outside the launch bridge. Report local energy ratio, centered
+envelope difference and q10/q50 displacement against the matched native suffix and independently
+read source timing, with undefined denominators explicit. Nonzero background can obscure an
+attack, and a short envelope window can retain carrier-phase effects. No new pass threshold is
+introduced. Separately report weighted source/wet energies and their signed interference term;
+added direct content does not establish retention of cropped native output.
+
+Use the same declared source origin, exact native pitch/reset order, block phase and history for
+each reference comparison. Compare H32768/H65536 as distinct fixtures, never interchangeable
+references. Cover ratios0.5/1/2 at 44.1/48/96 kHz, six existing tonal/percussive attack variations,
+markers0/17/511 and nonzero stereo history. Independent algebraic unit-distance taps verify the
+shared-reader branch, fractional loop/seek/stem addressing, partition independence and unchanged
+wet suffix. Keep the failed slice3e/3f raw-native two-ms/peak/0.1%-energy budgets visible and
+unchanged. A branch with unchanged source pitch may still change rhythmic phase and attack shape;
+reference equality cannot accept its pitch mixture or lost wet attack. All construction, reads,
+allocation and measurements remain offline cfg(test), with no live callback or scheduler changes.
+The signed native [-40ms,0) window reports preceding mixture energy/peak as context only; it is
+not an isolated target response or a replacement retention denominator.
+
+Before another candidate, derive causal feasibility from existing uncropped bounds: if C is the
+nominal anchor and U the largest translation retaining peak/99.9% response energy, pre-target
+headroom L=max(0,C-U) is necessary. With earliest controllable audible frame E and chosen target T,
+T-E>=L is necessary for such pre-target emission; it does not satisfy the failed intrinsic timing
+criterion. At 48k/ratio2/H16384, L1598 frames=33.292ms; nearest future1/64 at120BPM offers at most
+15.625ms even before device/control lead. Earlier audible emission changes the launch contract.
+Past/unreachable targets cannot recover unavailable content; authorized late phase catch-up needs
+explicit separate missed-content accounting. Do not implement that contract change silently.
+
+### Prior varispeed bridge evidence
+
+The prior non-live onset experiment compares H32768/H65536 output-frame histories at exact
 ratios 0.5/1/2 and 44.1/48/96 kHz. Target-relative background phase and attack content are held
 constant across histories; varied short tonal/percussive attacks include different block phases.
 For a raw quantile displacement a_p = raw_qp - dry_qp, deformation is a_j-a_i and the best

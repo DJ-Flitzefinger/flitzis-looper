@@ -261,6 +261,23 @@ or nonlinear diagnostics; their numerical verdicts are not audible attack accept
 The bridge changes pitch briefly and is not selected live behavior. See the backend
 guide for the unchanged budgets, mathematical lower bounds and remaining content gate.
 
+Run the fixed unity-source attack candidate separately:
+
+```powershell
+$env:FLITZIS_KEY_LOCK_PITCH_PROBE_CSV = (Join-Path (Split-Path -Parent (Get-Location).Path) 'scratch/slice3g-pitch.csv')
+.\scripts\run-rust-tests.ps1 --release --lib pitch_probe
+Remove-Item Env:\FLITZIS_KEY_LOCK_PITCH_PROBE_CSV
+```
+
+The test-only candidate reuses the fixed two-ms hold/five-ms fade, but reads its initial source
+branch at ratio1 from the declared logical fractional phase. Independent source/native oracles
+verify addressing, partitions and later wet continuation. The nonzero-history matrix includes
+markers0/17/511; launch-local and independently mapped target-local windows are distinct.
+Local mixture energy/envelope diagnostics and weighted-source/wet interference do not replace
+the original raw-native retention/timing gates. A unit-rate source branch preserves its own
+pitch while departing from canonical tempo progression; it is not selected live behavior.
+Ordinary tests export no audio or CSV and start no device.
+
 ### Nuitka Installer Direction
 
 The later Windows installer should be built so non-technical users do not need
