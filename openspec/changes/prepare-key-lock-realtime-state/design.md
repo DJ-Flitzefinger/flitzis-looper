@@ -103,6 +103,43 @@ This foundation does not prove audible transient alignment. Exact-ratio source p
 independent logical/feed cursors, explicit delay discard, stale/late prepared-state rejection and
 source-aligned activation/crossfades remain pending with separate audible evidence.
 
+## Exact-ratio source preparation proof gate
+
+Compile `key_lock_source_preparation.rs` only in native tests. It borrows immutable full-mix/stem
+buffers and uses the same `SourceReadPlan::fill_fractional_buffers` as the live mixer. It retains
+separate logical and future feed copies at an explicit constant `f32` ratio. Rebase the copied
+fractional source phase without changing the caller's clock or pending smoothing. Construction,
+pitch setup, reset, allocation and source pre-roll remain non-realtime operations. Set the exact
+inverse pitch before reset and before the first source shift, since native reset initializes its
+previous output hop from that pitch. Neutral silent warming is not part of this source reference.
+
+For native block size B and explicit experimental output discard D, process
+`P = ceil((D + B - 1) / B) * B` feed frames and retain raw native output `[D..P]`.
+The ready FIFO has `Q = P - D >= B - 1` frames, no pending native input, and a feed cursor at P.
+During n continued output frames, feed advances by n, logical position advances only by n, and
+pending input is `n mod B`. Output occupancy is `Q - (n mod B)`. Reuse the existing fixed FIFO;
+do not seed the live adapter's silent lead a second time. Retain native state and both FIFOs
+together. Bounded render work stages at most the fixed segment capacity and shifts only its
+bounded number of complete blocks. Invalid layout/ratio/discard/render bounds fail explicitly.
+
+An independent oracle addresses immutable source samples algebraically, then shifts them through
+a separately initialized raw native instance. It must not generate its source feed with the
+production source clock/reader or use the prepared fixture as its own reference. Compare every
+retained and continued stereo sample with raw output `[D..D+n]` across fractional rates,
+loop/intro/tail seeks, selected stems, nonaligned discard indices and one-frame/irregular segments.
+
+D is a declared experiment, not an adopted compensation constant. Measure the uncropped native
+response and translate its onset, 1%-of-peak onset and peak by D, including negative residuals.
+Record discarded energy and whether the original response peak lies before D. Also measure the
+retained response, which can hide a clipped startup transient if assessed alone. Cover startup
+and settled markers at different block phases. Nominal API delay or bit equality alone cannot
+certify an audible launch. No device is started by this gate.
+
+Live integration remains pending: asynchronous source/generation/loop/seek/stem/exact-ratio
+identity, fixed future handover frames, render splitting, stale/late rejection, off-thread
+retirement, and source-aligned wet/dry/neutral transitions. The test-only fixture cannot be
+adopted by `RtMixer` and changes no scheduler, transport, persisted marker or runtime fallback.
+
 ## References
 
 - https://raw.githubusercontent.com/breakfastquay/rubberband/v4.0.0/src/finer/R3LiveShifter.cpp

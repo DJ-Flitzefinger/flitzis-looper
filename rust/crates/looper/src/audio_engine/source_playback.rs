@@ -46,6 +46,23 @@ impl SourcePlayback {
         }
     }
 
+    /// Copy the current source phase into a constant-rate preparation epoch.
+    ///
+    /// Pending live smoothing is removed only from this value. Its logical counterpart retains
+    /// the accepted target and active-frame step interval.
+    #[cfg(test)]
+    pub(crate) fn at_constant_ratio(mut self, ratio: f32) -> Self {
+        self.rebase();
+        self.ratio = checked_ratio(ratio);
+        self.target = self.ratio;
+        self.frames_until_step = 0;
+        self
+    }
+
+    pub(crate) fn tempo_ratio(&self) -> f32 {
+        self.ratio
+    }
+
     pub(crate) fn configure(&mut self, sample_frames: usize, region: FrameRange) {
         let domain = (sample_frames, region);
         if self.domain == Some(domain) {
@@ -194,6 +211,35 @@ mod tests {
             live.advance(frames);
             assert_eq!(live.position(), prepared.position());
         }
+    }
+
+    #[test]
+    fn exact_preparation_copy_retains_phase_and_does_not_consume_live_smoothing() {
+        let mut logical = SourcePlayback::new(95, ExplicitSeekMode::AfterLoop, 0.73);
+        logical.configure(100, FrameRange { start: 13, end: 71 });
+        logical.advance(2);
+        logical.set_target(1.25);
+        assert_eq!(logical.chunk(3).0, 3);
+        logical.advance(3);
+        let position = logical.position();
+        let remaining_step_frames = logical.frames_until_step;
+        let exact_ratio = 1.37_f32;
+        let mut feed = logical.at_constant_ratio(exact_ratio);
+
+        assert_eq!(feed.position(), position);
+        assert_eq!(feed.tempo_ratio(), exact_ratio);
+        assert_eq!(feed.chunk(777), (777, exact_ratio));
+        feed.advance(7);
+        let distance = position.fraction + 7.0 * f64::from(exact_ratio);
+        let expected_frame = 13 + (position.frame + distance.floor() as usize - 100) % 58;
+        assert_eq!(feed.position().frame, expected_frame);
+        assert_eq!(feed.position().fraction, distance.fract());
+        assert_eq!(feed.position().seek_mode, ExplicitSeekMode::Normal);
+
+        assert_eq!(logical.position(), position);
+        assert_eq!(logical.target, 1.25);
+        assert_eq!(logical.chunk(777).0, remaining_step_frames);
+        assert_ne!(logical.tempo_ratio(), exact_ratio);
     }
 
     #[test]

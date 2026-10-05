@@ -35,5 +35,20 @@
 - [x] 5.6 Verify rate changes, pause/resume, source rebases and equal native input/output sequences without callback allocation or changed adapter delay.
 - [x] 5.7 Pass official strict OpenSpec validation and full native/Python/static checks; update maintained docs and continuation state with evidence and remaining limits.
 
-Exact-ratio source pre-roll, independent DSP feed-ahead and audible prepared-state handover remain
-pending slice 3 work. Fractional feed equivalence alone does not certify audible synchronization.
+## 6. Non-live exact-source preparation proof
+
+- [x] 6.1 Share fractional buffer filling with the live mixer and centralize exact inverse-pitch setup before native reset.
+- [x] 6.2 Implement a test-only coherent native/FIFO fixture with bounded explicit discard and separate logical/feed cursors.
+- [x] 6.3 Compare retained output and continuation against independent algebraic source reads and raw native output across rates, ratios, seeks, stems and partitions.
+- [x] 6.4 Measure uncropped and retained startup/settled transient residuals, discarded energy and clipping in release; keep nominal discard experimental.
+- [x] 6.5 Pass official strict validation and full native/Python/static checks; update maintained docs and handoff with exact evidence and limits.
+
+## 7. Pending live audible preparation
+
+- [ ] 7.1 Anchor explicit source history before the requested logical phase; sweep bounded discard/marker-phase/short-burst fixtures and define the musical timing criterion before choosing compensation.
+- [ ] 7.2 Implement source/generation/loop/seek/stem/exact-ratio identity with fixed future handover frames and stale/late rejection.
+- [ ] 7.3 Adopt coherent native/FIFO/feed state at the accepted render frame and retire replaced or stale ownership off-thread.
+- [ ] 7.4 Verify source-aligned start/retrigger/seek, pause/resume and click-safe wet/dry/neutral/global/per-pad transitions, including queue/failure paths.
+- [ ] 7.5 Validate audible compensation and obtain release/device acceptance before synchronized Quantize activation.
+
+Non-live preparation and reference equality alone do not certify audible synchronization.

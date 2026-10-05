@@ -1382,28 +1382,23 @@ impl RtMixer {
                         voice.source_playback.chunk(frames - rendered);
                     let stem_transition = stem_transitions[voice.sample_id];
                     let buffers = voice.stretch.resampled_buffers_mut(chunk_frames);
-                    for frame in 0..chunk_frames {
-                        let position = voice.source_playback.position_at(frame);
-                        let plan = SourceReadPlan {
-                            channels,
-                            sample_frames,
-                            frame_pos: position.frame,
-                            loop_region,
-                            seek_mode: position.seek_mode,
-                            selection: current_selection,
-                            transition: stem_transition,
-                        };
-                        let source_progress = frame as f64 * f64::from(tempo_ratio);
-                        for (channel, buffer) in buffers.iter_mut().enumerate().take(channels) {
-                            buffer[frame] = plan.sample_fractional(
-                                &sample,
-                                prepared_stem_set,
-                                position.fraction,
-                                source_progress,
-                                channel,
-                            );
-                        }
+                    let position = voice.source_playback.position();
+                    SourceReadPlan {
+                        channels,
+                        sample_frames,
+                        frame_pos: position.frame,
+                        loop_region,
+                        seek_mode: position.seek_mode,
+                        selection: current_selection,
+                        transition: stem_transition,
                     }
+                    .fill_fractional_buffers(
+                        &sample,
+                        prepared_stem_set,
+                        &voice.source_playback,
+                        buffers,
+                        chunk_frames,
+                    );
                     stem_transitions[voice.sample_id]
                         .advance_fractional(chunk_frames as f64 * f64::from(tempo_ratio));
                     voice.stretch.process_resampled(

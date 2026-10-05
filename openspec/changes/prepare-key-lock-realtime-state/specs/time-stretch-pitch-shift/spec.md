@@ -126,3 +126,41 @@ Paused output SHALL NOT advance the smoothing interval.
 - **WHEN** playback is paused and later resumed
 - **THEN** the remaining active output frames before the next step are preserved
 - **AND** silence rendered while paused does not consume the interval
+
+### Requirement: Exact Source Preparation Has An Independent Non-Realtime Proof Gate
+The system SHALL verify exact-ratio source preparation outside the audio callback against an
+independently resampled contiguous native reference before enabling source-prepared live adoption.
+
+The proof SHALL reuse the live fractional source policy for its preparation feed, preserve the
+caller's logical source state, and retain distinct logical and future feed cursors together with
+native state and fixed input/output FIFOs. It SHALL apply the actual native `f32` inverse-pitch
+conversion before reset and before the first source shift. Prepared output plus continuation
+SHALL equal the separate raw native reference at an explicitly declared discard index, including
+nonaligned discards, fractional ratios, loop/intro/tail addressing, stereo and prepared stems
+under regular, irregular and one-frame partitions. Preparation bounds SHALL reject invalid source
+layouts, unsupported ratios, excessive discards and render sizes without reading outside buffers.
+
+The proof SHALL report uncropped onset, 1%-of-peak onset and peak translated by the discard index,
+discarded response energy and startup-peak clipping as well as retained-window metrics. Nominal
+API delay and exact reference equality SHALL NOT be treated as audible synchronization evidence.
+This test-only gate SHALL NOT activate live state, alter transport, move markers or change the
+existing reserve-starvation behavior. Asynchronous identity, on-time handover, off-thread
+retirement and click-safe transitions SHALL remain separate acceptance gates.
+
+#### Scenario: Prepared output continues a contiguous exact-ratio reference
+- **GIVEN** immutable source buffers, a constant fractional ratio and an explicit discard index
+- **WHEN** preparation retains native output and continues under unequal render partitions
+- **THEN** every retained and continued stereo sample equals the independently generated reference slice
+- **AND** preparation advances only future feed while output advances the separate logical cursor
+- **AND** no second silent adapter lead or partition-dependent gap is inserted
+
+#### Scenario: Nominal discard clips a startup response
+- **GIVEN** a startup transient has a response peak before the experimental discard index
+- **WHEN** the non-realtime response is measured
+- **THEN** the proof reports that clipped peak, discarded energy and uncropped translated residuals
+- **AND** a finite retained response does not count as audible launch acceptance
+
+#### Scenario: Invalid preparation bounds are rejected
+- **WHEN** a proof request has invalid layout, ratio, discard arithmetic or render capacity
+- **THEN** it returns a bounded explicit error without reading outside accepted source buffers
+- **AND** an oversized render request leaves the prepared state available for a valid continuation

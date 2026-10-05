@@ -127,6 +127,12 @@ is `uv run cargo test --manifest-path rust/Cargo.toml --workspace`.
   preserved. The release `key_lock_latency_probe` example measures synthetic
   responses and preparation costs without a device; run it using the Windows
   DLL override in [the development guide](../docs/development.md#offline-key-lock-measurement).
+- Native tests compile `key_lock_source_preparation.rs` as a non-live exact-source
+  proof with separate logical/feed cursors and coherent native/FIFO continuation.
+  An independent algebraic source/raw-native reference verifies output at explicit
+  discard indices; release CSV metrics expose discarded startup peaks and uncropped
+  residuals. Production builds exclude this fixture. Timed live adoption, identity,
+  retirement, transitions and audible compensation remain pending.
 - Parameter messages are coalesced by identity in the callback before applying
   the latest drained value. The callback applies only identities touched by the
   drained batch instead of sweeping every pad slot.

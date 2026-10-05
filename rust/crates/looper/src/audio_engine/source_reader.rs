@@ -4,6 +4,7 @@
 //! and non-realtime preparation code can therefore read the same source without sharing a voice,
 //! advancing transport, or changing persisted loop markers.
 
+use super::source_playback::SourcePlayback;
 use crate::messages::{
     PreparedStemSet, STEM_BUFFER_COUNT, STEM_COMPONENT_MASK, SampleBuffer, StemMixMode,
 };
@@ -377,6 +378,47 @@ pub(crate) struct SourceReadPlan {
 }
 
 impl SourceReadPlan {
+    /// Fill fixed output-domain storage from a configured constant-ratio source chunk.
+    ///
+    /// Neither the source clock nor this plan's selection transition advances. The caller owns
+    /// their progression, so a worker can fill the same feed using independent copied state.
+    pub(crate) fn fill_fractional_buffers(
+        self,
+        sample: &SampleBuffer,
+        stems: Option<&PreparedStemSet>,
+        playback: &SourcePlayback,
+        buffers: &mut [Vec<f32>],
+        output_frames: usize,
+    ) {
+        debug_assert!(self.channels > 0 && buffers.len() >= self.channels);
+        debug_assert_eq!(sample.samples.len() / self.channels, self.sample_frames);
+        debug_assert!(
+            buffers
+                .iter()
+                .take(self.channels)
+                .all(|buffer| buffer.len() >= output_frames)
+        );
+        let tempo_ratio = f64::from(playback.tempo_ratio());
+        for frame in 0..output_frames {
+            let position = playback.position_at(frame);
+            let plan = Self {
+                frame_pos: position.frame,
+                seek_mode: position.seek_mode,
+                ..self
+            };
+            let source_progress = frame as f64 * tempo_ratio;
+            for (channel, buffer) in buffers.iter_mut().enumerate().take(self.channels) {
+                buffer[frame] = plan.sample_fractional(
+                    sample,
+                    stems,
+                    position.fraction,
+                    source_progress,
+                    channel,
+                );
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn sample_at_offset(
         self,
@@ -667,6 +709,50 @@ mod tests {
         assert_eq!(whole[1], [14.0, 39.0, 71.5, 108.5, 120.0, 130.0]);
         plan.transition.advance(4);
         assert!(!plan.transition.is_active());
+    }
+
+    #[test]
+    fn fractional_feed_uses_clock_ratio_and_borrows_source_transition_progress() {
+        let sample = stereo_sample(100.0);
+        let stems = prepared_stems();
+        let mut read_plan = plan(1, ExplicitSeekMode::BeforeLoop);
+        read_plan.selection =
+            StemRenderSelection::from_state(StemMixMode::AllStems, 42, STEM_MASK_VOCALS);
+        read_plan.transition = StemTransition::start(StemRenderSelection::full_mix(), 4);
+        read_plan.transition.advance_fractional(0.5);
+        let transition = read_plan.transition;
+        let mut playback = SourcePlayback::new(3, ExplicitSeekMode::Normal, 0.73);
+        playback.configure(6, read_plan.loop_region);
+        playback.advance(2);
+        playback.set_target(1.25);
+        let (frames, ratio) = playback.chunk(12);
+        assert_eq!(frames, 12);
+        let position = playback.position();
+        let mut buffers = [vec![-99.0; 13], vec![-99.0; 13]];
+        read_plan.fill_fractional_buffers(&sample, Some(&stems), &playback, &mut buffers, frames);
+
+        // Independent address/interpolation oracle: after two 0.73 frames the base is frame 4,
+        // fraction 0.46. The newly accepted target has made only its first 0.05 ratio step.
+        let initial_fraction = (2.0 * f64::from(0.73_f32)).fract();
+        for frame in 0..frames {
+            let source_progress = frame as f64 * f64::from(ratio);
+            let distance = initial_fraction + source_progress;
+            let lower = 2 + (2 + distance.floor() as usize) % 3;
+            let upper = 2 + (lower - 2 + 1) % 3;
+            let fraction = distance.fract() as f32;
+            let to_gain = ((0.5 + source_progress).min(4.0) / 4.0) as f32;
+            for (channel, buffer) in buffers.iter().enumerate() {
+                let lower_sample = (lower + channel * 10) as f32;
+                let upper_sample = (upper + channel * 10) as f32;
+                let interpolated = lower_sample + (upper_sample - lower_sample) * fraction;
+                let expected = interpolated * (100.0 * (1.0 - to_gain) + to_gain);
+                assert!((buffer[frame] - expected).abs() < 2.0e-4);
+            }
+        }
+        assert_eq!(buffers[0][frames], -99.0);
+        assert_eq!(buffers[1][frames], -99.0);
+        assert_eq!(playback.position(), position);
+        assert_eq!(read_plan.transition, transition);
     }
 
     #[test]

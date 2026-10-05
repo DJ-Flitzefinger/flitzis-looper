@@ -1,7 +1,7 @@
 #[cfg(test)]
 use crate::audio_engine::key_lock_preparation::create_key_lock_preparation;
 use crate::audio_engine::key_lock_preparation::{KeyLockPreparationLane, KeyLockPreparationWorker};
-use crate::audio_engine::rubberband_backend::RubberBandLiveShifter;
+use crate::audio_engine::rubberband_backend::{RubberBandLiveShifter, pitch_scale_for_tempo_ratio};
 
 /// Default maximum block size handled by the per-voice DSP wrapper.
 ///
@@ -125,7 +125,7 @@ impl StretchProcessor {
         }
 
         let output_samples = output_frames.min(DEFAULT_BLOCK_SAMPLES);
-        let pitch_scale = rubberband_pitch_scale(tempo_ratio);
+        let pitch_scale = pitch_scale_for_tempo_ratio(tempo_ratio);
 
         if preserve_pitch
             && (pitch_scale - 1.0).abs() > PITCH_SCALE_EPSILON
@@ -339,15 +339,7 @@ fn sample_rate_to_u32(sample_rate_hz: f32) -> u32 {
         .clamp(RUBBERBAND_MIN_SAMPLE_RATE_HZ, u32::MAX as f32) as u32
 }
 
-fn rubberband_pitch_scale(tempo_ratio: f32) -> f64 {
-    if !tempo_ratio.is_finite() || tempo_ratio <= 0.0 {
-        return 1.0;
-    }
-
-    f64::from((1.0 / tempo_ratio).clamp(0.5, 2.0))
-}
-
-struct FixedFifo {
+pub(super) struct FixedFifo {
     buffer: Vec<f32>,
     read_pos: usize,
     write_pos: usize,
@@ -355,7 +347,7 @@ struct FixedFifo {
 }
 
 impl FixedFifo {
-    fn new(capacity: usize) -> Self {
+    pub(super) fn new(capacity: usize) -> Self {
         Self {
             buffer: vec![0.0; capacity.max(1)],
             read_pos: 0,
@@ -376,11 +368,11 @@ impl FixedFifo {
         self.buffer.len()
     }
 
-    fn len(&self) -> usize {
+    pub(super) fn len(&self) -> usize {
         self.len
     }
 
-    fn push_slice(&mut self, input: &[f32]) -> usize {
+    pub(super) fn push_slice(&mut self, input: &[f32]) -> usize {
         let mut written = 0;
         for sample in input {
             if self.len == self.buffer.len() {
@@ -403,7 +395,7 @@ impl FixedFifo {
         }
     }
 
-    fn pop_into(&mut self, output: &mut [f32]) -> usize {
+    pub(super) fn pop_into(&mut self, output: &mut [f32]) -> usize {
         let mut read = 0;
         for sample in output {
             if self.len == 0 {
@@ -463,10 +455,10 @@ mod tests {
 
     #[test]
     fn pitch_scale_tracks_inverse_tempo_ratio() {
-        assert!((rubberband_pitch_scale(2.0) - 0.5).abs() < f64::EPSILON);
-        assert!((rubberband_pitch_scale(0.5) - 2.0).abs() < f64::EPSILON);
-        assert!((rubberband_pitch_scale(1.0) - 1.0).abs() < f64::EPSILON);
-        assert!((rubberband_pitch_scale(f32::NAN) - 1.0).abs() < f64::EPSILON);
+        assert!((pitch_scale_for_tempo_ratio(2.0) - 0.5).abs() < f64::EPSILON);
+        assert!((pitch_scale_for_tempo_ratio(0.5) - 2.0).abs() < f64::EPSILON);
+        assert!((pitch_scale_for_tempo_ratio(1.0) - 1.0).abs() < f64::EPSILON);
+        assert!((pitch_scale_for_tempo_ratio(f32::NAN) - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]

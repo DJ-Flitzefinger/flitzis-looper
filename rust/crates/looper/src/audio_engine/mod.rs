@@ -45,6 +45,8 @@ mod dsp;
 mod errors;
 mod input_mapping;
 mod key_lock_preparation;
+#[cfg(test)]
+mod key_lock_source_preparation;
 mod mixer;
 mod progress;
 mod rubberband_backend;

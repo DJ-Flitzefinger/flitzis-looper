@@ -354,8 +354,9 @@ both taps obey loop wrap and explicit intro/tail seek policy. Rate changes, paus
 and in-range loop edits preserve fractional carry. Source-selection ramps advance by
 fractional source distance. The mixer fills fixed planar buffers with canonical samples;
 `StretchProcessor` consumes them directly instead of interpolating segment endpoints.
-These shared rules provide the source boundary for later background preparation;
-they do not prime native state or compensate audible delay.
+`SourceReadPlan::fill_fractional_buffers` supplies fixed planar feed in both the
+live mixer and the non-live source-preparation proof. These shared rules do not
+compensate audible delay.
 
 `key_lock_preparation.rs` constructs two unique warmed native handles per voice
 before stream rendering: 64 handles for 32 voices, with one shared preparation
@@ -382,6 +383,14 @@ remain unchanged. Source pre-roll, a separate feed-ahead cursor, and click-safe
 wet/bypass transitions, including ratio 1.0 and mode toggles, remain the next
 audible-alignment stage. See [Key Lock backend](key-lock-backend.md) for the
 pinned allocation audit, offline baseline, and measurement limits.
+
+Native tests additionally compile a source-preparation proof fixture with separate
+constant-ratio logical/feed cursors, exact initial pitch-before-reset and coherent
+native/FIFO continuation at an explicit discard index. Its independent algebraic
+source/raw-native oracle covers retained output and later blocks. The fixture is
+absent from production builds. Uncropped and retained transient measurements expose
+discarded startup peaks; equality and nominal delay are not audible acceptance.
+Generation identity, timed live handover/retirement and transitions remain pending.
 
 Project persistence stores global Key Lock control intent and per-pad Key Lock
 booleans for loaded-pad intent, with unloaded pads saved and restored as

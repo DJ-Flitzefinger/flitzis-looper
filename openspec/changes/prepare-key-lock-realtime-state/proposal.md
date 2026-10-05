@@ -21,6 +21,9 @@ source pre-roll and synchronized audible launches can be enabled.
 - Advance per-voice tempo smoothing on fixed active-output-frame intervals instead of callback
   counts, and split bounded rendering at those rate changes.
 - Add a reproducible release probe for cold/warmed preparation and impulse timing.
+- Verify an exact-ratio source-preparation fixture against an independently resampled contiguous
+  native reference, keeping logical and future feed cursors separate. Record transient clipping
+  and uncropped residuals before selecting an audible discard rule. The fixture is test-only.
 
 ## Capabilities
 

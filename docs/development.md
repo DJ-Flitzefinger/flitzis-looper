@@ -206,6 +206,23 @@ live deadlines or hardware alignment. Record startup and settled response
 separately; the local baseline and final prepared results are recorded in
 `scratch/slice3-key-lock-latency-findings.md`.
 
+The test-only exact-source preparation proof compares a coherent native/FIFO
+continuation with an independent source/raw-native reference. It also exports
+uncropped translated impulse timing, retained timing and discarded peak/energy
+evidence. Run the release proof without an audio device:
+
+```powershell
+$env:FLITZIS_KEY_LOCK_SOURCE_PROBE_CSV = (Join-Path (Split-Path -Parent (Get-Location).Path) 'scratch/slice3d-source-preparation.csv')
+.\scripts\run-rust-tests.ps1 --release --lib key_lock_source_preparation
+Remove-Item Env:\FLITZIS_KEY_LOCK_SOURCE_PROBE_CSV
+```
+
+The optional export path must be absolute. Ordinary test runs write no CSV.
+The proof uses an explicit constant ratio and already accepted immutable source
+buffers; asynchronous live adoption is excluded. The nominal delay is only an
+experimental discard. Assess uncropped residuals and clipping alongside retained
+output before selecting compensation; this run provides no device/deadline evidence.
+
 ### Nuitka Installer Direction
 
 The later Windows installer should be built so non-technical users do not need

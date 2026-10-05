@@ -189,8 +189,9 @@ path at 44.1/48/96 kHz. Rate changes and pause/resume use active-frame progress,
 so their source feed does not change with render partition sizes. This proves
 the source-to-adapter prerequisite independently of the adapter FIFO property;
 it does not prove source priming, transient compensation or audible hardware
-alignment. Exact-source preparation can reuse this source path, but its native
-pre-roll and prepared-state activation are still pending.
+alignment. The live mixer and non-live preparation proof now call the same
+`SourceReadPlan::fill_fractional_buffers` helper. Live prepared-state activation
+and audible compensation remain pending.
 
 This preparation and adapter safety stage (slice 3a) does not perform track
 pre-roll, delay discarding, or a separate DSP feed-ahead cursor. Source playheads,
@@ -205,6 +206,55 @@ They do not include native/adapter signal delay or unknown latency after the
 device buffer. Offline impulse measurements and Rust allocation telemetry do
 not establish hardware onset precision or live callback deadlines. Captured-input
 nearest-grid diagnostics remain separate from current launch execution.
+
+### Non-live Exact-source Proof
+
+Native tests compile `key_lock_source_preparation.rs` and its independent
+reference tests. This fixture borrows already accepted immutable source/stem
+buffers; production builds and the live mixer do not include it. Both copied
+cursors use an explicit constant ratio. Live smoothing and asynchronous control
+changes are outside this proof. The caller's fractional clock and pending rate
+target remain unchanged.
+
+Exact initial inverse pitch uses the same `f32` conversion as live processing.
+It is set before native reset and the first source-content shift. Reset initializes
+the previous native output hop from that pitch. The fixture advances only future
+feed during preparation and retains native state plus fixed input/output FIFOs.
+For block size B and experimental discard D, it feeds
+`P = ceil((D + B - 1) / B) * B` frames and retains raw output `[D..P]`.
+Initial occupancy Q=P-D is at least B-1. After n rendered frames, input backlog
+is n mod B and output occupancy is Q minus that backlog. Logical playback advances
+by n; feed advances by P+n. It inserts no second silent adapter lead.
+
+The separate oracle resamples immutable source samples algebraically and shifts
+them through a raw native handle. It compares every retained and continued stereo
+sample, source cursor and FIFO count across 44.1/48/96 kHz, fractional ratios,
+loop/intro/tail positions, selected stems and unequal partitions. Explicit discard
+endpoints verify that D is honored independently of nominal native delay.
+
+The release CSV reports the uncropped response translated by D, startup-peak
+clipping and discarded energy, alongside the retained response. Negative residuals
+and a discarded original peak must remain visible: cropped output alone can hide
+the lost first transient. This is evidence for selecting a later compensation
+strategy, not audible acceptance. Reproduce the proof and CSV using
+[the development guide](development.md#offline-key-lock-measurement).
+
+The optimized Windows proof passed 984 reference comparisons, including 180
+impulse cases with identical metrics in 45 rate/ratio/marker groups across four
+partitions. In this exact-pitch/reset fixture, nominal discard clipped the startup
+peak at ratios 1.37 and 2.0 at all three rates. At 48 kHz/ratio 2, discard 3678
+removed 96.499% of the marker-zero response energy. Its uncropped translated
+onset/1%-onset/peak residuals were -3044/-2144/-420 frames; cropped metrics were
+0/0/+96. For the settled marker at frame 8192, the corresponding residuals were
+-3055/-2187/-418. These describe this native fixture, excluding the live adapter
+lead and device delay. They reject nominal discard alone as a startup rule and
+motivate explicit source history plus a separately justified musical timing
+criterion. Local evidence is `scratch/slice3d-{source-preparation.csv,validation-summary.json}`.
+
+Live source/generation/loop/seek/stem/ratio identity, fixed handover frames,
+stale/late rejection, off-thread retirement and source-aligned mode transitions
+remain pending. No transport, marker, launch policy or live fallback changes in
+this proof gate, and no device measurement is claimed.
 
 ## Settings Contract
 

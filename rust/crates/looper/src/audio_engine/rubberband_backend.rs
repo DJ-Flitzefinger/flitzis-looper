@@ -72,6 +72,15 @@ pub(crate) enum RubberBandError {
     },
 }
 
+/// Match native pitch to the exact accepted `f32` varispeed ratio.
+pub(crate) fn pitch_scale_for_tempo_ratio(tempo_ratio: f32) -> f64 {
+    if !tempo_ratio.is_finite() || tempo_ratio <= 0.0 {
+        return 1.0;
+    }
+
+    f64::from((1.0 / tempo_ratio).clamp(0.5, 2.0))
+}
+
 pub(crate) struct RubberBandLiveShifter {
     handle: NonNull<RubberBandLiveStateOpaque>,
     channels: usize,
@@ -191,6 +200,16 @@ impl RubberBandLiveShifter {
         self.start_delay = self.query_start_delay();
     }
 
+    /// Set initial pitch and clear native history before source preparation, outside rendering.
+    ///
+    /// Pitch is accepted before reset remeasures the native delay. No silent shifts follow, so
+    /// the caller's first shift supplies source content with this exact initial pitch.
+    pub(crate) fn prepare_exact_pitch(&mut self, pitch_scale: f64) -> Result<(), RubberBandError> {
+        self.set_pitch_scale(pitch_scale)?;
+        self.reset_for_preparation();
+        Ok(())
+    }
+
     /// Restore a silent, neutral instance for an ownership handover to the audio callback.
     ///
     /// Construction, native reset, cold pitch updates, and staging allocation are preparation work.
@@ -198,8 +217,7 @@ impl RubberBandLiveShifter {
     /// the callback must not reset the prepared handle again. This does not prime track content or
     /// compensate the signal's algorithmic delay.
     pub(crate) fn prepare_for_reuse(&mut self) -> Result<(), RubberBandError> {
-        self.set_pitch_scale(1.0)?;
-        self.reset_for_preparation();
+        self.prepare_exact_pitch(1.0)?;
 
         let input = (0..self.channels)
             .map(|_| vec![0.0; self.block_size])
@@ -387,6 +405,56 @@ mod tests {
         assert!((shifter.pitch_scale() - 0.5).abs() < 1.0e-12);
         assert!(shifter.start_delay() > 0);
         shifter.reset_for_preparation();
+    }
+
+    #[test]
+    fn exact_pitch_preparation_matches_fresh_source_history_after_reuse() {
+        let mut recycled = RubberBandLiveShifter::new(48_000, 2).unwrap();
+        recycled.prepare_exact_pitch(2.0).unwrap();
+        let block_size = recycled.block_size();
+        let mut recycled_output = vec![vec![0.0; block_size]; 2];
+        for block in 0..16 {
+            recycled
+                .shift(
+                    &sine_block(2, block_size, block, 48_000.0),
+                    &mut recycled_output,
+                )
+                .unwrap();
+        }
+        assert!(
+            recycled_output
+                .iter()
+                .flatten()
+                .any(|sample| sample.abs() > 0.01)
+        );
+
+        let exact_pitch = pitch_scale_for_tempo_ratio(1.37);
+        recycled.prepare_exact_pitch(exact_pitch).unwrap();
+        let mut fresh = RubberBandLiveShifter::new(48_000, 2).unwrap();
+        fresh.prepare_exact_pitch(exact_pitch).unwrap();
+        assert_eq!(recycled.pitch_scale(), exact_pitch);
+        assert_eq!(fresh.pitch_scale(), exact_pitch);
+        assert_eq!(recycled.start_delay(), fresh.start_delay());
+        let mut fresh_output = vec![vec![0.0; block_size]; 2];
+        for block in 0..20 {
+            let input = sine_block(2, block_size, block + 31, 48_000.0);
+            recycled.shift(&input, &mut recycled_output).unwrap();
+            fresh.shift(&input, &mut fresh_output).unwrap();
+            assert_eq!(recycled_output, fresh_output, "source block {block}");
+        }
+    }
+
+    #[test]
+    fn inverse_pitch_preserves_native_f32_reciprocal_semantics() {
+        let ratio = 137.3_f32 / 112.7_f32;
+        assert_eq!(
+            pitch_scale_for_tempo_ratio(ratio),
+            f64::from(1.0_f32 / ratio)
+        );
+        assert_eq!(pitch_scale_for_tempo_ratio(0.0), 1.0);
+        assert_eq!(pitch_scale_for_tempo_ratio(f32::INFINITY), 1.0);
+        assert_eq!(pitch_scale_for_tempo_ratio(0.1), 2.0);
+        assert_eq!(pitch_scale_for_tempo_ratio(10.0), 0.5);
     }
 
     #[test]
