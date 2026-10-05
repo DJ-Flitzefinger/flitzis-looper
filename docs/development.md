@@ -38,6 +38,28 @@ uv run python -m flitzis_looper
 Use `uv run cargo ...`, not plain `cargo ...`, so the Rust/PyO3 build uses the
 project Python environment consistently.
 
+### Windows Start Files
+
+Double-click a start file in the repository root, or call it from a terminal:
+
+- `start-dev.bat` builds and starts the app with the Rust Debug profile.
+- `start-release.bat` builds and starts the app with the optimized Rust Release
+  profile.
+
+Both files run from their own repository directory, synchronize dependencies
+with `uv sync --locked`, install the selected native profile with
+`uv run --no-sync maturin develop --locked` (adding `--release` for Release),
+then run `uv run --no-sync python -m flitzis_looper`. Existing build artifacts
+are reused by the build tools. The shared implementation is
+`scripts/start-app.bat`.
+
+Close all running Looper windows before using either file: both profiles install
+the same native extension, which Windows cannot replace while the app is using
+it. A failed setup or build stops the launch, and the terminal stays open to
+show the error. The launchers require `uv` on `PATH` and the native build setup
+described below. Release still runs the Python source app; these files do not
+create the future standalone installer.
+
 ## Native Rubber Band Dependency
 
 The Rubber Band Key Lock backend depends on the native Rubber Band C API. The
