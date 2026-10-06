@@ -2330,6 +2330,21 @@ mod tests {
     }
 
     #[test]
+    fn analysis_resampling_accepts_a_buffered_zero_output_tail_at_96khz() {
+        let mut input = vec![0.0; 4703];
+        input[0] = 0.75;
+        input[4702] = -0.9375;
+        let mut padded = input.clone();
+        padded.resize(6144, 0.0);
+        let reference = resample_mono_to_target(padded, 96_000, 44_100).unwrap();
+        let output = resample_mono_to_target(input, 96_000, 44_100).unwrap();
+        assert_eq!(output.len(), (4703_usize * 44_100).div_ceil(96_000));
+        assert_eq!(output, reference[..output.len()]);
+        assert!(output[0] > 0.1);
+        assert!(output[output.len() - 1] < -0.1);
+    }
+
+    #[test]
     fn analysis_resampling_preserves_same_rate_and_empty_input() {
         let input = vec![0.0, 0.25, -0.75, 1.0];
         assert_eq!(

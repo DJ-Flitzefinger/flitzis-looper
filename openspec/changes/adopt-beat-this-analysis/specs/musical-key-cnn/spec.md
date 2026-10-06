@@ -19,9 +19,12 @@ exactly once, flush the complete tail and return `ceil(source_frames * 44100 / l
 frames. At 44100 Hz the staged f32 samples SHALL be read exactly without rate conversion.
 Chunking SHALL NOT introduce per-chunk origins, shortened inference, alternate key parameters
 or a second full loaded-rate PCM allocation.
-Diagnostic tail flushing SHALL allow valid zero-output padding calls within a finite bound
-derived from converter dimensions and the remaining required output. It SHALL check cancellation
-between calls and report a conversion failure if that bound cannot produce the complete tail.
+Tail flushing in standard analysis preparation and diagnostic key preparation SHALL allow
+valid zero-output padding calls within a shared finite bound derived from source/target converter
+dimensions and the remaining required output. Both paths SHALL check cancellation between calls
+and report a conversion failure if that bound cannot produce the complete tail. Standard
+conversion SHALL preserve its existing PCM allocation limits, source origin, single leading-delay
+trim and complete ceiling output length.
 
 #### Scenario: Mono buffer is shared between pipelines
 - **GIVEN** immutable stereo loaded PCM at 48000 Hz
@@ -48,9 +51,11 @@ between calls and report a conversion failure if that bound cannot produce the c
 #### Scenario: A buffered FFT tail initially produces no output
 - **GIVEN** a valid 96000-Hz input ends with a fractional FFT/input-block remainder
 - **AND** the first zero-padding call produces no output while the converter accumulates its FFT unit
-- **WHEN** diagnostic key preparation flushes the tail
+- **WHEN** standard analysis preparation or diagnostic key preparation flushes the tail
 - **THEN** it continues within the calculated finite call bound to obtain the complete output
 - **AND** source origin, ceiling frame count and existing FFT sample values remain preserved
+- **AND** the output matches an independent full-block conversion with explicit zero padding
+  after one delay trim and retention of the original ceiling frame count
 - **AND** a cancelled or exhausted flush fails explicitly rather than looping without a bound
 
 #### Scenario: A failed staged key read preserves independent beat output

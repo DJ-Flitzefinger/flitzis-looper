@@ -91,6 +91,13 @@
   Spectral bar-phase regression distinguishes the corrected result from the historical
   zero-hop tie; multi-rate tests prove original sample coordinates. Saved/manual grids,
   legacy algorithms and selected Beat This configuration remain intact.
+- [x] Repair the standard analysis converter's rejection of valid zero-output FFT tail
+  padding by sharing the diagnostic converter's finite dimension-derived rule for both
+  source and target rates. Preserve cancellation, PCM limits, origin, one delay trim and
+  exact ceiling length; compare both paths with independent full-block explicit padding
+  for the 4703-frame fixture, all 5120 96-kHz remainders and coprime rates. Validate the
+  normal wrapper and real-source automatic loading, update maintained docs and pass full
+  project checks and official strict validation without changing default analysis routing.
 - [x] Prepare and validate the independent reference and measured paired-correction input
   workflow with exact frozen source/PCM/protocol hashes, private drafts/seals and an honest
   missing-input inventory. Input validation does not supply labels or certify acceptance.

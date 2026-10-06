@@ -39,12 +39,9 @@ fn r01_remainder_flushes_past_a_zero_output_call_without_changing_origin_or_tail
     let mut mono = vec![0.0_f32; 4703];
     mono[0] = 0.75;
     mono[4702] = -0.9375;
-    let legacy =
-        resample_mono_cancellable(mono.clone(), 96_000, KEY_RATE_HZ, usize::MAX, &|| false);
-    // Preserve evidence of the existing full-buffer converter's unrelated bug.
-    assert!(
-        matches!(legacy, Err(PcmError::Resample(ref message)) if message == "tail conversion made no progress")
-    );
+    let standard =
+        resample_mono_cancellable(mono.clone(), 96_000, KEY_RATE_HZ, usize::MAX, &|| false)
+            .unwrap();
     let streamed = key_input_from_f32_le(
         &mut Cursor::new(bytes(&mono)),
         mono.len(),
@@ -53,26 +50,23 @@ fn r01_remainder_flushes_past_a_zero_output_call_without_changing_origin_or_tail
         &|| false,
     )
     .unwrap();
-    let mut explicit_padding = mono.clone();
-    explicit_padding.resize(6144, 0.0);
-    let expected =
-        resample_mono_cancellable(explicit_padding, 96_000, KEY_RATE_HZ, usize::MAX, &|| false)
-            .unwrap();
+    let expected = explicit_zero_padding_reference(&mono, 96_000, KEY_RATE_HZ);
     assert_eq!(
         streamed.samples.len(),
         (4703_usize * 44_100).div_ceil(96_000)
     );
-    assert_eq!(
-        bits(&streamed.samples),
-        bits(&expected[..streamed.samples.len()])
-    );
+    assert_eq!(bits(&streamed.samples), bits(&expected));
+    assert_eq!(bits(&standard), bits(&expected));
     assert!(streamed.samples[0].abs() > 0.1);
     assert!(streamed.samples[streamed.samples.len() - 1].abs() > 0.1);
     assert_eq!(
         streamed.peak_bytes,
         key_peak_bytes(mono.len(), 96_000).unwrap()
     );
-    assert_eq!(tail_call_budget(2455 - 2352, 96_000).unwrap(), 2);
+    assert_eq!(
+        tail_call_budget(2455 - 2352, 96_000, KEY_RATE_HZ).unwrap(),
+        2
+    );
     let mut converter = Fft::<f32>::new(96_000, 44_100, 1024, 1, 1, FixedSync::Input).unwrap();
     let source = InterleavedOwned::new_from(vec![0.25_f32; 1024], 1, 1024).unwrap();
     let mut output = InterleavedOwned::new_from(vec![0.0_f32; 588], 1, 588).unwrap();
@@ -109,31 +103,16 @@ fn r01_remainder_flushes_past_a_zero_output_call_without_changing_origin_or_tail
 
 #[test]
 fn every_96khz_input_remainder_preserves_complete_reference_pcm() {
-    let mut legacy_flush_failures = 0;
     for frames in 1..=5120 {
         let mut mono: Vec<_> = (0..frames)
             .map(|index| ((index % 97) as f32 - 48.0) / 64.0)
             .collect();
         mono[0] = 0.75;
         mono[frames - 1] = -0.9375;
-        let reference =
-            match resample_mono_cancellable(mono.clone(), 96_000, KEY_RATE_HZ, usize::MAX, &|| {
-                false
-            }) {
-                Ok(reference) => reference,
-                Err(PcmError::Resample(message))
-                    if message == "tail conversion made no progress" =>
-                {
-                    legacy_flush_failures += 1;
-                    // Explicit zeros reproduce the identical partial-input padding
-                    // and flush signal, at a boundary the unchanged oracle accepts.
-                    let mut padded = mono.clone();
-                    padded.resize(6144, 0.0);
-                    resample_mono_cancellable(padded, 96_000, KEY_RATE_HZ, usize::MAX, &|| false)
-                        .unwrap()
-                }
-                Err(error) => panic!("unexpected legacy failure at frames={frames}: {error}"),
-            };
+        let reference = explicit_zero_padding_reference(&mono, 96_000, KEY_RATE_HZ);
+        let standard =
+            resample_mono_cancellable(mono.clone(), 96_000, KEY_RATE_HZ, usize::MAX, &|| false)
+                .unwrap();
         let streamed = key_input_from_f32_le(
             &mut Cursor::new(bytes(&mono)),
             frames,
@@ -144,28 +123,34 @@ fn every_96khz_input_remainder_preserves_complete_reference_pcm() {
         .unwrap();
         let expected_len = (frames * 44_100).div_ceil(96_000);
         assert_eq!(streamed.samples.len(), expected_len);
+        assert_eq!(bits(&streamed.samples), bits(&reference), "frames={frames}");
         assert_eq!(
-            bits(&streamed.samples),
-            bits(&reference[..expected_len]),
-            "frames={frames}"
+            bits(&standard),
+            bits(&reference),
+            "standard frames={frames}"
         );
         assert_eq!(streamed.peak_bytes, key_peak_bytes(frames, 96_000).unwrap());
     }
-    assert_eq!(legacy_flush_failures, 640);
 }
 
 /// Full-buffer test reference with an explicit finite zero suffix. It runs only
 /// full input blocks, eliminating partial/flush control-flow shared with the
-/// streamed path. It is needed for coprime rates where the old helper's zero-
-/// output rejection prevents it from producing an output at all.
-fn explicit_zero_padding_reference(mono: &[f32], rate_hz: u32) -> Vec<f32> {
-    let mut converter =
-        Fft::<f32>::new(rate_hz as usize, 44_100, 1024, 1, 1, FixedSync::Input).unwrap();
-    let expected = (mono.len() * 44_100).div_ceil(rate_hz as usize);
+/// standard and streamed paths, including repeated zero-output padding cases.
+fn explicit_zero_padding_reference(mono: &[f32], rate_hz: u32, target_rate: u32) -> Vec<f32> {
+    let mut converter = Fft::<f32>::new(
+        rate_hz as usize,
+        target_rate as usize,
+        1024,
+        1,
+        1,
+        FixedSync::Input,
+    )
+    .unwrap();
+    let expected = (mono.len() * target_rate as usize).div_ceil(rate_hz as usize);
     let delay = converter.output_delay();
     let input_chunk = converter.input_frames_max();
     let output_unit = converter.output_frames_max();
-    let input_unit = output_unit * rate_hz as usize / 44_100;
+    let input_unit = output_unit * rate_hz as usize / target_rate as usize;
     let units_needed = (delay + expected).div_ceil(output_unit);
     let input_frames = (units_needed * input_unit).div_ceil(input_chunk) * input_chunk;
     let output_frames = (units_needed + 1) * output_unit;
@@ -199,7 +184,10 @@ fn coprime_rates_flush_multiple_zero_output_calls_with_finite_budget() {
             let mut mono = vec![0.0; frames];
             mono[0] = 0.75;
             mono[frames - 1] = -0.9375;
-            let reference = explicit_zero_padding_reference(&mono, rate);
+            let reference = explicit_zero_padding_reference(&mono, rate, KEY_RATE_HZ);
+            let standard =
+                resample_mono_cancellable(mono.clone(), rate, KEY_RATE_HZ, usize::MAX, &|| false)
+                    .unwrap();
             let streamed = key_input_from_f32_le(
                 &mut Cursor::new(bytes(&mono)),
                 frames,
@@ -214,7 +202,63 @@ fn coprime_rates_flush_multiple_zero_output_calls_with_finite_budget() {
                 "rate={rate}, frames={frames}"
             );
             assert_eq!(streamed.peak_bytes, key_peak_bytes(frames, rate).unwrap());
+            assert_eq!(
+                bits(&standard),
+                bits(&reference),
+                "standard rate={rate}, frames={frames}"
+            );
         }
+    }
+}
+
+#[test]
+fn standard_converter_preserves_explicit_padding_at_other_target_rates() {
+    for (source, target) in [(96_000, 48_000), (44_100, 96_000), (44_101, 48_000)] {
+        for frames in [1, 1024, 4703] {
+            let mut mono = vec![0.0; frames];
+            mono[0] = 0.75;
+            mono[frames - 1] = -0.9375;
+            let reference = explicit_zero_padding_reference(&mono, source, target);
+            let standard =
+                resample_mono_cancellable(mono, source, target, usize::MAX, &|| false).unwrap();
+            assert_eq!(
+                bits(&standard),
+                bits(&reference),
+                "{source}->{target}, frames={frames}"
+            );
+        }
+    }
+}
+
+#[test]
+fn standard_zero_output_tail_preserves_cancellation_and_exact_pcm_limit() {
+    let converter = Fft::<f32>::new(96_000, 44_100, 1024, 1, 1, FixedSync::Input).unwrap();
+    let input = vec![0.25; 4703];
+    let expected = (4703_usize * 44_100).div_ceil(96_000);
+    let cap = pcm_bytes(input.capacity()).unwrap()
+        + pcm_bytes(converter.output_delay() + expected + converter.output_frames_max()).unwrap();
+    assert!(matches!(
+        resample_mono_cancellable(input.clone(), 96_000, 44_100, cap - 1, &|| false),
+        Err(PcmError::Limit(_))
+    ));
+    assert_eq!(
+        resample_mono_cancellable(input.clone(), 96_000, 44_100, cap, &|| false)
+            .unwrap()
+            .len(),
+        expected
+    );
+    // Entry/setup, four full blocks and one partial block precede the two
+    // padding calls. Check cancellation before the zero-output call and after it.
+    for cancel_at in [8, 9] {
+        let calls = Cell::new(0);
+        assert!(matches!(
+            resample_mono_cancellable(input.clone(), 96_000, 44_100, cap, &|| {
+                calls.set(calls.get() + 1);
+                calls.get() >= cancel_at
+            }),
+            Err(PcmError::Cancelled)
+        ));
+        assert_eq!(calls.get(), cancel_at);
     }
 }
 

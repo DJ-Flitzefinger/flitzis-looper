@@ -11,7 +11,9 @@ use std::io::Write;
 #[cfg(test)]
 use std::sync::Arc;
 
+mod fft;
 mod streamed;
+use fft::{RESAMPLE_CHUNK_FRAMES, tail_call_budget};
 pub(crate) use streamed::{PcmStagingPlan, key_input_from_f32_le};
 
 pub(crate) const MONO_RULE: &str = "arithmetic-channel-mean-f64-v1";
@@ -293,7 +295,7 @@ pub(crate) fn resample_mono_cancellable(
     let mut resampler = Fft::<f32>::new(
         src_rate as usize,
         target_rate as usize,
-        1024,
+        RESAMPLE_CHUNK_FRAMES,
         1,
         1,
         FixedSync::Input,
@@ -348,16 +350,20 @@ pub(crate) fn resample_mono_cancellable(
         indexing.output_offset += produced;
     }
     indexing.partial_len = Some(0);
+    let mut tail_calls_left = tail_call_budget(
+        required_output_len.saturating_sub(output_len),
+        src_rate,
+        target_rate,
+    )?;
     while output_len < required_output_len {
         check_cancelled(cancelled)?;
+        if tail_calls_left == 0 {
+            return Err(PcmError::Resample("tail exceeded bounded padding".into()));
+        }
+        tail_calls_left -= 1;
         let (_, produced) = resampler
             .process_into_buffer(&input, &mut output, Some(&indexing))
             .map_err(|error| PcmError::Resample(error.to_string()))?;
-        if produced == 0 {
-            return Err(PcmError::Resample(
-                "tail conversion made no progress".into(),
-            ));
-        }
         output_len += produced;
         indexing.output_offset += produced;
     }

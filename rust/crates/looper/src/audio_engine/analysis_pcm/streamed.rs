@@ -3,6 +3,7 @@
 //! The job owner must retire its loaded snapshot before constructing key PCM.
 //! A retained native file handle supplies the exact exported mono to both branches.
 
+use super::fft::{RESAMPLE_CHUNK_FRAMES, fft_dimensions, tail_call_budget};
 use super::{
     CHUNK_FRAMES, LoadedPcmSnapshot, PcmError, check_cancelled, check_limit, pcm_bytes,
     validate_rate,
@@ -12,7 +13,6 @@ use rubato::{Fft, FixedSync, Indexing, Resampler};
 use std::io::{Read, Write};
 
 const KEY_RATE_HZ: u32 = 44_100;
-const RESAMPLE_CHUNK_FRAMES: usize = 1024;
 const IO_CHUNK_BYTES: usize = CHUNK_FRAMES * size_of::<f32>();
 
 /// PCM-only reservations; existing internal FFT/CQT/ORT scratch is excluded.
@@ -108,32 +108,10 @@ fn output_frames(frame_count: usize, rate_hz: u32) -> Result<usize, PcmError> {
 /// consequently at most one FFT unit can be emitted by any process call.
 /// Runtime checks and tests compare this cheap arithmetic against Rubato itself.
 fn converter_dimensions(rate_hz: u32) -> (usize, usize) {
-    (RESAMPLE_CHUNK_FRAMES, converter_fft_dimensions(rate_hz).1)
-}
-
-fn converter_fft_dimensions(rate_hz: u32) -> (usize, usize) {
-    let mut left = rate_hz as usize;
-    let mut right = KEY_RATE_HZ as usize;
-    while right != 0 {
-        (left, right) = (right, left % right);
-    }
-    let reduced_input = rate_hz as usize / left;
-    let fft_units = RESAMPLE_CHUNK_FRAMES.div_ceil(reduced_input);
     (
-        fft_units * reduced_input,
-        fft_units * (KEY_RATE_HZ as usize / left),
+        RESAMPLE_CHUNK_FRAMES,
+        fft_dimensions(rate_hz, KEY_RATE_HZ).1,
     )
-}
-
-/// Every ceil(FFT input size / 1024) zero-padding calls must emit at least
-/// one complete FFT output unit, regardless of the converter's saved phase.
-/// A zero-output call can advance this phase, so it is not a failed flush.
-fn tail_call_budget(missing_frames: usize, rate_hz: u32) -> Result<usize, PcmError> {
-    let (fft_input, fft_output) = converter_fft_dimensions(rate_hz);
-    missing_frames
-        .div_ceil(fft_output)
-        .checked_mul(fft_input.div_ceil(RESAMPLE_CHUNK_FRAMES))
-        .ok_or(PcmError::Limit("resampler tail call budget overflow"))
 }
 
 fn key_peak_bytes(frame_count: usize, rate_hz: u32) -> Result<usize, PcmError> {
@@ -277,7 +255,7 @@ pub(crate) fn key_input_from_f32_le(
         if available == 0 {
             let remaining = match tail_calls_left {
                 Some(remaining) => remaining,
-                None => tail_call_budget(required_frames - produced_total, rate_hz)?,
+                None => tail_call_budget(required_frames - produced_total, rate_hz, KEY_RATE_HZ)?,
             };
             if remaining == 0 {
                 return Err(PcmError::Resample(

@@ -34,18 +34,22 @@ comparator; it is never an independent musical label. See the
 
 ## Entry points and ownership
 
-### Known normal-load analysis resampler regression
+### Normal-load analysis resampler repair
 
-The normal 96-kHz-to-44100-Hz analysis conversion currently rejects a valid
+Before the repair, normal 96-kHz-to-44100-Hz analysis conversion rejected a valid
 zero-output FFT tail-padding call as `tail conversion made no progress`.
-Certain input-length remainders therefore decode/cache successfully but fail
+Certain input-length remainders therefore decoded/cached successfully but failed
 automatic analysis before sample publication. This is distinct from MP3 decode
-failure and the corrected QM downbeat hop. The streamed diagnostic converter
-already accepts these calls within a finite dimension-derived padding budget.
-The pending standard-converter repair must share/generalize that bounded rule,
-preserve cancellation/PCM limits and retain the original origin and complete
-ceiling output length. Normal-load regression and real-source validation are
-required; the repair has not been applied.
+failure and the corrected QM downbeat hop. The standard converter now shares
+the streamed diagnostic converter's finite padding-budget rule in
+`analysis_pcm/fft.rs`, generalized to both source and target rates for the
+existing fixed-input `1024`-frame, one-subchunk Rubato setup. Both paths accept
+zero-output calls while the FFT unit fills, check cancellation between calls
+and fail explicitly when the calculated budget is exhausted. Existing PCM
+allocations and limits, one leading-delay trim, source origin and complete
+ceiling output length are preserved. Normal-load regression and real-source
+automatic-loading checks with a rebuilt native extension are required for the
+repair; converter parity alone does not establish successful sample publication.
 
 `flitzis_looper.analysis.jobs.OfflineAnalysisService.start(engine, pad_id,
 workdir, model=BeatModelIdentity())` starts a diagnostic request for a loaded
@@ -240,11 +244,15 @@ ownership, channel-mean bit parity, complete bounded export, first/last impulses
 silence and converter parity at 22050/44100/48000/96000 Hz, allocation limits,
 bounded cancellation/admission, missing/corrupt artifacts, malformed/stale
 responses, subprocess timeout/crash/output limits, a stalled key double,
-source replacement and shutdown. Staged key conversion must match the prior
-full-buffer output, complete length, origin and tail. Where the old converter
-rejects a valid zero-output flush, compare with its explicitly zero-extended
-input and retain only the original ceiling-length output; preserve the failed
-case as evidence. File lifetime checks must
+source replacement and shutdown. Standard analysis conversion and staged key
+conversion must match an independent reference that processes full input blocks
+with an explicit finite zero suffix, trims delay once and retains only the
+original ceiling-length output. Verify both paths for the 4703-frame 96-kHz
+regression, all 5120 input-length remainders and coprime rates that require
+multiple zero-output padding calls; preserve the old failed cases as evidence.
+Also exercise the normal preprocessing wrapper, cancellation during padding,
+PCM limits and actual original-source automatic loading with the rebuilt native
+extension. File lifetime checks must
 include failed preparation/reads, cancellation with a running key reader and
 cleanup failure. Separate worker tests and B1b observations cover
 reference frontend/model parity and real lifecycle behavior. None of these

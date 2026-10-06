@@ -235,6 +235,14 @@ and manual analysis. The loaded buffer is mixed to mono and resampled once to 44
 then shared by concurrent BPM and key workers. Analysis resampling processes the
 complete track, removes the FFT resampler's leading delay, and flushes its tail
 to preserve duration and transient times at every supported output rate.
+The standard converter and the streamed diagnostic key converter share the
+dimension calculation for the existing Rubato FFT setup (`1024` input frames,
+one subchunk/channel, `FixedSync::Input`). Tail padding may validly emit zero
+frames while an FFT unit fills. Both converters allow those calls within a
+finite bound derived from the source/target rates and remaining required output,
+check cancellation between calls, and fail explicitly if the budget is exhausted.
+They preserve their existing PCM allocations and limits, remove leading delay
+once, and return the exact ceiling-derived output length with source origin intact.
 
 The Rust analysis crate uses the qm-dsp-derived `DetectionFunction`,
 `TempoTrackV2`, and `DownBeat` pipeline for BPM and beat/downbeat positions.
