@@ -42,11 +42,31 @@
   pending/rejected replacement, queue/race/refresh and callback adoption; complete
   full validation and independent staged review.
 
+## G3b2e: Prepared source and stem current timing binding
+
+- [x] Bind productive prepared-source capture/permits and PreparedStemSet to actual
+  source/content/request/rate/epoch ownership, declared authority and complete
+  current acknowledged accepted revision, exact period and signed origin.
+- [x] Recheck before/after off-thread preparation, through enqueue and callback
+  adoption; fail unavailable Automatic and preserve previous audio on admission
+  failure or late rejection without promoting Manual/Tap/Legacy metadata.
+- [x] Refresh only admitted same-source stems' fixed effective projection on
+  successful native accepted adoption/clear; validate it in source_reader while
+  preserving one SourcePlayback trajectory and off-realtime large-owner retirement.
+- [x] Cover productive current/stale/rejected/replacement/Manual/Tap/Legacy/
+  unavailable admission, pending callback, mixed control/mixer-clear transition
+  and source/timing refresh races; complete
+  full checks, official strict validation and independent staged review.
+
 ## Explicit remaining boundaries
 
-- [ ] G3b2 remaining: prepared source/Key Lock/stem revision binding,
-  source-verified accepted persistence with manual/TAP/legacy policy.
+- [ ] G3b2 remaining: productive StretchProcessor/voice/DSP-history binding;
+  the warmed pool remains source-neutral and key_lock_source_preparation test-only.
+- [ ] Accepted source-verified SampleAnalysis/ProjectState persistence and loader
+  schema with fresh runtime adoption and explicit Manual/Tap/Legacy policy.
 - [ ] Source/accepted-bound controller global batch launch (including MIDI
   START/STOP) and explicit adoption/derived refresh orchestration remain separate.
 - [ ] G3c separate: musical versus physical loop periods over 75/1000 cycles,
-  fractional rate/wrap/partition proof and separate rendered/onset/device gates.
+  fractional periods/rates/wrap/partition proof and rendered/onset/device/listening gates.
+- [ ] C1 separate: original hash association does not prove copy-first immutable
+  decoder input or defeat original-file ABA replacement.

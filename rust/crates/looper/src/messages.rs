@@ -3,7 +3,7 @@
 //! This module defines the enums that serve as the wire format for messages passed through the
 //! ring buffer between the Python thread and the real-time audio thread.
 
-use crate::audio_engine::constant_timing::PreparedConstantTiming;
+use crate::audio_engine::constant_timing::{AcceptedTimingProjection, PreparedConstantTiming};
 use crate::audio_engine::input_runtime_binding::InputPadBinding;
 use crate::audio_engine::prepared_source::PreparedSourcePermit;
 use pyo3::prelude::*;
@@ -25,6 +25,9 @@ pub struct SampleBuffer {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedStemSet {
+    /// Effective native projection for these same-source PCM readers, refreshed
+    /// only by successful callback timing adoption/clear. Never a raw revision.
+    pub(crate) accepted_timing: Option<AcceptedTimingProjection>,
     pub reference_samples: Arc<[f32]>,
     pub publication: PreparedSourcePermit,
     pub source_version_hash: u64,
@@ -608,6 +611,7 @@ mod tests {
             samples: Arc::from([0.0_f32, 0.0].as_slice()),
         };
         let stems = PreparedStemSet {
+            accepted_timing: None,
             reference_samples: buffer.samples.clone(),
             publication: PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
@@ -624,6 +628,7 @@ mod tests {
             ControlMessage::PublishPreparedStems {
                 id: 3,
                 stems: PreparedStemSet {
+                    accepted_timing: None,
                     source_version_hash: 42,
                     sample_rate_hz: 44_100,
                     channels: 1,
@@ -643,6 +648,7 @@ mod tests {
             samples: Arc::from([0.0_f32, 0.0].as_slice()),
         };
         let stems = PreparedStemSet {
+            accepted_timing: None,
             reference_samples: buffer.samples.clone(),
             publication: PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,

@@ -69,7 +69,7 @@ pub struct InputRuntimePadBinding {
     intent: TimingIntent,
     pub(super) binding: InputPadBinding,
     pub(super) ownership: Arc<InputRuntimeOwnership>,
-    acknowledgements: Arc<CurrentTimingAcknowledgements>,
+    pub(super) acknowledgements: Arc<CurrentTimingAcknowledgements>,
     accepted: Option<CurrentConstantTimingRecord>,
 }
 
@@ -155,6 +155,15 @@ pub(super) fn capture(engine: &AudioEngine, id: usize) -> PyResult<Option<InputR
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    capture_under_request_lock(engine, id)
+}
+
+/// Shared current-source resolver for preparation and MIDI. The caller retains
+/// the pad request lock through its own source/admission transaction.
+pub(super) fn capture_under_request_lock(
+    engine: &AudioEngine,
+    id: usize,
+) -> PyResult<Option<InputRuntimePadBinding>> {
     let intents = engine
         .timing_intents
         .lock()

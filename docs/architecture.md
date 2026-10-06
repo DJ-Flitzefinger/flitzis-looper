@@ -433,8 +433,18 @@ Stem generation is offline/background work. G3b1 captures an opaque engine-owned
 source/request/preparation-epoch ticket before each job, requires a full original
 content digest matching the loaded source, and isolates worker artifact writes.
 The owner rechecks actual state through enqueue; callback adoption checks the
-actual source Arc and atomic permit. Shape/rate cannot identify replacement. A
-complete-set marker binds all five artifact digests; legacy stat-only caches
+actual source Arc and atomic permit. G3b2e also captures current native source/
+declared authority and complete acknowledged accepted revision, exact binary64
+period and signed origin. Generation/digest verification occurs in the shared
+resolver at capture; the fixed permit carries source address/shape/rate, authority
+revision and accepted projection with atomic owners. The pinned source,
+source_version digest and request/epoch/monotonic-authority guards preserve that
+ownership without separate generation/digest fields in the callback. Preparation
+rechecks before/after decoding and through enqueue; adoption rechecks the same
+fixed binding. Unavailable Automatic cannot
+admit preparation, and Manual/Tap/Legacy retain their own authority. Shape/rate,
+endpoints, raw revision, source hash or preparation epoch cannot identify current
+accepted ownership. A complete-set marker binds all five artifact digests; legacy stat-only caches
 invalidate. Python enables controls after native adoption feedback and avoids
 full-file hashing on mode/mask clicks. See [prepared publication](prepared-stem-publication.md).
 Cache publication compares the component-stem transient
@@ -456,8 +466,20 @@ unavailable. Passive restore cannot replay Legacy timing over it. Accepted maste
 controls publish period/speed directly; physical marker rounding uses loaded rate.
 Explicit current adoption still requires caller-owned derived loop/master refresh
 after acknowledgement. G3b2d binds MIDI runtime and scheduled triggers to current
-source/full timing authority. Prepared stem/Key Lock revision binding, accepted
-persistence and immutable copy-first source proof remain separate gates.
+source/full timing authority. G3b2e binds productive prepared-source/stem admission
+and rendering to current accepted timing. Successful same-source native accepted
+adoption/clear refreshes only the retained stems' fixed effective projection;
+pending/rejected replacement keeps the previous projection and failed stem
+admission keeps previous audio. Rendering matches actual source and exact current
+effective mixer projection while all stems share one SourcePlayback trajectory
+with full mix. Control can revoke acknowledgement before its parameter callback
+clear; a newly captured nonaccepted set can safely reject in that interval,
+preserving prior PCM/audio, then succeed after a fresh capture following clear.
+Productive StretchProcessor/voice/DSP-history binding, source-verified accepted
+SampleAnalysis/ProjectState persistence and loader schema with fresh runtime
+adoption, controller global START/STOP guarded batch launch including MIDI, and
+explicit acceptance/derived loop/master refresh orchestration remain separate.
+Original hash association leaves C1 immutable copy-first/ABA proof open.
 
 Active full-mix/stem mode and enabled-mask changes use bounded Rust-owned
 transition state with a short 128 source-frame crossfade. Both sides read the

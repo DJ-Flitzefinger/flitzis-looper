@@ -170,6 +170,7 @@ fn loop_fixture(rate: u32, ratio: f32, mode: ExplicitSeekMode, stem_mask: Option
     Fixture {
         sample,
         stems: Some(PreparedStemSet {
+            accepted_timing: None,
             reference_samples,
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 17,

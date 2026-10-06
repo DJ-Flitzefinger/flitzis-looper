@@ -307,9 +307,17 @@ pub(crate) fn prepared_stem_set_for_render<'a>(
     channels: usize,
     sample_rate_hz: f32,
     sample_frames: usize,
+    accepted_timing: Option<super::constant_timing::AcceptedTimingProjection>,
 ) -> Option<&'a PreparedStemSet> {
     stems.filter(|stems| {
-        prepared_stem_set_matches_sample(stems, sample, channels, sample_rate_hz, sample_frames)
+        stems.accepted_timing == accepted_timing
+            && prepared_stem_set_matches_sample(
+                stems,
+                sample,
+                channels,
+                sample_rate_hz,
+                sample_frames,
+            )
     })
 }
 
@@ -547,6 +555,7 @@ mod tests {
 
     fn prepared_stems(reference: &SampleBuffer) -> PreparedStemSet {
         PreparedStemSet {
+            accepted_timing: None,
             reference_samples: reference.samples.clone(),
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
@@ -660,7 +669,7 @@ mod tests {
     fn prepared_stem_selection_keeps_stereo_wrap_and_excludes_instrumental() {
         let sample = stereo_sample(100.0);
         let stems = prepared_stems(&sample);
-        let validated = prepared_stem_set_for_render(Some(&stems), &sample, 2, 48_000.0, 6);
+        let validated = prepared_stem_set_for_render(Some(&stems), &sample, 2, 48_000.0, 6, None);
         let mut plan = plan(4, ExplicitSeekMode::Normal);
         plan.selection = StemRenderSelection::from_state(StemMixMode::AllStems, 42, u8::MAX);
         let mut output = [vec![0.0; 4], vec![0.0; 4]];
@@ -807,6 +816,88 @@ mod tests {
     }
 
     #[test]
+    fn prepared_render_requires_complete_current_accepted_projection() {
+        use super::super::constant_timing::AcceptedTimingProjection;
+        let sample = stereo_sample(100.0);
+        let mut stems = prepared_stems(&sample);
+        let projection = AcceptedTimingProjection {
+            revision: [0x13; 32],
+            period_seconds: 60.0 / 119.999_123_456,
+            origin_seconds: -0.123_456_789,
+            sample_rate_hz: 48_000,
+            publication_epoch: 7,
+        };
+        stems.accepted_timing = Some(projection);
+        let renderable = |current| {
+            prepared_stem_set_for_render(Some(&stems), &sample, 2, 48_000.0, 6, current).is_some()
+        };
+        assert!(renderable(Some(projection)));
+        assert!(!renderable(None));
+        for stale in [
+            AcceptedTimingProjection {
+                revision: [0x14; 32],
+                ..projection
+            },
+            AcceptedTimingProjection {
+                period_seconds: f64::from_bits(projection.period_seconds.to_bits() + 1),
+                ..projection
+            },
+            AcceptedTimingProjection {
+                origin_seconds: -projection.origin_seconds,
+                ..projection
+            },
+            AcceptedTimingProjection {
+                sample_rate_hz: 44_100,
+                ..projection
+            },
+            AcceptedTimingProjection {
+                publication_epoch: 8,
+                ..projection
+            },
+        ] {
+            assert!(!renderable(Some(stale)));
+        }
+        let negative_zero = AcceptedTimingProjection {
+            origin_seconds: -0.0,
+            ..projection
+        };
+        stems.accepted_timing = Some(negative_zero);
+        assert!(
+            prepared_stem_set_for_render(
+                Some(&stems),
+                &sample,
+                2,
+                48_000.0,
+                6,
+                Some(negative_zero)
+            )
+            .is_some()
+        );
+        assert!(
+            prepared_stem_set_for_render(
+                Some(&stems),
+                &sample,
+                2,
+                48_000.0,
+                6,
+                Some(AcceptedTimingProjection {
+                    origin_seconds: 0.0,
+                    ..negative_zero
+                })
+            )
+            .is_none()
+        );
+        stems.accepted_timing = None;
+        assert!(
+            prepared_stem_set_for_render(Some(&stems), &sample, 2, 48_000.0, 6, None).is_some()
+        );
+        assert!(
+            prepared_stem_set_for_render(Some(&stems), &sample, 2, 48_000.0, 6, Some(projection))
+                .is_none()
+        );
+    }
+
+    #[test]
     fn prepared_source_validation_rejects_incomplete_or_mismatched_buffers() {
         let sample = stereo_sample(100.0);
         let stems = prepared_stems(&sample);
@@ -828,12 +919,19 @@ mod tests {
         }
         let mut incomplete = stems.clone();
         incomplete.available_mask = STEM_COMPONENT_MASK;
-        assert!(prepared_stem_set_for_render(Some(&incomplete), &sample, 2, 48_000.0, 6).is_none());
+        assert!(
+            prepared_stem_set_for_render(Some(&incomplete), &sample, 2, 48_000.0, 6, None)
+                .is_none()
+        );
         let mut stale = stems.clone();
         stale.source_version_hash = 0;
-        assert!(prepared_stem_set_for_render(Some(&stale), &sample, 2, 48_000.0, 6).is_none());
+        assert!(
+            prepared_stem_set_for_render(Some(&stale), &sample, 2, 48_000.0, 6, None).is_none()
+        );
         let mut truncated = stems.clone();
         truncated.stems[0].samples = Arc::from(vec![0.0; 10]);
-        assert!(prepared_stem_set_for_render(Some(&truncated), &sample, 2, 48_000.0, 6).is_none());
+        assert!(
+            prepared_stem_set_for_render(Some(&truncated), &sample, 2, 48_000.0, 6, None).is_none()
+        );
     }
 }

@@ -1328,6 +1328,7 @@ impl AudioEngine {
             })
             .map_err(PyValueError::new_err)?;
         stems.publication = source_ticket.publication.clone();
+        stems.accepted_timing = source_ticket.publication.accepted_projection();
 
         // Source mutation, timing publication and enqueue all serialize here.
         enqueue_current_prepared_stems(

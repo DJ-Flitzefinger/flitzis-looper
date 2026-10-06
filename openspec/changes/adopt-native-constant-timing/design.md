@@ -1,4 +1,4 @@
-# G3b2a/b/c/d native adoption, current authority and precise consumers
+# G3b2a/b/c/d/e native adoption, current authority and precise consumers
 
 ## Native authority
 
@@ -140,6 +140,50 @@ including its MIDI mapping. It does not consume RuntimePadState; accepted/source
 bound global batch launch and caller-owned refresh/adoption orchestration remain
 follow-up consumers. G3b2d covers runtime pad triggers and their guarded fallback.
 
+## Prepared source admission and retained stem projection
+
+PreparedSourcePermit reuses the current native source/authority resolver and fixed
+accepted projection alongside its existing actual source/content/request/rate/
+preparation-epoch owner. The shared resolver verifies actual generation/digest
+at capture. The fixed InputPadBinding retains source address/shape/loaded rate,
+monotonic authority revision and, for Automatic, complete current acknowledged
+accepted revision, binary64 period and independent signed origin. Its shared
+owners contain fixed atomics; separate generation/digest fields do not enter the
+callback binding. The pinned actual sample, matching source_version digest and
+checked request/epoch/authority owners preserve the captured source ownership.
+Automatic without a consistent current record fails admission. Manual/Tap/Legacy are admitted under
+their own authority without promoting numerical values. Historical constant-timing
+ticket metadata, raw revision, endpoint equality, source hash or preparation epoch
+alone cannot establish current accepted evidence.
+
+The productive stem path validates this binding before heavy preparation, after
+decoding/alignment, under the request owner through enqueue and at callback adoption.
+Request/epoch guards remain independent freshness checks. Pending or rejected timing
+replacement leaves the previous acknowledged accepted projection current; a newer
+request can still retire a preparation job. A successful source/authority/revision
+change between stages rejects that ticket. Full queues leave it unconsumed and
+failed or late-rejected admission preserves the previous audio. Fixed scalar/atomic
+checks reach the callback, while sample/evidence owners retire off realtime.
+
+Control revokes accepted acknowledgement before an admitted Legacy/Manual/Tap
+parameter clear necessarily reaches the mixer. A fresh nonaccepted ticket can
+capture valid current control authority during that interval, yet callback
+adoption rejects it against the still-effective accepted mixer projection.
+Previous PCM/audio remains valid; fresh capture after the effective clear can
+succeed. This is a safe rejected transition, not historical-ticket authority or
+a guarantee that control availability implies immediate adoption.
+
+After actual stem adoption, immutable same-source PCM does not need preparation
+again for timing-only changes. Successful native accepted adoption or clearing
+updates only the retained PreparedStemSet's fixed effective projection, without
+replacing PCM owners, resetting fractional carry or touching physical endpoints.
+Pending/failed/rejected updates do not refresh it. source_reader checks the actual
+reference source and exact effective accepted projection against effective mixer
+timing. Full mix, every stem and both sides of a source-selection transition use
+the same SourcePlayback rate/ramp, position, interpolation taps and loop/seek rules.
+There is no new per-stem cursor or callback allocation/lock. Feeding that common
+source into Key Lock does not complete productive DSP-history revision binding.
+
 ## Limits and remaining G3b2 consumers
 
 This slice activates a precise native grid only through explicit control API
@@ -148,8 +192,13 @@ their existing behavior. Source content is an observed loader digest; the
 complete mono digest and Arc/timebase checks verify the actually loaded PCM, not
 an immutable historical original-to-decoder relationship.
 
-Prepared source/stem identities, productive Key Lock history and
-source-verified persistence still need the full accepted revision. The existing
-Key Lock warmed-state pool is source-neutral; proof-only source preparation is
-not productive integration. G3c retains 75/1000-cycle, fractional wrap,
-callback-partition and rendered/device gates. This slice claims no audible SYNC.
+Productive StretchProcessor/voice/DSP history still needs full source/accepted
+revision binding. The existing Key Lock warmed-state pool is source-neutral;
+key_lock_source_preparation is test-only, not productive integration. Accepted
+source-verified SampleAnalysis/ProjectState persistence and loader schema with
+fresh runtime adoption, source/accepted-bound controller global START/STOP batch
+launch including MIDI, and explicit acceptance/derived loop/master refresh
+orchestration remain open. Original-hash association does not prove immutable
+copy-first/ABA lineage (C1). G3c retains separate musical/rounded physical loops
+over 75/1000 cycles, fractional periods/rates, callback partitions/wrap and
+rendered/onset/device/listening gates. This slice claims no audible SYNC.

@@ -28,14 +28,26 @@ fallback to actual native source ownership and complete acknowledged timing.
 Loop intent and launch travel as one guarded effect; quantized execution rechecks
 the same binding before changing audio state.
 
+G3b2e binds productive prepared-source permits, PreparedStemSet admission and
+source-reader rendering to actual current native source/authority and the full
+acknowledged accepted revision, exact period and signed origin. Already admitted
+same-source stems retain their PCM and one SourcePlayback trajectory; successful
+native adoption/clear refreshes only their fixed effective timing projection.
+Pending/rejected timing and failed stem admission retain previously effective audio.
+
 ## Non-goals and realtime safety
 
 This is a bounded part of G3b2. It does not choose a musical acceptance policy or
 infer quarter labels, switch the default analyzer, silently promote manual/TAP or
-legacy numbers, or complete prepared Key Lock/stem revision integration or accepted
-persistence. Those consumers remain explicit follow-up work. Musical/physical loop proof and
-audible DSP/device acceptance remain G3c. No PCM cache or Rust application-port
-planning is included.
+legacy numbers, or complete productive StretchProcessor/voice/DSP-history binding.
+The warmed Key Lock pool stays source-neutral and key_lock_source_preparation is
+test-only. Accepted source-verified SampleAnalysis/ProjectState persistence and
+loader schema with fresh runtime adoption, source/accepted-bound controller global
+START/STOP batch launch including MIDI, and explicit acceptance/derived loop/master
+refresh orchestration remain follow-up work. Musical/physical loop proof over
+75/1000 cycles, fractional periods/rates/partitions/wrap and rendered/onset/device/
+listening acceptance remain G3c. No PCM cache or Rust application-port planning is
+included.
 
 PCM scanning, QM analysis, hashing, fitting and evidence ownership remain outside
 realtime processing. The callback handles only bounded source/permit checks and

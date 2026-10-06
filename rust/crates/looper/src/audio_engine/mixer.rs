@@ -453,6 +453,11 @@ impl RtMixer {
             });
         if valid {
             self.pad_accepted_timing[id] = Some(projection);
+            // PCM remains immutable and source-bound. Every retained stem reads
+            // the newly adopted full revision through the same SourcePlayback.
+            if let Some(stems) = &mut self.prepared_stems[id] {
+                stems.accepted_timing = Some(projection);
+            }
             self.current_timing_acknowledgements
                 .acknowledge(id, projection.publication_epoch);
             timing.publication.mark_accepted();
@@ -468,6 +473,9 @@ impl RtMixer {
             && slot.is_some_and(|projection| projection.publication_epoch <= through_epoch)
         {
             *slot = None;
+            if let Some(stems) = &mut self.prepared_stems[id] {
+                stems.accepted_timing = None;
+            }
             self.current_timing_acknowledgements.clear(id);
         }
     }
@@ -567,6 +575,7 @@ impl RtMixer {
             || self.channels == 0
             || self.sample_is_active(id)
             || !stems.publication.current()
+            || stems.accepted_timing != self.pad_accepted_timing[id]
         {
             return false;
         }
@@ -1440,6 +1449,7 @@ impl RtMixer {
         let pad_loop_end_frame = &self.pad_loop_end_frame;
         let pad_playhead_frame = &mut self.pad_playhead_frame;
         let prepared_stem_slots = &self.prepared_stems;
+        let accepted_timing = &self.pad_accepted_timing;
         let stem_mix_mode = &self.stem_mix_mode;
         let stem_mix_source_version_hash = &self.stem_mix_source_version_hash;
         let stem_enabled_mask = &self.stem_enabled_mask;
@@ -1470,6 +1480,7 @@ impl RtMixer {
                     channels,
                     sample_rate_hz,
                     sample_frames,
+                    accepted_timing[voice.sample_id],
                 );
                 let current_selection = StemRenderSelection::from_state(
                     stem_mix_mode[voice.sample_id],
@@ -1603,6 +1614,7 @@ mod tests {
         let silence = create_test_sample(1, frames, 0.0);
 
         PreparedStemSet {
+            accepted_timing: None,
             reference_samples: reference.samples.clone(),
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
@@ -1782,6 +1794,7 @@ mod tests {
     ) -> PreparedStemSet {
         let buffer = create_test_sample(channels, frames, 0.25);
         PreparedStemSet {
+            accepted_timing: None,
             reference_samples: reference.samples.clone(),
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
@@ -1801,6 +1814,7 @@ mod tests {
         values: [f32; STEM_BUFFER_COUNT],
     ) -> PreparedStemSet {
         PreparedStemSet {
+            accepted_timing: None,
             reference_samples: reference.samples.clone(),
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
@@ -1810,6 +1824,112 @@ mod tests {
             available_mask: full_stem_available_mask(),
             stems: values.map(|value| create_test_sample(channels, frames, value)),
         }
+    }
+
+    #[test]
+    fn retained_stem_pcm_follows_only_successful_current_timing_adoption() {
+        let source = create_test_sample(1, 20_000, 0.25);
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, source.clone());
+        let stems = create_test_prepared_stems(&source, 1, 44_100, 20_000);
+        let pcm_owner = stems.stems[0].samples.clone();
+        assert!(mixer.publish_prepared_stems(0, stems));
+        assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
+        mixer.set_pad_loop_region(0, 0.012_345_6, Some(0.321_987_6));
+        mixer.set_speed(1.234_567_89);
+        assert!(mixer.play_sample(0, 1.0));
+        mixer.render(&mut [0.0; 17], &mut [0.0; NUM_SAMPLES]);
+        let position = mixer
+            .voices
+            .iter()
+            .find(|voice| voice.active)
+            .unwrap()
+            .source_playback
+            .position();
+        assert!(position.fraction > 0.0);
+        let projection = AcceptedTimingProjection {
+            revision: [0x17; 32],
+            period_seconds: 60.0 / 119.999_123_456,
+            origin_seconds: -0.123_456_789,
+            sample_rate_hz: 44_100,
+            publication_epoch: 1,
+        };
+        let mut retirement = CollectingRetirement::default();
+        for next in [
+            projection,
+            AcceptedTimingProjection {
+                revision: [0x18; 32],
+                publication_epoch: 2,
+                ..projection
+            },
+        ] {
+            assert!(mixer.publish_constant_timing_rt(
+                0,
+                PreparedConstantTiming {
+                    reference: source.clone(),
+                    publication: super::super::prepared_source::PreparedSourcePermit::for_epoch(
+                        Arc::new(std::sync::atomic::AtomicU64::new(next.publication_epoch)),
+                        next.publication_epoch,
+                    ),
+                    projection: next,
+                },
+                &mut retirement
+            ));
+            let retained = mixer.prepared_stems[0].as_ref().unwrap();
+            assert_eq!(retained.accepted_timing, Some(next));
+            assert!(Arc::ptr_eq(&retained.stems[0].samples, &pcm_owner));
+            assert_eq!(
+                mixer
+                    .voices
+                    .iter()
+                    .find(|voice| voice.active)
+                    .unwrap()
+                    .source_playback
+                    .position(),
+                position
+            );
+        }
+        let effective = mixer.prepared_stems[0].as_ref().unwrap().accepted_timing;
+        let mut invalid = projection;
+        invalid.revision = [0x19; 32];
+        invalid.publication_epoch = 3;
+        assert!(!mixer.publish_constant_timing_rt(
+            0,
+            PreparedConstantTiming {
+                reference: create_test_sample(1, 20_000, 0.25),
+                publication: super::super::prepared_source::PreparedSourcePermit::unrestricted(),
+                projection: invalid,
+            },
+            &mut retirement
+        ));
+        assert_eq!(
+            mixer.prepared_stems[0].as_ref().unwrap().accepted_timing,
+            effective
+        );
+        mixer.clear_constant_timing(0, 1); // an older queued clear cannot erase revision 2
+        assert_eq!(
+            mixer.prepared_stems[0].as_ref().unwrap().accepted_timing,
+            effective
+        );
+        mixer.clear_constant_timing(0, 3);
+        let retained = mixer.prepared_stems[0].as_ref().unwrap();
+        assert_eq!(retained.accepted_timing, None);
+        assert!(Arc::ptr_eq(&retained.stems[0].samples, &pcm_owner));
+        assert_eq!(
+            mixer
+                .voices
+                .iter()
+                .find(|voice| voice.active)
+                .unwrap()
+                .source_playback
+                .position(),
+            position
+        );
+        assert!(retirement.stems.is_empty());
+        assert_eq!(retirement.samples.len(), 3);
+        let mut output = [0.0; 11];
+        mixer.render(&mut output, &mut [0.0; NUM_SAMPLES]);
+        assert!(output.iter().all(|value| *value == 1.0));
     }
 
     #[test]
@@ -1863,6 +1983,7 @@ mod tests {
         let stem_samples: Arc<[f32]> = Arc::from(vec![0.25_f32; 32].into_boxed_slice());
         let weak = Arc::downgrade(&stem_samples);
         let stems = PreparedStemSet {
+            accepted_timing: None,
             reference_samples: mixer.sample_bank[0].as_ref().unwrap().samples.clone(),
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
@@ -3060,6 +3181,7 @@ mod tests {
         let vocals: Vec<f32> = (0..8).map(|frame| frame as f32).collect();
         let drums: Vec<f32> = (0..8).map(|frame| 100.0 + frame as f32).collect();
         let stems = PreparedStemSet {
+            accepted_timing: None,
             reference_samples: full_mix.samples.clone(),
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
@@ -3197,6 +3319,7 @@ mod tests {
             [0.0; 6],
         ];
         let stems = PreparedStemSet {
+            accepted_timing: None,
             reference_samples: full_mix.samples.clone(),
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
@@ -3213,7 +3336,7 @@ mod tests {
         mixer.set_pad_loop_region(0, 0.2, Some(0.5));
 
         let prepared_stems =
-            prepared_stem_set_for_render(Some(&stems), &full_mix, 1, 10.0, 6).unwrap();
+            prepared_stem_set_for_render(Some(&stems), &full_mix, 1, 10.0, 6, None).unwrap();
         let region = mixer.effective_loop_region(0, 6).unwrap();
         let mixed: Vec<f32> = (0..4)
             .map(|i| {

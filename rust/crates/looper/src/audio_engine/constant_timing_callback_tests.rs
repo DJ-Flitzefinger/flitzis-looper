@@ -194,10 +194,13 @@ fn constant_timing_legacy_origin_is_one_effect_at_actual_command_budget_boundary
 struct LimitedRetirement {
     slots: usize,
     retired: Vec<PreparedConstantTiming>,
+    stems: Vec<PreparedStemSet>,
 }
 impl AudioBufferRetirement for LimitedRetirement {
     fn retire_sample(&mut self, _: SampleBuffer) {}
-    fn retire_prepared_stems(&mut self, _: PreparedStemSet) {}
+    fn retire_prepared_stems(&mut self, stems: PreparedStemSet) {
+        self.stems.push(stems);
+    }
     fn retire_constant_timing(&mut self, timing: PreparedConstantTiming) {
         self.retired.push(timing);
     }
@@ -218,6 +221,7 @@ fn constant_timing_actual_callback_retirement_backpressure_keeps_publication_pen
     let mut retirement = LimitedRetirement {
         slots: 0,
         retired: Vec::new(),
+        stems: Vec::new(),
     };
     assert_eq!(state.drain(&mut consumer, &mut retirement), 0);
     assert_eq!(permit.status(), "pending");
@@ -229,6 +233,90 @@ fn constant_timing_actual_callback_retirement_backpressure_keeps_publication_pen
     assert_eq!(state.acknowledgements.current_epoch(0), 2);
     assert_eq!(retirement.retired.len(), 1);
     assert_eq!(retirement.retired[0].projection.revision, [0x42; 32]);
+}
+
+#[test]
+fn prepared_stems_actual_callback_backpressure_and_stale_revision_preserve_existing_audio() {
+    let source = sample();
+    let epoch = Arc::new(AtomicU64::new(2));
+    let (message, _) = publication(&source, &epoch, 2);
+    let ControlMessage::PublishConstantTiming { timing, .. } = &message else {
+        unreachable!()
+    };
+    let projected = timing.projection;
+    let (mut producer, mut consumer) = RingBuffer::new(2);
+    producer.push(message).unwrap();
+    let mut state = CallbackState::new(source.clone());
+    state.drain(&mut consumer, &mut ImmediateAudioBufferRetirement);
+    let prepared = |value, projection| {
+        let permit = PreparedSourcePermit::unrestricted();
+        permit.mark_pending().unwrap();
+        let pcm = SampleBuffer {
+            channels: 1,
+            samples: Arc::from(vec![value; RATE as usize]),
+        };
+        PreparedStemSet {
+            reference_samples: source.samples.clone(),
+            publication: permit,
+            accepted_timing: Some(projection),
+            source_version_hash: 42,
+            sample_rate_hz: RATE,
+            channels: 1,
+            frame_count: RATE as usize,
+            available_mask: 31,
+            stems: std::array::from_fn(|_| pcm.clone()),
+        }
+    };
+    let first = prepared(0.125, projected);
+    let status = first.publication.clone();
+    producer
+        .push(ControlMessage::PublishPreparedStems {
+            id: 0,
+            stems: first,
+        })
+        .unwrap();
+    let mut retirement = LimitedRetirement {
+        slots: 1,
+        retired: Vec::new(),
+        stems: Vec::new(),
+    };
+    assert_eq!(state.drain(&mut consumer, &mut retirement), 0);
+    assert_eq!(status.status(), "pending");
+    assert!(consumer.peek().is_ok());
+    retirement.slots = 2;
+    assert_eq!(state.drain(&mut consumer, &mut retirement), 1);
+    assert_eq!(status.status(), "accepted");
+    assert!(
+        state
+            .mixer
+            .set_stem_mix_mode(0, crate::messages::StemMixMode::AllStems, 42)
+    );
+    let mut stale = projected;
+    stale.revision = [0x43; 32]; // endpoint/period/origin/epoch equality is insufficient
+    let replacement = prepared(0.25, stale);
+    let rejected = replacement.publication.clone();
+    let rejected_pcm = replacement.stems[0].samples.clone();
+    producer
+        .push(ControlMessage::PublishPreparedStems {
+            id: 0,
+            stems: replacement,
+        })
+        .unwrap();
+    assert_eq!(state.drain(&mut consumer, &mut retirement), 1);
+    assert_eq!(rejected.status(), "rejected");
+    assert_eq!(retirement.stems.len(), 1);
+    assert!(Arc::ptr_eq(
+        &retirement.stems[0].stems[0].samples,
+        &rejected_pcm
+    ));
+    assert_eq!(
+        state.acknowledgements.current_epoch(0),
+        projected.publication_epoch
+    );
+    assert!(state.mixer.play_sample(0, 1.0));
+    let mut output = [0.0; 31];
+    state.mixer.render(&mut output, &mut [0.0; NUM_SAMPLES]);
+    assert!(output.iter().all(|value| *value == 0.5));
 }
 
 #[test]

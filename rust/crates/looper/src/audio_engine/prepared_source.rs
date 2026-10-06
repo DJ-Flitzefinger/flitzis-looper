@@ -1,7 +1,9 @@
 //! Non-realtime preparation identity and bounded callback publication checks.
 
 use super::AudioEngine;
+use super::constant_timing::{AcceptedTimingProjection, CurrentTimingAcknowledgements};
 use super::constants::NUM_SAMPLES;
+use super::input_runtime_binding::{self, InputPadBinding, InputRuntimeOwnership};
 use crate::messages::ControlMessage;
 use crate::messages::SampleBuffer;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -50,6 +52,38 @@ pub(crate) struct PreparedSourcePermit {
     pub(super) epoch: Arc<AtomicU64>,
     pub(super) expected: u64,
     status: Arc<AtomicU8>,
+    timing: Option<PreparedTimingPermit>,
+}
+
+/// Current accepted authority captured from the same native resolver as MIDI.
+/// These shared owners contain fixed atomics only, never PCM or evidence.
+#[derive(Clone)]
+struct PreparedTimingPermit {
+    id: usize,
+    binding: InputPadBinding,
+    ownership: Arc<InputRuntimeOwnership>,
+    acknowledgements: Arc<CurrentTimingAcknowledgements>,
+}
+
+impl std::fmt::Debug for PreparedTimingPermit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedTimingPermit")
+            .field("id", &self.id)
+            .field("binding", &self.binding)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PreparedTimingPermit {
+    fn current(&self) -> bool {
+        self.ownership.authority[self.id].load(Ordering::Acquire) == self.binding.authority_revision
+            && self.acknowledgements.current_epoch(self.id)
+                == self
+                    .binding
+                    .accepted
+                    .map_or(0, |accepted| accepted.publication_epoch)
+    }
 }
 
 impl PreparedSourcePermit {
@@ -62,6 +96,7 @@ impl PreparedSourcePermit {
             epoch,
             expected,
             status: Arc::new(AtomicU8::new(0)),
+            timing: None,
         }
     }
 
@@ -81,6 +116,18 @@ impl PreparedSourcePermit {
     }
     pub(crate) fn current(&self) -> bool {
         self.epoch.load(Ordering::Acquire) == self.expected
+            && self
+                .timing
+                .as_ref()
+                .is_none_or(PreparedTimingPermit::current)
+    }
+
+    /// Exact fixed projection from the authoritative current record at capture.
+    /// Preparation epochs and raw revisions cannot manufacture this value.
+    pub(super) fn accepted_projection(&self) -> Option<AcceptedTimingProjection> {
+        self.timing
+            .as_ref()
+            .and_then(|timing| timing.binding.accepted)
     }
 
     #[cfg(test)]
@@ -240,13 +287,18 @@ pub(super) fn capture_prepared_source(
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-    let cache = engine
-        .sample_cache
-        .lock()
-        .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?;
-    let sample = cache[id]
-        .clone()
-        .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?;
+    let sample = {
+        let cache = engine
+            .sample_cache
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?;
+        cache[id]
+            .clone()
+            .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?
+    };
+    let timing = input_runtime_binding::capture_under_request_lock(engine, id)?
+        .filter(|binding| binding.available() && binding.current())
+        .ok_or_else(|| PyValueError::new_err("current source timing unavailable"))?;
     let generations = engine
         .loaded_source_generations
         .lock()
@@ -266,16 +318,28 @@ pub(super) fn capture_prepared_source(
     if requests[id] == 0 || generations[id].0 == 0 || generations[id].1 == 0 {
         return Err(PyValueError::new_err("loaded source identity unavailable"));
     }
+    if !timing.current() {
+        return Err(PyValueError::new_err(
+            "current source timing changed during capture",
+        ));
+    }
+    let mut publication = PreparedSourcePermit::new(
+        engine.prepared_source_epochs[id].clone(),
+        engine.prepared_source_epochs[id].load(Ordering::Acquire),
+    );
+    publication.timing = Some(PreparedTimingPermit {
+        id,
+        binding: timing.binding,
+        ownership: timing.ownership,
+        acknowledgements: timing.acknowledgements,
+    });
     Ok(PreparedSourceTicket {
         id,
         request_id: requests[id],
         sample,
         sample_rate_hz: generations[id].1,
         source_version,
-        publication: PreparedSourcePermit::new(
-            engine.prepared_source_epochs[id].clone(),
-            engine.prepared_source_epochs[id].load(Ordering::Acquire),
-        ),
+        publication,
     })
 }
 
@@ -303,6 +367,7 @@ mod tests {
         crate::messages::PreparedStemSet {
             reference_samples: ticket.sample.samples.clone(),
             publication: ticket.publication.clone(),
+            accepted_timing: ticket.publication.accepted_projection(),
             source_version_hash: source_version_hash(&ticket.source_version),
             sample_rate_hz: ticket.sample_rate_hz,
             channels: 1,

@@ -94,9 +94,15 @@ and callback feedback; see [prepared publication](prepared-stem-publication.md).
 Its generic epoch does not replace this accepted revision. G3b2a connects native
 adoption and SourceGrid; G3b2b connects current native authority and native
 period/rate consumers; G3b2c adds Python projections and locked controls, G3b2d
-adds runtime MIDI pad triggers. Prepared revision/DSP-history binding, accepted
-persistence, controller global batch launch and explicit acceptance/refresh
-orchestration remain G3b2 work.
+adds runtime MIDI pad triggers. G3b2e binds productive prepared-source/stem
+admission to full current accepted revision/period/signed origin; retained
+same-source PCM refreshes only on effective native timing adoption/clear and
+shares one SourcePlayback trajectory. Productive StretchProcessor/voice/DSP-history
+binding, source-verified accepted persistence/fresh loader adoption, controller
+global START/STOP batch launch including MIDI and explicit acceptance/derived
+loop/master refresh orchestration remain G3b2 work. The warmed Key Lock pool
+remains source-neutral and source preparation test-only; C1 copy-first/ABA proof
+is still separate.
 G3c separately proves
 musical period versus rounded physical duration over 75/1000 cycles, fractional
 periods/rates and callback partitions. Rendered DSP/onset/device evidence is still

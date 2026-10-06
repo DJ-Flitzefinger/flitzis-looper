@@ -78,6 +78,7 @@ impl Fixture {
         Self {
             sample,
             stems: PreparedStemSet {
+                accepted_timing: None,
                 reference_samples,
                 publication:
                     crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),

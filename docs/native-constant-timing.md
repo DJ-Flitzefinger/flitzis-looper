@@ -1,6 +1,6 @@
 # Native accepted timing adoption
 
-G3b2a/b/c/d connects the G3a accepted record to actual loaded-pad ownership, current
+G3b2a/b/c/d/e connects the G3a accepted record to actual loaded-pad ownership, current
 acknowledged authority, native SourceGrid, transport/output clock and playback
 rate. This is an explicit control API. Normal loading and analysis,
 manual/TAP controllers and saved legacy projects retain their existing routing;
@@ -219,17 +219,62 @@ source/accepted-bound global batch launch and its refresh/adoption orchestration
 remain explicit follow-up consumers. This slice covers runtime pad triggers and
 their fallback, and does not claim all controller launch paths are guarded.
 
+## Prepared source and stem timing binding
+
+`capture_prepared_source()` uses the current native source/authority resolver to
+capture a fixed binding alongside the existing source/content/request/rate/epoch
+owner. Automatic requires a consistent current acknowledged complete accepted
+revision, exact period and signed origin; unavailable Automatic fails admission.
+Manual, Tap and Legacy keep their own authority. Historical ticket metadata,
+equal endpoints, raw revisions, source hash or preparation epoch alone do not
+prove current accepted ownership.
+
+Source generation and digest are verified by the shared resolver at capture.
+The permit's fixed InputPadBinding carries source address/shape/rate, monotonic
+authority revision and full accepted projection with atomic owners; it does not
+retain separate generation/digest fields in the callback. The pinned source and
+matching source_version digest plus request/epoch/authority guards preserve ownership.
+
+The productive preparation path validates that binding before and after off-thread
+decoding/alignment and through enqueue. PreparedStemSet carries the fixed binding
+to callback adoption, which rechecks actual current source, authority and accepted
+projection before replacing audio. A source/timing refresh between these stages
+cannot adopt a stale set. Failed admission and late rejection preserve previously
+admitted audio; pending/rejected timing replacement never makes its proposal current.
+
+A successful Legacy/Manual/Tap edit revokes control acknowledgement before its
+parameter callback clear may execute. A fresh nonaccepted preparation captured in
+that interval can be safely rejected against the mixer's still-effective accepted
+projection. Previous PCM/audio remains valid; fresh capture after actual clear
+can succeed. Control availability is not a promise of callback adoption during
+this transition.
+
+Admitted same-source stems retain their immutable PCM when native accepted timing
+is successfully adopted or cleared. The mixer updates only their fixed effective
+projection and source_reader checks it exactly against effective mixer timing.
+Pending/rejected updates do not change that projection. Full mix, stems and their
+source-selection transition continue reading one SourcePlayback trajectory with
+the existing rate/ramp, fractional epoch, interpolation and loop/seek rules.
+No second cursor, PCM rebuild, physical-loop rewrite or playhead reset is needed.
+The callback adds bounded fixed/atomic checks and projection copies; large owners
+and evidence remain in off-realtime retirement paths. See
+[prepared stem ownership](prepared-stem-publication.md).
+
 ## Remaining shared-period and loop work
 
-Pending prepared source/stem state and productive Key Lock
-history still need full accepted revision binding. The generic warmed Key Lock
-pool is source-neutral; test-only source preparation is not a production consumer.
-Accepted persistence needs source verification and explicit manual/TAP/legacy
-policy; no opaque ticket is a saved identity and no saved legacy BPM is evidence.
+Productive StretchProcessor/voice/DSP history still needs full source/accepted
+revision binding. The generic warmed Key Lock pool is source-neutral;
+key_lock_source_preparation is test-only and is not a production consumer.
+Accepted source-verified SampleAnalysis/ProjectState persistence and loader schema
+with fresh runtime adoption remain open; no opaque ticket is a saved identity and
+no saved Manual/Tap/Legacy BPM is accepted evidence. Source/accepted-bound
+controller global START/STOP batch launch including MIDI, and explicit accepted
+publication/derived loop/master refresh orchestration remain follow-up consumers.
+Original hash association still does not prove C1 immutable copy-first/ABA lineage.
 
 G3c remains separate: musical period versus rounded physical loops over 75/1000
 cycles, nonintegral periods/rates and callback partitions/wrap. Numerical grid
-tests do not pass rendered DSP, onset, device or sustained audible SYNC gates.
+tests do not pass rendered DSP, onset, device, listening or sustained audible SYNC gates.
 
 See [accepted record identity](accepted-constant-timing.md),
 [prepared stem ownership](prepared-stem-publication.md) and

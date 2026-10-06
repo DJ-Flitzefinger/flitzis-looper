@@ -156,6 +156,7 @@ fn prepare_stem_buffers_from_cache_at_project_root(
         .map_err(|_| "stem set is incomplete".to_string())?;
 
     Ok(PreparedStemSet {
+        accepted_timing: None,
         reference_samples: reference.samples.clone(),
         publication: super::prepared_source::PreparedSourcePermit::unbound(),
         source_version_hash: source_version_hash(source_version),

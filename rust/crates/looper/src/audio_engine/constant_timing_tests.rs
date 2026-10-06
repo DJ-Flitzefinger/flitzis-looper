@@ -14,6 +14,9 @@ const PERIOD: f64 = 60.0 / 119.999;
 #[path = "input_runtime_binding_tests.rs"]
 mod input_runtime_binding_tests;
 
+#[path = "prepared_source_timing_tests.rs"]
+mod prepared_source_timing_tests;
+
 fn source() -> SampleBuffer {
     let mut samples = vec![0.0_f32; (COUNT as f64 * PERIOD * f64::from(RATE)).ceil() as usize];
     for index in 0..COUNT {

@@ -194,13 +194,17 @@ intent and previously effective accepted timing.
 - **AND** successful admission records both values as one bounded callback effect
 
 ### Requirement: MIDI Runtime Binds Current Source And Complete Timing Authority
-The system SHALL bind productive MIDI pad runtime publication and direct triggers
-to actual native source identity, generation, content digest, loaded rate and full
-extent, and to the complete current acknowledged accepted revision, binary64
-period and signed origin when accepted timing is available. Endpoint or BPM
-equality SHALL NOT substitute for this binding. Manual, Tap, Legacy and unavailable
-Automatic states SHALL retain their declared authority without promoting numbers
-or historical tickets to accepted evidence.
+The system SHALL bind productive MIDI runtime publication and direct triggers to
+actual native source ownership and complete current acknowledged accepted timing.
+Endpoint or BPM equality SHALL NOT substitute for source or full revision identity.
+Manual, Tap, Legacy and unavailable Automatic SHALL keep their own authority
+without promoting numerical values or historical tickets.
+
+#### Scenario: Current native timing supplies MIDI runtime ownership
+- **GIVEN** an actual loaded source with current acknowledged accepted timing
+- **WHEN** productive MIDI runtime publication or a direct trigger captures its binding
+- **THEN** it binds actual source identity, generation, content digest, loaded rate and full extent
+- **AND** it carries complete current accepted revision, exact binary64 period and signed origin
 
 #### Scenario: An equal-valued accepted record replaces the current record
 - **GIVEN** two accepted records with equal periods, origins and physical endpoints
@@ -221,13 +225,17 @@ or historical tickets to accepted evidence.
 - **AND** fresh Manual, Tap and Legacy states remain supported under their own authority
 
 ### Requirement: MIDI Trigger Adoption Is One Bounded Source-Matching Effect
-The system SHALL admit direct MIDI loop intent and playback as one complete bounded
-effect and recheck source and timing authority when the audio callback adopts it.
-Stale adoption SHALL apply neither loop intent nor playback. Queue or validation
-failure SHALL preserve existing runtime and audio state. The callback SHALL NOT
-scan or hash PCM, acquire locks, allocate evidence, access Python or perform I/O.
-Failed direct MIDI fallback SHALL resolve fresh current authority and use the same
-guarded all-or-nothing trigger semantics rather than replaying the old snapshot.
+The system SHALL admit direct MIDI loop/playback as one guarded bounded effect and
+recheck current source and timing at callback adoption and quantized execution.
+Stale execution SHALL apply neither loop nor playback. Failure SHALL preserve
+runtime/audio state. Failed-direct fallback SHALL resolve fresh authority and use
+the same transaction. Callback work SHALL remain bounded and realtime-safe.
+
+#### Scenario: The callback processes a guarded MIDI trigger
+- **GIVEN** an admitted fixed source/timing-bound MIDI trigger
+- **WHEN** the callback checks its adoption or scheduled execution
+- **THEN** its source and timing checks remain bounded
+- **AND** it does not scan or hash PCM, acquire locks, allocate evidence, access Python or perform I/O
 
 #### Scenario: Authority changes after direct MIDI enqueue
 - **GIVEN** a source-bound MIDI trigger admitted before a successful timing edit or source replacement
@@ -259,3 +267,125 @@ guarded all-or-nothing trigger semantics rather than replaying the old snapshot.
 - **THEN** fallback resolves fresh current source and timing authority
 - **AND** unavailable Automatic timing does not overwrite the native loop
 - **AND** fallback admits no partial unguarded loop/play sequence
+- **AND** it does not replay the old runtime snapshot
+
+### Requirement: Prepared Sources Capture Current Native Timing Authority
+The system SHALL bind productive prepared-source capture and permits to actual
+current native source/request/epoch ownership and declared authority. Available
+Automatic SHALL retain complete acknowledged accepted revision, exact binary64
+period and signed origin; unavailable Automatic SHALL fail admission. Manual, Tap
+and Legacy SHALL keep their own authority without promotion to accepted evidence.
+
+#### Scenario: Current Automatic timing supplies prepared-source ownership
+- **GIVEN** an actual loaded source with current acknowledged Automatic timing
+- **WHEN** a productive prepared-source ticket is captured
+- **THEN** its permit binds the actual source and complete current accepted revision
+- **AND** it retains the exact binary64 period and independent signed origin rather than a BPM or endpoint projection
+- **AND** source/content/request/rate/epoch ownership checks remain effective
+- **AND** the shared current resolver verifies source generation, content digest, loaded rate, channels and full extent at capture
+- **AND** the fixed callback binding carries source address/shape/rate, monotonic authority revision and full accepted projection with checked request/epoch owners
+- **AND** its pinned source and matching source_version preserve ownership without separately retained generation/digest fields in realtime processing
+
+#### Scenario: Automatic has no consistent current acknowledgement
+- **GIVEN** Automatic intent without a current source-matching accepted record
+- **WHEN** prepared-source capture or publication is attempted
+- **THEN** admission fails without replacing previously admitted audio
+- **AND** historical accepted ticket metadata or saved numerical timing cannot authorize the set
+- **AND** raw revision, endpoint equality, source hash or preparation epoch alone cannot establish accepted authority
+
+#### Scenario: Manual Tap or Legacy prepares stems
+- **GIVEN** a current loaded source with declared Manual, Tap or Legacy authority
+- **WHEN** its productive stem preparation is captured and admitted
+- **THEN** the binding retains that authority and current source ownership
+- **AND** equal numerical timing cannot promote it to an accepted record or revive retired Automatic evidence
+
+### Requirement: Prepared Stem Adoption Rechecks Current Source And Timing
+The system SHALL recheck productive PreparedStemSet ownership and fixed timing
+binding before and after off-thread preparation, through enqueue and at callback
+adoption. Stale source, authority or accepted projection SHALL prevent adoption.
+Failed admission and rejection SHALL preserve prior audio; pending/rejected timing
+SHALL NOT become current evidence. Callback checks SHALL remain bounded and
+realtime-safe, with large owners/evidence retired off-thread.
+
+#### Scenario: A current prepared set reaches callback adoption
+- **GIVEN** a productive PreparedStemSet and its captured source/request/preparation-epoch owner
+- **WHEN** preparation and publication run
+- **THEN** source/request/epoch and fixed current timing binding are checked before off-thread decoding/alignment, after preparation, through enqueue and at adoption
+- **AND** stale complete accepted revision, exact period or signed origin rejects adoption even if numerical endpoints or PCM shape match
+- **AND** callback checks do not acquire locks, scan/hash PCM, allocate evidence, access Python/UI, perform I/O or log
+- **AND** large sample owners and evidence retire outside realtime processing
+
+#### Scenario: Accepted revision changes without changing timing numbers
+- **GIVEN** a prepared ticket captured under one acknowledged accepted revision
+- **WHEN** an equal-period equal-origin replacement with a different complete revision is acknowledged before stem adoption
+- **THEN** the old prepared set is rejected
+- **AND** endpoint equality and the still-matching source cannot authorize that old set
+- **AND** previous full-mix or admitted-stem audio remains available
+
+#### Scenario: A source or timing edit races off-thread preparation
+- **GIVEN** current source-bound stem preparation running outside the callback
+- **WHEN** source replacement or a successful authority/timing edit occurs before its post-preparation or enqueue check
+- **THEN** the prepared result cannot publish under its captured binding
+- **AND** previously admitted audio remains unchanged
+
+#### Scenario: Source or timing changes after stem enqueue
+- **GIVEN** a valid prepared set pending callback adoption
+- **WHEN** its actual source, declared authority or acknowledged accepted projection changes before adoption
+- **THEN** callback adoption reports rejection using bounded source/atomic/fixed-projection checks
+- **AND** neither the set nor its historical timing replaces existing audio
+
+#### Scenario: An accepted replacement remains pending or is rejected
+- **GIVEN** current acknowledged accepted timing and a pending replacement
+- **WHEN** prepared-source resolution runs before adoption or after rejection
+- **THEN** it resolves the previous effective accepted revision
+- **AND** the proposed replacement cannot authorize preparation as current timing
+- **AND** existing request/epoch guards still reject preparation jobs retired by a newer request
+
+#### Scenario: The publication ring has no capacity
+- **GIVEN** a valid current prepared-source ticket and existing audio
+- **WHEN** enqueue cannot reserve capacity
+- **THEN** its ticket remains unconsumed and no partial set is admitted
+- **AND** previous audio and effective timing remain unchanged
+
+#### Scenario: Control authority retires before the mixer clear executes
+- **GIVEN** an admitted Legacy, Manual or Tap edit has revoked control acknowledgement while the parameter callback still holds the old effective accepted projection
+- **WHEN** a fresh nonaccepted prepared-source ticket reaches callback adoption during that interval
+- **THEN** the mismatched effective mixer projection rejects that set without replacing prior PCM or audio
+- **AND** a fresh capture and publication after the actual mixer clear can succeed under current nonaccepted authority
+- **AND** neither control availability nor historical ticket metadata bypasses effective mixer compatibility
+
+### Requirement: Admitted Same-Source Stems Share Current Effective Trajectory
+The system SHALL retain admitted same-source stem PCM and refresh only its fixed
+accepted projection on successful native adoption/clear. Pending, failed or
+rejected timing SHALL preserve the previous projection. Rendering SHALL match
+actual source and exact effective mixer timing. Full mix, stems and transitions
+SHALL share one SourcePlayback trajectory; refresh SHALL preserve source
+progression and physical endpoints without rebuilding PCM or adding a cursor.
+
+#### Scenario: Same-source accepted timing is successfully replaced
+- **GIVEN** admitted stems and active fractional SourcePlayback under current accepted timing
+- **WHEN** the mixer successfully adopts a new accepted projection for the same actual source
+- **THEN** retained stem PCM receives the new fixed effective revision, period and signed origin
+- **AND** subsequent stem reads match current mixer timing
+- **AND** all stems and full mix continue the same source trajectory without a PCM rebuild or playhead reset
+- **AND** immutable same-source PCM owners remain intact while only fixed effective projection metadata changes
+- **AND** every stem, full mix and both transition sides share fractional position, rate/ramp, interpolation taps and loop/seek policy
+- **AND** refresh allocates no second cursor and rewrites no physical endpoints in realtime processing
+
+#### Scenario: Same-source accepted authority is successfully cleared
+- **GIVEN** admitted stems under an acknowledged accepted projection
+- **WHEN** a successful native authority edit clears that projection for the same source
+- **THEN** retained stems refresh their fixed effective projection to the native cleared state
+- **AND** shared source-frame playback remains under current native policy without promoting Manual, Tap or Legacy numbers
+
+#### Scenario: A retained stem projection does not match current mixer timing
+- **GIVEN** retained stem PCM whose complete accepted revision, exact binary64 period or signed origin differs from effective mixer timing
+- **WHEN** productive source_reader checks render compatibility
+- **THEN** the mismatched set cannot supply stem audio under that projection
+- **AND** matching source hash, shape or numerical loop endpoints cannot bypass the check
+
+#### Scenario: A pending or rejected replacement accompanies stem rendering
+- **GIVEN** admitted stems and one current acknowledged source trajectory
+- **WHEN** another accepted record is pending, failed or rejected
+- **THEN** admitted stems retain the previous effective accepted projection
+- **AND** each interpolation tap for full mix and all stems uses the same current source position and wrap policy

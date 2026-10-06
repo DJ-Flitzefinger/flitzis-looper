@@ -253,13 +253,23 @@ pub(super) fn current_record_for_source<'a>(
 }
 
 /// Fixed complete accepted revision and precise scalar projection; no evidence enters RT.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct AcceptedTimingProjection {
     pub(crate) revision: [u8; 32],
     pub(crate) period_seconds: f64,
     pub(crate) origin_seconds: f64,
     pub(crate) sample_rate_hz: u32,
     pub(crate) publication_epoch: u64,
+}
+
+impl PartialEq for AcceptedTimingProjection {
+    fn eq(&self, other: &Self) -> bool {
+        self.revision == other.revision
+            && self.period_seconds.to_bits() == other.period_seconds.to_bits()
+            && self.origin_seconds.to_bits() == other.origin_seconds.to_bits()
+            && self.sample_rate_hz == other.sample_rate_hz
+            && self.publication_epoch == other.publication_epoch
+    }
 }
 
 /// Whole transient source pin/permit retires off the callback after bounded adoption.
