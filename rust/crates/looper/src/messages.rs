@@ -4,6 +4,7 @@
 //! ring buffer between the Python thread and the real-time audio thread.
 
 use crate::audio_engine::constant_timing::PreparedConstantTiming;
+use crate::audio_engine::input_runtime_binding::InputPadBinding;
 use crate::audio_engine::prepared_source::PreparedSourcePermit;
 use pyo3::prelude::*;
 use std::sync::Arc;
@@ -318,6 +319,16 @@ pub enum ControlMessage {
         received_at_ns: Option<u64>,
     },
 
+    /// One guarded native MIDI loop/play effect, retained through quantized scheduling.
+    TriggerInputPad {
+        id: usize,
+        start_s: f64,
+        end_s: Option<f64>,
+        exclusive: bool,
+        binding: InputPadBinding,
+        received_at_ns: u64,
+    },
+
     /// Stop all active voices for a sample.
     ///
     /// # Parameters
@@ -360,6 +371,7 @@ impl ControlMessage {
             ControlMessage::Ping() => ControlMessageClass::Test,
             ControlMessage::PlaySample { .. }
             | ControlMessage::PlaySampleExclusive { .. }
+            | ControlMessage::TriggerInputPad { .. }
             | ControlMessage::StopSample { .. }
             | ControlMessage::StopAll()
             | ControlMessage::PauseSample { .. }

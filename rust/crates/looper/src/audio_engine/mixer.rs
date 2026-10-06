@@ -206,6 +206,7 @@ pub struct RtMixer {
 
     /// Fixed accepted binary64 source projection; legacy numbers stay separate.
     pad_accepted_timing: [Option<AcceptedTimingProjection>; NUM_SAMPLES],
+    input_runtime_ownership: Arc<super::input_runtime_binding::InputRuntimeOwnership>,
 
     /// Fixed callback-owned publication epochs shared with the control resolver.
     current_timing_acknowledgements: Arc<CurrentTimingAcknowledgements>,
@@ -292,6 +293,7 @@ impl RtMixer {
             pad_period_seconds: std::array::from_fn(|_| None),
             pad_phase_anchor_frame: std::array::from_fn(|_| 0.0),
             pad_accepted_timing: std::array::from_fn(|_| None),
+            input_runtime_ownership: Arc::default(),
             current_timing_acknowledgements: Arc::default(),
             pad_gain_db: std::array::from_fn(|_| PAD_GAIN_DB_DEFAULT),
             pad_gain_smoothers: std::array::from_fn(|_| SmoothedGain::default()),
@@ -323,6 +325,34 @@ impl RtMixer {
         acknowledgements: Arc<CurrentTimingAcknowledgements>,
     ) {
         self.current_timing_acknowledgements = acknowledgements;
+    }
+
+    pub(crate) fn set_input_runtime_ownership(
+        &mut self,
+        ownership: Arc<super::input_runtime_binding::InputRuntimeOwnership>,
+    ) {
+        self.input_runtime_ownership = ownership;
+    }
+
+    /// Fixed pointer/shape/full projection checks plus immediately published revocation.
+    pub(crate) fn input_binding_current(
+        &self,
+        id: usize,
+        binding: super::input_runtime_binding::InputPadBinding,
+    ) -> bool {
+        self.input_runtime_ownership.current(id, binding)
+            && binding.sample_rate_hz as f32 == self.sample_rate_hz
+            && self.sample_bank[id].as_ref().is_some_and(|sample| {
+                sample.samples.as_ptr() as usize == binding.source_address
+                    && sample.samples.len() == binding.sample_count
+                    && sample.channels == binding.channels
+            })
+            && self.pad_accepted_timing[id] == binding.accepted
+            && self.current_timing_acknowledgements.current_epoch(id)
+                == binding
+                    .accepted
+                    .map_or(0, |accepted| accepted.publication_epoch)
+            && self.input_runtime_ownership.current(id, binding)
     }
 
     /// Loads a sample into the sample bank at the specified slot.

@@ -52,6 +52,8 @@ mod dsp;
 mod errors;
 mod initial_loop_start;
 mod input_mapping;
+pub(crate) mod input_runtime_binding;
+pub use input_runtime_binding::InputRuntimePadBinding;
 mod key_lock_preparation;
 #[cfg(test)]
 mod key_lock_source_preparation;
@@ -457,6 +459,7 @@ pub struct AudioEngine {
     timing_intents: Mutex<Vec<analysis::tempo_acceptance::TimingIntent>>,
     current_timing_acknowledgements: Arc<constant_timing::CurrentTimingAcknowledgements>,
     current_constant_timing: Mutex<Vec<Vec<constant_timing::CurrentConstantTimingRecord>>>,
+    input_runtime_ownership: Arc<input_runtime_binding::InputRuntimeOwnership>,
     constant_timing_busy: AtomicBool,
     offline_jobs: analysis_jobs::OfflineJobs,
     input_runtime: Option<InputRuntime>,
@@ -490,6 +493,7 @@ impl AudioEngine {
             ]),
             current_timing_acknowledgements: Arc::default(),
             current_constant_timing: Mutex::new((0..NUM_SAMPLES).map(|_| Vec::new()).collect()),
+            input_runtime_ownership: Arc::default(),
             constant_timing_busy: AtomicBool::new(false),
             offline_jobs: analysis_jobs::OfflineJobs::default(),
             input_runtime: None,
@@ -515,13 +519,17 @@ impl AudioEngine {
         match create_audio_stream(
             self.input_clock,
             self.current_timing_acknowledgements.clone(),
+            self.input_runtime_ownership.clone(),
         ) {
             Ok(handle) => {
                 start_stream(&handle.stream).map_err(|e| {
                     PyRuntimeError::new_err(format!("Failed to start audio stream: {e}"))
                 })?;
-                self.input_runtime =
-                    Some(InputRuntime::new(handle.producer.clone(), self.input_clock));
+                self.input_runtime = Some(InputRuntime::new_with_ownership(
+                    handle.producer.clone(),
+                    self.input_clock,
+                    self.input_runtime_ownership.clone(),
+                ));
                 self.stream_handle = Some(handle);
                 self.is_playing = true;
                 Ok(())
@@ -663,20 +671,68 @@ impl AudioEngine {
         Ok(())
     }
 
+    #[pyo3(signature = (multi_loop, loaded, loop_starts, loop_ends, bindings=None))]
     pub fn set_input_runtime_state(
         &self,
+        py: Python<'_>,
         multi_loop: bool,
         loaded: Vec<bool>,
         loop_starts: Vec<f64>,
         loop_ends: Vec<Option<f64>>,
+        bindings: Option<Vec<Option<Py<InputRuntimePadBinding>>>>,
     ) -> PyResult<()> {
         let runtime = self
             .input_runtime
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        let bindings = bindings.unwrap_or_else(|| (0..NUM_SAMPLES).map(|_| None).collect());
+        let borrowed: Vec<_> = bindings
+            .iter()
+            .map(|binding| binding.as_ref().map(|binding| binding.borrow(py)))
+            .collect();
         runtime
-            .set_runtime_state(multi_loop, loaded, loop_starts, loop_ends)
+            .set_runtime_state(
+                multi_loop,
+                loaded,
+                loop_starts,
+                loop_ends,
+                borrowed.iter().map(|binding| binding.as_deref()).collect(),
+            )
             .map_err(PyValueError::new_err)
+    }
+
+    /// Capture actual loaded source and current acknowledged timing for MIDI admission.
+    pub fn current_input_runtime_pad_binding(
+        &self,
+        sample_id: usize,
+    ) -> PyResult<Option<InputRuntimePadBinding>> {
+        if sample_id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("sample id out of range"));
+        }
+        input_runtime_binding::capture(self, sample_id)
+    }
+
+    /// Retry MIDI through the same current guarded transaction, retaining input time.
+    #[pyo3(signature = (sample_id, received_at_ns=None))]
+    pub fn trigger_input_runtime_pad(
+        &self,
+        sample_id: usize,
+        received_at_ns: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<bool> {
+        if sample_id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("sample id out of range"));
+        }
+        let now = self.input_clock.capture_ns();
+        let timestamp = validated_input_timestamp(parse_input_timestamp(received_at_ns)?, now);
+        let runtime = self
+            .input_runtime
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        Ok(runtime.trigger_pad(sample_id, timestamp.unwrap_or(now)))
     }
 
     pub fn start_midi_input(&self) -> PyResult<usize> {
@@ -760,6 +816,7 @@ impl AudioEngine {
                 .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
             let advance = PadRequestAdvance::prepare(&mut requests[id], &prepared_epoch)
                 .map_err(PyRuntimeError::new_err)?;
+            let input_authority = self.input_runtime_ownership.next_authority(id)?;
             let mut cache = sample_cache
                 .lock()
                 .map_err(|_| PyRuntimeError::new_err("Failed to acquire sample cache lock"))?;
@@ -770,6 +827,7 @@ impl AudioEngine {
                 *slot = None;
             }
             digests[id] = None;
+            self.input_runtime_ownership.revoke(id, input_authority);
             advance.commit()
         };
         self.offline_jobs.cancel(Some(id));
@@ -2055,6 +2113,11 @@ impl AudioEngine {
             return Err(PyValueError::new_err("end_s out of range"));
         }
 
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+
         let handle = self
             .stream_handle
             .as_ref()
@@ -2065,11 +2128,16 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        push_control_message(
-            &mut producer_guard,
-            ControlMessage::SetPadLoopRegion { id, start_s, end_s },
-            "SetPadLoopRegion",
-        )
+        if producer_guard.is_full() {
+            return Err(PyRuntimeError::new_err(
+                "Failed to send SetPadLoopRegion - buffer may be full",
+            ));
+        }
+        let input_authority = self.input_runtime_ownership.next_authority(id)?;
+        self.input_runtime_ownership.revoke(id, input_authority);
+        producer_guard
+            .push(ControlMessage::SetPadLoopRegion { id, start_s, end_s })
+            .map_err(|_| PyRuntimeError::new_err("reserved single-producer capacity lost"))
     }
 
     /// Seek an active or paused sample voice to a source position in seconds.
@@ -2244,6 +2312,8 @@ impl AudioEngine {
             ));
         }
 
+        let input_authority = self.input_runtime_ownership.next_authority(id)?;
+        self.input_runtime_ownership.revoke(id, input_authority);
         advance.commit();
         producer_guard
             .push(ControlMessage::UnloadSample { id })

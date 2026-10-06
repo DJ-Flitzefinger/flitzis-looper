@@ -1,6 +1,6 @@
 # Native accepted timing adoption
 
-G3b2a/b/c connects the G3a accepted record to actual loaded-pad ownership, current
+G3b2a/b/c/d connects the G3a accepted record to actual loaded-pad ownership, current
 acknowledged authority, native SourceGrid, transport/output clock and playback
 rate. This is an explicit control API. Normal loading and analysis,
 manual/TAP controllers and saved legacy projects retain their existing routing;
@@ -172,11 +172,56 @@ caller refreshes derived Python loop/master controls after acknowledgement via
 republish physical auto-loop endpoints/master intent; read-only UI polling never
 drives correction. A normal analyzer/acceptance orchestrator is not added here.
 
+## MIDI current source and authority
+
+`current_input_runtime_pad_binding(sample_id)` captures an opaque native source
+and authority snapshot outside the callback. Its metadata names the actual source
+generation, digest, loaded rate, full extent and channels, declared timing intent
+and authority revision. Its optional `accepted_timing` is resolved through the
+same current acknowledged record as `current_constant_timing`, with complete
+accepted revision, period, signed origin and provenance. It owns no PCM buffer;
+caller metadata cannot construct or persist this binding.
+
+Python carries one frozen `CurrentPadTiming` through effective loop calculation
+and signature comparison, checks it against that native binding and publishes the
+binding with runtime loop intent. Equal BPM/endpoints do not hide a different
+source, full accepted revision or same-value authority edit. An unavailable or
+inconsistent Automatic snapshot disables the pad's direct runtime until a fresh
+matching publication; it does not replay saved analysis or clear the live loop.
+
+Direct MIDI loop intent and launch are one fixed guarded command. Native refresh
+revalidates current ownership before replacing the runtime. Callback/scheduled
+execution rechecks source identity, declared authority and acknowledged accepted
+projection before applying loop intent or exclusive playback. A newer effective
+runtime loop invalidates old queued/scheduled loop intent. Successful source or
+timing edits invalidate old bindings immediately, including Manual/Automatic
+roundtrips. New preparation requests and pending/rejected replacements retain the
+previous effective accepted record. No PCM scans, evidence allocations, locks,
+Python or I/O enter the callback.
+Scheduler capacity is allocated once on the heap before callback construction;
+the larger guarded event does not create a large inline startup stack temporary.
+Scheduling and execution reuse that fixed storage without callback allocation.
+
+Failed direct pad-trigger events refresh current runtime and retry through
+`trigger_input_runtime_pad`, retaining the captured timestamp and guarded
+all-or-nothing semantics. They do not use the ordinary unguarded Python loop/play
+sequence. A full queue, unavailable Automatic state or stale binding admits no
+partial loop or launch. Enqueue feedback still reports admission rather than
+audible or scheduled-execution acceptance; a subsequently retired trigger is
+discarded at execution. MIDI stop-all remains a global action.
+
+Runtime publication changes dormant input intent; polling does not publish accepted
+timing, refresh master controls or change a live loop. Explicit accepted adoption
+and subsequent caller-owned loop/master refresh remain the orchestration gate.
+Controller-owned global START/STOP (including its MIDI mapping) retains ordinary
+Python batch launch semantics; it does not consume RuntimePadState bindings. A
+source/accepted-bound global batch launch and its refresh/adoption orchestration
+remain explicit follow-up consumers. This slice covers runtime pad triggers and
+their fallback, and does not claim all controller launch paths are guarded.
+
 ## Remaining shared-period and loop work
 
-Current native and Python grid/loop/control consumers now share accepted timing.
-
-MIDI signatures, pending prepared source/stem state and productive Key Lock
+Pending prepared source/stem state and productive Key Lock
 history still need full accepted revision binding. The generic warmed Key Lock
 pool is source-neutral; test-only source preparation is not a production consumer.
 Accepted persistence needs source verification and explicit manual/TAP/legacy

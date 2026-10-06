@@ -234,7 +234,7 @@ Python package directories are already available to standalone test executables.
   the canonical cursor against the current effective loop and maps frame plus
   fractional remainder to beats. It matches rendering after loop/seek normalization
   without advancing the live cursor.
-- Already accepted starts retain output target/order/timestamp across BPM and
+- Ordinary UI starts retain output target/order/timestamp across BPM and
   metadata updates; current execution uses the latest effective loop start.
   Source-phase mapping remains an internal foundation, with ordinary immediate
   or future-grid loop-start launches still active.
@@ -242,9 +242,12 @@ Python package directories are already available to standalone test executables.
   boundary. Rust rejects stale sample publication after unload or replacement,
   and Python ignores stale progress, error, success, and analysis events.
 - Rust MIDI capture runs outside the callback and receives mapping snapshots,
-  input-runtime pad state, and Learn/capture state from Python. Direct MIDI
-  command dispatch is all-or-nothing; failed direct attempts are reported back
-  to Python for controller-owned fallback outside the MIDI dispatcher.
+  native source/authority-bound runtime state, and Learn/capture state from Python.
+  MIDI loop/launch is one guarded effect, checked again at quantized execution
+  before loop mutation or exclusive stop/start. Full accepted revision/period/
+  origin and source/authority revisions reject retired snapshots. Failed direct
+  pad triggers refresh current runtime and retry through the same guarded native
+  API outside the MIDI dispatcher, preserving all-or-nothing admission.
 - `timing.rs` owns the shared engine monotonic epoch, coherent bounded clock
   observations and captured-input nearest-grid diagnostic math. MIDI/UI launch
   time survives fixed-size commands and scheduled events. Callback publication

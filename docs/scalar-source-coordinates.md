@@ -62,10 +62,11 @@ rendering and the callback.
 Compact summaries may round. Tooltips and edit initialization disclose full
 effective precision. Untouched or reverted edits publish no override/speed update
 on Enter/focus loss. Intentional fractional edits, TAP and clear retain their
-authority. MIDI runtime metadata and its signature use the authoritative effective
-BPM resolver. Its signature also retains source path, loaded duration/rate and
-the exact effective endpoints used for publication; future accepted timing
-revisions must extend this identity.
+authority. MIDI runtime metadata and its signature carry one current source
+period/origin snapshot and the exact physical endpoints. G3b2d extends that
+identity with actual native source/generation/digest/rate/extent, declared authority
+and complete accepted revision. Native guarded launch checks it at scheduled
+execution; see [MIDI binding](native-constant-timing.md).
 
 ## Remaining timing work
 

@@ -85,6 +85,7 @@ impl CurrentTimingAcknowledgements {
 /// compared, never dereferenced; current monotonic generation/digest/rate and
 /// extent checks prevent a recycled address from authorizing another source.
 /// The full immutable accepted revision names the evidence retained by tickets.
+#[derive(Clone)]
 pub(super) struct CurrentConstantTimingRecord {
     source_address: usize,
     sample_count: usize,
@@ -97,6 +98,7 @@ pub(super) struct CurrentConstantTimingRecord {
     decision: TimingAcceptanceDecision,
     publication_epoch: u64,
     publication: PreparedSourcePermit,
+    pub(super) projection: AcceptedTimingProjection,
 }
 
 impl CurrentConstantTimingRecord {
@@ -105,6 +107,7 @@ impl CurrentConstantTimingRecord {
         ticket: &ConstantTimingTicket,
         publication_epoch: u64,
         publication: PreparedSourcePermit,
+        projection: AcceptedTimingProjection,
     ) -> Self {
         Self {
             source_address: ticket.sample.samples.as_ptr() as usize,
@@ -118,10 +121,11 @@ impl CurrentConstantTimingRecord {
             decision: timing.decision().clone(),
             publication_epoch,
             publication,
+            projection,
         }
     }
 
-    fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+    pub(super) fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let dict = PyDict::new(py);
         dict.set_item("pad_id", self.binding.job.pad_id)?;
         dict.set_item("source_id", &self.binding.job.source_id)?;
@@ -149,7 +153,7 @@ impl CurrentConstantTimingRecord {
 /// Terminal status is acquired before reading current acknowledgement: the mixer
 /// publishes its epoch before marking accepted, so a terminal non-current record
 /// cannot become current later. Pending records survive this off-RT retirement.
-fn retire_old_current_records(
+pub(super) fn retire_old_current_records(
     engine: &AudioEngine,
     id: usize,
     records: &mut Vec<CurrentConstantTimingRecord>,
@@ -207,18 +211,14 @@ pub(super) fn current_metadata(
     // poll. The next poll observes the new acknowledged record; audio progresses
     // independently. No spin/retry or callback lock is required.
     let acknowledged = engine.current_timing_acknowledgements.current_epoch(id);
-    let Some(record) = records.iter().find(|record| {
-        record.publication_epoch == acknowledged
-            && record.channels == source.channels
-            && record.source_address == source.samples.as_ptr() as usize
-            && record.sample_count == source.samples.len()
-            && generations[id]
-                == (
-                    record.binding.job.source_generation,
-                    record.binding.sample_rate_hz,
-                )
-            && digests[id].as_ref() == Some(&record.binding.source_sha256)
-    }) else {
+    let Some(record) = current_record_for_source(
+        engine,
+        id,
+        source,
+        generations[id],
+        digests[id].as_deref(),
+        records,
+    ) else {
         return Ok(None);
     };
     let metadata = record.metadata(py)?;
@@ -226,6 +226,30 @@ pub(super) fn current_metadata(
         return Ok(None);
     }
     Ok(Some(metadata))
+}
+
+/// Shared authoritative current source/acknowledgement predicate for control consumers.
+pub(super) fn current_record_for_source<'a>(
+    engine: &AudioEngine,
+    id: usize,
+    source: &SampleBuffer,
+    generation_and_rate: (u64, u32),
+    digest: Option<&str>,
+    records: &'a [CurrentConstantTimingRecord],
+) -> Option<&'a CurrentConstantTimingRecord> {
+    let acknowledged = engine.current_timing_acknowledgements.current_epoch(id);
+    records.iter().find(|record| {
+        record.publication_epoch == acknowledged
+            && record.channels == source.channels
+            && record.source_address == source.samples.as_ptr() as usize
+            && record.sample_count == source.samples.len()
+            && generation_and_rate
+                == (
+                    record.binding.job.source_generation,
+                    record.binding.sample_rate_hz,
+                )
+            && digest == Some(record.binding.source_sha256.as_str())
+    })
 }
 
 /// Fixed complete accepted revision and precise scalar projection; no evidence enters RT.
@@ -799,7 +823,7 @@ pub(super) fn publish(
     current_records[ticket.id]
         .try_reserve(1)
         .map_err(|_| PyRuntimeError::new_err("current timing record allocation failed"))?;
-    let record = CurrentConstantTimingRecord::new(&timing, ticket, next, permit.clone());
+    let record = CurrentConstantTimingRecord::new(&timing, ticket, next, permit.clone(), projected);
     permit.mark_pending().map_err(PyRuntimeError::new_err)?;
     guard
         .adopt(&ticket.adoption_ticket, timing)
@@ -844,6 +868,8 @@ pub(super) fn set_intent(
             "Failed to send timing intent - buffer may be full",
         ));
     }
+    let input_authority = engine.input_runtime_ownership.next_authority(id)?;
+    engine.input_runtime_ownership.revoke(id, input_authority);
     engine.prepared_source_epochs[id].store(next, Ordering::Release);
     engine
         .current_timing_acknowledgements
@@ -880,6 +906,8 @@ pub(super) fn publish_legacy_bpm(
             "Failed to send SetPadBpm - buffer may be full",
         ));
     }
+    let input_authority = engine.input_runtime_ownership.next_authority(id)?;
+    engine.input_runtime_ownership.revoke(id, input_authority);
     engine.prepared_source_epochs[id].store(next, Ordering::Release);
     engine
         .current_timing_acknowledgements
@@ -917,6 +945,8 @@ pub(super) fn publish_legacy_origin(
             "Failed to send SetPadTimingMetadata - buffer may be full",
         ));
     }
+    let input_authority = engine.input_runtime_ownership.next_authority(id)?;
+    engine.input_runtime_ownership.revoke(id, input_authority);
     engine.prepared_source_epochs[id].store(next, Ordering::Release);
     engine
         .current_timing_acknowledgements

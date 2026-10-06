@@ -1174,7 +1174,7 @@ def test_input_runtime_state_sync_skips_unchanged_frames(
     controller.input_mapping.on_frame_render()
 
     audio_engine_mock.set_input_runtime_state.assert_called_once()
-    multi_loop, loaded, loop_starts, loop_ends = (
+    multi_loop, loaded, loop_starts, loop_ends, _bindings = (
         audio_engine_mock.set_input_runtime_state.call_args.args
     )
     assert multi_loop is True
@@ -1199,7 +1199,11 @@ def test_input_runtime_signature_uses_effective_bpm_and_republishes_precision_ch
     audio_engine_mock.reset_mock()
 
     controller.input_mapping.on_frame_render()
-    assert controller.input_mapping._input_runtime_bpm_signature(0) == 119.999
+    signature = controller.input_mapping._last_input_runtime_state_signature
+    assert signature is not None
+    timing = signature[2][0].timing
+    assert timing is not None
+    assert timing.period_seconds == 60.0 / 119.999
     first_region = audio_engine_mock.set_input_runtime_state.call_args.args[3][0]
     audio_engine_mock.reset_mock()
     controller.input_mapping.on_frame_render()
@@ -1207,7 +1211,11 @@ def test_input_runtime_signature_uses_effective_bpm_and_republishes_precision_ch
 
     controller.project.manual_bpm[0] = 120.00128936767578
     controller.input_mapping.on_frame_render()
-    assert controller.input_mapping._input_runtime_bpm_signature(0) == 120.00128936767578
+    signature = controller.input_mapping._last_input_runtime_state_signature
+    assert signature is not None
+    timing = signature[2][0].timing
+    assert timing is not None
+    assert timing.period_seconds == 60.0 / 120.00128936767578
     audio_engine_mock.set_input_runtime_state.assert_called_once()
     new_region = audio_engine_mock.set_input_runtime_state.call_args.args[3][0]
     assert new_region != first_region
@@ -1238,7 +1246,7 @@ def test_input_runtime_snapshot_republishes_source_and_loaded_domain_changes(
     controller.input_mapping._sync_rust_runtime_state()
 
     audio_engine_mock.set_input_runtime_state.assert_called_once()
-    _, loaded, starts, ends = audio_engine_mock.set_input_runtime_state.call_args.args
+    _, loaded, starts, ends, _bindings = audio_engine_mock.set_input_runtime_state.call_args.args
     assert loaded[0]
     assert (starts[0], ends[0]) == controller.transport.loop.effective_region(0)
     audio_engine_mock.reset_mock()
@@ -1257,7 +1265,7 @@ def test_input_runtime_snapshot_publishes_exact_effective_endpoints_once(
     region = Mock(return_value=(start_s, end_s))
     monkeypatch.setattr(controller.transport.loop, "effective_region", region)
     controller.input_mapping._sync_rust_runtime_state()
-    region.assert_called_once_with(0)
+    region.assert_called_once_with(0, timing=None)
     audio_engine_mock.reset_mock()
     region.reset_mock()
 
@@ -1265,9 +1273,9 @@ def test_input_runtime_snapshot_publishes_exact_effective_endpoints_once(
     region.return_value = (start_s, end_s)
     controller.input_mapping._sync_rust_runtime_state()
 
-    region.assert_called_once_with(0)
+    region.assert_called_once_with(0, timing=None)
     audio_engine_mock.set_input_runtime_state.assert_called_once()
-    _, _, starts, ends = audio_engine_mock.set_input_runtime_state.call_args.args
+    _, _, starts, ends, _bindings = audio_engine_mock.set_input_runtime_state.call_args.args
     assert starts[0] == start_s
     assert ends[0] == end_s
 
@@ -1285,7 +1293,9 @@ def test_input_runtime_state_sync_republishes_loaded_loop_changes(
     controller.input_mapping.on_frame_render()
 
     audio_engine_mock.set_input_runtime_state.assert_called_once()
-    _, loaded, loop_starts, loop_ends = audio_engine_mock.set_input_runtime_state.call_args.args
+    _, loaded, loop_starts, loop_ends, _bindings = (
+        audio_engine_mock.set_input_runtime_state.call_args.args
+    )
     assert loaded[0] is True
     assert loop_starts[0] == pytest.approx(1.0)
     assert loop_ends[0] == pytest.approx(4.0)
@@ -1301,12 +1311,14 @@ def test_input_runtime_state_sync_republishes_loaded_loop_changes(
     controller.input_mapping.on_frame_render()
 
     audio_engine_mock.set_input_runtime_state.assert_called_once()
-    _, _, loop_starts, loop_ends = audio_engine_mock.set_input_runtime_state.call_args.args
+    _, _, loop_starts, loop_ends, _bindings = (
+        audio_engine_mock.set_input_runtime_state.call_args.args
+    )
     assert loop_starts[0] == pytest.approx(2.0)
     assert loop_ends[0] == pytest.approx(4.0)
 
 
-def test_failed_direct_rust_midi_event_executes_python_fallback(
+def test_failed_direct_rust_midi_event_retries_guarded_native_trigger(
     controller: AppController,
     audio_engine_mock: Mock,
 ) -> None:
@@ -1322,8 +1334,9 @@ def test_failed_direct_rust_midi_event_executes_python_fallback(
         "dispatched": False,
     })
 
-    audio_engine_mock.set_pad_loop_region.assert_called_once_with(0, 0.0, None)
-    audio_engine_mock.play_sample_exclusive.assert_called_once_with(0, 1.0)
+    audio_engine_mock.trigger_input_runtime_pad.assert_called_once_with(0, received_at_ns=None)
+    audio_engine_mock.set_pad_loop_region.assert_not_called()
+    audio_engine_mock.play_sample_exclusive.assert_not_called()
 
 
 @pytest.mark.parametrize("received_at_ns", [0, 12_345_678])
@@ -1348,13 +1361,14 @@ def test_midi_fallback_preserves_original_timestamp(
         "dispatched": dispatched,
     })
 
-    audio_engine_mock.play_sample_exclusive.assert_called_once_with(
-        0, 1.0, received_at_ns=received_at_ns
+    audio_engine_mock.trigger_input_runtime_pad.assert_called_once_with(
+        0, received_at_ns=received_at_ns
     )
+    audio_engine_mock.play_sample_exclusive.assert_not_called()
 
 
 @pytest.mark.parametrize("received_at_ns", [-1, True, 1.5, "12", 1 << 64])
-def test_invalid_midi_timestamp_reports_error_and_keeps_legacy_fallback(
+def test_invalid_midi_timestamp_reports_error_and_refuses_guarded_retry(
     controller: AppController, audio_engine_mock: Mock, received_at_ns: object
 ) -> None:
     controller.input_mapping.set_enabled(enabled=True)
@@ -1369,7 +1383,8 @@ def test_invalid_midi_timestamp_reports_error_and_keeps_legacy_fallback(
         "dispatched": False,
     })
 
-    audio_engine_mock.play_sample_exclusive.assert_called_once_with(0, 1.0)
+    audio_engine_mock.trigger_input_runtime_pad.assert_not_called()
+    audio_engine_mock.play_sample_exclusive.assert_not_called()
     assert "received_at_ns" in str(controller.session.input_mapping_error)
 
 

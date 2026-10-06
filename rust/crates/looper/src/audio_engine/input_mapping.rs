@@ -1,4 +1,7 @@
 use crate::audio_engine::constants::NUM_SAMPLES;
+use crate::audio_engine::input_runtime_binding::{
+    InputPadBinding, InputRuntimeOwnership, InputRuntimePadBinding,
+};
 use crate::audio_engine::timing::InputClock;
 use crate::messages::ControlMessage;
 use midir::{Ignore, MidiInput, MidiInputConnection};
@@ -61,11 +64,12 @@ struct InputMapping {
     action: InputAction,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct RuntimePadState {
     loaded: bool,
     loop_start_s: f64,
     loop_end_s: Option<f64>,
+    binding: Option<InputPadBinding>,
 }
 
 impl Default for RuntimePadState {
@@ -74,6 +78,7 @@ impl Default for RuntimePadState {
             loaded: false,
             loop_start_s: 0.0,
             loop_end_s: None,
+            binding: None,
         }
     }
 }
@@ -118,6 +123,8 @@ pub(crate) struct InputRuntime {
     event_rx: Mutex<Receiver<InputRuntimeEvent>>,
     mappings: Arc<Mutex<Vec<InputMapping>>>,
     runtime_state: Arc<Mutex<RuntimeState>>,
+    ownership: Arc<InputRuntimeOwnership>,
+    audio_producer: Arc<Mutex<Producer<ControlMessage>>>,
     test_normalizer: Mutex<MidiNormalizer>,
     midi_connections: Mutex<Vec<MidiInputConnection<()>>>,
     running: Arc<AtomicBool>,
@@ -125,7 +132,16 @@ pub(crate) struct InputRuntime {
 }
 
 impl InputRuntime {
+    #[cfg(test)]
     pub fn new(audio_producer: Arc<Mutex<Producer<ControlMessage>>>, clock: InputClock) -> Self {
+        Self::new_with_ownership(audio_producer, clock, Arc::default())
+    }
+
+    pub(super) fn new_with_ownership(
+        audio_producer: Arc<Mutex<Producer<ControlMessage>>>,
+        clock: InputClock,
+        ownership: Arc<InputRuntimeOwnership>,
+    ) -> Self {
         let enabled = Arc::new(AtomicBool::new(false));
         let learn_capture_active = Arc::new(AtomicBool::new(false));
         let mappings = Arc::new(Mutex::new(Vec::new()));
@@ -140,7 +156,8 @@ impl InputRuntime {
                 event_tx,
                 mappings: mappings.clone(),
                 runtime_state: runtime_state.clone(),
-                audio_producer,
+                ownership: ownership.clone(),
+                audio_producer: audio_producer.clone(),
                 enabled: enabled.clone(),
                 learn_capture_active: learn_capture_active.clone(),
                 running: running.clone(),
@@ -156,6 +173,8 @@ impl InputRuntime {
             event_rx: Mutex::new(event_rx),
             mappings,
             runtime_state,
+            ownership,
+            audio_producer,
             test_normalizer: Mutex::new(MidiNormalizer::default()),
             midi_connections: Mutex::new(Vec::new()),
             running,
@@ -195,10 +214,12 @@ impl InputRuntime {
         loaded: Vec<bool>,
         loop_starts: Vec<f64>,
         loop_ends: Vec<Option<f64>>,
+        bindings: Vec<Option<&InputRuntimePadBinding>>,
     ) -> Result<(), String> {
         if loaded.len() != NUM_SAMPLES
             || loop_starts.len() != NUM_SAMPLES
             || loop_ends.len() != NUM_SAMPLES
+            || bindings.len() != NUM_SAMPLES
         {
             return Err(format!(
                 "input runtime state arrays must have length {NUM_SAMPLES}"
@@ -215,17 +236,72 @@ impl InputRuntime {
             if end_s.is_some_and(|value| !value.is_finite() || value < 0.0) {
                 return Err("loop end out of range".to_string());
             }
+            let binding = if loaded[idx] {
+                let binding =
+                    bindings[idx].ok_or("loaded MIDI pad requires current native binding")?;
+                if binding.id != idx
+                    || !Arc::ptr_eq(&binding.ownership, &self.ownership)
+                    || !binding.current()
+                    || !binding.available()
+                {
+                    return Err("stale or unavailable MIDI pad binding".into());
+                }
+                Some(binding.binding)
+            } else {
+                None
+            };
             pads.push(RuntimePadState {
                 loaded: loaded[idx],
                 loop_start_s: start_s,
                 loop_end_s: end_s,
+                binding,
             });
         }
 
-        if let Ok(mut guard) = self.runtime_state.lock() {
-            *guard = RuntimeState { multi_loop, pads };
+        let mut guard = self
+            .runtime_state
+            .lock()
+            .map_err(|_| "input runtime lock poisoned")?;
+        let mut revisions = Vec::with_capacity(NUM_SAMPLES);
+        for (idx, pad) in pads.iter_mut().enumerate() {
+            if let Some(binding) = &mut pad.binding {
+                binding.runtime_revision = guard.pads[idx]
+                    .binding
+                    .map_or(0, |old| old.runtime_revision);
+            }
+            let changed = guard.multi_loop != multi_loop || guard.pads[idx] != *pad;
+            let revision = if changed {
+                super::prepared_source::next_epoch(&self.ownership.runtime[idx])?
+            } else {
+                self.ownership.runtime[idx].load(Ordering::Acquire)
+            };
+            if let Some(binding) = &mut pad.binding {
+                binding.runtime_revision = revision;
+            }
+            revisions.push(revision);
         }
+        // Validate the whole replacement before revoking any previous pad publication.
+        for (idx, binding) in bindings.iter().enumerate() {
+            if loaded[idx] && binding.is_none_or(|binding| !binding.current()) {
+                return Err("MIDI binding changed during runtime publication".into());
+            }
+        }
+        for (idx, revision) in revisions.into_iter().enumerate() {
+            self.ownership.runtime[idx].store(revision, Ordering::Release);
+        }
+        *guard = RuntimeState { multi_loop, pads };
         Ok(())
+    }
+
+    pub(super) fn trigger_pad(&self, id: usize, received_at_ns: u64) -> bool {
+        dispatch_trigger_pad(
+            id,
+            received_at_ns,
+            &self.runtime_state,
+            &self.ownership,
+            &self.audio_producer,
+        )
+        .dispatched
     }
 
     pub fn start_midi_input(&self) -> Result<usize, String> {
@@ -316,6 +392,7 @@ struct InputDispatcher {
     event_tx: SyncSender<InputRuntimeEvent>,
     mappings: Arc<Mutex<Vec<InputMapping>>>,
     runtime_state: Arc<Mutex<RuntimeState>>,
+    ownership: Arc<InputRuntimeOwnership>,
     audio_producer: Arc<Mutex<Producer<ControlMessage>>>,
     enabled: Arc<AtomicBool>,
     learn_capture_active: Arc<AtomicBool>,
@@ -349,6 +426,7 @@ impl InputDispatcher {
                     &mapping.action,
                     event.received_at_ns,
                     &self.runtime_state,
+                    &self.ownership,
                     &self.audio_producer,
                 );
                 dispatched = result.dispatched;
@@ -390,12 +468,17 @@ fn dispatch_action(
     action: &InputAction,
     received_at_ns: u64,
     runtime_state: &Arc<Mutex<RuntimeState>>,
+    ownership: &Arc<InputRuntimeOwnership>,
     audio_producer: &Arc<Mutex<Producer<ControlMessage>>>,
 ) -> DispatchResult {
     match action {
-        InputAction::TriggerPad { id } => {
-            dispatch_trigger_pad(*id, received_at_ns, runtime_state, audio_producer)
-        }
+        InputAction::TriggerPad { id } => dispatch_trigger_pad(
+            *id,
+            received_at_ns,
+            runtime_state,
+            ownership,
+            audio_producer,
+        ),
         InputAction::StopPad { id } => {
             dispatch_audio_messages(audio_producer, [ControlMessage::StopSample { id: *id }])
         }
@@ -416,6 +499,7 @@ fn dispatch_trigger_pad(
     id: usize,
     received_at_ns: u64,
     runtime_state: &Arc<Mutex<RuntimeState>>,
+    ownership: &Arc<InputRuntimeOwnership>,
     audio_producer: &Arc<Mutex<Producer<ControlMessage>>>,
 ) -> DispatchResult {
     let Ok(state) = runtime_state.lock() else {
@@ -430,34 +514,28 @@ fn dispatch_trigger_pad(
             direct: true,
         };
     };
-    if !pad.loaded {
+    if !pad.loaded
+        || pad
+            .binding
+            .is_none_or(|binding| !ownership.current(id, binding))
+    {
         return DispatchResult {
             dispatched: false,
             direct: true,
         };
     }
 
-    let play = if state.multi_loop {
-        ControlMessage::PlaySample {
-            id,
-            volume: 1.0,
-            received_at_ns: Some(received_at_ns),
-        }
-    } else {
-        ControlMessage::PlaySampleExclusive {
-            id,
-            volume: 1.0,
-            received_at_ns: Some(received_at_ns),
-        }
-    };
-    let loop_region = ControlMessage::SetPadLoopRegion {
+    let trigger = ControlMessage::TriggerInputPad {
         id,
         start_s: pad.loop_start_s,
         end_s: pad.loop_end_s,
+        exclusive: !state.multi_loop,
+        binding: pad.binding.expect("validated loaded binding"),
+        received_at_ns,
     };
     drop(state);
 
-    dispatch_audio_messages(audio_producer, [loop_region, play])
+    dispatch_audio_messages(audio_producer, [trigger])
 }
 
 fn dispatch_audio_messages<const N: usize>(
@@ -660,6 +738,21 @@ mod tests {
     use super::*;
     use rtrb::RingBuffer;
 
+    fn publish_test_runtime(runtime: &InputRuntime, multi_loop: bool) {
+        let bindings: Vec<_> = (0..NUM_SAMPLES)
+            .map(|id| InputRuntimePadBinding::for_test(id, runtime.ownership.clone()))
+            .collect();
+        runtime
+            .set_runtime_state(
+                multi_loop,
+                vec![true; NUM_SAMPLES],
+                vec![0.0; NUM_SAMPLES],
+                vec![None; NUM_SAMPLES],
+                bindings.iter().map(Some).collect(),
+            )
+            .unwrap();
+    }
+
     fn wait_for_input_event(runtime: &InputRuntime) -> InputRuntimeEvent {
         for _ in 0..100 {
             if let Some(event) = runtime.poll_event() {
@@ -823,7 +916,7 @@ mod tests {
     }
 
     #[test]
-    fn trigger_pad_dispatch_sends_loop_region_and_exclusive_play() {
+    fn trigger_pad_dispatch_sends_one_bound_loop_and_exclusive_play_effect() {
         let (producer, mut consumer) = RingBuffer::<ControlMessage>::new(8);
         let producer = Arc::new(Mutex::new(producer));
         let state = Arc::new(Mutex::new(RuntimeState::default()));
@@ -834,10 +927,11 @@ mod tests {
                 loaded: true,
                 loop_start_s: 1.25,
                 loop_end_s: Some(4.0),
+                binding: Some(InputRuntimePadBinding::for_test(3, Arc::default()).binding),
             };
         }
 
-        let result = dispatch_trigger_pad(3, 42, &state, &producer);
+        let result = dispatch_trigger_pad(3, 42, &state, &Arc::default(), &producer);
 
         assert_eq!(
             result,
@@ -848,20 +942,13 @@ mod tests {
         );
         assert!(matches!(
             consumer.pop().unwrap(),
-            ControlMessage::SetPadLoopRegion {
+            ControlMessage::TriggerInputPad {
                 id: 3,
                 start_s,
-                end_s: Some(4.0)
+                end_s: Some(4.0), exclusive: true, received_at_ns: 42, ..
             } if start_s == 1.25
         ));
-        assert!(matches!(
-            consumer.pop().unwrap(),
-            ControlMessage::PlaySampleExclusive {
-                id: 3,
-                volume: 1.0,
-                received_at_ns: Some(42)
-            }
-        ));
+        assert!(consumer.pop().is_err());
     }
 
     #[test]
@@ -873,37 +960,58 @@ mod tests {
             let mut guard = state.lock().unwrap();
             guard.multi_loop = true;
             guard.pads[1].loaded = true;
+            guard.pads[1].binding =
+                Some(InputRuntimePadBinding::for_test(1, Arc::default()).binding);
         }
 
-        let result = dispatch_trigger_pad(1, 42, &state, &producer);
+        let result = dispatch_trigger_pad(1, 42, &state, &Arc::default(), &producer);
 
         assert!(result.dispatched);
         assert!(matches!(
             consumer.pop().unwrap(),
-            ControlMessage::SetPadLoopRegion { id: 1, .. }
-        ));
-        assert!(matches!(
-            consumer.pop().unwrap(),
-            ControlMessage::PlaySample {
+            ControlMessage::TriggerInputPad {
                 id: 1,
-                volume: 1.0,
-                received_at_ns: Some(42)
+                exclusive: false,
+                received_at_ns: 42,
+                ..
             }
         ));
     }
 
     #[test]
     fn trigger_pad_dispatch_rejects_partial_loop_and_play_sequence() {
-        let (producer, mut consumer) = RingBuffer::<ControlMessage>::new(1);
+        let (mut producer, mut consumer) = RingBuffer::<ControlMessage>::new(1);
+        producer.push(ControlMessage::Ping()).unwrap();
         let producer = Arc::new(Mutex::new(producer));
         let state = Arc::new(Mutex::new(RuntimeState::default()));
         {
             let mut guard = state.lock().unwrap();
             guard.multi_loop = true;
             guard.pads[1].loaded = true;
+            guard.pads[1].binding =
+                Some(InputRuntimePadBinding::for_test(1, Arc::default()).binding);
         }
 
-        let result = dispatch_trigger_pad(1, 42, &state, &producer);
+        let result = dispatch_trigger_pad(1, 42, &state, &Arc::default(), &producer);
+
+        assert_eq!(
+            result,
+            DispatchResult {
+                dispatched: false,
+                direct: true
+            }
+        );
+        assert!(matches!(consumer.pop().unwrap(), ControlMessage::Ping()));
+        assert!(consumer.pop().is_err());
+    }
+
+    #[test]
+    fn trigger_pad_dispatch_rejects_unloaded_pad_without_message() {
+        let (producer, mut consumer) = RingBuffer::<ControlMessage>::new(8);
+        let producer = Arc::new(Mutex::new(producer));
+        let state = Arc::new(Mutex::new(RuntimeState::default()));
+
+        let result = dispatch_trigger_pad(1, 42, &state, &Arc::default(), &producer);
 
         assert_eq!(
             result,
@@ -916,20 +1024,74 @@ mod tests {
     }
 
     #[test]
-    fn trigger_pad_dispatch_rejects_unloaded_pad_without_message() {
+    fn refresh_changes_only_affected_pad_guard_and_rejects_foreign_binding_transactionally() {
         let (producer, mut consumer) = RingBuffer::<ControlMessage>::new(8);
-        let producer = Arc::new(Mutex::new(producer));
-        let state = Arc::new(Mutex::new(RuntimeState::default()));
-
-        let result = dispatch_trigger_pad(1, 42, &state, &producer);
-
-        assert_eq!(
-            result,
-            DispatchResult {
-                dispatched: false,
-                direct: true
-            }
+        let runtime = InputRuntime::new(Arc::new(Mutex::new(producer)), InputClock::new());
+        publish_test_runtime(&runtime, true);
+        assert!(runtime.trigger_pad(0, 42));
+        let ControlMessage::TriggerInputPad {
+            binding: original, ..
+        } = consumer.pop().unwrap()
+        else {
+            panic!("guarded trigger")
+        };
+        let bindings: Vec<_> = (0..NUM_SAMPLES)
+            .map(|id| InputRuntimePadBinding::for_test(id, runtime.ownership.clone()))
+            .collect();
+        let mut starts = vec![0.0; NUM_SAMPLES];
+        starts[1] = 0.25;
+        runtime
+            .set_runtime_state(
+                true,
+                vec![true; NUM_SAMPLES],
+                starts.clone(),
+                vec![None; NUM_SAMPLES],
+                bindings.iter().map(Some).collect(),
+            )
+            .unwrap();
+        assert!(runtime.ownership.current(0, original));
+        let previous_revision = runtime.ownership.runtime[0].load(Ordering::Acquire);
+        let foreign = InputRuntimePadBinding::for_test(0, Arc::default());
+        let mut mixed: Vec<_> = bindings.iter().map(Some).collect();
+        mixed[0] = Some(&foreign);
+        starts[0] = 0.5;
+        assert!(
+            runtime
+                .set_runtime_state(
+                    true,
+                    vec![true; NUM_SAMPLES],
+                    starts,
+                    vec![None; NUM_SAMPLES],
+                    mixed
+                )
+                .is_err()
         );
+        assert_eq!(
+            runtime.ownership.runtime[0].load(Ordering::Acquire),
+            previous_revision
+        );
+        assert!(runtime.ownership.current(0, original));
+    }
+
+    #[test]
+    fn loaded_runtime_requires_native_binding_and_same_value_authority_edit_rejects_old_snapshot() {
+        let (producer, mut consumer) = RingBuffer::<ControlMessage>::new(8);
+        let runtime = InputRuntime::new(Arc::new(Mutex::new(producer)), InputClock::new());
+        assert!(
+            runtime
+                .set_runtime_state(
+                    true,
+                    vec![true; NUM_SAMPLES],
+                    vec![0.0; NUM_SAMPLES],
+                    vec![None; NUM_SAMPLES],
+                    vec![None; NUM_SAMPLES]
+                )
+                .is_err()
+        );
+        publish_test_runtime(&runtime, true);
+        let ownership = &runtime.ownership;
+        ownership.revoke(0, ownership.next_authority(0).unwrap());
+        assert!(!runtime.trigger_pad(0, 42));
         assert!(consumer.pop().is_err());
     }
 
@@ -942,14 +1104,7 @@ mod tests {
             "midi:note:1:60".to_string(),
             "pad.trigger:0".to_string(),
         )]);
-        runtime
-            .set_runtime_state(
-                false,
-                vec![true; NUM_SAMPLES],
-                vec![0.0; NUM_SAMPLES],
-                vec![None; NUM_SAMPLES],
-            )
-            .unwrap();
+        publish_test_runtime(&runtime, false);
         runtime.set_learn_capture_active(true);
 
         assert!(runtime.inject_midi_message(&[0x90, 60, 100]));
@@ -985,21 +1140,15 @@ mod tests {
 
     #[test]
     fn queue_failure_preserves_captured_timestamp_without_partial_publication() {
-        let (producer, mut consumer) = RingBuffer::<ControlMessage>::new(1);
+        let (mut producer, mut consumer) = RingBuffer::<ControlMessage>::new(1);
+        producer.push(ControlMessage::Ping()).unwrap();
         let runtime = InputRuntime::new(Arc::new(Mutex::new(producer)), InputClock::new());
         runtime.set_enabled(true);
         runtime.replace_mappings(vec![(
             "midi:note:1:60".to_string(),
             "pad.trigger:0".to_string(),
         )]);
-        runtime
-            .set_runtime_state(
-                true,
-                vec![true; NUM_SAMPLES],
-                vec![0.0; NUM_SAMPLES],
-                vec![None; NUM_SAMPLES],
-            )
-            .unwrap();
+        publish_test_runtime(&runtime, true);
         runtime
             .input_tx
             .try_send(normalize_midi_message(&[0x90, 60, 100], 42).unwrap())
@@ -1010,6 +1159,7 @@ mod tests {
         assert_eq!(event.action_key.as_deref(), Some("pad.trigger:0"));
         assert!(event.direct);
         assert!(!event.dispatched);
+        assert!(matches!(consumer.pop().unwrap(), ControlMessage::Ping()));
         assert!(consumer.pop().is_err());
     }
 
@@ -1025,25 +1175,14 @@ mod tests {
             "midi:note:1:60".to_string(),
             "pad.trigger:0".to_string(),
         )]);
-        runtime
-            .set_runtime_state(
-                true,
-                vec![true; NUM_SAMPLES],
-                vec![0.0; NUM_SAMPLES],
-                vec![None; NUM_SAMPLES],
-            )
-            .unwrap();
+        publish_test_runtime(&runtime, true);
         assert!(runtime.inject_midi_message(&[0x90, 60, 100]));
         let event = wait_for_input_event(&runtime);
         assert!(event.received_at_ns >= before);
         assert!(event.received_at_ns <= clock.capture_ns());
         assert!(event.dispatched);
-        assert!(matches!(
-            consumer.pop().unwrap(),
-            ControlMessage::SetPadLoopRegion { .. }
-        ));
         assert!(
-            matches!(consumer.pop().unwrap(), ControlMessage::PlaySample { received_at_ns: Some(timestamp), .. }
+            matches!(consumer.pop().unwrap(), ControlMessage::TriggerInputPad { received_at_ns: timestamp, .. }
             if timestamp == event.received_at_ns)
         );
     }
@@ -1064,7 +1203,7 @@ mod tests {
         let state = Arc::new(Mutex::new(RuntimeState::default()));
         let action = parse_input_action("dsp.pad.parameter.delta:0:filter.cutoff");
 
-        let result = dispatch_action(&action, 42, &state, &producer);
+        let result = dispatch_action(&action, 42, &state, &Arc::default(), &producer);
 
         assert_eq!(
             result,

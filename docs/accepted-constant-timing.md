@@ -1,12 +1,12 @@
 # Accepted constant timing foundation
 
 G3a adds `flitzis_looper_analysis::tempo_acceptance`. This is a pure offline/control
-API. G3b2a/b now supplies a native current-pad caller, acknowledged current
-resolver and precise live SourceGrid/transport/output-clock/rate consumers through
-an explicit acceptance command; see
-[native adoption](native-constant-timing.md). Existing automatic BPM, editor,
-manual/TAP, saved projects and realtime wrapping retain their
-existing behavior. Full shared-period integration remains incomplete.
+API. G3b2a-d supplies native current-pad acceptance and acknowledgement, precise
+native/Python grid/period/loop/control consumers and source-bound MIDI runtime
+triggers; see [native adoption](native-constant-timing.md). Acceptance remains
+explicit. Ordinary automatic analysis, manual/TAP, saved legacy projects and
+physical wrapping keep their established policy. Prepared-state/history binding,
+accepted persistence and global launch orchestration remain incomplete.
 
 ## Explicit construction
 
@@ -80,10 +80,10 @@ The pure guard alone does not establish these facts.
 
 | Boundary | Required next integration |
 | --- | --- |
-| Editor, snapping, automatic loop ends | Use one accepted binary64 period/origin/revision, retaining physical endpoint rounding and manual authority. |
+| Editor, snapping, automatic loop ends | G3b2c uses one current binary64 period/origin/full revision and actual accepted extent/rate, retaining physical rounding and manual authority; caller-owned derived refresh follows adoption. |
 | Native SourceGrid | G3b2a uses the acknowledged binary64 period/origin/full revision directly; ordinary legacy timing stays compatible. |
-| Native transport reference/master, output clock and BPMLOCK | G3b2b consumes acknowledged source/output periods directly with binary64 rate/epoch ownership; Python controller integration remains. |
-| MIDI metadata | Include current source and accepted timing revision alongside exact effective endpoints. |
+| Native transport reference/master, output clock and BPMLOCK | G3b2b/c consumes acknowledged source/output periods directly with binary64 rate/epoch ownership and Python locked speed/master controls. |
+| MIDI metadata | G3b2d binds actual native source/authority and complete accepted revision to one guarded loop/launch effect, including scheduled execution and fresh failed-direct fallback. |
 | Prepared source/Key Lock state | Bind preparation to the current source and timing revision; retire stale work under the actual owner. |
 | Same-source stems | Retain one source trajectory and check content/generation before prepared publication; shape or path/mtime alone is insufficient. |
 | Persistence and legacy restore | Preserve manual/TAP and saved legacy intent through an explicit source-verified migration contract. |
@@ -93,8 +93,10 @@ content identities, current request/preparation epochs, isolated worker artifact
 and callback feedback; see [prepared publication](prepared-stem-publication.md).
 Its generic epoch does not replace this accepted revision. G3b2a connects native
 adoption and SourceGrid; G3b2b connects current native authority and native
-period/rate consumers. Remaining consumers, prepared revision binding and
-accepted persistence remain explicit G3b2 work.
+period/rate consumers; G3b2c adds Python projections and locked controls, G3b2d
+adds runtime MIDI pad triggers. Prepared revision/DSP-history binding, accepted
+persistence, controller global batch launch and explicit acceptance/refresh
+orchestration remain G3b2 work.
 G3c separately proves
 musical period versus rounded physical duration over 75/1000 cycles, fractional
 periods/rates and callback partitions. Rendered DSP/onset/device evidence is still

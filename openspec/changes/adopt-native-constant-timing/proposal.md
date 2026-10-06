@@ -22,13 +22,18 @@ roundtrips. Native transport, output clock and BPMLOCK consume the acknowledged
 period directly. SourcePlayback target/ramp/ratio and the Rubber Band pitch ABI
 use binary64, sharing one source trajectory and retaining fractional epochs.
 
+G3b2c connects Python grid/loop/editor and global controls to one current timing
+snapshot. G3b2d binds productive MIDI runtime, direct triggers and failed-direct
+fallback to actual native source ownership and complete acknowledged timing.
+Loop intent and launch travel as one guarded effect; quantized execution rechecks
+the same binding before changing audio state.
+
 ## Non-goals and realtime safety
 
 This is a bounded part of G3b2. It does not choose a musical acceptance policy or
 infer quarter labels, switch the default analyzer, silently promote manual/TAP or
-legacy numbers, or complete editor/snap/auto-loop, MIDI, prepared Key Lock/stem
-revision integration or accepted persistence.
-Those consumers remain explicit follow-up work. Musical/physical loop proof and
+legacy numbers, or complete prepared Key Lock/stem revision integration or accepted
+persistence. Those consumers remain explicit follow-up work. Musical/physical loop proof and
 audible DSP/device acceptance remain G3c. No PCM cache or Rust application-port
 planning is included.
 

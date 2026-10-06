@@ -377,7 +377,7 @@ def test_injected_mapped_midi_is_capture_only_while_learn_active(
     multi_loop = False
     audio_engine.set_input_runtime_state(
         multi_loop,
-        [True] * NUM_SAMPLES,
+        [False] * NUM_SAMPLES,
         [0.0] * NUM_SAMPLES,
         [None] * NUM_SAMPLES,
     )

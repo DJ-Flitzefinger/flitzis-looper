@@ -62,6 +62,35 @@ def current_timing_metadata(
     }
 
 
+class FakeInputRuntimePadBinding:
+    """Native-owned runtime capture substitute for controller-only tests."""
+
+    def __init__(
+        self,
+        sample_id: int = 0,
+        *,
+        accepted_timing: dict[str, object] | None = None,
+        intent: str = "legacy",
+        authority_revision: int = 1,
+    ) -> None:
+        source = accepted_timing or {}
+        self._metadata: dict[str, object] = {
+            "pad_id": sample_id,
+            "source_id": source.get("source_id", f"loaded-{sample_id}-1"),
+            "source_generation": source.get("source_generation", 1),
+            "source_sha256": source.get("source_sha256", "a" * 64),
+            "sample_rate_hz": source.get("sample_rate_hz", 44_100),
+            "frame_count": source.get("frame_count", 44_100 * 600),
+            "channels": 1,
+            "intent": intent,
+            "authority_revision": authority_revision,
+            "accepted_timing": accepted_timing,
+        }
+
+    def metadata(self) -> dict[str, object]:
+        return dict(self._metadata)
+
+
 class FakeStemGenerationBackend:
     def __init__(self) -> None:
         self.requests: list[StemGenerationRequest] = []
@@ -135,6 +164,17 @@ def audio_engine_mock() -> Iterator[Mock]:
         audio_engine.return_value.poll_input_events.return_value = None
         audio_engine.return_value.current_constant_timing.return_value = None
         audio_engine.return_value.pad_timing_intent.return_value = "legacy"
+
+        def runtime_binding(sample_id: int) -> FakeInputRuntimePadBinding:
+            metadata = audio_engine.return_value.current_constant_timing.return_value
+            accepted = metadata if isinstance(metadata, dict) else None
+            return FakeInputRuntimePadBinding(
+                sample_id,
+                accepted_timing=accepted,
+                intent=audio_engine.return_value.pad_timing_intent.return_value,
+            )
+
+        audio_engine.return_value.current_input_runtime_pad_binding.side_effect = runtime_binding
         audio_engine.return_value.capture_prepared_source.return_value = FakePreparedSourceTicket()
         if hasattr(audio_engine.return_value, "loaded_sample_shape"):
             audio_engine.return_value.loaded_sample_shape.return_value = (44_100, 1, 128)

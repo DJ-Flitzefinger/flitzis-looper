@@ -5,11 +5,20 @@
 //! eviction of previously accepted events.
 
 use crate::audio_engine::constants::MAX_SCHEDULED_EVENTS;
+use crate::audio_engine::input_runtime_binding::InputPadBinding;
 
 pub(crate) type TransportScheduler = FixedCapacityScheduler<MAX_SCHEDULED_EVENTS>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum ScheduledCommand {
+    TriggerInputPad {
+        id: usize,
+        start_s: f64,
+        end_s: Option<f64>,
+        exclusive: bool,
+        binding: InputPadBinding,
+        received_at_ns: u64,
+    },
     PlaySample {
         id: usize,
         volume: f32,
@@ -47,7 +56,9 @@ pub(crate) enum ScheduleError {
 }
 
 pub(crate) struct FixedCapacityScheduler<const CAPACITY: usize> {
-    events: [Option<ScheduledEvent>; CAPACITY],
+    // Allocate bounded storage once on the control/startup thread. Larger guarded
+    // events must not put several copies of this array on Python's debug stack.
+    events: Box<[Option<ScheduledEvent>]>,
     len: usize,
     next_sequence: u64,
 }
@@ -55,7 +66,7 @@ pub(crate) struct FixedCapacityScheduler<const CAPACITY: usize> {
 impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
     pub(crate) fn new() -> Self {
         Self {
-            events: [None; CAPACITY],
+            events: vec![None; CAPACITY].into_boxed_slice(),
             len: 0,
             next_sequence: 0,
         }
@@ -210,6 +221,33 @@ mod tests {
 
         assert_eq!(scheduler.capacity(), MAX_SCHEDULED_EVENTS);
         assert!(scheduler.is_empty());
+    }
+
+    #[test]
+    fn guarded_production_scheduler_initializes_on_normal_windows_python_stack() {
+        // Native debug startup previously copied the larger fixed event array
+        // several times on Python's 1 MiB thread stack. Storage belongs off RT.
+        assert!(std::mem::size_of::<TransportScheduler>() < 128);
+        std::thread::Builder::new()
+            .stack_size(1024 * 1024)
+            .spawn(|| {
+                let mut scheduler = TransportScheduler::new();
+                let storage = scheduler.events.as_ptr();
+                for frame in 0..MAX_SCHEDULED_EVENTS {
+                    scheduler.schedule(frame as u64, play(0)).unwrap();
+                }
+                assert_eq!(scheduler.schedule(0, play(0)), Err(ScheduleError::Full));
+                for frame in 0..MAX_SCHEDULED_EVENTS {
+                    assert_eq!(
+                        scheduler.pop_due_through(0, u64::MAX).unwrap().target_frame,
+                        frame as u64
+                    );
+                }
+                assert_eq!(scheduler.events.as_ptr(), storage);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[test]

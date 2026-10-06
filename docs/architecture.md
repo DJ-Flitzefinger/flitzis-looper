@@ -455,7 +455,8 @@ complete revision and provenance; Automatic without acknowledgement stays
 unavailable. Passive restore cannot replay Legacy timing over it. Accepted master
 controls publish period/speed directly; physical marker rounding uses loaded rate.
 Explicit current adoption still requires caller-owned derived loop/master refresh
-after acknowledgement. Prepared stem/Key Lock/MIDI revision binding, accepted
+after acknowledgement. G3b2d binds MIDI runtime and scheduled triggers to current
+source/full timing authority. Prepared stem/Key Lock revision binding, accepted
 persistence and immutable copy-first source proof remain separate gates.
 
 Active full-mix/stem mode and enabled-mask changes use bounded Rust-owned
@@ -638,14 +639,22 @@ only small discrete audio-safe commands directly through the command ring.
 Python publishes Learn/capture state to Rust so Learn takes precedence over
 mapped playback: while Learn is active, Rust reports the MIDI input as capture
 data and does not resolve mappings or enqueue direct playback commands.
-Python also publishes Rust input-runtime pad state at startup and when the
-loaded-pad, effective loop-region, BPM, grid-offset, or Multi Loop signature
-changes; unchanged UI frames do not republish the same snapshot.
+Python publishes Rust input-runtime pad state at startup and when current native
+source/authority, full accepted timing revision, effective loop intent or Multi
+Loop changes. It carries one current timing snapshot into endpoint calculation
+and checks an opaque native source/authority binding before publication; unchanged
+frames do not republish the same state. Automatic without acknowledgement cannot
+use saved analysis as runtime authority.
 
 Direct Rust dispatch is all-or-nothing. If the bounded command transaction
 cannot be fully enqueued or current Rust input-runtime state cannot accept it,
 Rust emits the mapped action with `direct=True` and `dispatched=False`; Python
-then applies normal controller fallback semantics outside the MIDI dispatcher.
+then resolves fresh runtime and retries pad triggers through the same guarded
+native API outside the MIDI dispatcher. Loop intent and launch form one fixed
+effect, rechecked at actual callback/scheduled execution before loop mutation or
+exclusive stop/start. Source/authority edits and changed effective runtime intent
+retire earlier triggers; unavailable Automatic state never replays an old loop.
+See [current MIDI binding](native-constant-timing.md).
 
 Controller-owned actions such as Tap BPM, stem masks, dB Gain/Trim, EQ, master
 volume, and speed are reported back to Python as small events. Future high-rate

@@ -1,4 +1,4 @@
-# G3b2a/b/c native adoption, current authority and precise consumers
+# G3b2a/b/c/d native adoption, current authority and precise consumers
 
 ## Native authority
 
@@ -114,6 +114,32 @@ acknowledged replacement alone does not automatically republish Python-owned
 physical endpoints/master intent; this remains an integration boundary for the
 later productive acceptance workflow, not sustained-SYNC evidence.
 
+## MIDI current source and scheduled authority
+
+An opaque InputRuntimePadBinding captures actual native source identity,
+generation/digest/rate/extent/channels and declared authority outside realtime.
+Accepted metadata is resolved from the same current record as
+current_constant_timing. Python checks one frozen CurrentPadTiming against the
+binding and uses that snapshot for loop endpoints and signature comparison.
+Equal numerical values cannot hide full revision or authority changes;
+Automatic without a matching acknowledgement is unavailable.
+
+Runtime replacement validates current native ownership before mutation. Direct
+MIDI loop/launch uses one guarded fixed effect, retained through quantized
+scheduling and checked before any loop mutation or exclusive playback. Native
+source/authority revisions retire old bindings immediately; effective runtime
+loop refresh retires its old queued intent. Pending analysis/acceptance requests
+do not revoke the previous effective accepted record. Fixed atomics and scalar
+source/projection comparisons avoid callback locks, PCM scans and evidence or
+source owners. Failed direct pad-trigger fallback refreshes current runtime and
+uses the same guarded admission with the captured timestamp; it never emits an
+unguarded partial loop/play sequence. Admission feedback does not claim later
+scheduled acceptance; subsequently retired effects are discarded at execution.
+Controller-owned global START/STOP retains ordinary Python batch launch semantics,
+including its MIDI mapping. It does not consume RuntimePadState; accepted/source-
+bound global batch launch and caller-owned refresh/adoption orchestration remain
+follow-up consumers. G3b2d covers runtime pad triggers and their guarded fallback.
+
 ## Limits and remaining G3b2 consumers
 
 This slice activates a precise native grid only through explicit control API
@@ -122,7 +148,7 @@ their existing behavior. Source content is an observed loader digest; the
 complete mono digest and Arc/timebase checks verify the actually loaded PCM, not
 an immutable historical original-to-decoder relationship.
 
-MIDI signatures, prepared source/stem identities, productive Key Lock history and
+Prepared source/stem identities, productive Key Lock history and
 source-verified persistence still need the full accepted revision. The existing
 Key Lock warmed-state pool is source-neutral; proof-only source preparation is
 not productive integration. G3c retains 75/1000-cycle, fractional wrap,

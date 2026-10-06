@@ -192,3 +192,70 @@ intent and previously effective accepted timing.
 - **WHEN** its combined speed/master-period parameter cannot be admitted
 - **THEN** neither parameter nor saved speed changes
 - **AND** successful admission records both values as one bounded callback effect
+
+### Requirement: MIDI Runtime Binds Current Source And Complete Timing Authority
+The system SHALL bind productive MIDI pad runtime publication and direct triggers
+to actual native source identity, generation, content digest, loaded rate and full
+extent, and to the complete current acknowledged accepted revision, binary64
+period and signed origin when accepted timing is available. Endpoint or BPM
+equality SHALL NOT substitute for this binding. Manual, Tap, Legacy and unavailable
+Automatic states SHALL retain their declared authority without promoting numbers
+or historical tickets to accepted evidence.
+
+#### Scenario: An equal-valued accepted record replaces the current record
+- **GIVEN** two accepted records with equal periods, origins and physical endpoints
+- **WHEN** the callback acknowledges the replacement's different complete revision
+- **THEN** MIDI runtime publication observes the new current revision
+- **AND** a trigger from the earlier runtime cannot apply its old derived loop intent
+
+#### Scenario: A source is replaced at the same path and shape
+- **GIVEN** a MIDI runtime snapshot for a loaded source
+- **WHEN** the current source generation or content changes with equal path, rate and extent
+- **THEN** the old snapshot cannot authorize a trigger for the replacement
+- **AND** a fresh source-bound runtime publication is required
+
+#### Scenario: Automatic timing is unavailable or explicitly retired
+- **GIVEN** Automatic timing without current acknowledgement or a successful Manual, Tap or Legacy edit
+- **WHEN** MIDI runtime refresh or a historical runtime trigger occurs
+- **THEN** historical accepted timing cannot restore retired authority or its derived loop region
+- **AND** fresh Manual, Tap and Legacy states remain supported under their own authority
+
+### Requirement: MIDI Trigger Adoption Is One Bounded Source-Matching Effect
+The system SHALL admit direct MIDI loop intent and playback as one complete bounded
+effect and recheck source and timing authority when the audio callback adopts it.
+Stale adoption SHALL apply neither loop intent nor playback. Queue or validation
+failure SHALL preserve existing runtime and audio state. The callback SHALL NOT
+scan or hash PCM, acquire locks, allocate evidence, access Python or perform I/O.
+Failed direct MIDI fallback SHALL resolve fresh current authority and use the same
+guarded all-or-nothing trigger semantics rather than replaying the old snapshot.
+
+#### Scenario: Authority changes after direct MIDI enqueue
+- **GIVEN** a source-bound MIDI trigger admitted before a successful timing edit or source replacement
+- **WHEN** the callback reaches that trigger after its authority has been retired
+- **THEN** neither its loop region nor its playback effect is applied
+- **AND** it cannot revive accepted timing from the old runtime snapshot
+
+#### Scenario: Quantized execution outlives the runtime snapshot
+- **GIVEN** a bound exclusive MIDI trigger scheduled for a later output frame
+- **WHEN** its source, accepted revision, authority or effective runtime loop intent changes before that frame
+- **THEN** scheduled execution rechecks the binding before any loop or playback mutation
+- **AND** stale execution neither rewrites the current loop nor stops unrelated voices
+
+#### Scenario: A replacement remains pending or is rejected
+- **GIVEN** current acknowledged accepted timing and a pending replacement
+- **WHEN** MIDI runtime resolves current timing before replacement adoption or after rejection
+- **THEN** the previous effective accepted revision remains authoritative
+- **AND** enqueue alone never publishes the replacement as current MIDI timing
+
+#### Scenario: Runtime refresh or trigger admission fails
+- **GIVEN** a current runtime and previously effective loop/playback state
+- **WHEN** a stale or invalid refresh is rejected or the trigger ring is full
+- **THEN** no partial loop/play transaction is admitted
+- **AND** the previous runtime and audio state are preserved
+
+#### Scenario: Python receives a failed direct MIDI event
+- **GIVEN** a direct MIDI trigger could not be admitted
+- **WHEN** Python handles its fallback after a source or authority change
+- **THEN** fallback resolves fresh current source and timing authority
+- **AND** unavailable Automatic timing does not overwrite the native loop
+- **AND** fallback admits no partial unguarded loop/play sequence

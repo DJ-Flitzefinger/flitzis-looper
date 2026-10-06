@@ -19,6 +19,9 @@ mod flitzis_looper_audio {
     use super::audio_engine::ConstantTimingTicket;
 
     #[pymodule_export]
+    use super::audio_engine::InputRuntimePadBinding;
+
+    #[pymodule_export]
     use super::audio_engine::ScalarSourceGrid;
 
     #[pymodule_export]

@@ -32,9 +32,21 @@
 - [x] Cover current/replacement/unavailable/manual/failure paths, full checks and
   independent staged review (evidence recorded locally at publication).
 
+## G3b2d: Current source and complete timing authority in MIDI
+
+- [x] Bind actual native MIDI runtime publication to current source identity,
+  generation/digest/rate/extent and full accepted revision/period/signed origin.
+- [x] Make loop/launch one guarded effect, including scheduled execution and
+  fresh source-bound failed-direct fallback; preserve state on failed admission.
+- [x] Cover source/revision replacement, authority edits, unavailable timing,
+  pending/rejected replacement, queue/race/refresh and callback adoption; complete
+  full validation and independent staged review.
+
 ## Explicit remaining boundaries
 
-- [ ] G3b2 remaining: MIDI/prepared source/Key Lock/stem revision binding,
+- [ ] G3b2 remaining: prepared source/Key Lock/stem revision binding,
   source-verified accepted persistence with manual/TAP/legacy policy.
+- [ ] Source/accepted-bound controller global batch launch (including MIDI
+  START/STOP) and explicit adoption/derived refresh orchestration remain separate.
 - [ ] G3c separate: musical versus physical loop periods over 75/1000 cycles,
   fractional rate/wrap/partition proof and separate rendered/onset/device gates.

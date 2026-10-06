@@ -52,7 +52,7 @@ pub fn setup_logger() {
         .unwrap_or(()); // Ignore initialization errors
 }
 
-trait AudioMessageSink {
+pub(super) trait AudioMessageSink {
     fn push_audio_message(&mut self, message: AudioMessage);
 }
 
@@ -281,7 +281,7 @@ fn drain_scheduler_due_at_callback_start<
     }
 }
 
-fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetirement>(
+pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetirement>(
     mixer: &mut RtMixer,
     _transport: &mut TransportTimeline,
     output_frame: u64,
@@ -290,6 +290,32 @@ fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetirement>(
     retirement: &mut R,
 ) {
     match command {
+        ScheduledCommand::TriggerInputPad {
+            id,
+            start_s,
+            end_s,
+            exclusive,
+            binding,
+            received_at_ns: _,
+        } => {
+            if !mixer.input_binding_current(id, binding)
+                || !mixer.can_play_sample(id, 1.0)
+                || (!exclusive
+                    && !mixer
+                        .voices
+                        .iter()
+                        .any(|voice| !voice.active || voice.sample_id == id))
+            {
+                return;
+            }
+            mixer.set_pad_loop_region(id, start_s, end_s);
+            if exclusive {
+                stop_all_samples(mixer, audio_messages, retirement);
+            }
+            if mixer.play_sample_at_output_frame_rt(id, 1.0, output_frame, retirement) {
+                audio_messages.push_audio_message(AudioMessage::SampleStarted { id });
+            }
+        }
         ScheduledCommand::PlaySample {
             id,
             volume,
@@ -583,7 +609,11 @@ fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
         ControlMessage::PublishConstantTiming { .. } => 1,
         ControlMessage::StopSample { .. } => MAX_VOICES,
         ControlMessage::UnloadSample { .. } => MAX_VOICES + 2,
-        ControlMessage::StopAll() | ControlMessage::PlaySampleExclusive { .. } => MAX_VOICES,
+        ControlMessage::StopAll()
+        | ControlMessage::PlaySampleExclusive { .. }
+        | ControlMessage::TriggerInputPad {
+            exclusive: true, ..
+        } => MAX_VOICES,
         _ => 0,
     }
 }
@@ -876,7 +906,11 @@ fn drain_parameter_messages(
 
 // Keep ordered command effects explicit at the realtime boundary.
 #[allow(clippy::too_many_arguments)]
-fn process_control_message<const CAPACITY: usize, S: AudioMessageSink, R: AudioBufferRetirement>(
+pub(super) fn process_control_message<
+    const CAPACITY: usize,
+    S: AudioMessageSink,
+    R: AudioBufferRetirement,
+>(
     message: ControlMessage,
     scheduler: &mut FixedCapacityScheduler<CAPACITY>,
     callback_start_frame: u64,
@@ -933,6 +967,48 @@ fn process_control_message<const CAPACITY: usize, S: AudioMessageSink, R: AudioB
                 retirement,
                 received_at_ns,
             );
+        }
+        ControlMessage::TriggerInputPad {
+            id,
+            start_s,
+            end_s,
+            exclusive,
+            binding,
+            received_at_ns,
+        } => {
+            if !mixer.input_binding_current(id, binding) {
+                return;
+            }
+            let command = ScheduledCommand::TriggerInputPad {
+                id,
+                start_s,
+                end_s,
+                exclusive,
+                binding,
+                received_at_ns,
+            };
+            if let Some(target) = quantized_target_frame(transport, *trigger_quantization) {
+                if scheduler.schedule(target, command).is_ok() {
+                    drain_scheduler_due_at_callback_start(
+                        scheduler,
+                        callback_start_frame,
+                        mixer,
+                        transport,
+                        audio_messages,
+                        retirement,
+                    );
+                }
+            } else {
+                schedule_immediate_command(
+                    scheduler,
+                    callback_start_frame,
+                    command,
+                    mixer,
+                    transport,
+                    audio_messages,
+                    retirement,
+                );
+            }
         }
         ControlMessage::PlaySampleExclusive {
             id,
@@ -1036,6 +1112,7 @@ fn process_control_message<const CAPACITY: usize, S: AudioMessageSink, R: AudioB
 pub fn create_audio_stream(
     input_clock: InputClock,
     current_timing_acknowledgements: Arc<CurrentTimingAcknowledgements>,
+    input_runtime_ownership: Arc<super::input_runtime_binding::InputRuntimeOwnership>,
 ) -> Result<AudioStreamHandle, Box<dyn std::error::Error>> {
     setup_logger();
 
@@ -1066,6 +1143,7 @@ pub fn create_audio_stream(
 
     let mut mixer = RtMixer::try_new(channels as usize, sample_rate_hz as f32)?;
     mixer.set_current_timing_acknowledgements(current_timing_acknowledgements);
+    mixer.set_input_runtime_ownership(input_runtime_ownership);
     let mut transport = TransportTimeline::new(sample_rate_hz);
     let mut scheduler = TransportScheduler::new();
     let mut trigger_quantization = TriggerQuantization::Immediate;
@@ -1905,7 +1983,7 @@ mod tests {
             return; // Skip test if no audio device available
         }
 
-        let result = create_audio_stream(InputClock::new(), Arc::default());
+        let result = create_audio_stream(InputClock::new(), Arc::default(), Arc::default());
         // We expect this to potentially fail in test environments,
         // but we want to ensure the function exists and has the right signature
         match result {

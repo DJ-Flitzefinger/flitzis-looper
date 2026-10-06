@@ -965,7 +965,9 @@ def test_long_source_markers_publish_exact_frames_to_audio_and_direct_input(
     assert controller.project.pad_loop_start_s[sample_id] == start_s
     assert controller.project.pad_loop_end_s[sample_id] == end_s
     audio_engine_mock.set_pad_loop_region.assert_called_with(sample_id, start_s, end_s)
-    _, loaded, loop_starts, loop_ends = audio_engine_mock.set_input_runtime_state.call_args.args
+    _, loaded, loop_starts, loop_ends, _bindings = (
+        audio_engine_mock.set_input_runtime_state.call_args.args
+    )
     assert loaded[sample_id] is True
     assert loop_starts[sample_id] == start_s
     assert loop_ends[sample_id] == end_s

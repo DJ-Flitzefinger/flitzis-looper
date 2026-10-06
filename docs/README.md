@@ -35,7 +35,7 @@ For focused areas:
 | `ui-toolkit.md` | Project-specific Dear ImGui design and state-flow rules. |
 | `stem-generation-setup.md` | External requirements for offline Demucs stem generation. |
 | `prepared-stem-publication.md` | G3b1 content identity, native preparation tickets, artifact integrity and callback adoption feedback. |
-| `native-constant-timing.md` | G3b2a/b actual-pad accepted timing, current acknowledgement authority, binary64 native period/rate consumers and remaining limits. |
+| `native-constant-timing.md` | G3b2a-d actual-pad accepted timing, native/Python period consumers, source-bound MIDI runtime/scheduling and remaining limits. |
 | `key-lock-backend.md` | Current Rubber Band Key Lock backend, timing semantics, realtime constraints, and native dependency requirements. |
 | `offline-analysis.md` | Diagnostic PCM/worker API, resource ownership and limits; default cutover remains gated. |
 | `beat-this-setup.md` | Explicit optional Windows CPU worker installation, locked environment and accepted model provenance. |
