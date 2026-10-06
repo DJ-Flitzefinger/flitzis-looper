@@ -11,6 +11,8 @@ mod detection_function;
 mod downbeat;
 pub mod key_detection;
 mod phase_vocoder;
+pub mod tempo_evidence;
+pub mod tempo_refinement;
 pub mod tempo_summary;
 mod tempotrack;
 

@@ -55,6 +55,8 @@ rust/
         `-- src/
             |-- lib.rs
             |-- bpm_pipeline.rs    # shared QM analysis, lossless capture and legacy projection
+            |-- tempo_evidence/    # complete PCM content binding and lossless backend adapters
+            |-- tempo_refinement/  # isolated repeated PCM features and explicit count correspondence
             |-- tempo_summary/     # offline count hypotheses and robust period diagnostics
             |-- detection_function.rs
             |-- tempotrack.rs
@@ -97,6 +99,17 @@ resampling, key inference and JSON event publication run outside the callback;
 the existing automatic/manual analyzer remains selected. See
 [Offline analysis boundary](../docs/offline-analysis.md) for limits, terminal
 component semantics and remaining Beat This setup/inference work.
+
+The analysis crate's `tempo_evidence`, `tempo_refinement` and `tempo_summary`
+APIs assess complete source-bound evidence offline. They have no automatic
+load, manual Analyze, callback or runtime-publication caller. Their narrow
+repeated-attack policy and independent-count assertion boundaries are described
+in [constant-tempo candidates](../docs/constant-tempo-summary.md).
+`analysis_pcm/tempo_gate.rs` is a test-only, explicitly ignored private-reference
+gate. It uses the existing native complete-input resampler and independently
+verified retained native PCM/Beat This evidence, with input/output paths supplied
+through `G2B2_GATE_INPUT` and `G2B2_GATE_OUTPUT`. It starts no device or inference
+and runs only when explicitly selected with `--ignored`.
 
 Run these from the repository root:
 

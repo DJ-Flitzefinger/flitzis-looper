@@ -67,9 +67,14 @@ Manual sample-domain anchors and explicit count correction remain available and 
 G2a implements the standalone [constant-tempo evidence core](constant-tempo-summary.md)
 with explicit quarter-note hypotheses and distant-fit diagnostics. G2b1 retains
 complete QM evidence before binary32 projection with its actual analyzer input
-timebase and requested configuration. G2b2 identity-bound adapters and PCM
-refinement remain pending, followed by G3 accepted timing publication. The
-core's engineering policy does not replace the frozen B2 acceptance criteria.
+timebase and requested configuration. G2b2 adds complete content-bound adapters
+and narrowly supported isolated comparable-attack refinement. Generated counts
+remain unverified; explicit independent source/PCM-bound feature counts alone
+assert musical units. Neither periodic PCM nor a small residual proves those
+units. Raw evidence and complete-feature summaries stay separate; the current
+loader's original-byte relationship is still a caller assertion. G3 accepted
+timing publication remains separate. The core's engineering policy does not
+replace the frozen B2 acceptance criteria.
 
 The 2026-10-06 [grid timing investigation](grid-timing-diagnosis.md) establishes
 an endpoint-sensitive BPM derivation and its hidden scalar-grid slope on an

@@ -24,6 +24,16 @@ hop/input rate/frame count and requested configuration. Binary64 seconds are
 available on demand. The default entry point projects the same tracking result
 without rerunning analysis. This capture does not establish loaded-source hashes,
 independent beat counts or accepted tempo; see [constant-tempo candidates](constant-tempo-summary.md).
+The separate G2b2 `tempo_evidence` API hashes complete immutable loaded mono PCM
+and retains full QM or Beat This evidence, original-source provenance, expected
+request generation and explicit analyzer transforms. `tempo_refinement` assesses
+only isolated bit-identical attacks and preserves their conditional discrete
+feature uncertainty. Generated count proposals stay unverified; matching
+independent source/PCM-bound count evidence alone can assert quarter-note units.
+These offline APIs have no production loading/service caller, add no runtime
+publication and do not make the current decode-before-copy loader a verified
+original-byte snapshot. Source-byte/cache ownership and G3 timing adoption are
+separate stages.
 The shared entry point rejects nonfinite/nonpositive timebase parameters before
 FFT allocation and bounds its ODF window, sample hop and decimated downbeat
 window to at most `2^20` samples. The normal defaults remain well within this

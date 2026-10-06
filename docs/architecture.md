@@ -257,14 +257,23 @@ The separate G2a `analysis::tempo_summary` API evaluates complete binary64 raw
 positions against explicit quarter-note count hypotheses outside realtime paths.
 It preserves source/PCM/provenance identity and origin, fits robust constant-period
 candidates with distant-region checks, and reports ambiguity, exclusions and
-conditional uncertainty. It has no analyzer, Python or runtime publication call
+conditional uncertainty. It has no runtime publication call
 site. G2b1 adds `analyze_bpm_raw`: the same QM pipeline retains complete binary64
 detector frames, downbeat indices, actual input hop/rate/frame count and requested
 configuration before legacy binary32 projection. Normal `analyze_bpm` still uses
 its existing BPM/grid arithmetic. QM input metadata describes the resampled
 analyzer input, not loaded-source/PCM hash identity or verified musical counts.
-Source-bound backend adapters, PCM refinement and accepted timing adoption remain
-later stages; see [constant-tempo candidates](constant-tempo-summary.md).
+G2b2 adds offline `tempo_evidence` adapters: they hash complete immutable loaded
+mono PCM, retain independent original-source provenance and request generation,
+and preserve whole QM or Beat This evidence beside a summary. QM analyzer input
+has its own actual content hash and transform/timebase. The original-byte
+relationship remains a caller assertion; the existing decode-before-copy loader
+is not repaired or adopted by this API. `tempo_refinement` supports only isolated
+bit-identical repeated attacks under a versioned full-source feature policy.
+Generated counts stay unverified; explicit independent source/PCM-bound feature
+counts are the sole verified path. Raw and complete-feature summaries remain
+separate, with uncertainty, displacement and source zero retained. G3 accepted
+timing adoption remains separate; see [constant-tempo candidates](constant-tempo-summary.md).
 
 The separate B1a/B1b diagnostic boundary exposes `begin_offline_analysis` and
 `OfflineAnalysisService`; it does not change that default routing or adopt new

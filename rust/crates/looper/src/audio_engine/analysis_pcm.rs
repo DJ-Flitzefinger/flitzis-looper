@@ -382,6 +382,9 @@ pub(crate) fn resample_mono_cancellable(
 }
 
 #[cfg(test)]
+mod tempo_gate;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::cell::Cell;

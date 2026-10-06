@@ -14,12 +14,13 @@
 - [x] G2b1: expose complete lossless QM capture before binary32 conversion, preserving
   exact detector frames, downbeat indices, actual input timebase and configuration;
   verify unchanged legacy output and run full validation.
-- [ ] G2b2: bind lossless QM capture and existing complete Beat This binary64 results
+- [x] G2b2: bind lossless QM capture and existing complete Beat This binary64 results
   to established source/PCM/backend identities and raw revisions; add supported
   count proposals without inventing independent quarter-note verification.
-- [ ] Implement conservative comparable-attack refinement, explicit count evidence,
+- [x] Implement conservative comparable-attack refinement, explicit count evidence,
   displacement/provenance and uncertainty; ambiguous signals remain unsupported.
-- [ ] Prove the actual exact-WAV <=1 loaded-frame slope gate over measured 0..599.5 s,
+- [x] Prove the actual exact-WAV <=1 loaded-frame slope gate over measured 0..599.5 s,
   all 1200 pulses, and report 600-s extrapolation separately; test true fractional and
   variable tempo independently without tuning frozen B2 limits.
-- [ ] Validate the complete G2 result and hand off source-bound accepted timing to G3.
+- [x] Validate the complete offline G2 result and hand off source-bound candidate
+  evidence to the separate G3 accepted-timing adoption stage.

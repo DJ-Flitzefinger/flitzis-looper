@@ -33,6 +33,34 @@ versioned fit/region policy in its diagnostic result.
 - **THEN** the original event remains in raw evidence with its exclusion recorded
 - **AND** source identity and the original grid origin remain unchanged
 
+### Requirement: Backend Adapters Bind Complete Evidence To Loaded PCM
+The system SHALL bind complete lossless backend evidence to content-hashed complete
+immutable loaded PCM, independently established original-source identity and provenance,
+and retained request/source-generation identity. It SHALL distinguish loaded-source
+coordinates from analyzer input coordinates and preserve the complete backend arrays,
+configuration, timebase, preprocessing transform and raw revision outside the summary.
+It SHALL keep consistency with the supplied retained request distinct from current
+engine-pad validity, which remains a separate adoption-stage check.
+
+#### Scenario: QM consumes resampled analyzer input
+- **GIVEN** loaded PCM at 48 kHz and complete QM evidence from 44.1-kHz input
+- **WHEN** the offline adapter binds the evidence to its source
+- **THEN** loaded PCM content and actual analyzer input content have separate digests and dimensions
+- **AND** all original detector frames, downbeat indices, requested configuration and input transform remain available
+- **AND** analyzer dimensions do not stand in for loaded-source identity
+
+#### Scenario: Beat This evidence has an unexpected request identity
+- **GIVEN** complete binary64 beats, downbeats and both logit arrays from one request
+- **WHEN** the adapter is supplied a different expected source generation or request
+- **THEN** it rejects the binding without accepting partial evidence
+- **AND** a valid binding retains all four arrays and full model/configuration identity
+
+#### Scenario: Original source identity is a caller assertion
+- **GIVEN** a complete immutable loaded PCM snapshot and asserted original-source digest with provenance
+- **WHEN** the offline adapter establishes its content binding
+- **THEN** it hashes the actual complete loaded PCM rather than a path or generation token
+- **AND** shape validation does not claim that the existing decode-before-copy loader proves the asserted original-byte relationship
+
 ### Requirement: Quarter Note Ambiguity Prevents Supported Constant Timing
 The system SHALL require explicit quarter-note count interpretation and distinguish
 unverified, ambiguous, unsupported and numerically supported candidates. It SHALL
@@ -50,6 +78,17 @@ NOT infer verified beat units from a small residual or proximity to an integer B
 - **WHEN** the multiple-position fit assesses the remaining events
 - **THEN** the gap does not silently shorten the musical count
 - **AND** the complete supplied count mapping remains available for review
+
+#### Scenario: Generated count proposals have no independent quarter-note units
+- **GIVEN** a complete detector sequence or repeated comparable PCM features
+- **WHEN** ordinal, half-tempo or double-tempo count proposals are generated
+- **THEN** every generated proposal remains unverified
+- **AND** periodicity, a good fit and closeness to an integer BPM cannot upgrade it to verified
+
+#### Scenario: Independent PCM counts have a different source, timebase or extent
+- **GIVEN** an asserted independent quarter-note evidence record
+- **WHEN** its source/PCM identity, loaded rate/frame count, feature policy, complete feature-frame sequence or explicit count extent does not match
+- **THEN** the refinement rejects the record instead of reconstructing counts from the fitted tempo
 
 ### Requirement: Robust Period Fits Require Distant Support And Honest Uncertainty
 The system SHALL evaluate multiple positions and distant regions with bounded work,
@@ -80,10 +119,24 @@ and supported quarter-note counts, retaining original/refined coordinates and me
 provenance. Unsupported signals SHALL remain uncertain. Offline assessment SHALL NOT
 replace manual/TAP intent or publish live timing before the separate adoption stage.
 
+#### Scenario: PCM contains a source-zero attack omitted by the detector
+- **GIVEN** a complete source scan finds an attack at frame zero absent from raw detector evidence
+- **WHEN** isolated comparable-attack refinement is evaluated
+- **THEN** immutable raw arrays and every raw-index association remain intact
+- **AND** the complete feature sequence retains the unmatched source-zero attack separately
+- **AND** original/refined positions, displacement, boundary evidence and policy uncertainty remain reviewable
+
+#### Scenario: Nearby or incomparable attacks cannot establish a unique feature
+- **GIVEN** collisions, unequal attack shapes or incomplete isolation evidence
+- **WHEN** the bounded refinement checks comparability and raw-to-feature associations
+- **THEN** the signal remains unsupported without selecting a falsely exact period
+- **AND** the conditional discrete-feature positioning bound is not presented as universal musical-onset accuracy
+
 #### Scenario: Exact reference validates the complete refinement stage
 - **GIVEN** the 48-kHz exact reference with 1200 verified pulses over 0..599.5 seconds
 - **WHEN** G2 refinement is evaluated against all pulse positions
 - **THEN** the supported constant period has at most one loaded-frame slope error over
   that measured span
 - **AND** the 600-second extrapolation is reported separately
+- **AND** measured fixture slope error remains distinct from the declared conditional period sensitivity
 - **AND** this numerical result does not certify musical-model or audible-SYNC acceptance
