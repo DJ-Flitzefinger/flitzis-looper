@@ -74,8 +74,9 @@ assert musical units. Neither periodic PCM nor a small residual proves those
 units. Raw evidence and complete-feature summaries stay separate; the current
 loader's original-byte relationship is still a caller assertion. G3a adds an
 [immutable accepted revision and control-only adoption guard](accepted-constant-timing.md)
-without a production caller. G3b consumer publication and G3c physical/musical
-loop proof remain separate. The core's engineering policy does not
+which G3b2a now connects to actual native pad publication and precise SourceGrid
+through [explicit acceptance](native-constant-timing.md). Remaining G3b consumers
+and G3c physical/musical loop proof stay separate. The core's engineering policy does not
 replace the frozen B2 acceptance criteria.
 
 The 2026-10-06 [grid timing investigation](grid-timing-diagnosis.md) establishes

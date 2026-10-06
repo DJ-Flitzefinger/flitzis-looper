@@ -576,12 +576,17 @@ fn publish_pad_telemetry<S: AudioMessageSink>(
 fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
     match message {
         ControlMessage::LoadSample { .. } | ControlMessage::PublishPreparedStems { .. } => 2,
+        ControlMessage::PublishConstantTiming { .. } => 1,
         ControlMessage::StopSample { .. } => MAX_VOICES,
         ControlMessage::UnloadSample { .. } => MAX_VOICES + 2,
         ControlMessage::StopAll() | ControlMessage::PlaySampleExclusive { .. } => MAX_VOICES,
         _ => 0,
     }
 }
+
+#[cfg(test)]
+#[path = "constant_timing_callback_tests.rs"]
+mod constant_timing_callback_tests;
 
 // Keep queue, scheduler, transport, mixer, telemetry, and retirement state explicit in the callback.
 #[allow(clippy::too_many_arguments)]
@@ -639,6 +644,7 @@ struct ParameterDrainResult {
 struct PendingPadBpm {
     id: usize,
     bpm: Option<f32>,
+    through_epoch: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -673,7 +679,11 @@ impl Default for PendingControlParameters {
             volume: None,
             speed: None,
             master_bpm: None,
-            pad_bpm: [PendingPadBpm { id: 0, bpm: None }; MAX_PARAMETER_MESSAGES_PER_CALLBACK],
+            pad_bpm: [PendingPadBpm {
+                id: 0,
+                bpm: None,
+                through_epoch: None,
+            }; MAX_PARAMETER_MESSAGES_PER_CALLBACK],
             pad_bpm_count: 0,
             pad_gain: [PendingPadGain {
                 id: 0,
@@ -697,8 +707,16 @@ impl PendingControlParameters {
             ControlParameterMessage::SetVolume(volume) => self.volume = Some(volume),
             ControlParameterMessage::SetSpeed(speed) => self.speed = Some(speed),
             ControlParameterMessage::SetMasterBpm(bpm) => self.master_bpm = Some(bpm),
+            #[cfg(test)]
             ControlParameterMessage::SetPadBpm { id, bpm } => {
-                self.record_pad_bpm(id, bpm);
+                self.record_pad_bpm(id, bpm, None);
+            }
+            ControlParameterMessage::SetLegacyPadBpm {
+                id,
+                bpm,
+                through_epoch,
+            } => {
+                self.record_pad_bpm(id, bpm, Some(through_epoch));
             }
             ControlParameterMessage::SetPadGain { id, gain_db } => {
                 self.record_pad_gain(id, gain_db);
@@ -714,7 +732,7 @@ impl PendingControlParameters {
         }
     }
 
-    fn record_pad_bpm(&mut self, id: usize, bpm: Option<f32>) {
+    fn record_pad_bpm(&mut self, id: usize, bpm: Option<f32>, through_epoch: Option<u64>) {
         if id >= NUM_SAMPLES {
             return;
         }
@@ -723,10 +741,15 @@ impl PendingControlParameters {
             .find(|pending| pending.id == id)
         {
             pending.bpm = bpm;
+            pending.through_epoch = through_epoch;
             return;
         }
         if self.pad_bpm_count < self.pad_bpm.len() {
-            self.pad_bpm[self.pad_bpm_count] = PendingPadBpm { id, bpm };
+            self.pad_bpm[self.pad_bpm_count] = PendingPadBpm {
+                id,
+                bpm,
+                through_epoch,
+            };
             self.pad_bpm_count += 1;
         }
     }
@@ -791,6 +814,9 @@ impl PendingControlParameters {
         }
         for pending in self.pad_bpm[..self.pad_bpm_count].iter().copied() {
             mixer.set_pad_bpm(pending.id, pending.bpm);
+            if let Some(epoch) = pending.through_epoch {
+                mixer.clear_constant_timing(pending.id, epoch);
+            }
             applied += 1;
         }
         for pending in self.pad_gain[..self.pad_gain_count].iter().copied() {
@@ -850,6 +876,12 @@ fn process_control_message<const CAPACITY: usize, S: AudioMessageSink, R: AudioB
         }
         ControlMessage::PublishPreparedStems { id, stems } => {
             mixer.publish_prepared_stems_rt(id, stems, retirement);
+        }
+        ControlMessage::PublishConstantTiming { id, timing } => {
+            mixer.publish_constant_timing_rt(id, timing, retirement);
+        }
+        ControlMessage::ClearPadConstantTiming { id, through_epoch } => {
+            mixer.clear_constant_timing(id, through_epoch);
         }
         ControlMessage::SetStemMixMode {
             id,
@@ -936,8 +968,17 @@ fn process_control_message<const CAPACITY: usize, S: AudioMessageSink, R: AudioB
         ControlMessage::SetPadKeyLock { id, enabled } => {
             mixer.set_pad_key_lock(id, enabled);
         }
+        #[cfg(test)]
         ControlMessage::SetPadTimingMetadata { id, metadata } => {
             mixer.set_pad_timing_metadata(id, metadata);
+        }
+        ControlMessage::SetLegacyPadTimingMetadata {
+            id,
+            metadata,
+            through_epoch,
+        } => {
+            mixer.set_pad_timing_metadata(id, metadata);
+            mixer.clear_constant_timing(id, through_epoch);
         }
         ControlMessage::BootstrapTransportFromPad { id } => {
             if id < NUM_SAMPLES {

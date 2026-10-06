@@ -110,11 +110,14 @@ Most Rust modules are `pub(crate)`. The public Python boundary is the PyO3
 The separate `rust/crates/analysis/` crate provides non-realtime BPM, key and
 beat-grid analysis; the looper's control/worker code publishes its results.
 Its `tempo_acceptance` module owns a pure G3a immutable accepted-period record
-and a control-only source/request/intent adoption guard. Constructors recompute
+and a non-realtime source/request/intent adoption guard. Constructors recompute
 supported G2 evidence and require explicit acceptance and independent origin
 provenance. The versioned revision binds counts, policies, period/error state and
-complete source/backend evidence. No live caller uses it yet: current binary32
-native BPM/rate and binary64 editor derivation remain unchanged until G3b. See
+complete source/backend evidence. G3b2a's explicit native acceptance API captures
+actual loaded source/QM evidence and uses that guard under current ownership,
+with bounded callback acknowledgement and a precise live SourceGrid projection.
+Editor, transport/master/output clock and BPMLOCK still need shared accepted
+period/revision integration; their legacy BPM/rates retain binary32 native values. See
 [accepted constant timing](accepted-constant-timing.md) for ownership and limits.
 Its shared `analyze_bpm` pipeline owns the legacy ODF/sample-hop conversion for
 both production and comparison fixtures. Private independent B2 input validation
@@ -404,7 +407,10 @@ SYNC uses the loop-relative contract in beatmap-sync-design.md.
 evaluator. A focused Python wrapper uses it for visible grid, snap and automatic
 endpoints. Origin/period remain independent of labels. Physical markers round each
 absolute boundary once; automatic ends advance original selected intent before
-rounding. This does not change the live native `f32` BPM/rate contract.
+rounding. G3b2a additionally lets the live SourceGrid consume explicitly accepted
+binary64 period/origin/full revision after actual mixer adoption; ordinary legacy
+grids and transport/BPMLOCK rates retain the existing `f32` contract. See
+[native accepted timing](native-constant-timing.md).
 
 `source_grid.rs` centralizes bounded source beat/bar, loop-start phase and
 master-beat-to-loop mapping. Source beat is `(frame - origin) / frames_per_beat`;
@@ -438,8 +444,9 @@ stem-available, but restored prepared stems are published to Rust only after the
 matching restored full-mix sample has completed its async load. If publication
 is rejected, Python marks the cache unavailable for controls and preserves Rust's
 previous playback state. Late callback rejection is observed before availability.
-The preparation epoch is not the G3a accepted revision; binary64 period adoption
-and immutable copy-first source proof remain separate gates.
+The preparation epoch is not the G3a accepted revision. G3b2a publishes precise
+accepted SourceGrid metadata; prepared stem/Key Lock revision binding, the other
+period consumers and immutable copy-first source proof remain separate gates.
 
 Active full-mix/stem mode and enabled-mask changes use bounded Rust-owned
 transition state with a short 128 source-frame crossfade. Both sides read the

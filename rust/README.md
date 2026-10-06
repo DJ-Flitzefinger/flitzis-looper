@@ -74,9 +74,12 @@ Most modules are `pub(crate)`. `lib.rs`, `audio_engine/mod.rs`, and
 
 The analysis crate's `tempo_acceptance` API retains a binary64 fitted period,
 complete evidence and a canonical accepted revision behind explicit acceptance
-and origin provenance. Its request/intent guard is control-only and has no
-production caller. G3b consumer integration and G3c physical/musical loop proof
-remain separate; see [accepted timing](../docs/accepted-constant-timing.md).
+and origin provenance. G3b2a's `audio_engine/constant_timing.rs` connects its
+request/intent guard to actual native loaded-source/QM capture and explicit
+publication, bounded callback acknowledgement and exact live SourceGrid metadata.
+Remaining shared-period consumers and G3c physical/musical loop proof stay
+separate; see [native adoption](../docs/native-constant-timing.md) and
+[accepted timing](../docs/accepted-constant-timing.md).
 
 ## Runtime Path
 
@@ -217,7 +220,9 @@ Python package directories are already available to standalone test executables.
   the callback; fixed-size messages preserve existing source seek semantics.
 - The pure `ScalarSourceGrid` PyO3 facade reuses `source_grid.rs` with a `f64`
   control period for editor lines, snap and automatic ends. The live constructor
-  still accepts native `f32` BPM. See
+  accepts native `f32` BPM for legacy state, while G3b2a acknowledged explicit
+  acceptance supplies the binary64 period/origin directly. Transport/BPMLOCK
+  rates are not yet migrated. See
   [scalar source coordinates](../docs/scalar-source-coordinates.md).
 - Transport stores complete musical position across BPM changes. The dedicated
   `bootstrap_transport_from_pad(id)` request latches the selected BPMLOCK

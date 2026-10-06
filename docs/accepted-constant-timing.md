@@ -1,9 +1,11 @@
 # Accepted constant timing foundation
 
 G3a adds `flitzis_looper_analysis::tempo_acceptance`. This is a pure offline/control
-API with no production caller. Existing automatic BPM, editor/native consumers,
-manual/TAP, saved projects and realtime wrapping remain unchanged. The record and
-guard prepare the next G3 integration boundary; they do not complete it.
+API. G3b2a now supplies a production native current-pad caller and precise live
+SourceGrid through an explicit acceptance command; see
+[native adoption](native-constant-timing.md). Existing automatic BPM, editor,
+transport/BPMLOCK, manual/TAP, saved projects and realtime wrapping retain their
+existing behavior. Full shared-period integration remains incomplete.
 
 ## Explicit construction
 
@@ -67,17 +69,19 @@ automatic results. Even an edit retaining the same intent enum must call
 guard identifiers reject exhaustion instead of wrapping.
 
 `check_binding` is also available as a pure full-binding predicate. A matching
-caller-supplied snapshot cannot establish live freshness. The next slice must
-serialize actual source/request and timing-intent changes at the engine's
-publication boundary and feed this guard there. No live job is protected by this
-new guard until that integration exists.
+caller-supplied snapshot cannot establish live freshness. G3b2a captures actual
+source/request/timebase in a native opaque ticket and feeds this guard under
+current ownership at explicit publication. It separately rechecks real Arc,
+generation, request, digest and timing intent, including bounded callback adoption.
+The pure guard alone does not establish these facts.
 
 ## Remaining consumer and loop gates
 
 | Boundary | Required next integration |
 | --- | --- |
 | Editor, snapping, automatic loop ends | Use one accepted binary64 period/origin/revision, retaining physical endpoint rounding and manual authority. |
-| Native SourceGrid, transport reference/master and BPMLOCK | Remove silent derivation through binary32 BPM; preserve ratio and source-epoch ownership. |
+| Native SourceGrid | G3b2a uses the acknowledged binary64 period/origin/full revision directly; ordinary legacy timing stays compatible. |
+| Transport reference/master, output clock and BPMLOCK | Still remove silent derivation through binary32 BPM/rate; preserve single-ratio and source-epoch ownership. |
 | MIDI metadata | Include current source and accepted timing revision alongside exact effective endpoints. |
 | Prepared source/Key Lock state | Bind preparation to the current source and timing revision; retire stale work under the actual owner. |
 | Same-source stems | Retain one source trajectory and check content/generation before prepared publication; shape or path/mtime alone is insufficient. |
@@ -86,8 +90,9 @@ new guard until that integration exists.
 G3b1 protects productive stem preparation with actual loaded-source pointers,
 content identities, current request/preparation epochs, isolated worker artifacts
 and callback feedback; see [prepared publication](prepared-stem-publication.md).
-Its generic epoch does not replace this accepted revision. The guard still has no
-production caller; binary64 consumers and accepted persistence remain G3b2.
+Its generic epoch does not replace this accepted revision. G3b2a connects native
+adoption and SourceGrid. Remaining consumers, prepared revision binding and
+accepted persistence remain explicit G3b2 work.
 G3c separately proves
 musical period versus rounded physical duration over 75/1000 cycles, fractional
 periods/rates and callback partitions. Rendered DSP/onset/device evidence is still

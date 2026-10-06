@@ -44,13 +44,12 @@ intercept separate from source zero and the selected grid origin.
 - **THEN** it retains the fitted binary64 period without a binary32 BPM roundtrip or integer-tempo snap
 
 ### Requirement: Control Adoption Rejects Stale Source Request And Timing Intent
-The system SHALL provide a non-realtime adoption guard that checks the accepted
-record against verified current source binding and a guard-specific current ticket.
-It SHALL invalidate prior tickets on newer requests, source replacement, unload,
-timing-intent changes and successful adoption; reject counter wrap; and preserve
-current state on failure. Manual, TAP and legacy intent SHALL prevent automatic
-adoption. Live publication SHALL remain gated until actual engine ownership feeds
-this guard in the separate integration slice.
+The system SHALL provide a non-realtime guard checking accepted records against
+verified current binding and guard-specific tickets. New requests, replacement, unload, intent changes and
+successful adoption SHALL revoke tickets. It SHALL reject wrap and preserve
+state on failure. Manual/TAP/Legacy SHALL block automatic adoption. Live
+publication SHALL require actual engine source/request/intent ownership from
+the integration slice.
 
 #### Scenario: An old result returns after a new request or source change
 - **GIVEN** a ticket issued for an earlier source/request revision

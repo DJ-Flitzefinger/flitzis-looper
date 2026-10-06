@@ -1,3 +1,4 @@
+use super::constant_timing::PreparedConstantTiming;
 use crate::messages::{PreparedStemSet, SampleBuffer};
 use rtrb::{Consumer, Producer, PushError, RingBuffer};
 use std::sync::{
@@ -18,11 +19,13 @@ const RETIRED_AUDIO_BUFFER_BACKLOG_CAPACITY: usize = 128;
 pub(crate) enum RetiredAudioBuffer {
     Sample(SampleBuffer),
     PreparedStems(PreparedStemSet),
+    ConstantTiming(PreparedConstantTiming),
 }
 
 pub(crate) trait AudioBufferRetirement {
     fn retire_sample(&mut self, sample: SampleBuffer);
     fn retire_prepared_stems(&mut self, stems: PreparedStemSet);
+    fn retire_constant_timing(&mut self, timing: PreparedConstantTiming);
     fn available_retirement_slots(&mut self) -> usize;
 }
 
@@ -34,6 +37,7 @@ impl AudioBufferRetirement for ImmediateAudioBufferRetirement {
     fn retire_sample(&mut self, _sample: SampleBuffer) {}
 
     fn retire_prepared_stems(&mut self, _stems: PreparedStemSet) {}
+    fn retire_constant_timing(&mut self, _timing: PreparedConstantTiming) {}
 
     fn available_retirement_slots(&mut self) -> usize {
         usize::MAX
@@ -110,6 +114,10 @@ impl AudioBufferRetirement for RtAudioBufferRetirement {
 
     fn retire_prepared_stems(&mut self, stems: PreparedStemSet) {
         self.retire_buffer(RetiredAudioBuffer::PreparedStems(stems));
+    }
+
+    fn retire_constant_timing(&mut self, timing: PreparedConstantTiming) {
+        self.retire_buffer(RetiredAudioBuffer::ConstantTiming(timing));
     }
 
     fn available_retirement_slots(&mut self) -> usize {

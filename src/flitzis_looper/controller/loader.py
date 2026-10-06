@@ -446,7 +446,10 @@ class LoaderController(BaseController):
         if isinstance(duration_s, float):
             self._project.sample_durations[sample_id] = duration_s
 
-        if new_assignment and self._on_new_sample_loaded is not None:
+        timing_stale = event.get("timing_stale") is True
+        # The source still belongs to this load, but a newer native request owns timing.
+        # Settle source bookkeeping without replaying automatic or restored grid intent.
+        if not timing_stale and new_assignment and self._on_new_sample_loaded is not None:
             detected_start = event.get("detected_loop_start_s")
             self._on_new_sample_loaded(
                 sample_id, detected_start if isinstance(detected_start, float) else None
@@ -455,10 +458,10 @@ class LoaderController(BaseController):
         # If analysis is provided in the event (from normal loading), store it
         analysis = event.get("analysis")
 
-        if analysis is not None:
+        if not timing_stale and analysis is not None:
             self._store_sample_analysis(sample_id, analysis)
         # If no analysis in event (from restoration), keep existing analysis from project state
-        elif (
+        elif not timing_stale and (
             self._project.sample_analysis[sample_id] is not None
             or self._project.manual_bpm[sample_id] is not None
             or self._project.pad_grid_offset_samples[sample_id] != 0
@@ -467,7 +470,8 @@ class LoaderController(BaseController):
             # Restore the persisted source grid after native sample publication.
             self._on_pad_bpm_changed(sample_id)
 
-        self._clear_analysis_task_state(sample_id)
+        if not timing_stale:
+            self._clear_analysis_task_state(sample_id)
 
         if restored_assignment and self._on_restored_sample_loaded is not None:
             self._on_restored_sample_loaded(sample_id)
@@ -567,7 +571,8 @@ class LoaderController(BaseController):
         if not self._matches_analysis_request(sample_id, event):
             return
 
-        self._store_sample_analysis(sample_id, event.get("analysis"))
+        if event.get("timing_stale") is not True:
+            self._store_sample_analysis(sample_id, event.get("analysis"))
         self._clear_analysis_task_state(sample_id)
 
     def _handle_stem_generation_success(self, sample_id: int) -> None:

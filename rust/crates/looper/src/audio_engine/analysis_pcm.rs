@@ -114,6 +114,23 @@ impl LoadedPcmSnapshot {
         max_pcm_bytes: usize,
         cancelled: &impl Fn() -> bool,
     ) -> Result<SharedMono, PcmError> {
+        let mono = self.prepare_complete_mono(max_pcm_bytes, cancelled)?;
+        Ok(SharedMono {
+            samples: Arc::new(mono),
+            identity: self.identity.clone(),
+            rate_hz: self.rate_hz,
+            frame_count: self.frame_count,
+            source_channels: self.sample.channels,
+            origin_seconds: 0.0,
+        })
+    }
+
+    /// Complete loaded-rate channel means for explicit non-realtime timing acceptance.
+    pub(crate) fn prepare_complete_mono(
+        &self,
+        max_pcm_bytes: usize,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Vec<f32>, PcmError> {
         check_cancelled(cancelled)?;
         check_limit(pcm_bytes(self.frame_count)?, max_pcm_bytes, "mono bytes")?;
         let mut mono = Vec::with_capacity(self.frame_count);
@@ -136,14 +153,7 @@ impl LoadedPcmSnapshot {
             }
         }
         check_cancelled(cancelled)?;
-        Ok(SharedMono {
-            samples: Arc::new(mono),
-            identity: self.identity.clone(),
-            rate_hz: self.rate_hz,
-            frame_count: self.frame_count,
-            source_channels: self.sample.channels,
-            origin_seconds: 0.0,
-        })
+        Ok(mono)
     }
 }
 

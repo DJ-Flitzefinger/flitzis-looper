@@ -10,6 +10,7 @@
 use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 #[cfg(test)]
 use crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement;
+use crate::audio_engine::constant_timing::{AcceptedTimingProjection, PreparedConstantTiming};
 use crate::audio_engine::constants::{
     MAX_VOICES, NUM_SAMPLES, PAD_EQ_DB_MAX, PAD_EQ_DB_MIN, PAD_GAIN_DB_DEFAULT, PAD_GAIN_DB_MAX,
     PAD_GAIN_DB_MIN, PAD_GAIN_SMOOTH_MS, SPEED_MAX, SPEED_MIN, VOLUME_MAX, VOLUME_MIN,
@@ -38,6 +39,7 @@ use crate::messages::{
     PadTimingMetadata, PreparedStemSet, STEM_COMPONENT_MASK, SampleBuffer, StemMixMode,
 };
 use cpal::Sample;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RtRenderPadActivity {
@@ -200,6 +202,9 @@ pub struct RtMixer {
     /// Per-pad musical phase anchor derived from bounded beatgrid/downbeat metadata.
     pad_phase_anchor_frame: [f64; NUM_SAMPLES],
 
+    /// Fixed accepted binary64 source projection; legacy numbers stay separate.
+    pad_accepted_timing: [Option<AcceptedTimingProjection>; NUM_SAMPLES],
+
     /// Per-pad Gain/Trim target in dB.
     pad_gain_db: [f32; NUM_SAMPLES],
 
@@ -281,6 +286,7 @@ impl RtMixer {
             master_bpm: None,
             pad_bpm: std::array::from_fn(|_| None),
             pad_phase_anchor_frame: std::array::from_fn(|_| 0.0),
+            pad_accepted_timing: std::array::from_fn(|_| None),
             pad_gain_db: std::array::from_fn(|_| PAD_GAIN_DB_DEFAULT),
             pad_gain_smoothers: std::array::from_fn(|_| SmoothedGain::default()),
             pad_dsp_chains: (0..NUM_SAMPLES)
@@ -347,6 +353,7 @@ impl RtMixer {
         }
 
         self.sample_bank[id] = Some(sample);
+        self.pad_accepted_timing[id] = None;
         self.stem_enabled_mask[id] = STEM_COMPONENT_MASK;
         self.stem_transitions[id].clear();
         true
@@ -378,6 +385,44 @@ impl RtMixer {
         self.prepared_stems[id] = Some(stems);
         self.stem_transitions[id].clear();
         true
+    }
+
+    /// Bounded source/permit checks, fixed metadata assignment and off-callback retirement.
+    pub(crate) fn publish_constant_timing_rt(
+        &mut self,
+        id: usize,
+        timing: PreparedConstantTiming,
+        retirement: &mut impl AudioBufferRetirement,
+    ) -> bool {
+        let projection = timing.projection;
+        let valid = id < NUM_SAMPLES
+            && timing.publication.current()
+            && projection.sample_rate_hz as f32 == self.sample_rate_hz
+            && SourceGrid::from_period(
+                projection.period_seconds * f64::from(projection.sample_rate_hz),
+                projection.origin_seconds * f64::from(projection.sample_rate_hz),
+            )
+            .is_some()
+            && self.sample_bank[id].as_ref().is_some_and(|sample| {
+                sample.channels == timing.reference.channels
+                    && Arc::ptr_eq(&sample.samples, &timing.reference.samples)
+            });
+        if valid {
+            self.pad_accepted_timing[id] = Some(projection);
+            timing.publication.mark_accepted();
+        } else {
+            timing.publication.mark_rejected();
+        }
+        retirement.retire_constant_timing(timing);
+        valid
+    }
+
+    pub(crate) fn clear_constant_timing(&mut self, id: usize, through_epoch: u64) {
+        if let Some(slot) = self.pad_accepted_timing.get_mut(id)
+            && slot.is_some_and(|projection| projection.publication_epoch <= through_epoch)
+        {
+            *slot = None;
+        }
     }
 
     pub(crate) fn set_stem_mix_mode(
@@ -731,6 +776,12 @@ impl RtMixer {
     }
 
     fn source_grid(&self, id: usize) -> Option<SourceGrid> {
+        if let Some(projection) = self.pad_accepted_timing[id] {
+            return SourceGrid::from_period(
+                projection.period_seconds * f64::from(projection.sample_rate_hz),
+                projection.origin_seconds * f64::from(projection.sample_rate_hz),
+            );
+        }
         SourceGrid::new(
             self.sample_rate_hz as f64,
             self.pad_bpm[id]?,
@@ -1154,6 +1205,7 @@ impl RtMixer {
         self.stem_enabled_mask[id] = STEM_COMPONENT_MASK;
         self.stem_transitions[id].clear();
         self.pad_phase_anchor_frame[id] = 0.0;
+        self.pad_accepted_timing[id] = None;
         true
     }
 
@@ -1653,6 +1705,10 @@ mod tests {
 
         fn retire_prepared_stems(&mut self, stems: PreparedStemSet) {
             self.stems.push(stems);
+        }
+
+        fn retire_constant_timing(&mut self, timing: PreparedConstantTiming) {
+            self.samples.push(timing.reference);
         }
 
         fn available_retirement_slots(&mut self) -> usize {

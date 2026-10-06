@@ -11,6 +11,8 @@
 
 ## Separate remaining G3 slices
 
+- [x] G3b2a (`adopt-native-constant-timing`): productive current-pad native
+  acceptance, bounded callback acknowledgement and precise SourceGrid.
 - [ ] G3b: connect actual current-pad publication authority and use the accepted
   period/revision across editor/snap/auto-loop, native timing/transport/BPMLOCK,
   MIDI metadata, preparation and same-source stems; preserve manual/TAP/legacy.

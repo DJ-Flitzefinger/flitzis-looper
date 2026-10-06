@@ -73,9 +73,10 @@ device acceptance is claimed.
 
 ## Remaining G3 boundaries
 
-G3b2 must feed TimingAdoptionGuard actual source/request/intent and use one complete
-accepted binary64 period/origin/revision in editor, snap, auto-loop, SourceGrid,
-transport/master and BPMLOCK. Accepted revisions must bind MIDI and prepared Key
+G3b2a now feeds TimingAdoptionGuard actual source/request/intent and publishes
+accepted binary64 period/origin/revision for native SourceGrid through
+[explicit acceptance](native-constant-timing.md). Editor, snap, auto-loop,
+transport/master/output clock and BPMLOCK remain. Accepted revisions must bind MIDI and prepared Key
 Lock/stem state; this generic epoch cannot replace them. Source-verified accepted
 timing persistence and manual/TAP/legacy policy remain unimplemented. G3c separately
 proves musical versus physical loops over 75/1000 cycles, fractional periods/rates,

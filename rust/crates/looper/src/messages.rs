@@ -3,6 +3,7 @@
 //! This module defines the enums that serve as the wire format for messages passed through the
 //! ring buffer between the Python thread and the real-time audio thread.
 
+use crate::audio_engine::constant_timing::PreparedConstantTiming;
 use crate::audio_engine::prepared_source::PreparedSourcePermit;
 use pyo3::prelude::*;
 use std::sync::Arc;
@@ -148,7 +149,15 @@ pub(crate) enum ControlParameterMessage {
     SetMasterBpm(f32),
 
     /// Set per-pad BPM metadata.
+    #[cfg(test)]
     SetPadBpm { id: usize, bpm: Option<f32> },
+
+    /// Apply a legacy BPM edit and retire older precise timing in one callback effect.
+    SetLegacyPadBpm {
+        id: usize,
+        bpm: Option<f32>,
+        through_epoch: u64,
+    },
 
     /// Set per-pad Gain/Trim in dB.
     SetPadGain { id: usize, gain_db: f32 },
@@ -169,7 +178,10 @@ impl ControlParameterMessage {
             ControlParameterMessage::SetVolume(_) => ControlParameterKey::Volume,
             ControlParameterMessage::SetSpeed(_) => ControlParameterKey::Speed,
             ControlParameterMessage::SetMasterBpm(_) => ControlParameterKey::MasterBpm,
-            ControlParameterMessage::SetPadBpm { id, bpm: _ } => ControlParameterKey::PadBpm(*id),
+            ControlParameterMessage::SetPadBpm { id, bpm: _ }
+            | ControlParameterMessage::SetLegacyPadBpm { id, .. } => {
+                ControlParameterKey::PadBpm(*id)
+            }
             ControlParameterMessage::SetPadGain { id, gain_db: _ } => {
                 ControlParameterKey::PadGain(*id)
             }
@@ -199,9 +211,26 @@ pub enum ControlMessage {
     SetPadKeyLock { id: usize, enabled: bool },
 
     /// Set bounded per-pad beatgrid/downbeat timing metadata.
+    #[cfg(test)]
     SetPadTimingMetadata {
         id: usize,
         metadata: PadTimingMetadata,
+    },
+
+    /// Apply a legacy origin edit and retire older precise timing atomically.
+    SetLegacyPadTimingMetadata {
+        id: usize,
+        metadata: PadTimingMetadata,
+        through_epoch: u64,
+    },
+
+    /// Clear precise timing through this native publication epoch without erasing newer state.
+    ClearPadConstantTiming { id: usize, through_epoch: u64 },
+
+    /// Adopt a fixed precise projection after actual current source and permit checks.
+    PublishConstantTiming {
+        id: usize,
+        timing: PreparedConstantTiming,
     },
 
     /// Request transport downbeat anchoring from a selected playing pad.
@@ -325,13 +354,15 @@ impl ControlMessage {
             | ControlMessage::PauseSample { .. }
             | ControlMessage::ResumeSample { .. }
             | ControlMessage::SeekSample { .. } => ControlMessageClass::PlaybackEvent,
-            ControlMessage::LoadSample { .. } | ControlMessage::PublishPreparedStems { .. } => {
-                ControlMessageClass::Publication
-            }
+            ControlMessage::LoadSample { .. }
+            | ControlMessage::PublishPreparedStems { .. }
+            | ControlMessage::PublishConstantTiming { .. } => ControlMessageClass::Publication,
             ControlMessage::SetBpmLock(_)
             | ControlMessage::SetKeyLock(_)
             | ControlMessage::SetPadKeyLock { .. }
             | ControlMessage::SetPadTimingMetadata { .. }
+            | ControlMessage::SetLegacyPadTimingMetadata { .. }
+            | ControlMessage::ClearPadConstantTiming { .. }
             | ControlMessage::AnchorTransportPhaseFromPad { .. }
             | ControlMessage::BootstrapTransportFromPad { .. }
             | ControlMessage::SetPadLoopRegion { .. }

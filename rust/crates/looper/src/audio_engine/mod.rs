@@ -21,8 +21,8 @@ use flitzis_looper_analysis as analysis;
 use crate::audio_engine::channels::map_channels;
 use crate::messages::{
     AudioMessage, BackgroundTaskKind, ControlMessage, ControlParameterMessage, LoaderEvent,
-    PadTimingMetadata, STEM_COMPONENT_MASK, SampleAnalysis, SampleBuffer, StemMixMode,
-    TriggerQuantization, task_to_str,
+    STEM_COMPONENT_MASK, SampleAnalysis, SampleBuffer, StemMixMode, TriggerQuantization,
+    task_to_str,
 };
 use numpy::{PyArray1, ToPyArray};
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
@@ -31,7 +31,7 @@ use pyo3::types::{PyBool, PyDict, PyInt};
 use rtrb::Producer;
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{
     Arc, Mutex,
     mpsc::{Receiver, Sender, TryRecvError},
@@ -45,7 +45,9 @@ mod audio_stream;
 pub use analysis_jobs::OfflineAnalysisJob;
 mod buffer_retirement;
 mod channels;
+pub(crate) mod constant_timing;
 mod constants;
+pub use constant_timing::ConstantTimingTicket;
 mod dsp;
 mod errors;
 mod initial_loop_start;
@@ -58,8 +60,7 @@ pub(crate) mod prepared_source;
 mod progress;
 pub use prepared_source::PreparedSourceTicket;
 use prepared_source::{
-    enqueue_current_prepared_stems, file_sha256, next_epoch, push_preparation_epoch_message,
-    validate_prepared_ticket,
+    enqueue_current_prepared_stems, file_sha256, next_epoch, validate_prepared_ticket,
 };
 mod rubberband_backend;
 mod sample_loader;
@@ -228,6 +229,48 @@ fn current_pad_request_id(
 
 fn pad_request_matches(pad_request_ids: &Arc<Mutex<Vec<u64>>>, id: usize, request_id: u64) -> bool {
     current_pad_request_id(pad_request_ids, id).is_ok_and(|current| current == request_id)
+}
+
+/// Normal analysis admission owns the same actual source/request boundary as timing work.
+fn admit_sample_analysis(engine: &AudioEngine, id: usize) -> PyResult<(SampleBuffer, u64, u32)> {
+    let mut requests = engine
+        .pad_request_ids
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    let loading = engine
+        .loading_sample_ids
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("loading lock poisoned"))?;
+    if loading.contains(&id) {
+        return Err(PyValueError::new_err("sample is currently loading"));
+    }
+    let mut tasks = engine
+        .active_tasks
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("task lock poisoned"))?;
+    if has_active_task_for_id(&tasks, id) {
+        return Err(PyValueError::new_err("sample task already running"));
+    }
+    let cache = engine
+        .sample_cache
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?;
+    let sample = cache[id]
+        .clone()
+        .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?;
+    let generations = engine
+        .loaded_source_generations
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("source generation lock poisoned"))?;
+    let (generation, rate) = generations[id];
+    if generation == 0 || rate == 0 {
+        return Err(PyValueError::new_err("loaded source identity unavailable"));
+    }
+    let advance = PadRequestAdvance::prepare(&mut requests[id], &engine.prepared_source_epochs[id])
+        .map_err(PyRuntimeError::new_err)?;
+    let request_id = advance.commit();
+    tasks.insert((id, BackgroundTaskKind::Analysis));
+    Ok((sample, request_id, rate))
 }
 
 fn publish_loaded_sample(
@@ -411,6 +454,8 @@ pub struct AudioEngine {
     loaded_source_generations: Arc<Mutex<Vec<(u64, u32)>>>,
     loaded_source_digests: Arc<Mutex<Vec<Option<String>>>>,
     prepared_source_epochs: Vec<Arc<AtomicU64>>,
+    timing_intents: Mutex<Vec<analysis::tempo_acceptance::TimingIntent>>,
+    constant_timing_busy: AtomicBool,
     offline_jobs: analysis_jobs::OfflineJobs,
     input_runtime: Option<InputRuntime>,
     input_clock: InputClock,
@@ -437,6 +482,11 @@ impl AudioEngine {
             prepared_source_epochs: (0..NUM_SAMPLES)
                 .map(|_| Arc::new(AtomicU64::new(1)))
                 .collect(),
+            timing_intents: Mutex::new(vec![
+                analysis::tempo_acceptance::TimingIntent::Legacy;
+                NUM_SAMPLES
+            ]),
+            constant_timing_busy: AtomicBool::new(false),
             offline_jobs: analysis_jobs::OfflineJobs::default(),
             input_runtime: None,
             input_clock: InputClock::new(),
@@ -906,6 +956,78 @@ impl AudioEngine {
             .map_err(PyRuntimeError::new_err)
     }
 
+    /// Declare automatic/manual/TAP/legacy timing authority under the native owner.
+    pub fn set_pad_timing_intent(&self, sample_id: usize, intent: &str) -> PyResult<()> {
+        if sample_id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+        let intent = constant_timing::parse_intent(intent)?;
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        constant_timing::set_intent(self, &handle.producer, sample_id, intent)
+    }
+
+    /// Explicitly run complete native QM evidence on the actual current loaded source.
+    pub fn prepare_constant_timing(
+        &self,
+        py: Python<'_>,
+        sample_id: usize,
+        timing_error_halfwidth_seconds: f64,
+        timing_error_provenance: String,
+    ) -> PyResult<ConstantTimingTicket> {
+        self.stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        py.detach(|| {
+            constant_timing::prepare(
+                self,
+                sample_id,
+                analysis::tempo_evidence::TimingBound {
+                    halfwidth_seconds: timing_error_halfwidth_seconds,
+                    provenance: timing_error_provenance,
+                },
+            )
+        })
+        .map_err(PyRuntimeError::new_err)
+    }
+
+    /// Construct accepted timing from explicit independent assertions and publish natively.
+    // Keep explicit evidence assertions distinct at the public control boundary.
+    #[allow(clippy::too_many_arguments)]
+    pub fn publish_constant_timing(
+        &self,
+        py: Python<'_>,
+        ticket: &ConstantTimingTicket,
+        hypotheses_json: String,
+        origin_seconds: f64,
+        origin_provenance: String,
+        acceptance_policy_version: String,
+        acceptance_provenance: String,
+    ) -> PyResult<()> {
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        py.detach(|| {
+            constant_timing::publish(
+                self,
+                &handle.producer,
+                ticket,
+                &hypotheses_json,
+                analysis::tempo_acceptance::IndependentTimingOrigin {
+                    seconds: origin_seconds,
+                    provenance: origin_provenance,
+                },
+                analysis::tempo_acceptance::TimingAcceptanceDecision {
+                    policy_version: acceptance_policy_version,
+                    provenance: acceptance_provenance,
+                },
+            )
+        })
+    }
+
     /// Analyze a previously loaded sample on a background thread.
     pub fn analyze_sample_async(&self, id: usize) -> PyResult<u64> {
         if self.offline_jobs.has_pad(id) {
@@ -920,49 +1042,15 @@ impl AudioEngine {
             )));
         }
 
-        let handle = self
-            .stream_handle
+        self.stream_handle
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
 
-        {
-            let loading = self
-                .loading_sample_ids
-                .lock()
-                .map_err(|_| PyRuntimeError::new_err("Failed to acquire loading ids lock"))?;
-            if loading.contains(&id) {
-                return Err(PyValueError::new_err("sample is currently loading"));
-            }
-        }
-
-        let sample = {
-            let cache = self
-                .sample_cache
-                .lock()
-                .map_err(|_| PyRuntimeError::new_err("Failed to acquire sample cache lock"))?;
-            cache
-                .get(id)
-                .and_then(|slot| slot.clone())
-                .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?
-        };
-
-        {
-            let mut tasks = self
-                .active_tasks
-                .lock()
-                .map_err(|_| PyRuntimeError::new_err("Failed to acquire active tasks lock"))?;
-            if has_active_task_for_id(&tasks, id) {
-                return Err(PyValueError::new_err("sample task already running"));
-            }
-            tasks.insert((id, BackgroundTaskKind::Analysis));
-        }
+        let (sample, request_id, output_sample_rate) = admit_sample_analysis(self, id)?;
 
         let loader_tx = self.loader_tx.clone();
-        let output_sample_rate = handle.output_sample_rate;
         let active_tasks = self.active_tasks.clone();
         let pad_request_ids = self.pad_request_ids.clone();
-        let request_id =
-            current_pad_request_id(&pad_request_ids, id).map_err(PyRuntimeError::new_err)?;
 
         thread::spawn(move || {
             let _task_guard = PadTaskGuard {
@@ -1232,22 +1320,73 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire loader receiver lock"))?;
 
-        let event = match loader_rx.try_recv() {
-            Ok(event) => event,
-            Err(TryRecvError::Empty) => return Ok(None),
-            Err(TryRecvError::Disconnected) => return Ok(None),
+        let requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        let (event, timing_stale) = loop {
+            let mut event = match loader_rx.try_recv() {
+                Ok(event) => event,
+                Err(TryRecvError::Empty | TryRecvError::Disconnected) => return Ok(None),
+            };
+            let (id, request_id) = match &event {
+                LoaderEvent::Started { id, request_id }
+                | LoaderEvent::Progress { id, request_id, .. }
+                | LoaderEvent::Success { id, request_id, .. }
+                | LoaderEvent::Error { id, request_id, .. }
+                | LoaderEvent::TaskStarted { id, request_id, .. }
+                | LoaderEvent::TaskProgress { id, request_id, .. }
+                | LoaderEvent::TaskSuccess { id, request_id, .. }
+                | LoaderEvent::TaskError { id, request_id, .. }
+                | LoaderEvent::OfflineAnalysisCompleted { id, request_id, .. } => {
+                    (*id, *request_id)
+                }
+            };
+            let stale = requests.get(id) != Some(&request_id);
+            if stale {
+                match &mut event {
+                    LoaderEvent::Success { analysis, .. } => {
+                        let cache = self
+                            .sample_cache
+                            .lock()
+                            .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?;
+                        let generations = self.loaded_source_generations.lock().map_err(|_| {
+                            PyRuntimeError::new_err("source generation lock poisoned")
+                        })?;
+                        if cache.get(id).is_none_or(Option::is_none)
+                            || generations
+                                .get(id)
+                                .is_none_or(|current| current.0 != request_id)
+                        {
+                            continue;
+                        }
+                        *analysis = None;
+                    }
+                    LoaderEvent::TaskSuccess {
+                        task: BackgroundTaskKind::Analysis,
+                        analysis,
+                        ..
+                    } => *analysis = None,
+                    LoaderEvent::TaskError {
+                        task: BackgroundTaskKind::Analysis,
+                        ..
+                    } => {}
+                    _ => continue,
+                }
+            }
+            break (event, stale);
         };
 
         let dict = PyDict::new(py);
+        if timing_stale {
+            dict.set_item("timing_stale", true)?;
+        }
         match event {
             LoaderEvent::OfflineAnalysisCompleted {
                 id,
                 request_id,
                 result_json,
             } => {
-                if !pad_request_matches(&self.pad_request_ids, id, request_id) {
-                    return Ok(None);
-                }
                 dict.set_item("type", "offline_analysis_completed")?;
                 dict.set_item("id", id)?;
                 dict.set_item("request_id", request_id)?;
@@ -1639,21 +1778,7 @@ impl AudioEngine {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
 
-        let _requests = self
-            .pad_request_ids
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        let mut producer_guard = handle
-            .parameter_producer
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
-
-        push_preparation_epoch_message(
-            &mut producer_guard,
-            ControlParameterMessage::SetPadBpm { id, bpm },
-            &self.prepared_source_epochs[id],
-            "SetPadBpm",
-        )
+        constant_timing::publish_legacy_bpm(self, &handle.parameter_producer, id, bpm)
     }
 
     pub fn set_pad_timing_metadata(&mut self, id: usize, phase_anchor_s: f64) -> PyResult<()> {
@@ -1670,24 +1795,7 @@ impl AudioEngine {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
 
-        let _requests = self
-            .pad_request_ids
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        let mut producer_guard = handle
-            .producer
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
-
-        push_preparation_epoch_message(
-            &mut producer_guard,
-            ControlMessage::SetPadTimingMetadata {
-                id,
-                metadata: PadTimingMetadata { phase_anchor_s },
-            },
-            &self.prepared_source_epochs[id],
-            "SetPadTimingMetadata",
-        )
+        constant_timing::publish_legacy_origin(self, &handle.producer, id, phase_anchor_s)
     }
 
     pub fn anchor_transport_phase_from_pad(&mut self, id: usize) -> PyResult<()> {
@@ -2141,6 +2249,8 @@ mod tests {
         Python::initialize();
         Python::attach(|py| {
             let engine = AudioEngine::new().unwrap();
+            engine.pad_request_ids.lock().unwrap()[3] = 7;
+            engine.loaded_source_generations.lock().unwrap()[3] = (7, 96_000);
             let detected_start = 1_000_003.0 / 96_000.0;
             assert_ne!(f64::from(detected_start as f32), detected_start);
             for suggestion in [Some(detected_start), None] {
@@ -2187,6 +2297,8 @@ mod tests {
         Python::initialize();
         Python::attach(|py| {
             let engine = AudioEngine::new().unwrap();
+            engine.pad_request_ids.lock().unwrap()[3] = 7;
+            engine.loaded_source_generations.lock().unwrap()[3] = (7, 96_000);
             for rate in [44_100_u32, 48_000, 96_000] {
                 for duration in [600_u32, 1_800] {
                     let frames = u64::from(rate) * u64::from(duration) + 7;

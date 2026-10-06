@@ -29,7 +29,13 @@ pub struct PreparedSourceTicket {
 impl PreparedSourceTicket {
     /// Bounded callback adoption feedback; polling never drives audio timing.
     pub fn publication_status(&self) -> &'static str {
-        match self.publication.status.load(Ordering::Acquire) {
+        self.publication.status()
+    }
+}
+
+impl PreparedSourcePermit {
+    pub(crate) fn status(&self) -> &'static str {
+        match self.status.load(Ordering::Acquire) {
             0 => "captured",
             1 => "pending",
             2 => "accepted",
@@ -156,6 +162,7 @@ pub(super) fn version_matches_digest(version: &str, digest: &str) -> bool {
 /// The locked single producer reserves available capacity before invalidating
 /// preparation. A consumer can only free slots, so the subsequent push cannot
 /// become full. The epoch is visible before the timing command is visible.
+#[cfg(test)]
 pub(super) fn push_preparation_epoch_message<T>(
     producer: &mut Producer<T>,
     message: T,
