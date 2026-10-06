@@ -344,6 +344,8 @@ fn legacy_parameter_lane_gap_rejects_fresh_preparation_and_keeps_previous_stem_a
     let source_hash = source_version_hash(&version());
     assert!(mixer.set_stem_mix_mode(0, crate::messages::StemMixMode::AllStems, source_hash));
     assert!(mixer.set_stem_enabled_mask(0, crate::messages::STEM_MASK_VOCALS, source_hash));
+    // Admit the actual old source/stem voice while its accepted authority is still current.
+    assert!(mixer.play_sample(0, 1.0));
 
     let (parameters, mut parameter_consumer) = rtrb::RingBuffer::new(1);
     let parameters = Arc::new(Mutex::new(parameters));
@@ -358,7 +360,8 @@ fn legacy_parameter_lane_gap_rejects_fresh_preparation_and_keeps_previous_stem_a
     assert!(!mixer.publish_prepared_stems(id, stems));
     assert_eq!(early.publication_status(), "rejected");
     assert_eq!(admitted.publication_status(), "accepted");
-    assert!(mixer.play_sample(0, 1.0));
+    // Revocation fences new admission while preserving already effective source/stem audio.
+    assert!(!mixer.play_sample(0, 1.0));
     let mut output = [0.0; 4];
     mixer.render(&mut output, &mut [0.0; NUM_SAMPLES]);
     assert_eq!(output, [0.25, -0.125, 0.0625, -0.03125]);

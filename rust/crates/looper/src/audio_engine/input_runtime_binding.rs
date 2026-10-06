@@ -6,20 +6,46 @@ use super::constant_timing::{
 };
 use super::constants::NUM_SAMPLES;
 use super::prepared_source::next_epoch;
+use crate::messages::SampleBuffer;
 use flitzis_looper_analysis::tempo_acceptance::TimingIntent;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::sync::{
     Arc,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
+
+/// One control-owned current PCM publication. Zero generation fences all new starts.
+/// Readers perform one bounded check and recheck; they never spin or dereference its address.
+struct CurrentSourceFence {
+    generation: AtomicU64,
+    address: AtomicUsize,
+    count: AtomicUsize,
+    channels: AtomicUsize,
+    rate: AtomicU32,
+}
+
+impl Default for CurrentSourceFence {
+    fn default() -> Self {
+        Self {
+            generation: AtomicU64::new(0),
+            address: AtomicUsize::new(0),
+            count: AtomicUsize::new(0),
+            channels: AtomicUsize::new(0),
+            rate: AtomicU32::new(0),
+        }
+    }
+}
 
 /// Control publishes revocation before queued callback work. Preparation requests
 /// deliberately do not change these source/authority epochs.
 pub(crate) struct InputRuntimeOwnership {
     pub(crate) authority: [AtomicU64; NUM_SAMPLES],
     pub(crate) runtime: [AtomicU64; NUM_SAMPLES],
+    timing_intent: [AtomicU8; NUM_SAMPLES],
+    source_tracking: bool,
+    sources: [CurrentSourceFence; NUM_SAMPLES],
 }
 
 impl Default for InputRuntimeOwnership {
@@ -27,11 +53,91 @@ impl Default for InputRuntimeOwnership {
         Self {
             authority: std::array::from_fn(|_| AtomicU64::new(1)),
             runtime: std::array::from_fn(|_| AtomicU64::new(0)),
+            timing_intent: std::array::from_fn(|_| AtomicU8::new(0)),
+            source_tracking: false,
+            sources: std::array::from_fn(|_| CurrentSourceFence::default()),
         }
     }
 }
 
 impl InputRuntimeOwnership {
+    /// AudioEngine tracks actual native control-cache ownership; standalone mixers are untracked.
+    pub(super) fn tracked() -> Self {
+        Self {
+            source_tracking: true,
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn revoke_source(&self, id: usize) {
+        self.sources[id].generation.store(0, Ordering::SeqCst);
+    }
+
+    pub(super) fn revoke_all_sources(&self) {
+        for id in 0..NUM_SAMPLES {
+            self.revoke_source(id);
+        }
+    }
+
+    /// Called only after successful queue/cache/generation/digest publication under request owner.
+    pub(super) fn publish_source(
+        &self,
+        id: usize,
+        sample: &SampleBuffer,
+        rate: u32,
+        generation: u64,
+    ) {
+        let source = &self.sources[id];
+        source.generation.store(0, Ordering::SeqCst);
+        source
+            .address
+            .store(sample.samples.as_ptr() as usize, Ordering::SeqCst);
+        source.count.store(sample.samples.len(), Ordering::SeqCst);
+        source.channels.store(sample.channels, Ordering::SeqCst);
+        source.rate.store(rate, Ordering::SeqCst);
+        source.generation.store(generation, Ordering::SeqCst);
+    }
+
+    pub(crate) fn source_current(&self, id: usize, sample: &SampleBuffer, rate: u32) -> bool {
+        if !self.source_tracking {
+            return true;
+        }
+        let source = &self.sources[id];
+        let generation = source.generation.load(Ordering::SeqCst);
+        generation != 0
+            && source.address.load(Ordering::SeqCst) == sample.samples.as_ptr() as usize
+            && source.count.load(Ordering::SeqCst) == sample.samples.len()
+            && source.channels.load(Ordering::SeqCst) == sample.channels
+            && source.rate.load(Ordering::SeqCst) == rate
+            && source.generation.load(Ordering::SeqCst) == generation
+    }
+
+    /// Successful control admission publishes declared authority before its callback clear.
+    pub(super) fn set_timing_intent(&self, id: usize, intent: TimingIntent) {
+        let value = match intent {
+            TimingIntent::Legacy => 0,
+            TimingIntent::Automatic => 1,
+            TimingIntent::Manual => 2,
+            TimingIntent::Tap => 3,
+        };
+        self.timing_intent[id].store(value, Ordering::Release);
+    }
+
+    /// New voice admission cannot reinterpret unavailable Automatic as Legacy fallback.
+    /// Existing effective source/history keeps rendering while a successful clear is pending.
+    pub(crate) fn source_timing_available(
+        &self,
+        id: usize,
+        accepted: Option<AcceptedTimingProjection>,
+        acknowledgements: &CurrentTimingAcknowledgements,
+    ) -> bool {
+        if let Some(accepted) = accepted {
+            acknowledgements.current_epoch(id) == accepted.publication_epoch
+        } else {
+            self.timing_intent[id].load(Ordering::Acquire) != 1
+        }
+    }
+
     pub(super) fn next_authority(&self, id: usize) -> PyResult<u64> {
         next_epoch(&self.authority[id]).map_err(PyRuntimeError::new_err)
     }

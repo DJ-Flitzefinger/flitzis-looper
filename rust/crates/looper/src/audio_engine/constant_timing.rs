@@ -885,6 +885,7 @@ pub(super) fn set_intent(
         .current_timing_acknowledgements
         .revoke_authority(id, next);
     intents[id] = intent;
+    engine.input_runtime_ownership.set_timing_intent(id, intent);
     producer
         .push(ControlMessage::ClearPadConstantTiming {
             id,
@@ -923,6 +924,9 @@ pub(super) fn publish_legacy_bpm(
         .current_timing_acknowledgements
         .revoke_authority(id, next);
     intents[id] = TimingIntent::Legacy;
+    engine
+        .input_runtime_ownership
+        .set_timing_intent(id, TimingIntent::Legacy);
     parameters
         .push(ControlParameterMessage::SetLegacyPadBpm {
             id,
@@ -962,6 +966,9 @@ pub(super) fn publish_legacy_origin(
         .current_timing_acknowledgements
         .revoke_authority(id, next);
     intents[id] = TimingIntent::Legacy;
+    engine
+        .input_runtime_ownership
+        .set_timing_intent(id, TimingIntent::Legacy);
     ordered
         .push(ControlMessage::SetLegacyPadTimingMetadata {
             id,

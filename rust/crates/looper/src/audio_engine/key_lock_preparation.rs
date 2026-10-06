@@ -73,6 +73,11 @@ pub(crate) struct KeyLockPreparationLane {
 }
 
 impl KeyLockPreparationLane {
+    #[cfg(test)]
+    pub(crate) fn fail_worker(&self) {
+        self.worker_failed.store(true, Ordering::Release);
+    }
+
     pub(crate) fn take_initial(&mut self) -> Option<RubberBandLiveShifter> {
         self.state.take_initial()
     }

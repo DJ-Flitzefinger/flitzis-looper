@@ -54,17 +54,18 @@ mod initial_loop_start;
 mod input_mapping;
 pub(crate) mod input_runtime_binding;
 pub use input_runtime_binding::InputRuntimePadBinding;
-mod key_lock_preparation;
+pub(crate) mod key_lock_preparation;
 #[cfg(test)]
 mod key_lock_source_preparation;
 mod mixer;
 pub(crate) mod prepared_source;
+mod productive_source_history;
 mod progress;
 pub use prepared_source::PreparedSourceTicket;
 use prepared_source::{
     enqueue_current_prepared_stems, file_sha256, next_epoch, validate_prepared_ticket,
 };
-mod rubberband_backend;
+pub(crate) mod rubberband_backend;
 mod sample_loader;
 mod scalar_grid;
 pub(crate) use scalar_grid::ScalarSourceGrid;
@@ -73,7 +74,7 @@ mod source_grid;
 mod source_playback;
 mod source_reader;
 mod stem_cache;
-mod stretch_processor;
+pub(crate) mod stretch_processor;
 mod timing;
 mod transport;
 mod voice_slot;
@@ -275,11 +276,21 @@ fn admit_sample_analysis(engine: &AudioEngine, id: usize) -> PyResult<(SampleBuf
     Ok((sample, request_id, rate))
 }
 
+struct LoadedSourcePublication<'a> {
+    ownership: &'a input_runtime_binding::InputRuntimeOwnership,
+    generation: u64,
+    rate: u32,
+    generation_slot: &'a mut (u64, u32),
+    digest_slot: &'a mut Option<String>,
+    digest: String,
+}
+
 fn publish_loaded_sample(
     producer: &Arc<Mutex<Producer<ControlMessage>>>,
     sample_cache: &Arc<Mutex<Vec<Option<SampleBuffer>>>>,
     id: usize,
     sample: SampleBuffer,
+    publication: LoadedSourcePublication<'_>,
 ) -> Result<(), String> {
     let mut cache = sample_cache
         .lock()
@@ -296,7 +307,12 @@ fn publish_loaded_sample(
         })
         .map_err(|_| "Failed to send LoadSample - buffer may be full".to_string())?;
 
-    *slot = Some(sample);
+    *publication.generation_slot = (publication.generation, publication.rate);
+    *publication.digest_slot = Some(publication.digest);
+    *slot = Some(sample.clone());
+    publication
+        .ownership
+        .publish_source(id, &sample, publication.rate, publication.generation);
 
     Ok(())
 }
@@ -493,7 +509,9 @@ impl AudioEngine {
             ]),
             current_timing_acknowledgements: Arc::default(),
             current_constant_timing: Mutex::new((0..NUM_SAMPLES).map(|_| Vec::new()).collect()),
-            input_runtime_ownership: Arc::default(),
+            input_runtime_ownership: Arc::new(
+                input_runtime_binding::InputRuntimeOwnership::tracked(),
+            ),
             constant_timing_busy: AtomicBool::new(false),
             offline_jobs: analysis_jobs::OfflineJobs::default(),
             input_runtime: None,
@@ -508,6 +526,7 @@ impl AudioEngine {
         }
 
         self.current_timing_acknowledgements.clear_all();
+        self.input_runtime_ownership.revoke_all_sources();
         for records in self
             .current_constant_timing
             .lock()
@@ -794,6 +813,7 @@ impl AudioEngine {
         let loaded_source_generations = self.loaded_source_generations.clone();
         let loaded_source_digests = self.loaded_source_digests.clone();
         let prepared_epoch = self.prepared_source_epochs[id].clone();
+        let input_runtime_ownership = self.input_runtime_ownership.clone();
         let run_analysis = run_analysis.unwrap_or(true);
 
         {
@@ -823,6 +843,7 @@ impl AudioEngine {
             let mut digests = loaded_source_digests
                 .lock()
                 .map_err(|_| PyRuntimeError::new_err("source digest lock poisoned"))?;
+            self.input_runtime_ownership.revoke_source(id);
             if let Some(slot) = cache.get_mut(id) {
                 *slot = None;
             }
@@ -961,7 +982,20 @@ impl AudioEngine {
             let Ok(mut digests) = loaded_source_digests.lock() else {
                 return;
             };
-            if let Err(error) = publish_loaded_sample(&producer, &sample_cache, id, sample) {
+            if let Err(error) = publish_loaded_sample(
+                &producer,
+                &sample_cache,
+                id,
+                sample,
+                LoadedSourcePublication {
+                    ownership: &input_runtime_ownership,
+                    generation: request_id,
+                    rate: output_sample_rate,
+                    generation_slot: &mut generations[id],
+                    digest_slot: &mut digests[id],
+                    digest: source_digest,
+                },
+            ) {
                 let _ = loader_tx.send(LoaderEvent::Error {
                     id,
                     request_id,
@@ -969,8 +1003,6 @@ impl AudioEngine {
                 });
                 return;
             }
-            generations[id] = (request_id, output_sample_rate);
-            digests[id] = Some(source_digest);
             drop(requests);
 
             progress.emit(
@@ -2316,6 +2348,7 @@ impl AudioEngine {
         let input_authority = self.input_runtime_ownership.next_authority(id)?;
         self.input_runtime_ownership.revoke(id, input_authority);
         advance.commit();
+        self.input_runtime_ownership.revoke_source(id);
         producer_guard
             .push(ControlMessage::UnloadSample { id })
             .map_err(|_| PyRuntimeError::new_err("reserved single-producer capacity lost"))?;
@@ -2860,13 +2893,32 @@ mod tests {
             samples: Arc::from([0.0_f32, 0.0].as_slice()),
         };
 
-        let result = publish_loaded_sample(&producer, &sample_cache, 0, sample);
+        let ownership = input_runtime_binding::InputRuntimeOwnership::tracked();
+        let mut generation = (0, 0);
+        let mut digest = None;
+        let result = publish_loaded_sample(
+            &producer,
+            &sample_cache,
+            0,
+            sample.clone(),
+            LoadedSourcePublication {
+                ownership: &ownership,
+                generation: 1,
+                rate: 48_000,
+                generation_slot: &mut generation,
+                digest_slot: &mut digest,
+                digest: "a".repeat(64),
+            },
+        );
 
         assert_eq!(
             result.expect_err("full command queue should reject publication"),
             "Failed to send LoadSample - buffer may be full"
         );
         assert!(sample_cache.lock().unwrap()[0].is_none());
+        assert_eq!(generation, (0, 0));
+        assert!(digest.is_none());
+        assert!(!ownership.source_current(0, &sample, 48_000));
     }
 
     #[test]

@@ -1,12 +1,13 @@
 # Accepted constant timing foundation
 
 G3a adds `flitzis_looper_analysis::tempo_acceptance`. This is a pure offline/control
-API. G3b2a-d supplies native current-pad acceptance and acknowledgement, precise
-native/Python grid/period/loop/control consumers and source-bound MIDI runtime
-triggers; see [native adoption](native-constant-timing.md). Acceptance remains
+API. G3b2a-e and G3b2f1 supply native current-pad acceptance and acknowledgement, precise
+native/Python grid/period/loop/control consumers, source-bound MIDI/prepared stems
+and productive voice/native/FIFO history; see [native adoption](native-constant-timing.md). Acceptance remains
 explicit. Ordinary automatic analysis, manual/TAP, saved legacy projects and
-physical wrapping keep their established policy. Prepared-state/history binding,
-accepted persistence and global launch orchestration remain incomplete.
+physical wrapping keep their established policy. Required NEXT G3b2f2
+source-prepared native-history integration remains incomplete and precedes G3b2g
+accepted persistence; global launch orchestration also remains incomplete.
 
 ## Explicit construction
 
@@ -84,8 +85,8 @@ The pure guard alone does not establish these facts.
 | Native SourceGrid | G3b2a uses the acknowledged binary64 period/origin/full revision directly; ordinary legacy timing stays compatible. |
 | Native transport reference/master, output clock and BPMLOCK | G3b2b/c consumes acknowledged source/output periods directly with binary64 rate/epoch ownership and Python locked speed/master controls. |
 | MIDI metadata | G3b2d binds actual native source/authority and complete accepted revision to one guarded loop/launch effect, including scheduled execution and fresh failed-direct fallback. |
-| Prepared source/Key Lock state | Bind preparation to the current source and timing revision; retire stale work under the actual owner. |
-| Same-source stems | Retain one source trajectory and check content/generation before prepared publication; shape or path/mtime alone is insufficient. |
+| Prepared source and same-source stems | G3b2e binds capture/admission/rendering to current source/authority/full accepted projection and retains one source trajectory. |
+| Productive Key Lock/voice/DSP history | G3b2f1 binds continuous native/FIFO feed, filter history and pinned voice timing; required NEXT G3b2f2 prepared native integration remains incomplete. |
 | Persistence and legacy restore | Preserve manual/TAP and saved legacy intent through an explicit source-verified migration contract. |
 
 G3b1 protects productive stem preparation with actual loaded-source pointers,
@@ -97,12 +98,17 @@ period/rate consumers; G3b2c adds Python projections and locked controls, G3b2d
 adds runtime MIDI pad triggers. G3b2e binds productive prepared-source/stem
 admission to full current accepted revision/period/signed origin; retained
 same-source PCM refreshes only on effective native timing adoption/clear and
-shares one SourcePlayback trajectory. Productive StretchProcessor/voice/DSP-history
-binding, source-verified accepted persistence/fresh loader adoption, controller
-global START/STOP batch launch including MIDI and explicit acceptance/derived
-loop/master refresh orchestration remain G3b2 work. The warmed Key Lock pool
-remains source-neutral and source preparation test-only; C1 copy-first/ABA proof
-is still separate.
+shares one SourcePlayback trajectory. G3b2f1 binds actual continuous productive native/FIFO
+history to canonical source feed and complete effective timing, retaining old
+voice source/timing ownership independently of bank replacement. Required NEXT
+G3b2f2 must integrate source-specific worker priming, retained prepared native/FIFO
+ownership, full source/current-revision/rate/epoch permits and timed transactional
+adoption with catch-up before G3b2g source-verified accepted persistence/fresh
+loader adoption. Controller global START/STOP batch
+launch including MIDI and explicit acceptance/derived loop/master refresh
+orchestration remain G3b2 work. The warmed Key Lock pool remains source-neutral
+and source preparation test-only; neither completes required G3b2f2. Later B5
+audible crop/delay/transition compensation and C1 copy-first/ABA proof stay separate.
 G3c separately proves
 musical period versus rounded physical duration over 75/1000 cycles, fractional
 periods/rates and callback partitions. Rendered DSP/onset/device evidence is still

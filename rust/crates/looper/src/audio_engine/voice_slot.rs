@@ -1,5 +1,7 @@
 use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
+use crate::audio_engine::constant_timing::AcceptedTimingProjection;
 use crate::audio_engine::key_lock_preparation::KeyLockPreparationLane;
+use crate::audio_engine::source_grid::SourceGrid;
 use crate::audio_engine::source_playback::SourcePlayback;
 pub(crate) use crate::audio_engine::source_reader::ExplicitSeekMode;
 use crate::audio_engine::stretch_processor::StretchProcessor;
@@ -12,6 +14,37 @@ pub(crate) struct VoiceStartConfig {
     pub(crate) volume: f32,
     pub(crate) initial_tempo_ratio: f64,
     pub(crate) start_output_frame: Option<u64>,
+    pub(crate) source_timing: VoiceSourceTiming,
+}
+
+/// Effective timing belongs to the voice's pinned source, even after a bank replacement.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct VoiceSourceTiming {
+    pub(crate) accepted: Option<AcceptedTimingProjection>,
+    pub(crate) legacy_period_seconds: Option<f64>,
+    pub(crate) legacy_origin_frame: f64,
+}
+
+impl VoiceSourceTiming {
+    pub(crate) fn period_seconds(self) -> Option<f64> {
+        self.accepted
+            .map(|timing| timing.period_seconds)
+            .or(self.legacy_period_seconds)
+    }
+
+    pub(crate) fn grid(self, sample_rate_hz: f64) -> Option<SourceGrid> {
+        if let Some(timing) = self.accepted {
+            SourceGrid::from_period(
+                timing.period_seconds * f64::from(timing.sample_rate_hz),
+                timing.origin_seconds * f64::from(timing.sample_rate_hz),
+            )
+        } else {
+            SourceGrid::from_period(
+                self.legacy_period_seconds? * sample_rate_hz,
+                self.legacy_origin_frame,
+            )
+        }
+    }
 }
 
 pub struct VoiceSlot {
@@ -21,6 +54,7 @@ pub struct VoiceSlot {
     pub frame_pos: usize,
     pub volume: f32,
     pub(crate) source_playback: SourcePlayback,
+    pub(crate) source_timing: VoiceSourceTiming,
     pub stretch: StretchProcessor,
     pub paused: bool,
     pub(crate) explicit_seek_mode: ExplicitSeekMode,
@@ -38,6 +72,7 @@ impl VoiceSlot {
             frame_pos: 0,
             volume: 0.0,
             source_playback: SourcePlayback::new(0, ExplicitSeekMode::Normal, 1.0),
+            source_timing: VoiceSourceTiming::default(),
             stretch: StretchProcessor::with_preparation_lane(channels, preparation),
             paused: false,
             explicit_seek_mode: ExplicitSeekMode::Normal,
@@ -49,32 +84,29 @@ impl VoiceSlot {
         config: VoiceStartConfig,
         retirement: &mut impl AudioBufferRetirement,
     ) {
+        // The source-address history is valid only while this voice retains its PCM pin.
+        self.stretch.reset();
         if let Some(old_sample) = self.sample.take() {
             retirement.retire_sample(old_sample);
         }
 
-        self.start_inner(
-            config.sample_id,
-            config.sample,
-            config.initial_frame_pos,
-            config.volume,
-            config.initial_tempo_ratio,
-            config.start_output_frame,
-        );
+        self.start_inner(config);
     }
 
-    fn start_inner(
-        &mut self,
-        sample_id: usize,
-        sample: SampleBuffer,
-        initial_frame_pos: usize,
-        volume: f32,
-        initial_tempo_ratio: f64,
-        _start_output_frame: Option<u64>,
-    ) {
+    fn start_inner(&mut self, config: VoiceStartConfig) {
+        let VoiceStartConfig {
+            sample_id,
+            sample,
+            initial_frame_pos,
+            volume,
+            initial_tempo_ratio,
+            start_output_frame: _,
+            source_timing,
+        } = config;
         self.active = true;
         self.sample_id = sample_id;
         self.sample = Some(sample);
+        self.source_timing = source_timing;
         self.frame_pos = initial_frame_pos;
         self.volume = volume;
         self.source_playback = SourcePlayback::new(
@@ -84,16 +116,17 @@ impl VoiceSlot {
         );
         self.paused = false;
         self.explicit_seek_mode = ExplicitSeekMode::Normal;
-        self.stretch.reset();
     }
 
     #[cfg(test)]
     pub(crate) fn stop(&mut self) {
+        self.stretch.reset();
         self.sample = None;
         self.stop_inner();
     }
 
     pub(crate) fn stop_rt(&mut self, retirement: &mut impl AudioBufferRetirement) {
+        self.stretch.reset();
         if let Some(sample) = self.sample.take() {
             retirement.retire_sample(sample);
         }
@@ -106,9 +139,9 @@ impl VoiceSlot {
         self.frame_pos = 0;
         self.volume = 0.0;
         self.source_playback = SourcePlayback::new(0, ExplicitSeekMode::Normal, 1.0);
+        self.source_timing = VoiceSourceTiming::default();
         self.paused = false;
         self.explicit_seek_mode = ExplicitSeekMode::Normal;
-        self.stretch.reset();
     }
 
     pub fn restart(

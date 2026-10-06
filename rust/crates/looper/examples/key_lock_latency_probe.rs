@@ -8,22 +8,16 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::time::Instant;
 
-#[path = "../src/audio_engine/constants.rs"]
-pub mod constants;
-#[path = "../src/audio_engine/key_lock_preparation.rs"]
-mod key_lock_preparation;
-#[path = "../src/audio_engine/rubberband_backend.rs"]
-mod rubberband_backend;
-mod audio_engine {
-    pub(crate) use crate::constants;
-    pub(crate) use crate::key_lock_preparation;
-    pub(crate) use crate::rubberband_backend;
-}
-#[path = "../src/audio_engine/stretch_processor.rs"]
-mod stretch_processor;
+// Keep the diagnostic on the actual production types, including productive source history.
+// Importing the complete graph avoids a second set of timing, source or message definitions.
+#[path = "../src/audio_engine/mod.rs"]
+mod audio_engine;
+#[path = "../src/messages.rs"]
+mod messages;
 
-use rubberband_backend::RubberBandLiveShifter;
-use stretch_processor::{DEFAULT_BLOCK_SAMPLES, StretchProcessor};
+use audio_engine::key_lock_preparation;
+use audio_engine::rubberband_backend::RubberBandLiveShifter;
+use audio_engine::stretch_processor::{DEFAULT_BLOCK_SAMPLES, StretchProcessor};
 
 // Cargo applies the package's link-lib instruction to its cdylib target. The standalone
 // path-imported probe also needs the native library; build.rs supplies its search directory.

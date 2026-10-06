@@ -29,6 +29,21 @@ fractional source distance.
 `VoiceSlot` owns the per-voice source playback state, `StretchProcessor` and
 explicit seek mode. The mixer retains one preparation worker for its 32 voice lanes.
 
+Productive `StretchProcessor` fills its own fixed feed from the actual borrowed
+source through the shared reader and canonical cursor. Its consumed native
+history and pending FIFOs bind that source's address/shape/loaded rate and full
+effective accepted revision with exact period/signed-origin bits. The expected
+next fractional position, including seek mode, guards continuity before samples
+enter native or pending adapter state. See [native timing ownership](native-constant-timing.md).
+
+This is G3b2f1 continuous productive history ownership. Required NEXT G3b2f2
+source-prepared native integration is still absent: source-specific worker
+priming, retained prepared native/FIFO ownership, full source/current-accepted-
+revision/rate/epoch permits and timed transactional adoption with catch-up. It
+must precede G3b2g accepted persistence/fresh loader adoption. The warmed reserve
+and test-only preparation proof do not complete it. Later B5 audible
+crop/delay/transition compensation is a separate gate.
+
 ## Playback Semantics
 
 - Per-pad Key Lock off: playback is varispeed, so tempo and pitch move
@@ -137,6 +152,24 @@ Dry varispeed and the approximately neutral ratio remain immediate. Pause/resume
 retain the current native state. Stem mode/mask transitions retain native
 history and use the existing source crossfade instead of resetting Rubber Band.
 
+Same-source accepted adoption/clear and rate changes retain chronological
+native/FIFO history when the canonical next fractional position is continuous;
+the complete effective accepted projection refreshes on productive feed.
+Pending/rejected timing leaves it unchanged. A source mismatch or discontinuity
+invalidates bounded adapter storage and marks used state dirty before foreign
+feed can enter it. A source-neutral warmed handle becomes source history only
+through actual productive consumption; this adds no source-specific pre-roll.
+
+Voice source and timing remain paired when a bank sample is replaced. The old
+active voice retains its pinned PCM and previous effective timing, separately
+from current pad-bank acceptance. An admitted retrigger adopts the actual current
+bank source, retires its old pin off realtime and invalidates old adapter history.
+Successful same-source timing refresh updates only matching voices. Native
+allocation/reset/loading and large-owner destruction remain outside the callback.
+Explicit active seeks use the pinned voice's source extent after bank replacement;
+even a same-position seek clears bounded adapter/FIFO and fixed per-pad filter
+history, with native reset/warming still owned by the worker.
+
 ### Adapter And Measured Delay
 
 The tested SHORT + CHANNELS_TOGETHER backend uses 512-frame blocks. Wet
@@ -197,15 +230,17 @@ so their source feed does not change with render partition sizes. This proves
 the source-to-adapter prerequisite independently of the adapter FIFO property;
 it does not prove source priming, transient compensation or audible hardware
 alignment. The live mixer and non-live preparation proof now call the same
-`SourceReadPlan::fill_fractional_buffers` helper. Live prepared-state activation
-and audible compensation remain pending.
+`SourceReadPlan::fill_fractional_buffers` helper. Required G3b2f2 prepared native
+ownership/adoption remains pending before persistence; audible compensation
+remains a separate later B5 gate.
 
 This preparation and adapter safety stage (slice 3a) does not perform track
 pre-roll, delay discarding, or a separate DSP feed-ahead cursor. Source playheads,
 persisted markers, the shared clock, and launch scheduling keep their existing
-meaning. Source-aware prepared handover, audible phase compensation, and short
-wet/bypass transitions, including ratio 1.0 and global/per-pad toggles, remain
-slice 3b work. Current mode changes can still switch between delayed wet output
+meaning. Source-prepared native ownership and timed adoption/catch-up are required
+NEXT G3b2f2. Audible phase compensation and short wet/bypass transitions, including
+ratio 1.0 and global/per-pad toggles, remain later B5 acoustic work. Current mode
+changes can still switch between delayed wet output
 and immediate dry output without that transition compensation.
 
 Output-clock snapshots estimate device buffering from CPAL callback timestamps.
@@ -223,7 +258,8 @@ cursors use an explicit constant ratio. Live smoothing and asynchronous control
 changes are outside this proof. The caller's fractional clock and pending rate
 target remain unchanged.
 
-Exact initial inverse pitch uses the same `f32` conversion as live processing.
+Exact initial inverse pitch uses the shared binary64 inverse-rate conversion and
+native `c_double` pitch ABI used by live processing.
 It is set before native reset and the first source-content shift. Reset initializes
 the previous native output hop from that pitch. The fixture advances only future
 feed during preparation and retains native state plus fixed input/output FIFOs.
@@ -315,13 +351,14 @@ already empty, and retention limits C to at most 2080. Nominal C3678 clips the
 original impulse peak and discards 96.714% energy; q10/q50 residuals are
 -907/-420 frames. Source history therefore establishes coherent provenance,
 but cannot by itself make an intrinsically spread transient fit both timing
-budgets. Resolve the onset/content policy before choosing compensation or live
-adoption. Local measurements are `scratch/slice3e-source-history{,.summary}.csv`;
+budgets. Resolve the onset/content policy before choosing audible compensation or
+compensated live onset. Local measurements are `scratch/slice3e-source-history{,.summary}.csv`;
 these isolated fixtures do not measure busy musical context or a device.
 
-Live source/generation/loop/seek/stem/ratio identity, fixed handover frames,
-stale/late rejection, off-thread retirement and source-aligned mode transitions
-remain pending. No transport, marker, launch policy or live fallback changes in
+G3b2f1 binds actual continuous history; source-prepared native ownership, complete
+permits and timed adoption/catch-up remain required G3b2f2. Audible compensation
+and source-aligned mode transitions remain later B5 work. No transport, marker,
+launch policy or live fallback changes in
 this proof gate, and no device measurement is claimed.
 
 ## Continuous Onset And Content Feasibility

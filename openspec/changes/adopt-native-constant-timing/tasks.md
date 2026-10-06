@@ -58,15 +58,41 @@
   and source/timing refresh races; complete
   full checks, official strict validation and independent staged review.
 
+## G3b2f1: Continuous productive voice and native/FIFO/filter-history ownership
+
+- [x] Fill productive StretchProcessor feed directly from actual borrowed source
+  and canonical SourceReadPlan/SourcePlayback; bind actual native and pending
+  FIFO history to source/shape/rate and complete effective accepted projection.
+- [x] Check expected fractional next-source position before consuming feed;
+  retain continuous same-source timing/rate/pause/stem history and invalidate
+  discontinuous history with bounded adapter work and existing worker recycling.
+- [x] Keep old active voice source/timing ownership independent of a replacement
+  bank; adopt current bank ownership on retrigger with off-realtime retirement.
+- [x] Bind productive per-pad EQ/isolator filter history to the same actual voice
+  source/projection/trajectory; clear fixed filter storage before foreign-source
+  or discontinuous output and retain continuous same-source history.
+- [x] Fence new voice/retrigger adoption against actual current native source
+  ownership, including loading unavailable and control/callback-bank mismatch;
+  preserve ongoing effective old source/timing/history on rejection.
+- [x] Cover current/stale/replacement/rejected/pending/Manual/Tap/Legacy/
+  unavailable, native loading/control-bank source mismatch, source/timing/rate
+  refresh, continuity and retirement races;
+  complete full checks, official strict validation and independent staged review.
+
 ## Explicit remaining boundaries
 
-- [ ] G3b2 remaining: productive StretchProcessor/voice/DSP-history binding;
-  the warmed pool remains source-neutral and key_lock_source_preparation test-only.
-- [ ] Accepted source-verified SampleAnalysis/ProjectState persistence and loader
+- [ ] Required NEXT G3b2f2: source-specific worker priming, retained prepared
+  native/FIFO ownership, full source/current-accepted-revision/rate/epoch permits
+  and timed transactional native adoption with catch-up. The warmed source-neutral
+  reserve, continuous f1 history and test-only key_lock_source_preparation do not
+  complete this required integration; finish it before G3b2g persistence.
+- [ ] G3b2g accepted source-verified SampleAnalysis/ProjectState persistence and loader
   schema with fresh runtime adoption and explicit Manual/Tap/Legacy policy.
 - [ ] Source/accepted-bound controller global batch launch (including MIDI
   START/STOP) and explicit adoption/derived refresh orchestration remain separate.
 - [ ] G3c separate: musical versus physical loop periods over 75/1000 cycles,
   fractional periods/rates/wrap/partition proof and rendered/onset/device/listening gates.
+- [ ] Later B5 audible crop/delay/transition compensation remains separate from
+  required G3b2f2 native ownership/adoption integration.
 - [ ] C1 separate: original hash association does not prove copy-first immutable
   decoder input or defeat original-file ABA replacement.

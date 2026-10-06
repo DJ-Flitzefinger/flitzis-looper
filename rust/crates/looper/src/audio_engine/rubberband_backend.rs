@@ -98,6 +98,11 @@ pub(crate) struct RubberBandLiveShifter {
 unsafe impl Send for RubberBandLiveShifter {}
 
 impl RubberBandLiveShifter {
+    #[cfg(test)]
+    pub(crate) fn state_address(&self) -> usize {
+        self.handle.as_ptr() as usize
+    }
+
     pub(crate) fn new(sample_rate_hz: u32, channels: usize) -> Result<Self, RubberBandError> {
         Self::with_options(sample_rate_hz, channels, RubberBandLiveOptions::default())
     }

@@ -14,6 +14,489 @@ const RATE: u32 = 8_000;
 const PRECISE_PERIOD: f64 = 60.0 / 119.999;
 const ORIGIN: f64 = -0.125_012_3;
 
+fn productive_source(value: f32) -> SampleBuffer {
+    SampleBuffer {
+        channels: 1,
+        samples: Arc::from(
+            (0..RATE)
+                .map(|frame| value * (frame as f32 * 0.13).sin())
+                .collect::<Vec<_>>(),
+        ),
+    }
+}
+
+fn productive_voice(state: &CallbackState) -> &crate::audio_engine::voice_slot::VoiceSlot {
+    state
+        .mixer
+        .voices
+        .iter()
+        .find(|voice| voice.is_playing_sample(0))
+        .unwrap()
+}
+
+#[test]
+fn productive_history_native_loaded_source_publication_fences_new_launch_during_missing_and_pending_cache()
+ {
+    use crate::audio_engine::input_runtime_binding::InputRuntimeOwnership;
+    use crate::audio_engine::{LoadedSourcePublication, publish_loaded_sample};
+    use flitzis_looper_analysis::tempo_acceptance::TimingIntent;
+    let old_source = productive_source(0.5);
+    let new_source = productive_source(0.2);
+    let other_source = productive_source(0.4);
+    let ownership = Arc::new(InputRuntimeOwnership::tracked());
+    let cache = Arc::new(std::sync::Mutex::new(vec![None; NUM_SAMPLES]));
+    let (producer, mut consumer) = RingBuffer::new(4);
+    let producer = Arc::new(std::sync::Mutex::new(producer));
+    let mut generation = (0, 0);
+    let mut digest = None;
+    let mut state = CallbackState::new(old_source.clone());
+    state.mixer.set_input_runtime_ownership(ownership.clone());
+    assert!(!state.mixer.can_play_sample(0, 1.0)); // tracked engine starts unavailable
+    publish_loaded_sample(
+        &producer,
+        &cache,
+        0,
+        old_source.clone(),
+        LoadedSourcePublication {
+            ownership: &ownership,
+            generation: 1,
+            rate: RATE,
+            generation_slot: &mut generation,
+            digest_slot: &mut digest,
+            digest: "a".repeat(64),
+        },
+    )
+    .unwrap();
+    assert_eq!(generation, (1, RATE));
+    assert!(ownership.source_current(0, &old_source, RATE));
+    assert!(!ownership.source_current(0, &old_source, RATE + 1));
+    assert_eq!(
+        state.drain(&mut consumer, &mut ImmediateAudioBufferRetirement),
+        1
+    );
+    let epoch = Arc::new(AtomicU64::new(2));
+    let (accepted, _) = publication(&old_source, &epoch, 2);
+    producer.lock().unwrap().push(accepted).unwrap();
+    state.drain(&mut consumer, &mut ImmediateAudioBufferRetirement);
+    ownership.set_timing_intent(0, TimingIntent::Automatic);
+    state.mixer.set_speed(1.37);
+    state.mixer.set_pad_key_lock(0, true);
+    assert!(state.mixer.play_sample(0, 1.0));
+    let mut other_generation = (0, 0);
+    let mut other_digest = None;
+    publish_loaded_sample(
+        &producer,
+        &cache,
+        1,
+        other_source,
+        LoadedSourcePublication {
+            ownership: &ownership,
+            generation: 1,
+            rate: RATE,
+            generation_slot: &mut other_generation,
+            digest_slot: &mut other_digest,
+            digest: "c".repeat(64),
+        },
+    )
+    .unwrap();
+    state.drain(&mut consumer, &mut ImmediateAudioBufferRetirement);
+    assert!(state.mixer.play_sample(1, 1.0));
+    state
+        .mixer
+        .render(&mut vec![0.0; 1657], &mut [0.0; NUM_SAMPLES]);
+    let history = productive_voice(&state)
+        .stretch
+        .productive_history()
+        .unwrap();
+    let native = productive_voice(&state).stretch.native_state_address();
+
+    // Exactly the native load-request transaction: fence before losing the control-cache pin.
+    ownership.revoke_source(0);
+    cache.lock().unwrap()[0] = None;
+    assert_eq!(state.acknowledgements.current_epoch(0), 2); // old effective timing/audio survives
+    assert!(!state.mixer.play_sample(0, 1.0));
+    let launch = ScheduledCommand::StopAllThenPlaySample {
+        id: 0,
+        volume: 1.0,
+        received_at_ns: None,
+    };
+    execute_scheduled_command(
+        &mut state.mixer,
+        &mut state.transport,
+        2,
+        launch,
+        &mut state.messages,
+        &mut ImmediateAudioBufferRetirement,
+    );
+    assert!(
+        state
+            .mixer
+            .voices
+            .iter()
+            .any(|voice| voice.is_playing_sample(1))
+    );
+    assert_eq!(
+        productive_voice(&state)
+            .stretch
+            .productive_history()
+            .unwrap()
+            .fed_output_frames,
+        history.fed_output_frames
+    );
+    state.mixer.render(&mut [0.0; 37], &mut [0.0; NUM_SAMPLES]);
+    assert_eq!(
+        productive_voice(&state)
+            .stretch
+            .productive_history()
+            .unwrap()
+            .binding,
+        history.binding
+    );
+
+    // Real native load publication completes control ownership BEFORE callback bank adoption.
+    publish_loaded_sample(
+        &producer,
+        &cache,
+        0,
+        new_source.clone(),
+        LoadedSourcePublication {
+            ownership: &ownership,
+            generation: 3,
+            rate: RATE,
+            generation_slot: &mut generation,
+            digest_slot: &mut digest,
+            digest: "b".repeat(64),
+        },
+    )
+    .unwrap();
+    assert_eq!(generation, (3, RATE));
+    assert_eq!(digest, Some("b".repeat(64)));
+    assert!(!state.mixer.play_sample(0, 1.0)); // new control pin cannot authorize old callback PCM
+    let mut blocked = LimitedRetirement {
+        slots: 1,
+        retired: Vec::new(),
+        stems: Vec::new(),
+    };
+    assert_eq!(state.drain(&mut consumer, &mut blocked), 0);
+    blocked.slots = 2;
+    assert_eq!(state.drain(&mut consumer, &mut blocked), 1);
+    assert!(!state.mixer.play_sample(0, 1.0)); // Automatic requires fresh new-source acceptance
+    state.mixer.render(&mut [0.0; 37], &mut [0.0; NUM_SAMPLES]);
+    assert_eq!(
+        productive_voice(&state)
+            .stretch
+            .productive_history()
+            .unwrap()
+            .binding,
+        history.binding
+    );
+    assert_eq!(
+        productive_voice(&state).stretch.native_state_address(),
+        native
+    );
+    ownership.set_timing_intent(0, TimingIntent::Legacy);
+    assert!(state.mixer.play_sample(0, 1.0));
+    assert!(Arc::ptr_eq(
+        &productive_voice(&state).sample.as_ref().unwrap().samples,
+        &new_source.samples
+    ));
+    state.mixer.render(&mut [0.0; 37], &mut [0.0; NUM_SAMPLES]);
+    assert_eq!(
+        productive_voice(&state)
+            .stretch
+            .productive_history()
+            .unwrap()
+            .binding
+            .accepted,
+        None
+    );
+    assert_eq!(
+        productive_voice(&state)
+            .stretch
+            .productive_history()
+            .unwrap()
+            .binding
+            .source_address,
+        new_source.samples.as_ptr() as usize
+    );
+}
+
+#[test]
+fn productive_history_callback_pending_rejected_and_same_drain_source_replace_keep_real_history_owned()
+ {
+    let source = productive_source(0.5);
+    let epoch = Arc::new(AtomicU64::new(2));
+    let (initial, initial_permit) = publication(&source, &epoch, 2);
+    let (mut producer, mut consumer) = RingBuffer::new(3);
+    producer.push(initial).unwrap();
+    let mut state = CallbackState::new(source.clone());
+    state.drain(&mut consumer, &mut ImmediateAudioBufferRetirement);
+    assert_eq!(initial_permit.status(), "accepted");
+    state.mixer.set_speed(1.37);
+    state.mixer.set_pad_key_lock(0, true);
+    assert!(state.mixer.play_sample(0, 1.0));
+    state
+        .mixer
+        .render(&mut vec![0.0; 1657], &mut [0.0; NUM_SAMPLES]);
+    let first = productive_voice(&state)
+        .stretch
+        .productive_history()
+        .unwrap();
+    let native = productive_voice(&state).stretch.native_state_address();
+    epoch.store(3, Ordering::Release);
+    let (pending, pending_permit) = publication(&source, &epoch, 3);
+    producer.push(pending).unwrap();
+    let mut blocked = LimitedRetirement {
+        slots: 0,
+        retired: Vec::new(),
+        stems: Vec::new(),
+    };
+    assert_eq!(state.drain(&mut consumer, &mut blocked), 0);
+    assert_eq!(pending_permit.status(), "pending");
+    state.mixer.render(&mut [0.0; 37], &mut [0.0; NUM_SAMPLES]);
+    assert_eq!(
+        productive_voice(&state)
+            .stretch
+            .productive_history()
+            .unwrap()
+            .binding,
+        first.binding
+    );
+    epoch.store(4, Ordering::Release);
+    blocked.slots = 1;
+    assert_eq!(state.drain(&mut consumer, &mut blocked), 1);
+    assert_eq!(pending_permit.status(), "rejected");
+    let (mut latest, latest_permit) = publication(&source, &epoch, 4);
+    let ControlMessage::PublishConstantTiming { timing, .. } = &mut latest else {
+        unreachable!()
+    };
+    timing.projection.origin_seconds = -0.0;
+    timing.projection.revision = [0x44; 32];
+    let latest_projection = timing.projection;
+    producer.push(latest).unwrap();
+    producer
+        .push(ControlMessage::LoadSample {
+            id: 0,
+            sample: productive_source(0.2),
+        })
+        .unwrap();
+    state.mixer.pause_sample(0);
+    assert_eq!(
+        state.drain(&mut consumer, &mut ImmediateAudioBufferRetirement),
+        2
+    );
+    assert_eq!(latest_permit.status(), "accepted");
+    state.mixer.resume_sample(0);
+    state.mixer.render(&mut [0.0; 37], &mut [0.0; NUM_SAMPLES]);
+    let history = productive_voice(&state)
+        .stretch
+        .productive_history()
+        .unwrap();
+    assert_eq!(history.binding.accepted, Some(latest_projection));
+    assert_eq!(
+        history.binding.source_address,
+        source.samples.as_ptr() as usize
+    );
+    assert_eq!(history.fed_output_frames, first.fed_output_frames + 74);
+    assert_eq!(
+        productive_voice(&state).stretch.native_state_address(),
+        native
+    );
+}
+
+struct AuthorityRaceRetirement {
+    ownership: Arc<crate::audio_engine::input_runtime_binding::InputRuntimeOwnership>,
+    calls: usize,
+    revoke_at_preflight: Option<usize>,
+    revoke_at_retire: bool,
+    samples: Vec<SampleBuffer>,
+    slots: usize,
+}
+
+impl AudioBufferRetirement for AuthorityRaceRetirement {
+    fn retire_sample(&mut self, source: SampleBuffer) {
+        if self.revoke_at_retire {
+            self.ownership.set_timing_intent(
+                0,
+                flitzis_looper_analysis::tempo_acceptance::TimingIntent::Automatic,
+            );
+        }
+        self.samples.push(source);
+    }
+    fn retire_prepared_stems(&mut self, _: PreparedStemSet) {
+        unreachable!()
+    }
+    fn retire_constant_timing(&mut self, _: PreparedConstantTiming) {
+        unreachable!()
+    }
+    fn available_retirement_slots(&mut self) -> usize {
+        self.calls += 1;
+        if self.revoke_at_preflight == Some(self.calls) {
+            self.ownership.set_timing_intent(
+                0,
+                flitzis_looper_analysis::tempo_acceptance::TimingIntent::Automatic,
+            );
+        }
+        self.slots
+    }
+}
+
+#[test]
+fn productive_history_exclusive_preflight_failure_preserves_loop_and_other_audio_and_rechecks_retirement()
+ {
+    use crate::audio_engine::input_runtime_binding::{InputPadBinding, InputRuntimeOwnership};
+    let original = productive_source(0.5);
+    let replacement = productive_source(0.2);
+    let mut state = CallbackState::new(original.clone());
+    let ownership = Arc::new(InputRuntimeOwnership::default());
+    state.mixer.set_input_runtime_ownership(ownership.clone());
+    state.mixer.set_speed(1.37);
+    state.mixer.set_pad_key_lock(0, true);
+    assert!(state.mixer.play_sample(0, 1.0));
+    state
+        .mixer
+        .render(&mut vec![0.0; 1657], &mut [0.0; NUM_SAMPLES]);
+    state.mixer.load_sample(0, replacement.clone());
+    state.mixer.load_sample(1, productive_source(0.4));
+    assert!(state.mixer.play_sample(1, 1.0));
+    let history = productive_voice(&state)
+        .stretch
+        .productive_history()
+        .unwrap();
+    let frame = productive_voice(&state).frame_pos;
+    let launch = ScheduledCommand::TriggerInputPad {
+        id: 0,
+        start_s: 0.2,
+        end_s: Some(0.7),
+        exclusive: true,
+        binding: InputPadBinding {
+            source_address: replacement.samples.as_ptr() as usize,
+            sample_count: replacement.samples.len(),
+            channels: 1,
+            sample_rate_hz: RATE,
+            authority_revision: 1,
+            runtime_revision: 0,
+            accepted: None,
+        },
+        received_at_ns: 0,
+    };
+    let mut retirement = AuthorityRaceRetirement {
+        ownership,
+        calls: 0,
+        revoke_at_preflight: None,
+        revoke_at_retire: false,
+        samples: Vec::new(),
+        slots: 0,
+    };
+    execute_scheduled_command(
+        &mut state.mixer,
+        &mut state.transport,
+        2,
+        launch,
+        &mut state.messages,
+        &mut retirement,
+    );
+    assert_eq!(productive_voice(&state).frame_pos, frame);
+    assert!(
+        state
+            .mixer
+            .voices
+            .iter()
+            .any(|voice| voice.is_playing_sample(1))
+    );
+    retirement.slots = MAX_VOICES;
+    retirement.calls = 0;
+    retirement.revoke_at_preflight = Some(2); // after guard but before final admitted source snapshot
+    execute_scheduled_command(
+        &mut state.mixer,
+        &mut state.transport,
+        3,
+        launch,
+        &mut state.messages,
+        &mut retirement,
+    );
+    assert_eq!(
+        productive_voice(&state)
+            .stretch
+            .productive_history()
+            .unwrap()
+            .binding,
+        history.binding
+    );
+    assert_eq!(productive_voice(&state).frame_pos, frame);
+    assert_eq!(
+        state
+            .mixer
+            .phase_aligned_initial_sample_frame(0, RATE as usize, 0.0),
+        0
+    );
+    assert!(
+        state
+            .mixer
+            .voices
+            .iter()
+            .any(|voice| voice.is_playing_sample(1))
+    );
+    assert!(retirement.samples.is_empty());
+    assert!(state.messages.is_empty());
+}
+
+#[test]
+fn productive_history_exclusive_commit_uses_admitted_source_when_authority_changes_during_stop() {
+    use crate::audio_engine::input_runtime_binding::InputRuntimeOwnership;
+    let source = productive_source(0.5);
+    let mut state = CallbackState::new(source.clone());
+    let ownership = Arc::new(InputRuntimeOwnership::default());
+    state.mixer.set_input_runtime_ownership(ownership.clone());
+    state.mixer.load_sample(1, productive_source(0.4));
+    assert!(state.mixer.play_sample(1, 1.0));
+    let mut retirement = AuthorityRaceRetirement {
+        ownership,
+        calls: 0,
+        revoke_at_preflight: None,
+        revoke_at_retire: true,
+        samples: Vec::new(),
+        slots: MAX_VOICES,
+    };
+    execute_scheduled_command(
+        &mut state.mixer,
+        &mut state.transport,
+        3,
+        ScheduledCommand::StopAllThenPlaySample {
+            id: 0,
+            volume: 1.0,
+            received_at_ns: None,
+        },
+        &mut state.messages,
+        &mut retirement,
+    );
+    assert_eq!(retirement.samples.len(), 1);
+    assert!(Arc::ptr_eq(
+        &productive_voice(&state).sample.as_ref().unwrap().samples,
+        &source.samples
+    ));
+    assert!(
+        state
+            .mixer
+            .voices
+            .iter()
+            .all(|voice| !voice.active || voice.sample_id == 0)
+    );
+    assert!(!state.mixer.can_play_sample(0, 1.0)); // later admission sees unavailable Automatic
+    state.mixer.set_speed(1.37);
+    state.mixer.set_pad_key_lock(0, true);
+    state.mixer.render(&mut [0.0; 37], &mut [0.0; NUM_SAMPLES]);
+    assert_eq!(
+        productive_voice(&state)
+            .stretch
+            .productive_history()
+            .unwrap()
+            .binding
+            .accepted,
+        None
+    );
+}
+
 fn sample() -> SampleBuffer {
     SampleBuffer {
         channels: 1,

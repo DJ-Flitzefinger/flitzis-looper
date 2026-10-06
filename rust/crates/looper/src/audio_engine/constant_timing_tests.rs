@@ -32,11 +32,18 @@ fn source() -> SampleBuffer {
 fn test_engine() -> AudioEngine {
     Python::initialize();
     let engine = AudioEngine::new().unwrap();
-    engine.sample_cache.lock().unwrap()[0] = Some(source());
+    let loaded = source();
+    engine.sample_cache.lock().unwrap()[0] = Some(loaded.clone());
     engine.pad_request_ids.lock().unwrap()[0] = 7;
     engine.loaded_source_generations.lock().unwrap()[0] = (7, RATE);
     engine.loaded_source_digests.lock().unwrap()[0] = Some("a".repeat(64));
     engine.timing_intents.lock().unwrap()[0] = TimingIntent::Automatic;
+    engine
+        .input_runtime_ownership
+        .set_timing_intent(0, TimingIntent::Automatic);
+    engine
+        .input_runtime_ownership
+        .publish_source(0, &loaded, RATE, 7);
     engine
 }
 

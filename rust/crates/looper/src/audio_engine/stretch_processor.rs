@@ -1,7 +1,21 @@
+use super::constant_timing::AcceptedTimingProjection;
+use super::productive_source_history::{ProductiveSourceBinding, ProductiveSourceHistory};
+use super::source_playback::SourcePlayback;
+use super::source_reader::SourceReadPlan;
 #[cfg(test)]
 use crate::audio_engine::key_lock_preparation::create_key_lock_preparation;
 use crate::audio_engine::key_lock_preparation::{KeyLockPreparationLane, KeyLockPreparationWorker};
 use crate::audio_engine::rubberband_backend::{RubberBandLiveShifter, pitch_scale_for_tempo_ratio};
+use crate::messages::{PreparedStemSet, SampleBuffer};
+
+pub(crate) struct ProductiveSourceFeed<'a> {
+    pub(crate) sample: &'a SampleBuffer,
+    pub(crate) stems: Option<&'a PreparedStemSet>,
+    pub(crate) sample_rate_hz: u32,
+    pub(crate) accepted: Option<AcceptedTimingProjection>,
+    pub(crate) plan: SourceReadPlan,
+    pub(crate) playback: &'a SourcePlayback,
+}
 
 /// Default maximum block size handled by the per-voice DSP wrapper.
 ///
@@ -30,6 +44,7 @@ pub struct StretchProcessor {
     rubberband_dirty: bool,
     rubberband_used: bool,
     preparation: KeyLockPreparationLane,
+    productive_history: Option<ProductiveSourceHistory>,
     // Standalone processors retain their worker. Mixer processors share an engine worker.
     _preparation_worker: Option<KeyLockPreparationWorker>,
 }
@@ -93,11 +108,13 @@ impl StretchProcessor {
             rubberband_dirty: false,
             rubberband_used: false,
             preparation,
+            productive_history: None,
             _preparation_worker: None,
         }
     }
 
     pub fn reset(&mut self) {
+        self.productive_history = None;
         for channel in &mut self.varispeed {
             channel.fill(0.0);
         }
@@ -105,6 +122,51 @@ impl StretchProcessor {
             channel.fill(0.0);
         }
         self.reset_rubberband_state();
+    }
+
+    /// Read the owning voice's real canonical source before feeding live native/adapter state.
+    /// Projection refreshes retain chronological history only across exact source continuity.
+    pub(crate) fn process_source(
+        &mut self,
+        feed: ProductiveSourceFeed<'_>,
+        output_frames: usize,
+        preserve_pitch: bool,
+    ) {
+        let frames = output_frames.min(DEFAULT_BLOCK_SAMPLES);
+        if frames == 0 {
+            return;
+        }
+        let binding = ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted);
+        let position = feed.playback.position();
+        if self
+            .productive_history
+            .is_some_and(|history| !history.continues(binding, position))
+        {
+            // Discard only fixed adapter storage. Used native state stays uniquely owned until
+            // the existing worker lane can exchange and reset it off the callback.
+            self.reset_rubberband_state();
+        }
+        let prior_frames = self
+            .productive_history
+            .map_or(0, |history| history.fed_output_frames);
+        feed.plan.fill_fractional_buffers(
+            feed.sample,
+            feed.stems,
+            feed.playback,
+            self.resampled_buffers_mut(frames),
+            frames,
+        );
+        self.process_resampled(frames, feed.playback.tempo_ratio(), preserve_pitch);
+        if self.rubberband_active {
+            self.productive_history = Some(ProductiveSourceHistory {
+                binding,
+                next_position: feed.playback.position_at(frames),
+                fed_output_frames: prior_frames.saturating_add(frames as u64),
+            });
+        } else {
+            // Dry bypass and failed reserve admission own no productive wet history.
+            self.productive_history = None;
+        }
     }
 
     /// Returns fixed feed storage whose first `output_frames` samples the source reader fills.
@@ -267,6 +329,7 @@ impl StretchProcessor {
     }
 
     fn reset_rubberband_state(&mut self) {
+        self.productive_history = None;
         // Rubber Band 4.0.0 reset/cold pitch setup allocate internally. Only the worker may
         // perform those operations. An unused prepared handle is already clean.
         self.rubberband_dirty |= self.rubberband_used;
@@ -325,6 +388,31 @@ impl StretchProcessor {
         self.rubberband_output_fifo
             .first()
             .map_or(0, FixedFifo::capacity)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn productive_history(&self) -> Option<ProductiveSourceHistory> {
+        self.productive_history
+    }
+
+    #[cfg(test)]
+    pub(crate) fn native_state_address(&self) -> usize {
+        self.rubberband
+            .as_ref()
+            .map_or(0, RubberBandLiveShifter::state_address)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_fifo_frames(&self) -> (usize, usize) {
+        (
+            self.rubberband_input_fifo[0].len(),
+            self.rubberband_output_fifo[0].len(),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_preparation_worker(&self) {
+        self.preparation.fail_worker();
     }
 }
 

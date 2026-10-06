@@ -1,4 +1,4 @@
-# G3b2a/b/c/d/e native adoption, current authority and precise consumers
+# G3b2a-e and G3b2f1 native adoption, current authority and precise consumers
 
 ## Native authority
 
@@ -64,8 +64,8 @@ clipping does not redefine the requested master. SourcePlayback ratio/target/ram
 are binary64 and rate changes retain fractional source epochs. LiveShifter pitch
 uses its native c_double ABI through a named inverse-rate conversion. Its existing
 near-unity/update threshold policy remains; no sub-threshold pitch accuracy or
-audible SYNC is claimed. No new physical wrap policy or DSP-history ownership is
-introduced.
+audible SYNC is claimed. Physical wrap policy is unchanged. Productive history
+ownership is described below.
 
 ## Python current projection and controls
 
@@ -181,8 +181,85 @@ Pending/failed/rejected updates do not refresh it. source_reader checks the actu
 reference source and exact effective accepted projection against effective mixer
 timing. Full mix, every stem and both sides of a source-selection transition use
 the same SourcePlayback rate/ramp, position, interpolation taps and loop/seek rules.
-There is no new per-stem cursor or callback allocation/lock. Feeding that common
-source into Key Lock does not complete productive DSP-history revision binding.
+There is no new per-stem cursor or callback allocation/lock.
+
+## G3b2f1 continuous productive voice source and native/FIFO history ownership
+
+StretchProcessor fills its fixed feed storage directly from the actual borrowed
+SampleBuffer through SourceReadPlan and the canonical SourcePlayback. Its actual
+Rubber Band history and both pending adapter FIFOs carry fixed source address,
+shape and loaded rate plus the complete effective accepted projection, with
+bit-exact period and signed origin. A warmed source-neutral handle has no source
+history. key_lock_source_preparation remains a separate test-only proof.
+
+Before consuming each productive feed, the processor compares its expected next
+fractional source position, including seek mode, with the actual canonical
+position. A source mismatch or discontinuity clears bounded adapter storage and
+marks used native state dirty before foreign feed can enter it. Native reset,
+construction and warming use the existing preparation worker; exchange still
+reserves bounded return capacity before ownership moves. No large sample owner
+or native handle is destroyed on the callback.
+
+Continuous same-source accepted adoption/clear refreshes the complete effective
+projection on productive feed while retaining chronological native/FIFO history.
+An equal-valued replacement still changes full revision identity. Rate changes
+retain history and the canonical fractional epoch; pause freezes both progression
+and history. Stem mode/mask crossfades continue through the same reader. Start,
+retrigger, stop, seek, leaving wet processing and a loop clamp remain explicit
+discontinuities. Pending, failed or rejected accepted replacement supplies no
+new effective projection and cannot relabel history.
+
+VoiceSlot pins the source it is actually playing and that source's effective
+timing. A replacement bank sample and its accepted projection cannot relabel
+the older active voice. The old voice may finish under its own prior effective
+source/timing until explicit retrigger or stop; it is not CURRENT pad-bank
+accepted authority. Retrigger adopts the actual current bank owner and retires
+the old pin through existing off-realtime retirement. Same-source successful
+adoption/clear updates only matching voices. Failed admission or late rejection
+preserves the previously effective source, timing and history.
+
+Explicit active seeks use the pinned voice's full source extent, even when a
+shorter bank replacement is already current. Every successful explicit seek,
+including a same-position seek, clears bounded adapter/FIFO history and fixed
+per-pad filter ownership. Native reset/warming remains worker-owned.
+
+New voice/retrigger adoption checks declared Automatic availability and effective
+projection acknowledgement before replacing audio. It cannot treat unavailable
+Automatic as Legacy fallback. After control revocation but before the effective
+callback clear, fresh adoption can reject while old effective playback continues.
+Manual/Tap/Legacy can admit after actual clear under their own authority. Required
+old-pin retirement capacity is reserved before loop/exclusive/replacement side
+effects. This remains per-voice adoption, not guarded controller global batching.
+
+AudioEngine uses a tracked current native source fence with fixed generation,
+address, shape and loaded-rate atomics. A zero generation is unavailable. Load
+requests revoke the fence before releasing control cache ownership. Successful
+loaded publication installs the command/cache/generation/digest under the request
+owner, then publishes the fence; full queues change none of those values. Unload
+and run revoke current fences. New adoption requires the callback bank to match
+one bounded source check/recheck before and after timing availability, with no
+spin or address dereference. Loading unavailable and replacement control PCM
+ahead of the callback bank reject even Legacy new starts. Existing effective
+voice/history ignores this new-adoption fence and retains its own pinned source.
+The marker contains no PCM/digest/evidence owner and does not establish C1
+immutable original-to-decoder lineage.
+
+G3b2f1 binds productive continuous history. It supplies no source-specific worker
+priming, retained prepared native/FIFO owner or timed prepared adoption/catch-up.
+Those are required NEXT G3b2f2 before G3b2g persistence, not deferred B5 acoustic
+compensation. Crop/delay correction and click-safe wet/bypass policy remain later
+B5 work. Reserve unavailability retains the existing
+bounded wet-silence policy with canonical source progression; it does not promise
+an audible seamless handover.
+
+The productive PerPadDspChain also checks the actual rendered voice's source,
+complete effective projection and expected fractional next position before
+filtering a chunk. Continuous same-source timing/rate changes retain actual EQ/
+isolator filter storage; a foreign source, loaded-rate mismatch or discontinuity
+clears only fixed Rust filter state before replacement output enters it. Its
+ledger counts actually filtered output, including existing wet fallback silence.
+That records filter ownership and trajectory, not an assertion of audible source
+content. It adds no native DSP allocation/reset/loading to the callback.
 
 ## Limits and remaining G3b2 consumers
 
@@ -192,13 +269,18 @@ their existing behavior. Source content is an observed loader digest; the
 complete mono digest and Arc/timebase checks verify the actually loaded PCM, not
 an immutable historical original-to-decoder relationship.
 
-Productive StretchProcessor/voice/DSP history still needs full source/accepted
-revision binding. The existing Key Lock warmed-state pool is source-neutral;
-key_lock_source_preparation is test-only, not productive integration. Accepted
-source-verified SampleAnalysis/ProjectState persistence and loader schema with
+The existing Key Lock warmed-state pool is source-neutral;
+key_lock_source_preparation is test-only, not productive source priming or timed
+native-history handover. G3b2f is incomplete: required NEXT G3b2f2 must integrate
+source-specific worker priming, retained prepared native/FIFO ownership, full
+source/current-accepted-revision/rate/epoch permits and timed transactional
+adoption with catch-up. Continuous f1 identity is insufficient for that prepared
+ownership. This native integration precedes G3b2g accepted source-verified
+SampleAnalysis/ProjectState persistence and loader schema with
 fresh runtime adoption, source/accepted-bound controller global START/STOP batch
 launch including MIDI, and explicit acceptance/derived loop/master refresh
 orchestration remain open. Original-hash association does not prove immutable
 copy-first/ABA lineage (C1). G3c retains separate musical/rounded physical loops
 over 75/1000 cycles, fractional periods/rates, callback partitions/wrap and
-rendered/onset/device/listening gates. This slice claims no audible SYNC.
+rendered/onset/device/listening gates. Later B5 audible crop/delay/transition
+compensation is separate from required f2 integration. This slice claims no audible SYNC.

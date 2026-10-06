@@ -21,6 +21,7 @@ use crate::audio_engine::dsp::{DspNodeSlot, DspParameterId, DspParameterSlot, Pe
 use crate::audio_engine::key_lock_preparation::{
     KeyLockPreparationError, KeyLockPreparationWorker, create_key_lock_preparation,
 };
+use crate::audio_engine::productive_source_history::ProductiveSourceBinding;
 use crate::audio_engine::source_grid::SourceGrid;
 use crate::audio_engine::source_reader::{
     FrameRange, STEM_TRANSITION_RAMP_FRAMES, SourceReadPlan, StemRenderSelection, StemTransition,
@@ -31,10 +32,10 @@ use crate::audio_engine::source_reader::{
 use crate::audio_engine::source_reader::{
     full_stem_available_mask, render_source_sample, stem_index_mask,
 };
-use crate::audio_engine::stretch_processor::DEFAULT_BLOCK_SAMPLES;
+use crate::audio_engine::stretch_processor::{DEFAULT_BLOCK_SAMPLES, ProductiveSourceFeed};
 #[cfg(test)]
 use crate::audio_engine::voice_slot::ExplicitSeekMode;
-use crate::audio_engine::voice_slot::{VoiceSlot, VoiceStartConfig};
+use crate::audio_engine::voice_slot::{VoiceSlot, VoiceSourceTiming, VoiceStartConfig};
 #[cfg(test)]
 use crate::messages::STEM_BUFFER_COUNT;
 use crate::messages::{
@@ -388,6 +389,22 @@ impl RtMixer {
             return false;
         }
 
+        // A timing mutation and bank replacement can share a callback with no intervening
+        // render (including paused voices). Freeze the old pin's latest effective timing first.
+        let previous_timing = self.timing_for_sample_id(id);
+        if let Some(previous) = self.sample_bank[id].as_ref() {
+            for voice in &mut self.voices {
+                if voice.is_playing_sample(id)
+                    && voice
+                        .sample
+                        .as_ref()
+                        .is_some_and(|active| Arc::ptr_eq(&active.samples, &previous.samples))
+                {
+                    voice.source_timing = previous_timing;
+                }
+            }
+        }
+
         if let Some(old_sample) = self.sample_bank[id].take() {
             retirement.retire_sample(old_sample);
         }
@@ -601,10 +618,44 @@ impl RtMixer {
     }
 
     pub(crate) fn can_play_sample(&self, id: usize, velocity: f32) -> bool {
-        id < NUM_SAMPLES
-            && velocity.is_finite()
-            && (VOLUME_MIN..=VOLUME_MAX).contains(&velocity)
-            && self.sample_bank[id].is_some()
+        if id >= NUM_SAMPLES
+            || !velocity.is_finite()
+            || !(VOLUME_MIN..=VOLUME_MAX).contains(&velocity)
+        {
+            return false;
+        }
+        let Some(sample) = self.sample_bank[id].as_ref() else {
+            return false;
+        };
+        self.input_runtime_ownership
+            .source_current(id, sample, self.sample_rate_hz as u32)
+            && self.input_runtime_ownership.source_timing_available(
+                id,
+                self.pad_accepted_timing[id],
+                &self.current_timing_acknowledgements,
+            )
+            && self
+                .input_runtime_ownership
+                .source_current(id, sample, self.sample_rate_hz as u32)
+    }
+
+    /// Reserve the one possible replaced voice pin before any launch/loop side effect.
+    pub(crate) fn can_adopt_sample(
+        &self,
+        id: usize,
+        retirement: &mut impl AudioBufferRetirement,
+    ) -> bool {
+        let Some(sample) = self.sample_bank.get(id).and_then(Option::as_ref) else {
+            return false;
+        };
+        let replaces_pin = self.voices.iter().any(|voice| {
+            voice.is_playing_sample(id)
+                && voice
+                    .sample
+                    .as_ref()
+                    .is_some_and(|old| !Arc::ptr_eq(&old.samples, &sample.samples))
+        });
+        !replaces_pin || retirement.available_retirement_slots() > 0
     }
 
     /// Starts playback of a loaded sample.
@@ -677,27 +728,106 @@ impl RtMixer {
         start_output_frame: Option<u64>,
         retirement: &mut impl AudioBufferRetirement,
     ) -> bool {
-        if !self.can_play_sample(id, velocity) {
-            return false;
-        }
-
-        let Some(sample) = self.sample_bank[id].as_ref() else {
+        let Some(config) = self.prepare_sample_start(
+            id,
+            velocity,
+            target_master_beat,
+            start_output_frame,
+            retirement,
+        ) else {
             return false;
         };
+        self.play_prepared_sample_rt(config, retirement)
+    }
+
+    pub(crate) fn prepare_play_sample_rt(
+        &self,
+        id: usize,
+        velocity: f32,
+        output_frame: u64,
+        retirement: &mut impl AudioBufferRetirement,
+    ) -> Option<VoiceStartConfig> {
+        self.prepare_sample_start(id, velocity, None, Some(output_frame), retirement)
+    }
+
+    fn prepare_sample_start(
+        &self,
+        id: usize,
+        velocity: f32,
+        target_master_beat: Option<f64>,
+        start_output_frame: Option<u64>,
+        retirement: &mut impl AudioBufferRetirement,
+    ) -> Option<VoiceStartConfig> {
+        if id >= NUM_SAMPLES || !self.can_adopt_sample(id, retirement) {
+            return None;
+        }
+
+        let sample = self.sample_bank[id].as_ref()?;
         let sample = sample.clone();
 
         let tempo_ratio = self.tempo_ratio_for_sample_id(id);
+        let source_timing = self.timing_for_sample_id(id);
 
         let sample_frames = sample.samples.len() / self.channels;
         let initial_frame_pos = target_master_beat
             .map(|phase| self.phase_aligned_initial_sample_frame(id, sample_frames, phase))
             .unwrap_or_else(|| self.effective_loop_start_frame(id, sample_frames));
 
+        // This is the admission point. No callback bank/source can change until this transaction
+        // commits; a later control revocation cannot partially reject an admitted exclusive start.
+        self.can_play_sample(id, velocity)
+            .then_some(VoiceStartConfig {
+                sample_id: id,
+                sample,
+                initial_frame_pos,
+                volume: velocity,
+                initial_tempo_ratio: tempo_ratio,
+                start_output_frame,
+                source_timing,
+            })
+    }
+
+    pub(crate) fn apply_prepared_loop_region(
+        &mut self,
+        config: &mut VoiceStartConfig,
+        start_s: f64,
+        end_s: Option<f64>,
+    ) {
+        self.set_pad_loop_region(config.sample_id, start_s, end_s);
+        config.initial_frame_pos = self.effective_loop_start_frame(
+            config.sample_id,
+            config.sample.samples.len() / self.channels,
+        );
+    }
+
+    pub(crate) fn play_prepared_sample_rt(
+        &mut self,
+        config: VoiceStartConfig,
+        retirement: &mut impl AudioBufferRetirement,
+    ) -> bool {
+        let id = config.sample_id;
+
         // Sample is already playing? -> reset play position
         for voice_slot in &mut self.voices {
             if voice_slot.active && voice_slot.sample_id == id {
                 self.stem_transitions[id].clear();
-                voice_slot.restart(initial_frame_pos, velocity, tempo_ratio, start_output_frame);
+                // Retrigger is explicit even when its integer phase happens to match a loop edge.
+                self.pad_dsp_chains[id].reset();
+                if voice_slot
+                    .sample
+                    .as_ref()
+                    .is_some_and(|old| Arc::ptr_eq(&old.samples, &config.sample.samples))
+                {
+                    voice_slot.source_timing = config.source_timing;
+                    voice_slot.restart(
+                        config.initial_frame_pos,
+                        config.volume,
+                        config.initial_tempo_ratio,
+                        config.start_output_frame,
+                    );
+                } else {
+                    voice_slot.start_rt(config, retirement);
+                }
                 return true;
             }
         }
@@ -707,17 +837,7 @@ impl RtMixer {
             if !voice_slot.active {
                 self.stem_transitions[id].clear();
                 self.pad_dsp_chains[id].reset();
-                voice_slot.start_rt(
-                    VoiceStartConfig {
-                        sample_id: id,
-                        sample: sample.clone(),
-                        initial_frame_pos,
-                        volume: velocity,
-                        initial_tempo_ratio: tempo_ratio,
-                        start_output_frame,
-                    },
-                    retirement,
-                );
+                voice_slot.start_rt(config, retirement);
                 return true;
             }
         }
@@ -840,16 +960,29 @@ impl RtMixer {
     }
 
     fn source_grid(&self, id: usize) -> Option<SourceGrid> {
-        if let Some(projection) = self.pad_accepted_timing[id] {
-            return SourceGrid::from_period(
-                projection.period_seconds * f64::from(projection.sample_rate_hz),
-                projection.origin_seconds * f64::from(projection.sample_rate_hz),
-            );
+        self.timing_for_sample_id(id)
+            .grid(f64::from(self.sample_rate_hz))
+    }
+
+    fn timing_for_sample_id(&self, id: usize) -> VoiceSourceTiming {
+        VoiceSourceTiming {
+            accepted: self.pad_accepted_timing[id],
+            legacy_period_seconds: self.pad_period_seconds[id],
+            legacy_origin_frame: self.pad_phase_anchor_frame[id],
         }
-        SourceGrid::from_period(
-            f64::from(self.sample_rate_hz) * self.pad_period_seconds[id]?,
-            self.pad_phase_anchor_frame[id],
-        )
+    }
+
+    fn timing_for_voice(&self, voice: &VoiceSlot) -> VoiceSourceTiming {
+        let current_source = voice
+            .sample
+            .as_ref()
+            .zip(self.sample_bank[voice.sample_id].as_ref())
+            .is_some_and(|(active, bank)| Arc::ptr_eq(&active.samples, &bank.samples));
+        if current_source {
+            self.timing_for_sample_id(voice.sample_id)
+        } else {
+            voice.source_timing
+        }
     }
 
     #[cfg(test)]
@@ -1036,7 +1169,14 @@ impl RtMixer {
             return false;
         }
 
-        let Some(sample) = self.sample_bank[id].as_ref() else {
+        // A successfully replaced bank can coexist with a retained old voice until retrigger.
+        // Seek addresses that voice's immutable source extent, never the future launch source.
+        let Some(sample) = self
+            .voices
+            .iter()
+            .find(|voice| voice.is_playing_sample(id))
+            .and_then(|voice| voice.sample.as_ref())
+        else {
             return false;
         };
         let sample_frames = sample.samples.len() / self.channels;
@@ -1049,6 +1189,9 @@ impl RtMixer {
         };
         let target_frame = self.source_frame_from_seconds(position_s, sample_frames);
         let seek_mode = explicit_seek_mode_for_frame(target_frame, loop_region, sample_frames);
+
+        // Explicit seek is a discontinuity even if it names the same exact current phase.
+        self.pad_dsp_chains[id].reset();
 
         let mut did_seek = false;
         for voice_slot in &mut self.voices {
@@ -1086,7 +1229,12 @@ impl RtMixer {
         let sample = voice.sample.as_ref()?;
         let sample_frames = sample.samples.len() / self.channels;
 
-        self.pad_bar_phase_beats_at_frame(id, sample_frames, voice.frame_pos)
+        if sample_frames == 0 || voice.frame_pos >= sample_frames {
+            return None;
+        }
+        self.timing_for_voice(voice)
+            .grid(f64::from(self.sample_rate_hz))?
+            .bar_phase_at_source(voice.frame_pos as f64)
     }
 
     #[cfg(test)]
@@ -1114,21 +1262,19 @@ impl RtMixer {
             // Rate clipping cannot redefine the requested master period.
             self.master_period_seconds
         } else {
-            self.output_period_for_sample_id(id)
+            if let Some(voice) = self
+                .voices
+                .iter()
+                .find(|voice| voice.active && voice.sample_id == id)
+            {
+                let source_period = self.timing_for_voice(voice).period_seconds()?;
+                let period =
+                    source_period / self.tempo_ratio_for_source_period(Some(source_period));
+                (period.is_finite() && period > 0.0).then_some(period)
+            } else {
+                self.output_period_for_sample_id(id)
+            }
         }
-    }
-
-    #[cfg(test)]
-    fn pad_bar_phase_beats_at_frame(
-        &self,
-        id: usize,
-        sample_frames: usize,
-        frame_pos: usize,
-    ) -> Option<f64> {
-        if id >= NUM_SAMPLES || sample_frames == 0 || frame_pos >= sample_frames {
-            return None;
-        }
-        self.source_grid(id)?.bar_phase_at_source(frame_pos as f64)
     }
 
     pub(crate) fn active_pad_beat_position(&self, id: usize) -> Option<f64> {
@@ -1144,18 +1290,21 @@ impl RtMixer {
         let mut playback = voice.source_playback;
         playback.configure(sample_frames, region);
         let position = playback.position();
-        self.source_grid(id)?
+        self.timing_for_voice(voice)
+            .grid(f64::from(self.sample_rate_hz))?
             .beat_at_source(position.frame as f64 + position.fraction)
     }
 
     fn tempo_ratio_for_sample_id(&self, sample_id: usize) -> f64 {
+        self.tempo_ratio_for_source_period(self.source_period_for_sample_id(sample_id))
+    }
+
+    fn tempo_ratio_for_source_period(&self, source_period: Option<f64>) -> f64 {
         let mut ratio = self.speed;
 
         if self.bpm_lock_enabled
-            && let (Some(master_period), Some(source_period)) = (
-                self.master_period_seconds,
-                self.source_period_for_sample_id(sample_id),
-            )
+            && let (Some(master_period), Some(source_period)) =
+                (self.master_period_seconds, source_period)
         {
             ratio = source_period / master_period;
         }
@@ -1186,6 +1335,8 @@ impl RtMixer {
         if id >= NUM_SAMPLES {
             return;
         }
+
+        self.pad_dsp_chains[id].reset();
 
         for voice_slot in &mut self.voices {
             if voice_slot.is_playing_sample(id) {
@@ -1441,21 +1592,23 @@ impl RtMixer {
         let pad_key_lock_enabled = &self.pad_key_lock_enabled;
         // Derive each target once before borrowing voices; start and render use
         // the same authoritative period/rate path.
-        let tempo_ratios: [f64; NUM_SAMPLES] =
-            std::array::from_fn(|id| self.tempo_ratio_for_sample_id(id));
+        let voice_timings: [VoiceSourceTiming; MAX_VOICES] =
+            std::array::from_fn(|index| self.timing_for_voice(&self.voices[index]));
+        let tempo_ratios: [f64; MAX_VOICES] = std::array::from_fn(|index| {
+            self.tempo_ratio_for_source_period(voice_timings[index].period_seconds())
+        });
         let pad_gain_smoothers = &mut self.pad_gain_smoothers;
         let pad_dsp_chains = &mut self.pad_dsp_chains;
         let pad_loop_start_frame = &self.pad_loop_start_frame;
         let pad_loop_end_frame = &self.pad_loop_end_frame;
         let pad_playhead_frame = &mut self.pad_playhead_frame;
         let prepared_stem_slots = &self.prepared_stems;
-        let accepted_timing = &self.pad_accepted_timing;
         let stem_mix_mode = &self.stem_mix_mode;
         let stem_mix_source_version_hash = &self.stem_mix_source_version_hash;
         let stem_enabled_mask = &self.stem_enabled_mask;
         let stem_transitions = &mut self.stem_transitions;
 
-        for voice in &mut self.voices {
+        for (voice_index, voice) in self.voices.iter_mut().enumerate() {
             if !voice.active {
                 continue;
             }
@@ -1464,13 +1617,16 @@ impl RtMixer {
             let is_paused = voice.paused;
 
             let Some(sample) = voice.sample.clone() else {
+                pad_dsp_chains[voice.sample_id].reset();
                 voice.stop_rt(retirement);
                 continue;
             };
+            voice.source_timing = voice_timings[voice_index];
 
             if !is_paused {
                 let sample_frames = sample.samples.len() / channels;
                 if sample_frames == 0 {
+                    pad_dsp_chains[voice.sample_id].reset();
                     voice.stop_rt(retirement);
                     continue;
                 }
@@ -1480,7 +1636,7 @@ impl RtMixer {
                     channels,
                     sample_rate_hz,
                     sample_frames,
-                    accepted_timing[voice.sample_id],
+                    voice.source_timing.accepted,
                 );
                 let current_selection = StemRenderSelection::from_state(
                     stem_mix_mode[voice.sample_id],
@@ -1488,15 +1644,14 @@ impl RtMixer {
                     stem_enabled_mask[voice.sample_id],
                 );
 
-                voice
-                    .source_playback
-                    .set_target(tempo_ratios[voice.sample_id]);
+                voice.source_playback.set_target(tempo_ratios[voice_index]);
 
                 let Some(loop_region) = effective_loop_region(
                     pad_loop_start_frame[voice.sample_id],
                     pad_loop_end_frame[voice.sample_id],
                     sample_frames,
                 ) else {
+                    pad_dsp_chains[voice.sample_id].reset();
                     voice.stop_rt(retirement);
                     continue;
                 };
@@ -1508,9 +1663,8 @@ impl RtMixer {
                     let (chunk_frames, tempo_ratio) =
                         voice.source_playback.chunk(frames - rendered);
                     let stem_transition = stem_transitions[voice.sample_id];
-                    let buffers = voice.stretch.resampled_buffers_mut(chunk_frames);
                     let position = voice.source_playback.position();
-                    SourceReadPlan {
+                    let source_plan = SourceReadPlan {
                         channels,
                         sample_frames,
                         frame_pos: position.frame,
@@ -1518,23 +1672,33 @@ impl RtMixer {
                         seek_mode: position.seek_mode,
                         selection: current_selection,
                         transition: stem_transition,
-                    }
-                    .fill_fractional_buffers(
-                        &sample,
-                        prepared_stem_set,
-                        &voice.source_playback,
-                        buffers,
+                    };
+                    let next_position = voice.source_playback.position_at(chunk_frames);
+                    voice.stretch.process_source(
+                        ProductiveSourceFeed {
+                            sample: &sample,
+                            stems: prepared_stem_set,
+                            sample_rate_hz: sample_rate_hz as u32,
+                            accepted: voice.source_timing.accepted,
+                            plan: source_plan,
+                            playback: &voice.source_playback,
+                        },
                         chunk_frames,
+                        pad_key_lock_enabled[voice.sample_id],
                     );
                     stem_transitions[voice.sample_id]
                         .advance_fractional(chunk_frames as f64 * tempo_ratio);
-                    voice.stretch.process_resampled(
-                        chunk_frames,
-                        tempo_ratio,
-                        pad_key_lock_enabled[voice.sample_id],
-                    );
-
                     let pad_dsp_chain = &mut pad_dsp_chains[voice.sample_id];
+                    pad_dsp_chain.bind_source(
+                        ProductiveSourceBinding::new(
+                            &sample,
+                            sample_rate_hz as u32,
+                            voice.source_timing.accepted,
+                        ),
+                        position,
+                        next_position,
+                        chunk_frames,
+                    );
                     let pad_gain_smoother = &mut pad_gain_smoothers[voice.sample_id];
                     let output_buffers = voice.stretch.output_buffers();
                     for frame in 0..chunk_frames {
@@ -4102,6 +4266,10 @@ mod tests {
         assert_eq!(frame_after_resume, frame_after_pause + 20);
     }
 }
+
+#[cfg(test)]
+#[path = "productive_history_tests.rs"]
+mod productive_history_tests;
 
 #[cfg(test)]
 #[path = "mixer_source_tests.rs"]

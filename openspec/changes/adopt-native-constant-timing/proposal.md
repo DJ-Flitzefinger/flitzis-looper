@@ -35,13 +35,36 @@ same-source stems retain their PCM and one SourcePlayback trajectory; successful
 native adoption/clear refreshes only their fixed effective timing projection.
 Pending/rejected timing and failed stem admission retain previously effective audio.
 
+G3b2f1 binds continuous productive voice ownership and actual StretchProcessor native/FIFO
+history to the source that supplies its canonical fractional feed and that
+source's complete effective accepted revision, exact period and signed origin.
+The processor fills its own fixed feed through SourceReadPlan/SourcePlayback;
+an expected next fractional position detects discontinuities before new feed
+enters old state. Same-source timing/rate refresh preserves chronological history.
+An old active voice retains its pinned source and effective timing after bank
+replacement; retrigger adopts the current bank owner through existing retirement.
+Productive per-pad EQ/isolator filter history uses the same source/projection/
+trajectory binding. Foreign-source or discontinuous output clears only bounded
+fixed Rust filter storage before reuse; continuous timing/rate changes retain it.
+New voice adoption also requires bounded agreement between the current native
+control-source fence and effective callback bank. Loading unavailable or a
+replacement control PCM ahead of bank adoption rejects new starts while ongoing
+old effective source/timing/history remains available.
+
 ## Non-goals and realtime safety
 
-This is a bounded part of G3b2. It does not choose a musical acceptance policy or
-infer quarter labels, switch the default analyzer, silently promote manual/TAP or
-legacy numbers, or complete productive StretchProcessor/voice/DSP-history binding.
+G3b2f1 completes continuous productive history ownership only. Required NEXT
+G3b2f2 remains absent: source-specific worker priming, retained prepared native/FIFO
+ownership, full source/current-revision/rate/epoch permits and timed transactional
+adoption with catch-up. It precedes G3b2g accepted persistence/fresh loader work.
 The warmed Key Lock pool stays source-neutral and key_lock_source_preparation is
-test-only. Accepted source-verified SampleAnalysis/ProjectState persistence and
+test-only; neither completes that required native integration.
+
+This slice does not choose a musical acceptance policy or infer quarter labels,
+switch the default analyzer, silently promote manual/TAP or legacy numbers, or
+select later B5 audible crop/delay/transition compensation. That acoustic policy
+is separate from the required G3b2f2 native ownership/adoption integration.
+Accepted source-verified SampleAnalysis/ProjectState persistence and
 loader schema with fresh runtime adoption, source/accepted-bound controller global
 START/STOP batch launch including MIDI, and explicit acceptance/derived loop/master
 refresh orchestration remain follow-up work. Musical/physical loop proof over
@@ -51,6 +74,8 @@ included.
 
 PCM scanning, QM analysis, hashing, fitting and evidence ownership remain outside
 realtime processing. The callback handles only bounded source/permit checks and
-fixed accepted timing metadata; large owners retire through non-realtime paths.
+fixed accepted timing metadata, actual borrowed-source feed and bounded adapter
+storage; native DSP construction/reset/loading and large-owner retirement stay
+outside it. The existing worker owns native state recycling and warming.
 Observed source digest plus loaded PCM identity does not prove immutable
 copy-first decode lineage or defeat an original-file ABA replacement.

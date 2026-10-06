@@ -4,6 +4,10 @@
 //! Python-facing EQ calls remain compatible, while live audio state is owned by typed normalized
 //! DSP parameters and Rust-side smoothing.
 
+use crate::audio_engine::productive_source_history::{
+    ProductiveSourceBinding, ProductiveSourceHistory,
+};
+use crate::audio_engine::source_playback::FractionalSourcePosition;
 use std::f32::consts::PI;
 
 const DEFAULT_SAMPLE_RATE_HZ: f32 = 44_100.0;
@@ -293,6 +297,7 @@ pub(crate) struct PerPadDspChain {
     channels: usize,
     parameters: [SmoothedNormalizedValue; DSP_PARAMETER_SLOTS],
     isolator_node: DjIsolatorNode,
+    source_history: Option<ProductiveSourceHistory>,
 }
 
 impl PerPadDspChain {
@@ -305,6 +310,7 @@ impl PerPadDspChain {
             channels,
             parameters: [SmoothedNormalizedValue::default(); DSP_PARAMETER_SLOTS],
             isolator_node: DjIsolatorNode::new(sample_rate_hz),
+            source_history: None,
         }
     }
 
@@ -331,6 +337,34 @@ impl PerPadDspChain {
         let mid = self.parameters[DspParameterSlot::Slot1.index()].advance();
         let high = self.parameters[DspParameterSlot::Slot2.index()].advance();
         self.isolator_node.set_normalized_targets(low, mid, high);
+    }
+
+    /// Bind the next bounded output block to the actual upstream source trajectory.
+    ///
+    /// Continuous same-source timing/rate refresh retains filter state. A different source or
+    /// source discontinuity clears only fixed Rust filter storage before consuming new output.
+    /// Wet fallback silence is still real emitted output; this ledger does not claim audibility.
+    pub(crate) fn bind_source(
+        &mut self,
+        binding: ProductiveSourceBinding,
+        position: FractionalSourcePosition,
+        next_position: FractionalSourcePosition,
+        frames: usize,
+    ) {
+        if self
+            .source_history
+            .is_some_and(|history| !history.continues(binding, position))
+        {
+            self.reset();
+        }
+        let fed_output_frames = self
+            .source_history
+            .map_or(0, |history| history.fed_output_frames);
+        self.source_history = Some(ProductiveSourceHistory {
+            binding,
+            next_position,
+            fed_output_frames: fed_output_frames.saturating_add(frames as u64),
+        });
     }
 
     pub(crate) fn process_sample(&mut self, channel: usize, sample: f32) -> f32 {
@@ -371,6 +405,7 @@ impl PerPadDspChain {
     }
 
     pub(crate) fn reset(&mut self) {
+        self.source_history = None;
         for parameter in &mut self.parameters {
             parameter.reset_to_target();
         }
@@ -381,6 +416,11 @@ impl PerPadDspChain {
     #[cfg(test)]
     pub(crate) fn parameter(&self, slot: DspParameterSlot) -> SmoothedNormalizedValue {
         self.parameters[slot.index()]
+    }
+
+    #[cfg(test)]
+    pub(crate) fn source_history(&self) -> Option<ProductiveSourceHistory> {
+        self.source_history
     }
 }
 
@@ -493,8 +533,105 @@ fn sanitize_sample_rate(sample_rate_hz: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use std::mem::size_of;
+    use std::sync::Arc;
 
     use super::*;
+    use crate::audio_engine::constant_timing::AcceptedTimingProjection;
+    use crate::audio_engine::source_reader::ExplicitSeekMode;
+    use crate::messages::SampleBuffer;
+
+    fn history_position(frame: usize) -> FractionalSourcePosition {
+        FractionalSourcePosition {
+            frame,
+            fraction: 0.25,
+            seek_mode: ExplicitSeekMode::Normal,
+        }
+    }
+
+    fn history_source() -> SampleBuffer {
+        let mut samples = vec![0.0; 128];
+        samples[0] = 1.0;
+        SampleBuffer {
+            samples: Arc::from(samples),
+            channels: 1,
+        }
+    }
+
+    fn source_bound_impulse_chain(source: &SampleBuffer) -> PerPadDspChain {
+        let mut chain = PerPadDspChain::new(0, 48_000.0, 1);
+        set_and_snap_parameter(&mut chain, DspParameterSlot::Slot0, 0.0);
+        let binding = ProductiveSourceBinding::new(source, 48_000, None);
+        chain.bind_source(binding, history_position(0), history_position(32), 32);
+        for sample in &source.samples[..32] {
+            chain.begin_frame();
+            chain.process_sample(0, *sample);
+        }
+        chain
+    }
+
+    #[test]
+    fn productive_filter_timing_refresh_retains_actual_signal_history() {
+        let source = history_source();
+        let mut chain = source_bound_impulse_chain(&source);
+        let mut reference = chain.clone();
+        let mut reset_reference = chain.clone();
+        reset_reference.reset();
+        let projection = AcceptedTimingProjection {
+            revision: [3; 32],
+            period_seconds: 0.50000000000001,
+            origin_seconds: -0.0,
+            sample_rate_hz: 48_000,
+            publication_epoch: 7,
+        };
+        let binding = ProductiveSourceBinding::new(&source, 48_000, Some(projection));
+        chain.bind_source(binding, history_position(32), history_position(64), 32);
+        let history = chain.source_history().unwrap();
+        assert_eq!(history.binding.accepted, Some(projection));
+        assert_eq!(history.fed_output_frames, 64);
+        let mut retained_tail = 0.0_f32;
+        for sample in &source.samples[32..64] {
+            chain.begin_frame();
+            reference.begin_frame();
+            reset_reference.begin_frame();
+            let actual = chain.process_sample(0, *sample);
+            assert_eq!(actual, reference.process_sample(0, *sample));
+            assert_eq!(reset_reference.process_sample(0, *sample), 0.0);
+            retained_tail = retained_tail.max(actual.abs());
+        }
+        assert!(retained_tail > 0.0);
+        let cleared = ProductiveSourceBinding::new(&source, 48_000, None);
+        chain.bind_source(cleared, history_position(64), history_position(65), 1);
+        assert_eq!(chain.source_history().unwrap().binding.accepted, None);
+        assert_eq!(chain.source_history().unwrap().fed_output_frames, 65);
+    }
+
+    #[test]
+    fn productive_filter_replacement_or_discontinuity_cannot_emit_old_source_tail() {
+        let source = history_source();
+        let replacement = history_source();
+        for (binding, position) in [
+            (
+                ProductiveSourceBinding::new(&replacement, 48_000, None),
+                history_position(32),
+            ),
+            (
+                ProductiveSourceBinding::new(&source, 48_000, None),
+                history_position(80),
+            ),
+            (
+                ProductiveSourceBinding::new(&source, 96_000, None),
+                history_position(32),
+            ),
+        ] {
+            let mut chain = source_bound_impulse_chain(&source);
+            chain.bind_source(binding, position, history_position(position.frame + 1), 1);
+            chain.begin_frame();
+            assert_eq!(chain.process_sample(0, 0.0), 0.0);
+            assert_eq!(chain.source_history().unwrap().fed_output_frames, 1);
+            chain.reset();
+            assert!(chain.source_history().is_none());
+        }
+    }
 
     fn set_and_snap_parameter(chain: &mut PerPadDspChain, slot: DspParameterSlot, normalized: f32) {
         let id = DspParameterId::per_pad(0, DspNodeSlot::Slot0, slot).unwrap();

@@ -20,6 +20,7 @@ struct RuntimeFixture {
     mode: TriggerQuantization,
     messages: Vec<AudioMessage>,
     multi_loop: bool,
+    preserved_loop_phase_start: Option<usize>,
 }
 
 impl RuntimeFixture {
@@ -44,6 +45,7 @@ impl RuntimeFixture {
             mode: TriggerQuantization::Immediate,
             messages: Vec::new(),
             multi_loop: false,
+            preserved_loop_phase_start: None,
         };
         fixture.accept(decision());
         fixture.refresh(0.125, Some(3.0)).unwrap();
@@ -128,20 +130,46 @@ impl RuntimeFixture {
                 .iter()
                 .any(|voice| voice.active && voice.sample_id == 0)
         );
-        assert!(self.mixer.play_sample(0, 1.0));
-        assert_eq!(
-            self.mixer
-                .voices
-                .iter()
-                .find(|voice| voice.active && voice.sample_id == 0)
-                .unwrap()
-                .frame_pos,
-            2_000
-        );
+        if self.mixer.can_play_sample(0, 1.0) {
+            assert!(self.mixer.play_sample(0, 1.0));
+            assert_eq!(
+                self.mixer
+                    .voices
+                    .iter()
+                    .find(|voice| voice.active && voice.sample_id == 0)
+                    .unwrap()
+                    .frame_pos,
+                2_000
+            );
+        } else {
+            assert!(!self.mixer.play_sample(0, 1.0));
+            // The guarded old trigger cannot overwrite newer loop intent, even when a new
+            // ordinary start is also correctly denied by unavailable source/timing authority.
+            assert_eq!(
+                self.mixer
+                    .phase_aligned_initial_sample_frame(0, RATE as usize * 4, 0.0),
+                self.preserved_loop_phase_start.unwrap()
+            );
+        }
+    }
+
+    fn load_fixture_pad(&mut self, id: usize, sample: SampleBuffer) {
+        self.engine.sample_cache.lock().unwrap()[id] = Some(sample.clone());
+        self.engine.loaded_source_generations.lock().unwrap()[id] = (1, RATE);
+        self.engine.loaded_source_digests.lock().unwrap()[id] = Some("a".repeat(64));
+        self.engine
+            .input_runtime_ownership
+            .publish_source(id, &sample, RATE, 1);
+        self.mixer.load_sample(id, sample);
     }
 
     fn preserve_new_loop(&mut self) {
         self.mixer.set_pad_loop_region(0, 0.25, Some(4.0));
+        self.preserved_loop_phase_start = Some(self.mixer.phase_aligned_initial_sample_frame(
+            0,
+            RATE as usize * 4,
+            0.0,
+        ));
     }
 }
 
@@ -237,8 +265,8 @@ fn midi_pending_rejected_or_new_request_preserves_effective_accepted_binding() {
 fn revision_only_replacement_rejects_queued_and_quantized_midi_without_loop_or_exclusive_effect() {
     for scheduled in [false, true] {
         let mut fixture = RuntimeFixture::new();
-        fixture.mixer.load_sample(1, source());
-        fixture.mixer.play_sample(1, 1.0);
+        fixture.load_fixture_pad(1, source());
+        assert!(fixture.mixer.play_sample(1, 1.0));
         let old_binding = input_runtime_binding::capture(&fixture.engine, 0)
             .unwrap()
             .unwrap();
@@ -303,6 +331,7 @@ fn source_revocation_rejects_old_bank_during_replacement_or_unload_gap() {
         let trigger = fixture.trigger_message();
         let ownership = fixture.engine.input_runtime_ownership.clone();
         ownership.revoke(0, ownership.next_authority(0).unwrap());
+        ownership.revoke_source(0);
         fixture.engine.sample_cache.lock().unwrap()[0] = None;
         fixture.engine.loaded_source_digests.lock().unwrap()[0] = None;
         assert!(
@@ -381,7 +410,7 @@ fn midi_voice_capacity_rejection_preserves_loop_and_other_voices() {
     fixture.refresh(0.125, Some(3.0)).unwrap();
     let sample = source();
     for id in 1..=crate::audio_engine::constants::MAX_VOICES {
-        fixture.mixer.load_sample(id, sample.clone());
+        fixture.load_fixture_pad(id, sample.clone());
         assert!(fixture.mixer.play_sample(id, 1.0));
     }
     fixture.preserve_new_loop();

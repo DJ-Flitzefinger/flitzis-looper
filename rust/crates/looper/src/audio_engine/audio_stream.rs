@@ -299,7 +299,7 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
             received_at_ns: _,
         } => {
             if !mixer.input_binding_current(id, binding)
-                || !mixer.can_play_sample(id, 1.0)
+                || (exclusive && retirement.available_retirement_slots() < MAX_VOICES)
                 || (!exclusive
                     && !mixer
                         .voices
@@ -308,11 +308,18 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
             {
                 return;
             }
-            mixer.set_pad_loop_region(id, start_s, end_s);
+            let Some(mut prepared) =
+                mixer.prepare_play_sample_rt(id, 1.0, output_frame, retirement)
+            else {
+                return;
+            };
+            // No fallible authority recheck follows the loop/stop effects. They commit the actual
+            // source and complete effective timing admitted above as one callback transaction.
+            mixer.apply_prepared_loop_region(&mut prepared, start_s, end_s);
             if exclusive {
                 stop_all_samples(mixer, audio_messages, retirement);
             }
-            if mixer.play_sample_at_output_frame_rt(id, 1.0, output_frame, retirement) {
+            if mixer.play_prepared_sample_rt(prepared, retirement) {
                 audio_messages.push_audio_message(AudioMessage::SampleStarted { id });
             }
         }
@@ -335,13 +342,16 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
             volume,
             received_at_ns: _,
         } => {
-            if !mixer.can_play_sample(id, volume) {
+            if retirement.available_retirement_slots() < MAX_VOICES {
                 return;
             }
+            let Some(prepared) = mixer.prepare_play_sample_rt(id, volume, output_frame, retirement)
+            else {
+                return;
+            };
 
             stop_all_samples(mixer, audio_messages, retirement);
-            let started =
-                mixer.play_sample_at_output_frame_rt(id, volume, output_frame, retirement);
+            let started = mixer.play_prepared_sample_rt(prepared, retirement);
 
             if started {
                 audio_messages.push_audio_message(AudioMessage::SampleStarted { id });
@@ -362,10 +372,10 @@ fn stop_all_samples<S: AudioMessageSink, R: AudioBufferRetirement>(
     audio_messages: &mut S,
     retirement: &mut R,
 ) {
-    for voice in &mut mixer.voices {
-        if voice.active {
-            let id = voice.sample_id;
-            voice.stop_rt(retirement);
+    for index in 0..MAX_VOICES {
+        if mixer.voices[index].active {
+            let id = mixer.voices[index].sample_id;
+            mixer.stop_sample_rt(id, retirement);
             audio_messages.push_audio_message(AudioMessage::SampleStopped { id });
         }
     }
@@ -607,6 +617,10 @@ fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
     match message {
         ControlMessage::LoadSample { .. } | ControlMessage::PublishPreparedStems { .. } => 2,
         ControlMessage::PublishConstantTiming { .. } => 1,
+        ControlMessage::PlaySample { .. }
+        | ControlMessage::TriggerInputPad {
+            exclusive: false, ..
+        } => 1,
         ControlMessage::StopSample { .. } => MAX_VOICES,
         ControlMessage::UnloadSample { .. } => MAX_VOICES + 2,
         ControlMessage::StopAll()

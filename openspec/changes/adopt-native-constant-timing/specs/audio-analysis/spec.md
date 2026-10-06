@@ -1,5 +1,11 @@
 ## ADDED Requirements
 
+G3b2f1 covers continuous productive voice/native/FIFO/filter-history ownership.
+Required NEXT G3b2f2 source-prepared native-history integration remains incomplete
+and precedes G3b2g persistence; later B5 audible compensation is a separate gate.
+The current realtime contracts below do not claim source-specific worker priming,
+retained prepared native/FIFO ownership or timed adoption/catch-up.
+
 ### Requirement: Explicit Native Acceptance Uses Actual Loaded Pad Evidence
 The system SHALL capture actual loaded source/PCM/timebase/generation/request in
 an opaque ticket and execute lossless QM preparation outside realtime processing.
@@ -389,3 +395,190 @@ progression and physical endpoints without rebuilding PCM or adding a cursor.
 - **WHEN** another accepted record is pending, failed or rejected
 - **THEN** admitted stems retain the previous effective accepted projection
 - **AND** each interpolation tap for full mix and all stems uses the same current source position and wrap policy
+
+### Requirement: Productive Native And FIFO History Owns Its Actual Source Feed
+The system SHALL fill productive StretchProcessor feed from the actual borrowed
+source through shared SourceReadPlan/SourcePlayback. Native history and pending
+FIFOs SHALL bind source address/shape/loaded rate and full effective accepted
+revision with bit-exact period/signed origin. It SHALL check expected fractional
+next-source position before feed and invalidate foreign or discontinuous history.
+A neutral warmed reserve SHALL NOT count as source history.
+
+#### Scenario: The productive processor consumes accepted source audio
+- **GIVEN** a voice pinned to an actual source with acknowledged accepted timing
+- **WHEN** productive StretchProcessor rendering reads canonical fractional feed
+- **THEN** actual native and pending FIFO history carry that source and complete effective accepted projection
+- **AND** caller metadata, a raw revision or a warmed reserve cannot substitute for actual consumed feed
+- **AND** a warmed reserve does not provide prepared source-specific priming
+
+#### Scenario: A foreign source or discontinuous position reaches the processor
+- **GIVEN** actual native or pending FIFO history from earlier productive feed
+- **WHEN** the source owner or expected next fractional position differs before consumption
+- **THEN** bounded adapter invalidation prevents foreign feed from entering the old history
+- **AND** used native state is exchanged through the existing worker ownership lanes without callback reset, loading or destruction
+
+#### Scenario: The worker reserve is unavailable
+- **GIVEN** invalidated used native state with no admissible warmed reserve
+- **WHEN** wet processing retries
+- **THEN** existing bounded wet-silence behavior preserves native ownership and canonical source progression
+- **AND** dry processing remains available without promoting the reserve to source history
+
+### Requirement: Continuous Productive History Tracks Effective Timing Refresh
+The system SHALL retain chronological native/FIFO history across continuous
+same-source timing adoption/clear, rate changes, pause/resume and stem crossfades,
+refreshing its full effective projection on productive feed. Pending, failed or
+rejected timing SHALL NOT change that projection. Start/retrigger, stop, seek,
+wet deactivation and source-position discontinuity SHALL invalidate adapter
+history through existing bounded rules.
+
+#### Scenario: Same-source accepted revision changes with equal timing numbers
+- **GIVEN** consumed native/FIFO history and a continuous same-source trajectory
+- **WHEN** a different full accepted revision with equal period/origin is successfully adopted
+- **THEN** the next productive feed carries the new complete effective revision while retaining chronological history
+- **AND** exact period and signed-origin bits remain part of the binding
+
+#### Scenario: Accepted authority is successfully cleared
+- **GIVEN** consumed same-source history under effective accepted timing
+- **WHEN** native Manual, Tap or Legacy authority clears acceptance
+- **THEN** subsequent continuous productive feed carries the cleared effective projection
+- **AND** those authority values are not promoted to accepted evidence
+
+#### Scenario: A replacement is pending or rejected
+- **GIVEN** productive history under a current effective accepted record
+- **WHEN** a new proposal is pending, fails admission or is rejected at callback adoption
+- **THEN** effective source/timing and consumed history remain under the previous record
+- **AND** Automatic without current acknowledgement cannot authorize new accepted preparation
+
+#### Scenario: Rate, pause or stem selection changes preserve continuity
+- **GIVEN** a continuous canonical fractional source trajectory
+- **WHEN** rate smoothing advances, pause/resume occurs or source selection crossfades
+- **THEN** native/FIFO history remains chronological under the same source ownership
+- **AND** no second source cursor or physical endpoint rewrite is introduced
+- **AND** this binding provides no prepared priming, audible delay compensation or seamless wet/bypass transition guarantee
+
+### Requirement: Active Voice Timing Belongs To Its Pinned Source
+The system SHALL bind voice timing/history and seek bounds to its actually pinned source.
+A replacement bank SHALL NOT relabel old PCM with its accepted timing.
+Retained old-voice ownership SHALL NOT be CURRENT pad-bank acceptance.
+Retrigger SHALL adopt current bank PCM with off-realtime pin retirement.
+Same-source effective timing refresh SHALL update only matching voices;
+failed or rejected adoption SHALL preserve previous effective audio/history.
+
+#### Scenario: A bank source is replaced while its old voice remains active
+- **GIVEN** an active voice pinned to the previous bank source and its effective timing
+- **WHEN** a replacement bank source and accepted revision become current
+- **THEN** the old voice continues only under its pinned source and previous effective timing
+- **AND** the replacement revision cannot relabel its old native/FIFO history
+- **AND** this old effective ownership can continue until explicit retrigger or stop without becoming current pad-bank acceptance
+
+#### Scenario: Explicit retrigger follows bank replacement
+- **GIVEN** an active voice whose source differs from the current bank
+- **WHEN** an admitted retrigger executes
+- **THEN** the voice adopts the current bank PCM and effective timing
+- **AND** old sample ownership retires through existing non-realtime paths
+- **AND** old native/FIFO history cannot consume the replacement source as a continuation
+
+#### Scenario: Same-source timing refresh occurs while a voice is paused
+- **GIVEN** a paused voice pinned to the source of an admitted timing refresh
+- **WHEN** native accepted timing is successfully adopted or cleared
+- **THEN** its effective timing follows only that matching source
+- **AND** consumed history remains frozen until productive feed resumes and refreshes its projection
+
+#### Scenario: An explicit seek targets retained source audio after bank replacement
+- **GIVEN** an active voice retaining a longer old source while the current bank contains a shorter replacement
+- **WHEN** an explicit seek targets a frame in that voice's old source extent, or repeats its existing position
+- **THEN** seek bounds and source progression use the actually pinned old source
+- **AND** every successful explicit seek clears bounded native/FIFO adapter history and fixed per-pad filter ownership even if the source phase is unchanged
+- **AND** native DSP reset/warming remains outside the callback on the preparation worker
+
+### Requirement: New Voice Ownership Requires Available Effective Timing And Retirement
+The system SHALL reject new voice/retrigger adoption if Automatic lacks current
+acknowledgement or effective acceptance no longer matches acknowledgement.
+It SHALL reserve off-realtime retirement capacity before replacement changes
+old voice, loop or exclusive playback. Rejection SHALL preserve existing
+audio/history. Manual/Tap/Legacy SHALL retain nonaccepted authority. These checks
+SHALL NOT establish guarded controller global batch adoption.
+
+#### Scenario: Automatic timing has no current acknowledgement
+- **GIVEN** Automatic authority without a current accepted projection
+- **WHEN** a new voice or retrigger requests adoption of that bank source
+- **THEN** adoption is rejected before replacing old source/history
+- **AND** ordinary Legacy numbers cannot authorize an Automatic fallback launch
+
+#### Scenario: Control authority retires before effective callback clearing
+- **GIVEN** an old accepted projection still effective in the mixer after control revocation
+- **WHEN** another new voice or retrigger requests adoption during that interval
+- **THEN** mismatch with current acknowledgement rejects new adoption
+- **AND** the already effective voice continues until the admitted callback clear executes
+- **AND** fresh Manual/Tap/Legacy adoption can proceed after the effective clear under its own authority
+
+#### Scenario: Replacement has no retirement capacity
+- **GIVEN** an old active voice pin and an otherwise valid replacement bank
+- **WHEN** required off-realtime retirement capacity is unavailable
+- **THEN** replacement adoption fails before old voice, loop or exclusive playback changes
+- **AND** old effective source/timing/history remains available
+
+### Requirement: New Voice Adoption Requires Current Native Source Ownership
+The system SHALL check current native source ownership before new voice/retrigger
+adoption. An unavailable loading source or a control source that differs from the
+effective callback bank SHALL reject new adoption before old voice, loop or
+exclusive playback changes. Ongoing effective playback SHALL retain its pinned
+source/timing/history during that interval. The check SHALL be bounded and SHALL
+NOT infer ownership from caller metadata or a historical ticket.
+
+#### Scenario: Native source loading has made control ownership unavailable
+- **GIVEN** an old effective voice while native loading has made current control source ownership unavailable
+- **WHEN** another new start or retrigger requests adoption
+- **THEN** unavailable actual native source ownership rejects that adoption
+- **AND** ongoing old effective source/timing/history remains available
+- **AND** Legacy numerical fallback cannot bypass the source ownership check
+
+#### Scenario: Replacement control PCM is published before callback bank adoption
+- **GIVEN** replacement PCM current under native control ownership while the callback bank still contains the previous source
+- **WHEN** another new start or retrigger requests adoption before the bank changes
+- **THEN** source ownership mismatch rejects that adoption before loop or exclusive playback changes
+- **AND** old ongoing history cannot be relabeled with the replacement's timing
+- **AND** fresh adoption can proceed only after actual current source ownership and callback bank agree
+
+### Requirement: Productive Per-Pad Filter History Uses The Same Source Trajectory
+The system SHALL bind actual per-pad filter history to the rendered voice's
+source/shape/loaded rate, full effective accepted projection and fractional
+next-source position. Continuous same-source timing/rate refresh SHALL retain
+filter state and refresh the projection. Foreign source or discontinuity SHALL
+clear fixed Rust filter storage before replacement output. Its ledger SHALL
+count filtered output, including wet fallback silence, without asserting
+audible source content.
+
+#### Scenario: Continuous accepted refresh reaches the productive filter chain
+- **GIVEN** a per-pad filter has processed the voice's previous canonical chunk
+- **WHEN** a same-source effective revision or rate target changes without source discontinuity
+- **THEN** actual filter state is retained with the complete new effective projection
+- **AND** source trajectory remains the voice's shared canonical cursor
+
+#### Scenario: A replacement voice reaches old per-pad filter state
+- **GIVEN** nonzero filter history from the previous voice source
+- **WHEN** a foreign source or discontinuous fractional position reaches productive filtering
+- **THEN** fixed filter storage is cleared before replacement output is processed
+- **AND** old source filter state cannot color the replacement as continued history
+
+#### Scenario: Wet output is silent while a native reserve is unavailable
+- **GIVEN** the existing wet fallback emits bounded silence while canonical source progression continues
+- **WHEN** productive per-pad DSP processes those output frames
+- **THEN** filter history records the actual processed output and current source trajectory
+- **AND** its binding does not claim those silent frames contain audible source feed
+
+### Requirement: Productive History Preserves Existing Realtime Native Ownership
+The system SHALL keep productive history checks, source reads, projection copies
+and fixed adapter/filter storage changes bounded. Native DSP construction/reset/
+loading/warming and large-owner retirement SHALL remain outside realtime
+processing. History binding SHALL reuse existing worker exchanges and
+off-realtime sample retirement without adding callback locks, evidence allocation,
+PCM hashing, I/O, Python/UI access or logging.
+
+#### Scenario: Productive history becomes discontinuous or a voice source changes
+- **GIVEN** productive native/adapter/filter history and an owning source pin
+- **WHEN** bounded history invalidation or source replacement runs on the callback
+- **THEN** only fixed adapter/filter storage and ownership checks change there
+- **AND** native reset/warming and large-owner destruction use the existing worker/retirement paths
+- **AND** callback processing adds no locks, evidence allocation, PCM hashing, I/O, Python/UI access or logging
+- **AND** stop/unload clears filter history ownership before the voice pin retires without retaining an additional PCM or native handle

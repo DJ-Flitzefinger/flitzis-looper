@@ -37,6 +37,7 @@ rust/
     |           |-- dsp.rs
     |           |-- input_mapping.rs
     |           |-- key_lock_preparation.rs
+    |           |-- productive_source_history.rs
     |           |-- mixer.rs
     |           |-- scheduler.rs
     |           |-- source_grid.rs
@@ -157,6 +158,27 @@ Python package directories are already available to standalone test executables.
   destruction. Native reset/cold pitch setup allocate in the pinned backend.
   Wet rendering uses silence if a reserve is unavailable; dry playback remains
   reactive. Pause/resume and stem source crossfades retain native history.
+- G3b2f1 productive StretchProcessor fills canonical fractional feed from the actual
+  borrowed source. Actual native and pending FIFO history bind source/shape/rate
+  and the complete effective accepted projection with bit-exact period/origin.
+  Expected next fractional position/seek mode detects discontinuities before
+  consumption; bounded adapter invalidation uses existing worker recycling for
+  native reset/warming. Continuous same-source timing/rate refresh retains history;
+  pending/rejected timing cannot relabel it. Active voice source/timing stays pinned
+  independently of bank replacement; retrigger adopts current bank PCM through
+  off-realtime retirement. Warmed reserves remain source-neutral. See
+  [productive timing history](../docs/native-constant-timing.md#productive-voice-and-nativefifo-history).
+- Required NEXT G3b2f2 remains unimplemented: source-specific worker priming,
+  retained prepared native/FIFO ownership, full source/current-accepted-revision/
+  rate/epoch permits and timed transactional adoption with catch-up. Finish this
+  native integration before G3b2g accepted persistence/fresh loader adoption.
+  Warmed reserves and test-only preparation do not complete it; later B5 audible
+  crop/delay/transition compensation is separate.
+- Productive per-pad EQ/isolator history uses that rendered voice's actual
+  source/projection/trajectory. Continuous same-source timing/rate refresh retains
+  fixed filter state; foreign source or discontinuity clears bounded Rust filter
+  storage before replacement output. Its ledger counts actual filtered output,
+  including wet fallback silence, without claiming audible source samples.
 - The wet adapter has a fixed 511-frame lead at the 512-frame block size.
   Algorithmic/adapter delay remains uncompensated and native nominal delay is
   distinct from measured transient peaks. Source pre-roll, DSP feed-ahead, and
@@ -175,8 +197,9 @@ Python package directories are already available to standalone test executables.
   Longer-history silent/nonzero-content probes measure translation-invariant onset
   deformation and one fixed offline dry-to-wet bridge. Native clipping, nonlinear
   background sensitivity and temporary varispeed pitch remain visible; that bridge
-  is not a selected live strategy. Production builds exclude this fixture. Timed live
-  adoption, identity, retirement, transitions and audible compensation remain pending.
+  is not a selected live strategy. Production builds exclude this fixture.
+  Required G3b2f2 prepared native ownership/permits/adoption/catch-up remains
+  pending; transitions and audible compensation remain later B5 work.
 - `key_lock_source_causal_probe.rs` is a test-only fixed-case proof of strict versus hypothetical
   early emission against identical continuous source/native histories. It checks canonical phase,
   exact retained continuation and disjoint missing-content intervals. Nominal translation remains
@@ -190,7 +213,7 @@ Python package directories are already available to standalone test executables.
   telemetry.
 - Scheduled mixer segments carry absolute output-frame positions. Every active
   voice derives fractional source progress from its active-output-frame count
-  within a rate epoch, using the actual native `f32` ratio promoted to `f64`.
+  within a rate epoch, using the actual native binary64 ratio.
   This avoids cumulative segment rounding in all lock modes.
 - `source_grid.rs` owns signed source beat/bar, loop-start phase and internal
   master-beat-to-loop mapping. The editor origin is published as `f64` seconds
@@ -210,8 +233,8 @@ Python package directories are already available to standalone test executables.
   in dry and Key Lock modes, with the first step at a newly accepted target. Render
   work splits at rate boundaries; pause freezes source and smoothing progress.
 - Signed grid and loop-region seconds use `f64`, including MIDI runtime loop
-  metadata, until source-frame conversion. Pad/master BPM remain native `f32`
-  parameters promoted to `f64` for phase math. Long source markers retain frame
+  metadata, until source-frame conversion. Native period/rate/BPM parameters
+  preserve binary64. Long source markers retain frame
   precision; this does not imply arbitrary decimal BPM exactness.
 - Waveform query/X, loaded duration, seek commands and playhead telemetry retain
   `f64` source seconds through the public boundary. Amplitudes remain `f32`.

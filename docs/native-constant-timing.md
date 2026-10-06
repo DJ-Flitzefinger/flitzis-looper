@@ -1,6 +1,6 @@
 # Native accepted timing adoption
 
-G3b2a/b/c/d/e connects the G3a accepted record to actual loaded-pad ownership, current
+G3b2a-e and the bounded G3b2f1 slice connect the G3a accepted record to actual loaded-pad ownership, current
 acknowledged authority, native SourceGrid, transport/output clock and playback
 rate. This is an explicit control API. Normal loading and analysis,
 manual/TAP controllers and saved legacy projects retain their existing routing;
@@ -119,8 +119,8 @@ SourcePlayback rate, target and smoothing preserve binary64 and rebase from the
 existing fractional source position. The same cursor supplies full mix and stems.
 Rubber Band receives a named inverse-rate conversion through its native `c_double`
 pitch ABI. Its existing near-unity and update-threshold behavior remains; this
-does not establish sub-threshold pitch application, prepared DSP-history revision
-binding or audible SYNC. Physical integer-loop wrapping is unchanged.
+does not establish sub-threshold pitch application or audible SYNC. Productive
+history ownership is described below. Physical integer-loop wrapping is unchanged.
 
 Regression tests exercise actual callback drains and rendering/bootstrap, including
 legacy BPM deliberately disagreeing with accepted timing, replacement while playing,
@@ -260,12 +260,85 @@ The callback adds bounded fixed/atomic checks and projection copies; large owner
 and evidence remain in off-realtime retirement paths. See
 [prepared stem ownership](prepared-stem-publication.md).
 
+## Productive voice and native/FIFO history
+
+G3b2f1 covers continuous productive history ownership. `StretchProcessor` fills
+its fixed feed directly from the actual borrowed source
+through `SourceReadPlan` and the canonical `SourcePlayback`. Actual consumed
+Rubber Band history and pending input/output FIFOs carry source address/shape/
+loaded rate and the complete effective accepted projection. Period and signed
+origin match exact binary64 bits, including signed zero. A warmed reserve remains
+source-neutral; it is not source-specific history or priming.
+
+Before consumption, expected next fractional source position and seek mode are
+checked against the canonical cursor. Source replacement or discontinuity clears
+bounded adapter storage and marks used native state dirty before foreign feed
+can enter old state. Native construction/reset/warming use the existing worker;
+callback exchange reserves its bounded return lane before ownership moves.
+
+Continuous same-source accepted adoption/clear updates the complete effective
+projection on productive feed while retaining chronological native/FIFO history.
+Equal timing numbers do not hide a different full revision. Rate smoothing keeps
+the fractional epoch; pause freezes feed and history; stem selection crossfades
+retain state. Start/retrigger, stop, seek, wet deactivation and discontinuous loop
+clamps invalidate history using existing bounded rules. Pending, rejected or
+failed timing does not change its effective binding.
+
+An active `VoiceSlot` owns the sample it actually pins and that source's effective
+timing. A replaced bank's current accepted record cannot relabel old voice PCM.
+That voice can continue its previous source/timing until retrigger or stop;
+its retained ownership is not current pad-bank acceptance. Retrigger adopts the
+current bank PCM and retires the old sample through existing off-realtime paths.
+Successful same-source adoption/clear refreshes only matching voices. Failed
+admission or late rejection preserves the previously effective audio/history.
+
+An explicit active seek uses that voice's pinned source extent rather than a
+shorter replacement bank. Every successful seek, including the same position,
+clears bounded adapter/FIFO history and fixed per-pad filter ownership. Native
+reset/warming remains on the preparation worker.
+
+New voice/retrigger adoption rejects unavailable Automatic or an effective
+accepted projection whose acknowledgement has retired. It also requires the
+effective bank PCM to match native current control-source ownership. Fixed
+generation/address/shape/rate atomics provide one bounded check/recheck, without
+spinning or retaining PCM/evidence in the marker. Loading revokes that marker
+before control cache ownership is removed. Successful native loaded publication
+installs queue/cache/generation/digest under the request owner before publishing
+the marker; full-queue publication changes none of those values. Unload/run also
+revoke it. New starts reject while loading is unavailable or replacement control
+PCM is ahead of callback bank adoption, including under Legacy authority.
+
+Existing effective audio/history keeps its own pin and can continue during these
+source transitions or while an admitted callback clear waits. Fresh Manual/Tap/Legacy
+adoption can proceed after actual clear under its own authority. Replacing a
+voice pin reserves existing off-realtime retirement capacity before old voice,
+loop or exclusive playback changes. This does not add a guarded global batch.
+
+`PerPadDspChain` binds its actual EQ/isolator filter history to the same rendered
+voice source/projection and expected fractional next position. Continuous
+same-source timing/rate changes retain filter state. A source/loaded-rate mismatch
+or discontinuity clears only bounded fixed Rust filter storage before replacement
+output enters it. The ledger counts actual filtered output, including existing
+wet fallback silence; it does not assert that silent output contains audible
+source samples.
+Stop/unload clears the filter ledger before the owning voice pin retires;
+the ledger owns no additional PCM or native handle.
+
+This is G3b2f1 productive continuous history binding. It leaves required NEXT
+G3b2f2 source-specific worker priming, retained prepared native/FIFO ownership,
+full source/current-accepted-revision/rate/epoch permits and timed transactional
+adoption with catch-up unimplemented. G3b2f2 precedes G3b2g persistence; it is
+native integration, separate from later B5 audible crop/delay/transition
+compensation. Existing wet silence while a reserve is unavailable
+continues with canonical source progression and supplies no audible handover
+guarantee. `key_lock_source_preparation` remains test-only.
+
 ## Remaining shared-period and loop work
 
-Productive StretchProcessor/voice/DSP history still needs full source/accepted
-revision binding. The generic warmed Key Lock pool is source-neutral;
-key_lock_source_preparation is test-only and is not a production consumer.
-Accepted source-verified SampleAnalysis/ProjectState persistence and loader schema
+G3b2f remains incomplete until required source-prepared native-history integration
+G3b2f2 is complete. The source-neutral warmed reserve, continuous history ledger
+and test-only key_lock_source_preparation do not provide that prepared ownership.
+After G3b2f2, G3b2g accepted source-verified SampleAnalysis/ProjectState persistence and loader schema
 with fresh runtime adoption remain open; no opaque ticket is a saved identity and
 no saved Manual/Tap/Legacy BPM is accepted evidence. Source/accepted-bound
 controller global START/STOP batch launch including MIDI, and explicit accepted
