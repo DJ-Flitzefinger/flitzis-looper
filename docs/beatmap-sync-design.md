@@ -72,8 +72,10 @@ and narrowly supported isolated comparable-attack refinement. Generated counts
 remain unverified; explicit independent source/PCM-bound feature counts alone
 assert musical units. Neither periodic PCM nor a small residual proves those
 units. Raw evidence and complete-feature summaries stay separate; the current
-loader's original-byte relationship is still a caller assertion. G3 accepted
-timing publication remains separate. The core's engineering policy does not
+loader's original-byte relationship is still a caller assertion. G3a adds an
+[immutable accepted revision and control-only adoption guard](accepted-constant-timing.md)
+without a production caller. G3b consumer publication and G3c physical/musical
+loop proof remain separate. The core's engineering policy does not
 replace the frozen B2 acceptance criteria.
 
 The 2026-10-06 [grid timing investigation](grid-timing-diagnosis.md) establishes

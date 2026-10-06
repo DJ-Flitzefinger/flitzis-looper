@@ -254,7 +254,10 @@ one frame. The discrete-feature bound and quarter-unit assertion remain explicit
 Legacy QM still returns 120.00128936767578 BPM. This probe proves neither general
 music refinement, automatic pad-load repair nor audible synchronization.
 
-G3 then publishes one source-bound accepted period/revision to all consumers and
+G3a now provides an immutable explicitly accepted period/revision and a
+control-only adoption guard; see [accepted timing](accepted-constant-timing.md).
+It recomputes this evidence path and does not publish into the runtime. G3b
+must connect actual current-pad validity and every consumer; G3c separately
 tests musical versus physical loop duration. Default analyzer acceptance,
 variable maps and audible synchronization retain their separate gates. See
 [the diagnosis](grid-timing-diagnosis.md), [scalar coordinates](scalar-source-coordinates.md)

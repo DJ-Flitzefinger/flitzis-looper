@@ -67,8 +67,9 @@ revisions must extend this identity.
 ## Remaining timing work
 
 The automatic metronome estimate remains `120.00128936767578`, so its scalar slope
-persists. G2 must establish supported robust count/region/period fitting and
-uncertainty. G3 must publish a source-bound timing revision to all consumers and
-separately verify musical versus physical loop periods. Numerical coordinates do
+persists. G2 provides offline supported count/region/period fitting and uncertainty.
+G3a adds an [immutable accepted revision and control-only guard](accepted-constant-timing.md).
+G3b must connect actual current-pad validity and all consumers; G3c must separately
+verify musical versus physical loop periods. Numerical coordinates do
 not prove audible DSP/device alignment or musical model acceptance. See
 [the diagnosis](grid-timing-diagnosis.md) and [the design](beatmap-sync-design.md).

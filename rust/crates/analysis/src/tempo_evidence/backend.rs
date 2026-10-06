@@ -2,9 +2,9 @@
 
 use super::binding::{valid_digest, valid_text};
 use super::{JobIdentity, PcmBinding, PcmBindingMetadata, TempoEvidenceError, f64_input_sha256};
+use crate::canonical_digest::CanonicalDigest;
 use crate::tempo_summary::{MAX_RAW_POSITIONS, RawTempoEvidence, SourceIdentity};
 use crate::{AnalysisConfig, QmRawAnalysis};
-use sha2::{Digest, Sha256};
 
 const RAW_REVISION: &str = "source-bound-raw-v1";
 const QM_BACKEND: &str = "qm-dsp-lossless-capture-v1";
@@ -243,6 +243,40 @@ impl BoundTempoEvidence {
             independent_origin_seconds: self.independent_origin_seconds,
         }
     }
+
+    /// Bind every retained backend field, including caller timing/origin assertions.
+    pub(crate) fn hash_canonical(&self, hash: &mut CanonicalDigest) {
+        hash_binding(hash, &self.binding);
+        hash.float(self.independent_origin_seconds);
+        hash.float(self.timing_bound.halfwidth_seconds);
+        hash.text(&self.timing_bound.provenance);
+        hash.float_array(&self.beat_seconds);
+        match &self.backend {
+            BackendEvidence::Qm { raw, input } => {
+                hash.text(QM_BACKEND);
+                hash_qm_input(hash, input);
+                hash_qm_configuration(hash, raw.configuration());
+                hash.number(u64::from(raw.input_sample_rate_hz()));
+                hash.number(raw.input_frame_count() as u64);
+                hash.number(raw.odf_hop_samples() as u64);
+                hash.float_array(raw.beat_frames());
+                hash.sequence(raw.downbeat_raw_indices(), |hash, index| {
+                    hash.number(*index as u64);
+                });
+            }
+            BackendEvidence::BeatThis(raw) => {
+                hash.text("beat-this-1.1.0-lossless-v1");
+                hash_beat_request(hash, &raw.expected_request);
+                hash_job(hash, &raw.response_job);
+                hash_beat_model(hash, &raw.response_model);
+                hash.number(u64::from(raw.response_schema_version));
+                hash.float_array(&raw.beat_seconds);
+                hash.float_array(&raw.downbeat_seconds);
+                hash.float_array(&raw.beat_logits);
+                hash.float_array(&raw.downbeat_logits);
+            }
+        }
+    }
 }
 
 fn duration(metadata: &PcmBindingMetadata) -> f64 {
@@ -423,41 +457,6 @@ fn source_identity(
         configuration_revision,
         raw_revision,
         timing_error_halfwidth_seconds,
-    }
-}
-
-/// Canonical length-delimited, little-endian encoding. Floating bits are never normalized.
-struct CanonicalDigest(Sha256);
-
-impl CanonicalDigest {
-    fn new(domain: &str) -> Self {
-        let mut digest = Self(Sha256::new());
-        digest.text(domain);
-        digest
-    }
-
-    fn number(&mut self, number: u64) {
-        self.0.update(number.to_le_bytes());
-    }
-
-    fn text(&mut self, value: &str) {
-        self.number(value.len() as u64);
-        self.0.update(value.as_bytes());
-    }
-
-    fn float(&mut self, value: f64) {
-        self.0.update(value.to_le_bytes());
-    }
-
-    fn float_array(&mut self, values: &[f64]) {
-        self.number(values.len() as u64);
-        for value in values {
-            self.float(*value);
-        }
-    }
-
-    fn finish(self) -> String {
-        format!("{:x}", self.0.finalize())
     }
 }
 

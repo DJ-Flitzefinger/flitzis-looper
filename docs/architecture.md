@@ -109,6 +109,13 @@ Most Rust modules are `pub(crate)`. The public Python boundary is the PyO3
 `src/flitzis_looper_audio/__init__.pyi`.
 The separate `rust/crates/analysis/` crate provides non-realtime BPM, key and
 beat-grid analysis; the looper's control/worker code publishes its results.
+Its `tempo_acceptance` module owns a pure G3a immutable accepted-period record
+and a control-only source/request/intent adoption guard. Constructors recompute
+supported G2 evidence and require explicit acceptance and independent origin
+provenance. The versioned revision binds counts, policies, period/error state and
+complete source/backend evidence. No live caller uses it yet: current binary32
+native BPM/rate and binary64 editor derivation remain unchanged until G3b. See
+[accepted constant timing](accepted-constant-timing.md) for ownership and limits.
 Its shared `analyze_bpm` pipeline owns the legacy ODF/sample-hop conversion for
 both production and comparison fixtures. Private independent B2 input validation
 and sealing live separately in Python's analysis package and do not publish

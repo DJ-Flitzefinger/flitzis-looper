@@ -56,6 +56,7 @@ rust/
             |-- lib.rs
             |-- bpm_pipeline.rs    # shared QM analysis, lossless capture and legacy projection
             |-- tempo_evidence/    # complete PCM content binding and lossless backend adapters
+            |-- tempo_acceptance/  # immutable accepted timing and control-only adoption guard
             |-- tempo_refinement/  # isolated repeated PCM features and explicit count correspondence
             |-- tempo_summary/     # offline count hypotheses and robust period diagnostics
             |-- detection_function.rs
@@ -68,6 +69,12 @@ rust/
 
 Most modules are `pub(crate)`. `lib.rs`, `audio_engine/mod.rs`, and
 `src/flitzis_looper_audio/__init__.pyi` define the Python-facing boundary.
+
+The analysis crate's `tempo_acceptance` API retains a binary64 fitted period,
+complete evidence and a canonical accepted revision behind explicit acceptance
+and origin provenance. Its request/intent guard is control-only and has no
+production caller. G3b consumer integration and G3c physical/musical loop proof
+remain separate; see [accepted timing](../docs/accepted-constant-timing.md).
 
 ## Runtime Path
 

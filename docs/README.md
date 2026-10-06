@@ -43,6 +43,7 @@ For focused areas:
 | `grid-timing-diagnosis.md` | Reproduced endpoint-derived BPM/grid drift, long-file precision evidence and remaining correction limits. |
 | `scalar-source-coordinates.md` | Shared scalar projection, long-file waveform/seek/playhead precision, BPM edit preservation and remaining timing boundaries. |
 | `constant-tempo-summary.md` | Offline count/fit API, complete content-bound backend evidence, isolated PCM refinement, independent-count assertions and the G3 adoption boundary. |
+| `accepted-constant-timing.md` | G3a immutable accepted-period revision, explicit acceptance/origin evidence, control-only adoption guard and remaining live/loop gates. |
 | `beatmap-sync-research.md` | Sourced feasibility decision for variable beatmaps and independent Quantize/SYNC; proposals and evidence limits, not current runtime behavior. |
 | `beatmap-sync-design.md` | Selected Beat This migration and staged shared-grid/SYNC design, including the future independent per-pad KEY contract and validation gates. |
 | `todos.md` | Explicit user-requested TODO notes; not an automatic work queue. |
