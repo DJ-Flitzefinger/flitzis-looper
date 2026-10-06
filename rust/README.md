@@ -55,6 +55,7 @@ rust/
         `-- src/
             |-- lib.rs
             |-- bpm_pipeline.rs    # shared legacy analysis and explicit sample-hop timebase
+            |-- tempo_summary/     # offline count hypotheses and robust period diagnostics
             |-- detection_function.rs
             |-- tempotrack.rs
             |-- phase_vocoder.rs

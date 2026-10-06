@@ -11,6 +11,7 @@ mod detection_function;
 mod downbeat;
 pub mod key_detection;
 mod phase_vocoder;
+pub mod tempo_summary;
 mod tempotrack;
 
 // Re-export public API surface

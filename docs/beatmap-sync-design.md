@@ -64,6 +64,11 @@ Manual sample-domain anchors and explicit count correction remain available and 
 
 ### Automatic BPM and optional SYNC operating policy
 
+G2a implements the standalone [constant-tempo evidence core](constant-tempo-summary.md)
+with explicit quarter-note hypotheses and distant-fit diagnostics. G2b adapters and
+PCM refinement are still pending, followed by G3 accepted timing publication. The
+core's engineering policy does not replace the frozen B2 acceptance criteria.
+
 The 2026-10-06 [grid timing investigation](grid-timing-diagnosis.md) establishes
 an endpoint-sensitive BPM derivation and its hidden scalar-grid slope on an
 exact reference. Correcting those shared timing and long-file coordinate

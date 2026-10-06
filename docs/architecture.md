@@ -253,6 +253,14 @@ model; see [Key detection](key-detection.md). A key detection failure returns
 `unknown` without discarding the BPM result. Automatic loading and manual
 analysis use the same preprocessing and detection path.
 
+The separate G2a `analysis::tempo_summary` API evaluates complete binary64 raw
+positions against explicit quarter-note count hypotheses outside realtime paths.
+It preserves source/PCM/provenance identity and origin, fits robust constant-period
+candidates with distant-region checks, and reports ambiguity, exclusions and
+conditional uncertainty. It has no analyzer, Python or runtime publication call
+site. Backend adapters, PCM refinement and accepted timing adoption remain later
+stages; see [constant-tempo candidates](constant-tempo-summary.md).
+
 The separate B1a/B1b diagnostic boundary exposes `begin_offline_analysis` and
 `OfflineAnalysisService`; it does not change that default routing or adopt new
 results into saved grids. Rust pins the immutable loaded source and streams its

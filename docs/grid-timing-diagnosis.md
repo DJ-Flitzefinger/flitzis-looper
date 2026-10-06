@@ -4,6 +4,10 @@ Investigation date: 2026-10-06. Runtime baseline: `35b00c5`.
 Status: reproduced and diagnosed; G1 source-coordinate precision is implemented.
 Automatic tempo-summary correction and live accepted-period unification remain pending.
 
+G2a now provides a standalone [offline count/period assessment core](constant-tempo-summary.md).
+Its explicit hypotheses and conservative diagnostics prepare G2b's signal-supported
+refinement; it does not change the automatic result or pass the actual-WAV slope gate.
+
 The investigation uncovered a significant, long-standing weakness in automatic
 BPM derivation: coarse detector endpoint errors become a constant tempo error
 that propagates into the scalar grid and dependent loop operations. A correct
