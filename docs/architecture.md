@@ -293,6 +293,15 @@ math. Near-integer tempos are not snapped to integer BPM solely for display
 readability; compact pad overlays may round for scanning, while editable BPM
 fields and the Loop Editor grid use the underlying effective BPM.
 
+Known issue (2026-10-06): the legacy mean-of-intervals BPM estimator reduces to
+the first/last detected position and interval count. Their coarse ODF timing
+can produce a persistent scalar-grid slope hidden by the two-decimal BPM field.
+The exact 120-BPM reference publishes 120.00128936767578, placing its grid about
+5.157/15.472 loaded frames early at 10/30 seconds at 48 kHz. Separate waveform
+and seek/playhead `f32` interfaces also lose frame resolution in long files.
+See [the diagnosis and evidence limits](grid-timing-diagnosis.md). These issues
+are documented, not repaired by this investigation.
+
 In the legacy grid fallback, beat/downbeat anchors reported very close to file
 start are normalized to `0.0` before deriving editor/native timing. An explicit
 persisted activity base bypasses this normalization and retains its loaded-frame

@@ -40,6 +40,7 @@ For focused areas:
 | `beat-this-reference-evidence.md` | B1b reference parity/resource observations and the remaining quality/live acceptance limits. |
 | `beat-this-acceptance.md` | Frozen B2a private quality/resource gates, independent label requirements and the current acceptance decision. |
 | `beat-this-reference-inputs.md` | Private independent annotation and paired human correction inputs, validation and sealing; no musical scoring or default adoption. |
+| `grid-timing-diagnosis.md` | Reproduced endpoint-derived BPM/grid drift, long-file precision gaps, correction direction and evidence limits; runtime fixes remain pending. |
 | `beatmap-sync-research.md` | Sourced feasibility decision for variable beatmaps and independent Quantize/SYNC; proposals and evidence limits, not current runtime behavior. |
 | `beatmap-sync-design.md` | Selected Beat This migration and staged shared-grid/SYNC design, including the future independent per-pad KEY contract and validation gates. |
 | `todos.md` | Explicit user-requested TODO notes; not an automatic work queue. |

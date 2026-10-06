@@ -64,6 +64,18 @@ Manual sample-domain anchors and explicit count correction remain available and 
 
 ### Automatic BPM and optional SYNC operating policy
 
+The 2026-10-06 [grid timing investigation](grid-timing-diagnosis.md) establishes
+an endpoint-sensitive BPM derivation and its hidden scalar-grid slope on an
+exact reference. Correcting those shared timing and long-file coordinate
+defects precedes further live SYNC work; model acceleration alone does not
+correct them. The latest user decision selects Beat This as the sole future
+automatic analyzer after acceptance, without a QM-versus-neural Settings
+selector. Verified GPU and same-model CPU execution are device policies, not
+different analysis methods. Existing CPU diagnostic setup remains unchanged;
+GPU adoption and Rust-native inference still require bounded implementation
+and parity/resource validation. Manual/TAP and saved legacy results remain
+authoritative under the existing preservation contracts.
+
 The user's 2026-10-06 feedback requests improved automatic BPM estimation while
 retaining TAP BPM as a useful manual control. Derive versioned BPM summaries from
 the selected backend's complete beat sequence and verify them across distant
