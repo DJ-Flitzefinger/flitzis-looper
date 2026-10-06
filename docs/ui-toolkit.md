@@ -322,6 +322,13 @@ Native loop-region seconds remain `f64` through ordinary and direct-MIDI paths
 until integer source-frame conversion, keeping long-position editor markers
 sample-accurate. Native BPM parameters retain their existing `f32` precision.
 
+Visible lines, musical snap and automatic endpoints share the pure native scalar
+evaluator through a focused Python wrapper. Waveform X/query, seek and playhead
+interfaces retain `f64`; ImPlot receives promoted visible Y arrays without narrowing
+X. BPM edit buffers initialize from full precision and publish deliberate text
+changes only. Rounded summaries expose effective precision in tooltips. See
+[scalar source coordinates](scalar-source-coordinates.md) for units and limits.
+
 BPMLOCK enable/restore uses the existing selected-pad reference setup.
 `BpmController.recompute_master_bpm()` publishes a valid master tempo and the
 dedicated native bootstrap request for that reference. Rust latches and completes

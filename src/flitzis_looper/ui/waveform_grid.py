@@ -2,6 +2,20 @@
 
 import math
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from flitzis_looper.controller.scalar_grid import beat_duration_s, scalar_source_grid
+
+if TYPE_CHECKING:
+    from flitzis_looper_audio import ScalarSourceGrid
+
+__all__ = [
+    "WaveformGridLine",
+    "beat_duration_s",
+    "loop_beat_label",
+    "visible_grid_lines",
+    "waveform_view_start",
+]
 
 _MIN_MINOR_STEP_PX = 12.0
 _MAX_GRID_LINES = 2048
@@ -16,14 +30,6 @@ class WaveformGridLine:
     loop_beat: float
     major: bool
     reference: bool = False
-
-
-def beat_duration_s(bpm: float | None) -> float | None:
-    """Return a finite positive quarter-note duration, when available."""
-    if bpm is None or not math.isfinite(bpm) or bpm <= 0.0:
-        return None
-    duration = 60.0 / bpm
-    return duration if math.isfinite(duration) and duration > 0.0 else None
 
 
 def waveform_view_start(loop_start_s: float, bpm: float | None) -> float:
@@ -67,6 +73,43 @@ def _reference_grid_beats(loop_grid_beat: float) -> tuple[float, ...]:
     return (nearest_tick - 1.0, nearest_tick)
 
 
+def _project_grid_lines(
+    grid: ScalarSourceGrid,
+    *,
+    first_beat: float,
+    last_beat: float,
+    loop_grid_beat: float,
+    step_beats: float,
+) -> dict[float, WaveformGridLine]:
+    """Evaluate the bounded visible range and actual near-loop references."""
+    every = _major_every(step_beats)
+    first = math.ceil(first_beat / step_beats)
+    last = math.floor(last_beat / step_beats)
+    projected: dict[float, WaveformGridLine] = {}
+    for index in range(first, min(last + 1, first + _MAX_GRID_LINES - 2)):
+        grid_beat = index * step_beats
+        source_s = grid.source_at_beat(grid_beat)
+        if source_s is None:
+            continue
+        projected[grid_beat] = WaveformGridLine(
+            source_s,
+            1.0 + grid_beat - loop_grid_beat,
+            index % every == 0,
+        )
+    for grid_beat in _reference_grid_beats(loop_grid_beat):
+        if first_beat <= grid_beat <= last_beat:
+            source_s = grid.source_at_beat(grid_beat)
+            if source_s is None:
+                continue
+            projected[grid_beat] = WaveformGridLine(
+                source_s,
+                1.0 + grid_beat - loop_grid_beat,
+                major=True,
+                reference=True,
+            )
+    return projected
+
+
 def visible_grid_lines(
     *,
     start_s: float,
@@ -90,10 +133,13 @@ def visible_grid_lines(
         or end_s <= start_s
     ):
         return ()
-    first_beat = (start_s - anchor_s) / beat_s
-    last_beat = (end_s - anchor_s) / beat_s
-    loop_grid_beat = (loop_start_s - anchor_s) / beat_s
-    if not all(math.isfinite(value) for value in (first_beat, last_beat, loop_grid_beat)):
+    grid = scalar_source_grid(origin_s=anchor_s, bpm=bpm)
+    if grid is None:
+        return ()
+    first_beat = grid.beat_at_source(start_s)
+    last_beat = grid.beat_at_source(end_s)
+    loop_grid_beat = grid.beat_at_source(loop_start_s)
+    if first_beat is None or last_beat is None or loop_grid_beat is None:
         return ()
     step_beats = _minor_step_beats(beat_s, px_per_s)
     # Keep even corrupt/extreme metadata from causing an unbounded UI loop.
@@ -104,25 +150,13 @@ def visible_grid_lines(
         step_beats = max(16.0, math.ceil(span_beats / (_MAX_GRID_LINES - 4) / 16.0) * 16.0)
     if not math.isfinite(first_beat / step_beats) or not math.isfinite(last_beat / step_beats):
         return ()
-    every = _major_every(step_beats)
-    first = math.ceil(first_beat / step_beats)
-    last = math.floor(last_beat / step_beats)
-    projected: dict[float, WaveformGridLine] = {}
-    for index in range(first, min(last + 1, first + _MAX_GRID_LINES - 2)):
-        grid_beat = index * step_beats
-        projected[grid_beat] = WaveformGridLine(
-            anchor_s + grid_beat * beat_s,
-            1.0 + grid_beat - loop_grid_beat,
-            index % every == 0,
-        )
-    for grid_beat in _reference_grid_beats(loop_grid_beat):
-        if first_beat <= grid_beat <= last_beat:
-            projected[grid_beat] = WaveformGridLine(
-                anchor_s + grid_beat * beat_s,
-                1.0 + grid_beat - loop_grid_beat,
-                major=True,
-                reference=True,
-            )
+    projected = _project_grid_lines(
+        grid,
+        first_beat=first_beat,
+        last_beat=last_beat,
+        loop_grid_beat=loop_grid_beat,
+        step_beats=step_beats,
+    )
     return tuple(
         sorted(
             (

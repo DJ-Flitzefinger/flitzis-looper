@@ -14,6 +14,7 @@ from flitzis_looper.ui.constants import (
 from flitzis_looper.ui.contextmanager import button_style, style_var
 from flitzis_looper.ui.render.bpm_entry import (
     filtered_bpm_entry_char,
+    format_bpm_entry_value,
     parse_bpm_entry_text,
     sanitize_bpm_entry_text,
 )
@@ -128,7 +129,7 @@ def _render_bpm_entry(
 
     commit = submitted or imgui.is_item_deactivated_after_edit()
     close = submitted or imgui.is_item_deactivated()
-    if commit:
+    if commit and sanitized != ctx.state.session.global_bpm_edit_initial_text:
         target_bpm = parse_bpm_entry_text(sanitized)
         if target_bpm is not None:
             ctx.audio.global_.set_effective_bpm(target_bpm)
@@ -160,7 +161,13 @@ def _bpm_display(ctx: UiContext) -> None:
         and imgui.is_item_hovered()
         and imgui.is_mouse_double_clicked(imgui.MouseButton_.left)
     ):
-        ctx.ui.start_global_bpm_edit(bpm_text)
+        ctx.ui.start_global_bpm_edit(format_bpm_entry_value(bpm))
+
+    if bpm is not None and imgui.is_item_hovered():
+        imgui.set_tooltip(
+            f"Effective BPM: {format_bpm_entry_value(bpm)}\n"
+            "Display rounded to two decimals. Double-click to edit full precision."
+        )
 
     imgui.push_font(None, 38)
     text_size = imgui.calc_text_size(bpm_text)

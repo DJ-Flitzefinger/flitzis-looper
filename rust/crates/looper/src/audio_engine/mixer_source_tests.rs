@@ -237,7 +237,11 @@ fn explicit_intro_and_tail_seek_taps_and_cursors_are_partition_invariant() {
             let mut reference_feed = None;
             for partitions in PARTITIONS {
                 restart(&mut mixer, ratio, false);
-                assert!(mixer.seek_sample_at_output_frame(0, origin as f32 / sample_rate, 0,));
+                assert!(mixer.seek_sample_at_output_frame(
+                    0,
+                    origin as f64 / f64::from(sample_rate),
+                    0,
+                ));
                 let actual = render_capture(&mut mixer, &mut 0, frames, partitions);
                 assert_audio_close(&actual.feed, &expected);
                 assert_audio_close(&actual.output, &expected);

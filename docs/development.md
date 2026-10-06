@@ -154,7 +154,11 @@ the test executable:
 .\scripts\run-rust-tests.ps1
 ```
 
-The helper asks `uv run python` for the active Python runtime location. For
+The helper asks `uv run python` for the active Python runtime location and its
+`purelib`/`platlib` package directories. It prepends those package directories
+to process-scoped `PYTHONPATH` so standalone PyO3 tests can import the same
+NumPy environment as the app, and restores the caller's `PATH`/`PYTHONPATH`
+after Cargo returns. For
 Rubber Band, it uses `RUBBERBAND_DLL_DIRS`, `RUBBERBAND_DLL_DIR`, a `bin`
 sibling of `RUBBERBAND_LIB_DIR`, `VCPKG_ROOT`, the default
 `$env:LOCALAPPDATA\vcpkg` location, and existing `PATH` entries that contain

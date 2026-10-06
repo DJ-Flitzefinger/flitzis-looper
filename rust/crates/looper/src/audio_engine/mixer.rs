@@ -737,12 +737,12 @@ impl RtMixer {
         self.pad_phase_anchor_frame.get(id).copied()
     }
 
-    fn source_frame_from_seconds(&self, position_s: f32, sample_frames: usize) -> usize {
+    fn source_frame_from_seconds(&self, position_s: f64, sample_frames: usize) -> usize {
         if !position_s.is_finite() || position_s < 0.0 {
             return 0;
         }
 
-        let frame = position_s as f64 * self.sample_rate_hz as f64;
+        let frame = position_s * f64::from(self.sample_rate_hz);
         if !frame.is_finite() || frame <= 0.0 {
             return 0;
         }
@@ -893,14 +893,14 @@ impl RtMixer {
     }
 
     #[cfg(test)]
-    pub fn seek_sample(&mut self, id: usize, position_s: f32) -> bool {
+    pub fn seek_sample(&mut self, id: usize, position_s: f64) -> bool {
         self.seek_sample_with_output_frame(id, position_s, None)
     }
 
     pub(crate) fn seek_sample_at_output_frame(
         &mut self,
         id: usize,
-        position_s: f32,
+        position_s: f64,
         output_frame: u64,
     ) -> bool {
         self.seek_sample_with_output_frame(id, position_s, Some(output_frame))
@@ -909,7 +909,7 @@ impl RtMixer {
     fn seek_sample_with_output_frame(
         &mut self,
         id: usize,
-        position_s: f32,
+        position_s: f64,
         output_frame: Option<u64>,
     ) -> bool {
         if id >= NUM_SAMPLES || !position_s.is_finite() || position_s < 0.0 || self.channels == 0 {
@@ -945,12 +945,12 @@ impl RtMixer {
         did_seek
     }
 
-    pub fn pad_playhead_seconds(&self, id: usize) -> Option<f32> {
+    pub fn pad_playhead_seconds(&self, id: usize) -> Option<f64> {
         if id >= NUM_SAMPLES {
             return None;
         }
         let frame = self.pad_playhead_frame[id]?;
-        Some(frame as f32 / self.sample_rate_hz)
+        Some(frame as f64 / f64::from(self.sample_rate_hz))
     }
 
     #[cfg(test)]
@@ -3281,7 +3281,47 @@ mod tests {
             let frame = mixer.pad_playhead_frame[0].unwrap();
             assert!((2..5).contains(&frame));
             let seconds = mixer.pad_playhead_seconds(0).unwrap();
-            assert!((seconds - frame as f32 / 10.0).abs() < 1e-6);
+            assert!((seconds - frame as f64 / 10.0).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn long_seek_and_playhead_conversion_preserves_frames_without_dense_pcm() {
+        for rate in [44_100_u32, 48_000, 96_000] {
+            let mut mixer = RtMixer::new(1, rate as f32);
+            let rate_f64 = f64::from(rate);
+            for duration in [600_u32, 1_800] {
+                let first = (u64::from(rate) * u64::from(duration)) as usize;
+                let total_frames = first + 16;
+                for frame in first..total_frames {
+                    let seconds = frame as f64 / rate_f64;
+                    assert_eq!(
+                        mixer.source_frame_from_seconds(seconds, total_frames),
+                        frame
+                    );
+                    mixer.pad_playhead_frame[0] = Some(frame);
+                    let telemetry = mixer.pad_playhead_seconds(0).unwrap();
+                    assert_eq!(telemetry, seconds);
+                    assert_eq!(
+                        mixer.source_frame_from_seconds(telemetry, total_frames),
+                        frame
+                    );
+                }
+                assert_eq!(
+                    mixer.source_frame_from_seconds(10_000.0, total_frames),
+                    total_frames
+                );
+                assert_eq!(mixer.source_frame_from_seconds(-1.0, total_frames), 0);
+                assert_eq!(mixer.source_frame_from_seconds(f64::NAN, total_frames), 0);
+                assert_eq!(
+                    mixer.source_frame_from_seconds((first as f64 + 0.49) / rate_f64, total_frames),
+                    first,
+                );
+                assert_eq!(
+                    mixer.source_frame_from_seconds((first as f64 + 0.51) / rate_f64, total_frames),
+                    first + 1,
+                );
+            }
         }
     }
 

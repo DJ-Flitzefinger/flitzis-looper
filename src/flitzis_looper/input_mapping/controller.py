@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING, Literal, cast
 from flitzis_looper.audio_gain import legacy_gain_value_to_db
 from flitzis_looper.constants import (
     NUM_BANKS,
-    NUM_SAMPLES,
     PAD_GAIN_DB_MAX,
     PAD_GAIN_DB_MIN,
     SPEED_MAX,
@@ -40,15 +39,13 @@ if TYPE_CHECKING:
 
 type InputSource = Literal["midi", "keyboard"]
 type _InputRuntimePadSignature = tuple[
-    bool,
+    str | None,
+    float | None,
     float,
     float | None,
-    bool,
-    float,
-    int,
     float | None,
 ]
-type _InputRuntimeStateSignature = tuple[bool, tuple[_InputRuntimePadSignature, ...]]
+type _InputRuntimeStateSignature = tuple[bool, int | None, tuple[_InputRuntimePadSignature, ...]]
 PAD_EQ_BANDS: tuple[PadEqBand, ...] = ("low", "mid", "high")
 MIDI_RELATIVE_VOLUME_STEP = 0.01
 MIDI_RELATIVE_GAIN_STEP_DB = 0.1
@@ -502,21 +499,14 @@ class InputMappingController(BaseController):
         if signature == self._last_input_runtime_state_signature:
             return
 
-        loaded = [path is not None for path in self._project.sample_paths]
-        loop_starts: list[float] = []
-        loop_ends: list[float | None] = []
-        for sample_id in range(NUM_SAMPLES):
-            if self._project.sample_paths[sample_id] is None:
-                loop_starts.append(0.0)
-                loop_ends.append(None)
-                continue
-            start_s, end_s = self._app.transport.loop.effective_region(sample_id)
-            loop_starts.append(float(start_s))
-            loop_ends.append(float(end_s) if end_s is not None else None)
+        multi_loop, _sample_rate_hz, pad_signatures = signature
+        loaded = [pad[0] is not None for pad in pad_signatures]
+        loop_starts = [pad[2] for pad in pad_signatures]
+        loop_ends = [pad[3] for pad in pad_signatures]
 
         try:
             self._audio.set_input_runtime_state(
-                self._project.multi_loop,
+                multi_loop,
                 loaded,
                 loop_starts,
                 loop_ends,
@@ -530,30 +520,25 @@ class InputMappingController(BaseController):
         pad_signatures: list[_InputRuntimePadSignature] = []
         for sample_id, sample_path in enumerate(self._project.sample_paths):
             if sample_path is None:
-                pad_signatures.append((False, 0.0, None, True, 0.0, 0, None))
+                pad_signatures.append((None, None, 0.0, None, None))
                 continue
 
-            end_s = self._project.pad_loop_end_s[sample_id]
+            start_s, end_s = self._app.transport.loop.effective_region(sample_id)
             pad_signatures.append((
-                True,
-                float(self._project.pad_loop_start_s[sample_id]),
+                sample_path,
+                self._project.sample_durations[sample_id],
+                float(start_s),
                 float(end_s) if end_s is not None else None,
-                bool(self._project.pad_loop_auto[sample_id]),
-                float(self._project.pad_loop_bars[sample_id]),
-                int(self._project.pad_grid_offset_samples[sample_id]),
                 self._input_runtime_bpm_signature(sample_id),
             ))
-        return (self._project.multi_loop, tuple(pad_signatures))
+        return (
+            self._project.multi_loop,
+            self._app.transport._output_sample_rate_hz(),
+            tuple(pad_signatures),
+        )
 
     def _input_runtime_bpm_signature(self, sample_id: int) -> float | None:
-        manual = self._project.manual_bpm[sample_id]
-        if manual is not None:
-            return float(manual)
-
-        analysis = self._project.sample_analysis[sample_id]
-        if analysis is None:
-            return None
-        return float(analysis.bpm) if analysis.bpm is not None else None
+        return self._app.transport.bpm.effective_bpm(sample_id)
 
     def _set_rust_enabled(self, *, enabled: bool) -> None:
         with suppress(RuntimeError, TypeError):

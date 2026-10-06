@@ -57,6 +57,8 @@ mod mixer;
 mod progress;
 mod rubberband_backend;
 mod sample_loader;
+mod scalar_grid;
+pub(crate) use scalar_grid::ScalarSourceGrid;
 mod scheduler;
 mod source_grid;
 mod source_playback;
@@ -66,6 +68,7 @@ mod stretch_processor;
 mod timing;
 mod transport;
 mod voice_slot;
+mod waveform;
 
 /// Tuple: (is_raw_mode, xs, y_min, y_max)
 ///
@@ -76,7 +79,7 @@ mod voice_slot;
 type WaveformResult = PyResult<
     Option<(
         bool,
-        Py<PyArray1<f32>>,
+        Py<PyArray1<f64>>,
         Py<PyArray1<f32>>,
         Option<Py<PyArray1<f32>>>,
     )>,
@@ -728,7 +731,7 @@ impl AudioEngine {
             );
 
             let frames = sample.samples.len() / sample.channels;
-            let duration_s = frames as f32 / output_sample_rate as f32;
+            let duration_s = frames as f64 / f64::from(output_sample_rate);
 
             let Ok(requests) = pad_request_ids.lock() else {
                 return;
@@ -1815,7 +1818,7 @@ impl AudioEngine {
     }
 
     /// Seek an active or paused sample voice to a source position in seconds.
-    pub fn seek_sample(&mut self, id: usize, position_s: f32) -> PyResult<()> {
+    pub fn seek_sample(&mut self, id: usize, position_s: f64) -> PyResult<()> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
         }
@@ -2042,8 +2045,8 @@ impl AudioEngine {
         py: Python,
         sample_id: usize,
         width_px: usize,
-        start_s: f32,
-        end_s: f32,
+        start_s: f64,
+        end_s: f64,
     ) -> WaveformResult {
         // Acquire data
         let sample_arc = {
@@ -2054,146 +2057,41 @@ impl AudioEngine {
             cache.get(sample_id).and_then(|slot| slot.clone())
         };
 
-        if sample_arc.is_none() {
+        let Some(sample) = sample_arc else {
             return Ok(None);
-        }
-        let sample = sample_arc.unwrap();
+        };
 
         // Retrieve sample rate
         let sample_rate = if let Some(handle) = self.stream_handle.as_ref() {
-            handle.output_sample_rate as f32
+            f64::from(handle.output_sample_rate)
         } else {
             44_100.0
         };
 
         let channels = sample.channels;
-        let total_frames = sample.samples.len() / channels;
-
-        // Calculate index ranges
-
-        // Map time (seconds) to indices
-        let start_idx = (start_s * sample_rate).floor() as usize;
-        let end_idx = (end_s * sample_rate).ceil() as usize;
-
-        // Clamp to buffer bounds
-        let start_idx = start_idx.clamp(0, total_frames);
-        let end_idx = end_idx.clamp(0, total_frames).max(start_idx); // Ensure no negative range
-
-        let range_len = end_idx - start_idx;
-        if range_len == 0 {
+        if channels == 0 {
             return Ok(None);
         }
-
-        let raw_data = &sample.samples;
-
-        // Mode selection: raw vs envelope
-
-        // If we have fewer samples than 2x pixels, showing an aggregate
-        // loses information. Show raw samples instead.
-        if range_len < width_px * 2 {
-            // === RAW MODE ===
-
-            // Allocate vectors
-            let mut xs = Vec::with_capacity(range_len);
-            let mut ys = Vec::with_capacity(range_len);
-
-            for i in 0..range_len {
-                let frame_idx = start_idx + i;
-                let sample_idx = frame_idx * channels;
-
-                // Mixdown logic: (L+R)/2 for stereo, or just L for Mono
-                let val = if channels == 2 {
-                    (raw_data[sample_idx] + raw_data[sample_idx + 1]) * 0.5
-                } else {
-                    raw_data[sample_idx]
-                };
-
-                xs.push(frame_idx as f32 / sample_rate);
-                ys.push(val);
-            }
-
-            // Convert to numpy arrays (direct write to Python heap)
-            let xs_py = xs.to_pyarray(py).to_owned();
-            let ys_py = ys.to_pyarray(py).to_owned();
-
-            Ok(Some((true, xs_py.into(), ys_py.into(), None)))
-        } else {
-            // === ENVELOPE MODE (Aggregation) ===
-
-            // We want exactly `width_px` data points
-            let mut xs = Vec::with_capacity(width_px);
-            let mut mins = Vec::with_capacity(width_px);
-            let mut maxs = Vec::with_capacity(width_px);
-
-            // How many frames fit into one pixel column?
-            let frames_per_bucket = range_len as f32 / width_px as f32;
-
-            for i in 0..width_px {
-                // Calculate the slice for this bucket
-                let bucket_start_rel = (i as f32 * frames_per_bucket) as usize;
-                let bucket_end_rel = ((i + 1) as f32 * frames_per_bucket) as usize;
-
-                let bucket_start = start_idx + bucket_start_rel;
-                let bucket_end = (start_idx + bucket_end_rel).min(start_idx + range_len);
-
-                if bucket_start >= bucket_end {
-                    continue;
-                }
-
-                let mut min_v = f32::MAX;
-                let mut max_v = f32::MIN;
-
-                // Inner Loop: Scan the bucket
-                // Optimizations:
-                // 1. We step by `channels` to stay aligned.
-                // 2. We mixdown stereo on the fly to find true peak.
-                let mut ptr = bucket_start * channels;
-                let end_ptr = bucket_end * channels;
-
-                // Using a while loop with raw indexing is often easier for
-                // stride logic than iterators in this specific math context
-                while ptr < end_ptr {
-                    let val = if channels == 2 {
-                        (raw_data[ptr] + raw_data[ptr + 1]) * 0.5
-                    } else {
-                        raw_data[ptr]
-                    };
-
-                    if val < min_v {
-                        min_v = val;
-                    }
-                    if val > max_v {
-                        max_v = val;
-                    }
-
-                    ptr += channels;
-                }
-
-                // If min_v is still MAX, it means the loop didn't run (empty bucket)
-                if min_v == f32::MAX {
-                    min_v = 0.0;
-                    max_v = 0.0;
-                }
-
-                // The X coordinate is the time at the START of the bucket
-                let time = bucket_start as f32 / sample_rate;
-
-                xs.push(time);
-                mins.push(min_v);
-                maxs.push(max_v);
-            }
-
-            let xs_py = xs.to_pyarray(py).to_owned();
-            let mins_py = mins.to_pyarray(py).to_owned();
-            let maxs_py = maxs.to_pyarray(py).to_owned();
-
-            Ok(Some((
-                false,
-                xs_py.into(),
-                mins_py.into(),
-                Some(maxs_py.into()),
-            )))
+        let total_frames = sample.samples.len() / channels;
+        let region = waveform::source_frame_range(start_s, end_s, sample_rate, total_frames);
+        if region.is_empty() {
+            return Ok(None);
         }
+        let Some(data) = waveform::render_region(
+            &sample.samples[region.start * channels..region.end * channels],
+            channels,
+            sample_rate,
+            region.start,
+            width_px,
+        ) else {
+            return Ok(None);
+        };
+        Ok(Some((
+            data.is_raw,
+            data.xs.to_pyarray(py).to_owned().into(),
+            data.y_min.to_pyarray(py).to_owned().into(),
+            data.y_max.map(|ys| ys.to_pyarray(py).to_owned().into()),
+        )))
     }
 }
 
@@ -2245,6 +2143,77 @@ mod tests {
                 assert_eq!(value.extract::<Option<f64>>().unwrap(), suggestion);
                 assert!(event.get_item("analysis").unwrap().is_none());
             }
+        });
+    }
+
+    #[test]
+    fn load_success_publishes_exact_long_loaded_duration_seconds() {
+        Python::initialize();
+        Python::attach(|py| {
+            let engine = AudioEngine::new().unwrap();
+            for rate in [44_100_u32, 48_000, 96_000] {
+                for duration in [600_u32, 1_800] {
+                    let frames = u64::from(rate) * u64::from(duration) + 7;
+                    let duration_s = frames as f64 / f64::from(rate);
+                    engine
+                        .loader_tx
+                        .send(LoaderEvent::Success {
+                            id: 3,
+                            request_id: 7,
+                            duration_s,
+                            detected_loop_start_s: None,
+                            cached_path: "samples/long.wav".to_owned(),
+                            analysis: None,
+                        })
+                        .unwrap();
+                    let event = engine.poll_loader_events(py).unwrap().unwrap();
+                    let event = event.bind(py).cast::<PyDict>().unwrap();
+                    let published = event
+                        .get_item("duration_s")
+                        .unwrap()
+                        .unwrap()
+                        .extract::<f64>()
+                        .unwrap();
+                    assert_eq!(published, duration_s);
+                    assert_eq!((published * f64::from(rate)).round() as u64, frames);
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn waveform_python_boundary_returns_f64_time_and_f32_pcm() {
+        Python::initialize();
+        Python::attach(|py| {
+            let engine = AudioEngine::new().unwrap();
+            engine.sample_cache.lock().unwrap()[0] = Some(SampleBuffer {
+                channels: 1,
+                samples: Arc::from([0.25_f32, -0.5, 0.75].as_slice()),
+            });
+            let (is_raw, xs, ys, maximum) = engine
+                .get_waveform_render_data(py, 0, 16, 1.0 / 44_100.0, 2.0 / 44_100.0)
+                .unwrap()
+                .unwrap();
+            assert!(is_raw);
+            assert!(maximum.is_none());
+            assert_eq!(xs.bind(py).getattr("dtype").unwrap().to_string(), "float64");
+            assert_eq!(ys.bind(py).getattr("dtype").unwrap().to_string(), "float32");
+            assert_eq!(
+                xs.bind(py)
+                    .getattr("size")
+                    .unwrap()
+                    .extract::<usize>()
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                xs.bind(py).get_item(0).unwrap().extract::<f64>().unwrap(),
+                1.0 / 44_100.0
+            );
+            assert_eq!(
+                ys.bind(py).get_item(0).unwrap().extract::<f32>().unwrap(),
+                -0.5
+            );
         });
     }
 

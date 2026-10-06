@@ -684,6 +684,9 @@ class SessionState(BaseModel):
     global_bpm_edit_text: str = ""
     """Temporary sanitized text buffer for the right-side global BPM edit field."""
 
+    global_bpm_edit_initial_text: str = ""
+    """Original full-precision buffer, used to distinguish edits from focus changes."""
+
     global_bpm_edit_focus_requested: bool = False
     """Whether the global BPM edit field should receive keyboard focus on the next frame."""
 

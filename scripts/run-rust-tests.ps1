@@ -30,26 +30,31 @@ function Add-CandidateDirectory {
     $Candidates.Add($Path)
 }
 
-function Get-UvPythonRuntimeDirectories {
+function Get-UvPythonEnvironment {
     $PythonRuntimeProbe = @'
+import json
 import os
 import sys
 import sysconfig
 
-paths = [
+runtime_dirs = [
     sys.base_prefix,
     os.path.dirname(sys.executable),
     sysconfig.get_config_var('BINDIR') or '',
 ]
-print(os.pathsep.join(dict.fromkeys(path for path in paths if path)))
+module_dirs = [sysconfig.get_path('purelib'), sysconfig.get_path('platlib')]
+print(json.dumps({
+    'runtime_dirs': list(dict.fromkeys(path for path in runtime_dirs if path)),
+    'module_dirs': list(dict.fromkeys(path for path in module_dirs if path)),
+}))
 '@
 
     $ProbeOutput = & uv run python -c $PythonRuntimeProbe
     if ($LASTEXITCODE -ne 0) {
-        throw "Failed to discover uv's Python runtime directory."
+        throw "Failed to discover uv's Python runtime and module directories."
     }
 
-    return Split-PathList ($ProbeOutput -join [IO.Path]::PathSeparator)
+    return ($ProbeOutput -join "`n" | ConvertFrom-Json)
 }
 
 $ScriptDir = Split-Path -Parent $PSCommandPath
@@ -63,8 +68,9 @@ $Triplet = if ($env:RUBBERBAND_VCPKG_TRIPLET) {
 }
 
 $Candidates = [System.Collections.Generic.List[string]]::new()
+$PythonEnvironment = Get-UvPythonEnvironment
 
-foreach ($PathEntry in Get-UvPythonRuntimeDirectories) {
+foreach ($PathEntry in $PythonEnvironment.runtime_dirs) {
     Add-CandidateDirectory $Candidates $PathEntry
 }
 
@@ -110,10 +116,20 @@ foreach ($Candidate in $Candidates) {
     $RuntimeDirs.Add($Resolved)
 }
 
-if ($RuntimeDirs.Count -gt 0) {
-    $env:PATH = (@($RuntimeDirs.ToArray()) + @($env:PATH)) -join [IO.Path]::PathSeparator
-}
-
 $ManifestPath = Join-Path $RepoRoot "rust\Cargo.toml"
-& uv run cargo test --manifest-path $ManifestPath --workspace @CargoArgs
-exit $LASTEXITCODE
+$OriginalRuntimePath = $env:PATH
+$OriginalPythonPath = $env:PYTHONPATH
+try {
+    if ($RuntimeDirs.Count -gt 0) {
+        $env:PATH = (@($RuntimeDirs.ToArray()) + @($OriginalRuntimePath)) -join [IO.Path]::PathSeparator
+    }
+    # Standalone PyO3 tests embed the base interpreter, which does not discover
+    # uv's virtualenv site-packages from the cargo executable's location.
+    $env:PYTHONPATH = (@($PythonEnvironment.module_dirs) + @(Split-PathList $OriginalPythonPath)) -join [IO.Path]::PathSeparator
+    & uv run cargo test --manifest-path $ManifestPath --workspace @CargoArgs
+    $TestExitCode = $LASTEXITCODE
+} finally {
+    $env:PATH = $OriginalRuntimePath
+    $env:PYTHONPATH = $OriginalPythonPath
+}
+exit $TestExitCode

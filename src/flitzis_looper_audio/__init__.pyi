@@ -1,6 +1,14 @@
 import numpy as np
 from numpy.typing import NDArray
 
+class ScalarSourceGrid:
+    # Pure source-second projection, independent of live native BPM/rate state.
+
+    def __init__(self, origin_s: float, seconds_per_beat: float) -> None: ...
+    def beat_at_source(self, source_s: float) -> float | None: ...
+    def source_at_beat(self, beat: float) -> float | None: ...
+    def source_after_beats(self, source_s: float, beats: float) -> float | None: ...
+
 class AudioMessage:
     def sample_id(self) -> int | None: ...
     def pad_peak(self) -> float | None: ...
@@ -110,7 +118,7 @@ class AudioEngine:
 
 type WaveFormRenderData = tuple[
     bool,  # True=raw mode; False=aggregate
-    NDArray[np.float32],  # Time values
+    NDArray[np.float64],  # Loaded-source seconds, preserving long-file frame addresses
     NDArray[np.float32],  # y_min (or raw samples in raw mode)
     NDArray[np.float32] | None,  # y_max (or None if in raw mode)
 ]

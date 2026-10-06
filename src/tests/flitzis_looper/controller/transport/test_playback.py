@@ -7,6 +7,23 @@ if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
 
 
+def test_seek_pad_preserves_adjacent_long_source_frames(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.project.sample_paths[0] = "samples/long.wav"
+    controller.project.sample_durations[0] = 100_000.0
+    controller.session.active_sample_ids.add(0)
+    positions = [(2**24 + offset) / 48_000 for offset in (1, 2)]
+
+    for position_s in positions:
+        controller.transport.playback.seek_pad(0, position_s)
+        assert controller.session.pad_playhead_s[0] == position_s
+
+    assert audio_engine_mock.seek_sample.call_args_list == [
+        call(0, position_s) for position_s in positions
+    ]
+
+
 def test_trigger_pad_single_loop(controller: AppController, audio_engine_mock: Mock) -> None:
     """Test triggering a pad in single loop mode uses the exclusive audio command."""
     sample_id = 0

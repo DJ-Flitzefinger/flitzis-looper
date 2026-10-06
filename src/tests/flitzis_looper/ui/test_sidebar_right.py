@@ -1,13 +1,22 @@
+from typing import TYPE_CHECKING
+from unittest.mock import Mock
+
 import pytest
 from imgui_bundle import imgui
 
 from flitzis_looper.constants import PITCH_BPM_COARSE_STEPS
 from flitzis_looper.ui.constants import CONTROL_ACTIVE_BORDER_RGBA, CONTROL_BORDER_RGBA
+from flitzis_looper.ui.context import UiContext
+from flitzis_looper.ui.render import sidebar_right
 from flitzis_looper.ui.render.bpm_entry import (
     filtered_bpm_entry_char,
+    format_bpm_entry_value,
     parse_bpm_entry_text,
     sanitize_bpm_entry_text,
 )
+
+if TYPE_CHECKING:
+    from flitzis_looper.controller import AppController
 from flitzis_looper.ui.render.sidebar_right import (
     PITCH_SLIDER_GRAB_MIN_SIZE,
     pitch_center_indicator_color,
@@ -20,7 +29,7 @@ from flitzis_looper.ui.render.sidebar_right import (
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("123,456abc", "123.45"),
+        ("123,456abc", "123.456"),
         ("12..3", "12.3"),
         ("a1b2c3", "123"),
         ("120,5", "120.5"),
@@ -34,7 +43,7 @@ def test_sanitize_bpm_entry_text(raw: str, expected: str) -> None:
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("123,456abc", 123.45),
+        ("123,456abc", 123.456),
         ("120.1", 120.1),
         ("001.20", 1.2),
     ],
@@ -73,7 +82,7 @@ def test_pitch_slider_grab_is_enlarged_for_easier_targeting() -> None:
         (",", "120", 3, ord(".")),
         (".", "120", 3, ord(".")),
         (".", "120.1", 5, None),
-        ("5", "120.12", 6, None),
+        ("5", "120.12", 6, ord("5")),
         ("5", "120.12", 2, ord("5")),
         ("\u00dc", "120", 3, None),
     ],
@@ -112,3 +121,97 @@ def test_pitch_center_indicator_y_matches_imgui_slider_grab_center() -> None:
 def test_pitch_center_indicator_color_is_green_only_at_neutral() -> None:
     assert pitch_center_indicator_color(speed=1.0) is CONTROL_ACTIVE_BORDER_RGBA
     assert pitch_center_indicator_color(speed=1.01) is CONTROL_BORDER_RGBA
+
+
+@pytest.mark.parametrize("bpm", [120.00128936767578, 119.999, 0.0000001, 1e20])
+def test_bpm_edit_text_preserves_the_full_value(bpm: float) -> None:
+    text = format_bpm_entry_value(bpm)
+    assert "e" not in text.lower()
+    assert sanitize_bpm_entry_text(text) == text
+    assert parse_bpm_entry_text(text) == bpm
+
+
+@pytest.mark.parametrize(
+    ("submitted", "deactivated_after_edit", "deactivated"),
+    [(False, False, False), (True, False, True), (False, False, True), (False, True, True)],
+)
+def test_untouched_global_bpm_entry_never_publishes_speed(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    submitted: bool,
+    deactivated_after_edit: bool,
+    deactivated: bool,
+) -> None:
+    ctx = UiContext(controller)
+    initial = format_bpm_entry_value(120.00128936767578)
+    ctx.ui.start_global_bpm_edit(initial)
+    audio_engine_mock.reset_mock()
+    monkeypatch.setattr(imgui, "set_cursor_screen_pos", lambda _pos: None)
+    monkeypatch.setattr(imgui, "set_next_item_width", lambda _width: None)
+    monkeypatch.setattr(imgui, "set_keyboard_focus_here", lambda: None)
+    monkeypatch.setattr(imgui, "set_cursor_pos", lambda _pos: None)
+    monkeypatch.setattr(imgui, "input_text", lambda *_args: (submitted, initial))
+    monkeypatch.setattr(imgui, "is_item_deactivated_after_edit", lambda: deactivated_after_edit)
+    monkeypatch.setattr(imgui, "is_item_deactivated", lambda: deactivated)
+
+    sidebar_right._render_bpm_entry(
+        ctx, imgui.ImVec2(0, 0), imgui.ImVec2(0, 0), imgui.ImVec2(160, 400), 40.0
+    )
+
+    audio_engine_mock.set_speed.assert_not_called()
+    assert controller.project.speed == 1.0
+    if not deactivated:
+        assert controller.session.global_bpm_edit_text == initial
+
+
+def test_deliberate_global_bpm_edit_retains_fractional_target(
+    controller: AppController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = UiContext(controller)
+    ctx.ui.start_global_bpm_edit(format_bpm_entry_value(120.00128936767578))
+    target_action = Mock()
+    monkeypatch.setattr(ctx.audio.global_, "set_effective_bpm", target_action)
+    monkeypatch.setattr(imgui, "set_cursor_screen_pos", lambda _pos: None)
+    monkeypatch.setattr(imgui, "set_next_item_width", lambda _width: None)
+    monkeypatch.setattr(imgui, "set_keyboard_focus_here", lambda: None)
+    monkeypatch.setattr(imgui, "set_cursor_pos", lambda _pos: None)
+    monkeypatch.setattr(imgui, "input_text", lambda *_args: (True, "119,9991234567"))
+
+    sidebar_right._render_bpm_entry(
+        ctx, imgui.ImVec2(0, 0), imgui.ImVec2(0, 0), imgui.ImVec2(160, 400), 40.0
+    )
+
+    target_action.assert_called_once_with(119.9991234567)
+    assert not controller.session.global_bpm_edit_active
+
+
+def test_global_bpm_display_opens_full_precision_and_explains_rounding(
+    controller: AppController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = UiContext(controller)
+    bpm = 120.00128936767578
+    monkeypatch.setattr(ctx.state.global_, "effective_bpm", lambda: bpm)
+    monkeypatch.setattr(imgui, "get_cursor_screen_pos", lambda: imgui.ImVec2(0, 0))
+    monkeypatch.setattr(imgui, "get_cursor_pos", lambda: imgui.ImVec2(0, 0))
+    monkeypatch.setattr(imgui, "get_content_region_avail", lambda: imgui.ImVec2(160, 400))
+    monkeypatch.setattr(imgui, "get_window_draw_list", Mock)
+    monkeypatch.setattr(imgui, "get_color_u32", lambda _color: 0)
+    monkeypatch.setattr(imgui, "invisible_button", lambda *_args: False)
+    monkeypatch.setattr(imgui, "is_item_hovered", lambda: True)
+    monkeypatch.setattr(imgui, "is_mouse_double_clicked", lambda _button: True)
+    monkeypatch.setattr(imgui, "push_font", lambda *_args: None)
+    monkeypatch.setattr(imgui, "pop_font", lambda: None)
+    monkeypatch.setattr(imgui, "calc_text_size", lambda _text: imgui.ImVec2(100, 32))
+    monkeypatch.setattr(imgui, "color_convert_float4_to_u32", lambda _color: 0)
+    tooltip = Mock()
+    monkeypatch.setattr(imgui, "set_tooltip", tooltip)
+
+    sidebar_right._bpm_display(ctx)
+
+    assert controller.session.global_bpm_edit_text == format_bpm_entry_value(bpm)
+    assert str(bpm) in tooltip.call_args.args[0]
+    assert "rounded" in tooltip.call_args.args[0]

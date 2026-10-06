@@ -107,12 +107,12 @@ uv run cargo fmt --manifest-path rust/Cargo.toml --all --check
 ```
 
 Use `uv run cargo ...` so PyO3 and maturin use the project Python environment.
-The Windows script adds uv's selected Python runtime and the documented Rubber
-Band runtime directories to `PATH` before launching the standalone Rust test
-executable.
-On non-Windows platforms, or in a Windows shell where the Rubber Band runtime
-DLLs are already visible to standalone test executables, the Rust test command
-is `uv run cargo test --manifest-path rust/Cargo.toml --workspace`.
+The helper adds uv's selected Python runtime and the documented Rubber Band
+runtime directories to `PATH`, and its `purelib`/`platlib` directories to
+`PYTHONPATH` for embedded PyO3/NumPy tests. It restores both variables after Cargo
+returns. Direct `uv run cargo test --manifest-path rust/Cargo.toml --workspace`
+also works when both native runtime libraries and the selected environment's
+Python package directories are already available to standalone test executables.
 
 ## Design Notes
 
@@ -187,6 +187,15 @@ is `uv run cargo test --manifest-path rust/Cargo.toml --workspace`.
   metadata, until source-frame conversion. Pad/master BPM remain native `f32`
   parameters promoted to `f64` for phase math. Long source markers retain frame
   precision; this does not imply arbitrary decimal BPM exactness.
+- Waveform query/X, loaded duration, seek commands and playhead telemetry retain
+  `f64` source seconds through the public boundary. Amplitudes remain `f32`.
+  Source address helpers recover frame-derived bounds within a tight roundoff
+  tolerance; envelope buckets use integer boundaries. Control queries stay outside
+  the callback; fixed-size messages preserve existing source seek semantics.
+- The pure `ScalarSourceGrid` PyO3 facade reuses `source_grid.rs` with a `f64`
+  control period for editor lines, snap and automatic ends. The live constructor
+  still accepts native `f32` BPM. See
+  [scalar source coordinates](../docs/scalar-source-coordinates.md).
 - Transport stores complete musical position across BPM changes. The dedicated
   `bootstrap_transport_from_pad(id)` request latches the selected BPMLOCK
   reference once per stream, waits for valid active source state and consumes

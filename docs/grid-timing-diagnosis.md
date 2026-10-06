@@ -1,7 +1,8 @@
 # Grid timing drift: diagnosis and correction direction
 
 Investigation date: 2026-10-06. Runtime baseline: `35b00c5`.
-Status: reproduced and diagnosed; runtime corrections are **not implemented**.
+Status: reproduced and diagnosed; G1 source-coordinate precision is implemented.
+Automatic tempo-summary correction and live accepted-period unification remain pending.
 
 The investigation uncovered a significant, long-standing weakness in automatic
 BPM derivation: coarse detector endpoint errors become a constant tempo error
@@ -91,7 +92,7 @@ not the source positions of grid lines.
 
 ## Separate precision and loop findings
 
-- Waveform query bounds and returned X coordinates use `f32` seconds in the
+- At the investigated baseline, waveform bounds and returned X used `f32` seconds in the
   [native engine](../rust/crates/looper/src/audio_engine/mod.rs). At 599.5 s,
   16 adjacent 48-kHz frames collapse to seven distinct X coordinates; a
   one-frame query can round both bounds to the same value. Seek/playhead
@@ -111,6 +112,31 @@ not the source positions of grid lines.
 The existing source/output-clock separation, actual-hop correction, activity
 anchor and resampler-tail repair remain justified. These findings do not
 support reverting them or blaming the source audio.
+
+### G1 coordinate correction
+
+The focused `preserve-scalar-source-precision` change now shares the pure Rust
+scalar projection across editor lines, snap and automatic endpoints, and preserves
+binary64 waveform/seek/playhead/duration addressing. Untouched BPM edits preserve
+the full effective value; intentional fractional BPM remains supported. See
+[scalar source coordinates](scalar-source-coordinates.md) for the API and remaining
+native binary32 BPM/rate boundary.
+
+A separate actual-WAV public API comparison at 599.5 seconds used 16 consecutive
+48-kHz frames. Before G1, 11 of 16 one-frame queries were empty, and the combined
+window returned 14 points with five distinct binary32 X values. After G1, every
+one-frame query returned exactly its addressed frame and the combined window
+returned exactly 16 points with 16 distinct binary64 X values. This probe used a
+muted isolated engine without playback or analysis; different query bounds from
+the earlier arithmetic probe explain its different baseline distinct-X count.
+Generated sparse tests additionally cover 44.1/48/96 kHz at 600/1800 seconds,
+seek/telemetry payloads and source clamps without large dense fixtures.
+
+Independent manual-120 grid/snap/auto tests cover all 1200 pulse positions
+`n*24000`, plus fractional 119.999/123.45, subdivisions and signed/off-grid origins.
+These are coordinate proofs. The automatic estimator has not changed, so the
+120.00128936767578-BPM scalar slope remains G2; native accepted period/revision and
+musical-versus-physical live loop behavior remain G3. No audible SYNC is certified.
 
 ## Correction direction and evidence limits
 

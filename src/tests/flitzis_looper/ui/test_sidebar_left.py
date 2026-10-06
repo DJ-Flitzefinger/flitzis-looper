@@ -1,9 +1,11 @@
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, cast
+from unittest.mock import Mock
 
 import pytest
 from imgui_bundle import imgui
 
+from flitzis_looper.ui.context import UiContext
 from flitzis_looper.ui.render import sidebar_left
 from flitzis_looper.ui.render.bpm_entry import filtered_bpm_entry_char, sanitize_bpm_entry_text
 from flitzis_looper.ui.render.sidebar_left import (
@@ -18,7 +20,7 @@ from flitzis_looper.ui.render.sidebar_left import (
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from flitzis_looper.ui.context import UiContext
+    from flitzis_looper.controller import AppController
 
 
 class _Point:
@@ -137,7 +139,7 @@ def test_sanitize_eq_entry_text(raw: str, expected: str) -> None:
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("123,456abc", "123.45"),
+        ("123,456abc", "123.456"),
         ("12..3", "12.3"),
         ("a1b2c3", "123"),
         ("120,5", "120.5"),
@@ -187,7 +189,7 @@ def test_filtered_eq_entry_char(
         (",", "120", 3, ord(".")),
         (".", "120", 3, ord(".")),
         (".", "120.1", 5, None),
-        ("5", "120.12", 6, None),
+        ("5", "120.12", 6, ord("5")),
         ("5", "120.12", 2, ord("5")),
         ("\u00dc", "120", 3, None),
     ],
@@ -228,7 +230,7 @@ def test_parse_eq_entry_text(raw: str, expected: float) -> None:
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("123,456abc", 123.45),
+        ("123,456abc", 123.456),
         ("120.1", 120.1),
         ("001.20", 1.2),
         ("0", MANUAL_BPM_ENTRY_MIN),
@@ -366,3 +368,85 @@ def test_sidebar_renders_pad_key_lock_only_for_loaded_pads(
     )
 
     assert key_lock_calls == expected_key_lock_calls
+
+
+@pytest.mark.parametrize("manual", [False, True])
+@pytest.mark.parametrize("submitted", [False, True])
+def test_untouched_pad_bpm_entry_preserves_effective_value_and_override(
+    controller: AppController,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    manual: bool,
+    submitted: bool,
+) -> None:
+    ctx = UiContext(controller)
+    bpm = 120.00128936767578
+    if manual:
+        controller.project.manual_bpm[0] = bpm
+    monkeypatch.setattr(ctx.state.pads, "effective_bpm", lambda _pad: bpm)
+    set_manual = Mock()
+    clear_manual = Mock()
+    monkeypatch.setattr(ctx.audio.pads, "set_manual_bpm", set_manual)
+    monkeypatch.setattr(ctx.audio.pads, "clear_manual_bpm", clear_manual)
+    monkeypatch.setattr(sidebar_left, "_BPM_ENTRY", sidebar_left._BpmEntryState())
+    monkeypatch.setattr(imgui, "text_colored", lambda *_args: None)
+    monkeypatch.setattr(imgui, "same_line", lambda *_args: None)
+    monkeypatch.setattr(imgui, "set_next_item_width", lambda _width: None)
+    monkeypatch.setattr(imgui, "input_text", lambda _id, text, *_args: (submitted, text))
+    monkeypatch.setattr(imgui, "is_item_deactivated_after_edit", lambda: True)
+    monkeypatch.setattr(imgui, "is_item_deactivated", lambda: True)
+    monkeypatch.setattr(imgui, "is_item_active", lambda: False)
+    monkeypatch.setattr(imgui, "is_item_hovered", lambda: True)
+    monkeypatch.setattr(imgui, "is_mouse_clicked", lambda _button: False)
+    tooltip = Mock()
+    monkeypatch.setattr(imgui, "set_tooltip", tooltip)
+    monkeypatch.setattr(imgui, "button", lambda *_args: False)
+
+    sidebar_left._render_bpm(
+        ctx, sidebar_left._SidebarPadInfo(0, 240.0, is_loaded=True, is_loading=False)
+    )
+
+    assert sidebar_left._BPM_ENTRY.text == str(bpm)
+    set_manual.assert_not_called()
+    clear_manual.assert_not_called()
+    assert controller.project.manual_bpm[0] == (bpm if manual else None)
+    tooltip.assert_called_once_with(f"Effective BPM: {bpm}")
+
+
+def test_deliberate_pad_bpm_edit_preserves_fractional_override(
+    controller: AppController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = UiContext(controller)
+    monkeypatch.setattr(ctx.state.pads, "effective_bpm", lambda _pad: 120.00128936767578)
+    set_manual = Mock()
+    monkeypatch.setattr(ctx.audio.pads, "set_manual_bpm", set_manual)
+    monkeypatch.setattr(sidebar_left, "_BPM_ENTRY", sidebar_left._BpmEntryState())
+    monkeypatch.setattr(imgui, "text_colored", lambda *_args: None)
+    monkeypatch.setattr(imgui, "same_line", lambda *_args: None)
+    monkeypatch.setattr(imgui, "set_next_item_width", lambda _width: None)
+    monkeypatch.setattr(imgui, "input_text", lambda *_args: (True, "119,9991234567"))
+    monkeypatch.setattr(imgui, "is_item_active", lambda: False)
+    monkeypatch.setattr(imgui, "is_item_hovered", lambda: False)
+    monkeypatch.setattr(imgui, "button", lambda *_args: False)
+
+    sidebar_left._render_bpm(
+        ctx, sidebar_left._SidebarPadInfo(0, 240.0, is_loaded=True, is_loading=False)
+    )
+
+    set_manual.assert_called_once_with(0, 119.9991234567)
+
+
+def test_pad_bpm_entry_baseline_tracks_pad_switches_and_inactive_metadata() -> None:
+    state = sidebar_left._BpmEntryState()
+    state.sync(pad_id=0, display_text="120.00128936767578")
+    state.active = True
+    state.sync(pad_id=0, display_text="119.999")
+    assert state.text == state.initial_text == "120.00128936767578"
+
+    state.sync(pad_id=1, display_text="123.456")
+    assert state.text == state.initial_text == "123.456"
+    assert not state.active
+
+    state.sync(pad_id=1, display_text="119.999")
+    assert state.text == state.initial_text == "119.999"

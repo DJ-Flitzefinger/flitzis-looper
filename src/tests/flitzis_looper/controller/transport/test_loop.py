@@ -1,9 +1,9 @@
 import math
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 import pytest
 
-from flitzis_looper.controller.transport.loop import PadLoopController
 from flitzis_looper.models import BeatGrid, SampleAnalysis
 
 if TYPE_CHECKING:
@@ -591,6 +591,81 @@ def test_effective_loop_end_computed_from_bars(
     assert end_s == pytest.approx(18.0)
 
 
+def test_manual_120_snap_and_auto_end_match_every_reference_pulse(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    controller.project.sample_paths[0] = "samples/reference.wav"
+    controller.project.sample_durations[0] = 600.0
+    controller.project.manual_bpm[0] = 120.0
+    controller.project.pad_grid_anchor_s[0] = 0.0
+    controller.project.pad_loop_auto[0] = True
+    controller.project.pad_loop_bars[0] = 0.5
+
+    for pulse in range(1_200):
+        # Pulse locations come from the independently known constant PCM blocks.
+        expected_frame = pulse * 24_000
+        controller.transport.loop.set_start(0, expected_frame / 48_000 + 1e-6)
+        start_s, end_s = controller.transport.loop.effective_region(0)
+        assert start_s * 48_000 == expected_frame
+        assert end_s is not None
+        assert end_s * 48_000 == (pulse + 2) * 24_000
+
+
+@pytest.mark.parametrize("sample_rate_hz", [44_100, 48_000, 96_000])
+@pytest.mark.parametrize("bpm", [119.999, 123.45])
+@pytest.mark.parametrize("origin_frame", [-217, 0, 28_776_001])
+def test_fractional_auto_end_and_snap_share_absolute_projection(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    sample_rate_hz: int,
+    bpm: float,
+    origin_frame: int,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = sample_rate_hz
+    controller.project.sample_paths[0] = "samples/fractional.wav"
+    controller.project.sample_durations[0] = 1_800.0
+    controller.project.manual_bpm[0] = bpm
+    controller.project.pad_grid_anchor_s[0] = max(origin_frame, 0) / sample_rate_hz
+    controller.project.pad_grid_offset_samples[0] = min(origin_frame, 0)
+    controller.project.pad_loop_auto[0] = True
+    controller.project.pad_loop_bars[0] = 0.5
+    raw_start_s = 599.5 + 0.49 / sample_rate_hz
+    controller.project.pad_loop_start_s[0] = raw_start_s
+
+    start_s, end_s = controller.transport.loop.effective_region(0)
+
+    assert end_s is not None
+    exact_start_frame = Decimal(raw_start_s) * sample_rate_hz
+    exact_end_frame = exact_start_frame + Decimal(120 * sample_rate_hz) / Decimal(str(bpm))
+    assert round(start_s * sample_rate_hz) == round(exact_start_frame)
+    assert round(end_s * sample_rate_hz) == round(exact_end_frame)
+    assert abs(Decimal(round(end_s * sample_rate_hz)) - exact_end_frame) <= Decimal("0.5")
+    assert controller.project.pad_loop_start_s[0] == raw_start_s
+    assert controller.transport.loop.grid_anchor_sec(0) == origin_frame / sample_rate_hz
+
+    exact_tick_frame = Decimal(origin_frame) + Decimal(19_185 * 60 * sample_rate_hz) / (
+        Decimal(str(bpm)) * 16
+    )
+    controller.transport.loop.set_start(0, float(exact_tick_frame / sample_rate_hz))
+    assert round(controller.project.pad_loop_start_s[0] * sample_rate_hz) == round(exact_tick_frame)
+
+
+def test_legacy_fractional_start_does_not_round_before_advancing_auto_end(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    controller.project.manual_bpm[0] = 119.999
+    controller.project.pad_loop_auto[0] = True
+    controller.project.pad_loop_bars[0] = 0.5
+    controller.project.pad_loop_start_s[0] = 599.5 + 0.49 / 48_000
+
+    start_s, end_s = controller.transport.loop.effective_region(0)
+
+    assert start_s == 28_776_000 / 48_000
+    assert end_s == 28_824_001 / 48_000
+
+
 def test_effective_loop_end_uses_effective_bpm_not_beat_grid(
     controller: AppController,
     audio_engine_mock: Mock,
@@ -1018,23 +1093,6 @@ def test_effective_region_auto_no_beats(controller: AppController, audio_engine_
 
     assert start_s == pytest.approx(0.0)
     assert end_s == pytest.approx(8.0)
-
-
-def test_grid_step_sec_for_120_bpm_is_one_over_32() -> None:
-    assert PadLoopController._grid_step_sec(120.0) == 1.0 / 32.0
-
-
-def test_snap_to_nearest_grid_point_rounds_to_nearest_step_with_anchor() -> None:
-    step_s = 1.0 / 32.0
-    anchor_s = 1.0 / 128.0
-
-    # (target - anchor) / step = 0.75 -> rounds to 1 step
-    target_s = 1.0 / 32.0
-    snapped = PadLoopController._snap_to_nearest_grid_point(
-        target_s, anchor_s=anchor_s, step_s=step_s
-    )
-
-    assert snapped == 5.0 / 128.0
 
 
 def test_quantize_time_none_sample_rate(controller: AppController, audio_engine_mock: Mock) -> None:

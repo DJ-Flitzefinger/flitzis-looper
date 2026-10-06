@@ -1,4 +1,5 @@
 from typing import TYPE_CHECKING
+from unittest.mock import Mock
 
 import pytest
 
@@ -28,8 +29,6 @@ from flitzis_looper.models import STEM_MASK_VOCALS
 from flitzis_looper.ui.context import UiContext
 
 if TYPE_CHECKING:
-    from unittest.mock import Mock
-
     from flitzis_looper.controller import AppController
 
 
@@ -1187,6 +1186,93 @@ def test_input_runtime_state_sync_skips_unchanged_frames(
     controller.input_mapping.on_frame_render()
 
     audio_engine_mock.set_input_runtime_state.assert_not_called()
+
+
+def test_input_runtime_signature_uses_effective_bpm_and_republishes_precision_changes(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller.project.sample_paths[0] = "samples/fractional.wav"
+    controller.project.sample_durations[0] = 100.0
+    controller.project.manual_bpm[0] = 120.0
+    controller.project.pad_loop_auto[0] = True
+    effective_bpm = [119.999]
+    monkeypatch.setattr(controller.transport.bpm, "effective_bpm", lambda _pad: effective_bpm[0])
+    audio_engine_mock.reset_mock()
+
+    controller.input_mapping.on_frame_render()
+    assert controller.input_mapping._input_runtime_bpm_signature(0) == 119.999
+    first_region = audio_engine_mock.set_input_runtime_state.call_args.args[3][0]
+    audio_engine_mock.reset_mock()
+    controller.input_mapping.on_frame_render()
+    audio_engine_mock.set_input_runtime_state.assert_not_called()
+
+    effective_bpm[0] = 120.00128936767578
+    controller.input_mapping.on_frame_render()
+    assert controller.input_mapping._input_runtime_bpm_signature(0) == effective_bpm[0]
+    audio_engine_mock.set_input_runtime_state.assert_called_once()
+    new_region = audio_engine_mock.set_input_runtime_state.call_args.args[3][0]
+    assert new_region != first_region
+
+
+@pytest.mark.parametrize("changed_input", ["source", "duration", "rate"])
+def test_input_runtime_snapshot_republishes_source_and_loaded_domain_changes(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    changed_input: str,
+) -> None:
+    controller.project.sample_paths[0] = "samples/long.wav"
+    controller.project.sample_durations[0] = 100_000.0
+    controller.project.pad_loop_start_s[0] = (2**24 + 1) / 48_000
+    controller.project.pad_loop_end_s[0] = (2**24 + 17) / 48_000
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    controller.input_mapping._sync_rust_runtime_state()
+    audio_engine_mock.reset_mock()
+    controller.input_mapping._sync_rust_runtime_state()
+    audio_engine_mock.set_input_runtime_state.assert_not_called()
+
+    if changed_input == "source":
+        controller.project.sample_paths[0] = "samples/replacement.wav"
+    elif changed_input == "duration":
+        controller.project.sample_durations[0] = 100_000.0 + 1 / 48_000
+    else:
+        audio_engine_mock.output_sample_rate.return_value = 44_100
+    controller.input_mapping._sync_rust_runtime_state()
+
+    audio_engine_mock.set_input_runtime_state.assert_called_once()
+    _, loaded, starts, ends = audio_engine_mock.set_input_runtime_state.call_args.args
+    assert loaded[0]
+    assert (starts[0], ends[0]) == controller.transport.loop.effective_region(0)
+    audio_engine_mock.reset_mock()
+    controller.input_mapping._sync_rust_runtime_state()
+    audio_engine_mock.set_input_runtime_state.assert_not_called()
+
+
+def test_input_runtime_snapshot_publishes_exact_effective_endpoints_once(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller.project.sample_paths[0] = "samples/long.wav"
+    start_s = (2**24 + 1) / 48_000
+    end_s = (2**24 + 17) / 48_000
+    region = Mock(return_value=(start_s, end_s))
+    monkeypatch.setattr(controller.transport.loop, "effective_region", region)
+    controller.input_mapping._sync_rust_runtime_state()
+    region.assert_called_once_with(0)
+    audio_engine_mock.reset_mock()
+    region.reset_mock()
+
+    end_s = (2**24 + 18) / 48_000
+    region.return_value = (start_s, end_s)
+    controller.input_mapping._sync_rust_runtime_state()
+
+    region.assert_called_once_with(0)
+    audio_engine_mock.set_input_runtime_state.assert_called_once()
+    _, _, starts, ends = audio_engine_mock.set_input_runtime_state.call_args.args
+    assert starts[0] == start_s
+    assert ends[0] == end_s
 
 
 def test_input_runtime_state_sync_republishes_loaded_loop_changes(

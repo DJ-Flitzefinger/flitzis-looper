@@ -41,7 +41,15 @@ impl SourceGrid {
         }
 
         let frames_per_beat = sample_rate_hz * 60.0 / f64::from(pad_bpm);
+        Self::from_period(frames_per_beat, origin_frame)
+    }
+
+    /// Build the same projection from a precise period in the caller's source units.
+    pub(crate) fn from_period(frames_per_beat: f64, origin_frame: f64) -> Option<Self> {
         if !frames_per_beat.is_finite() || frames_per_beat <= 0.0 {
+            return None;
+        }
+        if !origin_frame.is_finite() {
             return None;
         }
 
@@ -54,6 +62,17 @@ impl SourceGrid {
     pub(crate) fn beat_at_source(self, frame: f64) -> Option<f64> {
         let beat = (frame - self.origin_frame) / self.frames_per_beat;
         beat.is_finite().then_some(beat)
+    }
+
+    pub(crate) fn source_at_beat(self, beat: f64) -> Option<f64> {
+        let source = self.origin_frame + beat * self.frames_per_beat;
+        source.is_finite().then_some(source)
+    }
+
+    /// Preserve an off-grid source position without a lossy B/S round trip.
+    pub(crate) fn source_after_beats(self, frame: f64, beats: f64) -> Option<f64> {
+        let source = frame + beats * self.frames_per_beat;
+        source.is_finite().then_some(source)
     }
 
     #[cfg(test)]
@@ -159,6 +178,33 @@ mod tests {
 
     fn grid_with_100_frames_per_beat(origin_frame: f64) -> SourceGrid {
         SourceGrid::new(100.0, 60.0, origin_frame).unwrap()
+    }
+
+    #[test]
+    fn precise_period_projects_all_integer_reference_pulses() {
+        let grid = SourceGrid::from_period(24_000.0, 0.0).unwrap();
+        for pulse in 0_u32..1_200 {
+            let frame = f64::from(pulse * 24_000);
+            assert_eq!(grid.source_at_beat(f64::from(pulse)), Some(frame));
+            assert_eq!(grid.beat_at_source(frame), Some(f64::from(pulse)));
+        }
+    }
+
+    #[test]
+    fn precise_period_preserves_fractional_tempo_and_offgrid_phase() {
+        let frames_per_beat = 48_000.0 * (60.0 / 119.999);
+        let grid = SourceGrid::from_period(frames_per_beat, -217.0).unwrap();
+        assert_eq!(grid.source_at_beat(0.0), Some(-217.0));
+        assert_eq!(
+            grid.source_after_beats(28_776_001.25, 8.0),
+            Some(28_776_001.25 + 8.0 * frames_per_beat)
+        );
+        let live = SourceGrid::new(48_000.0, 119.999, -217.0).unwrap();
+        assert_ne!(grid.source_at_beat(1_200.0), live.source_at_beat(1_200.0));
+        assert_eq!(grid.source_at_beat(f64::INFINITY), None);
+        assert_eq!(grid.source_after_beats(f64::NAN, 8.0), None);
+        assert!(SourceGrid::from_period(0.0, 0.0).is_none());
+        assert!(SourceGrid::from_period(1.0, f64::NAN).is_none());
     }
 
     #[test]

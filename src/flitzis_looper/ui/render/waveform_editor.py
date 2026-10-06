@@ -2,6 +2,7 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
+import numpy as np
 from imgui_bundle import ImVec4, icons_fontawesome_6, imgui, imgui_ctx, implot
 
 from flitzis_looper.constants import PAD_LOOP_BARS_MIN
@@ -24,7 +25,6 @@ from flitzis_looper.ui.waveform_grid import (
 )
 
 if TYPE_CHECKING:
-    import numpy as np
     from numpy.typing import NDArray
 
     from flitzis_looper.ui.context import UiContext
@@ -436,8 +436,10 @@ def _plot_overlay_loop_region(
 
 
 def _plot_line(
-    xs: NDArray[np.float32], ys: NDArray[np.float32], *, show_sample_markers: bool
+    xs: NDArray[np.float64], ys: NDArray[np.float32], *, show_sample_markers: bool
 ) -> None:
+    # ImPlot requires one dtype for both arrays; preserve source-time precision.
+    plot_ys = ys.astype(np.float64, copy=False)
     with implot_style_color(implot.Col_.line, PLOT_FILL_RGBA):
         if show_sample_markers:
             implot.set_next_marker_style(implot.Marker_.circle)
@@ -445,19 +447,21 @@ def _plot_line(
                 implot_style_color(implot.Col_.marker_fill, PLOT_MARKER_RGBA),
                 implot_style_var(implot.StyleVar_.marker_size, 3.0),
             ):
-                implot.plot_line("wave", xs, ys)
+                implot.plot_line("wave", xs, plot_ys)
         else:
-            implot.plot_line("wave", xs, ys)
+            implot.plot_line("wave", xs, plot_ys)
 
 
 def _plot_shaded(
-    xs: NDArray[np.float32], y_min: NDArray[np.float32], y_max: NDArray[np.float32]
+    xs: NDArray[np.float64], y_min: NDArray[np.float32], y_max: NDArray[np.float32]
 ) -> None:
+    plot_y_min = y_min.astype(np.float64, copy=False)
+    plot_y_max = y_max.astype(np.float64, copy=False)
     with (
         implot_style_color(implot.Col_.fill, PLOT_FILL_RGBA),
         implot_style_var(implot.StyleVar_.fill_alpha, 0.85),
     ):
-        implot.plot_shaded("wave", xs, y_min, y_max)
+        implot.plot_shaded("wave", xs, plot_y_min, plot_y_max)
 
 
 def _plot_px_per_sec(*, start_s: float, end_s: float) -> float | None:

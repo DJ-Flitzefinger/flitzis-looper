@@ -6,6 +6,11 @@ from flitzis_looper.constants import (
     PAD_LOOP_BARS_GRANULARITY,
     PAD_LOOP_BARS_MIN,
 )
+from flitzis_looper.controller.scalar_grid import (
+    nearest_grid_source_s,
+    physical_source_marker_s,
+    scalar_source_grid,
+)
 from flitzis_looper.controller.timing_metadata import timing_anchor_sec_from_analysis
 from flitzis_looper.controller.validation import ensure_finite, normalize_bpm
 from flitzis_looper.models import validate_sample_id
@@ -152,8 +157,7 @@ class PadLoopController:
         if sample_rate_hz is None or sample_rate_hz <= 0:
             return None
 
-        beat_sec = 60.0 / bpm
-        bar_sec = beat_sec * 4.0
+        bar_sec = self._duration_s_for_bars(bars=1.0, bpm=bpm)
         return max(0, round(bar_sec * sample_rate_hz))
 
     def _clamp_grid_offset_samples(self, sample_id: int, value: int) -> int:
@@ -207,45 +211,30 @@ class PadLoopController:
         anchor_sample = base_sample + self._grid_offset_samples(sample_id)
         return anchor_sample / sample_rate_hz
 
-    @staticmethod
-    def _grid_step_sec(bpm: float) -> float:
-        beat_sec = 60.0 / bpm
-        return beat_sec / 16.0
-
-    @staticmethod
-    def _snap_to_nearest_grid_point(target_s: float, *, anchor_s: float, step_s: float) -> float:
-        if step_s <= 0.0:
-            return target_s
-
-        steps = round((target_s - anchor_s) / step_s)
-        if not isinstance(steps, int):
-            return target_s
-        return anchor_s + steps * step_s
-
     def _snap_to_nearest_64th_grid(self, sample_id: int, target_s: float) -> float:
         bpm = normalize_bpm(self._bpm.effective_bpm(sample_id))
         if bpm is None:
             return target_s
 
-        step_s = self._grid_step_sec(bpm)
-        anchor_s = self._grid_anchor_sec(sample_id)
-        return self._snap_to_nearest_grid_point(target_s, anchor_s=anchor_s, step_s=step_s)
+        grid = scalar_source_grid(origin_s=self._grid_anchor_sec(sample_id), bpm=bpm)
+        if grid is None:
+            return target_s
+        return nearest_grid_source_s(target_s, grid=grid, step_beats=1.0 / 16.0)
 
     def _quantize_time_to_cached_samples(self, time_s: float) -> float:
         """Quantize a time to an integer sample index at the cached WAV sample rate."""
-        sample_rate_hz = self._transport._output_sample_rate_hz()
-        if sample_rate_hz is None or sample_rate_hz <= 0:
-            return time_s
-
-        frames = round(time_s * sample_rate_hz)
-        if not isinstance(frames, int):
-            return time_s
-        frames = max(frames, 0)
-        return frames / sample_rate_hz
+        return physical_source_marker_s(
+            time_s, sample_rate_hz=self._transport._output_sample_rate_hz()
+        )
 
     @staticmethod
     def _duration_s_for_bars(*, bars: float, bpm: float) -> float:
-        return (bars * 4.0) * 60.0 / bpm
+        grid = scalar_source_grid(origin_s=0.0, bpm=bpm)
+        duration_s = grid.source_at_beat(bars * 4.0) if grid is not None else None
+        if duration_s is None:
+            msg = "bar duration must have a finite scalar projection"
+            raise ValueError(msg)
+        return duration_s
 
     @staticmethod
     def _normalize_requested_bars(bars: float) -> float:
@@ -309,16 +298,17 @@ class PadLoopController:
                     end_s = start_s + one_sample_s
             return (start_s, end_s)
 
-        start_s = self._quantize_time_to_cached_samples(start_s)
-
         effective_bpm = self._bpm.effective_bpm(sample_id)
         bpm = normalize_bpm(effective_bpm)
         if bpm is None:
-            return (start_s, None)
+            return (self._quantize_time_to_cached_samples(start_s), None)
 
         bars = self._stored_bars(sample_id)
-        duration_s = self._duration_s_for_bars(bars=bars, bpm=bpm)
-        end_s_effective = start_s + duration_s
+        grid = scalar_source_grid(origin_s=self._grid_anchor_sec(sample_id), bpm=bpm)
+        end_s_effective = grid.source_after_beats(start_s, bars * 4.0) if grid is not None else None
+        start_s = self._quantize_time_to_cached_samples(start_s)
+        if end_s_effective is None:
+            return (start_s, None)
         end_s_effective = self._quantize_time_to_cached_samples(end_s_effective)
         if end_s_effective <= start_s:
             end_s_effective = start_s + one_sample_s

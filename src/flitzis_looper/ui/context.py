@@ -853,6 +853,7 @@ class UiActions:
     def start_global_bpm_edit(self, text: str) -> None:
         self._controller.session.global_bpm_edit_active = True
         self._controller.session.global_bpm_edit_text = text
+        self._controller.session.global_bpm_edit_initial_text = text
         self._controller.session.global_bpm_edit_focus_requested = True
 
     def set_global_bpm_edit_text(self, text: str) -> None:
@@ -864,6 +865,7 @@ class UiActions:
     def finish_global_bpm_edit(self) -> None:
         self._controller.session.global_bpm_edit_active = False
         self._controller.session.global_bpm_edit_text = ""
+        self._controller.session.global_bpm_edit_initial_text = ""
         self._controller.session.global_bpm_edit_focus_requested = False
 
     def store_pressed_pad_state(self, pad_id: int, *, pressed: bool) -> None:

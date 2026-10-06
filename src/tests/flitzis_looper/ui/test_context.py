@@ -638,16 +638,19 @@ class TestUiActions:
         ui_actions.start_global_bpm_edit("120.00")
         assert controller.session.global_bpm_edit_active is True
         assert controller.session.global_bpm_edit_text == "120.00"
+        assert controller.session.global_bpm_edit_initial_text == "120.00"
         assert controller.session.global_bpm_edit_focus_requested is True
 
         ui_actions.set_global_bpm_edit_text("120.10")
         ui_actions.clear_global_bpm_edit_focus_request()
         assert controller.session.global_bpm_edit_text == "120.10"
+        assert controller.session.global_bpm_edit_initial_text == "120.00"
         assert controller.session.global_bpm_edit_focus_requested is False
 
         ui_actions.finish_global_bpm_edit()
         assert controller.session.global_bpm_edit_active is False
         assert not controller.session.global_bpm_edit_text
+        assert not controller.session.global_bpm_edit_initial_text
 
     def test_store_pressed_pad_state_true(self, controller: AppController) -> None:
         """Test store_pressed_pad_state sets pad pressed state to True."""

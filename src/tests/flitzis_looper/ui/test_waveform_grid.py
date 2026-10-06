@@ -1,5 +1,6 @@
 import math
 from contextlib import nullcontext
+from decimal import Decimal
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
@@ -137,6 +138,49 @@ def test_invalid_or_overflowing_grid_coordinates_are_rejected(bpm: float) -> Non
 def test_tiny_free_offset_is_not_formatted_as_an_exact_integer_beat() -> None:
     assert loop_beat_label(0.99999) == "~1"
     assert loop_beat_label(1.0 + 1e-12) == "1"
+
+
+def test_manual_120_grid_matches_every_independent_half_second_pulse() -> None:
+    lines = visible_grid_lines(
+        start_s=0.0,
+        end_s=599.5,
+        anchor_s=0.0,
+        loop_start_s=0.0,
+        bpm=120.0,
+        px_per_s=40.0,
+    )
+
+    assert len(lines) == 1_200
+    assert [line.source_s * 48_000 for line in lines] == [pulse * 24_000 for pulse in range(1_200)]
+
+
+@pytest.mark.parametrize(
+    ("sample_rate_hz", "bpm", "origin_frame"),
+    [(44_100, 119.999, -217), (48_000, 123.45, 28_776_001), (96_000, 119.999, 96_000)],
+)
+def test_fractional_visible_subdivisions_keep_continuous_source_positions(
+    sample_rate_hz: int, bpm: float, origin_frame: int
+) -> None:
+    period_frames = Decimal(60 * sample_rate_hz) / Decimal(str(bpm))
+    first_frame = Decimal(origin_frame) + 1_198 * period_frames
+    last_frame = first_frame + period_frames
+    lines = visible_grid_lines(
+        start_s=float((first_frame - period_frames / 32) / sample_rate_hz),
+        end_s=float((last_frame + period_frames / 32) / sample_rate_hz),
+        anchor_s=origin_frame / sample_rate_hz,
+        loop_start_s=599.123,
+        bpm=bpm,
+        px_per_s=1_000.0,
+    )
+
+    assert len(lines) == 17
+    for subdivision, line in enumerate(lines):
+        exact_frame = first_frame + Decimal(subdivision) * period_frames / 16
+        assert abs(Decimal(line.source_s) * sample_rate_hz - exact_frame) < Decimal("1e-6")
+        assert round(line.source_s * sample_rate_hz) == round(exact_frame)
+    assert any(
+        line.source_s * sample_rate_hz != round(line.source_s * sample_rate_hz) for line in lines
+    )
 
 
 def test_first_frame_zoom_to_loop_wins_over_initial_source_view(

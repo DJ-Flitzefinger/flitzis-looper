@@ -96,8 +96,10 @@ rust/crates/looper/src/
     |-- voice_slot.rs              # voice state and per-voice DSP buffers
     |-- stretch_processor.rs       # bounded Key Lock/master-tempo wrapper
     |-- sample_loader.rs           # non-realtime decode/cache/resample
+    |-- scalar_grid.rs             # pure binary64 scalar control projection facade
     |-- stem_cache.rs              # prepared-stem validation/loading
     |-- progress.rs
+    |-- waveform.rs                # non-realtime frame bounds and waveform projection
     |-- channels.rs
     `-- errors.rs
 ```
@@ -298,9 +300,10 @@ the first/last detected position and interval count. Their coarse ODF timing
 can produce a persistent scalar-grid slope hidden by the two-decimal BPM field.
 The exact 120-BPM reference publishes 120.00128936767578, placing its grid about
 5.157/15.472 loaded frames early at 10/30 seconds at 48 kHz. Separate waveform
-and seek/playhead `f32` interfaces also lose frame resolution in long files.
-See [the diagnosis and evidence limits](grid-timing-diagnosis.md). These issues
-are documented, not repaired by this investigation.
+and seek/playhead `f32` interfaces lost frame resolution in long files; G1 now
+preserves `f64` through these public address paths. The automatic estimator/slope
+remains pending. See [the diagnosis](grid-timing-diagnosis.md) and
+[the scalar coordinate contract](scalar-source-coordinates.md).
 
 In the legacy grid fallback, beat/downbeat anchors reported very close to file
 start are normalized to `0.0` before deriving editor/native timing. An explicit
@@ -319,6 +322,12 @@ Loaded full-mix buffers and prepared stems use the engine output rate, so their
 source-frame domain and the editor's sample-offset units use that loaded-buffer
 rate rather than the original file rate. Runtime source cursors retain a
 fractional remainder; integer playhead telemetry floors the next source cursor.
+
+Waveform query bounds, returned X, loaded duration, seek messages and playhead
+telemetry retain `f64` source seconds through PyO3/Python. Amplitudes remain `f32`;
+only visible UI amplitude arrays are promoted to match ImPlot's `f64` X/Y overload.
+Integer envelope buckets and tight roundoff recovery preserve exact `n/rate`
+one-frame queries. Source clipping and the seek intro/loop/tail policy remain.
 
 Python persists loop intent in seconds. Native loop-region commands and MIDI
 runtime loop metadata retain `f64` seconds until conversion to half-open integer
@@ -361,6 +370,12 @@ loops; adaptive zoom subdivision indices are not beat identities. Global speed,
 BPMLOCK, KEYLOCK, quantization and other-pad playback do not move source grid or
 stored markers. Existing live source-phase behavior is unchanged; future mapped
 SYNC uses the loop-relative contract in beatmap-sync-design.md.
+
+`source_grid.rs` also supplies a pure binary64-period `ScalarSourceGrid` control
+evaluator. A focused Python wrapper uses it for visible grid, snap and automatic
+endpoints. Origin/period remain independent of labels. Physical markers round each
+absolute boundary once; automatic ends advance original selected intent before
+rounding. This does not change the live native `f32` BPM/rate contract.
 
 `source_grid.rs` centralizes bounded source beat/bar, loop-start phase and
 master-beat-to-loop mapping. Source beat is `(frame - origin) / frames_per_beat`;

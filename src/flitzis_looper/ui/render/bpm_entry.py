@@ -1,20 +1,17 @@
 import math
 import string
+from decimal import Decimal
 
 BPM_ENTRY_DIGITS = frozenset(string.digits)
 
 
 def sanitize_bpm_entry_text(text: str) -> str:
+    """Retain decimal BPM digits without rounding or truncating their precision."""
     sanitized: list[str] = []
     has_decimal = False
-    decimal_places = 0
 
     for char in text.replace(",", "."):
         if char in BPM_ENTRY_DIGITS:
-            if has_decimal:
-                if decimal_places >= 2:
-                    continue
-                decimal_places += 1
             sanitized.append(char)
         elif char == "." and not has_decimal:
             has_decimal = True
@@ -23,10 +20,15 @@ def sanitize_bpm_entry_text(text: str) -> str:
     return "".join(sanitized)
 
 
+def format_bpm_entry_value(bpm: float) -> str:
+    """Return a round-trip decimal buffer without unsupported exponent notation."""
+    return format(Decimal(str(bpm)), "f")
+
+
 def filtered_bpm_entry_char(
     char_code: int,
     current_text: str,
-    cursor_pos: int,
+    _cursor_pos: int,
     *,
     has_selection: bool,
 ) -> int | None:
@@ -40,20 +42,14 @@ def filtered_bpm_entry_char(
         char = "."
         char_code = ord(".")
 
-    if char in BPM_ENTRY_DIGITS:
-        if "." not in current_text or has_selection:
-            accepted = char_code
-        else:
-            decimals = current_text.split(".", 1)[1]
-            if cursor_pos <= current_text.index(".") or len(decimals) < 2:
-                accepted = char_code
-    elif char == "." and ("." not in current_text or has_selection):
+    if char in BPM_ENTRY_DIGITS or (char == "." and ("." not in current_text or has_selection)):
         accepted = char_code
 
     return accepted
 
 
 def parse_bpm_entry_text(text: str) -> float | None:
+    """Parse a finite positive BPM without quantizing its fractional value."""
     sanitized = sanitize_bpm_entry_text(text)
     if sanitized in {"", "."}:
         return None
@@ -63,4 +59,4 @@ def parse_bpm_entry_text(text: str) -> float | None:
         return None
     if not math.isfinite(value) or value <= 0.0:
         return None
-    return round(value, 2)
+    return value

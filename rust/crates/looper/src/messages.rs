@@ -50,7 +50,7 @@ pub enum AudioMessage {
     MasterPeak { peak: f32 },
 
     /// Per-pad playback position in seconds (best-effort, low-rate).
-    PadPlayhead { id: usize, position_s: f32 },
+    PadPlayhead { id: usize, position_s: f64 },
 }
 
 #[pymethods]
@@ -80,7 +80,7 @@ impl AudioMessage {
         }
     }
 
-    pub fn pad_playhead(&self) -> Option<f32> {
+    pub fn pad_playhead(&self) -> Option<f64> {
         match self {
             AudioMessage::PadPlayhead { id: _, position_s } => Some(*position_s),
             _ => None,
@@ -299,7 +299,7 @@ pub enum ControlMessage {
     /// Seek an active or paused sample voice to a source position in seconds.
     ///
     /// If the sample has no active or paused voice, this has no effect.
-    SeekSample { id: usize, position_s: f32 },
+    SeekSample { id: usize, position_s: f64 },
 
     /// Unload a sample slot.
     ///
@@ -385,7 +385,7 @@ pub enum LoaderEvent {
     Success {
         id: usize,
         request_id: u64,
-        duration_s: f32,
+        duration_s: f64,
         /// Frame before first finite near-zero tolerance crossing, in loaded-source seconds.
         /// Clamped at source frame zero; there is no fixed-duration pre-roll.
         /// Independent of beat/downbeat analysis; `None` means no physical suggestion.
@@ -437,6 +437,40 @@ pub enum LoaderEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seek_and_playhead_messages_preserve_long_frame_addresses() {
+        let (mut producer, mut consumer) = rtrb::RingBuffer::new(1);
+        for rate in [44_100_u32, 48_000, 96_000] {
+            for duration in [600_u32, 1_800] {
+                let first = (u64::from(rate) * u64::from(duration)) as usize;
+                for frame in first..first + 16 {
+                    let position_s = frame as f64 / f64::from(rate);
+                    producer
+                        .push(ControlMessage::SeekSample { id: 3, position_s })
+                        .unwrap();
+                    let ControlMessage::SeekSample {
+                        id,
+                        position_s: accepted,
+                    } = consumer.pop().unwrap()
+                    else {
+                        panic!("seek message expected");
+                    };
+                    assert_eq!(id, 3);
+                    assert_eq!(accepted, position_s);
+                    let telemetry = AudioMessage::PadPlayhead {
+                        id,
+                        position_s: accepted,
+                    };
+                    assert_eq!(telemetry.sample_id(), Some(3));
+                    assert_eq!(
+                        (telemetry.pad_playhead().unwrap() * f64::from(rate)).round() as usize,
+                        frame,
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn master_peak_message_exposes_unclamped_output_peak() {

@@ -30,6 +30,18 @@ def metering_controller(
     return MeteringController(project_state, session_state, audio_engine_mock)
 
 
+def test_pad_playhead_projection_preserves_adjacent_long_source_frames(
+    metering_controller: MeteringController, session_state: SessionState
+) -> None:
+    msg = Mock()
+    msg.sample_id.return_value = 0
+    for offset in (1, 2):
+        position_s = (2**24 + offset) / 48_000
+        msg.pad_playhead.return_value = position_s
+        metering_controller.handle_pad_playhead_message(msg)
+        assert session_state.pad_playhead_s[0] == position_s
+
+
 def test_metering_controller_initialization(
     metering_controller: MeteringController,
     project_state: ProjectState,
