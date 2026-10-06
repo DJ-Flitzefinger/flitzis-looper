@@ -10,7 +10,9 @@
 use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 #[cfg(test)]
 use crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement;
-use crate::audio_engine::constant_timing::{AcceptedTimingProjection, PreparedConstantTiming};
+use crate::audio_engine::constant_timing::{
+    AcceptedTimingProjection, CurrentTimingAcknowledgements, PreparedConstantTiming,
+};
 use crate::audio_engine::constants::{
     MAX_VOICES, NUM_SAMPLES, PAD_EQ_DB_MAX, PAD_EQ_DB_MIN, PAD_GAIN_DB_DEFAULT, PAD_GAIN_DB_MAX,
     PAD_GAIN_DB_MIN, PAD_GAIN_SMOOTH_MS, SPEED_MAX, SPEED_MIN, VOLUME_MAX, VOLUME_MIN,
@@ -185,7 +187,7 @@ pub struct RtMixer {
     volume: f32,
 
     /// Global speed multiplier.
-    speed: f32,
+    speed: f64,
 
     /// Enable BPM lock (tempo matching).
     bpm_lock_enabled: bool,
@@ -193,17 +195,20 @@ pub struct RtMixer {
     /// Per-pad Key Lock state (preserve pitch when tempo changes).
     pad_key_lock_enabled: [bool; NUM_SAMPLES],
 
-    /// Current master BPM when BPM lock is enabled.
-    master_bpm: Option<f32>,
+    /// Authoritative output seconds per quarter when BPM lock is enabled.
+    master_period_seconds: Option<f64>,
 
-    /// Effective pad BPM metadata (manual override or analysis).
-    pad_bpm: [Option<f32>; NUM_SAMPLES],
+    /// Legacy seconds per quarter, converted once on parameter admission.
+    pad_period_seconds: [Option<f64>; NUM_SAMPLES],
 
     /// Per-pad musical phase anchor derived from bounded beatgrid/downbeat metadata.
     pad_phase_anchor_frame: [f64; NUM_SAMPLES],
 
     /// Fixed accepted binary64 source projection; legacy numbers stay separate.
     pad_accepted_timing: [Option<AcceptedTimingProjection>; NUM_SAMPLES],
+
+    /// Fixed callback-owned publication epochs shared with the control resolver.
+    current_timing_acknowledgements: Arc<CurrentTimingAcknowledgements>,
 
     /// Per-pad Gain/Trim target in dB.
     pad_gain_db: [f32; NUM_SAMPLES],
@@ -283,10 +288,11 @@ impl RtMixer {
             speed: 1.0,
             bpm_lock_enabled: false,
             pad_key_lock_enabled: std::array::from_fn(|_| false),
-            master_bpm: None,
-            pad_bpm: std::array::from_fn(|_| None),
+            master_period_seconds: None,
+            pad_period_seconds: std::array::from_fn(|_| None),
             pad_phase_anchor_frame: std::array::from_fn(|_| 0.0),
             pad_accepted_timing: std::array::from_fn(|_| None),
+            current_timing_acknowledgements: Arc::default(),
             pad_gain_db: std::array::from_fn(|_| PAD_GAIN_DB_DEFAULT),
             pad_gain_smoothers: std::array::from_fn(|_| SmoothedGain::default()),
             pad_dsp_chains: (0..NUM_SAMPLES)
@@ -310,6 +316,13 @@ impl RtMixer {
             }),
             _key_lock_preparation_worker: worker,
         })
+    }
+
+    pub(crate) fn set_current_timing_acknowledgements(
+        &mut self,
+        acknowledgements: Arc<CurrentTimingAcknowledgements>,
+    ) {
+        self.current_timing_acknowledgements = acknowledgements;
     }
 
     /// Loads a sample into the sample bank at the specified slot.
@@ -354,6 +367,7 @@ impl RtMixer {
 
         self.sample_bank[id] = Some(sample);
         self.pad_accepted_timing[id] = None;
+        self.current_timing_acknowledgements.clear(id);
         self.stem_enabled_mask[id] = STEM_COMPONENT_MASK;
         self.stem_transitions[id].clear();
         true
@@ -409,6 +423,8 @@ impl RtMixer {
             });
         if valid {
             self.pad_accepted_timing[id] = Some(projection);
+            self.current_timing_acknowledgements
+                .acknowledge(id, projection.publication_epoch);
             timing.publication.mark_accepted();
         } else {
             timing.publication.mark_rejected();
@@ -422,6 +438,7 @@ impl RtMixer {
             && slot.is_some_and(|projection| projection.publication_epoch <= through_epoch)
         {
             *slot = None;
+            self.current_timing_acknowledgements.clear(id);
         }
     }
 
@@ -692,7 +709,7 @@ impl RtMixer {
     /// - `speed`: Speed multiplier
     ///
     /// Invalid values (NaN, infinite, or out of range) are silently ignored.
-    pub fn set_speed(&mut self, speed: f32) {
+    pub fn set_speed(&mut self, speed: f64) {
         if !speed.is_finite() || !(SPEED_MIN..=SPEED_MAX).contains(&speed) {
             return;
         }
@@ -703,7 +720,7 @@ impl RtMixer {
     pub fn set_bpm_lock(&mut self, enabled: bool) {
         self.bpm_lock_enabled = enabled;
         if !enabled {
-            self.master_bpm = None;
+            self.master_period_seconds = None;
         }
     }
 
@@ -719,15 +736,22 @@ impl RtMixer {
         self.pad_key_lock_enabled[id] = enabled;
     }
 
-    pub fn set_master_bpm(&mut self, bpm: f32) {
+    #[cfg(test)]
+    pub fn set_master_bpm(&mut self, bpm: f64) {
         if !bpm.is_finite() || bpm <= 0.0 {
             return;
         }
 
-        self.master_bpm = Some(bpm);
+        self.set_master_period(60.0 / bpm);
     }
 
-    pub fn set_pad_bpm(&mut self, id: usize, bpm: Option<f32>) {
+    pub(crate) fn set_master_period(&mut self, period: f64) {
+        if period.is_finite() && period > 0.0 {
+            self.master_period_seconds = Some(period);
+        }
+    }
+
+    pub fn set_pad_bpm(&mut self, id: usize, bpm: Option<f64>) {
         if id >= NUM_SAMPLES {
             return;
         }
@@ -736,11 +760,12 @@ impl RtMixer {
             if !value.is_finite() || value <= 0.0 {
                 None
             } else {
-                Some(value)
+                let period = 60.0 / value;
+                (period.is_finite() && period > 0.0).then_some(period)
             }
         });
 
-        self.pad_bpm[id] = bpm;
+        self.pad_period_seconds[id] = bpm;
     }
 
     pub fn set_pad_timing_metadata(&mut self, id: usize, metadata: PadTimingMetadata) {
@@ -782,9 +807,8 @@ impl RtMixer {
                 projection.origin_seconds * f64::from(projection.sample_rate_hz),
             );
         }
-        SourceGrid::new(
-            self.sample_rate_hz as f64,
-            self.pad_bpm[id]?,
+        SourceGrid::from_period(
+            f64::from(self.sample_rate_hz) * self.pad_period_seconds[id]?,
             self.pad_phase_anchor_frame[id],
         )
     }
@@ -1026,27 +1050,32 @@ impl RtMixer {
         self.pad_bar_phase_beats_at_frame(id, sample_frames, voice.frame_pos)
     }
 
-    pub(crate) fn output_bpm_for_sample_id(&self, id: usize) -> Option<f32> {
+    #[cfg(test)]
+    pub(crate) fn output_bpm_for_sample_id(&self, id: usize) -> Option<f64> {
+        self.output_period_for_sample_id(id)
+            .map(|period| 60.0 / period)
+    }
+
+    fn source_period_for_sample_id(&self, id: usize) -> Option<f64> {
         if id >= NUM_SAMPLES {
             return None;
         }
-
-        let pad_bpm = self.pad_bpm[id].filter(|bpm| bpm.is_finite() && *bpm > 0.0)?;
-        let bpm = pad_bpm * self.tempo_ratio_for_sample_id(id);
-        if bpm.is_finite() && bpm > 0.0 {
-            Some(bpm)
-        } else {
-            None
-        }
+        self.pad_accepted_timing[id]
+            .map(|projection| projection.period_seconds)
+            .or(self.pad_period_seconds[id])
     }
 
-    pub(crate) fn transport_reference_bpm_for_sample_id(&self, id: usize) -> Option<f32> {
+    fn output_period_for_sample_id(&self, id: usize) -> Option<f64> {
+        let period = self.source_period_for_sample_id(id)? / self.tempo_ratio_for_sample_id(id);
+        (period.is_finite() && period > 0.0).then_some(period)
+    }
+
+    pub(crate) fn transport_reference_period_for_sample_id(&self, id: usize) -> Option<f64> {
         if self.bpm_lock_enabled {
-            // Keep the same accepted master value in transport and mixer. A
-            // clipped pad rate is an unsupported sync ratio, not a new master BPM.
-            self.master_bpm.filter(|bpm| bpm.is_finite() && *bpm > 0.0)
+            // Rate clipping cannot redefine the requested master period.
+            self.master_period_seconds
         } else {
-            self.output_bpm_for_sample_id(id)
+            self.output_period_for_sample_id(id)
         }
     }
 
@@ -1080,13 +1109,16 @@ impl RtMixer {
             .beat_at_source(position.frame as f64 + position.fraction)
     }
 
-    fn tempo_ratio_for_sample_id(&self, sample_id: usize) -> f32 {
+    fn tempo_ratio_for_sample_id(&self, sample_id: usize) -> f64 {
         let mut ratio = self.speed;
 
         if self.bpm_lock_enabled
-            && let (Some(master_bpm), Some(pad_bpm)) = (self.master_bpm, self.pad_bpm[sample_id])
+            && let (Some(master_period), Some(source_period)) = (
+                self.master_period_seconds,
+                self.source_period_for_sample_id(sample_id),
+            )
         {
-            ratio = master_bpm / pad_bpm;
+            ratio = source_period / master_period;
         }
 
         if !ratio.is_finite() {
@@ -1206,6 +1238,7 @@ impl RtMixer {
         self.stem_transitions[id].clear();
         self.pad_phase_anchor_frame[id] = 0.0;
         self.pad_accepted_timing[id] = None;
+        self.current_timing_acknowledgements.clear(id);
         true
     }
 
@@ -1365,12 +1398,12 @@ impl RtMixer {
 
         let channels = self.channels;
         let sample_rate_hz = self.sample_rate_hz;
-        let speed = self.speed;
         let volume = self.volume;
-        let bpm_lock_enabled = self.bpm_lock_enabled;
         let pad_key_lock_enabled = &self.pad_key_lock_enabled;
-        let master_bpm = self.master_bpm;
-        let pad_bpm = &self.pad_bpm;
+        // Derive each target once before borrowing voices; start and render use
+        // the same authoritative period/rate path.
+        let tempo_ratios: [f64; NUM_SAMPLES] =
+            std::array::from_fn(|id| self.tempo_ratio_for_sample_id(id));
         let pad_gain_smoothers = &mut self.pad_gain_smoothers;
         let pad_dsp_chains = &mut self.pad_dsp_chains;
         let pad_loop_start_frame = &self.pad_loop_start_frame;
@@ -1414,14 +1447,9 @@ impl RtMixer {
                     stem_enabled_mask[voice.sample_id],
                 );
 
-                let mut target_tempo_ratio = speed;
-                if bpm_lock_enabled
-                    && let (Some(master_bpm), Some(pad_bpm)) =
-                        (master_bpm, pad_bpm[voice.sample_id])
-                {
-                    target_tempo_ratio = master_bpm / pad_bpm;
-                }
-                voice.source_playback.set_target(target_tempo_ratio);
+                voice
+                    .source_playback
+                    .set_target(tempo_ratios[voice.sample_id]);
 
                 let Some(loop_region) = effective_loop_region(
                     pad_loop_start_frame[voice.sample_id],
@@ -1458,7 +1486,7 @@ impl RtMixer {
                         chunk_frames,
                     );
                     stem_transitions[voice.sample_id]
-                        .advance_fractional(chunk_frames as f64 * f64::from(tempo_ratio));
+                        .advance_fractional(chunk_frames as f64 * tempo_ratio);
                     voice.stretch.process_resampled(
                         chunk_frames,
                         tempo_ratio,
@@ -1652,7 +1680,7 @@ mod tests {
             .map(|voice| voice.frame_pos)
     }
 
-    fn four_bar_loop_frames(sample_rate_hz: f32, bpm: f32) -> usize {
+    fn four_bar_loop_frames(sample_rate_hz: f32, bpm: f64) -> usize {
         ((sample_rate_hz as f64 * 60.0 / bpm as f64) * 16.0).round() as usize
     }
 
@@ -1664,17 +1692,17 @@ mod tests {
     fn bpm_locked_phase_error_frames(
         mixer: &RtMixer,
         left_id: usize,
-        left_bpm: f32,
+        left_bpm: f64,
         right_id: usize,
-        right_bpm: f32,
-        master_bpm: f32,
+        right_bpm: f64,
+        master_bpm: f64,
         sample_rate_hz: f32,
     ) -> f64 {
         let left_loop_frames = four_bar_loop_frames(sample_rate_hz, left_bpm);
         let right_loop_frames = four_bar_loop_frames(sample_rate_hz, right_bpm);
         let output_cycle_frames = four_bar_loop_frames(sample_rate_hz, master_bpm) as f64;
-        let left_ratio = f64::from((master_bpm / left_bpm).clamp(SPEED_MIN, SPEED_MAX));
-        let right_ratio = f64::from((master_bpm / right_bpm).clamp(SPEED_MIN, SPEED_MAX));
+        let left_ratio = (master_bpm / left_bpm).clamp(SPEED_MIN, SPEED_MAX);
+        let right_ratio = (master_bpm / right_bpm).clamp(SPEED_MIN, SPEED_MAX);
         let left_frame = active_voice_frame(mixer, left_id).expect("left voice active");
         let right_frame = active_voice_frame(mixer, right_id).expect("right voice active");
         let left_phase = (left_frame % left_loop_frames) as f64 / left_ratio;
@@ -2174,8 +2202,8 @@ mod tests {
     #[test]
     fn bpm_locked_multi_loop_should_stay_phase_stable_across_repeated_wraps() {
         const SAMPLE_RATE_HZ: f32 = 3_360.0;
-        const ANCHOR_BPM: f32 = 120.0;
-        const SECOND_PAD_BPM: f32 = 140.0;
+        const ANCHOR_BPM: f64 = 120.0;
+        const SECOND_PAD_BPM: f64 = 140.0;
         const LOOP_REPEATS: usize = 10;
         const PHASE_TOLERANCE_FRAMES: f64 = 1.0;
 
@@ -2185,7 +2213,7 @@ mod tests {
         ];
         let mut failures = Vec::new();
 
-        for speed in [1.0_f32, 1.25, 1.5, 2.0] {
+        for speed in [1.0_f64, 1.25, 1.5, 2.0] {
             let master_bpm = ANCHOR_BPM * speed;
             let output_cycle_frames = four_bar_loop_frames(SAMPLE_RATE_HZ, master_bpm);
 
@@ -2304,8 +2332,8 @@ mod tests {
     #[test]
     fn prepared_stems_share_output_anchored_bpm_lock_phase_with_full_mix() {
         const SAMPLE_RATE_HZ: f32 = 3_360.0;
-        const ANCHOR_BPM: f32 = 120.0;
-        const STEM_PAD_BPM: f32 = 140.0;
+        const ANCHOR_BPM: f64 = 120.0;
+        const STEM_PAD_BPM: f64 = 140.0;
         const PHASE_TOLERANCE_FRAMES: f64 = 1.0;
 
         let mut output_frame = 0_u64;
@@ -2370,8 +2398,8 @@ mod tests {
     #[test]
     fn missing_bpm_fallback_does_not_disturb_synced_multi_loop_pads() {
         const SAMPLE_RATE_HZ: f32 = 3_360.0;
-        const ANCHOR_BPM: f32 = 120.0;
-        const SECOND_PAD_BPM: f32 = 140.0;
+        const ANCHOR_BPM: f64 = 120.0;
+        const SECOND_PAD_BPM: f64 = 140.0;
         const PHASE_TOLERANCE_FRAMES: f64 = 1.0;
 
         let mut output_frame = 0_u64;

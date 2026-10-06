@@ -117,7 +117,7 @@ impl StretchProcessor {
     pub fn process_resampled(
         &mut self,
         output_frames: usize,
-        tempo_ratio: f32,
+        tempo_ratio: f64,
         preserve_pitch: bool,
     ) {
         if self.channels == 0 {
@@ -458,7 +458,29 @@ mod tests {
         assert!((pitch_scale_for_tempo_ratio(2.0) - 0.5).abs() < f64::EPSILON);
         assert!((pitch_scale_for_tempo_ratio(0.5) - 2.0).abs() < f64::EPSILON);
         assert!((pitch_scale_for_tempo_ratio(1.0) - 1.0).abs() < f64::EPSILON);
-        assert!((pitch_scale_for_tempo_ratio(f32::NAN) - 1.0).abs() < f64::EPSILON);
+        assert!((pitch_scale_for_tempo_ratio(f64::NAN) - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn live_processor_applies_binary64_inverse_rate_to_native_pitch() {
+        let mut processor = StretchProcessor::new(1);
+        let frames = processor.rubberband_block_size().min(DEFAULT_BLOCK_SAMPLES);
+        for ratio in [1.371234567890123_f64, 1.3976543210987654_f64] {
+            let expected = 1.0 / ratio;
+            assert_ne!(expected, f64::from(1.0_f32 / ratio as f32));
+            processor.resampled_buffers_mut(frames)[0][..frames].fill(0.0);
+            processor.process_resampled(frames, ratio, true);
+            assert_eq!(processor.rubberband_pitch_scale, expected);
+            assert_eq!(
+                processor.rubberband.as_ref().unwrap().pitch_scale(),
+                expected
+            );
+            assert!(
+                processor.output_buffers()[0][..frames]
+                    .iter()
+                    .all(|value| value.is_finite())
+            );
+        }
     }
 
     #[test]

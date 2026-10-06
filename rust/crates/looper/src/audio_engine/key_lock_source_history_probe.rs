@@ -240,7 +240,7 @@ fn bounded_history_discard_marker_and_burst_sweep_preserves_reference_and_report
         for ratio in RATIOS {
             // Exact initialization queried independently, before generating any source stream.
             let mut native = RubberBandLiveShifter::new(rate, 2).unwrap();
-            native.set_pitch_scale(f64::from(1.0_f32 / ratio)).unwrap();
+            native.set_pitch_scale(1.0 / f64::from(ratio)).unwrap();
             native.reset_for_preparation();
             let delay = native.start_delay();
             let block = native.block_size();

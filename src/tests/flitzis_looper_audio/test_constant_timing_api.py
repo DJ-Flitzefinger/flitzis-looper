@@ -35,3 +35,12 @@ def test_constant_timing_cannot_publish_a_matching_caller_snapshot() -> None:
             "explicit-test-policy",
             "independent acceptance",
         )
+
+
+def test_current_constant_timing_has_no_authority_without_a_native_stream() -> None:
+    engine = AudioEngine()
+    assert engine.current_constant_timing(0) is None
+    with pytest.raises(ValueError, match="out of range"):
+        engine.current_constant_timing(216)
+    with pytest.raises(OverflowError):
+        engine.current_constant_timing(-1)

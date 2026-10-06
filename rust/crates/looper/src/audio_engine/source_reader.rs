@@ -399,7 +399,7 @@ impl SourceReadPlan {
                 .take(self.channels)
                 .all(|buffer| buffer.len() >= output_frames)
         );
-        let tempo_ratio = f64::from(playback.tempo_ratio());
+        let tempo_ratio = playback.tempo_ratio();
         for frame in 0..output_frames {
             let position = playback.position_at(frame);
             let plan = Self {
@@ -736,9 +736,9 @@ mod tests {
 
         // Independent address/interpolation oracle: after two 0.73 frames the base is frame 4,
         // fraction 0.46. The newly accepted target has made only its first 0.05 ratio step.
-        let initial_fraction = (2.0 * f64::from(0.73_f32)).fract();
+        let initial_fraction = (2.0 * 0.73_f64).fract();
         for frame in 0..frames {
-            let source_progress = frame as f64 * f64::from(ratio);
+            let source_progress = frame as f64 * ratio;
             let distance = initial_fraction + source_progress;
             let lower = 2 + (2 + distance.floor() as usize) % 3;
             let upper = 2 + (lower - 2 + 1) % 3;
@@ -756,6 +756,54 @@ mod tests {
         assert_eq!(buffers[1][frames], -99.0);
         assert_eq!(playback.position(), position);
         assert_eq!(read_plan.transition, transition);
+    }
+
+    #[test]
+    fn binary64_source_rate_reaches_fractional_taps_for_full_mix_and_prepared_stems() {
+        let sample = stereo_sample(1.0);
+        let stems = prepared_stems(&sample);
+        let ratio = 1.0 + 2.0_f64.powi(-24);
+        let elapsed = 8_388_608;
+        assert_eq!(ratio as f32, 1.0);
+        let mut playback = SourcePlayback::new(2, ExplicitSeekMode::Normal, ratio);
+        playback.configure(6, FrameRange { start: 2, end: 5 });
+        playback.advance(elapsed);
+        assert_eq!(playback.position().fraction, 0.5);
+
+        for (selection, gain) in [
+            (StemRenderSelection::full_mix(), 1.0),
+            (
+                StemRenderSelection::from_state(StemMixMode::AllStems, 42, u8::MAX),
+                11.0,
+            ),
+        ] {
+            let read_plan = SourceReadPlan {
+                selection,
+                ..plan(2, ExplicitSeekMode::Normal)
+            };
+            let mut buffers = [vec![-99.0; 4], vec![-99.0; 4]];
+            read_plan.fill_fractional_buffers(&sample, Some(&stems), &playback, &mut buffers, 3);
+            // Source integral and both wrapped taps are algebraic, independent of reader helpers.
+            for frame in 0..3 {
+                let distance = (elapsed + frame) as f64 * ratio;
+                let left = 2 + distance.floor() as usize % 3;
+                let right = 2 + (distance.floor() as usize + 1) % 3;
+                for (channel, buffer) in buffers.iter().enumerate() {
+                    let lower = (left + channel * 10) as f32 * gain;
+                    let upper = (right + channel * 10) as f32 * gain;
+                    let expected = lower + (upper - lower) * distance.fract() as f32;
+                    assert_eq!(buffer[frame], expected);
+                }
+            }
+            assert_eq!(buffers[0][0], 3.0 * gain);
+            assert_ne!(
+                buffers[0][0],
+                4.0 * gain,
+                "a binary32 rate loses this phase"
+            );
+            assert_eq!(buffers[0][3], -99.0);
+            assert_eq!(buffers[1][3], -99.0);
+        }
     }
 
     #[test]

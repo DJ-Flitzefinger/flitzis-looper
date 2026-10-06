@@ -109,7 +109,7 @@ fn set_loop(mixer: &mut RtMixer, sample_rate: f32, start: usize, end: usize) {
     );
 }
 
-fn restart(mixer: &mut RtMixer, ratio: f32, key_lock: bool) {
+fn restart(mixer: &mut RtMixer, ratio: f64, key_lock: bool) {
     mixer.stop_sample(0);
     mixer.set_bpm_lock(false);
     mixer.set_speed(ratio);
@@ -169,8 +169,8 @@ fn immutable_stereo_source_feed_and_cursor_are_partition_invariant() {
     let source = immutable_source(0);
     let oracle = SourceOracle::normal(127, 831);
     let frames = 2053;
-    let master_bpm = 137.3_f32;
-    let pad_bpm = 112.7_f32;
+    let master_bpm = 137.3_f64;
+    let pad_bpm = 112.7_f64;
     for sample_rate in [44_100.0, 48_000.0, 96_000.0] {
         let mut mixer = RtMixer::new(CHANNELS, sample_rate);
         mixer.load_sample(0, source.clone());
@@ -179,9 +179,7 @@ fn immutable_stereo_source_feed_and_cursor_are_partition_invariant() {
             .into_iter()
             .enumerate()
         {
-            let distances: Vec<f64> = (0..frames)
-                .map(|frame| frame as f64 * f64::from(ratio))
-                .collect();
+            let distances: Vec<f64> = (0..frames).map(|frame| frame as f64 * ratio).collect();
             let expected = oracle.samples(&source, &distances);
             let mut reference_feed = None;
             for key_lock in [false, true] {
@@ -202,7 +200,7 @@ fn immutable_stereo_source_feed_and_cursor_are_partition_invariant() {
                     if !key_lock {
                         assert_audio_close(&actual.output, &expected);
                     }
-                    oracle.assert_cursor(&mixer, frames as f64 * f64::from(ratio));
+                    oracle.assert_cursor(&mixer, frames as f64 * ratio);
                 }
             }
         }
@@ -212,7 +210,7 @@ fn immutable_stereo_source_feed_and_cursor_are_partition_invariant() {
 #[test]
 fn explicit_intro_and_tail_seek_taps_and_cursors_are_partition_invariant() {
     let source = immutable_source(2);
-    let ratio = 0.73_f32;
+    let ratio = 0.73_f64;
     let frames = 1907;
     for sample_rate in [44_100.0, 48_000.0, 96_000.0] {
         let mut mixer = RtMixer::new(CHANNELS, sample_rate);
@@ -230,9 +228,7 @@ fn explicit_intro_and_tail_seek_taps_and_cursors_are_partition_invariant() {
                 origin,
                 initial_mode,
             };
-            let distances: Vec<f64> = (0..frames)
-                .map(|frame| frame as f64 * f64::from(ratio))
-                .collect();
+            let distances: Vec<f64> = (0..frames).map(|frame| frame as f64 * ratio).collect();
             let expected = oracle.samples(&source, &distances);
             let mut reference_feed = None;
             for partitions in PARTITIONS {
@@ -250,7 +246,7 @@ fn explicit_intro_and_tail_seek_taps_and_cursors_are_partition_invariant() {
                 } else {
                     reference_feed = Some(actual.feed);
                 }
-                oracle.assert_cursor(&mixer, frames as f64 * f64::from(ratio));
+                oracle.assert_cursor(&mixer, frames as f64 * ratio);
             }
         }
     }
@@ -289,12 +285,10 @@ fn component_sum(stems: &PreparedStemSet, mask: u8) -> SampleBuffer {
 #[test]
 fn prepared_stem_masks_interpolate_the_same_fractional_source_addresses() {
     let source = immutable_source(0);
-    let ratio = 1.25_f32;
+    let ratio = 1.25_f64;
     let oracle = SourceOracle::normal(113, 787);
     let frames = 1493;
-    let distances: Vec<f64> = (0..frames)
-        .map(|frame| frame as f64 * f64::from(ratio))
-        .collect();
+    let distances: Vec<f64> = (0..frames).map(|frame| frame as f64 * ratio).collect();
     for sample_rate in [44_100.0, 48_000.0, 96_000.0] {
         let mut mixer = RtMixer::new(CHANNELS, sample_rate);
         mixer.load_sample(0, source.clone());
@@ -323,7 +317,7 @@ fn prepared_stem_masks_interpolate_the_same_fractional_source_addresses() {
                 } else {
                     reference_feed = Some(actual.feed);
                 }
-                oracle.assert_cursor(&mixer, frames as f64 * f64::from(ratio));
+                oracle.assert_cursor(&mixer, frames as f64 * ratio);
             }
         }
     }
@@ -337,7 +331,7 @@ fn accepted_same_source_stems_retain_fractional_trajectory_after_timing_intent_c
     let sample_rate = 48_000.0;
     let source = immutable_source(0);
     let oracle = SourceOracle::normal(113, 787);
-    let ratio = 0.73_f32;
+    let ratio = 0.73_f64;
     let prefix = 333;
     let frames = 1493;
     let mut reference_feed = None;
@@ -356,7 +350,7 @@ fn accepted_same_source_stems_retain_fractional_trajectory_after_timing_intent_c
         assert!(mixer.play_sample_at_output_frame(0, 1.0, 0));
         let mut output_frame = 0;
         render_capture(&mut mixer, &mut output_frame, prefix, partitions);
-        oracle.assert_cursor(&mixer, prefix as f64 * f64::from(ratio));
+        oracle.assert_cursor(&mixer, prefix as f64 * ratio);
 
         // Publication guards reject unfinished work; an accepted source-frame stem set
         // still follows the same source clock after later BPM/origin intent updates.
@@ -375,15 +369,15 @@ fn accepted_same_source_stems_retain_fractional_trajectory_after_timing_intent_c
                 .publication
                 .current()
         );
-        oracle.assert_cursor(&mixer, prefix as f64 * f64::from(ratio));
+        oracle.assert_cursor(&mixer, prefix as f64 * ratio);
         let distances: Vec<f64> = (prefix..prefix + frames)
-            .map(|frame| frame as f64 * f64::from(ratio))
+            .map(|frame| frame as f64 * ratio)
             .collect();
         let expected = oracle.samples(&selected, &distances);
         let actual = render_capture(&mut mixer, &mut output_frame, frames, partitions);
         assert_audio_close(&actual.feed, &expected);
         assert_audio_close(&actual.output, &expected);
-        oracle.assert_cursor(&mixer, (prefix + frames) as f64 * f64::from(ratio));
+        oracle.assert_cursor(&mixer, (prefix + frames) as f64 * ratio);
         if let Some(reference) = &reference_feed {
             assert_eq!(actual.feed, *reference);
         } else {
@@ -399,7 +393,7 @@ fn fractional_stem_crossfade_uses_common_addresses_across_partitions() {
     let stems = prepared_sources(&source, sample_rate);
     let selected = component_sum(&stems, STEM_MASK_VOCALS | STEM_MASK_DRUMS);
     let oracle = SourceOracle::normal(113, 787);
-    let ratio = 0.73_f32;
+    let ratio = 0.73_f64;
     let prefix = 333;
     let frames = 911;
     let mut mixer = RtMixer::new(CHANNELS, sample_rate);
@@ -408,8 +402,8 @@ fn fractional_stem_crossfade_uses_common_addresses_across_partitions() {
     set_loop(&mut mixer, sample_rate, oracle.start, oracle.end);
     let expected: Vec<f32> = (0..frames)
         .flat_map(|frame| {
-            let distance = (prefix + frame) as f64 * f64::from(ratio);
-            let to_gain = (frame as f64 * f64::from(ratio) / 128.0).min(1.0) as f32;
+            let distance = (prefix + frame) as f64 * ratio;
+            let to_gain = (frame as f64 * ratio / 128.0).min(1.0) as f32;
             let source = &source;
             let selected = &selected;
             (0..CHANNELS).map(move |channel| {
@@ -433,7 +427,7 @@ fn fractional_stem_crossfade_uses_common_addresses_across_partitions() {
         } else {
             reference_feed = Some(actual.feed);
         }
-        oracle.assert_cursor(&mixer, (prefix + frames) as f64 * f64::from(ratio));
+        oracle.assert_cursor(&mixer, (prefix + frames) as f64 * ratio);
         assert!(!mixer.stem_transitions[0].is_active());
     }
 }
@@ -443,14 +437,14 @@ fn pause_resume_preserves_fraction_and_excludes_paused_output_time() {
     let sample_rate = 48_000.0;
     let source = immutable_source(1);
     let oracle = SourceOracle::normal(127, 831);
-    let ratio = 0.73_f32;
+    let ratio = 0.73_f64;
     let prefix = 17;
     let frames = 1779;
     let mut mixer = RtMixer::new(CHANNELS, sample_rate);
     mixer.load_sample(0, source.clone());
     set_loop(&mut mixer, sample_rate, oracle.start, oracle.end);
     let distances: Vec<f64> = (prefix..prefix + frames)
-        .map(|frame| frame as f64 * f64::from(ratio))
+        .map(|frame| frame as f64 * ratio)
         .collect();
     let expected = oracle.samples(&source, &distances);
     let mut reference_feed = None;
@@ -458,11 +452,11 @@ fn pause_resume_preserves_fraction_and_excludes_paused_output_time() {
         restart(&mut mixer, ratio, false);
         let mut output_frame = 0;
         render_capture(&mut mixer, &mut output_frame, prefix, partitions);
-        oracle.assert_cursor(&mixer, prefix as f64 * f64::from(ratio));
+        oracle.assert_cursor(&mixer, prefix as f64 * ratio);
         mixer.pause_sample_at_output_frame(0, output_frame);
         let paused = render_capture(&mut mixer, &mut output_frame, 1301, partitions);
         assert!(paused.output.iter().all(|sample| *sample == 0.0));
-        oracle.assert_cursor(&mixer, prefix as f64 * f64::from(ratio));
+        oracle.assert_cursor(&mixer, prefix as f64 * ratio);
         mixer.resume_sample_at_output_frame(0, output_frame);
         let actual = render_capture(&mut mixer, &mut output_frame, frames, partitions);
         assert_audio_close(&actual.feed, &expected);
@@ -472,13 +466,13 @@ fn pause_resume_preserves_fraction_and_excludes_paused_output_time() {
         } else {
             reference_feed = Some(actual.feed);
         }
-        oracle.assert_cursor(&mixer, (prefix + frames) as f64 * f64::from(ratio));
+        oracle.assert_cursor(&mixer, (prefix + frames) as f64 * ratio);
     }
 }
 
 // Rate changes step immediately, then every 512 actively rendered output frames. Computing
 // the reference per sample makes callback boundaries irrelevant to the expected trajectory.
-fn smoothed_distances(initial: f32, changes: &[(usize, f32)], frames: usize) -> Vec<f64> {
+fn smoothed_distances(initial: f64, changes: &[(usize, f64)], frames: usize) -> Vec<f64> {
     let mut current = initial;
     let mut target = initial;
     let mut distance = 0.0;
@@ -494,7 +488,7 @@ fn smoothed_distances(initial: f32, changes: &[(usize, f32)], frames: usize) -> 
             next_step = frame + 512;
         }
         result.push(distance);
-        distance += f64::from(current);
+        distance += current;
     }
     result.push(distance);
     result
@@ -505,7 +499,7 @@ fn changed_targets_follow_active_output_time_across_callback_partitions() {
     let sample_rate = 48_000.0;
     let source = immutable_source(5);
     let oracle = SourceOracle::normal(127, 831);
-    let initial = 0.73_f32;
+    let initial = 0.73_f64;
     let changes = [(137, 1.25), (1430, 0.5), (2201, 1.999)];
     let frames = 4097;
     let distances = smoothed_distances(initial, &changes, frames);
@@ -554,7 +548,7 @@ fn changed_targets_follow_active_output_time_across_callback_partitions() {
 fn loop_edits_preserve_in_range_fraction_and_normalize_out_of_range_position() {
     let sample_rate = 48_000.0;
     let source = immutable_source(1);
-    let ratio = 0.73_f32;
+    let ratio = 0.73_f64;
     let mut mixer = RtMixer::new(CHANNELS, sample_rate);
     mixer.load_sample(0, source.clone());
     let mut reference_feed = None;
@@ -571,14 +565,14 @@ fn loop_edits_preserve_in_range_fraction_and_normalize_out_of_range_position() {
             origin: 139,
             initial_mode: ExplicitSeekMode::Normal,
         };
-        let fraction = 17.0 * f64::from(ratio) - 12.0;
+        let fraction = 17.0 * ratio - 12.0;
         let distances: Vec<f64> = (0..93)
-            .map(|frame| fraction + frame as f64 * f64::from(ratio))
+            .map(|frame| fraction + frame as f64 * ratio)
             .collect();
         let expected = oracle.samples(&source, &distances);
         let actual = render_capture(&mut mixer, &mut output_frame, 93, partitions);
         assert_audio_close(&actual.feed, &expected);
-        oracle.assert_cursor(&mixer, fraction + 93.0 * f64::from(ratio));
+        oracle.assert_cursor(&mixer, fraction + 93.0 * ratio);
         if let Some(reference) = &reference_feed {
             assert_eq!(actual.feed, *reference);
         } else {
@@ -589,7 +583,7 @@ fn loop_edits_preserve_in_range_fraction_and_normalize_out_of_range_position() {
         let single_frame = SourceOracle::normal(400, 401);
         let expected = single_frame.samples(&source, &[0.0; 37]);
         assert_audio_close(&actual.feed, &expected);
-        single_frame.assert_cursor(&mixer, 37.0 * f64::from(ratio));
+        single_frame.assert_cursor(&mixer, 37.0 * ratio);
     }
 }
 
@@ -597,8 +591,8 @@ fn loop_edits_preserve_in_range_fraction_and_normalize_out_of_range_position() {
 fn active_source_beat_query_retains_fraction_and_matches_loop_edit_first_read() {
     let sample_rate = 48_000.0;
     let source = immutable_source(2);
-    let ratio = 0.73_f32;
-    let bpm = 119.75_f32;
+    let ratio = 0.73_f64;
+    let bpm = 119.75_f64;
     let mut mixer = RtMixer::new(CHANNELS, sample_rate);
     mixer.load_sample(0, source.clone());
     set_loop(&mut mixer, sample_rate, 127, 831);
@@ -612,14 +606,14 @@ fn active_source_beat_query_retains_fraction_and_matches_loop_edit_first_read() 
     );
     let mut output_frame = 0;
     render_capture(&mut mixer, &mut output_frame, 17, &[1, 7, 9]);
-    let source_frame = 127.0 + 17.0 * f64::from(ratio);
-    let expected_beat = (source_frame + 3.0) * f64::from(bpm) / (60.0 * f64::from(sample_rate));
+    let source_frame = 127.0 + 17.0 * ratio;
+    let expected_beat = (source_frame + 3.0) * bpm / (60.0 * f64::from(sample_rate));
     assert!((mixer.active_pad_beat_position(0).unwrap() - expected_beat).abs() < 1e-12,);
     set_loop(&mut mixer, sample_rate, 130, 600);
     assert!((mixer.active_pad_beat_position(0).unwrap() - expected_beat).abs() < 1e-12,);
     // Before rendering a loop edit, the query must already use the renderer's normalization.
     set_loop(&mut mixer, sample_rate, 400, 600);
-    let expected_beat = 403.0 * f64::from(bpm) / (60.0 * f64::from(sample_rate));
+    let expected_beat = 403.0 * bpm / (60.0 * f64::from(sample_rate));
     assert!((mixer.active_pad_beat_position(0).unwrap() - expected_beat).abs() < 1e-12,);
     let first_read = render_capture(&mut mixer, &mut output_frame, 1, &[1]);
     assert_eq!(
@@ -655,7 +649,7 @@ fn pause_during_smoothing_preserves_remaining_active_frame_interval() {
     let sample_rate = 48_000.0;
     let source = immutable_source(5);
     let oracle = SourceOracle::normal(127, 831);
-    let initial = 0.73_f32;
+    let initial = 0.73_f64;
     let change_at = 137;
     let pause_at = 431;
     let frames = 2049;
@@ -702,11 +696,9 @@ fn pause_during_smoothing_preserves_remaining_active_frame_interval() {
 fn steady_key_lock_wet_output_from_immutable_source_is_partition_invariant() {
     let source = immutable_source(4);
     let oracle = SourceOracle::normal(127, 831);
-    let ratio = 0.73_f32;
+    let ratio = 0.73_f64;
     let frames = 8193;
-    let distances: Vec<f64> = (0..frames)
-        .map(|frame| frame as f64 * f64::from(ratio))
-        .collect();
+    let distances: Vec<f64> = (0..frames).map(|frame| frame as f64 * ratio).collect();
     let expected_feed = oracle.samples(&source, &distances);
     for sample_rate in [44_100.0, 48_000.0, 96_000.0] {
         let mut reference: Option<CapturedAudio> = None;
@@ -721,7 +713,7 @@ fn steady_key_lock_wet_output_from_immutable_source_is_partition_invariant() {
             assert_audio_close(&actual.feed, &expected_feed);
             assert!(actual.output.iter().all(|sample| sample.is_finite()));
             assert!(actual.output.iter().any(|sample| sample.abs() > 0.001));
-            oracle.assert_cursor(&mixer, frames as f64 * f64::from(ratio));
+            oracle.assert_cursor(&mixer, frames as f64 * ratio);
             if let Some(reference) = &reference {
                 assert_eq!(actual.feed, reference.feed);
                 assert_eq!(actual.output, reference.output);

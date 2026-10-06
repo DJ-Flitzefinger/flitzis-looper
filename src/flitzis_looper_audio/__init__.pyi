@@ -88,6 +88,7 @@ class AudioEngine:
     def set_pad_timing_intent(
         self, sample_id: int, intent: Literal["automatic", "manual", "tap", "legacy"]
     ) -> None: ...
+    def current_constant_timing(self, sample_id: int) -> dict[str, object] | None: ...
     def prepare_constant_timing(
         self,
         sample_id: int,

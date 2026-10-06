@@ -34,7 +34,7 @@ struct Fixture {
 
 impl Fixture {
     fn request(&self, initial_frames: usize, discard: usize) -> SourcePreparation {
-        let mut logical = SourcePlayback::new(self.start, self.mode, self.ratio);
+        let mut logical = SourcePlayback::new(self.start, self.mode, f64::from(self.ratio));
         logical.configure(self.sample.samples.len() / 2, self.region);
         logical.advance(initial_frames);
         let position = logical.position();
@@ -54,7 +54,7 @@ impl Fixture {
                 transition: StemTransition::default(),
             },
             logical,
-            tempo_ratio: self.ratio,
+            tempo_ratio: f64::from(self.ratio),
             discard_output_frames: discard,
             source_history: None,
         }
@@ -209,7 +209,7 @@ fn native_reference(
     let mut native = RubberBandLiveShifter::new(fixture.rate, 2).unwrap();
     // Independent initialization: reset sets the previous hop using the exact starting pitch.
     native
-        .set_pitch_scale(f64::from(1.0_f32 / fixture.ratio))
+        .set_pitch_scale(1.0 / f64::from(fixture.ratio))
         .unwrap();
     native.reset_for_preparation();
     let delay = native.start_delay();

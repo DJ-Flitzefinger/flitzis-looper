@@ -30,7 +30,8 @@ pub(crate) struct SourceLoopMetrics {
 }
 
 impl SourceGrid {
-    pub(crate) fn new(sample_rate_hz: f64, pad_bpm: f32, origin_frame: f64) -> Option<Self> {
+    #[cfg(test)]
+    pub(crate) fn new(sample_rate_hz: f64, pad_bpm: f64, origin_frame: f64) -> Option<Self> {
         if !sample_rate_hz.is_finite()
             || sample_rate_hz <= 0.0
             || !pad_bpm.is_finite()
@@ -40,7 +41,7 @@ impl SourceGrid {
             return None;
         }
 
-        let frames_per_beat = sample_rate_hz * 60.0 / f64::from(pad_bpm);
+        let frames_per_beat = sample_rate_hz * 60.0 / pad_bpm;
         Self::from_period(frames_per_beat, origin_frame)
     }
 
@@ -199,7 +200,7 @@ mod tests {
             grid.source_after_beats(28_776_001.25, 8.0),
             Some(28_776_001.25 + 8.0 * frames_per_beat)
         );
-        let live = SourceGrid::new(48_000.0, 119.999, -217.0).unwrap();
+        let live = SourceGrid::new(48_000.0, f64::from(119.999_f32), -217.0).unwrap();
         assert_ne!(grid.source_at_beat(1_200.0), live.source_at_beat(1_200.0));
         assert_eq!(grid.source_at_beat(f64::INFINITY), None);
         assert_eq!(grid.source_after_beats(f64::NAN, 8.0), None);
@@ -333,7 +334,7 @@ mod tests {
         for sample_rate in [f64::NAN, f64::INFINITY, 0.0, -1.0] {
             assert!(SourceGrid::new(sample_rate, 120.0, 0.0).is_none());
         }
-        for bpm in [f32::NAN, f32::INFINITY, 0.0, -1.0] {
+        for bpm in [f64::NAN, f64::INFINITY, 0.0, -1.0] {
             assert!(SourceGrid::new(48_000.0, bpm, 0.0).is_none());
         }
         for origin in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {

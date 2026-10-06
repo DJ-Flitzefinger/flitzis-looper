@@ -1,7 +1,8 @@
 # Native accepted timing adoption
 
-G3b2a connects the G3a accepted record to actual loaded-pad ownership and the live
-native SourceGrid. This is an explicit control API. Normal loading and analysis,
+G3b2a/b connects the G3a accepted record to actual loaded-pad ownership, current
+acknowledged authority, native SourceGrid, transport/output clock and playback
+rate. This is an explicit control API. Normal loading and analysis,
 manual/TAP controllers and saved legacy projects retain their existing routing;
 their numerical values are not promoted to accepted evidence.
 
@@ -70,6 +71,22 @@ It describes that ticket's historical adoption; it is not a current-pad polling
 authority after later source or timing edits. Polling observes acknowledgement
 and never drives audio progression.
 
+`AudioEngine.current_constant_timing(sample_id)` resolves current metadata from
+the actual loaded source Arc/digest/generation/rate, Automatic timing authority
+and fixed callback acknowledgement. It includes the complete accepted revision,
+accepted request identity, original/mono content identity, source zero, exact
+period, independent signed origin and acceptance provenance. The native retained
+record owns no PCM allocation, including weak array ownership. A non-dereferenced
+source address/extent is checked with native monotonic loaded generation, digest
+and rate, so recycled addresses cannot substitute for current source ownership.
+Historical `ticket.accepted_metadata()` can remain available after this resolver
+returns `None`. New requests and pending replacement retain the previous effective
+revision until actual adoption. A changing acknowledgement during a lookup returns
+unavailable for that poll. Successful Manual/Tap/Legacy edits revoke authority even
+while the callback clear waits; returning to Automatic cannot revive old timing.
+Full queues and failed edits preserve the previous current result. Retention and
+pruning occur outside realtime processing.
+
 The mixer creates SourceGrid directly from the accepted period multiplied by the
 actual loaded rate and the independent signed origin. It does not derive the
 period through binary32 BPM. Publication leaves source zero, stored physical loop
@@ -86,13 +103,36 @@ decoder input. Copy-first ownership and a full versioned PCM cache remain C1.
 The loaded buffer is resampled/channel-mapped at the existing engine rate;
 original, loaded and QM analyzer timebases remain distinct.
 
+## Native shared-period and rate consumers
+
+Native source timing prefers the acknowledged accepted period over legacy BPM.
+Transport retains authoritative binary64 output seconds per quarter. Its bootstrap,
+phase anchor, beat progression and quantization use that period directly. The shared
+OutputClock stores exact period bits; `output_clock_snapshot()` exposes
+`master_period_seconds` and derives its compatibility `master_bpm` for presentation.
+Legacy public speed, master BPM and pad BPM retain binary64 through messages.
+
+BPMLOCK derives one target as `source_period / master_output_period`; start and
+render share that resolver. Global speed applies when unlocked or timing is
+unavailable. Supported speed clipping cannot redefine the requested master period.
+SourcePlayback rate, target and smoothing preserve binary64 and rebase from the
+existing fractional source position. The same cursor supplies full mix and stems.
+Rubber Band receives a named inverse-rate conversion through its native `c_double`
+pitch ABI. Its existing near-unity and update-threshold behavior remains; this
+does not establish sub-threshold pitch application, prepared DSP-history revision
+binding or audible SYNC. Physical integer-loop wrapping is unchanged.
+
+Regression tests exercise actual callback drains and rendering/bootstrap, including
+legacy BPM deliberately disagreeing with accepted timing, replacement while playing,
+rate clipping, precise long source epochs and a quantization boundary where a
+binary32 BPM projection would choose the wrong output frame.
+
 ## Remaining shared-period and loop work
 
-This completes native accepted adoption and SourceGrid only. Editor lines,
-snapping and automatic endpoints still derive their scalar period from effective
-BPM. Transport/master/output-clock timing and BPMLOCK still use legacy binary32
-BPM/rates. They must consume the same accepted period/origin/revision, with one
-ratio and preserved fractional source epochs, in subsequent G3b2 work.
+This completes current native accepted authority and native period/rate consumers.
+Editor lines, snapping and automatic endpoints still derive their scalar period from effective
+BPM. Python current timing, labels and transport/global controls must consume the
+same accepted period/origin/revision in subsequent G3b2 work.
 
 MIDI signatures, pending prepared source/stem state and productive Key Lock
 history still need full accepted revision binding. The generic warmed Key Lock

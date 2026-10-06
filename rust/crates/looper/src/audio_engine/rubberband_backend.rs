@@ -72,13 +72,16 @@ pub(crate) enum RubberBandError {
     },
 }
 
-/// Match native pitch to the exact accepted `f32` varispeed ratio.
-pub(crate) fn pitch_scale_for_tempo_ratio(tempo_ratio: f32) -> f64 {
+/// Convert the canonical binary64 source rate to the Rubber Band `c_double` pitch ABI.
+///
+/// The native pitch scale is an inverse rate, not a second source-rate application. The ABI
+/// preserves binary64; PCM samples remain `c_float` and never define the timing precision.
+pub(crate) fn pitch_scale_for_tempo_ratio(tempo_ratio: f64) -> f64 {
     if !tempo_ratio.is_finite() || tempo_ratio <= 0.0 {
         return 1.0;
     }
 
-    f64::from((1.0 / tempo_ratio).clamp(0.5, 2.0))
+    (1.0 / tempo_ratio).clamp(0.5, 2.0)
 }
 
 pub(crate) struct RubberBandLiveShifter {
@@ -445,14 +448,16 @@ mod tests {
     }
 
     #[test]
-    fn inverse_pitch_preserves_native_f32_reciprocal_semantics() {
-        let ratio = 137.3_f32 / 112.7_f32;
-        assert_eq!(
-            pitch_scale_for_tempo_ratio(ratio),
-            f64::from(1.0_f32 / ratio)
-        );
+    fn inverse_pitch_preserves_binary64_ratio_through_native_double_abi() {
+        let ratio = 137.3_f64 / 112.7_f64;
+        let scale = pitch_scale_for_tempo_ratio(ratio);
+        assert_eq!(scale, 1.0 / ratio);
+        assert_ne!(scale, f64::from(1.0_f32 / ratio as f32));
+        let mut native = RubberBandLiveShifter::new(48_000, 1).unwrap();
+        native.set_pitch_scale(scale).unwrap();
+        assert_eq!(native.pitch_scale(), scale);
         assert_eq!(pitch_scale_for_tempo_ratio(0.0), 1.0);
-        assert_eq!(pitch_scale_for_tempo_ratio(f32::INFINITY), 1.0);
+        assert_eq!(pitch_scale_for_tempo_ratio(f64::INFINITY), 1.0);
         assert_eq!(pitch_scale_for_tempo_ratio(0.1), 2.0);
         assert_eq!(pitch_scale_for_tempo_ratio(10.0), 0.5);
     }

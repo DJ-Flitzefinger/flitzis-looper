@@ -455,6 +455,8 @@ pub struct AudioEngine {
     loaded_source_digests: Arc<Mutex<Vec<Option<String>>>>,
     prepared_source_epochs: Vec<Arc<AtomicU64>>,
     timing_intents: Mutex<Vec<analysis::tempo_acceptance::TimingIntent>>,
+    current_timing_acknowledgements: Arc<constant_timing::CurrentTimingAcknowledgements>,
+    current_constant_timing: Mutex<Vec<Vec<constant_timing::CurrentConstantTimingRecord>>>,
     constant_timing_busy: AtomicBool,
     offline_jobs: analysis_jobs::OfflineJobs,
     input_runtime: Option<InputRuntime>,
@@ -486,6 +488,8 @@ impl AudioEngine {
                 analysis::tempo_acceptance::TimingIntent::Legacy;
                 NUM_SAMPLES
             ]),
+            current_timing_acknowledgements: Arc::default(),
+            current_constant_timing: Mutex::new((0..NUM_SAMPLES).map(|_| Vec::new()).collect()),
             constant_timing_busy: AtomicBool::new(false),
             offline_jobs: analysis_jobs::OfflineJobs::default(),
             input_runtime: None,
@@ -499,7 +503,19 @@ impl AudioEngine {
             return Err(PyRuntimeError::new_err("AudioEngine already running"));
         }
 
-        match create_audio_stream(self.input_clock) {
+        self.current_timing_acknowledgements.clear_all();
+        for records in self
+            .current_constant_timing
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("current timing lock poisoned"))?
+            .iter_mut()
+        {
+            records.clear();
+        }
+        match create_audio_stream(
+            self.input_clock,
+            self.current_timing_acknowledgements.clone(),
+        ) {
             Ok(handle) => {
                 start_stream(&handle.stream).map_err(|e| {
                     PyRuntimeError::new_err(format!("Failed to start audio stream: {e}"))
@@ -546,7 +562,11 @@ impl AudioEngine {
         dict.set_item("audible_at_ns", snapshot.audible_at_ns)?;
         dict.set_item("output_frame", snapshot.output_frame)?;
         dict.set_item("sample_rate_hz", snapshot.sample_rate_hz)?;
-        dict.set_item("master_bpm", snapshot.master_bpm)?;
+        dict.set_item("master_period_seconds", snapshot.master_period_seconds)?;
+        dict.set_item(
+            "master_bpm",
+            snapshot.master_period_seconds.map(|period| 60.0 / period),
+        )?;
         dict.set_item("downbeat_frame", snapshot.downbeat_frame)?;
         Ok(Some(dict.into_any().unbind()))
     }
@@ -603,6 +623,15 @@ impl AudioEngine {
         self.offline_jobs.cancel(None);
         self.input_runtime = None;
         self.stream_handle = None;
+        self.current_timing_acknowledgements.clear_all();
+        for records in self
+            .current_constant_timing
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("current timing lock poisoned"))?
+            .iter_mut()
+        {
+            records.clear();
+        }
         self.is_playing = false;
         Ok(())
     }
@@ -967,6 +996,22 @@ impl AudioEngine {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
         constant_timing::set_intent(self, &handle.producer, sample_id, intent)
+    }
+
+    /// Current acknowledged accepted timing for the actual native loaded source.
+    /// Historical tickets and pending publications do not establish availability.
+    pub fn current_constant_timing(
+        &self,
+        py: Python<'_>,
+        sample_id: usize,
+    ) -> PyResult<Option<Py<PyAny>>> {
+        if sample_id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+        if self.stream_handle.is_none() {
+            return Ok(None);
+        }
+        constant_timing::current_metadata(self, py, sample_id)
     }
 
     /// Explicitly run complete native QM evidence on the actual current loaded source.
@@ -1662,7 +1707,7 @@ impl AudioEngine {
     }
 
     /// Set the global speed multiplier.
-    pub fn set_speed(&mut self, speed: f32) -> PyResult<()> {
+    pub fn set_speed(&mut self, speed: f64) -> PyResult<()> {
         if !speed.is_finite() || !(SPEED_MIN..=SPEED_MAX).contains(&speed) {
             return Err(PyValueError::new_err("speed out of range"));
         }
@@ -1742,8 +1787,8 @@ impl AudioEngine {
         )
     }
 
-    pub fn set_master_bpm(&mut self, bpm: f32) -> PyResult<()> {
-        if !bpm.is_finite() || bpm <= 0.0 {
+    pub fn set_master_bpm(&mut self, bpm: f64) -> PyResult<()> {
+        if !bpm.is_finite() || bpm <= 0.0 || !(60.0 / bpm).is_finite() {
             return Err(PyValueError::new_err("bpm out of range"));
         }
 
@@ -1751,6 +1796,10 @@ impl AudioEngine {
             .stream_handle
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        if !((60.0 / bpm) * f64::from(handle.output_sample_rate) * 4.0).is_finite() {
+            return Err(PyValueError::new_err("bpm output period out of range"));
+        }
 
         let mut producer_guard = handle
             .parameter_producer
@@ -1764,12 +1813,14 @@ impl AudioEngine {
         )
     }
 
-    pub fn set_pad_bpm(&mut self, id: usize, bpm: Option<f32>) -> PyResult<()> {
+    pub fn set_pad_bpm(&mut self, id: usize, bpm: Option<f64>) -> PyResult<()> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
         }
 
-        if bpm.is_some_and(|value| !value.is_finite() || value <= 0.0) {
+        if bpm
+            .is_some_and(|value| !value.is_finite() || value <= 0.0 || !(60.0 / value).is_finite())
+        {
             return Err(PyValueError::new_err("bpm out of range"));
         }
 
@@ -1777,6 +1828,12 @@ impl AudioEngine {
             .stream_handle
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        if bpm.is_some_and(|value| {
+            !((60.0 / value) * f64::from(handle.output_sample_rate)).is_finite()
+        }) {
+            return Err(PyValueError::new_err("bpm source period out of range"));
+        }
 
         constant_timing::publish_legacy_bpm(self, &handle.parameter_producer, id, bpm)
     }

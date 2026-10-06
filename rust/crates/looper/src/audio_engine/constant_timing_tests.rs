@@ -151,6 +151,295 @@ fn accept_message(mixer: &mut RtMixer, message: ControlMessage) -> bool {
     mixer.publish_constant_timing_rt(id, timing, &mut ImmediateAudioBufferRetirement)
 }
 
+fn acknowledged_mixer(engine: &AudioEngine) -> RtMixer {
+    let mut mixer = RtMixer::new(1, RATE as f32);
+    mixer.set_current_timing_acknowledgements(engine.current_timing_acknowledgements.clone());
+    mixer.load_sample(0, engine.sample_cache.lock().unwrap()[0].clone().unwrap());
+    mixer
+}
+
+fn current_record(engine: &AudioEngine) -> Option<(String, f64, u64)> {
+    Python::attach(|py| {
+        current_metadata(engine, py, 0).unwrap().map(|value| {
+            let dict = value.bind(py).cast::<PyDict>().unwrap();
+            let get = |key| dict.get_item(key).unwrap().unwrap();
+            assert_eq!(get("source_id").extract::<String>().unwrap(), "loaded-0-7");
+            assert_eq!(get("source_generation").extract::<u64>().unwrap(), 7);
+            assert_eq!(get("sample_rate_hz").extract::<u32>().unwrap(), RATE);
+            assert_eq!(
+                get("source_sha256").extract::<String>().unwrap(),
+                "a".repeat(64)
+            );
+            assert_eq!(get("source_zero_seconds").extract::<f64>().unwrap(), 0.0);
+            assert_eq!(
+                get("origin_seconds").extract::<f64>().unwrap(),
+                origin().seconds
+            );
+            assert_eq!(
+                get("mono_revision").extract::<String>().unwrap(),
+                MONO_REVISION
+            );
+            assert_eq!(get("accepted_request_id").extract::<u64>().unwrap(), 7);
+            (
+                get("revision").extract::<String>().unwrap(),
+                get("period_seconds_per_quarter").extract::<f64>().unwrap(),
+                get("publication_epoch").extract::<u64>().unwrap(),
+            )
+        })
+    })
+}
+
+#[test]
+fn current_resolver_follows_callback_revision_and_retains_old_acceptance_while_replacement_pending()
+{
+    let engine = test_engine();
+    let first = synthetic_ticket(&engine);
+    let (producer, mut consumer) = queue(2);
+    let mut mixer = acknowledged_mixer(&engine);
+    publish(
+        &engine,
+        &producer,
+        &first,
+        &hypotheses(),
+        origin(),
+        decision(),
+    )
+    .unwrap();
+    assert!(current_record(&engine).is_none());
+    assert!(accept_message(&mut mixer, consumer.pop().unwrap()));
+    let original = current_record(&engine).unwrap();
+    assert_eq!(
+        original.0,
+        first.guard.lock().unwrap().accepted().unwrap().revision()
+    );
+
+    // Equal-valued projections still have different full evidence/decision identity.
+    let replacement = synthetic_ticket(&engine);
+    let mut changed_decision = decision();
+    changed_decision
+        .provenance
+        .push_str("; distinct explicit decision");
+    producer
+        .lock()
+        .unwrap()
+        .push(ControlMessage::Ping())
+        .unwrap();
+    producer
+        .lock()
+        .unwrap()
+        .push(ControlMessage::Ping())
+        .unwrap();
+    assert!(
+        publish(
+            &engine,
+            &producer,
+            &replacement,
+            &hypotheses(),
+            origin(),
+            changed_decision.clone()
+        )
+        .is_err()
+    );
+    assert_eq!(replacement.publication_status().unwrap(), "captured");
+    assert_eq!(current_record(&engine).unwrap(), original);
+    consumer.pop().unwrap();
+    consumer.pop().unwrap();
+    publish(
+        &engine,
+        &producer,
+        &replacement,
+        &hypotheses(),
+        origin(),
+        changed_decision,
+    )
+    .unwrap();
+    assert_eq!(replacement.publication_status().unwrap(), "pending");
+    assert_eq!(current_record(&engine).unwrap(), original);
+    assert!(accept_message(&mut mixer, consumer.pop().unwrap()));
+    let current = current_record(&engine).unwrap();
+    assert_ne!(current.0, original.0);
+    assert_eq!(current.1, original.1);
+    assert!(current.2 > original.2);
+    assert_eq!(first.publication_status().unwrap(), "accepted");
+    assert_eq!(engine.current_constant_timing.lock().unwrap()[0].len(), 1);
+
+    // A new analysis request invalidates pending work, not acknowledged live timing.
+    let mut requests = engine.pad_request_ids.lock().unwrap();
+    PadRequestAdvance::prepare(&mut requests[0], &engine.prepared_source_epochs[0])
+        .unwrap()
+        .commit();
+    drop(requests);
+    assert_eq!(current_record(&engine).unwrap(), current);
+    mixer.clear_constant_timing(0, original.2);
+    assert_eq!(current_record(&engine).unwrap(), current);
+    mixer.clear_constant_timing(0, current.2);
+    assert!(current_record(&engine).is_none());
+    Python::attach(|py| assert!(replacement.accepted_metadata(py).unwrap().is_some()));
+}
+
+#[test]
+fn current_resolver_never_promotes_rejected_replacement_or_matching_stale_source_metadata() {
+    for source_change in 0..6 {
+        let engine = test_engine();
+        let first = synthetic_ticket(&engine);
+        let (producer, mut consumer) = queue(2);
+        let mut mixer = acknowledged_mixer(&engine);
+        publish(
+            &engine,
+            &producer,
+            &first,
+            &hypotheses(),
+            origin(),
+            decision(),
+        )
+        .unwrap();
+        assert!(accept_message(&mut mixer, consumer.pop().unwrap()));
+        let original = current_record(&engine).unwrap();
+        let pending = synthetic_ticket(&engine);
+        publish(
+            &engine,
+            &producer,
+            &pending,
+            &hypotheses(),
+            origin(),
+            decision(),
+        )
+        .unwrap();
+        // Callback rejection is observed without replacing the current accepted record.
+        engine.prepared_source_epochs[0].fetch_add(1, Ordering::AcqRel);
+        assert!(!accept_message(&mut mixer, consumer.pop().unwrap()));
+        assert_eq!(current_record(&engine).unwrap(), original);
+        match source_change {
+            0 => engine.sample_cache.lock().unwrap()[0] = Some(source()),
+            1 => engine.loaded_source_generations.lock().unwrap()[0].0 += 1,
+            2 => engine.loaded_source_generations.lock().unwrap()[0].1 = 48_000,
+            3 => engine.loaded_source_digests.lock().unwrap()[0] = Some("c".repeat(64)),
+            4 => engine.sample_cache.lock().unwrap()[0] = None,
+            _ => mixer.unload_sample(0),
+        }
+        assert!(
+            current_record(&engine).is_none(),
+            "source change {source_change}"
+        );
+        assert_eq!(first.publication_status().unwrap(), "accepted");
+    }
+}
+
+#[test]
+fn current_registry_cannot_pin_unloaded_pcm_and_shutdown_retires_pending_record_metadata() {
+    let mut engine = test_engine();
+    let first = synthetic_ticket(&engine);
+    let (producer, mut consumer) = queue(2);
+    let mut mixer = acknowledged_mixer(&engine);
+    publish(
+        &engine,
+        &producer,
+        &first,
+        &hypotheses(),
+        origin(),
+        decision(),
+    )
+    .unwrap();
+    assert!(accept_message(&mut mixer, consumer.pop().unwrap()));
+    drop(first);
+    let current_source = engine.sample_cache.lock().unwrap()[0].clone().unwrap();
+    // Neither strong nor weak array owners may linger in the metadata registry:
+    // Weak<[f32]> would retain the entire Arc allocation after the last strong drop.
+    assert_eq!(Arc::strong_count(&current_source.samples), 3); // cache, mixer, this pin
+    assert_eq!(Arc::weak_count(&current_source.samples), 0);
+    drop(current_source);
+    engine.sample_cache.lock().unwrap()[0] = None;
+    mixer.unload_sample(0);
+    assert!(current_record(&engine).is_none());
+
+    engine.sample_cache.lock().unwrap()[0] = Some(source());
+    let pending = synthetic_ticket(&engine);
+    publish(
+        &engine,
+        &producer,
+        &pending,
+        &hypotheses(),
+        origin(),
+        decision(),
+    )
+    .unwrap();
+    assert_eq!(engine.current_constant_timing.lock().unwrap()[0].len(), 1);
+    engine.shut_down().unwrap();
+    assert!(engine.current_constant_timing.lock().unwrap()[0].is_empty());
+    assert_eq!(engine.current_timing_acknowledgements.current_epoch(0), 0);
+}
+
+#[test]
+fn current_resolver_preserves_failed_edit_and_never_revives_manual_tap_legacy_authority() {
+    for intent in [
+        TimingIntent::Manual,
+        TimingIntent::Tap,
+        TimingIntent::Legacy,
+        TimingIntent::Automatic,
+    ] {
+        let engine = test_engine();
+        let first = synthetic_ticket(&engine);
+        let (producer, mut consumer) = queue(2);
+        let mut mixer = acknowledged_mixer(&engine);
+        publish(
+            &engine,
+            &producer,
+            &first,
+            &hypotheses(),
+            origin(),
+            decision(),
+        )
+        .unwrap();
+        assert!(accept_message(&mut mixer, consumer.pop().unwrap()));
+        let original = current_record(&engine).unwrap();
+        producer
+            .lock()
+            .unwrap()
+            .push(ControlMessage::Ping())
+            .unwrap();
+        producer
+            .lock()
+            .unwrap()
+            .push(ControlMessage::Ping())
+            .unwrap();
+        assert!(set_intent(&engine, &producer, 0, intent).is_err());
+        assert_eq!(current_record(&engine).unwrap(), original);
+        consumer.pop().unwrap();
+        consumer.pop().unwrap();
+        set_intent(&engine, &producer, 0, intent).unwrap();
+        assert!(current_record(&engine).is_none());
+        set_intent(&engine, &producer, 0, TimingIntent::Automatic).unwrap();
+        assert!(current_record(&engine).is_none()); // callback clears remain queued
+        assert_eq!(first.publication_status().unwrap(), "accepted");
+    }
+    for bpm_edit in [false, true] {
+        let engine = test_engine();
+        let first = synthetic_ticket(&engine);
+        let (producer, mut consumer) = queue(2);
+        let mut mixer = acknowledged_mixer(&engine);
+        publish(
+            &engine,
+            &producer,
+            &first,
+            &hypotheses(),
+            origin(),
+            decision(),
+        )
+        .unwrap();
+        assert!(accept_message(&mut mixer, consumer.pop().unwrap()));
+        if bpm_edit {
+            let (parameter, _) = rtrb::RingBuffer::new(1);
+            publish_legacy_bpm(&engine, &Arc::new(Mutex::new(parameter)), 0, Some(119.999))
+                .unwrap();
+        } else {
+            publish_legacy_origin(&engine, &producer, 0, origin().seconds).unwrap();
+        }
+        assert!(current_record(&engine).is_none());
+        set_intent(&engine, &producer, 0, TimingIntent::Automatic).unwrap();
+        assert!(current_record(&engine).is_none());
+    }
+}
+
 #[test]
 fn real_native_qm_preparation_binds_complete_actual_loaded_pcm_and_request() {
     let engine = test_engine();

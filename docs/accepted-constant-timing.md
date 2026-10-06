@@ -1,10 +1,11 @@
 # Accepted constant timing foundation
 
 G3a adds `flitzis_looper_analysis::tempo_acceptance`. This is a pure offline/control
-API. G3b2a now supplies a production native current-pad caller and precise live
-SourceGrid through an explicit acceptance command; see
+API. G3b2a/b now supplies a native current-pad caller, acknowledged current
+resolver and precise live SourceGrid/transport/output-clock/rate consumers through
+an explicit acceptance command; see
 [native adoption](native-constant-timing.md). Existing automatic BPM, editor,
-transport/BPMLOCK, manual/TAP, saved projects and realtime wrapping retain their
+manual/TAP, saved projects and realtime wrapping retain their
 existing behavior. Full shared-period integration remains incomplete.
 
 ## Explicit construction
@@ -81,7 +82,7 @@ The pure guard alone does not establish these facts.
 | --- | --- |
 | Editor, snapping, automatic loop ends | Use one accepted binary64 period/origin/revision, retaining physical endpoint rounding and manual authority. |
 | Native SourceGrid | G3b2a uses the acknowledged binary64 period/origin/full revision directly; ordinary legacy timing stays compatible. |
-| Transport reference/master, output clock and BPMLOCK | Still remove silent derivation through binary32 BPM/rate; preserve single-ratio and source-epoch ownership. |
+| Native transport reference/master, output clock and BPMLOCK | G3b2b consumes acknowledged source/output periods directly with binary64 rate/epoch ownership; Python controller integration remains. |
 | MIDI metadata | Include current source and accepted timing revision alongside exact effective endpoints. |
 | Prepared source/Key Lock state | Bind preparation to the current source and timing revision; retire stale work under the actual owner. |
 | Same-source stems | Retain one source trajectory and check content/generation before prepared publication; shape or path/mtime alone is insufficient. |
@@ -91,7 +92,8 @@ G3b1 protects productive stem preparation with actual loaded-source pointers,
 content identities, current request/preparation epochs, isolated worker artifacts
 and callback feedback; see [prepared publication](prepared-stem-publication.md).
 Its generic epoch does not replace this accepted revision. G3b2a connects native
-adoption and SourceGrid. Remaining consumers, prepared revision binding and
+adoption and SourceGrid; G3b2b connects current native authority and native
+period/rate consumers. Remaining consumers, prepared revision binding and
 accepted persistence remain explicit G3b2 work.
 G3c separately proves
 musical period versus rounded physical duration over 75/1000 cycles, fractional

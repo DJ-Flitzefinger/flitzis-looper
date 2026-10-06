@@ -40,8 +40,10 @@ explicit seek mode. The mixer retains one preparation worker for its 32 voice la
   Lock values. A later per-pad toggle changes only that loaded pad, and unloaded
   pads remain disabled.
 - BPM Lock off: the active tempo ratio is the global speed multiplier.
-- BPM Lock on with valid master and pad BPM metadata: the active tempo ratio is
-  `master_bpm / pad_bpm`.
+- BPM Lock on with valid master/source timing: the active tempo ratio is
+  `source_period / master_output_period`. Acknowledged accepted source timing
+  takes precedence over legacy pad timing. Supported clipping does not redefine
+  the requested master period.
 - Pads without valid BPM metadata use the global speed multiplier.
 - Full-mix and prepared-stem playback share the same source addressing and Key
   Lock path.
@@ -53,7 +55,9 @@ Scheduled render segments carry absolute output-frame positions from
 
 Every playback mode uses `SourcePlayback` to derive fractional source progress
 from a scalar source epoch plus active output-frame count times the actual native
-`f32` tempo ratio promoted to `f64`. Reads linearly interpolate two integer
+binary64 tempo ratio. Start and render use the same native period/rate resolver;
+SourcePlayback target/ramp and fractional epochs preserve binary64. Reads linearly
+interpolate two integer
 neighbors through the shared half-open loop/seek policy. The lookahead tap wraps
 at loop end; explicit intro seeks play into the loop, and tail seeks play to
 track end before wrapping into the loop. Both channels and prepared-stem
@@ -68,6 +72,9 @@ source cursor. Ordinary wrapping does not redefine the Rust master output
 timeline, Rubber Band state, editor source grid or prepared-stem alignment.
 
 The same source feed supplies dry varispeed output and the Rubber Band adapter.
+The named inverse-rate pitch conversion uses LiveShifter's native `c_double` ABI
+without narrowing to binary32. Existing near-unity bypass and pitch-update
+thresholds remain; sub-threshold pitch changes are not claimed to be applied.
 `StretchProcessor` no longer interpolates render-segment endpoints. This makes
 source/native input independent of fixed, irregular and one-frame partitions
 when source state and accepted control events are equivalent.

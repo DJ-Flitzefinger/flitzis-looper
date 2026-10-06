@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use crate::audio_engine::buffer_retirement::{
     AudioBufferRetirement, AudioBufferRetirementWorker, create_audio_buffer_retirement,
 };
+use crate::audio_engine::constant_timing::CurrentTimingAcknowledgements;
 use crate::audio_engine::constants::{MAX_VOICES, NUM_SAMPLES};
 use crate::audio_engine::mixer::{RtMixer, RtRenderPadActivity};
 use crate::audio_engine::scheduler::{
@@ -222,12 +223,15 @@ fn anchor_transport_phase_from_pad_at_frame(
     let Some(source_beat) = mixer.active_pad_beat_position(id) else {
         return false;
     };
-    let Some(bpm) = mixer.transport_reference_bpm_for_sample_id(id) else {
+    let Some(period) = mixer.transport_reference_period_for_sample_id(id) else {
         return false;
     };
 
-    let anchored =
-        transport.set_master_bpm_and_anchor_beat_position_at_frame(bpm, source_beat, output_frame);
+    let anchored = transport.set_master_period_and_anchor_beat_position_at_frame(
+        period,
+        source_beat,
+        output_frame,
+    );
     if anchored {
         transport.complete_bootstrap();
     }
@@ -247,10 +251,10 @@ fn try_bootstrap_transport_from_reference(
     let Some(source_beat) = mixer.active_pad_beat_position(id) else {
         return false;
     };
-    let Some(bpm) = mixer.transport_reference_bpm_for_sample_id(id) else {
+    let Some(period) = mixer.transport_reference_period_for_sample_id(id) else {
         return false;
     };
-    transport.bootstrap_from_source_at_frame(bpm, source_beat, output_frame)
+    transport.bootstrap_from_source_period_at_frame(period, source_beat, output_frame)
 }
 
 fn drain_scheduler_due_at_callback_start<
@@ -643,7 +647,7 @@ struct ParameterDrainResult {
 #[derive(Debug, Clone, Copy)]
 struct PendingPadBpm {
     id: usize,
-    bpm: Option<f32>,
+    bpm: Option<f64>,
     through_epoch: Option<u64>,
 }
 
@@ -663,8 +667,8 @@ struct PendingPadEq {
 
 struct PendingControlParameters {
     volume: Option<f32>,
-    speed: Option<f32>,
-    master_bpm: Option<f32>,
+    speed: Option<f64>,
+    master_bpm: Option<f64>,
     pad_bpm: [PendingPadBpm; MAX_PARAMETER_MESSAGES_PER_CALLBACK],
     pad_bpm_count: usize,
     pad_gain: [PendingPadGain; MAX_PARAMETER_MESSAGES_PER_CALLBACK],
@@ -732,7 +736,7 @@ impl PendingControlParameters {
         }
     }
 
-    fn record_pad_bpm(&mut self, id: usize, bpm: Option<f32>, through_epoch: Option<u64>) {
+    fn record_pad_bpm(&mut self, id: usize, bpm: Option<f64>, through_epoch: Option<u64>) {
         if id >= NUM_SAMPLES {
             return;
         }
@@ -807,9 +811,13 @@ impl PendingControlParameters {
             applied += 1;
         }
         if let Some(bpm) = self.master_bpm {
-            mixer.set_master_bpm(bpm);
-            transport
-                .set_master_bpm_preserving_beat_position_at_frame(bpm, transport.output_frame());
+            let period = 60.0 / bpm;
+            if transport.set_master_period_preserving_beat_position_at_frame(
+                period,
+                transport.output_frame(),
+            ) {
+                mixer.set_master_period(period);
+            }
             applied += 1;
         }
         for pending in self.pad_bpm[..self.pad_bpm_count].iter().copied() {
@@ -1016,6 +1024,7 @@ fn process_control_message<const CAPACITY: usize, S: AudioMessageSink, R: AudioB
 /// 5. Builds and returns the audio stream
 pub fn create_audio_stream(
     input_clock: InputClock,
+    current_timing_acknowledgements: Arc<CurrentTimingAcknowledgements>,
 ) -> Result<AudioStreamHandle, Box<dyn std::error::Error>> {
     setup_logger();
 
@@ -1045,6 +1054,7 @@ pub fn create_audio_stream(
     let (mut producer_out, consumer_out) = RingBuffer::new(1024);
 
     let mut mixer = RtMixer::try_new(channels as usize, sample_rate_hz as f32)?;
+    mixer.set_current_timing_acknowledgements(current_timing_acknowledgements);
     let mut transport = TransportTimeline::new(sample_rate_hz);
     let mut scheduler = TransportScheduler::new();
     let mut trigger_quantization = TriggerQuantization::Immediate;
@@ -1081,7 +1091,7 @@ pub fn create_audio_stream(
                     audible_at_ns: observed_at_ns,
                     output_frame: buffer_start_frame,
                     sample_rate_hz,
-                    master_bpm: transport.master_bpm(),
+                    master_period_seconds: transport.master_period_seconds(),
                     downbeat_frame: transport.downbeat_frame(),
                     master_beat: transport
                         .beat_position_at_frame(buffer_start_frame)
@@ -1108,7 +1118,7 @@ pub fn create_audio_stream(
 
             // Publish the same clock estimate with the accepted current grid.
             callback_clock.publish(OutputClockSnapshot {
-                master_bpm: transport.master_bpm(),
+                master_period_seconds: transport.master_period_seconds(),
                 downbeat_frame: transport.downbeat_frame(),
                 master_beat: transport
                     .beat_position_at_frame(buffer_start_frame)
@@ -1483,6 +1493,43 @@ mod tests {
     }
 
     #[test]
+    fn master_parameter_period_is_precise_and_failure_keeps_mixer_transport_coupled() {
+        let mut mixer = RtMixer::new(1, 48_000.0);
+        mixer.set_bpm_lock(true);
+        mixer.set_pad_bpm(0, Some(93.123_456_789_012_34));
+        let mut transport = TransportTimeline::new(48_000);
+        transport.advance_by_rendered_frames(13_001);
+        let before_beat = transport.beat_position().unwrap();
+        let bpm = 129.987_654_321_098_76;
+        let period = 60.0 / bpm;
+        assert_ne!(period, 60.0 / f64::from(bpm as f32));
+        let (mut producer, mut consumer) = RingBuffer::new(1);
+        producer
+            .push(ControlParameterMessage::SetMasterBpm(bpm))
+            .unwrap();
+        drain_parameter_messages(&mut consumer, &mut mixer, &mut transport);
+        assert_eq!(transport.master_period_seconds(), Some(period));
+        assert_eq!(
+            mixer.transport_reference_period_for_sample_id(0),
+            Some(period)
+        );
+        assert_eq!(transport.beat_position(), Some(before_beat));
+        let before_output_bpm = mixer.output_bpm_for_sample_id(0);
+        // Finite positive BPM can still imply an overflowing output-frame period.
+        producer
+            .push(ControlParameterMessage::SetMasterBpm(60.0 / f64::MAX))
+            .unwrap();
+        drain_parameter_messages(&mut consumer, &mut mixer, &mut transport);
+        assert_eq!(transport.master_period_seconds(), Some(period));
+        assert_eq!(
+            mixer.transport_reference_period_for_sample_id(0),
+            Some(period)
+        );
+        assert_eq!(mixer.output_bpm_for_sample_id(0), before_output_bpm);
+        assert_eq!(transport.beat_position(), Some(before_beat));
+    }
+
+    #[test]
     fn full_parameter_queue_does_not_consume_command_queue_capacity() {
         let (mut command_producer, mut command_consumer) = RingBuffer::<ControlMessage>::new(1);
         let (mut parameter_producer, _parameter_consumer) =
@@ -1659,7 +1706,7 @@ mod tests {
             return; // Skip test if no audio device available
         }
 
-        let result = create_audio_stream(InputClock::new());
+        let result = create_audio_stream(InputClock::new(), Arc::default());
         // We expect this to potentially fail in test environments,
         // but we want to ensure the function exists and has the right signature
         match result {

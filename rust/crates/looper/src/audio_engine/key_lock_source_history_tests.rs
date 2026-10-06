@@ -70,7 +70,7 @@ impl Fixture {
             fraction: distance.fract(),
             seek_mode: mode,
         };
-        let mut origin = SourcePlayback::new(start, mode, 0.73);
+        let mut origin = SourcePlayback::new(start, mode, f64::from(0.73_f32));
         origin.configure(SOURCE_FRAMES, LOOP);
         origin.advance(initial_frames);
         assert_eq!(origin.position(), phase);
@@ -97,7 +97,7 @@ impl Fixture {
     }
 
     fn request(&self, history: usize, discard: usize) -> SourcePreparation {
-        let mut logical = self.origin.at_constant_ratio(self.ratio);
+        let mut logical = self.origin.at_constant_ratio(f64::from(self.ratio));
         logical.advance(history);
         let position = logical.position();
         assert_eq!(position, self.reference_position(history));
@@ -116,7 +116,7 @@ impl Fixture {
                 transition: StemTransition::default(),
             },
             logical,
-            tempo_ratio: self.ratio,
+            tempo_ratio: f64::from(self.ratio),
             discard_output_frames: discard,
             source_history: Some(SourceHistory {
                 origin: self.origin,
@@ -188,9 +188,7 @@ impl Fixture {
 
     fn native_reference(&self, output_frames: usize) -> (usize, usize, Vec<Vec<f32>>) {
         let mut native = RubberBandLiveShifter::new(self.rate, 2).unwrap();
-        native
-            .set_pitch_scale(f64::from(1.0_f32 / self.ratio))
-            .unwrap();
+        native.set_pitch_scale(1.0 / f64::from(self.ratio)).unwrap();
         native.reset_for_preparation();
         let delay = native.start_delay();
         let block = native.block_size();

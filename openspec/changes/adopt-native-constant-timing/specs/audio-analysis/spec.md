@@ -75,3 +75,53 @@ preserve physical endpoints, source zero and active source progression.
 - **WHEN** the callback has not yet accepted it
 - **THEN** feedback reports pending status
 - **AND** it does not report the new timing as effective
+
+### Requirement: Current Accepted Timing Is Native Acknowledged Authority
+The system SHALL resolve current accepted timing from actual native loaded-source
+ownership and callback acknowledgement, retaining the complete accepted revision,
+exact period and signed origin. Historical ticket feedback SHALL NOT substitute
+for current pad authority. Pending replacement SHALL leave the previous effective
+record observable; successful source or timing-intent replacement SHALL revoke it.
+
+#### Scenario: An accepted ticket becomes historical
+- **GIVEN** a callback-acknowledged accepted record for a loaded pad
+- **WHEN** the source is unloaded or replaced, or a Manual, Tap or Legacy edit succeeds
+- **THEN** current-pad resolution no longer exposes that record
+- **AND** historical ticket feedback cannot revive it
+
+#### Scenario: A newer automatic record is still pending
+- **GIVEN** a current acknowledged accepted record and a valid replacement
+- **WHEN** the replacement is enqueued but has not been acknowledged
+- **THEN** current resolution retains the previous effective revision
+- **AND** it exposes the replacement only after actual callback adoption
+
+### Requirement: Native Period And Rate Consumers Preserve Binary64 Timing
+The system SHALL use acknowledged accepted seconds-per-quarter directly for
+native source timing, transport anchoring/bootstrap, output-clock quantization
+and BPMLOCK, converting legacy public BPM only at admission without a binary32
+roundtrip. It SHALL derive the playback target once as source period divided by
+master output period, preserving binary64 rates and fractional source epochs.
+
+#### Scenario: Accepted timing differs from a binary32 BPM projection
+- **GIVEN** an acknowledged nonintegral binary64 source period and master output period
+- **WHEN** production bootstrap, quantization and BPMLOCK rendering consume them
+- **THEN** transport and the shared output clock retain the exact master period
+- **AND** SourcePlayback uses one binary64 source-to-output-period ratio
+- **AND** callback partitioning does not introduce a second rate or source epoch
+
+#### Scenario: The requested BPMLOCK rate exceeds its supported range
+- **GIVEN** a source period and master output period whose ratio requires clipping
+- **WHEN** the native renderer applies its supported speed limit
+- **THEN** the master period remains the requested authoritative period
+- **AND** the clipped physical progression does not claim sustained musical SYNC
+
+### Requirement: Pitch ABI And Physical Wrap Preserve The Shared Trajectory
+The system SHALL use explicit Rubber Band pitch conversion at its ABI boundary
+without changing the shared source trajectory or existing physical-loop wrap
+policy. Rate clipping SHALL NOT redefine the authoritative master period.
+
+#### Scenario: Key Lock follows the shared binary64 source rate
+- **GIVEN** an acknowledged period-driven source trajectory
+- **WHEN** the native Key Lock adapter receives its inverse-rate pitch scale
+- **THEN** the existing native double ABI retains binary64 pitch conversion
+- **AND** pitch update thresholds, source epoch and physical wrap policy remain unchanged

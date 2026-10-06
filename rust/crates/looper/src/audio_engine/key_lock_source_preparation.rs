@@ -51,7 +51,7 @@ pub(super) struct SourceHistory {
 pub(super) struct SourcePreparation {
     pub(super) plan: SourceReadPlan,
     pub(super) logical: SourcePlayback,
-    pub(super) tempo_ratio: f32,
+    pub(super) tempo_ratio: f64,
     pub(super) discard_output_frames: usize,
     pub(super) source_history: Option<SourceHistory>,
 }
@@ -145,8 +145,8 @@ impl<'a> PreparedSourceStream<'a> {
             if origin.position() != origin_position {
                 return Err(PreparationError::InvalidHistory);
             }
-            let source_distance = origin_position.fraction
-                + history_output_frames as f64 * f64::from(request.tempo_ratio);
+            let source_distance =
+                origin_position.fraction + history_output_frames as f64 * request.tempo_ratio;
             if !source_distance.is_finite()
                 || origin_position
                     .frame
@@ -271,7 +271,7 @@ impl<'a> PreparedSourceStream<'a> {
         );
         self.plan
             .transition
-            .advance_fractional(frames as f64 * f64::from(self.feed.tempo_ratio()));
+            .advance_fractional(frames as f64 * self.feed.tempo_ratio());
         self.feed.advance(frames);
     }
 
@@ -378,7 +378,7 @@ mod bounds {
     #[test]
     fn invalid_source_ratio_and_extreme_discard_fail_before_reading() {
         let (sample, request) = fixture();
-        for ratio in [f32::NAN, f32::INFINITY, 0.0, -1.0, 0.49, 2.01] {
+        for ratio in [f64::NAN, f64::INFINITY, 0.0, -1.0, 0.49, 2.01] {
             let mut invalid = request;
             invalid.tempo_ratio = ratio;
             assert!(matches!(

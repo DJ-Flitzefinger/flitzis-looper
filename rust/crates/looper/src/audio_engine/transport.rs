@@ -4,7 +4,7 @@
 //! target absolute output frames without relying on Python callback timing.
 
 const DEFAULT_SAMPLE_RATE_HZ: u32 = 44_100;
-const DEFAULT_MASTER_BPM: f32 = 120.0;
+const DEFAULT_MASTER_PERIOD_SECONDS: f64 = 0.5;
 const BEATS_PER_BAR_4_4: u32 = 4;
 pub(crate) const GRID_64THS_PER_BEAT: u16 = 16;
 pub(crate) const GRID_64THS_PER_BAR: u16 = GRID_64THS_PER_BEAT * BEATS_PER_BAR_4_4 as u16;
@@ -33,7 +33,7 @@ impl QuantizeGrid {
 pub(crate) struct TransportTimeline {
     output_frame: u64,
     sample_rate_hz: u32,
-    master_bpm: Option<f32>,
+    master_period_seconds: Option<f64>,
     beats_per_bar: u32,
     downbeat_frame: u64,
     beat_anchor_frame: u64,
@@ -53,7 +53,7 @@ impl TransportTimeline {
         Self {
             output_frame: 0,
             sample_rate_hz,
-            master_bpm: Some(DEFAULT_MASTER_BPM),
+            master_period_seconds: Some(DEFAULT_MASTER_PERIOD_SECONDS),
             beats_per_bar: BEATS_PER_BAR_4_4,
             downbeat_frame: 0,
             beat_anchor_frame: 0,
@@ -74,8 +74,13 @@ impl TransportTimeline {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn master_bpm(&self) -> Option<f32> {
-        self.master_bpm
+    pub(crate) fn master_bpm(&self) -> Option<f64> {
+        Some(60.0 / self.master_period_seconds?)
+    }
+
+    /// Authoritative output seconds per quarter; BPM is presentation only.
+    pub(crate) fn master_period_seconds(&self) -> Option<f64> {
+        self.master_period_seconds
     }
 
     #[allow(dead_code)]
@@ -156,18 +161,34 @@ impl TransportTimeline {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn set_master_bpm_and_anchor_beat_position_at_frame(
         &mut self,
-        bpm: f32,
+        bpm: f64,
         beat_position: f64,
         output_frame: u64,
     ) -> bool {
-        if !is_valid_bpm(bpm) {
+        let Some(period_seconds) = period_from_bpm(bpm) else {
+            return false;
+        };
+        self.set_master_period_and_anchor_beat_position_at_frame(
+            period_seconds,
+            beat_position,
+            output_frame,
+        )
+    }
+
+    pub(crate) fn set_master_period_and_anchor_beat_position_at_frame(
+        &mut self,
+        period_seconds: f64,
+        beat_position: f64,
+        output_frame: u64,
+    ) -> bool {
+        if !self.is_valid_period(period_seconds) {
             return false;
         }
-
         let previous = *self;
-        self.master_bpm = Some(bpm);
+        self.master_period_seconds = Some(period_seconds);
 
         if self.anchor_beat_position_at_frame(beat_position, output_frame) {
             return true;
@@ -177,26 +198,35 @@ impl TransportTimeline {
         false
     }
 
+    #[cfg(test)]
     pub(crate) fn set_master_bpm_preserving_beat_position_at_frame(
         &mut self,
-        bpm: f32,
+        bpm: f64,
         output_frame: u64,
     ) -> bool {
-        if !is_valid_bpm(bpm) {
+        let Some(period_seconds) = period_from_bpm(bpm) else {
+            return false;
+        };
+        self.set_master_period_preserving_beat_position_at_frame(period_seconds, output_frame)
+    }
+
+    pub(crate) fn set_master_period_preserving_beat_position_at_frame(
+        &mut self,
+        period_seconds: f64,
+        output_frame: u64,
+    ) -> bool {
+        if !self.is_valid_period(period_seconds) {
             return false;
         }
 
         let Some(beat_position) = self.beat_position_at_frame(output_frame) else {
-            return self.set_master_bpm(bpm);
+            return self.set_master_period(period_seconds);
         };
-        let previous = *self;
-        self.master_bpm = Some(bpm);
-        if self.anchor_beat_position_at_frame(beat_position, output_frame) {
-            true
-        } else {
-            *self = previous;
-            false
-        }
+        self.set_master_period_and_anchor_beat_position_at_frame(
+            period_seconds,
+            beat_position,
+            output_frame,
+        )
     }
 
     pub(crate) fn request_bootstrap(&mut self, id: usize) {
@@ -221,38 +251,69 @@ impl TransportTimeline {
         self.bootstrap_reference = None;
     }
 
+    #[cfg(test)]
     pub(crate) fn bootstrap_from_source_at_frame(
         &mut self,
-        bpm: f32,
+        bpm: f64,
         source_beat: f64,
         frame: u64,
     ) -> bool {
-        if self.bootstrap_complete || !is_valid_bpm(bpm) {
+        let Some(period_seconds) = period_from_bpm(bpm) else {
+            return false;
+        };
+        self.bootstrap_from_source_period_at_frame(period_seconds, source_beat, frame)
+    }
+
+    pub(crate) fn bootstrap_from_source_period_at_frame(
+        &mut self,
+        period_seconds: f64,
+        source_beat: f64,
+        frame: u64,
+    ) -> bool {
+        if self.bootstrap_complete {
             return false;
         }
-        let previous = *self;
-        self.master_bpm = Some(bpm);
-        if self.anchor_beat_position_at_frame(source_beat, frame) {
+        if self.set_master_period_and_anchor_beat_position_at_frame(
+            period_seconds,
+            source_beat,
+            frame,
+        ) {
             self.complete_bootstrap();
             true
         } else {
-            *self = previous;
             false
         }
     }
 
-    pub(crate) fn set_master_bpm(&mut self, bpm: f32) -> bool {
-        if !is_valid_bpm(bpm) {
+    #[cfg(test)]
+    pub(crate) fn set_master_bpm(&mut self, bpm: f64) -> bool {
+        let Some(period_seconds) = period_from_bpm(bpm) else {
+            return false;
+        };
+        self.set_master_period(period_seconds)
+    }
+
+    pub(crate) fn set_master_period(&mut self, period_seconds: f64) -> bool {
+        if !self.is_valid_period(period_seconds) {
             return false;
         }
-
-        self.master_bpm = Some(bpm);
+        self.master_period_seconds = Some(period_seconds);
         true
+    }
+
+    fn is_valid_period(&self, period_seconds: f64) -> bool {
+        let frames_per_beat = f64::from(self.sample_rate_hz) * period_seconds;
+        let frames_per_bar = frames_per_beat * f64::from(self.beats_per_bar);
+        period_seconds.is_finite()
+            && period_seconds > 0.0
+            && frames_per_beat.is_finite()
+            && frames_per_beat > 0.0
+            && frames_per_bar.is_finite()
     }
 
     #[allow(dead_code)]
     pub(crate) fn clear_master_bpm(&mut self) {
-        self.master_bpm = None;
+        self.master_period_seconds = None;
     }
 
     pub(crate) fn advance_by_rendered_frames(&mut self, frames: usize) {
@@ -260,12 +321,7 @@ impl TransportTimeline {
     }
 
     pub(crate) fn frames_per_beat(&self) -> Option<f64> {
-        let bpm = self.master_bpm?;
-        if !is_valid_bpm(bpm) {
-            return None;
-        }
-
-        Some(self.sample_rate_hz as f64 * 60.0 / bpm as f64)
+        Some(f64::from(self.sample_rate_hz) * self.master_period_seconds?)
     }
 
     pub(crate) fn frames_per_bar(&self) -> Option<f64> {
@@ -333,8 +389,13 @@ impl TransportTimeline {
     }
 }
 
-fn is_valid_bpm(bpm: f32) -> bool {
-    bpm.is_finite() && bpm > 0.0
+#[cfg(test)]
+fn period_from_bpm(bpm: f64) -> Option<f64> {
+    if !bpm.is_finite() || bpm <= 0.0 {
+        return None;
+    }
+    let period_seconds = 60.0 / bpm;
+    (period_seconds.is_finite() && period_seconds > 0.0).then_some(period_seconds)
 }
 
 fn normalize_phase(value: f64, modulo: f64) -> f64 {
@@ -381,7 +442,11 @@ mod tests {
 
         assert_eq!(transport.output_frame(), 0);
         assert_eq!(transport.sample_rate_hz(), 48_000);
-        assert_eq!(transport.master_bpm(), Some(DEFAULT_MASTER_BPM));
+        assert_eq!(
+            transport.master_period_seconds(),
+            Some(DEFAULT_MASTER_PERIOD_SECONDS)
+        );
+        assert_eq!(transport.master_bpm(), Some(120.0));
         assert_eq!(transport.beats_per_bar(), 4);
         assert_eq!(transport.downbeat_frame(), 0);
     }
@@ -427,7 +492,7 @@ mod tests {
         let mut transport = TransportTimeline::new(48_000);
         assert!(transport.set_master_bpm(120.0));
 
-        for bpm in [f32::NAN, f32::INFINITY, 0.0, -1.0] {
+        for bpm in [f64::NAN, f64::INFINITY, 0.0, -1.0] {
             assert!(!transport.set_master_bpm(bpm));
             assert_eq!(transport.master_bpm(), Some(120.0));
         }
@@ -455,7 +520,11 @@ mod tests {
         transport.advance_by_rendered_frames(512);
 
         assert_eq!(transport.output_frame(), 1_024);
-        assert_eq!(transport.master_bpm(), Some(DEFAULT_MASTER_BPM));
+        assert_eq!(
+            transport.master_period_seconds(),
+            Some(DEFAULT_MASTER_PERIOD_SECONDS)
+        );
+        assert_eq!(transport.master_bpm(), Some(120.0));
         assert_eq!(transport.downbeat_frame(), 0);
         assert_eq!(transport.beat_position(), Some(1_024.0 / 24_000.0));
     }
@@ -706,10 +775,7 @@ mod tests {
                 assert_eq!(transport.output_frame(), frame);
             }
             transport.advance_by_rendered_frames(rate as usize);
-            assert!(
-                (transport.beat_position().unwrap() - before - 123.45_f32 as f64 / 60.0).abs()
-                    < 1e-12
-            );
+            assert!((transport.beat_position().unwrap() - before - 123.45 / 60.0).abs() < 1e-12);
         }
     }
 
@@ -750,5 +816,87 @@ mod tests {
         transport.clear_pending_bootstrap_for_pad(3);
         transport.request_bootstrap(9);
         assert_eq!(transport.bootstrap_reference(), Some(9));
+    }
+
+    #[test]
+    fn accepted_period_selects_true_fractional_boundary_without_binary32_bpm_roundtrip() {
+        let period_seconds = 0.500_000_001_234_567_9;
+        let mut transport = TransportTimeline::new(48_000);
+        assert!(transport.set_master_period(period_seconds));
+        transport.advance_by_rendered_frames(24_000);
+        let grid = QuantizeGrid::from_step_64ths(16).unwrap();
+
+        assert_eq!(transport.master_period_seconds(), Some(period_seconds));
+        assert_eq!(transport.frames_per_beat(), Some(48_000.0 * period_seconds));
+        // The true first quarter lies strictly after frame 24000. Its first
+        // available output frame is 24001, independently of callback partition.
+        assert_eq!(transport.next_grid_frame(grid), Some(24_001));
+        let lossy_bpm = (60.0 / period_seconds) as f32;
+        assert_eq!(lossy_bpm, 120.0);
+        assert!(transport.set_master_bpm(f64::from(lossy_bpm)));
+        assert_eq!(transport.next_grid_frame(grid), Some(24_000));
+    }
+
+    #[test]
+    fn direct_period_bootstrap_and_rate_change_preserve_exact_period_and_beat_epoch() {
+        let first_period = 0.500_000_001_234_567_9;
+        let next_period = 0.734_567_890_123_456_7;
+        let mut transport = TransportTimeline::new(48_000);
+        transport.advance_by_rendered_frames(96_007);
+        transport.request_bootstrap(3);
+        assert!(transport.bootstrap_from_source_period_at_frame(first_period, -5.25, 96_007));
+        assert_eq!(transport.master_period_seconds(), Some(first_period));
+        assert_eq!(transport.beat_position(), Some(-5.25));
+        assert_eq!(transport.bootstrap_reference(), None);
+
+        transport.advance_by_rendered_frames(137);
+        let beat_before = transport.beat_position().unwrap();
+        let frame = transport.output_frame();
+        assert!(transport.set_master_period_preserving_beat_position_at_frame(next_period, frame));
+        assert_eq!(transport.master_period_seconds(), Some(next_period));
+        assert_eq!(transport.beat_position(), Some(beat_before));
+        assert_eq!(transport.output_frame(), frame);
+        transport.advance_by_rendered_frames(48_000);
+        assert!(
+            (transport.beat_position().unwrap() - beat_before - 1.0 / next_period).abs() < 1e-12
+        );
+        assert!(!transport.bootstrap_from_source_period_at_frame(first_period, 0.0, frame));
+        assert_eq!(transport.master_period_seconds(), Some(next_period));
+    }
+
+    #[test]
+    fn invalid_period_or_anchor_preserves_current_clock_and_pending_bootstrap() {
+        let period_seconds = 0.500_000_001_234_567_9;
+        let mut transport = TransportTimeline::new(48_000);
+        assert!(
+            transport.set_master_period_and_anchor_beat_position_at_frame(
+                period_seconds,
+                -5.25,
+                96_007,
+            )
+        );
+        transport.advance_by_rendered_frames(96_144);
+        transport.request_bootstrap(3);
+        let frame = transport.output_frame();
+        let downbeat = transport.downbeat_frame();
+        let beat = transport.beat_position();
+        for invalid in [f64::NAN, f64::INFINITY, 0.0, -1.0, f64::MAX] {
+            assert!(!transport.set_master_period(invalid));
+            assert!(!transport.set_master_period_preserving_beat_position_at_frame(invalid, frame));
+            assert!(!transport.bootstrap_from_source_period_at_frame(invalid, 1.0, frame));
+            assert_eq!(transport.master_period_seconds(), Some(period_seconds));
+            assert_eq!(transport.beat_position(), beat);
+            assert_eq!(transport.downbeat_frame(), downbeat);
+            assert_eq!(transport.output_frame(), frame);
+            assert_eq!(transport.bootstrap_reference(), Some(3));
+        }
+        assert!(
+            !transport.set_master_period_and_anchor_beat_position_at_frame(0.75, f64::NAN, frame)
+        );
+        assert!(!transport.bootstrap_from_source_period_at_frame(0.75, f64::NAN, frame));
+        assert_eq!(transport.master_period_seconds(), Some(period_seconds));
+        assert_eq!(transport.beat_position(), beat);
+        assert_eq!(transport.downbeat_frame(), downbeat);
+        assert_eq!(transport.bootstrap_reference(), Some(3));
     }
 }

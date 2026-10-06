@@ -9,7 +9,7 @@ use super::source_reader::{
     ExplicitSeekMode, FrameRange, advance_playback_position, playhead_before_render,
 };
 
-const TEMPO_STEP: f32 = 0.05;
+const TEMPO_STEP: f64 = 0.05;
 const TEMPO_STEP_OUTPUT_FRAMES: usize = 512;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -24,13 +24,13 @@ pub(crate) struct SourcePlayback {
     origin: FractionalSourcePosition,
     domain: Option<(usize, FrameRange)>,
     elapsed_output_frames: u64,
-    ratio: f32,
-    target: f32,
+    ratio: f64,
+    target: f64,
     frames_until_step: usize,
 }
 
 impl SourcePlayback {
-    pub(crate) fn new(frame: usize, seek_mode: ExplicitSeekMode, ratio: f32) -> Self {
+    pub(crate) fn new(frame: usize, seek_mode: ExplicitSeekMode, ratio: f64) -> Self {
         let ratio = checked_ratio(ratio);
         Self {
             origin: FractionalSourcePosition {
@@ -51,7 +51,7 @@ impl SourcePlayback {
     /// Pending live smoothing is removed only from this value. Its logical counterpart retains
     /// the accepted target and active-frame step interval.
     #[cfg(test)]
-    pub(crate) fn at_constant_ratio(mut self, ratio: f32) -> Self {
+    pub(crate) fn at_constant_ratio(mut self, ratio: f64) -> Self {
         self.rebase();
         self.ratio = checked_ratio(ratio);
         self.target = self.ratio;
@@ -59,7 +59,7 @@ impl SourcePlayback {
         self
     }
 
-    pub(crate) fn tempo_ratio(&self) -> f32 {
+    pub(crate) fn tempo_ratio(&self) -> f64 {
         self.ratio
     }
 
@@ -84,7 +84,7 @@ impl SourcePlayback {
         self.domain = None;
     }
 
-    pub(crate) fn set_target(&mut self, target: f32) {
+    pub(crate) fn set_target(&mut self, target: f64) {
         let target = checked_ratio(target);
         if target != self.target {
             self.target = target;
@@ -104,7 +104,7 @@ impl SourcePlayback {
     }
 
     /// Begin a constant-ratio chunk, bounded by the next active-output-frame smoothing step.
-    pub(crate) fn chunk(&mut self, max_frames: usize) -> (usize, f32) {
+    pub(crate) fn chunk(&mut self, max_frames: usize) -> (usize, f64) {
         if self.frames_until_step == 0 && self.ratio != self.target {
             self.rebase();
             let delta = (self.target - self.ratio).clamp(-TEMPO_STEP, TEMPO_STEP);
@@ -132,7 +132,7 @@ impl SourcePlayback {
             + self
                 .elapsed_output_frames
                 .saturating_add(output_offset as u64) as f64
-                * f64::from(self.ratio);
+                * self.ratio;
         let whole = distance.floor() as usize;
         let (frame, seek_mode) = self.domain.map_or(
             (
@@ -169,7 +169,7 @@ impl SourcePlayback {
     }
 }
 
-fn checked_ratio(ratio: f32) -> f32 {
+fn checked_ratio(ratio: f64) -> f64 {
     if ratio.is_finite() {
         ratio.clamp(SPEED_MIN, SPEED_MAX)
     } else {
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn long_constant_epoch_uses_exact_count_instead_of_segment_rounding() {
-        let ratio = 123.45_f32 / 97.3_f32;
+        let ratio = 123.45_f64 / 97.3_f64;
         let mut playback = SourcePlayback::new(7, ExplicitSeekMode::Normal, ratio);
         playback.configure(101, FrameRange { start: 7, end: 101 });
         // Thirty minutes at 96 kHz, advanced with unrelated chunk sizes.
@@ -191,10 +191,92 @@ mod tests {
         for frames in [1, 31, 512, total - 544] {
             playback.advance(frames);
         }
-        let distance = total as f64 * f64::from(ratio);
+        let distance = total as f64 * ratio;
         let position = playback.position();
         assert_eq!(position.frame, 7 + distance.floor() as usize % 94);
         assert_eq!(position.fraction, distance.fract());
+        let narrowed_distance = total as f64 * f64::from(ratio as f32);
+        assert_ne!(distance.floor(), narrowed_distance.floor());
+    }
+
+    #[test]
+    fn binary64_target_change_below_one_binary32_step_retains_fractional_source_epoch() {
+        // Both rates round to 1.0 in binary32, but this target must change the live source rate.
+        let target = 1.0 + 2.0_f64.powi(-24);
+        assert_eq!(target as f32, 1.0);
+        let mut playback = SourcePlayback::new(7, ExplicitSeekMode::Normal, 1.0);
+        playback.configure(101, FrameRange { start: 7, end: 101 });
+        playback.advance(17);
+        let before = playback.position();
+        playback.set_target(target);
+        assert_eq!(playback.chunk(8_388_608), (8_388_608, target));
+        assert_eq!(playback.position(), before);
+        playback.advance(8_388_608);
+        let position = playback.position();
+        assert_eq!(position.frame, 7 + (17 + 8_388_608) % 94);
+        assert_eq!(position.fraction, 0.5);
+
+        let next_target = target + 2.0_f64.powi(-25);
+        playback.set_target(next_target);
+        assert_eq!(playback.chunk(1), (1, next_target));
+        assert_eq!(playback.position(), position);
+        playback.advance(1);
+        assert_eq!(playback.position().fraction, (0.5 + next_target).fract());
+    }
+
+    #[test]
+    fn binary64_ramp_and_position_are_identical_under_unrelated_partitions() {
+        let start = 0.9345678901234568;
+        let target = 1.1234567890123457;
+        let total = 2309;
+        let region = FrameRange { start: 7, end: 101 };
+        let run = |partition: &[usize]| {
+            let mut playback = SourcePlayback::new(7, ExplicitSeekMode::Normal, start);
+            playback.configure(101, region);
+            playback.advance(17);
+            playback.set_target(target);
+            let mut trace = Vec::with_capacity(total);
+            let mut rendered = 0;
+            let mut segment = 0;
+            while rendered < total {
+                let requested = partition[segment % partition.len()].min(total - rendered);
+                let mut remaining = requested;
+                while remaining > 0 {
+                    let (frames, ratio) = playback.chunk(remaining);
+                    for offset in 0..frames {
+                        trace.push((ratio, playback.position_at(offset)));
+                    }
+                    playback.advance(frames);
+                    remaining -= frames;
+                }
+                rendered += requested;
+                segment += 1;
+            }
+            (trace, playback.position())
+        };
+        let (reference, final_position) = run(&[1]);
+        for partition in [&[512][..], &[1024][..], &[31, 257, 1, 96, 777][..]] {
+            let (trace, position) = run(partition);
+            assert_eq!(trace, reference);
+            assert_eq!(position, final_position);
+        }
+        let ratios = [
+            start + 0.05,
+            start + 0.05 + 0.05,
+            start + 0.05 + 0.05 + 0.05,
+            target,
+        ];
+        let mut distance = 17.0 * start;
+        for (frame, (ratio, position)) in reference.iter().enumerate() {
+            let stage = (frame / 512).min(3);
+            assert_eq!(*ratio, ratios[stage]);
+            // Independent scalar integral: every accepted stage spans active output frames.
+            assert_eq!(position.frame, 7 + distance.floor() as usize % 94);
+            assert!((position.fraction - distance.fract()).abs() < 1.0e-9);
+            distance += ratios[stage];
+        }
+        assert_eq!(final_position.frame, 7 + distance.floor() as usize % 94);
+        assert!((final_position.fraction - distance.fract()).abs() < 1.0e-9);
     }
 
     #[test]
@@ -223,14 +305,14 @@ mod tests {
         logical.advance(3);
         let position = logical.position();
         let remaining_step_frames = logical.frames_until_step;
-        let exact_ratio = 1.37_f32;
+        let exact_ratio = 1.37_f64;
         let mut feed = logical.at_constant_ratio(exact_ratio);
 
         assert_eq!(feed.position(), position);
         assert_eq!(feed.tempo_ratio(), exact_ratio);
         assert_eq!(feed.chunk(777), (777, exact_ratio));
         feed.advance(7);
-        let distance = position.fraction + 7.0 * f64::from(exact_ratio);
+        let distance = position.fraction + 7.0 * exact_ratio;
         let expected_frame = 13 + (position.frame + distance.floor() as usize - 100) % 58;
         assert_eq!(feed.position().frame, expected_frame);
         assert_eq!(feed.position().fraction, distance.fract());

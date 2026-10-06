@@ -167,7 +167,7 @@ fn measure_preparation(rate: u32, ratio: f32, trials: usize) {
             RubberBandLiveShifter::new(rate, 2).unwrap()
         });
         case.measure("native_first_pitch_update", || {
-            native.set_pitch_scale(f64::from(1.0 / ratio)).unwrap()
+            native.set_pitch_scale(1.0 / f64::from(ratio)).unwrap()
         });
         let block = native.block_size();
         let input = vec![vec![0.0; block]; 2];
@@ -179,7 +179,7 @@ fn measure_preparation(rate: u32, ratio: f32, trials: usize) {
             native.reset_for_preparation()
         });
         case.measure("native_same_pitch_update_after_reset", || {
-            native.set_pitch_scale(f64::from(1.0 / ratio)).unwrap()
+            native.set_pitch_scale(1.0 / f64::from(ratio)).unwrap()
         });
         case.measure("native_first_shift_after_reset", || {
             native.shift(&input, &mut output).unwrap()
@@ -196,7 +196,7 @@ fn measure_preparation(rate: u32, ratio: f32, trials: usize) {
             native.prepare_for_reuse().unwrap()
         });
         case.measure("native_warmed_pitch_update", || {
-            native.set_pitch_scale(f64::from(1.0 / ratio)).unwrap()
+            native.set_pitch_scale(1.0 / f64::from(ratio)).unwrap()
         });
         case.measure("native_warmed_first_shift", || {
             native.shift(&input, &mut output).unwrap()
@@ -206,17 +206,17 @@ fn measure_preparation(rate: u32, ratio: f32, trials: usize) {
             channel.fill(0.25);
         }
         case.measure("adapter_first_activate_and_process", || {
-            adapter.process_resampled(512, ratio, true)
+            adapter.process_resampled(512, f64::from(ratio), true)
         });
         case.measure("adapter_reset_after_process", || adapter.reset());
         for channel in adapter.resampled_buffers_mut(512) {
             channel.fill(0.25);
         }
         case.measure("adapter_activate_after_reset", || {
-            adapter.process_resampled(512, ratio, true)
+            adapter.process_resampled(512, f64::from(ratio), true)
         });
         case.measure("adapter_warm_process", || {
-            adapter.process_resampled(512, ratio, true)
+            adapter.process_resampled(512, f64::from(ratio), true)
         });
     }
 }
@@ -234,7 +234,7 @@ fn measure_native_response(rate: u32, ratio: f32, marker: usize, warmed: bool) {
         native.prepare_for_reuse().unwrap();
     }
     case.emit(kind, "delay_before_pitch", native.start_delay(), "frames");
-    native.set_pitch_scale(f64::from(1.0 / ratio)).unwrap();
+    native.set_pitch_scale(1.0 / f64::from(ratio)).unwrap();
     let block = native.block_size();
     let delay = native.start_delay();
     case.emit(kind, "block_size", block, "frames");
@@ -299,7 +299,7 @@ fn adapter_response(
                     + (source[source_index + 1] - source[source_index]) * fraction;
             }
         }
-        adapter.process_resampled(output_samples, ratio, key_lock);
+        adapter.process_resampled(output_samples, f64::from(ratio), key_lock);
         rendered.extend_from_slice(&adapter.output_buffers()[0][..output_samples]);
         offset += output_samples;
         index += 1;

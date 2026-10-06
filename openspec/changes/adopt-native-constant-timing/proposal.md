@@ -16,12 +16,18 @@ checks protect preparation, enqueue and bounded mixer adoption. Callback feedbac
 distinguishes pending publication from actual acceptance. The live SourceGrid uses
 the accepted binary64 period and signed origin with the complete accepted revision.
 
+G3b2b adds current-pad resolution from retained native records and fixed callback
+acknowledgement epochs, including authority revocation across Manual/Tap/Legacy
+roundtrips. Native transport, output clock and BPMLOCK consume the acknowledged
+period directly. SourcePlayback target/ramp/ratio and the Rubber Band pitch ABI
+use binary64, sharing one source trajectory and retaining fractional epochs.
+
 ## Non-goals and realtime safety
 
 This is a bounded part of G3b2. It does not choose a musical acceptance policy or
 infer quarter labels, switch the default analyzer, silently promote manual/TAP or
-legacy numbers, or complete editor/snap/auto-loop, transport/master/BPMLOCK,
-MIDI, prepared Key Lock/stem revision integration or accepted persistence.
+legacy numbers, or complete editor/snap/auto-loop, MIDI, prepared Key Lock/stem
+revision integration or accepted persistence.
 Those consumers remain explicit follow-up work. Musical/physical loop proof and
 audible DSP/device acceptance remain G3c. No PCM cache or Rust application-port
 planning is included.

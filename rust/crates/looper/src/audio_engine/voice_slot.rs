@@ -10,7 +10,7 @@ pub(crate) struct VoiceStartConfig {
     pub(crate) sample: SampleBuffer,
     pub(crate) initial_frame_pos: usize,
     pub(crate) volume: f32,
-    pub(crate) initial_tempo_ratio: f32,
+    pub(crate) initial_tempo_ratio: f64,
     pub(crate) start_output_frame: Option<u64>,
 }
 
@@ -69,7 +69,7 @@ impl VoiceSlot {
         sample: SampleBuffer,
         initial_frame_pos: usize,
         volume: f32,
-        initial_tempo_ratio: f32,
+        initial_tempo_ratio: f64,
         _start_output_frame: Option<u64>,
     ) {
         self.active = true;
@@ -115,7 +115,7 @@ impl VoiceSlot {
         &mut self,
         initial_frame_pos: usize,
         volume: f32,
-        initial_tempo_ratio: f32,
+        initial_tempo_ratio: f64,
         _start_output_frame: Option<u64>,
     ) {
         self.frame_pos = initial_frame_pos;

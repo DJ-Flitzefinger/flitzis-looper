@@ -143,19 +143,19 @@ pub(crate) enum ControlParameterMessage {
     SetVolume(f32),
 
     /// Set the global speed multiplier.
-    SetSpeed(f32),
+    SetSpeed(f64),
 
     /// Set the current master BPM when BPM lock is enabled.
-    SetMasterBpm(f32),
+    SetMasterBpm(f64),
 
     /// Set per-pad BPM metadata.
     #[cfg(test)]
-    SetPadBpm { id: usize, bpm: Option<f32> },
+    SetPadBpm { id: usize, bpm: Option<f64> },
 
     /// Apply a legacy BPM edit and retire older precise timing in one callback effect.
     SetLegacyPadBpm {
         id: usize,
-        bpm: Option<f32>,
+        bpm: Option<f64>,
         through_epoch: u64,
     },
 

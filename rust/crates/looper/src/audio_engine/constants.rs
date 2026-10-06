@@ -19,10 +19,10 @@ pub const MAX_VOICES: usize = 32;
 pub const MAX_SCHEDULED_EVENTS: usize = 1024;
 
 /// Minimum playback speed multiplier (50%).
-pub const SPEED_MIN: f32 = 0.5;
+pub const SPEED_MIN: f64 = 0.5;
 
 /// Maximum playback speed multiplier (200%).
-pub const SPEED_MAX: f32 = 2.0;
+pub const SPEED_MAX: f64 = 2.0;
 
 /// Minimum volume level (silence).
 pub const VOLUME_MIN: f32 = 0.0;

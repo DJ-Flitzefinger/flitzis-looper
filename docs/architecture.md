@@ -116,8 +116,10 @@ provenance. The versioned revision binds counts, policies, period/error state an
 complete source/backend evidence. G3b2a's explicit native acceptance API captures
 actual loaded source/QM evidence and uses that guard under current ownership,
 with bounded callback acknowledgement and a precise live SourceGrid projection.
-Editor, transport/master/output clock and BPMLOCK still need shared accepted
-period/revision integration; their legacy BPM/rates retain binary32 native values. See
+G3b2b resolves current accepted metadata from actual source/authority and callback
+acknowledgement; transport/master/output clock and BPMLOCK consume binary64 periods
+and rates directly. Editor and other pending consumers still need full revision
+integration. See
 [accepted constant timing](accepted-constant-timing.md) for ownership and limits.
 Its shared `analyze_bpm` pipeline owns the legacy ODF/sample-hop conversion for
 both production and comparison fixtures. Private independent B2 input validation
@@ -204,10 +206,11 @@ Accepted master-BPM updates apply to both transport-grid timing and BPM-lock
 tempo matching while preserving complete current transport beat position, not
 only modulo-four phase. Future progression uses the new tempo. Internal clock
 snapshots retain that complete beat reference so target diagnostics do not
-derive phase from a rounded downbeat frame; the public snapshot shape is unchanged.
-Pad/master BPM retain the established native `f32` parameter representation;
-phase arithmetic promotes those accepted values to `f64`. Fractional BPM is
-preserved within that representation, without promising exact decimal values.
+derive phase from a rounded downbeat frame. The native snapshot stores the exact
+binary64 master period; the public snapshot exposes `master_period_seconds` and
+derived compatibility `master_bpm`. Legacy BPM and speed messages retain binary64;
+master admission converts BPM once to the authoritative output period. Explicitly
+accepted pad periods take precedence over legacy BPM in native consumers.
 
 Accepted scheduler events retain their absolute output targets, stable order
 and original optional timestamps across BPM, bootstrap and pad metadata updates.
@@ -219,9 +222,10 @@ this foundation does not add pending-start cancellation.
 Scheduled render segments pass their absolute output-frame bounds into the
 mixer. Every active voice derives fractional source progress from its active
 output-frame count within the current rate epoch, using the actual bounded
-native `f32` ratio promoted to `f64`. This model avoids segment-level source
+native binary64 ratio. This model avoids segment-level source
 rounding with or without BPM Lock. BPM-locked voices with valid master/pad
-metadata use the BPM ratio; missing metadata resolves to global speed without
+metadata use `source_period / master_output_period`; missing metadata resolves to
+global speed without
 redefining another pad's phase or the shared transport timeline.
 
 ## Sample Loading
@@ -407,9 +411,9 @@ SYNC uses the loop-relative contract in beatmap-sync-design.md.
 evaluator. A focused Python wrapper uses it for visible grid, snap and automatic
 endpoints. Origin/period remain independent of labels. Physical markers round each
 absolute boundary once; automatic ends advance original selected intent before
-rounding. G3b2a additionally lets the live SourceGrid consume explicitly accepted
-binary64 period/origin/full revision after actual mixer adoption; ordinary legacy
-grids and transport/BPMLOCK rates retain the existing `f32` contract. See
+rounding. G3b2a/b additionally lets the live SourceGrid and native transport/rate
+consumers use explicitly accepted binary64 period/origin/full revision after
+actual mixer adoption; legacy native parameters also preserve binary64. See
 [native accepted timing](native-constant-timing.md).
 
 `source_grid.rs` centralizes bounded source beat/bar, loop-start phase and
@@ -445,8 +449,9 @@ matching restored full-mix sample has completed its async load. If publication
 is rejected, Python marks the cache unavailable for controls and preserves Rust's
 previous playback state. Late callback rejection is observed before availability.
 The preparation epoch is not the G3a accepted revision. G3b2a publishes precise
-accepted SourceGrid metadata; prepared stem/Key Lock revision binding, the other
-period consumers and immutable copy-first source proof remain separate gates.
+accepted SourceGrid metadata; G3b2b adds current authority and native period/rate
+consumers. Prepared stem/Key Lock revision binding, Python consumers and immutable
+copy-first source proof remain separate gates.
 
 Active full-mix/stem mode and enabled-mask changes use bounded Rust-owned
 transition state with a short 128 source-frame crossfade. Both sides read the
@@ -465,7 +470,8 @@ Rust `UnloadSample` also retires any prepared stem buffers held by the mixer.
 Speed and BPM Lock resolve to one Rust mixer tempo ratio per active voice:
 
 - BPM Lock off: global speed multiplier.
-- BPM Lock on with valid metadata: `master_bpm / pad_bpm`.
+- BPM Lock on with valid metadata: `source_period / master_output_period`, using
+  acknowledged accepted timing before legacy pad timing.
 - Missing pad BPM metadata: global speed fallback.
 
 Key Lock selects rendering semantics per pad:

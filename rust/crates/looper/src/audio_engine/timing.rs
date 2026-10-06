@@ -47,7 +47,7 @@ pub(crate) struct OutputClockSnapshot {
     pub(crate) audible_at_ns: u64,
     pub(crate) output_frame: u64,
     pub(crate) sample_rate_hz: u32,
-    pub(crate) master_bpm: Option<f32>,
+    pub(crate) master_period_seconds: Option<f64>,
     pub(crate) downbeat_frame: u64,
     pub(crate) master_beat: f64,
     pub(crate) freshness_ns: u64,
@@ -81,7 +81,7 @@ impl OutputClockSnapshot {
         nearest_grid_frame(
             input_frame,
             self.sample_rate_hz,
-            self.master_bpm?,
+            self.master_period_seconds?,
             self.output_frame as f64,
             self.master_beat,
             grid,
@@ -92,7 +92,7 @@ impl OutputClockSnapshot {
 fn nearest_grid_frame(
     input_frame: f64,
     sample_rate_hz: u32,
-    master_bpm: f32,
+    master_period_seconds: f64,
     reference_frame: f64,
     reference_beat: f64,
     grid: QuantizeGrid,
@@ -102,14 +102,14 @@ fn nearest_grid_frame(
         || sample_rate_hz == 0
         || !reference_frame.is_finite()
         || !reference_beat.is_finite()
-        || !master_bpm.is_finite()
-        || master_bpm <= 0.0
+        || !master_period_seconds.is_finite()
+        || master_period_seconds <= 0.0
     {
         return None;
     }
-    let frames_per_grid = f64::from(sample_rate_hz) * 60.0 / f64::from(master_bpm)
-        * f64::from(grid.step_64ths())
-        / f64::from(GRID_64THS_PER_BEAT);
+    let frames_per_grid =
+        f64::from(sample_rate_hz) * master_period_seconds * f64::from(grid.step_64ths())
+            / f64::from(GRID_64THS_PER_BEAT);
     if !frames_per_grid.is_finite() || frames_per_grid <= 0.0 {
         return None;
     }
@@ -264,7 +264,7 @@ impl SharedOutputClock {
             snapshot.audible_at_ns,
             snapshot.output_frame,
             u64::from(snapshot.sample_rate_hz),
-            u64::from(snapshot.master_bpm.map_or(0, f32::to_bits)),
+            snapshot.master_period_seconds.map_or(0, f64::to_bits),
             snapshot.downbeat_frame,
             snapshot.freshness_ns,
             snapshot.master_beat.to_bits(),
@@ -288,14 +288,15 @@ impl SharedOutputClock {
         if self.sequence.load(Ordering::SeqCst) != before {
             return None;
         }
-        let bpm = f32::from_bits(fields[5] as u32);
+        let period_seconds = f64::from_bits(fields[5]);
         Some(OutputClockSnapshot {
             valid: fields[0] != 0,
             observed_at_ns: fields[1],
             audible_at_ns: fields[2],
             output_frame: fields[3],
             sample_rate_hz: fields[4] as u32,
-            master_bpm: (bpm.is_finite() && bpm > 0.0).then_some(bpm),
+            master_period_seconds: (period_seconds.is_finite() && period_seconds > 0.0)
+                .then_some(period_seconds),
             downbeat_frame: fields[6],
             freshness_ns: fields[7],
             master_beat: f64::from_bits(fields[8]),
@@ -330,7 +331,7 @@ mod tests {
             audible_at_ns: observed_at_ns.saturating_add(10_000_000),
             output_frame: frame,
             sample_rate_hz: 48_000,
-            master_bpm: Some(120.0),
+            master_period_seconds: Some(0.5),
             downbeat_frame: 0,
             master_beat: frame as f64 / 24_000.0,
             freshness_ns: MIN_FRESHNESS_NS,
@@ -348,13 +349,13 @@ mod tests {
             (9_001.0, 12_000),
         ] {
             assert_eq!(
-                nearest_grid_frame(input, 48_000, 120.0, 0.0, 0.0, grid),
+                nearest_grid_frame(input, 48_000, 0.5, 0.0, 0.0, grid),
                 Some(target)
             );
         }
         // Signed distance before a positive anchor follows the same tie rule.
         assert_eq!(
-            nearest_grid_frame(3_000.0, 48_000, 120.0, 12_000.0, 0.0, grid),
+            nearest_grid_frame(3_000.0, 48_000, 0.5, 12_000.0, 0.0, grid),
             Some(6_000)
         );
     }
@@ -371,7 +372,7 @@ mod tests {
                     nearest_grid_frame(
                         input_frame,
                         clock.sample_rate_hz,
-                        clock.master_bpm.unwrap(),
+                        clock.master_period_seconds.unwrap(),
                         clock.output_frame as f64,
                         clock.master_beat,
                         grid,
@@ -405,21 +406,21 @@ mod tests {
         // A real +0.48-frame grid origin must not be rounded down to zero.
         let reference_beat = -0.48 / 24_000.0;
         assert_eq!(
-            nearest_grid_frame(6_000.0, 48_000, 120.0, 0.0, reference_beat, grid),
+            nearest_grid_frame(6_000.0, 48_000, 0.5, 0.0, reference_beat, grid),
             Some(6_001)
         );
         // A real -0.48-frame origin places this boundary before frame 6000.
         assert_eq!(
-            nearest_grid_frame(6_000.0, 48_000, 120.0, 0.0, -reference_beat, grid),
+            nearest_grid_frame(6_000.0, 48_000, 0.5, 0.0, -reference_beat, grid),
             Some(6_000)
         );
         assert_eq!(
-            nearest_grid_frame(0.0, 48_000, 120.0, 0.0, -reference_beat, grid),
+            nearest_grid_frame(0.0, 48_000, 0.5, 0.0, -reference_beat, grid),
             None
         );
         for (input, target) in [(8_999.999_99, 6_000), (9_000.000_01, 12_000)] {
             assert_eq!(
-                nearest_grid_frame(input, 48_000, 120.0, 12_010.0, 12_010.0 / 24_000.0, grid),
+                nearest_grid_frame(input, 48_000, 0.5, 12_010.0, 12_010.0 / 24_000.0, grid),
                 Some(target)
             );
         }
@@ -466,7 +467,7 @@ mod tests {
         );
         assert_eq!(clock.input_target_frame(Some(0), 1_010_000_000, grid), None); // before output frame zero
         let mut bad = clock;
-        bad.master_bpm = None;
+        bad.master_period_seconds = None;
         assert_eq!(
             bad.input_target_frame(Some(1_000_000_000), 1_010_000_000, grid),
             None
@@ -519,5 +520,70 @@ mod tests {
         assert_eq!(shared.read(), Some(value));
         shared.sequence.store(3, Ordering::SeqCst);
         assert_eq!(shared.read(), None);
+    }
+
+    #[test]
+    fn published_exact_period_selects_true_input_boundary_without_binary32_bpm_roundtrip() {
+        let period_seconds = 0.500_000_001_234_567_9;
+        let grid = QuantizeGrid::from_step_64ths(16).unwrap();
+        let observed_ns = 1_000_000_000;
+        let shared = SharedOutputClock::new();
+        // Keep input mapping near its snapshot epoch so the result cannot be
+        // attributed to extrapolation, stale time or an anchor reconstruction.
+        let mut clock = snapshot(24_000, observed_ns);
+        clock.master_period_seconds = Some(period_seconds);
+        clock.master_beat = 24_000.0 / (48_000.0 * period_seconds);
+        shared.publish(clock);
+        let published = shared.read().unwrap();
+        assert_eq!(published, clock);
+        assert_eq!(
+            published.master_period_seconds.unwrap().to_bits(),
+            period_seconds.to_bits()
+        );
+        assert_eq!(
+            published.input_target_frame(Some(clock.audible_at_ns), clock.audible_at_ns, grid),
+            Some(24_001)
+        );
+
+        let lossy_bpm = (60.0 / period_seconds) as f32;
+        assert_eq!(lossy_bpm, 120.0);
+        clock.master_period_seconds = Some(60.0 / f64::from(lossy_bpm));
+        clock.master_beat = 1.0;
+        shared.publish(clock);
+        assert_eq!(
+            shared.read().unwrap().input_target_frame(
+                Some(clock.audible_at_ns),
+                clock.audible_at_ns,
+                grid,
+            ),
+            Some(24_000)
+        );
+    }
+
+    #[test]
+    fn unavailable_or_invalid_period_has_no_diagnostic_target() {
+        let grid = QuantizeGrid::from_step_64ths(4).unwrap();
+        let shared = SharedOutputClock::new();
+        for invalid in [
+            None,
+            Some(0.0),
+            Some(-0.5),
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+        ] {
+            let mut clock = snapshot(24_000, 1_000_000_000);
+            clock.master_period_seconds = invalid;
+            assert_eq!(
+                clock.input_target_frame(Some(clock.audible_at_ns), clock.audible_at_ns, grid),
+                None
+            );
+            shared.publish(clock);
+            let published = shared.read().unwrap();
+            assert_eq!(published.master_period_seconds, None);
+            assert_eq!(
+                published.input_target_frame(Some(clock.audible_at_ns), clock.audible_at_ns, grid),
+                None
+            );
+        }
     }
 }
