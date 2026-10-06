@@ -16,7 +16,45 @@ analysis or manual grids. B1b adds explicit setup, an accepted final0 checksum, 
 locked Windows CPU environment and the pinned 22050-Hz reference frontend. See
 [setup](../../../docs/beat-this-setup.md) and [evidence](../../../docs/beat-this-reference-evidence.md).
 
+## B2 independent reference and comparator preparation
+
+The legacy QM repair centralizes production and diagnostic fixture analysis in
+the analysis crate. Downbeat spectral segments use the ODF's actual integer hop
+in samples; BPM and source seconds use that hop divided by the actual input rate.
+Frame zero, algorithms, defaults and saved/manual results remain intact. Old
+legacy output is historical evidence and cannot represent the corrected comparator.
+
+A separate explicitly invoked Python input workflow prepares private reference
+drafts, validates complete independent loaded-domain annotations and seals their
+exact bytes. It checks unchanged frozen identities, actual annotation PCM,
+human independence, separate temporal/event coverage and recording-group overlap.
+Human correction order is sealed separately before measured paired sessions;
+session validation binds that order, reference and matching endpoints/workflow.
+Neither input validation nor sealing computes musical scores or supplies human
+observations. The workflow reads no candidate predictions during reference
+preparation/sealing, invokes no models and changes no routing/persistence/callback.
+See [reference input contract](../../../docs/beat-this-reference-inputs.md).
+
 ## Input domains and preprocessing
+
+The 2026-10-06 user refinement also requires improved automatic BPM estimation
+from the selected full beat sequence. Freeze a versioned aggregation/beat-unit
+policy and validate stable integer/fractional tempo, distant intervals, local
+variation and count ambiguity before cutover. Preserve raw predictions and
+existing entered/tapped BPM overrides for the same unchanged source. Aggregate BPM is
+metadata; accepted variable beatmaps remain the later shared timing authority. Do not infer
+correctness by rounding toward an assumed DAW integer tempo. See the operating
+policy in [the implementation design](../../../docs/beatmap-sync-design.md).
+
+For pad-load BPM metadata, evaluate longer stable regions near the source middle
+against complete-track evidence and distant windows, including sparse intro/outro
+and an ambiguous middle. Freeze a versioned region-selection/weighting policy
+before held-out evaluation. Comparable transient spans, such as reliable snares,
+require explicit quarter-note counts and original source-time anchors; arbitrary
+peak pairing must not create half/double tempo or move the grid/loop origin.
+Retain selected windows, uncertainty and local tempo evidence without cropping
+the adopted full-track model input or replacing immutable raw predictions.
+An intro/outro cause for the observed fractional BPM remains unproven.
 
 Contracts implemented by the B1a records, plus explicitly deferred model/map layers:
 

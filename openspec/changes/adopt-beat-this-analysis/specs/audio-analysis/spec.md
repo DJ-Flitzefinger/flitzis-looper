@@ -99,6 +99,127 @@ reanalysis SHALL create a new raw result without silently overwriting an accepte
 
 ## ADDED Requirements
 
+### Requirement: Automatic BPM Summary Preserves Full Beat Evidence And Manual Intent
+The system SHALL derive automatic BPM metadata from the selected backend's complete valid
+beat results using a documented versioned estimation method and explicit beat-unit policy.
+It SHALL preserve raw beat coordinates and distinguish aggregate BPM metadata from local
+beat-interval timing. It SHALL NOT establish correctness by rounding toward an integer BPM
+or replace variable source timing with the aggregate value for future mapped playback.
+
+The system SHALL preserve existing manually entered or TAP-derived BPM overrides through
+new automatic analysis of the same unchanged source. Insufficient or ambiguous beat/count
+evidence SHALL have an explicit non-certified status rather than a claim of exact tempo.
+The estimation method SHALL be validated on distant source intervals before the separate
+default-cutover gate passes.
+
+The estimation method SHALL evaluate a longer rhythmically stable central source region
+as a candidate for pad-load BPM metadata against complete-track and distant-region evidence.
+Its selection/weighting policy SHALL be versioned and frozen before held-out evaluation.
+A central region with insufficient or changing rhythm SHALL NOT establish constant tempo
+by its position alone; another supported region or explicit uncertainty SHALL be retained.
+
+Comparable transient spans used for refinement SHALL retain their original source-time
+anchors and explicit quarter-note counts. Snare-to-snare distance SHALL NOT imply one beat
+without count evidence. The system SHALL retain selected-region provenance and uncertainty,
+preserve complete adopted model input/raw results and assess half/double tempo, missing
+events, syncopation and genuine local variation. Region selection SHALL NOT relocate the
+grid origin or loop start, or flatten variable timing into one playback tempo.
+
+#### Scenario: Constant source tempo is assessed across the complete beat sequence
+- **GIVEN** complete valid beat evidence with a consistent pulse interpretation
+- **WHEN** automatic BPM metadata is computed after the cutover gate
+- **THEN** the versioned method uses the complete evidence and is validated across distant intervals
+- **AND** its method, beat-unit interpretation and uncertainty status are identifiable
+- **AND** raw beat coordinates remain unchanged
+
+#### Scenario: A stable fractional tempo remains valid
+- **GIVEN** complete beat evidence supports a stable noninteger tempo
+- **WHEN** the automatic summary is computed
+- **THEN** the fractional value is retained under the versioned method
+- **AND** proximity to an integer does not cause automatic rounding or declare correctness
+
+#### Scenario: Local source variation is not flattened into timing truth
+- **GIVEN** beat intervals vary across a source
+- **WHEN** aggregate BPM metadata is produced
+- **THEN** the original local beat timings remain available
+- **AND** the summary does not claim those intervals are constant or activate mapped playback
+
+#### Scenario: Automatic analysis preserves a tapped override
+- **GIVEN** a pad has an existing manually entered or TAP-derived BPM override for its source
+- **WHEN** new automatic analysis completes for that same unchanged source
+- **THEN** the new automatic metadata does not overwrite that override
+- **AND** manually clearing the override remains the explicit way to select automatic BPM
+
+#### Scenario: A stable middle region is tested against an ambiguous intro and outro
+- **GIVEN** a source has sparse or ambiguous intro/outro rhythm and a longer stable middle
+- **WHEN** a representative region is evaluated for pad-load BPM metadata
+- **THEN** its estimate is compared with complete-track and distant-region evidence
+- **AND** its versioned selection and uncertainty remain identifiable
+- **AND** full raw predictions and the original grid and loop origins remain unchanged
+
+#### Scenario: An ambiguous middle does not establish tempo by location
+- **GIVEN** the source middle contains a breakdown or changing tempo
+- **WHEN** representative-region selection runs
+- **THEN** another supported region or explicit uncertainty is retained
+- **AND** central position does not certify a constant BPM for the source
+
+#### Scenario: Comparable snares retain the musical interval count
+- **GIVEN** two reliable snare anchors span a known number of quarter notes
+- **WHEN** their elapsed source seconds support a tempo refinement
+- **THEN** BPM uses that explicit count rather than assuming one beat between events
+- **AND** missing or ambiguous event/count evidence cannot silently create half/double tempo
+- **AND** original source anchors and raw beat results remain available
+
+### Requirement: Independent Acceptance Inputs Preserve Evidence Boundaries
+The system SHALL provide an explicitly invoked offline preparation and validation workflow
+for independent B2 references and paired human correction inputs without invoking inference,
+reading candidate predictions during reference sealing or adopting results into project state.
+
+Reference input SHALL bind the unchanged frozen corpus and scoring protocol to original source
+hashes, complete loaded-rate mono PCM hashes, actual frame counts/rates and frame-zero origin.
+The workflow SHALL require actual annotation audio and an independent human declaration,
+full-span beat/count/bar/meter labels with bounded uncertainty, predeclared temporal regions,
+recording-group/class certification and critical-downbeat identities or explicit absent features.
+It SHALL check temporal coverage and eligible event denominators separately under the frozen
+limits and reject cross-split recording-group contamination. Empty drafts or unavailable
+annotation audio SHALL NOT become sealed references.
+
+Reference and correction-order receipts SHALL bind exact input bytes and revisions. Paired
+correction input SHALL retain the sealed reference, a predeclared balanced backend order,
+matching human/tool/workflow identity, actual active human intervals and operation categories,
+and corrected-legacy implementation provenance. Validation SHALL NOT manufacture labels,
+human correction time, musical scores or acceptance. All files SHALL remain caller-selected
+private workspace artifacts; preparation SHALL NOT overwrite frozen evidence. These operations
+SHALL run outside the realtime audio callback and leave default routing unchanged.
+
+Each correction phase containing operations SHALL retain its own positive recorded active
+human time; another phase's measured time SHALL NOT satisfy that phase's evidence requirement.
+
+#### Scenario: Empty independent annotation cannot establish acceptance
+- **GIVEN** frozen corpus metadata and no complete independent human labels or annotation audio
+- **WHEN** the offline workflow prepares and validates a reference draft
+- **THEN** the draft lists required private inputs and remains incomplete
+- **AND** no reference seal, musical pass or default cutover is produced
+
+#### Scenario: Complete reference is sealed before candidate inspection
+- **GIVEN** independently prepared complete labels, actual matching loaded PCM and split certification
+- **WHEN** the offline workflow validates and seals the reference input
+- **THEN** its receipt binds the exact source, PCM, protocol, annotation revision and input digest
+- **AND** candidate predictions are not read and eligibility is distinct from musical acceptance
+
+#### Scenario: Human correction comparison retains a predeclared order and endpoint
+- **GIVEN** a sealed independent reference and a sealed order for both backends on held-out tracks
+- **WHEN** actual human correction sessions are imported
+- **THEN** the workflow rejects missing pairs, altered order or mismatched reference/tool/endpoint
+- **AND** active intervals and edit categories remain observed human inputs rather than job durations
+- **AND** valid session input alone does not certify comparative improvement
+
+#### Scenario: Another phase cannot hide unmeasured correction operations
+- **GIVEN** one correction phase has operations but no active time and another has measured time
+- **WHEN** the paired correction input is validated
+- **THEN** the unmeasured operation phase is rejected despite positive session-wide time
+- **AND** genuine zero-operation zero-time baselines remain representable under the existing policy
+
 ### Requirement: Diagnostic Boundary Precedes Model And Default Activation
 The system SHALL expose the loaded-PCM and real local worker boundary only through explicitly
 invoked diagnostic analysis until the separate default-cutover acceptance gate is satisfied.

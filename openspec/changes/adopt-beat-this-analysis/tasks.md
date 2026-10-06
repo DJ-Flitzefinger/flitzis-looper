@@ -85,9 +85,28 @@
 - [x] Freeze the finite private pilot corpus, annotation uncertainty policy, held-out
   correction-burden gates, critical-downbeat criteria and local memory/time limits before
   new inference/tuning. See docs/beat-this-acceptance.md and the hashed local v1 manifest.
+- [x] Correct the legacy QM downbeat sample-hop defect before collecting the paired
+  comparator: use one shared production/fixture pipeline, actual ODF integer hop for
+  segments/seconds/BPM, retained frame-zero origin and bounded invalid-config handling.
+  Spectral bar-phase regression distinguishes the corrected result from the historical
+  zero-hop tie; multi-rate tests prove original sample coordinates. Saved/manual grids,
+  legacy algorithms and selected Beat This configuration remain intact.
+- [x] Prepare and validate the independent reference and measured paired-correction input
+  workflow with exact frozen source/PCM/protocol hashes, private drafts/seals and an honest
+  missing-input inventory. Input validation does not supply labels or certify acceptance.
 - [ ] Obtain independent full-span labels, certify recording groups/class coverage and
   measure paired held-out correction burden. Sparse manually verified grids alone do not
   satisfy whole-track quality/count continuity; raw predictions never serve as labels.
+- [ ] Implement and validate a versioned automatic BPM summary from full selected-backend
+  beat results, with explicit beat units, distant-interval checks and uncertainty handling.
+  Preserve true fractional BPM, raw/local timing and manual/TAP overrides; do not use
+  integer rounding as musical truth or a summary as variable-map playback authority.
+- [ ] Evaluate longer representative middle-region selection/weighting for pad-load BPM
+  against complete-track and distant-window evidence. Freeze the policy before held-out
+  validation; cover sparse intro/outro, an ambiguous middle, variable/fractional tempo
+  and explicit quarter-note counts across comparable transient spans (for example snares).
+  Preserve full raw inference, source/grid/loop origins, selected-region provenance and
+  uncertainty; reject unsupported peak pairing and half/double-tempo assumptions.
 - [x] Measure every frozen complete track's admission, raw response and final publication,
   time and actual live-process memory. Preserve full raw output even on publication failure;
   explicit size/admission rejection remains an acceptance failure, not a truncated success.

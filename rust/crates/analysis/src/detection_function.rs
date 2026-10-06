@@ -35,7 +35,7 @@ impl DetectionFunction {
     pub fn new(sample_rate_hz: u32, config: &AnalysisConfig) -> Self {
         // Frame length: next power of 2 of sampleRate / maxBinHz
         let frame_length = next_power_of_two((sample_rate_hz as f64 / config.max_bin_hz) as usize);
-        // Step size: sampleRate * stepSecs
+        // Preserve the existing truncation to the actual integer sample hop.
         let step_size = (sample_rate_hz as f64 * config.step_secs) as usize;
         let half_length = frame_length / 2 + 1;
 
@@ -49,6 +49,16 @@ impl DetectionFunction {
             step_size,
             half_length,
         }
+    }
+
+    /// Actual ODF frame increment in samples at the input sample rate.
+    pub fn step_size_samples(&self) -> usize {
+        self.step_size
+    }
+
+    /// ODF analysis window length in samples at the input sample rate.
+    pub fn frame_length_samples(&self) -> usize {
+        self.frame_length
     }
 
     /// Process the entire audio buffer and return the ODF values.
@@ -154,6 +164,16 @@ mod tests {
             }
         }
         audio
+    }
+
+    #[test]
+    fn actual_hop_truncates_requested_seconds_to_original_rate_samples() {
+        let config = AnalysisConfig::default();
+        for (rate, samples) in [(44_100, 512), (48_000, 557), (96_000, 1114)] {
+            let df = DetectionFunction::new(rate, &config);
+            assert_eq!(df.step_size_samples(), samples);
+            assert_ne!(samples as f64 / rate as f64, config.step_secs);
+        }
     }
 
     #[test]

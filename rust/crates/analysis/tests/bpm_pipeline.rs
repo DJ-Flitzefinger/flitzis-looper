@@ -5,9 +5,7 @@
 //! DetectionFunction (ComplexSD), RCF / Viterbi beat period estimation,
 //! DP beat tracking, and final BPM calculation.
 
-use flitzis_looper_analysis::{
-    AnalysisConfig, BeatGrid, DetectionFunction, DownBeat, SampleAnalysis, TempoTrackV2,
-};
+use flitzis_looper_analysis::{AnalysisConfig, DetectionFunction, SampleAnalysis, analyze_bpm};
 use std::path::PathBuf;
 
 const KNOWN_BPM: f32 = 120.0;
@@ -125,21 +123,6 @@ fn decode_audio_to_mono_f64(
     }
 }
 
-/// Return the next higher integer power of two from x.
-fn next_power_of_two(x: usize) -> usize {
-    if x <= 1 {
-        return 1;
-    }
-    if x.is_power_of_two() {
-        return x;
-    }
-    let mut n = 1;
-    while n < x {
-        n <<= 1;
-    }
-    n
-}
-
 /// Run the full pipeline on the test fixture and return the analysis result.
 fn analyze_test_fixture() -> std::io::Result<SampleAnalysis> {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
@@ -155,99 +138,14 @@ fn analyze_test_fixture() -> std::io::Result<SampleAnalysis> {
         ));
     }
 
-    let config = AnalysisConfig::default();
-
-    // Step 1: Compute onset detection function
-    let mut df = DetectionFunction::new(sample_rate, &config);
-    let frame_length = next_power_of_two((sample_rate as f64 / config.max_bin_hz) as usize);
-
-    if audio.len() < frame_length {
-        return Ok(SampleAnalysis {
-            bpm: 0.0,
-            key: "unknown".to_string(),
-            beat_grid: BeatGrid {
-                beats: Vec::new(),
-                downbeats: Vec::new(),
-                bars: Vec::new(),
-            },
-        });
-    }
-
-    let odf = df.process(&audio);
-
-    if odf.is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "no ODF values",
-        ));
-    }
-
-    // Step 2: Estimate beat periods via Viterbi HMM
-    let mut beat_period = Vec::new();
-    let tracker = TempoTrackV2::new(sample_rate as f64, config.step_secs);
-    tracker.calculate_beat_period(&odf, &mut beat_period, config.input_tempo, false);
-
-    // Step 3: Calculate beat positions via dynamic programming
-    let mut beats_frames = Vec::new();
-    tracker.calculate_beats(
-        &odf,
-        &beat_period,
-        &mut beats_frames,
-        config.alpha,
-        config.tightness,
-    );
-
-    // Step 4: Calculate BPM from beat intervals
-    let bpm = flitzis_looper_analysis::calculate_bpm(&beats_frames, config.step_secs);
-
-    // Step 5: Downbeat detection
-    let mut downbeat_indices = Vec::new();
-    let mut bar_indices = Vec::new();
-    if !beats_frames.is_empty() {
-        let mut downbeat = DownBeat::new(sample_rate as f64, 16, config.step_secs as usize);
-        downbeat.find_downbeats(&audio, audio.len(), &beats_frames, &mut downbeat_indices);
-        bar_indices = downbeat_indices.clone();
-    }
-
-    // Convert beat positions from frames to seconds
-    let frame_duration = config.step_secs;
-    let beats: Vec<f32> = beats_frames
-        .iter()
-        .map(|f| (*f * frame_duration) as f32)
-        .collect();
-    let downbeats: Vec<f32> = downbeat_indices
-        .iter()
-        .filter_map(|idx| beats_frames.get(*idx))
-        .map(|f| (*f * frame_duration) as f32)
-        .collect();
-    let bars: Vec<f32> = bar_indices
-        .iter()
-        .filter_map(|idx| beats_frames.get(*idx))
-        .map(|f| (*f * frame_duration) as f32)
-        .collect();
-
-    let beat_grid = BeatGrid {
-        beats,
-        downbeats,
-        bars,
-    };
+    let (bpm, beat_grid) = analyze_bpm(&audio, sample_rate, &AnalysisConfig::default())
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
 
     Ok(SampleAnalysis {
         bpm,
         key: "unknown".to_string(),
         beat_grid,
     })
-}
-
-// ODF stage
-
-#[test]
-fn odf_produces_frames() {
-    let result = analyze_test_fixture().expect("failed to decode test fixture");
-    assert!(
-        !result.beat_grid.beats.is_empty() || result.bpm > 0.0,
-        "Pipeline should produce some output"
-    );
 }
 
 // Final BPM calculation
@@ -278,6 +176,7 @@ fn bpm_is_reasonable() {
 #[test]
 fn beats_are_strictly_increasing() {
     let result = analyze_test_fixture().expect("failed to decode test fixture");
+    assert!(result.beat_grid.beats.len() > 40);
     for i in 1..result.beat_grid.beats.len() {
         assert!(
             result.beat_grid.beats[i] > result.beat_grid.beats[i - 1],
@@ -303,21 +202,72 @@ fn beats_span_the_audio() {
 // Downbeat detection
 
 #[test]
-fn downbeats_detected() {
+fn downbeats_and_bars_retain_the_detected_beat_indices() {
     let result = analyze_test_fixture().expect("failed to decode test fixture");
-    assert!(
-        !result.beat_grid.downbeats.is_empty(),
-        "Expected at least one downbeat"
-    );
+    let grid = result.beat_grid;
+    assert!(grid.downbeats.len() > 10);
+    assert_eq!(grid.bars, grid.downbeats);
+    let indices: Vec<usize> = grid
+        .downbeats
+        .iter()
+        .map(|downbeat| {
+            grid.beats
+                .iter()
+                .position(|beat| beat == downbeat)
+                .expect("each downbeat must be an actual detected beat")
+        })
+        .collect();
+    assert!(indices[0] < 4);
+    assert!(indices.windows(2).all(|pair| pair[1] - pair[0] == 4));
 }
 
 #[test]
-fn downbeats_are_subset_of_beats() {
-    let result = analyze_test_fixture().expect("failed to decode test fixture");
-    assert!(
-        result.beat_grid.downbeats.len() <= result.beat_grid.beats.len(),
-        "Downbeat count {} should not exceed beat count {}",
-        result.beat_grid.downbeats.len(),
-        result.beat_grid.beats.len()
-    );
+fn complete_pipeline_keeps_original_sample_coordinates_at_multiple_rates() {
+    let config = AnalysisConfig::default();
+    for sample_rate_hz in [44_100, 48_000, 96_000] {
+        let hop_samples = DetectionFunction::new(sample_rate_hz, &config).step_size_samples();
+        let period_samples = 43 * hop_samples;
+        let offset_samples = 3 * hop_samples;
+        let mut audio = vec![0.0; offset_samples + 32 * period_samples];
+        for beat in 0..32 {
+            let start = offset_samples + beat * period_samples;
+            for offset in 0..64 {
+                audio[start + offset] = 1.0 - offset as f64 / 64.0;
+            }
+        }
+
+        // This entry point is also called by the production engine wrapper.
+        let (bpm, grid) = analyze_bpm(&audio, sample_rate_hz, &config).unwrap();
+        assert!(grid.beats.len() >= 28, "rate={sample_rate_hz}");
+        assert!(
+            grid.beats[0] < 0.5,
+            "startup must remain in original coordinates"
+        );
+        assert!(grid.beats.last().unwrap() > &14.0);
+        let frame_indices: Vec<f64> = grid
+            .beats
+            .iter()
+            .map(|seconds| {
+                let source_sample = *seconds as f64 * sample_rate_hz as f64;
+                let frame = (source_sample / hop_samples as f64).round();
+                assert!(
+                    (source_sample - frame * hop_samples as f64).abs() < 0.25,
+                    "beat {seconds} at rate {sample_rate_hz} must use actual hop {hop_samples}"
+                );
+                frame
+            })
+            .collect();
+        let average_period =
+            (frame_indices.last().unwrap() - frame_indices[0]) / (frame_indices.len() - 1) as f64;
+        let expected_bpm =
+            (60.0 * sample_rate_hz as f64 / (average_period * hop_samples as f64)) as f32;
+        assert_eq!(bpm, expected_bpm);
+        assert!(
+            frame_indices
+                .windows(2)
+                .all(|pair| (pair[1] - pair[0] - 43.0).abs() <= 1.0)
+        );
+        assert_eq!(grid.bars, grid.downbeats);
+        assert!(grid.downbeats.iter().all(|time| grid.beats.contains(time)));
+    }
 }

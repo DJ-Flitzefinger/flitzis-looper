@@ -7,7 +7,45 @@ saved analysis still use their existing paths. The unconfigured adapter reports
 locked Windows CPU runtime and verified `final0` separately. Default cutover
 requires B2 acceptance.
 
+## Legacy qm comparator timebase
+
+Normal analysis still selects qm-dsp until the separate Beat This acceptance and
+cutover. New qm runs and the Rust diagnostic fixture call the same
+`flitzis_looper_analysis::analyze_bpm` implementation. `DetectionFunction` exposes
+its actual integer hop in samples; downbeat spectral segments receive that hop,
+and beat/downbeat/bar seconds and BPM intervals use `hop / input_rate`. Casting
+the configured `0.01161` seconds directly to the downbeat's sample increment
+previously produced zero and made every spectral segment empty. Configured
+fractional sample hops now retain the exact ODF timebase rather than accumulating
+seconds-rounding drift. Frame zero and leading silence remain intact.
+The shared entry point rejects nonfinite/nonpositive timebase parameters before
+FFT allocation and bounds its ODF window, sample hop and decimated downbeat
+window to at most `2^20` samples. The normal defaults remain well within this
+offline dimensional limit.
+
+The legacy spectral/tempo algorithms, fixed bar-phase limitations and analysis
+defaults remain unchanged. The tracker retains its existing 44100-Hz/512-sample
+Rayleigh prior; this correction does not certify a general rate-independent
+tempo estimator. Normal preprocessing still supplies 44100-Hz input. Existing
+saved grids, manual anchors and historical comparison evidence keep their
+original identity. Corrected output must be measured anew before it is used as a
+comparator; it is never an independent musical label. See the
+[private reference input workflow](beat-this-reference-inputs.md).
+
 ## Entry points and ownership
+
+### Known normal-load analysis resampler regression
+
+The normal 96-kHz-to-44100-Hz analysis conversion currently rejects a valid
+zero-output FFT tail-padding call as `tail conversion made no progress`.
+Certain input-length remainders therefore decode/cache successfully but fail
+automatic analysis before sample publication. This is distinct from MP3 decode
+failure and the corrected QM downbeat hop. The streamed diagnostic converter
+already accepts these calls within a finite dimension-derived padding budget.
+The pending standard-converter repair must share/generalize that bounded rule,
+preserve cancellation/PCM limits and retain the original origin and complete
+ceiling output length. Normal-load regression and real-source validation are
+required; the repair has not been applied.
 
 `flitzis_looper.analysis.jobs.OfflineAnalysisService.start(engine, pad_id,
 workdir, model=BeatModelIdentity())` starts a diagnostic request for a loaded

@@ -62,6 +62,67 @@ Manual sample-domain anchors and explicit count correction remain available and 
 
 ## Analysis migration
 
+### Automatic BPM and optional SYNC operating policy
+
+The user's 2026-10-06 feedback requests improved automatic BPM estimation while
+retaining TAP BPM as a useful manual control. Derive versioned BPM summaries from
+the selected backend's complete beat sequence and verify them across distant
+source intervals. A stable fractional tempo is valid: closeness to an integer
+must not decide correctness. For example, a 94.2395782-BPM grid against a true
+94-BPM sequence differs by about 153 ms after one minute. A constant origin edit
+cannot remove that slope. Long TAP series reduce random clicking error but do
+not certify exact tempo, count or absence of local variation.
+
+For pad-load BPM metadata, evaluate the user's proposed longer representative
+region near the track middle. Intros/outros with sparse or ambiguous rhythm may
+distort an estimate; this is a hypothesis to test, not an established explanation
+for the observed 94.2395782 value. Compare a documented stable-region selection
+and weighting policy with complete-track evidence and several distant windows.
+The middle can itself contain a breakdown or tempo change. Select another
+supported region or retain uncertainty when no representative region exists;
+do not assume central position establishes quality or constant tempo.
+
+Where reliable repeated transients such as snares support refinement, measure
+longer spans between comparable attacks with explicit musical beat counts:
+`BPM = 60 * quarter_note_count / elapsed_source_seconds`. Two snare hits need
+not be one quarter note apart. Validate count/half-double tempo, missing hits,
+syncopation, swing and changing patterns instead of pairing arbitrary peaks.
+Preserve sample-domain onset evidence, original source coordinates, selected
+windows, estimator revision and uncertainty separately from immutable raw beats.
+A middle-region BPM estimate does not move the grid origin or loop start.
+Complete raw model input/results remain required; this candidate selection is
+for derived metadata/refinement, not a crop of the adopted reference inference.
+
+Before cutover, compare integer/fractional constant tempo, ambiguous intro/outro,
+an ambiguous middle, local ramps/jumps and meter/count ambiguity with independent
+references and correction burden under the unchanged acceptance protocol. Freeze
+the region policy before held-out evaluation; no new threshold, default behavior
+or live SYNC follows from this planning refinement.
+
+Keep summary BPM, local tempo and accepted beat positions distinct. Local drift,
+abrupt edits, swing and detector/count errors require different diagnoses. A
+single transient can be off-beat; peak snapping must not invent beat/count truth.
+The analysis cutover must preserve manual/tapped overrides for the same unchanged
+source and preserve raw predictions. Source replacement keeps its source-bound reset rules.
+Its BPM estimation method and aggregation are pending implementation/validation;
+an improved summary alone does not activate variable-map display or playback.
+
+The user expects normally at most six simultaneous pads and accepts reduced
+trigger responsiveness while optional SYNC is enabled. Treat six as a measured
+operating target, not a current performance guarantee or a new pad-count limit.
+Include 1/2/4/6-pad tests plus the existing stress cases, DSP modes, transitions
+and device conditions. SYNC-off retains the reactive free/scalar path. SYNC-on
+may use an explicitly declared bounded preparation/headroom policy; readiness,
+target selection, late entry and audible alignment still require separate proof.
+This preference does not authorize hidden mid-session latency growth, change
+past failed causal evidence or relax callback deadlines. No new mode is enabled.
+
+Precompute source beatmaps and trajectories off-thread, then follow one master
+timeline with continuous bounded source-rate control. Monitor phase in matching
+output-time domains. Repeated seeks or chasing visible peaks are not the normal
+correction mechanism. Ambiguous or missing source content needs review or an
+explicit degraded/unlocked state; timing adjustment cannot reconstruct lost sound.
+
 The B1a diagnostic boundary uses existing loaded immutable PCM and source/request generation,
 without consulting the waveform envelope or another file decoder. Its non-realtime snapshot
 prepares one arithmetic mono source, exports complete float32-LE audio at the actual loaded rate

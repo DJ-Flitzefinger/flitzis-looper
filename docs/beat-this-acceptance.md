@@ -94,12 +94,37 @@ active correction per minute of audio.
 
 A corrected-legacy comparison, when measured, must show no regression on critical
 downbeats and at least 20% fewer total operations and active time when the legacy
-baseline is nonzero; preserve zero when the baseline is zero. The known legacy
-downbeat units bug must be repaired before obtaining that comparator. It is not
-a prerequisite to installing/running the selected model. Without paired human
+baseline is nonzero; preserve zero when the baseline is zero. The legacy downbeat
+units bug is repaired in the shared production/comparator pipeline; fresh corrected-legacy
+evidence is still required for that comparator. This repair was not a prerequisite
+to installing/running the selected model. Without paired human
 measurements, reduced correction burden remains unproven. The absolute v1 caps
 establish preliminary editing eligibility only; they do not complete the required
 replacement acceptance or establish comparative improvement.
+
+## Independent reference input preparation
+
+The [private input workflow](beat-this-reference-inputs.md) prepares invalid empty
+drafts and validates/seals complete independently supplied annotations, followed
+by a predeclared balanced correction order and actual paired human sessions.
+Input receipts preserve protocol/source/PCM/revision identities; they do not
+compute musical scores or establish replacement acceptance.
+
+On 2026-10-06, all five musical sources T01-T05 were loaded without analysis and
+exported as complete 96000-Hz mono PCM using the existing native boundary. Each
+export reproduced the retained native evidence hash and frame count exactly.
+Float32 WAV listening wrappers retain identical audio bytes. Their private
+identity inventory, listening files and preparation report are in
+`scratch/b2-reference/`; the original frozen templates and evidence are unchanged.
+The importer binds that separately checked inventory checksum, requires actual
+finite annotation PCM and rejects original-decode seconds without a verified
+loaded-domain relationship. No key/model inference or candidate inspection was
+part of this preparation.
+
+All five complete human references, recording-group/class certifications and
+three paired held-out correction measurements remain pending. R01 is resource
+only; sparse H01/H02 anchors cannot replace those references. Musical scoring,
+default cutover and live-map adoption remain pending.
 
 ## Resource and publication gates
 

@@ -12,8 +12,8 @@ use crate::math_utils::adaptive_threshold;
 pub struct DownBeat {
     /// Decimation factor.
     factor: usize,
-    /// Detection function increment.
-    increment: usize,
+    /// ODF frame increment in samples at the original input sample rate.
+    increment_samples: usize,
     /// Beat frame size (power of 2).
     beat_frame_size: usize,
     /// Complex buffer for FFT.
@@ -25,9 +25,12 @@ pub struct DownBeat {
 }
 
 impl DownBeat {
-    /// Create a new DownBeat detector.
-    pub fn new(sample_rate: f64, factor: usize, increment: usize) -> Self {
-        let decimated_rate = sample_rate / factor as f64;
+    /// Create a detector at `sample_rate_hz` with a decimation `factor`.
+    ///
+    /// `increment_samples` is the actual ODF hop in original-rate samples, not seconds
+    /// or decimated samples. ODF frame zero addresses input sample zero.
+    pub fn new(sample_rate_hz: f64, factor: usize, increment_samples: usize) -> Self {
+        let decimated_rate = sample_rate_hz / factor as f64;
         let beat_frame_size = next_power_of_two((decimated_rate * 1.3) as usize).max(2);
 
         let mut planner = FftPlanner::<f64>::new();
@@ -35,7 +38,7 @@ impl DownBeat {
 
         Self {
             factor,
-            increment,
+            increment_samples,
             beat_frame_size,
             fft_buf: vec![Complex::new(0.0, 0.0); beat_frame_size],
             fft_plan,
@@ -52,7 +55,7 @@ impl DownBeat {
     ///
     /// `audio` is the full audio buffer at the original sample rate.
     /// `audio_length` is the number of samples in the audio buffer.
-    /// `beats` contains beat positions in frame indices (DF increment units).
+    /// `beats` contains ODF frame indices: original sample = frame * increment_samples.
     /// `downbeats` is filled with indices into the `beats` array.
     pub fn find_downbeats(
         &mut self,
@@ -76,9 +79,10 @@ impl DownBeat {
 
         for i in 0..(beats.len() - 1) {
             // Calculate beat segment boundaries in downsampled audio
-            let beat_start = ((beats[i] * self.increment as f64) / self.factor as f64) as usize;
+            let beat_start =
+                ((beats[i] * self.increment_samples as f64) / self.factor as f64) as usize;
             let mut beat_end =
-                ((beats[i + 1] * self.increment as f64) / self.factor as f64) as usize;
+                ((beats[i + 1] * self.increment_samples as f64) / self.factor as f64) as usize;
 
             if beat_end >= dec_len {
                 beat_end = dec_len.saturating_sub(1);
@@ -273,7 +277,7 @@ mod tests {
     #[test]
     fn downbeat_with_regular_beats() {
         let audio = click_track(44100, 120.0, 20);
-        let beats = fake_beat_positions(20, 4.3); // ~120 BPM at 86 Hz frame rate
+        let beats = fake_beat_positions(20, 43.0); // ~120 BPM at 86 Hz frame rate
 
         let mut downbeat = DownBeat::new(44100.0, 16, 512);
         downbeat.set_beats_per_bar(4);

@@ -107,6 +107,11 @@ Most Rust modules are `pub(crate)`. The public Python boundary is the PyO3
 `src/flitzis_looper_audio/__init__.pyi`.
 The separate `rust/crates/analysis/` crate provides non-realtime BPM, key and
 beat-grid analysis; the looper's control/worker code publishes its results.
+Its shared `analyze_bpm` pipeline owns the legacy ODF/sample-hop conversion for
+both production and comparison fixtures. Private independent B2 input validation
+and sealing live separately in Python's analysis package and do not publish
+results into live or saved project state; see [offline analysis](offline-analysis.md)
+and [reference inputs](beat-this-reference-inputs.md).
 
 ## Command, Parameter, And Telemetry Rings
 

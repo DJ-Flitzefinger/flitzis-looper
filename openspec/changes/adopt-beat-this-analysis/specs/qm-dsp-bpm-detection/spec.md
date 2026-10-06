@@ -77,11 +77,29 @@ into bar positions. ODF indices SHALL convert using the actual integer sample in
 seconds SHALL NOT be passed as a sample-hop count. This legacy requirement SHALL NOT mandate
 its phase model or bar grouping for the selected Beat This default.
 
+The production path and diagnostic comparator SHALL use the same legacy pipeline. Beat,
+downbeat and bar seconds and the BPM interval calculation SHALL use the ODF's actual integer
+sample increment divided by its input sample rate, with frame zero retained and no fitted
+timing offset. Existing saved/manual results SHALL NOT be rewritten by this correction.
+
 #### Scenario: Downbeats detected for 4/4 audio
 - **GIVEN** beat positions for 4/4 audio under explicit legacy/diagnostic analysis
 - **WHEN** legacy downbeat detection runs with the correct sample increment
 - **THEN** it produces estimated downbeat positions drawn from those beats
 - **AND** the result retains legacy provenance rather than implying verified meter labels
+
+#### Scenario: Fractional configured hop uses the actual sampled timebase
+- **GIVEN** a configured seconds step whose product with the input sample rate is fractional
+- **WHEN** the ODF and legacy beat/downbeat pipeline run
+- **THEN** downbeat spectral segments use the exact integer sample increment used by the ODF
+- **AND** positions and BPM use that increment divided by the actual input rate
+- **AND** source leading silence is retained without a fitted offset or origin shift
+
+#### Scenario: Downbeat phase depends on the actual beat segments
+- **GIVEN** known beat indices and a synthetic repeated spectral pattern with a specified bar phase
+- **WHEN** legacy downbeat detection examines their audio segments
+- **THEN** it detects that pattern's phase using a nonzero sample increment
+- **AND** production and diagnostic analysis invoke the same implementation
 
 #### Scenario: Empty downbeats for ambiguous input
 - **GIVEN** legacy beat positions with no clear bar structure
@@ -96,9 +114,18 @@ analysis, independently of the selected Beat This worker/model configuration.
 Its defaults SHALL remain stepSecs=0.01161, maxBinHz=50, inputTempo=120, alpha=0.9, tightness=4.0,
 viterbiSigma=8.0, windowLength=512 and hopSize=128. Preserved legacy configuration SHALL NOT
 select the legacy backend automatically when the new default runtime or model is missing.
+The shared legacy entry point SHALL reject nonfinite/nonpositive timebase values and derived
+ODF windows, sample hops or decimated downbeat windows outside `1..=2^20` samples before FFT
+allocation.
 
 #### Scenario: Default config produces valid analysis
 - **GIVEN** a default AnalysisConfig and explicitly selected legacy analysis
 - **WHEN** the legacy pipeline processes valid audio
 - **THEN** it produces legacy BPM/beat/downbeat estimates using the documented defaults
 - **AND** its configuration is not applied to Beat This logits or postprocessing
+
+#### Scenario: Invalid legacy timebase fails before allocation
+- **GIVEN** zero, negative, nonfinite or excessively large timebase/window parameters
+- **WHEN** the shared legacy pipeline is invoked
+- **THEN** it reports a bounded configuration error before constructing FFT/history buffers
+- **AND** normal defaults retain their documented behavior

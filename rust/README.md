@@ -54,6 +54,7 @@ rust/
         |-- Cargo.toml
         `-- src/
             |-- lib.rs
+            |-- bpm_pipeline.rs    # shared legacy analysis and explicit sample-hop timebase
             |-- detection_function.rs
             |-- tempotrack.rs
             |-- phase_vocoder.rs

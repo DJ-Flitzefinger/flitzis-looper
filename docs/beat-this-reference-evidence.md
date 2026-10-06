@@ -156,8 +156,13 @@ Independent full-span annotations are still required. The B1b combined-RSS monit
 retained exited-process samples, so its combined figures above are provisional;
 B2 must sum live samples only. Source-generation identity is still
 engine-local; persisted source content identity and cached new-analysis restore
-belong to subsequent adoption work. The known legacy downbeat-unit defect must
-be addressed if its output is used as a comparator.
+belong to subsequent adoption work. The legacy downbeat-unit defect is corrected
+in the shared qm pipeline documented in
+[offline analysis](offline-analysis.md#legacy-qm-comparator-timebase). Historical
+legacy predictions retain their original lineage; only newly measured corrected
+results may supply the comparator. The [reference input workflow](beat-this-reference-inputs.md)
+prepares independent annotations and paired human sessions; neither a validated
+input nor this engineering correction establishes musical acceptance.
 
 The native staging limit excludes FFT/CQT/ORT and model workspace. A 120-second
 worker timeout, 8-MiB response bound, 250000-logit bound and 1-MiB final envelope

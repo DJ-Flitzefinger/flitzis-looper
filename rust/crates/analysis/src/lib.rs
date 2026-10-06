@@ -6,6 +6,7 @@
 //! **Key detection** (KeyNet CNN): mono audio → CQT spectrogram → ONNX inference
 //! → Camelot key string.
 
+mod bpm_pipeline;
 mod detection_function;
 mod downbeat;
 pub mod key_detection;
@@ -13,6 +14,7 @@ mod phase_vocoder;
 mod tempotrack;
 
 // Re-export public API surface
+pub use bpm_pipeline::analyze_bpm;
 pub use detection_function::DetectionFunction;
 pub use downbeat::DownBeat;
 pub use key_detection::{KeyError, KeyResult, camelot_index_to_key, detect_key};
@@ -24,7 +26,8 @@ pub mod window;
 /// Configuration for the analysis pipeline with Mixxx-matching defaults.
 #[derive(Debug, Clone)]
 pub struct AnalysisConfig {
-    /// Frame step in seconds (≈86 Hz frame rate). Default: 0.01161.
+    /// Requested frame step in seconds (≈86 Hz). Truncated to an integer sample hop.
+    /// Default: 0.01161.
     pub step_secs: f64,
     /// Maximum bin frequency in Hz for frame size calculation. Default: 50.0.
     pub max_bin_hz: f64,
