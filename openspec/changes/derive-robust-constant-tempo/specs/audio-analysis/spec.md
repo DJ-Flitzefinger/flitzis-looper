@@ -1,5 +1,25 @@
 ## ADDED Requirements
 
+### Requirement: Lossless QM Capture Preserves The Detector Timebase
+The system SHALL expose complete QM analysis evidence before its legacy binary32
+projection, retaining binary64 detector-frame positions, downbeat raw indices,
+the actual integer sample hop, input sample rate and frame count, and complete
+requested analysis configuration. The raw capture and legacy output SHALL use the same
+tracking pipeline without rerunning analysis or changing the legacy BPM/grid.
+
+#### Scenario: A long source has positions not representable in binary32
+- **GIVEN** QM detector positions with binary64 source seconds beyond binary32 precision
+- **WHEN** an offline caller reads the complete raw analysis
+- **THEN** all original detector positions and downbeat index associations remain available
+- **AND** source seconds use the actual sample hop and input sample rate before any binary32 cast
+- **AND** the legacy projection retains the existing BPM, beats, downbeats and bars
+
+#### Scenario: Raw capture has no independent musical verification
+- **GIVEN** raw QM positions and their input timebase
+- **WHEN** the raw evidence is prepared for later constant-tempo assessment
+- **THEN** the capture does not fabricate source/PCM hashes, timing-error bounds or verified quarter-note counts
+- **AND** independently established identity, origin and count evidence remain caller responsibilities
+
 ### Requirement: Constant Tempo Assessment Retains Immutable Evidence
 The system SHALL assess constant-tempo candidates outside realtime processing from
 complete immutable raw binary64 beat coordinates with source/PCM identity, coordinate

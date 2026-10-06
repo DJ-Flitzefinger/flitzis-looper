@@ -6,6 +6,38 @@ timestamps. It does not run an analyzer, inspect PCM, update pads or publish BPM
 The existing automatic 120.00128936767578-BPM reference result therefore remains
 unchanged until the later adapter/refinement and adoption stages.
 
+## Lossless QM capture
+
+G2b1 adds `flitzis_looper_analysis::analyze_bpm_raw` and `QmRawAnalysis`.
+The shared QM pipeline retains every original binary64 detector-frame position,
+downbeat raw-index association, actual integer sample hop, analyzer input rate
+and complete input frame count. It also snapshots all requested `AnalysisConfig`
+fields. That snapshot does not assert that previously unused tracker settings
+have become active. Binary64 beat/downbeat seconds are derived from
+`detector_frame * (actual_hop_samples / input_sample_rate_hz)` on demand.
+Bars retain the legacy downbeat convention; no sort, crop, origin shift or
+deduplication is introduced.
+
+`beat_frames()` and `downbeat_raw_indices()` borrow the retained raw arrays.
+`input_sample_rate_hz()`, `input_frame_count()` and `odf_hop_samples()` expose the
+actual input dimensions; `configuration()` borrows the requested snapshot.
+`beat_seconds()` and `downbeat_seconds()` return exact-size binary64 iterators.
+`legacy_result()` produces the compatibility BPM/grid without another analysis run.
+
+Ordinary `analyze_bpm` uses the same tracking result and preserves its existing
+binary32 BPM/grid projection and arithmetic order. It neither runs the analyzer
+twice nor creates an eager complete binary64 seconds buffer. Both entry points
+retain the same short-input and invalid-timebase behavior.
+
+QM capture describes the analyzer input. Normal loading resamples the loaded
+source to 44,100 Hz before this call; that input rate/frame count must not be
+misrepresented as loaded-source identity. Capture cannot establish source/PCM
+hashes, a timing-error bound, independent grid origin or verified musical counts.
+G2b2 must bind the retained input timebase/configuration to independently established
+source evidence. The existing Beat This `decode_result` reader already retains
+all four complete binary64 prediction arrays and request/model identity; it will
+be reused when those backend-independent bindings are added.
+
 ## Evidence and count interpretation
 
 `RawTempoEvidence` borrows complete source-relative beat seconds, `SourceIdentity`
@@ -95,9 +127,12 @@ tempo variation and invalid/unsupported evidence. Run on Windows with:
 .\scripts\run-rust-tests.ps1 -p flitzis-looper-analysis --test tempo_summary
 ```
 
-G2b still needs lossless adapters (QM before its binary32 conversion; existing
-complete Beat This binary64 evidence), supported count proposals and conservative
-PCM refinement of comparable attacks. The actual private 48-kHz reference must
+G2b1 preserves QM frames before binary32 projection and tests exact legacy parity,
+long-position precision, downbeat associations, requested/actual timebase and
+short/invalid input behavior. This capture is not a source-bound adapter or signal gate.
+G2b2 still needs identity-bound adapters using QM capture and existing complete
+Beat This binary64 evidence, supported count proposals and conservative PCM
+refinement of comparable attacks. The actual private 48-kHz reference must
 support all 1200 pulses and 1199 quarter intervals with at most one loaded frame
 of slope error over 0..599.5 seconds. Its 600-second extrapolation is separate.
 Synthetic timestamps alone do not pass that signal gate.

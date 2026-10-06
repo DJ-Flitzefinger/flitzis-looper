@@ -54,7 +54,7 @@ rust/
         |-- Cargo.toml
         `-- src/
             |-- lib.rs
-            |-- bpm_pipeline.rs    # shared legacy analysis and explicit sample-hop timebase
+            |-- bpm_pipeline.rs    # shared QM analysis, lossless capture and legacy projection
             |-- tempo_summary/     # offline count hypotheses and robust period diagnostics
             |-- detection_function.rs
             |-- tempotrack.rs

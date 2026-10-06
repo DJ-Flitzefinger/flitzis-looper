@@ -11,8 +11,12 @@
 
 ## G2b: adapters, count support and PCM refinement
 
-- [ ] Add lossless full-result adapters and supported count proposals for the selected
-  backend evidence; preserve original source/backend identities and raw revisions.
+- [x] G2b1: expose complete lossless QM capture before binary32 conversion, preserving
+  exact detector frames, downbeat indices, actual input timebase and configuration;
+  verify unchanged legacy output and run full validation.
+- [ ] G2b2: bind lossless QM capture and existing complete Beat This binary64 results
+  to established source/PCM/backend identities and raw revisions; add supported
+  count proposals without inventing independent quarter-note verification.
 - [ ] Implement conservative comparable-attack refinement, explicit count evidence,
   displacement/provenance and uncertainty; ambiguous signals remain unsupported.
 - [ ] Prove the actual exact-WAV <=1 loaded-frame slope gate over measured 0..599.5 s,

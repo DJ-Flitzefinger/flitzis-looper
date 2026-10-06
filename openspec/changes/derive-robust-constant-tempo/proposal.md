@@ -14,7 +14,9 @@ retains complete raw positions and source identity, assesses explicit quarter-no
 hypotheses, compares distant regions and reports residuals and conditional period
 uncertainty. Its supported output is a numerical candidate, not accepted timing.
 
-G2b then supplies lossless backend adapters and signal-supported PCM refinement.
+G2b begins with lossless QM capture from the shared tracker before its legacy
+binary32 projection. Source-bound backend adapters and signal-supported PCM
+refinement follow in the next bounded slice.
 The actual exact-WAV measured-span frame gate must pass before G2 is complete.
 G3 separately publishes accepted source timing to every consumer.
 

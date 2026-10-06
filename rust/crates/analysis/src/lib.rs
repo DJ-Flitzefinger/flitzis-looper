@@ -15,7 +15,7 @@ pub mod tempo_summary;
 mod tempotrack;
 
 // Re-export public API surface
-pub use bpm_pipeline::analyze_bpm;
+pub use bpm_pipeline::{QmRawAnalysis, analyze_bpm, analyze_bpm_raw};
 pub use detection_function::DetectionFunction;
 pub use downbeat::DownBeat;
 pub use key_detection::{KeyError, KeyResult, camelot_index_to_key, detect_key};
@@ -25,7 +25,7 @@ pub mod math_utils;
 pub mod window;
 
 /// Configuration for the analysis pipeline with Mixxx-matching defaults.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AnalysisConfig {
     /// Requested frame step in seconds (≈86 Hz). Truncated to an integer sample hop.
     /// Default: 0.01161.

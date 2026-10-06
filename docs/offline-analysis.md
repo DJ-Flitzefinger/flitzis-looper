@@ -18,6 +18,12 @@ the configured `0.01161` seconds directly to the downbeat's sample increment
 previously produced zero and made every spectral segment empty. Configured
 fractional sample hops now retain the exact ODF timebase rather than accumulating
 seconds-rounding drift. Frame zero and leading silence remain intact.
+G2b1's Rust-only `analyze_bpm_raw` exposes this same pipeline before binary32
+projection, retaining complete detector frames/downbeat raw indices, actual
+hop/input rate/frame count and requested configuration. Binary64 seconds are
+available on demand. The default entry point projects the same tracking result
+without rerunning analysis. This capture does not establish loaded-source hashes,
+independent beat counts or accepted tempo; see [constant-tempo candidates](constant-tempo-summary.md).
 The shared entry point rejects nonfinite/nonpositive timebase parameters before
 FFT allocation and bounds its ODF window, sample hop and decimated downbeat
 window to at most `2^20` samples. The normal defaults remain well within this

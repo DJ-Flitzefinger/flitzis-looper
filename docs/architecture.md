@@ -258,8 +258,13 @@ positions against explicit quarter-note count hypotheses outside realtime paths.
 It preserves source/PCM/provenance identity and origin, fits robust constant-period
 candidates with distant-region checks, and reports ambiguity, exclusions and
 conditional uncertainty. It has no analyzer, Python or runtime publication call
-site. Backend adapters, PCM refinement and accepted timing adoption remain later
-stages; see [constant-tempo candidates](constant-tempo-summary.md).
+site. G2b1 adds `analyze_bpm_raw`: the same QM pipeline retains complete binary64
+detector frames, downbeat indices, actual input hop/rate/frame count and requested
+configuration before legacy binary32 projection. Normal `analyze_bpm` still uses
+its existing BPM/grid arithmetic. QM input metadata describes the resampled
+analyzer input, not loaded-source/PCM hash identity or verified musical counts.
+Source-bound backend adapters, PCM refinement and accepted timing adoption remain
+later stages; see [constant-tempo candidates](constant-tempo-summary.md).
 
 The separate B1a/B1b diagnostic boundary exposes `begin_offline_analysis` and
 `OfflineAnalysisService`; it does not change that default routing or adopt new

@@ -50,6 +50,16 @@ limits bound work and avoid an all-pairs search over complete input.
 4. G3 separately adopts one source-bound accepted timing revision across control
    and live consumers and proves musical versus physical loop duration.
 
+G2b1 isolates the first loss boundary: `analyze_bpm_raw` captures the complete QM
+detector frames and downbeat raw indices with actual integer hop, input rate/count
+and complete configuration. Binary64 seconds are derived on demand; ordinary
+`analyze_bpm` projects the same capture directly to its existing binary32 output.
+No second tracker/downbeat run or eager full binary64 seconds buffer is required.
+This layer identifies the analyzer input, which may be resampled from a loaded
+source. It cannot establish loaded-source/PCM digests or a musical timing bound.
+G2b2 must bind that distinction to the existing immutable PCM/job identity and
+the already lossless Beat This reader before count/refinement assessment.
+
 Pure core tests do not establish signal refinement, normal pad-load correction,
 frozen musical acceptance or audible synchronization. Docs and handoff must keep
 the remaining G2b and G3 work explicit.
