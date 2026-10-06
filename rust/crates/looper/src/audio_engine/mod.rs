@@ -13,7 +13,6 @@ use crate::audio_engine::sample_loader::{
 };
 use crate::audio_engine::stem_cache::{
     prepare_stem_buffers_from_cache, project_stem_cache_dir, source_version_hash,
-    write_deterministic_stem_artifacts,
 };
 use crate::audio_engine::timing::{InputClock, validated_input_timestamp};
 use crate::audio_engine::transport::QuantizeGrid;
@@ -32,6 +31,7 @@ use pyo3::types::{PyBool, PyDict, PyInt};
 use rtrb::Producer;
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{
     Arc, Mutex,
     mpsc::{Receiver, Sender, TryRecvError},
@@ -54,7 +54,13 @@ mod key_lock_preparation;
 #[cfg(test)]
 mod key_lock_source_preparation;
 mod mixer;
+pub(crate) mod prepared_source;
 mod progress;
+pub use prepared_source::PreparedSourceTicket;
+use prepared_source::{
+    enqueue_current_prepared_stems, file_sha256, next_epoch, push_preparation_epoch_message,
+    validate_prepared_ticket,
+};
 mod rubberband_backend;
 mod sample_loader;
 mod scalar_grid;
@@ -164,16 +170,47 @@ fn has_active_task_for_id(tasks: &HashSet<(usize, BackgroundTaskKind)>, id: usiz
     tasks.iter().any(|(task_id, _)| *task_id == id)
 }
 
-fn next_pad_request_id(pad_request_ids: &Arc<Mutex<Vec<u64>>>, id: usize) -> Result<u64, String> {
+/// Checked ownership transition prepared and committed while holding the request mutex.
+/// Both counters are validated before any publication or identity mutation.
+struct PadRequestAdvance<'a> {
+    current: &'a mut u64,
+    epoch: &'a AtomicU64,
+    next_request: u64,
+    next_epoch: u64,
+}
+
+impl<'a> PadRequestAdvance<'a> {
+    fn prepare(current: &'a mut u64, epoch: &'a AtomicU64) -> Result<Self, String> {
+        let next_request = current.checked_add(1).ok_or("pad request id exhausted")?;
+        let next_epoch = next_epoch(epoch)?;
+        Ok(Self {
+            current,
+            epoch,
+            next_request,
+            next_epoch,
+        })
+    }
+
+    fn commit(self) -> u64 {
+        // Callback freshness must be invalidated before the new request/command is visible.
+        self.epoch.store(self.next_epoch, Ordering::Release);
+        *self.current = self.next_request;
+        self.next_request
+    }
+}
+
+fn next_pad_request_id(
+    pad_request_ids: &Arc<Mutex<Vec<u64>>>,
+    id: usize,
+    epoch: &AtomicU64,
+) -> Result<u64, String> {
     let mut guard = pad_request_ids
         .lock()
         .map_err(|_| "Failed to acquire pad request id lock".to_string())?;
     let Some(current) = guard.get_mut(id) else {
         return Err("id out of range".to_string());
     };
-    let next = current.wrapping_add(1);
-    *current = if next == 0 { 1 } else { next };
-    Ok(*current)
+    Ok(PadRequestAdvance::prepare(current, epoch)?.commit())
 }
 
 fn current_pad_request_id(
@@ -199,6 +236,10 @@ fn publish_loaded_sample(
     id: usize,
     sample: SampleBuffer,
 ) -> Result<(), String> {
+    let mut cache = sample_cache
+        .lock()
+        .map_err(|_| "sample cache lock poisoned")?;
+    let slot = cache.get_mut(id).ok_or("id out of range")?;
     let mut producer_guard = producer
         .lock()
         .map_err(|_| "Failed to acquire producer lock".to_string())?;
@@ -210,11 +251,7 @@ fn publish_loaded_sample(
         })
         .map_err(|_| "Failed to send LoadSample - buffer may be full".to_string())?;
 
-    if let Ok(mut cache) = sample_cache.lock()
-        && let Some(slot) = cache.get_mut(id)
-    {
-        *slot = Some(sample);
-    }
+    *slot = Some(sample);
 
     Ok(())
 }
@@ -372,6 +409,8 @@ pub struct AudioEngine {
     active_tasks: Arc<Mutex<HashSet<(usize, BackgroundTaskKind)>>>,
     pad_request_ids: Arc<Mutex<Vec<u64>>>,
     loaded_source_generations: Arc<Mutex<Vec<(u64, u32)>>>,
+    loaded_source_digests: Arc<Mutex<Vec<Option<String>>>>,
+    prepared_source_epochs: Vec<Arc<AtomicU64>>,
     offline_jobs: analysis_jobs::OfflineJobs,
     input_runtime: Option<InputRuntime>,
     input_clock: InputClock,
@@ -394,6 +433,10 @@ impl AudioEngine {
             active_tasks: Arc::new(Mutex::new(HashSet::new())),
             pad_request_ids: Arc::new(Mutex::new(vec![0; NUM_SAMPLES])),
             loaded_source_generations: Arc::new(Mutex::new(vec![(0, 0); NUM_SAMPLES])),
+            loaded_source_digests: Arc::new(Mutex::new(vec![None; NUM_SAMPLES])),
+            prepared_source_epochs: (0..NUM_SAMPLES)
+                .map(|_| Arc::new(AtomicU64::new(1)))
+                .collect(),
             offline_jobs: analysis_jobs::OfflineJobs::default(),
             input_runtime: None,
             input_clock: InputClock::new(),
@@ -614,6 +657,8 @@ impl AudioEngine {
         let loading_sample_ids = self.loading_sample_ids.clone();
         let pad_request_ids = self.pad_request_ids.clone();
         let loaded_source_generations = self.loaded_source_generations.clone();
+        let loaded_source_digests = self.loaded_source_digests.clone();
+        let prepared_epoch = self.prepared_source_epochs[id].clone();
         let run_analysis = run_analysis.unwrap_or(true);
 
         {
@@ -625,28 +670,49 @@ impl AudioEngine {
             }
         }
 
-        let request_id =
-            next_pad_request_id(&pad_request_ids, id).map_err(PyRuntimeError::new_err)?;
-        self.offline_jobs.cancel(Some(id));
+        let loading_guard = PadLoadingGuard {
+            id,
+            loading_sample_ids: loading_sample_ids.clone(),
+        };
 
-        {
+        let request_id = {
+            let mut requests = pad_request_ids
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+            let advance = PadRequestAdvance::prepare(&mut requests[id], &prepared_epoch)
+                .map_err(PyRuntimeError::new_err)?;
             let mut cache = sample_cache
                 .lock()
                 .map_err(|_| PyRuntimeError::new_err("Failed to acquire sample cache lock"))?;
+            let mut digests = loaded_source_digests
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("source digest lock poisoned"))?;
             if let Some(slot) = cache.get_mut(id) {
                 *slot = None;
             }
-        }
+            digests[id] = None;
+            advance.commit()
+        };
+        self.offline_jobs.cancel(Some(id));
 
         thread::spawn(move || {
-            let _loading_guard = PadLoadingGuard {
-                id,
-                loading_sample_ids,
-            };
+            let _loading_guard = loading_guard;
 
             let _ = loader_tx.send(LoaderEvent::Started { id, request_id });
 
             let mut progress = ProgressReporter::new(id, request_id, loader_tx.clone());
+
+            let source_digest = match file_sha256(Path::new(&path)) {
+                Ok(digest) => digest,
+                Err(error) => {
+                    let _ = loader_tx.send(LoaderEvent::Error {
+                        id,
+                        request_id,
+                        error,
+                    });
+                    return;
+                }
+            };
 
             let sample = match decode_audio_file_to_sample_buffer(
                 Path::new(&path),
@@ -702,6 +768,18 @@ impl AudioEngine {
                 }
             };
 
+            match file_sha256(Path::new(&cached_path)) {
+                Ok(digest) if digest == source_digest => {}
+                _ => {
+                    let _ = loader_tx.send(LoaderEvent::Error {
+                        id,
+                        request_id,
+                        error: "Source content changed during decoding/project copy".into(),
+                    });
+                    return;
+                }
+            }
+
             let analysis = if run_analysis {
                 progress.emit(LoadProgressStage::Analyzing, 0.0, resampling_required, true);
 
@@ -740,6 +818,12 @@ impl AudioEngine {
                 return;
             }
 
+            let Ok(mut generations) = loaded_source_generations.lock() else {
+                return;
+            };
+            let Ok(mut digests) = loaded_source_digests.lock() else {
+                return;
+            };
             if let Err(error) = publish_loaded_sample(&producer, &sample_cache, id, sample) {
                 let _ = loader_tx.send(LoaderEvent::Error {
                     id,
@@ -748,9 +832,8 @@ impl AudioEngine {
                 });
                 return;
             }
-            if let Ok(mut generations) = loaded_source_generations.lock() {
-                generations[id] = (request_id, output_sample_rate);
-            }
+            generations[id] = (request_id, output_sample_rate);
+            digests[id] = Some(source_digest);
             drop(requests);
 
             progress.emit(
@@ -814,7 +897,10 @@ impl AudioEngine {
                 sample,
                 loaded_rate,
                 generation,
-                self.pad_request_ids.clone(),
+                analysis_jobs::OfflineRequestOwner {
+                    request_ids: self.pad_request_ids.clone(),
+                    prepared_epoch: self.prepared_source_epochs[id].clone(),
+                },
                 self.loader_tx.clone(),
             )
             .map_err(PyRuntimeError::new_err)
@@ -939,141 +1025,46 @@ impl AudioEngine {
         Ok(request_id)
     }
 
-    /// Schedule offline stem generation on a background thread.
-    ///
-    /// This API currently provides source-version-aware task gating and deterministic cache
-    /// artifact writing. Neural inference is intentionally not implemented here yet.
+    /// Legacy placeholder generation is disabled; productive jobs use the Python backend.
     pub fn generate_stems_async(
         &self,
         id: usize,
         source_version: String,
         cache_dir: String,
     ) -> PyResult<()> {
-        if self.offline_jobs.has_pad(id) {
-            return Err(PyValueError::new_err(
-                "offline analysis is running or retiring",
-            ));
-        }
         if id >= NUM_SAMPLES {
-            return Err(PyValueError::new_err(format!(
-                "id out of range (expected 0..{}, got {id})",
-                NUM_SAMPLES - 1
-            )));
+            return Err(PyValueError::new_err("id out of range"));
         }
-
         if source_version.trim().is_empty() {
             return Err(PyValueError::new_err("source_version must not be empty"));
         }
-
         project_stem_cache_dir(&cache_dir).map_err(PyValueError::new_err)?;
-
-        let handle = self
-            .stream_handle
+        self.stream_handle
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-        let output_sample_rate = handle.output_sample_rate;
-
-        {
-            let loading = self
-                .loading_sample_ids
-                .lock()
-                .map_err(|_| PyRuntimeError::new_err("Failed to acquire loading ids lock"))?;
-            if loading.contains(&id) {
-                return Err(PyValueError::new_err("sample is currently loading"));
-            }
-        }
-
-        let sample = {
-            let cache = self
-                .sample_cache
-                .lock()
-                .map_err(|_| PyRuntimeError::new_err("Failed to acquire sample cache lock"))?;
-            cache
-                .get(id)
-                .and_then(|slot| slot.clone())
-                .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?
-        };
-
-        {
-            let mut tasks = self
-                .active_tasks
-                .lock()
-                .map_err(|_| PyRuntimeError::new_err("Failed to acquire active tasks lock"))?;
-            if has_active_task_for_id(&tasks, id) {
-                return Err(PyValueError::new_err("sample task already running"));
-            }
-            tasks.insert((id, BackgroundTaskKind::StemGeneration));
-        }
-
-        let loader_tx = self.loader_tx.clone();
-        let active_tasks = self.active_tasks.clone();
-        let request_id =
-            current_pad_request_id(&self.pad_request_ids, id).map_err(PyRuntimeError::new_err)?;
-
-        thread::spawn(move || {
-            let _task_guard = PadTaskGuard {
-                id,
-                task: BackgroundTaskKind::StemGeneration,
-                active_tasks,
-            };
-
-            let _ = loader_tx.send(LoaderEvent::TaskStarted {
-                id,
-                request_id,
-                task: BackgroundTaskKind::StemGeneration,
-            });
-
-            let _ = loader_tx.send(LoaderEvent::TaskProgress {
-                id,
-                request_id,
-                task: BackgroundTaskKind::StemGeneration,
-                percent: 0.0,
-                stage: "Generating stems".to_string(),
-            });
-
-            let result =
-                write_deterministic_stem_artifacts(&sample, output_sample_rate, &cache_dir, {
-                    let loader_tx = loader_tx.clone();
-                    move |percent, stage| {
-                        let _ = loader_tx.send(LoaderEvent::TaskProgress {
-                            id,
-                            request_id,
-                            task: BackgroundTaskKind::StemGeneration,
-                            percent,
-                            stage: stage.to_string(),
-                        });
-                    }
-                });
-
-            match result {
-                Ok(()) => {
-                    let _ = loader_tx.send(LoaderEvent::TaskSuccess {
-                        id,
-                        request_id,
-                        task: BackgroundTaskKind::StemGeneration,
-                        analysis: None,
-                    });
-                }
-                Err(error) => {
-                    let _ = loader_tx.send(LoaderEvent::TaskError {
-                        id,
-                        request_id,
-                        task: BackgroundTaskKind::StemGeneration,
-                        error,
-                    });
-                }
-            }
-        });
-
-        Ok(())
+        Err(PyRuntimeError::new_err(
+            "Legacy native stem generation is disabled; use the ticket-bound offline separator",
+        ))
     }
 
-    /// Validate cached stem artifacts and publish prepared handles to the audio thread.
-    pub fn publish_prepared_stems(
+    /// Capture real loaded-source ownership before starting a preparation job.
+    /// The original content token must match the digest recorded by the loader.
+    pub fn capture_prepared_source(
         &self,
         id: usize,
         source_version: String,
+    ) -> PyResult<PreparedSourceTicket> {
+        prepared_source::capture_prepared_source(self, id, source_version)
+    }
+
+    /// Recheck the admission snapshot before and after off-thread artifact preparation.
+    pub fn publish_prepared_stems(
+        &self,
+        py: Python<'_>,
+        id: usize,
+        source_version: String,
         cache_dir: String,
+        source_ticket: &PreparedSourceTicket,
     ) -> PyResult<()> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err(format!(
@@ -1093,6 +1084,10 @@ impl AudioEngine {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
 
+        let requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
         let sample = {
             let cache = self
                 .sample_cache
@@ -1103,25 +1098,37 @@ impl AudioEngine {
                 .and_then(|slot| slot.clone())
                 .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?
         };
-
-        let stems = prepare_stem_buffers_from_cache(
+        validate_prepared_ticket(
+            source_ticket,
+            id,
             &source_version,
+            requests[id],
+            &self.prepared_source_epochs[id],
             &sample,
-            handle.output_sample_rate,
-            &cache_dir,
         )
         .map_err(PyValueError::new_err)?;
+        drop(requests);
 
-        let mut producer_guard = handle
-            .producer
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
-
-        producer_guard
-            .push(ControlMessage::PublishPreparedStems { id, stems })
-            .map_err(|_| {
-                PyRuntimeError::new_err("Failed to send PublishPreparedStems - buffer may be full")
+        let mut stems = py
+            .detach(|| {
+                prepare_stem_buffers_from_cache(
+                    &source_version,
+                    &sample,
+                    source_ticket.sample_rate_hz,
+                    &cache_dir,
+                )
             })
+            .map_err(PyValueError::new_err)?;
+        stems.publication = source_ticket.publication.clone();
+
+        // Source mutation, timing publication and enqueue all serialize here.
+        enqueue_current_prepared_stems(
+            self,
+            &handle.producer,
+            source_ticket,
+            &source_version,
+            stems,
+        )
     }
 
     /// Select whether a pad renders from the loaded full mix or all prepared stems.
@@ -1632,14 +1639,19 @@ impl AudioEngine {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
 
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
         let mut producer_guard = handle
             .parameter_producer
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        push_parameter_message(
+        push_preparation_epoch_message(
             &mut producer_guard,
             ControlParameterMessage::SetPadBpm { id, bpm },
+            &self.prepared_source_epochs[id],
             "SetPadBpm",
         )
     }
@@ -1658,17 +1670,22 @@ impl AudioEngine {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
 
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
         let mut producer_guard = handle
             .producer
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        push_control_message(
+        push_preparation_epoch_message(
             &mut producer_guard,
             ControlMessage::SetPadTimingMetadata {
                 id,
                 metadata: PadTimingMetadata { phase_anchor_s },
             },
+            &self.prepared_source_epochs[id],
             "SetPadTimingMetadata",
         )
     }
@@ -1962,25 +1979,44 @@ impl AudioEngine {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
 
-        let _ = next_pad_request_id(&self.pad_request_ids, id).map_err(PyRuntimeError::new_err)?;
-        self.offline_jobs.cancel(Some(id));
+        let mut requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        let advance =
+            PadRequestAdvance::prepare(&mut requests[id], &self.prepared_source_epochs[id])
+                .map_err(PyRuntimeError::new_err)?;
+        let mut cache = self
+            .sample_cache
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?;
+        let mut digests = self
+            .loaded_source_digests
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("source digest lock poisoned"))?;
 
         let mut producer_guard = handle
             .producer
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
+        if producer_guard.is_full() {
+            return Err(PyRuntimeError::new_err(
+                "Failed to send UnloadSample - buffer may be full",
+            ));
+        }
+
+        advance.commit();
         producer_guard
             .push(ControlMessage::UnloadSample { id })
-            .map_err(|_| {
-                PyRuntimeError::new_err("Failed to send UnloadSample - buffer may be full")
-            })?;
-
-        if let Ok(mut cache) = self.sample_cache.lock()
-            && let Some(slot) = cache.get_mut(id)
-        {
-            *slot = None;
-        }
+            .map_err(|_| PyRuntimeError::new_err("reserved single-producer capacity lost"))?;
+        cache[id] = None;
+        digests[id] = None;
+        drop(producer_guard);
+        drop(digests);
+        drop(cache);
+        drop(requests);
+        self.offline_jobs.cancel(Some(id));
 
         if let Ok(mut set) = self.loading_sample_ids.lock() {
             set.remove(&id);
@@ -2407,12 +2443,14 @@ mod tests {
     #[test]
     fn pad_request_ids_increment_and_invalidate_old_work() {
         let ids = Arc::new(Mutex::new(vec![0; 2]));
+        let epoch = AtomicU64::new(1);
 
-        let first = next_pad_request_id(&ids, 0).expect("first request id");
-        let second = next_pad_request_id(&ids, 0).expect("second request id");
+        let first = next_pad_request_id(&ids, 0, &epoch).expect("first request id");
+        let second = next_pad_request_id(&ids, 0, &epoch).expect("second request id");
 
         assert_eq!(first, 1);
         assert_eq!(second, 2);
+        assert_eq!(epoch.load(Ordering::Acquire), 3);
         assert!(!pad_request_matches(&ids, 0, first));
         assert!(pad_request_matches(&ids, 0, second));
         assert!(pad_request_matches(&ids, 1, 0));
@@ -2421,10 +2459,21 @@ mod tests {
     #[test]
     fn pad_request_ids_do_not_wrap_to_zero() {
         let ids = Arc::new(Mutex::new(vec![u64::MAX]));
+        let epoch = AtomicU64::new(7);
 
-        let next = next_pad_request_id(&ids, 0).expect("wrapped request id");
+        assert!(next_pad_request_id(&ids, 0, &epoch).is_err());
+        assert_eq!(ids.lock().unwrap()[0], u64::MAX);
+        assert_eq!(epoch.load(Ordering::Acquire), 7);
+        assert!(pad_request_matches(&ids, 0, u64::MAX));
+    }
 
-        assert_eq!(next, 1);
-        assert!(pad_request_matches(&ids, 0, 1));
+    #[test]
+    fn prepared_epoch_exhaustion_preserves_shared_request_identity() {
+        let ids = Arc::new(Mutex::new(vec![7]));
+        let epoch = AtomicU64::new(u64::MAX);
+
+        assert!(next_pad_request_id(&ids, 0, &epoch).is_err());
+        assert_eq!(ids.lock().unwrap()[0], 7);
+        assert_eq!(epoch.load(Ordering::Acquire), u64::MAX);
     }
 }

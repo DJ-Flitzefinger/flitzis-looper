@@ -1,12 +1,21 @@
-import shutil
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, SimpleQueue
 from typing import TYPE_CHECKING, Literal
+from uuid import uuid4
 
 from flitzis_looper.controller.base import BaseController
+from flitzis_looper.controller.stem_cache import (
+    cache_dir_for_sample_id,
+    delete_stem_cache_dirs,
+    discard_generation_artifacts,
+    expected_stem_files,
+    promote_generation_artifacts,
+    source_version_for_sample_path,
+    verified_stem_cache_available,
+)
 from flitzis_looper.controller.stem_generation import (
     AudioShape,
     DemucsStemGenerationBackend,
@@ -17,11 +26,9 @@ from flitzis_looper.controller.stem_generation import (
 )
 from flitzis_looper.models import (
     STEM_COMPONENT_MASK,
-    STEM_KINDS,
     STEM_MASK_DISPLAY_MODES,
     STEM_MIX_MODES,
     StemCacheEntry,
-    StemFileSet,
     StemGridIndicatorState,
     StemMaskDisplayMode,
     StemMixMode,
@@ -30,9 +37,8 @@ from flitzis_looper.models import (
 
 if TYPE_CHECKING:
     from flitzis_looper.models import ProjectState, SessionState
-    from flitzis_looper_audio import AudioEngine
+    from flitzis_looper_audio import AudioEngine, PreparedSourceTicket
 
-STEM_CACHE_ROOT = Path("samples") / "stems"
 type StemTaskRunner = Callable[[Callable[[], None]], None]
 type _StemBackendEventType = Literal["progress", "success", "error"]
 
@@ -41,6 +47,8 @@ type _StemBackendEventType = Literal["progress", "success", "error"]
 class _StemBackendEvent:
     sample_id: int
     source_version: str
+    source_ticket: PreparedSourceTicket
+    cache_dir: Path
     event_type: _StemBackendEventType
     percent: float | None = None
     stage: str | None = None
@@ -48,83 +56,15 @@ class _StemBackendEvent:
     result: StemGenerationResult | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _PendingStemPublication:
+    source_ticket: PreparedSourceTicket
+    entry: StemCacheEntry
+
+
 def _start_stem_generation_thread(target: Callable[[], None]) -> None:
     thread = threading.Thread(target=target, daemon=True)
     thread.start()
-
-
-def source_version_for_sample_path(
-    sample_path: str, *, project_root: Path | None = None
-) -> str | None:
-    """Return a deterministic source-version token for a project sample path."""
-    root = Path.cwd() if project_root is None else project_root
-    path = Path(sample_path)
-    abs_path = path if path.is_absolute() else root / path
-
-    try:
-        stat = abs_path.stat()
-    except OSError:
-        return None
-
-    try:
-        normalized_path = abs_path.resolve().relative_to(root.resolve()).as_posix()
-    except OSError:
-        normalized_path = sample_path
-    except ValueError:
-        normalized_path = abs_path.resolve().as_posix()
-
-    return f"{normalized_path}|{stat.st_size}|{stat.st_mtime_ns}"
-
-
-def cache_dir_for_sample_id(sample_id: int) -> str:
-    """Return the project-relative stem cache directory for a pad."""
-    validate_sample_id(sample_id)
-    return (STEM_CACHE_ROOT / f"#{sample_id + 1}").as_posix()
-
-
-def _safe_stem_cache_dir_path(cache_dir: str) -> Path | None:
-    rel = Path(cache_dir)
-    if rel.is_absolute():
-        return None
-
-    root = (Path.cwd() / STEM_CACHE_ROOT).resolve(strict=False)
-    target = (Path.cwd() / rel).resolve(strict=False)
-
-    try:
-        target.relative_to(root)
-    except ValueError:
-        return None
-
-    if target == root:
-        return None
-
-    return target
-
-
-def delete_stem_cache_dirs(sample_id: int, *cache_dirs: str | None) -> bool:
-    """Delete known project-local stem cache directories for a pad."""
-    validate_sample_id(sample_id)
-    deleted = False
-    seen: set[Path] = set()
-    for cache_dir in (*cache_dirs, cache_dir_for_sample_id(sample_id)):
-        if cache_dir is None:
-            continue
-        target = _safe_stem_cache_dir_path(cache_dir)
-        if target is None or target in seen:
-            continue
-        seen.add(target)
-        if target.exists():
-            shutil.rmtree(target)
-            deleted = True
-    return deleted
-
-
-def expected_stem_files(cache_dir: str) -> StemFileSet:
-    """Return the expected project-relative file names for a complete stem set."""
-    files = StemFileSet()
-    for kind in STEM_KINDS:
-        files = files.with_kind(kind, f"{cache_dir}/{kind}.wav")
-    return files
 
 
 class StemController(BaseController):  # noqa: PLR0904
@@ -147,7 +87,11 @@ class StemController(BaseController):  # noqa: PLR0904
             stem_task_runner if stem_task_runner is not None else _start_stem_generation_thread
         )
         self._stem_generation_events: SimpleQueue[_StemBackendEvent] = SimpleQueue()
+        self._generation_source_tickets: dict[int, PreparedSourceTicket] = {}
+        self._pending_stem_publications: dict[int, _PendingStemPublication] = {}
+        self._restored_stem_candidates: dict[int, StemCacheEntry] = {}
         self._on_frame_render_callbacks.append(self._poll_generation_events)
+        self._on_frame_render_callbacks.append(self._poll_stem_publications)
 
     def generate_stems_async(self, sample_id: int) -> bool:
         """Schedule offline stem generation for a stopped loaded pad when allowed."""
@@ -193,13 +137,21 @@ class StemController(BaseController):  # noqa: PLR0904
             sample_id=sample_id,
             source_path=source_path,
             source_version=source_version,
-            cache_dir=Path.cwd() / cache_dir,
+            cache_dir=Path.cwd() / cache_dir / f".generation-{uuid4().hex}",
             target_shape=target_shape,
             model_cache_dir=default_demucs_model_cache_dir(project_root=Path.cwd()),
             device_policy="auto",
             demucs_shifts=self._project.demucs_shifts,
             demucs_overlap=self._project.demucs_overlap,
         )
+
+        try:
+            source_ticket = self._capture_source_ticket(sample_id, source_version)
+        except (AttributeError, RuntimeError, TypeError, ValueError) as err:
+            self._clear_stem_generation_state(sample_id)
+            self._session.stem_generation_errors[sample_id] = f"Stem admission failed: {err}"
+            return False
+        self._generation_source_tickets[sample_id] = source_ticket
 
         self._project.stem_cache[sample_id] = StemCacheEntry(
             source_version=source_version,
@@ -208,11 +160,12 @@ class StemController(BaseController):  # noqa: PLR0904
             available=False,
         )
         self._mark_project_changed()
-        self._stem_task_runner(lambda: self._run_stem_backend(request))
+        self._stem_task_runner(lambda: self._run_stem_backend(request, source_ticket))
         return True
 
     def restore_stem_cache_from_project_state(self) -> None:
         """Validate restored stem cache metadata against current project-local files."""
+        self._restored_stem_candidates.clear()
         changed = False
         for sample_id, entry in enumerate(self._project.stem_cache):
             if entry is None:
@@ -231,12 +184,14 @@ class StemController(BaseController):  # noqa: PLR0904
                 changed = True
                 continue
 
-            available = self._entry_files_available(entry)
-            if entry.available != available:
-                self._project.stem_cache[sample_id] = entry.model_copy(
-                    update={"available": available}
-                )
+            if entry.available:
+                self._project.stem_cache[sample_id] = entry.model_copy(update={"available": False})
                 changed = True
+            current = self._project.stem_cache[sample_id]
+            if current is not None and self._entry_files_available(current):
+                self._restored_stem_candidates[sample_id] = current
+            else:
+                self._restored_stem_candidates.pop(sample_id, None)
 
         if changed:
             self._mark_project_changed()
@@ -245,7 +200,11 @@ class StemController(BaseController):  # noqa: PLR0904
         """Publish restored prepared stems after the restored full mix has loaded."""
         validate_sample_id(sample_id)
         entry = self._project.stem_cache[sample_id]
-        if entry is None or not entry.available:
+        if entry is None or (
+            not entry.available and self._restored_stem_candidates.get(sample_id) is not entry
+        ):
+            return True
+        if sample_id in self._pending_stem_publications:
             return True
 
         source_version = self.source_version_for_pad(sample_id)
@@ -262,16 +221,15 @@ class StemController(BaseController):  # noqa: PLR0904
             return True
 
         try:
-            self._audio.publish_prepared_stems(sample_id, source_version, entry.cache_dir)
-        except (RuntimeError, ValueError) as err:
+            source_ticket = self._capture_source_ticket(sample_id, source_version)
+            return self._queue_stem_publication(sample_id, entry, source_ticket)
+        except (AttributeError, RuntimeError, TypeError, ValueError) as err:
             self._project.stem_cache[sample_id] = entry.model_copy(update={"available": False})
             self._session.stem_generation_errors[sample_id] = (
                 f"Restored stem publication failed: {err}"
             )
             self._mark_project_changed()
             return False
-
-        return self._publish_all_stems_mode_if_preferred(sample_id, source_version)
 
     def invalidate_stem_cache(self, sample_id: int) -> None:
         """Mark cached stem metadata unavailable for a pad."""
@@ -359,14 +317,8 @@ class StemController(BaseController):  # noqa: PLR0904
             self._mark_project_changed()
             return True
 
-        entry = self._project.stem_cache[sample_id]
-        source_version = self.source_version_for_pad(sample_id)
-        if (
-            entry is None
-            or not entry.available
-            or source_version is None
-            or source_version != entry.source_version
-        ):
+        source_version = self._current_prepared_source_version(sample_id)
+        if source_version is None:
             return False
 
         if not self._publish_all_stems_state(sample_id, source_version):
@@ -459,9 +411,9 @@ class StemController(BaseController):  # noqa: PLR0904
         if entry is None or not entry.available:
             return True
 
-        source_version = self.source_version_for_pad(sample_id)
-        if source_version is None or source_version != entry.source_version:
-            return True
+        source_version = self._current_prepared_source_version(sample_id)
+        if source_version is None:
+            return False
 
         return self._publish_stem_mix_mode(sample_id, source_version)
 
@@ -475,9 +427,9 @@ class StemController(BaseController):  # noqa: PLR0904
         if entry is None or not entry.available:
             return True
 
-        source_version = self.source_version_for_pad(sample_id)
-        if source_version is None or source_version != entry.source_version:
-            return True
+        source_version = self._current_prepared_source_version(sample_id)
+        if source_version is None:
+            return False
 
         return self._publish_stem_enabled_mask(sample_id, source_version)
 
@@ -485,6 +437,21 @@ class StemController(BaseController):  # noqa: PLR0904
         if not self._publish_stem_mix_mode(sample_id, source_version):
             return False
         return self._publish_stem_enabled_mask(sample_id, source_version)
+
+    def _current_prepared_source_version(self, sample_id: int) -> str | None:
+        entry = self._project.stem_cache[sample_id]
+        if entry is None or not entry.available or self._project.sample_paths[sample_id] is None:
+            return None
+        try:
+            self._capture_source_ticket(sample_id, entry.source_version)
+        except (AttributeError, RuntimeError, TypeError, ValueError) as err:
+            self._project.stem_cache[sample_id] = entry.model_copy(update={"available": False})
+            self._session.stem_generation_errors[sample_id] = (
+                f"Prepared stems no longer match the loaded source: {err}"
+            )
+            self._mark_project_changed()
+            return None
+        return entry.source_version
 
     def _publish_stem_mix_mode(self, sample_id: int, source_version: str) -> bool:
         try:
@@ -548,7 +515,11 @@ class StemController(BaseController):  # noqa: PLR0904
             except Empty:
                 return
 
-            if not self._is_current_generation(event.sample_id, event.source_version):
+            if not self._is_current_generation(event):
+                if event.event_type != "progress":
+                    if self._generation_source_tickets.get(event.sample_id) is event.source_ticket:
+                        self._generation_source_tickets.pop(event.sample_id, None)
+                    self._discard_generation_artifacts(event.sample_id, event.cache_dir)
                 continue
 
             if event.event_type == "progress":
@@ -556,16 +527,28 @@ class StemController(BaseController):  # noqa: PLR0904
                     event.sample_id,
                     event.percent,
                     event.stage,
+                    event.source_ticket,
                 )
             elif event.event_type == "success":
                 self._record_generation_result(event.sample_id, event.result)
-                self._handle_stem_generation_success(event.sample_id)
+                self._handle_stem_generation_success(
+                    event.sample_id, event.source_ticket, event.cache_dir
+                )
             elif event.error is not None:
-                self._handle_stem_generation_error(event.sample_id, event.error)
+                self._handle_stem_generation_error(
+                    event.sample_id, event.error, event.source_ticket
+                )
+            if event.event_type != "progress":
+                self._discard_generation_artifacts(event.sample_id, event.cache_dir)
 
     def _handle_stem_generation_started(self, sample_id: int) -> None:
         """Apply a stem-generation start event from a backend event source."""
         validate_sample_id(sample_id)
+        if (
+            sample_id in self._generation_source_tickets
+            or sample_id in self._pending_stem_publications
+        ):
+            return
         self._session.stem_generating_sample_ids.add(sample_id)
         self._clear_stem_generation_messages(sample_id)
 
@@ -574,10 +557,16 @@ class StemController(BaseController):  # noqa: PLR0904
         sample_id: int,
         percent: float | None,
         stage: str | None,
+        source_ticket: PreparedSourceTicket | None = None,
     ) -> None:
         """Apply a stem-generation progress event from a backend event source."""
         validate_sample_id(sample_id)
         if sample_id not in self._session.stem_generating_sample_ids:
+            return
+        if source_ticket is None and (
+            sample_id in self._generation_source_tickets
+            or sample_id in self._pending_stem_publications
+        ):
             return
 
         if stage is not None:
@@ -585,58 +574,156 @@ class StemController(BaseController):  # noqa: PLR0904
         if percent is not None:
             self._session.stem_generation_progress[sample_id] = float(percent)
 
-    def _handle_stem_generation_success(self, sample_id: int) -> None:
-        """Publish completed stems when the pad and source version are still eligible."""
+    def _handle_stem_generation_success(
+        self,
+        sample_id: int,
+        source_ticket: PreparedSourceTicket | None = None,
+        generation_cache_dir: Path | None = None,
+    ) -> None:
+        """Publish a completed job using its original native admission ticket."""
         validate_sample_id(sample_id)
         if sample_id not in self._session.stem_generating_sample_ids:
+            return
+        if source_ticket is None:
+            self._reject_legacy_stem_completion(sample_id)
+            return
+        if self._generation_source_tickets.get(sample_id) is not source_ticket:
             return
 
         source_version = self._session.stem_generation_source_versions.get(sample_id)
         self._clear_stem_generation_state(sample_id)
-        self._session.stem_generation_progress.pop(sample_id, None)
-        self._session.stem_generation_stage.pop(sample_id, None)
         if source_version is None:
             return
+        entry = self._eligible_generation_entry(sample_id, source_version)
+        if entry is not None:
+            self._publish_generation_cache(sample_id, source_ticket, entry, generation_cache_dir)
 
+    def _reject_legacy_stem_completion(self, sample_id: int) -> None:
+        # Unbound legacy events cannot finish a current Python job or capture a fresh
+        # ticket that would launder artifacts prepared for a prior source/timing intent.
+        if (
+            sample_id in self._generation_source_tickets
+            or sample_id in self._pending_stem_publications
+        ):
+            return
+        self._clear_stem_generation_state(sample_id)
+        self._session.stem_generation_errors[sample_id] = (
+            "Stem completion rejected because its admission ticket is missing"
+        )
+
+    def _eligible_generation_entry(
+        self, sample_id: int, source_version: str
+    ) -> StemCacheEntry | None:
         entry = self._project.stem_cache[sample_id]
         if entry is None or entry.source_version != source_version:
-            return
-
-        current_source_version = self.source_version_for_pad(sample_id)
-        if current_source_version != source_version:
+            return None
+        if self.source_version_for_pad(sample_id) != source_version:
             self._project.stem_cache[sample_id] = None
             self._mark_project_changed()
-            return
-
+            return None
         if sample_id in self._session.active_sample_ids:
-            return
+            return None
+        return entry
 
+    def _publish_generation_cache(
+        self,
+        sample_id: int,
+        source_ticket: PreparedSourceTicket,
+        entry: StemCacheEntry,
+        generation_cache_dir: Path | None,
+    ) -> None:
+        if generation_cache_dir is None:
+            self._session.stem_generation_errors[sample_id] = (
+                "Stem completion rejected because its private artifact directory is missing"
+            )
+            return
+        try:
+            promote_generation_artifacts(entry, generation_cache_dir)
+        except (OSError, ValueError) as err:
+            self._session.stem_generation_errors[sample_id] = f"Stem cache promotion failed: {err}"
+            return
         if not self._entry_files_available(entry):
             self._session.stem_generation_errors[sample_id] = (
-                "Stem generation completed but cache files are incomplete"
+                "Stem cache integrity changed before publication"
             )
             return
 
         try:
-            self._audio.publish_prepared_stems(sample_id, source_version, entry.cache_dir)
+            self._queue_stem_publication(sample_id, entry, source_ticket)
         except (RuntimeError, ValueError) as err:
             self._session.stem_generation_errors[sample_id] = (
                 f"Stem generation completed but publication failed: {err}"
             )
-        else:
-            if not entry.available:
-                self._project.stem_cache[sample_id] = entry.model_copy(update={"available": True})
-                self._mark_project_changed()
-            self._publish_all_stems_mode_if_preferred(sample_id, source_version)
 
-    def _handle_stem_generation_error(self, sample_id: int, message: str) -> None:
+    def _queue_stem_publication(
+        self, sample_id: int, entry: StemCacheEntry, source_ticket: PreparedSourceTicket
+    ) -> bool:
+        self._audio.publish_prepared_stems(
+            sample_id, entry.source_version, entry.cache_dir, source_ticket
+        )
+        queued_entry = entry
+        if entry.available:
+            queued_entry = entry.model_copy(update={"available": False})
+            self._project.stem_cache[sample_id] = queued_entry
+            self._mark_project_changed()
+        self._restored_stem_candidates.pop(sample_id, None)
+        pending = _PendingStemPublication(source_ticket=source_ticket, entry=queued_entry)
+        self._pending_stem_publications[sample_id] = pending
+        return self._poll_stem_publication(sample_id, pending)
+
+    def _poll_stem_publications(self) -> None:
+        for sample_id, pending in tuple(self._pending_stem_publications.items()):
+            self._poll_stem_publication(sample_id, pending)
+
+    def _poll_stem_publication(self, sample_id: int, pending: _PendingStemPublication) -> bool:
+        if self._project.stem_cache[sample_id] is not pending.entry:
+            self._pending_stem_publications.pop(sample_id, None)
+            return True
+        try:
+            status = pending.source_ticket.publication_status()
+        except (AttributeError, RuntimeError, TypeError, ValueError) as err:
+            self._pending_stem_publications.pop(sample_id, None)
+            self._session.stem_generation_errors[sample_id] = (
+                f"Stem publication status failed: {err}"
+            )
+            return False
+        if status in {"captured", "pending"}:
+            return True
+        self._pending_stem_publications.pop(sample_id, None)
+        self._restored_stem_candidates.pop(sample_id, None)
+        if status != "accepted":
+            self._session.stem_generation_errors[sample_id] = (
+                "Prepared stem publication rejected by native source/request/timing validation"
+            )
+            return False
+        self._project.stem_cache[sample_id] = pending.entry.model_copy(update={"available": True})
+        self._mark_project_changed()
+        return self._publish_all_stems_mode_if_preferred(sample_id, pending.entry.source_version)
+
+    def _capture_source_ticket(self, sample_id: int, source_version: str) -> PreparedSourceTicket:
+        ticket = self._audio.capture_prepared_source(sample_id, source_version)
+        if ticket is None:
+            msg = "Native source admission returned no ticket"
+            raise RuntimeError(msg)
+        return ticket
+
+    def _handle_stem_generation_error(
+        self,
+        sample_id: int,
+        message: str,
+        source_ticket: PreparedSourceTicket | None = None,
+    ) -> None:
         """Apply a stem-generation failure event from a backend event source."""
         validate_sample_id(sample_id)
         if sample_id not in self._session.stem_generating_sample_ids:
             return
+        if source_ticket is None and (
+            sample_id in self._generation_source_tickets
+            or sample_id in self._pending_stem_publications
+        ):
+            return
 
-        self._session.stem_generating_sample_ids.discard(sample_id)
-        self._session.stem_generation_source_versions.pop(sample_id, None)
+        self._clear_stem_generation_state(sample_id)
         self._session.stem_generation_progress.pop(sample_id, None)
         self._session.stem_generation_stage.pop(sample_id, None)
         self._session.stem_generation_errors[sample_id] = message
@@ -648,24 +735,26 @@ class StemController(BaseController):  # noqa: PLR0904
             return "Cannot generate stems while the pad is playing"
         if sample_id in self._session.loading_sample_ids:
             return "Cannot generate stems while the pad is loading"
-        if sample_id in self._session.analyzing_sample_ids:
+        if (
+            sample_id in self._session.analyzing_sample_ids
+            or sample_id in self._pending_stem_publications
+        ):
             return "Cannot generate stems while another pad task is running"
         if sample_id in self._session.stem_generating_sample_ids:
             return "Stem generation is already running for this pad"
         return None
 
     def _entry_files_available(self, entry: StemCacheEntry) -> bool:
-        for kind in STEM_KINDS:
-            path = entry.stems.path_for(kind)
-            if path is None:
-                return False
-            if not (Path.cwd() / Path(path)).is_file():
-                return False
-        return True
+        return verified_stem_cache_available(entry)
 
     def _clear_stem_generation_state(self, sample_id: int) -> None:
         self._session.stem_generating_sample_ids.discard(sample_id)
         self._session.stem_generation_source_versions.pop(sample_id, None)
+        self._generation_source_tickets.pop(sample_id, None)
+        self._pending_stem_publications.pop(sample_id, None)
+        self._restored_stem_candidates.pop(sample_id, None)
+        self._session.stem_generation_progress.pop(sample_id, None)
+        self._session.stem_generation_stage.pop(sample_id, None)
 
     def _clear_stem_generation_messages(self, sample_id: int) -> None:
         self._session.stem_generation_errors.pop(sample_id, None)
@@ -715,12 +804,16 @@ class StemController(BaseController):  # noqa: PLR0904
             return None
         return AudioShape(sample_rate_hz=sample_rate_hz, channels=1, frame_count=frame_count)
 
-    def _run_stem_backend(self, request: StemGenerationRequest) -> None:
+    def _run_stem_backend(
+        self, request: StemGenerationRequest, source_ticket: PreparedSourceTicket
+    ) -> None:
         def report_progress(percent: float, stage: str) -> None:
             self._stem_generation_events.put(
                 _StemBackendEvent(
                     sample_id=request.sample_id,
                     source_version=request.source_version,
+                    source_ticket=source_ticket,
+                    cache_dir=request.cache_dir,
                     event_type="progress",
                     percent=percent,
                     stage=stage,
@@ -734,6 +827,8 @@ class StemController(BaseController):  # noqa: PLR0904
                 _StemBackendEvent(
                     sample_id=request.sample_id,
                     source_version=request.source_version,
+                    source_ticket=source_ticket,
+                    cache_dir=request.cache_dir,
                     event_type="error",
                     error=str(err),
                 )
@@ -744,16 +839,28 @@ class StemController(BaseController):  # noqa: PLR0904
             _StemBackendEvent(
                 sample_id=request.sample_id,
                 source_version=request.source_version,
+                source_ticket=source_ticket,
+                cache_dir=request.cache_dir,
                 event_type="success",
                 result=result,
             )
         )
 
-    def _is_current_generation(self, sample_id: int, source_version: str) -> bool:
+    def _is_current_generation(self, event: _StemBackendEvent) -> bool:
         return (
-            sample_id in self._session.stem_generating_sample_ids
-            and self._session.stem_generation_source_versions.get(sample_id) == source_version
+            event.sample_id in self._session.stem_generating_sample_ids
+            and self._session.stem_generation_source_versions.get(event.sample_id)
+            == event.source_version
+            and self._generation_source_tickets.get(event.sample_id) is event.source_ticket
         )
+
+    def _discard_generation_artifacts(self, sample_id: int, cache_dir: Path) -> None:
+        try:
+            discard_generation_artifacts(cache_dir)
+        except (OSError, ValueError) as err:
+            self._session.stem_generation_diagnostics[sample_id] = (
+                f"Private stem artifact cleanup failed: {err}"
+            )
 
     def _record_generation_result(
         self,

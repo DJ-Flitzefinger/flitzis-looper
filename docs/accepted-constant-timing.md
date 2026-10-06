@@ -83,7 +83,12 @@ new guard until that integration exists.
 | Same-source stems | Retain one source trajectory and check content/generation before prepared publication; shape or path/mtime alone is insufficient. |
 | Persistence and legacy restore | Preserve manual/TAP and saved legacy intent through an explicit source-verified migration contract. |
 
-G3b integrates these consumers and current-pad authority. G3c separately proves
+G3b1 protects productive stem preparation with actual loaded-source pointers,
+content identities, current request/preparation epochs, isolated worker artifacts
+and callback feedback; see [prepared publication](prepared-stem-publication.md).
+Its generic epoch does not replace this accepted revision. The guard still has no
+production caller; binary64 consumers and accepted persistence remain G3b2.
+G3c separately proves
 musical period versus rounded physical duration over 75/1000 cycles, fractional
 periods/rates and callback partitions. Rendered DSP/onset/device evidence is still
 required for audible sustained SYNC. G3a changes no physical wrap policy and does

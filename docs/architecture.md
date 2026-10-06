@@ -419,10 +419,15 @@ and no sustained synchronization guarantee. Tempo ratios clipped outside the
 engine's `0.5..2.0` range also fall outside that guarantee. This helper prepares
 the phase contract; it does not yet change normal source-start reads.
 
-Stem generation is offline/background work. Rust accepts prepared immutable stem
-buffers only after non-realtime validation. Prepared stems must match the loaded
-full mix by source version, sample rate, channel layout, frame count, and
-source-frame origin. Cache publication compares the component-stem transient
+Stem generation is offline/background work. G3b1 captures an opaque engine-owned
+source/request/preparation-epoch ticket before each job, requires a full original
+content digest matching the loaded source, and isolates worker artifact writes.
+The owner rechecks actual state through enqueue; callback adoption checks the
+actual source Arc and atomic permit. Shape/rate cannot identify replacement. A
+complete-set marker binds all five artifact digests; legacy stat-only caches
+invalidate. Python enables controls after native adoption feedback and avoids
+full-file hashing on mode/mask clicks. See [prepared publication](prepared-stem-publication.md).
+Cache publication compares the component-stem transient
 sum with the loaded full-mix buffer and, outside the realtime callback, applies
 one shared frame offset to the prepared stem set when an offline separator has
 introduced a measurable global delay. Individual stems are not shifted
@@ -431,8 +436,10 @@ independently.
 Restored stem caches are validated in Python before the pad is treated as
 stem-available, but restored prepared stems are published to Rust only after the
 matching restored full-mix sample has completed its async load. If publication
-is rejected, Python marks the cache unavailable for controls and leaves Rust in
-full-mix playback.
+is rejected, Python marks the cache unavailable for controls and preserves Rust's
+previous playback state. Late callback rejection is observed before availability.
+The preparation epoch is not the G3a accepted revision; binary64 period adoption
+and immutable copy-first source proof remain separate gates.
 
 Active full-mix/stem mode and enabled-mask changes use bounded Rust-owned
 transition state with a short 128 source-frame crossfade. Both sides read the

@@ -290,6 +290,7 @@ pub(crate) fn prepared_stem_set_matches_sample(
         || stems.frame_count != sample_frames
         || stems.available_mask != full_stem_available_mask()
         || stems.source_version_hash == 0
+        || !std::sync::Arc::ptr_eq(&stems.reference_samples, &sample.samples)
     {
         return false;
     }
@@ -544,8 +545,10 @@ mod tests {
         }
     }
 
-    fn prepared_stems() -> PreparedStemSet {
+    fn prepared_stems(reference: &SampleBuffer) -> PreparedStemSet {
         PreparedStemSet {
+            reference_samples: reference.samples.clone(),
+            publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
             sample_rate_hz: 48_000,
             channels: 2,
@@ -656,7 +659,7 @@ mod tests {
     #[test]
     fn prepared_stem_selection_keeps_stereo_wrap_and_excludes_instrumental() {
         let sample = stereo_sample(100.0);
-        let stems = prepared_stems();
+        let stems = prepared_stems(&sample);
         let validated = prepared_stem_set_for_render(Some(&stems), &sample, 2, 48_000.0, 6);
         let mut plan = plan(4, ExplicitSeekMode::Normal);
         plan.selection = StemRenderSelection::from_state(StemMixMode::AllStems, 42, u8::MAX);
@@ -669,7 +672,7 @@ mod tests {
     #[test]
     fn missing_or_stale_stems_fall_back_but_an_empty_matching_mask_is_silent() {
         let sample = stereo_sample(100.0);
-        let stems = prepared_stems();
+        let stems = prepared_stems(&sample);
         let mut plan = plan(4, ExplicitSeekMode::Normal);
         plan.selection =
             StemRenderSelection::from_state(StemMixMode::AllStems, 7, STEM_MASK_VOCALS);
@@ -685,7 +688,7 @@ mod tests {
     #[test]
     fn transition_across_segments_reads_both_sides_at_the_same_wrapped_frame() {
         let sample = stereo_sample(100.0);
-        let stems = prepared_stems();
+        let stems = prepared_stems(&sample);
         let mut plan = plan(4, ExplicitSeekMode::Normal);
         plan.selection =
             StemRenderSelection::from_state(StemMixMode::AllStems, 42, STEM_MASK_MELODY);
@@ -714,7 +717,7 @@ mod tests {
     #[test]
     fn fractional_feed_uses_clock_ratio_and_borrows_source_transition_progress() {
         let sample = stereo_sample(100.0);
-        let stems = prepared_stems();
+        let stems = prepared_stems(&sample);
         let mut read_plan = plan(1, ExplicitSeekMode::BeforeLoop);
         read_plan.selection =
             StemRenderSelection::from_state(StemMixMode::AllStems, 42, STEM_MASK_VOCALS);
@@ -758,9 +761,17 @@ mod tests {
     #[test]
     fn prepared_source_validation_rejects_incomplete_or_mismatched_buffers() {
         let sample = stereo_sample(100.0);
-        let stems = prepared_stems();
+        let stems = prepared_stems(&sample);
         assert!(prepared_stem_set_matches_sample(
             &stems, &sample, 2, 48_000.0, 6
+        ));
+        let same_values_new_source = stereo_sample(100.0);
+        assert!(!prepared_stem_set_matches_sample(
+            &stems,
+            &same_values_new_source,
+            2,
+            48_000.0,
+            6
         ));
         for (channels, rate, frames) in [(1, 48_000.0, 6), (2, 44_100.0, 6), (2, 48_000.0, 5)] {
             assert!(!prepared_stem_set_matches_sample(

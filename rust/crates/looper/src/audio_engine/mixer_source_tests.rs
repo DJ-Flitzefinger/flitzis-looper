@@ -256,8 +256,10 @@ fn explicit_intro_and_tail_seek_taps_and_cursors_are_partition_invariant() {
     }
 }
 
-fn prepared_sources(sample_rate: f32) -> PreparedStemSet {
+fn prepared_sources(reference: &SampleBuffer, sample_rate: f32) -> PreparedStemSet {
     PreparedStemSet {
+        reference_samples: reference.samples.clone(),
+        publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
         source_version_hash: 42,
         sample_rate_hz: sample_rate as u32,
         channels: CHANNELS,
@@ -297,7 +299,7 @@ fn prepared_stem_masks_interpolate_the_same_fractional_source_addresses() {
         let mut mixer = RtMixer::new(CHANNELS, sample_rate);
         mixer.load_sample(0, source.clone());
         set_loop(&mut mixer, sample_rate, oracle.start, oracle.end);
-        let stems = prepared_sources(sample_rate);
+        let stems = prepared_sources(&source, sample_rate);
         assert!(mixer.publish_prepared_stems(0, stems.clone()));
         for mask in [
             0,
@@ -328,10 +330,73 @@ fn prepared_stem_masks_interpolate_the_same_fractional_source_addresses() {
 }
 
 #[test]
+fn accepted_same_source_stems_retain_fractional_trajectory_after_timing_intent_changes() {
+    use crate::audio_engine::prepared_source::PreparedSourcePermit;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    let sample_rate = 48_000.0;
+    let source = immutable_source(0);
+    let oracle = SourceOracle::normal(113, 787);
+    let ratio = 0.73_f32;
+    let prefix = 333;
+    let frames = 1493;
+    let mut reference_feed = None;
+    for partitions in PARTITIONS {
+        let mut mixer = RtMixer::new(CHANNELS, sample_rate);
+        mixer.load_sample(0, source.clone());
+        set_loop(&mut mixer, sample_rate, oracle.start, oracle.end);
+        let epoch = Arc::new(AtomicU64::new(1));
+        let mut stems = prepared_sources(&source, sample_rate);
+        stems.publication = PreparedSourcePermit::for_epoch(epoch.clone(), 1);
+        let selected = component_sum(&stems, STEM_MASK_VOCALS | STEM_MASK_DRUMS);
+        assert!(mixer.publish_prepared_stems(0, stems));
+        mixer.set_speed(ratio);
+        assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
+        assert!(mixer.set_stem_enabled_mask(0, STEM_MASK_VOCALS | STEM_MASK_DRUMS, 42));
+        assert!(mixer.play_sample_at_output_frame(0, 1.0, 0));
+        let mut output_frame = 0;
+        render_capture(&mut mixer, &mut output_frame, prefix, partitions);
+        oracle.assert_cursor(&mixer, prefix as f64 * f64::from(ratio));
+
+        // Publication guards reject unfinished work; an accepted source-frame stem set
+        // still follows the same source clock after later BPM/origin intent updates.
+        epoch.store(2, Ordering::Release);
+        mixer.set_pad_bpm(0, Some(123.45));
+        mixer.set_pad_timing_metadata(
+            0,
+            PadTimingMetadata {
+                phase_anchor_s: -0.217,
+            },
+        );
+        assert!(
+            !mixer.prepared_stems[0]
+                .as_ref()
+                .unwrap()
+                .publication
+                .current()
+        );
+        oracle.assert_cursor(&mixer, prefix as f64 * f64::from(ratio));
+        let distances: Vec<f64> = (prefix..prefix + frames)
+            .map(|frame| frame as f64 * f64::from(ratio))
+            .collect();
+        let expected = oracle.samples(&selected, &distances);
+        let actual = render_capture(&mut mixer, &mut output_frame, frames, partitions);
+        assert_audio_close(&actual.feed, &expected);
+        assert_audio_close(&actual.output, &expected);
+        oracle.assert_cursor(&mixer, (prefix + frames) as f64 * f64::from(ratio));
+        if let Some(reference) = &reference_feed {
+            assert_eq!(actual.feed, *reference);
+        } else {
+            reference_feed = Some(actual.feed);
+        }
+    }
+}
+
+#[test]
 fn fractional_stem_crossfade_uses_common_addresses_across_partitions() {
     let sample_rate = 48_000.0;
     let source = immutable_source(0);
-    let stems = prepared_sources(sample_rate);
+    let stems = prepared_sources(&source, sample_rate);
     let selected = component_sum(&stems, STEM_MASK_VOCALS | STEM_MASK_DRUMS);
     let oracle = SourceOracle::normal(113, 787);
     let ratio = 0.73_f32;

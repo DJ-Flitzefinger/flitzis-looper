@@ -3,7 +3,10 @@
 //! These helpers run only on background/control-plane threads. They must never be called from the
 //! real-time audio callback.
 
-use std::fs::{self, File};
+use std::fs;
+#[cfg(test)]
+use std::fs::File;
+#[cfg(test)]
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 
@@ -48,24 +51,7 @@ pub(crate) fn project_stem_cache_dir(cache_dir: &str) -> Result<PathBuf, String>
     Ok(parts.iter().collect())
 }
 
-pub(crate) fn write_deterministic_stem_artifacts<F>(
-    sample: &SampleBuffer,
-    output_sample_rate: u32,
-    cache_dir: &str,
-    mut progress: F,
-) -> Result<(), String>
-where
-    F: FnMut(f32, &'static str),
-{
-    write_deterministic_stem_artifacts_at_project_root(
-        sample,
-        output_sample_rate,
-        cache_dir,
-        Path::new("."),
-        &mut progress,
-    )
-}
-
+#[cfg(test)]
 fn write_deterministic_stem_artifacts_at_project_root<F>(
     sample: &SampleBuffer,
     output_sample_rate: u32,
@@ -170,6 +156,8 @@ fn prepare_stem_buffers_from_cache_at_project_root(
         .map_err(|_| "stem set is incomplete".to_string())?;
 
     Ok(PreparedStemSet {
+        reference_samples: reference.samples.clone(),
+        publication: super::prepared_source::PreparedSourcePermit::unbound(),
         source_version_hash: source_version_hash(source_version),
         sample_rate_hz: output_sample_rate,
         channels: reference.channels,
@@ -598,6 +586,7 @@ fn parse_le_u32(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
 }
 
+#[cfg(test)]
 fn write_pcm16_wav(
     path: &Path,
     channels: usize,
@@ -652,6 +641,7 @@ fn pcm16_to_float(sample: i16) -> f32 {
     }
 }
 
+#[cfg(test)]
 fn float_to_pcm16(sample: f32) -> i16 {
     let sample = if sample.is_finite() {
         sample.clamp(-1.0, 1.0)

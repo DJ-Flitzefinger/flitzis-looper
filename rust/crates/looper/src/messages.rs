@@ -3,6 +3,7 @@
 //! This module defines the enums that serve as the wire format for messages passed through the
 //! ring buffer between the Python thread and the real-time audio thread.
 
+use crate::audio_engine::prepared_source::PreparedSourcePermit;
 use pyo3::prelude::*;
 use std::sync::Arc;
 
@@ -22,6 +23,8 @@ pub struct SampleBuffer {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedStemSet {
+    pub reference_samples: Arc<[f32]>,
+    pub publication: PreparedSourcePermit,
     pub source_version_hash: u64,
     pub sample_rate_hz: u32,
     pub channels: usize,
@@ -347,6 +350,7 @@ pub(crate) use flitzis_looper_analysis::SampleAnalysis;
 pub enum BackgroundTaskKind {
     Analysis,
     OfflineAnalysis,
+    #[cfg(test)]
     StemGeneration,
 }
 
@@ -354,6 +358,7 @@ pub fn task_to_str(task: BackgroundTaskKind) -> &'static str {
     match task {
         BackgroundTaskKind::Analysis => "analysis",
         BackgroundTaskKind::OfflineAnalysis => "offline_analysis",
+        #[cfg(test)]
         BackgroundTaskKind::StemGeneration => "stem_generation",
     }
 }
@@ -549,6 +554,8 @@ mod tests {
             samples: Arc::from([0.0_f32, 0.0].as_slice()),
         };
         let stems = PreparedStemSet {
+            reference_samples: buffer.samples.clone(),
+            publication: PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
             sample_rate_hz: 44_100,
             channels: 1,
@@ -568,7 +575,8 @@ mod tests {
                     channels: 1,
                     frame_count: 2,
                     available_mask: 0b1_1111,
-                    stems: _
+                    stems: _,
+                    ..
                 }
             }
         ));
@@ -581,6 +589,8 @@ mod tests {
             samples: Arc::from([0.0_f32, 0.0].as_slice()),
         };
         let stems = PreparedStemSet {
+            reference_samples: buffer.samples.clone(),
+            publication: PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
             sample_rate_hz: 44_100,
             channels: 1,

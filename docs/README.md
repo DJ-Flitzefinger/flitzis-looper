@@ -34,6 +34,7 @@ For focused areas:
 | `development.md` | Setup, validation, OpenSpec workflow, package layout, and generated-file notes. |
 | `ui-toolkit.md` | Project-specific Dear ImGui design and state-flow rules. |
 | `stem-generation-setup.md` | External requirements for offline Demucs stem generation. |
+| `prepared-stem-publication.md` | G3b1 content identity, native preparation tickets, artifact integrity and callback adoption feedback. |
 | `key-lock-backend.md` | Current Rubber Band Key Lock backend, timing semantics, realtime constraints, and native dependency requirements. |
 | `offline-analysis.md` | Diagnostic PCM/worker API, resource ownership and limits; default cutover remains gated. |
 | `beat-this-setup.md` | Explicit optional Windows CPU worker installation, locked environment and accepted model provenance. |

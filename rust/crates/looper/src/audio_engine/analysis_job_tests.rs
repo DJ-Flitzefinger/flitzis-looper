@@ -9,12 +9,19 @@ fn sample() -> SampleBuffer {
     }
 }
 
+fn fresh_owner(request_ids: &Arc<Mutex<Vec<u64>>>) -> OfflineRequestOwner {
+    OfflineRequestOwner {
+        request_ids: request_ids.clone(),
+        prepared_epoch: Arc::new(AtomicU64::new(1)),
+    }
+}
+
 fn begin(
     jobs: &OfflineJobs,
     ids: &Arc<Mutex<Vec<u64>>>,
     tx: &Sender<LoaderEvent>,
 ) -> OfflineAnalysisJob {
-    jobs.begin(0, sample(), 48_000, 1, ids.clone(), tx.clone())
+    jobs.begin(0, sample(), 48_000, 1, fresh_owner(ids), tx.clone())
         .unwrap()
 }
 
@@ -80,8 +87,18 @@ fn retiring_key_retains_slot_and_pcm_until_actual_terminal() {
             .contains("retiring")
     );
     assert!(
-        jobs.begin(0, sample(), 48_000, 1, ids.clone(), tx.clone())
-            .is_err()
+        jobs.begin(
+            0,
+            sample(),
+            48_000,
+            1,
+            OfflineRequestOwner {
+                request_ids: ids.clone(),
+                prepared_epoch: Arc::new(AtomicU64::new(1))
+            },
+            tx.clone()
+        )
+        .is_err()
     );
     assert!(job.state().snapshot.lock().unwrap().is_none());
     assert!(job.state().staged_pcm.lock().unwrap().is_some());
@@ -90,7 +107,20 @@ fn retiring_key_retains_slot_and_pcm_until_actual_terminal() {
     assert!(job.state().snapshot.lock().unwrap().is_none());
     assert!(job.state().staged_pcm.lock().unwrap().is_none());
     assert_eq!(completions(&rx), 0);
-    assert!(jobs.begin(0, sample(), 48_000, 1, ids, tx).is_ok());
+    assert!(
+        jobs.begin(
+            0,
+            sample(),
+            48_000,
+            1,
+            OfflineRequestOwner {
+                request_ids: ids,
+                prepared_epoch: Arc::new(AtomicU64::new(1))
+            },
+            tx
+        )
+        .is_ok()
+    );
 }
 
 #[test]
@@ -101,7 +131,9 @@ fn complete_export_retires_analysis_source_pin_but_preserves_playback_owner() {
     let source = sample();
     let playback = source.samples.clone();
     let weak = Arc::downgrade(&playback);
-    let job = jobs.begin(0, source, 96_000, 1, ids, tx).unwrap();
+    let job = jobs
+        .begin(0, source, 96_000, 1, fresh_owner(&ids), tx)
+        .unwrap();
     assert_eq!(Arc::strong_count(&playback), 2);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("mono.f32");
@@ -139,7 +171,7 @@ fn failed_partial_export_retires_source_before_cleanup_without_publishing_pcm() 
     };
     let weak = Arc::downgrade(&source.samples);
     let job = jobs
-        .begin(0, source, 96_000, 1, ids.clone(), tx.clone())
+        .begin(0, source, 96_000, 1, fresh_owner(&ids), tx.clone())
         .unwrap();
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("partial.f32");
@@ -153,8 +185,18 @@ fn failed_partial_export_retires_source_before_cleanup_without_publishing_pcm() 
     assert!(job.state().staged_pcm.lock().unwrap().is_none());
     assert!(weak.upgrade().is_some());
     assert!(
-        jobs.begin(0, sample(), 96_000, 2, ids.clone(), tx.clone())
-            .is_err()
+        jobs.begin(
+            0,
+            sample(),
+            96_000,
+            2,
+            OfflineRequestOwner {
+                request_ids: ids.clone(),
+                prepared_epoch: Arc::new(AtomicU64::new(1))
+            },
+            tx.clone()
+        )
+        .is_err()
     );
     job.cancel();
     job.state().retire_pcm().unwrap();
@@ -165,7 +207,20 @@ fn failed_partial_export_retires_source_before_cleanup_without_publishing_pcm() 
     std::fs::remove_file(path).unwrap();
     assert!(!job.state().finish(&envelope(&job)).unwrap());
     assert_eq!(completions(&rx), 0);
-    assert!(jobs.begin(0, sample(), 96_000, 2, ids, tx).is_ok());
+    assert!(
+        jobs.begin(
+            0,
+            sample(),
+            96_000,
+            2,
+            OfflineRequestOwner {
+                request_ids: ids,
+                prepared_epoch: Arc::new(AtomicU64::new(1))
+            },
+            tx
+        )
+        .is_ok()
+    );
 }
 
 #[test]
@@ -198,16 +253,114 @@ fn valid_components_publish_once_and_keep_loaded_source_identity() {
     let ids = Arc::new(Mutex::new(vec![7]));
     let (tx, rx) = channel();
     let job = jobs
-        .begin(0, sample(), 44_100, 7, ids.clone(), tx.clone())
+        .begin(0, sample(), 44_100, 7, fresh_owner(&ids), tx.clone())
         .unwrap();
     assert_eq!(job.state().identity.source_generation, 7);
     assert_eq!(job.state().identity.request_id, 8);
     job.state().finish(&envelope(&job)).unwrap();
     assert!(job.state().finish(&envelope(&job)).is_err());
     assert_eq!(completions(&rx), 1);
-    let next = jobs.begin(0, sample(), 44_100, 7, ids, tx).unwrap();
+    let next = jobs
+        .begin(0, sample(), 44_100, 7, fresh_owner(&ids), tx)
+        .unwrap();
     assert_eq!(next.state().identity.source_generation, 7);
     assert_eq!(next.state().identity.request_id, 9);
+}
+
+#[test]
+fn offline_admission_rejects_either_counter_exhaustion_without_changing_ownership() {
+    for (request, prepared_epoch) in [(u64::MAX, 7), (7, u64::MAX)] {
+        let jobs = OfflineJobs::default();
+        let ids = Arc::new(Mutex::new(vec![request]));
+        let epoch = Arc::new(AtomicU64::new(prepared_epoch));
+        let (tx, rx) = channel();
+        let source = sample();
+        assert!(
+            jobs.begin(
+                0,
+                source.clone(),
+                48_000,
+                1,
+                OfflineRequestOwner {
+                    request_ids: ids.clone(),
+                    prepared_epoch: epoch.clone()
+                },
+                tx
+            )
+            .is_err()
+        );
+        assert_eq!(ids.lock().unwrap()[0], request);
+        assert_eq!(epoch.load(Ordering::Acquire), prepared_epoch);
+        assert!(!jobs.busy.load(Ordering::Acquire));
+        assert!(jobs.current.lock().unwrap().upgrade().is_none());
+        assert_eq!(Arc::strong_count(&source.samples), 1);
+        assert!(rx.try_recv().is_err());
+    }
+}
+
+#[test]
+fn cancellation_overflow_cancels_teardown_but_preserves_both_shared_counters() {
+    for (request, prepared_epoch) in [(u64::MAX - 1, 7), (7, u64::MAX - 1)] {
+        let jobs = OfflineJobs::default();
+        let ids = Arc::new(Mutex::new(vec![request]));
+        let epoch = Arc::new(AtomicU64::new(prepared_epoch));
+        let (tx, rx) = channel();
+        let job = jobs
+            .begin(
+                0,
+                sample(),
+                48_000,
+                1,
+                OfflineRequestOwner {
+                    request_ids: ids.clone(),
+                    prepared_epoch: epoch.clone(),
+                },
+                tx,
+            )
+            .unwrap();
+        let current_request = ids.lock().unwrap()[0];
+        let current_epoch = epoch.load(Ordering::Acquire);
+
+        assert!(job.state().cancel_request().is_err());
+        assert!(job.is_cancelled());
+        assert_eq!(ids.lock().unwrap()[0], current_request);
+        assert_eq!(epoch.load(Ordering::Acquire), current_epoch);
+        assert!(!job.state().finish(&envelope(&job)).unwrap());
+        assert_eq!(completions(&rx), 0);
+        assert!(!jobs.busy.load(Ordering::Acquire));
+        assert_eq!(ids.lock().unwrap()[0], current_request);
+        assert_eq!(epoch.load(Ordering::Acquire), current_epoch);
+    }
+}
+
+#[test]
+fn superseded_offline_cancellation_preserves_the_new_preparation_owner() {
+    let jobs = OfflineJobs::default();
+    let ids = Arc::new(Mutex::new(vec![7]));
+    let epoch = Arc::new(AtomicU64::new(1));
+    let (tx, rx) = channel();
+    let job = jobs
+        .begin(
+            0,
+            sample(),
+            48_000,
+            1,
+            OfflineRequestOwner {
+                request_ids: ids.clone(),
+                prepared_epoch: epoch.clone(),
+            },
+            tx,
+        )
+        .unwrap();
+    let newer_request = next_pad_request_id(&ids, 0, &epoch).unwrap();
+    let newer_epoch = epoch.load(Ordering::Acquire);
+
+    job.state().cancel_request().unwrap();
+    assert!(job.is_cancelled());
+    assert_eq!(ids.lock().unwrap()[0], newer_request);
+    assert_eq!(epoch.load(Ordering::Acquire), newer_epoch);
+    assert!(!job.state().finish(&envelope(&job)).unwrap());
+    assert_eq!(completions(&rx), 0);
 }
 
 #[test]
@@ -220,7 +373,7 @@ fn stale_source_and_bad_identity_never_publish_or_release_live_slot() {
     wrong["identity"]["source_generation"] = json!(99);
     assert!(job.state().finish(&wrong.to_string()).is_err());
     assert!(jobs.busy.load(Ordering::Acquire));
-    next_pad_request_id(&ids, 0).unwrap();
+    next_pad_request_id(&ids, 0, &job.state().prepared_epoch).unwrap();
     assert!(job.is_cancelled());
     job.state().finish(&envelope(&job)).unwrap();
     assert_eq!(completions(&rx), 0);
@@ -250,8 +403,18 @@ fn invalid_input_does_not_change_request_or_consume_admission() {
     let ids = Arc::new(Mutex::new(vec![1]));
     let (tx, _) = channel();
     assert!(
-        jobs.begin(0, sample(), 0, 1, ids.clone(), tx.clone())
-            .is_err()
+        jobs.begin(
+            0,
+            sample(),
+            0,
+            1,
+            OfflineRequestOwner {
+                request_ids: ids.clone(),
+                prepared_epoch: Arc::new(AtomicU64::new(1))
+            },
+            tx.clone()
+        )
+        .is_err()
     );
     assert_eq!(current_pad_request_id(&ids, 0).unwrap(), 1);
     assert!(!jobs.busy.load(Ordering::Acquire));
@@ -278,7 +441,20 @@ fn repeated_old_retirement_cannot_release_a_new_reservation() {
     let next = begin(&jobs, &ids, &tx);
     old.state().release_reservation();
     assert!(jobs.busy.load(Ordering::Acquire));
-    assert!(jobs.begin(0, sample(), 48_000, 1, ids, tx).is_err());
+    assert!(
+        jobs.begin(
+            0,
+            sample(),
+            48_000,
+            1,
+            OfflineRequestOwner {
+                request_ids: ids,
+                prepared_epoch: Arc::new(AtomicU64::new(1))
+            },
+            tx
+        )
+        .is_err()
+    );
     next.state().finish(&envelope(&next)).unwrap();
 }
 
@@ -413,7 +589,20 @@ fn packed_long_result_publishes_once_without_expanding_or_changing_values() {
     assert!(job.state().snapshot.lock().unwrap().is_none());
     assert!(job.state().staged_pcm.lock().unwrap().is_none());
     assert!(!jobs.busy.load(Ordering::Acquire));
-    assert!(jobs.begin(0, sample(), 48_000, 1, ids, tx).is_ok());
+    assert!(
+        jobs.begin(
+            0,
+            sample(),
+            48_000,
+            1,
+            OfflineRequestOwner {
+                request_ids: ids,
+                prepared_epoch: Arc::new(AtomicU64::new(1))
+            },
+            tx
+        )
+        .is_ok()
+    );
 }
 
 #[test]
@@ -429,7 +618,20 @@ fn invalid_packed_result_keeps_native_admission_until_valid_retirement() {
     assert!(job.state().snapshot.lock().unwrap().is_some());
     assert!(!job.state().finished.load(Ordering::Acquire));
     assert_eq!(completions(&rx), 0);
-    assert!(jobs.begin(0, sample(), 48_000, 1, ids, tx).is_err());
+    assert!(
+        jobs.begin(
+            0,
+            sample(),
+            48_000,
+            1,
+            OfflineRequestOwner {
+                request_ids: ids,
+                prepared_epoch: Arc::new(AtomicU64::new(1))
+            },
+            tx
+        )
+        .is_err()
+    );
     assert!(
         job.state()
             .finish(&ready_envelope(&job, 1).to_string())
@@ -448,7 +650,7 @@ fn cancelled_or_stale_packed_result_retires_without_publication() {
         if cancelled {
             job.cancel();
         } else {
-            next_pad_request_id(&ids, 0).unwrap();
+            next_pad_request_id(&ids, 0, &job.state().prepared_epoch).unwrap();
         }
         let ready = ready_envelope(&job, 1).to_string();
         job.state().key_running.store(true, Ordering::Release);
@@ -459,7 +661,20 @@ fn cancelled_or_stale_packed_result_retires_without_publication() {
         assert!(!job.state().finish(&ready).unwrap());
         assert_eq!(completions(&rx), 0);
         assert!(job.state().snapshot.lock().unwrap().is_none());
-        assert!(jobs.begin(0, sample(), 48_000, 2, ids, tx).is_ok());
+        assert!(
+            jobs.begin(
+                0,
+                sample(),
+                48_000,
+                2,
+                OfflineRequestOwner {
+                    request_ids: ids,
+                    prepared_epoch: Arc::new(AtomicU64::new(1))
+                },
+                tx
+            )
+            .is_ok()
+        );
     }
 }
 

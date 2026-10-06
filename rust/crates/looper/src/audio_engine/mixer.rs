@@ -365,6 +365,7 @@ impl RtMixer {
         retirement: &mut impl AudioBufferRetirement,
     ) -> bool {
         if !self.can_accept_prepared_stems(id, &stems) {
+            stems.publication.mark_rejected();
             retirement.retire_prepared_stems(stems);
             return false;
         }
@@ -373,6 +374,7 @@ impl RtMixer {
             retirement.retire_prepared_stems(old_stems);
         }
 
+        stems.publication.mark_accepted();
         self.prepared_stems[id] = Some(stems);
         self.stem_transitions[id].clear();
         true
@@ -469,7 +471,11 @@ impl RtMixer {
     }
 
     fn can_accept_prepared_stems(&self, id: usize, stems: &PreparedStemSet) -> bool {
-        if id >= NUM_SAMPLES || self.channels == 0 || self.sample_is_active(id) {
+        if id >= NUM_SAMPLES
+            || self.channels == 0
+            || self.sample_is_active(id)
+            || !stems.publication.current()
+        {
             return false;
         }
 
@@ -1478,6 +1484,7 @@ mod tests {
     }
 
     fn create_sine_prepared_stems(
+        reference: &SampleBuffer,
         sample_rate_hz: u32,
         frames: usize,
         frequency_hz: f32,
@@ -1486,6 +1493,8 @@ mod tests {
         let silence = create_test_sample(1, frames, 0.0);
 
         PreparedStemSet {
+            reference_samples: reference.samples.clone(),
+            publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
             sample_rate_hz,
             channels: 1,
@@ -1652,12 +1661,15 @@ mod tests {
     }
 
     fn create_test_prepared_stems(
+        reference: &SampleBuffer,
         channels: usize,
         sample_rate_hz: u32,
         frames: usize,
     ) -> PreparedStemSet {
         let buffer = create_test_sample(channels, frames, 0.25);
         PreparedStemSet {
+            reference_samples: reference.samples.clone(),
+            publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
             sample_rate_hz,
             channels,
@@ -1668,12 +1680,15 @@ mod tests {
     }
 
     fn create_test_prepared_stems_with_values(
+        reference: &SampleBuffer,
         channels: usize,
         sample_rate_hz: u32,
         frames: usize,
         values: [f32; STEM_BUFFER_COUNT],
     ) -> PreparedStemSet {
         PreparedStemSet {
+            reference_samples: reference.samples.clone(),
+            publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
             sample_rate_hz,
             channels,
@@ -1734,6 +1749,8 @@ mod tests {
         let stem_samples: Arc<[f32]> = Arc::from(vec![0.25_f32; 32].into_boxed_slice());
         let weak = Arc::downgrade(&stem_samples);
         let stems = PreparedStemSet {
+            reference_samples: mixer.sample_bank[0].as_ref().unwrap().samples.clone(),
+            publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
             sample_rate_hz: 44_100,
             channels: 1,
@@ -1987,7 +2004,10 @@ mod tests {
     fn stem_selection_and_pause_resume_retain_warm_key_lock_history() {
         let mut mixer = RtMixer::new(1, 48_000.0);
         mixer.load_sample(0, create_sine_sample(48_000.0, 96_000, 440.0));
-        assert!(mixer.publish_prepared_stems(0, create_test_prepared_stems(1, 48_000, 96_000)));
+        assert!(mixer.publish_prepared_stems(
+            0,
+            create_test_prepared_stems(mixer.sample_bank[0].as_ref().unwrap(), 1, 48_000, 96_000)
+        ));
         mixer.set_speed(2.0);
         mixer.set_key_lock(true);
         assert!(mixer.play_sample(0, 1.0));
@@ -2031,7 +2051,12 @@ mod tests {
         stem_mixer.load_sample(0, create_test_sample(1, frames, 0.0));
         assert!(stem_mixer.publish_prepared_stems(
             0,
-            create_sine_prepared_stems(sample_rate_hz as u32, frames, source_hz)
+            create_sine_prepared_stems(
+                stem_mixer.sample_bank[0].as_ref().unwrap(),
+                sample_rate_hz as u32,
+                frames,
+                source_hz
+            )
         ));
         assert!(stem_mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
         stem_mixer.set_bpm_lock(true);
@@ -2246,6 +2271,7 @@ mod tests {
         assert!(mixer.publish_prepared_stems(
             1,
             create_test_prepared_stems_with_values(
+                mixer.sample_bank[1].as_ref().unwrap(),
                 1,
                 SAMPLE_RATE_HZ as u32,
                 stem_loop_frames,
@@ -2611,7 +2637,10 @@ mod tests {
     fn test_load_sample_clears_prepared_stems() {
         let mut mixer = RtMixer::new(2, 44_100.0);
         mixer.load_sample(0, create_test_sample(2, 100, 0.5));
-        assert!(mixer.publish_prepared_stems(0, create_test_prepared_stems(2, 44_100, 100)));
+        assert!(mixer.publish_prepared_stems(
+            0,
+            create_test_prepared_stems(mixer.sample_bank[0].as_ref().unwrap(), 2, 44_100, 100)
+        ));
 
         mixer.load_sample(0, create_test_sample(2, 100, 0.25));
 
@@ -2623,7 +2652,10 @@ mod tests {
         let mut mixer = RtMixer::new(2, 44_100.0);
         mixer.load_sample(0, create_test_sample(2, 100, 0.5));
 
-        assert!(mixer.publish_prepared_stems(0, create_test_prepared_stems(2, 44_100, 100)));
+        assert!(mixer.publish_prepared_stems(
+            0,
+            create_test_prepared_stems(mixer.sample_bank[0].as_ref().unwrap(), 2, 44_100, 100)
+        ));
 
         assert_eq!(
             mixer.prepared_stems[0]
@@ -2634,12 +2666,56 @@ mod tests {
     }
 
     #[test]
+    fn delayed_prepared_stems_reject_equal_valued_replacement_and_retire_source_pin() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        let sample = create_test_sample(1, 100, 0.5);
+        let old_source = Arc::downgrade(&sample.samples);
+        mixer.load_sample(0, sample);
+        let stems =
+            create_test_prepared_stems(mixer.sample_bank[0].as_ref().unwrap(), 1, 44_100, 100);
+
+        // A fresh source can have exactly the same dimensions and PCM values.
+        mixer.load_sample(0, create_test_sample(1, 100, 0.5));
+        let mut retirement = CollectingRetirement::default();
+        assert!(!mixer.publish_prepared_stems_rt(0, stems, &mut retirement));
+        assert!(mixer.prepared_stems[0].is_none());
+        assert_eq!(retirement.stems.len(), 1);
+        assert!(old_source.upgrade().is_some());
+
+        drop(retirement);
+        assert!(old_source.upgrade().is_none());
+    }
+
+    #[test]
+    fn delayed_prepared_stems_reject_timing_intent_changed_after_enqueue() {
+        use crate::audio_engine::prepared_source::PreparedSourcePermit;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        mixer.load_sample(0, create_test_sample(1, 100, 0.5));
+        let epoch = Arc::new(AtomicU64::new(1));
+        let mut stems =
+            create_test_prepared_stems(mixer.sample_bank[0].as_ref().unwrap(), 1, 44_100, 100);
+        stems.publication = PreparedSourcePermit::for_epoch(epoch.clone(), 1);
+
+        // Model an intent publication after command enqueue and before callback consumption.
+        epoch.store(2, Ordering::Release);
+        let mut retirement = CollectingRetirement::default();
+        assert!(!mixer.publish_prepared_stems_rt(0, stems, &mut retirement));
+        assert!(mixer.prepared_stems[0].is_none());
+        assert_eq!(retirement.stems.len(), 1);
+    }
+
+    #[test]
     fn test_publish_prepared_stems_rejects_active_pad() {
         let mut mixer = RtMixer::new(1, 44_100.0);
         mixer.load_sample(0, create_test_sample(1, 100, 0.5));
         assert!(mixer.play_sample(0, 1.0));
 
-        assert!(!mixer.publish_prepared_stems(0, create_test_prepared_stems(1, 44_100, 100)));
+        assert!(!mixer.publish_prepared_stems(
+            0,
+            create_test_prepared_stems(mixer.sample_bank[0].as_ref().unwrap(), 1, 44_100, 100)
+        ));
 
         assert!(mixer.prepared_stems[0].is_none());
     }
@@ -2649,9 +2725,18 @@ mod tests {
         let mut mixer = RtMixer::new(2, 44_100.0);
         mixer.load_sample(0, create_test_sample(2, 100, 0.5));
 
-        assert!(!mixer.publish_prepared_stems(0, create_test_prepared_stems(1, 44_100, 100)));
-        assert!(!mixer.publish_prepared_stems(0, create_test_prepared_stems(2, 48_000, 100)));
-        assert!(!mixer.publish_prepared_stems(0, create_test_prepared_stems(2, 44_100, 99)));
+        assert!(!mixer.publish_prepared_stems(
+            0,
+            create_test_prepared_stems(mixer.sample_bank[0].as_ref().unwrap(), 1, 44_100, 100)
+        ));
+        assert!(!mixer.publish_prepared_stems(
+            0,
+            create_test_prepared_stems(mixer.sample_bank[0].as_ref().unwrap(), 2, 48_000, 100)
+        ));
+        assert!(!mixer.publish_prepared_stems(
+            0,
+            create_test_prepared_stems(mixer.sample_bank[0].as_ref().unwrap(), 2, 44_100, 99)
+        ));
 
         assert!(mixer.prepared_stems[0].is_none());
     }
@@ -2664,7 +2749,10 @@ mod tests {
         assert!(!mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
         assert_eq!(mixer.stem_mix_mode[0], StemMixMode::FullMix);
 
-        assert!(mixer.publish_prepared_stems(0, create_test_prepared_stems(1, 44_100, 20)));
+        assert!(mixer.publish_prepared_stems(
+            0,
+            create_test_prepared_stems(mixer.sample_bank[0].as_ref().unwrap(), 1, 44_100, 20)
+        ));
         assert!(!mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 7));
         assert_eq!(mixer.stem_mix_mode[0], StemMixMode::FullMix);
 
@@ -2677,7 +2765,10 @@ mod tests {
     fn test_set_stem_mix_mode_reverts_to_full_mix_without_prepared_stems() {
         let mut mixer = RtMixer::new(1, 44_100.0);
         mixer.load_sample(0, create_test_sample(1, 20, 0.9));
-        assert!(mixer.publish_prepared_stems(0, create_test_prepared_stems(1, 44_100, 20)));
+        assert!(mixer.publish_prepared_stems(
+            0,
+            create_test_prepared_stems(mixer.sample_bank[0].as_ref().unwrap(), 1, 44_100, 20)
+        ));
         assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
 
         assert!(mixer.set_stem_mix_mode(0, StemMixMode::FullMix, 0));
@@ -2694,7 +2785,10 @@ mod tests {
         assert!(!mixer.set_stem_enabled_mask(0, STEM_MASK_VOCALS, 42));
         assert_eq!(mixer.stem_enabled_mask[0], STEM_COMPONENT_MASK);
 
-        assert!(mixer.publish_prepared_stems(0, create_test_prepared_stems(1, 44_100, 20)));
+        assert!(mixer.publish_prepared_stems(
+            0,
+            create_test_prepared_stems(mixer.sample_bank[0].as_ref().unwrap(), 1, 44_100, 20)
+        ));
         assert!(!mixer.set_stem_enabled_mask(0, STEM_MASK_VOCALS, 7));
         assert!(!mixer.set_stem_enabled_mask(0, STEM_MASK_VOCALS | stem_index_mask(4), 42));
         assert_eq!(mixer.stem_enabled_mask[0], STEM_COMPONENT_MASK);
@@ -2710,8 +2804,13 @@ mod tests {
     fn test_render_uses_full_mix_by_default_when_prepared_stems_are_available() {
         let mut mixer = RtMixer::new(1, 44_100.0);
         mixer.load_sample(0, create_test_sample(1, 20, 0.9));
-        let stems =
-            create_test_prepared_stems_with_values(1, 44_100, 20, [0.1, 0.2, 0.05, 0.0, 0.15]);
+        let stems = create_test_prepared_stems_with_values(
+            mixer.sample_bank[0].as_ref().unwrap(),
+            1,
+            44_100,
+            20,
+            [0.1, 0.2, 0.05, 0.0, 0.15],
+        );
         assert!(mixer.publish_prepared_stems(0, stems));
         assert!(mixer.play_sample(0, 1.0));
 
@@ -2727,8 +2826,13 @@ mod tests {
     fn test_render_uses_prepared_stems_in_all_stems_mode() {
         let mut mixer = RtMixer::new(1, 44_100.0);
         mixer.load_sample(0, create_test_sample(1, 20, 0.9));
-        let stems =
-            create_test_prepared_stems_with_values(1, 44_100, 20, [0.1, 0.2, 0.05, 0.0, 0.15]);
+        let stems = create_test_prepared_stems_with_values(
+            mixer.sample_bank[0].as_ref().unwrap(),
+            1,
+            44_100,
+            20,
+            [0.1, 0.2, 0.05, 0.0, 0.15],
+        );
         assert!(mixer.publish_prepared_stems(0, stems));
         assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
         assert!(mixer.play_sample(0, 1.0));
@@ -2745,8 +2849,13 @@ mod tests {
     fn test_render_uses_enabled_stem_mask_in_all_stems_mode() {
         let mut mixer = RtMixer::new(1, 44_100.0);
         mixer.load_sample(0, create_test_sample(1, 20, 0.9));
-        let stems =
-            create_test_prepared_stems_with_values(1, 44_100, 20, [0.1, 0.2, 0.05, 0.4, 0.15]);
+        let stems = create_test_prepared_stems_with_values(
+            mixer.sample_bank[0].as_ref().unwrap(),
+            1,
+            44_100,
+            20,
+            [0.1, 0.2, 0.05, 0.4, 0.15],
+        );
         assert!(mixer.publish_prepared_stems(0, stems));
         assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
         assert!(mixer.set_stem_enabled_mask(
@@ -2768,8 +2877,13 @@ mod tests {
     fn test_all_stems_mask_does_not_add_instrumental_artifact() {
         let mut mixer = RtMixer::new(1, 44_100.0);
         mixer.load_sample(0, create_test_sample(1, 20, 0.9));
-        let stems =
-            create_test_prepared_stems_with_values(1, 44_100, 20, [0.1, 0.2, 0.05, 0.4, 0.8]);
+        let stems = create_test_prepared_stems_with_values(
+            mixer.sample_bank[0].as_ref().unwrap(),
+            1,
+            44_100,
+            20,
+            [0.1, 0.2, 0.05, 0.4, 0.8],
+        );
         assert!(mixer.publish_prepared_stems(0, stems));
         assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
         assert!(mixer.set_stem_enabled_mask(0, STEM_COMPONENT_MASK, 42));
@@ -2787,8 +2901,13 @@ mod tests {
     fn test_switching_to_all_stems_preserves_voice_playhead() {
         let mut mixer = RtMixer::new(1, 44_100.0);
         mixer.load_sample(0, create_test_sample(1, 20, 0.9));
-        let stems =
-            create_test_prepared_stems_with_values(1, 44_100, 20, [0.1, 0.2, 0.05, 0.0, 0.15]);
+        let stems = create_test_prepared_stems_with_values(
+            mixer.sample_bank[0].as_ref().unwrap(),
+            1,
+            44_100,
+            20,
+            [0.1, 0.2, 0.05, 0.0, 0.15],
+        );
         assert!(mixer.publish_prepared_stems(0, stems));
         assert!(mixer.play_sample(0, 1.0));
 
@@ -2827,6 +2946,8 @@ mod tests {
         let vocals: Vec<f32> = (0..8).map(|frame| frame as f32).collect();
         let drums: Vec<f32> = (0..8).map(|frame| 100.0 + frame as f32).collect();
         let stems = PreparedStemSet {
+            reference_samples: full_mix.samples.clone(),
+            publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
             sample_rate_hz: 10,
             channels: 1,
@@ -2876,8 +2997,13 @@ mod tests {
     fn test_inactive_stem_mode_change_does_not_leave_stale_transition() {
         let mut mixer = RtMixer::new(1, 44_100.0);
         mixer.load_sample(0, create_test_sample(1, 20, 0.9));
-        let stems =
-            create_test_prepared_stems_with_values(1, 44_100, 20, [0.1, 0.2, 0.05, 0.0, 0.15]);
+        let stems = create_test_prepared_stems_with_values(
+            mixer.sample_bank[0].as_ref().unwrap(),
+            1,
+            44_100,
+            20,
+            [0.1, 0.2, 0.05, 0.0, 0.15],
+        );
         assert!(mixer.publish_prepared_stems(0, stems));
 
         assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
@@ -2897,9 +3023,39 @@ mod tests {
         let mut mixer = RtMixer::new(1, 44_100.0);
         mixer.load_sample(0, create_test_sample(1, 20, 0.4));
 
-        let mut stems =
-            create_test_prepared_stems_with_values(1, 44_100, 20, [0.9, 0.0, 0.0, 0.0, 0.0]);
+        let mut stems = create_test_prepared_stems_with_values(
+            mixer.sample_bank[0].as_ref().unwrap(),
+            1,
+            44_100,
+            20,
+            [0.9, 0.0, 0.0, 0.0, 0.0],
+        );
         stems.available_mask = 0;
+        mixer.prepared_stems[0] = Some(stems);
+        assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
+        assert!(mixer.play_sample(0, 1.0));
+
+        let mut output = vec![0.0; 20];
+        let mut pad_peaks = [0.0_f32; NUM_SAMPLES];
+        mixer.render(&mut output, &mut pad_peaks);
+
+        assert!(output.iter().all(|&sample| (sample - 0.4).abs() < 1e-5));
+        assert!((pad_peaks[0] - 0.4).abs() < 1e-5);
+    }
+
+    #[test]
+    fn render_rejects_same_shape_stems_bound_to_a_different_source() {
+        let mut mixer = RtMixer::new(1, 44_100.0);
+        let previous_source = create_test_sample(1, 20, 0.4);
+        let stems = create_test_prepared_stems_with_values(
+            &previous_source,
+            1,
+            44_100,
+            20,
+            [0.9, 0.0, 0.0, 0.0, 0.0],
+        );
+        mixer.load_sample(0, create_test_sample(1, 20, 0.4));
+        // Exercise render's independent validation even if a stale set bypassed admission.
         mixer.prepared_stems[0] = Some(stems);
         assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
         assert!(mixer.play_sample(0, 1.0));
@@ -2927,6 +3083,8 @@ mod tests {
             [0.0; 6],
         ];
         let stems = PreparedStemSet {
+            reference_samples: full_mix.samples.clone(),
+            publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 42,
             sample_rate_hz: 10,
             channels: 1,
@@ -2964,8 +3122,13 @@ mod tests {
     fn test_prepared_stem_rendering_shares_bpm_lock_playhead_timing() {
         let mut mixer = RtMixer::new(1, 44_100.0);
         mixer.load_sample(0, create_test_sample(1, 100, 0.2));
-        let stems =
-            create_test_prepared_stems_with_values(1, 44_100, 100, [0.1, 0.05, 0.0, 0.0, 0.05]);
+        let stems = create_test_prepared_stems_with_values(
+            mixer.sample_bank[0].as_ref().unwrap(),
+            1,
+            44_100,
+            100,
+            [0.1, 0.05, 0.0, 0.0, 0.05],
+        );
         assert!(mixer.publish_prepared_stems(0, stems,));
         assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
         mixer.set_bpm_lock(true);

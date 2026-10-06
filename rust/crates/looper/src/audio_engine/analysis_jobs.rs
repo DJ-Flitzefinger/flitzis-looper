@@ -8,7 +8,7 @@ use super::analysis_pcm::{
     key_input_from_f32_le,
 };
 use super::analysis_predictions::validate_predictions;
-use super::{current_pad_request_id, next_pad_request_id, pad_request_matches};
+use super::{PadRequestAdvance, current_pad_request_id, next_pad_request_id, pad_request_matches};
 use crate::messages::{BackgroundTaskKind, LoaderEvent, SampleBuffer};
 use flitzis_looper_analysis as analysis;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -17,11 +17,17 @@ use pyo3::types::PyDict;
 use serde_json::{Value, json};
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak, mpsc::Sender};
 
 const MAX_PCM_BYTES: usize = 512 * 1024 * 1024;
 const MAX_RESULT_BYTES: usize = 1024 * 1024;
+
+/// Shared current-request publication boundary and its actual callback freshness epoch.
+pub(super) struct OfflineRequestOwner {
+    pub request_ids: Arc<Mutex<Vec<u64>>>,
+    pub prepared_epoch: Arc<AtomicU64>,
+}
 
 #[derive(Default)]
 pub(super) struct OfflineJobs {
@@ -35,7 +41,7 @@ impl OfflineJobs {
             && let Some(job) = slot.upgrade()
             && pad.is_none_or(|id| id == job.identity.pad_id)
         {
-            job.cancel_request();
+            let _ = job.cancel_request();
         }
     }
 
@@ -53,9 +59,13 @@ impl OfflineJobs {
         sample: SampleBuffer,
         rate: u32,
         source_generation: u64,
-        request_ids: Arc<Mutex<Vec<u64>>>,
+        owner: OfflineRequestOwner,
         tx: Sender<LoaderEvent>,
     ) -> Result<OfflineAnalysisJob, String> {
+        let OfflineRequestOwner {
+            request_ids,
+            prepared_epoch,
+        } = owner;
         let mut slot = self
             .current
             .lock()
@@ -84,7 +94,7 @@ impl OfflineJobs {
             return Err("offline analysis PCM byte limit exceeded".into());
         }
         let retained_bytes = snapshot.retained_bytes();
-        let request_id = next_pad_request_id(&request_ids, id)?;
+        let request_id = next_pad_request_id(&request_ids, id, &prepared_epoch)?;
         let identity = PcmIdentity {
             request_id,
             ..identity
@@ -102,6 +112,7 @@ impl OfflineJobs {
             observed_key_peak_bytes: AtomicUsize::new(0),
             pcm_retired: AtomicBool::new(false),
             request_ids,
+            prepared_epoch,
             tx,
             cancelled: AtomicBool::new(false),
             preparing: AtomicBool::new(false),
@@ -133,6 +144,7 @@ struct JobState {
     observed_key_peak_bytes: AtomicUsize,
     pcm_retired: AtomicBool,
     request_ids: Arc<Mutex<Vec<u64>>>,
+    prepared_epoch: Arc<AtomicU64>,
     tx: Sender<LoaderEvent>,
     cancelled: AtomicBool,
     preparing: AtomicBool,
@@ -146,19 +158,26 @@ struct JobState {
 }
 
 impl JobState {
-    fn cancel_request(&self) {
+    fn cancel_request(&self) -> Result<(), String> {
         // Serialize cancellation against publication. Invalidating the request
         // also rejects a queued completion if cancellation wins the race.
-        if let Ok(mut requests) = self.request_ids.lock()
-            && !self.finished.load(Ordering::Acquire)
-        {
-            self.cancelled.store(true, Ordering::Release);
-            if let Some(current) = requests.get_mut(self.identity.pad_id)
-                && *current == self.identity.request_id
-            {
-                *current = current.wrapping_add(1).max(1);
-            }
+        if self.finished.load(Ordering::Acquire) {
+            return Ok(());
         }
+        // Teardown still cancels native results when a counter cannot advance.
+        // Such a rejected transition preserves both shared counters, never wrapping.
+        self.cancelled.store(true, Ordering::Release);
+        let mut requests = self
+            .request_ids
+            .lock()
+            .map_err(|_| "request lock poisoned")?;
+        if !self.finished.load(Ordering::Acquire)
+            && let Some(current) = requests.get_mut(self.identity.pad_id)
+            && *current == self.identity.request_id
+        {
+            PadRequestAdvance::prepare(current, &self.prepared_epoch)?.commit();
+        }
+        Ok(())
     }
 
     fn release_reservation(&self) {
@@ -529,7 +548,7 @@ impl OfflineAnalysisJob {
         self.state().cancelled()
     }
     pub fn cancel(&self) {
-        self.state().cancel_request();
+        let _ = self.state().cancel_request();
     }
     pub fn retire_pcm(&self, py: Python<'_>) -> PyResult<()> {
         py.detach(|| self.state().retire_pcm())
@@ -560,7 +579,7 @@ impl OfflineAnalysisJob {
         if state.retirement_started.swap(true, Ordering::AcqRel) {
             return Err(PyRuntimeError::new_err("offline work already retiring"));
         }
-        state.cancel_request();
+        let _ = state.cancel_request();
         let id = &state.identity;
         let envelope = json!({"schema_version":1,"identity":{"pad_id":id.pad_id,
             "request_id":id.request_id,"source_id":id.source_id,"source_generation":id.source_generation},
@@ -593,7 +612,7 @@ impl OfflineAnalysisJob {
 impl Drop for OfflineAnalysisJob {
     fn drop(&mut self) {
         if let Some(state) = self.state.take() {
-            state.cancel_request();
+            let _ = state.cancel_request();
             if state.finished.load(Ordering::Acquire)
                 || state.retirement_started.swap(true, Ordering::AcqRel)
             {

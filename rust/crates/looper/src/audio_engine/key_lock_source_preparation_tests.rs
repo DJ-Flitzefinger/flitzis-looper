@@ -162,12 +162,16 @@ fn loop_fixture(rate: u32, ratio: f32, mode: ExplicitSeekMode, stem_mask: Option
     let full_mix = (0..1939 * 2)
         .map(|index| stems[..4].iter().map(|stem| stem.samples[index]).sum())
         .collect::<Vec<_>>();
+    let sample = SampleBuffer {
+        channels: 2,
+        samples: Arc::from(full_mix),
+    };
+    let reference_samples = sample.samples.clone();
     Fixture {
-        sample: SampleBuffer {
-            channels: 2,
-            samples: Arc::from(full_mix),
-        },
+        sample,
         stems: Some(PreparedStemSet {
+            reference_samples,
+            publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
             source_version_hash: 17,
             sample_rate_hz: rate,
             channels: 2,

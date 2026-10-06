@@ -1,3 +1,5 @@
+from typing import Literal
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -45,6 +47,10 @@ class OfflineAnalysisJob:
     def progress(self, stage: str) -> None: ...
     def finish(self, result_json: str) -> bool: ...
 
+class PreparedSourceTicket:
+    # Opaque native source/request/timing admission identity; not persistable.
+    def publication_status(self) -> Literal["captured", "pending", "accepted", "rejected"]: ...
+
 class AudioEngine:
     def __init__(self) -> None: ...
     def run(self) -> None: ...
@@ -74,8 +80,15 @@ class AudioEngine:
     def analyze_sample_async(self, sample_id: int) -> int: ...
     def begin_offline_analysis(self, sample_id: int) -> OfflineAnalysisJob: ...
     def generate_stems_async(self, sample_id: int, source_version: str, cache_dir: str) -> None: ...
+    def capture_prepared_source(
+        self, sample_id: int, source_version: str
+    ) -> PreparedSourceTicket: ...
     def publish_prepared_stems(
-        self, sample_id: int, source_version: str, cache_dir: str
+        self,
+        sample_id: int,
+        source_version: str,
+        cache_dir: str,
+        source_ticket: PreparedSourceTicket,
     ) -> None: ...
     def set_stem_mix_mode(
         self, sample_id: int, mode: str, source_version: str | None = None

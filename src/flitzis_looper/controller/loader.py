@@ -5,9 +5,7 @@ from typing import TYPE_CHECKING, TypeVar
 from pydantic import ValidationError
 
 from flitzis_looper.controller.base import BaseController
-from flitzis_looper.controller.stems import source_version_for_sample_path
 from flitzis_looper.models import (
-    STEM_KINDS,
     ProjectState,
     SampleAnalysis,
     SessionState,
@@ -17,7 +15,6 @@ from flitzis_looper.models import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from flitzis_looper.models import StemCacheEntry
     from flitzis_looper_audio import AudioEngine
 
 
@@ -577,72 +574,12 @@ class LoaderController(BaseController):
         if sample_id not in self._session.stem_generating_sample_ids:
             return
 
-        source_version = self._session.stem_generation_source_versions.get(sample_id)
+        # This legacy native event stream has no source ticket captured at admission.
+        # Only the Python backend's ticket-bound completion can publish prepared stems.
         self._clear_stem_generation_state(sample_id)
-        if source_version is None:
-            return
-
-        entry = self._project.stem_cache[sample_id]
-        if entry is None or entry.source_version != source_version:
-            return
-
-        current_source_version = self._source_version_for_pad(sample_id)
-        if current_source_version != source_version:
-            self._project.stem_cache[sample_id] = None
-            self._mark_project_changed()
-            return
-
-        if sample_id in self._session.active_sample_ids:
-            return
-
-        if not self._stem_cache_files_available(entry):
-            self._session.stem_generation_errors[sample_id] = (
-                "Stem generation completed but cache files are incomplete"
-            )
-            return
-
-        try:
-            self._audio.publish_prepared_stems(sample_id, source_version, entry.cache_dir)
-        except (RuntimeError, ValueError) as err:
-            self._session.stem_generation_errors[sample_id] = (
-                f"Stem generation completed but publication failed: {err}"
-            )
-        else:
-            if not entry.available:
-                self._project.stem_cache[sample_id] = entry.model_copy(update={"available": True})
-                self._mark_project_changed()
-            self._publish_all_stems_mode_if_preferred(sample_id, source_version)
-
-    def _publish_all_stems_mode_if_preferred(self, sample_id: int, source_version: str) -> None:
-        if self._project.pad_stem_mix_mode[sample_id] != "all_stems":
-            return
-
-        try:
-            self._audio.set_stem_mix_mode(sample_id, "all_stems", source_version)
-            self._audio.set_stem_enabled_mask(
-                sample_id,
-                self._session.pad_stem_enabled_mask[sample_id],
-                source_version,
-            )
-        except (RuntimeError, ValueError) as err:
-            self._session.stem_generation_errors[sample_id] = (
-                f"Stem generation completed but mix update failed: {err}"
-            )
-
-    def _source_version_for_pad(self, sample_id: int) -> str | None:
-        sample_path = self._project.sample_paths[sample_id]
-        if sample_path is None:
-            return None
-        return source_version_for_sample_path(sample_path)
-
-    def _stem_cache_files_available(self, entry: StemCacheEntry) -> bool:
-        for kind in STEM_KINDS:
-            path = entry.stems.path_for(kind)
-            if path is None:
-                return False
-            if not (Path.cwd() / Path(path)).is_file():
-                return False
-        return True
+        self._session.stem_generation_errors[sample_id] = (
+            "Stem completion rejected because its admission ticket is missing"
+        )
 
     def _handle_task_error(self, sample_id: int, event: dict[str, object]) -> None:
         task = event.get("task")

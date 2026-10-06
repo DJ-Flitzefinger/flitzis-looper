@@ -1,3 +1,5 @@
+import hashlib
+import json
 import struct
 import wave
 from typing import TYPE_CHECKING
@@ -20,6 +22,14 @@ if TYPE_CHECKING:
     from flitzis_looper.models import ProjectState, SessionState
 
 
+class FakePreparedSourceTicket:
+    def __init__(self, status: str = "accepted") -> None:
+        self.status = status
+
+    def publication_status(self) -> str:
+        return self.status
+
+
 class FakeStemGenerationBackend:
     def __init__(self) -> None:
         self.requests: list[StemGenerationRequest] = []
@@ -31,6 +41,7 @@ class FakeStemGenerationBackend:
             artifact_count=len(STEM_KINDS),
         )
         self.error: RuntimeError | None = None
+        self.sample_value = 1024
 
     def generate(
         self,
@@ -49,16 +60,34 @@ class FakeStemGenerationBackend:
                 request.target_shape.sample_rate_hz,
                 request.target_shape.channels,
                 request.target_shape.frame_count,
+                self.sample_value,
             )
         return self.result
 
 
-def _write_test_wav(path: Path, sample_rate_hz: int, channels: int, frames: int) -> None:
+def write_test_stem_marker(cache_dir: Path, source_version: str) -> None:
+    digests = {
+        kind: hashlib.sha256((cache_dir / f"{kind}.wav").read_bytes()).hexdigest()
+        for kind in STEM_KINDS
+    }
+    (cache_dir / ".complete.json").write_text(
+        json.dumps({
+            "schema": "stem-set-sha256-v1",
+            "source_version": source_version,
+            "stems": digests,
+        }),
+        encoding="utf-8",
+    )
+
+
+def _write_test_wav(
+    path: Path, sample_rate_hz: int, channels: int, frames: int, sample_value: int
+) -> None:
     with wave.open(str(path), "wb") as wav:
         wav.setnchannels(channels)
         wav.setsampwidth(2)
         wav.setframerate(sample_rate_hz)
-        frame = b"".join(struct.pack("<h", 1024) for _ in range(channels))
+        frame = b"".join(struct.pack("<h", sample_value) for _ in range(channels))
         wav.writeframes(frame * frames)
 
 
@@ -72,6 +101,7 @@ def audio_engine_mock() -> Iterator[Mock]:
     with patch("flitzis_looper.controller.app.AudioEngine", autospec=True) as audio_engine:
         audio_engine.return_value.output_sample_rate.return_value = 44_100
         audio_engine.return_value.poll_input_events.return_value = None
+        audio_engine.return_value.capture_prepared_source.return_value = FakePreparedSourceTicket()
         if hasattr(audio_engine.return_value, "loaded_sample_shape"):
             audio_engine.return_value.loaded_sample_shape.return_value = (44_100, 1, 128)
         yield audio_engine.return_value

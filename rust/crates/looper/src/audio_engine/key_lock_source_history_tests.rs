@@ -74,9 +74,13 @@ impl Fixture {
         origin.configure(SOURCE_FRAMES, LOOP);
         origin.advance(initial_frames);
         assert_eq!(origin.position(), phase);
+        let reference_samples = sample.samples.clone();
         Self {
             sample,
             stems: PreparedStemSet {
+                reference_samples,
+                publication:
+                    crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
                 source_version_hash: 17,
                 sample_rate_hz: rate,
                 channels: 2,

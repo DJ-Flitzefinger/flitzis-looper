@@ -1,6 +1,8 @@
 # Rust Audio Engine Module
 
-This crate builds the native `flitzis_looper_audio` Python extension. It owns
+This crate builds the native `flitzis_looper_audio` Python extension. Prepared
+stem tickets and callback feedback are documented in
+[prepared publication](../docs/prepared-stem-publication.md). It owns
 the realtime audio path and exposes the PyO3 `AudioEngine` class used by the
 Python application package.
 

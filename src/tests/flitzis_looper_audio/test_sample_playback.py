@@ -15,6 +15,7 @@ from flitzis_looper.constants import (
     VOLUME_MAX,
     VOLUME_MIN,
 )
+from flitzis_looper.controller.stem_cache import source_version_for_sample_path
 from flitzis_looper_audio import AudioEngine
 from tests.conftest import write_mono_pcm16_wav
 
@@ -165,7 +166,7 @@ def test_stem_slot_id_range_rejects_project_slot_count(audio_engine: AudioEngine
         audio_engine.generate_stems_async(invalid_id, "source", "samples/stems/cache")
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.publish_prepared_stems(invalid_id, "source", "samples/stems/cache")
+        audio_engine.capture_prepared_source(invalid_id, "source")
 
     with pytest.raises(ValueError, match=r"id out of range"):
         audio_engine.set_stem_mix_mode(invalid_id, "full_mix")
@@ -577,11 +578,11 @@ def test_loaded_sample_shape_requires_initialized_engine() -> None:
         engine.loaded_sample_shape(0)
 
 
-def test_publish_prepared_stems_requires_initialized_engine() -> None:
+def test_publish_prepared_stems_requires_admission_ticket() -> None:
     engine = AudioEngine()
 
-    with pytest.raises(RuntimeError, match=r"Audio engine not initialized"):
-        engine.publish_prepared_stems(0, "source", "samples/stems/cache")
+    with pytest.raises(TypeError, match=r"source_ticket"):
+        engine.publish_prepared_stems(0, "source", "samples/stems/cache")  # type: ignore[call-arg]
 
 
 def test_generate_stems_async_rejects_empty_source_version(audio_engine: AudioEngine) -> None:
@@ -594,9 +595,9 @@ def test_generate_stems_async_rejects_invalid_cache_dir(audio_engine: AudioEngin
         audio_engine.generate_stems_async(0, "source", "../samples/stems/cache")
 
 
-def test_publish_prepared_stems_rejects_invalid_cache_dir(audio_engine: AudioEngine) -> None:
-    with pytest.raises(ValueError, match=r"stem cache directory"):
-        audio_engine.publish_prepared_stems(0, "source", "../samples/stems/cache")
+def test_capture_prepared_source_rejects_unloaded_pad(audio_engine: AudioEngine) -> None:
+    with pytest.raises(ValueError, match=r"sample is not loaded"):
+        audio_engine.capture_prepared_source(0, "source")
 
 
 def test_analyze_unloaded_pad_does_not_poison_active_task_gate(
@@ -607,7 +608,7 @@ def test_analyze_unloaded_pad_does_not_poison_active_task_gate(
             audio_engine.analyze_sample_async(0)
 
 
-def test_generate_stems_async_writes_project_cache_artifacts(
+def test_prepared_stems_publish_with_actual_admission_ticket(
     audio_engine: AudioEngine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -623,8 +624,14 @@ def test_generate_stems_async_writes_project_cache_artifacts(
     assert frame_count == 128
 
     cache_dir = "samples/stems/cache"
-    audio_engine.generate_stems_async(0, "source-version", cache_dir)
-    _wait_for_loader_event(audio_engine, 0, "task_success", task="stem_generation")
+    target = tmp_path / cache_dir
+    target.mkdir(parents=True)
+    for stem_name in ("vocals", "melody", "bass", "drums", "instrumental"):
+        with wave.open(str(target / f"{stem_name}.wav"), "wb") as wav:
+            wav.setnchannels(channels)
+            wav.setsampwidth(2)
+            wav.setframerate(sample_rate)
+            wav.writeframes(b"\0\0" * frame_count * channels)
 
     for stem_name in ("vocals", "melody", "bass", "drums", "instrumental"):
         path = tmp_path / cache_dir / f"{stem_name}.wav"
@@ -634,7 +641,27 @@ def test_generate_stems_async_writes_project_cache_artifacts(
             assert wav.getnframes() == 128
             assert wav.getnchannels() >= 1
 
-    audio_engine.publish_prepared_stems(0, "source-version", cache_dir)
+    version = source_version_for_sample_path(str(wav_path))
+    assert version is not None
+    ticket = audio_engine.capture_prepared_source(0, version)
+    audio_engine.publish_prepared_stems(0, version, cache_dir, ticket)
+    deadline = time.monotonic() + 2.0
+    while ticket.publication_status() == "pending" and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert ticket.publication_status() == "accepted"
+
+
+def test_legacy_native_separator_cannot_overwrite_canonical_cache(
+    audio_engine: AudioEngine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    canonical = tmp_path / "samples" / "stems" / "#1"
+    canonical.mkdir(parents=True)
+    artifact = canonical / "vocals.wav"
+    artifact.write_bytes(b"current accepted artifacts")
+    with pytest.raises(RuntimeError, match="Legacy native stem generation is disabled"):
+        audio_engine.generate_stems_async(0, "source-version", "samples/stems/#1")
+    assert artifact.read_bytes() == b"current accepted artifacts"
 
 
 def test_publish_prepared_stems_rejects_misaligned_cache_artifacts(
@@ -654,8 +681,13 @@ def test_publish_prepared_stems_rejects_misaligned_cache_artifacts(
         rate = output_rate + 1 if stem_name == "vocals" else output_rate
         write_mono_pcm16_wav(cache_dir / f"{stem_name}.wav", rate)
 
+    version = source_version_for_sample_path(str(wav_path))
+    assert version is not None
+    ticket = audio_engine.capture_prepared_source(0, version)
+    with pytest.raises(ValueError, match=r"stem cache directory"):
+        audio_engine.publish_prepared_stems(0, version, "../samples/stems/cache", ticket)
     with pytest.raises(ValueError, match=r"sample rate mismatch"):
-        audio_engine.publish_prepared_stems(0, "source-version", "samples/stems/cache")
+        audio_engine.publish_prepared_stems(0, version, "samples/stems/cache", ticket)
 
 
 def test_load_sample_async_emits_started_and_error_for_missing_file(
