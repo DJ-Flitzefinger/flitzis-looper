@@ -21,6 +21,7 @@ use crate::audio_engine::dsp::{DspNodeSlot, DspParameterId, DspParameterSlot, Pe
 use crate::audio_engine::key_lock_preparation::{
     KeyLockPreparationError, KeyLockPreparationWorker, create_key_lock_preparation,
 };
+use crate::audio_engine::native_history_permit::NativeHistoryContext;
 use crate::audio_engine::productive_source_history::ProductiveSourceBinding;
 use crate::audio_engine::source_grid::SourceGrid;
 use crate::audio_engine::source_reader::{
@@ -43,6 +44,7 @@ use crate::messages::{
 };
 use cpal::Sample;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RtRenderPadActivity {
@@ -211,6 +213,8 @@ pub struct RtMixer {
 
     /// Fixed callback-owned publication epochs shared with the control resolver.
     current_timing_acknowledgements: Arc<CurrentTimingAcknowledgements>,
+    /// Native preparation requests and cancellation share the control owner's monotonic epoch.
+    prepared_source_epochs: Vec<Arc<AtomicU64>>,
 
     /// Per-pad Gain/Trim target in dB.
     pad_gain_db: [f32; NUM_SAMPLES],
@@ -296,6 +300,7 @@ impl RtMixer {
             pad_accepted_timing: std::array::from_fn(|_| None),
             input_runtime_ownership: Arc::default(),
             current_timing_acknowledgements: Arc::default(),
+            prepared_source_epochs: (0..NUM_SAMPLES).map(|_| Arc::default()).collect(),
             pad_gain_db: std::array::from_fn(|_| PAD_GAIN_DB_DEFAULT),
             pad_gain_smoothers: std::array::from_fn(|_| SmoothedGain::default()),
             pad_dsp_chains: (0..NUM_SAMPLES)
@@ -333,6 +338,11 @@ impl RtMixer {
         ownership: Arc<super::input_runtime_binding::InputRuntimeOwnership>,
     ) {
         self.input_runtime_ownership = ownership;
+    }
+
+    pub(crate) fn set_prepared_source_epochs(&mut self, epochs: Vec<Arc<AtomicU64>>) {
+        assert_eq!(epochs.len(), NUM_SAMPLES);
+        self.prepared_source_epochs = epochs;
     }
 
     /// Fixed pointer/shape/full projection checks plus immediately published revocation.
@@ -445,6 +455,7 @@ impl RtMixer {
         stems.publication.mark_accepted();
         self.prepared_stems[id] = Some(stems);
         self.stem_transitions[id].clear();
+        self.invalidate_prepared_for_pad(id);
         true
     }
 
@@ -469,6 +480,7 @@ impl RtMixer {
                     && Arc::ptr_eq(&sample.samples, &timing.reference.samples)
             });
         if valid {
+            self.invalidate_prepared_for_pad(id);
             self.pad_accepted_timing[id] = Some(projection);
             // PCM remains immutable and source-bound. Every retained stem reads
             // the newly adopted full revision through the same SourcePlayback.
@@ -494,6 +506,7 @@ impl RtMixer {
                 stems.accepted_timing = None;
             }
             self.current_timing_acknowledgements.clear(id);
+            self.invalidate_prepared_for_pad(id);
         }
     }
 
@@ -578,6 +591,8 @@ impl RtMixer {
         if id >= NUM_SAMPLES || previous == next {
             return;
         }
+
+        self.invalidate_prepared_for_pad(id);
 
         if self.sample_is_active(id) {
             self.stem_transitions[id] =
@@ -873,10 +888,12 @@ impl RtMixer {
             return;
         }
 
+        self.invalidate_prepared_for_all();
         self.speed = speed;
     }
 
     pub fn set_bpm_lock(&mut self, enabled: bool) {
+        self.invalidate_prepared_for_all();
         self.bpm_lock_enabled = enabled;
         if !enabled {
             self.master_period_seconds = None;
@@ -884,6 +901,7 @@ impl RtMixer {
     }
 
     pub fn set_key_lock(&mut self, enabled: bool) {
+        self.invalidate_prepared_for_all();
         self.pad_key_lock_enabled.fill(enabled);
     }
 
@@ -893,6 +911,7 @@ impl RtMixer {
         }
 
         self.pad_key_lock_enabled[id] = enabled;
+        self.invalidate_prepared_for_pad(id);
     }
 
     #[cfg(test)]
@@ -906,6 +925,7 @@ impl RtMixer {
 
     pub(crate) fn set_master_period(&mut self, period: f64) {
         if period.is_finite() && period > 0.0 {
+            self.invalidate_prepared_for_all();
             self.master_period_seconds = Some(period);
         }
     }
@@ -925,6 +945,7 @@ impl RtMixer {
         });
 
         self.pad_period_seconds[id] = bpm;
+        self.invalidate_prepared_for_pad(id);
     }
 
     pub fn set_pad_timing_metadata(&mut self, id: usize, metadata: PadTimingMetadata) {
@@ -935,6 +956,21 @@ impl RtMixer {
         let frame = metadata.phase_anchor_s * self.sample_rate_hz as f64;
         if frame.is_finite() {
             self.pad_phase_anchor_frame[id] = frame.round();
+            self.invalidate_prepared_for_pad(id);
+        }
+    }
+
+    fn invalidate_prepared_for_pad(&mut self, id: usize) {
+        for voice in &mut self.voices {
+            if voice.is_playing_sample(id) {
+                voice.stretch.invalidate_prepared();
+            }
+        }
+    }
+
+    fn invalidate_prepared_for_all(&mut self) {
+        for voice in &mut self.voices {
+            voice.stretch.invalidate_prepared();
         }
     }
 
@@ -1571,7 +1607,7 @@ impl RtMixer {
         &mut self,
         output: &mut [f32],
         pad_peaks: &mut [f32; NUM_SAMPLES],
-        _output_start_frame: Option<u64>,
+        output_start_frame: Option<u64>,
         pad_activity: &mut RtRenderPadActivity,
         retirement: &mut impl AudioBufferRetirement,
     ) {
@@ -1607,14 +1643,24 @@ impl RtMixer {
         let stem_mix_source_version_hash = &self.stem_mix_source_version_hash;
         let stem_enabled_mask = &self.stem_enabled_mask;
         let stem_transitions = &mut self.stem_transitions;
+        let bank_sources = &self.sample_bank;
+        let ownership = &self.input_runtime_ownership;
+        let acknowledgements = &self.current_timing_acknowledgements;
+        let prepared_source_epochs = &self.prepared_source_epochs;
 
         for (voice_index, voice) in self.voices.iter_mut().enumerate() {
             if !voice.active {
+                // An in-flight worker may finish after stop/unload. Drain its fenced owner even
+                // when no voice renders again; all large destruction remains on the worker.
+                voice.stretch.retire_prepared();
                 continue;
             }
             pad_activity.record(voice.sample_id);
 
             let is_paused = voice.paused;
+            if is_paused {
+                voice.stretch.retire_prepared();
+            }
 
             let Some(sample) = voice.sample.clone() else {
                 pad_dsp_chains[voice.sample_id].reset();
@@ -1660,8 +1706,14 @@ impl RtMixer {
                 // Each iteration consumes output frames and crosses at most one fixed rate step.
                 // The enclosing render chunk is bounded by max_realtime_render_frames().
                 while rendered < frames {
-                    let (chunk_frames, tempo_ratio) =
-                        voice.source_playback.chunk(frames - rendered);
+                    let output_frame =
+                        output_start_frame.map(|frame| frame.saturating_add(rendered as u64));
+                    let remaining = output_frame.map_or(frames - rendered, |frame| {
+                        voice
+                            .stretch
+                            .chunk_until_prepared_adoption(frame, frames - rendered)
+                    });
+                    let (chunk_frames, tempo_ratio) = voice.source_playback.chunk(remaining);
                     let stem_transition = stem_transitions[voice.sample_id];
                     let position = voice.source_playback.position();
                     let source_plan = SourceReadPlan {
@@ -1674,6 +1726,22 @@ impl RtMixer {
                         transition: stem_transition,
                     };
                     let next_position = voice.source_playback.position_at(chunk_frames);
+                    let context = NativeHistoryContext {
+                        id: voice.sample_id,
+                        ownership,
+                        acknowledgements,
+                        preparation_epoch: &prepared_source_epochs[voice.sample_id],
+                    };
+                    let permit = bank_sources[voice.sample_id]
+                        .as_ref()
+                        .filter(|bank| Arc::ptr_eq(&bank.samples, &sample.samples))
+                        .and_then(|_| {
+                            context.capture(
+                                &sample,
+                                sample_rate_hz as u32,
+                                voice.source_timing.accepted,
+                            )
+                        });
                     voice.stretch.process_source(
                         ProductiveSourceFeed {
                             sample: &sample,
@@ -1682,6 +1750,8 @@ impl RtMixer {
                             accepted: voice.source_timing.accepted,
                             plan: source_plan,
                             playback: &voice.source_playback,
+                            permit: permit.as_ref(),
+                            output_frame,
                         },
                         chunk_frames,
                         pad_key_lock_enabled[voice.sample_id],
@@ -4270,6 +4340,10 @@ mod tests {
 #[cfg(test)]
 #[path = "productive_history_tests.rs"]
 mod productive_history_tests;
+
+#[cfg(test)]
+#[path = "prepared_native_mixer_tests.rs"]
+mod prepared_native_mixer_tests;
 
 #[cfg(test)]
 #[path = "mixer_source_tests.rs"]

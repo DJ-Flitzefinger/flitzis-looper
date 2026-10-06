@@ -177,6 +177,7 @@ impl VoiceSlot {
     }
 
     pub(crate) fn clear_explicit_seek(&mut self) {
+        self.stretch.invalidate_prepared();
         self.explicit_seek_mode = ExplicitSeekMode::Normal;
         self.source_playback.clear_explicit_seek();
     }
@@ -187,11 +188,13 @@ impl VoiceSlot {
 
     /// Pause playback: set the paused flag. Does not change frame_pos.
     pub fn pause(&mut self) {
+        self.stretch.invalidate_prepared();
         self.paused = true;
     }
 
     /// Resume playback: clear the paused flag.
     pub fn resume(&mut self) {
+        self.stretch.invalidate_prepared();
         self.paused = false;
     }
 }

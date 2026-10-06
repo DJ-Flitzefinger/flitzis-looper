@@ -152,7 +152,11 @@ Python package directories are already available to standalone test executables.
 - PyO3 setters for must-apply command and parameter publications report full
   queues as caller-visible `RuntimeError`s instead of silently accepting the
   write.
-- Key Lock setup warms 64 unique native handles for 32 voices. A shared
+- Key Lock setup constructs 96 unique native handles for 32 voices: the existing
+  64 effective/neutral-reserve handles are warmed at setup, and 32 source reserves
+  receive exact pitch/reset and actual source feed on the worker. Historical
+  64-handle startup/memory measurements do not measure the extended pool.
+  The third owner adds unmeasured resource cost. A shared
   `key_lock_preparation.rs` worker resets and warms recycled handles; bounded
   per-voice SPSC lanes exchange ownership without callback waits or native
   destruction. Native reset/cold pitch setup allocate in the pinned backend.
@@ -168,12 +172,27 @@ Python package directories are already available to standalone test executables.
   independently of bank replacement; retrigger adopts current bank PCM through
   off-realtime retirement. Warmed reserves remain source-neutral. See
   [productive timing history](../docs/native-constant-timing.md#productive-voice-and-nativefifo-history).
-- Required NEXT G3b2f2 remains unimplemented: source-specific worker priming,
-  retained prepared native/FIFO ownership, full source/current-accepted-revision/
-  rate/epoch permits and timed transactional adoption with catch-up. Finish this
-  native integration before G3b2g accepted persistence/fresh loader adoption.
-  Warmed reserves and test-only preparation do not complete it; later B5 audible
-  crop/delay/transition compensation is separate.
+- G3b2f2 extends that worker with bounded productive request/result/recycle lanes.
+  `prepared_native_history::NativeAdapterState` owns an actual native handle and
+  its fixed FIFOs shared by live rendering and worker preparation. Current/prepared
+  adapter boxes and pending-request retention allocate at setup; lanes move those
+  boxes and fixed request storage without callback allocation or a large 32-voice
+  inline stack aggregate. Worker catch-up owns temporary feed/output scratch. Requests pin
+  actual PCM/stems, copy canonical playback/read plan and use `NativeHistoryPermit`
+  for current loaded-request generation/source/rate/shared preparation epoch,
+  authority/runtime revisions and exact complete accepted projection. The worker
+  processes 4096 active frames including smoothing; active source transitions defer
+  preparation. Rendering splits at request output frame + 4096 and transactionally
+  swaps only after current source/loop/seek/stem/rate/full-trajectory rechecks and
+  reserved worker recycling. Pending/failed/stale/late/unready/full-lane work keeps
+  old effective audio/native history. Actual ownership/shifted-output/failure tests
+  establish this native gate before G3b2g persistence; acoustic B5 remains separate.
+  The worker checks local atomic voice cancellation before/after catch-up, and
+  adoption checks the exact outstanding request ID. Stop/reset/wet deactivation
+  retires source/stem pins through a separate bounded worker lane while retaining
+  fenced dirty native/FIFOs. Completed-request atomics settle discarded jobs;
+  inactive/paused callback polls retire ready results without source rendering,
+  including a result published after cancellation. Teardown tails remain off RT.
 - Productive per-pad EQ/isolator history uses that rendered voice's actual
   source/projection/trajectory. Continuous same-source timing/rate refresh retains
   fixed filter state; foreign source or discontinuity clears bounded Rust filter
@@ -198,8 +217,8 @@ Python package directories are already available to standalone test executables.
   deformation and one fixed offline dry-to-wet bridge. Native clipping, nonlinear
   background sensitivity and temporary varispeed pitch remain visible; that bridge
   is not a selected live strategy. Production builds exclude this fixture.
-  Required G3b2f2 prepared native ownership/permits/adoption/catch-up remains
-  pending; transitions and audible compensation remain later B5 work.
+  G3b2f2 productive native ownership/permits/adoption/catch-up is a distinct path;
+  this fixture cannot prove it. Transitions and audible compensation remain later B5 work.
 - `key_lock_source_causal_probe.rs` is a test-only fixed-case proof of strict versus hypothetical
   early emission against identical continuous source/native histories. It checks canonical phase,
   exact retained continuation and disjoint missing-content intervals. Nominal translation remains

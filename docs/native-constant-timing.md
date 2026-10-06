@@ -1,6 +1,6 @@
 # Native accepted timing adoption
 
-G3b2a-e and the bounded G3b2f1 slice connect the G3a accepted record to actual loaded-pad ownership, current
+G3b2a-f connect the G3a accepted record to actual loaded-pad ownership, current
 acknowledged authority, native SourceGrid, transport/output clock and playback
 rate. This is an explicit control API. Normal loading and analysis,
 manual/TAP controllers and saved legacy projects retain their existing routing;
@@ -324,21 +324,101 @@ source samples.
 Stop/unload clears the filter ledger before the owning voice pin retires;
 the ledger owns no additional PCM or native handle.
 
-This is G3b2f1 productive continuous history binding. It leaves required NEXT
-G3b2f2 source-specific worker priming, retained prepared native/FIFO ownership,
-full source/current-accepted-revision/rate/epoch permits and timed transactional
-adoption with catch-up unimplemented. G3b2f2 precedes G3b2g persistence; it is
-native integration, separate from later B5 audible crop/delay/transition
-compensation. Existing wet silence while a reserve is unavailable
-continues with canonical source progression and supplies no audible handover
-guarantee. `key_lock_source_preparation` remains test-only.
+G3b2f1 supplies continuous productive history binding. G3b2f2 adds the prepared
+native continuation below before G3b2g persistence. These ownership contracts
+supply no audible delay/crop/transition guarantee; that remains later B5 work.
+Existing neutral-reserve unavailability retains wet silence with canonical source
+progression. `key_lock_source_preparation` remains test-only.
+
+## Productive prepared native continuation
+
+`NativeHistoryContext` captures `NativeHistoryPermit` at a productive render
+boundary. The permit retains fixed `InputPadBinding` and shared atomic owners:
+actual source address/shape/loaded rate, tracked native loaded-request generation,
+shared preparation epoch, authority and runtime revisions, and complete effective
+accepted projection. Current checks repeat a bounded source/epoch/authority/
+runtime/acknowledgement test without spinning. Accepted period and signed origin
+compare exact binary64 bits, including signed zero. Automatic without current
+acknowledgement cannot capture; Manual, Tap and Legacy remain nonaccepted.
+The shared epoch retires preparation after new analysis, cancellation, load and
+successful timing edits, including equal-value edits. The voice's local request
+counter and shared atomic invalidation epoch separately identify its runtime
+trajectory. The worker checks that local epoch before and after catch-up; actual
+adoption also requires the exact outstanding request ID.
+
+The existing `key_lock_preparation` worker receives a request pinning the actual
+`SampleBuffer` and optional admitted `PreparedStemSet`, plus copied canonical
+`SourcePlayback` and `SourceReadPlan`. `prepared_native_history::NativeAdapterState`
+owns the actual Rubber Band handle and fixed adapter storage. A third preallocated
+per-voice state supplies preparation capacity alongside the effective owner and
+neutral warmed reserve. It is not neutral warmed: the worker prepares exact
+starting pitch/reset off realtime, then processes 4096 active output frames from
+real requested PCM through the same fixed native adapter and fractional reader as
+productive rendering. Copied chunk/advance preserves rate smoothing, physical
+loop, fractional epoch and explicit seek behavior. Native state and complete
+input/output FIFOs remain retained as a coherent continuation with their source/
+stem pins; neutral warming alone cannot provide it. Active stem-selection
+transitions defer requests until complete while the old effective owner continues.
+Current and prepared adapters use setup-allocated `Box<NativeAdapterState>` owners
+through ready/recycle/pending-return lanes. Pending-request retention is also
+heap-allocated at setup, and request rings have fixed preallocated storage. This
+keeps large retained payloads out of the 32-voice Windows stack aggregate; the
+callback moves/swaps existing boxes only. Catch-up feed/output scratch stays off RT.
+
+The adoption deadline is the actual request output frame plus 4096.
+`StretchProcessor::chunk_until_prepared_adoption` splits rendering at that exact
+absolute frame. Adoption rechecks the current permit and complete effective
+projection, source/stem pointer identities, read plan, full canonical playback
+checkpoint and local request/epoch. It reserves bounded recycling capacity before
+exchanging the complete native/FIFO owner. The logical source cursor continues
+unchanged; callback preparation/catch-up is prohibited.
+
+Pending, worker-failed, unready, late, stale or recycle-saturated results preserve
+previous effective native/FIFO history and output. Rejected results and old
+prepared owners return through bounded lanes for off-thread recycling/destruction;
+source/stem pins do not undergo final callback drops. Old retained bank-source
+voices continue under their own effective source/timing but cannot authorize a
+new current-source preparation once tracked source ownership differs. Equal
+timing values cannot hide changed complete accepted revision or source generation.
+A reset may retire request pins through a separate bounded worker lane, retaining
+the invalidated dirty native/FIFO state until safe exchange; its dirty-state fence
+prevents foreign feed even after those source owners have retired.
+Stop/reset/wet deactivation publish local cancellation before recycling owners.
+The worker destroys stale in-flight request pins off realtime and records completed
+request IDs so cancellation cannot leave the voice permanently pending. Inactive
+and paused voices poll the bounded ready/recycle retirement path every callback,
+without reading source audio, to retire a result published after cancellation.
+Stream teardown retires remaining owners off realtime after rendering stops.
+
+The 4096-frame horizon bounds preparation work; it does not define native delay,
+audible crop, transient alignment, a seamless wet/bypass transition or a device
+deadline guarantee. Stream setup now constructs 96 unique native handles for 32
+voices, including the 64 existing neutral-warmed handles and 32 source reserves.
+The extra owner has startup/memory cost; historical two-handle measurements do not
+measure this extension. The productive worker, handle/FIFO, nonzero shifted-output
+and failure-path tests below establish numerical G3b2f2 ownership/continuation;
+the test-only preparation fixture remains separate evidence.
+
+The production adapter oracle matrix covers 324 steady and 54 smoothed cases:
+mono/stereo at 44.1/48/96 kHz, physical loops, intro/tail seeks, full mix, component
+stems and ALL. An independent algebraic fractional-source reader feeds raw Rubber
+Band without the shared adapter; each case compares a 20,017-frame prepared
+continuation bit-exactly and requires genuine shifted samples above 0.02 amplitude.
+Actual mixer/worker tests separately verify current/prepared native-address and
+FIFO ownership transfer at the deadline, a 12,853-frame productive suffix against
+the raw-native oracle, 15 current-source/timing/runtime invalidation cases, active
+rate smoothing, deferred/changed stem selection, same-phase seek, late/failed/
+recycle-saturated adoption and real worker pin retirement while preparing, ready
+or adopted. Inactive retirement polling is exercised without another source read.
+The legacy partition fixture isolates continuous playback with preparation
+unavailable; productive readiness/adoption has separate tests. These are numerical
+ownership/continuation checks, not full G3c or later B5 acoustic acceptance.
 
 ## Remaining shared-period and loop work
 
-G3b2f remains incomplete until required source-prepared native-history integration
-G3b2f2 is complete. The source-neutral warmed reserve, continuous history ledger
-and test-only key_lock_source_preparation do not provide that prepared ownership.
-After G3b2f2, G3b2g accepted source-verified SampleAnalysis/ProjectState persistence and loader schema
+G3b2f1/f2 supply productive continuous and prepared native/FIFO ownership with the
+numerical timed-adoption proof above. G3b2g accepted source-verified
+SampleAnalysis/ProjectState persistence and loader schema
 with fresh runtime adoption remain open; no opaque ticket is a saved identity and
 no saved Manual/Tap/Legacy BPM is accepted evidence. Source/accepted-bound
 controller global START/STOP batch launch including MIDI, and explicit accepted

@@ -182,11 +182,15 @@ The adapter probe samples one immutable source-domain impulse at absolute output
 positions, so callback partitions do not relocate markers or interpolation endpoints.
 It measures startup and settled markers separately; the production source-path tests
 add fractional BPM, loops, seeks and prepared stems.
-The current engine prepares 64 unique handles for 32 voices and adds a fixed
-511-frame wet adapter lead. Native reset/cold pitch work stays off the callback;
+The current engine constructs 96 unique handles for 32 voices: 64 effective/
+neutral-reserve handles are warmed at setup; 32 source reserves receive exact
+pitch/reset and actual source priming on the worker. Historical 64-handle startup/
+memory figures do not measure this extension's added cost. The fixed wet adapter
+lead remains 511 frames. Native reset/cold pitch work stays off the callback;
 reserve starvation produces bounded wet silence, while dry processing remains
-reactive. See [Key Lock backend](key-lock-backend.md) for the allocation audit
-and the pending source pre-roll and mode-transition work.
+reactive. See [Key Lock backend](key-lock-backend.md) for the allocation audit,
+productive source-prepared ownership/timed adoption and the separate pending
+audible delay/crop/mode-transition work.
 
 From the repository root, with the documented runtime override set to the
 actual Rubber Band DLL directory, run:
@@ -209,6 +213,22 @@ API delay does not equal every transient peak, and offline timings do not prove
 live deadlines or hardware alignment. Record startup and settled response
 separately; the local baseline and final prepared results are recorded in
 `scratch/slice3-key-lock-latency-findings.md`.
+
+Focused production-path preparation tests require no audio device:
+
+```powershell
+.\scripts\run-rust-tests.ps1 --release --lib prepared_native
+.\scripts\run-rust-tests.ps1 --release --lib native_history_permit
+.\scripts\run-rust-tests.ps1 --release --lib key_lock_preparation
+```
+
+These exercise the actual worker, copied canonical trajectory/shared adapter,
+native/FIFO ownership, exact absolute adoption deadline and source/timing/runtime
+permits. Independent algebraic/raw-native suffix comparisons cover real shifted
+content; cancellation/unload tests observe source-pin retirement without later
+source rendering. They establish numerical ownership/continuation contracts,
+not audible delay compensation, listening, device alignment or live deadlines.
+The non-live diagnostic fixture below remains distinct from this productive path.
 
 The test-only exact-source preparation proof compares a coherent native/FIFO
 continuation with an independent source/raw-native reference. It also exports

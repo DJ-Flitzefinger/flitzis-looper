@@ -710,6 +710,12 @@ fn steady_key_lock_wet_output_from_immutable_source_is_partition_invariant() {
             mixer.load_sample(0, source.clone());
             set_loop(&mut mixer, sample_rate, oracle.start, oracle.end);
             restart(&mut mixer, ratio, true);
+            // The retained voice continues, but an unpublished current source generation fences
+            // new native preparation. This isolates continuous adapter partitioning; productive
+            // preparation's ready/late deadline policy has separate real-worker mixer tests.
+            mixer.set_input_runtime_ownership(Arc::new(
+                crate::audio_engine::input_runtime_binding::InputRuntimeOwnership::tracked(),
+            ));
             let actual = render_capture(&mut mixer, &mut 0, frames, partitions);
             assert_audio_close(&actual.feed, &expected_feed);
             assert!(actual.output.iter().all(|sample| sample.is_finite()));

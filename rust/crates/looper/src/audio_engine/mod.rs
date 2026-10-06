@@ -58,6 +58,8 @@ pub(crate) mod key_lock_preparation;
 #[cfg(test)]
 mod key_lock_source_preparation;
 mod mixer;
+mod native_history_permit;
+mod prepared_native_history;
 pub(crate) mod prepared_source;
 mod productive_source_history;
 mod progress;
@@ -539,6 +541,7 @@ impl AudioEngine {
             self.input_clock,
             self.current_timing_acknowledgements.clone(),
             self.input_runtime_ownership.clone(),
+            self.prepared_source_epochs.clone(),
         ) {
             Ok(handle) => {
                 start_stream(&handle.stream).map_err(|e| {

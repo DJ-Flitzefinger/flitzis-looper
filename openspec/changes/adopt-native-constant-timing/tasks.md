@@ -79,13 +79,29 @@
   refresh, continuity and retirement races;
   complete full checks, official strict validation and independent staged review.
 
+## G3b2f2: Productive prepared source-specific native/FIFO continuation
+
+- [x] Extend the existing native worker with bounded request/result/recycle lanes
+  and a preallocated source-specific native/FIFO owner per voice; pin actual
+  PCM/stems and copy canonical SourcePlayback/SourceReadPlan instead of neutral tags.
+- [x] Capture/recheck actual source generation/load request/loaded rate, shared
+  preparation request/epoch, declared authority and full CURRENT accepted revision
+  with exact period/signed origin; keep Manual/Tap/Legacy nonaccepted.
+- [x] Prime/catch up 4096 active frames off callback through the common adapter
+  and canonical rate smoothing; defer active stem-selection transitions.
+- [x] Split rendering at the exact absolute deadline and reserve off-thread
+  recycling before transactional native/FIFO adoption; recheck source, loop, seek,
+  stems, full trajectory/rate/current permit and retain old history on every failure.
+- [x] Check local atomic voice cancellation before/after worker catch-up and exact
+  request identity before adoption; settle discarded jobs with completed-request
+  atomics, retire source/stem pins and publish-after-cancel results through bounded
+  worker lanes, including paused/inactive polling and off-thread teardown tails.
+- [x] Prove actual productive worker/native/FIFO ownership and genuine shifted
+  output against an independent continuation, plus readiness/stale/late/queue and
+  source/timing/runtime invalidation; complete full checks/strict/staged review.
+
 ## Explicit remaining boundaries
 
-- [ ] Required NEXT G3b2f2: source-specific worker priming, retained prepared
-  native/FIFO ownership, full source/current-accepted-revision/rate/epoch permits
-  and timed transactional native adoption with catch-up. The warmed source-neutral
-  reserve, continuous f1 history and test-only key_lock_source_preparation do not
-  complete this required integration; finish it before G3b2g persistence.
 - [ ] G3b2g accepted source-verified SampleAnalysis/ProjectState persistence and loader
   schema with fresh runtime adoption and explicit Manual/Tap/Legacy policy.
 - [ ] Source/accepted-bound controller global batch launch (including MIDI

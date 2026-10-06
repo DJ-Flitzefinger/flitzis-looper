@@ -63,6 +63,27 @@ impl SourcePlayback {
         self.ratio
     }
 
+    /// Compare the complete copied trajectory at a prepared native adoption boundary.
+    ///
+    /// Equal current source phase is insufficient: a pending rate target or a different active
+    /// smoothing interval changes future feed. The copied worker cursor must reach the same
+    /// canonical epoch and exact binary64 state, rather than merely a wrapped position.
+    pub(crate) fn matches_exact(&self, other: &Self) -> bool {
+        self.origin.frame == other.origin.frame
+            && self.origin.fraction.to_bits() == other.origin.fraction.to_bits()
+            && self.origin.seek_mode == other.origin.seek_mode
+            && self.domain == other.domain
+            && self.elapsed_output_frames == other.elapsed_output_frames
+            && self.ratio.to_bits() == other.ratio.to_bits()
+            && self.target.to_bits() == other.target.to_bits()
+            && self.frames_until_step == other.frames_until_step
+    }
+
+    /// Check pending preparation control intent while its copied smoothing clock advances.
+    pub(crate) fn matches_rate_target(&self, other: &Self) -> bool {
+        self.target.to_bits() == other.target.to_bits()
+    }
+
     pub(crate) fn configure(&mut self, sample_frames: usize, region: FrameRange) {
         let domain = (sample_frames, region);
         if self.domain == Some(domain) {
@@ -180,6 +201,69 @@ fn checked_ratio(ratio: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepared_adoption_requires_equal_future_rate_target_and_smoothing_interval() {
+        let region = FrameRange { start: 7, end: 101 };
+        let mut current = SourcePlayback::new(7, ExplicitSeekMode::Normal, 1.0);
+        current.configure(101, region);
+        let mut changed_target = current;
+        changed_target.set_target(1.0 + 2.0_f64.powi(-24));
+        assert_eq!(current.position(), changed_target.position());
+        assert_eq!(current.tempo_ratio(), changed_target.tempo_ratio());
+        assert!(!current.matches_exact(&changed_target));
+        assert!(!current.matches_rate_target(&changed_target));
+        assert_ne!(current.chunk(1).1, changed_target.chunk(1).1);
+
+        let ramp = |frames| {
+            let mut playback = SourcePlayback::new(7, ExplicitSeekMode::Normal, 1.0);
+            playback.configure(101, region);
+            playback.set_target(1.2);
+            playback.chunk(frames);
+            playback.advance(frames);
+            playback.seek(47, ExplicitSeekMode::Normal);
+            playback.configure(101, region);
+            playback
+        };
+        let mut later_step = ramp(100);
+        let mut earlier_step = ramp(101);
+        assert_eq!(later_step.position(), earlier_step.position());
+        assert_eq!(later_step.tempo_ratio(), earlier_step.tempo_ratio());
+        assert!(!later_step.matches_exact(&earlier_step));
+        assert!(later_step.matches_rate_target(&earlier_step));
+        assert_eq!(later_step.chunk(512).0, 412);
+        assert_eq!(earlier_step.chunk(512).0, 411);
+    }
+
+    #[test]
+    fn copied_prepared_trajectory_matches_exactly_across_canonical_rate_steps_and_partitions() {
+        let mut initial = SourcePlayback::new(95, ExplicitSeekMode::AfterLoop, 0.73);
+        initial.configure(100, FrameRange { start: 13, end: 71 });
+        initial.advance(2);
+        initial.set_target(1.371_234_567_890_123);
+        let advance = |mut playback: SourcePlayback, partition: &[usize]| {
+            let mut elapsed = 0;
+            let mut segment = 0;
+            while elapsed < 8_321 {
+                let requested = partition[segment % partition.len()].min(8_321 - elapsed);
+                let mut remaining = requested;
+                while remaining > 0 {
+                    let (frames, _) = playback.chunk(remaining);
+                    playback.advance(frames);
+                    remaining -= frames;
+                }
+                elapsed += requested;
+                segment += 1;
+            }
+            playback
+        };
+        let reference = advance(initial, &[1]);
+        for partition in [&[512][..], &[31, 257, 1, 96, 777][..]] {
+            let prepared = advance(initial, partition);
+            assert!(reference.matches_exact(&prepared));
+            assert_eq!(reference.position(), prepared.position());
+        }
+    }
 
     #[test]
     fn long_constant_epoch_uses_exact_count_instead_of_segment_rounding() {

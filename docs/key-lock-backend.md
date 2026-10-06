@@ -13,6 +13,8 @@ The active backend is implemented behind:
 rust/crates/looper/src/audio_engine/stretch_processor.rs
 rust/crates/looper/src/audio_engine/rubberband_backend.rs
 rust/crates/looper/src/audio_engine/key_lock_preparation.rs
+rust/crates/looper/src/audio_engine/prepared_native_history.rs
+rust/crates/looper/src/audio_engine/native_history_permit.rs
 rust/crates/looper/src/audio_engine/source_playback.rs
 rust/crates/looper/src/audio_engine/source_reader.rs
 ```
@@ -36,13 +38,12 @@ effective accepted revision with exact period/signed-origin bits. The expected
 next fractional position, including seek mode, guards continuity before samples
 enter native or pending adapter state. See [native timing ownership](native-constant-timing.md).
 
-This is G3b2f1 continuous productive history ownership. Required NEXT G3b2f2
-source-prepared native integration is still absent: source-specific worker
-priming, retained prepared native/FIFO ownership, full source/current-accepted-
-revision/rate/epoch permits and timed transactional adoption with catch-up. It
-must precede G3b2g accepted persistence/fresh loader adoption. The warmed reserve
-and test-only preparation proof do not complete it. Later B5 audible
-crop/delay/transition compensation is a separate gate.
+G3b2f1 supplies continuous productive history ownership. G3b2f2 extends the same
+worker with actual source-specific native/FIFO preparation and timed transactional
+adoption described below. That productive gate precedes G3b2g accepted persistence/
+fresh loader adoption; its completion requires genuine ownership/output/failure
+proof. Neutral reserves and the test-only preparation fixture stay separate.
+Later B5 audible crop/delay/transition compensation is a separate gate.
 
 ## Playback Semantics
 
@@ -112,14 +113,17 @@ These changes do not reconstruct Rubber Band state.
 
 ### Preparation Ownership
 
-Stream setup constructs 64 unique native handles: one current handle and one
-reserve for each of 32 voices. Every handle is warmed with neutral silent
-blocks before callback rendering. Fixed block buffers, channel pointer arrays,
-and bounded FIFOs are also allocated before rendering. Preparation failures,
+Stream setup constructs 96 unique native handles: one current handle, one
+neutral reserve and one source-specific preparation reserve for each of 32 voices.
+The current/neutral pair is warmed with silent blocks before callback rendering.
+The third handle's exact pitch/reset and first actual source shifts run on the
+worker for the captured request; it is not neutral warmed as prepared history.
+Fixed block buffers, channel pointer arrays and bounded FIFOs are also allocated
+before rendering. Preparation failures,
 including failure to start the worker, reject stream setup.
 
-The two-handle pool has a measurable startup/memory cost. Cold standalone
-Windows measurements for 32 stereo voices observed:
+The original two-handle neutral pool has a measurable startup/memory cost.
+Historical standalone Windows measurements for 32 stereo voices observed:
 
 | Output rate | Pool setup | Working-set increase | Private-committed increase |
 | --- | --- | --- | --- |
@@ -127,8 +131,9 @@ Windows measurements for 32 stereo voices observed:
 | 96 kHz | 270.090 ms | 205.965 MiB | 230.719 MiB |
 
 These are single-run process deltas on the measured system, not portable memory
-limits or live callback costs. The fixed reserve preserves quality/options and bounds
-ownership exchange; its resource cost remains part of later profiling.
+limits, live callback costs or measurements of the extended 96-handle pool.
+The third state adds unmeasured startup/memory cost. Fixed reserves bound ownership
+exchange; resource and preparation throughput remain part of later profiling.
 
 The pinned Rubber Band 4.0.0 source audit found that native `reset()` and a
 pitch change before the first `shift()` call `measureResamplerDelay()`, which
@@ -169,6 +174,63 @@ allocation/reset/loading and large-owner destruction remain outside the callback
 Explicit active seeks use the pinned voice's source extent after bank replacement;
 even a same-position seek clears bounded adapter/FIFO and fixed per-pad filter
 history, with native reset/warming still owned by the worker.
+
+### Productive Source-Specific Preparation
+
+`prepared_native_history::NativeAdapterState` centralizes the actual native
+handle and fixed input/output FIFOs used by both productive `StretchProcessor`
+and its preparation worker. The worker's bounded request/result/recycle lanes
+retain an actual processed owner; a source tag or neutral warmed state does not
+substitute. A request pins actual PCM and optional admitted stems, copies
+canonical `SourcePlayback` and `SourceReadPlan`, and carries a `NativeHistoryPermit`.
+The permit checks tracked loaded-request generation, source address/shape/rate,
+shared preparation epoch, authority/runtime revisions and CURRENT acknowledged
+full accepted projection, including exact period and signed origin bits.
+Automatic without acknowledgement cannot capture. Manual/Tap/Legacy remain
+nonaccepted; equal-valued timing edits still retire pending work. A shared local
+atomic voice epoch is checked by the worker before/after catch-up; adoption checks
+the exact outstanding request ID as well as that epoch.
+Current/prepared `NativeAdapterState` and pending-request retention use boxes
+allocated at setup. Ready/recycle/pending-return lanes move preallocated box
+owners, keeping large retained payloads out of the 32-VoiceSlot stack aggregate.
+Request rings also allocate fixed storage at setup. The callback only moves/swaps
+these owners; catch-up feed/output scratch allocation remains on the worker.
+
+The worker applies exact starting inverse-rate pitch before reset and processes
+4096 active frames through the same fixed adapter and source reader, including
+copied canonical rate smoothing. It retains the resulting handle and full FIFO
+continuation with request pins. Active stem-selection transitions defer requests
+until complete, while effective playback continues. This bounded horizon is not
+a native-delay estimate, pre-target crop or accepted musical onset policy.
+
+The deadline is the captured absolute request output frame plus 4096.
+`StretchProcessor::chunk_until_prepared_adoption` splits productive rendering at
+that exact frame. The callback checks current permit/effective full timing,
+actual source/stem identities, read plan/loop/seek and full playback checkpoint
+plus local request/invalidation epoch. It reserves bounded recycling capacity
+before swapping the native/FIFO state, keeping the logical source cursor intact.
+Pending, failed, stale, unready, late or recycle-saturated work keeps the old
+effective audio/history. Rejected/old prepared owners and pinned PCM/stems return
+for worker recycling/destruction; no heavy catch-up, cold native setup or final
+owner destruction runs on the callback. A reset can retire source/stem request
+pins through a separate bounded worker lane while retaining the invalidated dirty
+native/FIFO owner; the existing dirty-state fence still prevents foreign feed.
+Stop/reset/wet deactivation publishes local cancellation. Stale in-flight owners
+are destroyed on the worker, with completed-request atomics settling pending state.
+Paused/inactive voices poll only bounded ready/recycle retirement every callback,
+so a result published after cancellation does not require later source rendering
+to release its pins. Stream teardown retires remaining tail owners off realtime.
+
+Productive ownership, genuine nonzero shifted output, independent continuation
+and failure-path tests establish the numerical G3b2f2 gate. This is
+distinct from the non-live proof below and supplies no acoustic delay/crop,
+click-safe mode transition, device-deadline or sustained audible SYNC acceptance.
+The prepared adapter matrix compares independent algebraic-source/raw-native
+20,017-frame suffixes across steady/smoothed mono/stereo, rates and loop/seek/stem
+cases. Actual mixer/worker tests separately prove the transferred handle/FIFOs,
+12,853-frame productive raw-native suffix, current-permit/runtime rejection and
+off-thread pin retirement. See [productive preparation evidence](native-constant-timing.md#productive-prepared-native-continuation)
+for scope; these comparisons do not close the acoustic gates below.
 
 ### Adapter And Measured Delay
 
@@ -230,15 +292,15 @@ so their source feed does not change with render partition sizes. This proves
 the source-to-adapter prerequisite independently of the adapter FIFO property;
 it does not prove source priming, transient compensation or audible hardware
 alignment. The live mixer and non-live preparation proof now call the same
-`SourceReadPlan::fill_fractional_buffers` helper. Required G3b2f2 prepared native
-ownership/adoption remains pending before persistence; audible compensation
-remains a separate later B5 gate.
+`SourceReadPlan::fill_fractional_buffers` helper, also used by G3b2f2 productive
+worker preparation. That native ownership/adoption contract is described above;
+audible compensation remains a separate later B5 gate.
 
 This preparation and adapter safety stage (slice 3a) does not perform track
 pre-roll, delay discarding, or a separate DSP feed-ahead cursor. Source playheads,
 persisted markers, the shared clock, and launch scheduling keep their existing
-meaning. Source-prepared native ownership and timed adoption/catch-up are required
-NEXT G3b2f2. Audible phase compensation and short wet/bypass transitions, including
+meaning. G3b2f2 productive source-prepared ownership/adoption extends this earlier
+safety stage without choosing audible phase compensation. Short wet/bypass transitions, including
 ratio 1.0 and global/per-pad toggles, remain later B5 acoustic work. Current mode
 changes can still switch between delayed wet output
 and immediate dry output without that transition compensation.
@@ -355,8 +417,8 @@ budgets. Resolve the onset/content policy before choosing audible compensation o
 compensated live onset. Local measurements are `scratch/slice3e-source-history{,.summary}.csv`;
 these isolated fixtures do not measure busy musical context or a device.
 
-G3b2f1 binds actual continuous history; source-prepared native ownership, complete
-permits and timed adoption/catch-up remain required G3b2f2. Audible compensation
+G3b2f1 binds actual continuous history; G3b2f2 productive native/FIFO preparation,
+complete permits and timed adoption/catch-up are described above. Audible compensation
 and source-aligned mode transitions remain later B5 work. No transport, marker,
 launch policy or live fallback changes in
 this proof gate, and no device measurement is claimed.
@@ -591,8 +653,10 @@ The audio callback must not:
 
 The callback updates scalar mode/ratio state, reads bounded per-pad Key Lock
 state, reads prepared source buffers, uses fixed Rubber Band staging storage,
-consumes or produces bounded FIFO data, and mixes the resulting output through
-Gain/Trim, DSP, metering, and master volume.
+consumes or produces bounded FIFO data, splits at exact prepared-adoption frames,
+and mixes the resulting output through Gain/Trim, DSP, metering and master volume.
+Source-specific priming/catch-up, native reset/cold pitch preparation and prepared
+native/FIFO/PCM-owner destruction stay on the preparation worker.
 
 ## Native Dependency
 

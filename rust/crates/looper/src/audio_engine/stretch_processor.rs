@@ -1,11 +1,19 @@
 use super::constant_timing::AcceptedTimingProjection;
+use super::native_history_permit::NativeHistoryPermit;
+use super::prepared_native_history::{
+    NativeAdapterState, PITCH_SCALE_EPSILON, PREPARED_HISTORY_FRAMES,
+};
 use super::productive_source_history::{ProductiveSourceBinding, ProductiveSourceHistory};
 use super::source_playback::SourcePlayback;
 use super::source_reader::SourceReadPlan;
 #[cfg(test)]
 use crate::audio_engine::key_lock_preparation::create_key_lock_preparation;
-use crate::audio_engine::key_lock_preparation::{KeyLockPreparationLane, KeyLockPreparationWorker};
-use crate::audio_engine::rubberband_backend::{RubberBandLiveShifter, pitch_scale_for_tempo_ratio};
+use crate::audio_engine::key_lock_preparation::{
+    KeyLockPreparationLane, KeyLockPreparationWorker, SourceExchange,
+};
+#[cfg(test)]
+use crate::audio_engine::rubberband_backend::RubberBandLiveShifter;
+use crate::audio_engine::rubberband_backend::pitch_scale_for_tempo_ratio;
 use crate::messages::{PreparedStemSet, SampleBuffer};
 
 pub(crate) struct ProductiveSourceFeed<'a> {
@@ -15,6 +23,8 @@ pub(crate) struct ProductiveSourceFeed<'a> {
     pub(crate) accepted: Option<AcceptedTimingProjection>,
     pub(crate) plan: SourceReadPlan,
     pub(crate) playback: &'a SourcePlayback,
+    pub(crate) permit: Option<&'a NativeHistoryPermit>,
+    pub(crate) output_frame: Option<u64>,
 }
 
 /// Default maximum block size handled by the per-voice DSP wrapper.
@@ -27,22 +37,16 @@ pub const DEFAULT_BLOCK_SAMPLES: usize = 1024;
 const DEFAULT_SAMPLE_RATE_HZ: f32 = 48_000.0;
 #[cfg(test)]
 const RUBBERBAND_MIN_SAMPLE_RATE_HZ: f32 = 8_000.0;
-const PITCH_SCALE_EPSILON: f64 = 0.001;
 
 pub struct StretchProcessor {
     channels: usize,
     varispeed: Vec<Vec<f32>>,
     output: Vec<Vec<f32>>,
-    rubberband: Option<RubberBandLiveShifter>,
-    rubberband_block_size: usize,
-    rubberband_input: Vec<Vec<f32>>,
-    rubberband_output: Vec<Vec<f32>>,
-    rubberband_input_fifo: Vec<FixedFifo>,
-    rubberband_output_fifo: Vec<FixedFifo>,
-    rubberband_active: bool,
-    rubberband_pitch_scale: f64,
-    rubberband_dirty: bool,
-    rubberband_used: bool,
+    native: Box<NativeAdapterState>,
+    preparation_epoch: u64,
+    request_id: u64,
+    request_pending: bool,
+    adopted_request_id: Option<u64>,
     preparation: KeyLockPreparationLane,
     productive_history: Option<ProductiveSourceHistory>,
     // Standalone processors retain their worker. Mixer processors share an engine worker.
@@ -79,34 +83,15 @@ impl StretchProcessor {
             .collect();
 
         let rubberband = preparation.take_initial();
-        let rubberband_block_size = rubberband
-            .as_ref()
-            .map_or(DEFAULT_BLOCK_SAMPLES, RubberBandLiveShifter::block_size);
-        let input_fifo_capacity = rubberband_block_size + DEFAULT_BLOCK_SAMPLES;
-        let output_fifo_capacity = rubberband_block_size * 2 + DEFAULT_BLOCK_SAMPLES;
-
         Self {
             channels,
             varispeed,
             output,
-            rubberband,
-            rubberband_block_size,
-            rubberband_input: (0..channels)
-                .map(|_| vec![0.0; rubberband_block_size])
-                .collect(),
-            rubberband_output: (0..channels)
-                .map(|_| vec![0.0; rubberband_block_size])
-                .collect(),
-            rubberband_input_fifo: (0..channels)
-                .map(|_| FixedFifo::new(input_fifo_capacity))
-                .collect(),
-            rubberband_output_fifo: (0..channels)
-                .map(|_| FixedFifo::new(output_fifo_capacity))
-                .collect(),
-            rubberband_active: false,
-            rubberband_pitch_scale: 1.0,
-            rubberband_dirty: false,
-            rubberband_used: false,
+            native: Box::new(NativeAdapterState::new(rubberband, channels)),
+            preparation_epoch: 0,
+            request_id: 0,
+            request_pending: false,
+            adopted_request_id: None,
             preparation,
             productive_history: None,
             _preparation_worker: None,
@@ -114,6 +99,7 @@ impl StretchProcessor {
     }
 
     pub fn reset(&mut self) {
+        self.invalidate_prepared();
         self.productive_history = None;
         for channel in &mut self.varispeed {
             channel.fill(0.0);
@@ -122,6 +108,25 @@ impl StretchProcessor {
             channel.fill(0.0);
         }
         self.reset_rubberband_state();
+    }
+
+    /// Fence a pending source-specific candidate without touching current audio/native history.
+    pub(crate) fn invalidate_prepared(&mut self) {
+        self.preparation_epoch = self.preparation_epoch.saturating_add(1);
+        self.preparation.invalidate_source(self.preparation_epoch);
+    }
+
+    pub(crate) fn retire_prepared(&mut self) {
+        self.preparation.retire_prepared();
+    }
+
+    pub(crate) fn chunk_until_prepared_adoption(
+        &mut self,
+        output_frame: u64,
+        max_frames: usize,
+    ) -> usize {
+        self.preparation
+            .chunk_until_prepared_adoption(output_frame, max_frames)
     }
 
     /// Read the owning voice's real canonical source before feeding live native/adapter state.
@@ -135,6 +140,53 @@ impl StretchProcessor {
         let frames = output_frames.min(DEFAULT_BLOCK_SAMPLES);
         if frames == 0 {
             return;
+        }
+        let wet = preserve_pitch
+            && (pitch_scale_for_tempo_ratio(feed.playback.tempo_ratio()) - 1.0).abs()
+                > PITCH_SCALE_EPSILON;
+        if !wet && self.request_pending {
+            self.invalidate_prepared();
+        }
+        if self.request_pending && self.preparation.source_work_finished(self.request_id) {
+            self.request_pending = false;
+        }
+        match self.preparation.exchange_source(
+            &mut self.native,
+            &feed,
+            self.preparation_epoch,
+            self.request_id,
+        ) {
+            SourceExchange::Adopted(request_id) => {
+                self.request_pending = false;
+                self.adopted_request_id = Some(request_id);
+                self.productive_history = Some(ProductiveSourceHistory {
+                    binding: ProductiveSourceBinding::new(
+                        feed.sample,
+                        feed.sample_rate_hz,
+                        feed.accepted,
+                    ),
+                    next_position: feed.playback.position(),
+                    fed_output_frames: PREPARED_HISTORY_FRAMES as u64,
+                });
+            }
+            SourceExchange::Rejected(_request_id) => self.request_pending = false,
+            SourceExchange::Pending => {}
+        }
+        if wet
+            && !self.request_pending
+            && !self
+                .native
+                .source
+                .as_ref()
+                .is_some_and(|source| source.matches_contract(&feed, self.preparation_epoch))
+            && let Some(request_id) = self.request_id.checked_add(1)
+            && self.preparation_epoch != u64::MAX
+            && self
+                .preparation
+                .request_source(&feed, self.preparation_epoch, request_id)
+        {
+            self.request_id = request_id;
+            self.request_pending = true;
         }
         let binding = ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted);
         let position = feed.playback.position();
@@ -157,7 +209,7 @@ impl StretchProcessor {
             frames,
         );
         self.process_resampled(frames, feed.playback.tempo_ratio(), preserve_pitch);
-        if self.rubberband_active {
+        if self.native.active {
             self.productive_history = Some(ProductiveSourceHistory {
                 binding,
                 next_position: feed.playback.position_at(frames),
@@ -191,7 +243,7 @@ impl StretchProcessor {
 
         if preserve_pitch
             && (pitch_scale - 1.0).abs() > PITCH_SCALE_EPSILON
-            && self.rubberband.is_some()
+            && self.native.rubberband.is_some()
         {
             self.process_rubberband(output_samples, pitch_scale);
         } else {
@@ -205,108 +257,28 @@ impl StretchProcessor {
     }
 
     fn process_rubberband(&mut self, output_samples: usize, pitch_scale: f64) {
-        if !self.rubberband_active {
-            if self.rubberband_dirty {
-                if !self.preparation.exchange(&mut self.rubberband) {
-                    self.silence_output(output_samples);
-                    return;
-                }
-                self.rubberband_dirty = false;
-                self.rubberband_used = false;
-                self.rubberband_pitch_scale = 1.0;
-            }
-            // A fixed B-1 frame lead guarantees output for every bounded input partition.
-            // With r pending input frames, the remaining output occupancy is B-1-r.
-            for fifo in &mut self.rubberband_output_fifo {
-                fifo.push_silence(self.rubberband_block_size.saturating_sub(1));
-            }
-            self.rubberband_active = true;
-        }
-
-        if (pitch_scale - self.rubberband_pitch_scale).abs() > PITCH_SCALE_EPSILON {
-            let Some(rubberband) = self.rubberband.as_mut() else {
-                self.copy_varispeed_output(output_samples);
-                return;
-            };
-            if rubberband.set_pitch_scale(pitch_scale).is_err() {
-                self.reset_rubberband_state();
+        if !self.native.active && self.native.dirty {
+            if !self.preparation.exchange(&mut self.native.rubberband) {
                 self.silence_output(output_samples);
                 return;
             }
-            self.rubberband_pitch_scale = pitch_scale;
+            self.native.dirty = false;
+            self.native.used = false;
+            self.native.pitch_scale = 1.0;
         }
-
-        for channel in 0..self.channels {
-            let written = self.rubberband_input_fifo[channel]
-                .push_slice(&self.varispeed[channel][..output_samples]);
-            if written != output_samples {
-                self.reset_rubberband_state();
-                self.silence_output(output_samples);
-                return;
-            }
-        }
-
-        if !self.shift_available_rubberband_blocks() {
+        if self
+            .native
+            .render(
+                &self.varispeed,
+                &mut self.output,
+                output_samples,
+                pitch_scale,
+            )
+            .is_err()
+        {
             self.reset_rubberband_state();
             self.silence_output(output_samples);
-            return;
         }
-
-        for channel in 0..self.channels {
-            let read = self.rubberband_output_fifo[channel]
-                .pop_into(&mut self.output[channel][..output_samples]);
-            if read < output_samples {
-                self.output[channel][read..output_samples].fill(0.0);
-            }
-        }
-    }
-
-    fn shift_available_rubberband_blocks(&mut self) -> bool {
-        if self.rubberband_block_size == 0 {
-            return false;
-        }
-
-        let max_shift_blocks =
-            (DEFAULT_BLOCK_SAMPLES / self.rubberband_block_size).saturating_add(2);
-        let mut shifted_blocks = 0;
-
-        while shifted_blocks < max_shift_blocks
-            && self
-                .rubberband_input_fifo
-                .iter()
-                .all(|fifo| fifo.len() >= self.rubberband_block_size)
-        {
-            for channel in 0..self.channels {
-                let read = self.rubberband_input_fifo[channel]
-                    .pop_into(&mut self.rubberband_input[channel][..self.rubberband_block_size]);
-                if read != self.rubberband_block_size {
-                    return false;
-                }
-            }
-
-            let Some(rubberband) = self.rubberband.as_mut() else {
-                return false;
-            };
-            if rubberband
-                .shift(&self.rubberband_input, &mut self.rubberband_output)
-                .is_err()
-            {
-                return false;
-            }
-            self.rubberband_used = true;
-
-            for channel in 0..self.channels {
-                let written = self.rubberband_output_fifo[channel]
-                    .push_slice(&self.rubberband_output[channel][..self.rubberband_block_size]);
-                if written != self.rubberband_block_size {
-                    return false;
-                }
-            }
-
-            shifted_blocks += 1;
-        }
-
-        true
     }
 
     fn copy_varispeed_output(&mut self, output_samples: usize) {
@@ -323,30 +295,16 @@ impl StretchProcessor {
     }
 
     fn deactivate_rubberband_if_needed(&mut self) {
-        if self.rubberband_active {
+        if self.native.active {
             self.reset_rubberband_state();
         }
     }
 
     fn reset_rubberband_state(&mut self) {
         self.productive_history = None;
-        // Rubber Band 4.0.0 reset/cold pitch setup allocate internally. Only the worker may
-        // perform those operations. An unused prepared handle is already clean.
-        self.rubberband_dirty |= self.rubberband_used;
-        for channel in &mut self.rubberband_input {
-            channel.fill(0.0);
-        }
-        for channel in &mut self.rubberband_output {
-            channel.fill(0.0);
-        }
-        for fifo in &mut self.rubberband_input_fifo {
-            fifo.reset();
-        }
-        for fifo in &mut self.rubberband_output_fifo {
-            fifo.reset();
-        }
-        self.rubberband_active = false;
-        self.rubberband_pitch_scale = 1.0;
+        self.preparation
+            .retire_source_owner(&mut self.native.source);
+        self.native.reset_adapter();
     }
 
     #[cfg(test)]
@@ -361,31 +319,34 @@ impl StretchProcessor {
 
     #[cfg(test)]
     pub(crate) fn rubberband_block_size(&self) -> usize {
-        self.rubberband_block_size
+        self.native.block_size
     }
 
     #[cfg(test)]
     pub(crate) fn rubberband_start_delay(&self) -> usize {
-        self.rubberband
+        self.native
+            .rubberband
             .as_ref()
             .map_or(0, RubberBandLiveShifter::start_delay)
     }
 
     #[cfg(test)]
     pub(crate) fn adapter_delay_frames(&self) -> usize {
-        self.rubberband_block_size.saturating_sub(1)
+        self.native.block_size.saturating_sub(1)
     }
 
     #[cfg(test)]
     pub(crate) fn rubberband_input_fifo_capacity(&self) -> usize {
-        self.rubberband_input_fifo
+        self.native
+            .input_fifo
             .first()
             .map_or(0, FixedFifo::capacity)
     }
 
     #[cfg(test)]
     pub(crate) fn rubberband_output_fifo_capacity(&self) -> usize {
-        self.rubberband_output_fifo
+        self.native
+            .output_fifo
             .first()
             .map_or(0, FixedFifo::capacity)
     }
@@ -397,7 +358,8 @@ impl StretchProcessor {
 
     #[cfg(test)]
     pub(crate) fn native_state_address(&self) -> usize {
-        self.rubberband
+        self.native
+            .rubberband
             .as_ref()
             .map_or(0, RubberBandLiveShifter::state_address)
     }
@@ -405,14 +367,48 @@ impl StretchProcessor {
     #[cfg(test)]
     pub(crate) fn pending_fifo_frames(&self) -> (usize, usize) {
         (
-            self.rubberband_input_fifo[0].len(),
-            self.rubberband_output_fifo[0].len(),
+            self.native.input_fifo[0].len(),
+            self.native.output_fifo[0].len(),
         )
     }
 
     #[cfg(test)]
     pub(crate) fn fail_preparation_worker(&self) {
         self.preparation.fail_worker();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prepared_target_output_frame(&mut self) -> Option<u64> {
+        self.preparation
+            .prepared_state()?
+            .source
+            .as_ref()
+            .map(|source| source.target_output_frame)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn source_preparation_ready(&mut self) -> bool {
+        self.preparation.prepared_state().is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prepared_native_address(&mut self) -> usize {
+        self.preparation
+            .prepared_state()
+            .and_then(|state| state.rubberband.as_ref())
+            .map_or(0, RubberBandLiveShifter::state_address)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prepared_fifo_frames(&mut self) -> Option<(usize, usize)> {
+        self.preparation
+            .prepared_state()
+            .map(|state| (state.input_fifo[0].len(), state.output_fifo[0].len()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn adopted_request_id(&self) -> Option<u64> {
+        self.adopted_request_id
     }
 }
 
@@ -427,7 +423,7 @@ fn sample_rate_to_u32(sample_rate_hz: f32) -> u32 {
         .clamp(RUBBERBAND_MIN_SAMPLE_RATE_HZ, u32::MAX as f32) as u32
 }
 
-pub(super) struct FixedFifo {
+pub(crate) struct FixedFifo {
     buffer: Vec<f32>,
     read_pos: usize,
     write_pos: usize,
@@ -444,7 +440,7 @@ impl FixedFifo {
         }
     }
 
-    fn reset(&mut self) {
+    pub(super) fn reset(&mut self) {
         self.buffer.fill(0.0);
         self.read_pos = 0;
         self.write_pos = 0;
@@ -474,7 +470,7 @@ impl FixedFifo {
         written
     }
 
-    fn push_silence(&mut self, frames: usize) {
+    pub(super) fn push_silence(&mut self, frames: usize) {
         debug_assert!(self.len + frames <= self.buffer.len());
         for _ in 0..frames.min(self.buffer.len().saturating_sub(self.len)) {
             self.buffer[self.write_pos] = 0.0;
@@ -558,9 +554,9 @@ mod tests {
             assert_ne!(expected, f64::from(1.0_f32 / ratio as f32));
             processor.resampled_buffers_mut(frames)[0][..frames].fill(0.0);
             processor.process_resampled(frames, ratio, true);
-            assert_eq!(processor.rubberband_pitch_scale, expected);
+            assert_eq!(processor.native.pitch_scale, expected);
             assert_eq!(
-                processor.rubberband.as_ref().unwrap().pitch_scale(),
+                processor.native.rubberband.as_ref().unwrap().pitch_scale(),
                 expected
             );
             assert!(
@@ -738,8 +734,8 @@ mod tests {
             processor.process_resampled(frames, 2.0, true);
             output.extend_from_slice(&processor.output_buffers()[0][..frames]);
             // Output always drains completely; no segment can insert extra silence/latency.
-            let pending_input = processor.rubberband_input_fifo[0].len();
-            let pending_output = processor.rubberband_output_fifo[0].len();
+            let pending_input = processor.native.input_fifo[0].len();
+            let pending_output = processor.native.output_fifo[0].len();
             assert_eq!(
                 pending_input + pending_output,
                 processor.adapter_delay_frames()
@@ -773,16 +769,16 @@ mod tests {
         processor.reset();
         processor.resampled_buffers_mut(512)[0][..512].fill(0.5);
         processor.process_resampled(512, 2.0, true);
-        assert!(!processor.rubberband_dirty);
-        assert!(processor.rubberband_used);
+        assert!(!processor.native.dirty);
+        assert!(processor.native.used);
 
         processor.reset();
         for _ in 0..4 {
             processor.resampled_buffers_mut(512)[0][..512].fill(0.5);
             processor.process_resampled(512, 2.0, true);
-            assert!(processor.rubberband_dirty);
-            assert!(!processor.rubberband_active);
-            assert!(processor.rubberband.is_some());
+            assert!(processor.native.dirty);
+            assert!(!processor.native.active);
+            assert!(processor.native.rubberband.is_some());
             assert!(
                 processor.output_buffers()[0][..512]
                     .iter()
@@ -795,7 +791,7 @@ mod tests {
                 .iter()
                 .all(|sample| *sample == 0.5)
         );
-        assert!(processor.rubberband_dirty);
+        assert!(processor.native.dirty);
     }
 
     #[test]
@@ -803,11 +799,11 @@ mod tests {
         let mut processor = StretchProcessor::new(1);
         for _ in 0..10 {
             processor.reset();
-            assert!(!processor.rubberband_dirty);
+            assert!(!processor.native.dirty);
         }
         processor.resampled_buffers_mut(512)[0][..512].fill(0.2);
         processor.process_resampled(512, 2.0, true);
-        assert!(processor.rubberband_used);
-        assert!(!processor.rubberband_dirty);
+        assert!(processor.native.used);
+        assert!(!processor.native.dirty);
     }
 }

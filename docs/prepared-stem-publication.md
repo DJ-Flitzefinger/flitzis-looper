@@ -77,8 +77,11 @@ the mixer's effective projection, including that brief control/callback transiti
 shape, rate and equal numerical values alone are insufficient. Full mix and every
 stem read both interpolation taps at the same
 SourcePlayback position, rate/ramp, loop/seek policy and source-selection transition.
-This shared feed reaches Key Lock without giving its productive DSP history a
-source/accepted revision binding.
+This shared feed reaches Key Lock with G3b2f1 continuous native/FIFO history bound
+to the actual source and complete effective timing. G3b2f2 productive worker
+preparation pins the same admitted stems and copies the same canonical trajectory;
+its source-specific native/FIFO adoption rechecks their actual buffer identities
+and effective timing. Active selection ramps defer preparation until complete.
 
 `ticket.publication_status()` reports `captured`, `pending`, `accepted` or
 `rejected` through bounded atomics. Python leaves controls unavailable while queued
@@ -117,8 +120,11 @@ G3b2a/b/c/d connects [explicit acceptance](native-constant-timing.md) to current
 native/Python grid, loop, transport/master/rate and MIDI pad consumers. G3b2e
 adds productive prepared-source/stem revision binding with a shared source
 trajectory; the generic preparation epoch remains a separate freshness check.
-Productive StretchProcessor/voice/DSP-history binding remains pending: the warmed
-Key Lock pool is source-neutral and key_lock_source_preparation is test-only.
+G3b2f1 binds continuous productive StretchProcessor/voice/filter history and pinned
+source timing. G3b2f2 adds actual worker-owned native/FIFO continuation from those
+PCM/stem owners, exact current permits and timed transactional adoption; completion
+requires productive ownership/output/failure proof. Neutral reserves and the
+separate test-only key_lock_source_preparation cannot substitute for that owner.
 Accepted source-verified SampleAnalysis/ProjectState persistence and loader schema
 with fresh runtime adoption, source/accepted-bound controller global START/STOP
 batch launch including MIDI, and explicit acceptance/derived loop/master refresh

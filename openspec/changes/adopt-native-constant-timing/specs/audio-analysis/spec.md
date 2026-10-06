@@ -1,10 +1,9 @@
 ## ADDED Requirements
 
 G3b2f1 covers continuous productive voice/native/FIFO/filter-history ownership.
-Required NEXT G3b2f2 source-prepared native-history integration remains incomplete
-and precedes G3b2g persistence; later B5 audible compensation is a separate gate.
-The current realtime contracts below do not claim source-specific worker priming,
-retained prepared native/FIFO ownership or timed adoption/catch-up.
+G3b2f2 adds the productive prepared native-history contract below. Its completion
+requires actual worker-owned native/FIFO preparation and timed adoption evidence,
+before G3b2g persistence; later B5 audible compensation is a separate gate.
 
 ### Requirement: Explicit Native Acceptance Uses Actual Loaded Pad Evidence
 The system SHALL capture actual loaded source/PCM/timebase/generation/request in
@@ -582,3 +581,105 @@ PCM hashing, I/O, Python/UI access or logging.
 - **AND** native reset/warming and large-owner destruction use the existing worker/retirement paths
 - **AND** callback processing adds no locks, evidence allocation, PCM hashing, I/O, Python/UI access or logging
 - **AND** stop/unload clears filter history ownership before the voice pin retires without retaining an additional PCM or native handle
+
+### Requirement: Productive Source Preparation Retains Actual Native And FIFO History
+The system SHALL prepare productive Key Lock replacement history on its native
+worker from pinned actual source/stem PCM, a copied canonical SourcePlayback and
+the shared SourceReadPlan. The prepared owner SHALL retain the actual processed
+native handle and pending adapter FIFOs. Neutral warming, opaque tags or test-only
+state SHALL NOT satisfy productive source-specific preparation.
+
+#### Scenario: The worker prepares actual productive source history
+- **GIVEN** an eligible effective voice and a captured current source/timing permit
+- **WHEN** the native worker prepares and catches up a replacement through the canonical source reader and adapter
+- **THEN** its retained handle has consumed that actual fractional source/stem feed
+- **AND** its native state and input/output FIFOs form one coherent continuation owned until adoption or off-thread retirement
+- **AND** genuine shifted output and handle/FIFO ownership are independently verifiable
+
+### Requirement: Prepared Native History Requires Current Complete Permits
+The system SHALL bind prepared native history to current source generation/load
+request, loaded rate, preparation request/epoch, declared authority and the full
+CURRENT acknowledged accepted revision with exact binary64 period and signed
+origin. It SHALL recheck this permit at actual adoption. Manual/Tap/Legacy SHALL
+remain nonaccepted; unavailable Automatic SHALL fail admission.
+
+#### Scenario: A current accepted permit is captured
+- **GIVEN** actual source ownership under current acknowledged Automatic timing
+- **WHEN** productive native preparation captures its permit
+- **THEN** it binds source generation/load request/rate, shared preparation request/epoch, authority/runtime revisions and complete exact accepted projection
+- **AND** equal timing numbers or signed-zero changes cannot substitute for that complete projection
+
+#### Scenario: Automatic is unavailable or only historical acceptance is supplied
+- **GIVEN** Automatic authority without consistent current native acknowledgement
+- **WHEN** productive native preparation is requested
+- **THEN** no accepted preparation is admitted from historical ticket metadata, raw revisions or equal numerical timing
+- **AND** previous effective audio/native history remains available
+
+#### Scenario: Nonaccepted authority requests preparation
+- **GIVEN** a current Manual, Tap or Legacy source binding
+- **WHEN** eligible source-specific history is prepared
+- **THEN** preparation remains under that nonaccepted authority
+- **AND** its numerical period or origin is not promoted to an accepted revision
+
+### Requirement: Prepared Native Adoption Is Timed And Transactional
+The system SHALL adopt a prepared native/FIFO owner only at its exact absolute
+output-frame deadline, splitting productive rendering at that boundary. It SHALL
+recheck current source/timing and complete runtime trajectory and reserve off-thread
+recycling before exchange. Worker catch-up SHALL finish before adoption; late,
+unready, stale, failed or rejected work SHALL preserve previous effective audio/
+native history without partial replacement.
+
+#### Scenario: Ready prepared history reaches its exact adoption frame
+- **GIVEN** a ready source-specific native/FIFO owner matching the current effective voice and captured permit
+- **WHEN** a callback spans the absolute adoption deadline
+- **THEN** the callback renders the old effective owner up to the exact frame and rechecks all captured runtime/current-authority constraints
+- **AND** those checks include physical loop, fractional trajectory/seek mode, source/stem selection and rate
+- **AND** it exchanges the complete native/FIFO continuation only after recycling capacity is reserved
+- **AND** subsequent output uses the adopted native owner and the same canonical logical source trajectory
+
+#### Scenario: A control or source change retires preparation
+- **GIVEN** source-specific preparation pending under an earlier source, loop, seek, stem, rate or accepted binding
+- **WHEN** that runtime state or current source/request/epoch/authority changes before adoption
+- **THEN** the mismatching prepared owner cannot enter productive rendering
+- **AND** the previously effective native/FIFO owner and audio remain available
+- **AND** even equal period/origin numbers cannot hide a changed full accepted revision
+
+#### Scenario: Readiness or recycling fails at the deadline
+- **GIVEN** an existing effective owner and a prepared adoption deadline
+- **WHEN** preparation fails, completion is late, the result is unready or the bounded recycle lane is full
+- **THEN** no partial replacement changes effective audio/native history
+- **AND** failed or rejected prepared source/native/FIFO owners retire outside the callback
+
+### Requirement: Prepared Native Work Remains Outside Realtime Rendering
+The system SHALL perform source-specific priming, catch-up, native construction,
+reset, cold pitch setup, heavy source processing and prepared-owner destruction
+on non-realtime paths. The callback SHALL use only bounded queue/permit/runtime
+checks, exact boundary splitting and ownership exchange through existing native
+worker and retirement mechanisms, without heavy preparation, blocking locks,
+PCM hashing, I/O, Python/UI access, logging or large-owner destruction.
+
+#### Scenario: Prepared native work is superseded or rejected
+- **GIVEN** a prepared native handle/FIFO owner and pinned actual source/stem PCM
+- **WHEN** preparation is cancelled, fails or is rejected at timed adoption
+- **THEN** native and large PCM owners remain retained for off-thread recycling/destruction
+- **AND** callback rejection performs bounded work without native reset, loading or heavy catch-up
+
+### Requirement: Cancelled Prepared Native Owners Retire Without Source Rendering
+The system SHALL check a shared local voice epoch before and after worker catch-up
+and the exact outstanding request ID before adoption. Stop/reset/wet deactivation
+SHALL cancel pending work; discarded jobs SHALL settle pending state through fixed
+completion feedback. Inactive/paused callbacks SHALL poll bounded owner retirement
+without source rendering; source/native/FIFO destruction and teardown tails SHALL
+remain off realtime.
+
+#### Scenario: Cancellation races with worker preparation or publication
+- **GIVEN** a prepared job in flight or ready while its voice stops, resets or leaves wet processing
+- **WHEN** local cancellation is published before or after the worker's final freshness check
+- **THEN** stale in-flight work is discarded on the worker, or bounded callback retirement returns the late published owner intact
+- **AND** completed-request feedback settles pending work without allowing an old request ID to adopt
+
+#### Scenario: A cancelled voice never renders source audio again
+- **GIVEN** a cancelled inactive or paused voice with a late ready result or retained source/stem pins
+- **WHEN** subsequent callbacks poll its bounded retirement lanes, or stream teardown runs after rendering stops
+- **THEN** native/FIFO/source/stem owners retire off realtime without requiring another productive source feed
+- **AND** the dirty-state fence prevents invalidated native history from consuming foreign feed

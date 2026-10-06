@@ -51,14 +51,25 @@ control-source fence and effective callback bank. Loading unavailable or a
 replacement control PCM ahead of bank adoption rejects new starts while ongoing
 old effective source/timing/history remains available.
 
+G3b2f2 integrates source-specific native preparation in that productive path.
+The existing worker retains an actual prepared Rubber Band handle with its
+adapter FIFOs after 4096 active frames from pinned actual PCM/stems and copied
+canonical playback/read-plan state, including rate smoothing. Current native
+source/load/preparation/authority and full accepted projection permits protect
+the job. Rendering splits at the exact captured output frame plus 4096 and
+transactionally adopts only a current matching continuation after reserving
+off-thread recycling. Pending, failed, stale, unready, late or saturated work
+keeps the old effective native/FIFO owner and output. Active stem-selection
+transitions defer preparation. Completion requires real productive ownership,
+shifted-output and failure-path proof, rather than the separate test fixture.
+
 ## Non-goals and realtime safety
 
-G3b2f1 completes continuous productive history ownership only. Required NEXT
-G3b2f2 remains absent: source-specific worker priming, retained prepared native/FIFO
-ownership, full source/current-revision/rate/epoch permits and timed transactional
-adoption with catch-up. It precedes G3b2g accepted persistence/fresh loader work.
-The warmed Key Lock pool stays source-neutral and key_lock_source_preparation is
-test-only; neither completes that required native integration.
+G3b2f1 continuous history and G3b2f2 source-specific prepared native continuation
+precede G3b2g accepted persistence/fresh loader work. The neutral warmed reserves
+and test-only key_lock_source_preparation stay separate from productive source
+priming. The 4096-frame worker horizon is a bounded catch-up contract, not an
+audible delay or onset correction. No seamless mode transition is claimed.
 
 This slice does not choose a musical acceptance policy or infer quarter labels,
 switch the default analyzer, silently promote manual/TAP or legacy numbers, or
@@ -75,7 +86,8 @@ included.
 PCM scanning, QM analysis, hashing, fitting and evidence ownership remain outside
 realtime processing. The callback handles only bounded source/permit checks and
 fixed accepted timing metadata, actual borrowed-source feed and bounded adapter
-storage; native DSP construction/reset/loading and large-owner retirement stay
-outside it. The existing worker owns native state recycling and warming.
+storage and exact adoption-boundary splitting; native DSP construction/reset/
+loading, source-specific priming/catch-up and large-owner retirement stay outside
+it. The existing worker owns prepared continuation, state recycling and warming.
 Observed source digest plus loaded PCM identity does not prove immutable
 copy-first decode lineage or defeat an original-file ABA replacement.

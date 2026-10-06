@@ -1127,6 +1127,7 @@ pub fn create_audio_stream(
     input_clock: InputClock,
     current_timing_acknowledgements: Arc<CurrentTimingAcknowledgements>,
     input_runtime_ownership: Arc<super::input_runtime_binding::InputRuntimeOwnership>,
+    prepared_source_epochs: Vec<Arc<std::sync::atomic::AtomicU64>>,
 ) -> Result<AudioStreamHandle, Box<dyn std::error::Error>> {
     setup_logger();
 
@@ -1158,6 +1159,7 @@ pub fn create_audio_stream(
     let mut mixer = RtMixer::try_new(channels as usize, sample_rate_hz as f32)?;
     mixer.set_current_timing_acknowledgements(current_timing_acknowledgements);
     mixer.set_input_runtime_ownership(input_runtime_ownership);
+    mixer.set_prepared_source_epochs(prepared_source_epochs);
     let mut transport = TransportTimeline::new(sample_rate_hz);
     let mut scheduler = TransportScheduler::new();
     let mut trigger_quantization = TriggerQuantization::Immediate;
@@ -1997,7 +1999,12 @@ mod tests {
             return; // Skip test if no audio device available
         }
 
-        let result = create_audio_stream(InputClock::new(), Arc::default(), Arc::default());
+        let result = create_audio_stream(
+            InputClock::new(),
+            Arc::default(),
+            Arc::default(),
+            (0..NUM_SAMPLES).map(|_| Arc::default()).collect(),
+        );
         // We expect this to potentially fail in test environments,
         // but we want to ensure the function exists and has the right signature
         match result {

@@ -99,17 +99,29 @@ impl InputRuntimeOwnership {
     }
 
     pub(crate) fn source_current(&self, id: usize, sample: &SampleBuffer, rate: u32) -> bool {
+        self.source_generation(id, sample, rate).is_some()
+    }
+
+    /// Capture the actual loaded request generation with one bounded source check/recheck.
+    /// Standalone mixers do not have control-cache tracking; their immutable pin is authoritative.
+    pub(crate) fn source_generation(
+        &self,
+        id: usize,
+        sample: &SampleBuffer,
+        rate: u32,
+    ) -> Option<u64> {
         if !self.source_tracking {
-            return true;
+            return Some(1);
         }
         let source = &self.sources[id];
         let generation = source.generation.load(Ordering::SeqCst);
-        generation != 0
+        (generation != 0
             && source.address.load(Ordering::SeqCst) == sample.samples.as_ptr() as usize
             && source.count.load(Ordering::SeqCst) == sample.samples.len()
             && source.channels.load(Ordering::SeqCst) == sample.channels
             && source.rate.load(Ordering::SeqCst) == rate
-            && source.generation.load(Ordering::SeqCst) == generation
+            && source.generation.load(Ordering::SeqCst) == generation)
+            .then_some(generation)
     }
 
     /// Successful control admission publishes declared authority before its callback clear.

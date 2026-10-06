@@ -218,6 +218,13 @@ impl StemTransition {
         self.total_frames > 0 && self.elapsed_frames < self.total_frames as f64
     }
 
+    /// Preserve complete source-selection ramp state at a prepared adoption boundary.
+    pub(crate) fn matches_exact(self, other: Self) -> bool {
+        self.from == other.from
+            && self.elapsed_frames.to_bits() == other.elapsed_frames.to_bits()
+            && self.total_frames == other.total_frames
+    }
+
     fn gains_at(self, frame_offset: f64) -> (f32, f32) {
         if !self.is_active() {
             return (0.0, 1.0);
@@ -387,6 +394,30 @@ pub(crate) struct SourceReadPlan {
 }
 
 impl SourceReadPlan {
+    /// Compare actual source addressing and selection, including an unfinished transition.
+    ///
+    /// Source pins and current timing authority are checked separately by the owning permit.
+    pub(crate) fn matches_exact(self, other: Self) -> bool {
+        self.channels == other.channels
+            && self.sample_frames == other.sample_frames
+            && self.frame_pos == other.frame_pos
+            && self.loop_region == other.loop_region
+            && self.seek_mode == other.seek_mode
+            && self.selection == other.selection
+            && self.transition.matches_exact(other.transition)
+    }
+
+    /// Check source selection and boundaries while a pending copied trajectory advances.
+    ///
+    /// Frame/seek phase and transition progress are compared against the advanced checkpoint
+    /// only at adoption. An explicit seek is separately fenced by the owning preparation epoch.
+    pub(crate) fn matches_source_contract(self, other: Self) -> bool {
+        self.channels == other.channels
+            && self.sample_frames == other.sample_frames
+            && self.loop_region == other.loop_region
+            && self.selection == other.selection
+    }
+
     /// Fill fixed output-domain storage from a configured constant-ratio source chunk.
     ///
     /// Neither the source clock nor this plan's selection transition advances. The caller owns
@@ -577,6 +608,56 @@ mod tests {
             selection: StemRenderSelection::full_mix(),
             transition: StemTransition::default(),
         }
+    }
+
+    #[test]
+    fn prepared_plan_rejects_equal_phase_with_different_future_loop_or_selection_ramp() {
+        let sample = stereo_sample(1.0);
+        let original = plan(3, ExplicitSeekMode::Normal);
+        assert!(original.matches_exact(original));
+        let different_loop = SourceReadPlan {
+            loop_region: FrameRange { start: 2, end: 4 },
+            ..original
+        };
+        assert_eq!(original.frame_pos, different_loop.frame_pos);
+        assert!(!original.matches_exact(different_loop));
+        assert!(!original.matches_source_contract(different_loop));
+        assert_ne!(
+            original.sample_fractional(&sample, None, 0.5, 0.0, 0),
+            different_loop.sample_fractional(&sample, None, 0.5, 0.0, 0)
+        );
+
+        let stems = prepared_stems(&sample);
+        let mut transition = StemTransition::start(StemRenderSelection::full_mix(), 128);
+        let transitioning = SourceReadPlan {
+            selection: StemRenderSelection::from_state(StemMixMode::AllStems, 42, STEM_MASK_MELODY),
+            transition,
+            ..original
+        };
+        transition.advance_fractional(0.73);
+        let advanced_transition = SourceReadPlan {
+            transition,
+            ..transitioning
+        };
+        assert!(!transitioning.matches_exact(advanced_transition));
+        assert!(transitioning.matches_source_contract(advanced_transition));
+        assert_ne!(
+            transitioning.sample_fractional(&sample, Some(&stems), 0.0, 0.0, 0),
+            advanced_transition.sample_fractional(&sample, Some(&stems), 0.0, 0.0, 0)
+        );
+        let different_selection = SourceReadPlan {
+            selection: StemRenderSelection::from_state(StemMixMode::AllStems, 42, STEM_MASK_VOCALS),
+            ..transitioning
+        };
+        assert!(!transitioning.matches_exact(different_selection));
+        assert!(!transitioning.matches_source_contract(different_selection));
+        let advanced_phase = SourceReadPlan {
+            frame_pos: 4,
+            seek_mode: ExplicitSeekMode::AfterLoop,
+            ..original
+        };
+        assert!(original.matches_source_contract(advanced_phase));
+        assert!(!original.matches_exact(advanced_phase));
     }
 
     #[test]
