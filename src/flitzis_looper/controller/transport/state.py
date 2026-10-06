@@ -96,7 +96,14 @@ class ApplyProjectState:
             ):
                 continue
 
-            self._transport.loop._apply_effective_pad_loop_region_to_audio(sample_id)
+            timing = self._bpm.current_timing(sample_id)
+            if (
+                timing is None
+                and self._project.manual_bpm[sample_id] is None
+                and self._audio.pad_timing_intent(sample_id) == "automatic"
+            ):
+                continue
+            self._transport.loop._apply_effective_pad_loop_region_to_audio(sample_id, timing=timing)
 
     def _apply_pad_bpm_settings(self) -> None:
         for sample_id in range(len(self._project.sample_paths)):

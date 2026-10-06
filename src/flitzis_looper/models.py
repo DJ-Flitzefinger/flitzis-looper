@@ -702,6 +702,12 @@ class SessionState(BaseModel):
     bpm_lock_anchor_bpm: float | None = None
     """Pad BPM value captured when BPM lock is enabled."""
 
+    bpm_lock_anchor_revision: str | None = None
+    """Current accepted anchor revision at the last successful master publication."""
+
+    master_period_seconds: float | None = None
+    """Exact output quarter period at the last successful master publication."""
+
     master_bpm: float | None = None
     """Current master BPM when BPM lock is enabled."""
 

@@ -13,9 +13,11 @@
 
 - [x] G3b2a (`adopt-native-constant-timing`): productive current-pad native
   acceptance, bounded callback acknowledgement and precise SourceGrid.
-- [ ] G3b: connect actual current-pad publication authority and use the accepted
-  period/revision across editor/snap/auto-loop, native timing/transport/BPMLOCK,
-  MIDI metadata, preparation and same-source stems; preserve manual/TAP/legacy.
+- [x] G3b2b/c (`adopt-native-constant-timing`): current native authority and exact
+  native/Python grid, loop, presentation and transport/BPMLOCK period consumers.
+- [ ] G3b remaining: full-revision MIDI metadata, preparation, same-source stems,
+  productive Key Lock history and source-verified accepted persistence; preserve
+  manual/TAP/legacy and complete productive acceptance refresh integration.
 - [ ] G3c: prove musical versus physical loop duration for 75/1000 cycles,
   fractional periods/rates and callback partitions; retain separate rendered
   DSP/onset/device acceptance before any audible sustained-SYNC claim.

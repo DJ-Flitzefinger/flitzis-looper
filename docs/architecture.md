@@ -449,9 +449,14 @@ matching restored full-mix sample has completed its async load. If publication
 is rejected, Python marks the cache unavailable for controls and preserves Rust's
 previous playback state. Late callback rejection is observed before availability.
 The preparation epoch is not the G3a accepted revision. G3b2a publishes precise
-accepted SourceGrid metadata; G3b2b adds current authority and native period/rate
-consumers. Prepared stem/Key Lock revision binding, Python consumers and immutable
-copy-first source proof remain separate gates.
+accepted SourceGrid metadata; G3b2b/c adds current authority and native/Python
+period/rate/grid/loop/global-control consumers. Frozen Python source timing retains
+complete revision and provenance; Automatic without acknowledgement stays
+unavailable. Passive restore cannot replay Legacy timing over it. Accepted master
+controls publish period/speed directly; physical marker rounding uses loaded rate.
+Explicit current adoption still requires caller-owned derived loop/master refresh
+after acknowledgement. Prepared stem/Key Lock/MIDI revision binding, accepted
+persistence and immutable copy-first source proof remain separate gates.
 
 Active full-mix/stem mode and enabled-mask changes use bounded Rust-owned
 transition state with a short 128 source-frame crossfade. Both sides read the

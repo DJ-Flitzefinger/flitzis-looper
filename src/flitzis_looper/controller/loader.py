@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, TypeVar
 from pydantic import ValidationError
 
 from flitzis_looper.controller.base import BaseController
+from flitzis_looper.controller.validation import normalize_bpm
 from flitzis_looper.models import (
     ProjectState,
     SampleAnalysis,
@@ -375,6 +376,7 @@ class LoaderController(BaseController):
         ))
 
     def _publish_unloaded_pad_audio_defaults(self, sample_id: int, defaults: ProjectState) -> None:
+        self._restore_legacy_timing_authority(sample_id, None)
         self._audio.set_pad_gain(sample_id, defaults.pad_gain_db[sample_id])
         self._audio.set_pad_eq(
             sample_id,
@@ -447,6 +449,9 @@ class LoaderController(BaseController):
             self._project.sample_durations[sample_id] = duration_s
 
         timing_stale = event.get("timing_stale") is True
+        # A successful ordinary load owns its timing again. Passive refresh
+        # cannot clear Automatic authority while acceptance is still pending.
+        self._restore_legacy_timing_authority(sample_id, None, timing_stale=timing_stale)
         # The source still belongs to this load, but a newer native request owns timing.
         # Settle source bookkeeping without replaying automatic or restored grid intent.
         if not timing_stale and new_assignment and self._on_new_sample_loaded is not None:
@@ -632,9 +637,20 @@ class LoaderController(BaseController):
         except ValidationError:
             return
 
+        manual = self._project.manual_bpm[sample_id]
+        self._restore_legacy_timing_authority(
+            sample_id, normalize_bpm(manual if manual is not None else parsed.bpm)
+        )
         self._project.sample_analysis[sample_id] = parsed
         self._on_pad_bpm_changed(sample_id)
         self._mark_project_changed()
+
+    def _restore_legacy_timing_authority(
+        self, sample_id: int, bpm: float | None, *, timing_stale: bool = False
+    ) -> None:
+        """Resume ordinary timing only at a successful or explicitly cleared lifecycle."""
+        if not timing_stale and self._audio.pad_timing_intent(sample_id) == "automatic":
+            self._audio.set_pad_bpm(sample_id, bpm)
 
     def _clear_restored_pad(self, sample_id: int) -> None:
         self._reset_unloaded_pad_defaults(sample_id)

@@ -668,7 +668,7 @@ struct PendingPadEq {
 struct PendingControlParameters {
     volume: Option<f32>,
     speed: Option<f64>,
-    master_bpm: Option<f64>,
+    master_period_seconds: Option<f64>,
     pad_bpm: [PendingPadBpm; MAX_PARAMETER_MESSAGES_PER_CALLBACK],
     pad_bpm_count: usize,
     pad_gain: [PendingPadGain; MAX_PARAMETER_MESSAGES_PER_CALLBACK],
@@ -682,7 +682,7 @@ impl Default for PendingControlParameters {
         Self {
             volume: None,
             speed: None,
-            master_bpm: None,
+            master_period_seconds: None,
             pad_bpm: [PendingPadBpm {
                 id: 0,
                 bpm: None,
@@ -710,7 +710,19 @@ impl PendingControlParameters {
         match message {
             ControlParameterMessage::SetVolume(volume) => self.volume = Some(volume),
             ControlParameterMessage::SetSpeed(speed) => self.speed = Some(speed),
-            ControlParameterMessage::SetMasterBpm(bpm) => self.master_bpm = Some(bpm),
+            ControlParameterMessage::SetMasterBpm(bpm) => {
+                self.master_period_seconds = Some(60.0 / bpm);
+            }
+            ControlParameterMessage::SetMasterPeriod(period) => {
+                self.master_period_seconds = Some(period);
+            }
+            ControlParameterMessage::SetSpeedAndMasterPeriod {
+                speed,
+                period_seconds,
+            } => {
+                self.speed = Some(speed);
+                self.master_period_seconds = Some(period_seconds);
+            }
             #[cfg(test)]
             ControlParameterMessage::SetPadBpm { id, bpm } => {
                 self.record_pad_bpm(id, bpm, None);
@@ -810,8 +822,7 @@ impl PendingControlParameters {
             mixer.set_speed(speed);
             applied += 1;
         }
-        if let Some(bpm) = self.master_bpm {
-            let period = 60.0 / bpm;
+        if let Some(period) = self.master_period_seconds {
             if transport.set_master_period_preserving_beat_position_at_frame(
                 period,
                 transport.output_frame(),
@@ -1527,6 +1538,194 @@ mod tests {
         );
         assert_eq!(mixer.output_bpm_for_sample_id(0), before_output_bpm);
         assert_eq!(transport.beat_position(), Some(before_beat));
+    }
+
+    #[test]
+    fn direct_master_period_and_bpm_share_last_admitted_parameter_order() {
+        let period = 0.224_504_832_555_644_9_f64;
+        assert_ne!(period.to_bits(), (60.0 / (60.0 / period)).to_bits());
+        for (first, last, expected) in [
+            (
+                ControlParameterMessage::SetMasterBpm(120.0),
+                ControlParameterMessage::SetMasterPeriod(period),
+                period,
+            ),
+            (
+                ControlParameterMessage::SetMasterPeriod(period),
+                ControlParameterMessage::SetMasterBpm(123.5),
+                60.0 / 123.5,
+            ),
+        ] {
+            let (mut producer, mut consumer) = RingBuffer::new(2);
+            producer.push(first).unwrap();
+            producer.push(last).unwrap();
+            let mut mixer = RtMixer::new(1, 48_000.0);
+            mixer.set_bpm_lock(true);
+            mixer.set_pad_bpm(0, Some(93.123_456_789));
+            let mut transport = TransportTimeline::new(48_000);
+            transport.advance_by_rendered_frames(13_001);
+            let before_beat = transport.beat_position();
+            let result = drain_parameter_messages(&mut consumer, &mut mixer, &mut transport);
+            assert_eq!(result.messages_drained, 2);
+            assert_eq!(result.parameters_applied, 1);
+            assert_eq!(
+                transport.master_period_seconds().unwrap().to_bits(),
+                expected.to_bits()
+            );
+            assert_eq!(
+                mixer
+                    .transport_reference_period_for_sample_id(0)
+                    .unwrap()
+                    .to_bits(),
+                expected.to_bits()
+            );
+            assert_eq!(transport.beat_position(), before_beat);
+        }
+    }
+
+    #[test]
+    fn invalid_direct_master_period_or_full_ring_keeps_effective_clock() {
+        let period = 0.224_504_832_555_644_9_f64;
+        let mut mixer = RtMixer::new(1, 48_000.0);
+        mixer.set_bpm_lock(true);
+        mixer.set_pad_bpm(0, Some(93.123_456_789));
+        let mut transport = TransportTimeline::new(48_000);
+        transport.advance_by_rendered_frames(13_001);
+        let (mut producer, mut consumer) = RingBuffer::new(1);
+        producer
+            .push(ControlParameterMessage::SetMasterPeriod(period))
+            .unwrap();
+        assert!(
+            producer
+                .push(ControlParameterMessage::SetMasterPeriod(0.75))
+                .is_err()
+        );
+        assert_eq!(transport.master_period_seconds(), Some(0.5));
+        drain_parameter_messages(&mut consumer, &mut mixer, &mut transport);
+        let beat_before = transport.beat_position();
+        for invalid in [f64::NAN, f64::INFINITY, 0.0, -1.0, f64::MAX] {
+            producer
+                .push(ControlParameterMessage::SetMasterPeriod(invalid))
+                .unwrap();
+            drain_parameter_messages(&mut consumer, &mut mixer, &mut transport);
+            assert_eq!(
+                transport.master_period_seconds().unwrap().to_bits(),
+                period.to_bits()
+            );
+            assert_eq!(
+                mixer
+                    .transport_reference_period_for_sample_id(0)
+                    .unwrap()
+                    .to_bits(),
+                period.to_bits()
+            );
+            assert_eq!(transport.beat_position(), beat_before);
+        }
+    }
+
+    #[test]
+    fn coupled_speed_master_period_keeps_component_order_and_exact_bits() {
+        let period = 0.224_504_832_555_644_9_f64;
+        let batch = ControlParameterMessage::SetSpeedAndMasterPeriod {
+            speed: 1.25,
+            period_seconds: period,
+        };
+        for (messages, expected_speed, expected_period) in [
+            (
+                vec![
+                    ControlParameterMessage::SetSpeed(0.75),
+                    ControlParameterMessage::SetMasterBpm(120.0),
+                    batch,
+                ],
+                1.25,
+                period,
+            ),
+            (
+                vec![batch, ControlParameterMessage::SetSpeed(0.75)],
+                0.75,
+                period,
+            ),
+            (
+                vec![batch, ControlParameterMessage::SetMasterBpm(123.5)],
+                1.25,
+                60.0 / 123.5,
+            ),
+            (
+                vec![batch, ControlParameterMessage::SetMasterPeriod(0.6)],
+                1.25,
+                0.6,
+            ),
+        ] {
+            let (mut producer, mut consumer) = RingBuffer::new(messages.len());
+            for message in messages {
+                producer.push(message).unwrap();
+            }
+            let mut mixer = RtMixer::new(1, 48_000.0);
+            mixer.set_pad_bpm(0, Some(120.0));
+            let mut transport = TransportTimeline::new(48_000);
+            transport.advance_by_rendered_frames(13_001);
+            let beat_before = transport.beat_position();
+            let result = drain_parameter_messages(&mut consumer, &mut mixer, &mut transport);
+            assert_eq!(result.parameters_applied, 2);
+            assert_eq!(
+                mixer.output_bpm_for_sample_id(0),
+                Some(60.0 / (0.5 / expected_speed))
+            );
+            assert_eq!(
+                transport.master_period_seconds().unwrap().to_bits(),
+                expected_period.to_bits()
+            );
+            assert_eq!(transport.beat_position(), beat_before);
+            mixer.set_bpm_lock(true);
+            assert_eq!(
+                mixer
+                    .transport_reference_period_for_sample_id(0)
+                    .unwrap()
+                    .to_bits(),
+                expected_period.to_bits()
+            );
+        }
+    }
+
+    #[test]
+    fn coupled_speed_master_period_is_not_split_at_callback_drain_budget() {
+        let period = 0.224_504_832_555_644_9_f64;
+        let (mut producer, mut consumer) = RingBuffer::new(MAX_PARAMETER_MESSAGES_PER_CALLBACK + 1);
+        for _ in 1..MAX_PARAMETER_MESSAGES_PER_CALLBACK {
+            producer
+                .push(ControlParameterMessage::SetVolume(0.5))
+                .unwrap();
+        }
+        producer
+            .push(ControlParameterMessage::SetSpeedAndMasterPeriod {
+                speed: 1.25,
+                period_seconds: period,
+            })
+            .unwrap();
+        producer
+            .push(ControlParameterMessage::SetVolume(0.75))
+            .unwrap();
+        let mut mixer = RtMixer::new(1, 48_000.0);
+        mixer.set_pad_bpm(0, Some(120.0));
+        let mut transport = TransportTimeline::new(48_000);
+        let result = drain_parameter_messages(&mut consumer, &mut mixer, &mut transport);
+        assert_eq!(result.messages_drained, MAX_PARAMETER_MESSAGES_PER_CALLBACK);
+        assert_eq!(result.parameters_applied, 3);
+        assert_eq!(mixer.output_bpm_for_sample_id(0), Some(150.0));
+        assert_eq!(
+            transport.master_period_seconds().unwrap().to_bits(),
+            period.to_bits()
+        );
+        mixer.set_bpm_lock(true);
+        assert_eq!(
+            mixer.transport_reference_period_for_sample_id(0),
+            Some(period)
+        );
+        assert_eq!(
+            consumer.pop().unwrap(),
+            ControlParameterMessage::SetVolume(0.75)
+        );
+        assert!(consumer.pop().is_err());
     }
 
     #[test]

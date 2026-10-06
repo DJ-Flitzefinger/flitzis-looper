@@ -998,6 +998,23 @@ impl AudioEngine {
         constant_timing::set_intent(self, &handle.producer, sample_id, intent)
     }
 
+    /// Read declared native authority without claiming callback adoption or changing it.
+    pub fn pad_timing_intent(&self, sample_id: usize) -> PyResult<&'static str> {
+        if sample_id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+        let intents = self
+            .timing_intents
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("timing intent lock poisoned"))?;
+        Ok(match intents[sample_id] {
+            analysis::tempo_acceptance::TimingIntent::Automatic => "automatic",
+            analysis::tempo_acceptance::TimingIntent::Manual => "manual",
+            analysis::tempo_acceptance::TimingIntent::Tap => "tap",
+            analysis::tempo_acceptance::TimingIntent::Legacy => "legacy",
+        })
+    }
+
     /// Current acknowledged accepted timing for the actual native loaded source.
     /// Historical tickets and pending publications do not establish availability.
     pub fn current_constant_timing(
@@ -1813,6 +1830,62 @@ impl AudioEngine {
         )
     }
 
+    /// Publish binary64 output seconds per quarter, preserving the current beat epoch.
+    pub fn set_master_period(&mut self, period_seconds: f64) -> PyResult<()> {
+        if !period_seconds.is_finite() || period_seconds <= 0.0 {
+            return Err(PyValueError::new_err("period_seconds out of range"));
+        }
+
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        if !(period_seconds * f64::from(handle.output_sample_rate) * 4.0).is_finite() {
+            return Err(PyValueError::new_err("master output period out of range"));
+        }
+
+        let mut producer = handle
+            .parameter_producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+
+        push_parameter_message(
+            &mut producer,
+            ControlParameterMessage::SetMasterPeriod(period_seconds),
+            "SetMasterPeriod",
+        )
+    }
+
+    /// Admit coupled speed and output period as one validated parameter message.
+    pub fn set_speed_and_master_period(&mut self, speed: f64, period_seconds: f64) -> PyResult<()> {
+        if !speed.is_finite() || !(SPEED_MIN..=SPEED_MAX).contains(&speed) {
+            return Err(PyValueError::new_err("speed out of range"));
+        }
+        if !period_seconds.is_finite() || period_seconds <= 0.0 {
+            return Err(PyValueError::new_err("period_seconds out of range"));
+        }
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        if !(period_seconds * f64::from(handle.output_sample_rate) * 4.0).is_finite() {
+            return Err(PyValueError::new_err("master output period out of range"));
+        }
+        let mut producer = handle
+            .parameter_producer
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
+        push_parameter_message(
+            &mut producer,
+            ControlParameterMessage::SetSpeedAndMasterPeriod {
+                speed,
+                period_seconds,
+            },
+            "SetSpeedAndMasterPeriod",
+        )
+    }
+
     pub fn set_pad_bpm(&mut self, id: usize, bpm: Option<f64>) -> PyResult<()> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
@@ -2587,6 +2660,122 @@ mod tests {
         .expect_err("full parameter queue should fail");
 
         assert!(error.to_string().contains("Failed to send SetSpeed"));
+    }
+
+    #[test]
+    fn master_period_public_api_validates_before_requiring_a_stream() {
+        Python::initialize();
+        Python::attach(|py| {
+            let mut engine = AudioEngine::new().unwrap();
+            for invalid in [f64::NAN, f64::INFINITY, 0.0, -1.0] {
+                let error = engine.set_master_period(invalid).unwrap_err();
+                assert!(error.is_instance_of::<PyValueError>(py));
+            }
+            let error = engine
+                .set_master_period(0.224_504_832_555_644_9)
+                .unwrap_err();
+            assert!(error.is_instance_of::<PyRuntimeError>(py));
+            assert!(error.to_string().contains("Audio engine not initialized"));
+        });
+    }
+
+    #[test]
+    fn pad_timing_intent_reads_declared_authority_without_adoption_or_mutation() {
+        Python::initialize();
+        Python::attach(|py| {
+            let engine = AudioEngine::new().unwrap();
+            assert_eq!(engine.pad_timing_intent(3).unwrap(), "legacy");
+            for (intent, expected) in [
+                (
+                    analysis::tempo_acceptance::TimingIntent::Automatic,
+                    "automatic",
+                ),
+                (analysis::tempo_acceptance::TimingIntent::Manual, "manual"),
+                (analysis::tempo_acceptance::TimingIntent::Tap, "tap"),
+                (analysis::tempo_acceptance::TimingIntent::Legacy, "legacy"),
+            ] {
+                engine.timing_intents.lock().unwrap()[3] = intent;
+                let epoch_before = engine.prepared_source_epochs[3].load(Ordering::Acquire);
+                assert_eq!(engine.pad_timing_intent(3).unwrap(), expected);
+                assert!(engine.current_constant_timing(py, 3).unwrap().is_none());
+                assert_eq!(engine.pad_timing_intent(3).unwrap(), expected);
+                assert_eq!(
+                    engine.prepared_source_epochs[3].load(Ordering::Acquire),
+                    epoch_before
+                );
+            }
+            let error = engine.pad_timing_intent(NUM_SAMPLES).unwrap_err();
+            assert!(error.is_instance_of::<PyValueError>(py));
+        });
+    }
+
+    #[test]
+    fn master_period_publication_failure_does_not_replace_a_queued_parameter() {
+        Python::initialize();
+        let (mut producer, mut consumer) = RingBuffer::new(1);
+        producer
+            .push(ControlParameterMessage::SetMasterBpm(123.5))
+            .unwrap();
+        let error = push_parameter_message(
+            &mut producer,
+            ControlParameterMessage::SetMasterPeriod(0.224_504_832_555_644_9),
+            "SetMasterPeriod",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("Failed to send SetMasterPeriod"));
+        assert_eq!(
+            consumer.pop().unwrap(),
+            ControlParameterMessage::SetMasterBpm(123.5)
+        );
+        assert!(consumer.pop().is_err());
+    }
+
+    #[test]
+    fn coupled_speed_master_period_validates_both_before_admission() {
+        Python::initialize();
+        Python::attach(|py| {
+            let mut engine = AudioEngine::new().unwrap();
+            for speed in [f64::NAN, f64::INFINITY, SPEED_MIN - 0.01, SPEED_MAX + 0.01] {
+                let error = engine.set_speed_and_master_period(speed, 0.5).unwrap_err();
+                assert!(error.is_instance_of::<PyValueError>(py));
+            }
+            for period in [f64::NAN, f64::INFINITY, 0.0, -1.0] {
+                let error = engine
+                    .set_speed_and_master_period(1.25, period)
+                    .unwrap_err();
+                assert!(error.is_instance_of::<PyValueError>(py));
+            }
+            let error = engine.set_speed_and_master_period(1.25, 0.5).unwrap_err();
+            assert!(error.is_instance_of::<PyRuntimeError>(py));
+        });
+    }
+
+    #[test]
+    fn coupled_speed_master_period_full_ring_never_partially_enqueues() {
+        Python::initialize();
+        let (mut producer, mut consumer) = RingBuffer::new(1);
+        producer
+            .push(ControlParameterMessage::SetVolume(0.25))
+            .unwrap();
+        let batch = ControlParameterMessage::SetSpeedAndMasterPeriod {
+            speed: 1.25,
+            period_seconds: 0.224_504_832_555_644_9,
+        };
+        let error =
+            push_parameter_message(&mut producer, batch, "SetSpeedAndMasterPeriod").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to send SetSpeedAndMasterPeriod")
+        );
+        assert_eq!(
+            consumer.pop().unwrap(),
+            ControlParameterMessage::SetVolume(0.25)
+        );
+        assert!(consumer.pop().is_err());
+        push_parameter_message(&mut producer, batch, "SetSpeedAndMasterPeriod").unwrap();
+        assert_eq!(consumer.pop().unwrap(), batch);
+        assert!(consumer.pop().is_err());
     }
 
     #[test]

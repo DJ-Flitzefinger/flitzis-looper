@@ -4,7 +4,9 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from flitzis_looper.controller.current_timing import CurrentPadTiming
 from flitzis_looper.models import BeatGrid, SampleAnalysis
+from tests.flitzis_looper.conftest import current_timing_metadata
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1128,3 +1130,275 @@ def test_apply_effective_region_not_loaded(
     controller.transport.loop.reset(sample_id)
 
     audio_engine_mock.set_pad_loop_region.assert_not_called()
+
+
+def test_accepted_loop_projection_uses_signed_origin_period_and_loaded_rate(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    controller.project.sample_paths[0] = "samples/current.wav"
+    controller.project.sample_durations[0] = 60.0
+    controller.project.sample_analysis[0] = SampleAnalysis(
+        bpm=90.0,
+        key="C",
+        beat_grid=BeatGrid(beats=[10.0], downbeats=[10.0], bars=[10.0]),
+    )
+    controller.project.pad_grid_anchor_s[0] = 10.0
+    controller.project.pad_grid_offset_samples[0] = 240
+    controller.project.pad_loop_auto[0] = True
+    controller.project.pad_loop_bars[0] = 0.5
+    period = 0.48602673147023145
+    origin = -0.010000000000002
+    timing = CurrentPadTiming(period, origin, 44_100, "current-accepted-revision")
+    monkeypatch.setattr(controller.transport.bpm, "current_timing", lambda _sample_id: timing)
+
+    controller.transport.loop.apply_grid_anchor_to_audio(0)
+    controller.transport.loop.set_start(0, origin + period * (16 + 0.04))
+
+    expected_start_frame = round((Decimal(origin) + Decimal(period) * Decimal("16.0625")) * 44_100)
+    expected_end_frame = round(
+        (Decimal(expected_start_frame) / 44_100 + Decimal(period) * 2) * 44_100
+    )
+    assert controller.transport.loop.grid_anchor_sec(0) == origin
+    assert controller.project.pad_loop_start_s[0] == expected_start_frame / 44_100
+    assert controller.transport.loop.effective_region(0) == (
+        expected_start_frame / 44_100,
+        expected_end_frame / 44_100,
+    )
+    audio_engine_mock.set_pad_loop_region.assert_called_with(
+        0, expected_start_frame / 44_100, expected_end_frame / 44_100
+    )
+    assert controller.transport.loop.max_auto_loop_bars(0) == (
+        60.0 - expected_start_frame / 44_100
+    ) / (4 * period)
+    assert controller.transport.loop._bar_samples_for_grid_offset_clamp(0) == round(
+        4 * period * 44_100
+    )
+    audio_engine_mock.set_pad_timing_metadata.assert_not_called()
+
+
+def test_effective_loop_region_reuses_explicit_accepted_snapshot(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    controller.project.sample_paths[0] = "samples/current.wav"
+    controller.project.pad_loop_auto[0] = True
+    controller.project.pad_loop_bars[0] = 0.5
+    start_s = 20 + 0.49 / 44_100
+    controller.project.pad_loop_start_s[0] = start_s
+    period = 0.48602673147023145
+    timing = CurrentPadTiming(period, -0.1, 44_100, "snapshot-revision")
+
+    def unexpected_poll(_sample_id: int) -> None:
+        pytest.fail("an explicit timing snapshot must not poll a replacement")
+
+    monkeypatch.setattr(controller.transport.bpm, "current_timing", unexpected_poll)
+    expected_start_frame = round(Decimal(start_s) * 44_100)
+    expected_end_frame = round((Decimal(start_s) + Decimal(period) * 2) * 44_100)
+    assert controller.transport.loop.effective_region(0, timing=timing) == (
+        expected_start_frame / 44_100,
+        expected_end_frame / 44_100,
+    )
+
+
+def test_explicit_unavailable_snapshot_does_not_resolve_a_pending_replacement(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller.project.sample_paths[0] = "samples/current.wav"
+    controller.project.pad_loop_auto[0] = True
+    controller.project.sample_durations[0] = 60.0
+
+    def unexpected_poll(_sample_id: int) -> None:
+        pytest.fail("an unavailable snapshot must not poll a pending replacement")
+
+    monkeypatch.setattr(controller.transport.bpm, "current_timing", unexpected_poll)
+
+    assert controller.transport.loop.effective_region(0, timing=None) == (0.0, None)
+    assert controller.transport.loop.max_auto_loop_bars(0, timing=None) is None
+    assert controller.transport.loop.reclamp_grid_offset_samples(0, timing=None) is False
+    controller.transport.loop._apply_effective_pad_loop_region_to_audio(0, timing=None)
+    audio_engine_mock.set_pad_loop_region.assert_called_once_with(0, 0.0, None)
+
+
+def test_explicit_grid_offset_publishes_legacy_intent_and_failed_edit_keeps_saved_offset(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    controller.project.sample_paths[0] = "samples/current.wav"
+    controller.project.pad_grid_anchor_s[0] = 10.0
+    controller.project.pad_grid_offset_samples[0] = 240
+    timing = CurrentPadTiming(0.48602673147023145, -0.1, 44_100, "current-revision")
+    monkeypatch.setattr(controller.transport.bpm, "current_timing", lambda _sample_id: timing)
+    audio_engine_mock.set_pad_timing_metadata.side_effect = RuntimeError("command queue is full")
+
+    with pytest.raises(RuntimeError, match="queue is full"):
+        controller.transport.loop.set_grid_offset_samples(0, 480)
+
+    assert controller.project.pad_grid_offset_samples[0] == 240
+    assert controller.transport.loop.grid_anchor_sec(0) == -0.1
+    audio_engine_mock.set_pad_loop_region.assert_not_called()
+    audio_engine_mock.set_pad_timing_metadata.assert_called_with(0, 10 + 480 / 44_100)
+
+
+def test_current_accepted_loop_state_is_not_cached_after_resolver_retires_it(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    controller.project.sample_paths[0] = "samples/current.wav"
+    controller.project.pad_loop_auto[0] = True
+    controller.project.pad_loop_bars[0] = 0.5
+    timing = CurrentPadTiming(0.48602673147023145, -0.1, 44_100, "retired-revision")
+    monkeypatch.setattr(controller.transport.bpm, "current_timing", lambda _sample_id: timing)
+    assert controller.transport.loop.effective_region(0) == (
+        0.0,
+        round(2 * timing.period_seconds * 44_100) / 44_100,
+    )
+
+    monkeypatch.setattr(controller.transport.bpm, "current_timing", lambda _sample_id: None)
+
+    assert controller.transport.loop.effective_region(0) == (0.0, None)
+    assert controller.transport.loop.grid_anchor_sec(0) == 0.0
+    assert controller.transport.loop.max_auto_loop_bars(0) is None
+
+
+def test_manual_loop_timing_wins_over_native_accepted_record(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    audio_engine_mock.current_constant_timing.return_value = current_timing_metadata(
+        period=0.48602673147023145, origin=-0.1, rate=44_100
+    )
+    audio_engine_mock.pad_timing_intent.return_value = "automatic"
+    controller.project.sample_paths[0] = "samples/current.wav"
+    controller.project.manual_bpm[0] = 150.0
+    controller.project.pad_grid_anchor_s[0] = 1.0
+    controller.project.pad_grid_offset_samples[0] = -240
+    controller.project.pad_loop_auto[0] = True
+    controller.project.pad_loop_bars[0] = 0.5
+
+    controller.transport.loop.set_start(0, 1.031)
+
+    assert controller.project.pad_loop_start_s[0] == 1.02
+    assert controller.transport.loop.grid_anchor_sec(0) == 0.995
+    assert controller.transport.loop.effective_region(0) == (1.02, 1.82)
+    audio_engine_mock.current_constant_timing.assert_not_called()
+
+
+def test_explicit_offset_edit_resumes_legacy_tempo_and_refreshes_locked_master(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    audio_engine_mock.current_constant_timing.return_value = current_timing_metadata(
+        period=0.48602673147023145, origin=-0.1
+    )
+    audio_engine_mock.pad_timing_intent.return_value = "automatic"
+    controller.project.sample_paths[0] = "samples/current.wav"
+    controller.project.sample_durations[0] = 60.0
+    controller.project.sample_analysis[0] = SampleAnalysis(
+        bpm=90.0, key="C", beat_grid=BeatGrid(beats=[10.0], downbeats=[10.0], bars=[10.0])
+    )
+    controller.project.pad_loop_auto[0] = True
+    controller.project.pad_loop_bars[0] = 0.5
+    controller.project.bpm_lock = True
+    controller.session.bpm_lock_anchor_pad_id = 0
+
+    def revoke_current(_sample_id: int, _origin: float) -> None:
+        audio_engine_mock.current_constant_timing.return_value = None
+        audio_engine_mock.pad_timing_intent.return_value = "legacy"
+
+    audio_engine_mock.set_pad_timing_metadata.side_effect = revoke_current
+    controller.transport.loop.set_grid_offset_samples(0, 480)
+
+    assert controller.project.pad_grid_offset_samples[0] == 480
+    timing = controller.transport.bpm.current_timing(0)
+    assert timing is not None
+    assert timing.accepted_revision is None
+    assert controller.transport.loop.grid_anchor_sec(0) == 10.01
+    assert controller.transport.loop.effective_region(0) == (0.0, 64_000 / 48_000)
+    assert controller.session.master_bpm == 90.0
+    assert controller.session.bpm_lock_anchor_revision is None
+    audio_engine_mock.set_pad_bpm.assert_called_with(0, 90.0)
+    audio_engine_mock.set_master_bpm.assert_called_with(90.0)
+    audio_engine_mock.bootstrap_transport_from_pad.assert_called_with(0)
+
+
+@pytest.mark.parametrize("operation", ["start", "end", "auto", "bars", "all", "initialize"])
+def test_loop_operation_keeps_one_accepted_snapshot_through_publication(
+    controller: AppController, audio_engine_mock: Mock, operation: str
+) -> None:
+    audio_engine_mock.current_constant_timing.side_effect = [
+        current_timing_metadata(),
+        RuntimeError("unexpected second current lookup"),
+    ]
+    audio_engine_mock.pad_timing_intent.return_value = "automatic"
+    controller.project.sample_paths[0] = "samples/current.wav"
+    controller.project.sample_durations[0] = 60.0
+    controller.project.pad_loop_auto[0] = operation != "auto"
+    actions = {
+        "start": lambda: controller.transport.loop.set_start(0, 1.0),
+        "end": lambda: controller.transport.loop.set_end(0, 2.0),
+        "auto": lambda: controller.transport.loop.set_auto(0, enabled=True),
+        "bars": lambda: controller.transport.loop.set_bars(0, bars=0.5),
+        "all": lambda: controller.transport.loop.set_full_track_region(0),
+        "initialize": lambda: controller.transport.loop.initialize_loaded_pad_defaults(0, 0.125),
+    }
+
+    actions[operation]()
+
+    audio_engine_mock.current_constant_timing.assert_called_once_with(0)
+    audio_engine_mock.set_pad_loop_region.assert_called_once()
+    audio_engine_mock.set_pad_timing_metadata.assert_not_called()
+
+
+def test_grid_refresh_does_not_revoke_unavailable_automatic_authority(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.project.sample_paths[0] = "samples/current.wav"
+    audio_engine_mock.current_constant_timing.return_value = None
+    audio_engine_mock.pad_timing_intent.return_value = "automatic"
+
+    controller.transport.loop.apply_grid_anchor_to_audio(0, timing=None)
+
+    audio_engine_mock.current_constant_timing.assert_not_called()
+    audio_engine_mock.set_pad_timing_metadata.assert_not_called()
+
+
+@pytest.mark.parametrize("project_duration_s", [None, 10.0, 900.0])
+def test_current_accepted_extent_controls_max_bars_and_all_region(
+    controller: AppController, audio_engine_mock: Mock, project_duration_s: float | None
+) -> None:
+    period = 0.48602673147023145
+    audio_engine_mock.output_sample_rate.return_value = 48_000
+    audio_engine_mock.current_constant_timing.return_value = current_timing_metadata(
+        period=period, rate=44_100, revision="current-source-extent-revision"
+    )
+    audio_engine_mock.pad_timing_intent.return_value = "automatic"
+    controller.project.sample_paths[0] = "samples/current.wav"
+    controller.project.sample_durations[0] = project_duration_s
+    start_s = 2.0 + 3 / 44_100
+    controller.project.pad_loop_start_s[0] = start_s
+    controller.project.pad_loop_auto[0] = True
+
+    assert controller.transport.loop.max_auto_loop_bars(0) == (600.0 - start_s) / (4 * period)
+    controller.transport.loop.set_full_track_region(0)
+
+    assert controller.project.pad_loop_auto[0] is False
+    assert controller.project.pad_loop_start_s[0] == 0.0
+    assert controller.project.pad_loop_end_s[0] == 600.0
+    audio_engine_mock.set_pad_loop_region.assert_called_once_with(0, 0.0, 600.0)
+    assert controller.project.sample_durations[0] == project_duration_s
+    timing = controller.transport.bpm.current_timing(0)
+    assert timing is not None
+    assert timing.accepted_revision == "current-source-extent-revision"
+    audio_engine_mock.set_pad_bpm.assert_not_called()
+    audio_engine_mock.set_pad_timing_metadata.assert_not_called()

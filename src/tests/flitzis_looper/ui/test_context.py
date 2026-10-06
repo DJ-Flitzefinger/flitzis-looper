@@ -13,6 +13,7 @@ from unittest.mock import Mock, call
 import pytest
 
 from flitzis_looper.constants import SPEED_STEP
+from flitzis_looper.controller.current_timing import CurrentPadTiming
 from flitzis_looper.models import (
     STEM_INSTRUMENTAL_PRESET_MASK,
     BeatGrid,
@@ -29,6 +30,7 @@ from flitzis_looper.ui.context import (
     UiContext,
     UiState,
 )
+from tests.flitzis_looper.conftest import current_timing_metadata
 
 if TYPE_CHECKING:
     from flitzis_looper.controller import AppController
@@ -171,6 +173,61 @@ class TestUiStateComputedProperties:
 
         controller.transport.bpm.set_manual_bpm(0, 120.0)
         assert ui_state.pads.effective_bpm(0) == 120.0
+
+    def test_pad_current_timing_keeps_complete_current_revision(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        controller.project.sample_analysis[0] = SampleAnalysis(
+            bpm=135.0, key="C", beat_grid=BeatGrid(beats=[], downbeats=[], bars=[])
+        )
+        native_record = current_timing_metadata(
+            period=0.500000013, origin=-0.025000001, revision="a" * 64
+        )
+        audio_engine_mock.current_constant_timing.return_value = native_record
+        audio_engine_mock.pad_timing_intent.return_value = "automatic"
+        pads = UiState(controller).pads
+
+        first = pads.current_timing(0)
+        assert first is not None
+        assert first.period_seconds == 0.500000013
+        assert first.origin_seconds == -0.025000001
+        assert first.accepted_revision == "a" * 64
+        assert first.accepted_identity is not None
+        assert first.accepted_identity.source_generation == native_record["source_generation"]
+        assert pads.effective_bpm(0) == 60.0 / first.period_seconds
+
+        # A pending or rejected replacement leaves the native effective record unchanged.
+        assert pads.current_timing(0) == first
+        audio_engine_mock.current_constant_timing.return_value = {
+            **native_record,
+            "revision": "b" * 64,
+        }
+        replacement = pads.current_timing(0)
+        assert replacement is not None
+        assert replacement.period_seconds == first.period_seconds
+        assert replacement.origin_seconds == first.origin_seconds
+        assert replacement.accepted_revision == "b" * 64
+
+        # An unavailable Automatic record cannot promote the retained legacy analysis.
+        audio_engine_mock.current_constant_timing.return_value = None
+        assert pads.current_timing(0) is None
+        assert pads.effective_bpm(0) is None
+        audio_engine_mock.pad_timing_intent.return_value = "legacy"
+        retired = pads.current_timing(0)
+        assert retired is not None
+        assert retired.accepted_revision is None
+        assert pads.effective_bpm(0) == 135.0
+
+        controller.project.manual_bpm[0] = 120.0
+        audio_engine_mock.current_constant_timing.return_value = native_record
+        audio_engine_mock.pad_timing_intent.return_value = "automatic"
+        audio_engine_mock.current_constant_timing.reset_mock()
+        manual = pads.current_timing(0)
+        assert manual is not None
+        assert manual.period_seconds == 0.5
+        assert manual.accepted_revision is None
+        assert pads.effective_bpm(0) == 120.0
+        audio_engine_mock.current_constant_timing.assert_not_called()
 
     def test_pad_effective_key_prefers_manual(self, controller: AppController) -> None:
         ui_state = UiState(controller)
@@ -970,13 +1027,19 @@ class TestWaveformEditorTransportControls:
         assert limits == pytest.approx((0.0, 20.0))
         assert controller.session.active_sample_ids == {0, 1}
         assert controller.session.pad_playhead_s[0] == pytest.approx(12.0)
-        assert audio_engine_mock.method_calls == []
+        assert all(
+            method[0] in {"current_constant_timing", "pad_timing_intent"}
+            for method in audio_engine_mock.method_calls
+        )
 
         limits = ctx.ui.waveform.view_jump_end_selected_pad_on_press()
         assert limits == pytest.approx((80.0, 100.0))
         assert controller.session.active_sample_ids == {0, 1}
         assert controller.session.pad_playhead_s[0] == pytest.approx(12.0)
-        assert audio_engine_mock.method_calls == []
+        assert all(
+            method[0] in {"current_constant_timing", "pad_timing_intent"}
+            for method in audio_engine_mock.method_calls
+        )
 
     def test_seek_selected_pad_to_position_calls_selected_pad_seek(
         self, controller: AppController, audio_engine_mock: Mock
@@ -1046,6 +1109,58 @@ class TestWaveformEditorTransportControls:
         assert ctx.ui.waveform.view_limits(0, include_source_start=True) == (0.0, 40.0)
         ctx.ui.waveform.record_view_range(0, 9.5, 26.0)
         assert ctx.ui.waveform.view_jump_start_selected_pad_on_press() == (0.0, 16.5)
+
+    def test_waveform_view_uses_current_period_for_margin_and_auto_end(
+        self, controller: AppController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        timing = CurrentPadTiming(
+            period_seconds=0.500000013,
+            origin_seconds=-0.025000001,
+            sample_rate_hz=48_000,
+            accepted_revision="a" * 64,
+            origin_provenance="signed source reference",
+        )
+        controller.project.sample_durations[0] = 40.0
+        controller.project.pad_loop_start_s[0] = 0.075
+        ctx = _open_waveform_editor(controller, 0)
+        resolve = Mock(return_value=timing)
+        region = Mock(return_value=(0.075, 16.075))
+        monkeypatch.setattr(controller.transport.bpm, "current_timing", resolve)
+        monkeypatch.setattr(
+            controller.transport.bpm, "effective_bpm", Mock(side_effect=AssertionError)
+        )
+        monkeypatch.setattr(controller.transport.loop, "effective_region", region)
+
+        assert ctx.ui.waveform.view_limits(0, loop_only=True) == (
+            0.075 - timing.period_seconds,
+            16.075,
+        )
+        resolve.assert_called_once_with(0)
+        region.assert_called_once_with(0, timing=timing)
+
+    @pytest.mark.parametrize("stored_duration", [3.0, 900.0, None])
+    def test_waveform_view_and_jump_use_current_accepted_native_extent(
+        self,
+        controller: AppController,
+        audio_engine_mock: Mock,
+        stored_duration: float | None,
+    ) -> None:
+        ctx = _open_waveform_editor(controller, 0)
+        controller.project.sample_paths[0] = "samples/current.wav"
+        controller.project.sample_durations[0] = stored_duration
+        audio_engine_mock.current_constant_timing.return_value = current_timing_metadata(period=0.5)
+        audio_engine_mock.pad_timing_intent.return_value = "automatic"
+
+        assert ctx.ui.waveform.view_limits(0) == (-0.5, 600.0)
+        ctx.ui.waveform.record_view_range(0, 0.0, 10.0)
+        audio_engine_mock.current_constant_timing.reset_mock()
+        assert ctx.ui.waveform.view_jump_end_selected_pad_on_press() == (590.0, 600.0)
+        audio_engine_mock.current_constant_timing.assert_called_once_with(0)
+        assert controller.project.sample_durations[0] == stored_duration
+
+        controller.project.manual_bpm[0] = 120.0
+        manual_limits = (-0.5, stored_duration) if stored_duration is not None else None
+        assert ctx.ui.waveform.view_limits(0) == manual_limits
 
     def test_virtual_waveform_margin_never_requests_negative_source_frames(
         self, controller: AppController, audio_engine_mock: Mock

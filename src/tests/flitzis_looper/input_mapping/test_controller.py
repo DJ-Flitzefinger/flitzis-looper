@@ -1191,14 +1191,11 @@ def test_input_runtime_state_sync_skips_unchanged_frames(
 def test_input_runtime_signature_uses_effective_bpm_and_republishes_precision_changes(
     controller: AppController,
     audio_engine_mock: Mock,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     controller.project.sample_paths[0] = "samples/fractional.wav"
     controller.project.sample_durations[0] = 100.0
-    controller.project.manual_bpm[0] = 120.0
+    controller.project.manual_bpm[0] = 119.999
     controller.project.pad_loop_auto[0] = True
-    effective_bpm = [119.999]
-    monkeypatch.setattr(controller.transport.bpm, "effective_bpm", lambda _pad: effective_bpm[0])
     audio_engine_mock.reset_mock()
 
     controller.input_mapping.on_frame_render()
@@ -1208,9 +1205,9 @@ def test_input_runtime_signature_uses_effective_bpm_and_republishes_precision_ch
     controller.input_mapping.on_frame_render()
     audio_engine_mock.set_input_runtime_state.assert_not_called()
 
-    effective_bpm[0] = 120.00128936767578
+    controller.project.manual_bpm[0] = 120.00128936767578
     controller.input_mapping.on_frame_render()
-    assert controller.input_mapping._input_runtime_bpm_signature(0) == effective_bpm[0]
+    assert controller.input_mapping._input_runtime_bpm_signature(0) == 120.00128936767578
     audio_engine_mock.set_input_runtime_state.assert_called_once()
     new_region = audio_engine_mock.set_input_runtime_state.call_args.args[3][0]
     assert new_region != first_region

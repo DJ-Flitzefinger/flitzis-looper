@@ -8,6 +8,11 @@ from flitzis_looper.constants import (
     VOLUME_MAX,
     VOLUME_MIN,
 )
+from flitzis_looper.controller.current_timing import (
+    UNRESOLVED_TIMING,
+    CurrentPadTiming,
+    UnresolvedTiming,
+)
 from flitzis_looper.controller.validation import ensure_finite, normalize_bpm
 from flitzis_looper.models import (
     LEGACY_TRIGGER_QUANTIZATION_TO_STEP,
@@ -166,34 +171,70 @@ class GlobalParametersController:
         self._audio.set_volume(self._project.volume)
         self._session.global_stop_momentary_mute_active = False
 
-    def set_speed(self, speed: float) -> None:
+    def set_speed(
+        self,
+        speed: float,
+        *,
+        anchor_timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
+    ) -> None:
         """Set global playback speed multiplier."""
         ensure_finite(speed)
+        anchor_id = self._session.bpm_lock_anchor_pad_id
+        if self._project.bpm_lock and anchor_id is not None:
+            if isinstance(anchor_timing, UnresolvedTiming):
+                anchor_timing = self._bpm.current_timing(anchor_id)
+            if anchor_timing is None and self._audio.pad_timing_intent(anchor_id) == "automatic":
+                msg = "current automatic anchor timing is not acknowledged"
+                raise RuntimeError(msg)
         clamped = min(max(speed, SPEED_MIN), SPEED_MAX)
-        self._audio.set_speed(clamped)
+        accepted_anchor = (
+            self._project.bpm_lock
+            and isinstance(anchor_timing, CurrentPadTiming)
+            and anchor_timing.accepted_revision is not None
+        )
+        if accepted_anchor and isinstance(anchor_timing, CurrentPadTiming):
+            self._audio.set_speed_and_master_period(clamped, anchor_timing.period_seconds / clamped)
+        else:
+            self._audio.set_speed(clamped)
         self._project.speed = clamped
-        self._bpm.recompute_master_bpm()
         self._transport._mark_project_changed()
+        self._bpm.recompute_master_bpm(timing=anchor_timing, publish_master=not accepted_anchor)
 
     def speed_reference_bpm(self) -> float | None:
         """Return the BPM value represented by 1.00x speed for the current context."""
+        period = self.speed_reference_period_seconds()
+        return 60.0 / period if period is not None else None
+
+    def speed_reference_period_seconds(self) -> float | None:
+        """Return the current source quarter period for the global speed control."""
+        period, _timing = self._speed_reference()
+        return period
+
+    def _speed_reference(
+        self,
+    ) -> tuple[float | None, CurrentPadTiming | UnresolvedTiming | None]:
         speed = float(self._project.speed)
         if speed <= 0.0:
-            return None
+            return None, UNRESOLVED_TIMING
 
         if self._project.bpm_lock:
+            anchor_pad_id = self._session.bpm_lock_anchor_pad_id
+            if anchor_pad_id is not None:
+                timing = self._bpm.current_timing(anchor_pad_id)
+                return (timing.period_seconds if timing is not None else None), timing
             master_bpm = normalize_bpm(self._session.master_bpm)
             if master_bpm is not None:
-                return float(master_bpm) / speed
+                return 60.0 / (float(master_bpm) / speed), UNRESOLVED_TIMING
 
-        return normalize_bpm(self._bpm.effective_bpm(self._project.selected_pad))
+        timing = self._bpm.current_timing(self._project.selected_pad)
+        return (timing.period_seconds if timing is not None else None), UNRESOLVED_TIMING
 
     def effective_display_bpm(self) -> float | None:
         """Return the BPM currently displayed above the global Pitch control."""
-        reference_bpm = self.speed_reference_bpm()
-        if reference_bpm is None:
+        period = self.speed_reference_period_seconds()
+        if period is None:
             return None
-        return float(reference_bpm) * float(self._project.speed)
+        return 60.0 / (period / float(self._project.speed))
 
     def set_effective_display_bpm(self, bpm: float) -> bool:
         """Set global speed by targeting a displayed BPM value."""
@@ -201,11 +242,11 @@ class GlobalParametersController:
         if bpm <= 0.0:
             return False
 
-        reference_bpm = self.speed_reference_bpm()
-        if reference_bpm is None:
+        period, timing = self._speed_reference()
+        if period is None:
             return False
 
-        self.set_speed(float(bpm) / float(reference_bpm))
+        self.set_speed(period * (float(bpm) / 60.0), anchor_timing=timing)
         return True
 
     def nudge_speed_by_bpm_step(self, direction: int) -> None:
@@ -220,12 +261,15 @@ class GlobalParametersController:
         if steps == 0:
             return
 
-        current_bpm = self.effective_display_bpm()
-        if current_bpm is None:
-            self.set_speed(float(self._project.speed) + SPEED_STEP * steps)
+        period, timing = self._speed_reference()
+        if period is None:
+            self.set_speed(float(self._project.speed) + SPEED_STEP * steps, anchor_timing=timing)
             return
 
-        self.set_effective_display_bpm(round(float(current_bpm) + PITCH_BPM_STEP * steps, 2))
+        current_bpm = 60.0 / (period / float(self._project.speed))
+        target_bpm = round(current_bpm + PITCH_BPM_STEP * steps, 2)
+        if target_bpm > 0.0:
+            self.set_speed(period * (target_bpm / 60.0), anchor_timing=timing)
 
     def reset_speed(self) -> None:
         """Reset global speed back to 1.0x."""

@@ -21,9 +21,20 @@
 - [x] Validate all production coupling/failure/precision paths, full project checks
   and independent staged review.
 
+## G3b2c: Python current period/origin/revision consumers
+
+- [x] Resolve frozen native current identity/provenance without historical tickets;
+  keep Automatic without acknowledgement unavailable and preserve manual priority.
+- [x] Integrate scalar grid, loop/snap/clamp/auto durations, waveform/editor and
+  labels with one exact period/origin/loaded-rate snapshot per operation.
+- [x] Preserve Automatic authority during restore/refresh and use direct binary64
+  master periods for accepted BPMLOCK/speed controls; retain explicit edit policy.
+- [x] Cover current/replacement/unavailable/manual/failure paths, full checks and
+  independent staged review (evidence recorded locally at publication).
+
 ## Explicit remaining boundaries
 
-- [ ] G3b2 remaining: editor/snap/auto-loop, MIDI/prepared source/Key Lock/stem revision binding,
+- [ ] G3b2 remaining: MIDI/prepared source/Key Lock/stem revision binding,
   source-verified accepted persistence with manual/TAP/legacy policy.
 - [ ] G3c separate: musical versus physical loop periods over 75/1000 cycles,
   fractional rate/wrap/partition proof and separate rendered/onset/device gates.

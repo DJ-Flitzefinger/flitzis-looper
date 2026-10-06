@@ -1,6 +1,6 @@
 # Native accepted timing adoption
 
-G3b2a/b connects the G3a accepted record to actual loaded-pad ownership, current
+G3b2a/b/c connects the G3a accepted record to actual loaded-pad ownership, current
 acknowledged authority, native SourceGrid, transport/output clock and playback
 rate. This is an explicit control API. Normal loading and analysis,
 manual/TAP controllers and saved legacy projects retain their existing routing;
@@ -127,12 +127,54 @@ legacy BPM deliberately disagreeing with accepted timing, replacement while play
 rate clipping, precise long source epochs and a quantization boundary where a
 binary32 BPM projection would choose the wrong output frame.
 
+## Python current consumers and global controls
+
+`BpmController.current_timing()` resolves a frozen source period/origin/loaded-rate
+snapshot with full accepted revision and current source/adoption identity and
+provenance. Manual project intent takes priority, followed by native current
+acknowledgement and ordinary Legacy analysis. It never reads historical ticket
+metadata. `AudioEngine.pad_timing_intent()` exposes declared authority without
+claiming acknowledgement; Automatic with no current record stays unavailable.
+
+Scalar grid, waveform editor lines/view margin/loop-relative labels and loop
+snap/clamp/bar duration/maximum-auto/effective endpoints use the exact period.
+One operation carries the same resolved snapshot, including unavailable `None`.
+Signed accepted origins retain their fractional source position. Physical marker
+conversion rounds each absolute boundary once at the actual loaded rate.
+ALL, maximum auto-loop length and waveform navigation/query clipping use the
+accepted full frame extent rather than stale saved duration. The UI waveform
+cache/view key includes native source identity/generation/digests/extent/rate;
+timing-only revisions of the same source preserve navigation. This bounded UI
+cache binding does not implement the future C0-C3 PCM cache/residency design.
+
+Passive restore/refresh/BPMLOCK activation skip legacy BPM and origin writes for
+Automatic authority. Unavailable automatic restore preserves native loop/master
+state. Intentional Manual/Tap edits retire acceptance, and final native intent
+follows legacy numeric/origin publication. Clearing manual or editing a legacy
+grid offset resumes existing Legacy analysis/grid policy without caching accepted
+evidence; accepted origin is not copied into saved legacy base intent. Failed
+first numeric admission preserves the saved BPM/offset intent. Validated load,
+unload/reset and ordinary analysis completions restore Legacy before derived
+callbacks; pending or retired timing_stale work cannot revoke current acceptance.
+
+Accepted master control publishes `current_source_period / speed` directly through
+`AudioEngine.set_master_period()`. This parameter and compatibility BPM share one
+coalesced lane with last-admitted ordering. Session master period/revision records
+the last successful publication, while display BPM is derived from period. Speed,
+BPM target and nudge reuse one source snapshot; unavailable Automatic anchors
+reject explicit speed changes before saved speed or native speed is changed.
+`set_speed_and_master_period()` admits an accepted locked speed change as one
+bounded parameter effect, so a full ring cannot admit only half the update.
+
+Accepted publication remains an explicit native control API. The integration
+caller refreshes derived Python loop/master controls after acknowledgement via
+`on_pad_bpm_changed()`. An acknowledged replacement alone does not automatically
+republish physical auto-loop endpoints/master intent; read-only UI polling never
+drives correction. A normal analyzer/acceptance orchestrator is not added here.
+
 ## Remaining shared-period and loop work
 
-This completes current native accepted authority and native period/rate consumers.
-Editor lines, snapping and automatic endpoints still derive their scalar period from effective
-BPM. Python current timing, labels and transport/global controls must consume the
-same accepted period/origin/revision in subsequent G3b2 work.
+Current native and Python grid/loop/control consumers now share accepted timing.
 
 MIDI signatures, pending prepared source/stem state and productive Key Lock
 history still need full accepted revision binding. The generic warmed Key Lock

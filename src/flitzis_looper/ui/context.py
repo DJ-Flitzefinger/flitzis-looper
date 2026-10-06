@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, TypeVar, cast
 
 from pydantic import BaseModel
 
+from flitzis_looper.controller.current_timing import UNRESOLVED_TIMING, UnresolvedTiming
 from flitzis_looper.input_mapping import (
     KeyboardBinding,
     LooperAction,
@@ -19,12 +20,13 @@ from flitzis_looper.input_mapping import (
     start_stop_action,
 )
 from flitzis_looper.input_timing import validate_input_timestamp_ns
-from flitzis_looper.ui.waveform_grid import beat_duration_s, waveform_view_start
+from flitzis_looper.ui.waveform_grid import waveform_view_start
 
 if TYPE_CHECKING:
     from imgui_bundle import imgui
 
     from flitzis_looper.controller import AppController
+    from flitzis_looper.controller.current_timing import CurrentPadTiming
     from flitzis_looper.models import (
         ProjectState,
         SampleAnalysis,
@@ -38,6 +40,9 @@ if TYPE_CHECKING:
     from flitzis_looper_audio import WaveFormRenderData
 
 T = TypeVar("T", bound=BaseModel)
+type _WaveformSourceIdentity = tuple[
+    str | None, float | None, tuple[str, int, str, str, int, int] | None
+]
 
 
 class ReadOnlyStateProxy[T]:
@@ -98,6 +103,10 @@ class PadSelectors:  # noqa: PLR0904 - selector facade intentionally mirrors pad
     def effective_bpm(self, pad_id: int) -> float | None:
         return self._controller.transport.bpm.effective_bpm(pad_id)
 
+    def current_timing(self, pad_id: int) -> CurrentPadTiming | None:
+        """Return one coherent current source period, origin and accepted revision."""
+        return self._controller.transport.bpm.current_timing(pad_id)
+
     def manual_key(self, pad_id: int) -> str | None:
         return self._project.manual_key[pad_id]
 
@@ -109,8 +118,15 @@ class PadSelectors:  # noqa: PLR0904 - selector facade intentionally mirrors pad
             return False
         return bool(self._project.pad_key_lock[pad_id])
 
-    def effective_loop_region(self, pad_id: int) -> tuple[float, float | None]:
-        return self._controller.transport.loop.effective_region(pad_id)
+    def effective_loop_region(
+        self,
+        pad_id: int,
+        *,
+        timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
+    ) -> tuple[float, float | None]:
+        if isinstance(timing, UnresolvedTiming):
+            return self._controller.transport.loop.effective_region(pad_id)
+        return self._controller.transport.loop.effective_region(pad_id, timing=timing)
 
     def grid_anchor_s(self, pad_id: int) -> float:
         """Return the same signed source origin used by snapping and native timing."""
@@ -554,12 +570,12 @@ class WaveformEditorActions:
         self._last_width_px: int | None = None
         self._last_start_s: float | None = None
         self._last_end_s: float | None = None
-        self._last_source_identity: tuple[str | None, float | None] | None = None
+        self._last_source_identity: _WaveformSourceIdentity | None = None
         self._last_waveform_value: WaveFormRenderData | None = None
 
         # Per-pad view state for the waveform editor plot (seconds).
         self._pad_view_ranges: dict[int, tuple[float, float]] = {}
-        self._pad_view_sources: dict[int, tuple[str | None, float | None]] = {}
+        self._pad_view_sources: dict[int, _WaveformSourceIdentity] = {}
 
     def _selected_pad_id(self) -> int | None:
         return self._controller.session.waveform_editor_pad_id
@@ -692,38 +708,65 @@ class WaveformEditorActions:
         """Record the plot's current visible X-range for a pad."""
         self._pad_view_ranges[int(pad_id)] = (float(start_s), float(end_s))
 
-    def consume_source_view_reset(self, pad_id: int) -> bool:
+    def consume_source_view_reset(
+        self,
+        pad_id: int,
+        *,
+        timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
+    ) -> bool:
         """Reset the first view of a newly assigned source, preserving later navigation."""
-        identity = self._waveform_source_identity(pad_id)
-        if self._pad_view_sources.get(pad_id) == identity:
-            return False
+        identity = self._waveform_source_identity(pad_id, timing=timing)
+        previous = self._pad_view_sources.get(pad_id)
+        if previous is not None and previous[:2] == identity[:2]:
+            # A transient unavailable timing lookup says nothing about source replacement.
+            # Retain only observed source ownership for navigation, never timing authority.
+            if identity[2] is None or previous[2] == identity[2]:
+                return False
+            if previous[2] is None:
+                self._pad_view_sources[pad_id] = identity
+                return False
         self._pad_view_sources[pad_id] = identity
         self._pad_view_ranges.pop(pad_id, None)
         return True
 
     def view_limits(
-        self, pad_id: int, *, loop_only: bool = False, include_source_start: bool = False
+        self,
+        pad_id: int,
+        *,
+        loop_only: bool = False,
+        include_source_start: bool = False,
+        timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
     ) -> tuple[float, float] | None:
         """Project source bounds with virtual room for the beat preceding the loop."""
-        duration_s = self._controller.project.sample_durations[pad_id]
+        if isinstance(timing, UnresolvedTiming):
+            timing = self._controller.transport.bpm.current_timing(pad_id)
+        duration_s = self._source_duration_s(pad_id, timing=timing)
         if duration_s is None or duration_s <= 0.0:
             return None
         loop_start_s = self._controller.project.pad_loop_start_s[pad_id]
-        bpm = self._controller.transport.bpm.effective_bpm(pad_id)
-        start_s = waveform_view_start(loop_start_s, bpm)
+        start_s = waveform_view_start(
+            loop_start_s, period_seconds=timing.period_seconds if timing is not None else None
+        )
         if loop_only:
-            _, loop_end_s = self._controller.transport.loop.effective_region(pad_id)
+            _, loop_end_s = self._controller.transport.loop.effective_region(pad_id, timing=timing)
             end_s = min(duration_s, loop_end_s) if loop_end_s is not None else duration_s
             return (start_s, end_s)
-        if include_source_start or beat_duration_s(bpm) is None:
+        if include_source_start or timing is None:
             start_s = min(0.0, start_s)
         return (start_s, duration_s)
 
-    def _current_view_width_s(self, pad_id: int, *, sample_duration_s: float) -> float:
+    def _source_duration_s(self, pad_id: int, *, timing: CurrentPadTiming | None) -> float | None:
+        if timing is not None and timing.source_duration_seconds is not None:
+            return timing.source_duration_seconds
+        return self._controller.project.sample_durations[pad_id]
+
+    def _current_view_width_s(
+        self, pad_id: int, *, sample_duration_s: float, timing: CurrentPadTiming | None
+    ) -> float:
         if sample_duration_s <= 0.0:
             return 0.0
 
-        limits = self.view_limits(pad_id, include_source_start=True)
+        limits = self.view_limits(pad_id, include_source_start=True, timing=timing)
         total_width_s = limits[1] - limits[0] if limits is not None else sample_duration_s
         current = self._pad_view_ranges.get(pad_id)
         if current is None:
@@ -742,13 +785,14 @@ class WaveformEditorActions:
         if pad_id is None:
             return None
 
-        dur_s = self._controller.project.sample_durations[pad_id]
+        timing = self._controller.transport.bpm.current_timing(pad_id)
+        dur_s = self._source_duration_s(pad_id, timing=timing)
         if dur_s is None:
             return None
 
         dur_s = float(dur_s)
-        width_s = self._current_view_width_s(pad_id, sample_duration_s=dur_s)
-        limits = self.view_limits(pad_id, include_source_start=True)
+        width_s = self._current_view_width_s(pad_id, sample_duration_s=dur_s, timing=timing)
+        limits = self.view_limits(pad_id, include_source_start=True, timing=timing)
         start_s = limits[0] if limits is not None else 0.0
         end_s = min(dur_s, start_s + width_s)
 
@@ -761,14 +805,15 @@ class WaveformEditorActions:
         if pad_id is None:
             return None
 
-        dur_s = self._controller.project.sample_durations[pad_id]
+        timing = self._controller.transport.bpm.current_timing(pad_id)
+        dur_s = self._source_duration_s(pad_id, timing=timing)
         if dur_s is None:
             return None
 
         dur_s = float(dur_s)
-        width_s = self._current_view_width_s(pad_id, sample_duration_s=dur_s)
+        width_s = self._current_view_width_s(pad_id, sample_duration_s=dur_s, timing=timing)
         end_s = dur_s
-        limits = self.view_limits(pad_id, include_source_start=True)
+        limits = self.view_limits(pad_id, include_source_start=True, timing=timing)
         minimum_s = limits[0] if limits is not None else 0.0
         start_s = max(minimum_s, end_s - width_s)
 
@@ -776,9 +821,17 @@ class WaveformEditorActions:
         return (start_s, end_s)
 
     def get_render_data(
-        self, pad_id: int, width_px: int, start_s: float, end_s: float
+        self,
+        pad_id: int,
+        width_px: int,
+        start_s: float,
+        end_s: float,
+        *,
+        timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
     ) -> WaveFormRenderData | None:
-        source_identity = self._waveform_source_identity(pad_id)
+        if isinstance(timing, UnresolvedTiming):
+            timing = self._controller.transport.bpm.current_timing(pad_id)
+        source_identity = self._waveform_source_identity(pad_id, timing=timing)
         if (
             self._last_pad_id != pad_id
             or self._last_width_px != width_px
@@ -792,18 +845,41 @@ class WaveformEditorActions:
             self._last_end_s = end_s
             self._last_source_identity = source_identity
             self._last_waveform_value = self._controller.transport.waveform.get_render_data(
-                pad_id, width_px, start_s, end_s
+                pad_id, width_px, start_s, end_s, timing=timing
             )
         return self._last_waveform_value
 
-    def _waveform_source_identity(self, pad_id: int) -> tuple[str | None, float | None]:
+    def _waveform_source_identity(
+        self,
+        pad_id: int,
+        *,
+        timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
+    ) -> _WaveformSourceIdentity:
         if not 0 <= pad_id < len(self._controller.project.sample_paths):
-            return (None, None)
+            return (None, None, None)
+        if isinstance(timing, UnresolvedTiming):
+            timing = self._controller.transport.bpm.current_timing(pad_id)
+        source_identity = None
+        if (
+            timing is not None
+            and timing.accepted_identity is not None
+            and timing.sample_rate_hz is not None
+        ):
+            accepted = timing.accepted_identity
+            source_identity = (
+                accepted.source_id,
+                accepted.source_generation,
+                accepted.source_sha256,
+                accepted.pcm_sha256,
+                accepted.frame_count,
+                timing.sample_rate_hz,
+            )
 
         duration_s = self._controller.project.sample_durations[pad_id]
         return (
             self._controller.project.sample_paths[pad_id],
             float(duration_s) if duration_s is not None else None,
+            source_identity,
         )
 
 

@@ -128,6 +128,7 @@ pub(crate) enum ControlMessageClass {
 pub(crate) enum ControlParameterKey {
     Volume,
     Speed,
+    SpeedAndMasterPeriod,
     MasterBpm,
     PadBpm(usize),
     PadGain(usize),
@@ -147,6 +148,12 @@ pub(crate) enum ControlParameterMessage {
 
     /// Set the current master BPM when BPM lock is enabled.
     SetMasterBpm(f64),
+
+    /// Set the authoritative output seconds per quarter without a BPM roundtrip.
+    SetMasterPeriod(f64),
+
+    /// Admit a coupled speed/output period in one bounded callback message.
+    SetSpeedAndMasterPeriod { speed: f64, period_seconds: f64 },
 
     /// Set per-pad BPM metadata.
     #[cfg(test)]
@@ -177,7 +184,11 @@ impl ControlParameterMessage {
         match self {
             ControlParameterMessage::SetVolume(_) => ControlParameterKey::Volume,
             ControlParameterMessage::SetSpeed(_) => ControlParameterKey::Speed,
-            ControlParameterMessage::SetMasterBpm(_) => ControlParameterKey::MasterBpm,
+            ControlParameterMessage::SetSpeedAndMasterPeriod { .. } => {
+                ControlParameterKey::SpeedAndMasterPeriod
+            }
+            ControlParameterMessage::SetMasterBpm(_)
+            | ControlParameterMessage::SetMasterPeriod(_) => ControlParameterKey::MasterBpm,
             ControlParameterMessage::SetPadBpm { id, bpm: _ }
             | ControlParameterMessage::SetLegacyPadBpm { id, .. } => {
                 ControlParameterKey::PadBpm(*id)
@@ -744,6 +755,10 @@ mod tests {
 
     #[test]
     fn parameter_messages_expose_stable_coalescing_keys() {
+        assert_eq!(
+            ControlParameterMessage::SetMasterBpm(123.5).key(),
+            ControlParameterMessage::SetMasterPeriod(0.500_000_001).key()
+        );
         assert_eq!(
             ControlParameterMessage::SetVolume(0.5).key(),
             ControlParameterKey::Volume

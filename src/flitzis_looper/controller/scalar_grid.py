@@ -5,17 +5,23 @@ import math
 from flitzis_looper_audio import ScalarSourceGrid
 
 
-def beat_duration_s(bpm: float | None) -> float | None:
-    """Return a finite positive quarter-note duration from the full effective BPM."""
+def beat_duration_s(
+    bpm: float | None = None, *, period_seconds: float | None = None
+) -> float | None:
+    """Resolve a quarter-note duration, preserving a supplied binary64 period."""
+    if period_seconds is not None:
+        return period_seconds if math.isfinite(period_seconds) and period_seconds > 0.0 else None
     if bpm is None or not math.isfinite(bpm) or bpm <= 0.0:
         return None
     duration = 60.0 / bpm
     return duration if math.isfinite(duration) and duration > 0.0 else None
 
 
-def scalar_source_grid(*, origin_s: float, bpm: float | None) -> ScalarSourceGrid | None:
+def scalar_source_grid(
+    *, origin_s: float, bpm: float | None = None, period_seconds: float | None = None
+) -> ScalarSourceGrid | None:
     """Create a precise scalar evaluator, keeping the independent signed source origin."""
-    duration_s = beat_duration_s(bpm)
+    duration_s = beat_duration_s(bpm, period_seconds=period_seconds)
     if duration_s is None or not math.isfinite(origin_s):
         return None
     return ScalarSourceGrid(origin_s, duration_s)

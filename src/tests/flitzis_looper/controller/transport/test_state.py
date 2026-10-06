@@ -200,7 +200,7 @@ def test_apply_pad_loop_regions_skips_unloaded_pads(
         defaults = ProjectState()
         apply_project_state._apply_pad_loop_regions(defaults)
         assert mock_method.called
-        mock_method.assert_called_with(1)
+        mock_method.assert_called_with(1, timing=None)
 
 
 def test_apply_pad_loop_regions_only_when_changed(
@@ -238,7 +238,7 @@ def test_apply_pad_loop_regions_applies_effective_region(
 
         defaults = ProjectState()
         apply_project_state._apply_pad_loop_regions(defaults)
-        mock_method.assert_called_once_with(0)
+        mock_method.assert_called_once_with(0, timing=None)
 
 
 def test_apply_pad_bpm_settings_only_when_available(

@@ -15,11 +15,13 @@ addresses. Automatic tempo estimation and variable-map playback/SYNC remain pend
 | Physical marker | Integer loaded frame | One absolute-boundary rounding, then existing source clamps. |
 | Output frame | Permanent Rust output clock | Transport/scheduler, separate from source addresses. |
 
-Python resolves manual/TAP BPM before detected BPM. The control evaluator accepts
-the binary64 period `60/effective_bpm`. G3b2a/b native live timing prefers explicitly
+Python resolves manual/TAP intent before current native accepted timing and legacy
+detected BPM. The control evaluator uses the accepted binary64 period directly;
+Legacy/manual values convert `60/BPM` once. G3b2a/b/c live timing prefers explicitly
 acknowledged accepted binary64 period/origin; native legacy parameters, transport,
-output clock and SourcePlayback rates also preserve binary64. Python current
-accepted-period/revision integration remains G3b2.
+output clock and SourcePlayback rates also preserve binary64. Python frozen
+current snapshots retain full accepted identity and provenance; unavailable
+Automatic acknowledgement cannot authorize saved Legacy analysis replay.
 
 ## Projection and markers
 

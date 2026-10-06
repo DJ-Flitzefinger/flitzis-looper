@@ -1,4 +1,5 @@
 import math
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from flitzis_looper.constants import (
@@ -6,13 +7,18 @@ from flitzis_looper.constants import (
     PAD_LOOP_BARS_GRANULARITY,
     PAD_LOOP_BARS_MIN,
 )
+from flitzis_looper.controller.current_timing import (
+    UNRESOLVED_TIMING,
+    CurrentPadTiming,
+    UnresolvedTiming,
+)
 from flitzis_looper.controller.scalar_grid import (
     nearest_grid_source_s,
     physical_source_marker_s,
     scalar_source_grid,
 )
 from flitzis_looper.controller.timing_metadata import timing_anchor_sec_from_analysis
-from flitzis_looper.controller.validation import ensure_finite, normalize_bpm
+from flitzis_looper.controller.validation import ensure_finite
 from flitzis_looper.models import validate_sample_id
 
 if TYPE_CHECKING:
@@ -41,7 +47,8 @@ class PadLoopController:
     ) -> None:
         """Initialize a new track's loop and grid at the same source activity boundary."""
         validate_sample_id(sample_id)
-        anchor_s = self._loaded_activity_anchor_s(sample_id, detected_loop_start_s)
+        timing = self._bpm.current_timing(sample_id)
+        anchor_s = self._loaded_activity_anchor_s(sample_id, detected_loop_start_s, timing=timing)
         start_s = anchor_s if anchor_s is not None else 0.0
 
         changed = (
@@ -62,11 +69,23 @@ class PadLoopController:
         if changed:
             self._transport._mark_project_changed()
 
-        self.apply_grid_anchor_to_audio(sample_id)
-        self._apply_effective_pad_loop_region_to_audio(sample_id)
+        # The new durable legacy origin is now the activity anchor, not the old snapshot's base.
+        if timing is not None and timing.accepted_revision is None:
+            timing = replace(
+                timing,
+                origin_seconds=self._legacy_grid_anchor_sec(
+                    sample_id, sample_rate_hz=self._timing_sample_rate_hz(timing)
+                ),
+            )
+        self.apply_grid_anchor_to_audio(sample_id, timing=timing)
+        self._apply_effective_pad_loop_region_to_audio(sample_id, timing=timing)
 
     def _loaded_activity_anchor_s(
-        self, sample_id: int, detected_loop_start_s: float | None
+        self,
+        sample_id: int,
+        detected_loop_start_s: float | None,
+        *,
+        timing: CurrentPadTiming | None,
     ) -> float | None:
         if (
             detected_loop_start_s is None
@@ -85,7 +104,9 @@ class PadLoopController:
             return None
 
         # This candidate protects the source attack; musical snapping could trim it.
-        start_s = self._quantize_time_to_cached_samples(detected_loop_start_s)
+        start_s = physical_source_marker_s(
+            detected_loop_start_s, sample_rate_hz=self._timing_sample_rate_hz(timing)
+        )
         return start_s if start_s < duration_s else None
 
     def set_full_track_region(self, sample_id: int) -> None:
@@ -95,12 +116,15 @@ class PadLoopController:
         if self._project.sample_paths[sample_id] is None:
             return
 
-        duration_s = self._project.sample_durations[sample_id]
+        timing = self._bpm.current_timing(sample_id)
+        duration_s = self._source_duration_s(sample_id, timing)
         if duration_s is None or not math.isfinite(duration_s) or duration_s <= 0.0:
             return
 
         start_s = 0.0
-        end_s = self._quantize_time_to_cached_samples(float(duration_s))
+        end_s = physical_source_marker_s(
+            float(duration_s), sample_rate_hz=self._timing_sample_rate_hz(timing)
+        )
         if end_s <= start_s:
             return
 
@@ -116,21 +140,48 @@ class PadLoopController:
         if changed:
             self._transport._mark_project_changed()
 
-        self._apply_effective_pad_loop_region_to_audio(sample_id)
+        self._apply_effective_pad_loop_region_to_audio(sample_id, timing=timing)
 
-    def _apply_effective_pad_loop_region_to_audio(self, sample_id: int) -> None:
+    def _resolve_timing(
+        self, sample_id: int, timing: CurrentPadTiming | UnresolvedTiming | None
+    ) -> CurrentPadTiming | None:
+        return (
+            timing
+            if isinstance(timing, CurrentPadTiming) or timing is None
+            else self._bpm.current_timing(sample_id)
+        )
+
+    def _apply_effective_pad_loop_region_to_audio(
+        self,
+        sample_id: int,
+        *,
+        timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
+    ) -> None:
         if self._project.sample_paths[sample_id] is None:
             return
-        start_s, end_s = self._effective_pad_loop_region(sample_id)
+        start_s, end_s = self._effective_pad_loop_region(sample_id, timing=timing)
         self._audio.set_pad_loop_region(sample_id, start_s, end_s)
 
-    def apply_grid_anchor_to_audio(self, sample_id: int) -> None:
-        """Publish the waveform editor's signed source-grid origin unchanged."""
+    def apply_grid_anchor_to_audio(
+        self,
+        sample_id: int,
+        *,
+        timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
+    ) -> None:
+        """Publish legacy origins without revoking current accepted timing."""
         validate_sample_id(sample_id)
         if self._project.sample_paths[sample_id] is None:
             return
 
-        self._audio.set_pad_timing_metadata(sample_id, self._grid_anchor_sec(sample_id))
+        if (
+            self._project.manual_bpm[sample_id] is None
+            and self._audio.pad_timing_intent(sample_id) == "automatic"
+        ):
+            return
+        timing = self._resolve_timing(sample_id, timing)
+        if timing is not None and timing.accepted_revision is not None:
+            return
+        self._audio.set_pad_timing_metadata(sample_id, self._legacy_grid_anchor_sec(sample_id))
 
     def _grid_offset_samples(self, sample_id: int) -> int:
         return int(self._project.pad_grid_offset_samples[sample_id])
@@ -148,88 +199,139 @@ class PadLoopController:
             return 0
         return max(frames, 0)
 
-    def _bar_samples_for_grid_offset_clamp(self, sample_id: int) -> int | None:
-        bpm = normalize_bpm(self._transport.bpm.effective_bpm(sample_id))
-        if bpm is None:
+    def _bar_samples_for_grid_offset_clamp(
+        self,
+        sample_id: int,
+        *,
+        timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
+    ) -> int | None:
+        timing = self._resolve_timing(sample_id, timing)
+        if timing is None:
             return None
 
-        sample_rate_hz = self._transport._output_sample_rate_hz()
+        sample_rate_hz = self._timing_sample_rate_hz(timing)
         if sample_rate_hz is None or sample_rate_hz <= 0:
             return None
 
-        bar_sec = self._duration_s_for_bars(bars=1.0, bpm=bpm)
+        bar_sec = self._duration_s_for_bars(bars=1.0, period_seconds=timing.period_seconds)
         return max(0, round(bar_sec * sample_rate_hz))
 
-    def _clamp_grid_offset_samples(self, sample_id: int, value: int) -> int:
-        bar_samples = self._bar_samples_for_grid_offset_clamp(sample_id)
+    def _clamp_grid_offset_samples(
+        self, sample_id: int, value: int, *, timing: CurrentPadTiming | None
+    ) -> int:
+        bar_samples = self._bar_samples_for_grid_offset_clamp(sample_id, timing=timing)
         if bar_samples is None:
             return int(value)
 
         return max(-bar_samples, min(bar_samples, int(value)))
 
-    def reclamp_grid_offset_samples(self, sample_id: int) -> bool:
+    def reclamp_grid_offset_samples(
+        self,
+        sample_id: int,
+        *,
+        timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
+    ) -> bool:
         """Re-clamp the stored grid offset when effective BPM changes."""
         validate_sample_id(sample_id)
 
+        timing = self._resolve_timing(sample_id, timing)
         current = int(self._project.pad_grid_offset_samples[sample_id])
-        clamped = self._clamp_grid_offset_samples(sample_id, current)
+        clamped = self._clamp_grid_offset_samples(sample_id, current, timing=timing)
         if clamped == current:
             return False
 
         self._project.pad_grid_offset_samples[sample_id] = clamped
         self._transport._mark_project_changed()
-        self.apply_grid_anchor_to_audio(sample_id)
-        self._apply_effective_pad_loop_region_to_audio(sample_id)
+        self.apply_grid_anchor_to_audio(sample_id, timing=timing)
+        self._apply_effective_pad_loop_region_to_audio(sample_id, timing=timing)
         return True
 
     def set_grid_offset_samples(self, sample_id: int, grid_offset_samples: int) -> None:
         validate_sample_id(sample_id)
 
-        grid_offset_samples = int(grid_offset_samples)
-        grid_offset_samples = self._clamp_grid_offset_samples(sample_id, grid_offset_samples)
+        timing = self._bpm.current_timing(sample_id)
+        grid_offset_samples = self._clamp_grid_offset_samples(
+            sample_id, int(grid_offset_samples), timing=timing
+        )
 
         if grid_offset_samples == self._project.pad_grid_offset_samples[sample_id]:
             return
 
+        if self._project.sample_paths[sample_id] is not None:
+            # An explicit offset edit is legacy intent. Successful native publication
+            # revokes accepted authority; failed publication leaves saved intent intact.
+            self._audio.set_pad_timing_metadata(
+                sample_id,
+                self._legacy_grid_anchor_sec(
+                    sample_id,
+                    sample_rate_hz=self._timing_sample_rate_hz(timing),
+                    grid_offset_samples=grid_offset_samples,
+                ),
+            )
         self._project.pad_grid_offset_samples[sample_id] = grid_offset_samples
         self._transport._mark_project_changed()
-        self.apply_grid_anchor_to_audio(sample_id)
-        self._apply_effective_pad_loop_region_to_audio(sample_id)
+        self._bpm.on_pad_bpm_changed(sample_id)
 
     def grid_anchor_sec(self, sample_id: int) -> float:
-        """Grid anchor in source seconds (persisted or legacy base plus sample offset)."""
+        """Return the current accepted signed origin or the durable legacy origin."""
         validate_sample_id(sample_id)
         return self._grid_anchor_sec(sample_id)
 
     def _grid_anchor_sec(self, sample_id: int) -> float:
-        sample_rate_hz = self._transport._output_sample_rate_hz()
+        timing = self._bpm.current_timing(sample_id)
+        return (
+            timing.origin_seconds if timing is not None else self._legacy_grid_anchor_sec(sample_id)
+        )
+
+    def _legacy_grid_anchor_sec(
+        self,
+        sample_id: int,
+        *,
+        sample_rate_hz: int | None = None,
+        grid_offset_samples: int | None = None,
+    ) -> float:
+        """Resolve saved legacy intent without consulting current accepted timing."""
+        if sample_rate_hz is None:
+            sample_rate_hz = self._transport._output_sample_rate_hz()
         if sample_rate_hz is None or sample_rate_hz <= 0:
             # Without a sample rate, we can't express a sample offset in seconds.
             return self._base_grid_anchor_sec(sample_id)
 
         base_sample = self._base_grid_anchor_sample(sample_id, sample_rate_hz=sample_rate_hz)
-        anchor_sample = base_sample + self._grid_offset_samples(sample_id)
+        offset = (
+            self._grid_offset_samples(sample_id)
+            if grid_offset_samples is None
+            else grid_offset_samples
+        )
+        anchor_sample = base_sample + offset
         return anchor_sample / sample_rate_hz
 
-    def _snap_to_nearest_64th_grid(self, sample_id: int, target_s: float) -> float:
-        bpm = normalize_bpm(self._bpm.effective_bpm(sample_id))
-        if bpm is None:
+    def _snap_to_nearest_64th_grid(
+        self, target_s: float, *, timing: CurrentPadTiming | None
+    ) -> float:
+        if timing is None:
             return target_s
 
-        grid = scalar_source_grid(origin_s=self._grid_anchor_sec(sample_id), bpm=bpm)
+        grid = scalar_source_grid(
+            origin_s=timing.origin_seconds, period_seconds=timing.period_seconds
+        )
         if grid is None:
             return target_s
         return nearest_grid_source_s(target_s, grid=grid, step_beats=1.0 / 16.0)
 
-    def _quantize_time_to_cached_samples(self, time_s: float) -> float:
-        """Quantize a time to an integer sample index at the cached WAV sample rate."""
-        return physical_source_marker_s(
-            time_s, sample_rate_hz=self._transport._output_sample_rate_hz()
-        )
+    def _timing_sample_rate_hz(self, timing: CurrentPadTiming | None) -> int | None:
+        if timing is not None and timing.sample_rate_hz is not None:
+            return timing.sample_rate_hz
+        return self._transport._output_sample_rate_hz()
+
+    def _source_duration_s(self, sample_id: int, timing: CurrentPadTiming | None) -> float | None:
+        if timing is not None and timing.source_duration_seconds is not None:
+            return timing.source_duration_seconds
+        return self._project.sample_durations[sample_id]
 
     @staticmethod
-    def _duration_s_for_bars(*, bars: float, bpm: float) -> float:
-        grid = scalar_source_grid(origin_s=0.0, bpm=bpm)
+    def _duration_s_for_bars(*, bars: float, period_seconds: float) -> float:
+        grid = scalar_source_grid(origin_s=0.0, period_seconds=period_seconds)
         duration_s = grid.source_at_beat(bars * 4.0) if grid is not None else None
         if duration_s is None:
             msg = "bar duration must have a finite scalar projection"
@@ -257,87 +359,108 @@ class PadLoopController:
             return PAD_LOOP_BARS_DEFAULT
         return bars
 
-    def max_auto_loop_bars(self, sample_id: int) -> float | None:
+    def max_auto_loop_bars(
+        self,
+        sample_id: int,
+        *,
+        timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
+    ) -> float | None:
         """Return the largest auto-loop bar count that fits, or None when unknown."""
         validate_sample_id(sample_id)
 
-        bpm = normalize_bpm(self._bpm.effective_bpm(sample_id))
-        if bpm is None:
+        timing = self._resolve_timing(sample_id, timing)
+        if timing is None:
             return None
 
-        duration_s = self._project.sample_durations[sample_id]
+        duration_s = self._source_duration_s(sample_id, timing)
         if duration_s is None or not math.isfinite(duration_s) or duration_s <= 0.0:
             return None
 
-        start_s = self._quantize_time_to_cached_samples(
-            float(self._project.pad_loop_start_s[sample_id])
+        start_s = physical_source_marker_s(
+            float(self._project.pad_loop_start_s[sample_id]),
+            sample_rate_hz=self._timing_sample_rate_hz(timing),
         )
         remaining_s = float(duration_s) - start_s
         if remaining_s <= 0.0:
             return 0.0
 
-        bar_s = self._duration_s_for_bars(bars=1.0, bpm=bpm)
+        bar_s = self._duration_s_for_bars(bars=1.0, period_seconds=timing.period_seconds)
         if bar_s <= 0.0:
             return None
         return remaining_s / bar_s
 
-    def _effective_pad_loop_region(self, sample_id: int) -> tuple[float, float | None]:
+    def _effective_pad_loop_region(
+        self,
+        sample_id: int,
+        *,
+        timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
+    ) -> tuple[float, float | None]:
+        timing = self._resolve_timing(sample_id, timing)
         start_s = float(self._project.pad_loop_start_s[sample_id])
         end_s = self._project.pad_loop_end_s[sample_id]
 
-        sample_rate_hz = self._transport._output_sample_rate_hz()
+        sample_rate_hz = self._timing_sample_rate_hz(timing)
         one_sample_s = (
             1.0 / sample_rate_hz if sample_rate_hz is not None and sample_rate_hz > 0 else 0.0001
         )
 
         if not self._project.pad_loop_auto[sample_id]:
-            start_s = self._quantize_time_to_cached_samples(start_s)
+            start_s = physical_source_marker_s(start_s, sample_rate_hz=sample_rate_hz)
             if end_s is not None:
-                end_s = self._quantize_time_to_cached_samples(float(end_s))
+                end_s = physical_source_marker_s(float(end_s), sample_rate_hz=sample_rate_hz)
                 if end_s <= start_s:
                     end_s = start_s + one_sample_s
             return (start_s, end_s)
 
-        effective_bpm = self._bpm.effective_bpm(sample_id)
-        bpm = normalize_bpm(effective_bpm)
-        if bpm is None:
-            return (self._quantize_time_to_cached_samples(start_s), None)
+        if timing is None:
+            return (physical_source_marker_s(start_s, sample_rate_hz=sample_rate_hz), None)
 
         bars = self._stored_bars(sample_id)
-        grid = scalar_source_grid(origin_s=self._grid_anchor_sec(sample_id), bpm=bpm)
+        grid = scalar_source_grid(
+            origin_s=timing.origin_seconds, period_seconds=timing.period_seconds
+        )
         end_s_effective = grid.source_after_beats(start_s, bars * 4.0) if grid is not None else None
-        start_s = self._quantize_time_to_cached_samples(start_s)
+        start_s = physical_source_marker_s(start_s, sample_rate_hz=sample_rate_hz)
         if end_s_effective is None:
             return (start_s, None)
-        end_s_effective = self._quantize_time_to_cached_samples(end_s_effective)
+        end_s_effective = physical_source_marker_s(end_s_effective, sample_rate_hz=sample_rate_hz)
         if end_s_effective <= start_s:
             end_s_effective = start_s + one_sample_s
         return (start_s, end_s_effective)
 
-    def effective_region(self, sample_id: int) -> tuple[float, float | None]:
+    def effective_region(
+        self,
+        sample_id: int,
+        *,
+        timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
+    ) -> tuple[float, float | None]:
         validate_sample_id(sample_id)
-        return self._effective_pad_loop_region(sample_id)
+        return self._effective_pad_loop_region(sample_id, timing=timing)
 
     def set_auto(self, sample_id: int, *, enabled: bool) -> None:
         validate_sample_id(sample_id)
         if enabled == self._transport._project.pad_loop_auto[sample_id]:
             return
 
+        timing = self._bpm.current_timing(sample_id)
         self._transport._project.pad_loop_auto[sample_id] = enabled
         if enabled:
             start_s = float(self._transport._project.pad_loop_start_s[sample_id])
-            start_s = self._snap_to_nearest_64th_grid(sample_id, start_s)
-            start_s = self._quantize_time_to_cached_samples(start_s)
+            start_s = self._snap_to_nearest_64th_grid(start_s, timing=timing)
+            start_s = physical_source_marker_s(
+                start_s, sample_rate_hz=self._timing_sample_rate_hz(timing)
+            )
             self._transport._project.pad_loop_start_s[sample_id] = start_s
 
         self._transport._mark_project_changed()
-        self._apply_effective_pad_loop_region_to_audio(sample_id)
+        self._apply_effective_pad_loop_region_to_audio(sample_id, timing=timing)
 
     def set_bars(self, sample_id: int, *, bars: float) -> None:
         validate_sample_id(sample_id)
 
         bars = self._normalize_requested_bars(bars)
-        max_bars = self.max_auto_loop_bars(sample_id)
+        timing = self._bpm.current_timing(sample_id)
+        max_bars = self.max_auto_loop_bars(sample_id, timing=timing)
         if max_bars is not None and bars > max_bars + 1e-9:
             return
 
@@ -346,21 +469,22 @@ class PadLoopController:
 
         self._transport._project.pad_loop_bars[sample_id] = bars
         self._transport._mark_project_changed()
-        self._apply_effective_pad_loop_region_to_audio(sample_id)
+        self._apply_effective_pad_loop_region_to_audio(sample_id, timing=timing)
 
     def set_start(self, sample_id: int, start_s: float) -> None:
         validate_sample_id(sample_id)
         ensure_finite(start_s)
 
+        timing = self._bpm.current_timing(sample_id)
+        sample_rate_hz = self._timing_sample_rate_hz(timing)
         start_s = max(0.0, start_s)
         if self._transport._project.pad_loop_auto[sample_id]:
-            start_s = self._snap_to_nearest_64th_grid(sample_id, start_s)
+            start_s = self._snap_to_nearest_64th_grid(start_s, timing=timing)
 
-        start_s = self._quantize_time_to_cached_samples(start_s)
+        start_s = physical_source_marker_s(start_s, sample_rate_hz=sample_rate_hz)
         self._transport._project.pad_loop_start_s[sample_id] = start_s
 
         end_s = self._transport._project.pad_loop_end_s[sample_id]
-        sample_rate_hz = self._transport._output_sample_rate_hz()
         one_sample_s = (
             1.0 / sample_rate_hz if sample_rate_hz is not None and sample_rate_hz > 0 else 0.0001
         )
@@ -369,22 +493,24 @@ class PadLoopController:
             self._transport._project.pad_loop_end_s[sample_id] = start_s + one_sample_s
 
         self._transport._mark_project_changed()
-        self._apply_effective_pad_loop_region_to_audio(sample_id)
+        self._apply_effective_pad_loop_region_to_audio(sample_id, timing=timing)
 
     def set_end(self, sample_id: int, end_s: float | None) -> None:
         validate_sample_id(sample_id)
 
+        timing = self._bpm.current_timing(sample_id)
         if end_s is not None:
             ensure_finite(end_s)
+            sample_rate_hz = self._timing_sample_rate_hz(timing)
             end_s = max(0.0, end_s)
             if self._transport._project.pad_loop_auto[sample_id]:
-                end_s = self._snap_to_nearest_64th_grid(sample_id, end_s)
-            end_s = self._quantize_time_to_cached_samples(end_s)
+                end_s = self._snap_to_nearest_64th_grid(end_s, timing=timing)
+            end_s = physical_source_marker_s(end_s, sample_rate_hz=sample_rate_hz)
 
-            start_s = self._quantize_time_to_cached_samples(
-                float(self._transport._project.pad_loop_start_s[sample_id])
+            start_s = physical_source_marker_s(
+                float(self._transport._project.pad_loop_start_s[sample_id]),
+                sample_rate_hz=sample_rate_hz,
             )
-            sample_rate_hz = self._transport._output_sample_rate_hz()
             one_sample_s = (
                 1.0 / sample_rate_hz
                 if sample_rate_hz is not None and sample_rate_hz > 0
@@ -396,4 +522,4 @@ class PadLoopController:
 
         self._transport._project.pad_loop_end_s[sample_id] = end_s
         self._transport._mark_project_changed()
-        self._apply_effective_pad_loop_region_to_audio(sample_id)
+        self._apply_effective_pad_loop_region_to_audio(sample_id, timing=timing)

@@ -30,6 +30,38 @@ class FakePreparedSourceTicket:
         return self.status
 
 
+def current_timing_metadata(
+    *,
+    sample_id: int = 0,
+    period: float = 0.500000000123,
+    origin: float = -0.125,
+    revision: str = "accepted-test-revision",
+    rate: int = 48_000,
+) -> dict[str, object]:
+    """Complete native current-record contract for control consumer tests."""
+    return {
+        "pad_id": sample_id,
+        "source_id": "native-loaded-source",
+        "source_generation": 7,
+        "accepted_request_id": 9,
+        "publication_epoch": 11,
+        "source_sha256": "a" * 64,
+        "source_provenance": "observed association; copy-first not proved",
+        "pcm_sha256": "b" * 64,
+        "sample_rate_hz": rate,
+        "frame_count": rate * 600,
+        "source_zero_seconds": 0.0,
+        "mono_revision": "channel-mean-v1",
+        "raw_revision": "raw-test-revision",
+        "revision": revision,
+        "period_seconds_per_quarter": period,
+        "origin_seconds": origin,
+        "origin_provenance": "independent test origin",
+        "acceptance_policy_version": "test-policy-v1",
+        "acceptance_provenance": "explicit test assessment",
+    }
+
+
 class FakeStemGenerationBackend:
     def __init__(self) -> None:
         self.requests: list[StemGenerationRequest] = []
@@ -101,6 +133,8 @@ def audio_engine_mock() -> Iterator[Mock]:
     with patch("flitzis_looper.controller.app.AudioEngine", autospec=True) as audio_engine:
         audio_engine.return_value.output_sample_rate.return_value = 44_100
         audio_engine.return_value.poll_input_events.return_value = None
+        audio_engine.return_value.current_constant_timing.return_value = None
+        audio_engine.return_value.pad_timing_intent.return_value = "legacy"
         audio_engine.return_value.capture_prepared_source.return_value = FakePreparedSourceTicket()
         if hasattr(audio_engine.return_value, "loaded_sample_shape"):
             audio_engine.return_value.loaded_sample_shape.return_value = (44_100, 1, 128)

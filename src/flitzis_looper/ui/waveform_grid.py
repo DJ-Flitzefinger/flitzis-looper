@@ -32,9 +32,11 @@ class WaveformGridLine:
     reference: bool = False
 
 
-def waveform_view_start(loop_start_s: float, bpm: float | None) -> float:
+def waveform_view_start(
+    loop_start_s: float, bpm: float | None = None, *, period_seconds: float | None = None
+) -> float:
     """Include a beat of visual space before a loop, without adding source audio."""
-    beat_s = beat_duration_s(bpm)
+    beat_s = beat_duration_s(bpm, period_seconds=period_seconds)
     if beat_s is None:
         return loop_start_s
     return loop_start_s - beat_s
@@ -116,7 +118,8 @@ def visible_grid_lines(
     end_s: float,
     anchor_s: float,
     loop_start_s: float,
-    bpm: float,
+    bpm: float | None = None,
+    period_seconds: float | None = None,
     px_per_s: float,
 ) -> tuple[WaveformGridLine, ...]:
     """Project bounded scalar grid lines, retaining real beat zero/one references.
@@ -124,7 +127,7 @@ def visible_grid_lines(
     Grid positions always come from the source anchor. The selected loop changes
     only the displayed continuous coordinate ``1 + (source - loop_start) / beat``.
     """
-    beat_s = beat_duration_s(bpm)
+    beat_s = beat_duration_s(bpm, period_seconds=period_seconds)
     if (
         beat_s is None
         or not all(math.isfinite(value) for value in (start_s, end_s, anchor_s, loop_start_s))
@@ -133,7 +136,7 @@ def visible_grid_lines(
         or end_s <= start_s
     ):
         return ()
-    grid = scalar_source_grid(origin_s=anchor_s, bpm=bpm)
+    grid = scalar_source_grid(origin_s=anchor_s, bpm=bpm, period_seconds=period_seconds)
     if grid is None:
         return ()
     first_beat = grid.beat_at_source(start_s)

@@ -6,6 +6,7 @@ import numpy as np
 from imgui_bundle import ImVec4, icons_fontawesome_6, imgui, imgui_ctx, implot
 
 from flitzis_looper.constants import PAD_LOOP_BARS_MIN
+from flitzis_looper.controller.current_timing import UNRESOLVED_TIMING, UnresolvedTiming
 from flitzis_looper.ui.constants import (
     PLOT_FILL_RGBA,
     PLOT_MARKER_RGBA,
@@ -27,6 +28,7 @@ from flitzis_looper.ui.waveform_grid import (
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
+    from flitzis_looper.controller.current_timing import CurrentPadTiming
     from flitzis_looper.ui.context import UiContext
 
 _LOOP_START_DRAG_LINE_ID = 0
@@ -387,8 +389,10 @@ def _plot_overlay_loop_region(
     end_s: float,
     draw_list: imgui.ImDrawList,
     sample_duration_s: float,
+    *,
+    timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
 ) -> None:
-    loop_start_s, loop_end_s = ctx.state.pads.effective_loop_region(pad_id)
+    loop_start_s, loop_end_s = ctx.state.pads.effective_loop_region(pad_id, timing=timing)
     playhead_s = ctx.state.session.pad_playhead_s[pad_id]
 
     # Loop region
@@ -525,23 +529,30 @@ def _draw_zero_line(draw_list: imgui.ImDrawList, start_s: float, end_s: float) -
 
 
 def _plot_musical_grid(
-    ctx: UiContext, pad_id: int, draw_list: imgui.ImDrawList, start_s: float, end_s: float
+    ctx: UiContext,
+    pad_id: int,
+    draw_list: imgui.ImDrawList,
+    start_s: float,
+    end_s: float,
+    *,
+    timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
 ) -> None:
-    bpm = ctx.state.pads.effective_bpm(pad_id)
-    if bpm is None or not math.isfinite(bpm) or bpm <= 0.0:
+    if isinstance(timing, UnresolvedTiming):
+        timing = ctx.state.pads.current_timing(pad_id)
+    if timing is None:
         return
 
     px_per_sec = _plot_px_per_sec(start_s=start_s, end_s=end_s)
     if px_per_sec is None:
         return
 
-    loop_start_s, _ = ctx.state.pads.effective_loop_region(pad_id)
+    loop_start_s, _ = ctx.state.pads.effective_loop_region(pad_id, timing=timing)
     lines = visible_grid_lines(
         start_s=start_s,
         end_s=end_s,
-        anchor_s=ctx.state.pads.grid_anchor_s(pad_id),
+        anchor_s=timing.origin_seconds,
         loop_start_s=loop_start_s,
-        bpm=bpm,
+        period_seconds=timing.period_seconds,
         px_per_s=px_per_sec,
     )
     _draw_musical_grid_lines(draw_list, lines)
@@ -607,15 +618,15 @@ def _handle_clicks(ctx: UiContext, pad_id: int, sample_duration_s: float) -> Non
     imgui.reset_mouse_drag_delta(imgui.MouseButton_.right)
 
 
-def _setup_plot_axes(ctx: UiContext, pad_id: int) -> None:
+def _setup_plot_axes(ctx: UiContext, pad_id: int, *, timing: CurrentPadTiming | None) -> None:
     axis_no_grid = getattr(implot.AxisFlags_, "no_grid_lines", 0)
     y_flags = implot.AxisFlags_.no_highlight | axis_no_grid
     implot.setup_axis(implot.ImAxis_.y1, None, y_flags)
     if axis_no_grid:
         implot.setup_axis(implot.ImAxis_.x1, None, axis_no_grid)
 
-    limits = ctx.ui.waveform.view_limits(pad_id)
-    bounds = ctx.ui.waveform.view_limits(pad_id, include_source_start=True)
+    limits = ctx.ui.waveform.view_limits(pad_id, timing=timing)
+    bounds = ctx.ui.waveform.view_limits(pad_id, include_source_start=True, timing=timing)
     if limits is not None and bounds is not None:
         implot.setup_axis_limits_constraints(implot.ImAxis_.x1, *bounds)
         implot.setup_axis_limits(implot.ImAxis_.x1, *limits, imgui.Cond_.once)
@@ -624,7 +635,10 @@ def _setup_plot_axes(ctx: UiContext, pad_id: int) -> None:
 
 
 def _render_plot(ctx: UiContext, pad_id: int) -> None:
+    timing = ctx.state.pads.current_timing(pad_id)
     sample_duration_s = ctx.state.project.sample_durations[pad_id]
+    if timing is not None and timing.source_duration_seconds is not None:
+        sample_duration_s = timing.source_duration_seconds
     if sample_duration_s is None:
         return
 
@@ -638,7 +652,7 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
     ):
         return
 
-    _setup_plot_axes(ctx, pad_id)
+    _setup_plot_axes(ctx, pad_id, timing=timing)
 
     # Get view limits
     plot_limits = implot.get_plot_limits()
@@ -651,7 +665,7 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
     plot_width_px = max(plot_width_px, 100)  # Safety fallback
 
     # Call Rust for data (fast aggregation, cached)
-    data = ctx.ui.waveform.get_render_data(pad_id, plot_width_px, start_s, end_s)
+    data = ctx.ui.waveform.get_render_data(pad_id, plot_width_px, start_s, end_s, timing=timing)
     draw_list = implot.get_plot_draw_list()
 
     if data is not None:
@@ -662,9 +676,11 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
         else:
             typed_y2 = cast("NDArray[np.float32]", y2)  # y2 is set in this branch
             _plot_shaded(xs, y1, typed_y2)
-    _plot_overlay_loop_region(ctx, pad_id, start_s, end_s, draw_list, sample_duration_s)
+    _plot_overlay_loop_region(
+        ctx, pad_id, start_s, end_s, draw_list, sample_duration_s, timing=timing
+    )
     _handle_clicks(ctx, pad_id, sample_duration_s)
-    _plot_musical_grid(ctx, pad_id, draw_list, start_s, end_s)
+    _plot_musical_grid(ctx, pad_id, draw_list, start_s, end_s, timing=timing)
 
     _draw_zero_line(draw_list, start_s, end_s)
 
@@ -672,8 +688,9 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
 
 
 def _render_editor_body(ctx: UiContext, pad_id: int) -> None:
-    if ctx.ui.waveform.consume_source_view_reset(pad_id):
-        limits = ctx.ui.waveform.view_limits(pad_id)
+    timing = ctx.state.pads.current_timing(pad_id)
+    if ctx.ui.waveform.consume_source_view_reset(pad_id, timing=timing):
+        limits = ctx.ui.waveform.view_limits(pad_id, timing=timing)
         if limits is not None:
             implot.set_next_axis_limits(implot.ImAxis_.x1, *limits, imgui.Cond_.always)
 

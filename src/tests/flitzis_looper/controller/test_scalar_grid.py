@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 
 from flitzis_looper.controller.scalar_grid import (
+    beat_duration_s,
     nearest_grid_source_s,
     physical_source_marker_s,
     scalar_source_grid,
@@ -45,6 +46,34 @@ def test_projection_preserves_full_effective_precision() -> None:
     assert position_s is not None
     expected_s = Decimal(1_199 * 60) / Decimal("119.999")
     assert abs(Decimal(position_s) - expected_s) < Decimal("1e-12")
+
+
+def test_explicit_period_overrides_bpm_without_a_roundtrip() -> None:
+    period = 0.48602673147023145
+    assert beat_duration_s(90.0, period_seconds=period) == period
+    grid = scalar_source_grid(origin_s=0.0, bpm=90.0, period_seconds=period)
+    assert grid is not None
+    assert grid.source_at_beat(1.0) == period
+    assert grid.source_at_beat(16.0) == period * 16.0
+
+
+@pytest.mark.parametrize("period", [0.0, -0.5, math.nan, math.inf])
+def test_invalid_explicit_period_cannot_revive_legacy_bpm(period: float) -> None:
+    assert beat_duration_s(120.0, period_seconds=period) is None
+    assert scalar_source_grid(origin_s=-0.1, bpm=120.0, period_seconds=period) is None
+
+
+def test_signed_fractional_origin_and_explicit_period_use_absolute_boundary_rounding() -> None:
+    origin = -0.010000000000002
+    period = 0.48602673147023145
+    grid = scalar_source_grid(origin_s=origin, period_seconds=period)
+    assert grid is not None
+    beat = 1049 / 16
+    source_s = grid.source_at_beat(beat)
+    assert source_s is not None
+    exact_frame = (Decimal(origin) + Decimal(period) * Decimal(beat)) * 44_100
+    marker_s = physical_source_marker_s(source_s, sample_rate_hz=44_100)
+    assert round(marker_s * 44_100) == round(exact_frame)
 
 
 def test_source_advancement_preserves_offgrid_phase_without_rounding_duration() -> None:

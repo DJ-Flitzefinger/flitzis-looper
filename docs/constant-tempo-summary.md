@@ -256,9 +256,10 @@ music refinement, automatic pad-load repair nor audible synchronization.
 
 G3a now provides an immutable explicitly accepted period/revision and a
 control-only adoption guard; see [accepted timing](accepted-constant-timing.md).
-It recomputes this evidence path. G3b2a now connects actual current-pad validity
-and explicit native accepted publication to precise SourceGrid; see
-[native adoption](native-constant-timing.md). Other G3b consumers remain pending; G3c separately
+It recomputes this evidence path. G3b2a/b/c connects actual current-pad validity
+and explicit native accepted publication to native/Python grid, loop and
+transport/global controls; see [native adoption](native-constant-timing.md).
+Full-revision MIDI/preparation/persistence consumers remain pending; G3c separately
 tests musical versus physical loop duration. Default analyzer acceptance,
 variable maps and audible synchronization retain their separate gates. See
 [the diagnosis](grid-timing-diagnosis.md), [scalar coordinates](scalar-source-coordinates.md)

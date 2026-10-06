@@ -1,4 +1,4 @@
-# G3b2a/b native adoption, current authority and precise consumers
+# G3b2a/b/c native adoption, current authority and precise consumers
 
 ## Native authority
 
@@ -67,6 +67,53 @@ near-unity/update threshold policy remains; no sub-threshold pitch accuracy or
 audible SYNC is claimed. No new physical wrap policy or DSP-history ownership is
 introduced.
 
+## Python current projection and controls
+
+CurrentPadTiming is a frozen control snapshot of the exact source period, signed
+origin, actual loaded rate, complete accepted revision and full current native
+source/adoption identity and provenance. Manual project intent wins; native
+current_constant_timing supplies accepted authority; ordinary Legacy analysis
+retains its existing period/origin projection. Historical ticket metadata is
+never consulted or cached. Native pad_timing_intent is a read-only declaration,
+not acknowledgement. Automatic without current acknowledgement is unavailable,
+so passive restore/refresh cannot revoke it by replaying saved analysis.
+
+Scalar projection, waveform lines/view margin/labels and loop snap/clamp/duration/
+auto endpoints use period directly. One operation carries a single resolved
+snapshot, including explicit unavailable None. Only physical marker boundaries
+round to loaded frames. Native accepted frame extent bounds ALL, maximum auto
+length and waveform navigation/query clipping. Waveform cache/view keys include
+actual accepted source generation/digests/extent/rate, excluding timing-only
+revision changes; this is not the future complete PCM cache/residency design.
+Intentional legacy grid-offset edits revoke accepted
+authority and resume existing saved analysis/grid policy, refreshing pad/master
+controls; accepted evidence is not persisted as a manual override. Manual and
+Tap numeric admission precede saved BPM mutation, and final intent declaration
+follows legacy origin publication. Accepted origin is not automatically copied
+into the legacy persisted base when manual authority replaces acceptance.
+
+Accepted BPMLOCK resolves the anchor anew for each explicit control operation,
+publishing period/speed through set_master_period. BPM is presentation. Native
+direct-period and compatibility-BPM writes share a coalesced master slot with
+last-admitted ordering. Speed/BPM-target/nudge reuse one anchor snapshot; explicit
+speed admission rejects an unavailable Automatic anchor before changing saved
+speed. Passive unavailable refresh keeps existing native loop/master state.
+Accepted locked speed uses one combined parameter admission/callback record for
+speed and exact master period; full queues preserve both parameters and saved
+speed. Existing coalescing still respects later individual parameter writes.
+
+Explicit validated load/unload/reset and ordinary analysis completions restore
+Legacy authority before derived callbacks. Pending work keeps previous current
+acceptance; retired timing_stale completions cannot perform this authority change.
+
+Explicit accepted publication remains a control API, not the normal estimator
+or an automatic acceptance orchestrator. A caller invokes the derived controller
+refresh after acknowledgement to publish current physical auto-loop endpoints
+and master controls. Read-only UI polling does not drive audio correction. An
+acknowledged replacement alone does not automatically republish Python-owned
+physical endpoints/master intent; this remains an integration boundary for the
+later productive acceptance workflow, not sustained-SYNC evidence.
+
 ## Limits and remaining G3b2 consumers
 
 This slice activates a precise native grid only through explicit control API
@@ -75,8 +122,6 @@ their existing behavior. Source content is an observed loader digest; the
 complete mono digest and Arc/timebase checks verify the actually loaded PCM, not
 an immutable historical original-to-decoder relationship.
 
-Editor/snap/automatic markers and presentation/controller state still need the
-same current accepted period/origin/revision.
 MIDI signatures, prepared source/stem identities, productive Key Lock history and
 source-verified persistence still need the full accepted revision. The existing
 Key Lock warmed-state pool is source-neutral; proof-only source preparation is
