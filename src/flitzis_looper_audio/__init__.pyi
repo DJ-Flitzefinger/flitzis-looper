@@ -57,6 +57,14 @@ class ConstantTimingTicket:
     def publication_status(self) -> Literal["captured", "pending", "accepted", "rejected"]: ...
     def accepted_metadata(self) -> dict[str, object] | None: ...
 
+class CapturedConstantTiming:
+    # Opaque synchronous immutable source/request capture for off-thread preparation.
+    ...
+
+class AcceptedTimingRefreshTicket:
+    def publication_status(self) -> Literal["pending", "accepted", "rejected"]: ...
+    def is_current(self) -> bool: ...
+
 class InputRuntimePadBinding:
     # Opaque current native source/authority snapshot; no PCM owner or persisted identity.
     def metadata(self) -> dict[str, object]: ...
@@ -118,6 +126,23 @@ class AudioEngine:
     def restore_constant_timing(
         self, ticket: SavedConstantTimingTicket
     ) -> ConstantTimingTicket: ...
+    def capture_current_constant_timing(
+        self,
+        binding: InputRuntimePadBinding,
+        timing_error_halfwidth_seconds: float,
+        timing_error_provenance: str,
+    ) -> CapturedConstantTiming: ...
+    def prepare_captured_constant_timing(
+        self,
+        captured: CapturedConstantTiming,
+    ) -> ConstantTimingTicket: ...
+    def refresh_current_constant_timing(
+        self,
+        binding: InputRuntimePadBinding,
+        start_s: float,
+        end_s: float | None,
+        master_period_seconds: float | None = None,
+    ) -> AcceptedTimingRefreshTicket: ...
     def prepare_constant_timing(
         self,
         sample_id: int,

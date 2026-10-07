@@ -19,6 +19,12 @@ mod flitzis_looper_audio {
     use super::audio_engine::ConstantTimingTicket;
 
     #[pymodule_export]
+    use super::audio_engine::CapturedConstantTiming;
+
+    #[pymodule_export]
+    use super::audio_engine::AcceptedTimingRefreshTicket;
+
+    #[pymodule_export]
     use super::audio_engine::SavedConstantTimingTicket;
 
     #[pymodule_export]

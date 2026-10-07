@@ -14,6 +14,9 @@ pub(super) const PERIOD: f64 = 60.0 / 119.999;
 #[path = "input_runtime_binding_tests.rs"]
 mod input_runtime_binding_tests;
 
+#[path = "accepted_timing_refresh_tests.rs"]
+mod accepted_timing_refresh_tests;
+
 #[path = "global_playback_batch_tests.rs"]
 mod global_playback_batch_tests;
 

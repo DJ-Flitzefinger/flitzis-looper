@@ -242,6 +242,11 @@ pub enum ControlMessage {
     /// Clear precise timing through this native publication epoch without erasing newer state.
     ClearPadConstantTiming { id: usize, through_epoch: u64 },
 
+    /// Coupled derived controls from current acknowledged timing.
+    RefreshAcceptedTiming(
+        std::sync::Arc<crate::audio_engine::accepted_timing_refresh::AcceptedTimingRefresh>,
+    ),
+
     /// Adopt a fixed precise projection after actual current source and permit checks.
     PublishConstantTiming {
         id: usize,
@@ -386,7 +391,8 @@ impl ControlMessage {
             | ControlMessage::SeekSample { .. } => ControlMessageClass::PlaybackEvent,
             ControlMessage::LoadSample { .. }
             | ControlMessage::PublishPreparedStems { .. }
-            | ControlMessage::PublishConstantTiming { .. } => ControlMessageClass::Publication,
+            | ControlMessage::PublishConstantTiming { .. }
+            | ControlMessage::RefreshAcceptedTiming(_) => ControlMessageClass::Publication,
             ControlMessage::SetBpmLock(_)
             | ControlMessage::SetKeyLock(_)
             | ControlMessage::SetPadKeyLock { .. }

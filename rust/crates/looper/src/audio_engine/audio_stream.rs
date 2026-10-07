@@ -289,13 +289,24 @@ fn drain_scheduler_due_at_callback_start<
 
 pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetirement>(
     mixer: &mut RtMixer,
-    _transport: &mut TransportTimeline,
+    transport: &mut TransportTimeline,
     output_frame: u64,
     command: ScheduledCommand,
     audio_messages: &mut S,
     retirement: &mut R,
 ) {
     match command {
+        ScheduledCommand::RefreshAcceptedTiming(refresh) => {
+            let accepted = execute_accepted_timing_refresh(
+                mixer,
+                transport,
+                output_frame,
+                &refresh,
+                retirement,
+            );
+            refresh.finish(accepted);
+            retirement.retire_accepted_timing_refresh(refresh);
+        }
         ScheduledCommand::GlobalPlaybackBatch(batch) => {
             let accepted = execute_global_playback_batch(
                 mixer,
@@ -382,6 +393,46 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
             stop_all_samples(mixer, audio_messages, retirement);
         }
     }
+}
+
+fn execute_accepted_timing_refresh<R: AudioBufferRetirement>(
+    mixer: &mut RtMixer,
+    transport: &mut TransportTimeline,
+    output_frame: u64,
+    refresh: &super::accepted_timing_refresh::AcceptedTimingRefresh,
+    retirement: &mut R,
+) -> bool {
+    if retirement.available_retirement_slots() < 1
+        || !refresh.global_current()
+        || !mixer.refresh_binding_current(refresh.id, refresh.binding)
+    {
+        return false;
+    }
+    let mut candidate = *transport;
+    if let Some(period) = refresh.master_period_seconds {
+        if !mixer.accepted_refresh_master_matches(refresh.binding, period)
+            || !candidate.set_master_period_preserving_beat_position_at_frame(period, output_frame)
+        {
+            return false;
+        }
+        // This coupled master belongs to the acknowledged selected source. A still-pending
+        // foreign reference cannot later anchor it from another pad's source beat position.
+        // Completed one-time bootstrap remains complete; ordinary requests retain their policy.
+        if let Some(previous) = candidate.bootstrap_reference() {
+            candidate.clear_pending_bootstrap_for_pad(previous);
+        }
+        candidate.request_bootstrap(refresh.id);
+    }
+    // Recheck immediately before the first mutation; thereafter no fallible work remains.
+    if !refresh.global_current() || !mixer.refresh_binding_current(refresh.id, refresh.binding) {
+        return false;
+    }
+    mixer.set_pad_loop_region(refresh.id, refresh.start_s, refresh.end_s);
+    if let Some(period) = refresh.master_period_seconds {
+        *transport = candidate;
+        mixer.set_master_period(period);
+    }
+    true
 }
 
 fn execute_global_playback_batch<S: AudioMessageSink, R: AudioBufferRetirement>(
@@ -485,7 +536,11 @@ fn stop_all_samples<S: AudioMessageSink, R: AudioBufferRetirement>(
 // Keep scheduler, transport, mixer, output, and retirement ownership visible in the render path.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
-fn render_scheduled_audio<const CAPACITY: usize, S: AudioMessageSink, R: AudioBufferRetirement>(
+pub(super) fn render_scheduled_audio<
+    const CAPACITY: usize,
+    S: AudioMessageSink,
+    R: AudioBufferRetirement,
+>(
     mixer: &mut RtMixer,
     scheduler: &mut FixedCapacityScheduler<CAPACITY>,
     output: &mut [f32],
@@ -718,7 +773,9 @@ fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
     match message {
         ControlMessage::GlobalPlaybackBatch(_) => MAX_VOICES + 1,
         ControlMessage::LoadSample { .. } | ControlMessage::PublishPreparedStems { .. } => 2,
-        ControlMessage::PublishConstantTiming { .. } => 1,
+        ControlMessage::PublishConstantTiming { .. } | ControlMessage::RefreshAcceptedTiming(_) => {
+            1
+        }
         ControlMessage::PlaySample { .. }
         | ControlMessage::TriggerInputPad {
             exclusive: false, ..
@@ -794,7 +851,7 @@ pub(super) fn drain_control_messages<
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ParameterDrainResult {
+pub(super) struct ParameterDrainResult {
     messages_drained: usize,
     parameters_applied: usize,
 }
@@ -1006,7 +1063,7 @@ impl PendingControlParameters {
     }
 }
 
-fn drain_parameter_messages(
+pub(super) fn drain_parameter_messages(
     consumer: &mut Consumer<ControlParameterMessage>,
     mixer: &mut RtMixer,
     transport: &mut TransportTimeline,
@@ -1023,6 +1080,7 @@ fn drain_parameter_messages(
         messages_drained += 1;
     }
 
+    mixer.set_global_parameters_drained(consumer.is_empty());
     ParameterDrainResult {
         messages_drained,
         parameters_applied: pending.apply_to(mixer, transport),
@@ -1046,6 +1104,22 @@ pub(super) fn process_control_message<
     retirement: &mut R,
 ) {
     match message {
+        ControlMessage::RefreshAcceptedTiming(refresh) => {
+            // The next frame is after this callback's bounded parameter drain. Existing
+            // immediate commands may drain frame-zero events, so frame zero cannot be used.
+            let target = callback_start_frame.checked_add(1).filter(|_| {
+                !scheduler.is_full()
+                    && refresh.global_current()
+                    && mixer.refresh_binding_current(refresh.id, refresh.binding)
+            });
+            if let Some(target) = target {
+                let _ =
+                    scheduler.schedule(target, ScheduledCommand::RefreshAcceptedTiming(refresh));
+            } else {
+                refresh.finish(false);
+                retirement.retire_accepted_timing_refresh(refresh);
+            }
+        }
         ControlMessage::GlobalPlaybackBatch(batch) => {
             // Admission and execution both check current actual source/authority/projection.
             if scheduler.is_full()

@@ -106,13 +106,11 @@ Explicit validated load/unload/reset and ordinary analysis completions restore
 Legacy authority before derived callbacks. Pending work keeps previous current
 acceptance; retired timing_stale completions cannot perform this authority change.
 
-Explicit accepted publication remains a control API, not the normal estimator
-or an automatic acceptance orchestrator. A caller invokes the derived controller
-refresh after acknowledgement to publish current physical auto-loop endpoints
-and master controls. Read-only UI polling does not drive audio correction. An
-acknowledged replacement alone does not automatically republish Python-owned
-physical endpoints/master intent; this remains an integration boundary for the
-later productive acceptance workflow, not sustained-SYNC evidence.
+Explicit accepted publication remains separate from normal-estimator/default
+acceptance. G3b2i's application controller completes publication through current
+native ownership and an acknowledged atomic loop/master refresh, as described
+below. Read-only UI polling does not drive audio correction, and this explicit
+completion route is not sustained-SYNC evidence.
 
 ## MIDI current source and scheduled authority
 
@@ -400,6 +398,48 @@ independent continuation, and cover current-source/timing and runtime failures.
 The separate test-only key_lock_source_preparation fixture remains diagnostic;
 it cannot substitute for this production path.
 
+## G3b2i general explicit publication and derived completion
+
+The application owns a focused AcceptedTimingController. Explicit preparation
+declares Automatic intent and synchronously captures actual native source,
+request and authority before a single worker performs QM/evidence preparation.
+An already Automatic pad does not receive a same-value authority edit; pending
+replacement therefore retains its previous acknowledged accepted record. A
+separate explicit assessment supplies count hypotheses, independent signed
+origin and versioned acceptance provenance. No normal load/analysis path infers
+that assessment or changes the default estimator.
+Preparation retains preceding publication/refresh observers even after replacement
+capture fails or succeeds. Same-pad overlapping publication refuses admission until
+prior completion settles; a failed assessment cannot discard genuine earlier ACK.
+
+Publication completion requires current native acknowledgement. Ticket metadata
+correlates the explicit request; only the actual current resolver and opaque
+current binding authorize derived calculation. One frozen source period/origin/
+rate/full identity feeds the existing physical loop evaluator. A selected BPMLOCK
+anchor derives the exact output period as source period divided by saved speed.
+
+The derived loop and optional master/bootstrap enter one native ordered effect.
+Admission reserves capacity before changing authority and callback execution
+rechecks actual source/authority/full accepted projection. A control-only global
+revision invalidates refresh after later speed/master/BPMLOCK admission. Refresh
+executes at callback start plus one output frame, after the bounded parameter
+drain; an older parameter backlog rejects the whole effect. This orders existing
+lanes without a second musical clock or broad scheduler redesign. Scheduler and
+retirement failure preserve previous loop/master values.
+Coupled master refresh replaces an earlier still-pending bootstrap reference with
+the selected current source; completed one-time bootstrap remains completed. A
+foreign earlier reference becoming playable cannot anchor the beat phase or
+consume the selected current source's bootstrap after refresh acknowledgement;
+native BPMLOCK also preserves the exact accepted master period.
+
+A second acknowledgement and current/control-intent checks gate application
+master/revision/grid-offset completion. Fresh saved adoption uses the same
+application route before restored stem completion. Polling observes explicitly
+owned pending operations; it cannot choose acceptance or drive progression.
+Native evidence, hashes, worker preparation, persistence and payload destruction
+remain outside realtime. The callback performs bounded checks, fixed transport
+projection, loop application and existing retirement only.
+
 ## Limits and remaining G3b2 consumers
 
 This slice activates a precise native grid only through explicit control API
@@ -414,8 +454,9 @@ timed adoption described above. G3b2f2 must pass actual integration, failure and
 ownership tests for that native gate. G3b2g supplies supported complete source-
 verified SampleAnalysis/ProjectState persistence and fresh loader adoption.
 G3b2h supplies source/accepted-bound controller GLOBAL START/STOP batches including
-MIDI. General explicit acceptance/derived loop/master refresh orchestration remains
-open; loader-specific refresh alone cannot close it. Original-hash association does not prove immutable
+MIDI. G3b2i supplies general explicit publication and current-bound acknowledged
+derived loop/master completion; normal-estimator/default acceptance remains a later
+gate. Original-hash association does not prove immutable
 copy-first/ABA lineage (C1). G3c retains separate musical/rounded physical loops
 over 75/1000 cycles, fractional periods/rates, callback partitions/wrap and
 rendered/onset/device/listening gates. Later B5 audible crop/delay/transition

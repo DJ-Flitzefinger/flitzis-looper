@@ -824,3 +824,83 @@ refresh, which remains a separate integration boundary.
 - **THEN** work remains bounded by configured pad/voice/batch capacity
 - **AND** evidence, native preparation and large-owner retirement stay off realtime
 - **AND** batch feedback does not become a second timing owner or an automatic acceptance orchestrator
+
+### Requirement: Explicit Accepted Control Publication Has A Productive Completion Route
+The system SHALL provide a general controller route for explicit native accepted
+publication and its derived refresh, using opaque actual-source tickets and
+independent count, origin, error and acceptance assertions. Preparation and
+evidence work SHALL remain off realtime. Normal analysis and Manual/Tap/Legacy
+values SHALL NOT acquire acceptance through this route implicitly.
+
+#### Scenario: A performer explicitly publishes assessed native evidence
+- **GIVEN** actual loaded-source native evidence and explicitly supplied independent musical interpretation, signed origin and versioned acceptance provenance
+- **WHEN** the general application controller publishes that assessment
+- **THEN** native source/request/authority checks and callback adoption establish acceptance
+- **AND** pending controller completion observes actual current acknowledgement before requesting derived loop or master refresh
+- **AND** no caller is required to invoke an unrelated refresh manually after publication
+
+#### Scenario: A preparation or publication is stale or rejected
+- **GIVEN** pending explicit work and previously effective loop/master state
+- **WHEN** its source or authority changes, native preparation fails, command admission fails or callback adoption rejects it
+- **THEN** no provisional analysis or historical ticket metadata becomes current loop/master authority
+- **AND** the prior effective derived state remains available
+
+#### Scenario: A replacement fails while valid completion remains pending
+- **GIVEN** an earlier valid publication or derived refresh awaiting acknowledgement
+- **WHEN** replacement preparation fails or an invalid/stale same-pad publication overlaps it
+- **THEN** the earlier completion observer remains available to process genuine native success
+- **AND** overlap cannot discard restored-stem completion or require an unrelated manual refresh
+
+### Requirement: Accepted Derived Refresh Commits Against Current Native Ownership
+The system SHALL admit accepted loop and optional master refresh as one guarded
+native effect using actual CURRENT acknowledged source/authority/full accepted
+identity, exact period and signed origin. Admission and callback execution SHALL
+reject stale, unavailable or inconsistent ownership and preserve previous derived
+state on capacity or validation failure. Session completion SHALL require genuine
+refresh acknowledgement and current matching control intent.
+
+#### Scenario: A current acknowledged anchor refreshes its loop and master
+- **GIVEN** current native accepted ownership, stored physical loop intent and a selected BPMLOCK anchor
+- **WHEN** explicit publication completion refreshes derived controls
+- **THEN** loop calculation uses one frozen current source period/origin/full revision and loaded rate
+- **AND** the native transaction applies the physical loop and source-period-over-speed master reference coherently
+- **AND** session master period/revision updates only after accepted current native execution
+
+#### Scenario: Source or control changes before refresh execution
+- **GIVEN** an admitted refresh and retained previous loop/master state
+- **WHEN** source, declared authority, accepted revision or applicable control intent changes before execution
+- **THEN** stale work cannot apply its captured loop/master values
+- **AND** equal numerical periods or historical accepted status cannot hide changed ownership
+
+#### Scenario: Older and newer parameter controls surround refresh
+- **GIVEN** master or speed parameter updates and an accepted refresh using the ordered control route
+- **WHEN** callback control and parameter drains execute in their normal bounded order
+- **THEN** older admitted parameters cannot overwrite a newly acknowledged refresh
+- **AND** a later explicit control update retains its own order and invalidates stale refresh intent
+
+#### Scenario: An earlier foreign bootstrap reference becomes ready later
+- **GIVEN** a pending bootstrap reference to another pad and a current accepted anchor refresh
+- **WHEN** the coupled loop/master effect executes before that earlier pad becomes playable
+- **THEN** the pending bootstrap reference follows the refreshed selected current source
+- **AND** late readiness of the earlier pad cannot anchor the beat phase or consume the selected current source's one-time bootstrap
+- **AND** native BPMLOCK preserves the acknowledged exact master period
+- **AND** an already completed one-time bootstrap retains its established epoch
+
+#### Scenario: Saved fresh adoption shares the general refresh route
+- **GIVEN** source-verified saved evidence that has genuinely adopted under fresh native ownership
+- **WHEN** the application handles its completion
+- **THEN** it uses the same current-bound derived loop/master transaction as general explicit publication
+- **AND** loader-only completion cannot bypass the general ownership and execution checks
+
+### Requirement: Accepted Refresh Adds No Realtime Evidence Or Timing Owner
+The system SHALL keep refresh callback checks and effects bounded using existing
+source, scheduler, transport and retirement mechanisms. Evidence preparation,
+ownership allocation, persistence and large-owner destruction SHALL remain off
+realtime. Completion polling SHALL observe explicit operations without driving
+audio progression, musical acceptance or default-estimator selection.
+
+#### Scenario: A refresh executes or is rejected on the callback
+- **GIVEN** a fixed admitted accepted refresh payload
+- **WHEN** callback checks, execution or rejection run
+- **THEN** they introduce no PCM scans, evidence fitting, I/O, locks, Python/GIL/UI access, logging or native DSP construction
+- **AND** retained payloads and source owners retire through existing non-realtime mechanisms

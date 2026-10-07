@@ -1,7 +1,7 @@
 # Accepted constant timing foundation
 
 G3a adds `flitzis_looper_analysis::tempo_acceptance`. This is a pure offline/control
-API. G3b2a-h supply native current-pad acceptance and acknowledgement, precise
+API. G3b2a-i supply native current-pad acceptance and acknowledgement, precise
 native/Python grid/period/loop/control consumers, source-bound MIDI/prepared stems
 and productive continuous/prepared voice/native/FIFO history; see
 [native adoption](native-constant-timing.md). Acceptance remains explicit.
@@ -11,8 +11,9 @@ and numerical timed-adoption proof. G3b2g persists supported COMPLETE native QM
 evidence with source verification and fresh acknowledged loader adoption.
 G3b2h supplies transactional current-source/accepted GLOBAL START/STOP batches,
 including productive MIDI actions and execution feedback. General accepted
-publication/derived-refresh orchestration remains incomplete; loader-specific
-refresh does not close that boundary.
+publication and derived refresh now share a general application route with fresh
+saved adoption. Actual CURRENT native ownership and atomic execution acknowledgement
+gate derived loop/master completion; normal-estimator/default acceptance is separate.
 
 ## Explicit construction
 
@@ -86,7 +87,7 @@ The pure guard alone does not establish these facts.
 
 | Boundary | Required next integration |
 | --- | --- |
-| Editor, snapping, automatic loop ends | G3b2c uses one current binary64 period/origin/full revision and actual accepted extent/rate, retaining physical rounding and manual authority; caller-owned derived refresh follows adoption. |
+| Editor, snapping, automatic loop ends | G3b2c uses one current binary64 period/origin/full revision and actual accepted extent/rate; G3b2i couples derived loop/master refresh to actual current native execution. |
 | Native SourceGrid | G3b2a uses the acknowledged binary64 period/origin/full revision directly; ordinary legacy timing stays compatible. |
 | Native transport reference/master, output clock and BPMLOCK | G3b2b/c consumes acknowledged source/output periods directly with binary64 rate/epoch ownership and Python locked speed/master controls. |
 | MIDI metadata | G3b2d binds actual native source/authority and complete accepted revision to one guarded loop/launch effect, including scheduled execution and fresh failed-direct fallback. |
@@ -123,8 +124,9 @@ pinned voice ownership cannot be relabeled by current bank replacement. Native
 playback messages own active/paused truth and must fit as a complete batch before
 audio effects; actual batch execution feedback changes restore intent. Loader
 callbacks prune unloaded/replaced ids before late acknowledgement can restore
-them. General explicit acceptance/derived loop/master refresh
-orchestration remains G3b2 work. Neutral warmed reserves and the separate test-only
+them. G3b2i provides general explicit publication and current-bound atomic derived
+loop/master refresh with actual execution acknowledgement and source/control guards.
+Neutral warmed reserves and the separate test-only
 source preparation fixture do not substitute for the productive native owner. Later B5
 audible crop/delay/transition compensation and C1 copy-first/ABA proof stay separate.
 G3c separately proves

@@ -74,6 +74,14 @@ loop, playback or bootstrap change. Terminal execution feedback preserves contro
 restore intent on pending or rejected work; ordinary native messages own active/
 paused truth. Active old-source pins cannot be relabeled by a replacement bank.
 
+G3b2i adds a general application control route for explicitly preparing and
+publishing accepted native evidence and completing a current-bound derived
+loop/master refresh. A single guarded native effect couples the physical loop
+and optional exact master period; actual execution feedback gates session
+completion. Saved fresh adoption shares that application refresh route. Source,
+authority, full accepted projection and control ordering protect it from stale
+work; historical ticket metadata cannot establish current ownership.
+
 ## Non-goals and realtime safety
 
 G3b2f1 continuous history and G3b2f2 source-specific prepared native continuation
@@ -88,9 +96,9 @@ select later B5 audible crop/delay/transition compensation. That acoustic policy
 is separate from the required G3b2f2 native ownership/adoption integration.
 Supported source-verified SampleAnalysis/ProjectState persistence and fresh loader
 adoption are implemented by G3b2g; source/accepted-bound GLOBAL START/STOP batches
-are implemented by G3b2h. General explicit acceptance/derived loop/master refresh
-orchestration remains follow-up work; loader-specific refresh alone does not close
-that boundary. Musical/physical loop proof over
+are implemented by G3b2h. G3b2i integrates general explicit publication and derived
+refresh without choosing a normal-estimator or default acceptance gate.
+Musical/physical loop proof over
 75/1000 cycles, fractional periods/rates/partitions/wrap and rendered/onset/device/
 listening acceptance remain G3c. No PCM cache or Rust application-port planning is
 included.

@@ -325,6 +325,11 @@ struct RetainedSamples {
     samples: Vec<SampleBuffer>,
 }
 impl AudioBufferRetirement for RetainedSamples {
+    fn retire_accepted_timing_refresh(
+        &mut self,
+        _: Arc<crate::audio_engine::accepted_timing_refresh::AcceptedTimingRefresh>,
+    ) {
+    }
     fn retire_global_playback_batch(
         &mut self,
         _: Arc<crate::audio_engine::global_playback_batch::GlobalPlaybackBatch>,

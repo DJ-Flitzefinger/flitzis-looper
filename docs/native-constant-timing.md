@@ -1,6 +1,6 @@
 # Native accepted timing adoption
 
-G3b2a-h connect the G3a accepted record to actual loaded-pad ownership, current
+G3b2a-i connect the G3a accepted record to actual loaded-pad ownership, current
 acknowledged authority, native SourceGrid, transport/output clock and playback
 rate. This is an explicit control API. Normal loading and analysis,
 manual/TAP controllers and saved legacy projects retain their existing routing;
@@ -166,11 +166,54 @@ reject explicit speed changes before saved speed or native speed is changed.
 `set_speed_and_master_period()` admits an accepted locked speed change as one
 bounded parameter effect, so a full ring cannot admit only half the update.
 
-Accepted publication remains an explicit native control API. The integration
-caller refreshes derived Python loop/master controls after acknowledgement via
-`on_pad_bpm_changed()`. An acknowledged replacement alone does not automatically
-republish physical auto-loop endpoints/master intent; read-only UI polling never
-drives correction. A normal analyzer/acceptance orchestrator is not added here.
+General explicit publication uses the application's `accepted_timing` controller.
+It prepares actual native evidence on a bounded worker and accepts only explicitly
+supplied musical hypotheses, signed origin and acceptance policy/provenance. Native
+capture precedes worker execution, so delayed work cannot capture a newer source.
+The explicit Automatic choice remains separate from accepting musical evidence.
+Preparation preserves existing publication/refresh observers, including when a
+replacement capture fails. A same-pad publication waits for outstanding publication
+or derived completion to settle; invalid or stale overlapping assessments cannot
+abandon the preceding genuine acknowledgement or restored-stem completion.
+
+After publication acknowledgement, the controller resolves actual CURRENT native
+timing and its opaque source/authority binding anew. It calculates the physical
+loop through the existing loop evaluator with that frozen exact period/origin/rate
+and full identity. A selected BPMLOCK anchor supplies `period / speed` directly.
+`refresh_current_constant_timing(binding, start_s, end_s, master_period_seconds)`
+admits those derived values as one guarded native effect. It never replays Legacy
+BPM or origin, refits evidence, or treats historical ticket metadata as current.
+
+The callback schedules refresh at its start frame plus one, after the existing
+bounded parameter drain. Older parameter backlog rejects the whole effect; later
+speed/master/BPMLOCK admission invalidates its global control revision. Current
+source/authority/full accepted projection and retirement/scheduler capacity are
+checked before effects. Loop and optional master/bootstrap commit together;
+failure leaves both previous derived values available. This one-frame boundary
+orders control lanes and does not introduce a second musical clock.
+The coupled master effect replaces an older pending bootstrap reference with its
+selected current pad; an already completed one-time bootstrap keeps its epoch.
+An older foreign reference becoming ready afterward cannot anchor the beat phase
+or consume the selected pad's one-time bootstrap. The exact master period remains
+preserved under native BPMLOCK.
+
+An active or paused voice pin belonging to an older bank source cannot acquire
+the new source's loop geometry or accepted ownership. Such a refresh rejects as
+a whole; stop or restart under the current source permits a new explicit retry.
+Master refresh also requires actual native BPMLOCK and exact agreement with the
+accepted period divided by current native speed, so a direct control edit between
+Python calculation and native admission cannot publish a stale derived master.
+
+`AcceptedTimingRefreshTicket.publication_status()` reports actual execution, and
+`is_current()` checks its retained source/authority and applicable global control
+revision. Session master period/revision and acceptance completion become visible
+only after accepted current refresh and matching application control intent.
+Pending, rejected, unavailable or stale completion cannot project provisional
+analysis or a historical accepted ticket. Polling observes explicitly requested
+work; ordinary read-only UI polling does not publish timing or drive progression.
+Admission pressure receives at most three still-current attempts; rejected execution
+or exhausted retries reports the failure and leaves an explicit retry available.
+Normal estimator/default musical acceptance remains a later gate.
 
 ## MIDI current source and authority
 
@@ -210,9 +253,9 @@ partial loop or launch. Enqueue feedback still reports admission rather than
 audible or scheduled-execution acceptance; a subsequently retired trigger is
 discarded at execution. MIDI global actions now use the controller batch path below.
 
-Runtime publication changes dormant input intent; polling does not publish accepted
-timing, refresh master controls or change a live loop. Explicit accepted adoption
-and subsequent caller-owned loop/master refresh remain the orchestration gate.
+Runtime publication changes dormant input intent; MIDI polling does not publish
+accepted timing, refresh master controls or change a live loop. General explicit
+accepted adoption uses the application completion route described above.
 Controller GLOBAL START/STOP, including mapped MIDI, reuses this native source/
 authority resolver without creating another timing owner.
 
@@ -274,10 +317,9 @@ input timestamp; direct unguarded MIDI stop-all no longer bypasses it.
 Callback work uses fixed-capacity scalar/atomic checks, scheduler storage and
 feedback. PCM hashing/scanning, evidence allocation, locks, Python/GIL/UI, I/O,
 logging, native DSP construction/reset and large-owner destruction remain outside
-it. Ticket polling cannot drive audio timing or accepted publication. General
-explicit accepted publication and derived loop/master refresh orchestration
-remain a separate required integration step; loader-specific refresh does not
-close that boundary.
+it. Batch ticket polling cannot drive audio timing or accepted publication.
+General explicit publication and derived loop/master completion use the separate
+application route described above, sharing the current binding and native guards.
 
 ## Prepared source and stem timing binding
 
@@ -512,8 +554,8 @@ The historical evidence job and accepted revision stay distinct from new runtime
 generation/request ownership. No persisted flag or ticket acknowledgement is
 CURRENT until genuine fresh callback adoption. Pending, failed, rejected or stale
 work leaves Automatic unavailable. Only matching current native acknowledgement
-triggers restored loop/master/stem intent refresh. General explicit publication
-and refresh orchestration remains the next separate consumer step.
+triggers restored intent completion. In the application, fresh saved adoption uses
+the same guarded general loop/master refresh route before stem intent completion.
 
 `ProjectState.pad_timing_intent` durably distinguishes Manual, Tap and Legacy.
 A manual BPM override suppresses Automatic restoration; Tap retains its origin
@@ -532,9 +574,9 @@ fresh loader adoption of supported COMPLETE native QM raw accepted records;
 unsupported evidence is rejected rather than converted to compatible-only timing.
 No opaque ticket is a saved identity and no saved Manual/Tap/Legacy BPM is accepted
 evidence. G3b2h binds productive controller GLOBAL START/STOP batches, including
-MIDI, to current source/authority and actual execution feedback. General explicit
-accepted publication/derived loop/master refresh orchestration remains open;
-loader-specific refresh alone does not close that consumer.
+MIDI, to current source/authority and actual execution feedback. G3b2i adds general
+explicit accepted publication and guarded acknowledged derived loop/master refresh,
+shared with fresh saved adoption in the application.
 Original hash association still does not prove C1 immutable copy-first/ABA lineage.
 
 G3c remains separate: musical period versus rounded physical loops over 75/1000

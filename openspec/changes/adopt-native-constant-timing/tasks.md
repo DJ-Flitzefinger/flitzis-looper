@@ -126,13 +126,26 @@ Publication requires full final-tree checks, official strict validation and an
 independent staged review. Their exact tree/blob identity and actual results are
 recorded in the step's validation/publication evidence.
 
+## G3b2i: General explicit publication and current-bound derived refresh
+
+- [x] Provide a productive application controller route for explicit native
+  preparation/publication with independently supplied evidence assertions.
+- [x] Observe actual CURRENT acknowledged ownership before calculating physical
+  loop and optional exact master period from one frozen current snapshot.
+- [x] Couple loop/master native admission and execution with current binding,
+  capacity, callback/control ordering and genuine acknowledgement checks.
+- [x] Share the guarded derived refresh with fresh saved adoption in the App;
+  preserve Manual/Tap/Legacy policy and pending/rejected/unavailable state.
+- [x] Verify productive source/control races, ordering and capacity failures,
+  full final-tree checks, official strict validation and independent staged review.
+
 ## Explicit remaining boundaries
 
 - [x] G3b2g supported COMPLETE native QM source-verified SampleAnalysis/ProjectState
   persistence and loader schema with fresh runtime adoption and explicit
   Manual/Tap/Legacy policy (persist-source-verified-constant-timing).
-- [ ] General explicit accepted publication and derived loop/master refresh
-  orchestration remains separate; loader-specific refresh alone does not close it.
+- [x] G3b2i general explicit accepted publication and current-bound acknowledged
+  derived loop/master refresh, shared with fresh saved adoption in the application.
 - [ ] G3c separate: musical versus physical loop periods over 75/1000 cycles,
   fractional periods/rates/wrap/partition proof and rendered/onset/device/listening gates.
 - [ ] Later B5 audible crop/delay/transition compensation remains separate from

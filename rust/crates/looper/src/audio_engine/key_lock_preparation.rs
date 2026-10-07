@@ -800,7 +800,12 @@ mod tests {
                 lane.fail_worker();
             }
             lane.invalidate_source(1);
-            while weak.upgrade().is_some() && std::time::Instant::now() < deadline {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            // Pin destruction and request completion are separate worker effects. Observing
+            // the last Arc disappear cannot synchronize the subsequent completion store.
+            while (weak.upgrade().is_some() || !lane.source_work_finished(1))
+                && std::time::Instant::now() < deadline
+            {
                 // Equivalent to the mixer polling inactive lanes. Never invokes process_source.
                 lane.retire_prepared();
                 thread::sleep(Duration::from_millis(1));

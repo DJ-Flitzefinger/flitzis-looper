@@ -11,6 +11,7 @@ pub(crate) type TransportScheduler = FixedCapacityScheduler<MAX_SCHEDULED_EVENTS
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ScheduledCommand {
+    RefreshAcceptedTiming(std::sync::Arc<super::accepted_timing_refresh::AcceptedTimingRefresh>),
     GlobalPlaybackBatch(std::sync::Arc<super::global_playback_batch::GlobalPlaybackBatch>),
     TriggerInputPad {
         id: usize,

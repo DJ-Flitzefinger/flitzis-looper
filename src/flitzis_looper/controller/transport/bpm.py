@@ -13,6 +13,8 @@ from flitzis_looper.controller.validation import ensure_finite, normalize_bpm
 from flitzis_looper.models import TimingIntent, validate_sample_id
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from flitzis_looper.controller.transport import TransportController
 
 
@@ -26,6 +28,11 @@ class BpmController:
         self._project = transport._project
         self._session = transport._session
         self._audio = transport._audio
+        self._on_accepted_refresh: Callable[[int], None] | None = None
+
+    def set_accepted_refresh_callback(self, callback: Callable[[int], None]) -> None:
+        """Connect productive accepted updates to acknowledged atomic derived refresh."""
+        self._on_accepted_refresh = callback
 
     def set_manual_bpm(self, sample_id: int, bpm: float) -> None:
         """Set a pad's manual BPM override."""
@@ -194,6 +201,13 @@ class BpmController:
     def on_pad_bpm_changed(self, sample_id: int, *, publish_bpm: bool = True) -> None:
         """Refresh derived controls without replaying legacy values over accepted timing."""
         timing = self.current_timing(sample_id)
+        if (
+            timing is not None
+            and timing.accepted_revision is not None
+            and self._on_accepted_refresh is not None
+        ):
+            self._on_accepted_refresh(sample_id)
+            return
         if (
             timing is None
             and self._project.manual_bpm[sample_id] is None

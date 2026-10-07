@@ -38,6 +38,8 @@ use std::sync::{
 };
 use std::thread;
 
+pub(crate) mod accepted_timing_refresh;
+pub use accepted_timing_refresh::AcceptedTimingRefreshTicket;
 mod analysis_jobs;
 mod analysis_pcm;
 mod analysis_predictions;
@@ -47,6 +49,7 @@ mod buffer_retirement;
 mod channels;
 pub(crate) mod constant_timing;
 mod constants;
+pub use constant_timing::CapturedConstantTiming;
 pub use constant_timing::ConstantTimingTicket;
 pub use constant_timing::SavedConstantTimingTicket;
 mod dsp;
@@ -126,6 +129,25 @@ fn parse_stem_mix_mode(mode: &str) -> Option<StemMixMode> {
         "all_stems" | "all-stems" | "stems" => Some(StemMixMode::AllStems),
         _ => None,
     }
+}
+
+/// Reserve capacity before publishing a global timing edit's revocation fence.
+fn push_global_timing_message<T>(
+    revision: &AtomicU64,
+    producer: &mut Producer<T>,
+    message: T,
+    name: &str,
+) -> PyResult<()> {
+    if producer.is_full() {
+        return Err(PyRuntimeError::new_err(format!(
+            "Failed to send {name} - buffer may be full"
+        )));
+    }
+    let next = next_epoch(revision).map_err(PyRuntimeError::new_err)?;
+    revision.store(next, Ordering::Release);
+    producer
+        .push(message)
+        .map_err(|_| PyRuntimeError::new_err("reserved single-producer capacity lost"))
 }
 
 fn push_control_message(
@@ -481,6 +503,7 @@ pub struct AudioEngine {
     current_timing_acknowledgements: Arc<constant_timing::CurrentTimingAcknowledgements>,
     current_constant_timing: Mutex<Vec<Vec<constant_timing::CurrentConstantTimingRecord>>>,
     input_runtime_ownership: Arc<input_runtime_binding::InputRuntimeOwnership>,
+    global_timing_revision: Arc<AtomicU64>,
     constant_timing_busy: AtomicBool,
     offline_jobs: analysis_jobs::OfflineJobs,
     input_runtime: Option<InputRuntime>,
@@ -517,6 +540,7 @@ impl AudioEngine {
             input_runtime_ownership: Arc::new(
                 input_runtime_binding::InputRuntimeOwnership::tracked(),
             ),
+            global_timing_revision: Arc::new(AtomicU64::new(1)),
             constant_timing_busy: AtomicBool::new(false),
             offline_jobs: analysis_jobs::OfflineJobs::default(),
             input_runtime: None,
@@ -1190,6 +1214,64 @@ impl AudioEngine {
             )
         })
         .map_err(PyRuntimeError::new_err)
+    }
+
+    /// Capture actual source/request/authority synchronously before off-thread analysis.
+    pub fn capture_current_constant_timing(
+        &self,
+        binding: &InputRuntimePadBinding,
+        timing_error_halfwidth_seconds: f64,
+        timing_error_provenance: String,
+    ) -> PyResult<CapturedConstantTiming> {
+        self.stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        constant_timing::capture_preparation(
+            self,
+            binding.id,
+            analysis::tempo_evidence::TimingBound {
+                halfwidth_seconds: timing_error_halfwidth_seconds,
+                provenance: timing_error_provenance,
+            },
+            Some(binding),
+        )
+        .map_err(PyValueError::new_err)
+    }
+
+    /// Prepare only the captured immutable source; newer requests reject this work.
+    pub fn prepare_captured_constant_timing(
+        &self,
+        py: Python<'_>,
+        captured: &CapturedConstantTiming,
+    ) -> PyResult<ConstantTimingTicket> {
+        self.stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        py.detach(|| constant_timing::prepare_captured(self, captured))
+            .map_err(PyRuntimeError::new_err)
+    }
+
+    /// Admit one guarded loop and optional master/bootstrap effect from current acceptance.
+    #[pyo3(signature = (binding, start_s, end_s, master_period_seconds=None))]
+    pub fn refresh_current_constant_timing(
+        &self,
+        binding: &InputRuntimePadBinding,
+        start_s: f64,
+        end_s: Option<f64>,
+        master_period_seconds: Option<f64>,
+    ) -> PyResult<AcceptedTimingRefreshTicket> {
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        accepted_timing_refresh::enqueue(
+            self,
+            &handle.producer,
+            binding,
+            start_s,
+            end_s,
+            master_period_seconds,
+        )
     }
 
     /// Construct accepted timing from explicit independent assertions and publish natively.
@@ -1919,6 +2001,10 @@ impl AudioEngine {
             return Err(PyValueError::new_err("speed out of range"));
         }
 
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
         let handle = self
             .stream_handle
             .as_ref()
@@ -1929,7 +2015,8 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        push_parameter_message(
+        push_global_timing_message(
+            &self.global_timing_revision,
             &mut producer_guard,
             ControlParameterMessage::SetSpeed(speed),
             "SetSpeed",
@@ -1937,6 +2024,10 @@ impl AudioEngine {
     }
 
     pub fn set_bpm_lock(&mut self, enabled: bool) -> PyResult<()> {
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
         let handle = self
             .stream_handle
             .as_ref()
@@ -1947,7 +2038,8 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        push_control_message(
+        push_global_timing_message(
+            &self.global_timing_revision,
             &mut producer_guard,
             ControlMessage::SetBpmLock(enabled),
             "SetBpmLock",
@@ -1999,6 +2091,10 @@ impl AudioEngine {
             return Err(PyValueError::new_err("bpm out of range"));
         }
 
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
         let handle = self
             .stream_handle
             .as_ref()
@@ -2013,7 +2109,8 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        push_parameter_message(
+        push_global_timing_message(
+            &self.global_timing_revision,
             &mut producer_guard,
             ControlParameterMessage::SetMasterBpm(bpm),
             "SetMasterBpm",
@@ -2026,6 +2123,10 @@ impl AudioEngine {
             return Err(PyValueError::new_err("period_seconds out of range"));
         }
 
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
         let handle = self
             .stream_handle
             .as_ref()
@@ -2040,7 +2141,8 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        push_parameter_message(
+        push_global_timing_message(
+            &self.global_timing_revision,
             &mut producer,
             ControlParameterMessage::SetMasterPeriod(period_seconds),
             "SetMasterPeriod",
@@ -2055,6 +2157,10 @@ impl AudioEngine {
         if !period_seconds.is_finite() || period_seconds <= 0.0 {
             return Err(PyValueError::new_err("period_seconds out of range"));
         }
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
         let handle = self
             .stream_handle
             .as_ref()
@@ -2066,7 +2172,8 @@ impl AudioEngine {
             .parameter_producer
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
-        push_parameter_message(
+        push_global_timing_message(
+            &self.global_timing_revision,
             &mut producer,
             ControlParameterMessage::SetSpeedAndMasterPeriod {
                 speed,
@@ -2123,6 +2230,10 @@ impl AudioEngine {
             return Err(PyValueError::new_err("id out of range"));
         }
 
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
         let handle = self
             .stream_handle
             .as_ref()
@@ -2133,7 +2244,8 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        push_control_message(
+        push_global_timing_message(
+            &self.global_timing_revision,
             &mut producer_guard,
             ControlMessage::AnchorTransportPhaseFromPad { id },
             "AnchorTransportPhaseFromPad",
@@ -2145,6 +2257,10 @@ impl AudioEngine {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
         }
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
         let handle = self
             .stream_handle
             .as_ref()
@@ -2153,7 +2269,8 @@ impl AudioEngine {
             .producer
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
-        push_control_message(
+        push_global_timing_message(
+            &self.global_timing_revision,
             &mut producer,
             ControlMessage::BootstrapTransportFromPad { id },
             "BootstrapTransportFromPad",

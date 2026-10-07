@@ -1,6 +1,7 @@
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
+from flitzis_looper.controller.accepted_publication import AcceptedTimingController
 from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.controller.metering import MeteringController
 from flitzis_looper.controller.persistence import ProjectPersistence
@@ -42,6 +43,8 @@ class AppController:
             self._audio,
             on_project_changed=self._persistence.mark_dirty,
         )
+        self.accepted_timing = AcceptedTimingController(self.transport)
+        self.transport.bpm.set_accepted_refresh_callback(self.accepted_timing.refresh_current)
         self.stems = StemController(
             self._project,
             self._session,
@@ -68,9 +71,8 @@ class AppController:
         self.loader.set_new_sample_loaded_callback(
             self.transport.loop.initialize_loaded_pad_defaults
         )
-        self.loader.set_sample_unloaded_callback(
-            self.transport.playback.discard_global_restore_for_unloaded_pad
-        )
+        self.loader.set_sample_unloaded_callback(self._on_sample_unloaded)
+        self.loader.set_accepted_timing_refresh_callback(self._refresh_restored_accepted_timing)
         self.metering = MeteringController(self._project, self._session, self._audio)
         self.input_mapping = InputMappingController(
             self,
@@ -92,6 +94,7 @@ class AppController:
         self.input_mapping.apply_project_state_to_input_runtime()
 
     def shut_down(self) -> None:
+        self.accepted_timing.shut_down()
         self.loader.shut_down()
         with suppress(OSError):
             self._persistence.flush()
@@ -110,6 +113,16 @@ class AppController:
         """Poll runtime event sources and update controller-owned state projections."""
         self.loader.poll_loader_events()
         self._poll_audio_messages()
+        self.accepted_timing.poll()
+
+    def _refresh_restored_accepted_timing(self, sample_id: int) -> None:
+        self.accepted_timing.refresh_current(
+            sample_id, on_refreshed=self.loader.finish_accepted_timing_refresh
+        )
+
+    def _on_sample_unloaded(self, sample_id: int) -> None:
+        self.accepted_timing.cancel(sample_id)
+        self.transport.playback.discard_global_restore_for_unloaded_pad(sample_id)
 
     def _poll_audio_messages(self) -> None:
         while True:

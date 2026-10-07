@@ -130,8 +130,10 @@ authority/accepted batch with all-or-none native admission and scheduled executi
 Native messages own active/paused truth; batch execution reserves their complete
 feedback capacity before any effect. Terminal batch feedback updates restore
 intent after actual acceptance, and loader callbacks prune retired pads from
-pending restore intent. General accepted publication and derived loop/
-master refresh orchestration remains separate. See
+pending restore intent. G3b2i adds explicit application preparation/publication
+and one current-bound native loop/master refresh with execution acknowledgement.
+Source/authority/full accepted identity and control ordering guard both values;
+completion polling observes explicit work without owning audio timing. See
 [accepted constant timing](accepted-constant-timing.md) for ownership and limits.
 Its shared `analyze_bpm` pipeline owns the legacy ODF/sample-hop conversion for
 both production and comparison fixtures. Private independent B2 input validation
@@ -489,8 +491,8 @@ period/rate/grid/loop/global-control consumers. Frozen Python source timing reta
 complete revision and provenance; Automatic without acknowledgement stays
 unavailable. Passive restore cannot replay Legacy timing over it. Accepted master
 controls publish period/speed directly; physical marker rounding uses loaded rate.
-Explicit current adoption still requires caller-owned derived loop/master refresh
-after acknowledgement. G3b2d binds MIDI runtime and scheduled triggers to current
+Explicit current adoption completes through G3b2i's application controller and
+current-bound native loop/master transaction after acknowledgement. G3b2d binds MIDI runtime and scheduled triggers to current
 source/full timing authority. G3b2e binds productive prepared-source/stem admission
 and rendering to current accepted timing. Successful same-source native accepted
 adoption/clear refreshes only the retained stems' fixed effective projection;
@@ -505,8 +507,10 @@ active voice source/timing ownership; G3b2f2 adds productive worker-owned native
 continuation as described below. G3b2g additionally connects source-verified
 accepted SampleAnalysis/ProjectState persistence with fresh native loader adoption.
 G3b2h additionally binds controller GLOBAL START/STOP batches including MIDI to
-current native source/authority and acknowledged full accepted timing. General
-explicit acceptance/derived loop/master refresh orchestration remains separate.
+current native source/authority and acknowledged full accepted timing. G3b2i
+integrates general explicit accepted publication and derived loop/master completion,
+shared with fresh saved adoption. Both native execution and current control intent
+must still agree before Python projects completion.
 Original hash association leaves C1 immutable copy-first/ABA proof open.
 
 Active full-mix/stem mode and enabled-mask changes use bounded Rust-owned

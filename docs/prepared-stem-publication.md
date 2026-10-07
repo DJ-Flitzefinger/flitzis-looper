@@ -128,8 +128,9 @@ separate test-only key_lock_source_preparation cannot substitute for that owner.
 G3b2g adds supported complete source-verified SampleAnalysis/ProjectState persistence
 and fresh acknowledged loader adoption. G3b2h binds productive controller GLOBAL
 START/STOP batches including MIDI to current native source/authority and complete
-acknowledged accepted timing. General explicit acceptance/derived loop/master refresh
-orchestration remains open; loader-specific refresh alone does not close it.
+acknowledged accepted timing. G3b2i adds general explicit publication and guarded
+derived loop/master completion, shared with fresh saved adoption before restored
+stem intent completion in the application.
 The original hash association does not complete
 C1 immutable copy-first/ABA proof. G3c separately proves musical versus physical
 loops over 75/1000 cycles, fractional periods/rates, callback partitions/wrap and

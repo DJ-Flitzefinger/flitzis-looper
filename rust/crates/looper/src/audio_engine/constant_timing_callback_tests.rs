@@ -314,6 +314,11 @@ struct AuthorityRaceRetirement {
 }
 
 impl AudioBufferRetirement for AuthorityRaceRetirement {
+    fn retire_accepted_timing_refresh(
+        &mut self,
+        _: Arc<crate::audio_engine::accepted_timing_refresh::AcceptedTimingRefresh>,
+    ) {
+    }
     fn retire_global_playback_batch(
         &mut self,
         _: Arc<super::super::global_playback_batch::GlobalPlaybackBatch>,
@@ -685,6 +690,11 @@ struct LimitedRetirement {
     stems: Vec<PreparedStemSet>,
 }
 impl AudioBufferRetirement for LimitedRetirement {
+    fn retire_accepted_timing_refresh(
+        &mut self,
+        _: Arc<crate::audio_engine::accepted_timing_refresh::AcceptedTimingRefresh>,
+    ) {
+    }
     fn retire_global_playback_batch(
         &mut self,
         _: Arc<super::super::global_playback_batch::GlobalPlaybackBatch>,

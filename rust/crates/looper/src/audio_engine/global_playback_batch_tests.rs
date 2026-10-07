@@ -550,6 +550,11 @@ struct RetainedBatchRetirement {
 }
 
 impl crate::audio_engine::buffer_retirement::AudioBufferRetirement for RetainedBatchRetirement {
+    fn retire_accepted_timing_refresh(
+        &mut self,
+        _: Arc<crate::audio_engine::accepted_timing_refresh::AcceptedTimingRefresh>,
+    ) {
+    }
     fn retire_sample(&mut self, sample: SampleBuffer) {
         self.samples.push(sample);
     }

@@ -56,6 +56,7 @@ class LoaderController(BaseController):
         self._on_restored_sample_loaded: Callable[[int], bool] | None = None
         self._on_new_sample_loaded: Callable[[int, float | None], None] | None = None
         self._on_sample_unloaded: Callable[[int], None] | None = None
+        self._on_accepted_timing_refresh: Callable[[int], None] | None = None
         self._load_request_ids: dict[int, int] = {}
         self._analysis_request_ids: dict[int, int] = {}
         self._accepted_restore = AcceptedTimingRestore(
@@ -63,10 +64,21 @@ class LoaderController(BaseController):
         )
 
     def _finish_accepted_restore(self, sample_id: int) -> None:
+        if self._on_accepted_timing_refresh is not None:
+            self._on_accepted_timing_refresh(sample_id)
+            return
         self._on_pad_bpm_changed(sample_id)
+        self.finish_accepted_timing_refresh(sample_id)
+        self._mark_project_changed()
+
+    def finish_accepted_timing_refresh(self, sample_id: int) -> None:
+        """Refresh restored stem intent after acknowledged derived timing completion."""
         if self._on_restored_sample_loaded is not None:
             self._on_restored_sample_loaded(sample_id)
-        self._mark_project_changed()
+
+    def set_accepted_timing_refresh_callback(self, callback: Callable[[int], None]) -> None:
+        """Route fresh accepted restore through the application's guarded completion."""
+        self._on_accepted_timing_refresh = callback
 
     def shut_down(self) -> None:
         """Drain owned timing restoration before native stream teardown."""

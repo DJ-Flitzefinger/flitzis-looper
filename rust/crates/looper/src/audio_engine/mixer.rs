@@ -194,6 +194,7 @@ pub struct RtMixer {
 
     /// Enable BPM lock (tempo matching).
     bpm_lock_enabled: bool,
+    global_parameters_drained: bool,
 
     /// Per-pad Key Lock state (preserve pitch when tempo changes).
     pad_key_lock_enabled: [bool; NUM_SAMPLES],
@@ -293,6 +294,7 @@ impl RtMixer {
             volume: VOLUME_MAX,
             speed: 1.0,
             bpm_lock_enabled: false,
+            global_parameters_drained: true,
             pad_key_lock_enabled: std::array::from_fn(|_| false),
             master_period_seconds: None,
             pad_period_seconds: std::array::from_fn(|_| None),
@@ -356,6 +358,22 @@ impl RtMixer {
             && self.input_runtime_ownership.current(id, binding)
     }
 
+    pub(crate) fn set_global_parameters_drained(&mut self, drained: bool) {
+        self.global_parameters_drained = drained;
+    }
+
+    pub(crate) fn accepted_refresh_master_matches(
+        &self,
+        binding: super::input_runtime_binding::InputPadBinding,
+        period: f64,
+    ) -> bool {
+        self.global_parameters_drained
+            && self.bpm_lock_enabled
+            && binding.accepted.is_some_and(|accepted| {
+                period.to_bits() == (accepted.period_seconds / self.speed).to_bits()
+            })
+    }
+
     /// Controller batches share source/authority/accepted guards without owning MIDI intent.
     pub(crate) fn source_binding_current(
         &self,
@@ -381,6 +399,32 @@ impl RtMixer {
             && self
                 .input_runtime_ownership
                 .binding_source_current(id, binding)
+    }
+
+    /// Derived bank geometry cannot rewrite a still-active or paused previous-source pin.
+    pub(crate) fn refresh_binding_current(
+        &self,
+        id: usize,
+        binding: super::input_runtime_binding::InputPadBinding,
+    ) -> bool {
+        self.source_binding_current(id, binding)
+            && self
+                .voices
+                .iter()
+                .filter(|voice| voice.active && voice.sample_id == id)
+                .all(|voice| {
+                    voice.sample.as_ref().is_some_and(|sample| {
+                        sample.samples.as_ptr() as usize == binding.source_address
+                            && sample.samples.len() == binding.sample_count
+                            && sample.channels == binding.channels
+                    }) && self.timing_for_voice(voice).accepted == binding.accepted
+                })
+            && self.source_binding_current(id, binding)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn loop_region_frames(&self, id: usize) -> (usize, Option<usize>) {
+        (self.pad_loop_start_frame[id], self.pad_loop_end_frame[id])
     }
 
     /// Validate every live/paused pin against the exact source and effective projection.
@@ -2049,6 +2093,11 @@ mod tests {
     }
 
     impl AudioBufferRetirement for CollectingRetirement {
+        fn retire_accepted_timing_refresh(
+            &mut self,
+            _: Arc<crate::audio_engine::accepted_timing_refresh::AcceptedTimingRefresh>,
+        ) {
+        }
         fn retire_global_playback_batch(
             &mut self,
             _: Arc<super::super::global_playback_batch::GlobalPlaybackBatch>,

@@ -434,12 +434,44 @@ pub(super) fn parse_intent(value: &str) -> PyResult<TimingIntent> {
     }
 }
 
-/// Capture all actual native owners under their common request publication mutex.
+/// Opaque synchronous source/request capture for off-thread native preparation.
+#[pyclass(frozen)]
+pub struct CapturedConstantTiming {
+    id: usize,
+    sample: SampleBuffer,
+    source_generation: u64,
+    sample_rate_hz: u32,
+    source_digest: String,
+    request_id: u64,
+    captured_epoch: u64,
+    epoch: Arc<AtomicU64>,
+    timing_bound: TimingBound,
+}
+
 pub(super) fn prepare(
     engine: &AudioEngine,
     id: usize,
     timing_bound: TimingBound,
 ) -> Result<ConstantTimingTicket, String> {
+    if engine
+        .constant_timing_busy
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("constant timing preparation busy".into());
+    }
+    let _lease = PreparationLease(&engine.constant_timing_busy);
+    let captured = capture_preparation(engine, id, timing_bound, None)?;
+    prepare_captured_inner(engine, &captured)
+}
+
+/// Capture all actual native owners under their common request publication mutex.
+pub(super) fn capture_preparation(
+    engine: &AudioEngine,
+    id: usize,
+    timing_bound: TimingBound,
+    expected: Option<&super::input_runtime_binding::InputRuntimePadBinding>,
+) -> Result<CapturedConstantTiming, String> {
     if id >= NUM_SAMPLES {
         return Err("id out of range".into());
     }
@@ -450,19 +482,24 @@ pub(super) fn prepare(
     {
         return Err("invalid explicit timing error declaration".into());
     }
-    if engine
-        .constant_timing_busy
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return Err("constant timing preparation busy".into());
-    }
-    let _lease = PreparationLease(&engine.constant_timing_busy);
     let (sample, source_generation, sample_rate_hz, source_digest, request_id, captured_epoch) = {
         let mut requests = engine
             .pad_request_ids
             .lock()
             .map_err(|_| "request lock poisoned")?;
+        if let Some(expected) = expected {
+            let current = super::input_runtime_binding::capture_under_request_lock(engine, id)
+                .map_err(|error| error.to_string())?
+                .ok_or("constant timing preparation source unavailable")?;
+            if expected.id != id
+                || !Arc::ptr_eq(&expected.ownership, &engine.input_runtime_ownership)
+                || !expected.current()
+                || expected.binding != current.binding
+                || !current.current()
+            {
+                return Err("stale or foreign constant timing preparation binding".into());
+            }
+        }
         let intents = engine
             .timing_intents
             .lock()
@@ -543,7 +580,52 @@ pub(super) fn prepare(
         )
     };
     engine.offline_jobs.cancel(Some(id));
-    let epoch = engine.prepared_source_epochs[id].clone();
+    Ok(CapturedConstantTiming {
+        id,
+        sample,
+        source_generation,
+        sample_rate_hz,
+        source_digest,
+        request_id,
+        captured_epoch,
+        epoch: engine.prepared_source_epochs[id].clone(),
+        timing_bound,
+    })
+}
+
+pub(super) fn prepare_captured(
+    engine: &AudioEngine,
+    captured: &CapturedConstantTiming,
+) -> Result<ConstantTimingTicket, String> {
+    if !Arc::ptr_eq(&captured.epoch, &engine.prepared_source_epochs[captured.id])
+        || captured.epoch.load(Ordering::Acquire) != captured.captured_epoch
+    {
+        return Err("stale or foreign captured constant timing preparation".into());
+    }
+    if engine
+        .constant_timing_busy
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("constant timing preparation busy".into());
+    }
+    let _lease = PreparationLease(&engine.constant_timing_busy);
+    prepare_captured_inner(engine, captured)
+}
+
+fn prepare_captured_inner(
+    engine: &AudioEngine,
+    captured: &CapturedConstantTiming,
+) -> Result<ConstantTimingTicket, String> {
+    let id = captured.id;
+    let sample = captured.sample.clone();
+    let source_generation = captured.source_generation;
+    let sample_rate_hz = captured.sample_rate_hz;
+    let source_digest = captured.source_digest.clone();
+    let request_id = captured.request_id;
+    let captured_epoch = captured.captured_epoch;
+    let timing_bound = captured.timing_bound.clone();
+    let epoch = captured.epoch.clone();
     let cancelled = || epoch.load(Ordering::Acquire) != captured_epoch;
     let snapshot = LoadedPcmSnapshot::new(
         sample.clone(),
