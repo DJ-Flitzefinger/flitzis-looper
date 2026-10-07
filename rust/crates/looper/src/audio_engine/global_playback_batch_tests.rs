@@ -134,6 +134,230 @@ impl Fixture {
 }
 
 #[test]
+fn global_batch_claimed_start_tail_is_followed_by_ordered_stop_before_ui_feedback_and_fresh_start()
+{
+    // Test-only control interleave at the first guaranteed state event: the start's
+    // final guard already passed, but Python has observed no native event yet.
+    struct StopAtFirstStart<'a> {
+        engine: &'a AudioEngine,
+        producer: &'a Arc<Mutex<Producer<ControlMessage>>>,
+        stop: Option<GlobalPlaybackBatchTicket>,
+        messages: Vec<AudioMessage>,
+    }
+    impl crate::audio_engine::audio_stream::AudioMessageSink for StopAtFirstStart<'_> {
+        fn push_audio_message(&mut self, message: AudioMessage) {
+            if matches!(message, AudioMessage::SampleStarted { .. }) && self.stop.is_none() {
+                self.engine.cancel_all_launches().unwrap();
+                let bindings: Vec<_> = [0, 1]
+                    .into_iter()
+                    .map(|id| {
+                        input_runtime_binding::capture(self.engine, id)
+                            .unwrap()
+                            .unwrap()
+                    })
+                    .collect();
+                self.stop = Some(
+                    global_playback_batch::enqueue(
+                        self.engine,
+                        self.producer,
+                        bindings
+                            .iter()
+                            .map(|binding| (binding, 0.125, Some(3.0)))
+                            .collect(),
+                        false,
+                        None,
+                    )
+                    .unwrap(),
+                );
+            }
+            self.messages.push(message);
+        }
+        fn available_audio_message_slots(&mut self) -> usize {
+            usize::MAX
+        }
+    }
+    let mut fixture = Fixture::new();
+    let start = fixture.enqueue(&[0, 1], true);
+    let message = fixture.consumer.pop().unwrap();
+    let mut feedback = StopAtFirstStart {
+        engine: &fixture.engine,
+        producer: &fixture.producer,
+        stop: None,
+        messages: Vec::new(),
+    };
+    process_control_message(
+        message,
+        &mut fixture.scheduler,
+        0,
+        &mut fixture.mode,
+        &mut fixture.transport,
+        &mut fixture.mixer,
+        &mut feedback,
+        &mut ImmediateAudioBufferRetirement,
+    );
+    assert_eq!(start.publication_status(), "accepted");
+    assert_eq!(
+        fixture
+            .mixer
+            .voices
+            .iter()
+            .filter(|voice| voice.active)
+            .count(),
+        2
+    );
+    assert_eq!(
+        feedback
+            .messages
+            .iter()
+            .filter(|message| matches!(message, AudioMessage::SampleStarted { .. }))
+            .count(),
+        2
+    );
+    let stop = feedback.stop.take().unwrap();
+    assert_eq!(stop.publication_status(), "pending");
+    drop(feedback); // Only now could a controller consume the withheld started events.
+    assert_eq!(
+        drain_control_messages(
+            &mut fixture.consumer,
+            &mut fixture.scheduler,
+            0,
+            &mut fixture.mode,
+            &mut fixture.transport,
+            &mut fixture.mixer,
+            &mut fixture.messages,
+            &mut ImmediateAudioBufferRetirement,
+        ),
+        1
+    );
+    assert_eq!(stop.publication_status(), "accepted");
+    assert!(!fixture.mixer.voices.iter().any(|voice| voice.active));
+    let fresh = fixture.enqueue(&[0, 1], true);
+    fixture.drain();
+    assert_eq!(fresh.publication_status(), "accepted");
+    assert_eq!(
+        fixture
+            .mixer
+            .voices
+            .iter()
+            .filter(|voice| voice.active)
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn global_batch_stop_admits_all_216_pending_targets_beyond_start_voice_capacity() {
+    let mut fixture = Fixture::new();
+    for id in 2..NUM_SAMPLES {
+        fixture.load(id);
+    }
+    let bindings: Vec<_> = (0..NUM_SAMPLES)
+        .map(|id| {
+            input_runtime_binding::capture(&fixture.engine, id)
+                .unwrap()
+                .unwrap()
+        })
+        .collect();
+    let midi = crate::audio_engine::input_mapping::InputRuntime::new_with_ownership(
+        fixture.producer.clone(),
+        crate::audio_engine::timing::InputClock::new(),
+        fixture.engine.input_runtime_ownership.clone(),
+    );
+    midi.set_runtime_state(
+        true,
+        vec![true; NUM_SAMPLES],
+        vec![0.125; NUM_SAMPLES],
+        vec![Some(3.0); NUM_SAMPLES],
+        bindings.iter().map(Some).collect(),
+    )
+    .unwrap();
+    let bindings: Vec<_> = (0..NUM_SAMPLES)
+        .map(|id| {
+            input_runtime_binding::capture(&fixture.engine, id)
+                .unwrap()
+                .unwrap()
+        })
+        .collect();
+    let entries = || {
+        bindings
+            .iter()
+            .map(|binding| (binding, 0.125, Some(3.0)))
+            .collect()
+    };
+    assert!(
+        global_playback_batch::enqueue(&fixture.engine, &fixture.producer, entries(), true, None,)
+            .is_err()
+    );
+    assert!(fixture.engine.admitted_launch_ids().is_empty());
+    // Admit and schedule every actual native MIDI start. None has executed or
+    // published active feedback, although their fixed admitted IDs are visible.
+    let mut scheduler = FixedCapacityScheduler::<{ NUM_SAMPLES + 1 }>::new();
+    fixture.transport.advance_by_rendered_frames(1);
+    fixture.mode = TriggerQuantization::Grid { step_64ths: 16 };
+    for id in 0..NUM_SAMPLES {
+        assert!(midi.trigger_pad(id, 42));
+        assert_eq!(
+            drain_control_messages(
+                &mut fixture.consumer,
+                &mut scheduler,
+                0,
+                &mut fixture.mode,
+                &mut fixture.transport,
+                &mut fixture.mixer,
+                &mut fixture.messages,
+                &mut ImmediateAudioBufferRetirement,
+            ),
+            1
+        );
+    }
+    assert_eq!(scheduler.len(), NUM_SAMPLES);
+    assert!(fixture.messages.is_empty());
+    assert_eq!(fixture.engine.admitted_launch_ids().len(), NUM_SAMPLES);
+    fixture.engine.cancel_all_launches().unwrap();
+    assert_eq!(fixture.engine.admitted_launch_ids().len(), NUM_SAMPLES);
+    let stop =
+        global_playback_batch::enqueue(&fixture.engine, &fixture.producer, entries(), false, None)
+            .unwrap();
+    assert!(fixture.engine.admitted_launch_ids().is_empty());
+    assert!(
+        matches!(fixture.consumer.peek(), Ok(ControlMessage::GlobalPlaybackBatch(batch))
+        if !batch.start && batch.entries.len() == NUM_SAMPLES)
+    );
+    assert_eq!(
+        drain_control_messages(
+            &mut fixture.consumer,
+            &mut scheduler,
+            0,
+            &mut fixture.mode,
+            &mut fixture.transport,
+            &mut fixture.mixer,
+            &mut fixture.messages,
+            &mut ImmediateAudioBufferRetirement,
+        ),
+        1
+    );
+    assert_eq!(stop.publication_status(), "accepted");
+    assert!(!fixture.mixer.voices.iter().any(|voice| voice.active));
+    while let Some(event) = scheduler.pop_due_through(0, u64::MAX) {
+        execute_scheduled_command(
+            &mut fixture.mixer,
+            &mut fixture.transport,
+            event.execution_frame,
+            event.command,
+            &mut fixture.messages,
+            &mut ImmediateAudioBufferRetirement,
+        );
+    }
+    assert!(!fixture.mixer.voices.iter().any(|voice| voice.active));
+    assert!(fixture.messages.is_empty());
+    fixture.mode = TriggerQuantization::Immediate;
+    let fresh = fixture.enqueue(&[0, 1], true);
+    assert_eq!(fixture.engine.admitted_launch_ids(), vec![0, 1]);
+    fixture.drain();
+    assert_eq!(fresh.publication_status(), "accepted");
+}
+
+#[test]
 fn global_batch_current_exact_accepted_and_nonaccepted_start_stop_execute_transactionally() {
     for intent in [
         TimingIntent::Manual,
@@ -550,6 +774,11 @@ struct RetainedBatchRetirement {
 }
 
 impl crate::audio_engine::buffer_retirement::AudioBufferRetirement for RetainedBatchRetirement {
+    fn retire_resident_capture(
+        &mut self,
+        _: std::sync::Arc<crate::audio_engine::resident_seek::ResidentSeekCapture>,
+    ) {
+    }
     fn retire_resident_cancellation(&mut self, _: std::sync::Arc<std::sync::atomic::AtomicBool>) {}
     fn retire_resident_transaction(&mut self, _: Box<crate::messages::ResidentTransaction>) {}
     fn retire_cold_adoption(&mut self, _: Arc<std::sync::atomic::AtomicU8>) {}
@@ -620,7 +849,7 @@ fn global_batch_execution_failures_retire_payload_and_preserve_history_before_co
             _ => unreachable!(),
         };
         let mut retirement = RetainedBatchRetirement {
-            slots: MAX_VOICES + 1,
+            slots: 2 * MAX_VOICES + 1,
             batches: Vec::new(),
             samples: Vec::new(),
             revoke: None,
@@ -873,7 +1102,7 @@ fn global_batch_old_started_then_reliable_unload_feedback_cannot_reactivate_unlo
         .push(ControlMessage::UnloadSample { id: 0 })
         .unwrap();
     let mut retirement = RetainedBatchRetirement {
-        slots: MAX_VOICES + 2,
+        slots: 2 * MAX_VOICES + 2,
         batches: Vec::new(),
         samples: Vec::new(),
         revoke: None,
@@ -955,7 +1184,7 @@ fn global_batch_unload_full_feedback_defers_actual_pin_and_paused_history_until_
     let (mut feedback, mut receiver) = rtrb::RingBuffer::<AudioMessage>::new(1);
     feedback.push(AudioMessage::Pong()).unwrap();
     let mut retirement = RetainedBatchRetirement {
-        slots: MAX_VOICES + 2,
+        slots: 2 * MAX_VOICES + 2,
         batches: Vec::new(),
         samples: Vec::new(),
         revoke: None,

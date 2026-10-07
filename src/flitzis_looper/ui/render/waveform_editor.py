@@ -634,6 +634,26 @@ def _setup_plot_axes(ctx: UiContext, pad_id: int, *, timing: CurrentPadTiming | 
     implot.setup_finish()
 
 
+def _render_context_readiness(ctx: UiContext, pad_id: int) -> None:
+    status, error = ctx.ui.waveform.readiness(pad_id)
+    if status == "pending":
+        imgui.text_colored(TEXT_MUTED_RGBA, "Preparing source waveform...")
+    elif status == "error":
+        imgui.text_colored(TEXT_MUTED_RGBA, f"Waveform unavailable: {error}")
+        imgui.same_line()
+        if imgui.small_button(f"Retry##waveform-{pad_id}"):
+            ctx.ui.waveform.retry(pad_id)
+    control_status, control_error = ctx.audio.pads.residency_status(pad_id)
+    if control_status in {"preparing", "pending", "adopting"}:
+        imgui.text_colored(TEXT_MUTED_RGBA, "Preparing playback context...")
+        if control_status != "adopting":
+            imgui.same_line()
+            if imgui.small_button(f"Cancel##resident-context-{pad_id}"):
+                ctx.audio.pads.cancel_residency(pad_id)
+    elif control_error:
+        imgui.text_colored(TEXT_MUTED_RGBA, f"Playback context unavailable: {control_error}")
+
+
 def _render_plot(ctx: UiContext, pad_id: int) -> None:
     timing = ctx.state.pads.current_timing(pad_id)
     sample_duration_s = ctx.state.project.sample_durations[pad_id]
@@ -685,6 +705,7 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
     _draw_zero_line(draw_list, start_s, end_s)
 
     implot.end_plot()
+    _render_context_readiness(ctx, pad_id)
 
 
 def _render_editor_body(ctx: UiContext, pad_id: int) -> None:

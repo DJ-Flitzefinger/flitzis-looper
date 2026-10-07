@@ -32,6 +32,13 @@ full frame count and absolute physical endpoints; only sample reads translate
 into resident storage. Source beat, playhead and labels remain absolute. A new
 window revision does not create accepted evidence or relabel a prior voice.
 
+C2b full-source waveform navigation reads sealed complete chunks and returns a
+bounded pending/error/ready view. The view's immutable source/generation identity
+prevents same-path replacement or superseded zoom from reusing stale results.
+Requested loop markers remain project intent while preparation runs; effective
+geometry changes only after the matching native ACK. Wider views and seeks never
+interpret a finite array's local start as source frame zero.
+
 `ScalarSourceGrid(origin_s, seconds_per_beat)` exposes `beat_at_source`,
 `source_at_beat` and `source_after_beats`, reusing pure Rust source-grid arithmetic
 without stream state, scheduling or source reads. Invalid construction raises

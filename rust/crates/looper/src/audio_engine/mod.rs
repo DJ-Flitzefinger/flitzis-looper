@@ -4,7 +4,6 @@ use crate::audio_engine::constants::{
     SPEED_MIN, VOLUME_MAX, VOLUME_MIN,
 };
 use crate::audio_engine::input_mapping::InputRuntime;
-use crate::audio_engine::progress::LoadProgressStage;
 use crate::audio_engine::stem_cache::{
     prepare_stem_buffers_from_cache, project_stem_cache_dir, source_version_hash,
 };
@@ -29,7 +28,6 @@ use std::sync::{
     Arc, Mutex,
     mpsc::{Receiver, Sender, TryRecvError},
 };
-use std::thread;
 
 pub(crate) mod accepted_timing_refresh;
 pub use accepted_timing_refresh::AcceptedTimingRefreshTicket;
@@ -46,6 +44,7 @@ mod cold_residency;
 #[cfg(all(test, windows))]
 mod cold_residency_tests;
 mod cold_store;
+mod complete_context;
 pub(crate) mod constant_timing;
 mod constants;
 pub use constant_timing::CapturedConstantTiming;
@@ -70,7 +69,8 @@ pub(crate) mod prepared_source;
 mod productive_source_history;
 mod progress;
 mod project_assets;
-mod resident_relocation;
+pub(crate) mod resident_relocation;
+pub(crate) mod resident_seek;
 pub use prepared_source::PreparedSourceTicket;
 use prepared_source::{enqueue_current_prepared_stems, next_epoch, validate_prepared_ticket};
 pub use project_assets::ProjectAssetLease;
@@ -250,7 +250,10 @@ fn pad_request_matches(pad_request_ids: &Arc<Mutex<Vec<u64>>>, id: usize, reques
 }
 
 /// Normal analysis admission owns the same actual source/request boundary as timing work.
-fn admit_sample_analysis(engine: &AudioEngine, id: usize) -> PyResult<(SampleBuffer, u64, u32)> {
+fn admit_sample_analysis(
+    engine: &AudioEngine,
+    id: usize,
+) -> PyResult<(complete_context::CompleteSourceReader, u64, u32)> {
     let mut requests = engine
         .pad_request_ids
         .lock()
@@ -276,7 +279,8 @@ fn admit_sample_analysis(engine: &AudioEngine, id: usize) -> PyResult<(SampleBuf
     let sample = cache[id]
         .clone()
         .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?;
-    require_complete_analysis_pcm(&sample)?;
+    let reader = complete_context::CompleteSourceReader::capture(engine, id, sample)
+        .map_err(PyValueError::new_err)?;
     let generations = engine
         .loaded_source_generations
         .lock()
@@ -285,19 +289,41 @@ fn admit_sample_analysis(engine: &AudioEngine, id: usize) -> PyResult<(SampleBuf
     if generation == 0 || rate == 0 {
         return Err(PyValueError::new_err("loaded source identity unavailable"));
     }
+    admit_complete_analysis(&reader, rate).map_err(PyValueError::new_err)?;
     let advance = PadRequestAdvance::prepare(&mut requests[id], &engine.prepared_source_epochs[id])
         .map_err(PyRuntimeError::new_err)?;
     let request_id = advance.commit();
     tasks.insert((id, BackgroundTaskKind::Analysis));
-    Ok((sample, request_id, rate))
+    Ok((reader, request_id, rate))
 }
 
-fn require_complete_analysis_pcm(sample: &SampleBuffer) -> PyResult<()> {
-    if sample.resident_start() != 0 || sample.resident_end() != sample.frame_count() {
-        return Err(PyValueError::new_err(
-            "complete-source analysis requires a complete PCM reader",
-        ));
+fn admit_complete_analysis(
+    reader: &complete_context::CompleteSourceReader,
+    rate: u32,
+) -> Result<(), String> {
+    if rate == 0 {
+        return Err("analysis source rate is unavailable".into());
     }
+    let sample = &reader.reference;
+    if sample
+        .residency
+        .as_ref()
+        .is_some_and(|view| view.source.sample_rate_hz != rate)
+    {
+        return Err("complete analysis rate differs from immutable source".into());
+    }
+    // Same executed conversion/analyzer admission as cold-load analysis, plus
+    // the separately retained finite reference during complete materialization.
+    let finite = sample.resident_start() != 0 || sample.resident_end() != sample.frame_count();
+    let held = if finite { reader.held_bytes()? } else { 0 };
+    analysis_pcm::default_analysis_peak(
+        sample.frame_count(),
+        sample.channels,
+        rate,
+        held,
+        cold_jobs::PCM_LIMIT_BYTES,
+    )
+    .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -570,6 +596,7 @@ pub struct AudioEngine {
     constant_timing_busy: AtomicBool,
     offline_jobs: analysis_jobs::OfflineJobs,
     cold_jobs: cold_jobs::ColdJobs,
+    waveform_requests: waveform::WaveformRequests,
     cold_cancelled: Arc<AtomicBool>,
     cold_loading: Arc<Vec<AtomicU64>>,
     cold_leases: Arc<Mutex<Vec<Option<cold_store::CommittedColdLease>>>>,
@@ -697,6 +724,7 @@ impl AudioEngine {
             offline_jobs: analysis_jobs::OfflineJobs::default(),
             cold_jobs: cold_jobs::ColdJobs::new()
                 .map_err(|error| PyRuntimeError::new_err(error.to_string()))?,
+            waveform_requests: waveform::WaveformRequests::default(),
             cold_cancelled: Arc::new(AtomicBool::new(false)),
             cold_loading: Arc::new((0..NUM_SAMPLES).map(|_| AtomicU64::new(0)).collect()),
             cold_leases: Arc::new(Mutex::new((0..NUM_SAMPLES).map(|_| None).collect())),
@@ -899,7 +927,16 @@ impl AudioEngine {
 
     /// Shut down the audio engine.
     pub fn shut_down(&mut self) -> PyResult<()> {
+        if let Some(runtime) = self.input_runtime.as_ref() {
+            runtime.set_enabled(false);
+        }
+        input_runtime_binding::cancel_launches_before_shutdown(
+            &self.input_runtime_ownership,
+            self.stream_handle.as_ref().map(|handle| &handle.producer),
+        );
+        self.cold_jobs.close_admission();
         self.cold_cancelled.store(true, Ordering::Release);
+        self.waveform_requests.cancel_all();
         resident_relocation::cancel_all(self)?;
         self.cold_jobs.shutdown();
         self.offline_jobs.cancel(None);
@@ -1134,6 +1171,57 @@ impl AudioEngine {
         resident_relocation::relocate(self, id, start_s, end_s)
     }
 
+    /// Prepare one source-bound control transaction; native ACK publishes its
+    /// storage and complete loop/seek/Key Lock effect together.
+    #[pyo3(signature = (id, start_s=None, end_s=None, position_s=None, key_lock=None))]
+    pub fn prepare_resident_control(
+        &self,
+        id: usize,
+        start_s: Option<f64>,
+        end_s: Option<f64>,
+        position_s: Option<f64>,
+        key_lock: Option<bool>,
+    ) -> PyResult<resident_relocation::ResidentWindowTicket> {
+        if start_s.is_none() && end_s.is_some() {
+            return Err(PyValueError::new_err("end_s requires start_s"));
+        }
+        resident_relocation::prepare_control(
+            self,
+            id,
+            resident_relocation::WindowRequest {
+                loop_region: start_s.map(|start| (start, end_s)),
+                seek_position_s: position_s,
+                key_lock,
+                ..resident_relocation::WindowRequest::default()
+            },
+        )
+    }
+
+    /// Launch the acknowledged source/window with its original input timestamp.
+    /// The intent and source guards remain current through native scheduling.
+    #[pyo3(signature = (ticket, exclusive=false, received_at_ns=None))]
+    pub fn play_resident_control(
+        &self,
+        ticket: &resident_relocation::ResidentWindowTicket,
+        exclusive: bool,
+        received_at_ns: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<bool> {
+        let now = self.input_clock.capture_ns();
+        let received_at_ns =
+            validated_input_timestamp(parse_input_timestamp(received_at_ns)?, now).unwrap_or(now);
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        resident_relocation::launch_with_producer(
+            self,
+            ticket,
+            exclusive,
+            received_at_ns,
+            &handle.producer,
+        )
+    }
+
     /// Actual complete cold manifest; contains no accepted-timing claim.
     pub fn cold_source_manifest(&self, id: usize) -> PyResult<Option<String>> {
         if id >= NUM_SAMPLES {
@@ -1246,15 +1334,16 @@ impl AudioEngine {
             .get(id)
             .and_then(Clone::clone)
             .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?;
-        require_complete_analysis_pcm(&sample)?;
+        let reader = complete_context::CompleteSourceReader::capture(self, id, sample)
+            .map_err(PyRuntimeError::new_err)?;
         let (generation, loaded_rate) = self
             .loaded_source_generations
             .lock()
             .map_err(|_| PyRuntimeError::new_err("source generation lock poisoned"))?[id];
         self.offline_jobs
-            .begin(
+            .begin_complete(
                 id,
-                sample,
+                reader,
                 loaded_rate,
                 generation,
                 analysis_jobs::OfflineRequestOwner {
@@ -1491,83 +1580,7 @@ impl AudioEngine {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
 
-        let (sample, request_id, output_sample_rate) = admit_sample_analysis(self, id)?;
-
-        let loader_tx = self.loader_tx.clone();
-        let active_tasks = self.active_tasks.clone();
-        let pad_request_ids = self.pad_request_ids.clone();
-
-        thread::spawn(move || {
-            let _task_guard = PadTaskGuard {
-                id,
-                task: BackgroundTaskKind::Analysis,
-                active_tasks,
-            };
-
-            let _ = loader_tx.send(LoaderEvent::TaskStarted {
-                id,
-                request_id,
-                task: BackgroundTaskKind::Analysis,
-            });
-
-            let stage = LoadProgressStage::Analyzing.stage_label().to_string();
-            let _ = loader_tx.send(LoaderEvent::TaskProgress {
-                id,
-                request_id,
-                task: BackgroundTaskKind::Analysis,
-                percent: 0.0,
-                stage: stage.clone(),
-            });
-
-            let analysis = match analyze_sample(&sample, output_sample_rate) {
-                Ok(result) => result,
-                Err(error) => {
-                    if !pad_request_matches(&pad_request_ids, id, request_id) {
-                        let _ = loader_tx.send(LoaderEvent::TaskError {
-                            id,
-                            request_id,
-                            task: BackgroundTaskKind::Analysis,
-                            error: "Analysis superseded by another pad request".into(),
-                        });
-                        return;
-                    }
-                    let _ = loader_tx.send(LoaderEvent::TaskError {
-                        id,
-                        request_id,
-                        task: BackgroundTaskKind::Analysis,
-                        error,
-                    });
-                    return;
-                }
-            };
-
-            if !pad_request_matches(&pad_request_ids, id, request_id) {
-                let _ = loader_tx.send(LoaderEvent::TaskError {
-                    id,
-                    request_id,
-                    task: BackgroundTaskKind::Analysis,
-                    error: "Analysis superseded by another pad request".into(),
-                });
-                return;
-            }
-
-            let _ = loader_tx.send(LoaderEvent::TaskProgress {
-                id,
-                request_id,
-                task: BackgroundTaskKind::Analysis,
-                percent: 1.0,
-                stage,
-            });
-
-            let _ = loader_tx.send(LoaderEvent::TaskSuccess {
-                id,
-                request_id,
-                task: BackgroundTaskKind::Analysis,
-                analysis: Some(analysis),
-            });
-        });
-
-        Ok(request_id)
+        complete_context::start_analysis(self, id)
     }
 
     /// Legacy placeholder generation is disabled; productive jobs use the Python backend.
@@ -2132,9 +2145,38 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        producer_guard
-            .push(ControlMessage::StopAll())
-            .map_err(|_| PyRuntimeError::new_err("Failed to send Stop - buffer may be full"))
+        input_runtime_binding::enqueue_stop_with_producer(
+            &self.input_runtime_ownership,
+            &mut producer_guard,
+            None,
+        )
+        .then_some(())
+        .ok_or_else(|| PyRuntimeError::new_err("Failed to send Stop - buffer may be full"))
+    }
+
+    /// Atomically revoke earlier starts and report whether this pad needs ordered STOP.
+    /// Acknowledged source/window state and admitted ownership are preserved.
+    pub fn cancel_pad_launches(&self, sample_id: usize) -> PyResult<bool> {
+        input_runtime_binding::cancel_launches_with_producer(
+            &self.input_runtime_ownership,
+            self.stream_handle.as_ref().map(|handle| &handle.producer),
+            Some(sample_id),
+        )
+        .map(|targets| !targets.is_empty())
+    }
+
+    /// Atomically revoke earlier starts and return all admitted targets needing STOP.
+    pub fn cancel_all_launches(&self) -> PyResult<Vec<usize>> {
+        input_runtime_binding::cancel_launches_with_producer(
+            &self.input_runtime_ownership,
+            self.stream_handle.as_ref().map(|handle| &handle.producer),
+            None,
+        )
+    }
+
+    /// Source-bound IDs admitted before UI/active feedback; at most NUM_SAMPLES scalars.
+    pub fn admitted_launch_ids(&self) -> Vec<usize> {
+        self.input_runtime_ownership.admitted_launch_ids()
     }
 
     /// Admit one controller-owned global launch against actual native current bindings.
@@ -2730,9 +2772,13 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
-        producer_guard
-            .push(ControlMessage::StopSample { id })
-            .map_err(|_| PyRuntimeError::new_err("Failed to send StopSample - buffer may be full"))
+        input_runtime_binding::enqueue_stop_with_producer(
+            &self.input_runtime_ownership,
+            &mut producer_guard,
+            Some(id),
+        )
+        .then_some(())
+        .ok_or_else(|| PyRuntimeError::new_err("Failed to send StopSample - buffer may be full"))
     }
 
     /// Pause playback of a sample without resetting its position.
@@ -2855,6 +2901,16 @@ impl AudioEngine {
         start_s: f64,
         end_s: f64,
     ) -> WaveformResult {
+        if sample_id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        if self.cold_loading[sample_id].load(Ordering::Acquire) != 0 {
+            return Ok(None);
+        }
         // Acquire data
         let sample_arc = {
             let cache = self
@@ -2886,10 +2942,25 @@ impl AudioEngine {
         if region.is_empty() {
             return Ok(None);
         }
-        if region.start < sample.resident_start() || region.end > sample.resident_end() {
-            return Err(PyValueError::new_err(
-                "waveform region requires a matching complete-source reader",
-            ));
+        if region.start < sample.resident_start()
+            || region.end > sample.resident_end()
+            || region.len() > 4096
+        {
+            let Some(data) = self
+                .waveform_requests
+                .request(self, sample_id, &sample, region, width_px)
+                .map_err(PyRuntimeError::new_err)?
+            else {
+                return Ok(None);
+            };
+            return Ok(Some((
+                data.is_raw,
+                data.xs.to_pyarray(py).to_owned().into(),
+                data.y_min.to_pyarray(py).to_owned().into(),
+                data.y_max
+                    .as_ref()
+                    .map(|ys| ys.to_pyarray(py).to_owned().into()),
+            )));
         }
         let Some(data) = waveform::render_region(
             &sample.samples[(region.start - sample.resident_start()) * channels
@@ -2907,6 +2978,70 @@ impl AudioEngine {
             data.y_min.to_pyarray(py).to_owned().into(),
             data.y_max.map(|ys| ys.to_pyarray(py).to_owned().into()),
         )))
+    }
+
+    /// Read waveform preparation readiness without seeking or changing timing.
+    pub fn waveform_readiness(&self, sample_id: usize) -> PyResult<(String, Option<String>)> {
+        if sample_id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+        if self.cold_loading[sample_id].load(Ordering::Acquire) != 0 {
+            return Ok(("pending".into(), None));
+        }
+        self.waveform_requests
+            .status(sample_id)
+            .map_err(PyRuntimeError::new_err)
+    }
+
+    /// Explicit retry of a failed view; cancels only that editor request.
+    pub fn retry_waveform(&self, sample_id: usize) -> PyResult<()> {
+        self.waveform_requests
+            .cancel(sample_id)
+            .map_err(PyRuntimeError::new_err)
+    }
+
+    /// Assignment freshness for editor caches, independent of accepted timing.
+    pub fn waveform_source_identity(
+        &self,
+        sample_id: usize,
+    ) -> PyResult<Option<(u64, String, usize, u32)>> {
+        if sample_id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+        if self.cold_loading[sample_id].load(Ordering::Acquire) != 0 {
+            return Ok(None);
+        }
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        if self.cold_loading[sample_id].load(Ordering::Acquire) != 0 {
+            return Ok(None);
+        }
+        let cache = self
+            .sample_cache
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?;
+        let generations = self
+            .loaded_source_generations
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("source generation lock poisoned"))?;
+        let Some(sample) = cache[sample_id].as_ref() else {
+            return Ok(None);
+        };
+        let (generation, rate) = generations[sample_id];
+        let digest = sample
+            .residency
+            .as_ref()
+            .map(|view| {
+                view.source
+                    .transform_sha256
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(Some((generation, digest, sample.frame_count(), rate)))
     }
 }
 
@@ -3471,7 +3606,16 @@ mod tests {
 
 impl Drop for AudioEngine {
     fn drop(&mut self) {
+        if let Some(runtime) = self.input_runtime.as_ref() {
+            runtime.set_enabled(false);
+        }
+        input_runtime_binding::cancel_launches_before_shutdown(
+            &self.input_runtime_ownership,
+            self.stream_handle.as_ref().map(|handle| &handle.producer),
+        );
+        self.cold_jobs.close_admission();
         self.cold_cancelled.store(true, Ordering::Release);
+        self.waveform_requests.cancel_all();
         let _ = resident_relocation::cancel_all(self);
         self.cold_jobs.shutdown();
     }

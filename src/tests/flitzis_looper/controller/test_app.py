@@ -255,6 +255,34 @@ def test_controller_shut_down_flushes_persistence(controller: AppController) -> 
         mock_flush.assert_called_once()
 
 
+def test_shutdown_disables_midi_before_worker_joins_without_changing_saved_preference(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    controller.project.input_mapping_enabled = True
+    events: list[str] = []
+    audio_engine_mock.set_input_mapping_enabled.side_effect = lambda enabled: events.append(
+        "disabled" if enabled is False else "enabled"
+    )
+
+    def revoke() -> list[int]:
+        events.append("revoked")
+        return []
+
+    audio_engine_mock.cancel_all_launches.side_effect = revoke
+    with (
+        patch.object(
+            controller.accepted_timing, "shut_down", side_effect=lambda: events.append("accepted")
+        ),
+        patch.object(controller.loader, "shut_down", side_effect=lambda: events.append("loader")),
+        patch.object(controller.stems, "shut_down", side_effect=lambda: events.append("stems")),
+        patch.object(controller._persistence, "flush"),
+    ):
+        controller.shut_down()
+    assert events == ["disabled", "revoked", "accepted", "loader", "stems"]
+    assert controller.project.input_mapping_enabled is True
+
+
 def test_controller_shut_down_stops_audio(controller: AppController) -> None:
     """Test AppController stops all audio on shutdown."""
     assert hasattr(controller._audio, "stop_all")

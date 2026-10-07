@@ -109,7 +109,12 @@ complete set token/content, matching fullmix/components and coverage of the actu
 voice trajectory. Source fraction, rate/ramp, filter and native/FIFO state stay
 coherent; old job/voice allocations remain pinned until their final reader retires.
 Introducing a new complete set or source generation remains inactive-only.
-Complete control/editor/nonresident-seek readiness is the following C2b stage.
+C2b source-bound control preparation changes matching fullmix/stem windows and
+loop/seek/Key Lock effect under one native ACK. Complete source/set identity,
+timing and history still govern adoption; pending/error/cancellation leaves
+previous effective audio available. Complete waveform/analysis readers and
+nonresident seeks use bounded complete-source exceptions, documented in
+[PCM cache and readiness](pcm-cache-residency.md).
 
 Each separator writes `samples/stems/#<pad>/.generation-<uuid>/`. Events retain the
 original ticket identity, so an old completion cannot consume a new job even after

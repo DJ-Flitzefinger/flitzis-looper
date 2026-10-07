@@ -67,6 +67,79 @@ def test_waveform_request_and_cache_distinguish_adjacent_long_frames(
     assert calls[1].args == (0, 320, next_s, end_s)
 
 
+def test_pending_complete_source_waveform_repolls_same_view_without_seeking(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    ctx = UiContext(controller)
+    controller.project.sample_paths[0] = "samples/finite.wav"
+    controller.project.sample_durations[0] = 600.0
+    controller.project.pad_loop_start_s[0] = 42.0
+    controller.project.pad_loop_end_s[0] = 42.5
+    ready = object()
+    audio_engine_mock.get_waveform_render_data.side_effect = [None, None, ready]
+    audio_engine_mock.waveform_readiness.return_value = ("pending", None)
+    ctx.ui.waveform.record_view_range(0, 599.0, 600.0)
+
+    assert ctx.ui.waveform.get_render_data(0, 320, 599.0, 600.0) is None
+    assert ctx.ui.waveform.readiness(0) == ("pending", None)
+    assert ctx.ui.waveform.get_render_data(0, 320, 599.0, 600.0) is None
+    assert ctx.ui.waveform.get_render_data(0, 320, 599.0, 600.0) is ready
+    assert ctx.ui.waveform.get_render_data(0, 320, 599.0, 600.0) is ready
+    assert ctx.ui.waveform.readiness(0) == ("ready", None)
+    assert audio_engine_mock.get_waveform_render_data.call_count == 3
+    assert ctx.ui.waveform._pad_view_ranges[0] == (599.0, 600.0)
+    assert controller.project.pad_loop_start_s[0] == 42.0
+    assert controller.project.pad_loop_end_s[0] == 42.5
+    audio_engine_mock.seek_sample.assert_not_called()
+    audio_engine_mock.prepare_resident_control.assert_not_called()
+
+
+def test_waveform_error_is_visible_and_retry_keeps_source_view(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    ctx = UiContext(controller)
+    controller.project.sample_paths[0] = "samples/finite.wav"
+    controller.project.sample_durations[0] = 600.0
+    ctx.ui.waveform.record_view_range(0, 0.0, 1.0)
+    ready = object()
+    audio_engine_mock.get_waveform_render_data.side_effect = [
+        RuntimeError("complete source queue full"),
+        ready,
+    ]
+
+    assert ctx.ui.waveform.get_render_data(0, 320, 0.0, 1.0) is None
+    assert ctx.ui.waveform.readiness(0) == ("error", "complete source queue full")
+    ctx.ui.waveform.retry(0)
+    assert ctx.ui.waveform.get_render_data(0, 320, 0.0, 1.0) is ready
+    assert ctx.ui.waveform._pad_view_ranges[0] == (0.0, 1.0)
+    audio_engine_mock.retry_waveform.assert_called_once_with(0)
+    audio_engine_mock.seek_sample.assert_not_called()
+
+
+def test_legacy_waveform_cache_fences_same_path_native_assignment_aba(
+    controller: AppController,
+    audio_engine_mock: Mock,
+) -> None:
+    ctx = UiContext(controller)
+    controller.project.sample_paths[0] = "samples/same.wav"
+    controller.project.sample_durations[0] = 600.0
+    audio_engine_mock.current_constant_timing.return_value = None
+    audio_engine_mock.waveform_source_identity.return_value = (7, "a" * 64, 28_800_000, 48_000)
+    first, second = object(), object()
+    audio_engine_mock.get_waveform_render_data.side_effect = [first, second]
+    assert ctx.ui.waveform.consume_source_view_reset(0)
+    assert ctx.ui.waveform.get_render_data(0, 320, 0.0, 600.0) is first
+    ctx.ui.waveform.record_view_range(0, 42.0, 43.0)
+    audio_engine_mock.waveform_source_identity.return_value = None
+    assert not ctx.ui.waveform.consume_source_view_reset(0)
+    audio_engine_mock.waveform_source_identity.return_value = (9, "a" * 64, 28_800_000, 48_000)
+    assert ctx.ui.waveform.consume_source_view_reset(0)
+    assert 0 not in ctx.ui.waveform._pad_view_ranges
+    assert ctx.ui.waveform.get_render_data(0, 320, 0.0, 600.0) is second
+
+
 def test_waveform_cache_and_view_follow_accepted_native_source_identity(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:

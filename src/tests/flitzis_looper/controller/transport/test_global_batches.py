@@ -320,13 +320,17 @@ def test_pending_batch_and_native_feedback_preserve_telemetry_owned_voice_sets(
         assert controller.session.global_stop_restore_sample_ids == set()
 
 
-def test_pending_global_batch_does_not_admit_a_second_conflicting_global_operation(
-    controller: AppController, audio_engine_mock: Mock
+@pytest.mark.parametrize("start_status", ["pending", "accepted"])
+def test_stop_supersedes_start_but_pending_stop_blocks_further_global_operations(
+    controller: AppController, audio_engine_mock: Mock, start_status: str
 ) -> None:
-    _accepted_sources(controller, audio_engine_mock)
+    _, bindings = _accepted_sources(controller, audio_engine_mock)
     controller.session.active_sample_ids = {0, 2}
-    ticket = FakeGlobalPlaybackBatchTicket("pending")
-    audio_engine_mock.start_global_playback_batch.return_value = ticket
+    start = FakeGlobalPlaybackBatchTicket(start_status)
+    stop = FakeGlobalPlaybackBatchTicket("pending")
+    audio_engine_mock.start_global_playback_batch.return_value = start
+    audio_engine_mock.stop_global_playback_batch.return_value = stop
+    before = controller.session.model_dump()
     controller.transport.playback.start_or_restart_global_start_stop()
 
     controller.transport.playback.stop_global_start_stop()
@@ -334,7 +338,20 @@ def test_pending_global_batch_does_not_admit_a_second_conflicting_global_operati
     controller.transport.playback.start_or_restart_global_start_stop()
 
     audio_engine_mock.start_global_playback_batch.assert_called_once()
-    audio_engine_mock.stop_global_playback_batch.assert_not_called()
+    audio_engine_mock.stop_global_playback_batch.assert_called_once_with(
+        [bindings[0], bindings[2]], received_at_ns=None
+    )
+    assert controller.session.model_dump() == before
+    _assert_no_unguarded_batch_effect(audio_engine_mock)
+
+    stop.status = "accepted"
+    controller.transport.playback.start_or_restart_global_start_stop()
+
+    assert audio_engine_mock.start_global_playback_batch.call_count == 2
+    audio_engine_mock.stop_global_playback_batch.assert_called_once()
+    assert controller.session.active_sample_ids == {0, 2}
+    assert controller.session.paused_sample_ids == set()
+    _assert_no_unguarded_batch_effect(audio_engine_mock)
 
 
 def test_manual_gesture_prevents_late_stop_ack_from_reviving_old_restore_set(

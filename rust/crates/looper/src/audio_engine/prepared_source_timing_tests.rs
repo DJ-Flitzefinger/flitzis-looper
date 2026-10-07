@@ -53,6 +53,10 @@ fn prepared_capture_uses_complete_current_revision_and_exact_signed_projection()
     let first = engine.capture_prepared_source(0, version()).unwrap();
     let current = input_runtime_binding::capture(&engine, 0).unwrap().unwrap();
     let projected = first.publication.accepted_projection().unwrap();
+    assert!(
+        first.publication.resident_launch_permit().is_none(),
+        "resident launch snapshots must not discard a productive accepted-timing guard"
+    );
     assert_eq!(Some(projected), current.binding.accepted);
     assert_eq!(projected.origin_seconds, origin().seconds);
     assert_eq!(projected.sample_rate_hz, RATE);

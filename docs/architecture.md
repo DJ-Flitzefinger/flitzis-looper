@@ -85,6 +85,7 @@ rust/crates/looper/src/
     |-- cold_load.rs               # source/request guards and native adoption ACK
     |-- cold_residency.rs          # saved absolute windows and complete source descriptors
     |-- cold_store.rs              # immutable copy, full manifests and atomic commit
+    |-- complete_context.rs        # sealed full-source waveform/export/analysis readers
     |-- constants.rs               # banks, grid size, slot count, ranges
     |-- dsp.rs                     # per-pad DSP chain and DJ isolator node
     |-- input_mapping.rs           # Rust MIDI capture outside callback
@@ -265,10 +266,13 @@ redefining another pad's phase or the shared transport timeline.
 ## Sample Loading
 
 The [PCM cache/residency design](pcm-cache-residency.md) documents the productive
-copy-first full PCM cache and C2a finite saved-loop residency. Complete source
+copy-first full PCM cache, finite saved-loop residency and C2b control readiness. Complete source
 metadata remains authoritative while ordinary saved loops retain only their
 proved physical PCM range. Unsupported Key Lock context retains an explicitly
-admitted full-track fallback. C2b control readiness and C3 measurements remain.
+admitted full-track fallback. Complete waveform/analysis leases and source-bound
+loop/ALL/seek/Key Lock preparation share guarded native adoption. The controller
+keeps requested project intent separate from effective audio and routes UI/MIDI
+fallback through one bounded readiness behavior. C3 measurements remain.
 Two fixed workers and 32 queued reservations
 bound preparation; each worker admits at most 1 GiB transient PCM. Windows sealed
 source capture, full decoder/playback manifests and native adoption ACK establish

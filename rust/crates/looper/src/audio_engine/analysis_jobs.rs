@@ -5,11 +5,12 @@
 
 use super::analysis_pcm::{
     KEY_PREPROCESSING, LoadedPcmSnapshot, MONO_RULE, PcmIdentity, PcmStagingPlan,
-    key_input_from_f32_le,
+    key_input_from_f32_le, staging_plan,
 };
 use super::analysis_predictions::validate_predictions;
+use super::complete_context::{CompleteSourceGuard, CompleteSourceReader};
 use super::{PadRequestAdvance, current_pad_request_id, next_pad_request_id, pad_request_matches};
-use crate::messages::{BackgroundTaskKind, LoaderEvent, SampleBuffer};
+use crate::messages::{BackgroundTaskKind, CompleteSourceIdentity, LoaderEvent, SampleBuffer};
 use flitzis_looper_analysis as analysis;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -53,6 +54,7 @@ impl OfflineJobs {
         })
     }
 
+    #[cfg(test)]
     pub fn begin(
         &self,
         id: usize,
@@ -61,6 +63,45 @@ impl OfflineJobs {
         source_generation: u64,
         owner: OfflineRequestOwner,
         tx: Sender<LoaderEvent>,
+    ) -> Result<OfflineAnalysisJob, String> {
+        self.begin_input(id, sample, rate, source_generation, owner, tx, None)
+    }
+
+    pub(super) fn begin_complete(
+        &self,
+        id: usize,
+        reader: CompleteSourceReader,
+        rate: u32,
+        source_generation: u64,
+        owner: OfflineRequestOwner,
+        tx: Sender<LoaderEvent>,
+    ) -> Result<OfflineAnalysisJob, String> {
+        if reader.guard.as_ref().is_some_and(|guard| {
+            !guard.current() || guard.generation != source_generation || guard.rate != rate
+        }) {
+            return Err("complete analysis source assignment changed before admission".into());
+        }
+        self.begin_input(
+            id,
+            reader.reference.clone(),
+            rate,
+            source_generation,
+            owner,
+            tx,
+            Some(reader),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)] // Existing offline identity + owner remain explicit at admission.
+    fn begin_input(
+        &self,
+        id: usize,
+        sample: SampleBuffer,
+        rate: u32,
+        source_generation: u64,
+        owner: OfflineRequestOwner,
+        tx: Sender<LoaderEvent>,
+        reader: Option<CompleteSourceReader>,
     ) -> Result<OfflineAnalysisJob, String> {
         let OfflineRequestOwner {
             request_ids,
@@ -73,11 +114,7 @@ impl OfflineJobs {
         if self.busy.load(Ordering::Acquire) {
             return Err("offline analysis busy (running or retiring)".into());
         }
-        let frames = sample
-            .samples
-            .len()
-            .checked_div(sample.channels)
-            .unwrap_or(0);
+        let frames = sample.frame_count();
         let identity = PcmIdentity {
             pad_id: id,
             request_id: current_pad_request_id(&request_ids, id)?,
@@ -85,15 +122,30 @@ impl OfflineJobs {
             source_generation,
         };
         // Validate before changing accepted request intent.
-        let snapshot = LoadedPcmSnapshot::new(sample, rate, identity.clone(), MAX_PCM_BYTES)
-            .map_err(|e| e.to_string())?;
-        let staging = snapshot.staging_plan().map_err(|e| e.to_string())?;
+        let source_guard = reader.as_ref().and_then(|reader| reader.guard.clone());
+        let complete_source = sample.residency.as_ref().map(|view| view.source.clone());
+        let snapshot = if let Some(reader) = reader {
+            if sample
+                .residency
+                .as_ref()
+                .is_some_and(|view| view.source.sample_rate_hz != rate)
+            {
+                return Err("complete analysis rate differs from immutable source".into());
+            }
+            OfflineInput::Complete(Box::new(reader))
+        } else {
+            OfflineInput::Loaded(
+                LoadedPcmSnapshot::new(sample, rate, identity.clone(), MAX_PCM_BYTES)
+                    .map_err(|e| e.to_string())?,
+            )
+        };
+        let staging = snapshot.staging_plan(rate)?;
         if staging.export_peak_bytes.max(staging.key_peak_bytes) > MAX_PCM_BYTES
             || staging.export_bytes > MAX_PCM_BYTES
         {
             return Err("offline analysis PCM byte limit exceeded".into());
         }
-        let retained_bytes = snapshot.retained_bytes();
+        let retained_bytes = snapshot.retained_bytes()?;
         let request_id = next_pad_request_id(&request_ids, id, &prepared_epoch)?;
         let identity = PcmIdentity {
             request_id,
@@ -113,6 +165,8 @@ impl OfflineJobs {
             pcm_retired: AtomicBool::new(false),
             request_ids,
             prepared_epoch,
+            source_guard,
+            complete_source,
             tx,
             cancelled: AtomicBool::new(false),
             preparing: AtomicBool::new(false),
@@ -131,13 +185,73 @@ impl OfflineJobs {
     }
 }
 
+enum OfflineInput {
+    Loaded(LoadedPcmSnapshot),
+    Complete(Box<CompleteSourceReader>),
+}
+
+impl OfflineInput {
+    fn retained_bytes(&self) -> Result<usize, String> {
+        match self {
+            Self::Loaded(snapshot) => Ok(snapshot.retained_bytes()),
+            Self::Complete(reader) => reader.held_bytes(),
+        }
+    }
+    fn source_channels(&self) -> usize {
+        match self {
+            Self::Loaded(snapshot) => snapshot.source_channels(),
+            Self::Complete(reader) => reader.reference.channels,
+        }
+    }
+    fn staging_plan(&self, rate: u32) -> Result<PcmStagingPlan, String> {
+        match self {
+            Self::Loaded(snapshot) => snapshot.staging_plan().map_err(|e| e.to_string()),
+            Self::Complete(reader) => {
+                let mut plan =
+                    staging_plan(reader.held_bytes()?, reader.reference.frame_count(), rate)
+                        .map_err(|e| e.to_string())?;
+                plan.export_peak_bytes = reader.admit_scan(MAX_PCM_BYTES, 0)?;
+                Ok(plan)
+            }
+        }
+    }
+    fn stream_f32_le(
+        &self,
+        output: &mut File,
+        max_working_bytes: usize,
+        max_export_bytes: usize,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<(), String> {
+        match self {
+            Self::Loaded(snapshot) => snapshot
+                .stream_f32_le(output, max_working_bytes, max_export_bytes, cancelled)
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            Self::Complete(reader) => {
+                reader.admit_scan(max_working_bytes, 0)?;
+                if reader
+                    .reference
+                    .frame_count()
+                    .checked_mul(4)
+                    .is_none_or(|n| n > max_export_bytes)
+                {
+                    return Err("complete analysis export byte limit exceeded".into());
+                }
+                reader
+                    .stream_mono(output, cancelled)
+                    .map_err(|e| e.to_string())
+            }
+        }
+    }
+}
+
 struct JobState {
     identity: PcmIdentity,
     rate: u32,
     frames: usize,
     channels: usize,
     staging: PcmStagingPlan,
-    snapshot: Mutex<Option<LoadedPcmSnapshot>>,
+    snapshot: Mutex<Option<OfflineInput>>,
     staged_pcm: Mutex<Option<File>>,
     retained_source_bytes: AtomicUsize,
     observed_export_peak_bytes: AtomicUsize,
@@ -145,6 +259,8 @@ struct JobState {
     pcm_retired: AtomicBool,
     request_ids: Arc<Mutex<Vec<u64>>>,
     prepared_epoch: Arc<AtomicU64>,
+    source_guard: Option<CompleteSourceGuard>,
+    complete_source: Option<Arc<CompleteSourceIdentity>>,
     tx: Sender<LoaderEvent>,
     cancelled: AtomicBool,
     preparing: AtomicBool,
@@ -188,6 +304,10 @@ impl JobState {
 
     fn cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
+            || self
+                .source_guard
+                .as_ref()
+                .is_some_and(|guard| !guard.current())
             || !pad_request_matches(
                 &self.request_ids,
                 self.identity.pad_id,
@@ -335,6 +455,10 @@ impl JobState {
             .lock()
             .map_err(|_| "request lock poisoned")?;
         let accepted = !self.cancelled.load(Ordering::Acquire)
+            && self
+                .source_guard
+                .as_ref()
+                .is_none_or(|guard| guard.current())
             && requests.get(self.identity.pad_id) == Some(&self.identity.request_id);
         if accepted {
             let _ = self.tx.send(LoaderEvent::OfflineAnalysisCompleted {
@@ -503,6 +627,19 @@ impl OfflineAnalysisJob {
         dict.set_item("channels", self.state().channels)?;
         dict.set_item("origin_seconds", 0.0)?;
         dict.set_item("mono_rule", MONO_RULE)?;
+        if let Some(source) = self.state().complete_source.as_ref() {
+            let digest = |bytes: &[u8; 32]| {
+                bytes
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            };
+            dict.set_item("complete_source_identity", digest(&source.transform_sha256))?;
+            dict.set_item("original_sha256", digest(&source.original_sha256))?;
+            dict.set_item("complete_playback_sha256", digest(&source.playback_sha256))?;
+            dict.set_item("complete_mono_sha256", digest(&source.mono_sha256))?;
+            dict.set_item("source_zero_frame", source.source_zero_frame)?;
+        }
         Ok(dict.into_any().unbind())
     }
     pub fn prepare_export(&self, py: Python<'_>, path: String) -> PyResult<()> {

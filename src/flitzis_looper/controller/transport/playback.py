@@ -1,4 +1,3 @@
-import math
 from typing import TYPE_CHECKING
 
 from flitzis_looper.controller.transport.global_playback import GlobalPlaybackController
@@ -83,21 +82,31 @@ class PadPlaybackController:
         exclusive: bool = False,
         received_at_ns: int | None = None,
     ) -> None:
-        start_s, end_s = self._loop.effective_region(sample_id)
-        self._audio.set_pad_loop_region(sample_id, start_s, end_s)
+        start_s, end_s = self._loop.requested_region(sample_id)
         play = self._audio.play_sample_exclusive if exclusive else self._audio.play_sample
-        if received_at_ns is None:
-            play(sample_id, 1.0)
-        else:
-            play(sample_id, 1.0, received_at_ns=received_at_ns)
+        self._transport.residency.start(
+            sample_id,
+            start_s,
+            end_s,
+            lambda: (
+                play(sample_id, 1.0)
+                if received_at_ns is None
+                else play(sample_id, 1.0, received_at_ns=received_at_ns)
+            ),
+            prepared_play=lambda ticket: self._audio.play_resident_control(
+                ticket, exclusive=exclusive, received_at_ns=received_at_ns
+            ),
+        )
 
     def stop_pad(self, sample_id: int) -> None:
         """Stop a pad if it is currently active."""
         validate_sample_id(sample_id)
-        if sample_id not in self._session.active_sample_ids:
+        queued = self._transport.residency.cancel_launch(sample_id)
+        if sample_id not in self._session.active_sample_ids and not queued:
             return
 
         self._audio.stop_sample(sample_id)
+        self._transport.residency.cancel_requested(sample_id)
         self._forget_global_start_stop_restore()
 
     def stop_all_pads(self, *, received_at_ns: int | None = None) -> None:
@@ -156,12 +165,7 @@ class PadPlaybackController:
             return
 
         target_s = max(0.0, float(position_s))
-        duration_s = self._project.sample_durations[sample_id]
-        if duration_s is not None and math.isfinite(duration_s) and duration_s >= 0.0:
-            target_s = min(target_s, float(duration_s))
-
-        self._audio.seek_sample(sample_id, target_s)
-        self._session.pad_playhead_s[sample_id] = target_s
+        self._transport.residency.seek(sample_id, target_s)
 
     def handle_sample_started_message(self, msg: AudioMessage.SampleStarted) -> None:
         pad_id = msg.sample_id()

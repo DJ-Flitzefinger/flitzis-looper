@@ -1,11 +1,12 @@
 # Complete PCM cache and finite loop residency
 
-Status: C1a/C1b cold/warm loading and C2a finite saved-loop residency, 2026-10-07.
+Status: C1a/C1b cold/warm loading, C2a finite saved-loop residency and C2b control
+readiness, 2026-10-07.
 The existing `AudioEngine.load_sample_async` now runs the copy-first path below.
 Validated warm reuse and last-owner lifecycle remain authoritative. C2a separates
 complete source authority from resident storage and restores saved finite loops.
-C2b's complete control/readiness matrix and C3's measured startup/RAM acceptance
-remain pending; no startup/RAM or device/listening acceptance is claimed.
+C3's measured startup/RAM acceptance remains pending; no startup/RAM or
+device/listening acceptance is claimed.
 The active [OpenSpec change](../openspec/changes/cache-full-pcm-and-resident-loops/proposal.md)
 contains the remaining contracts and bounded implementation tasks.
 
@@ -324,22 +325,16 @@ publishes the resident fence and acknowledges. Control reconciliation observes
 ACK without driving audio progression. Complete-source identities/reader records
 remain within the existing bounded ownership registry.
 
-C2a does not claim the full C2b readiness/control/editor/analysis/nonresident-seek/
-ALL matrix. Unprepared context cannot silently become missing-sample output:
-admission or native guards preserve effective audio. The next slice prepares
-those complete-source exceptions and finishes shared control routing. C3 still
+C2a supplied the saved-loop foundation. C2b adds the control/editor/analysis/
+nonresident-seek/ALL matrix below. Unprepared context cannot silently become
+missing-sample output: admission or native guards preserve effective audio. C3 still
 must measure actual 200-pad startup/RAM/I/O/CPU, fallback cost and lifecycle;
 source/window byte counts alone are not those measurements. Hearing and devices
 remain open until the final human-run acceptance stage.
 
-The current finite view renders waveform requests only when their complete-source
-range is resident, preserving absolute x coordinates. Wider navigation/waveform,
-complete-source legacy/offline analysis and nonresident seeks report unavailable
-instead of analyzing or labeling a cropped source as complete. Existing complete
-views keep their source-end seek clamping. Saved Automatic geometry is only a
-hint: unsupported complete evidence cannot establish CURRENT, and a changed
-fresh loop outside the window requires C2b preparation. The isolated productive
-probes and their invocation are recorded in [development](development.md).
+Saved Automatic geometry remains only a hint: unsupported complete evidence
+cannot establish CURRENT. The isolated productive probes and their invocation
+are recorded in [development](development.md).
 
 The productive 600-second PCM24 fixture restores the saved absolute 42.0–42.5
 second loop as 24,000 stereo frames: 192,000 resident PCM bytes, while complete
@@ -353,6 +348,117 @@ These are logical PCM/integrity byte proofs, not measured process RAM or startup
 performance. The separate productive five-file stem probe checks complete-set
 identity, finite component geometry and bit-exact active continuation across
 native window ACK and cancellation; it does not evaluate separation quality.
+
+## Complete access and acknowledged controls (C2b)
+
+`complete_context::CompleteSourceReader` captures the immutable complete playback
+descriptor, current source generation/rate and sealed committed lease. A finite
+playback window remains the alignment/identity reference, never the complete
+analysis input. Waveform projection and offline mono export stream fixed chunks
+from the retained sealed reader; source zero, full end, binary64 X coordinates
+and exact sample zoom remain absolute. The lease stays owned through the actual
+visitor/read return even after cancellation or unload. These reads do not seek
+audio or retain a hidden complete playback allocation.
+
+Wider waveform views share the existing two-worker/32-reservation lane. There is
+one latest projected result per pad, at most 16384 columns, 48-KiB reader scratch
+and no complete
+PCM result cache. View supersession rejects older results. The editor shows
+pending/error and continues polling the same requested view. A failed identical
+view stays terminal until explicit Retry or a new view/source. Normal complete
+analysis uses that bounded lane with the existing complete conversion/analyzer
+admission under 1 GiB per job. The optional diagnostic export/key route retains
+its separate one-job/512-MiB staging policy and explicit analyzer/rate identities.
+Neither route changes the analyzer default or promotes historical timing.
+
+`prepare_resident_control` prepares source-bound loop, seek and Key Lock intent
+under one native transaction. It admits queue and PCM capacity before replacing
+pending ownership. Full mix and an already accepted identical complete StemSet
+are prepared together; callback guards recheck complete source, actual window,
+request/source epoch, timing authority and latest intent. The old effective
+handles, loop and processing state remain valid until actual native ACK. The
+callback reserves retirement/feedback capacity before claiming and changing
+state. Preparation, large owners and file readers retire off-thread.
+
+Normal finite loop edits use the exact proved physical tap interval. ALL admits
+complete playback. Nonresident seeks admit complete context so physical intro
+and tail continue to the existing loop/full-source boundary. Source-end clamping
+retains the exclusive full frame endpoint; the next read wraps. A paused seek
+stays paused and a stopped seek does not start or request complete PCM. A voice
+pinned to a prior source retains its own source extent, timing and frozen
+stem selection/transition. A preallocated one-slot handoff captures that actual
+voice before the worker acquires its older sealed source lease. A nonresident
+seek prepares that source and the identical old complete StemSet, then rechecks
+voice generation, window and timing at ACK. It replaces only that voice's reader;
+the new bank's window, stem set, selection and timing remain intact. Key Lock uses
+the labelled admitted full-track exception while finite continuation is unproved.
+Same-source storage relocation retains actual native/FIFO/filter/rate history;
+a real seek or discontinuous loop clamp preserves the existing invalidation rules.
+
+A seek whose actual pinned reader already covers the proved target and future
+loop read set is acknowledged directly by the bounded capture command; it keeps
+the same PCM Arc and performs no complete-source read or copy. A covered seek
+still resets the existing discontinuity history and obeys cancellation/retirement
+capacity before adoption.
+
+The Python `ResidencyController` is the shared UI/MIDI/control readiness path.
+Durable project fields record requested intent; `effective_region` retains the
+previous acknowledged region while preparing. Error or cancellation restores
+only that still-current intent, never a newer assignment or timing authority.
+Per-pad latest tickets have eight admission/launch attempts and a 30-second
+deadline; a claimed predecessor is observed before a newer attempt. A claimed
+native tail cannot be rolled back. A deadline exposes unconfirmed ownership and
+revokes its waiting launch until actual completion is observed. Freshness requires actual source generation,
+authority, unique latest intent and adopted window, rather than ACK alone.
+
+Prepared UI starts retain their original input timestamp. MIDI fallback uses
+the same preparation and then refreshes its native current-source guard before
+launch. `play_resident_control` carries the acknowledged ticket's opaque source,
+window and timing binding through the existing queued/scheduled trigger. Execution
+rechecks that binding and latest intent before an exclusive start can stop other
+pads. A MIDI runtime refresh alone cannot invalidate a prepared UI launch.
+GLOBAL START retains one complete source-bound batch until pending
+regions settle and retries batch queue pressure within eight attempts/30 seconds.
+A newer global gesture replaces the earlier timestamp. STOP cancels pending
+launches even before a voice becomes active. A bounded per-pad stop revision
+fences queued and scheduled UI/MIDI triggers and global START entries, separately
+from complete source/window authority. Native STOP admission advances it only
+after queue capacity is reserved; later starts capture the fresh revision.
+The controller retains one admitted launch ticket per pad for exact cancellation;
+its launch flag cannot revoke a newer ticket or undo an acknowledged window.
+GLOBAL STOP includes pending START targets whose claimed callback tail may not
+have reached UI telemetry yet, then queues STOP behind that tail. Fixed native
+admitted-start records also supply direct MIDI targets before input or active
+feedback is observed. STOP captures these targets and revokes their launch
+revisions under the same producer admission mutex used by UI/MIDI/global
+starts, so an earlier independent scan cannot miss a claimed start.
+Cancellation alone retains targets until ordered STOP admission. STOP metadata
+may cover all 216 pad assignments while START retains the 32-voice limit and
+existing retirement reservations. Shutdown disables mapped MIDI before launch
+revocation and Python/native worker joins. A previously captured mapping rechecks
+that enabled state under producer admission; the saved input preference remains
+unchanged. This mutex is used only in the control path. Native shutdown closes
+cold-lane admission and drains queued ownership before cancellation releases
+active workers, so they cannot start a queued job on their way to the join.
+GLOBAL STOP preserves its existing current-source binding guards: an old pinned
+voice whose source differs from the current bank still rejects the whole batch.
+The existing single-pad STOP remains available for that pinned voice.
+Unload/shutdown cancels continuations. Failed post-ACK launch admission reports
+an error while keeping the acknowledged loop/source; transient queue pressure
+has bounded retries. New complete stem generation/adoption remains inactive-only.
+
+After direct bank replacement, a loop preparation with unchanged Key Lock may
+acknowledge the new bank while a prior-source voice keeps its frozen loop and
+stem view. The guarded retrigger switches to the new bank and retires the old
+voice off-thread. A changed Key Lock request with that unmatched finite voice
+reports unavailable rather than changing its unprepared processing context.
+
+Hardware-free proofs exercise actual worker admission, native command drain,
+ACK, complete/window/source identity, independent full-buffer PCM and finite
+output, lifecycle and off-thread retirement. Accepted musical P and integer H
+remain separate, with the existing <=1-loaded-frame 75/1000-cycle gate. Resource
+limits and logical resident bytes are not C3 process-RAM or startup measurements.
+The 200-pad measurement and actual human/device acceptance remain separate.
 
 ## Preliminary C1b integrity measurements
 

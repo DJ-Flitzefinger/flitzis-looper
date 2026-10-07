@@ -45,13 +45,13 @@
 
 ## C2b: readiness and all existing controls
 
-- [ ] Preserve full-source waveform/navigation/analysis with bounded complete-source
+- [x] Preserve full-source waveform/navigation/analysis with bounded complete-source
   leases; expose pending/error without moving source zero or timing/labels.
-- [ ] Prepare finite window/ALL/outside-loop-seek transitions with old audio valid
+- [x] Prepare finite window/ALL/outside-loop-seek transitions with old audio valid
   until guarded adoption ACK; preserve intro/tail-wrap and paused/stopped seek.
-- [ ] Route UI/MIDI/control intents through one transaction behavior, including
+- [x] Route UI/MIDI/control intents through one transaction behavior, including
   stale intent/unload/error/queue pressure and off-thread retirement.
-- [ ] Prove full-buffer parity, accepted P versus physical H, <=1-loaded-frame
+- [x] Prove full-buffer parity, accepted P versus physical H, <=1-loaded-frame
   long-cycle bounds, fractional rate/Key Lock/stems and actual lifecycle; full checks.
 
 ## C3: measured acceptance

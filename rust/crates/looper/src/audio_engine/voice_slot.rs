@@ -4,9 +4,20 @@ use crate::audio_engine::key_lock_preparation::KeyLockPreparationLane;
 use crate::audio_engine::source_grid::SourceGrid;
 use crate::audio_engine::source_playback::SourcePlayback;
 pub(crate) use crate::audio_engine::source_reader::ExplicitSeekMode;
-use crate::audio_engine::source_reader::{FrameRange, SourceLoopDomain};
+use crate::audio_engine::source_reader::{
+    FrameRange, SourceLoopDomain, StemRenderSelection, StemTransition,
+};
 use crate::audio_engine::stretch_processor::StretchProcessor;
-use crate::messages::SampleBuffer;
+use crate::messages::{PreparedStemSet, SampleBuffer};
+
+/// The effective source selection follows an old PCM pin across bank replacement.
+/// The set uses existing immutable Arcs; capture does not allocate on the callback.
+#[derive(Clone, Debug)]
+pub(crate) struct FrozenStemView {
+    pub(crate) set: Option<PreparedStemSet>,
+    pub(crate) selection: StemRenderSelection,
+    pub(crate) transition: StemTransition,
+}
 
 pub(crate) struct VoiceStartConfig {
     pub(crate) sample_id: usize,
@@ -73,6 +84,8 @@ pub struct VoiceSlot {
     pub(crate) source_timing: VoiceSourceTiming,
     /// Frozen only when this voice keeps an old source after bank replacement.
     pub(crate) source_loop_region: Option<FrameRange>,
+    pub(crate) frozen_stems: Option<FrozenStemView>,
+    pub(crate) generation: u64,
     pub stretch: StretchProcessor,
     pub paused: bool,
     pub(crate) explicit_seek_mode: ExplicitSeekMode,
@@ -92,6 +105,8 @@ impl VoiceSlot {
             source_playback: SourcePlayback::new(0, ExplicitSeekMode::Normal, 1.0),
             source_timing: VoiceSourceTiming::default(),
             source_loop_region: None,
+            frozen_stems: None,
+            generation: 0,
             stretch: StretchProcessor::with_preparation_lane(channels, preparation),
             paused: false,
             explicit_seek_mode: ExplicitSeekMode::Normal,
@@ -108,11 +123,13 @@ impl VoiceSlot {
         if let Some(old_sample) = self.sample.take() {
             retirement.retire_sample(old_sample);
         }
+        self.retire_frozen_stems(retirement);
 
         self.start_inner(config);
     }
 
     fn start_inner(&mut self, config: VoiceStartConfig) {
+        self.generation = self.generation.saturating_add(1);
         let VoiceStartConfig {
             sample_id,
             sample,
@@ -142,6 +159,7 @@ impl VoiceSlot {
     pub(crate) fn stop(&mut self) {
         self.stretch.reset();
         self.sample = None;
+        self.frozen_stems = None;
         self.stop_inner();
     }
 
@@ -150,11 +168,13 @@ impl VoiceSlot {
         if let Some(sample) = self.sample.take() {
             retirement.retire_sample(sample);
         }
+        self.retire_frozen_stems(retirement);
 
         self.stop_inner();
     }
 
     fn stop_inner(&mut self) {
+        self.generation = self.generation.saturating_add(1);
         self.active = false;
         self.frame_pos = 0;
         self.volume = 0.0;
@@ -165,13 +185,25 @@ impl VoiceSlot {
         self.explicit_seek_mode = ExplicitSeekMode::Normal;
     }
 
-    pub fn restart(
+    pub(crate) fn retire_frozen_stems(&mut self, retirement: &mut impl AudioBufferRetirement) {
+        if let Some(view) = self.frozen_stems.take()
+            && let Some(set) = view.set
+        {
+            retirement.retire_prepared_stems(set);
+        }
+    }
+
+    pub(crate) fn restart(
         &mut self,
         initial_frame_pos: usize,
         volume: f32,
         initial_tempo_ratio: f64,
         _start_output_frame: Option<u64>,
+        retirement: &mut impl AudioBufferRetirement,
     ) {
+        self.retire_frozen_stems(retirement);
+        self.source_loop_region = None;
+        self.generation = self.generation.saturating_add(1);
         self.frame_pos = initial_frame_pos;
         self.volume = volume;
         self.source_playback = SourcePlayback::new(
@@ -190,6 +222,7 @@ impl VoiceSlot {
         mode: ExplicitSeekMode,
         _output_frame: Option<u64>,
     ) {
+        self.generation = self.generation.saturating_add(1);
         self.frame_pos = frame_pos;
         self.explicit_seek_mode = mode;
         // Seek is an explicit discontinuity: retain rate, discard only the old source phase.

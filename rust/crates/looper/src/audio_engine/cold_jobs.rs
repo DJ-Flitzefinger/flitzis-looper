@@ -137,7 +137,8 @@ impl ColdJobs {
         Ok(())
     }
 
-    pub(super) fn shutdown(&mut self) {
+    /// Close worker claims before releasing active jobs through cancellation.
+    pub(super) fn close_admission(&self) {
         let queued = if let Ok(mut state) = self.shared.state.lock() {
             state.stopped = true;
             self.shared.ready.notify_all();
@@ -147,6 +148,16 @@ impl ColdJobs {
         };
         // Job destructors can take the admission mutex; drop outside that lock.
         drop(queued);
+    }
+
+    #[cfg(test)]
+    pub(super) fn counts_for_test(&self) -> (usize, usize, usize) {
+        let state = self.shared.state.lock().unwrap();
+        (state.active, state.jobs.len(), state.admitted)
+    }
+
+    pub(super) fn shutdown(&mut self) {
+        self.close_admission();
         for worker in self.workers.drain(..) {
             let _ = worker.join();
         }
@@ -206,6 +217,63 @@ mod tests {
             lane.reserve().err().as_deref(),
             Some("cold source lane stopped")
         );
+    }
+
+    #[test]
+    fn close_admission_retires_queued_ownership_before_active_jobs_are_released() {
+        struct QueuedOwner(Arc<AtomicUsize>);
+        impl Drop for QueuedOwner {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let mut lane = ColdJobs::new().unwrap();
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let (tx, rx) = mpsc::channel();
+        for _ in 0..WORKERS {
+            let (gate, tx) = (gate.clone(), tx.clone());
+            lane.submit(lane.reserve().unwrap(), move || {
+                tx.send(()).unwrap();
+                let mut open = gate.0.lock().unwrap();
+                while !*open {
+                    open = gate.1.wait(open).unwrap();
+                }
+            })
+            .unwrap();
+        }
+        for _ in 0..WORKERS {
+            rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        let ran = Arc::new(AtomicUsize::new(0));
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let owner = QueuedOwner(dropped.clone());
+        let ran_job = ran.clone();
+        lane.submit(lane.reserve().unwrap(), move || {
+            let _owner = owner;
+            ran_job.fetch_add(1, Ordering::SeqCst);
+        })
+        .unwrap();
+        let reserved_before_close = lane.reserve().unwrap();
+        assert_eq!(lane.counts_for_test(), (WORKERS, 1, WORKERS + 2));
+
+        // Active jobs remain held while queued job destructors release reservations.
+        lane.close_admission();
+        assert_eq!(lane.counts_for_test(), (WORKERS, 0, WORKERS + 1));
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+        assert_eq!(ran.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            lane.reserve().err().as_deref(),
+            Some("cold source lane stopped")
+        );
+        assert!(lane.submit(reserved_before_close, || {}).is_err());
+        assert_eq!(lane.counts_for_test(), (WORKERS, 0, WORKERS));
+
+        *gate.0.lock().unwrap() = true;
+        gate.1.notify_all();
+        lane.shutdown();
+        assert_eq!(lane.counts_for_test(), (0, 0, 0));
+        assert_eq!(ran.load(Ordering::SeqCst), 0);
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
     }
 
     #[test]

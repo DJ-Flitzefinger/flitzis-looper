@@ -10,6 +10,7 @@ use flitzis_looper_analysis::tempo_evidence::{
     BeatThisModelIdentity, BeatThisRawEvidence, BeatThisRequestIdentity,
 };
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 const QUARTERS: usize = 64;
 const TICKS_PER_QUARTER: u64 = 16;
@@ -114,16 +115,39 @@ fn accepted_mixer(case: Case) -> (AudioEngine, ConstantTimingTicket, RtMixer) {
         );
         samples[frame..frame + PULSE_FRAMES].fill(0.5);
     }
-    let sample = SampleBuffer {
+    let mut sample = SampleBuffer {
         residency: None,
         channels: 1,
         samples: Arc::from(samples),
-    };
+    }
+    .with_complete_source(case.sample_rate);
+    // Generated float32 bytes are this fixture's source, rather than an original
+    // audio file. Bind the actual complete content before evidence publication.
+    let generated_digest: [u8; 32] = sample
+        .samples
+        .iter()
+        .fold(Sha256::new(), |mut hash, sample| {
+            hash.update(sample.to_le_bytes());
+            hash
+        })
+        .finalize()
+        .into();
+    let generated_digest_hex = f32_pcm_sha256(&sample.samples);
+    let identity = Arc::get_mut(
+        &mut Arc::get_mut(sample.residency.as_mut().unwrap())
+            .unwrap()
+            .source,
+    )
+    .unwrap();
+    identity.original_sha256 = generated_digest;
+    identity.playback_sha256 = generated_digest;
+    identity.mono_sha256 = generated_digest;
+    identity.transform_sha256 = Sha256::digest(b"generated-mono-identity-f32le-v1").into();
     let engine = AudioEngine::new().unwrap();
     engine.sample_cache.lock().unwrap()[0] = Some(sample.clone());
     engine.pad_request_ids.lock().unwrap()[0] = 7;
     engine.loaded_source_generations.lock().unwrap()[0] = (7, case.sample_rate);
-    engine.loaded_source_digests.lock().unwrap()[0] = Some("a".repeat(64));
+    engine.loaded_source_digests.lock().unwrap()[0] = Some(generated_digest_hex.clone());
     engine.timing_intents.lock().unwrap()[0] = TimingIntent::Automatic;
     engine
         .input_runtime_ownership
@@ -140,7 +164,7 @@ fn accepted_mixer(case: Case) -> (AudioEngine, ConstantTimingTicket, RtMixer) {
                 source_id: "g3c-generated-source-0-7".into(),
                 source_generation: 7,
             },
-            source_sha256: "a".repeat(64),
+            source_sha256: generated_digest_hex.clone(),
             source_provenance: "synthetic generated PCM; no original-file lineage claim".into(),
             pcm_sha256: f32_pcm_sha256(&sample.samples),
             sample_rate_hz: case.sample_rate,
@@ -200,7 +224,7 @@ fn accepted_mixer(case: Case) -> (AudioEngine, ConstantTimingTicket, RtMixer) {
         request_id: 7,
         source_generation: 7,
         sample_rate_hz: case.sample_rate,
-        source_digest: "a".repeat(64),
+        source_digest: generated_digest_hex,
         sample: sample.clone(),
         epoch: engine.prepared_source_epochs[0].clone(),
         captured_epoch: engine.prepared_source_epochs[0].load(Ordering::Acquire),
@@ -733,3 +757,6 @@ fn actual_accepted_integer_musical_loops_preserve_exact_physical_positive_contro
     }
     export("generated-integer-rendered-proof.json", &rows);
 }
+
+#[path = "resident_long_cycle_tests.rs"]
+mod resident_long_cycle_tests;

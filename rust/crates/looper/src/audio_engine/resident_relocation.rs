@@ -2,17 +2,22 @@
 //! Complete file readers and all large allocations/destruction remain off callback.
 use super::AudioEngine;
 use super::cold_store::CommittedColdLease;
+use super::constant_timing::CurrentTimingAcknowledgements;
 use super::constants::NUM_SAMPLES;
-use super::input_runtime_binding::{self, InputRuntimePadBinding};
-use super::prepared_source::PreparedSourcePermit;
-use crate::messages::{ControlMessage, PreparedStemSet, ResidentContext, SampleBuffer};
+use super::input_runtime_binding::{
+    self, InputPadBinding, InputRuntimeOwnership, InputRuntimePadBinding,
+};
+use super::prepared_source::{PreparedSourcePermit, ResidentLaunchPermit};
+use crate::messages::{
+    ControlMessage, PreparedStemSet, ResidentContext, ResidentControlIntent, SampleBuffer,
+};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use rtrb::Producer;
 use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicU8, Ordering},
+    atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
 };
 use std::time::{Duration, Instant};
 
@@ -21,6 +26,13 @@ const ADOPTION_DEADLINE: Duration = Duration::from_secs(30);
 #[derive(Clone)]
 struct StemOwner {
     set: PreparedStemSet,
+    source_version: String,
+    cache_dir: PathBuf,
+    generation_path: PathBuf,
+}
+
+struct StemDescriptor {
+    identity: std::sync::Weak<[u8; 32]>,
     source_version: String,
     cache_dir: PathBuf,
     generation_path: PathBuf,
@@ -41,12 +53,64 @@ pub(super) struct ResidentStemCache {
     accepted: Option<StemOwner>,
     pending: Option<StemOwner>,
     relocation: Option<PendingWindow>,
+    intent_epoch: Arc<AtomicU64>,
+    history: Vec<StemDescriptor>,
+}
+
+impl ResidentStemCache {
+    fn remember(&mut self, owner: &StemOwner) -> PyResult<()> {
+        self.history
+            .retain(|entry| entry.identity.strong_count() > 0);
+        let identity = Arc::downgrade(&owner.set.complete_set_identity);
+        if self
+            .history
+            .iter()
+            .any(|entry| entry.identity.ptr_eq(&identity))
+        {
+            return Ok(());
+        }
+        if self.history.len() >= 128 {
+            return Err(PyRuntimeError::new_err(
+                "retained stem descriptor bound exceeded",
+            ));
+        }
+        self.history.push(StemDescriptor {
+            identity,
+            source_version: owner.source_version.clone(),
+            cache_dir: owner.cache_dir.clone(),
+            generation_path: owner.generation_path.clone(),
+        });
+        Ok(())
+    }
+
+    fn owner_for(&self, set: &PreparedStemSet) -> Option<StemOwner> {
+        if let Some(owner) = &self.accepted
+            && Arc::ptr_eq(&owner.set.complete_set_identity, &set.complete_set_identity)
+        {
+            let mut owner = owner.clone();
+            owner.set = set.clone();
+            return Some(owner);
+        }
+        let identity = Arc::downgrade(&set.complete_set_identity);
+        let descriptor = self
+            .history
+            .iter()
+            .find(|entry| entry.identity.ptr_eq(&identity))?;
+        Some(StemOwner {
+            set: set.clone(),
+            source_version: descriptor.source_version.clone(),
+            cache_dir: descriptor.cache_dir.clone(),
+            generation_path: descriptor.generation_path.clone(),
+        })
+    }
 }
 
 #[derive(Default)]
 struct WindowState {
     terminal: AtomicU8,
     error: Mutex<Option<String>>,
+    adopted_binding: Mutex<Option<InputPadBinding>>,
+    launch_cancelled: Arc<AtomicBool>,
 }
 
 impl WindowState {
@@ -63,6 +127,8 @@ impl WindowState {
 struct JobGuard {
     publication: PreparedSourcePermit,
     state: Arc<WindowState>,
+    id: usize,
+    ownership: Arc<InputRuntimeOwnership>,
     enqueued: bool,
 }
 
@@ -82,11 +148,36 @@ impl Drop for JobGuard {
                 "resident preparation cancelled before native enqueue".into(),
                 true,
             );
+            self.ownership
+                .finish_resident_control(self.id, self.publication.expected);
         }
     }
 }
 
 /// Native ACK is authoritative; polling cannot cause callback adoption.
+#[derive(Clone, Debug)]
+pub(crate) struct ResidentLaunchGuard {
+    // Resident permits contain only fixed atomic Arcs, never PCM,
+    // file/evidence leases or collections. Scheduling clones allocate nothing;
+    // rejection/execution drops only this bounded scalar metadata.
+    publication: ResidentLaunchPermit,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl PartialEq for ResidentLaunchGuard {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.publication.epoch, &other.publication.epoch)
+            && self.publication.expected == other.publication.expected
+            && Arc::ptr_eq(&self.cancelled, &other.cancelled)
+    }
+}
+
+impl ResidentLaunchGuard {
+    pub(crate) fn current(&self) -> bool {
+        !self.cancelled.load(Ordering::Acquire) && self.publication.current_accepted()
+    }
+}
+
 #[pyclass(frozen)]
 pub struct ResidentWindowTicket {
     publication: PreparedSourcePermit,
@@ -94,15 +185,103 @@ pub struct ResidentWindowTicket {
     #[pyo3(get)]
     window_revision: u64,
     #[pyo3(get)]
+    previous_window_revision: u64,
+    #[pyo3(get)]
     start_frame: usize,
     #[pyo3(get)]
     end_frame: usize,
     #[pyo3(get)]
     full_frame_count: usize,
+    id: usize,
+    source_generation: u64,
+    binding: InputPadBinding,
+    ownership: Arc<InputRuntimeOwnership>,
+    acknowledgements: Arc<CurrentTimingAcknowledgements>,
+    loop_region: Option<(f64, Option<f64>)>,
+}
+
+impl ResidentWindowTicket {
+    pub(super) fn launch_message(
+        &self,
+        exclusive: bool,
+        received_at_ns: u64,
+    ) -> Option<ControlMessage> {
+        if self.publication.status() != "accepted"
+            || !self.is_current()
+            || self.state.launch_cancelled.load(Ordering::Acquire)
+        {
+            return None;
+        }
+        let (start_s, end_s) = self.loop_region?;
+        let launch_revision = self.ownership.launch_revision(self.id);
+        if !self.ownership.launch_current(self.id, launch_revision) {
+            return None;
+        }
+        let binding = if self.publication.preserved_window() {
+            self.binding
+        } else {
+            (*self.state.adopted_binding.lock().ok()?)?
+        };
+        Some(ControlMessage::TriggerInputPad {
+            id: self.id,
+            start_s,
+            end_s,
+            exclusive,
+            binding,
+            received_at_ns,
+            resident_control: Some(ResidentLaunchGuard {
+                publication: self.publication.resident_launch_permit()?,
+                cancelled: self.state.launch_cancelled.clone(),
+            }),
+            launch_revision,
+        })
+    }
+}
+
+pub(super) fn launch_with_producer(
+    engine: &AudioEngine,
+    ticket: &ResidentWindowTicket,
+    exclusive: bool,
+    received_at_ns: u64,
+    producer: &Arc<Mutex<Producer<ControlMessage>>>,
+) -> PyResult<bool> {
+    if !Arc::ptr_eq(&ticket.ownership, &engine.input_runtime_ownership) {
+        return Ok(false);
+    }
+    let mut producer = producer
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
+    if producer.is_full() {
+        return Err(PyRuntimeError::new_err("resident command queue is full"));
+    }
+    let Some(message) = ticket.launch_message(exclusive, received_at_ns) else {
+        return Ok(false);
+    };
+    engine
+        .input_runtime_ownership
+        .mark_launch_admitted(ticket.id);
+    producer
+        .push(message)
+        .map_err(|_| PyRuntimeError::new_err("resident command queue is full"))?;
+    Ok(true)
 }
 
 #[pymethods]
 impl ResidentWindowTicket {
+    /// Revoke this ticket's starts while preserving its acknowledged window.
+    /// The flag belongs only to this ticket, so stale cancellation cannot affect a newer owner.
+    pub fn cancel_launch(&self) -> bool {
+        !self.state.launch_cancelled.swap(true, Ordering::AcqRel)
+    }
+
+    /// The adopted target comes from the actual voice's complete native extent.
+    #[getter]
+    pub fn effective_seek_seconds(&self) -> Option<f64> {
+        (self.publication.status() == "accepted")
+            .then(|| self.publication.resident_seek_seconds())
+            .flatten()
+    }
+
     pub fn publication_status(&self) -> &'static str {
         match self.state.terminal.load(Ordering::Acquire) {
             1 => "failed",
@@ -122,12 +301,40 @@ impl ResidentWindowTicket {
             .map_err(|_| PyRuntimeError::new_err("resident error lock poisoned"))
     }
 
+    /// An ACK alone cannot promote a ticket after unload, replacement or a newer intent.
+    pub fn is_current(&self) -> bool {
+        let binding =
+            if self.publication.status() == "accepted" && !self.publication.preserved_window() {
+                let Ok(adopted) = self.state.adopted_binding.lock() else {
+                    return false;
+                };
+                let Some(binding) = *adopted else {
+                    return false;
+                };
+                binding
+            } else {
+                self.binding
+            };
+        self.publication.current()
+            && self.ownership.authority_current(self.id, binding)
+            && self.ownership.binding_source_generation(self.id, binding)
+                == Some(self.source_generation)
+            && self.ownership.binding_window_current(self.id, binding)
+            && self.acknowledgements.current_epoch(self.id)
+                == binding
+                    .accepted
+                    .map_or(0, |accepted| accepted.publication_epoch)
+            && self.publication.current()
+    }
+
     /// A claimed callback tail cannot be cancelled or rolled back by metadata.
     pub fn cancel(&self) -> bool {
         let cancelled = self.publication.cancel_unclaimed();
         if cancelled {
             self.state
                 .fail("resident preparation cancelled".into(), true);
+            self.ownership
+                .finish_resident_control(self.id, self.publication.expected);
         }
         cancelled
     }
@@ -169,13 +376,16 @@ pub(super) fn cancel_all(engine: &AudioEngine) -> PyResult<()> {
         .resident_stem_cache
         .lock()
         .map_err(|_| PyRuntimeError::new_err("resident ownership lock poisoned"))?;
-    for owner in owners.iter() {
+    for (id, owner) in owners.iter().enumerate() {
         if let Some(pending) = &owner.relocation
             && pending.publication.cancel_unclaimed()
         {
             pending
                 .state
                 .fail("resident preparation cancelled by shutdown".into(), true);
+            engine
+                .input_runtime_ownership
+                .finish_resident_control(id, pending.publication.expected);
         }
     }
     Ok(())
@@ -194,7 +404,12 @@ pub(super) fn reconcile_under_request_lock(engine: &AudioEngine) -> PyResult<()>
         let owner = &mut owners[id];
         if let Some(pending) = owner.pending.as_ref() {
             match pending.set.publication.status() {
-                "accepted" => owner.accepted = owner.pending.take(),
+                "accepted" => {
+                    if let Some(old) = owner.accepted.clone() {
+                        owner.remember(&old)?;
+                    }
+                    owner.accepted = owner.pending.take();
+                }
                 "rejected" => {
                     owner.pending = None;
                 }
@@ -211,6 +426,9 @@ pub(super) fn reconcile_under_request_lock(engine: &AudioEngine) -> PyResult<()>
             }
             let status = pending.publication.status();
             if status == "accepted" {
+                engine
+                    .input_runtime_ownership
+                    .finish_resident_control(id, pending.publication.expected);
                 let current = pending.sample.as_ref().is_some_and(|next| {
                     cache[id].as_ref().is_some_and(|sample| {
                         sample.same_source(next)
@@ -218,7 +436,7 @@ pub(super) fn reconcile_under_request_lock(engine: &AudioEngine) -> PyResult<()>
                     })
                 });
                 let pending = owner.relocation.take().expect("checked pending window");
-                if current {
+                if current && !pending.publication.preserved_window() {
                     cache[id] = pending.sample;
                     if let Some(accepted) = &mut owner.accepted
                         && let Some(stems) = pending.stems
@@ -227,6 +445,9 @@ pub(super) fn reconcile_under_request_lock(engine: &AudioEngine) -> PyResult<()>
                     }
                 }
             } else if status == "rejected" {
+                engine
+                    .input_runtime_ownership
+                    .finish_resident_control(id, pending.publication.expected);
                 owner.relocation = None;
             }
         }
@@ -239,6 +460,9 @@ pub(super) fn reconcile_under_request_lock(engine: &AudioEngine) -> PyResult<()>
                     .is_some_and(|stem| sample.same_source(stem))
             })
         }) {
+            if let Some(old) = owner.accepted.clone() {
+                owner.remember(&old)?;
+            }
             owner.accepted = None;
         }
     }
@@ -248,10 +472,14 @@ pub(super) fn reconcile_under_request_lock(engine: &AudioEngine) -> PyResult<()>
 struct WindowWork {
     id: usize,
     old: SampleBuffer,
+    bank: SampleBuffer,
+    seek_receiver: Option<rtrb::Consumer<super::resident_seek::ResidentSeekPin>>,
+    seek_pin: Option<super::resident_seek::ResidentSeekPin>,
     start: usize,
     end: usize,
     revision: u64,
     context: ResidentContext,
+    intent: ResidentControlIntent,
     request: u64,
     binding: InputRuntimePadBinding,
     source_lease: CommittedColdLease,
@@ -267,6 +495,37 @@ struct WindowWork {
     cancelled: Arc<std::sync::atomic::AtomicBool>,
 }
 
+fn admitted_window_peak(
+    old: &SampleBuffer,
+    start: usize,
+    end: usize,
+    with_stems: bool,
+) -> Result<usize, String> {
+    let frames = old.frame_count();
+    let full_bytes = frames
+        .checked_mul(old.channels)
+        .and_then(|n| n.checked_mul(4))
+        .ok_or("resident PCM geometry overflow")?;
+    let window_bytes = (end - start)
+        .checked_mul(old.channels)
+        .and_then(|n| n.checked_mul(4))
+        .ok_or("resident PCM geometry overflow")?;
+    let peak = if with_stems {
+        super::stem_cache::admitted_stem_pcm_bytes(frames, old.channels)?
+            .checked_add(window_bytes)
+            .ok_or("resident PCM overlap overflow")?
+    } else {
+        full_bytes
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(window_bytes))
+            .ok_or("resident PCM overlap overflow")?
+    };
+    if peak > super::cold_jobs::PCM_LIMIT_BYTES {
+        return Err("resident preparation exceeds the 1-GiB transient PCM admission".into());
+    }
+    Ok(peak)
+}
+
 impl WindowWork {
     fn current(&self) -> bool {
         !self.cancelled.load(Ordering::Acquire)
@@ -274,33 +533,63 @@ impl WindowWork {
             && self.binding.current()
     }
 
-    fn prepare(&self) -> Result<(), String> {
+    fn prepare(&mut self) -> Result<(), String> {
+        if let Some(mut receiver) = self.seek_receiver.take() {
+            let deadline = Instant::now() + ADOPTION_DEADLINE;
+            let pin = loop {
+                if self.publication.status() == "accepted" {
+                    return Ok(());
+                }
+                if !self.current() {
+                    return Err("resident seek capture was cancelled or superseded".into());
+                }
+                if let Ok(pin) = receiver.pop() {
+                    break pin;
+                }
+                if Instant::now() >= deadline {
+                    return Err("resident seek capture deadline expired".into());
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            };
+            if !pin.sample.same_source(&self.bank) {
+                self.source_lease = self
+                    .assets
+                    .cold_lease_for_reader(&pin.sample)
+                    .map_err(|error| error.to_string())?;
+                self.old = pin.sample.clone();
+                self.stem_owner = pin
+                    .stems
+                    .as_ref()
+                    .map(|set| {
+                        self.owners
+                            .lock()
+                            .map_err(|_| "resident ownership lock poisoned".to_string())?[self.id]
+                            .owner_for(set)
+                            .ok_or_else(|| {
+                                "captured stem set has no retained immutable descriptor".to_string()
+                            })
+                    })
+                    .transpose()?;
+                self.seek_pin = Some(pin.clone());
+                self.revision = self
+                    .old
+                    .window_revision()
+                    .checked_add(1)
+                    .ok_or("voice window revision exhausted")?;
+            }
+            self.start = 0;
+            self.end = self.old.frame_count();
+            self.context = if pin.key_lock {
+                ResidentContext::KeyLockFullTrack
+            } else {
+                ResidentContext::FullTrack
+            };
+        }
         if !self.current() {
             return Err("resident source/window was superseded".into());
         }
         let frames = self.old.frame_count();
-        let full_bytes = frames
-            .checked_mul(self.old.channels)
-            .and_then(|n| n.checked_mul(4))
-            .ok_or("resident PCM geometry overflow")?;
-        let window_bytes = (self.end - self.start)
-            .checked_mul(self.old.channels)
-            .and_then(|n| n.checked_mul(4))
-            .ok_or("resident PCM geometry overflow")?;
-        let peak = if self.stem_owner.is_some() {
-            // New finite fullmix persists while complete stems are read/aligned/cropped.
-            super::stem_cache::admitted_stem_pcm_bytes(frames, self.old.channels)?
-                .checked_add(window_bytes)
-                .ok_or("resident PCM overlap overflow")?
-        } else {
-            full_bytes
-                .checked_mul(2)
-                .and_then(|n| n.checked_add(window_bytes))
-                .ok_or("resident PCM overlap overflow")?
-        };
-        if peak > super::cold_jobs::PCM_LIMIT_BYTES {
-            return Err("resident preparation exceeds the 1-GiB transient PCM admission".into());
-        }
+        admitted_window_peak(&self.old, self.start, self.end, self.stem_owner.is_some())?;
         let complete = if self.old.resident_start() == 0 && self.old.resident_end() == frames {
             self.old.clone()
         } else {
@@ -335,7 +624,10 @@ impl WindowWork {
                     return Err("complete accepted stem set changed".into());
                 }
                 set.complete_set_identity = owner.set.complete_set_identity.clone();
-                set.accepted_timing = self.binding.binding.accepted;
+                set.accepted_timing = self
+                    .seek_pin
+                    .as_ref()
+                    .map_or(self.binding.binding.accepted, |pin| pin.timing.accepted);
                 set.publication = owner.set.publication.clone();
                 let set = set.window_for(&sample)?;
                 self.assets
@@ -345,6 +637,27 @@ impl WindowWork {
             })
             .transpose()?;
         drop(complete);
+        // Preparation owns the already-admitted payload while the realtime command
+        // lane is briefly full. Retry is bounded, off-thread and cancellable.
+        for attempt in 0..8 {
+            if !self.current() {
+                return Err(
+                    "resident preparation superseded while waiting for command capacity".into(),
+                );
+            }
+            if !self
+                .producer
+                .lock()
+                .map_err(|_| "producer lock poisoned")?
+                .is_full()
+            {
+                break;
+            }
+            if attempt == 7 {
+                return Err("resident command queue is full".into());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
         let requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
         let cache = self
             .cache
@@ -354,7 +667,7 @@ impl WindowWork {
             || !self.current()
             || !cache[self.id]
                 .as_ref()
-                .is_some_and(|current| current.same_window(&self.old))
+                .is_some_and(|current| current.same_window(&self.bank))
         {
             return Err("stale resident source/window preparation".into());
         }
@@ -374,6 +687,13 @@ impl WindowWork {
         self.publication.mark_pending()?;
         pending.sample = Some(sample.clone());
         pending.stems = stems.clone();
+        let mut adopted_binding = self.binding.binding;
+        adopted_binding.resident = sample.resident_binding();
+        *self
+            .state
+            .adopted_binding
+            .lock()
+            .map_err(|_| "resident binding lock poisoned")? = Some(adopted_binding);
         producer
             .push(ControlMessage::RelocateResident(Box::new(
                 crate::messages::ResidentTransaction {
@@ -382,7 +702,9 @@ impl WindowWork {
                     stems,
                     binding: self.binding.binding,
                     publication: self.publication.clone(),
-                    expected_window_revision: self.old.window_revision(),
+                    expected_window_revision: self.bank.window_revision(),
+                    intent: self.intent,
+                    seek_pin: self.seek_pin.clone(),
                 },
             )))
             .map_err(|_| "reserved single-producer capacity lost")?;
@@ -412,22 +734,77 @@ pub(super) fn relocate_with_producer(
     end_s: f64,
     producer: Arc<Mutex<Producer<ControlMessage>>>,
 ) -> PyResult<ResidentWindowTicket> {
+    prepare_window_with_producer(
+        engine,
+        id,
+        WindowRequest {
+            storage_range: Some((start_s, end_s)),
+            ..WindowRequest::default()
+        },
+        producer,
+    )
+}
+
+#[derive(Default, Clone, Copy)]
+pub(super) struct WindowRequest {
+    pub(super) storage_range: Option<(f64, f64)>,
+    pub(super) loop_region: Option<(f64, Option<f64>)>,
+    pub(super) seek_position_s: Option<f64>,
+    pub(super) key_lock: Option<bool>,
+}
+
+pub(super) fn prepare_control(
+    engine: &AudioEngine,
+    id: usize,
+    request: WindowRequest,
+) -> PyResult<ResidentWindowTicket> {
+    let handle = engine
+        .stream_handle
+        .as_ref()
+        .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+    prepare_window_with_producer(engine, id, request, handle.producer.clone())
+}
+
+pub(super) fn prepare_window_with_producer(
+    engine: &AudioEngine,
+    id: usize,
+    request: WindowRequest,
+    producer: Arc<Mutex<Producer<ControlMessage>>>,
+) -> PyResult<ResidentWindowTicket> {
     if id >= NUM_SAMPLES
-        || !start_s.is_finite()
-        || !end_s.is_finite()
-        || start_s < 0.0
-        || end_s <= start_s
+        || request.storage_range.is_some_and(|(start, end)| {
+            !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start
+        })
+        || request.loop_region.is_some_and(|(start, end)| {
+            !start.is_finite()
+                || start < 0.0
+                || end.is_some_and(|end| !end.is_finite() || end < 0.0)
+        })
+        || request
+            .seek_position_s
+            .is_some_and(|position| !position.is_finite() || position < 0.0)
     {
         return Err(PyValueError::new_err("invalid resident source range"));
     }
     reconcile(engine)?;
+    let seek_only = request.seek_position_s.is_some()
+        && request.loop_region.is_none()
+        && request.key_lock.is_none()
+        && request.storage_range.is_none();
     let binding = input_runtime_binding::capture(engine, id)?
-        .filter(|current| current.available() && current.current())
+        .filter(|current| (seek_only || current.available()) && current.current())
         .ok_or_else(|| PyValueError::new_err("current complete source/timing unavailable"))?;
     let reservation = engine
         .cold_jobs
         .reserve()
         .map_err(PyRuntimeError::new_err)?;
+    if producer
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?
+        .is_full()
+    {
+        return Err(PyRuntimeError::new_err("resident command queue is full"));
+    }
     let requests = engine
         .pad_request_ids
         .lock()
@@ -448,9 +825,36 @@ pub(super) fn relocate_with_producer(
         .checked_add(1)
         .ok_or_else(|| PyValueError::new_err("window revision exhausted"))?;
     let rate = binding.binding.sample_rate_hz;
-    let (start, end, context) = if view.context == ResidentContext::KeyLockFullTrack {
+    let intent = ResidentControlIntent {
+        loop_region: request.loop_region.map(|(start, end)| {
+            let start = (start * f64::from(rate)).round() as usize;
+            let end = end
+                .map(|end| ((end * f64::from(rate)).round() as usize).max(start.saturating_add(1)));
+            (start, end)
+        }),
+        seek_position_s: request.seek_position_s,
+        key_lock: request.key_lock,
+    };
+    let key_lock_full = request
+        .key_lock
+        .unwrap_or(view.context == ResidentContext::KeyLockFullTrack);
+    let (start, end, context) = if key_lock_full {
         (0, old.frame_count(), ResidentContext::KeyLockFullTrack)
-    } else {
+    } else if request.seek_position_s.is_some() {
+        (0, old.frame_count(), ResidentContext::FullTrack)
+    } else if let Some((start, end)) = intent.loop_region {
+        let region = super::source_reader::effective_loop_region(start, end, old.frame_count())
+            .ok_or_else(|| PyValueError::new_err("invalid complete source loop"))?;
+        (
+            region.start,
+            region.end,
+            if region.start == 0 && region.end == old.frame_count() {
+                ResidentContext::FullTrack
+            } else {
+                ResidentContext::FiniteLoop
+            },
+        )
+    } else if let Some((start_s, end_s)) = request.storage_range {
         let start = (start_s * f64::from(rate)).round() as usize;
         let end = (end_s * f64::from(rate)).round() as usize;
         (
@@ -462,6 +866,8 @@ pub(super) fn relocate_with_producer(
                 ResidentContext::FiniteLoop
             },
         )
+    } else {
+        (old.resident_start(), old.resident_end(), view.context)
     };
     if start >= end || end > old.frame_count() {
         return Err(PyValueError::new_err("resident range exceeds full source"));
@@ -472,29 +878,77 @@ pub(super) fn relocate_with_producer(
         .map_err(|_| PyRuntimeError::new_err("cold lease lock poisoned"))?[id]
         .clone()
         .ok_or_else(|| PyValueError::new_err("complete source lease unavailable"))?;
-    let publication = PreparedSourcePermit::new(
-        engine.prepared_source_epochs[id].clone(),
-        engine.prepared_source_epochs[id].load(Ordering::Acquire),
-    );
+    // Admission and the immediate voice-capture command share exclusive producer
+    // capacity before a previous intent can be superseded.
+    let mut admission_producer = producer
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
+    if admission_producer.is_full() {
+        return Err(PyRuntimeError::new_err("resident command queue is full"));
+    }
+    let mut owners = engine
+        .resident_stem_cache
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("resident ownership lock poisoned"))?;
+    if owners[id].pending.is_some() {
+        return Err(PyRuntimeError::new_err(
+            "resident stem publication is pending",
+        ));
+    }
+    if !seek_only {
+        admitted_window_peak(&old, start, end, owners[id].accepted.is_some())
+            .map_err(PyRuntimeError::new_err)?;
+    }
+    if owners[id]
+        .relocation
+        .as_ref()
+        .is_some_and(|pending| pending.publication.status() == "adopting")
+    {
+        return Err(PyRuntimeError::new_err(
+            "resident native adoption is in progress",
+        ));
+    }
+    let next_intent = super::prepared_source::next_epoch(&owners[id].intent_epoch)
+        .map_err(PyRuntimeError::new_err)?;
+    if let Some(previous) = owners[id].relocation.as_ref() {
+        if !previous.publication.cancel_unclaimed() {
+            return Err(PyRuntimeError::new_err(
+                "resident native adoption is in progress",
+            ));
+        }
+        previous.state.fail(
+            "resident preparation superseded by newer intent".into(),
+            true,
+        );
+    }
+    owners[id]
+        .intent_epoch
+        .store(next_intent, Ordering::Release);
+    engine
+        .input_runtime_ownership
+        .begin_resident_control(id, next_intent);
+    let publication = PreparedSourcePermit::new(owners[id].intent_epoch.clone(), next_intent)
+        .with_source_epoch(
+            engine.prepared_source_epochs[id].clone(),
+            engine.prepared_source_epochs[id].load(Ordering::Acquire),
+        );
     let state = Arc::new(WindowState::default());
     let token = Arc::new(());
     let ticket = ResidentWindowTicket {
         publication: publication.clone(),
         state: state.clone(),
         window_revision: revision,
+        previous_window_revision: old.window_revision(),
         start_frame: start,
         end_frame: end,
         full_frame_count: old.frame_count(),
+        id,
+        source_generation: binding.source_generation,
+        binding: binding.binding,
+        ownership: binding.ownership.clone(),
+        acknowledgements: binding.acknowledgements.clone(),
+        loop_region: request.loop_region,
     };
-    let mut owners = engine
-        .resident_stem_cache
-        .lock()
-        .map_err(|_| PyRuntimeError::new_err("resident ownership lock poisoned"))?;
-    if owners[id].pending.is_some() || owners[id].relocation.is_some() {
-        return Err(PyValueError::new_err(
-            "resident publication is already pending",
-        ));
-    }
     let stem_owner = owners[id].accepted.clone();
     owners[id].relocation = Some(PendingWindow {
         sample: None,
@@ -505,13 +959,34 @@ pub(super) fn relocate_with_producer(
         state: state.clone(),
         admitted: Instant::now(),
     });
-    let work = WindowWork {
+    let (capture, seek_receiver) = if seek_only {
+        let (sender, receiver) = rtrb::RingBuffer::new(1);
+        (
+            Some(Arc::new(super::resident_seek::ResidentSeekCapture::new(
+                id,
+                binding.binding,
+                publication.clone(),
+                request
+                    .seek_position_s
+                    .expect("validated seek-only request"),
+                sender,
+            ))),
+            Some(receiver),
+        )
+    } else {
+        (None, None)
+    };
+    let mut work = WindowWork {
         id,
-        old,
+        old: old.clone(),
+        bank: old,
+        seek_receiver,
+        seek_pin: None,
         start,
         end,
         revision,
         context,
+        intent,
         request: requests[id],
         binding,
         source_lease,
@@ -520,7 +995,7 @@ pub(super) fn relocate_with_producer(
         cache: engine.sample_cache.clone(),
         owners: engine.resident_stem_cache.clone(),
         assets: engine.project_assets.clone(),
-        producer,
+        producer: producer.clone(),
         publication: publication.clone(),
         state: state.clone(),
         token,
@@ -529,9 +1004,24 @@ pub(super) fn relocate_with_producer(
     drop(owners);
     drop(cache);
     drop(requests);
+    if let Some(capture) = capture
+        && admission_producer
+            .push(ControlMessage::CaptureResidentSeek(capture))
+            .is_err()
+    {
+        state.fail("resident command queue is full".into(), false);
+        publication.cancel_unclaimed();
+        engine
+            .input_runtime_ownership
+            .finish_resident_control(id, publication.expected);
+        return Err(PyRuntimeError::new_err("resident command queue is full"));
+    }
+    drop(admission_producer);
     let mut guard = JobGuard {
         publication: publication.clone(),
         state: state.clone(),
+        id,
+        ownership: engine.input_runtime_ownership.clone(),
         enqueued: false,
     };
     engine
@@ -542,6 +1032,9 @@ pub(super) fn relocate_with_producer(
                 let cancelled = !work.current();
                 work.state.fail(error, cancelled);
                 work.publication.cancel_unclaimed();
+                work.binding
+                    .ownership
+                    .finish_resident_control(work.id, work.publication.expected);
             }
         })
         .map_err(PyRuntimeError::new_err)?;
@@ -685,9 +1178,13 @@ mod tests {
         rx.recv_timeout(Duration::from_secs(3)).unwrap();
         let publication = PreparedSourcePermit::unrestricted();
         let state = Arc::new(WindowState::default());
+        let ownership = Arc::new(InputRuntimeOwnership::default());
+        ownership.begin_resident_control(0, publication.expected);
         let mut guard = JobGuard {
             publication: publication.clone(),
             state: state.clone(),
+            id: 0,
+            ownership: ownership.clone(),
             enqueued: false,
         };
         lane.submit(lane.reserve().unwrap(), move || guard.mark_enqueued())
@@ -699,9 +1196,48 @@ mod tests {
         }
         assert_eq!(state.terminal.load(Ordering::Acquire), 2);
         assert_eq!(publication.status(), "rejected");
+        assert!(!ownership.resident_control_pending(0));
         *gate.0.lock().unwrap() = true;
         gate.1.notify_all();
         shutdown.join().unwrap();
+    }
+
+    #[test]
+    fn actual_cold_worker_panic_finishes_only_its_exact_pending_input_owner() {
+        for newer_intent in [false, true] {
+            let mut lane = super::super::cold_jobs::ColdJobs::new().unwrap();
+            let publication = PreparedSourcePermit::unrestricted();
+            let state = Arc::new(WindowState::default());
+            let ownership = Arc::new(InputRuntimeOwnership::default());
+            ownership.begin_resident_control(0, publication.expected);
+            let guard = JobGuard {
+                publication: publication.clone(),
+                state: state.clone(),
+                id: 0,
+                ownership: ownership.clone(),
+                enqueued: false,
+            };
+            if newer_intent {
+                ownership.begin_resident_control(0, publication.expected + 1);
+            }
+            lane.submit(lane.reserve().unwrap(), move || {
+                let _guard = guard;
+                panic!("injected resident preparation failure");
+            })
+            .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while state.terminal.load(Ordering::Acquire) == 0 && Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            assert_eq!(state.terminal.load(Ordering::Acquire), 2);
+            lane.shutdown();
+            assert_eq!(publication.status(), "rejected");
+            assert_eq!(
+                ownership.resident_control_pending(0),
+                newer_intent,
+                "failed old job cleared a newer native readiness owner"
+            );
+        }
     }
 
     #[test]

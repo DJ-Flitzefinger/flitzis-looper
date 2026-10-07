@@ -336,6 +336,7 @@ pub(super) fn unload_for_producer(
     engine.input_runtime_ownership.revoke(id, authority);
     advance.commit();
     engine.input_runtime_ownership.revoke_source(id);
+    engine.input_runtime_ownership.clear_launch_admitted(id);
     producer
         .push(ControlMessage::UnloadSample { id })
         .expect("reserved single-producer capacity");
@@ -526,12 +527,16 @@ impl ColdLoad {
         let analysis = if self.run_analysis {
             // Account full playback, channel-conversion copy, mono, resampler and
             // f32/f64 analyzer inputs before invoking existing bounded-input kernels.
-            let frames = sample.samples.len() / sample.channels;
-            let mono_frames = (frames as u128 * 44_100).div_ceil(u128::from(self.output_rate));
-            let transient = sample.samples.len() as u128 * 8 + mono_frames * 24 + 1024 * 1024;
-            if transient > PCM_LIMIT_BYTES as u128 {
-                return Err("cold automatic analysis exceeds transient PCM byte limit".into());
-            }
+            super::analysis_pcm::default_analysis_peak(
+                sample.frame_count(),
+                sample.channels,
+                self.output_rate,
+                0,
+                PCM_LIMIT_BYTES,
+            )
+            .map_err(|error| {
+                format!("cold automatic analysis exceeds transient PCM byte limit: {error}")
+            })?;
             if cancelled() {
                 return Err("cold load cancelled".into());
             }

@@ -57,8 +57,7 @@ class GlobalParametersController:
             if self._project.pad_key_lock[sample_id] is enabled:
                 continue
 
-            self._project.pad_key_lock[sample_id] = enabled
-            self._audio.set_pad_key_lock(sample_id, enabled)
+            self._transport.pad.set_pad_key_lock(sample_id, enabled=enabled)
             changed = True
 
         if not changed:

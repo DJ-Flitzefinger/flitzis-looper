@@ -118,6 +118,23 @@ vector with unchanged CQT/ONNX parameters; chunking does not shorten analysis or
 reset the source-time origin. See the setup document for exact short-input and
 exclusive-end conventions.
 
+### Complete-source access with a finite playback bank
+
+For cache-backed finite playback, `CompleteSourceReader` captures the immutable
+complete descriptor, native generation and loaded rate, then owns the sealed
+committed cold-file lease through actual read return. Chunk reads retain source
+frame zero, complete extent and full source/PCM digests. Waveform projection uses
+48-KiB reader scratch and a bounded output view, at most 16384 columns, with
+pending/error/retry state. A cancelled reader keeps its lease until its running
+visitor returns; replacing a source or viewport cannot publish the old result.
+
+Diagnostic export reads the same complete file in bounded chunks under its
+existing one-job 512-MiB staging policy, without materializing full playback PCM.
+Normal manual Analyze retains qm-dsp and runs on the shared two-worker,
+32-queued-job cold lane. Its conservative 1-GiB transient admission accounts for
+executed source, channel conversion, resampling and analyzer preparation before
+worker allocation. These paths leave the effective finite playback bank intact.
+
 ## Admission and retirement limits
 
 | Resource | Diagnostic policy |

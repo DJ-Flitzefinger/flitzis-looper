@@ -292,6 +292,35 @@ impl ProjectAssets {
         Ok(())
     }
 
+    /// Resolve the retained immutable lease from an actual captured native PCM
+    /// owner. Pointer and full descriptor are both checked; paths confer no proof.
+    pub(super) fn cold_lease_for_reader(
+        &self,
+        sample: &SampleBuffer,
+    ) -> io::Result<CommittedColdLease> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("asset gate poisoned"))?;
+        let weak = Arc::downgrade(&sample.samples);
+        let lease = state
+            .readers
+            .iter()
+            .find_map(|reader| {
+                reader
+                    .pcm
+                    .iter()
+                    .any(|pcm| pcm.ptr_eq(&weak))
+                    .then(|| reader.cold.clone())
+                    .flatten()
+            })
+            .ok_or_else(|| {
+                io::Error::other("captured voice has no retained complete source lease")
+            })?;
+        lease.verify_reference(sample)?;
+        Ok(lease)
+    }
+
     pub(super) fn retire(&self, root: &Path, path: &Path, recursive: bool) -> io::Result<()> {
         let (root, path) = owned_path(root, path)?;
         validate_target(&root, &path, recursive)?;

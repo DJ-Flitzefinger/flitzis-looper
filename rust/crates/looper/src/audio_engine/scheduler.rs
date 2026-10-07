@@ -10,6 +10,12 @@ use crate::audio_engine::input_runtime_binding::InputPadBinding;
 pub(crate) type TransportScheduler = FixedCapacityScheduler<MAX_SCHEDULED_EVENTS>;
 
 #[derive(Debug, Clone, PartialEq)]
+// Compact inline launch guards measure 264 bytes/command on Windows x64; the
+// 1024-slot pool (280 bytes/slot) is allocated once during control-side startup.
+// Exact source/timing bindings must stay inline when RT schedules or rejects an
+// event. Boxing them there would allocate/free on RT; this exception is limited
+// to the generic variant-size heuristic, with fixed storage and bounded copies.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ScheduledCommand {
     RefreshAcceptedTiming(std::sync::Arc<super::accepted_timing_refresh::AcceptedTimingRefresh>),
     GlobalPlaybackBatch(std::sync::Arc<super::global_playback_batch::GlobalPlaybackBatch>),
@@ -20,6 +26,8 @@ pub(crate) enum ScheduledCommand {
         exclusive: bool,
         binding: InputPadBinding,
         received_at_ns: u64,
+        resident_control: Option<super::resident_relocation::ResidentLaunchGuard>,
+        launch_revision: u64,
     },
     PlaySample {
         id: usize,
@@ -220,6 +228,14 @@ mod tests {
     #[test]
     fn scheduler_uses_named_capacity() {
         let scheduler = TransportScheduler::new();
+
+        eprintln!(
+            "scheduler layout: command={} slot={} capacity={} startup_bytes={}",
+            std::mem::size_of::<ScheduledCommand>(),
+            std::mem::size_of::<Option<ScheduledEvent>>(),
+            MAX_SCHEDULED_EVENTS,
+            std::mem::size_of::<Option<ScheduledEvent>>() * MAX_SCHEDULED_EVENTS,
+        );
 
         assert_eq!(scheduler.capacity(), MAX_SCHEDULED_EVENTS);
         assert!(scheduler.is_empty());

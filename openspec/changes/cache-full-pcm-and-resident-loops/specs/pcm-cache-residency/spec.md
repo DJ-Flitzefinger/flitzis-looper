@@ -175,6 +175,84 @@ Pending work SHALL NOT claim an effective seek, loop, ALL or accepted timing cha
 - **THEN** that identical intent does not invalidate its own preparation
 - **AND** a different admitted loop or DSP intent cancels that preparation through native adoption
 
+### Requirement: Shared bounded control transactions
+The system SHALL share one source-bound transaction behavior across UI, MIDI
+fallback and controls for preparation, cancellation, errors and adoption freshness.
+Admission retries SHALL be finite; unload/shutdown or newer source/timing intent
+SHALL revoke older continuations. A claimed native tail SHALL complete or report
+unconfirmed state before a dependent intent is treated as adopted.
+
+#### Scenario: Queue pressure while a latest edit waits for a claimed predecessor
+- **WHEN** bounded admission cannot prepare the latest edit before its retry limit or deadline
+- **THEN** previous acknowledged audio and source/timing/stem ownership remain valid
+- **AND** error/cancellation restores only the still-current request's prior acknowledged intent
+- **AND** a late ACK cannot launch audio or update intent after unload or same-pad source reuse
+
+#### Scenario: Guarded MIDI needs a nonresident loop
+- **WHEN** a direct MIDI launch cannot admit the current requested context
+- **THEN** its fallback uses the same finite preparation as a UI launch and retains the original input timestamp
+- **AND** it launches only after matching native ACK and a fresh native current-source guard
+
+#### Scenario: A prepared global start meets queue pressure
+- **WHEN** a complete requested GLOBAL START batch waits for resident readiness or native queue capacity
+- **THEN** retries remain bounded and preserve one original input timestamp and the complete target set
+- **AND** every retry rechecks current source, timing and restore revision
+- **AND** a newer global gesture supersedes the older timestamp, and terminal launch error remains visible after an unrelated region ACK
+
+#### Scenario: A prepared UI start waits in the native schedule
+- **WHEN** an acknowledged UI start executes after its original input timestamp was queued
+- **THEN** its opaque complete source, resident window, timing authority and latest intent are rechecked before playback or exclusive stops
+- **AND** stale source/window or cancelled ownership cannot launch, while an unrelated MIDI runtime refresh preserves the matching UI launch
+
+#### Scenario: A new bank is prepared while a prior-source finite voice plays
+- **WHEN** loop preparation retains the effective Key Lock mode after direct bank replacement
+- **THEN** the new bank may acknowledge readiness while the prior voice keeps its frozen source, loop and stems until guarded retrigger
+- **AND** changing Key Lock without admitted context for that unmatched finite voice reports unavailable
+
+### Requirement: Stop revokes queued starts while preserving resident readiness
+The system SHALL revoke prior queued and scheduled UI, MIDI and global starts
+when STOP is admitted, preserving acknowledged source/window readiness.
+STOP SHALL capture retained targets and revoke launch revisions under the same
+native producer admission fence. Global STOP SHALL queue a guarded stop behind
+any claimed START tail before retiring its targets. Later start gestures SHALL
+use a fresh launch revision.
+
+#### Scenario: STOP follows preparation ACK before playback feedback
+- **WHEN** a UI or MIDI start has been queued after resident ACK but no active voice is yet visible
+- **THEN** STOP revokes its scheduled launch while the adopted window and CURRENT authority stay valid
+- **AND** cancellation of an older ticket cannot revoke a newer ticket's launch
+
+#### Scenario: A global START has passed its final callback guard
+- **WHEN** GLOBAL STOP arrives before that START's active feedback is observed
+- **THEN** the stop target set includes the pending start targets and a guarded STOP follows its claimed tail
+- **AND** starts admitted after the ordered STOP use a fresh revision and can execute
+
+#### Scenario: A direct MIDI start is not yet visible to Python
+- **WHEN** STOP arrives after native direct MIDI admission and before input or active feedback is observed
+- **THEN** bounded native admitted-start records supply the target for an ordered STOP even after its final start guard
+- **AND** a STOP target set larger than voice capacity remains bounded by pad capacity without expanding the START voice limit
+
+#### Scenario: A direct start races with STOP target capture
+- **WHEN** a direct MIDI start enters before STOP acquires the shared producer admission fence
+- **THEN** the same fenced cancellation returns its retained target even if that start passed its callback guard
+- **AND** STOP does not rely on an earlier independent scan or active feedback
+
+### Requirement: Shutdown closes background and mapped launch admission before joins
+The system SHALL disable mapped MIDI admission and revoke starts before joining
+background work. It SHALL recheck previously captured mappings under the producer
+admission fence and close cold-lane admission before cancellation releases active
+workers, without changing the saved input preference.
+
+#### Scenario: Shutdown follows captured MIDI mapping
+- **WHEN** MIDI mapping was captured before shutdown disables input admission
+- **THEN** admission rechecks the enabled state under the producer fence before queueing that mapping
+- **AND** shutdown disables MIDI before worker joins without changing the saved input preference
+
+#### Scenario: A cold job remains queued at shutdown
+- **WHEN** both cold workers are active and another job is queued when shutdown begins
+- **THEN** shutdown closes lane admission and retires queued ownership before cancelling the active jobs
+- **AND** the queued job never starts, while active workers drain and their source artifacts retire after final owners release
+
 ### Requirement: Complete editor and analysis access
 The system SHALL preserve full-source waveform navigation, extreme sample zoom,
 source-relative overlays and complete-track analysis through non-realtime
@@ -188,6 +266,17 @@ as complete input to timing, key or stem analysis.
 - **WHEN** the editor jumps to the full track's start or end
 - **THEN** matching complete-source waveform data becomes available off-thread
 - **AND** audio progression, source zero, timing and labels remain unchanged
+
+### Requirement: Bounded complete-source reader ownership
+The system SHALL bind complete-reader admission to the full immutable playback
+descriptor, actual native generation and sealed reader through actual read return.
+Viewport projection SHALL retain only bounded render results and share bounded
+worker admission; complete analysis SHALL preserve its existing admission budget.
+
+#### Scenario: Superseded view or analysis after same-path source replacement
+- **WHEN** an admitted complete reader finishes after a new view or source assignment
+- **THEN** it cannot publish an obsolete waveform or analyze a cropped window as a complete source
+- **AND** its readers retire after actual work returns without pinning complete playback PCM
 
 ### Requirement: Explicit seek and full-track exceptions
 The system SHALL preserve explicit seek inside, before and after the loop:
@@ -203,6 +292,13 @@ MUST NOT introduce callback file reads or a continuous streaming framework.
 - **THEN** old playback remains effective during complete-track preparation
 - **AND** after matching ACK the tail plays to the full source end then wraps into
   the existing loop without changing markers, grid or auto-loop intent
+
+#### Scenario: A prior finite voice seeks after bank replacement
+- **WHEN** a live or paused voice still owns an older finite source while its pad bank has been replaced
+- **THEN** seek preparation captures that actual voice generation, source/window and timing
+- **AND** it prepares the older sealed complete source and identical already accepted complete StemSet
+- **AND** matching native ACK changes only that voice reader and seek, preserving its old stem selection/transition and the new bank's window, stems and timing
+- **AND** stop, retrigger, an intervening seek or new source/authority rejects the stale captured transaction before adoption
 
 ### Requirement: Same-source stem windows
 The system SHALL transactionally adopt full-mix and component stems only with

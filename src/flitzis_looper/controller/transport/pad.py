@@ -56,8 +56,7 @@ class PadController:
         if self._project.pad_key_lock[sample_id] is enabled:
             return
 
-        self._audio.set_pad_key_lock(sample_id, enabled)
-        self._project.pad_key_lock[sample_id] = enabled
+        self._transport.residency.set_key_lock(sample_id, enabled=enabled)
         self._transport._mark_project_changed()
 
     def toggle_pad_key_lock(self, sample_id: int) -> None:

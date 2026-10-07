@@ -146,6 +146,18 @@ filter continuity, replacement pinning and accepted refresh/clear consequences.
 Fractional-domain rate ramps have shared SourcePlayback trace/partition coverage;
 the new 144-case raw-native matrix uses steady rates. Existing physical-domain
 native ramp tests remain separate.
+C2b extends this to actual finite-window adoption: 81 generated complete-evidence
+cases cross 44.1/48/96-kHz loaded rates, P<H/P>H/P=H, playback rates 0.73/1/1.25
+and fixed/irregular/one-frame callback partitions. The native command ring,
+guarded ACK, resident bank and real retirement worker execute the transition.
+Whole resident output equals the complete-buffer output, and the independent
+PCM-knot oracle checks every output sample. The 27 one-frame cases independently
+check observed wraps 75 and 1000 against rational and admitted periods within
+one loaded frame. Complete PCM owners must actually retire after finite adoption.
+Separate transaction tests cover intro/tail/source-end seek, paused/stopped
+semantics, same complete stem sets, Key Lock context and native/FIFO history.
+These software proofs do not certify process RAM, startup deadlines or listening.
+
 C1 immutable copy-first/ABA, B5 audible compensation and unmeasured current 96-handle/save-integrity costs
 remain separate. See [native ownership](native-constant-timing.md) and
 [the migration design](beatmap-sync-design.md).

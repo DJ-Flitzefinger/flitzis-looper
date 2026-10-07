@@ -299,8 +299,35 @@ impl InputRuntime {
             &self.runtime_state,
             &self.ownership,
             &self.audio_producer,
+            None,
         )
         .dispatched
+    }
+
+    /// Test-only split at the real dispatcher mapping-capture/admission boundary.
+    #[cfg(test)]
+    pub(super) fn capture_mapping_dispatch_for_test(
+        &self,
+        binding_key: &str,
+        received_at_ns: u64,
+    ) -> Option<impl FnOnce() -> bool + '_> {
+        if !self.enabled.load(Ordering::Acquire)
+            || self.learn_capture_active.load(Ordering::Acquire)
+        {
+            return None;
+        }
+        let mapping = lookup_mapping(&self.mappings, binding_key)?;
+        Some(move || {
+            dispatch_action(
+                &mapping.action,
+                received_at_ns,
+                &self.runtime_state,
+                &self.ownership,
+                &self.audio_producer,
+                Some(self.enabled.as_ref()),
+            )
+            .dispatched
+        })
     }
 
     pub fn start_midi_input(&self) -> Result<usize, String> {
@@ -427,6 +454,7 @@ impl InputDispatcher {
                     &self.runtime_state,
                     &self.ownership,
                     &self.audio_producer,
+                    Some(self.enabled.as_ref()),
                 );
                 dispatched = result.dispatched;
                 direct = result.direct;
@@ -469,6 +497,7 @@ fn dispatch_action(
     runtime_state: &Arc<Mutex<RuntimeState>>,
     ownership: &Arc<InputRuntimeOwnership>,
     audio_producer: &Arc<Mutex<Producer<ControlMessage>>>,
+    admission_enabled: Option<&AtomicBool>,
 ) -> DispatchResult {
     match action {
         InputAction::TriggerPad { id } => dispatch_trigger_pad(
@@ -477,9 +506,20 @@ fn dispatch_action(
             runtime_state,
             ownership,
             audio_producer,
+            admission_enabled,
         ),
         InputAction::StopPad { id } => {
-            dispatch_audio_messages(audio_producer, [ControlMessage::StopSample { id: *id }])
+            let dispatched = audio_producer.try_lock().is_ok_and(|mut producer| {
+                super::input_runtime_binding::enqueue_stop_with_producer(
+                    ownership,
+                    &mut producer,
+                    Some(*id),
+                )
+            });
+            DispatchResult {
+                dispatched,
+                direct: true,
+            }
         }
         InputAction::Python { action_key } => {
             let _ = action_key.len();
@@ -497,6 +537,7 @@ fn dispatch_trigger_pad(
     runtime_state: &Arc<Mutex<RuntimeState>>,
     ownership: &Arc<InputRuntimeOwnership>,
     audio_producer: &Arc<Mutex<Producer<ControlMessage>>>,
+    admission_enabled: Option<&AtomicBool>,
 ) -> DispatchResult {
     let Ok(state) = runtime_state.lock() else {
         return DispatchResult {
@@ -511,9 +552,21 @@ fn dispatch_trigger_pad(
         };
     };
     if !pad.loaded
+        || ownership.resident_control_pending(id)
         || pad
             .binding
             .is_none_or(|binding| !ownership.current(id, binding))
+        || pad.binding.is_some_and(|binding| {
+            binding.resident.is_some_and(|resident| {
+                let frames = binding.sample_count / binding.channels.max(1);
+                let start = (pad.loop_start_s * f64::from(binding.sample_rate_hz)).round() as usize;
+                let end = pad
+                    .loop_end_s
+                    .map(|end| (end * f64::from(binding.sample_rate_hz)).round() as usize);
+                super::source_reader::effective_loop_region(start, end, frames)
+                    .is_none_or(|region| region.start < resident.start || region.end > resident.end)
+            })
+        })
     {
         return DispatchResult {
             dispatched: false,
@@ -521,6 +574,30 @@ fn dispatch_trigger_pad(
         };
     }
 
+    let Ok(mut producer) = audio_producer.try_lock() else {
+        return DispatchResult {
+            dispatched: false,
+            direct: true,
+        };
+    };
+    // A dispatcher may have captured its mapping before shutdown disabled input.
+    // Recheck under the admission mutex, ahead of ownership publication. Explicit
+    // public trigger_pad callers pass None and retain their existing semantics.
+    if admission_enabled.is_some_and(|enabled| !enabled.load(Ordering::Acquire))
+        || producer.is_full()
+    {
+        return DispatchResult {
+            dispatched: false,
+            direct: true,
+        };
+    }
+    let launch_revision = ownership.launch_revision(id);
+    if !ownership.launch_current(id, launch_revision) {
+        return DispatchResult {
+            dispatched: false,
+            direct: true,
+        };
+    }
     let trigger = ControlMessage::TriggerInputPad {
         id,
         start_s: pad.loop_start_s,
@@ -528,41 +605,14 @@ fn dispatch_trigger_pad(
         exclusive: !state.multi_loop,
         binding: pad.binding.expect("validated loaded binding"),
         received_at_ns,
+        resident_control: None,
+        launch_revision,
     };
     drop(state);
 
-    dispatch_audio_messages(audio_producer, [trigger])
-}
-
-fn dispatch_audio_messages<const N: usize>(
-    audio_producer: &Arc<Mutex<Producer<ControlMessage>>>,
-    messages: [ControlMessage; N],
-) -> DispatchResult {
-    let Ok(mut producer) = audio_producer.try_lock() else {
-        return DispatchResult {
-            dispatched: false,
-            direct: true,
-        };
-    };
-
-    if producer.slots() < N {
-        return DispatchResult {
-            dispatched: false,
-            direct: true,
-        };
-    }
-
-    for message in messages {
-        if producer.push(message).is_err() {
-            return DispatchResult {
-                dispatched: false,
-                direct: true,
-            };
-        }
-    }
-
+    ownership.mark_launch_admitted(id);
     DispatchResult {
-        dispatched: true,
+        dispatched: producer.push(trigger).is_ok(),
         direct: true,
     }
 }
@@ -924,7 +974,7 @@ mod tests {
             };
         }
 
-        let result = dispatch_trigger_pad(3, 42, &state, &Arc::default(), &producer);
+        let result = dispatch_trigger_pad(3, 42, &state, &Arc::default(), &producer, None);
 
         assert_eq!(
             result,
@@ -957,7 +1007,7 @@ mod tests {
                 Some(InputRuntimePadBinding::for_test(1, Arc::default()).binding);
         }
 
-        let result = dispatch_trigger_pad(1, 42, &state, &Arc::default(), &producer);
+        let result = dispatch_trigger_pad(1, 42, &state, &Arc::default(), &producer, None);
 
         assert!(result.dispatched);
         assert!(matches!(
@@ -966,6 +1016,54 @@ mod tests {
                 id: 1,
                 exclusive: false,
                 received_at_ns: 42,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn pending_or_nonresident_trigger_returns_controller_fallback_before_native_enqueue() {
+        let (producer, mut consumer) = RingBuffer::<ControlMessage>::new(8);
+        let producer = Arc::new(Mutex::new(producer));
+        let state = Arc::new(Mutex::new(RuntimeState::default()));
+        let ownership = Arc::new(InputRuntimeOwnership::default());
+        let mut binding = InputRuntimePadBinding::for_test(1, ownership.clone()).binding;
+        binding.sample_count = 256;
+        binding.resident = Some(crate::messages::ResidentBinding {
+            address: 42,
+            start: 32,
+            end: 64,
+            revision: 1,
+            context: crate::messages::ResidentContext::FiniteLoop,
+        });
+        state.lock().unwrap().pads[1] = RuntimePadState {
+            loaded: true,
+            loop_start_s: 80.0 / 48_000.0,
+            loop_end_s: Some(111.0 / 48_000.0),
+            binding: Some(binding),
+        };
+        let result = dispatch_trigger_pad(1, 42, &state, &ownership, &producer, None);
+        assert_eq!(
+            result,
+            DispatchResult {
+                dispatched: false,
+                direct: true
+            }
+        );
+        assert!(consumer.pop().is_err());
+        state.lock().unwrap().pads[1].loop_start_s = 32.0 / 48_000.0;
+        state.lock().unwrap().pads[1].loop_end_s = Some(64.0 / 48_000.0);
+        ownership.begin_resident_control(1, 7);
+        assert!(!dispatch_trigger_pad(1, 43, &state, &ownership, &producer, None).dispatched);
+        ownership.begin_resident_control(1, 8);
+        ownership.finish_resident_control(1, 7);
+        assert!(!dispatch_trigger_pad(1, 44, &state, &ownership, &producer, None).dispatched);
+        ownership.finish_resident_control(1, 8);
+        assert!(dispatch_trigger_pad(1, 45, &state, &ownership, &producer, None).dispatched);
+        assert!(matches!(
+            consumer.pop().unwrap(),
+            ControlMessage::TriggerInputPad {
+                received_at_ns: 45,
                 ..
             }
         ));
@@ -1000,7 +1098,7 @@ mod tests {
                 Some(InputRuntimePadBinding::for_test(1, Arc::default()).binding);
         }
 
-        let result = dispatch_trigger_pad(1, 42, &state, &Arc::default(), &producer);
+        let result = dispatch_trigger_pad(1, 42, &state, &Arc::default(), &producer, None);
 
         assert_eq!(
             result,
@@ -1019,7 +1117,7 @@ mod tests {
         let producer = Arc::new(Mutex::new(producer));
         let state = Arc::new(Mutex::new(RuntimeState::default()));
 
-        let result = dispatch_trigger_pad(1, 42, &state, &Arc::default(), &producer);
+        let result = dispatch_trigger_pad(1, 42, &state, &Arc::default(), &producer, None);
 
         assert_eq!(
             result,
@@ -1211,7 +1309,7 @@ mod tests {
         let state = Arc::new(Mutex::new(RuntimeState::default()));
         let action = parse_input_action("dsp.pad.parameter.delta:0:filter.cutoff");
 
-        let result = dispatch_action(&action, 42, &state, &Arc::default(), &producer);
+        let result = dispatch_action(&action, 42, &state, &Arc::default(), &producer, None);
 
         assert_eq!(
             result,

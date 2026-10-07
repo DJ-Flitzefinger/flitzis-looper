@@ -954,7 +954,10 @@ fn constant_timing_normal_analysis_admission_rejects_pending_and_queued_and_chec
             )
             .unwrap();
         }
-        let (sample, request, rate) = super::super::admit_sample_analysis(&engine, 0).unwrap();
+        let (reader, request, rate) = super::super::admit_sample_analysis(&engine, 0).unwrap();
+        let sample = reader
+            .materialize(super::super::cold_jobs::PCM_LIMIT_BYTES, &|| false)
+            .unwrap();
         assert_eq!(request, ticket.request_id + 1);
         assert_eq!(rate, RATE);
         assert!(Arc::ptr_eq(&sample.samples, &ticket.sample.samples));

@@ -406,7 +406,17 @@ class InputMappingController(BaseController):
             received_at_ns = validate_input_timestamp_ns(timestamp)
             if not self._refresh_rust_runtime_state():
                 return
-            self._audio.trigger_input_runtime_pad(sample_id, received_at_ns=received_at_ns)
+            dispatched = self._audio.trigger_input_runtime_pad(
+                sample_id, received_at_ns=received_at_ns
+            )
+            if not dispatched:
+                start, end = self._app.transport.loop.requested_region(sample_id)
+                self._app.transport.residency.prepare_trigger(
+                    sample_id,
+                    start,
+                    end,
+                    lambda: self._trigger_current_midi(sample_id, received_at_ns),
+                )
         except (RuntimeError, ValueError, TypeError) as err:
             self._session.input_mapping_error = str(err)
 
@@ -415,6 +425,13 @@ class InputMappingController(BaseController):
             return
         self._midi_cc_values[binding_key] = value
         self._midi_cc_directions.pop(binding_key, None)
+
+    def _trigger_current_midi(self, sample_id: int, received_at_ns: int | None) -> None:
+        if not self._refresh_rust_runtime_state() or not self._audio.trigger_input_runtime_pad(
+            sample_id, received_at_ns=received_at_ns
+        ):
+            msg = "prepared MIDI launch remains unavailable"
+            raise RuntimeError(msg)
 
     def _execute_relative_midi_action(
         self,

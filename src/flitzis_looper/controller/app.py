@@ -110,6 +110,8 @@ class AppController:
         self.input_mapping.apply_project_state_to_input_runtime()
 
     def shut_down(self) -> None:
+        self._audio.set_input_mapping_enabled(False)
+        self.transport.residency.shut_down()
         self.accepted_timing.shut_down()
         self.loader.shut_down()
         self.stems.shut_down()
@@ -132,6 +134,7 @@ class AppController:
         self.loader.poll_loader_events()
         self._poll_audio_messages()
         self.accepted_timing.poll()
+        self.transport.residency.poll()
 
     def _refresh_restored_accepted_timing(self, sample_id: int) -> None:
         self.accepted_timing.refresh_current(
@@ -139,6 +142,7 @@ class AppController:
         )
 
     def _on_sample_unloaded(self, sample_id: int) -> None:
+        self.transport.residency.cancel(sample_id)
         self.accepted_timing.cancel(sample_id)
         self.transport.playback.discard_global_restore_for_unloaded_pad(sample_id)
 

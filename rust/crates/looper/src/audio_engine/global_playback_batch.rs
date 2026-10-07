@@ -22,6 +22,7 @@ pub(crate) struct GlobalPlaybackEntry {
     pub(crate) binding: InputPadBinding,
     pub(crate) start_s: f64,
     pub(crate) end_s: Option<f64>,
+    pub(crate) launch_revision: u64,
 }
 
 #[derive(Debug)]
@@ -80,9 +81,11 @@ pub(super) fn enqueue(
     start: bool,
     received_at_ns: Option<u64>,
 ) -> PyResult<GlobalPlaybackBatchTicket> {
-    if entries.len() > MAX_VOICES || (start && entries.is_empty()) {
+    if (start && (entries.len() > MAX_VOICES || entries.is_empty()))
+        || (!start && entries.len() > NUM_SAMPLES)
+    {
         return Err(PyValueError::new_err(
-            "global playback batch exceeds voice capacity or is empty",
+            "global playback batch exceeds start/stop target capacity or is empty",
         ));
     }
     let _requests = engine
@@ -122,6 +125,7 @@ pub(super) fn enqueue(
             binding: current.binding,
             start_s: *start_s,
             end_s: *end_s,
+            launch_revision: 0,
         });
     }
     let mut producer = producer
@@ -131,6 +135,37 @@ pub(super) fn enqueue(
         return Err(PyRuntimeError::new_err(
             "global playback binding changed during admission",
         ));
+    }
+    if producer.is_full() {
+        return Err(PyRuntimeError::new_err(
+            "Failed to send global playback batch - buffer may be full",
+        ));
+    }
+    for entry in &mut effects {
+        if start {
+            entry.launch_revision = engine.input_runtime_ownership.launch_revision(entry.id);
+            if !engine
+                .input_runtime_ownership
+                .launch_current(entry.id, entry.launch_revision)
+            {
+                return Err(PyRuntimeError::new_err(
+                    "global playback launch revision exhausted",
+                ));
+            }
+        } else {
+            engine.input_runtime_ownership.cancel_launches(entry.id);
+        }
+    }
+    for entry in &effects {
+        if start {
+            engine
+                .input_runtime_ownership
+                .mark_launch_admitted(entry.id);
+        } else {
+            engine
+                .input_runtime_ownership
+                .clear_launch_admitted(entry.id);
+        }
     }
     let status = Arc::new(AtomicU8::new(PENDING));
     let batch = Arc::new(GlobalPlaybackBatch {

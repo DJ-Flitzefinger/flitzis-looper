@@ -262,6 +262,13 @@ impl PreparedStemSet {
 }
 
 /// One prebuilt all-or-none callback payload, allocated by the bounded worker.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ResidentControlIntent {
+    pub(crate) loop_region: Option<(usize, Option<usize>)>,
+    pub(crate) seek_position_s: Option<f64>,
+    pub(crate) key_lock: Option<bool>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ResidentTransaction {
     pub(crate) id: usize,
@@ -270,6 +277,8 @@ pub(crate) struct ResidentTransaction {
     pub(crate) binding: InputPadBinding,
     pub(crate) publication: PreparedSourcePermit,
     pub(crate) expected_window_revision: u64,
+    pub(crate) intent: ResidentControlIntent,
+    pub(crate) seek_pin: Option<crate::audio_engine::resident_seek::ResidentSeekPin>,
 }
 
 /// Message that is emitted from the audio thread.
@@ -559,6 +568,7 @@ pub enum ControlMessage {
     },
 
     RelocateResident(Box<ResidentTransaction>),
+    CaptureResidentSeek(Arc<crate::audio_engine::resident_seek::ResidentSeekCapture>),
 
     /// Select which prepared component stems are enabled for an all-stems pad.
     ///
@@ -600,6 +610,8 @@ pub enum ControlMessage {
         exclusive: bool,
         binding: InputPadBinding,
         received_at_ns: u64,
+        resident_control: Option<crate::audio_engine::resident_relocation::ResidentLaunchGuard>,
+        launch_revision: u64,
     },
 
     /// Bounded immutable global effect; its storage retires outside realtime processing.
@@ -668,6 +680,7 @@ impl ControlMessage {
             ControlMessage::LoadSample { .. }
             | ControlMessage::LoadColdSample { .. }
             | ControlMessage::RelocateResident(_)
+            | ControlMessage::CaptureResidentSeek(_)
             | ControlMessage::PublishPreparedStems { .. }
             | ControlMessage::PublishConstantTiming { .. }
             | ControlMessage::RefreshAcceptedTiming(_) => ControlMessageClass::Publication,

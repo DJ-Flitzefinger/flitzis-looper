@@ -296,6 +296,22 @@ fn drain_scheduler_due_at_callback_start<
     }
 }
 
+fn trigger_binding_current(
+    mixer: &RtMixer,
+    id: usize,
+    binding: super::input_runtime_binding::InputPadBinding,
+    resident_control: Option<&super::resident_relocation::ResidentLaunchGuard>,
+    launch_revision: u64,
+) -> bool {
+    if !mixer.launch_current(id, launch_revision) {
+        return false;
+    }
+    match resident_control {
+        Some(guard) => guard.current() && mixer.source_binding_current(id, binding),
+        None => mixer.input_binding_current(id, binding),
+    }
+}
+
 pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetirement>(
     mixer: &mut RtMixer,
     transport: &mut TransportTimeline,
@@ -334,10 +350,17 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
             exclusive,
             binding,
             received_at_ns: _,
+            resident_control,
+            launch_revision,
         } => {
-            if !mixer.input_binding_current(id, binding)
-                || !mixer.loop_intent_context_available(id, start_s, end_s)
-                || (exclusive && retirement.available_retirement_slots() < MAX_VOICES)
+            if !trigger_binding_current(
+                mixer,
+                id,
+                binding,
+                resident_control.as_ref(),
+                launch_revision,
+            ) || !mixer.loop_intent_context_available(id, start_s, end_s)
+                || (exclusive && retirement.available_retirement_slots() < 2 * MAX_VOICES)
                 || (!exclusive
                     && !mixer
                         .voices
@@ -380,7 +403,7 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
             volume,
             received_at_ns: _,
         } => {
-            if retirement.available_retirement_slots() < MAX_VOICES {
+            if retirement.available_retirement_slots() < 2 * MAX_VOICES {
                 return;
             }
             let Some(prepared) = mixer.prepare_play_sample_rt(id, volume, output_frame, retirement)
@@ -456,7 +479,7 @@ fn execute_global_playback_batch<S: AudioMessageSink, R: AudioBufferRetirement>(
     // Captured input time is diagnostic context; transport owns execution quantization.
     let _received_at_ns = batch.received_at_ns;
     // One fixed retirement reservation covers every old pin plus this immutable payload.
-    if retirement.available_retirement_slots() < MAX_VOICES + 1 {
+    if retirement.available_retirement_slots() < 2 * MAX_VOICES + 1 {
         return false;
     }
     let feedback_needed = if batch.start {
@@ -478,6 +501,7 @@ fn execute_global_playback_batch<S: AudioMessageSink, R: AudioBufferRetirement>(
     }
     if !batch.entries.iter().all(|entry| {
         mixer.source_binding_current(entry.id, entry.binding)
+            && mixer.launch_current(entry.id, entry.launch_revision)
             && mixer.loop_intent_context_available(entry.id, entry.start_s, entry.end_s)
     }) {
         return false;
@@ -507,11 +531,10 @@ fn execute_global_playback_batch<S: AudioMessageSink, R: AudioBufferRetirement>(
         prepared[index] = Some(config);
     }
     // A control revocation during preparation rejects the whole effect before its first mutation.
-    if !batch
-        .entries
-        .iter()
-        .all(|entry| mixer.source_binding_current(entry.id, entry.binding))
-    {
+    if !batch.entries.iter().all(|entry| {
+        mixer.source_binding_current(entry.id, entry.binding)
+            && mixer.launch_current(entry.id, entry.launch_revision)
+    }) {
         return false;
     }
     for (index, entry) in batch.entries.iter().enumerate() {
@@ -781,31 +804,33 @@ fn publish_pad_telemetry<S: AudioMessageSink>(
 
 fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
     match message {
-        ControlMessage::GlobalPlaybackBatch(_) => MAX_VOICES + 1,
-        ControlMessage::RelocateResident(_) => MAX_VOICES + 3,
+        ControlMessage::GlobalPlaybackBatch(_) => 2 * MAX_VOICES + 1,
+        ControlMessage::RelocateResident(_) => 2 * MAX_VOICES + 3,
+        ControlMessage::CaptureResidentSeek(_) => 3,
         ControlMessage::LoadColdSample {
             replace_assignment: true,
             ..
-        } => MAX_VOICES + 4,
+        } => 2 * MAX_VOICES + 4,
         ControlMessage::LoadColdSample {
             replace_assignment: false,
             ..
-        } => 4,
-        ControlMessage::LoadSample { .. } | ControlMessage::PublishPreparedStems { .. } => 2,
+        } => MAX_VOICES + 4,
+        ControlMessage::LoadSample { .. } => MAX_VOICES + 2,
+        ControlMessage::PublishPreparedStems { .. } => 2,
         ControlMessage::PublishConstantTiming { .. } | ControlMessage::RefreshAcceptedTiming(_) => {
             1
         }
         ControlMessage::PlaySample { .. }
         | ControlMessage::TriggerInputPad {
             exclusive: false, ..
-        } => 1,
-        ControlMessage::StopSample { .. } => MAX_VOICES,
-        ControlMessage::UnloadSample { .. } => MAX_VOICES + 2,
+        } => 2,
+        ControlMessage::StopSample { .. } => 2 * MAX_VOICES,
+        ControlMessage::UnloadSample { .. } => 2 * MAX_VOICES + 2,
         ControlMessage::StopAll()
         | ControlMessage::PlaySampleExclusive { .. }
         | ControlMessage::TriggerInputPad {
             exclusive: true, ..
-        } => MAX_VOICES,
+        } => 2 * MAX_VOICES,
         _ => 0,
     }
 }
@@ -1149,10 +1174,10 @@ pub(super) fn process_control_message<
         ControlMessage::GlobalPlaybackBatch(batch) => {
             // Admission and execution both check current actual source/authority/projection.
             if scheduler.is_full()
-                || !batch
-                    .entries
-                    .iter()
-                    .all(|entry| mixer.source_binding_current(entry.id, entry.binding))
+                || !batch.entries.iter().all(|entry| {
+                    mixer.source_binding_current(entry.id, entry.binding)
+                        && (!batch.start || mixer.launch_current(entry.id, entry.launch_revision))
+                })
             {
                 batch.finish(false);
                 retirement.retire_global_playback_batch(batch);
@@ -1267,7 +1292,10 @@ pub(super) fn process_control_message<
             mixer.publish_prepared_stems_rt(id, stems, retirement);
         }
         ControlMessage::RelocateResident(transaction) => {
-            mixer.relocate_resident_rt(transaction, retirement);
+            mixer.relocate_resident_at_output_frame(transaction, retirement, callback_start_frame);
+        }
+        ControlMessage::CaptureResidentSeek(capture) => {
+            mixer.capture_resident_seek_rt(capture, retirement, callback_start_frame);
         }
         ControlMessage::PublishConstantTiming { id, timing } => {
             mixer.publish_constant_timing_rt(id, timing, retirement);
@@ -1314,8 +1342,16 @@ pub(super) fn process_control_message<
             exclusive,
             binding,
             received_at_ns,
+            resident_control,
+            launch_revision,
         } => {
-            if !mixer.input_binding_current(id, binding) {
+            if !trigger_binding_current(
+                mixer,
+                id,
+                binding,
+                resident_control.as_ref(),
+                launch_revision,
+            ) {
                 return;
             }
             let command = ScheduledCommand::TriggerInputPad {
@@ -1325,6 +1361,8 @@ pub(super) fn process_control_message<
                 exclusive,
                 binding,
                 received_at_ns,
+                resident_control,
+                launch_revision,
             };
             if let Some(target) = quantized_target_frame(transport, *trigger_quantization) {
                 if scheduler.schedule(target, command).is_ok() {
@@ -2307,15 +2345,15 @@ mod tests {
     fn retirement_slot_estimate_covers_polyphonic_stop_paths() {
         assert_eq!(
             control_message_retirement_slots_needed(&ControlMessage::StopSample { id: 0 }),
-            MAX_VOICES
+            2 * MAX_VOICES
         );
         assert_eq!(
             control_message_retirement_slots_needed(&ControlMessage::UnloadSample { id: 0 }),
-            MAX_VOICES + 2
+            2 * MAX_VOICES + 2
         );
         assert_eq!(
             control_message_retirement_slots_needed(&ControlMessage::StopAll()),
-            MAX_VOICES
+            2 * MAX_VOICES
         );
         assert_eq!(
             control_message_retirement_slots_needed(&ControlMessage::PlaySampleExclusive {
@@ -2323,7 +2361,7 @@ mod tests {
                 volume: 1.0,
                 received_at_ns: None
             }),
-            MAX_VOICES
+            2 * MAX_VOICES
         );
     }
 

@@ -123,6 +123,15 @@ until off-thread retirement. A new load assignment gets fresh runtime source
 authority even for identical complete cache content. See
 [finite residency](pcm-cache-residency.md).
 
+C2b shares one source-bound resident transaction across loop/ALL, seek, Key Lock,
+UI and guarded MIDI fallback. Preparation preserves effective audio until native
+ACK and carries the original launch timestamp. Admission and launch retries are
+bounded; unload, source/authority/timing replacement or a newer intent retires
+stale work. Complete waveform and offline readers own the sealed full source
+through actual read return without promoting a finite playback view to complete
+evidence. Numerical resident/full-buffer long-cycle proofs remain separate from
+C3 process-memory and final human device/listening acceptance.
+
 ## Native shared-period and rate consumers
 
 Native source timing prefers the acknowledged accepted period over legacy BPM.
@@ -415,7 +424,11 @@ Successful same-source adoption/clear refreshes only matching voices. Failed
 admission or late rejection preserves the previously effective audio/history.
 
 An explicit active seek uses that voice's pinned source extent rather than a
-shorter replacement bank. Every successful seek, including the same position,
+shorter replacement bank. If its old finite reader lacks the target context,
+C2b captures the actual voice generation/window/timing and frozen stem set through
+a preallocated bounded handoff. The worker reads its retained sealed complete
+source and identical stems; guarded ACK updates only that old voice reader.
+The replacement bank remains unchanged. Every successful seek, including the same position,
 clears bounded adapter/FIFO history and fixed per-pad filter ownership. Native
 reset/warming remains on the preparation worker.
 

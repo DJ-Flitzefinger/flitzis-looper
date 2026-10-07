@@ -158,7 +158,7 @@ fn retirement_backpressure_keeps_cold_pending_and_pinned_adoption_needs_no_feedb
             .current_epoch(0),
         3
     );
-    fixture.callback.retirement.slots = 4;
+    fixture.callback.retirement.slots = MAX_VOICES + 4;
     fixture.callback.feedback.slots = 0;
     assert_eq!(fixture.callback.drain(&mut fixture.consumer), 1);
     assert!(matches!(
@@ -184,11 +184,11 @@ fn explicit_assignment_replacement_stops_old_voice_only_after_real_callback_ack(
     fixture.pending(0, request);
     fixture.callback.assert_old_voice(&fixture.previous);
     fixture.assert_no_terminal();
-    fixture.callback.retirement.slots = MAX_VOICES + 2;
+    fixture.callback.retirement.slots = 2 * MAX_VOICES + 2;
     assert_eq!(fixture.callback.drain(&mut fixture.consumer), 0);
     fixture.callback.assert_old_voice(&fixture.previous);
     fixture.assert_no_terminal();
-    fixture.callback.retirement.slots = MAX_VOICES + 4;
+    fixture.callback.retirement.slots = 2 * MAX_VOICES + 4;
     fixture.callback.feedback.slots = 0;
     assert_eq!(fixture.callback.drain(&mut fixture.consumer), 0);
     fixture.callback.assert_old_voice(&fixture.previous);
@@ -531,6 +531,7 @@ fn shutdown_cancels_pending_and_queued_jobs_and_drains_owned_disk_artifacts() {
     let second = fixture.admit(1, false);
     fixture.pending(1, second);
     let queued = fixture.admit(2, false);
+    assert_eq!(fixture.engine.cold_jobs.counts_for_test(), (2, 1, 3));
     fixture.engine.shut_down().unwrap();
     fixture.assert_rolled_back();
     for id in 0..3 {

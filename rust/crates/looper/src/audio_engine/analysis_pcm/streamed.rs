@@ -125,7 +125,7 @@ fn key_peak_bytes(frame_count: usize, rate_hz: u32) -> Result<usize, PcmError> {
     Ok(peak)
 }
 
-fn staging_plan(
+pub(crate) fn staging_plan(
     retained_bytes: usize,
     frame_count: usize,
     rate_hz: u32,

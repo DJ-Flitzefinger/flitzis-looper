@@ -200,7 +200,7 @@ fn productive_history_native_loaded_source_publication_fences_new_launch_during_
         stems: Vec::new(),
     };
     assert_eq!(state.drain(&mut consumer, &mut blocked), 0);
-    blocked.slots = 2;
+    blocked.slots = MAX_VOICES + 2;
     assert_eq!(state.drain(&mut consumer, &mut blocked), 1);
     assert!(!state.mixer.play_sample(0, 1.0)); // Automatic requires fresh new-source acceptance
     state.mixer.render(&mut [0.0; 37], &mut [0.0; NUM_SAMPLES]);
@@ -336,6 +336,11 @@ struct AuthorityRaceRetirement {
 }
 
 impl AudioBufferRetirement for AuthorityRaceRetirement {
+    fn retire_resident_capture(
+        &mut self,
+        _: std::sync::Arc<crate::audio_engine::resident_seek::ResidentSeekCapture>,
+    ) {
+    }
     fn retire_resident_cancellation(&mut self, _: std::sync::Arc<std::sync::atomic::AtomicBool>) {}
     fn retire_resident_transaction(&mut self, _: Box<crate::messages::ResidentTransaction>) {}
     fn retire_cold_adoption(&mut self, _: Arc<std::sync::atomic::AtomicU8>) {}
@@ -415,6 +420,8 @@ fn productive_history_exclusive_preflight_failure_preserves_loop_and_other_audio
             accepted: None,
         },
         received_at_ns: 0,
+        resident_control: None,
+        launch_revision: 0,
     };
     let mut retirement = AuthorityRaceRetirement {
         ownership,
@@ -492,7 +499,7 @@ fn productive_history_exclusive_commit_uses_admitted_source_when_authority_chang
         revoke_at_preflight: None,
         revoke_at_retire: true,
         samples: Vec::new(),
-        slots: MAX_VOICES,
+        slots: 2 * MAX_VOICES,
     };
     execute_scheduled_command(
         &mut state.mixer,
@@ -717,6 +724,11 @@ struct LimitedRetirement {
     stems: Vec<PreparedStemSet>,
 }
 impl AudioBufferRetirement for LimitedRetirement {
+    fn retire_resident_capture(
+        &mut self,
+        _: std::sync::Arc<crate::audio_engine::resident_seek::ResidentSeekCapture>,
+    ) {
+    }
     fn retire_resident_cancellation(&mut self, _: std::sync::Arc<std::sync::atomic::AtomicBool>) {}
     fn retire_resident_transaction(&mut self, _: Box<crate::messages::ResidentTransaction>) {}
     fn retire_cold_adoption(&mut self, _: Arc<std::sync::atomic::AtomicU8>) {}

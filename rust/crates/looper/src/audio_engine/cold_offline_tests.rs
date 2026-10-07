@@ -18,14 +18,26 @@ struct ColdOffline {
     callback: Callback,
     loaded: SampleBuffer,
     generation: u64,
+    full_frames: usize,
 }
 
 impl ColdOffline {
     fn new() -> Self {
+        Self::new_selected(None)
+    }
+
+    fn new_selected(hint: Option<crate::audio_engine::cold_residency::ResidentLoadHint>) -> Self {
+        Self::new_selected_frames(hint, 128)
+    }
+
+    fn new_selected_frames(
+        hint: Option<crate::audio_engine::cold_residency::ResidentLoadHint>,
+        frames: usize,
+    ) -> Self {
         Python::initialize();
         let directory = tempfile::tempdir().unwrap();
         let external = directory.path().join("external.wav");
-        constant_wav(&external, 8192);
+        constant_wav_frames(&external, 8192, frames);
         let engine = AudioEngine::new().unwrap();
         assert!(engine.stream_handle.is_none());
         let previous = old(&engine);
@@ -40,23 +52,28 @@ impl ColdOffline {
             callback,
             loaded: previous,
             generation: 7,
+            full_frames: frames,
         };
-        value.load_and_ack(1);
+        value.load_and_ack_selected(1, hint);
         value
     }
 
     fn load_and_ack(&mut self, expected_commands: usize) {
-        let request = admit_for_format(
+        self.load_and_ack_selected(expected_commands, None);
+    }
+
+    fn load_and_ack_selected(
+        &mut self,
+        expected_commands: usize,
+        hint: Option<crate::audio_engine::cold_residency::ResidentLoadHint>,
+    ) {
+        let request = crate::audio_engine::cold_load::admit_for_format_selected(
             &self.engine,
             0,
             self.external.to_string_lossy().into(),
-            false,
-            false,
-            true,
+            (false, false, true, hint),
             self.producer.clone(),
-            2,
-            48_000,
-            self.directory.path().join("samples"),
+            (2, 48_000, self.directory.path().join("samples")),
         )
         .unwrap();
         wait_until(|| self.engine.input_runtime_ownership.cold_status(0, request) == Some(0));
@@ -81,7 +98,14 @@ impl ColdOffline {
             (request, 48_000)
         );
         assert_eq!(self.loaded.channels, 2);
-        assert_eq!(self.loaded.samples.len(), 256);
+        assert_eq!(
+            self.loaded.samples.len(),
+            if hint.is_some() {
+                64
+            } else {
+                self.full_frames * 2
+            }
+        );
         assert!(self.callback.mixer.play_sample(0, 1.0));
         self.assert_playback_owner();
     }
@@ -132,12 +156,16 @@ impl ColdOffline {
 }
 
 fn constant_wav(path: &std::path::Path, value: i16) {
+    constant_wav_frames(path, value, 128);
+}
+
+fn constant_wav_frames(path: &std::path::Path, value: i16, frames: usize) {
     let mut bytes = wav(path, 48_000);
     bytes.truncate(44);
-    let data = 128_u32 * 2;
+    let data = u32::try_from(frames * 2).unwrap();
     bytes[4..8].copy_from_slice(&(36 + data).to_le_bytes());
     bytes[40..44].copy_from_slice(&data.to_le_bytes());
-    for _ in 0..128 {
+    for _ in 0..frames {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
     fs::write(path, bytes).unwrap();
@@ -230,6 +258,397 @@ fn finish_cancelled(job: &OfflineAnalysisJob) {
     job.cancel();
     retire(job);
     assert!(!finish(job, &result));
+}
+
+fn finite_complete_fixture() -> ColdOffline {
+    let fixture = ColdOffline::new_selected(Some(
+        crate::audio_engine::cold_residency::ResidentLoadHint {
+            start_s: 32.0 / 48_000.0,
+            end_s: 64.0 / 48_000.0,
+            key_lock: false,
+        },
+    ));
+    assert_eq!(fixture.loaded.frame_count(), 128);
+    assert_eq!(fixture.loaded.resident_start(), 32);
+    assert_eq!(fixture.loaded.resident_end(), 64);
+    assert_eq!(fixture.loaded.samples.len(), 64);
+    fixture.assert_playback_owner();
+    fixture
+}
+
+#[test]
+fn c2b_productive_complete_waveform_navigation_keeps_finite_audio_and_absolute_extreme_zoom() {
+    let fixture = finite_complete_fixture();
+    let request = fixture.engine.pad_request_ids.lock().unwrap()[0];
+    Python::attach(|py| {
+        assert!(
+            fixture
+                .engine
+                .get_waveform_render_data(py, 0, 8, 0.0, 128.0 / 48_000.0)
+                .unwrap()
+                .is_none()
+        )
+    });
+    wait_until(|| fixture.engine.waveform_readiness(0).unwrap().0 == "ready");
+    Python::attach(|py| {
+        let (raw, xs, low, high) = fixture
+            .engine
+            .get_waveform_render_data(py, 0, 8, 0.0, 128.0 / 48_000.0)
+            .unwrap()
+            .unwrap();
+        assert!(!raw);
+        for bin in 0..8 {
+            assert_eq!(
+                xs.bind(py).get_item(bin).unwrap().extract::<f64>().unwrap(),
+                (bin * 16) as f64 / 48_000.0
+            );
+            assert_eq!(
+                low.bind(py)
+                    .get_item(bin)
+                    .unwrap()
+                    .extract::<f32>()
+                    .unwrap(),
+                0.25
+            );
+            assert_eq!(
+                high.as_ref()
+                    .unwrap()
+                    .bind(py)
+                    .get_item(bin)
+                    .unwrap()
+                    .extract::<f32>()
+                    .unwrap(),
+                0.25
+            );
+        }
+        assert!(
+            fixture
+                .engine
+                .get_waveform_render_data(py, 0, 16, 124.0 / 48_000.0, 128.0 / 48_000.0)
+                .unwrap()
+                .is_none()
+        );
+    });
+    wait_until(|| fixture.engine.waveform_readiness(0).unwrap().0 == "ready");
+    Python::attach(|py| {
+        let (raw, xs, low, high) = fixture
+            .engine
+            .get_waveform_render_data(py, 0, 16, 124.0 / 48_000.0, 128.0 / 48_000.0)
+            .unwrap()
+            .unwrap();
+        assert!(raw && high.is_none());
+        for offset in 0..4 {
+            assert_eq!(
+                xs.bind(py)
+                    .get_item(offset)
+                    .unwrap()
+                    .extract::<f64>()
+                    .unwrap(),
+                (124 + offset) as f64 / 48_000.0
+            );
+            assert_eq!(
+                low.bind(py)
+                    .get_item(offset)
+                    .unwrap()
+                    .extract::<f32>()
+                    .unwrap(),
+                0.25
+            );
+        }
+    });
+    assert_eq!(fixture.engine.pad_request_ids.lock().unwrap()[0], request);
+    assert_eq!(
+        fixture
+            .engine
+            .waveform_source_identity(0)
+            .unwrap()
+            .unwrap()
+            .0,
+        fixture.generation
+    );
+    fixture.assert_playback_owner();
+    let lease = fixture.engine.cold_leases.lock().unwrap()[0]
+        .clone()
+        .unwrap();
+    assert!(
+        lease
+            .live_cached_pcm_samples()
+            .is_none_or(|samples| samples == 64)
+    );
+}
+
+#[test]
+fn c2b_productive_finite_offline_export_is_complete_and_lease_retires_after_read_return() {
+    let fixture = finite_complete_fixture();
+    let reader = crate::audio_engine::complete_context::CompleteSourceReader::capture(
+        &fixture.engine,
+        0,
+        fixture.loaded.clone(),
+    )
+    .unwrap();
+    let job = fixture
+        .engine
+        .offline_jobs
+        .begin_complete(
+            0,
+            reader,
+            48_000,
+            fixture.generation,
+            OfflineRequestOwner {
+                request_ids: fixture.engine.pad_request_ids.clone(),
+                prepared_epoch: fixture.engine.prepared_source_epochs[0].clone(),
+            },
+            fixture.engine.loader_tx.clone(),
+        )
+        .unwrap();
+    let metadata = dictionary(&job, false);
+    assert_eq!(metadata["frame_count"], 128);
+    assert_eq!(metadata["origin_seconds"], 0.0);
+    let source = &fixture.loaded.residency.as_ref().unwrap().source;
+    let digest = |bytes: &[u8; 32]| {
+        bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    assert_eq!(
+        metadata["complete_source_identity"],
+        digest(&source.transform_sha256)
+    );
+    assert_eq!(
+        metadata["complete_playback_sha256"],
+        digest(&source.playback_sha256)
+    );
+    assert_eq!(
+        metadata["complete_mono_sha256"],
+        digest(&source.mono_sha256)
+    );
+    assert_eq!(metadata["source_zero_frame"], 0);
+    assert_eq!(dictionary(&job, true)["retained_source_bytes"], 64 * 4);
+    let path = fixture.path("complete-finite-mono.f32le");
+    prepare(&job, &path);
+    assert_mono_file(&path, 8192.0 / 32768.0);
+    assert_eq!(dictionary(&job, true)["retained_source_bytes"], 0);
+    assert_eq!(
+        dictionary(&job, true)["observed_export_peak_bytes"],
+        64 * 4 + crate::audio_engine::complete_context::READER_SCRATCH_BYTES
+    );
+    assert!(fs::OpenOptions::new().write(true).open(&path).is_err());
+    retire(&job);
+    fs::remove_file(&path).unwrap();
+    assert!(finish(&job, &envelope(&job, false)));
+    assert_eq!(completed(&fixture.engine).len(), 1);
+    fixture.assert_playback_owner();
+    // Export released its complete file reader and only the finite bank/voice remains.
+    let lease = fixture.engine.cold_leases.lock().unwrap()[0]
+        .clone()
+        .unwrap();
+    assert!(
+        lease
+            .live_cached_pcm_samples()
+            .is_none_or(|samples| samples == 64)
+    );
+}
+
+#[test]
+fn c2b_complete_reader_cancellation_keeps_sealed_ownership_through_actual_visitor_return() {
+    let fixture = finite_complete_fixture();
+    let reader = crate::audio_engine::complete_context::CompleteSourceReader::capture(
+        &fixture.engine,
+        0,
+        fixture.loaded.clone(),
+    )
+    .unwrap();
+    let lease = fixture.engine.cold_leases.lock().unwrap()[0]
+        .clone()
+        .unwrap();
+    let path = lease.cache_path.join("playback.f32le");
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        reader.visit_region(0..128, &|| false, |_, samples| {
+            assert_eq!(samples.len(), 256);
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Ok(())
+        })
+    });
+    entered_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    fixture.engine.loaded_source_generations.lock().unwrap()[0] = (fixture.generation + 1, 48_000);
+    fixture.engine.cold_leases.lock().unwrap()[0].take();
+    drop(lease);
+    assert!(fs::OpenOptions::new().write(true).open(&path).is_err());
+    release_tx.send(()).unwrap();
+    assert!(
+        handle
+            .join()
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("cancelled")
+    );
+    assert!(path.is_file());
+    assert!(fixture.external.is_file());
+}
+
+#[test]
+fn c2b_productive_complete_analysis_admission_is_bounded_and_superseded_work_cannot_publish() {
+    let fixture = finite_complete_fixture();
+    let request = fixture.engine.pad_request_ids.lock().unwrap()[0];
+    let reservations: Vec<_> = (0..crate::audio_engine::cold_jobs::QUEUED_JOBS)
+        .map(|_| fixture.engine.cold_jobs.reserve().unwrap())
+        .collect();
+    assert!(
+        crate::audio_engine::complete_context::start_analysis(&fixture.engine, 0)
+            .unwrap_err()
+            .to_string()
+            .contains("queue full")
+    );
+    assert_eq!(fixture.engine.pad_request_ids.lock().unwrap()[0], request);
+    assert!(fixture.engine.active_tasks.lock().unwrap().is_empty());
+    drop(reservations);
+    let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+    let (tx, rx) = std::sync::mpsc::channel();
+    for _ in 0..crate::audio_engine::cold_jobs::WORKERS {
+        let gate = gate.clone();
+        let tx = tx.clone();
+        fixture
+            .engine
+            .cold_jobs
+            .submit(fixture.engine.cold_jobs.reserve().unwrap(), move || {
+                tx.send(()).unwrap();
+                let mut open = gate.0.lock().unwrap();
+                while !*open {
+                    open = gate.1.wait(open).unwrap();
+                }
+            })
+            .unwrap();
+    }
+    for _ in 0..crate::audio_engine::cold_jobs::WORKERS {
+        rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    }
+    let analysis_request =
+        crate::audio_engine::complete_context::start_analysis(&fixture.engine, 0).unwrap();
+    crate::audio_engine::next_pad_request_id(
+        &fixture.engine.pad_request_ids,
+        0,
+        &fixture.engine.prepared_source_epochs[0],
+    )
+    .unwrap();
+    *gate.0.lock().unwrap() = true;
+    gate.1.notify_all();
+    wait_until(|| fixture.engine.active_tasks.lock().unwrap().is_empty());
+    let events: Vec<_> = fixture
+        .engine
+        .loader_rx
+        .lock()
+        .unwrap()
+        .try_iter()
+        .collect();
+    assert!(events.iter().any(|event| matches!(event, LoaderEvent::TaskError { request_id, error, .. } if *request_id == analysis_request && error.contains("superseded"))));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, LoaderEvent::TaskSuccess { .. }))
+    );
+    fixture.assert_playback_owner();
+}
+
+#[test]
+fn c2b_productive_complete_waveform_pressure_is_terminal_until_explicit_retry() {
+    let fixture = finite_complete_fixture();
+    let reservations: Vec<_> = (0..crate::audio_engine::cold_jobs::QUEUED_JOBS)
+        .map(|_| fixture.engine.cold_jobs.reserve().unwrap())
+        .collect();
+    Python::attach(|py| {
+        assert!(
+            fixture
+                .engine
+                .get_waveform_render_data(py, 0, 8, 0.0, 128.0 / 48_000.0)
+                .unwrap_err()
+                .to_string()
+                .contains("queue full")
+        )
+    });
+    assert_eq!(fixture.engine.waveform_readiness(0).unwrap().0, "error");
+    drop(reservations);
+    Python::attach(|py| {
+        assert!(
+            fixture
+                .engine
+                .get_waveform_render_data(py, 0, 8, 0.0, 128.0 / 48_000.0)
+                .unwrap()
+                .is_none()
+        )
+    });
+    assert_eq!(fixture.engine.waveform_readiness(0).unwrap().0, "error");
+    fixture.engine.retry_waveform(0).unwrap();
+    Python::attach(|py| {
+        assert!(
+            fixture
+                .engine
+                .get_waveform_render_data(py, 0, 8, 0.0, 128.0 / 48_000.0)
+                .unwrap()
+                .is_none()
+        )
+    });
+    wait_until(|| fixture.engine.waveform_readiness(0).unwrap().0 == "ready");
+    fixture.assert_playback_owner();
+}
+
+#[test]
+fn c2b_productive_default_analysis_reads_complete_source_without_expanding_effective_finite_bank() {
+    let fixture = ColdOffline::new_selected_frames(
+        Some(crate::audio_engine::cold_residency::ResidentLoadHint {
+            start_s: 32.0 / 48_000.0,
+            end_s: 64.0 / 48_000.0,
+            key_lock: false,
+        }),
+        96_000,
+    );
+    let reader = crate::audio_engine::complete_context::CompleteSourceReader::capture(
+        &fixture.engine,
+        0,
+        fixture.loaded.clone(),
+    )
+    .unwrap();
+    let full = reader
+        .materialize(crate::audio_engine::cold_jobs::PCM_LIMIT_BYTES, &|| false)
+        .unwrap();
+    assert_eq!(full.samples.len(), 192_000);
+    assert!(
+        full.samples
+            .iter()
+            .all(|&sample| sample.to_bits() == (8192.0_f32 / 32768.0).to_bits())
+    );
+    drop(full);
+    drop(reader);
+    let request =
+        crate::audio_engine::complete_context::start_analysis(&fixture.engine, 0).unwrap();
+    wait_until(|| fixture.engine.active_tasks.lock().unwrap().is_empty());
+    let terminal = fixture.engine.loader_rx.lock().unwrap().try_iter().find(|event| matches!(event,
+        LoaderEvent::TaskSuccess { request_id, .. } | LoaderEvent::TaskError { request_id, .. } if *request_id == request)).unwrap();
+    assert!(
+        matches!(
+            terminal,
+            LoaderEvent::TaskSuccess {
+                analysis: Some(_),
+                ..
+            }
+        ),
+        "{terminal:?}"
+    );
+    fixture.assert_playback_owner();
+    assert_eq!(
+        fixture.engine.sample_cache.lock().unwrap()[0]
+            .as_ref()
+            .unwrap()
+            .samples
+            .len(),
+        64
+    );
 }
 
 #[test]

@@ -40,7 +40,7 @@ impl PreparedSourcePermit {
         match self.status.load(Ordering::Acquire) {
             0 => "captured",
             1 => "pending",
-            2 => "accepted",
+            2 | 5 => "accepted",
             4 => "adopting",
             _ => "rejected",
         }
@@ -53,7 +53,38 @@ pub(crate) struct PreparedSourcePermit {
     pub(super) epoch: Arc<AtomicU64>,
     pub(super) expected: u64,
     status: Arc<AtomicU8>,
+    resident_seek_bits: Arc<AtomicU64>,
+    source_epoch: Option<(Arc<AtomicU64>, u64)>,
     timing: Option<PreparedTimingPermit>,
+}
+
+/// Inline resident-launch snapshot of the existing scalar publication guards.
+/// Timing-bound permits cannot produce this snapshot; mixer source/timing binding
+/// checks remain separate. Cloning creates no new RT-owned heap object.
+#[derive(Debug, Clone)]
+pub(crate) struct ResidentLaunchPermit {
+    pub(super) epoch: Arc<AtomicU64>,
+    pub(super) expected: u64,
+    status: Arc<AtomicU8>,
+    source_epoch: Option<(Arc<AtomicU64>, u64)>,
+}
+
+fn publication_epochs_current(
+    epoch: &AtomicU64,
+    expected: u64,
+    source_epoch: &Option<(Arc<AtomicU64>, u64)>,
+) -> bool {
+    epoch.load(Ordering::Acquire) == expected
+        && source_epoch
+            .as_ref()
+            .is_none_or(|(epoch, expected)| epoch.load(Ordering::Acquire) == *expected)
+}
+
+impl ResidentLaunchPermit {
+    pub(crate) fn current_accepted(&self) -> bool {
+        matches!(self.status.load(Ordering::Acquire), 2 | 5)
+            && publication_epochs_current(&self.epoch, self.expected, &self.source_epoch)
+    }
 }
 
 /// Current accepted authority captured from the same native resolver as MIDI.
@@ -97,6 +128,8 @@ impl PreparedSourcePermit {
             epoch,
             expected,
             status: Arc::new(AtomicU8::new(0)),
+            resident_seek_bits: Arc::new(AtomicU64::new(f64::NAN.to_bits())),
+            source_epoch: None,
             timing: None,
         }
     }
@@ -112,21 +145,61 @@ impl PreparedSourcePermit {
         self.status.store(2, Ordering::Release);
     }
 
+    /// A guarded seek of a previous-source pin changes no current bank storage.
+    pub(crate) fn mark_accepted_preserved_window(&self) {
+        self.status.store(5, Ordering::Release);
+    }
+
+    pub(super) fn preserved_window(&self) -> bool {
+        self.status.load(Ordering::Acquire) == 5
+    }
+
+    pub(crate) fn record_resident_seek(&self, seconds: Option<f64>) {
+        self.resident_seek_bits
+            .store(seconds.unwrap_or(f64::NAN).to_bits(), Ordering::Release);
+    }
+
+    pub(super) fn resident_seek_seconds(&self) -> Option<f64> {
+        let seconds = f64::from_bits(self.resident_seek_bits.load(Ordering::Acquire));
+        seconds.is_finite().then_some(seconds)
+    }
+
     pub(crate) fn mark_rejected(&self) {
         self.status.store(3, Ordering::Release);
     }
     pub(crate) fn current(&self) -> bool {
         self.status.load(Ordering::Acquire) != 3
-            && self.epoch.load(Ordering::Acquire) == self.expected
+            && publication_epochs_current(&self.epoch, self.expected, &self.source_epoch)
             && self
                 .timing
                 .as_ref()
                 .is_none_or(PreparedTimingPermit::current)
     }
 
+    pub(super) fn resident_launch_permit(&self) -> Option<ResidentLaunchPermit> {
+        self.timing.is_none().then(|| ResidentLaunchPermit {
+            epoch: self.epoch.clone(),
+            expected: self.expected,
+            status: self.status.clone(),
+            source_epoch: self.source_epoch.clone(),
+        })
+    }
+
+    pub(super) fn with_source_epoch(mut self, epoch: Arc<AtomicU64>, expected: u64) -> Self {
+        self.source_epoch = Some((epoch, expected));
+        self
+    }
+
     pub(crate) fn claim_resident(&self) -> bool {
         self.status
             .compare_exchange(1, 4, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// A stopped seek has no PCM payload; still claim before its native no-op ACK.
+    pub(crate) fn claim_resident_capture(&self) -> bool {
+        self.status
+            .compare_exchange(0, 4, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
     }
 

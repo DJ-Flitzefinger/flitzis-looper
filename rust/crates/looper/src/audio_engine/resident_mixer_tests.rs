@@ -184,6 +184,8 @@ fn storage_only_callback_relocation_retains_source_current_voice_rate_filter_and
                 binding: old_binding,
                 publication: publication.clone(),
                 expected_window_revision: 1,
+                intent: Default::default(),
+                seek_pin: None,
             })),
         );
         assert_eq!(publication.status(), "accepted");
@@ -262,6 +264,8 @@ fn active_relocation_rejects_new_source_new_complete_stemset_stale_revision_canc
                 binding: before,
                 publication: publication.clone(),
                 expected_window_revision: if case == 2 { 0 } else { 1 },
+                intent: Default::default(),
+                seek_pin: None,
             })),
         );
         assert_eq!(publication.status(), "rejected");
@@ -301,6 +305,8 @@ fn keylock_enabled_after_window_capture_rejects_finite_relocation_for_active_and
                 binding: captured,
                 publication: publication.clone(),
                 expected_window_revision: 1,
+                intent: Default::default(),
+                seek_pin: None,
             })),
         );
         assert_eq!(publication.status(), "rejected");
@@ -356,6 +362,8 @@ fn native_keylock_full_context_relocation_keeps_actual_handle_fifo_history_and_o
             binding: before,
             publication: publication.clone(),
             expected_window_revision: 1,
+            intent: Default::default(),
+            seek_pin: None,
         })),
     );
     assert_eq!(publication.status(), "accepted");
@@ -469,3 +477,6 @@ fn finite_window_has_no_hidden_complete_pcm_pin_and_old_voice_keeps_source_geome
     );
     assert!(voice(&actual).source_playback.position().frame < END);
 }
+
+#[path = "resident_transaction_parity_tests.rs"]
+mod resident_transaction_parity_tests;

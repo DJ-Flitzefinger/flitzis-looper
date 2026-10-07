@@ -488,6 +488,26 @@ the retained complete G2 gate input (default local path, or
 `FLITZIS_G3C_GATE_INPUT`). Private inputs, JSON evidence and audio snippets are
 never repository fixtures. See [the proof domains and remaining gates](loop-period-proof.md).
 
+### Hardware-free C2b complete-context and residency evidence
+
+Complete-source waveform/export/default-analysis tests and actual cold-worker
+control transactions run without an app or device:
+
+```powershell
+.\scripts\run-rust-tests.ps1 -CargoArgs @('c2b_')
+.\scripts\run-rust-tests.ps1 -CargoArgs @('resident_control_worker_tests')
+.\scripts\run-rust-tests.ps1 -CargoArgs @('resident_transaction_parity_tests')
+.\scripts\run-rust-tests.ps1 -CargoArgs @('resident_long_cycle_tests')
+uv run pytest src/tests/flitzis_looper/controller/transport/test_residency.py
+```
+
+Repeat native checks with `--release` and install the matching debug/release
+extension before the Python suite, serially. The long-cycle test compares the
+actual native ACK/render route with complete-buffer output and an independent
+PCM/period oracle at 75 and 1000 observed cycles. It certifies those numerical
+contracts only. C3 process-memory/performance and human device/listening gates
+remain separate. Generated source and proof exports stay outside the repository.
+
 ### G3c productive device and listening preparation
 
 The [human-run acceptance packet](device-loop-acceptance.md) documents the opt-in

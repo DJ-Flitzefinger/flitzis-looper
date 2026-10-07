@@ -185,6 +185,9 @@ def audio_engine_mock() -> Iterator[Mock]:
         audio_engine.return_value.receive_msg.return_value = None
         audio_engine.return_value.current_constant_timing.return_value = None
         audio_engine.return_value.pad_timing_intent.return_value = "legacy"
+        audio_engine.return_value.cancel_pad_launches = Mock(return_value=False)
+        audio_engine.return_value.cancel_all_launches = Mock(return_value=[])
+        audio_engine.return_value.admitted_launch_ids = Mock(return_value=[])
 
         def runtime_binding(sample_id: int) -> FakeInputRuntimePadBinding:
             metadata = audio_engine.return_value.current_constant_timing.return_value

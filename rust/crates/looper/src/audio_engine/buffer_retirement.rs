@@ -25,9 +25,11 @@ pub(crate) enum RetiredAudioBuffer {
     AcceptedTimingRefresh(Arc<super::accepted_timing_refresh::AcceptedTimingRefresh>),
     ResidentTransaction(Box<crate::messages::ResidentTransaction>),
     ResidentCancellation(Arc<AtomicBool>),
+    ResidentSeekCapture(Arc<super::resident_seek::ResidentSeekCapture>),
 }
 
 pub(crate) trait AudioBufferRetirement {
+    fn retire_resident_capture(&mut self, capture: Arc<super::resident_seek::ResidentSeekCapture>);
     fn retire_resident_cancellation(&mut self, cancelled: Arc<AtomicBool>);
     fn retire_resident_transaction(
         &mut self,
@@ -53,6 +55,7 @@ pub(crate) struct ImmediateAudioBufferRetirement;
 
 #[cfg(test)]
 impl AudioBufferRetirement for ImmediateAudioBufferRetirement {
+    fn retire_resident_capture(&mut self, _: Arc<super::resident_seek::ResidentSeekCapture>) {}
     fn retire_resident_cancellation(&mut self, _: Arc<AtomicBool>) {}
     fn retire_resident_transaction(&mut self, _: Box<crate::messages::ResidentTransaction>) {}
     fn retire_cold_adoption(&mut self, _: Arc<std::sync::atomic::AtomicU8>) {}
@@ -140,6 +143,9 @@ impl RtAudioBufferRetirement {
 }
 
 impl AudioBufferRetirement for RtAudioBufferRetirement {
+    fn retire_resident_capture(&mut self, capture: Arc<super::resident_seek::ResidentSeekCapture>) {
+        self.retire_buffer(RetiredAudioBuffer::ResidentSeekCapture(capture));
+    }
     fn retire_resident_cancellation(&mut self, cancelled: Arc<AtomicBool>) {
         self.retire_buffer(RetiredAudioBuffer::ResidentCancellation(cancelled));
     }

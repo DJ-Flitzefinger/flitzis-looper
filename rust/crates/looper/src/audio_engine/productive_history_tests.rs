@@ -391,6 +391,11 @@ struct RetainedSamples {
     samples: Vec<SampleBuffer>,
 }
 impl AudioBufferRetirement for RetainedSamples {
+    fn retire_resident_capture(
+        &mut self,
+        _: std::sync::Arc<crate::audio_engine::resident_seek::ResidentSeekCapture>,
+    ) {
+    }
     fn retire_resident_cancellation(&mut self, _: std::sync::Arc<std::sync::atomic::AtomicBool>) {}
     fn retire_resident_transaction(&mut self, _: Box<crate::messages::ResidentTransaction>) {}
     fn retire_cold_adoption(&mut self, _: Arc<std::sync::atomic::AtomicU8>) {}

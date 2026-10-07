@@ -12,6 +12,52 @@ impl ColdTransaction {
 }
 
 impl CommittedColdLease {
+    pub(in crate::audio_engine) fn verify_reference(
+        &self,
+        reference: &SampleBuffer,
+    ) -> io::Result<()> {
+        let view = reference
+            .residency
+            .as_ref()
+            .ok_or_else(|| invalid("source descriptor missing"))?;
+        let expected = crate::audio_engine::cold_residency::identity(&self.manifest)
+            .map_err(io::Error::other)?;
+        if view.source.transform_sha256 != expected.transform_sha256
+            || view.source.original_sha256 != expected.original_sha256
+            || view.source.playback_sha256 != expected.playback_sha256
+            || view.source.mono_sha256 != expected.mono_sha256
+            || view.source.frame_count != expected.frame_count
+            || view.source.channels != expected.channels
+            || view.source.sample_rate_hz != expected.sample_rate_hz
+            || view.source.source_zero_frame != expected.source_zero_frame
+        {
+            return Err(invalid("complete lease does not belong to resident source"));
+        }
+        Ok(())
+    }
+
+    pub(in crate::audio_engine) fn open_complete_reader(
+        &self,
+        reference: &SampleBuffer,
+    ) -> io::Result<File> {
+        self.verify_reference(reference)?;
+        let path = self.cache_path.join("playback.f32le");
+        reject_links(&path)?;
+        let file = sealed_reader(&path)?;
+        let expected_bytes = reference
+            .frame_count()
+            .checked_mul(reference.channels)
+            .and_then(|n| n.checked_mul(4))
+            .ok_or_else(|| invalid("complete reader extent overflow"))?;
+        if self.cache.file_identities.get(1) != Some(&file_identity(&file)?)
+            || file.metadata()?.len() != expected_bytes as u64
+        {
+            return Err(invalid(
+                "complete reader FileID/extent differs from immutable lease",
+            ));
+        }
+        Ok(file)
+    }
     /// The same immutable FileID under held write/delete-excluding file/directory
     /// guards permits bounded rereads without claiming a mutable pathname is content.
     pub(in crate::audio_engine) fn read_complete(
@@ -40,16 +86,7 @@ impl CommittedColdLease {
             .ok_or_else(|| invalid("source descriptor missing"))?;
         let expected = crate::audio_engine::cold_residency::identity(&self.manifest)
             .map_err(io::Error::other)?;
-        if view.source.transform_sha256 != expected.transform_sha256
-            || view.source.original_sha256 != expected.original_sha256
-            || view.source.playback_sha256 != expected.playback_sha256
-            || view.source.mono_sha256 != expected.mono_sha256
-            || view.source.frame_count != expected.frame_count
-            || view.source.channels != expected.channels
-            || view.source.sample_rate_hz != expected.sample_rate_hz
-        {
-            return Err(invalid("complete lease does not belong to resident source"));
-        }
+        self.verify_reference(reference)?;
         let count = expected
             .frame_count
             .checked_mul(expected.channels)
@@ -66,14 +103,7 @@ impl CommittedColdLease {
         if count.checked_mul(8).is_none_or(|n| n > budget) {
             return Err(invalid("complete reader exceeds transient PCM limit"));
         }
-        let path = self.cache_path.join("playback.f32le");
-        reject_links(&path)?;
-        let mut file = sealed_reader(&path)?;
-        if self.cache.file_identities.get(1) != Some(&file_identity(&file)?) {
-            return Err(invalid(
-                "complete reader FileID differs from immutable lease",
-            ));
-        }
+        let mut file = self.open_complete_reader(reference)?;
         let samples = warm::read_playback(
             &mut file,
             expected.frame_count,

@@ -41,7 +41,10 @@ if TYPE_CHECKING:
 
 T = TypeVar("T", bound=BaseModel)
 type _WaveformSourceIdentity = tuple[
-    str | None, float | None, tuple[str, int, str, str, int, int] | None
+    str | None,
+    float | None,
+    tuple[str, int, str, str, int, int] | None,
+    tuple[int, str, int, int] | None,
 ]
 
 
@@ -271,6 +274,14 @@ class UiState:
 class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad controls.
     def __init__(self, controller: AppController):
         self._controller = controller
+
+    def residency_status(self, pad_id: int) -> tuple[str | None, str | None]:
+        """Read requested control readiness separately from effective playback."""
+        return self._controller.transport.residency.status(pad_id)
+
+    def cancel_residency(self, pad_id: int) -> None:
+        """Cancel a pending source context before native adoption claims it."""
+        self._controller.transport.residency.cancel_requested(pad_id)
 
     def trigger_pad(self, pad_id: int, *, received_at_ns: int | None = None) -> None:
         """Trigger or learn a pad action, retaining its captured Rust input timestamp."""
@@ -582,11 +593,17 @@ class WaveformEditorActions:
 
     def open(self, pad_id: int) -> None:
         session = self._controller.session
+        if session.waveform_editor_pad_id is not None and session.waveform_editor_pad_id != pad_id:
+            self._controller.transport.waveform.release_view(session.waveform_editor_pad_id)
+            self._last_waveform_value = None
         session.waveform_editor_open = True
         session.waveform_editor_pad_id = pad_id
 
     def close(self) -> None:
         session = self._controller.session
+        if session.waveform_editor_pad_id is not None:
+            self._controller.transport.waveform.release_view(session.waveform_editor_pad_id)
+        self._last_waveform_value = None
         session.waveform_editor_open = False
         session.waveform_editor_pad_id = None
 
@@ -717,7 +734,11 @@ class WaveformEditorActions:
         """Reset the first view of a newly assigned source, preserving later navigation."""
         identity = self._waveform_source_identity(pad_id, timing=timing)
         previous = self._pad_view_sources.get(pad_id)
-        if previous is not None and previous[:2] == identity[:2]:
+        if (
+            previous is not None
+            and previous[:2] == identity[:2]
+            and (identity[3] is None or previous[3] == identity[3])
+        ):
             # A transient unavailable timing lookup says nothing about source replacement.
             # Retain only observed source ownership for navigation, never timing authority.
             if identity[2] is None or previous[2] == identity[2]:
@@ -832,13 +853,15 @@ class WaveformEditorActions:
         if isinstance(timing, UnresolvedTiming):
             timing = self._controller.transport.bpm.current_timing(pad_id)
         source_identity = self._waveform_source_identity(pad_id, timing=timing)
-        if (
-            self._last_pad_id != pad_id
-            or self._last_width_px != width_px
-            or self._last_start_s != start_s
-            or self._last_end_s != end_s
-            or self._last_source_identity != source_identity
-        ):
+        view = (pad_id, width_px, start_s, end_s, source_identity)
+        previous = (
+            self._last_pad_id,
+            self._last_width_px,
+            self._last_start_s,
+            self._last_end_s,
+            self._last_source_identity,
+        )
+        if self._last_waveform_value is None or previous != view:
             self._last_pad_id = pad_id
             self._last_width_px = width_px
             self._last_start_s = start_s
@@ -849,6 +872,15 @@ class WaveformEditorActions:
             )
         return self._last_waveform_value
 
+    def readiness(self, pad_id: int) -> tuple[str, str | None]:
+        """Expose pending/error full-source reads while the editor stays navigable."""
+        return self._controller.transport.waveform.readiness(pad_id)
+
+    def retry(self, pad_id: int) -> None:
+        """Retry the requested view while retaining absolute source coordinates."""
+        self._controller.transport.waveform.retry(pad_id)
+        self._last_waveform_value = None
+
     def _waveform_source_identity(
         self,
         pad_id: int,
@@ -856,7 +888,7 @@ class WaveformEditorActions:
         timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
     ) -> _WaveformSourceIdentity:
         if not 0 <= pad_id < len(self._controller.project.sample_paths):
-            return (None, None, None)
+            return (None, None, None, None)
         if isinstance(timing, UnresolvedTiming):
             timing = self._controller.transport.bpm.current_timing(pad_id)
         source_identity = None
@@ -880,6 +912,7 @@ class WaveformEditorActions:
             self._controller.project.sample_paths[pad_id],
             float(duration_s) if duration_s is not None else None,
             source_identity,
+            self._controller.transport.waveform.source_identity(pad_id),
         )
 
 

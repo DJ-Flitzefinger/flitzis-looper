@@ -1,6 +1,9 @@
 //! Productive finite source preparation, real native command ACK and independent
 //! original-PCM output oracles. No stream, device, app or synthetic timing owner.
 
+#[path = "resident_control_worker_tests.rs"]
+mod resident_control_worker_tests;
+
 use super::audio_stream::drain_control_messages;
 use super::buffer_retirement::{
     AudioBufferRetirement, AudioBufferRetirementWorker, RtAudioBufferRetirement,
@@ -30,6 +33,9 @@ struct RetirementGate {
 }
 
 impl AudioBufferRetirement for RetirementGate {
+    fn retire_resident_capture(&mut self, value: Arc<super::resident_seek::ResidentSeekCapture>) {
+        self.actual.retire_resident_capture(value);
+    }
     fn retire_resident_cancellation(&mut self, value: Arc<AtomicBool>) {
         self.actual.retire_resident_cancellation(value);
     }
@@ -832,8 +838,14 @@ fn exercise_productive_relocation(directory: &Path, with_stems: bool) {
     callback.render_continuation(&rendered_mono[32..64], 7, 137);
     // The same productive worker can be cancelled after enqueue without
     // changing its already-accepted source/window or active reader.
-    let cancelled =
-        relocate_with_producer(&engine, 0, 8.0 / 48_000.0, 88.0 / 48_000.0, producer).unwrap();
+    let cancelled = relocate_with_producer(
+        &engine,
+        0,
+        8.0 / 48_000.0,
+        88.0 / 48_000.0,
+        producer.clone(),
+    )
+    .unwrap();
     wait_until(Duration::from_secs(10), || {
         consumer.peek().is_ok() || matches!(cancelled.publication_status(), "failed" | "cancelled")
     });
@@ -849,6 +861,160 @@ fn exercise_productive_relocation(directory: &Path, with_stems: bool) {
             .same_window(&next)
     );
     callback.render_continuation(&rendered_mono[32..64], 144, 113);
+    if with_stems {
+        // This actual old finite voice carries its accepted complete set across
+        // a different cold assignment. Its next outside-loop seek must prepare
+        // the original sealed lease and historical stem descriptor, not bank B.
+        let replacement = directory.join("replacement.wav");
+        write_pcm16(&replacement, 48_000, 1, &vec![8192; 1000]);
+        let (load_producer, mut load_consumer) = rtrb::RingBuffer::new(4);
+        let request = admit_for_format_selected(
+            &engine,
+            0,
+            replacement.to_string_lossy().into_owned(),
+            (
+                false,
+                false,
+                false,
+                Some(ResidentLoadHint {
+                    start_s: 100.0 / 48_000.0,
+                    end_s: 300.0 / 48_000.0,
+                    key_lock: false,
+                }),
+            ),
+            Arc::new(Mutex::new(load_producer)),
+            (2, 48_000, directory.join("samples")),
+        )
+        .unwrap();
+        wait_until(Duration::from_secs(10), || !load_consumer.is_empty());
+        assert_eq!(callback.drain(&mut load_consumer), 1);
+        assert!(matches!(
+            terminal(&engine, request),
+            LoaderEvent::Success { .. }
+        ));
+        wait_until(Duration::from_secs(10), || {
+            engine.cold_loading[0].load(Ordering::Acquire) == 0
+        });
+        let replacement_bank = engine.sample_cache.lock().unwrap()[0].clone().unwrap();
+        assert!(!replacement_bank.same_source(&next));
+        assert_eq!(
+            (
+                replacement_bank.frame_count(),
+                replacement_bank.resident_start(),
+                replacement_bank.resident_end()
+            ),
+            (1000, 100, 300)
+        );
+        // New launch selection must not rewrite the pinned old voice's selection.
+        callback.mixer.set_stem_mix_mode(0, StemMixMode::FullMix, 0);
+        callback.mixer.set_stem_enabled_mask(0, 0, 0);
+        callback.render_continuation(&rendered_mono[32..64], 257, 29);
+        let seek = super::resident_relocation::prepare_window_with_producer(
+            &engine,
+            0,
+            super::resident_relocation::WindowRequest {
+                seek_position_s: Some(250.0 / 48_000.0),
+                ..super::resident_relocation::WindowRequest::default()
+            },
+            producer,
+        )
+        .unwrap();
+        assert!(matches!(
+            consumer.peek(),
+            Ok(ControlMessage::CaptureResidentSeek(_))
+        ));
+        assert_eq!(callback.drain(&mut consumer), 1);
+        wait_until(Duration::from_secs(10), || {
+            !consumer.is_empty() || matches!(seek.publication_status(), "failed" | "cancelled")
+        });
+        assert_eq!(
+            seek.publication_status(),
+            "pending",
+            "{:?}",
+            seek.error().unwrap()
+        );
+        let ControlMessage::RelocateResident(transaction) = consumer.peek().unwrap() else {
+            panic!("actual prepared old pin command")
+        };
+        let captured = transaction.seek_pin.as_ref().unwrap();
+        assert!(captured.sample.same_window(&next));
+        let prepared = transaction.stems.as_ref().unwrap();
+        assert!(Arc::ptr_eq(
+            &prepared.complete_set_identity,
+            accepted_set_identity.as_ref().unwrap()
+        ));
+        assert_eq!(
+            (
+                transaction.sample.frame_count(),
+                transaction.sample.resident_start(),
+                transaction.sample.resident_end()
+            ),
+            (256, 0, 256)
+        );
+        assert!(
+            prepared
+                .stems
+                .iter()
+                .all(|stem| stem.same_window(&transaction.sample))
+        );
+        callback.retirement.capacity = 0;
+        assert_eq!(callback.drain(&mut consumer), 0);
+        callback.render_continuation(&rendered_mono[32..64], 286, 31);
+        callback.retirement.capacity = usize::MAX;
+        assert_eq!(callback.drain(&mut consumer), 1);
+        assert_eq!(seek.publication_status(), "accepted");
+        assert_eq!(seek.effective_seek_seconds(), Some(250.0 / 48_000.0));
+        assert!(seek.is_current());
+        reconcile(&engine).unwrap();
+        assert!(
+            engine.sample_cache.lock().unwrap()[0]
+                .as_ref()
+                .unwrap()
+                .same_window(&replacement_bank)
+        );
+        let old_voice = callback
+            .mixer
+            .voices
+            .iter()
+            .find(|voice| voice.is_playing_sample(0))
+            .unwrap();
+        assert!(old_voice.sample.as_ref().unwrap().same_source(&next));
+        let old_set = old_voice
+            .frozen_stems
+            .as_ref()
+            .unwrap()
+            .set
+            .as_ref()
+            .unwrap();
+        assert!(Arc::ptr_eq(
+            &old_set.complete_set_identity,
+            accepted_set_identity.as_ref().unwrap()
+        ));
+        let complete_pin = Arc::downgrade(&old_voice.sample.as_ref().unwrap().samples);
+        let stem_pin = Arc::downgrade(&old_set.stems[0].samples);
+        let mut output = vec![0.0; 117 * 2];
+        callback.mixer.render_rt_at_output_frame(
+            &mut output,
+            &mut [0.0; NUM_SAMPLES],
+            317,
+            &mut callback.retirement,
+        );
+        for (index, actual) in output.chunks_exact(2).enumerate() {
+            let frame = if index < 6 {
+                250 + index
+            } else {
+                32 + (index - 6) % 32
+            };
+            assert_eq!(
+                actual, [rendered_mono[frame]; 2],
+                "serialized old stem oracle frame {index}"
+            );
+        }
+        callback.mixer.stop_sample_rt(0, &mut callback.retirement);
+        wait_until(Duration::from_secs(10), || {
+            complete_pin.upgrade().is_none() && stem_pin.upgrade().is_none()
+        });
+    }
 }
 
 #[test]

@@ -18,6 +18,26 @@ class WaveformController:
     def __init__(self, transport: TransportController) -> None:
         self._transport = transport
         self._audio = transport._audio
+        self._readiness: dict[int, tuple[str, str | None]] = {}
+
+    def readiness(self, pad_id: int) -> tuple[str, str | None]:
+        """Return full-source projection readiness without changing playback."""
+        return self._readiness.get(pad_id, ("idle", None))
+
+    def source_identity(self, pad_id: int) -> tuple[int, str, int, int] | None:
+        """Read the assignment identity used to fence same-path editor caches."""
+        identity = self._audio.waveform_source_identity(pad_id)
+        return identity if isinstance(identity, tuple) else None
+
+    def retry(self, pad_id: int) -> None:
+        """Retry a failed editor read without seeking or changing timing."""
+        self._audio.retry_waveform(pad_id)
+        self._readiness[pad_id] = ("idle", None)
+
+    def release_view(self, pad_id: int) -> None:
+        """Invalidate editor work; its worker owns the reader until read return."""
+        self._audio.retry_waveform(pad_id)
+        self._readiness.pop(pad_id, None)
 
     def get_render_data(
         self,
@@ -44,6 +64,13 @@ class WaveformController:
         source_width_px = max(
             1, round(width_px * (source_end_s - source_start_s) / (end_s - start_s))
         )
-        return self._audio.get_waveform_render_data(
-            pad_id, source_width_px, source_start_s, source_end_s
-        )
+        try:
+            data = self._audio.get_waveform_render_data(
+                pad_id, source_width_px, source_start_s, source_end_s
+            )
+            status = ("ready", None) if data is not None else self._audio.waveform_readiness(pad_id)
+        except (RuntimeError, ValueError) as error:
+            self._readiness[pad_id] = ("error", str(error))
+            return None
+        self._readiness[pad_id] = status
+        return data

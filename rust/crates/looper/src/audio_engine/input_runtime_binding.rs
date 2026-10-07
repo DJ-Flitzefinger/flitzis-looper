@@ -12,8 +12,8 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::sync::{
-    Arc,
-    atomic::{AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering},
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
 
 /// One control-owned current PCM publication. Zero generation fences all new starts.
@@ -57,6 +57,9 @@ pub(crate) struct InputRuntimeOwnership {
     source_tracking: bool,
     sources: [CurrentSourceFence; NUM_SAMPLES],
     cold_adoptions: [AtomicU64; NUM_SAMPLES],
+    resident_controls: [AtomicU64; NUM_SAMPLES],
+    launch_revisions: [AtomicU64; NUM_SAMPLES],
+    admitted_launches: [AtomicBool; NUM_SAMPLES],
 }
 
 impl Default for InputRuntimeOwnership {
@@ -68,11 +71,77 @@ impl Default for InputRuntimeOwnership {
             source_tracking: false,
             sources: std::array::from_fn(|_| CurrentSourceFence::default()),
             cold_adoptions: std::array::from_fn(|_| AtomicU64::new(0)),
+            resident_controls: std::array::from_fn(|_| AtomicU64::new(0)),
+            launch_revisions: std::array::from_fn(|_| AtomicU64::new(0)),
+            admitted_launches: std::array::from_fn(|_| AtomicBool::new(false)),
         }
     }
 }
 
 impl InputRuntimeOwnership {
+    pub(crate) fn mark_launch_admitted(&self, id: usize) {
+        self.admitted_launches[id].store(true, Ordering::Release);
+    }
+
+    pub(super) fn clear_launch_admitted(&self, id: usize) {
+        self.admitted_launches[id].store(false, Ordering::Release);
+    }
+
+    pub(super) fn clear_all_launches_admitted(&self) {
+        for id in 0..NUM_SAMPLES {
+            self.clear_launch_admitted(id);
+        }
+    }
+
+    pub(super) fn admitted_launch_ids(&self) -> Vec<usize> {
+        (0..NUM_SAMPLES)
+            .filter(|&id| self.admitted_launches[id].load(Ordering::Acquire))
+            .collect()
+    }
+
+    pub(crate) fn launch_revision(&self, id: usize) -> u64 {
+        self.launch_revisions[id].load(Ordering::Acquire)
+    }
+
+    pub(crate) fn launch_current(&self, id: usize, revision: u64) -> bool {
+        id < NUM_SAMPLES && revision != u64::MAX && self.launch_revision(id) == revision
+    }
+
+    /// A stop revokes earlier starts without changing adopted source/window/timing.
+    /// One CAS suffices: a concurrent successful cancellation already revoked this value.
+    pub(super) fn cancel_launches(&self, id: usize) {
+        let revision = self.launch_revision(id);
+        let _ = self.launch_revisions[id].compare_exchange(
+            revision,
+            revision.saturating_add(1),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    pub(super) fn cancel_all_launches(&self) {
+        for id in 0..NUM_SAMPLES {
+            self.cancel_launches(id);
+        }
+    }
+
+    pub(super) fn begin_resident_control(&self, id: usize, intent: u64) {
+        self.resident_controls[id].store(intent, Ordering::Release);
+    }
+
+    pub(crate) fn finish_resident_control(&self, id: usize, intent: u64) {
+        let _ = self.resident_controls[id].compare_exchange(
+            intent,
+            0,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    pub(crate) fn resident_control_pending(&self, id: usize) -> bool {
+        id < NUM_SAMPLES && self.resident_controls[id].load(Ordering::Acquire) != 0
+    }
+
     pub(super) fn begin_cold(&self, id: usize, generation: u64) {
         self.cold_adoptions[id].store(generation * 4, Ordering::Release);
     }
@@ -134,6 +203,7 @@ impl InputRuntimeOwnership {
 
     pub(super) fn revoke_source(&self, id: usize) {
         self.sources[id].generation.store(0, Ordering::SeqCst);
+        self.resident_controls[id].store(0, Ordering::Release);
     }
 
     pub(super) fn revoke_all_sources(&self) {
@@ -312,6 +382,81 @@ impl InputRuntimeOwnership {
             && source.generation.load(Ordering::SeqCst) == generation)
             .then_some(generation)
     }
+}
+
+/// Capture every earlier admitted target and revoke its old launch revision at one
+/// admission boundary. A live caller supplies the same producer mutex used by
+/// UI, MIDI and global starts. None is only for an engine without a stream.
+/// Pure cancellation keeps the flags set: a start may have passed its final RT
+/// guard already and still needs an ordered STOP before feedback reaches Python.
+pub(super) fn cancel_launches_with_producer(
+    ownership: &InputRuntimeOwnership,
+    producer: Option<&Arc<Mutex<rtrb::Producer<crate::messages::ControlMessage>>>>,
+    id: Option<usize>,
+) -> PyResult<Vec<usize>> {
+    if id.is_some_and(|id| id >= NUM_SAMPLES) {
+        return Err(pyo3::exceptions::PyValueError::new_err("id out of range"));
+    }
+    let _producer = producer
+        .map(|producer| {
+            producer
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))
+        })
+        .transpose()?;
+    let targets = if let Some(id) = id {
+        ownership.admitted_launches[id]
+            .load(Ordering::Acquire)
+            .then_some(id)
+            .into_iter()
+            .collect()
+    } else {
+        ownership.admitted_launch_ids()
+    };
+    if let Some(id) = id {
+        ownership.cancel_launches(id);
+    } else {
+        ownership.cancel_all_launches();
+    }
+    Ok(targets)
+}
+
+/// Runtime admission is disabled before shutdown calls this control-only fence.
+/// Recover a poisoned producer solely to revoke queued starts before worker joins;
+/// public admission/cancellation still reports a poisoned producer as an error.
+pub(super) fn cancel_launches_before_shutdown(
+    ownership: &InputRuntimeOwnership,
+    producer: Option<&Arc<Mutex<rtrb::Producer<crate::messages::ControlMessage>>>>,
+) {
+    let _producer = producer.map(|producer| {
+        producer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    });
+    ownership.cancel_all_launches();
+}
+
+/// Producer capacity is reserved before changing launch ownership. This helper is
+/// shared by public stops and direct MIDI stops; callers hold the producer lock.
+pub(super) fn enqueue_stop_with_producer(
+    ownership: &InputRuntimeOwnership,
+    producer: &mut rtrb::Producer<crate::messages::ControlMessage>,
+    id: Option<usize>,
+) -> bool {
+    if producer.is_full() || id.is_some_and(|id| id >= NUM_SAMPLES) {
+        return false;
+    }
+    let message = if let Some(id) = id {
+        ownership.cancel_launches(id);
+        ownership.clear_launch_admitted(id);
+        crate::messages::ControlMessage::StopSample { id }
+    } else {
+        ownership.cancel_all_launches();
+        ownership.clear_all_launches_admitted();
+        crate::messages::ControlMessage::StopAll()
+    };
+    // The sole producer owns an available slot; the consumer can only free more.
+    producer.push(message).is_ok()
 }
 
 /// Fixed scheduler value. Pointer is compared only; monotonic authority fences

@@ -6,6 +6,7 @@ from flitzis_looper.controller.transport.global_params import GlobalParametersCo
 from flitzis_looper.controller.transport.loop import PadLoopController
 from flitzis_looper.controller.transport.pad import PadController
 from flitzis_looper.controller.transport.playback import PadPlaybackController
+from flitzis_looper.controller.transport.residency import ResidencyController
 from flitzis_looper.controller.transport.state import ApplyProjectState
 from flitzis_looper.controller.transport.waveform import WaveformController
 
@@ -26,6 +27,7 @@ class TransportController(BaseController):
     ) -> None:
         super().__init__(project, session, audio, on_project_changed)
 
+        self.residency = ResidencyController(self)
         self.bpm = BpmController(self)
         self.global_params = GlobalParametersController(self)
         self.loop = PadLoopController(self)

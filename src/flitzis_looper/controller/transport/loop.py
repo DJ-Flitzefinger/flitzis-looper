@@ -47,6 +47,7 @@ class PadLoopController:
     ) -> None:
         """Initialize a new track's loop and grid at the same source activity boundary."""
         validate_sample_id(sample_id)
+        self._transport.residency.remember(sample_id)
         timing = self._bpm.current_timing(sample_id)
         anchor_s = self._loaded_activity_anchor_s(sample_id, detected_loop_start_s, timing=timing)
         start_s = anchor_s if anchor_s is not None else 0.0
@@ -112,6 +113,7 @@ class PadLoopController:
     def set_full_track_region(self, sample_id: int) -> None:
         """Store and publish an explicit full-track loop region for a loaded pad."""
         validate_sample_id(sample_id)
+        self._transport.residency.remember(sample_id)
 
         if self._project.sample_paths[sample_id] is None:
             return
@@ -160,7 +162,7 @@ class PadLoopController:
         if self._project.sample_paths[sample_id] is None:
             return
         start_s, end_s = self._effective_pad_loop_region(sample_id, timing=timing)
-        self._audio.set_pad_loop_region(sample_id, start_s, end_s)
+        self._transport.residency.publish_loop(sample_id, start_s, end_s)
 
     def apply_grid_anchor_to_audio(
         self,
@@ -395,16 +397,35 @@ class PadLoopController:
         *,
         timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
     ) -> tuple[float, float | None]:
+        return self.region_for_intent(
+            sample_id,
+            start=float(self._project.pad_loop_start_s[sample_id]),
+            end=self._project.pad_loop_end_s[sample_id],
+            auto=self._project.pad_loop_auto[sample_id],
+            bars=self._stored_bars(sample_id),
+            timing=timing,
+        )
+
+    def region_for_intent(
+        self,
+        sample_id: int,
+        *,
+        start: float,
+        end: float | None,
+        auto: bool,
+        bars: float,
+        timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
+    ) -> tuple[float, float | None]:
+        """Project a saved intent without substituting pending project fields."""
         timing = self._resolve_timing(sample_id, timing)
-        start_s = float(self._project.pad_loop_start_s[sample_id])
-        end_s = self._project.pad_loop_end_s[sample_id]
+        start_s, end_s = start, end
 
         sample_rate_hz = self._timing_sample_rate_hz(timing)
         one_sample_s = (
             1.0 / sample_rate_hz if sample_rate_hz is not None and sample_rate_hz > 0 else 0.0001
         )
 
-        if not self._project.pad_loop_auto[sample_id]:
+        if not auto:
             start_s = physical_source_marker_s(start_s, sample_rate_hz=sample_rate_hz)
             if end_s is not None:
                 end_s = physical_source_marker_s(float(end_s), sample_rate_hz=sample_rate_hz)
@@ -415,7 +436,6 @@ class PadLoopController:
         if timing is None:
             return (physical_source_marker_s(start_s, sample_rate_hz=sample_rate_hz), None)
 
-        bars = self._stored_bars(sample_id)
         grid = scalar_source_grid(
             origin_s=timing.origin_seconds, period_seconds=timing.period_seconds
         )
@@ -435,10 +455,24 @@ class PadLoopController:
         timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
     ) -> tuple[float, float | None]:
         validate_sample_id(sample_id)
+        acknowledged = self._transport.residency.acknowledged_region(sample_id)
+        if acknowledged is not None:
+            return acknowledged
+        return self._effective_pad_loop_region(sample_id, timing=timing)
+
+    def requested_region(
+        self,
+        sample_id: int,
+        *,
+        timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
+    ) -> tuple[float, float | None]:
+        """Return performer intent for preparation, independently of effective audio."""
+        validate_sample_id(sample_id)
         return self._effective_pad_loop_region(sample_id, timing=timing)
 
     def set_auto(self, sample_id: int, *, enabled: bool) -> None:
         validate_sample_id(sample_id)
+        self._transport.residency.remember(sample_id)
         if enabled == self._transport._project.pad_loop_auto[sample_id]:
             return
 
@@ -457,6 +491,7 @@ class PadLoopController:
 
     def set_bars(self, sample_id: int, *, bars: float) -> None:
         validate_sample_id(sample_id)
+        self._transport.residency.remember(sample_id)
 
         bars = self._normalize_requested_bars(bars)
         timing = self._bpm.current_timing(sample_id)
@@ -473,6 +508,7 @@ class PadLoopController:
 
     def set_start(self, sample_id: int, start_s: float) -> None:
         validate_sample_id(sample_id)
+        self._transport.residency.remember(sample_id)
         ensure_finite(start_s)
 
         timing = self._bpm.current_timing(sample_id)
@@ -497,6 +533,7 @@ class PadLoopController:
 
     def set_end(self, sample_id: int, end_s: float | None) -> None:
         validate_sample_id(sample_id)
+        self._transport.residency.remember(sample_id)
 
         timing = self._bpm.current_timing(sample_id)
         if end_s is not None:

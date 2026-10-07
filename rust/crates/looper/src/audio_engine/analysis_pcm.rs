@@ -14,7 +14,7 @@ use std::sync::Arc;
 pub(crate) mod fft;
 mod streamed;
 use fft::{RESAMPLE_CHUNK_FRAMES, tail_call_budget};
-pub(crate) use streamed::{PcmStagingPlan, key_input_from_f32_le};
+pub(crate) use streamed::{PcmStagingPlan, key_input_from_f32_le, staging_plan};
 
 pub(crate) const MONO_RULE: &str = "arithmetic-channel-mean-f64-v1";
 pub(crate) const KEY_PREPROCESSING: &str = "rubato-fft-1.0-44100-delay-trim-tail-flush-v1";
@@ -22,6 +22,73 @@ const CHUNK_FRAMES: usize = 4096;
 const MAX_CHANNELS: usize = 32;
 const MIN_RATE_HZ: u32 = 8000;
 const MAX_RATE_HZ: u32 = 384_000;
+
+/// Conservative executed default-analyzer PCM admission, before conversion or FFT.
+/// Includes stereo conversion overlap, source-length mono, delayed output, cloned
+/// f32/f64 inputs and the pinned FFT workspace; model/spectral storage is separate.
+pub(super) fn default_analysis_peak(
+    frames: usize,
+    channels: usize,
+    rate_hz: u32,
+    extra_held_bytes: usize,
+    maximum: usize,
+) -> Result<usize, PcmError> {
+    validate_rate(rate_hz)?;
+    if frames == 0 || !matches!(channels, 1 | 2) {
+        return Err(PcmError::InvalidInput("default analysis source geometry"));
+    }
+    let converted = (frames as u128 * 44_100).div_ceil(u128::from(rate_hz));
+    let (input, output) = if rate_hz == 44_100 {
+        (0, 0)
+    } else {
+        fft::fft_dimensions(rate_hz, 44_100)
+    };
+    let fft_workspace = (input as u128 + output as u128) * 64 * 4;
+    let delayed_output = output as u128 * 2 * 4;
+    let peak = frames as u128 * channels as u128 * 8
+        + frames as u128 * 4
+        + converted * 24
+        + fft_workspace
+        + delayed_output
+        + 1024 * 1024
+        + extra_held_bytes as u128;
+    if peak > maximum as u128 {
+        return Err(PcmError::Limit(
+            "complete automatic analysis transient bytes",
+        ));
+    }
+    usize::try_from(peak).map_err(|_| PcmError::Limit("default analysis reservation overflow"))
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+
+    #[test]
+    fn default_analysis_admission_covers_stereo_mono_overlap_and_coprime_fft_workspace() {
+        let maximum = 1024 * 1024 * 1024;
+        // This geometry's old source+target-only estimate admitted it, although
+        // channel conversion simultaneously owns another 220 MB source mono.
+        let frames = 55_000_000;
+        let old =
+            frames as u128 * 2 * 8 + (frames as u128 * 44_100).div_ceil(384_000) * 24 + 1024 * 1024;
+        assert!(old < maximum as u128);
+        assert!(matches!(
+            default_analysis_peak(frames, 2, 384_000, 0, maximum),
+            Err(PcmError::Limit(_))
+        ));
+        // Coprime native rates require whole FFT units rather than the common
+        // small 44.1/48/96k buffers; a fixed 1 MB allowance cannot cover them.
+        assert!(default_analysis_peak(1, 2, 48_001, 0, 2 * 1024 * 1024).is_err());
+        assert!(default_analysis_peak(1, 2, 48_001, 0, maximum).unwrap() > 20 * 1024 * 1024);
+        for rate in [44_100, 48_000, 96_000] {
+            assert!(
+                default_analysis_peak(rate as usize * 2, 2, rate, 256, maximum).unwrap()
+                    < 16 * 1024 * 1024
+            );
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PcmIdentity {
@@ -63,6 +130,20 @@ impl LoadedPcmSnapshot {
         max_pcm_bytes: usize,
     ) -> Result<Self, PcmError> {
         validate_rate(rate_hz)?;
+        if sample.resident_start() != 0 || sample.resident_end() != sample.frame_count() {
+            return Err(PcmError::InvalidInput(
+                "cropped PCM cannot establish a complete analysis snapshot",
+            ));
+        }
+        if sample
+            .residency
+            .as_ref()
+            .is_some_and(|view| view.source.sample_rate_hz != rate_hz)
+        {
+            return Err(PcmError::InvalidInput(
+                "complete analysis rate differs from source descriptor",
+            ));
+        }
         if sample.channels == 0 || sample.channels > MAX_CHANNELS {
             return Err(PcmError::InvalidInput("channel count must be in 1..=32"));
         }
