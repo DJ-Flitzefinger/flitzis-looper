@@ -68,6 +68,9 @@ class AppController:
         self.loader.set_new_sample_loaded_callback(
             self.transport.loop.initialize_loaded_pad_defaults
         )
+        self.loader.set_sample_unloaded_callback(
+            self.transport.playback.discard_global_restore_for_unloaded_pad
+        )
         self.metering = MeteringController(self._project, self._session, self._audio)
         self.input_mapping = InputMappingController(
             self,
@@ -81,6 +84,7 @@ class AppController:
             self.stems,
             self.input_mapping,
         }
+        self.transport.playback.set_global_playback_feedback_poll(self._poll_audio_messages)
 
         self.loader.restore_samples_from_project_state()
         self.stems.restore_stem_cache_from_project_state()

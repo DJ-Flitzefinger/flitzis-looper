@@ -53,7 +53,6 @@ impl MidiBinding {
 enum InputAction {
     TriggerPad { id: usize },
     StopPad { id: usize },
-    StopAll,
     Python { action_key: String },
 }
 
@@ -482,9 +481,6 @@ fn dispatch_action(
         InputAction::StopPad { id } => {
             dispatch_audio_messages(audio_producer, [ControlMessage::StopSample { id: *id }])
         }
-        InputAction::StopAll => {
-            dispatch_audio_messages(audio_producer, [ControlMessage::StopAll()])
-        }
         InputAction::Python { action_key } => {
             let _ = action_key.len();
             DispatchResult {
@@ -583,9 +579,6 @@ fn parse_input_action(action_key: &str) -> InputAction {
         .and_then(|value| value.parse::<usize>().ok())
     {
         return InputAction::StopPad { id };
-    }
-    if action_key == "global.stop_all" {
-        return InputAction::StopAll;
     }
     InputAction::Python {
         action_key: action_key.to_string(),
@@ -976,6 +969,21 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn global_stop_mapping_returns_captured_action_to_controller_without_unguarded_audio() {
+        let (producer, mut consumer) = RingBuffer::<ControlMessage>::new(8);
+        let runtime = InputRuntime::new(Arc::new(Mutex::new(producer)), InputClock::new());
+        runtime.set_enabled(true);
+        runtime.replace_mappings(vec![("midi:note:1:60".into(), "global.stop_all".into())]);
+        assert!(runtime.inject_midi_message(&[0x90, 60, 127]));
+        let event = wait_for_input_event(&runtime);
+        assert_eq!(event.action_key.as_deref(), Some("global.stop_all"));
+        assert!(event.received_at_ns > 0);
+        assert!(event.dispatched);
+        assert!(!event.direct);
+        assert!(consumer.pop().is_err());
     }
 
     #[test]

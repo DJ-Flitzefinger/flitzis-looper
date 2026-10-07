@@ -124,8 +124,14 @@ acknowledgement; transport/master/output clock and BPMLOCK consume binary64 peri
 and rates directly. G3b2c-f integrate precise Python consumers, guarded MIDI,
 prepared stems, continuous voice/native/FIFO history and source-specific worker
 preparation with timed native adoption. G3b2g adds complete source-verified native
-QM persistence and fresh acknowledged loader adoption. Global
-launch/general adoption orchestration remains separate. See
+QM persistence and fresh acknowledged loader adoption. G3b2h binds productive
+controller GLOBAL START/STOP, including MIDI, to one fixed-capacity current-source/
+authority/accepted batch with all-or-none native admission and scheduled execution.
+Native messages own active/paused truth; batch execution reserves their complete
+feedback capacity before any effect. Terminal batch feedback updates restore
+intent after actual acceptance, and loader callbacks prune retired pads from
+pending restore intent. General accepted publication and derived loop/
+master refresh orchestration remains separate. See
 [accepted constant timing](accepted-constant-timing.md) for ownership and limits.
 Its shared `analyze_bpm` pipeline owns the legacy ODF/sample-hop conversion for
 both production and comparison fixtures. Private independent B2 input validation
@@ -498,8 +504,9 @@ G3b2f1 binds continuous productive StretchProcessor feed/native/FIFO history and
 active voice source/timing ownership; G3b2f2 adds productive worker-owned native
 continuation as described below. G3b2g additionally connects source-verified
 accepted SampleAnalysis/ProjectState persistence with fresh native loader adoption.
-Controller global START/STOP guarded batch launch including MIDI and general
-explicit acceptance/derived loop/master refresh orchestration remain separate.
+G3b2h additionally binds controller GLOBAL START/STOP batches including MIDI to
+current native source/authority and acknowledged full accepted timing. General
+explicit acceptance/derived loop/master refresh orchestration remains separate.
 Original hash association leaves C1 immutable copy-first/ABA proof open.
 
 Active full-mix/stem mode and enabled-mask changes use bounded Rust-owned

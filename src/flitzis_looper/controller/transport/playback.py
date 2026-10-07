@@ -1,11 +1,14 @@
 import math
 from typing import TYPE_CHECKING
 
+from flitzis_looper.controller.transport.global_playback import GlobalPlaybackController
 from flitzis_looper.controller.validation import ensure_finite
 from flitzis_looper.input_timing import validate_input_timestamp_ns
 from flitzis_looper.models import validate_sample_id
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from flitzis_looper.controller.transport import TransportController
     from flitzis_looper_audio import AudioMessage
 
@@ -19,10 +22,18 @@ class PadPlaybackController:
         self._session = transport._session
         self._audio = transport._audio
         self._loop = transport.loop
+        self._global_playback = GlobalPlaybackController(transport)
 
     def _forget_global_start_stop_restore(self) -> None:
-        self._session.global_stop_engaged = False
-        self._session.global_stop_restore_sample_ids = set()
+        self._global_playback.forget_restore()
+
+    def discard_global_restore_for_unloaded_pad(self, sample_id: int) -> None:
+        """Prevent a late STOP acknowledgement from remembering an unloaded pad."""
+        self._global_playback.discard_pad_restore(sample_id)
+
+    def set_global_playback_feedback_poll(self, callback: Callable[[], None]) -> None:
+        """Drain native playback feedback before a subsequent global target capture."""
+        self._global_playback.set_feedback_poll(callback)
 
     def trigger_pad(self, sample_id: int, *, received_at_ns: int | None = None) -> None:
         """Trigger or retrigger a pad's loop.
@@ -89,9 +100,9 @@ class PadPlaybackController:
         self._audio.stop_sample(sample_id)
         self._forget_global_start_stop_restore()
 
-    def stop_all_pads(self) -> None:
-        """Stop all currently active pads."""
-        self._audio.stop_all()
+    def stop_all_pads(self, *, received_at_ns: int | None = None) -> None:
+        """Admit a source-bound stop for the complete active/paused set."""
+        self._global_playback.stop(remember=False, received_at_ns=received_at_ns)
 
     def start_or_restart_global_start_stop(self, *, received_at_ns: int | None = None) -> None:
         """Start remembered loops or restart active loops from their loop starts.
@@ -99,41 +110,11 @@ class PadPlaybackController:
         Args:
             received_at_ns: One captured Rust input timestamp shared by every pad.
         """
-        received_at_ns = validate_input_timestamp_ns(received_at_ns)
-        if self._session.global_stop_engaged:
-            target_sample_ids = sorted(self._session.global_stop_restore_sample_ids)
-            self._session.global_stop_engaged = False
-            self._session.global_stop_restore_sample_ids = set()
-        else:
-            target_sample_ids = sorted(
-                self._session.active_sample_ids - self._session.paused_sample_ids
-            )
-
-        if not target_sample_ids:
-            return
-
-        started_sample_ids: set[int] = set()
-        for sample_id in target_sample_ids:
-            if self._project.sample_paths[sample_id] is None:
-                continue
-            self._start_pad(sample_id, received_at_ns=received_at_ns)
-            started_sample_ids.add(sample_id)
-
-        self._session.active_sample_ids.update(started_sample_ids)
-        self._session.paused_sample_ids.difference_update(started_sample_ids)
+        self._global_playback.start(received_at_ns=received_at_ns)
 
     def stop_global_start_stop(self) -> None:
         """Stop active loops from START/STOP right mouse down without starting anything."""
-        active_sample_ids = set(self._session.active_sample_ids)
-        if not active_sample_ids:
-            return
-
-        playing_sample_ids = active_sample_ids - self._session.paused_sample_ids
-        self._session.global_stop_restore_sample_ids = playing_sample_ids
-        self._session.global_stop_engaged = bool(playing_sample_ids)
-        self._audio.stop_all()
-        self._session.active_sample_ids.clear()
-        self._session.paused_sample_ids.clear()
+        self._global_playback.stop(remember=True)
 
     def pause_pad(self, sample_id: int) -> None:
         """Pause a pad if it is currently playing.
@@ -188,6 +169,7 @@ class PadPlaybackController:
             return
 
         self._session.active_sample_ids.add(pad_id)
+        self._session.paused_sample_ids.discard(pad_id)
 
     def handle_sample_stopped_message(self, msg: AudioMessage.SampleStopped) -> None:
         pad_id = msg.sample_id()

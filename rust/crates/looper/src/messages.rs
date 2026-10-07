@@ -332,6 +332,9 @@ pub enum ControlMessage {
         received_at_ns: u64,
     },
 
+    /// Bounded immutable global effect; its storage retires outside realtime processing.
+    GlobalPlaybackBatch(Arc<crate::audio_engine::global_playback_batch::GlobalPlaybackBatch>),
+
     /// Stop all active voices for a sample.
     ///
     /// # Parameters
@@ -375,6 +378,7 @@ impl ControlMessage {
             ControlMessage::PlaySample { .. }
             | ControlMessage::PlaySampleExclusive { .. }
             | ControlMessage::TriggerInputPad { .. }
+            | ControlMessage::GlobalPlaybackBatch(_)
             | ControlMessage::StopSample { .. }
             | ControlMessage::StopAll()
             | ControlMessage::PauseSample { .. }

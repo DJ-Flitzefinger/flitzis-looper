@@ -124,7 +124,7 @@ fn productive_history_native_loaded_source_publication_fences_new_launch_during_
         &mut state.mixer,
         &mut state.transport,
         2,
-        launch,
+        launch.clone(),
         &mut state.messages,
         &mut ImmediateAudioBufferRetirement,
     );
@@ -314,6 +314,11 @@ struct AuthorityRaceRetirement {
 }
 
 impl AudioBufferRetirement for AuthorityRaceRetirement {
+    fn retire_global_playback_batch(
+        &mut self,
+        _: Arc<super::super::global_playback_batch::GlobalPlaybackBatch>,
+    ) {
+    }
     fn retire_sample(&mut self, source: SampleBuffer) {
         if self.revoke_at_retire {
             self.ownership.set_timing_intent(
@@ -392,7 +397,7 @@ fn productive_history_exclusive_preflight_failure_preserves_loop_and_other_audio
         &mut state.mixer,
         &mut state.transport,
         2,
-        launch,
+        launch.clone(),
         &mut state.messages,
         &mut retirement,
     );
@@ -680,6 +685,11 @@ struct LimitedRetirement {
     stems: Vec<PreparedStemSet>,
 }
 impl AudioBufferRetirement for LimitedRetirement {
+    fn retire_global_playback_batch(
+        &mut self,
+        _: Arc<super::super::global_playback_batch::GlobalPlaybackBatch>,
+    ) {
+    }
     fn retire_sample(&mut self, _: SampleBuffer) {}
     fn retire_prepared_stems(&mut self, stems: PreparedStemSet) {
         self.stems.push(stems);

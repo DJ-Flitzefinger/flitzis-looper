@@ -325,6 +325,11 @@ struct RetainedSamples {
     samples: Vec<SampleBuffer>,
 }
 impl AudioBufferRetirement for RetainedSamples {
+    fn retire_global_playback_batch(
+        &mut self,
+        _: Arc<crate::audio_engine::global_playback_batch::GlobalPlaybackBatch>,
+    ) {
+    }
     fn retire_sample(&mut self, sample: SampleBuffer) {
         assert!(self.slots > 0);
         self.slots -= 1;

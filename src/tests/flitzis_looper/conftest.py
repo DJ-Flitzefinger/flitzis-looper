@@ -30,6 +30,16 @@ class FakePreparedSourceTicket:
         return self.status
 
 
+class FakeGlobalPlaybackBatchTicket:
+    """Controller-only feedback substitute for a native global transaction."""
+
+    def __init__(self, status: str = "accepted") -> None:
+        self.status = status
+
+    def publication_status(self) -> str:
+        return self.status
+
+
 def current_timing_metadata(
     *,
     sample_id: int = 0,
@@ -162,6 +172,7 @@ def audio_engine_mock() -> Iterator[Mock]:
     with patch("flitzis_looper.controller.app.AudioEngine", autospec=True) as audio_engine:
         audio_engine.return_value.output_sample_rate.return_value = 44_100
         audio_engine.return_value.poll_input_events.return_value = None
+        audio_engine.return_value.receive_msg.return_value = None
         audio_engine.return_value.current_constant_timing.return_value = None
         audio_engine.return_value.pad_timing_intent.return_value = "legacy"
 
@@ -175,6 +186,12 @@ def audio_engine_mock() -> Iterator[Mock]:
             )
 
         audio_engine.return_value.current_input_runtime_pad_binding.side_effect = runtime_binding
+        audio_engine.return_value.start_global_playback_batch.return_value = (
+            FakeGlobalPlaybackBatchTicket()
+        )
+        audio_engine.return_value.stop_global_playback_batch.return_value = (
+            FakeGlobalPlaybackBatchTicket()
+        )
         audio_engine.return_value.capture_prepared_source.return_value = FakePreparedSourceTicket()
         if hasattr(audio_engine.return_value, "loaded_sample_shape"):
             audio_engine.return_value.loaded_sample_shape.return_value = (44_100, 1, 128)

@@ -55,6 +55,7 @@ class LoaderController(BaseController):
         self._on_stems_deleted = on_stems_deleted
         self._on_restored_sample_loaded: Callable[[int], bool] | None = None
         self._on_new_sample_loaded: Callable[[int, float | None], None] | None = None
+        self._on_sample_unloaded: Callable[[int], None] | None = None
         self._load_request_ids: dict[int, int] = {}
         self._analysis_request_ids: dict[int, int] = {}
         self._accepted_restore = AcceptedTimingRestore(
@@ -78,6 +79,10 @@ class LoaderController(BaseController):
     def set_restored_sample_loaded_callback(self, callback: Callable[[int], bool]) -> None:
         """Register behavior that runs after a restored sample finishes loading."""
         self._on_restored_sample_loaded = callback
+
+    def set_sample_unloaded_callback(self, callback: Callable[[int], None]) -> None:
+        """Register control-intent cleanup after a native unload is admitted."""
+        self._on_sample_unloaded = callback
 
     def restore_samples_from_project_state(self) -> None:
         """Schedule async loads for cached samples referenced by `ProjectState`.
@@ -185,6 +190,8 @@ class LoaderController(BaseController):
             self._clear_stem_cache(sample_id)
 
         self._audio.unload_sample(sample_id)
+        if self._on_sample_unloaded is not None:
+            self._on_sample_unloaded(sample_id)
         self._reset_unloaded_pad_defaults(sample_id)
         self._on_pad_bpm_changed(sample_id)
         self._mark_project_changed()

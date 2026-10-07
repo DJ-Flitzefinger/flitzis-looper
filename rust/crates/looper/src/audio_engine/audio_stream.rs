@@ -54,11 +54,16 @@ pub fn setup_logger() {
 
 pub(super) trait AudioMessageSink {
     fn push_audio_message(&mut self, message: AudioMessage);
+    fn available_audio_message_slots(&mut self) -> usize;
 }
 
 impl AudioMessageSink for Producer<AudioMessage> {
     fn push_audio_message(&mut self, message: AudioMessage) {
         let _ = self.push(message);
+    }
+
+    fn available_audio_message_slots(&mut self) -> usize {
+        self.slots()
     }
 }
 
@@ -75,7 +80,8 @@ fn schedule_immediate_command<
     audio_messages: &mut S,
     retirement: &mut R,
 ) {
-    if scheduler.schedule(callback_start_frame, command).is_ok() {
+    if !scheduler.is_full() {
+        let _ = scheduler.schedule(callback_start_frame, command);
         drain_scheduler_due_at_callback_start(
             scheduler,
             callback_start_frame,
@@ -290,6 +296,17 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
     retirement: &mut R,
 ) {
     match command {
+        ScheduledCommand::GlobalPlaybackBatch(batch) => {
+            let accepted = execute_global_playback_batch(
+                mixer,
+                output_frame,
+                &batch,
+                audio_messages,
+                retirement,
+            );
+            batch.finish(accepted);
+            retirement.retire_global_playback_batch(batch);
+        }
         ScheduledCommand::TriggerInputPad {
             id,
             start_s,
@@ -365,6 +382,90 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
             stop_all_samples(mixer, audio_messages, retirement);
         }
     }
+}
+
+fn execute_global_playback_batch<S: AudioMessageSink, R: AudioBufferRetirement>(
+    mixer: &mut RtMixer,
+    output_frame: u64,
+    batch: &super::global_playback_batch::GlobalPlaybackBatch,
+    audio_messages: &mut S,
+    retirement: &mut R,
+) -> bool {
+    // Captured input time is diagnostic context; transport owns execution quantization.
+    let _received_at_ns = batch.received_at_ns;
+    // One fixed retirement reservation covers every old pin plus this immutable payload.
+    if retirement.available_retirement_slots() < MAX_VOICES + 1 {
+        return false;
+    }
+    let feedback_needed = if batch.start {
+        batch.entries.len()
+    } else {
+        mixer.voices.iter().filter(|voice| voice.active).count()
+    };
+    // The callback is the only writer. The consumer can only increase this capacity
+    // until all transaction feedback is published, so no accepted effect loses its state events.
+    if audio_messages.available_audio_message_slots() < feedback_needed {
+        return false;
+    }
+    if !batch.start {
+        if !mixer.global_stop_bindings_current(&batch.entries) {
+            return false;
+        }
+        stop_all_samples(mixer, audio_messages, retirement);
+        return true;
+    }
+    if !batch
+        .entries
+        .iter()
+        .all(|entry| mixer.source_binding_current(entry.id, entry.binding))
+    {
+        return false;
+    }
+    let free = mixer.voices.iter().filter(|voice| !voice.active).count();
+    let new = batch
+        .entries
+        .iter()
+        .filter(|entry| {
+            !mixer
+                .voices
+                .iter()
+                .any(|voice| voice.active && voice.sample_id == entry.id)
+        })
+        .count();
+    if new > free {
+        return false;
+    }
+    // Preparing clones immutable PCM pins and fixed configs only; no active history mutates.
+    let mut prepared: [Option<super::voice_slot::VoiceStartConfig>; MAX_VOICES] =
+        std::array::from_fn(|_| None);
+    for (index, entry) in batch.entries.iter().enumerate() {
+        let Some(config) = mixer.prepare_play_sample_rt(entry.id, 1.0, output_frame, retirement)
+        else {
+            return false;
+        };
+        prepared[index] = Some(config);
+    }
+    // A control revocation during preparation rejects the whole effect before its first mutation.
+    if !batch
+        .entries
+        .iter()
+        .all(|entry| mixer.source_binding_current(entry.id, entry.binding))
+    {
+        return false;
+    }
+    for (index, entry) in batch.entries.iter().enumerate() {
+        let mut config = prepared[index]
+            .take()
+            .expect("validated prepared batch entry");
+        mixer.apply_prepared_loop_region(&mut config, entry.start_s, entry.end_s);
+        let started = mixer.play_prepared_sample_rt(config, retirement);
+        debug_assert!(
+            started,
+            "capacity was reserved for the complete global batch"
+        );
+        audio_messages.push_audio_message(AudioMessage::SampleStarted { id: entry.id });
+    }
+    true
 }
 
 fn stop_all_samples<S: AudioMessageSink, R: AudioBufferRetirement>(
@@ -615,6 +716,7 @@ fn publish_pad_telemetry<S: AudioMessageSink>(
 
 fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
     match message {
+        ControlMessage::GlobalPlaybackBatch(_) => MAX_VOICES + 1,
         ControlMessage::LoadSample { .. } | ControlMessage::PublishPreparedStems { .. } => 2,
         ControlMessage::PublishConstantTiming { .. } => 1,
         ControlMessage::PlaySample { .. }
@@ -638,7 +740,11 @@ mod constant_timing_callback_tests;
 
 // Keep queue, scheduler, transport, mixer, telemetry, and retirement state explicit in the callback.
 #[allow(clippy::too_many_arguments)]
-fn drain_control_messages<const CAPACITY: usize, S: AudioMessageSink, R: AudioBufferRetirement>(
+pub(super) fn drain_control_messages<
+    const CAPACITY: usize,
+    S: AudioMessageSink,
+    R: AudioBufferRetirement,
+>(
     consumer: &mut Consumer<ControlMessage>,
     scheduler: &mut FixedCapacityScheduler<CAPACITY>,
     callback_start_frame: u64,
@@ -651,13 +757,18 @@ fn drain_control_messages<const CAPACITY: usize, S: AudioMessageSink, R: AudioBu
     let mut processed = 0;
 
     while processed < MAX_CONTROL_MESSAGES_PER_CALLBACK {
-        let needed_retirement_slots = match consumer.peek() {
-            Ok(message) => control_message_retirement_slots_needed(message),
+        let (needed_retirement_slots, needed_feedback_slots) = match consumer.peek() {
+            Ok(message) => (
+                control_message_retirement_slots_needed(message),
+                usize::from(matches!(message, ControlMessage::UnloadSample { .. })),
+            ),
             Err(_) => break,
         };
 
-        if needed_retirement_slots > 0
-            && retirement.available_retirement_slots() < needed_retirement_slots
+        if (needed_retirement_slots > 0
+            && retirement.available_retirement_slots() < needed_retirement_slots)
+            || (needed_feedback_slots > 0
+                && audio_messages.available_audio_message_slots() < needed_feedback_slots)
         {
             break;
         }
@@ -935,6 +1046,45 @@ pub(super) fn process_control_message<
     retirement: &mut R,
 ) {
     match message {
+        ControlMessage::GlobalPlaybackBatch(batch) => {
+            // Admission and execution both check current actual source/authority/projection.
+            if scheduler.is_full()
+                || !batch
+                    .entries
+                    .iter()
+                    .all(|entry| mixer.source_binding_current(entry.id, entry.binding))
+            {
+                batch.finish(false);
+                retirement.retire_global_playback_batch(batch);
+                return;
+            }
+            let target = if batch.start {
+                match *trigger_quantization {
+                    TriggerQuantization::Immediate => callback_start_frame,
+                    TriggerQuantization::Grid { .. } => {
+                        let Some(target) = quantized_target_frame(transport, *trigger_quantization)
+                            .filter(|target| *target < u64::MAX)
+                        else {
+                            batch.finish(false);
+                            retirement.retire_global_playback_batch(batch);
+                            return;
+                        };
+                        target
+                    }
+                }
+            } else {
+                callback_start_frame
+            };
+            let _ = scheduler.schedule(target, ScheduledCommand::GlobalPlaybackBatch(batch));
+            drain_scheduler_due_at_callback_start(
+                scheduler,
+                callback_start_frame,
+                mixer,
+                transport,
+                audio_messages,
+                retirement,
+            );
+        }
         ControlMessage::Ping() => {
             audio_messages.push_audio_message(AudioMessage::Pong());
         }
@@ -1067,6 +1217,8 @@ pub(super) fn process_control_message<
         ControlMessage::UnloadSample { id } => {
             mixer.unload_sample_rt(id, retirement);
             transport.clear_pending_bootstrap_for_pad(id);
+            // The command drain reserved this final ordered state event before mutation.
+            audio_messages.push_audio_message(AudioMessage::SampleStopped { id });
         }
         ControlMessage::SetBpmLock(enabled) => {
             mixer.set_bpm_lock(enabled);
@@ -1301,6 +1453,9 @@ mod tests {
     use std::sync::Arc;
 
     impl AudioMessageSink for Vec<AudioMessage> {
+        fn available_audio_message_slots(&mut self) -> usize {
+            usize::MAX
+        }
         fn push_audio_message(&mut self, message: AudioMessage) {
             self.push(message);
         }
@@ -2694,7 +2849,7 @@ mod tests {
             ControlMessage::BootstrapTransportFromPad { id: 0 },
         ] {
             process_control_message(
-                command,
+                command.clone(),
                 &mut scheduler,
                 100,
                 &mut quantization,
@@ -2823,7 +2978,7 @@ mod tests {
                 transport
                     .next_grid_frame(QuantizeGrid::from_step_64ths(16).unwrap())
                     .unwrap(),
-                command,
+                command.clone(),
             )
             .unwrap();
         assert_eq!(accepted.target_frame, 10);

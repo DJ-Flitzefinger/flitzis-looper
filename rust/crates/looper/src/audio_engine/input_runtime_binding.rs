@@ -159,9 +159,29 @@ impl InputRuntimeOwnership {
     }
 
     pub(crate) fn current(&self, id: usize, binding: InputPadBinding) -> bool {
-        id < NUM_SAMPLES
-            && self.authority[id].load(Ordering::Acquire) == binding.authority_revision
+        self.authority_current(id, binding)
             && self.runtime[id].load(Ordering::Acquire) == binding.runtime_revision
+    }
+
+    pub(crate) fn authority_current(&self, id: usize, binding: InputPadBinding) -> bool {
+        id < NUM_SAMPLES && self.authority[id].load(Ordering::Acquire) == binding.authority_revision
+    }
+
+    pub(crate) fn binding_source_current(&self, id: usize, binding: InputPadBinding) -> bool {
+        if id >= NUM_SAMPLES {
+            return false;
+        }
+        if !self.source_tracking {
+            return true;
+        }
+        let source = &self.sources[id];
+        let generation = source.generation.load(Ordering::SeqCst);
+        generation != 0
+            && source.address.load(Ordering::SeqCst) == binding.source_address
+            && source.count.load(Ordering::SeqCst) == binding.sample_count
+            && source.channels.load(Ordering::SeqCst) == binding.channels
+            && source.rate.load(Ordering::SeqCst) == binding.sample_rate_hz
+            && source.generation.load(Ordering::SeqCst) == generation
     }
 }
 
@@ -215,12 +235,14 @@ impl InputRuntimePadBinding {
         }
     }
     pub(super) fn current(&self) -> bool {
-        self.ownership.authority[self.id].load(Ordering::Acquire) == self.binding.authority_revision
+        self.ownership.authority_current(self.id, self.binding)
+            && self.ownership.binding_source_current(self.id, self.binding)
             && self.acknowledgements.current_epoch(self.id)
                 == self
                     .binding
                     .accepted
                     .map_or(0, |accepted| accepted.publication_epoch)
+            && self.ownership.authority_current(self.id, self.binding)
     }
 
     pub(super) fn available(&self) -> bool {

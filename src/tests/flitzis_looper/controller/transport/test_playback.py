@@ -1,5 +1,5 @@
 from typing import TYPE_CHECKING
-from unittest.mock import Mock, call
+from unittest.mock import ANY, Mock, call
 
 import pytest
 
@@ -111,11 +111,12 @@ def test_global_restart_preserves_one_input_timestamp_for_every_pad(
 
     controller.transport.playback.start_or_restart_global_start_stop(received_at_ns=0)
 
-    assert audio_engine_mock.play_sample.call_args_list == [
-        call(0, 1.0, received_at_ns=0),
-        call(2, 1.0, received_at_ns=0),
-    ]
-    assert controller.session.active_sample_ids == {0, 2}
+    audio_engine_mock.start_global_playback_batch.assert_called_once_with(
+        [(ANY, 0.0, None), (ANY, 0.0, None)], received_at_ns=0
+    )
+    entries = audio_engine_mock.start_global_playback_batch.call_args.args[0]
+    assert [binding.metadata()["pad_id"] for binding, _, _ in entries] == [0, 2]
+    assert controller.session.active_sample_ids == set()
 
 
 def test_invalid_trigger_timestamp_is_rejected_before_loop_publication(
@@ -225,7 +226,9 @@ def test_stop_all_pads(controller: AppController, audio_engine_mock: Mock) -> No
 
     controller.transport.playback.stop_all_pads()
 
-    audio_engine_mock.stop_all.assert_called_once()
+    audio_engine_mock.stop_global_playback_batch.assert_called_once()
+    bindings = audio_engine_mock.stop_global_playback_batch.call_args.args[0]
+    assert [binding.metadata()["pad_id"] for binding in bindings] == [0, 1, 2]
     # Simulate audio messages for stopped samples
     for sample_id in (0, 1, 2):
         msg = Mock()
@@ -243,12 +246,13 @@ def test_global_start_stop_right_stops_and_remembers_playing_set(
     controller.session.paused_sample_ids.add(1)
 
     controller.transport.playback.stop_global_start_stop()
+    controller.transport.on_frame_render()
 
-    audio_engine_mock.stop_all.assert_called_once()
+    audio_engine_mock.stop_global_playback_batch.assert_called_once()
     assert controller.session.global_stop_engaged is True
     assert controller.session.global_stop_restore_sample_ids == {0}
-    assert controller.session.active_sample_ids == set()
-    assert controller.session.paused_sample_ids == set()
+    assert controller.session.active_sample_ids == {0, 1}
+    assert controller.session.paused_sample_ids == {1}
 
 
 def test_global_start_stop_right_stops_paused_only_set_without_restore(
@@ -259,12 +263,13 @@ def test_global_start_stop_right_stops_paused_only_set_without_restore(
     controller.session.paused_sample_ids.add(1)
 
     controller.transport.playback.stop_global_start_stop()
+    controller.transport.on_frame_render()
 
-    audio_engine_mock.stop_all.assert_called_once()
+    audio_engine_mock.stop_global_playback_batch.assert_called_once()
     assert controller.session.global_stop_engaged is False
     assert controller.session.global_stop_restore_sample_ids == set()
-    assert controller.session.active_sample_ids == set()
-    assert controller.session.paused_sample_ids == set()
+    assert controller.session.active_sample_ids == {1}
+    assert controller.session.paused_sample_ids == {1}
 
 
 def test_global_start_stop_right_ignores_empty_active_set(
@@ -273,6 +278,7 @@ def test_global_start_stop_right_ignores_empty_active_set(
     controller.transport.playback.stop_global_start_stop()
 
     audio_engine_mock.stop_all.assert_not_called()
+    audio_engine_mock.stop_global_playback_batch.assert_not_called()
     assert controller.session.global_stop_engaged is False
     assert controller.session.global_stop_restore_sample_ids == set()
 
@@ -289,13 +295,14 @@ def test_global_start_stop_left_restarts_current_active_set(
     controller.session.active_sample_ids.update({0, 1})
 
     controller.transport.playback.start_or_restart_global_start_stop()
+    controller.transport.on_frame_render()
 
     audio_engine_mock.stop_all.assert_not_called()
-    assert audio_engine_mock.set_pad_loop_region.call_args_list == [
-        call(0, 1.0, 3.0),
-        call(1, 2.0, 4.0),
-    ]
-    assert audio_engine_mock.play_sample.call_args_list == [call(0, 1.0), call(1, 1.0)]
+    audio_engine_mock.start_global_playback_batch.assert_called_once_with(
+        [(ANY, 1.0, 3.0), (ANY, 2.0, 4.0)], received_at_ns=None
+    )
+    audio_engine_mock.set_pad_loop_region.assert_not_called()
+    audio_engine_mock.play_sample.assert_not_called()
     assert controller.session.global_stop_engaged is False
     assert controller.session.global_stop_restore_sample_ids == set()
     assert controller.session.active_sample_ids == {0, 1}
@@ -311,7 +318,11 @@ def test_global_start_stop_left_restarts_current_active_set_without_paused_pads(
 
     controller.transport.playback.start_or_restart_global_start_stop()
 
-    audio_engine_mock.play_sample.assert_called_once_with(0, 1.0)
+    audio_engine_mock.start_global_playback_batch.assert_called_once_with(
+        [(ANY, 0.0, None)], received_at_ns=None
+    )
+    entries = audio_engine_mock.start_global_playback_batch.call_args.args[0]
+    assert entries[0][0].metadata()["pad_id"] == 0
     assert 1 in controller.session.paused_sample_ids
 
 
@@ -328,15 +339,21 @@ def test_global_start_stop_left_restores_remembered_set_together(
     controller.session.global_stop_restore_sample_ids = {0, 1}
 
     controller.transport.playback.start_or_restart_global_start_stop()
+    controller.transport.on_frame_render()
 
     audio_engine_mock.stop_all.assert_not_called()
-    assert audio_engine_mock.set_pad_loop_region.call_args_list == [
-        call(0, 1.0, 3.0),
-        call(1, 2.0, 4.0),
-    ]
-    assert audio_engine_mock.play_sample.call_args_list == [call(0, 1.0), call(1, 1.0)]
+    audio_engine_mock.start_global_playback_batch.assert_called_once_with(
+        [(ANY, 1.0, 3.0), (ANY, 2.0, 4.0)], received_at_ns=None
+    )
+    audio_engine_mock.set_pad_loop_region.assert_not_called()
+    audio_engine_mock.play_sample.assert_not_called()
     assert controller.session.global_stop_engaged is False
     assert controller.session.global_stop_restore_sample_ids == set()
+    assert controller.session.active_sample_ids == set()
+    for sample_id in (0, 1):
+        message = Mock()
+        message.sample_id.return_value = sample_id
+        controller.transport.playback.handle_sample_started_message(message)
     assert controller.session.active_sample_ids == {0, 1}
 
 
@@ -349,6 +366,11 @@ def test_manual_pad_trigger_after_global_stop_forgets_remembered_set(
     controller.session.active_sample_ids.update({0, 1, 2})
 
     controller.transport.playback.stop_global_start_stop()
+    controller.transport.on_frame_render()
+    for sample_id in (0, 1, 2):
+        message = Mock()
+        message.sample_id.return_value = sample_id
+        controller.transport.playback.handle_sample_stopped_message(message)
     audio_engine_mock.reset_mock()
 
     controller.transport.playback.trigger_pad(3)
@@ -362,7 +384,11 @@ def test_manual_pad_trigger_after_global_stop_forgets_remembered_set(
     audio_engine_mock.reset_mock()
     controller.transport.playback.start_or_restart_global_start_stop()
 
-    assert audio_engine_mock.play_sample.call_args_list == [call(3, 1.0)]
+    audio_engine_mock.start_global_playback_batch.assert_called_once_with(
+        [(ANY, 0.0, None)], received_at_ns=None
+    )
+    entries = audio_engine_mock.start_global_playback_batch.call_args.args[0]
+    assert entries[0][0].metadata()["pad_id"] == 3
 
 
 def test_manual_pad_stop_after_global_stop_forgets_remembered_set(
@@ -387,6 +413,7 @@ def test_manual_pad_stop_after_global_stop_forgets_remembered_set(
     controller.transport.playback.start_or_restart_global_start_stop()
 
     audio_engine_mock.play_sample.assert_not_called()
+    audio_engine_mock.start_global_playback_batch.assert_not_called()
 
 
 def test_global_start_stop_right_never_restores_remembered_set(
@@ -399,6 +426,8 @@ def test_global_start_stop_right_never_restores_remembered_set(
 
     audio_engine_mock.stop_all.assert_not_called()
     audio_engine_mock.play_sample.assert_not_called()
+    audio_engine_mock.stop_global_playback_batch.assert_not_called()
+    audio_engine_mock.start_global_playback_batch.assert_not_called()
     assert controller.session.global_stop_engaged is True
     assert controller.session.global_stop_restore_sample_ids == {0, 1}
 

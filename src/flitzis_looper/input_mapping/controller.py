@@ -11,7 +11,7 @@ from flitzis_looper.constants import (
     SPEED_MIN,
 )
 from flitzis_looper.controller.base import BaseController
-from flitzis_looper.controller.current_timing import current_accepted_timing
+from flitzis_looper.controller.current_binding import capture_current_pad_binding
 from flitzis_looper.input_mapping.actions import LooperAction, PadEqBand
 from flitzis_looper.input_mapping.bindings import KeyboardBinding, MidiBinding
 from flitzis_looper.input_mapping.storage import (
@@ -283,7 +283,9 @@ class InputMappingController(BaseController):
             "global.key_lock.toggle": self._toggle_key_lock,
             "global.bpm_lock.toggle": self._toggle_bpm_lock,
             "global.trigger_quantization.toggle": self._toggle_trigger_quantization,
-            "global.stop_all": self._app.transport.playback.stop_all_pads,
+            "global.stop_all": lambda: self._app.transport.playback.stop_all_pads(
+                received_at_ns=received_at_ns
+            ),
             "global.start_stop": lambda: (
                 self._app.transport.playback.start_or_restart_global_start_stop(
                     received_at_ns=received_at_ns
@@ -368,8 +370,7 @@ class InputMappingController(BaseController):
 
         action_key = event.get("action_key")
         if isinstance(action_key, str):
-            if action_key.startswith("pad.trigger:"):
-                self._retry_guarded_midi_trigger(action_key, event.get("received_at_ns"))
+            if self._execute_bound_midi_playback(action_key, event.get("received_at_ns")):
                 return
             if self._execute_relative_midi_action(
                 action_key,
@@ -383,6 +384,19 @@ class InputMappingController(BaseController):
                 self._session.input_mapping_error = str(err)
                 received_at_ns = None
             self.execute_action(LooperAction.from_key(action_key), received_at_ns=received_at_ns)
+
+    def _execute_bound_midi_playback(self, action_key: str, timestamp: object) -> bool:
+        if action_key.startswith("pad.trigger:"):
+            self._retry_guarded_midi_trigger(action_key, timestamp)
+            return True
+        if action_key not in {"global.start_stop", "global.stop_all"}:
+            return False
+        try:
+            received_at_ns = validate_input_timestamp_ns(timestamp)
+            self.execute_action(LooperAction.from_key(action_key), received_at_ns=received_at_ns)
+        except (RuntimeError, ValueError, TypeError) as err:
+            self._session.input_mapping_error = str(err)
+        return True
 
     def _retry_guarded_midi_trigger(self, action_key: str, timestamp: object) -> None:
         sample_id = _parse_prefixed_sample_id(action_key, "pad.trigger:")
@@ -560,44 +574,7 @@ class InputMappingController(BaseController):
                 continue
 
             timing = self._app.transport.bpm.current_timing(sample_id)
-            binding = self._audio.current_input_runtime_pad_binding(sample_id)
-            metadata = binding.metadata() if binding is not None else None
-            accepted = None
-            source_signature = (
-                tuple(
-                    metadata[key]
-                    for key in (
-                        "pad_id",
-                        "source_id",
-                        "source_generation",
-                        "source_sha256",
-                        "sample_rate_hz",
-                        "frame_count",
-                        "channels",
-                        "intent",
-                        "authority_revision",
-                    )
-                )
-                if metadata is not None
-                else None
-            )
-            if metadata is not None:
-                accepted_metadata = metadata["accepted_timing"]
-                accepted = (
-                    current_accepted_timing(accepted_metadata, sample_id=sample_id)
-                    if isinstance(accepted_metadata, dict)
-                    else None
-                )
-                if metadata["intent"] == "automatic" and (
-                    timing is None or timing.accepted_revision is None
-                ):
-                    binding = None
-                if (
-                    timing is not None
-                    and timing.accepted_revision is not None
-                    and timing != accepted
-                ):
-                    binding = None
+            snapshot = capture_current_pad_binding(self._audio, sample_id, timing=timing)
             start_s, end_s = self._app.transport.loop.effective_region(sample_id, timing=timing)
             pad_signatures.append(
                 _InputRuntimePadSignature(
@@ -606,10 +583,10 @@ class InputMappingController(BaseController):
                     start_seconds=float(start_s),
                     end_seconds=float(end_s) if end_s is not None else None,
                     timing=timing,
-                    binding_timing=accepted,
-                    source_signature=source_signature,
-                    ready=binding is not None,
-                    binding=binding,
+                    binding_timing=snapshot.accepted_timing if snapshot else None,
+                    source_signature=snapshot.source_signature if snapshot else None,
+                    ready=snapshot is not None,
+                    binding=snapshot.binding if snapshot else None,
                 )
             )
         return (

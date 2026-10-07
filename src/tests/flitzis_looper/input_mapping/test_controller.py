@@ -1,5 +1,5 @@
 from typing import TYPE_CHECKING
-from unittest.mock import Mock
+from unittest.mock import ANY, Mock
 
 import pytest
 
@@ -1122,7 +1122,10 @@ def test_non_direct_rust_midi_event_executes_start_stop_action(
         "dispatched": True,
     })
 
-    audio_engine_mock.play_sample.assert_called_once_with(0, 1.0)
+    audio_engine_mock.start_global_playback_batch.assert_called_once_with(
+        [(ANY, 0.0, None)], received_at_ns=None
+    )
+    audio_engine_mock.play_sample.assert_not_called()
 
 
 def test_rust_midi_event_is_ignored_when_mapping_disabled(
@@ -1440,11 +1443,12 @@ def test_midi_controller_owned_global_restart_preserves_timestamp_for_batch(
         "dispatched": True,
     })
 
-    assert audio_engine_mock.play_sample.call_count == 2
-    assert all(
-        invocation.kwargs == {"received_at_ns": 19}
-        for invocation in audio_engine_mock.play_sample.call_args_list
+    audio_engine_mock.start_global_playback_batch.assert_called_once_with(
+        [(ANY, 0.0, None), (ANY, 0.0, None)], received_at_ns=19
     )
+    entries = audio_engine_mock.start_global_playback_batch.call_args.args[0]
+    assert [binding.metadata()["pad_id"] for binding, _, _ in entries] == [0, 1]
+    audio_engine_mock.play_sample.assert_not_called()
 
 
 def test_future_dsp_midi_event_does_not_call_audio_without_explicit_handler(

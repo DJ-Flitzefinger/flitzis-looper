@@ -1,6 +1,6 @@
 # Native accepted timing adoption
 
-G3b2a-g connect the G3a accepted record to actual loaded-pad ownership, current
+G3b2a-h connect the G3a accepted record to actual loaded-pad ownership, current
 acknowledged authority, native SourceGrid, transport/output clock and playback
 rate. This is an explicit control API. Normal loading and analysis,
 manual/TAP controllers and saved legacy projects retain their existing routing;
@@ -208,16 +208,76 @@ all-or-nothing semantics. They do not use the ordinary unguarded Python loop/pla
 sequence. A full queue, unavailable Automatic state or stale binding admits no
 partial loop or launch. Enqueue feedback still reports admission rather than
 audible or scheduled-execution acceptance; a subsequently retired trigger is
-discarded at execution. MIDI stop-all remains a global action.
+discarded at execution. MIDI global actions now use the controller batch path below.
 
 Runtime publication changes dormant input intent; polling does not publish accepted
 timing, refresh master controls or change a live loop. Explicit accepted adoption
 and subsequent caller-owned loop/master refresh remain the orchestration gate.
-Controller-owned global START/STOP (including its MIDI mapping) retains ordinary
-Python batch launch semantics; it does not consume RuntimePadState bindings. A
-source/accepted-bound global batch launch and its refresh/adoption orchestration
-remain explicit follow-up consumers. This slice covers runtime pad triggers and
-their fallback, and does not claim all controller launch paths are guarded.
+Controller GLOBAL START/STOP, including mapped MIDI, reuses this native source/
+authority resolver without creating another timing owner.
+
+## Controller GLOBAL START/STOP batches
+
+The productive controller captures one `CurrentPadTiming` and opaque
+`InputRuntimePadBinding` per affected pad, then uses the same exact source/adoption
+comparison as MIDI runtime publication. Complete accepted identity, period and
+signed origin bits must match; equal BPM, endpoints or signed-zero numerical values
+cannot substitute for the full binding. START calculates each effective loop from
+its captured snapshot. Automatic without current acknowledgement fails admission;
+Manual, Tap and Legacy retain nonaccepted authority. New preparation and pending/
+rejected replacements retain the previous acknowledged accepted record.
+
+Native START accepts binding/start/end tuples; STOP accepts current bindings for
+every active pad, including paused voices. A batch is bounded by voice capacity
+and one `GlobalPlaybackBatchTicket` reports `pending`, `accepted` or `rejected`.
+START retains one captured Rust input timestamp and schedules one common output
+frame through the existing output-clock and quantization path. Enqueue or schedule
+success alone does not establish playback acceptance. Immutable batch storage is
+allocated on the control path; scheduler capacity is allocated at callback setup.
+
+Native admission and immediate/scheduled execution recheck every actual current
+source, declared authority, acknowledgement and complete effective accepted
+projection before any effect. Execution validates all voice and off-realtime
+retirement and native playback-feedback capacity before applying any loop, start,
+stop or transport bootstrap. The entire set of required SampleStarted/SampleStopped
+messages must fit the feedback ring before the first audio effect; command-ring
+capacity alone cannot protect the controller projection. The callback is its single
+producer, while concurrent draining can only free slots.
+Starts reuse existing single-pad preparation, canonical `SourcePlayback`, rate
+and source/native/FIFO/filter invalidation. A current-bank STOP also checks the
+actual active pins: an old voice retained after bank replacement cannot be
+relabeled with the replacement's current timing and rejects the entire batch.
+An admitted restart adopts current bank PCM and retires old pins through existing
+off-realtime paths. No failed subset can stop unrelated voices or rewrite loops.
+
+The controller leaves active/paused truth to native playback messages. It observes
+terminal ticket feedback only for GLOBAL restore intent: an accepted STOP remembers
+the captured playing subset, and an accepted remembered START consumes that intent.
+Generic stop-all creates no remembered restore set. Before each subsequent global
+target capture, the controller drains native playback feedback through the existing
+app event handler after observing any accepted ticket. A following MIDI/keyboard
+STOP therefore sees starts whose playback feedback has not reached the normal
+frame poll yet. Native unload reserves one feedback slot before execution and
+publishes an ordered SampleStopped; full feedback defers the whole unload, so
+queued older START feedback cannot leave an unloaded pad active in the controller.
+Actual SampleStarted telemetry clears the started pad's paused projection.
+A loader unload/replacement callback
+prunes that pad from observed and pending restore ids and normalizes restore
+engagement; a late accepted STOP cannot put it back, while unrelated captured ids
+remain. Pending or rejected admission/execution retains prior restore bookkeeping.
+Full command/feedback/scheduler rings,
+unavailable timing, stale binding, exhausted voice or retirement capacity preserve
+the prior effective audio, loops, transport and ownership. Mapped MIDI global
+actions dispatch through this same controller transaction with their original
+input timestamp; direct unguarded MIDI stop-all no longer bypasses it.
+
+Callback work uses fixed-capacity scalar/atomic checks, scheduler storage and
+feedback. PCM hashing/scanning, evidence allocation, locks, Python/GIL/UI, I/O,
+logging, native DSP construction/reset and large-owner destruction remain outside
+it. Ticket polling cannot drive audio timing or accepted publication. General
+explicit accepted publication and derived loop/master refresh orchestration
+remain a separate required integration step; loader-specific refresh does not
+close that boundary.
 
 ## Prepared source and stem timing binding
 
@@ -312,7 +372,8 @@ Existing effective audio/history keeps its own pin and can continue during these
 source transitions or while an admitted callback clear waits. Fresh Manual/Tap/Legacy
 adoption can proceed after actual clear under its own authority. Replacing a
 voice pin reserves existing off-realtime retirement capacity before old voice,
-loop or exclusive playback changes. This does not add a guarded global batch.
+loop or exclusive playback changes. G3b2h reuses these single-voice checks in
+the complete guarded global batch described above.
 
 `PerPadDspChain` binds its actual EQ/isolator filter history to the same rendered
 voice source/projection and expected fractional next position. Continuous
@@ -470,9 +531,10 @@ numerical timed-adoption proof above. G3b2g adds source-verified persistence and
 fresh loader adoption of supported COMPLETE native QM raw accepted records;
 unsupported evidence is rejected rather than converted to compatible-only timing.
 No opaque ticket is a saved identity and no saved Manual/Tap/Legacy BPM is accepted
-evidence. Source/accepted-bound
-controller global START/STOP batch launch including MIDI, and explicit accepted
-publication/derived loop/master refresh orchestration remain follow-up consumers.
+evidence. G3b2h binds productive controller GLOBAL START/STOP batches, including
+MIDI, to current source/authority and actual execution feedback. General explicit
+accepted publication/derived loop/master refresh orchestration remains open;
+loader-specific refresh alone does not close that consumer.
 Original hash association still does not prove C1 immutable copy-first/ABA lineage.
 
 G3c remains separate: musical period versus rounded physical loops over 75/1000

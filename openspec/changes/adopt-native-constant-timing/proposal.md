@@ -63,6 +63,17 @@ keeps the old effective native/FIFO owner and output. Active stem-selection
 transitions defer preparation. Completion requires real productive ownership,
 shifted-output and failure-path proof, rather than the separate test fixture.
 
+G3b2g separately persists supported complete source-verified native QM raw evidence
+and restores it through fresh native capture and actual callback acknowledgement.
+G3b2h connects productive controller GLOBAL START/STOP, including mapped MIDI,
+to one fixed-capacity native batch. Every affected pad uses the shared actual
+current-source/authority resolver and full acknowledged accepted projection,
+including exact period and signed origin. Native admission and scheduled execution
+validate the complete batch and all required voice/retirement/playback-feedback capacity before any
+loop, playback or bootstrap change. Terminal execution feedback preserves controller
+restore intent on pending or rejected work; ordinary native messages own active/
+paused truth. Active old-source pins cannot be relabeled by a replacement bank.
+
 ## Non-goals and realtime safety
 
 G3b2f1 continuous history and G3b2f2 source-specific prepared native continuation
@@ -75,10 +86,11 @@ This slice does not choose a musical acceptance policy or infer quarter labels,
 switch the default analyzer, silently promote manual/TAP or legacy numbers, or
 select later B5 audible crop/delay/transition compensation. That acoustic policy
 is separate from the required G3b2f2 native ownership/adoption integration.
-Accepted source-verified SampleAnalysis/ProjectState persistence and
-loader schema with fresh runtime adoption, source/accepted-bound controller global
-START/STOP batch launch including MIDI, and explicit acceptance/derived loop/master
-refresh orchestration remain follow-up work. Musical/physical loop proof over
+Supported source-verified SampleAnalysis/ProjectState persistence and fresh loader
+adoption are implemented by G3b2g; source/accepted-bound GLOBAL START/STOP batches
+are implemented by G3b2h. General explicit acceptance/derived loop/master refresh
+orchestration remains follow-up work; loader-specific refresh alone does not close
+that boundary. Musical/physical loop proof over
 75/1000 cycles, fractional periods/rates/partitions/wrap and rendered/onset/device/
 listening acceptance remain G3c. No PCM cache or Rust application-port planning is
 included.
@@ -86,8 +98,10 @@ included.
 PCM scanning, QM analysis, hashing, fitting and evidence ownership remain outside
 realtime processing. The callback handles only bounded source/permit checks and
 fixed accepted timing metadata, actual borrowed-source feed and bounded adapter
-storage and exact adoption-boundary splitting; native DSP construction/reset/
-loading, source-specific priming/catch-up and large-owner retirement stay outside
+storage, batch-capacity checks and exact adoption-boundary splitting; native DSP
+construction/reset/loading, source-specific priming/catch-up and large-owner retirement stay outside
 it. The existing worker owns prepared continuation, state recycling and warming.
 Observed source digest plus loaded PCM identity does not prove immutable
 copy-first decode lineage or defeat an original-file ABA replacement.
+Current 96-native-handle setup/RAM and persistence integrity I/O/CPU costs remain
+unmeasured; historical 64-handle measurements cannot establish current performance.

@@ -1,7 +1,7 @@
 # Accepted constant timing foundation
 
 G3a adds `flitzis_looper_analysis::tempo_acceptance`. This is a pure offline/control
-API. G3b2a-g supply native current-pad acceptance and acknowledgement, precise
+API. G3b2a-h supply native current-pad acceptance and acknowledgement, precise
 native/Python grid/period/loop/control consumers, source-bound MIDI/prepared stems
 and productive continuous/prepared voice/native/FIFO history; see
 [native adoption](native-constant-timing.md). Acceptance remains explicit.
@@ -9,7 +9,10 @@ Ordinary automatic analysis, manual/TAP, saved legacy projects and physical
 wrapping keep their established policy. G3b2f2 supplies productive native ownership
 and numerical timed-adoption proof. G3b2g persists supported COMPLETE native QM
 evidence with source verification and fresh acknowledged loader adoption.
-Global launch and general acceptance/derived-refresh orchestration remain incomplete.
+G3b2h supplies transactional current-source/accepted GLOBAL START/STOP batches,
+including productive MIDI actions and execution feedback. General accepted
+publication/derived-refresh orchestration remains incomplete; loader-specific
+refresh does not close that boundary.
 
 ## Explicit construction
 
@@ -87,6 +90,7 @@ The pure guard alone does not establish these facts.
 | Native SourceGrid | G3b2a uses the acknowledged binary64 period/origin/full revision directly; ordinary legacy timing stays compatible. |
 | Native transport reference/master, output clock and BPMLOCK | G3b2b/c consumes acknowledged source/output periods directly with binary64 rate/epoch ownership and Python locked speed/master controls. |
 | MIDI metadata | G3b2d binds actual native source/authority and complete accepted revision to one guarded loop/launch effect, including scheduled execution and fresh failed-direct fallback. |
+| Controller GLOBAL START/STOP including MIDI | G3b2h binds every affected current native source/authority and complete acknowledged accepted projection to one all-or-none scheduled transaction, preserving restore intent until actual execution. |
 | Prepared source and same-source stems | G3b2e binds capture/admission/rendering to current source/authority/full accepted projection and retains one source trajectory. |
 | Productive Key Lock/voice/DSP history | G3b2f1 binds continuous native/FIFO/filter/pinned voice history; G3b2f2 adds worker-owned actual source-specific native/FIFO continuation and current-permit timed transactional adoption. |
 | Persistence and legacy restore | G3b2g persists complete supported native QM evidence with exact identity/bits, explicit Manual/Tap/Legacy intent and fresh source-verified native adoption. |
@@ -111,9 +115,16 @@ Productive numerical output/ownership/failure tests establish that native gate.
 G3b2g source-verifies supported COMPLETE native QM persistence and fresh loader
 adoption while preserving historical accepted identity separately from runtime
 request ownership; unsupported evidence schemas fail closed.
-Controller global START/STOP batch
-launch including MIDI and explicit acceptance/derived loop/master refresh
-orchestration remain G3b2 work. Neutral warmed reserves and the separate test-only
+G3b2h binds controller GLOBAL START/STOP, including MIDI, through the same native
+current source/authority resolver and exact full accepted period/signed-origin
+comparison. Whole-batch admission and scheduled execution preserve all previous
+audio/loop/transport/restore state on stale/unavailable/capacity failure, and old
+pinned voice ownership cannot be relabeled by current bank replacement. Native
+playback messages own active/paused truth and must fit as a complete batch before
+audio effects; actual batch execution feedback changes restore intent. Loader
+callbacks prune unloaded/replaced ids before late acknowledgement can restore
+them. General explicit acceptance/derived loop/master refresh
+orchestration remains G3b2 work. Neutral warmed reserves and the separate test-only
 source preparation fixture do not substitute for the productive native owner. Later B5
 audible crop/delay/transition compensation and C1 copy-first/ABA proof stay separate.
 G3c separately proves
@@ -121,6 +132,8 @@ musical period versus rounded physical duration over 75/1000 cycles, fractional
 periods/rates and callback partitions. Rendered DSP/onset/device evidence is still
 required for audible sustained SYNC. G3a changes no physical wrap policy and does
 not pass these gates or the frozen B2 musical/default gate.
+Current 96-native-handle setup/RAM and source-verifying persistence I/O/CPU costs
+remain unmeasured; historical 64-handle measurements do not cover them.
 
 Focused public API tests:
 

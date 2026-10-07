@@ -1,7 +1,7 @@
 from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
-from unittest.mock import Mock, call
+from unittest.mock import ANY, Mock, call
 
 from imgui_bundle import imgui, implot
 
@@ -78,10 +78,13 @@ def test_start_stop_mouse_input_captures_once_for_whole_restart_batch(
 
     assert audio_engine_mock.method_calls[0] == call.capture_input_timestamp_ns()
     audio_engine_mock.capture_input_timestamp_ns.assert_called_once()
-    assert audio_engine_mock.play_sample.call_args_list == [
-        call(0, 1.0, received_at_ns=73),
-        call(1, 1.0, received_at_ns=73),
-    ]
+    audio_engine_mock.start_global_playback_batch.assert_called_once_with(
+        [(ANY, 0.0, None), (ANY, 0.0, None)], received_at_ns=73
+    )
+    entries = audio_engine_mock.start_global_playback_batch.call_args.args[0]
+    assert [binding.metadata()["pad_id"] for binding, _, _ in entries] == [0, 1]
+    audio_engine_mock.play_sample.assert_not_called()
+    audio_engine_mock.set_pad_loop_region.assert_not_called()
 
 
 def test_waveform_loop_edit_retains_input_time_before_edit_and_restart(

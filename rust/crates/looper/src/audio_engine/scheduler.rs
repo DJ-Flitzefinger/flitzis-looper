@@ -9,8 +9,9 @@ use crate::audio_engine::input_runtime_binding::InputPadBinding;
 
 pub(crate) type TransportScheduler = FixedCapacityScheduler<MAX_SCHEDULED_EVENTS>;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ScheduledCommand {
+    GlobalPlaybackBatch(std::sync::Arc<super::global_playback_batch::GlobalPlaybackBatch>),
     TriggerInputPad {
         id: usize,
         start_s: f64,
@@ -35,14 +36,14 @@ pub(crate) enum ScheduledCommand {
     StopAll,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ScheduledEvent {
     pub(crate) target_frame: u64,
     pub(crate) sequence: u64,
     pub(crate) command: ScheduledCommand,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct DueEvent {
     pub(crate) target_frame: u64,
     pub(crate) execution_frame: u64,
@@ -105,15 +106,15 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
             sequence: self.next_sequence,
             command,
         };
-        let insert_at = self.insertion_index(event);
+        let insert_at = self.insertion_index(&event);
 
         let mut index = self.len;
         while index > insert_at {
-            self.events[index] = self.events[index - 1];
+            self.events[index] = self.events[index - 1].take();
             index -= 1;
         }
 
-        self.events[insert_at] = Some(event);
+        self.events[insert_at] = Some(event.clone());
         self.len += 1;
         self.next_sequence = self.next_sequence.saturating_add(1);
 
@@ -123,7 +124,7 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
     pub(crate) fn peek_next_target_frame(&self) -> Option<u64> {
         self.events
             .first()
-            .and_then(|event| event.map(|event| event.target_frame))
+            .and_then(|event| event.as_ref().map(|event| event.target_frame))
     }
 
     pub(crate) fn pop_due_at_callback_start(
@@ -138,7 +139,7 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
         callback_start_frame: u64,
         latest_frame: u64,
     ) -> Option<DueEvent> {
-        let event = self.events.first().copied().flatten()?;
+        let event = self.events.first()?.as_ref()?;
         if event.target_frame > latest_frame {
             return None;
         }
@@ -151,10 +152,10 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
         })
     }
 
-    fn insertion_index(&self, new_event: ScheduledEvent) -> usize {
+    fn insertion_index(&self, new_event: &ScheduledEvent) -> usize {
         let mut index = 0;
         while index < self.len {
-            let Some(existing_event) = self.events[index] else {
+            let Some(existing_event) = self.events[index].as_ref() else {
                 break;
             };
 
@@ -172,11 +173,11 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
             return None;
         }
 
-        let event = self.events[0]?;
+        let event = self.events[0].take()?;
 
         let mut index = 1;
         while index < self.len {
-            self.events[index - 1] = self.events[index];
+            self.events[index - 1] = self.events[index].take();
             index += 1;
         }
 
@@ -187,7 +188,7 @@ impl<const CAPACITY: usize> FixedCapacityScheduler<CAPACITY> {
     }
 }
 
-fn event_sorts_before(left: ScheduledEvent, right: ScheduledEvent) -> bool {
+fn event_sorts_before(left: &ScheduledEvent, right: &ScheduledEvent) -> bool {
     left.target_frame < right.target_frame
         || (left.target_frame == right.target_frame && left.sequence < right.sequence)
 }

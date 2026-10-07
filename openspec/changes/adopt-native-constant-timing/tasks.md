@@ -100,16 +100,44 @@
   output against an independent continuation, plus readiness/stale/late/queue and
   source/timing/runtime invalidation; complete full checks/strict/staged review.
 
+## G3b2h: Current source/accepted-bound controller GLOBAL START/STOP batches
+
+- [x] Capture every affected actual native source/authority and full CURRENT
+  acknowledged accepted identity with exact period/signed origin; reuse the shared
+  MIDI/current binding comparison and frozen per-pad Python loop snapshot.
+- [x] Admit one fixed-capacity START/STOP transaction including productive MIDI
+  global actions; recheck whole-batch ownership at callback/scheduled execution
+  before any loop, voice, stop, bootstrap or retirement effect.
+- [x] Preserve previous audio, loops, pinned-source/native/FIFO/filter ownership
+  and controller restore state on unavailable/stale/command-or-feedback-full/
+  scheduler/voice/retirement
+  failure; keep Manual/Tap/Legacy nonaccepted and prior current during pending/
+  rejected accepted replacement.
+- [x] Use execution feedback for GLOBAL restore intent and native messages for
+  active/paused truth; retain the original shared MIDI/input timestamp and reject
+  old pinned-voice/current-bank mismatches without relabeling or partial stopping;
+  prune unloaded/replaced pads from late pending restore feedback and clear paused
+  projection only on actual native start telemetry.
+- [x] Cover actual productive controller/native/MIDI/current/stale/pending/
+  rejected/Manual/Tap/Legacy/unavailable/queue/scheduling/failure paths with
+  productive regressions, including feedback saturation and ordered unload/input.
+
+Publication requires full final-tree checks, official strict validation and an
+independent staged review. Their exact tree/blob identity and actual results are
+recorded in the step's validation/publication evidence.
+
 ## Explicit remaining boundaries
 
 - [x] G3b2g supported COMPLETE native QM source-verified SampleAnalysis/ProjectState
   persistence and loader schema with fresh runtime adoption and explicit
   Manual/Tap/Legacy policy (persist-source-verified-constant-timing).
-- [ ] Source/accepted-bound controller global batch launch (including MIDI
-  START/STOP) and explicit adoption/derived refresh orchestration remain separate.
+- [ ] General explicit accepted publication and derived loop/master refresh
+  orchestration remains separate; loader-specific refresh alone does not close it.
 - [ ] G3c separate: musical versus physical loop periods over 75/1000 cycles,
   fractional periods/rates/wrap/partition proof and rendered/onset/device/listening gates.
 - [ ] Later B5 audible crop/delay/transition compensation remains separate from
   required G3b2f2 native ownership/adoption integration.
 - [ ] C1 separate: original hash association does not prove copy-first immutable
   decoder input or defeat original-file ABA replacement.
+- [ ] Current 96-native-handle setup/RAM and source-verifying save I/O/CPU costs
+  require measurement; historical 64-handle observations do not establish them.

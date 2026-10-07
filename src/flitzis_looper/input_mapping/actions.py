@@ -65,7 +65,7 @@ class LooperAction(BaseModel):
 
     @classmethod
     def stop_all(cls) -> LooperAction:
-        return cls(key="global.stop_all", label="Stop all", source="direct")
+        return cls(key="global.stop_all", label="Stop all")
 
     @classmethod
     def speed_delta(cls, direction: Literal["increase", "decrease"]) -> LooperAction:

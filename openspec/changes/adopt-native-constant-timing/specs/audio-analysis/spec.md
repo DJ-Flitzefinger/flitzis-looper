@@ -495,8 +495,8 @@ The system SHALL reject new voice/retrigger adoption if Automatic lacks current
 acknowledgement or effective acceptance no longer matches acknowledgement.
 It SHALL reserve off-realtime retirement capacity before replacement changes
 old voice, loop or exclusive playback. Rejection SHALL preserve existing
-audio/history. Manual/Tap/Legacy SHALL retain nonaccepted authority. These checks
-SHALL NOT establish guarded controller global batch adoption.
+audio/history. Manual/Tap/Legacy SHALL retain nonaccepted authority. The guarded
+controller batch transaction below SHALL reuse these single-voice checks.
 
 #### Scenario: Automatic timing has no current acknowledgement
 - **GIVEN** Automatic authority without a current accepted projection
@@ -683,3 +683,144 @@ remain off realtime.
 - **WHEN** subsequent callbacks poll its bounded retirement lanes, or stream teardown runs after rendering stops
 - **THEN** native/FIFO/source/stem owners retire off realtime without requiring another productive source feed
 - **AND** the dirty-state fence prevents invalidated native history from consuming foreign feed
+
+### Requirement: Controller Global Batches Bind Every Current Native Pad
+The system SHALL bind each controller/MIDI GLOBAL START/STOP pad to actual native
+source/authority and full CURRENT acknowledged accepted revision, exact period and
+signed origin. Admission SHALL reject the whole batch for unavailable, stale,
+foreign or inconsistent bindings. Manual/Tap/Legacy SHALL remain nonaccepted;
+historical metadata and equal numerical timing SHALL NOT establish ownership.
+
+#### Scenario: Several current accepted pads restart together
+- **GIVEN** active or remembered pads with actual native current source ownership and acknowledged accepted timing
+- **WHEN** GLOBAL START captures their batch
+- **THEN** every affected pad carries its actual source generation/content/rate/extent and declared authority
+- **AND** each Automatic pad carries its full current accepted revision, exact period and signed origin
+- **AND** one operation uses the matching frozen Python timing snapshot for each pad's loop calculation
+
+#### Scenario: One pad is unavailable or changes during admission
+- **GIVEN** an otherwise valid batch with one Automatic pad lacking consistent current acknowledgement or one retired source/authority binding
+- **WHEN** native batch admission validates all affected pads
+- **THEN** the entire batch is rejected without publishing any pad loop or playback effect
+- **AND** previous effective audio, loop, transport and controller restore state remain available
+
+#### Scenario: A replacement is pending or rejected
+- **GIVEN** a current accepted record and a replacement proposal that is pending or rejected
+- **WHEN** a controller batch captures current timing
+- **THEN** the previous acknowledged accepted revision remains authoritative
+- **AND** the proposal or historical ticket does not become batch authority
+
+#### Scenario: Manual Tap and Legacy participate in a mixed batch
+- **GIVEN** actual current native sources under Manual, Tap, Legacy and acknowledged Automatic authority
+- **WHEN** the controller captures one mixed batch
+- **THEN** the first three pads remain bound to their own nonaccepted authority
+- **AND** matching numerical timing cannot promote them to accepted records
+
+### Requirement: Global Batch Execution Is Transactional And Scheduled Once
+The system SHALL admit GLOBAL START/STOP as one bounded transaction, recheck all
+source/authority/accepted bindings at execution and schedule START at one shared
+output boundary with its captured timestamp. Execution SHALL reserve whole-batch
+voice, retirement and playback-feedback capacity before effects. Validation or
+command/feedback/scheduler/capacity failure SHALL preserve previous audio, loops,
+transport and ownership without partial effects.
+
+#### Scenario: Quantized restart reaches its common boundary
+- **GIVEN** a valid admitted batch and one captured input timestamp
+- **WHEN** the native scheduler reaches the selected output frame
+- **THEN** it rechecks the complete batch before any loop or voice mutation
+- **AND** all affected starts use that same output frame and their matching loop intent
+- **AND** source rates, fractional progression, DSP invalidation and pin retirement reuse existing single-pad behavior
+
+#### Scenario: An equal-valued revision changes after enqueue
+- **GIVEN** an admitted batch awaiting immediate or quantized execution
+- **WHEN** one source, declared authority, full accepted revision or signed-origin bits changes before execution despite equal BPM or loop endpoints
+- **THEN** the whole stale batch is rejected before any affected pad changes
+- **AND** unrelated and previously effective pinned voices remain available
+
+#### Scenario: Capacity fails before the batch can commit
+- **GIVEN** current effective voices, loops and transport state
+- **WHEN** command or playback-feedback capacity is insufficient, the scheduler is full, available voices are insufficient or off-realtime retirement capacity cannot cover the entire batch
+- **THEN** no subset of loops, starts, stops or transport bootstrap is applied
+- **AND** source/native/FIFO/filter owners remain coherent and large owners retire only outside realtime processing
+
+#### Scenario: Playback feedback cannot cover every affected pad
+- **GIVEN** a current valid START or STOP batch and a bounded native-to-control feedback ring
+- **WHEN** its available slots are fewer than all required SampleStarted or SampleStopped messages
+- **THEN** execution rejects the whole batch before changing audio, loops or pinned ownership
+- **AND** it publishes no partial playback feedback or accepted result
+- **AND** previous controller restore intent remains available
+
+#### Scenario: Current bank and an active pinned voice have different ownership
+- **GIVEN** a voice retaining an older source and effective timing after current bank replacement
+- **WHEN** a guarded global batch is checked or committed
+- **THEN** the replacement bank's current accepted record cannot relabel the old voice or its history
+- **AND** stale or inconsistent ownership rejects the batch without partially changing other voices
+- **AND** an admitted restart adopts the actual current bank source through the existing preparation and retirement path
+
+### Requirement: Controller Batch Feedback Preserves Restore State Until Acceptance
+The system SHALL distinguish enqueue/scheduling from native acceptance.
+Active/paused state SHALL follow playback messages; SampleStarted SHALL clear
+paused state. Only accepted batches SHALL change restore intent; pending/rejected
+work SHALL preserve it. STOP SHALL remember the playing subset. Subsequent global
+target capture SHALL first drain existing playback feedback. Unload SHALL prune
+observed/pending restore and publish reliable ordered STOP feedback.
+
+#### Scenario: Stop is admitted but not yet executed
+- **GIVEN** an active playing set and paused pads with existing GLOBAL restore bookkeeping
+- **WHEN** GLOBAL STOP is enqueued or scheduled but native execution remains pending
+- **THEN** controller bookkeeping retains the previous active, paused and restore state
+- **AND** only actual accepted execution remembers the playing subset and applies the stop result
+
+#### Scenario: Remembered restart is rejected after enqueue
+- **GIVEN** a remembered restore set and a pending GLOBAL START batch
+- **WHEN** source or authority changes before native execution rejects that batch
+- **THEN** controller feedback retains the remembered restore set and prior active/paused state
+- **AND** the rejection cannot consume the next legitimate restore attempt
+
+#### Scenario: A pad unloads before its accepted STOP is observed
+- **GIVEN** a GLOBAL STOP ticket that becomes accepted before Python observes it
+- **WHEN** the loader unloads or replaces one captured pad before ticket polling
+- **THEN** the loader's control-intent callback removes that pad from observed and pending restore sets
+- **AND** later accepted feedback can remember only the remaining captured pads
+- **AND** restore engagement is false when no remembered pads remain
+
+#### Scenario: Restart acknowledgement precedes native playback telemetry
+- **GIVEN** a remembered pad whose session projection is still paused
+- **WHEN** accepted START feedback is observed before its SampleStarted message
+- **THEN** ticket polling does not optimistically change active or paused state
+- **AND** the actual SampleStarted message adds the active pad and clears its paused projection
+
+#### Scenario: Mapped MIDI global actions execute productively
+- **GIVEN** a mapped MIDI GLOBAL START or STOP action and its captured Rust input timestamp
+- **WHEN** input handling executes the controller action
+- **THEN** it uses the same source-bound all-or-none batch transaction as the UI controller
+- **AND** no direct unguarded MIDI stop-all or Python per-pad loop/play sequence bypasses that transaction
+- **AND** pending or failed execution cannot optimistically corrupt session state
+
+#### Scenario: A following STOP arrives before normal START feedback polling
+- **GIVEN** an accepted remembered START with native SampleStarted messages still queued
+- **WHEN** a following MIDI, keyboard or UI global STOP captures its targets before normal frame audio polling
+- **THEN** it first drains the existing playback feedback after observing batch completion
+- **AND** it captures the complete newly active set for the same guarded STOP transaction
+
+#### Scenario: Unload follows an older queued START message
+- **GIVEN** an accepted START with its feedback queued and a subsequently admitted pad unload
+- **WHEN** the native callback executes the unload
+- **THEN** it reserves one feedback slot before any unload effect and emits ordered SampleStopped feedback
+- **AND** full feedback defers the entire unload with prior pins and audio preserved
+- **AND** draining the older START and subsequent unload STOP leaves that pad inactive
+
+### Requirement: Global Batch Realtime Work Is Fixed And Bounded
+The system SHALL allocate batch/scheduler storage outside realtime and bound
+callback work by configured capacity, reusing existing trajectory, preparation
+and retirement. Batch callback work SHALL add no PCM scans, evidence allocation,
+locks, GIL/UI/I/O/logging, native DSP construction/reset or large-owner destruction.
+Feedback SHALL NOT drive audio timing, accepted publication or derived loop/master
+refresh, which remains a separate integration boundary.
+
+#### Scenario: A batch executes or retires on the callback
+- **GIVEN** a captured fixed-capacity controller batch
+- **WHEN** callback admission, scheduling, execution, rejection or feedback runs
+- **THEN** work remains bounded by configured pad/voice/batch capacity
+- **AND** evidence, native preparation and large-owner retirement stay off realtime
+- **AND** batch feedback does not become a second timing owner or an automatic acceptance orchestrator

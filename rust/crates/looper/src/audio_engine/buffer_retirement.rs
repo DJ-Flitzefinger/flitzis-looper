@@ -20,12 +20,17 @@ pub(crate) enum RetiredAudioBuffer {
     Sample(SampleBuffer),
     PreparedStems(PreparedStemSet),
     ConstantTiming(PreparedConstantTiming),
+    GlobalPlaybackBatch(Arc<super::global_playback_batch::GlobalPlaybackBatch>),
 }
 
 pub(crate) trait AudioBufferRetirement {
     fn retire_sample(&mut self, sample: SampleBuffer);
     fn retire_prepared_stems(&mut self, stems: PreparedStemSet);
     fn retire_constant_timing(&mut self, timing: PreparedConstantTiming);
+    fn retire_global_playback_batch(
+        &mut self,
+        batch: Arc<super::global_playback_batch::GlobalPlaybackBatch>,
+    );
     fn available_retirement_slots(&mut self) -> usize;
 }
 
@@ -38,6 +43,11 @@ impl AudioBufferRetirement for ImmediateAudioBufferRetirement {
 
     fn retire_prepared_stems(&mut self, _stems: PreparedStemSet) {}
     fn retire_constant_timing(&mut self, _timing: PreparedConstantTiming) {}
+    fn retire_global_playback_batch(
+        &mut self,
+        _batch: Arc<super::global_playback_batch::GlobalPlaybackBatch>,
+    ) {
+    }
 
     fn available_retirement_slots(&mut self) -> usize {
         usize::MAX
@@ -108,6 +118,12 @@ impl RtAudioBufferRetirement {
 }
 
 impl AudioBufferRetirement for RtAudioBufferRetirement {
+    fn retire_global_playback_batch(
+        &mut self,
+        batch: Arc<super::global_playback_batch::GlobalPlaybackBatch>,
+    ) {
+        self.retire_buffer(RetiredAudioBuffer::GlobalPlaybackBatch(batch));
+    }
     fn retire_sample(&mut self, sample: SampleBuffer) {
         self.retire_buffer(RetiredAudioBuffer::Sample(sample));
     }

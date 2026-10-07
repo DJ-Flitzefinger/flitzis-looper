@@ -360,6 +360,9 @@ mod tests {
         engine.loaded_source_generations.lock().unwrap()[0] = (7, 44_100);
         let digest = "a".repeat(64);
         engine.loaded_source_digests.lock().unwrap()[0] = Some(digest.clone());
+        engine
+            .input_runtime_ownership
+            .publish_source(0, &sample, 44_100, 7);
         (engine, format!("samples/a.wav|sha256-v1:{digest}"), sample)
     }
 

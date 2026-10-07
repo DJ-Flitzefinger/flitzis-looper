@@ -125,11 +125,15 @@ source timing. G3b2f2 adds actual worker-owned native/FIFO continuation from tho
 PCM/stem owners, exact current permits and timed transactional adoption; completion
 requires productive ownership/output/failure proof. Neutral reserves and the
 separate test-only key_lock_source_preparation cannot substitute for that owner.
-Accepted source-verified SampleAnalysis/ProjectState persistence and loader schema
-with fresh runtime adoption, source/accepted-bound controller global START/STOP
-batch launch including MIDI, and explicit acceptance/derived loop/master refresh
-orchestration remain later gates. The original hash association does not complete
+G3b2g adds supported complete source-verified SampleAnalysis/ProjectState persistence
+and fresh acknowledged loader adoption. G3b2h binds productive controller GLOBAL
+START/STOP batches including MIDI to current native source/authority and complete
+acknowledged accepted timing. General explicit acceptance/derived loop/master refresh
+orchestration remains open; loader-specific refresh alone does not close it.
+The original hash association does not complete
 C1 immutable copy-first/ABA proof. G3c separately proves musical versus physical
 loops over 75/1000 cycles, fractional periods/rates, callback partitions/wrap and
 rendered/onset/device/listening gates. Numerical ownership tests supply no human
-listening, label or device acceptance.
+listening, label or device acceptance. Later B5 audible crop/delay/transition
+compensation stays separate; current 96-native-handle setup/RAM and source-verifying
+save I/O/CPU costs remain unmeasured.

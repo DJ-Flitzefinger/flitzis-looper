@@ -352,6 +352,20 @@ impl RtMixer {
         binding: super::input_runtime_binding::InputPadBinding,
     ) -> bool {
         self.input_runtime_ownership.current(id, binding)
+            && self.source_binding_current(id, binding)
+            && self.input_runtime_ownership.current(id, binding)
+    }
+
+    /// Controller batches share source/authority/accepted guards without owning MIDI intent.
+    pub(crate) fn source_binding_current(
+        &self,
+        id: usize,
+        binding: super::input_runtime_binding::InputPadBinding,
+    ) -> bool {
+        self.input_runtime_ownership.authority_current(id, binding)
+            && self
+                .input_runtime_ownership
+                .binding_source_current(id, binding)
             && binding.sample_rate_hz as f32 == self.sample_rate_hz
             && self.sample_bank[id].as_ref().is_some_and(|sample| {
                 sample.samples.as_ptr() as usize == binding.source_address
@@ -363,7 +377,39 @@ impl RtMixer {
                 == binding
                     .accepted
                     .map_or(0, |accepted| accepted.publication_epoch)
-            && self.input_runtime_ownership.current(id, binding)
+            && self.input_runtime_ownership.authority_current(id, binding)
+            && self
+                .input_runtime_ownership
+                .binding_source_current(id, binding)
+    }
+
+    /// Validate every live/paused pin against the exact source and effective projection.
+    pub(crate) fn global_stop_bindings_current(
+        &self,
+        entries: &[super::global_playback_batch::GlobalPlaybackEntry],
+    ) -> bool {
+        entries
+            .iter()
+            .all(|entry| self.source_binding_current(entry.id, entry.binding))
+            && self
+                .voices
+                .iter()
+                .filter(|voice| voice.active)
+                .all(|voice| {
+                    entries
+                        .iter()
+                        .find(|entry| entry.id == voice.sample_id)
+                        .is_some_and(|entry| {
+                            voice.sample.as_ref().is_some_and(|sample| {
+                                sample.samples.as_ptr() as usize == entry.binding.source_address
+                                    && sample.samples.len() == entry.binding.sample_count
+                                    && sample.channels == entry.binding.channels
+                            }) && self.timing_for_voice(voice).accepted == entry.binding.accepted
+                        })
+                })
+            && entries
+                .iter()
+                .all(|entry| self.source_binding_current(entry.id, entry.binding))
     }
 
     /// Loads a sample into the sample bank at the specified slot.
@@ -2003,6 +2049,11 @@ mod tests {
     }
 
     impl AudioBufferRetirement for CollectingRetirement {
+        fn retire_global_playback_batch(
+            &mut self,
+            _: Arc<super::super::global_playback_batch::GlobalPlaybackBatch>,
+        ) {
+        }
         fn retire_sample(&mut self, sample: SampleBuffer) {
             self.samples.push(sample);
         }

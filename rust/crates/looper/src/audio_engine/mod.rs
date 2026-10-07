@@ -51,6 +51,8 @@ pub use constant_timing::ConstantTimingTicket;
 pub use constant_timing::SavedConstantTimingTicket;
 mod dsp;
 mod errors;
+pub(crate) mod global_playback_batch;
+pub use global_playback_batch::GlobalPlaybackBatchTicket;
 mod initial_loop_start;
 mod input_mapping;
 pub(crate) mod input_runtime_binding;
@@ -1834,6 +1836,58 @@ impl AudioEngine {
         producer_guard
             .push(ControlMessage::StopAll())
             .map_err(|_| PyRuntimeError::new_err("Failed to send Stop - buffer may be full"))
+    }
+
+    /// Admit one controller-owned global launch against actual native current bindings.
+    #[pyo3(signature = (entries, *, received_at_ns=None))]
+    pub fn start_global_playback_batch(
+        &self,
+        py: Python<'_>,
+        entries: Vec<(Py<InputRuntimePadBinding>, f64, Option<f64>)>,
+        received_at_ns: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<GlobalPlaybackBatchTicket> {
+        let received_at_ns = validated_input_timestamp(
+            parse_input_timestamp(received_at_ns)?,
+            self.input_clock.capture_ns(),
+        );
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        let bindings: Vec<_> = entries
+            .iter()
+            .map(|(binding, _, _)| binding.borrow(py))
+            .collect();
+        let entries = bindings
+            .iter()
+            .zip(entries.iter())
+            .map(|(binding, (_, start, end))| (&**binding, *start, *end))
+            .collect();
+        global_playback_batch::enqueue(self, &handle.producer, entries, true, received_at_ns)
+    }
+
+    /// Stop only after every actual voice is covered by matching current native authority.
+    #[pyo3(signature = (bindings, *, received_at_ns=None))]
+    pub fn stop_global_playback_batch(
+        &self,
+        py: Python<'_>,
+        bindings: Vec<Py<InputRuntimePadBinding>>,
+        received_at_ns: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<GlobalPlaybackBatchTicket> {
+        let received_at_ns = validated_input_timestamp(
+            parse_input_timestamp(received_at_ns)?,
+            self.input_clock.capture_ns(),
+        );
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        let bindings: Vec<_> = bindings.iter().map(|binding| binding.borrow(py)).collect();
+        let entries = bindings
+            .iter()
+            .map(|binding| (&**binding, 0.0, None))
+            .collect();
+        global_playback_batch::enqueue(self, &handle.producer, entries, false, received_at_ns)
     }
 
     /// Set the global volume multiplier.
