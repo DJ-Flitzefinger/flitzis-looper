@@ -21,6 +21,16 @@ metadata or persisted. `metadata()` exposes source/PCM/job/timebase and complete
 raw evidence for independent count assessment. Preparation does not accept a
 musical interpretation or change the default estimator.
 
+Normal preparation and saved restoration retain the 512 MiB controlled-PCM limit.
+`capture_current_constant_timing(..., pcm_limit_bytes=...)` accepts an explicit
+integer limit up to 1 GiB for a genuine current-source capture. Invalid limits
+reject before source request advancement. This runtime policy follows the captured
+ticket and current accepted record so export verifies the same complete source
+within its admitted limit. Saved evidence cannot request a higher restoration
+budget. The limit covers controlled PCM staging rather than whole-process memory;
+QM/FFT workspace and other loaded pads remain separate. No budget work occurs in
+the realtime callback and a larger budget supplies no timing acceptance.
+
 `publish_constant_timing(ticket, hypotheses_json, origin_seconds,
 origin_provenance, acceptance_policy_version, acceptance_provenance)` recomputes
 the supported raw fit and constructs `AcceptedConstantTiming`. The hypotheses

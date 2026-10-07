@@ -23,6 +23,7 @@ pub struct SavedConstantTimingTicket {
     epoch: Arc<AtomicU64>,
     captured_epoch: u64,
     record: Value,
+    pcm_budget: PcmBudget,
 }
 
 fn object<'a>(
@@ -355,6 +356,7 @@ fn verify(
     ),
     String,
 > {
+    let pcm_limit_bytes = ticket.pcm_budget.limit_bytes();
     let cancelled = || ticket.epoch.load(Ordering::Acquire) != ticket.captured_epoch;
     if cancelled() {
         return Err("saved timing restore cancelled".into());
@@ -372,17 +374,17 @@ fn verify(
             source_id: format!("loaded-{}-{}", ticket.id, ticket.source_generation),
             source_generation: ticket.source_generation,
         },
-        MAX_PCM_BYTES,
+        pcm_limit_bytes,
     )
     .map_err(|e| e.to_string())?;
     let mono = snapshot
-        .prepare_complete_mono(MAX_PCM_BYTES, &cancelled)
+        .prepare_complete_mono(pcm_limit_bytes, &cancelled)
         .map_err(|e| e.to_string())?;
     let retained = snapshot
         .retained_bytes()
         .checked_add(mono.capacity() * 4)
         .ok_or("timing PCM bytes overflow")?;
-    let budget = MAX_PCM_BYTES
+    let budget = pcm_limit_bytes
         .checked_sub(retained)
         .ok_or("timing PCM byte limit exceeded")?;
     let converted = resample_mono_cancellable(
@@ -394,7 +396,7 @@ fn verify(
     )
     .map_err(|e| e.to_string())?;
     if retained as u128 + converted.capacity() as u128 * 4 + converted.len() as u128 * 8
-        > MAX_PCM_BYTES as u128
+        > pcm_limit_bytes as u128
     {
         return Err("timing PCM byte limit exceeded".into());
     }
@@ -554,6 +556,7 @@ pub(in crate::audio_engine) fn capture_saved(
         epoch: engine.prepared_source_epochs[id].clone(),
         captured_epoch: engine.prepared_source_epochs[id].load(Ordering::Acquire),
         record,
+        pcm_budget: PcmBudget::default(),
     })
 }
 
@@ -592,6 +595,7 @@ pub(in crate::audio_engine) fn restore_saved(
         guard: Mutex::new(guard),
         adoption_ticket,
         publication: Mutex::new(None),
+        pcm_budget: saved.pcm_budget,
     };
     publish_record(engine, producer, &ticket, accepted, true)?;
     Ok(ticket)
@@ -663,6 +667,7 @@ pub(in crate::audio_engine) fn export_current(
                 epoch: engine.prepared_source_epochs[id].clone(),
                 captured_epoch: engine.prepared_source_epochs[id].load(Ordering::Acquire),
                 record: envelope["record"].clone(),
+                pcm_budget: current.pcm_budget,
             },
             current.publication_epoch,
             envelope,

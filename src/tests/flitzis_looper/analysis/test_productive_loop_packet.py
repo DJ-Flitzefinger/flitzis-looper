@@ -22,13 +22,24 @@ from flitzis_looper.analysis.productive_loop_packet import (
     prepare_packet,
     request_snapshot,
 )
-from flitzis_looper.analysis.productive_loop_run import ProductiveObserver, run_packet
+from flitzis_looper.analysis.productive_loop_packet import (
+    main as packet_main,
+)
+from flitzis_looper.analysis.productive_loop_run import (
+    ProductiveObserver,
+    preparation_pcm_budget,
+    run_packet,
+)
 from flitzis_looper.analysis.productive_loop_snapshot import comparison_pad
+from flitzis_looper.controller import accepted_restore
 from flitzis_looper.models import ProjectState
 from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding, current_timing_metadata
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from flitzis_looper.controller import AppController
+    from flitzis_looper_audio import ConstantTimingTicket
 
 
 def reference(path: Path) -> QuarterReference:
@@ -56,6 +67,76 @@ def metadata(ref: QuarterReference, *, rate: int = 48_000) -> dict[str, object]:
         "frame_count": rate * 3,
         "beat_seconds": [0.503, 1.004, 2.005],
     }
+
+
+def budget_binding(ref: QuarterReference, *, rate: int = 48_000) -> dict[str, object]:
+    return {
+        "pad_id": 0,
+        "source_id": "synthetic-loaded-source",
+        "source_generation": 7,
+        "source_sha256": ref.source_sha256,
+        "sample_rate_hz": rate,
+        "channels": 2,
+        "frame_count": (ref.source_frame_count * rate + ref.source_sample_rate_hz - 1)
+        // ref.source_sample_rate_hz,
+    }
+
+
+@pytest.mark.parametrize("rate", [44_100, 48_000, 96_000])
+def test_actual_geometry_uses_loaded_frames_and_keeps_normal_default(
+    tmp_path: Path, rate: int
+) -> None:
+    source = tmp_path / "synthetic-source"
+    source.write_bytes(b"synthetic independent geometry reference")
+    ref = reference(source)
+    binding = budget_binding(ref, rate=rate)
+    receipt = preparation_pcm_budget(binding, ref, 0)
+    assert receipt["native_source_binding"] == binding
+    assert receipt["requested_pcm_limit_bytes"] == 512 * 1024 * 1024
+    assert receipt["analyzer_frame_count"] == 3 * 44_100
+
+
+def test_complete_600_second_stereo_geometry_admits_bounded_explicit_policy(tmp_path: Path) -> None:
+    source = tmp_path / "synthetic-source"
+    source.write_bytes(b"synthetic geometry; not a device or decoded audio fixture")
+    ref = reference(source)
+    ref.source_frame_count = 600 * 48_000
+    receipt = preparation_pcm_budget(budget_binding(ref), ref, 0)
+    assert receipt["estimated_peak_pcm_bytes"] == 778_320_000 + 2 * 1029 * 4
+    assert receipt["requested_pcm_limit_bytes"] == 1024 * 1024 * 1024
+    assert receipt["loaded_interleaved_f32_bytes"] == 28_800_000 * 2 * 4
+    assert receipt["converter_padding_pcm_bytes"] == 8232
+    with pytest.raises(ValueError, match="at most 1 GiB"):
+        preparation_pcm_budget(budget_binding(ref, rate=96_000), ref, 0)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("pad_id", False),
+        ("source_generation", True),
+        ("source_generation", 0),
+        ("source_id", ""),
+        ("source_sha256", "f" * 64),
+        ("sample_rate_hz", True),
+        ("sample_rate_hz", 7999),
+        ("sample_rate_hz", 384_001),
+        ("channels", 0),
+        ("channels", 33),
+        ("frame_count", 144_001),
+        ("frame_count", 144_000.0),
+    ],
+)
+def test_pcm_admission_rejects_unbound_or_invalid_actual_geometry(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    source = tmp_path / "synthetic-source"
+    source.write_bytes(b"synthetic independent geometry reference")
+    ref = reference(source)
+    binding = budget_binding(ref)
+    binding[field] = value
+    with pytest.raises(ValueError, match=r"actual native|PCM admission"):
+        preparation_pcm_budget(binding, ref, 0)
 
 
 def native_pair(pad: int = 0) -> tuple[dict[str, object], dict[str, object], str]:
@@ -350,6 +431,7 @@ def blank_observer(
     observer.stage = "waiting_for_source"
     observer.preparation = observer.mapping = observer.publication = observer.ticket = None
     observer.request_metadata = None
+    observer.prior_analysis_errors = {}
     observer.completed = set()
     observer.failure = None
     observer.requests = queue.SimpleQueue()
@@ -365,6 +447,168 @@ def advance_observer_until(observer: ProductiveObserver, stage: str) -> None:
         time.sleep(0.001)
     assert observer.stage == stage
     assert observer.failure is None
+
+
+@pytest.fixture
+def budgeted_observer(
+    controller: AppController, audio_engine_mock: Mock, tmp_path: Path
+) -> Iterator[ProductiveObserver]:
+    source = tmp_path / "source.wav"
+    source.write_bytes(b"synthetic source for controller-only restored-session regression")
+    ref = reference(source)
+    ref.source_frame_count = 600 * 48_000
+    plan_path = prepare_packet(tmp_path, source, tmp_path / "exports/run", reference=ref, pads=1)
+    plan, ref = load_plan(tmp_path, plan_path)
+    current = current_timing_metadata()
+    current["source_sha256"] = ref.source_sha256
+    audio_engine_mock.current_input_runtime_pad_binding.side_effect = None
+    audio_engine_mock.current_input_runtime_pad_binding.return_value = FakeInputRuntimePadBinding(
+        accepted_timing=current, intent="automatic"
+    )
+    audio_engine_mock.current_constant_timing.return_value = None
+    audio_engine_mock.poll_loader_events.return_value = None
+    audio_engine_mock.pad_timing_intent.return_value = "automatic"
+    audio_engine_mock.prepare_captured_constant_timing.return_value = Mock()
+    controller.project.sample_paths[0] = str(source)
+    controller.project.pad_timing_intent[0] = "automatic"
+    controller.project.speed = 0.73
+    observer = blank_observer(controller, plan, ref, tmp_path / "observations")
+    try:
+        yield observer
+    finally:
+        observer.worker.shutdown(wait=True)
+        controller.accepted_timing.shut_down()
+
+
+def test_reopen_waits_for_other_restore_then_fresh_success_reaches_real_ack_ready(
+    budgeted_observer: ProductiveObserver, audio_engine_mock: Mock
+) -> None:
+    observer, controller = budgeted_observer, budgeted_observer.controller
+    restorer = controller.loader._accepted_restore
+    historical: Future[ConstantTimingTicket] = Future()
+    controller.project.sample_paths[4] = "samples/historical-source.wav"
+    restorer._pending[4] = accepted_restore._Restore(historical, "samples/historical-source.wav")
+    observer._wait_for_source(0)
+    assert restorer.has_pending()
+    assert observer.preparation is None
+    audio_engine_mock.capture_current_constant_timing.assert_not_called()
+    assert controller.accepted_timing._worker is None
+    historical.set_exception(ValueError("historical default 512 MiB restore failed"))
+    restorer.poll()
+    assert not restorer.has_pending()
+    controller.session.sample_analysis_errors[0] = "earlier selected-pad restore failed"
+    current = current_timing_metadata()
+    current["source_sha256"] = observer.reference.source_sha256
+    ticket = audio_engine_mock.prepare_captured_constant_timing.return_value
+    ticket.metadata.return_value = dict(
+        current, request_id=current["accepted_request_id"], beat_seconds=[0.503, 1.004, 2.005]
+    )
+    ticket.publication_status.return_value = "pending"
+    refresh = audio_engine_mock.refresh_current_constant_timing.return_value
+    refresh.publication_status.return_value = "pending"
+    refresh.is_current.return_value = False
+    advance_observer_until(observer, "awaiting_actual_publication_ack")
+    assert 0 not in controller.session.sample_analysis_errors
+    assert (
+        controller.session.sample_analysis_errors[4] == "historical default 512 MiB restore failed"
+    )
+    assert audio_engine_mock.capture_current_constant_timing.call_args.kwargs == {
+        "pcm_limit_bytes": 1024 * 1024 * 1024
+    }
+    ticket.publication_status.return_value = "accepted"
+    audio_engine_mock.current_constant_timing.return_value = current
+    advance_observer_until(observer, "awaiting_actual_derived_ack")
+    refresh.publication_status.return_value = "accepted"
+    refresh.is_current.return_value = True
+    advance_observer_until(observer, "ready")
+    observer.worker.submit(lambda: None).result(timeout=2.0)
+    receipt = json.loads((observer.directory / "pad-0-pcm-admission.json").read_text())
+    assert receipt["prior_analysis_error_before_explicit_preparation"] == (
+        "earlier selected-pad restore failed"
+    )
+    assert observer.completed == {0}
+    audio_engine_mock.play_sample.assert_not_called()
+
+
+@pytest.mark.parametrize("analyzing", [False, True])
+def test_fresh_capture_waits_for_other_planned_pad_startup_work(
+    budgeted_observer: ProductiveObserver, audio_engine_mock: Mock, *, analyzing: bool
+) -> None:
+    observer = budgeted_observer
+    observer.plan.pad_ids = [0, 4]
+    session = observer.controller.session
+    pending = session.analyzing_sample_ids if analyzing else session.loading_sample_ids
+    pending.add(4)
+    observer._wait_for_source(0)
+    assert observer.preparation is None
+    audio_engine_mock.capture_current_constant_timing.assert_not_called()
+    assert observer.controller.accepted_timing._worker is None
+    pending.remove(4)
+    observer._wait_for_source(0)
+    assert observer.preparation is not None
+    audio_engine_mock.capture_current_constant_timing.assert_called_once()
+
+
+def test_failed_fresh_preparation_retains_old_error_and_new_failure(
+    budgeted_observer: ProductiveObserver, audio_engine_mock: Mock
+) -> None:
+    observer = budgeted_observer
+    observer.controller.session.sample_analysis_errors[0] = "old restore failure"
+    audio_engine_mock.prepare_captured_constant_timing.side_effect = ValueError("new PCM failure")
+    observer._wait_for_source(0)
+    assert observer.preparation is not None
+    with pytest.raises(ValueError, match="new PCM failure"):
+        observer.preparation.result(timeout=2.0)
+    observer.on_frame()
+    observer.worker.submit(lambda: None).result(timeout=2.0)
+    assert observer.failure == "new PCM failure"
+    assert observer.controller.session.sample_analysis_errors[0] == "old restore failure"
+    assert not (observer.directory / "setup-ready.json").exists()
+    receipt = json.loads((observer.directory / "setup-failed.json").read_text())
+    assert receipt["error"] == "new PCM failure"
+
+
+def test_fresh_success_cannot_clear_a_new_analysis_error(
+    budgeted_observer: ProductiveObserver, audio_engine_mock: Mock
+) -> None:
+    observer = budgeted_observer
+    observer.controller.session.sample_analysis_errors[0] = "old restore failure"
+    ticket = audio_engine_mock.prepare_captured_constant_timing.return_value
+    current = current_timing_metadata()
+    current["source_sha256"] = observer.reference.source_sha256
+    ticket.metadata.return_value = dict(
+        current, request_id=current["accepted_request_id"], beat_seconds=[0.503, 1.004, 2.005]
+    )
+    observer._wait_for_source(0)
+    assert observer.preparation is not None
+    observer.preparation.result(timeout=2.0)
+    observer.controller.session.sample_analysis_errors[0] = "new unrelated analysis failure"
+    observer._finish_preparation(0)
+    assert observer.controller.session.sample_analysis_errors[0] == "new unrelated analysis failure"
+
+
+def test_rejected_pcm_geometry_retains_binding_without_capture_or_error_clear(
+    budgeted_observer: ProductiveObserver, audio_engine_mock: Mock
+) -> None:
+    observer = budgeted_observer
+    binding = budget_binding(observer.reference)
+    binding["channels"] = True
+    audio_engine_mock.current_input_runtime_pad_binding.return_value = Mock(
+        metadata=lambda: binding
+    )
+    observer.controller.session.sample_analysis_errors[0] = "historical restore failure"
+    with pytest.raises(ValueError, match="actual native channels"):
+        observer._wait_for_source(0)
+    observer.worker.submit(lambda: None).result(timeout=2.0)
+    audio_engine_mock.capture_current_constant_timing.assert_not_called()
+    assert observer.controller.accepted_timing._worker is None
+    assert observer.controller.session.sample_analysis_errors[0] == "historical restore failure"
+    receipt = json.loads((observer.directory / "pad-0-pcm-admission-rejected.json").read_text())
+    assert receipt["native_source_binding"] == binding
+    assert (
+        receipt["prior_analysis_error_before_explicit_preparation"] == "historical restore failure"
+    )
+    assert not (observer.directory / "setup-ready.json").exists()
 
 
 def test_adapter_uses_productive_controller_prepare_publish_current_and_derived_ack(
@@ -469,3 +713,64 @@ def test_user_run_exception_retires_only_its_owned_isolated_controller(
     observer.close.assert_called_once()
     controller.shut_down.assert_called_once()
     assert Path.cwd() == previous
+
+
+@pytest.mark.parametrize("launch_directory", ["repo", "scratch"])
+@pytest.mark.parametrize("absolute_plan", [False, True])
+def test_human_cli_resolves_plan_from_workspace_before_controller_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    launch_directory: str,
+    *,
+    absolute_plan: bool,
+) -> None:
+    source = tmp_path / "source.wav"
+    source.write_bytes(b"hardware-free launcher regression source")
+    plan_path = prepare_packet(
+        tmp_path, source, tmp_path / "exports/listening073", reference=reference(source), pads=1
+    )
+    plan, _ref = load_plan(tmp_path, plan_path)
+    current_directory = tmp_path / launch_directory
+    current_directory.mkdir()
+    monkeypatch.chdir(current_directory)
+    argument = plan_path if absolute_plan else plan_path.relative_to(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["productive_loop_packet", "--workspace", str(tmp_path), "run", "--plan", str(argument)],
+    )
+    module = "flitzis_looper.analysis.productive_loop_run"
+    constructor = Mock(side_effect=RuntimeError("hardware-free controller boundary"))
+    observer, ui = Mock(), Mock()
+    monkeypatch.setattr(f"{module}.AppController", constructor)
+    monkeypatch.setattr(f"{module}.ProductiveObserver", observer)
+    monkeypatch.setattr(f"{module}.run_ui", ui)
+
+    with pytest.raises(RuntimeError, match="hardware-free controller boundary"):
+        packet_main()
+
+    constructor.assert_called_once_with(project_config_path=Path(plan.project_config_path))
+    observer.assert_not_called()
+    ui.assert_not_called()
+    assert Path.cwd() == current_directory
+
+
+@pytest.mark.parametrize("invalid_plan", ["repo/run-plan.json", "../outside/run-plan.json"])
+def test_human_run_rejects_nonprivate_plan_before_app_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invalid_plan: str
+) -> None:
+    current_directory = tmp_path / "repo"
+    current_directory.mkdir()
+    monkeypatch.chdir(current_directory)
+    module = "flitzis_looper.analysis.productive_loop_run"
+    constructor, observer, ui = Mock(), Mock(), Mock()
+    monkeypatch.setattr(f"{module}.AppController", constructor)
+    monkeypatch.setattr(f"{module}.ProductiveObserver", observer)
+    monkeypatch.setattr(f"{module}.run_ui", ui)
+
+    with pytest.raises(ValueError, match="outside_workspace_or_inside_repo"):
+        run_packet(tmp_path, Path(invalid_plan))
+
+    constructor.assert_not_called()
+    observer.assert_not_called()
+    ui.assert_not_called()
+    assert Path.cwd() == current_directory

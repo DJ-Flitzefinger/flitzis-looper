@@ -29,3 +29,23 @@ device/listening gates as open; passing schema checks is not acceptance. Human
 listening records bind the actual run/capture and uninterrupted duration of at
 least 1800 seconds, with explicit observer and audible observations. Private
 sources, captures, project configuration and large evidence stay outside Git.
+
+The productive route resolves private plan paths against the explicit workspace,
+independently of the shell working directory. A source-specific PCM budget uses
+genuine loaded frames/rate/channels and the frozen reference duration. Normal
+constant-timing preparation and saved restoration retain their 512 MiB policy;
+the route may opt into a finite budget no greater than 1 GiB. Native capacity
+checks remain authoritative. The budget follows captured/prepared/current runtime
+ownership so exporting accepted evidence re-verifies the same full source within
+that bound. It is not serialized as accepted evidence or a restoration permission.
+No resource policy or preparation work is added to the realtime callback.
+
+Actual device/listening acceptance is deferred to the end of the authorized
+pre-port program. Its pending status does not block separately authorized later
+preparation stages; automated/numerical and realtime/source-identity requirements
+still apply. Deferral is a scheduling decision, never a passed G3 receipt.
+
+Human guidance explains listening versus recording, reports preparation failure
+and READY explicitly, identifies UI pad #1 as native pad 0, and keeps all actual
+acceptance gates open. Restarting creates new observations but preserves saved
+project controls; a modified diagnostic project needs a freshly prepared packet.

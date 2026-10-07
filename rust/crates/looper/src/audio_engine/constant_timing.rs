@@ -28,13 +28,19 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-const MAX_PCM_BYTES: usize = 512 * 1024 * 1024;
+pub(super) const MAX_PCM_BYTES: usize = 512 * 1024 * 1024;
 const MAX_HYPOTHESIS_JSON_BYTES: usize = 32 * 1024 * 1024;
 const SOURCE_PROVENANCE: &str = "native-loader-sha256-before-decode-and-project-copy-check-v1; loaded Arc association; immutable copy-first decode ABA is not proved";
 
+mod pcm_budget;
 mod persistence;
+use pcm_budget::PcmBudget;
 pub use persistence::SavedConstantTimingTicket;
 pub(super) use persistence::{capture_saved, export_current, restore_saved};
+
+pub(super) fn validated_pcm_limit_bytes(limit_bytes: usize) -> Result<usize, String> {
+    PcmBudget::new(limit_bytes).map(PcmBudget::limit_bytes)
+}
 
 /// Fixed callback feedback. Publication epochs identify retained native records;
 /// zero means no accepted projection is effective in the current mixer bank.
@@ -106,6 +112,7 @@ pub(super) struct CurrentConstantTimingRecord {
     // Complete accepted evidence must survive callers dropping opaque tickets.
     // This owner is retained/destroyed exclusively outside realtime processing.
     accepted: Arc<AcceptedConstantTiming>,
+    pcm_budget: PcmBudget,
 }
 
 impl CurrentConstantTimingRecord {
@@ -130,12 +137,14 @@ impl CurrentConstantTimingRecord {
             publication,
             projection,
             accepted: Arc::new(timing.clone()),
+            pcm_budget: ticket.pcm_budget,
         }
     }
 
     pub(super) fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let dict = PyDict::new(py);
         dict.set_item("pad_id", self.binding.job.pad_id)?;
+        dict.set_item("pcm_limit_bytes", self.pcm_budget.limit_bytes())?;
         dict.set_item("source_id", &self.binding.job.source_id)?;
         dict.set_item("source_generation", self.binding.job.source_generation)?;
         dict.set_item("accepted_request_id", self.binding.job.request_id)?;
@@ -304,6 +313,7 @@ pub struct ConstantTimingTicket {
     guard: Mutex<TimingAdoptionGuard>,
     adoption_ticket: TimingAdoptionTicket,
     publication: Mutex<Option<PreparedSourcePermit>>,
+    pcm_budget: PcmBudget,
 }
 
 #[pymethods]
@@ -313,6 +323,7 @@ impl ConstantTimingTicket {
         let binding = &self.binding;
         let dict = PyDict::new(py);
         dict.set_item("pad_id", self.id)?;
+        dict.set_item("pcm_limit_bytes", self.pcm_budget.limit_bytes())?;
         dict.set_item("request_id", self.request_id)?;
         dict.set_item("source_id", &binding.job.source_id)?;
         dict.set_item("source_generation", self.source_generation)?;
@@ -446,6 +457,7 @@ pub struct CapturedConstantTiming {
     captured_epoch: u64,
     epoch: Arc<AtomicU64>,
     timing_bound: TimingBound,
+    pcm_budget: PcmBudget,
 }
 
 pub(super) fn prepare(
@@ -472,6 +484,17 @@ pub(super) fn capture_preparation(
     timing_bound: TimingBound,
     expected: Option<&super::input_runtime_binding::InputRuntimePadBinding>,
 ) -> Result<CapturedConstantTiming, String> {
+    capture_preparation_with_limit(engine, id, timing_bound, expected, MAX_PCM_BYTES)
+}
+
+pub(super) fn capture_preparation_with_limit(
+    engine: &AudioEngine,
+    id: usize,
+    timing_bound: TimingBound,
+    expected: Option<&super::input_runtime_binding::InputRuntimePadBinding>,
+    pcm_limit_bytes: usize,
+) -> Result<CapturedConstantTiming, String> {
+    let pcm_budget = PcmBudget::new(pcm_limit_bytes)?;
     if id >= NUM_SAMPLES {
         return Err("id out of range".into());
     }
@@ -549,21 +572,20 @@ pub(super) fn capture_preparation(
             .len()
             .checked_div(sample.channels)
             .unwrap_or(0);
-        let converted_frames =
-            (frames as u128 * 44_100).div_ceil(u128::from(sample_rate_hz.max(1)));
-        let pcm_peak =
-            sample.samples.len() as u128 * 4 + frames as u128 * 8 + converted_frames * 12;
-        if pcm_peak > MAX_PCM_BYTES as u128 {
-            return Err("constant timing PCM byte limit exceeded".into());
-        }
+        pcm_budget.check_loaded_geometry(sample.samples.len(), sample.channels, sample_rate_hz)?;
         let identity = PcmIdentity {
             pad_id: id,
             request_id: requests[id],
             source_id: format!("loaded-{id}-{source_generation}"),
             source_generation,
         };
-        LoadedPcmSnapshot::new(sample.clone(), sample_rate_hz, identity, MAX_PCM_BYTES)
-            .map_err(|e| e.to_string())?;
+        LoadedPcmSnapshot::new(
+            sample.clone(),
+            sample_rate_hz,
+            identity,
+            pcm_budget.limit_bytes(),
+        )
+        .map_err(|e| e.to_string())?;
         if timing_bound.halfwidth_seconds > frames as f64 / f64::from(sample_rate_hz) {
             return Err("timing error exceeds source duration".into());
         }
@@ -590,6 +612,7 @@ pub(super) fn capture_preparation(
         captured_epoch,
         epoch: engine.prepared_source_epochs[id].clone(),
         timing_bound,
+        pcm_budget,
     })
 }
 
@@ -627,6 +650,7 @@ fn prepare_captured_inner(
     let timing_bound = captured.timing_bound.clone();
     let epoch = captured.epoch.clone();
     let cancelled = || epoch.load(Ordering::Acquire) != captured_epoch;
+    let pcm_limit_bytes = captured.pcm_budget.limit_bytes();
     let snapshot = LoadedPcmSnapshot::new(
         sample.clone(),
         sample_rate_hz,
@@ -636,17 +660,17 @@ fn prepare_captured_inner(
             source_id: format!("loaded-{id}-{source_generation}"),
             source_generation,
         },
-        MAX_PCM_BYTES,
+        pcm_limit_bytes,
     )
     .map_err(|e| e.to_string())?;
     let mono = snapshot
-        .prepare_complete_mono(MAX_PCM_BYTES, &cancelled)
+        .prepare_complete_mono(pcm_limit_bytes, &cancelled)
         .map_err(|e| e.to_string())?;
     let retained_and_mono = snapshot
         .retained_bytes()
         .checked_add(mono.capacity() * size_of::<f32>())
         .ok_or("timing PCM byte count overflow")?;
-    let converter_budget = MAX_PCM_BYTES
+    let converter_budget = pcm_limit_bytes
         .checked_sub(retained_and_mono)
         .ok_or("constant timing PCM byte limit exceeded")?;
     let binding = PcmBinding::verify(
@@ -680,7 +704,7 @@ fn prepare_captured_inner(
         .checked_add(converted.capacity() * size_of::<f32>())
         .and_then(|bytes| bytes.checked_add(converted.len() * size_of::<f64>()))
         .ok_or("timing PCM byte count overflow")?;
-    if conversion_peak > MAX_PCM_BYTES {
+    if conversion_peak > pcm_limit_bytes {
         return Err("constant timing PCM byte limit exceeded".into());
     }
     let analyzer: Vec<f64> = converted.into_iter().map(f64::from).collect();
@@ -720,6 +744,7 @@ fn prepare_captured_inner(
         guard: Mutex::new(guard),
         adoption_ticket,
         publication: Mutex::new(None),
+        pcm_budget: captured.pcm_budget,
     };
     let requests = engine
         .pad_request_ids
@@ -1086,6 +1111,10 @@ pub(super) fn publish_legacy_origin(
 #[cfg(test)]
 #[path = "constant_timing_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "constant_timing_pcm_budget_tests.rs"]
+mod pcm_budget_tests;
 
 #[cfg(test)]
 #[path = "musical_loop_proof_tests.rs"]

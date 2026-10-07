@@ -8,6 +8,7 @@ device stream. It never starts pad playback or controls capture/listening.
 import hashlib
 import importlib
 import json
+import math
 import os
 import queue
 import sys
@@ -31,7 +32,12 @@ from flitzis_looper.analysis.productive_loop_packet import (
 from flitzis_looper.analysis.productive_loop_snapshot import comparison_pad
 from flitzis_looper.analysis.reference_inputs_validation import read_json_bytes
 from flitzis_looper.controller import AppController
-from flitzis_looper.controller.accepted_publication import ExplicitTimingAssessment
+from flitzis_looper.controller.accepted_publication import (
+    DEFAULT_CONSTANT_TIMING_PCM_LIMIT_BYTES,
+    MAX_CONSTANT_TIMING_PCM_LIMIT_BYTES,
+    ExplicitTimingAssessment,
+    validate_constant_timing_pcm_limit,
+)
 from flitzis_looper.ui import run_ui
 
 if TYPE_CHECKING:
@@ -47,6 +53,76 @@ def report(message: str) -> None:
     """Make the concrete readiness/artifact path visible to the human operator."""
     sys.stdout.write(message + "\n")
     sys.stdout.flush()
+
+
+def _native_dimension(metadata: dict[str, object], key: str, maximum: int) -> int:
+    value = metadata.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or not 0 < value <= maximum:
+        msg = f"invalid actual native {key} for PCM admission"
+        raise ValueError(msg)
+    return value
+
+
+def preparation_pcm_budget(
+    metadata: dict[str, object], reference: QuarterReference, sample_id: int
+) -> dict[str, object]:
+    """Derive a finite PCM-only cap from genuine loaded geometry and source extent.
+
+    The source, mono/copy and analyzer terms match native admission. Padding
+    bounds two output FFT units for the pinned Rubato 1.0/1024-frame setup;
+    native allocation-capacity checks remain authoritative at execution.
+    """
+    if metadata.get("source_sha256") != reference.source_sha256 or (
+        type(metadata.get("pad_id")) is not int or metadata.get("pad_id") != sample_id
+    ):
+        msg = "actual native source differs from the frozen packet identity"
+        raise ValueError(msg)
+    source_id = metadata.get("source_id")
+    if not isinstance(source_id, str) or not 0 < len(source_id) <= 1024:
+        msg = "actual native source identity unavailable for PCM admission"
+        raise ValueError(msg)
+    _native_dimension(metadata, "source_generation", 2**64 - 1)
+    rate = _native_dimension(metadata, "sample_rate_hz", 384_000)
+    if rate < 8000:
+        msg = "actual native sample rate is outside supported PCM geometry"
+        raise ValueError(msg)
+    channels = _native_dimension(metadata, "channels", 32)
+    frames = _native_dimension(metadata, "frame_count", 2**64 - 1)
+    expected_frames = (
+        reference.source_frame_count * rate + reference.source_sample_rate_hz - 1
+    ) // reference.source_sample_rate_hz
+    if frames != expected_frames:
+        msg = "actual native extent differs from the frozen complete source"
+        raise ValueError(msg)
+    converted = (frames * 44_100 + rate - 1) // rate
+    common_rate = math.gcd(rate, 44_100)
+    reduced_input = rate // common_rate
+    fft_output_frames = ((1024 + reduced_input - 1) // reduced_input) * (44_100 // common_rate)
+    padding = 0 if rate == 44_100 else 2 * fft_output_frames * 4
+    required = frames * channels * 4 + frames * 8 + converted * 12 + padding
+    pcm_limit_bytes = validate_constant_timing_pcm_limit(
+        max(DEFAULT_CONSTANT_TIMING_PCM_LIMIT_BYTES, 1 << (required - 1).bit_length())
+    )
+    return {
+        "schema_version": 1,
+        "policy": "actual-loaded-geometry-pcm-power-of-two-v1",
+        "native_source_binding": metadata,
+        "frozen_source_sha256": reference.source_sha256,
+        "frozen_source_sample_rate_hz": reference.source_sample_rate_hz,
+        "frozen_source_frame_count": reference.source_frame_count,
+        "loaded_interleaved_f32_bytes": frames * channels * 4,
+        "mono_and_transient_copy_bytes": frames * 8,
+        "analyzer_frame_count": converted,
+        "converted_f32_and_analyzer_f64_bytes": converted * 12,
+        "fft_output_unit_frames": fft_output_frames,
+        "converter_padding_pcm_bytes": padding,
+        "estimated_peak_pcm_bytes": required,
+        "requested_pcm_limit_bytes": pcm_limit_bytes,
+        "default_pcm_limit_bytes": DEFAULT_CONSTANT_TIMING_PCM_LIMIT_BYTES,
+        "hard_max_pcm_limit_bytes": MAX_CONSTANT_TIMING_PCM_LIMIT_BYTES,
+        "allocation_scope": "Controlled PCM only; FFT/QM/engine/process RAM is separate",
+        "execution_capacity_checks": "actual native allocation capacities remain authoritative",
+    }
 
 
 class ProductiveObserver:
@@ -72,6 +148,7 @@ class ProductiveObserver:
         self.publication: Future[None] | None = None
         self.ticket: ConstantTimingTicket | None = None
         self.request_metadata: dict[str, object] | None = None
+        self.prior_analysis_errors: dict[int, str | None] = {}
         self.completed: set[int] = set()
         self.failure: str | None = None
         self.started_at_utc = utc_now()
@@ -159,7 +236,11 @@ class ProductiveObserver:
                         "human_listening": "pending",
                     },
                 )
-                report(f"Packet preparation failed: {error}")
+                report(
+                    f"NOT READY: packet preparation failed: {error}. "
+                    "Do not start a recording or listening timer. No playback, recording "
+                    f"or acceptance occurred automatically. Failure evidence: {self.directory}"
+                )
         try:
             request = self.requests.get_nowait()
         except queue.Empty:
@@ -181,7 +262,13 @@ class ProductiveObserver:
 
     def _wait_for_source(self, sample_id: int) -> None:
         session = self.controller.session
-        if sample_id in session.loading_sample_ids or sample_id in session.analyzing_sample_ids:
+        if (
+            any(
+                pad in session.loading_sample_ids or pad in session.analyzing_sample_ids
+                for pad in self.plan.pad_ids
+            )
+            or self.controller.loader._accepted_restore.has_pending()
+        ):
             return
         error = session.sample_load_errors.get(sample_id)
         if error is not None:
@@ -189,21 +276,50 @@ class ProductiveObserver:
         binding = self.controller._audio.current_input_runtime_pad_binding(sample_id)
         if binding is None:
             return
-        if binding.metadata().get("source_sha256") != self.plan.source_sha256:
-            msg = "loaded source differs from independently verified packet"
-            raise ValueError(msg)
+        pcm_limit_bytes = self._admit_pcm_budget(sample_id, binding.metadata())
         self.preparation = self.controller.accepted_timing.prepare(
             sample_id,
             self.reference.timing_error_halfwidth_seconds,
             self.reference.timing_error_provenance,
             intent="automatic",
+            pcm_limit_bytes=pcm_limit_bytes,
         )
         self.stage = "preparing_actual_native_source"
 
-    def _finish_preparation(self, _sample_id: int) -> None:
+    def _admit_pcm_budget(self, sample_id: int, metadata: dict[str, object]) -> int:
+        prior_error = self.controller.session.sample_analysis_errors.get(sample_id)
+        receipt = {
+            "native_source_binding": metadata,
+            "independent_reference_sha256": self.plan.reference_sha256,
+            "prior_analysis_error_before_explicit_preparation": prior_error,
+        }
+        try:
+            budget = preparation_pcm_budget(metadata, self.reference, sample_id)
+        except ValueError as error:
+            self.worker.submit(
+                write_json,
+                self.directory / f"pad-{sample_id}-pcm-admission-rejected.json",
+                {**receipt, "error": str(error)},
+            )
+            raise
+        self.worker.submit(
+            write_json,
+            self.directory / f"pad-{sample_id}-pcm-admission.json",
+            {**receipt, **budget},
+        )
+        self.prior_analysis_errors[sample_id] = prior_error
+        pcm_limit_bytes = budget["requested_pcm_limit_bytes"]
+        assert isinstance(pcm_limit_bytes, int)
+        return pcm_limit_bytes
+
+    def _finish_preparation(self, sample_id: int) -> None:
         if self.preparation is None or not self.preparation.done():
             return
         self.ticket = self.preparation.result()
+        prior_error = self.prior_analysis_errors.pop(sample_id, None)
+        errors = self.controller.session.sample_analysis_errors
+        if prior_error is not None and errors.get(sample_id) == prior_error:
+            errors.pop(sample_id)
         self.mapping = self.worker.submit(self._map_ticket, self.ticket)
         self.stage = "mapping_independent_quarters"
 
@@ -276,7 +392,10 @@ class ProductiveObserver:
         )
         report(
             f"READY: actual current + derived ACK on pads {sorted(self.completed)}. "
-            f"Play and capture manually. Observations: {self.directory}"
+            "UI pad #1 is native pad 0. Check 1 measures a manually recorded loopback; "
+            "check 2 records >=30 minutes of uninterrupted human listening. Neither check "
+            "starts automatically or grants acceptance; do them only when you have time. "
+            f"Observations: {self.directory}"
         )
 
     def _map_ticket(
@@ -437,7 +556,7 @@ class ProductiveObserver:
 
 def run_packet(workspace: Path, plan_path: Path) -> None:
     """Start only when the human explicitly runs this opt-in CLI command."""
-    plan, reference = load_plan(workspace, plan_path.resolve())
+    plan, reference = load_plan(workspace, plan_path)
     original_directory = Path.cwd()
     os.chdir(plan.project_directory)
     controller: AppController | None = None
@@ -451,6 +570,12 @@ def run_packet(workspace: Path, plan_path: Path) -> None:
         exit_called = True
 
     try:
+        report(
+            "Preparing accepted timing for an isolated test project; this is not a recording "
+            "or listening test. Wait for READY before starting any recording or timer. "
+            "UI pad #1 corresponds to native pad 0. Nothing plays or records automatically; "
+            "you may close the app without doing a human test."
+        )
         controller = AppController(project_config_path=Path(plan.project_config_path))
         observer = ProductiveObserver(controller, plan, reference)
         run_ui(controller, on_frame=observer.on_frame, on_exit=close_observer)

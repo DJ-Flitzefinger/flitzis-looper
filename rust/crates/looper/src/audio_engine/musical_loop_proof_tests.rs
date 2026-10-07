@@ -208,6 +208,7 @@ fn accepted_mixer(case: Case) -> (AudioEngine, ConstantTimingTicket, RtMixer) {
         guard: Mutex::new(guard),
         adoption_ticket,
         publication: Mutex::new(None),
+        pcm_budget: PcmBudget::default(),
     };
     let hypotheses = json!([{
         "id": "independent-generated-quarters",

@@ -8,7 +8,12 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from flitzis_looper.controller.accepted_publication import ExplicitTimingAssessment
+from flitzis_looper.controller.accepted_publication import (
+    DEFAULT_CONSTANT_TIMING_PCM_LIMIT_BYTES,
+    MAX_CONSTANT_TIMING_PCM_LIMIT_BYTES,
+    ExplicitTimingAssessment,
+    validate_constant_timing_pcm_limit,
+)
 from flitzis_looper.models import BeatGrid, SampleAnalysis
 from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding, current_timing_metadata
 
@@ -415,7 +420,7 @@ def test_explicit_preparation_chooses_automatic_and_captures_before_worker(
         audio_engine_mock.pad_timing_intent.return_value = intent
         audio_engine_mock.current_constant_timing.return_value = None
 
-    def capture(*_args: object) -> object:
+    def capture(*_args: object, **_kwargs: object) -> object:
         order.append("capture")
         return object()
 
@@ -637,6 +642,59 @@ def test_invalid_preparation_assertions_cannot_change_performer_authority(
     assert controller.project.manual_bpm[0] == 94.0
     assert controller.project.pad_timing_intent[0] == "manual"
     assert not controller.persistence._dirty
+
+
+@pytest.mark.parametrize("value", [True, False, 0, -1, 1.5, "1073741824", 2**30 + 1])
+def test_pcm_policy_requires_a_bounded_actual_integer(value: object) -> None:
+    with pytest.raises(ValueError, match="PCM limit"):
+        validate_constant_timing_pcm_limit(value)
+
+
+@pytest.mark.parametrize("pcm_limit_bytes", [True, 0, -1, 2**30 + 1])
+def test_invalid_pcm_policy_has_no_authority_or_capture_side_effects(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    automatic_pad: dict[str, object],
+    pcm_limit_bytes: int,
+) -> None:
+    controller.project.manual_bpm[0] = 94.0
+    controller.project.pad_timing_intent[0] = "manual"
+    with pytest.raises(ValueError, match="PCM limit"):
+        controller.accepted_timing.prepare(
+            0, 0.001, "independent bound", intent="automatic", pcm_limit_bytes=pcm_limit_bytes
+        )
+    audio_engine_mock.set_pad_timing_intent.assert_not_called()
+    audio_engine_mock.current_input_runtime_pad_binding.assert_not_called()
+    audio_engine_mock.capture_current_constant_timing.assert_not_called()
+    assert controller.accepted_timing._worker is None
+    assert controller.project.manual_bpm[0] == 94.0
+    assert controller.project.pad_timing_intent[0] == "manual"
+    assert not controller.persistence._dirty
+
+
+@pytest.mark.parametrize("pcm_limit_bytes", [None, MAX_CONSTANT_TIMING_PCM_LIMIT_BYTES])
+def test_preparation_forwards_default_or_explicit_immutable_pcm_policy(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    automatic_pad: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    pcm_limit_bytes: int | None,
+) -> None:
+    worker = Mock()
+    monkeypatch.setattr(
+        "flitzis_looper.controller.accepted_publication.ThreadPoolExecutor",
+        lambda **_kwargs: worker,
+    )
+    policy = {} if pcm_limit_bytes is None else {"pcm_limit_bytes": pcm_limit_bytes}
+    controller.accepted_timing.prepare(0, 0.001, "independent bound", intent="automatic", **policy)
+    expected = (
+        DEFAULT_CONSTANT_TIMING_PCM_LIMIT_BYTES if pcm_limit_bytes is None else pcm_limit_bytes
+    )
+    assert audio_engine_mock.capture_current_constant_timing.call_args.kwargs == {
+        "pcm_limit_bytes": expected
+    }
+    worker.submit.assert_called_once()
+    audio_engine_mock.prepare_captured_constant_timing.assert_not_called()
 
 
 def test_failed_replacement_capture_keeps_prior_native_refresh_completion(

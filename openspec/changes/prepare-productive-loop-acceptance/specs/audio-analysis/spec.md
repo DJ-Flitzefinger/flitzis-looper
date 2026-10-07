@@ -28,6 +28,49 @@ matching current accepted ownership; Python intent SHALL NOT replace that state.
 - **THEN** comparison cannot relabel the old voice using the replacement current accepted revision
 - **AND** unavailable, multiple or mismatched effective voices are explicit evidence blockers
 
+### Requirement: Productive Preparation Has Explicit Bounded PCM Admission
+The system SHALL retain the normal 512 MiB constant-timing PCM limit and permit
+the opt-in productive measurement route to request a source-specific preparation
+budget derived from actual loaded geometry, bounded by 1 GiB. It SHALL reject
+invalid or excessive budgets before advancing source requests, preserve source
+ownership and complete evidence verification, and perform preparation and export
+verification outside the realtime callback. The admitted budget SHALL remain
+runtime policy for that captured source and SHALL NOT grant timing acceptance
+or become authority from saved evidence.
+
+#### Scenario: The complete diagnostic source exceeds the normal preparation budget
+- **GIVEN** the unchanged ten-minute diagnostic source loaded at the actual output rate and channel count
+- **WHEN** the explicit productive route prepares its actual native evidence
+- **THEN** a finite geometry-derived budget can admit the complete source up to the hard ceiling
+- **AND** genuine current-source export verifies the same complete PCM under that admitted budget
+- **AND** the source is not truncated, replaced or granted acceptance by its memory budget
+
+#### Scenario: A caller requests an invalid or excessive budget
+- **GIVEN** an existing loaded source and pending preparation ownership
+- **WHEN** a negative, non-integer or above-ceiling preparation budget is requested
+- **THEN** preparation rejects it before mutating timing intent or advancing source requests
+- **AND** ordinary preparation and saved restoration keep their existing default resource policy
+
+### Requirement: Human Operator Guidance Distinguishes Readiness And Acceptance
+The system SHALL explain the audible listening check and recorded timing
+measurement, identify preparation readiness separately from an open app window,
+and provide concrete manual next steps. It SHALL identify failed preparation
+as unusable for acceptance and preserve earlier attempts. Guidance SHALL NOT
+claim that restarting a session resets modified project settings or that casual
+app use constitutes a completed human test.
+
+#### Scenario: The operator opens the app without a prepared accepted route
+- **GIVEN** a human-started measurement app whose preparation fails before READY
+- **WHEN** preparation reports its failure
+- **THEN** the operator is told that the attempt does not count as a completed test
+- **AND** actual device and listening gates remain pending without automatic playback or capture
+
+#### Scenario: The operator has no time for the human test
+- **GIVEN** no actual uninterrupted listening or captured output has been assessed
+- **WHEN** the operator closes the app without performing the test
+- **THEN** guidance permits leaving the human checks pending
+- **AND** automated preparation checks cannot replace those human gates
+
 ### Requirement: Recorded Features Retain Independent Clock And Error Domains
 The system SHALL compare actual captured signal features with explicit feature
 associations and independently declared clock calibration, preserving capture,
@@ -57,4 +100,4 @@ SHALL validate record consistency without inventing listening or accepting G3.
 - **GIVEN** passing hardware-free and recorded feature checks without sustained human evidence
 - **WHEN** the preparation packet is delivered
 - **THEN** device and listening acceptance remain explicit open gates
-- **AND** cache/residency planning and implementation cannot begin on that evidence alone
+- **AND** continuing separately authorized preparation does not declare those gates passed

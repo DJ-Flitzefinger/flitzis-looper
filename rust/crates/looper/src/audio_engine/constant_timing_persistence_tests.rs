@@ -177,9 +177,11 @@ fn saved_timing_productive_native_qm_file_decode_export_fresh_adoption_roundtrip
     let (producer, mut consumer) = queue(2);
     let mut mixer = acknowledged_mixer(&engine);
     let saved = capture_saved(&engine, 0, &f.envelope, f.path.clone()).unwrap();
+    assert_eq!(saved.pcm_budget, PcmBudget::default());
     assert_eq!(saved.request_id, 92);
     assert_eq!(saved.source_generation, 71);
     let ticket = restore_saved(&engine, &producer, &saved).unwrap();
+    assert_eq!(ticket.pcm_budget, PcmBudget::default());
     assert_eq!(ticket.publication_status().unwrap(), "pending");
     Python::attach(|py| assert!(current_metadata(&engine, py, 0).unwrap().is_none()));
     assert!(
@@ -206,6 +208,81 @@ fn saved_timing_productive_native_qm_file_decode_export_fresh_adoption_roundtrip
         export_current(&engine, 0, f.path.clone()).unwrap().unwrap(),
         f.envelope
     );
+}
+
+#[test]
+fn current_export_keeps_admitted_runtime_budget_without_encoding_or_restoring_it() {
+    let f = fixture();
+    let engine = fresh_engine();
+    let binding = crate::audio_engine::input_runtime_binding::capture(&engine, 0)
+        .unwrap()
+        .unwrap();
+    let captured = capture_preparation_with_limit(
+        &engine,
+        0,
+        TimingBound {
+            halfwidth_seconds: 0.05,
+            provenance: "independent bounded fixture matching tolerance".into(),
+        },
+        Some(&binding),
+        32 * 1024 * 1024,
+    )
+    .unwrap();
+    let ticket = prepare_captured(&engine, &captured).unwrap();
+    let counts: Vec<Option<i64>> = ticket
+        .evidence
+        .beat_seconds()
+        .iter()
+        .map(|t| Some((t / PERIOD).round() as i64))
+        .collect();
+    let hypotheses = json!([{
+        "id":"independent-pulse-quarters",
+        "provenance":"generated test quarter times; association by known period",
+        "verification":"verified",
+        "quarter_note_denominator":1,
+        "quarter_counts":counts
+    }])
+    .to_string();
+    let (producer, mut consumer) = queue(1);
+    let mut mixer = acknowledged_mixer(&engine);
+    publish(
+        &engine,
+        &producer,
+        &ticket,
+        &hypotheses,
+        origin(),
+        decision(),
+    )
+    .unwrap();
+    assert!(accept_message(&mut mixer, consumer.pop().unwrap()));
+    let admitted = ticket.pcm_budget;
+    drop(ticket);
+    assert_eq!(
+        engine.current_constant_timing.lock().unwrap()[0]
+            .last()
+            .unwrap()
+            .pcm_budget,
+        admitted
+    );
+    let exported = export_current(&engine, 0, f.path.clone()).unwrap().unwrap();
+    assert!(!exported.contains("pcm_limit_bytes"));
+    // A test-only policy reduction proves content verification actually uses
+    // the retained current budget, rather than a new caller/default budget.
+    engine.current_constant_timing.lock().unwrap()[0]
+        .last_mut()
+        .unwrap()
+        .pcm_budget = PcmBudget::new(1).unwrap();
+    assert!(export_current(&engine, 0, f.path.clone()).is_err());
+    engine.current_constant_timing.lock().unwrap()[0]
+        .last_mut()
+        .unwrap()
+        .pcm_budget = admitted;
+    assert_eq!(
+        export_current(&engine, 0, f.path.clone()).unwrap().unwrap(),
+        exported
+    );
+    let saved = capture_saved(&engine, 0, &exported, f.path.clone()).unwrap();
+    assert_eq!(saved.pcm_budget, PcmBudget::default());
 }
 
 #[test]

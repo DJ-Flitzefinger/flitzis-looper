@@ -2,8 +2,9 @@
 //!
 //! Registered below `constant_timing` so the retained real backend evidence can
 //! enter the same guarded publication as productive preparation. This test-only
-//! bridge does not bypass adoption with a fabricated accepted projection. No
-//! inference, normal-preparation/default acceptance, device or listening claim.
+//! bridge does not bypass adoption with a fabricated accepted projection. The
+//! separate budget probe executes actual full-source native QM preparation.
+//! Neither probe establishes default-analyzer, device or listening acceptance.
 
 use super::*;
 use crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement;
@@ -245,6 +246,7 @@ fn publish_actual_acceptance(
         guard: Mutex::new(guard),
         adoption_ticket,
         publication: Mutex::new(None),
+        pcm_budget: PcmBudget::default(),
     };
     publish_record(engine, &producer, &ticket, timing, false).unwrap();
     Python::attach(|py| assert!(current_metadata(engine, py, 0).unwrap().is_none()));
@@ -622,6 +624,259 @@ fn private_actual_wav_accepted_physical_loop_render_and_onsets_75_1000_cycles() 
     fs::write(
         output_dir.join("summary.json"),
         serde_json::to_vec_pretty(&report).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+#[ignore = "explicit hardware-free full-source budget probe; needs FLITZIS_G3C_WAV and FLITZIS_G3C_PCM_BUDGET_OUTPUT_DIR"]
+fn private_actual_wav_pcm_budget_capture_prepare_publish_export() {
+    let workspace = workspace();
+    let wav = PathBuf::from(std::env::var_os("FLITZIS_G3C_WAV").unwrap())
+        .canonicalize()
+        .unwrap();
+    assert!(wav.starts_with(workspace.join("test-audio")));
+    let output_dir = PathBuf::from(std::env::var_os("FLITZIS_G3C_PCM_BUDGET_OUTPUT_DIR").unwrap());
+    assert!(output_dir.is_absolute());
+    let output_parent = output_dir.parent().unwrap().canonicalize().unwrap();
+    assert!(output_parent.starts_with(workspace.join("scratch")));
+    fs::create_dir(&output_dir).unwrap(); // A new receipt cannot overwrite an earlier attempt.
+    let output_dir = output_dir.canonicalize().unwrap();
+    assert!(output_dir.starts_with(workspace.join("scratch")));
+    let original_sha256 = file_sha256(&wav).unwrap();
+    assert_eq!(original_sha256, ORIGINAL_SHA256);
+    let sample = decode_audio_file_to_sample_buffer(&wav, 2, RATE, |_| {}).unwrap();
+    assert_eq!(sample.channels, 2);
+    assert_eq!(sample.samples.len(), SOURCE_FRAMES * 2);
+    let quarter_samples = LOOP_FRAMES * sample.channels;
+    assert!(
+        sample
+            .samples
+            .chunks_exact(quarter_samples)
+            .all(|block| block == &sample.samples[..quarter_samples])
+    );
+    Python::initialize();
+    let engine = AudioEngine::new().unwrap();
+    let mut mixer = RtMixer::new(2, RATE as f32);
+    mixer.set_current_timing_acknowledgements(engine.current_timing_acknowledgements.clone());
+    mixer.set_input_runtime_ownership(engine.input_runtime_ownership.clone());
+    mixer.set_prepared_source_epochs(engine.prepared_source_epochs.clone());
+    let (producer, mut consumer) = super::tests::queue(2);
+    engine.pad_request_ids.lock().unwrap()[0] = 7;
+    engine.timing_intents.lock().unwrap()[0] = TimingIntent::Automatic;
+    engine
+        .input_runtime_ownership
+        .set_timing_intent(0, TimingIntent::Automatic);
+    let mut generations = engine.loaded_source_generations.lock().unwrap();
+    let mut digests = engine.loaded_source_digests.lock().unwrap();
+    publish_loaded_sample(
+        &producer,
+        &engine.sample_cache,
+        0,
+        sample.clone(),
+        LoadedSourcePublication {
+            ownership: &engine.input_runtime_ownership,
+            generation: 7,
+            rate: RATE,
+            generation_slot: &mut generations[0],
+            digest_slot: &mut digests[0],
+            digest: original_sha256.clone(),
+        },
+    )
+    .unwrap();
+    drop(generations);
+    drop(digests);
+    let ControlMessage::LoadSample { id, sample: loaded } = consumer.pop().unwrap() else {
+        panic!("native source publication must precede timing");
+    };
+    mixer.load_sample(id, loaded);
+    let binding = crate::audio_engine::input_runtime_binding::capture(&engine, 0)
+        .unwrap()
+        .unwrap();
+    let request_before = engine.pad_request_ids.lock().unwrap()[0];
+    let epoch_before = engine.prepared_source_epochs[0].load(Ordering::Acquire);
+    let timing_bound = || TimingBound {
+        halfwidth_seconds: 0.05,
+        provenance: "explicit authored-quarter fixture raw-QM feature matching bound".into(),
+    };
+    let default_error = capture_preparation(&engine, 0, timing_bound(), Some(&binding))
+        .err()
+        .unwrap();
+    assert_eq!(default_error, "constant timing PCM byte limit exceeded");
+    assert_eq!(engine.pad_request_ids.lock().unwrap()[0], request_before);
+    assert_eq!(
+        engine.prepared_source_epochs[0].load(Ordering::Acquire),
+        epoch_before
+    );
+    assert!(binding.current());
+    fs::write(
+        output_dir.join("default-admission.json"),
+        serde_json::to_vec_pretty(&json!({
+            "evidence_kind":"hardware_free_actual_source_fixture",
+            "actual_original_path":wav,
+            "actual_original_sha256":original_sha256,
+            "loaded_sample_rate_hz":RATE,
+            "loaded_frame_count":SOURCE_FRAMES,
+            "loaded_channels":2,
+            "normal_pcm_limit_bytes":MAX_PCM_BYTES,
+            "default_error":default_error,
+            "request_before":request_before,
+            "request_after":engine.pad_request_ids.lock().unwrap()[0],
+            "epoch_before":epoch_before,
+            "epoch_after":engine.prepared_source_epochs[0].load(Ordering::Acquire),
+            "app_or_device_session":false,
+            "device_acceptance":"pending",
+            "human_listening":"pending"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let explicit_limit = 1024 * 1024 * 1024;
+    let captured =
+        capture_preparation_with_limit(&engine, 0, timing_bound(), Some(&binding), explicit_limit)
+            .unwrap();
+    assert!(Arc::ptr_eq(&captured.sample.samples, &sample.samples));
+    let ticket = prepare_captured(&engine, &captured).unwrap();
+    assert_eq!(ticket.pcm_budget.limit_bytes(), explicit_limit);
+    let actual_preparation: Value = Python::attach(|py| {
+        let metadata = ticket.metadata(py).unwrap();
+        let encoded: String = py
+            .import("json")
+            .unwrap()
+            .call_method1("dumps", (metadata,))
+            .unwrap()
+            .extract()
+            .unwrap();
+        serde_json::from_str(&encoded).unwrap()
+    });
+    fs::write(
+        output_dir.join("actual-native-preparation.json"),
+        serde_json::to_vec_pretty(&actual_preparation).unwrap(),
+    )
+    .unwrap();
+    let mut quarters = Vec::with_capacity(ticket.evidence.beat_seconds().len());
+    let mut maximum_matching_error = 0.0_f64;
+    for actual in ticket.evidence.beat_seconds() {
+        assert!(actual.is_finite());
+        let independent_quarter = (actual / 0.5).round() as i64;
+        assert!((0..1200).contains(&independent_quarter));
+        assert!(
+            quarters
+                .last()
+                .is_none_or(|previous| *previous < independent_quarter)
+        );
+        let matching_error = (actual - independent_quarter as f64 * 0.5).abs();
+        assert!(matching_error <= 0.05);
+        maximum_matching_error = maximum_matching_error.max(matching_error);
+        quarters.push(independent_quarter);
+    }
+    assert!(quarters.len() >= 3);
+    let hypotheses = json!([{
+        "id":"independently-authored-source-quarter-pulses",
+        "provenance":"unchanged known source explicitly authors 1200 quarter pulses at n*0.5 seconds; actual raw events individually associated by independent source-time proximity",
+        "verification":"verified",
+        "quarter_note_denominator":1,
+        "quarter_counts":quarters
+    }])
+    .to_string();
+    publish(
+        &engine,
+        &producer,
+        &ticket,
+        &hypotheses,
+        IndependentTimingOrigin {
+            seconds: 0.0,
+            provenance: "authored source quarter zero at original/loaded source frame zero".into(),
+        },
+        TimingAcceptanceDecision {
+            policy_version: "hardware-free-full-source-pcm-budget-probe-v1".into(),
+            provenance: "explicit diagnostic fixture units; no device or listening acceptance"
+                .into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(ticket.publication_status().unwrap(), "pending");
+    assert!(
+        export_current(&engine, 0, wav.to_string_lossy().into())
+            .unwrap()
+            .is_none()
+    );
+    assert!(super::tests::accept_message(
+        &mut mixer,
+        consumer.pop().unwrap()
+    ));
+    assert_eq!(ticket.publication_status().unwrap(), "accepted");
+    let current: Value = Python::attach(|py| {
+        let metadata = current_metadata(&engine, py, 0).unwrap().unwrap();
+        let encoded: String = py
+            .import("json")
+            .unwrap()
+            .call_method1("dumps", (metadata,))
+            .unwrap()
+            .extract()
+            .unwrap();
+        serde_json::from_str(&encoded).unwrap()
+    });
+    assert_eq!(current["pcm_limit_bytes"], explicit_limit);
+    assert_eq!(current["source_sha256"], original_sha256);
+    assert_eq!(current["frame_count"], SOURCE_FRAMES);
+    assert_eq!(current["sample_rate_hz"], RATE);
+    let revision = current["revision"].as_str().unwrap().to_owned();
+    let period = current["period_seconds_per_quarter"].as_f64().unwrap();
+    let pcm_sha256 = ticket.binding.pcm_sha256.clone();
+    drop(ticket);
+    drop(captured);
+    let encoded = export_current(&engine, 0, wav.to_string_lossy().into())
+        .unwrap()
+        .unwrap();
+    let exported: Value = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(exported["record"]["accepted_revision"], revision);
+    assert_eq!(
+        exported["record"]["period_bits"],
+        format!("{:016x}", period.to_bits())
+    );
+    assert_eq!(
+        exported["record"]["evidence"]["binding"]["pcm_sha256"],
+        pcm_sha256
+    );
+    assert_eq!(current["pcm_sha256"], pcm_sha256);
+    assert!(!encoded.contains("pcm_limit_bytes"));
+    fs::write(
+        output_dir.join("verified-current-timing.json"),
+        encoded.as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(file_sha256(&wav).unwrap(), original_sha256);
+    fs::write(
+        output_dir.join("summary.json"),
+        serde_json::to_vec_pretty(&json!({
+            "schema_version":1,
+            "evidence_kind":"hardware_free_actual_source_fixture",
+            "probe_revision":"full-source-pcm-budget-capture-prepare-publish-export-v1",
+            "actual_original_path":wav,
+            "actual_original_sha256":original_sha256,
+            "original_source_hash_after_matches":true,
+            "loaded_sample_rate_hz":RATE,
+            "loaded_frame_count":SOURCE_FRAMES,
+            "loaded_channels":2,
+            "normal_budget_rejected_before_request_advance":true,
+            "explicit_pcm_limit_bytes":explicit_limit,
+            "raw_qm_event_count":quarters.len(),
+            "independent_source_quarter_counts":quarters,
+            "maximum_raw_feature_matching_error_seconds":maximum_matching_error,
+            "actual_preparation":"actual-native-preparation.json",
+            "actual_preparation_sha256":file_sha256(&output_dir.join("actual-native-preparation.json")).unwrap(),
+            "current_native_metadata":current,
+            "current_full_accepted_revision":revision,
+            "verified_export":"verified-current-timing.json",
+            "verified_export_sha256":file_sha256(&output_dir.join("verified-current-timing.json")).unwrap(),
+            "saved_runtime_budget_encoded":false,
+            "app_or_device_session":false,
+            "human_listening_evidence":false,
+            "device_acceptance":"pending",
+            "human_listening":"pending"
+        }))
+        .unwrap(),
     )
     .unwrap();
 }

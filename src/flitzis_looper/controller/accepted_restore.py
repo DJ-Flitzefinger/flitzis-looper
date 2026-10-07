@@ -52,6 +52,10 @@ class AcceptedTimingRestore:
         self._worker: ThreadPoolExecutor | None = None
         self._pending: dict[int, _Restore] = {}
 
+    def has_pending(self) -> bool:
+        """Report owned restoration work before a new shared native preparation."""
+        return bool(self._pending)
+
     def begin(self, sample_id: int) -> None:
         """Capture current native ownership before scheduling heavy verification."""
         self.cancel(sample_id)

@@ -21,6 +21,22 @@ if TYPE_CHECKING:
     from flitzis_looper_audio import AcceptedTimingRefreshTicket, ConstantTimingTicket
 
 
+DEFAULT_CONSTANT_TIMING_PCM_LIMIT_BYTES = 512 * 1024 * 1024
+MAX_CONSTANT_TIMING_PCM_LIMIT_BYTES = 1024 * 1024 * 1024
+
+
+def validate_constant_timing_pcm_limit(value: object) -> int:
+    """Validate the explicit PCM cap before native ownership or project edits."""
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not 0 < value <= MAX_CONSTANT_TIMING_PCM_LIMIT_BYTES
+    ):
+        msg = "constant timing PCM limit must be a positive integer at most 1 GiB"
+        raise ValueError(msg)
+    return value
+
+
 @dataclass(frozen=True)
 class ExplicitTimingAssessment:
     """Independent caller assertions, never inferred from a detector or fit."""
@@ -94,14 +110,18 @@ class AcceptedTimingController:
         timing_error_provenance: str,
         *,
         intent: Literal["automatic"],
+        pcm_limit_bytes: int = DEFAULT_CONSTANT_TIMING_PCM_LIMIT_BYTES,
     ) -> Future[ConstantTimingTicket]:
         """Explicitly choose Automatic and prepare actual captured source off-thread.
 
         The mandatory intent declares a performer choice. It does not accept a
         detector result: publication still needs a separate independent assessment.
         Native intent admission precedes durable intent changes and source capture.
+        The optional PCM cap is an explicit bounded preparation policy; it does
+        not estimate total engine, analyzer or FFT workspace memory.
         """
         validate_sample_id(sample_id)
+        validate_constant_timing_pcm_limit(pcm_limit_bytes)
         if intent != "automatic":
             msg = "explicit preparation requires Automatic intent"
             raise ValueError(msg)
@@ -127,7 +147,10 @@ class AcceptedTimingController:
             msg = "actual loaded source is unavailable for explicit preparation"
             raise RuntimeError(msg)
         captured = self._audio.capture_current_constant_timing(
-            binding, timing_error_halfwidth_seconds, timing_error_provenance
+            binding,
+            timing_error_halfwidth_seconds,
+            timing_error_provenance,
+            pcm_limit_bytes=pcm_limit_bytes,
         )
         future = self._executor().submit(self._audio.prepare_captured_constant_timing, captured)
         previous = self._preparations.pop(sample_id, None)

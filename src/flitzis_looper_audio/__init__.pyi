@@ -136,6 +136,8 @@ class AudioEngine:
         binding: InputRuntimePadBinding,
         timing_error_halfwidth_seconds: float,
         timing_error_provenance: str,
+        *,
+        pcm_limit_bytes: int = 536870912,
     ) -> CapturedConstantTiming: ...
     def prepare_captured_constant_timing(
         self,

@@ -486,6 +486,16 @@ fn parse_input_timestamp(received_at_ns: Option<&Bound<'_, PyAny>>) -> PyResult<
         .map_err(|_| PyValueError::new_err("received_at_ns must be in 0..=18446744073709551615"))
 }
 
+fn parse_constant_timing_pcm_limit(value: &Bound<'_, PyAny>) -> PyResult<usize> {
+    if value.is_instance_of::<PyBool>() || !value.is_instance_of::<PyInt>() {
+        return Err(PyTypeError::new_err("pcm_limit_bytes must be an integer"));
+    }
+    let limit_bytes = value.extract::<usize>().map_err(|_| {
+        PyValueError::new_err("constant timing PCM limit must be in 1..=1073741824 bytes")
+    })?;
+    constant_timing::validated_pcm_limit_bytes(limit_bytes).map_err(PyValueError::new_err)
+}
+
 /// AudioEngine provides audio output and non-realtime control through CPAL.
 #[pyclass]
 pub struct AudioEngine {
@@ -1271,16 +1281,18 @@ impl AudioEngine {
     }
 
     /// Capture actual source/request/authority synchronously before off-thread analysis.
+    #[pyo3(signature = (binding, timing_error_halfwidth_seconds, timing_error_provenance, *, pcm_limit_bytes = constant_timing::MAX_PCM_BYTES))]
     pub fn capture_current_constant_timing(
         &self,
         binding: &InputRuntimePadBinding,
         timing_error_halfwidth_seconds: f64,
         timing_error_provenance: String,
+        #[pyo3(from_py_with = parse_constant_timing_pcm_limit)] pcm_limit_bytes: usize,
     ) -> PyResult<CapturedConstantTiming> {
         self.stream_handle
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-        constant_timing::capture_preparation(
+        constant_timing::capture_preparation_with_limit(
             self,
             binding.id,
             analysis::tempo_evidence::TimingBound {
@@ -1288,6 +1300,7 @@ impl AudioEngine {
                 provenance: timing_error_provenance,
             },
             Some(binding),
+            pcm_limit_bytes,
         )
         .map_err(PyValueError::new_err)
     }

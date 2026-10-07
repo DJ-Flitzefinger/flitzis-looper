@@ -137,6 +137,7 @@ pub(super) fn synthetic_ticket(engine: &AudioEngine) -> ConstantTimingTicket {
         guard: Mutex::new(guard),
         adoption_ticket,
         publication: Mutex::new(None),
+        pcm_budget: PcmBudget::default(),
     }
 }
 
