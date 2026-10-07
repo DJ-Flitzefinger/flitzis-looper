@@ -40,6 +40,15 @@ pub struct AudioStreamHandle {
     pub output_channels: usize,
     pub output_sample_rate: u32,
     pub(crate) output_clock: Arc<SharedOutputClock>,
+    pub(crate) device_descriptor: OutputDeviceDescriptor,
+}
+
+/// Strings are acquired before callback construction and never enter realtime work.
+pub(crate) struct OutputDeviceDescriptor {
+    pub(crate) host: String,
+    pub(crate) endpoint_name: Option<String>,
+    pub(crate) endpoint_description_error: Option<String>,
+    pub(crate) default_sample_format: String,
 }
 
 /// Setup and configure the logger for audio operations
@@ -1354,6 +1363,7 @@ pub fn create_audio_stream(
     current_timing_acknowledgements: Arc<CurrentTimingAcknowledgements>,
     input_runtime_ownership: Arc<super::input_runtime_binding::InputRuntimeOwnership>,
     prepared_source_epochs: Vec<Arc<std::sync::atomic::AtomicU64>>,
+    loop_acceptance: Arc<super::loop_acceptance::SharedLoopAcceptance>,
 ) -> Result<AudioStreamHandle, Box<dyn std::error::Error>> {
     setup_logger();
 
@@ -1363,6 +1373,16 @@ pub fn create_audio_stream(
         .ok_or("No audio device found")?;
 
     let config = device.default_output_config()?;
+    let description = device.description();
+    let device_descriptor = OutputDeviceDescriptor {
+        host: host.id().name().to_owned(),
+        endpoint_name: description
+            .as_ref()
+            .ok()
+            .map(|value| value.name().to_owned()),
+        endpoint_description_error: description.err().map(|error| error.to_string()),
+        default_sample_format: config.sample_format().to_string(),
+    };
     let sample_rate = config.sample_rate();
     let sample_rate_hz = sample_rate;
     let channels = config.channels();
@@ -1475,6 +1495,7 @@ pub fn create_audio_stream(
             let frames = data.len() / channels as usize;
             transport.advance_by_rendered_frames(frames);
             let frame_clock = transport.output_frame();
+            loop_acceptance.observe(&mixer, observed_at_ns, frame_clock, frames);
 
             publish_pad_telemetry(
                 &mut producer_out,
@@ -1509,6 +1530,7 @@ pub fn create_audio_stream(
         output_channels: channels as usize,
         output_sample_rate: sample_rate_hz,
         output_clock,
+        device_descriptor,
     })
 }
 
@@ -2233,6 +2255,7 @@ mod tests {
             Arc::default(),
             Arc::default(),
             (0..NUM_SAMPLES).map(|_| Arc::default()).collect(),
+            Arc::default(),
         );
         // We expect this to potentially fail in test environments,
         // but we want to ensure the function exists and has the right signature

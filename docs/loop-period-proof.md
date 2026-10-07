@@ -5,6 +5,10 @@ trajectory and reader for compatible effective accepted timing. Hardware-free
 musical/PCM/onset proof remains distinct from actual device/loopback and sustained
 human listening acceptance.
 
+The [device/listening packet](device-loop-acceptance.md) provides concrete
+productive preparation and independent offline capture tooling. Its synthetic
+fixtures and consistency receipts do not close those gates.
+
 ## Independent domains
 
 For loaded rate `Fs`, accepted quarter period `T`, logical loop beats `b`,

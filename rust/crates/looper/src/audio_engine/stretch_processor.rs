@@ -56,6 +56,16 @@ pub struct StretchProcessor {
 unsafe impl Send for StretchProcessor {}
 
 impl StretchProcessor {
+    /// Scalar state already owned by the render path; no native processing or query.
+    pub(crate) fn loop_acceptance_state(&self) -> (bool, f64, usize, usize, usize) {
+        (
+            self.native.active,
+            self.native.pitch_scale,
+            self.native.input_fifo.first().map_or(0, FixedFifo::len),
+            self.native.output_fifo.first().map_or(0, FixedFifo::len),
+            self.native.block_size,
+        )
+    }
     #[cfg(test)]
     pub fn new(channels: usize) -> Self {
         Self::with_sample_rate(channels, DEFAULT_SAMPLE_RATE_HZ)

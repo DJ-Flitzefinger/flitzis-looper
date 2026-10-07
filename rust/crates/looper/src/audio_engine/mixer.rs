@@ -46,6 +46,9 @@ use cpal::Sample;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
+#[path = "mixer_loop_acceptance.rs"]
+mod loop_acceptance_snapshot;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RtRenderPadActivity {
     ids: [usize; NUM_SAMPLES],

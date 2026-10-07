@@ -63,6 +63,7 @@ pub use input_runtime_binding::InputRuntimePadBinding;
 pub(crate) mod key_lock_preparation;
 #[cfg(test)]
 mod key_lock_source_preparation;
+mod loop_acceptance;
 mod mixer;
 mod native_history_permit;
 mod prepared_native_history;
@@ -501,6 +502,7 @@ pub struct AudioEngine {
     prepared_source_epochs: Vec<Arc<AtomicU64>>,
     timing_intents: Mutex<Vec<analysis::tempo_acceptance::TimingIntent>>,
     current_timing_acknowledgements: Arc<constant_timing::CurrentTimingAcknowledgements>,
+    loop_acceptance: Arc<loop_acceptance::SharedLoopAcceptance>,
     current_constant_timing: Mutex<Vec<Vec<constant_timing::CurrentConstantTimingRecord>>>,
     input_runtime_ownership: Arc<input_runtime_binding::InputRuntimeOwnership>,
     global_timing_revision: Arc<AtomicU64>,
@@ -536,6 +538,7 @@ impl AudioEngine {
                 NUM_SAMPLES
             ]),
             current_timing_acknowledgements: Arc::default(),
+            loop_acceptance: Arc::default(),
             current_constant_timing: Mutex::new((0..NUM_SAMPLES).map(|_| Vec::new()).collect()),
             input_runtime_ownership: Arc::new(
                 input_runtime_binding::InputRuntimeOwnership::tracked(),
@@ -555,6 +558,7 @@ impl AudioEngine {
         }
 
         self.current_timing_acknowledgements.clear_all();
+        self.loop_acceptance.reset();
         self.input_runtime_ownership.revoke_all_sources();
         for records in self
             .current_constant_timing
@@ -569,6 +573,7 @@ impl AudioEngine {
             self.current_timing_acknowledgements.clone(),
             self.input_runtime_ownership.clone(),
             self.prepared_source_epochs.clone(),
+            self.loop_acceptance.clone(),
         ) {
             Ok(handle) => {
                 start_stream(&handle.stream).map_err(|e| {
@@ -595,6 +600,54 @@ impl AudioEngine {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
         Ok(handle.output_sample_rate)
+    }
+
+    /// Request one fixed callback observation. No playback action is performed.
+    pub fn request_loop_acceptance_snapshot(&self, sample_id: usize) -> PyResult<u64> {
+        if self.stream_handle.is_none() {
+            return Err(PyRuntimeError::new_err("Audio engine not initialized"));
+        }
+        self.loop_acceptance.request(sample_id)
+    }
+
+    /// One nonblocking read; None means pending, superseded or a busy writer.
+    pub fn loop_acceptance_snapshot(
+        &self,
+        py: Python<'_>,
+        sample_id: usize,
+        request_id: u64,
+    ) -> PyResult<Option<Py<PyAny>>> {
+        if self.stream_handle.is_none() {
+            return Err(PyRuntimeError::new_err("Audio engine not initialized"));
+        }
+        loop_acceptance::metadata(self, py, sample_id, request_id)
+    }
+
+    /// Actual selected endpoint and stream configuration retained outside the callback.
+    pub fn output_device_descriptor(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let Some(handle) = self.stream_handle.as_ref() else {
+            return Ok(None);
+        };
+        let dict = PyDict::new(py);
+        dict.set_item("host", &handle.device_descriptor.host)?;
+        dict.set_item("endpoint_name", &handle.device_descriptor.endpoint_name)?;
+        dict.set_item(
+            "endpoint_description_error",
+            &handle.device_descriptor.endpoint_description_error,
+        )?;
+        dict.set_item("sample_rate_hz", handle.output_sample_rate)?;
+        dict.set_item("channels", handle.output_channels)?;
+        dict.set_item("stream_sample_format", "f32")?;
+        dict.set_item(
+            "default_device_sample_format",
+            &handle.device_descriptor.default_sample_format,
+        )?;
+        dict.set_item("requested_buffer_frames", 512)?;
+        dict.set_item(
+            "buffer_policy",
+            "fixed-request; observed callback_frames are separate",
+        )?;
+        Ok(Some(dict.into_any().unbind()))
     }
 
     /// Capture observable input time in the engine epoch shared with native MIDI.
@@ -680,6 +733,7 @@ impl AudioEngine {
         self.offline_jobs.cancel(None);
         self.input_runtime = None;
         self.stream_handle = None;
+        self.loop_acceptance.reset();
         self.current_timing_acknowledgements.clear_all();
         for records in self
             .current_constant_timing

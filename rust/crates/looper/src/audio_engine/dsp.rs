@@ -301,6 +301,13 @@ pub(crate) struct PerPadDspChain {
 }
 
 impl PerPadDspChain {
+    /// Observe applied and pending isolator values without advancing the smoother.
+    pub(crate) fn loop_acceptance_parameters(&self) -> ([f32; 3], [f32; 3]) {
+        (
+            std::array::from_fn(|index| self.parameters[index].current),
+            std::array::from_fn(|index| self.parameters[index].target),
+        )
+    }
     pub(crate) fn new(pad_id: usize, sample_rate_hz: f32, channels: usize) -> Self {
         let sample_rate_hz = sanitize_sample_rate(sample_rate_hz);
         let channels = channels.clamp(DEFAULT_CHANNELS, DSP_MAX_CHANNELS);

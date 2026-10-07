@@ -439,6 +439,21 @@ the retained complete G2 gate input (default local path, or
 `FLITZIS_G3C_GATE_INPUT`). Private inputs, JSON evidence and audio snippets are
 never repository fixtures. See [the proof domains and remaining gates](loop-period-proof.md).
 
+### G3c productive device and listening preparation
+
+The [human-run acceptance packet](device-loop-acceptance.md) documents the opt-in
+`productive_loop_packet prepare|run|request` commands and offline
+`loop_capture features|compare|listening-receipt` workflow. Preparation and offline
+commands do not instantiate the application or open a device. Only the human
+invokes `run`; it uses the normal controllers/UI in an isolated private project,
+with explicit native accepted publication and derived acknowledgement. It never
+starts a pad or a recorder automatically.
+
+Demand-only native snapshots retain effective current-bound voice values separately
+from Python intent and CPAL estimated output-clock observations. JSON, source
+hashing/export and capture analysis stay off the callback. Native/Synthetic tests
+and valid evidence receipts do not certify actual device or sustained listening.
+
 ## Python Packages Under `src/`
 
 There are two Python packages by design:

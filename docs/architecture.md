@@ -140,6 +140,15 @@ error. G3c2 uses the compatible accepted musical period in shared SourcePlayback
 and safe source-reader seam interpolation while preserving integer physical markers.
 The [strict musical loop gate](loop-period-proof.md) checks actual rendered output;
 actual device/loopback and sustained human listening remain separate open gates.
+G3c3 adds an opt-in isolated measurement adapter using these same controllers,
+publication and derived acknowledgement. A demand-only fixed atomic snapshot
+observes one effective voice against current source/generation/authority/full
+accepted identity; absent, multiple, stale or mismatched voices remain unavailable.
+It copies existing rate/loop/Key Lock/stem/DSP scalars after a bounded voice scan,
+without processing or controlling audio. Endpoint/configuration strings are
+retained during non-realtime stream setup. Background workers serialize private
+observations and offline captured-WAV features; independent clock uncertainty and
+human listening remain explicit. See [the packet](device-loop-acceptance.md).
 Its shared `analyze_bpm` pipeline owns the legacy ODF/sample-hop conversion for
 both production and comparison fixtures. Private independent B2 input validation
 and sealing live separately in Python's analysis package and do not publish

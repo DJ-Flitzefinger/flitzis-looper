@@ -13,6 +13,8 @@ from flitzis_looper.models import ProjectState, SessionState
 from flitzis_looper_audio import AudioEngine, AudioMessage
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from flitzis_looper.controller.base import BaseController
     from flitzis_looper.controller.stem_generation import StemGenerationBackend
 
@@ -22,8 +24,16 @@ class AppController:
         self,
         stem_backend: StemGenerationBackend | None = None,
         stem_task_runner: StemTaskRunner | None = None,
+        *,
+        project_config_path: Path | None = None,
     ) -> None:
-        self._persistence = ProjectPersistence.from_config_path()
+        self._persistence = (
+            ProjectPersistence.from_config_path()
+            if project_config_path is None
+            else ProjectPersistence.from_config_path(project_config_path)
+        )
+        if project_config_path is not None:
+            self._persistence.config_path = project_config_path
         self._project = self._persistence.project
         self._session = SessionState()
 

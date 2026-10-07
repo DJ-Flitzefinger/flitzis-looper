@@ -23,6 +23,9 @@ mod global_playback_batch_tests;
 #[path = "prepared_source_timing_tests.rs"]
 mod prepared_source_timing_tests;
 
+#[path = "loop_acceptance_tests.rs"]
+mod loop_acceptance_tests;
+
 pub(super) fn source() -> SampleBuffer {
     let mut samples = vec![0.0_f32; (COUNT as f64 * PERIOD * f64::from(RATE)).ceil() as usize];
     for index in 0..COUNT {

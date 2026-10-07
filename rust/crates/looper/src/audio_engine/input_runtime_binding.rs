@@ -168,20 +168,30 @@ impl InputRuntimeOwnership {
     }
 
     pub(crate) fn binding_source_current(&self, id: usize, binding: InputPadBinding) -> bool {
+        self.binding_source_generation(id, binding).is_some()
+    }
+
+    /// Read-only fixed source fence, including its checked generation for evidence consumers.
+    pub(crate) fn binding_source_generation(
+        &self,
+        id: usize,
+        binding: InputPadBinding,
+    ) -> Option<u64> {
         if id >= NUM_SAMPLES {
-            return false;
+            return None;
         }
         if !self.source_tracking {
-            return true;
+            return Some(1);
         }
         let source = &self.sources[id];
         let generation = source.generation.load(Ordering::SeqCst);
-        generation != 0
+        (generation != 0
             && source.address.load(Ordering::SeqCst) == binding.source_address
             && source.count.load(Ordering::SeqCst) == binding.sample_count
             && source.channels.load(Ordering::SeqCst) == binding.channels
             && source.rate.load(Ordering::SeqCst) == binding.sample_rate_hz
-            && source.generation.load(Ordering::SeqCst) == generation
+            && source.generation.load(Ordering::SeqCst) == generation)
+            .then_some(generation)
     }
 }
 
@@ -201,7 +211,7 @@ pub(crate) struct InputPadBinding {
 #[pyclass(frozen)]
 pub struct InputRuntimePadBinding {
     pub(super) id: usize,
-    source_generation: u64,
+    pub(super) source_generation: u64,
     source_digest: String,
     sample_rate_hz: u32,
     intent: TimingIntent,

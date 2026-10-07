@@ -44,6 +44,7 @@ For focused areas:
 | `beat-this-reference-inputs.md` | Private independent annotation and paired human correction inputs, validation and sealing; no musical scoring or default adoption. |
 | `grid-timing-diagnosis.md` | Reproduced endpoint-derived BPM/grid drift, long-file precision evidence and remaining correction limits. |
 | `loop-period-proof.md` | G3c independent musical/physical duration, productive fractional seam policy and rendered-feature proof; device/listening remain gated. |
+| `device-loop-acceptance.md` | G3c3 productive human-run preparation, real capture/clock comparison and uninterrupted 30-minute listening packet; actual gates remain open. |
 | `scalar-source-coordinates.md` | Shared scalar projection, long-file waveform/seek/playhead precision, BPM edit preservation and remaining timing boundaries. |
 | `constant-tempo-summary.md` | Offline count/fit API, complete content-bound backend evidence, isolated PCM refinement, independent-count assertions and the G3 adoption boundary. |
 | `accepted-constant-timing.md` | G3a immutable accepted-period revision, explicit acceptance/origin evidence, control-only adoption guard and remaining live/loop gates. |

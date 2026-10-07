@@ -65,6 +65,11 @@ impl SourcePlayback {
         self.ratio
     }
 
+    /// Observe the pending target separately from the applied rate without advancing it.
+    pub(crate) fn rate_target(&self) -> f64 {
+        self.target
+    }
+
     /// Compare the complete copied trajectory at a prepared native adoption boundary.
     ///
     /// Equal current source phase is insufficient: a pending rate target or a different active
