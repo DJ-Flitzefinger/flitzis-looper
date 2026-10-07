@@ -46,6 +46,7 @@ pub(crate) struct InputRuntimeOwnership {
     timing_intent: [AtomicU8; NUM_SAMPLES],
     source_tracking: bool,
     sources: [CurrentSourceFence; NUM_SAMPLES],
+    cold_adoptions: [AtomicU64; NUM_SAMPLES],
 }
 
 impl Default for InputRuntimeOwnership {
@@ -56,11 +57,63 @@ impl Default for InputRuntimeOwnership {
             timing_intent: std::array::from_fn(|_| AtomicU8::new(0)),
             source_tracking: false,
             sources: std::array::from_fn(|_| CurrentSourceFence::default()),
+            cold_adoptions: std::array::from_fn(|_| AtomicU64::new(0)),
         }
     }
 }
 
 impl InputRuntimeOwnership {
+    pub(super) fn begin_cold(&self, id: usize, generation: u64) {
+        self.cold_adoptions[id].store(generation * 4, Ordering::Release);
+    }
+
+    /// Fixed scalar callback acknowledgement; no per-job object is retired here.
+    pub(crate) fn claim_cold(&self, id: usize, generation: u64) -> bool {
+        self.cold_adoptions[id]
+            .compare_exchange(
+                generation * 4,
+                generation * 4 + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    pub(crate) fn accept_cold(&self, id: usize, generation: u64) {
+        let _ = self.cold_adoptions[id].compare_exchange(
+            generation * 4 + 1,
+            generation * 4 + 2,
+            Ordering::Release,
+            Ordering::Acquire,
+        );
+    }
+
+    pub(crate) fn reject_claimed_cold(&self, id: usize, generation: u64) {
+        let _ = self.cold_adoptions[id].compare_exchange(
+            generation * 4 + 1,
+            generation * 4 + 3,
+            Ordering::Release,
+            Ordering::Acquire,
+        );
+    }
+
+    pub(super) fn cancel_cold(&self, id: usize, generation: u64) -> bool {
+        self.cold_adoptions[id]
+            .compare_exchange(
+                generation * 4,
+                generation * 4 + 3,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    #[cfg(test)]
+    pub(super) fn cold_status(&self, id: usize, generation: u64) -> Option<u8> {
+        let status = self.cold_adoptions[id].load(Ordering::Acquire);
+        (status / 4 == generation).then_some((status % 4) as u8)
+    }
+
     /// AudioEngine tracks actual native control-cache ownership; standalone mixers are untracked.
     pub(super) fn tracked() -> Self {
         Self {

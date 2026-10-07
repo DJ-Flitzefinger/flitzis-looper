@@ -173,9 +173,8 @@ class PadLoopController:
         if self._project.sample_paths[sample_id] is None:
             return
 
-        if (
-            self._project.manual_bpm[sample_id] is None
-            and self._audio.pad_timing_intent(sample_id) == "automatic"
+        if self._project.manual_bpm[sample_id] is None and self._bpm.awaiting_automatic_timing(
+            sample_id
         ):
             return
         timing = self._resolve_timing(sample_id, timing)

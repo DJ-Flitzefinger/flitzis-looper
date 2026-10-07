@@ -21,6 +21,50 @@ def _legacy_analysis() -> dict[str, object]:
     }
 
 
+def test_failed_cold_load_settles_superseded_analysis_without_changing_effective_source(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    project = controller.project
+    session = controller.session
+    project.sample_paths[0] = "samples/old.wav"
+    project.sample_durations[0] = 32.0
+    project.sample_analysis[0] = SampleAnalysis.model_validate(_legacy_analysis())
+    project.manual_bpm[0] = 123.456
+    project.pad_gain_db[0] = -6.0
+    session.active_sample_ids.add(0)
+    session.pad_playhead_s[0] = 4.25
+    audio_engine_mock.analyze_sample_async.return_value = 3
+    controller.loader.analyze_sample_async(0)
+    session.sample_analysis_progress[0] = 0.5
+    old_project = project.model_dump()
+    audio_engine_mock.load_sample_async.return_value = 4
+    controller.loader.load_sample_async(0, "new.wav")
+    audio_engine_mock.poll_loader_events.side_effect = [
+        {"type": "error", "id": 0, "request_id": 4, "msg": "cold decode failed"},
+        {
+            "type": "task_error",
+            "id": 0,
+            "request_id": 3,
+            "task": "analysis",
+            "timing_stale": True,
+            "msg": "Analysis superseded by another pad request",
+        },
+        None,
+    ]
+
+    controller.loader.poll_loader_events()
+
+    assert project.model_dump() == old_project
+    assert session.active_sample_ids == {0}
+    assert session.pad_playhead_s[0] == 4.25
+    assert session.analyzing_sample_ids == set()
+    assert 0 not in session.sample_analysis_progress
+    assert 0 not in controller.loader._analysis_request_ids
+    assert session.sample_analysis_errors[0] == "Analysis superseded by another pad request"
+    assert session.sample_load_errors[0] == "cold decode failed"
+    audio_engine_mock.unload_sample.assert_not_called()
+
+
 @pytest.mark.parametrize("restored", [False, True])
 @pytest.mark.parametrize("include_analysis", [False, True])
 def test_current_source_completion_preserves_newer_timing_and_analysis_request(
@@ -133,6 +177,40 @@ def automatic_pad(controller: AppController, audio_engine_mock: Mock) -> dict[st
     audio_engine_mock.set_pad_bpm.side_effect = legacy_edit
     audio_engine_mock.set_pad_timing_metadata.side_effect = legacy_edit
     return metadata
+
+
+@pytest.mark.parametrize("failure", ["admission", "worker", "stale-callback"])
+def test_failed_cold_replacement_retains_acknowledged_automatic_authority(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    automatic_pad: dict[str, object],
+    failure: str,
+) -> None:
+    previous = controller.project.model_dump()
+    previous_timing = controller.transport.bpm.current_timing(0)
+    assert previous_timing is not None
+    audio_engine_mock.reset_mock()
+    if failure == "admission":
+        audio_engine_mock.load_sample_async.side_effect = RuntimeError("bounded source queue full")
+        controller.loader.load_sample_async(0, "new.wav")
+    else:
+        audio_engine_mock.load_sample_async.return_value = 7
+        controller.loader.load_sample_async(0, "new.wav")
+        audio_engine_mock.poll_loader_events.side_effect = [
+            {"type": "error", "id": 0, "request_id": 7, "msg": failure},
+            None,
+        ]
+        controller.loader.poll_loader_events()
+
+    assert controller.project.model_dump() == previous
+    assert controller.transport.bpm.current_timing(0) == previous_timing
+    assert audio_engine_mock.current_constant_timing.return_value is automatic_pad
+    assert audio_engine_mock.pad_timing_intent(0) == "automatic"
+    audio_engine_mock.set_pad_bpm.assert_not_called()
+    audio_engine_mock.set_pad_timing_metadata.assert_not_called()
+    audio_engine_mock.set_pad_loop_region.assert_not_called()
+    audio_engine_mock.set_pad_timing_intent.assert_not_called()
+    audio_engine_mock.unload_sample.assert_not_called()
 
 
 def test_accepted_unload_then_ordinary_reload_restores_legacy_timing(

@@ -1,13 +1,171 @@
 # Complete PCM cache and finite loop residency
 
-Status: C0 audited design, 2026-10-07, baseline `1be58def`.
-**No cache/residency implementation or performance acceptance is delivered by C0.**
+Status: C1a productive bounded cold loading, 2026-10-07; C0 baseline `1be58def`.
+The existing `AudioEngine.load_sample_async` now runs the copy-first path below.
+Warm reuse/last-owner lifecycle (C1b), residency (C2) and measured performance
+(C3) remain pending. Full-buffer playback and fresh accepted-timing verification
+remain authoritative; no startup/RAM or device/listening acceptance is claimed.
 The active [OpenSpec change](../openspec/changes/cache-full-pcm-and-resident-loops/proposal.md)
-defines the proposed contracts; its unchecked tasks are implementation work.
-This document is the maintained engineering reference for C1-C3, not an account
-of features already available.
+contains the remaining contracts and bounded implementation tasks.
 
-## Audited current behavior
+## Delivered cold path (C1a)
+
+`cold_jobs.rs` admits at most two active workers and 32 queued/reserved jobs.
+The queue bound includes reservations made before request mutation. Each active
+job admits at most 1 GiB of transient PCM, including decoder packet/workspace,
+Vec growth overlap, retained decoder PCM, FFT conversion/channel mapping, and
+Vec-to-Arc overlap. Decoder workspace admits conservative supported-codec packet
+maxima; ALAC cookie block length/rate/channels are checked before constructor
+allocation, with actual codec configuration SHA256 recorded. Automatic analyzer inputs have a separate conservative
+admission calculation within that same job budget after decoder PCM is released.
+Thus the cold lane's admitted transient PCM is at most 2 GiB, excluding previous
+resident pad/voice PCM and old-source request checkpoints (including pins retained
+after unload), existing native preparation pools and non-PCM analyzer
+model/DSP storage. These are limits, not measured process peak RAM. Default
+analyzer behavior is retained; opaque native analysis kernels finish their bounded
+input before a subsequent cancellation check. Other stages check cancellation
+between packets/chunks and before commit/publication.
+
+`cold_store.rs` opens actual files with Windows FILE_SHARE_READ exclusion of
+writes/deletion, verifies opened leaf/ancestor reparse attributes, copies/hashes
+64-KiB chunks into an exclusive snapshot, verifies exact digest/EOF, and retains
+the same sealed reader throughout `sample_loader/cold.rs` decode. External
+replacement or A-to-B-to-A after capture cannot change decoder input. Inputs with
+an existing incompatible writer fail safely. This tested stable-capture protocol
+is Windows-only; other platforms fail Unsupported until an equivalent protocol
+is proved. Imports retain a byte-exact collision-safe original; restoration
+captures a contained existing original without another durable original.
+
+Each cold attempt creates complete `decoder.f32le`, `playback.f32le` and
+`manifest.json` under `samples/.pcm-cache/v1/.staging-<pid>-<generation>/`.
+Canonical versioned descriptors bind actual original digest/bytes, decoder
+container/codec/library/options/packet error policy, full decoder interleaved and
+arithmetic-channel-mean-f64-to-f32 digests, actual rate/channels/full frames/zero,
+and the full playback parent identity, own digests/dimensions and executed
+resampler/channel transform. No window or historical accepted flag supplies
+these identities. Original decoder rate/layout is retained independently of the
+selected playback/device rate, with no forced 48-kHz conversion.
+
+Files are flushed, the exclusive complete directory is renamed on the same
+filesystem to `<full-identity>-<pid>-<generation>`, and every committed file is
+reopened with immutable sharing and fully reverified before native publication.
+Existing identical, partial or corrupt generations are never overwritten or
+reused in C1a. Fault/cancellation cleanup deletes only this attempt's creations,
+after closing dependent readers; external sources/private evidence survive.
+Sealed successful original/PCM/manifest/directory leases stay outside realtime
+ownership. Successful entries remain durable; shared reuse, deferred reader
+retirement and eventual last-owner cleanup are C1b. File flush plus atomic rename
+and post-rename verification prove atomic complete visibility and injected failure
+rollback, not a Windows power-loss durability/recovery guarantee. Crash-left
+staging/partial entries are ineligible; C1b will handle recovery/cleanup.
+
+`cold_load.rs` retains previous source/digest/generation/lease through admission
+and preparation. Source/request/device format and timing-intent epoch are
+rechecked before enqueue. Normal cold selection and Automatic restore reject
+intervening timing edits; initial empty Legacy restoration admits its existing
+startup settings through enqueue and native adoption. Reserved single-producer capacity makes source,
+digest, generation, intent and queued handle publication one transaction. A fixed
+source/epoch guard and scalar acknowledgement govern `LoadColdSample`; the
+callback reserves MAX_VOICES+3 retirement slots and one feedback slot before
+stopping the application's old voices and adopting the complete new bank. The application explicitly requests `replace_assignment=True`; direct native
+`load_sample_async` defaults to false and retains active voices pinned to their
+previous source, as does `LoadSample` bank replacement.
+
+The worker emits Success and transfers its sealed lease only after native ACK.
+Blocked retirement/feedback keeps old audio and project metadata effective.
+Pending adoption has a 30-second deadline; cancellation/rejection restores only
+its still-current proposed control source, preserving a newer unload/load or
+Manual/Tap intent. A matching ACK linearizes adoption, and later timing edits are
+reported as timing-stale source success without resetting their authority.
+The callback's claimed tail is bounded and nonfallible after a second source/epoch
+check. An exceptional backend stall after claim reaches a finite timeout (or
+shutdown), retains complete files/sealed ownership while still current, and
+reports unconfirmed adoption without Success or an unsafe source rollback. A
+superseding generation cannot overwrite a job's unique fixed scalar ACK.
+Unconfirmed current source is fenced from new starts until explicit unload/restart
+or a fresh successful assignment. C1b owns subsequent reconciliation/cleanup.
+Prior-audio preservation is proved for rejection before
+this irreversible callback tail, not a stalled backend after it starts. ACKed
+files stay durable even if unload/reload wins before metadata delivery.
+Only prebuilt PCM and a bounded per-job atomic token allocated by control enter
+the callback; even the atomic token is retired through the reserved off-thread
+queue. No filesystem/hashing/decoding/JSON/GIL/locks or heavy allocation/
+retirement was added there.
+
+While cold enqueue is pending, the control cache contains the proposed source,
+so CURRENT/MIDI capture can be temporarily unavailable; it cannot promote the
+new source's historical timing. Old bank/voice/accepted handles remain effective,
+and rejection restores the prior control source. Existing input-runtime refresh
+rebinding continues to use native source/authority signatures.
+
+Python now keeps assignment/duration/analysis/settings/stems on admission or
+pre-adoption worker failure. Superseded in-flight analysis is explicitly settled
+as cancelled rather than left busy. Successful matching source replacement
+records complete source metadata and then refreshes defaults/derived control intent; a derived setter
+failure is visible while that new source and its matching metadata stay valid.
+Native unload admission now precedes Python source/task/settings mutation, so a
+full native queue preserves the previous project/session and deferred restore.
+The existing successful explicit-unload deletion policy remains for C1b to
+replace with last-reader cleanup; successful replacement does not eagerly delete
+old original/stem data. Saved Automatic intent remains unresolved even after an
+initial admission/preparation error. Only existing full-content verification
+and fresh timing ACK can establish CURRENT. Historical acceptance is never upgraded
+by the PCM manifest. Existing save-integrity verification remains in force.
+
+Startup restoration uses a private deferred-admission table bounded by the
+216 available pad IDs. Exact queue-full defers remaining saved sources rather
+than losing them; native event polling retries at most eight admissions and
+stops at the first repeated full queue. Stopped/invalid preparation failures
+remain terminal and visible. New admitted selection, unload, shutdown or changed
+saved path cancels the corresponding deferred entry; retry uses the latest timing
+intent. Equivalent Windows slash/backslash assignments restore canonical paths
+without resetting saved timing/mix/loop settings. Full-pad mocked admission tests
+prove scheduling/control behavior, not a 200-pad RAM/readiness measurement.
+
+## Decoder and playback boundary evidence
+
+Symphonia 0.5.5 explicitly keeps gapless disabled, verification disabled, and
+origin at the first decoded frame. Declared delay/padding and actual decoded
+extent are recorded; no leading silence, priming or padding is heuristically
+removed. Independent encoded fixtures and FFmpeg/ffprobe references prove the
+policy rather than assuming decoder equality. For example the 11023-frame MP3
+fixtures decode to 12672 frames: 1105 priming plus 544 padding remain. AAC retains
+1024 priming frames; Vorbis retains its actual decoder extent; lossless source
+samples and first/last impulses are checked at 44.1/48/96 kHz. MP3 supports only
+44.1/48 kHz in this fixture encoder and is not relabelled as a 96-kHz source.
+
+Playback uses the existing Rubato 1.0.0 FFT Input/1024/one-subchunk transform,
+with the stronger analyzer integer-ceiling, delay-plus-length and bounded tail
+rules reused for multichannel conversion. Output is exactly
+`ceil(source_frames * output_rate / source_rate)`, after one integer algorithmic
+delay trim and a bounded zero-padded tail. Independent fully padded raw FFT
+oracles compare every sample for all nine 44.1/48/96-kHz rate pairs, mono/stereo,
+1/17/1023/1024/1025/4095/4096/11023 frames, and zero/tail impulses. Integer delay
+compensation retains declared source zero; tested impulse peaks stay within one
+output frame of rounded source positions, while full samples match the independent
+fully padded FFT oracle within 2e-6. No analytic subframe phase bound, zero acoustic
+delay or identical peak-frame placement is claimed.
+
+Headless productive tests use the same admission/preparation/native command drain,
+not a disconnected helper-only path. They exercise complete original/artifact
+identity, queue failure, native backpressure/ACK, cancellation, intent races and
+old-source preservation. Full Debug/Release checks retain the G3 numerical,
+current accepted, pinned source and native-history tests. Six Windows headless
+integration tests first perform actual cold-worker/native adoption ACK, then call
+the public `OfflineAnalysisJob` PyO3 wrappers through embedded Python. They prove
+full export/playback ownership, source replacement and busy retirement, exact
+staging/key accounting, sealed-file retirement, missing-parent failure before
+key work, and complete packed-result publication/readmission.
+
+Pre-stream Python validation/poll tests use a real uninitialized `AudioEngine`.
+The remaining public-API integration fixture requires `run()` to initialize its
+CPAL stream/input runtime, including tests whose logical assertions are offline;
+these stay explicit `--audio-devices` opt-in. Their native core contracts are
+tested headlessly; the skipped Python service-to-stream glue is not counted as
+passed. This step runs offline checks.
+Actual human/device/hearing gates remain OPEN until final pre-port acceptance.
+
+## Audited C0 baseline (historical)
 
 Line references describe the C0 baseline. In the table, native module names
 (`mod.rs`, `sample_loader.rs`, `source_reader.rs`, `constant_timing/*`, etc.)
@@ -257,7 +415,7 @@ unknown files, project config, originals or private audio as garbage.
 
 ## Bounded implementation and evidence plan
 
-- **C1a, exact next slice:** bounded cold-load job admission, immutable copy-first
+- **C1a, delivered:** bounded cold-load job admission, immutable copy-first
   input, full decoder/playback artifact writer and manifest with complete actual
   digests, exclusive atomic cold commit, request-guarded all-or-none publication
   and snapshot/staging cancellation/queue-failure rollback. Retain current

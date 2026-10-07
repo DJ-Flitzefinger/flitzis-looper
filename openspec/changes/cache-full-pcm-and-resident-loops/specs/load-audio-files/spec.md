@@ -13,8 +13,10 @@ second durable original. Complete validated PCM MAY replace repeat decoding.
 
 Source replacement SHALL preserve already pinned native voice ownership until
 its existing stop/unload/transition lifecycle; a bank publication MUST NOT
-relabel old voice PCM or timing. The application's explicit unload-before-new-load
-path SHALL still stop that pad's voices and reset track-bound intent.
+relabel old voice PCM or timing. The application's validated successful cold
+replacement SHALL stop that pad's voices and reset track-bound intent only after
+guarded native adoption; admission or preparation failure SHALL retain the prior
+effective source and project metadata.
 Invalid id/path/format or failed native admission SHALL not publish a new source.
 
 #### Scenario: Load succeeds
@@ -30,12 +32,27 @@ Invalid id/path/format or failed native admission SHALL not publish a new source
 
 #### Scenario: Application replaces an assignment
 - **WHEN** the performer selects a new source for an occupied pad
-- **THEN** the existing explicit unload stops its voices and resets track-bound settings
-- **AND** subsequent successful loading assigns the new project original
+- **THEN** preparation retains the previous effective audio and project metadata
+- **AND** guarded successful native adoption stops its voices and assigns the matching new project original
+- **AND** matching completion resets retired track-bound settings
 
-#### Scenario: Invalid id path or format
-- **WHEN** the requested id is out of range, the path cannot be captured, or decode fails
-- **THEN** no new source is published and the failure is reported
+#### Scenario: Sample id is out of range
+- **WHEN** the requested id is outside `0..NUM_SAMPLES`
+- **THEN** a Python exception reports invalid admission and no source is changed
+
+#### Scenario: File path is invalid
+- **WHEN** the requested source cannot be captured
+- **THEN** the asynchronous load failure is reported and no source is changed
+
+#### Scenario: File format is unsupported
+- **WHEN** the immutable snapshot cannot be decoded
+- **THEN** the asynchronous load failure is reported and no source is changed
+
+#### Scenario: Cold queue or worker failure retains previous assignment
+- **GIVEN** an occupied pad has matching source, timing, stems and saved settings
+- **WHEN** admission, snapshot, decode, manifest, commit, queue or pending adoption fails
+- **THEN** the previous effective audio and complete project assignment remain valid
+- **AND** only this failed attempt's exclusive temporary creations are rolled back
 
 ### Requirement: Unload Sample Slot
 The system SHALL expose a Python API to unload a sample slot in `0..NUM_SAMPLES`,

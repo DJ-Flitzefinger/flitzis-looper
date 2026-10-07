@@ -9,6 +9,16 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture
+def uninitialized_audio_engine() -> Iterable[AudioEngine]:
+    """Exercise real native validation and polling without opening a device."""
+    engine = AudioEngine()
+    try:
+        yield engine
+    finally:
+        engine.shut_down()
+
+
+@pytest.fixture
 def audio_engine() -> Iterable[AudioEngine]:
     engine: AudioEngine | None = None
     try:

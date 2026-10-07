@@ -5,6 +5,14 @@ use thiserror::Error;
 /// Errors that can occur while loading audio files.
 #[derive(Debug, Error)]
 pub enum SampleLoadError {
+    #[error("audio loading cancelled")]
+    Cancelled,
+
+    #[error("audio PCM limit exceeded: {0}")]
+    Limit(&'static str),
+
+    #[error("invalid audio PCM: {0}")]
+    InvalidInput(&'static str),
     /// Failed to open the audio file.
     #[error("failed to open file: {0}")]
     Io(#[from] std::io::Error),

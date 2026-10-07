@@ -47,6 +47,7 @@ warn_required_dynamic_aliases = true
 pythonpath = ["src"]
 testpaths = ["src/tests"]
 norecursedirs = ["old-project"]
+markers = ["audio_device: opens a real audio device; requires explicit --audio-devices"]
 
 [tool.maturin]
 manifest-path = "rust/crates/looper/Cargo.toml"

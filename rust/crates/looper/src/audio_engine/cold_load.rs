@@ -1,0 +1,624 @@
+//! Productive bounded cold preparation and request-serialized publication.
+
+use super::cold_jobs::PCM_LIMIT_BYTES;
+use super::cold_store::{ColdTransaction, CommittedColdLease, PcmArtifactInput};
+use super::input_runtime_binding::InputRuntimeOwnership;
+use super::progress::{LoadProgressStage, ProgressReporter};
+use super::sample_loader::{
+    SampleLoadProgress, SampleLoadSubtask, decode_audio_snapshot, prepare_playback,
+};
+use super::{
+    AudioEngine, LoadedSourcePublication, PadRequestAdvance, analyze_sample, pad_request_matches,
+    publish_loaded_sample,
+};
+use crate::messages::{ControlMessage, LoaderEvent, SampleBuffer};
+use flitzis_looper_analysis::tempo_acceptance::TimingIntent;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::prelude::*;
+use rtrb::Producer;
+use std::collections::HashSet;
+use std::path::{Component, PathBuf};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
+    mpsc::Sender,
+};
+
+struct LoadingGuard {
+    id: usize,
+    request_id: u64,
+    slots: Arc<Vec<AtomicU64>>,
+    loading: Arc<Mutex<HashSet<usize>>>,
+}
+
+impl Drop for LoadingGuard {
+    fn drop(&mut self) {
+        if self.slots[self.id]
+            .compare_exchange(self.request_id, 0, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        if let Ok(mut loading) = self.loading.lock()
+            && self.slots[self.id].load(Ordering::Acquire) == 0
+        {
+            loading.remove(&self.id);
+        }
+    }
+}
+
+struct ColdLoad {
+    id: usize,
+    request_id: u64,
+    adoption: Arc<AtomicU8>,
+    path: PathBuf,
+    samples_root: PathBuf,
+    output_channels: usize,
+    output_rate: u32,
+    run_analysis: bool,
+    restore_automatic: bool,
+    replace_assignment: bool,
+    intents: Arc<Mutex<Vec<TimingIntent>>>,
+    initial_source: Option<SampleBuffer>,
+    requests: Arc<Mutex<Vec<u64>>>,
+    epoch: Arc<AtomicU64>,
+    expected_epoch: u64,
+    guard_epoch: bool,
+    cache: Arc<Mutex<Vec<Option<SampleBuffer>>>>,
+    generations: Arc<Mutex<Vec<(u64, u32)>>>,
+    digests: Arc<Mutex<Vec<Option<String>>>>,
+    leases: Arc<Mutex<Vec<Option<CommittedColdLease>>>>,
+    lease_generations: Arc<Vec<AtomicU64>>,
+    ownership: Arc<InputRuntimeOwnership>,
+    cancelled: Arc<AtomicBool>,
+    events: Sender<LoaderEvent>,
+}
+
+pub(super) fn admit(
+    engine: &AudioEngine,
+    id: usize,
+    path: String,
+    run_analysis: bool,
+    restore_automatic: bool,
+    replace_assignment: bool,
+) -> PyResult<u64> {
+    let handle = engine
+        .stream_handle
+        .as_ref()
+        .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+    admit_for_format(
+        engine,
+        id,
+        path,
+        run_analysis,
+        restore_automatic,
+        replace_assignment,
+        handle.producer.clone(),
+        handle.output_channels,
+        handle.output_sample_rate,
+        std::env::current_dir()
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
+            .join("samples"),
+    )
+}
+
+// Kept separate so actual productive admission/preparation can be tested with a
+// virtual command consumer without creating an audio device or a CPAL stream.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn admit_for_format(
+    engine: &AudioEngine,
+    id: usize,
+    path: String,
+    run_analysis: bool,
+    restore_automatic: bool,
+    replace_assignment: bool,
+    producer: Arc<Mutex<Producer<ControlMessage>>>,
+    output_channels: usize,
+    output_rate: u32,
+    samples_root: PathBuf,
+) -> PyResult<u64> {
+    if id >= super::constants::NUM_SAMPLES {
+        return Err(PyValueError::new_err("id out of range"));
+    }
+    let reservation = engine
+        .cold_jobs
+        .reserve()
+        .map_err(PyRuntimeError::new_err)?;
+    let mut requests = engine
+        .pad_request_ids
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    let mut loading = engine
+        .loading_sample_ids
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("loading lock poisoned"))?;
+    if loading.contains(&id) {
+        return Err(PyValueError::new_err("sample is already loading"));
+    }
+    let advance = PadRequestAdvance::prepare(&mut requests[id], &engine.prepared_source_epochs[id])
+        .map_err(PyRuntimeError::new_err)?;
+    let request_id = advance.next_request;
+    if request_id > u64::MAX / 4 {
+        return Err(PyRuntimeError::new_err(
+            "cold acknowledgement generation exhausted",
+        ));
+    }
+    let initial_source = engine
+        .sample_cache
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?[id]
+        .clone();
+    let work = ColdLoad {
+        id,
+        request_id,
+        adoption: Arc::new(AtomicU8::new(0)),
+        path: PathBuf::from(path),
+        samples_root,
+        output_channels,
+        output_rate,
+        run_analysis,
+        restore_automatic,
+        replace_assignment,
+        guard_epoch: run_analysis || restore_automatic || initial_source.is_some(),
+        initial_source,
+        epoch: engine.prepared_source_epochs[id].clone(),
+        expected_epoch: advance.next_epoch,
+        intents: engine.timing_intents.clone(),
+        requests: engine.pad_request_ids.clone(),
+        cache: engine.sample_cache.clone(),
+        generations: engine.loaded_source_generations.clone(),
+        digests: engine.loaded_source_digests.clone(),
+        leases: engine.cold_leases.clone(),
+        lease_generations: engine.cold_lease_generations.clone(),
+        ownership: engine.input_runtime_ownership.clone(),
+        cancelled: engine.cold_cancelled.clone(),
+        events: engine.loader_tx.clone(),
+    };
+    let guard = LoadingGuard {
+        id,
+        request_id,
+        slots: engine.cold_loading.clone(),
+        loading: engine.loading_sample_ids.clone(),
+    };
+    engine
+        .cold_jobs
+        .submit(reservation, move || {
+            let _guard = guard;
+            let events = work.events.clone();
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work.run(producer)))
+                .is_err()
+            {
+                let _ = events.send(LoaderEvent::Error {
+                    id,
+                    request_id,
+                    error: "cold worker failed".into(),
+                });
+            }
+        })
+        .map_err(PyRuntimeError::new_err)?;
+    // A worker's first current-request check takes this mutex. It cannot observe
+    // the reservation before the request/loading commit has finished.
+    advance.commit();
+    engine.cold_loading[id].store(request_id, Ordering::Release);
+    loading.insert(id);
+    drop(loading);
+    drop(requests);
+    engine.offline_jobs.cancel(Some(id));
+    Ok(request_id)
+}
+
+/// The production unload transaction, also usable by headless virtual consumers.
+pub(super) fn unload_for_producer(
+    engine: &AudioEngine,
+    id: usize,
+    producer: &Arc<Mutex<Producer<ControlMessage>>>,
+) -> PyResult<()> {
+    if id >= super::constants::NUM_SAMPLES {
+        return Err(PyValueError::new_err("id out of range"));
+    }
+    let mut requests = engine
+        .pad_request_ids
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    let advance = PadRequestAdvance::prepare(&mut requests[id], &engine.prepared_source_epochs[id])
+        .map_err(PyRuntimeError::new_err)?;
+    let mut cache = engine
+        .sample_cache
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?;
+    let mut digests = engine
+        .loaded_source_digests
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("source digest lock poisoned"))?;
+    let mut leases = engine
+        .cold_leases
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("cold lease lock poisoned"))?;
+    let mut loading = engine
+        .loading_sample_ids
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("loading lock poisoned"))?;
+    let mut tasks = engine
+        .active_tasks
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("task lock poisoned"))?;
+    let mut producer = producer
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?;
+    if producer.is_full() {
+        return Err(PyRuntimeError::new_err(
+            "Failed to send UnloadSample - buffer may be full",
+        ));
+    }
+    let authority = engine.input_runtime_ownership.next_authority(id)?;
+    engine.input_runtime_ownership.revoke(id, authority);
+    advance.commit();
+    engine.input_runtime_ownership.revoke_source(id);
+    producer
+        .push(ControlMessage::UnloadSample { id })
+        .expect("reserved single-producer capacity");
+    cache[id] = None;
+    digests[id] = None;
+    leases[id] = None;
+    engine.cold_lease_generations[id].store(0, Ordering::Release);
+    engine.cold_loading[id].store(0, Ordering::Release);
+    loading.remove(&id);
+    tasks.retain(|(task_id, _)| *task_id != id);
+    drop(producer);
+    drop(tasks);
+    drop(loading);
+    drop(leases);
+    drop(digests);
+    drop(cache);
+    drop(requests);
+    engine.offline_jobs.cancel(Some(id));
+    Ok(())
+}
+
+fn same_source(left: Option<&SampleBuffer>, right: Option<&SampleBuffer>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            left.channels == right.channels && Arc::ptr_eq(&left.samples, &right.samples)
+        }
+        _ => false,
+    }
+}
+
+impl ColdLoad {
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+            || (self.guard_epoch && self.epoch.load(Ordering::Acquire) != self.expected_epoch)
+            || !pad_request_matches(&self.requests, self.id, self.request_id)
+    }
+
+    fn prepare(
+        &self,
+    ) -> Result<
+        (
+            ColdTransaction,
+            SampleBuffer,
+            Option<crate::messages::SampleAnalysis>,
+            Option<f64>,
+        ),
+        String,
+    > {
+        let cancelled = || self.is_cancelled();
+        let restore = !self.path.is_absolute()
+            && self.path.components().next() == Some(Component::Normal("samples".as_ref()))
+            && self
+                .path
+                .components()
+                .all(|part| matches!(part, Component::Normal(_)));
+        let mut transaction =
+            ColdTransaction::capture(&self.samples_root, &self.path, !restore, &cancelled)
+                .map_err(|error| error.to_string())?;
+        let mut progress = ProgressReporter::new(self.id, self.request_id, self.events.clone());
+        let mut report = |update: SampleLoadProgress| {
+            let stage = match update.subtask {
+                SampleLoadSubtask::Decoding => LoadProgressStage::Decoding,
+                SampleLoadSubtask::Resampling => LoadProgressStage::Resampling,
+                SampleLoadSubtask::ChannelMapping => LoadProgressStage::ChannelMapping,
+            };
+            progress.emit(
+                stage,
+                update.percent,
+                update.resampling_required,
+                update.percent <= 0.0 || update.percent >= 1.0,
+            );
+        };
+        let decoded = decode_audio_snapshot(
+            transaction
+                .snapshot_file()
+                .map_err(|error| error.to_string())?,
+            &self.path,
+            self.output_rate,
+            PCM_LIMIT_BYTES,
+            &cancelled,
+            &mut report,
+        )
+        .map_err(|error| error.to_string())?;
+        let (sample, transform) = prepare_playback(
+            &decoded,
+            self.output_channels,
+            self.output_rate,
+            PCM_LIMIT_BYTES,
+            &cancelled,
+            &mut report,
+        )
+        .map_err(|error| error.to_string())?;
+        transaction
+            .write_pcm_artifacts(
+                PcmArtifactInput {
+                    samples: &decoded.samples,
+                    rate_hz: decoded.rate_hz,
+                    channels: decoded.channels,
+                    provenance: decoded.decoder.to_json(),
+                },
+                PcmArtifactInput {
+                    samples: &sample.samples,
+                    rate_hz: self.output_rate,
+                    channels: sample.channels,
+                    provenance: serde_json::json!({"processing":"full-buffer-playback-v1"}),
+                },
+                transform.to_json(),
+                &cancelled,
+            )
+            .map_err(|error| error.to_string())?;
+        drop(decoded);
+        let detected =
+            super::initial_loop_start::detect_initial_loop_start(&sample, self.output_rate);
+        let analysis = if self.run_analysis {
+            // Account full playback, channel-conversion copy, mono, resampler and
+            // f32/f64 analyzer inputs before invoking existing bounded-input kernels.
+            let frames = sample.samples.len() / sample.channels;
+            let mono_frames = (frames as u128 * 44_100).div_ceil(u128::from(self.output_rate));
+            let transient = sample.samples.len() as u128 * 8 + mono_frames * 24 + 1024 * 1024;
+            if transient > PCM_LIMIT_BYTES as u128 {
+                return Err("cold automatic analysis exceeds transient PCM byte limit".into());
+            }
+            if cancelled() {
+                return Err("cold load cancelled".into());
+            }
+            progress.emit(
+                LoadProgressStage::Analyzing,
+                0.0,
+                self.output_rate
+                    != transform.to_json()["source_rate_hz"].as_u64().unwrap_or(0) as u32,
+                true,
+            );
+            let result = analyze_sample(&sample, self.output_rate)?;
+            if cancelled() {
+                return Err("cold load cancelled".into());
+            }
+            Some(result)
+        } else {
+            None
+        };
+        progress.emit(
+            LoadProgressStage::Publishing,
+            0.0,
+            transform.to_json()["source_rate_hz"] != transform.to_json()["output_rate_hz"],
+            true,
+        );
+        transaction
+            .commit(&cancelled)
+            .map_err(|error| error.to_string())?;
+        Ok((transaction, sample, analysis, detected))
+    }
+
+    fn run(self, producer: Arc<Mutex<Producer<ControlMessage>>>) {
+        let _ = self.events.send(LoaderEvent::Started {
+            id: self.id,
+            request_id: self.request_id,
+        });
+        let result = self.publish(&producer);
+        if let Err(error) = result {
+            let _ = self.events.send(LoaderEvent::Error {
+                id: self.id,
+                request_id: self.request_id,
+                error,
+            });
+        }
+    }
+
+    fn await_adoption(&self) -> Result<(), (String, bool)> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            match self.adoption.load(Ordering::Acquire) {
+                2 => return Ok(()),
+                3 => return Err(("cold native adoption rejected".into(), false)),
+                0 if (self.is_cancelled() || std::time::Instant::now() >= deadline)
+                    && self
+                        .adoption
+                        .compare_exchange(0, 3, Ordering::AcqRel, Ordering::Acquire)
+                        .is_ok() =>
+                {
+                    self.ownership.cancel_cold(self.id, self.request_id);
+                }
+                1 if self.cancelled.load(Ordering::Acquire)
+                    || std::time::Instant::now() >= deadline =>
+                {
+                    // Claimed callback work may already have changed the bank. Keep its
+                    // complete files durable; never invent Success or roll back that source.
+                    return Err((
+                        "cold callback acknowledgement incomplete; artifacts retained".into(),
+                        true,
+                    ));
+                }
+                _ => {}
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    fn rollback_pending(
+        &self,
+        prepared: &SampleBuffer,
+        previous_generation: (u64, u32),
+        previous_digest: Option<String>,
+        previous_intent: TimingIntent,
+        enqueue_epoch: u64,
+    ) -> Result<(), String> {
+        let _requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
+        let mut intents = self
+            .intents
+            .lock()
+            .map_err(|_| "timing intent lock poisoned")?;
+        let mut cache = self
+            .cache
+            .lock()
+            .map_err(|_| "sample cache lock poisoned")?;
+        let mut generations = self
+            .generations
+            .lock()
+            .map_err(|_| "source generation lock poisoned")?;
+        let mut digests = self
+            .digests
+            .lock()
+            .map_err(|_| "source digest lock poisoned")?;
+        if same_source(cache[self.id].as_ref(), Some(prepared)) {
+            cache[self.id] = self.initial_source.clone();
+            generations[self.id] = previous_generation;
+            digests[self.id] = previous_digest;
+            if self.epoch.load(Ordering::Acquire) == enqueue_epoch {
+                intents[self.id] = previous_intent;
+                self.ownership.set_timing_intent(self.id, previous_intent);
+            }
+            if let Some(previous) = self.initial_source.as_ref() {
+                self.ownership.publish_source(
+                    self.id,
+                    previous,
+                    previous_generation.1,
+                    previous_generation.0,
+                );
+            } else {
+                self.ownership.revoke_source(self.id);
+            }
+        }
+        Ok(())
+    }
+
+    fn publish(&self, producer: &Arc<Mutex<Producer<ControlMessage>>>) -> Result<(), String> {
+        let (transaction, sample, analysis, detected_loop_start_s) = self.prepare()?;
+        let requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
+        if self.cancelled.load(Ordering::Acquire)
+            || requests[self.id] != self.request_id
+            || (self.guard_epoch && self.epoch.load(Ordering::Acquire) != self.expected_epoch)
+        {
+            return Err("cold request became stale".into());
+        }
+        {
+            let cache = self
+                .cache
+                .lock()
+                .map_err(|_| "sample cache lock poisoned")?;
+            if !same_source(cache[self.id].as_ref(), self.initial_source.as_ref()) {
+                return Err("cold source changed".into());
+            }
+        }
+        let mut intents = self
+            .intents
+            .lock()
+            .map_err(|_| "timing intent lock poisoned")?;
+        let mut generations = self
+            .generations
+            .lock()
+            .map_err(|_| "source generation lock poisoned")?;
+        let mut digests = self
+            .digests
+            .lock()
+            .map_err(|_| "source digest lock poisoned")?;
+        let previous_generation = generations[self.id];
+        let previous_digest = digests[self.id].clone();
+        let previous_intent = intents[self.id];
+        let enqueue_epoch = self.epoch.load(Ordering::Acquire);
+        let cached_path = transaction
+            .original_path()
+            .strip_prefix(self.samples_root.parent().ok_or("samples parent missing")?)
+            .unwrap_or(transaction.original_path())
+            .to_string_lossy()
+            .replace('\\', "/");
+        let duration_s =
+            (sample.samples.len() / sample.channels) as f64 / f64::from(self.output_rate);
+        publish_loaded_sample(
+            producer,
+            &self.cache,
+            self.id,
+            sample.clone(),
+            LoadedSourcePublication {
+                ownership: &self.ownership,
+                generation: self.request_id,
+                rate: self.output_rate,
+                generation_slot: &mut generations[self.id],
+                digest_slot: &mut digests[self.id],
+                digest: transaction.source_digest().to_owned(),
+                cold: true,
+                cold_epoch: self.guard_epoch.then(|| self.epoch.clone()),
+                cold_adoption: Some(self.adoption.clone()),
+                replace_assignment: self.replace_assignment,
+                intent: self
+                    .restore_automatic
+                    .then_some((&mut intents[self.id], TimingIntent::Automatic)),
+            },
+        )?;
+        drop(digests);
+        drop(generations);
+        drop(intents);
+        drop(requests);
+        if let Err((error, may_be_adopted)) = self.await_adoption() {
+            if may_be_adopted {
+                let lease = transaction.into_lease();
+                let _requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
+                let cache = self
+                    .cache
+                    .lock()
+                    .map_err(|_| "sample cache lock poisoned")?;
+                if same_source(cache[self.id].as_ref(), Some(&sample)) {
+                    self.ownership.revoke_source(self.id);
+                    self.leases.lock().map_err(|_| "cold lease lock poisoned")?[self.id] =
+                        Some(lease);
+                    self.lease_generations[self.id].store(0, Ordering::Release);
+                }
+                return Err(error);
+            }
+            self.rollback_pending(
+                &sample,
+                previous_generation,
+                previous_digest,
+                previous_intent,
+                enqueue_epoch,
+            )?;
+            return Err(error);
+        }
+        // ACK makes files durable even if a newer request wins before metadata delivery.
+        let lease = transaction.into_lease();
+        let requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
+        let cache = self
+            .cache
+            .lock()
+            .map_err(|_| "sample cache lock poisoned")?;
+        if requests[self.id] != self.request_id
+            || !same_source(cache[self.id].as_ref(), Some(&sample))
+        {
+            return Err("adopted cold source superseded".into());
+        }
+        // Only callback ACK transfers sealed original/artifact ownership and project metadata.
+        self.leases.lock().map_err(|_| "cold lease lock poisoned")?[self.id] = Some(lease);
+        self.lease_generations[self.id].store(self.request_id, Ordering::Release);
+        let _ = self.events.send(LoaderEvent::Success {
+            timing_epoch: Some(enqueue_epoch),
+            id: self.id,
+            request_id: self.request_id,
+            duration_s,
+            detected_loop_start_s,
+            cached_path,
+            analysis,
+        });
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[path = "cold_load_tests.rs"]
+mod tests;

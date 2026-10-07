@@ -388,6 +388,7 @@ struct RetainedSamples {
     samples: Vec<SampleBuffer>,
 }
 impl AudioBufferRetirement for RetainedSamples {
+    fn retire_cold_adoption(&mut self, _: Arc<std::sync::atomic::AtomicU8>) {}
     fn retire_accepted_timing_refresh(
         &mut self,
         _: Arc<crate::audio_engine::accepted_timing_refresh::AcceptedTimingRefresh>,

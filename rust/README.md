@@ -33,6 +33,9 @@ rust/
     |           |-- analysis_predictions.rs # bounded lossless diagnostic envelope validation
     |           |-- audio_stream.rs
     |           |-- buffer_retirement.rs
+    |           |-- cold_jobs.rs   # bounded cold admission/fixed workers
+    |           |-- cold_load.rs   # guarded preparation/native ACK publication
+    |           |-- cold_store.rs  # sealed originals/full atomic PCM artifacts
     |           |-- constants.rs
     |           |-- dsp.rs
     |           |-- input_mapping.rs
@@ -49,6 +52,7 @@ rust/
     |           |-- stretch_processor.rs
     |           |-- rubberband_backend.rs
     |           |-- sample_loader.rs
+    |           |-- sample_loader/cold.rs # same-snapshot decoder/full playback derivative
     |           |-- stem_cache.rs
     |           |-- progress.rs
     |           |-- channels.rs
@@ -69,6 +73,12 @@ rust/
             |-- math_utils.rs
             `-- window.rs
 ```
+
+The productive cold load API admits fixed workers and transient PCM before
+copy-first snapshot decode, complete artifact commit and guarded native ACK.
+File ownership stays off realtime; full-buffer playback remains. Windows stable
+sharing, decoder/resampler evidence, pending/fault behavior and C1b/C2/C3 limits
+are maintained in [PCM cache and residency](../docs/pcm-cache-residency.md).
 
 Most modules are `pub(crate)`. `lib.rs`, `audio_engine/mod.rs`, and
 `src/flitzis_looper_audio/__init__.pyi` define the Python-facing boundary.

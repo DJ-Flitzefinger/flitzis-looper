@@ -58,6 +58,11 @@ fn productive_history_native_loaded_source_publication_fences_new_launch_during_
         0,
         old_source.clone(),
         LoadedSourcePublication {
+            cold: false,
+            cold_epoch: None,
+            cold_adoption: None,
+            replace_assignment: false,
+            intent: None,
             ownership: &ownership,
             generation: 1,
             rate: RATE,
@@ -90,6 +95,11 @@ fn productive_history_native_loaded_source_publication_fences_new_launch_during_
         1,
         other_source,
         LoadedSourcePublication {
+            cold: false,
+            cold_epoch: None,
+            cold_adoption: None,
+            replace_assignment: false,
+            intent: None,
             ownership: &ownership,
             generation: 1,
             rate: RATE,
@@ -160,6 +170,11 @@ fn productive_history_native_loaded_source_publication_fences_new_launch_during_
         0,
         new_source.clone(),
         LoadedSourcePublication {
+            cold: false,
+            cold_epoch: None,
+            cold_adoption: None,
+            replace_assignment: false,
+            intent: None,
             ownership: &ownership,
             generation: 3,
             rate: RATE,
@@ -314,6 +329,7 @@ struct AuthorityRaceRetirement {
 }
 
 impl AudioBufferRetirement for AuthorityRaceRetirement {
+    fn retire_cold_adoption(&mut self, _: Arc<std::sync::atomic::AtomicU8>) {}
     fn retire_accepted_timing_refresh(
         &mut self,
         _: Arc<crate::audio_engine::accepted_timing_refresh::AcceptedTimingRefresh>,
@@ -690,6 +706,7 @@ struct LimitedRetirement {
     stems: Vec<PreparedStemSet>,
 }
 impl AudioBufferRetirement for LimitedRetirement {
+    fn retire_cold_adoption(&mut self, _: Arc<std::sync::atomic::AtomicU8>) {}
     fn retire_accepted_timing_refresh(
         &mut self,
         _: Arc<crate::audio_engine::accepted_timing_refresh::AcceptedTimingRefresh>,

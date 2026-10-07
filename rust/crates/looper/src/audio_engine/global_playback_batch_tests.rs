@@ -550,6 +550,7 @@ struct RetainedBatchRetirement {
 }
 
 impl crate::audio_engine::buffer_retirement::AudioBufferRetirement for RetainedBatchRetirement {
+    fn retire_cold_adoption(&mut self, _: Arc<std::sync::atomic::AtomicU8>) {}
     fn retire_accepted_timing_refresh(
         &mut self,
         _: Arc<crate::audio_engine::accepted_timing_refresh::AcceptedTimingRefresh>,

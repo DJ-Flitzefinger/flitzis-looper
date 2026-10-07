@@ -19,15 +19,19 @@ loop descriptors, proved reader/DSP context, explicit readiness, guarded atomic
 publication and last-owner cleanup. Keep full-source editor/analysis and
 full-track seek/ALL exceptions.
 
+C1a delivers the bounded Windows copy-first complete cold artifacts and native
+ACK publication described in the maintained design. Warm/lifecycle, residency
+and measured performance remain the later slices.
+
 C0 delivers the contract audit and maintained design in
-`docs/pcm-cache-residency.md`, plus this focused change. C1-C3 implementation,
+`docs/pcm-cache-residency.md`, plus this focused change. C1b-C3 implementation,
 integration and measurements remain unchecked in tasks.md. The MODIFIED deltas
 resolve existing unconditional decode/immediate-region/delete wording and the
 old bank-replacement scenario against the already specified pinned-voice behavior.
 
 ## Non-goals and realtime constraints
 
-No production implementation in C0, continuous streaming system, callback disk
+No warm reuse/residency implementation in C1a, continuous streaming system, callback disk
 access, forced 48-kHz conversion, analyzer-default cutover, new timing evidence,
 new pitch/FX backend, acoustic-delay compensation or full application Rust-port
 planning/implementation. Actual device/hearing acceptance stays open and occurs

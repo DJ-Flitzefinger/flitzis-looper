@@ -3,7 +3,7 @@
 import json
 from concurrent.futures import Future
 from typing import TYPE_CHECKING
-from unittest.mock import Mock, call
+from unittest.mock import Mock
 
 import pytest
 
@@ -219,7 +219,7 @@ def test_nonaccepted_intent_saves_without_exporting_old_acceptance(
     audio.export_current_constant_timing.assert_not_called()
 
 
-def test_startup_reserves_automatic_and_loader_success_avoids_legacy_replay(
+def test_startup_captures_automatic_without_mutating_authority_before_cold_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -234,10 +234,14 @@ def test_startup_reserves_automatic_and_loader_success_avoids_legacy_replay(
     begin = Mock()
     monkeypatch.setattr(loader._accepted_restore, "begin", begin)
     loader.restore_samples_from_project_state()
-    assert audio.mock_calls.index(call.set_pad_timing_intent(0, "automatic")) < (
-        audio.mock_calls.index(call.load_sample_async(0, "samples/source.wav", run_analysis=False))
+    audio.load_sample_async.assert_called_once_with(
+        0,
+        "samples/source.wav",
+        run_analysis=False,
+        restore_automatic=True,
+        replace_assignment=True,
     )
-    audio.set_pad_timing_intent.assert_called_once_with(0, "automatic")
+    audio.set_pad_timing_intent.assert_not_called()
     audio.poll_loader_events.side_effect = [
         {
             "type": "success",
@@ -284,13 +288,76 @@ def test_actual_startup_audio_projection_waits_for_fresh_automatic_adoption(
     loader.restore_samples_from_project_state()
     transport.apply_project_state_to_audio()
 
-    assert native_intent[0] == "automatic"
+    assert native_intent[0] == "legacy"
+    assert transport.bpm.current_timing(0) is None
+    assert transport.bpm.effective_bpm(0) is None
+    audio.set_pad_timing_intent.assert_not_called()
+    audio.capture_saved_constant_timing.assert_not_called()
+    audio.load_sample_async.assert_called_once_with(
+        0,
+        "samples/source.wav",
+        run_analysis=False,
+        restore_automatic=True,
+        replace_assignment=True,
+    )
     audio.set_pad_bpm.assert_not_called()
     audio.set_pad_timing_metadata.assert_not_called()
     audio.set_pad_loop_region.assert_not_called()
     audio.set_master_bpm.assert_not_called()
     audio.set_master_period.assert_not_called()
     assert session.master_period_seconds is None
+
+
+@pytest.mark.parametrize("failure_stage", ["admission", "preparation"])
+def test_failed_initial_automatic_restore_keeps_saved_timing_unresolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_stage: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "samples").mkdir()
+    write_mono_pcm16_wav(tmp_path / "samples/source.wav", 48_000)
+    project = _project()
+    project.bpm_lock = True
+    project.pad_loop_start_s[0] = 5.0
+    project.pad_loop_end_s[0] = 10.0
+    project.pad_grid_anchor_s[0] = 1.25
+    project.pad_grid_offset_samples[0] = -128
+    previous_project = project.model_dump()
+    audio = Mock()
+    audio.output_sample_rate.return_value = 48_000
+    audio.current_constant_timing.return_value = None
+    audio.pad_timing_intent.return_value = "legacy"
+    audio.load_sample_async.return_value = 7
+    audio.poll_loader_events.return_value = None
+    if failure_stage == "admission":
+        audio.load_sample_async.side_effect = RuntimeError("cold worker stopped")
+    session = SessionState()
+    transport = TransportController(project, session, audio)
+    loader = LoaderController(project, session, audio, transport.bpm.on_pad_bpm_changed)
+
+    loader.restore_samples_from_project_state()
+    if failure_stage == "preparation":
+        audio.poll_loader_events.side_effect = [
+            {"type": "error", "id": 0, "request_id": 7, "msg": "snapshot failed"},
+            None,
+        ]
+        loader.poll_loader_events()
+    transport.apply_project_state_to_audio()
+    transport.bpm.on_pad_bpm_changed(0)
+    transport.bpm.recompute_master_bpm()
+
+    assert 0 not in session.loading_sample_ids
+    assert session.sample_load_errors[0]
+    assert project.model_dump() == previous_project
+    assert transport.bpm.current_timing(0) is None
+    assert transport.bpm.effective_bpm(0) is None
+    assert session.master_period_seconds is None
+    audio.set_pad_timing_intent.assert_not_called()
+    audio.capture_saved_constant_timing.assert_not_called()
+    audio.set_pad_bpm.assert_not_called()
+    audio.set_pad_timing_metadata.assert_not_called()
+    audio.set_pad_loop_region.assert_not_called()
+    audio.set_master_bpm.assert_not_called()
+    audio.set_master_period.assert_not_called()
 
 
 @pytest.mark.parametrize(

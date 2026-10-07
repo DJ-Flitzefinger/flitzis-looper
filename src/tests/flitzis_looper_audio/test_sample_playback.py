@@ -107,72 +107,80 @@ def test_load_and_play_sample_smoke(
     audio_engine.unload_sample(0)
 
 
-def test_transport_slot_id_range_rejects_project_slot_count(audio_engine: AudioEngine) -> None:
+def test_transport_slot_id_range_rejects_project_slot_count(
+    uninitialized_audio_engine: AudioEngine,
+) -> None:
     invalid_id = NUM_SAMPLES
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.load_sample_async(invalid_id, "does-not-matter.wav", run_analysis=True)
+        uninitialized_audio_engine.load_sample_async(
+            invalid_id, "does-not-matter.wav", run_analysis=True
+        )
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.play_sample(invalid_id, 1.0)
+        uninitialized_audio_engine.play_sample(invalid_id, 1.0)
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.play_sample_exclusive(invalid_id, 1.0)
+        uninitialized_audio_engine.play_sample_exclusive(invalid_id, 1.0)
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.pause_sample(invalid_id)
+        uninitialized_audio_engine.pause_sample(invalid_id)
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.resume_sample(invalid_id)
+        uninitialized_audio_engine.resume_sample(invalid_id)
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.seek_sample(invalid_id, 0.0)
+        uninitialized_audio_engine.seek_sample(invalid_id, 0.0)
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.anchor_transport_phase_from_pad(invalid_id)
+        uninitialized_audio_engine.anchor_transport_phase_from_pad(invalid_id)
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.bootstrap_transport_from_pad(invalid_id)
+        uninitialized_audio_engine.bootstrap_transport_from_pad(invalid_id)
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.set_pad_bpm(invalid_id, 120.0)
+        uninitialized_audio_engine.set_pad_bpm(invalid_id, 120.0)
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.set_pad_timing_metadata(invalid_id, 0.0)
+        uninitialized_audio_engine.set_pad_timing_metadata(invalid_id, 0.0)
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.set_pad_loop_region(invalid_id, 0.0, None)
+        uninitialized_audio_engine.set_pad_loop_region(invalid_id, 0.0, None)
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.set_pad_gain(invalid_id, 1.0)
+        uninitialized_audio_engine.set_pad_gain(invalid_id, 1.0)
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.set_pad_eq(invalid_id, 0.0, 0.0, 0.0)
+        uninitialized_audio_engine.set_pad_eq(invalid_id, 0.0, 0.0, 0.0)
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.stop_sample(invalid_id)
+        uninitialized_audio_engine.stop_sample(invalid_id)
 
+
+def test_unload_slot_id_range_rejects_project_slot_count(audio_engine: AudioEngine) -> None:
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.unload_sample(invalid_id)
+        audio_engine.unload_sample(NUM_SAMPLES)
 
 
-def test_stem_slot_id_range_rejects_project_slot_count(audio_engine: AudioEngine) -> None:
+def test_stem_slot_id_range_rejects_project_slot_count(
+    uninitialized_audio_engine: AudioEngine,
+) -> None:
     invalid_id = NUM_SAMPLES
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.loaded_sample_shape(invalid_id)
+        uninitialized_audio_engine.loaded_sample_shape(invalid_id)
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.generate_stems_async(invalid_id, "source", "samples/stems/cache")
+        uninitialized_audio_engine.generate_stems_async(invalid_id, "source", "samples/stems/cache")
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.capture_prepared_source(invalid_id, "source")
+        uninitialized_audio_engine.capture_prepared_source(invalid_id, "source")
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.set_stem_mix_mode(invalid_id, "full_mix")
+        uninitialized_audio_engine.set_stem_mix_mode(invalid_id, "full_mix")
 
     with pytest.raises(ValueError, match=r"id out of range"):
-        audio_engine.set_stem_enabled_mask(invalid_id, 1, "source")
+        uninitialized_audio_engine.set_stem_enabled_mask(invalid_id, 1, "source")
 
 
 def test_last_sample_slot_accepts_control_messages(audio_engine: AudioEngine) -> None:
@@ -235,12 +243,12 @@ def test_seek_sample_requires_initialized_engine() -> None:
         engine.seek_sample(0, 1.0)
 
 
-def test_seek_sample_rejects_invalid_positions(audio_engine: AudioEngine) -> None:
+def test_seek_sample_rejects_invalid_positions(uninitialized_audio_engine: AudioEngine) -> None:
     with pytest.raises(ValueError, match=r"position_s out of range"):
-        audio_engine.seek_sample(0, float("nan"))
+        uninitialized_audio_engine.seek_sample(0, float("nan"))
 
     with pytest.raises(ValueError, match=r"position_s out of range"):
-        audio_engine.seek_sample(0, -0.01)
+        uninitialized_audio_engine.seek_sample(0, -0.01)
 
 
 def test_stop_all_is_safe_when_nothing_playing(audio_engine: AudioEngine) -> None:
@@ -260,33 +268,35 @@ def test_fast_parameter_setters_accept_documented_ranges(audio_engine: AudioEngi
     audio_engine.set_pad_eq(0, PAD_EQ_DB_MIN, 0.0, PAD_EQ_DB_MAX)
 
 
-def test_fast_parameter_setters_reject_invalid_values(audio_engine: AudioEngine) -> None:
+def test_fast_parameter_setters_reject_invalid_values(
+    uninitialized_audio_engine: AudioEngine,
+) -> None:
     with pytest.raises(ValueError, match=r"volume out of range"):
-        audio_engine.set_volume(float("nan"))
+        uninitialized_audio_engine.set_volume(float("nan"))
 
     with pytest.raises(ValueError, match=r"volume out of range"):
-        audio_engine.set_volume(VOLUME_MAX + 0.01)
+        uninitialized_audio_engine.set_volume(VOLUME_MAX + 0.01)
 
     with pytest.raises(ValueError, match=r"speed out of range"):
-        audio_engine.set_speed(float("inf"))
+        uninitialized_audio_engine.set_speed(float("inf"))
 
     with pytest.raises(ValueError, match=r"speed out of range"):
-        audio_engine.set_speed(SPEED_MIN - 0.01)
+        uninitialized_audio_engine.set_speed(SPEED_MIN - 0.01)
 
     with pytest.raises(ValueError, match=r"bpm out of range"):
-        audio_engine.set_master_bpm(0.0)
+        uninitialized_audio_engine.set_master_bpm(0.0)
 
     with pytest.raises(ValueError, match=r"bpm out of range"):
-        audio_engine.set_pad_bpm(0, float("nan"))
+        uninitialized_audio_engine.set_pad_bpm(0, float("nan"))
 
     with pytest.raises(ValueError, match=r"gain out of range"):
-        audio_engine.set_pad_gain(0, PAD_GAIN_DB_MAX + 0.01)
+        uninitialized_audio_engine.set_pad_gain(0, PAD_GAIN_DB_MAX + 0.01)
 
     with pytest.raises(ValueError, match=r"eq gain out of range"):
-        audio_engine.set_pad_eq(0, PAD_EQ_DB_MIN - 0.01, 0.0, 0.0)
+        uninitialized_audio_engine.set_pad_eq(0, PAD_EQ_DB_MIN - 0.01, 0.0, 0.0)
 
     with pytest.raises(ValueError, match=r"eq gain out of range"):
-        audio_engine.set_pad_eq(0, 0.0, float("nan"), 0.0)
+        uninitialized_audio_engine.set_pad_eq(0, 0.0, float("nan"), 0.0)
 
 
 def test_fast_parameter_setters_require_initialized_engine() -> None:
@@ -333,12 +343,14 @@ def test_set_trigger_quantization_accepts_supported_modes(audio_engine: AudioEng
         audio_engine.set_trigger_quantization(mode)
 
 
-def test_set_trigger_quantization_rejects_invalid_mode(audio_engine: AudioEngine) -> None:
+def test_set_trigger_quantization_rejects_invalid_mode(
+    uninitialized_audio_engine: AudioEngine,
+) -> None:
     with pytest.raises(ValueError, match=r"trigger quantization mode"):
-        audio_engine.set_trigger_quantization("half_note")
+        uninitialized_audio_engine.set_trigger_quantization("half_note")
 
     with pytest.raises(ValueError, match=r"trigger quantization mode"):
-        audio_engine.set_trigger_quantization("1_bar")
+        uninitialized_audio_engine.set_trigger_quantization("1_bar")
 
 
 def test_set_trigger_quantization_requires_initialized_engine() -> None:
@@ -485,16 +497,16 @@ def test_set_stem_mix_mode_accepts_supported_modes(audio_engine: AudioEngine) ->
     audio_engine.set_stem_mix_mode(0, "all_stems", "source-version")
 
 
-def test_set_stem_mix_mode_rejects_invalid_mode(audio_engine: AudioEngine) -> None:
+def test_set_stem_mix_mode_rejects_invalid_mode(uninitialized_audio_engine: AudioEngine) -> None:
     with pytest.raises(ValueError, match=r"stem mix mode"):
-        audio_engine.set_stem_mix_mode(0, "half_stems")
+        uninitialized_audio_engine.set_stem_mix_mode(0, "half_stems")
 
 
 def test_set_stem_mix_mode_all_stems_requires_source_version(
-    audio_engine: AudioEngine,
+    uninitialized_audio_engine: AudioEngine,
 ) -> None:
     with pytest.raises(ValueError, match=r"source_version"):
-        audio_engine.set_stem_mix_mode(0, "all_stems")
+        uninitialized_audio_engine.set_stem_mix_mode(0, "all_stems")
 
 
 def test_set_stem_mix_mode_requires_initialized_engine() -> None:
@@ -508,16 +520,18 @@ def test_set_stem_enabled_mask_accepts_component_mask(audio_engine: AudioEngine)
     audio_engine.set_stem_enabled_mask(0, 0b1111, "source-version")
 
 
-def test_set_stem_enabled_mask_rejects_unsupported_mask(audio_engine: AudioEngine) -> None:
+def test_set_stem_enabled_mask_rejects_unsupported_mask(
+    uninitialized_audio_engine: AudioEngine,
+) -> None:
     with pytest.raises(ValueError, match=r"stem enabled mask"):
-        audio_engine.set_stem_enabled_mask(0, 0b1_0000, "source-version")
+        uninitialized_audio_engine.set_stem_enabled_mask(0, 0b1_0000, "source-version")
 
 
 def test_set_stem_enabled_mask_rejects_empty_source_version(
-    audio_engine: AudioEngine,
+    uninitialized_audio_engine: AudioEngine,
 ) -> None:
     with pytest.raises(ValueError, match=r"source_version"):
-        audio_engine.set_stem_enabled_mask(0, 0b1111, "")
+        uninitialized_audio_engine.set_stem_enabled_mask(0, 0b1111, "")
 
 
 def test_set_stem_enabled_mask_requires_initialized_engine() -> None:
@@ -534,13 +548,15 @@ def test_set_pad_timing_metadata_accepts_finite_signed_anchor(
     audio_engine.set_pad_timing_metadata(0, anchor_s)
 
 
-def test_set_pad_timing_metadata_rejects_invalid_anchor(audio_engine: AudioEngine) -> None:
+def test_set_pad_timing_metadata_rejects_invalid_anchor(
+    uninitialized_audio_engine: AudioEngine,
+) -> None:
     with pytest.raises(ValueError, match=r"phase_anchor_s out of range"):
-        audio_engine.set_pad_timing_metadata(0, float("nan"))
+        uninitialized_audio_engine.set_pad_timing_metadata(0, float("nan"))
 
     for anchor_s in [float("inf"), float("-inf")]:
         with pytest.raises(ValueError, match=r"phase_anchor_s out of range"):
-            audio_engine.set_pad_timing_metadata(0, anchor_s)
+            uninitialized_audio_engine.set_pad_timing_metadata(0, anchor_s)
 
 
 def test_set_pad_timing_metadata_requires_initialized_engine() -> None:
@@ -585,19 +601,25 @@ def test_publish_prepared_stems_requires_admission_ticket() -> None:
         engine.publish_prepared_stems(0, "source", "samples/stems/cache")  # type: ignore[call-arg]
 
 
-def test_generate_stems_async_rejects_empty_source_version(audio_engine: AudioEngine) -> None:
+def test_generate_stems_async_rejects_empty_source_version(
+    uninitialized_audio_engine: AudioEngine,
+) -> None:
     with pytest.raises(ValueError, match=r"source_version"):
-        audio_engine.generate_stems_async(0, "", "samples/stems/cache")
+        uninitialized_audio_engine.generate_stems_async(0, "", "samples/stems/cache")
 
 
-def test_generate_stems_async_rejects_invalid_cache_dir(audio_engine: AudioEngine) -> None:
+def test_generate_stems_async_rejects_invalid_cache_dir(
+    uninitialized_audio_engine: AudioEngine,
+) -> None:
     with pytest.raises(ValueError, match=r"stem cache directory"):
-        audio_engine.generate_stems_async(0, "source", "../samples/stems/cache")
+        uninitialized_audio_engine.generate_stems_async(0, "source", "../samples/stems/cache")
 
 
-def test_capture_prepared_source_rejects_unloaded_pad(audio_engine: AudioEngine) -> None:
+def test_capture_prepared_source_rejects_unloaded_pad(
+    uninitialized_audio_engine: AudioEngine,
+) -> None:
     with pytest.raises(ValueError, match=r"sample is not loaded"):
-        audio_engine.capture_prepared_source(0, "source")
+        uninitialized_audio_engine.capture_prepared_source(0, "source")
 
 
 def test_analyze_unloaded_pad_does_not_poison_active_task_gate(
@@ -721,10 +743,14 @@ def test_load_sample_async_emits_started_and_error_for_missing_file(
     assert isinstance(seen["error"].get("msg"), str)
 
 
-def test_poll_loader_events_returns_none_when_empty(audio_engine: AudioEngine) -> None:
+def test_poll_loader_events_returns_none_when_empty(
+    uninitialized_audio_engine: AudioEngine,
+) -> None:
     # Ensure the queue is drained.
     deadline = time.monotonic() + 0.2
-    while time.monotonic() < deadline and audio_engine.poll_loader_events() is not None:
+    while (
+        time.monotonic() < deadline and uninitialized_audio_engine.poll_loader_events() is not None
+    ):
         pass
 
-    assert audio_engine.poll_loader_events() is None
+    assert uninitialized_audio_engine.poll_loader_events() is None

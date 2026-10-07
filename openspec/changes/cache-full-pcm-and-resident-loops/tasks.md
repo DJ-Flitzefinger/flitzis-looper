@@ -1,4 +1,4 @@
-## C0: audit and contract (this step)
+## C0: audit and contract (complete)
 
 - [x] Audit actual editor/seek/ALL/stem/Key Lock/load/analysis/timing/cleanup contracts.
 - [x] Record current gaps, selected identity/timebase/residency/readiness/lifecycle
@@ -7,17 +7,17 @@
 
 ## C1a: immutable input and complete cold artifacts
 
-- [ ] Bound source-job admission/worker concurrency and transient PCM bytes; retain
+- [x] Bound source-job admission/worker concurrency and transient PCM bytes; retain
   request cancellation before changing the productive cold load pipeline.
-- [ ] Copy/hash stable bytes first and decode that immutable snapshot; prove
+- [x] Copy/hash stable bytes first and decode that immutable snapshot; prove
   replacement/ABA, byte-exact originals and snapshot reader lifetime.
-- [ ] Produce complete versioned decoder PCM and playback derivative/manifest
+- [x] Produce complete versioned decoder PCM and playback derivative/manifest
   from actual digests and recorded transforms with full-buffer playback retained.
-- [ ] Commit cold artifacts atomically from exclusive staging; implement snapshot/
+- [x] Commit cold artifacts atomically from exclusive staging; implement snapshot/
   staging cancellation and queue-failure rollback before productive publication.
-- [ ] Prove decoder delay/padding and playback resampler phase/delay/tail/ceiling
+- [x] Prove decoder delay/padding and playback resampler phase/delay/tail/ceiling
   behavior against independent 44.1/48/96-kHz fixtures; preserve source zero.
-- [ ] Integrate request-guarded all-or-none cold source/metadata publication and
+- [x] Integrate request-guarded all-or-none cold source/metadata publication and
   current load/timing/stem guards without promoting historical
   acceptance; document, validate and independently review the exact final tree.
 

@@ -81,6 +81,9 @@ rust/crates/looper/src/
     |-- analysis_predictions.rs    # bounded diagnostic prediction validation
     |-- audio_stream.rs            # CPAL callback and scheduler integration
     |-- buffer_retirement.rs       # non-audio retirement of large handles
+    |-- cold_jobs.rs               # bounded cold admission and fixed workers
+    |-- cold_load.rs               # source/request guards and native adoption ACK
+    |-- cold_store.rs              # immutable copy, full manifests and atomic commit
     |-- constants.rs               # banks, grid size, slot count, ranges
     |-- dsp.rs                     # per-pad DSP chain and DJ isolator node
     |-- input_mapping.rs           # Rust MIDI capture outside callback
@@ -98,7 +101,8 @@ rust/crates/looper/src/
     |-- transport.rs               # output-frame timeline and musical grid
     |-- voice_slot.rs              # voice state and per-voice DSP buffers
     |-- stretch_processor.rs       # bounded Key Lock/master-tempo wrapper
-    |-- sample_loader.rs           # non-realtime decode/cache/resample
+    |-- sample_loader.rs           # decode/progress helpers
+    |-- sample_loader/cold.rs       # same-snapshot decoder and full playback conversion
     |-- scalar_grid.rs             # pure binary64 scalar control projection facade
     |-- stem_cache.rs              # prepared-stem validation/loading
     |-- progress.rs
@@ -328,8 +332,11 @@ G2b2 adds offline `tempo_evidence` adapters: they hash complete immutable loaded
 mono PCM, retain independent original-source provenance and request generation,
 and preserve whole QM or Beat This evidence beside a summary. QM analyzer input
 has its own actual content hash and transform/timebase. The original-byte
-relationship remains a caller assertion; the existing decode-before-copy loader
-is not repaired or adopted by this API. `tempo_refinement` supports only isolated
+relationship remains a caller assertion for this standalone evidence API. The
+productive C1a cold loader now copies/hashes immutable actual bytes first, decodes
+that same snapshot and retains a complete PCM manifest; this does not itself
+verify quarter counts or authorize historical accepted timing. See
+[PCM cache and residency](pcm-cache-residency.md). `tempo_refinement` supports only isolated
 bit-identical repeated attacks under a versioned full-source feature policy.
 Generated counts stay unverified; explicit independent source/PCM-bound feature
 counts are the sole verified path. Raw and complete-feature summaries remain

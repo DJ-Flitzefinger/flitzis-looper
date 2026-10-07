@@ -108,7 +108,7 @@ class BpmController:
         timing = self.current_timing(sample_id)
         if timing is not None and timing.accepted_revision is not None:
             return timing.bpm
-        if timing is None and self._audio.pad_timing_intent(sample_id) == "automatic":
+        if timing is None and self.awaiting_automatic_timing(sample_id):
             return None
         return self._legacy_bpm(sample_id)
 
@@ -127,7 +127,7 @@ class BpmController:
             metadata = self._audio.current_constant_timing(sample_id)
             if metadata is not None:
                 return current_accepted_timing(metadata, sample_id=sample_id)
-            if self._audio.pad_timing_intent(sample_id) == "automatic":
+            if self.awaiting_automatic_timing(sample_id):
                 return None
         analysis = self._project.sample_analysis[sample_id]
         period = beat_duration_s(
@@ -139,6 +139,15 @@ class BpmController:
             period_seconds=period,
             origin_seconds=self._transport.loop._legacy_grid_anchor_sec(sample_id),
             sample_rate_hz=self._transport._output_sample_rate_hz(),
+        )
+
+    def awaiting_automatic_timing(self, sample_id: int) -> bool:
+        """Keep Automatic intent unresolved until native timing is acknowledged."""
+        validate_sample_id(sample_id)
+        if self._project.manual_bpm[sample_id] is not None:
+            return False
+        return self._audio.pad_timing_intent(sample_id) == "automatic" or (
+            self._project.pad_timing_intent[sample_id] == "automatic"
         )
 
     def recompute_master_bpm(
@@ -160,7 +169,7 @@ class BpmController:
         if (
             anchor_pad_id is not None
             and timing is None
-            and self._audio.pad_timing_intent(anchor_pad_id) == "automatic"
+            and self.awaiting_automatic_timing(anchor_pad_id)
         ):
             # No acknowledgement is not permission to replace accepted master timing.
             return
@@ -211,7 +220,7 @@ class BpmController:
         if (
             timing is None
             and self._project.manual_bpm[sample_id] is None
-            and self._audio.pad_timing_intent(sample_id) == "automatic"
+            and self.awaiting_automatic_timing(sample_id)
         ):
             return
         bpm = normalize_bpm(

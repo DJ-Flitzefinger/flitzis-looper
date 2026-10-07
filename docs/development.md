@@ -332,6 +332,13 @@ intended distribution model.
 
 ## Validation
 
+### Offline and device validation
+
+Ordinary `uv run pytest` runs the full offline suite and skips tests that open a
+real audio device. Use `uv run pytest --audio-devices` only for an explicitly
+authorized human/device session. Native cold-load tests exercise the productive
+worker and callback command drain with virtual PCM output and no CPAL stream.
+
 The optional Beat This boundary is available only through explicit diagnostic
 API calls and does not change normal load/manual analysis routing. Its
 unconfigured mode needs no Beat This installation; real B1b inference uses the

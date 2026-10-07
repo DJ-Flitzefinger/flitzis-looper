@@ -476,6 +476,38 @@ impl RtMixer {
         self.load_sample_rt(id, sample, &mut retirement);
     }
 
+    pub(crate) fn claim_cold(&self, id: usize, generation: u64) -> bool {
+        self.input_runtime_ownership.claim_cold(id, generation)
+    }
+    pub(crate) fn reject_claimed_cold(&self, id: usize, generation: u64) {
+        self.input_runtime_ownership
+            .reject_claimed_cold(id, generation);
+    }
+
+    pub(crate) fn accept_cold(&self, id: usize, generation: u64) {
+        self.input_runtime_ownership.accept_cold(id, generation);
+    }
+    pub(crate) fn cancel_cold(&self, id: usize, generation: u64) {
+        if id < NUM_SAMPLES {
+            self.input_runtime_ownership.cancel_cold(id, generation);
+        }
+    }
+
+    pub(crate) fn cold_source_current(
+        &self,
+        id: usize,
+        sample: &SampleBuffer,
+        generation: u64,
+    ) -> bool {
+        id < NUM_SAMPLES
+            && sample.channels == self.channels
+            && self.input_runtime_ownership.source_generation(
+                id,
+                sample,
+                self.sample_rate_hz as u32,
+            ) == Some(generation)
+    }
+
     pub(crate) fn load_sample_rt(
         &mut self,
         id: usize,
@@ -2103,6 +2135,7 @@ mod tests {
     }
 
     impl AudioBufferRetirement for CollectingRetirement {
+        fn retire_cold_adoption(&mut self, _: Arc<std::sync::atomic::AtomicU8>) {}
         fn retire_accepted_timing_refresh(
             &mut self,
             _: Arc<crate::audio_engine::accepted_timing_refresh::AcceptedTimingRefresh>,

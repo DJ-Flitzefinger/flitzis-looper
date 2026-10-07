@@ -70,12 +70,31 @@ PCM bytes for copy/decode/validation/resampling/window preparation.
 Artifact publication SHALL commit an immutable complete entry atomically.
 Pad publication SHALL separately check current source/request/intent and window
 revision and atomically publish matching handles, metadata and completion state.
-Queue-full, failure or cancellation MUST NOT produce partial native ownership.
+Queue-full, preparation failure and pre-adoption cancellation MUST NOT create
+partial native ownership.
 
 #### Scenario: Late completion after unload or a newer request
 - **WHEN** a worker completes for an invalidated request or window revision
 - **THEN** no source, window, analysis, stem or readiness state is republished
 - **AND** its exclusively owned temporary artifacts and readers retire off-thread
+
+#### Scenario: Cold adoption waits for native capacity
+- **GIVEN** a complete committed cold artifact and the previous effective source
+- **WHEN** retirement or feedback capacity delays the native command
+- **THEN** the previous audio and project metadata remain effective
+- **AND** only matching native adoption ACK authorizes cold Success
+
+#### Scenario: Pending cold adoption is invalidated
+- **WHEN** unload or a newer source/timing intent invalidates a waiting cold transaction
+- **THEN** the native guard rejects the stale transaction before stopping old audio
+- **AND** rollback restores only that transaction's still-current proposed source
+- **AND** a newer owner or Manual/Tap intent is preserved
+
+#### Scenario: A backend stalls after claiming native adoption
+- **WHEN** the claimed callback tail does not confirm adoption before its finite deadline or shutdown
+- **THEN** the system SHALL report unconfirmed native adoption without Success or unsafe rollback
+- **AND** complete committed files SHALL remain durable and sealed while still current
+- **AND** the proposed source SHALL be fenced from new starts until unload/restart or fresh successful assignment
 
 ### Requirement: Full metadata is independent of residency
 The system SHALL retain stable complete-source identity, source zero, full rate/
@@ -92,14 +111,11 @@ move loop markers or derive full duration from a window's allocation.
 - **AND** CURRENT, MIDI, stems and history refer to matching complete-source and window ownership
 
 ### Requirement: Proved loop and DSP context
-The system SHALL admit a loop window only when its full read set and retained
-processing state cover interpolation taps, physical bounds, fractional musical
-wrap, supported rate/smoothing, Key Lock history/native/FIFO/filter state and
-matching stem transitions.
-
-The context SHALL be derived from executed reader/DSP behavior and independently
-proved against complete-buffer playback. Unproved or over-budget context SHALL
-use an explicit admitted full-track exception or report preparation unavailable.
+The system SHALL admit a loop window only with independently proved complete-
+buffer parity for the executed interpolation, bounds, fractional wrap, rate/
+smoothing, Key Lock history/native/FIFO/filter state and stem-transition read set.
+Unproved or over-budget context SHALL use an admitted full-track exception or
+report preparation unavailable.
 
 #### Scenario: Fractional seam or Key Lock needs samples outside physical loop
 - **WHEN** the required context exceeds the proposed loop window
@@ -149,16 +165,16 @@ MUST NOT introduce callback file reads or a continuous streaming framework.
   the existing loop without changing markers, grid or auto-loop intent
 
 ### Requirement: Same-source stem windows
-The system SHALL bind full-mix and prepared component stems to matching complete
-source identity, accepted timing where applicable, absolute source ranges and
-window revisions before transactional adoption.
+The system SHALL transactionally adopt full-mix and component stems only with
+matching complete-source/accepted-timing identity, absolute range and window
+revision. Full extent/channel metadata SHALL remain separate from resident counts.
+Stale permits/windows and incomplete sets SHALL remain unavailable.
 
-Full stem extent/channel metadata SHALL remain separate from resident counts.
-Cached instrumental data SHALL NOT become a fifth live component; stale windows,
-source/timing permits or incomplete component sets SHALL remain unavailable.
-Active finite window relocation SHALL preserve the identical complete source
-and already accepted complete StemSet identity. Generation or adoption of a new
-complete set SHALL retain the inactive-pad restriction.
+#### Scenario: Active relocation or new stem generation
+- **WHEN** a stem window is relocated while playback is active
+- **THEN** the complete source and already accepted complete StemSet SHALL remain identical
+- **AND** generation/adoption of a new complete set SHALL require an inactive pad
+- **AND** cached instrumental data SHALL NOT become a fifth live component
 
 #### Scenario: Stem result races a window edit
 - **WHEN** same-source stems finish for an older window revision
@@ -166,14 +182,12 @@ complete set SHALL retain the inactive-pad restriction.
 - **AND** the prior valid full-mix/stem trajectory and mask continue
 
 ### Requirement: Last-user cleanup and external-original safety
-The system SHALL invalidate pending work on cancellation/unload and retire all
-pad, job, editor/analysis, queued-command, native-history and active/pinned-voice
-readers through bounded off-thread cleanup before deleting owned artifacts.
-
-Shared digest entries SHALL remain valid until their final owning assignment and
-reader retire. Cleanup SHALL check managed-path containment, serialize against
-new reader admission, retry safe deferred deletion and tolerate missing files.
-The system MUST NOT delete an external original.
+The system SHALL invalidate pending work and retire pad, job, editor/analysis,
+queued-command, native-history and pinned-voice readers through bounded off-thread
+cleanup before owned-artifact deletion. Shared entries SHALL remain until their final
+assignment/reader retires. Cleanup SHALL check containment, serialize reader admission,
+retry deferred deletion and tolerate missing files. External originals MUST NOT
+be deleted.
 
 #### Scenario: One of two pads sharing a digest unloads
 - **WHEN** the first pad unloads while the second pad or a voice/job retains a reader
@@ -193,15 +207,18 @@ locks, logging, neural inference, plugin work or unbounded preparation.
 - **THEN** effective publication is deferred without freeing payloads or reading disk on the callback
 
 ### Requirement: Measured cache and residency acceptance
-The system SHALL establish cache/residency claims with real cold/warm measurements
-on 200 occupied pads, short loops in long sources and explicit full-track exceptions.
+The system SHALL establish cache/residency claims through real cold/warm 200-pad,
+short-loop/long-source and explicit full-track measurements with source identities,
+resource/integrity costs, lifecycle and independent timing/playback parity.
+Human listening/device acceptance SHALL remain separately open until its final
+human-run stage.
 
-Evidence SHALL include source identities, readiness, worker/handle peaks, steady/
-transient/process RAM, disk/integrity/save I/O and CPU, corruption/cancellation/
-cleanup, 44100/48000/96000-Hz parity, fractional periods/rates/starts/tails,
-Key Lock and stems, accepted timing and <=1-loaded-frame unwrapped loop bounds.
-Human listening and actual device acceptance SHALL remain separately open until
-their final human-run stage.
+#### Scenario: Resource and parity evidence is gathered
+- **WHEN** cache/residency measurements establish a claim
+- **THEN** evidence SHALL include readiness, worker/handle peaks, steady/transient/process RAM and disk/integrity/save I/O/CPU
+- **AND** corruption/cancellation/cleanup and 44100/48000/96000-Hz parity SHALL be proved
+- **AND** fractional periods/rates/starts/tails, Key Lock/stems and accepted timing SHALL be checked
+- **AND** unwrapped loop bounds SHALL remain within one loaded frame
 
 #### Scenario: A warm startup report claims improvement
 - **WHEN** cold/warm results are compared

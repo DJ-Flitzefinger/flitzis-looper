@@ -781,6 +781,14 @@ fn publish_pad_telemetry<S: AudioMessageSink>(
 fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
     match message {
         ControlMessage::GlobalPlaybackBatch(_) => MAX_VOICES + 1,
+        ControlMessage::LoadColdSample {
+            replace_assignment: true,
+            ..
+        } => MAX_VOICES + 3,
+        ControlMessage::LoadColdSample {
+            replace_assignment: false,
+            ..
+        } => 3,
         ControlMessage::LoadSample { .. } | ControlMessage::PublishPreparedStems { .. } => 2,
         ControlMessage::PublishConstantTiming { .. } | ControlMessage::RefreshAcceptedTiming(_) => {
             1
@@ -826,7 +834,14 @@ pub(super) fn drain_control_messages<
         let (needed_retirement_slots, needed_feedback_slots) = match consumer.peek() {
             Ok(message) => (
                 control_message_retirement_slots_needed(message),
-                usize::from(matches!(message, ControlMessage::UnloadSample { .. })),
+                usize::from(matches!(
+                    message,
+                    ControlMessage::UnloadSample { .. }
+                        | ControlMessage::LoadColdSample {
+                            replace_assignment: true,
+                            ..
+                        }
+                )),
             ),
             Err(_) => break,
         };
@@ -1173,6 +1188,64 @@ pub(super) fn process_control_message<
         }
         ControlMessage::LoadSample { id, sample } => {
             mixer.load_sample_rt(id, sample, retirement);
+        }
+        ControlMessage::LoadColdSample {
+            id,
+            sample,
+            source_generation,
+            adoption,
+            epoch,
+            captured_epoch,
+            replace_assignment,
+        } => {
+            let epoch_current = || {
+                epoch.as_ref().is_none_or(|epoch| {
+                    epoch.load(std::sync::atomic::Ordering::Acquire) == captured_epoch
+                })
+            };
+            if epoch_current()
+                && mixer.cold_source_current(id, &sample, source_generation)
+                && adoption
+                    .compare_exchange(
+                        0,
+                        1,
+                        std::sync::atomic::Ordering::AcqRel,
+                        std::sync::atomic::Ordering::Acquire,
+                    )
+                    .is_ok()
+            {
+                // A concurrent control change after claim must still reject before effects.
+                if !mixer.claim_cold(id, source_generation)
+                    || !epoch_current()
+                    || !mixer.cold_source_current(id, &sample, source_generation)
+                {
+                    mixer.reject_claimed_cold(id, source_generation);
+                    adoption.store(3, std::sync::atomic::Ordering::Release);
+                    retirement.retire_sample(sample);
+                    retirement.retire_cold_adoption(adoption);
+                    return;
+                }
+                if replace_assignment {
+                    transport.clear_pending_bootstrap_for_pad(id);
+                    mixer.stop_sample_rt(id, retirement);
+                }
+                mixer.load_sample_rt(id, sample, retirement);
+                mixer.accept_cold(id, source_generation);
+                adoption.store(2, std::sync::atomic::Ordering::Release);
+                if replace_assignment {
+                    audio_messages.push_audio_message(AudioMessage::SampleStopped { id });
+                }
+            } else {
+                mixer.cancel_cold(id, source_generation);
+                let _ = adoption.compare_exchange(
+                    0,
+                    3,
+                    std::sync::atomic::Ordering::Release,
+                    std::sync::atomic::Ordering::Acquire,
+                );
+                retirement.retire_sample(sample);
+            }
+            retirement.retire_cold_adoption(adoption);
         }
         ControlMessage::PublishPreparedStems { id, stems } => {
             mixer.publish_prepared_stems_rt(id, stems, retirement);

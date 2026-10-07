@@ -3,23 +3,17 @@
 //! This module provides functions for loading and decoding audio files into sample buffers
 //! that can be used by the real-time mixer.
 
-use audioadapter::AdapterMut;
-use audioadapter_buffers::owned::InterleavedOwned;
-use rubato::{Fft, FixedSync, Indexing, Resampler};
-use std::fs;
-use std::fs::File;
+#[cfg(test)]
+use std::fs::{self, File};
+#[cfg(test)]
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
-use crate::audio_engine::channels::map_channels;
 use crate::audio_engine::errors::SampleLoadError;
+#[cfg(test)]
 use crate::messages::SampleBuffer;
-use symphonia::core::{
-    audio::SampleBuffer as SymphoniaSampleBuffer, codecs::DecoderOptions,
-    errors::Error as SymphoniaError, formats::FormatOptions, io::MediaSourceStream,
-    meta::MetadataOptions, probe::Hint,
-};
-use symphonia::default::{get_codecs, get_probe};
+
+mod cold;
+pub(crate) use cold::{decode_audio_snapshot, prepare_playback};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SampleLoadSubtask {
@@ -43,8 +37,6 @@ fn clamp_progress(percent: f32) -> f32 {
         0.0
     }
 }
-
-const MAX_CONSECUTIVE_PACKET_DECODE_ERRORS: usize = 64;
 
 fn append_decode_error_silence(
     decoded: &mut Vec<f32>,
@@ -102,157 +94,9 @@ fn update_decoded_stream_config(
     }
 }
 
-/// Resample audio data.
-///
-/// # Arguments
-///
-/// * `samples` - Interleaved audio samples to resample
-/// * `channels` - Number of channels in the audio data
-/// * `from_rate` - Current sample rate in Hz
-/// * `to_rate` - Target sample rate in Hz
-///
-/// # Returns
-///
-/// - `Ok(Vec<f32>)`: Resampled audio samples
-/// - `Err(SampleLoadError)`: Resampling error
-fn resample_audio<F>(
-    samples: Vec<f32>,
-    channels: usize,
-    from_rate: u32,
-    to_rate: u32,
-    mut progress: F,
-) -> Result<Vec<f32>, SampleLoadError>
-where
-    F: FnMut(f32),
-{
-    if from_rate == to_rate {
-        progress(1.0);
-        return Ok(samples);
-    }
-
-    let input_frames = samples.len() / channels;
-    if input_frames == 0 {
-        progress(1.0);
-        return Ok(Vec::new());
-    }
-
-    // Create resampler with fixed I/O size.
-    let mut resampler = Fft::<f32>::new(
-        from_rate as usize,
-        to_rate as usize,
-        1024, // chunk_size
-        1,    // sub_chunks
-        channels,
-        FixedSync::Input,
-    )?;
-
-    // Create input buffer adapter.
-    let input_buffer = InterleavedOwned::new_from(samples, channels, input_frames).unwrap();
-
-    // Manual version of rubato's `process_all_into_buffer()` loop, so we can emit progress.
-    let expected_output_len = (resampler.resample_ratio() * input_frames as f64).ceil() as usize;
-
-    // Allocate with `output_frames_max()` (not `output_frames_next()`), because for some
-    // resampler configurations `output_frames_next()` can change after processing starts.
-    // This matches rubato's `process_all_needed_output_len()` logic but uses the maximum.
-    let output_frames = resampler
-        .output_delay()
-        .saturating_add(resampler.output_frames_max())
-        .saturating_add(expected_output_len);
-
-    let mut output_buffer =
-        InterleavedOwned::new_from(vec![0.0; output_frames * channels], channels, output_frames)
-            .unwrap();
-
-    let mut indexing = Indexing {
-        input_offset: 0,
-        output_offset: 0,
-        partial_len: None,
-        active_channels_mask: None,
-    };
-
-    let mut frames_left = input_frames;
-    let mut output_len: usize = 0;
-    let mut frames_to_trim = resampler.output_delay();
-
-    progress(0.0);
-
-    let next_nbr_input_frames = resampler.input_frames_next();
-    while frames_left > next_nbr_input_frames {
-        let (nbr_in, nbr_out) =
-            resampler.process_into_buffer(&input_buffer, &mut output_buffer, Some(&indexing))?;
-
-        frames_left = frames_left.saturating_sub(nbr_in);
-        output_len = output_len.saturating_add(nbr_out);
-        indexing.input_offset = indexing.input_offset.saturating_add(nbr_in);
-        indexing.output_offset = indexing.output_offset.saturating_add(nbr_out);
-
-        if frames_to_trim > 0 && output_len > frames_to_trim {
-            output_buffer.copy_frames_within(frames_to_trim, 0, frames_to_trim);
-            output_len -= frames_to_trim;
-            indexing.output_offset -= frames_to_trim;
-            frames_to_trim = 0;
-        }
-
-        let consumed = input_frames.saturating_sub(frames_left);
-        let percent = consumed as f32 / input_frames as f32;
-        progress(clamp_progress(percent));
-    }
-
-    if frames_left > 0 {
-        indexing.partial_len = Some(frames_left);
-        let (_nbr_in, nbr_out) =
-            resampler.process_into_buffer(&input_buffer, &mut output_buffer, Some(&indexing))?;
-
-        output_len = output_len.saturating_add(nbr_out);
-        indexing.output_offset = indexing.output_offset.saturating_add(nbr_out);
-
-        progress(1.0);
-    }
-
-    indexing.partial_len = Some(0);
-    while output_len < expected_output_len {
-        let (_nbr_in, nbr_out) =
-            resampler.process_into_buffer(&input_buffer, &mut output_buffer, Some(&indexing))?;
-
-        output_len = output_len.saturating_add(nbr_out);
-        indexing.output_offset = indexing.output_offset.saturating_add(nbr_out);
-
-        progress(1.0);
-    }
-
-    let trimmed_buf = output_buffer.take_data();
-    let trimmed_buf = trimmed_buf[..expected_output_len * channels].to_vec();
-
-    Ok(trimmed_buf)
-}
-
-/// Decodes an audio file into a sample buffer with the specified output configuration.
-///
-/// This function loads an audio file from disk, decodes it using the Symphonia library,
-/// resamples it to the target sample rate (if needed), and converts it to a
-/// floating-point sample buffer with the requested channel count.
-///
-/// # Parameters
-///
-/// - `path`: Path to the audio file to load
-/// - `output_channels`: Number of output channels (1 for mono, 2 for stereo)
-/// - `output_rate_hz`: Output sample rate in Hz
-/// - `progress`: Progress callback
-///
-/// # Returns
-///
-/// - `Ok(SampleBuffer)`: Successfully decoded audio buffer
-/// - `Err(SampleLoadError)`: Error encountered during loading or decoding
-///
-/// # Errors
-///
-/// This function may return errors for various conditions:
-/// - File not found or cannot be opened
-/// - Audio format not recognized or corrupted
-/// - Unsupported channel count
-/// - Resampling errors
-/// - Invalid or corrupt audio data
+/// Decode a path for legacy fixture consumers. Productive cold loading supplies
+/// a stable snapshot handle to `decode_audio_snapshot` instead.
+#[cfg(test)]
 pub fn decode_audio_file_to_sample_buffer<F>(
     path: &Path,
     output_channels: usize,
@@ -262,173 +106,28 @@ pub fn decode_audio_file_to_sample_buffer<F>(
 where
     F: FnMut(SampleLoadProgress),
 {
-    let file = File::open(path)?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
-
-    let mut hint = Hint::new();
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        hint.with_extension(ext);
-    }
-
-    let probed = get_probe().format(
-        &hint,
-        mss,
-        &FormatOptions::default(),
-        &MetadataOptions::default(),
+    let decoded = decode_audio_snapshot(
+        File::open(path)?,
+        path,
+        output_rate_hz,
+        usize::MAX,
+        &|| false,
+        &mut progress,
     )?;
-    let mut format = probed.format;
-
-    let track = format
-        .default_track()
-        .ok_or(SampleLoadError::NoDefaultTrack)?;
-    let track_id = track.id;
-    let codec_params = track.codec_params.clone();
-    let total_frames = codec_params.n_frames;
-
-    let mut decoder = get_codecs().make(&codec_params, &DecoderOptions::default())?;
-
-    let initial_resampling_required = codec_params
-        .sample_rate
-        .is_some_and(|file_rate_hz| file_rate_hz != output_rate_hz);
-
-    let mut file_rate_hz: Option<u32> = None;
-    let mut file_channels: Option<usize> = None;
-    let mut decoded_frames: u64 = 0;
-    let mut consecutive_packet_decode_errors: usize = 0;
-    progress(SampleLoadProgress {
-        subtask: SampleLoadSubtask::Decoding,
-        resampling_required: initial_resampling_required,
-        percent: 0.0,
-    });
-
-    let mut decoded: Vec<f32> = Vec::new();
-    loop {
-        let packet = match format.next_packet() {
-            Ok(packet) => packet,
-            Err(SymphoniaError::IoError(err))
-                if err.kind() == std::io::ErrorKind::UnexpectedEof =>
-            {
-                break;
-            }
-            Err(SymphoniaError::DecodeError(_)) => {
-                // Older MP3s may contain damaged frames inside otherwise usable streams.
-                // Keep scanning, but cap consecutive failures to avoid an endless loop.
-                consecutive_packet_decode_errors += 1;
-                if consecutive_packet_decode_errors > MAX_CONSECUTIVE_PACKET_DECODE_ERRORS {
-                    break;
-                }
-                continue;
-            }
-            Err(err) => return Err(SampleLoadError::Decode(err)),
-        };
-        consecutive_packet_decode_errors = 0;
-
-        if packet.track_id() != track_id {
-            continue;
-        }
-
-        let audio_buf = match decoder.decode(&packet) {
-            Ok(audio_buf) => audio_buf,
-            Err(SymphoniaError::DecodeError(_)) => {
-                if let Some(silence_frames) =
-                    append_decode_error_silence(&mut decoded, file_channels, packet.dur)
-                {
-                    decoded_frames = decoded_frames.saturating_add(silence_frames);
-                    if let Some(total_frames) = total_frames {
-                        let percent = (decoded_frames as f32 / total_frames as f32).min(1.0);
-                        progress(SampleLoadProgress {
-                            subtask: SampleLoadSubtask::Decoding,
-                            resampling_required: initial_resampling_required,
-                            percent: clamp_progress(percent),
-                        });
-                    }
-                }
-                continue;
-            }
-            Err(err) => return Err(SampleLoadError::Decode(err)),
-        };
-        let spec = *audio_buf.spec();
-        let duration = audio_buf.capacity() as u64;
-        let packet_frames = audio_buf.frames() as u64;
-        update_decoded_stream_config(
-            &mut file_rate_hz,
-            &mut file_channels,
-            spec.rate,
-            spec.channels.count(),
-        )?;
-
-        let mut sample_buf = SymphoniaSampleBuffer::<f32>::new(duration, spec);
-        sample_buf.copy_interleaved_ref(audio_buf);
-        decoded.extend_from_slice(sample_buf.samples());
-
-        decoded_frames = decoded_frames.saturating_add(packet_frames);
-        if let Some(total_frames) = total_frames {
-            let percent = (decoded_frames as f32 / total_frames as f32).min(1.0);
-            progress(SampleLoadProgress {
-                subtask: SampleLoadSubtask::Decoding,
-                resampling_required: initial_resampling_required,
-                percent: clamp_progress(percent),
-            });
-        }
-    }
-
-    if decoded.is_empty() {
-        return Err(SampleLoadError::NoDecodedFrames);
-    }
-
-    let file_rate_hz = file_rate_hz.ok_or(SampleLoadError::MissingSampleRate)?;
-    let file_channels = file_channels.ok_or(SampleLoadError::MissingChannels)?;
-    let resampling_required = file_rate_hz != output_rate_hz;
-
-    progress(SampleLoadProgress {
-        subtask: SampleLoadSubtask::Decoding,
-        resampling_required,
-        percent: 1.0,
-    });
-
-    let resampled = if !resampling_required {
-        decoded
-    } else {
-        progress(SampleLoadProgress {
-            subtask: SampleLoadSubtask::Resampling,
-            resampling_required,
-            percent: 0.0,
-        });
-        resample_audio(
-            decoded,
-            file_channels,
-            file_rate_hz,
-            output_rate_hz,
-            |percent| {
-                progress(SampleLoadProgress {
-                    subtask: SampleLoadSubtask::Resampling,
-                    resampling_required,
-                    percent,
-                });
-            },
-        )?
-    };
-
-    progress(SampleLoadProgress {
-        subtask: SampleLoadSubtask::ChannelMapping,
-        resampling_required,
-        percent: 0.0,
-    });
-    let mapped = map_channels(resampled, file_channels, output_channels)?;
-    progress(SampleLoadProgress {
-        subtask: SampleLoadSubtask::ChannelMapping,
-        resampling_required,
-        percent: 1.0,
-    });
-
-    Ok(SampleBuffer {
-        channels: output_channels,
-        samples: Arc::from(mapped.into_boxed_slice()),
-    })
+    let (sample, _) = prepare_playback(
+        &decoded,
+        output_channels,
+        output_rate_hz,
+        usize::MAX,
+        &|| false,
+        progress,
+    )?;
+    Ok(sample)
 }
 
 /// Generates a unique filename for caching an audio file, handling collisions
 /// by appending numeric suffixes (_0, _1, etc.).
+#[cfg(test)]
 fn find_unique_cache_path(
     project_samples_dir: &Path,
     stem: &str,
@@ -462,6 +161,7 @@ fn find_unique_cache_path(
     ))
 }
 
+#[cfg(test)]
 fn has_cache_filename_collision<I, N>(
     base_exists: bool,
     stem: &str,
@@ -505,6 +205,7 @@ where
 ///
 /// - `Ok(PathBuf)`: Path to the cached file (either existing or newly copied)
 /// - `Err(std::io::Error)`: I/O error during copy operation
+#[cfg(test)]
 pub fn cache_audio_file_for_project(
     project_samples_dir: &Path,
     source_path: &Path,
@@ -540,7 +241,7 @@ mod tests {
     use super::*;
 
     /// Helper function to create a PCM16 WAV file for testing.
-    fn write_pcm16_wav(
+    pub(super) fn write_pcm16_wav(
         path: &Path,
         channels: u16,
         sample_rate_hz: u32,

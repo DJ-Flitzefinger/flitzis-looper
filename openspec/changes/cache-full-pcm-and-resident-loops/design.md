@@ -1,4 +1,4 @@
-# C0 decisions
+# C0 decisions and C1a cold integration
 
 The maintained design and audited code/test/spec map live in
 [PCM cache and residency](../../../docs/pcm-cache-residency.md).
@@ -31,3 +31,21 @@ can temporarily retain complete PCM, and proved DSP context may be large. Peak R
 disk bytes, CPU, readiness and integrity cost must be measured rather than hidden.
 Decoder delay/padding and the current playback resampler's short/tail behavior
 need explicit versioned proof before an artifact claims time-origin parity.
+
+## C1a implementation boundary
+
+The productive existing load API uses two fixed workers, 32 queued/reserved
+requests and 1 GiB transient PCM per worker (2 GiB aggregate, not process RAM).
+Windows write/delete-excluded copy-first leases, canonical complete PCM
+manifests, exclusive same-filesystem atomic directory commit and post-commit
+full sealed verification precede bounded guarded native source adoption ACK.
+Only matching ACK permits source/metadata Success; cancellation and queue/guard
+failure roll back exclusively owned cold creations and their still-current
+proposed control source. Newer source or Manual/Tap intent is never overwritten.
+A stalled backend after the bounded irreversible callback tail begins has a
+finite unconfirmed-adoption error: complete files remain durable and no Success
+or unsafe rollback is invented. Subsequent reconciliation is C1b.
+Power-loss directory durability and portable stable capture remain unproved;
+non-Windows capture fails safely. Warm reuse/shared ownership/last-owner cleanup,
+resident windows and measured performance remain C1b/C2/C3. See maintained docs
+for exact policies, independent decoder/FFT evidence and the realtime boundary.

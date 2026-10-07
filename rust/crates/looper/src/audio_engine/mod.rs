@@ -3,14 +3,8 @@ use crate::audio_engine::constants::{
     NUM_SAMPLES, PAD_EQ_DB_MAX, PAD_EQ_DB_MIN, PAD_GAIN_DB_MAX, PAD_GAIN_DB_MIN, SPEED_MAX,
     SPEED_MIN, VOLUME_MAX, VOLUME_MIN,
 };
-use crate::audio_engine::errors::SampleLoadError;
-use crate::audio_engine::initial_loop_start::detect_initial_loop_start;
 use crate::audio_engine::input_mapping::InputRuntime;
-use crate::audio_engine::progress::{LoadProgressStage, ProgressReporter};
-use crate::audio_engine::sample_loader::{
-    SampleLoadProgress, SampleLoadSubtask, cache_audio_file_for_project,
-    decode_audio_file_to_sample_buffer,
-};
+use crate::audio_engine::progress::LoadProgressStage;
 use crate::audio_engine::stem_cache::{
     prepare_stem_buffers_from_cache, project_stem_cache_dir, source_version_hash,
 };
@@ -30,7 +24,6 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyInt};
 use rtrb::Producer;
 use std::collections::HashSet;
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{
     Arc, Mutex,
@@ -47,6 +40,9 @@ mod audio_stream;
 pub use analysis_jobs::OfflineAnalysisJob;
 mod buffer_retirement;
 mod channels;
+mod cold_jobs;
+mod cold_load;
+mod cold_store;
 pub(crate) mod constant_timing;
 mod constants;
 pub use constant_timing::CapturedConstantTiming;
@@ -71,9 +67,7 @@ pub(crate) mod prepared_source;
 mod productive_source_history;
 mod progress;
 pub use prepared_source::PreparedSourceTicket;
-use prepared_source::{
-    enqueue_current_prepared_stems, file_sha256, next_epoch, validate_prepared_ticket,
-};
+use prepared_source::{enqueue_current_prepared_stems, next_epoch, validate_prepared_ticket};
 pub(crate) mod rubberband_backend;
 mod sample_loader;
 mod scalar_grid;
@@ -169,19 +163,6 @@ fn push_parameter_message(
     producer.push(message).map_err(|_| {
         PyRuntimeError::new_err(format!("Failed to send {label} - buffer may be full"))
     })
-}
-
-struct PadLoadingGuard {
-    id: usize,
-    loading_sample_ids: Arc<Mutex<HashSet<usize>>>,
-}
-
-impl Drop for PadLoadingGuard {
-    fn drop(&mut self) {
-        if let Ok(mut set) = self.loading_sample_ids.lock() {
-            set.remove(&self.id);
-        }
-    }
 }
 
 struct PadTaskGuard {
@@ -311,6 +292,14 @@ struct LoadedSourcePublication<'a> {
     generation_slot: &'a mut (u64, u32),
     digest_slot: &'a mut Option<String>,
     digest: String,
+    cold: bool,
+    cold_epoch: Option<Arc<AtomicU64>>,
+    cold_adoption: Option<Arc<std::sync::atomic::AtomicU8>>,
+    replace_assignment: bool,
+    intent: Option<(
+        &'a mut analysis::tempo_acceptance::TimingIntent,
+        analysis::tempo_acceptance::TimingIntent,
+    )>,
 }
 
 fn publish_loaded_sample(
@@ -328,19 +317,50 @@ fn publish_loaded_sample(
         .lock()
         .map_err(|_| "Failed to acquire producer lock".to_string())?;
 
-    producer_guard
-        .push(ControlMessage::LoadSample {
-            id,
-            sample: sample.clone(),
-        })
-        .map_err(|_| "Failed to send LoadSample - buffer may be full".to_string())?;
-
+    if producer_guard.is_full() {
+        return Err("Failed to send LoadSample - buffer may be full".into());
+    }
+    let authority = publication
+        .ownership
+        .next_authority(id)
+        .map_err(|error| error.to_string())?;
+    // Capacity is reserved under the only producer lock. Publish the source fence
+    // before releasing the command so a fast callback never sees an old fence.
+    publication.ownership.revoke(id, authority);
+    if let Some((slot, intent)) = publication.intent {
+        *slot = intent;
+        publication.ownership.set_timing_intent(id, intent);
+    }
     *publication.generation_slot = (publication.generation, publication.rate);
     *publication.digest_slot = Some(publication.digest);
     *slot = Some(sample.clone());
     publication
         .ownership
         .publish_source(id, &sample, publication.rate, publication.generation);
+
+    let message = if publication.cold {
+        publication.ownership.begin_cold(id, publication.generation);
+        let epoch = publication.cold_epoch;
+        let captured_epoch = epoch
+            .as_ref()
+            .map_or(0, |epoch| epoch.load(Ordering::Acquire));
+        ControlMessage::LoadColdSample {
+            id,
+            sample,
+            source_generation: publication.generation,
+            adoption: publication
+                .cold_adoption
+                .expect("bounded cold adoption token"),
+            epoch,
+            captured_epoch,
+            replace_assignment: publication.replace_assignment,
+        }
+    } else {
+        ControlMessage::LoadSample { id, sample }
+    };
+    producer_guard
+        .push(message)
+        .expect("reserved single-producer capacity");
 
     Ok(())
 }
@@ -405,7 +425,7 @@ fn run_key_detection(mono_44100: Vec<f32>) -> String {
 
 /// Analyze a sample buffer for BPM, beat grid, and key.
 ///
-/// Shared preprocessing (decode → mono → resample to 44100) runs once, then
+/// Shared preprocessing (decode -> mono -> resample to 44100) runs once, then
 /// the BPM pipeline and key detection pipeline execute concurrently via
 /// `std::thread::scope`. Total analysis time is bounded by the slower pipeline.
 fn analyze_sample(sample: &SampleBuffer, sample_rate_hz: u32) -> Result<SampleAnalysis, String> {
@@ -510,7 +530,7 @@ pub struct AudioEngine {
     loaded_source_generations: Arc<Mutex<Vec<(u64, u32)>>>,
     loaded_source_digests: Arc<Mutex<Vec<Option<String>>>>,
     prepared_source_epochs: Vec<Arc<AtomicU64>>,
-    timing_intents: Mutex<Vec<analysis::tempo_acceptance::TimingIntent>>,
+    timing_intents: Arc<Mutex<Vec<analysis::tempo_acceptance::TimingIntent>>>,
     current_timing_acknowledgements: Arc<constant_timing::CurrentTimingAcknowledgements>,
     loop_acceptance: Arc<loop_acceptance::SharedLoopAcceptance>,
     current_constant_timing: Mutex<Vec<Vec<constant_timing::CurrentConstantTimingRecord>>>,
@@ -518,6 +538,11 @@ pub struct AudioEngine {
     global_timing_revision: Arc<AtomicU64>,
     constant_timing_busy: AtomicBool,
     offline_jobs: analysis_jobs::OfflineJobs,
+    cold_jobs: cold_jobs::ColdJobs,
+    cold_cancelled: Arc<AtomicBool>,
+    cold_loading: Arc<Vec<AtomicU64>>,
+    cold_leases: Arc<Mutex<Vec<Option<cold_store::CommittedColdLease>>>>,
+    cold_lease_generations: Arc<Vec<AtomicU64>>,
     input_runtime: Option<InputRuntime>,
     input_clock: InputClock,
 }
@@ -543,10 +568,10 @@ impl AudioEngine {
             prepared_source_epochs: (0..NUM_SAMPLES)
                 .map(|_| Arc::new(AtomicU64::new(1)))
                 .collect(),
-            timing_intents: Mutex::new(vec![
+            timing_intents: Arc::new(Mutex::new(vec![
                 analysis::tempo_acceptance::TimingIntent::Legacy;
                 NUM_SAMPLES
-            ]),
+            ])),
             current_timing_acknowledgements: Arc::default(),
             loop_acceptance: Arc::default(),
             current_constant_timing: Mutex::new((0..NUM_SAMPLES).map(|_| Vec::new()).collect()),
@@ -556,6 +581,12 @@ impl AudioEngine {
             global_timing_revision: Arc::new(AtomicU64::new(1)),
             constant_timing_busy: AtomicBool::new(false),
             offline_jobs: analysis_jobs::OfflineJobs::default(),
+            cold_jobs: cold_jobs::ColdJobs::new()
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?,
+            cold_cancelled: Arc::new(AtomicBool::new(false)),
+            cold_loading: Arc::new((0..NUM_SAMPLES).map(|_| AtomicU64::new(0)).collect()),
+            cold_leases: Arc::new(Mutex::new((0..NUM_SAMPLES).map(|_| None).collect())),
+            cold_lease_generations: Arc::new((0..NUM_SAMPLES).map(|_| AtomicU64::new(0)).collect()),
             input_runtime: None,
             input_clock: InputClock::new(),
         })
@@ -563,6 +594,10 @@ impl AudioEngine {
 
     /// Initialize and run the audio engine.
     pub fn run(&mut self) -> PyResult<()> {
+        if self.cold_cancelled.swap(false, Ordering::AcqRel) {
+            self.cold_jobs = cold_jobs::ColdJobs::new()
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        }
         if self.stream_handle.is_some() {
             return Err(PyRuntimeError::new_err("AudioEngine already running"));
         }
@@ -740,6 +775,8 @@ impl AudioEngine {
 
     /// Shut down the audio engine.
     pub fn shut_down(&mut self) -> PyResult<()> {
+        self.cold_cancelled.store(true, Ordering::Release);
+        self.cold_jobs.shutdown();
         self.offline_jobs.cancel(None);
         self.input_runtime = None;
         self.stream_handle = None;
@@ -873,249 +910,54 @@ impl AudioEngine {
         Ok(runtime.inject_midi_message(&message))
     }
 
-    /// Load an audio file into a sample slot on a background thread.
-    ///
-    /// # Parameters
-    /// * `id` - Sample slot identifier
-    /// * `path` - Path to the audio file
-    /// * `run_analysis` - Whether to run automatic analysis after loading (default: true)
+    /// Admit copy-first complete cold preparation in the fixed worker lane.
+    #[pyo3(signature = (id, path, run_analysis=None, restore_automatic=false, replace_assignment=false))]
     pub fn load_sample_async(
         &self,
         id: usize,
         path: String,
         run_analysis: Option<bool>,
+        restore_automatic: bool,
+        replace_assignment: bool,
     ) -> PyResult<u64> {
         if id >= NUM_SAMPLES {
-            return Err(PyValueError::new_err(format!(
-                "id out of range (expected 0..{}, got {id})",
-                NUM_SAMPLES - 1
-            )));
+            return Err(PyValueError::new_err("id out of range"));
         }
-
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
-        let loader_tx = self.loader_tx.clone();
-        let producer = handle.producer.clone();
-        let output_channels = handle.output_channels;
-        let output_sample_rate = handle.output_sample_rate;
-        let sample_cache = self.sample_cache.clone();
-        let loading_sample_ids = self.loading_sample_ids.clone();
-        let pad_request_ids = self.pad_request_ids.clone();
-        let loaded_source_generations = self.loaded_source_generations.clone();
-        let loaded_source_digests = self.loaded_source_digests.clone();
-        let prepared_epoch = self.prepared_source_epochs[id].clone();
-        let input_runtime_ownership = self.input_runtime_ownership.clone();
-        let run_analysis = run_analysis.unwrap_or(true);
-
-        {
-            let mut set = loading_sample_ids
-                .lock()
-                .map_err(|_| PyRuntimeError::new_err("Failed to acquire loading ids lock"))?;
-            if !set.insert(id) {
-                return Err(PyValueError::new_err("sample is already loading"));
-            }
-        }
-
-        let loading_guard = PadLoadingGuard {
+        cold_load::admit(
+            self,
             id,
-            loading_sample_ids: loading_sample_ids.clone(),
-        };
+            path,
+            run_analysis.unwrap_or(true),
+            restore_automatic,
+            replace_assignment,
+        )
+    }
 
-        let request_id = {
-            let mut requests = pad_request_ids
-                .lock()
-                .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-            let advance = PadRequestAdvance::prepare(&mut requests[id], &prepared_epoch)
-                .map_err(PyRuntimeError::new_err)?;
-            let input_authority = self.input_runtime_ownership.next_authority(id)?;
-            let mut cache = sample_cache
-                .lock()
-                .map_err(|_| PyRuntimeError::new_err("Failed to acquire sample cache lock"))?;
-            let mut digests = loaded_source_digests
-                .lock()
-                .map_err(|_| PyRuntimeError::new_err("source digest lock poisoned"))?;
-            self.input_runtime_ownership.revoke_source(id);
-            if let Some(slot) = cache.get_mut(id) {
-                *slot = None;
-            }
-            digests[id] = None;
-            self.input_runtime_ownership.revoke(id, input_authority);
-            advance.commit()
-        };
-        self.offline_jobs.cancel(Some(id));
-
-        thread::spawn(move || {
-            let _loading_guard = loading_guard;
-
-            let _ = loader_tx.send(LoaderEvent::Started { id, request_id });
-
-            let mut progress = ProgressReporter::new(id, request_id, loader_tx.clone());
-
-            let source_digest = match file_sha256(Path::new(&path)) {
-                Ok(digest) => digest,
-                Err(error) => {
-                    let _ = loader_tx.send(LoaderEvent::Error {
-                        id,
-                        request_id,
-                        error,
-                    });
-                    return;
-                }
-            };
-
-            let sample = match decode_audio_file_to_sample_buffer(
-                Path::new(&path),
-                output_channels,
-                output_sample_rate,
-                |update: SampleLoadProgress| {
-                    let stage = match update.subtask {
-                        SampleLoadSubtask::Decoding => LoadProgressStage::Decoding,
-                        SampleLoadSubtask::Resampling => LoadProgressStage::Resampling,
-                        SampleLoadSubtask::ChannelMapping => LoadProgressStage::ChannelMapping,
-                    };
-                    let force = update.percent <= 0.0 || update.percent >= 1.0;
-                    progress.emit(stage, update.percent, update.resampling_required, force);
-                },
-            ) {
-                Ok(sample) => sample,
-                Err(SampleLoadError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
-                    let _ = loader_tx.send(LoaderEvent::Error {
-                        id,
-                        request_id,
-                        error: format!("File not found: {path}"),
-                    });
-                    return;
-                }
-                Err(err) => {
-                    let _ = loader_tx.send(LoaderEvent::Error {
-                        id,
-                        request_id,
-                        error: err.to_string(),
-                    });
-                    return;
-                }
-            };
-
-            let resampling_required = progress.resampling_required.unwrap_or(true);
-            let detected_loop_start_s = detect_initial_loop_start(&sample, output_sample_rate);
-
-            let cached_path = if path.starts_with("samples/") {
-                // When restoring from cache (path already in samples directory), use original path without copying
-                path.clone()
-            } else {
-                // When loading a new sample (from file dialog), copy it to samples directory
-                match cache_audio_file_for_project(Path::new("samples"), Path::new(&path)) {
-                    Ok(path) => path.to_string_lossy().to_string(),
-                    Err(err) => {
-                        let _ = loader_tx.send(LoaderEvent::Error {
-                            id,
-                            request_id,
-                            error: format!("Failed to cache audio file: {err}"),
-                        });
-                        return;
-                    }
-                }
-            };
-
-            match file_sha256(Path::new(&cached_path)) {
-                Ok(digest) if digest == source_digest => {}
-                _ => {
-                    let _ = loader_tx.send(LoaderEvent::Error {
-                        id,
-                        request_id,
-                        error: "Source content changed during decoding/project copy".into(),
-                    });
-                    return;
-                }
-            }
-
-            let analysis = if run_analysis {
-                progress.emit(LoadProgressStage::Analyzing, 0.0, resampling_required, true);
-
-                match analyze_sample(&sample, output_sample_rate) {
-                    Ok(result) => {
-                        progress.emit(LoadProgressStage::Analyzing, 1.0, resampling_required, true);
-                        Some(result)
-                    }
-                    Err(err) => {
-                        let _ = loader_tx.send(LoaderEvent::Error {
-                            id,
-                            request_id,
-                            error: err,
-                        });
-                        return;
-                    }
-                }
-            } else {
-                None
-            };
-
-            progress.emit(
-                LoadProgressStage::Publishing,
-                0.0,
-                resampling_required,
-                true,
-            );
-
-            let frames = sample.samples.len() / sample.channels;
-            let duration_s = frames as f64 / f64::from(output_sample_rate);
-
-            let Ok(requests) = pad_request_ids.lock() else {
-                return;
-            };
-            if requests.get(id) != Some(&request_id) {
-                return;
-            }
-
-            let Ok(mut generations) = loaded_source_generations.lock() else {
-                return;
-            };
-            let Ok(mut digests) = loaded_source_digests.lock() else {
-                return;
-            };
-            if let Err(error) = publish_loaded_sample(
-                &producer,
-                &sample_cache,
-                id,
-                sample,
-                LoadedSourcePublication {
-                    ownership: &input_runtime_ownership,
-                    generation: request_id,
-                    rate: output_sample_rate,
-                    generation_slot: &mut generations[id],
-                    digest_slot: &mut digests[id],
-                    digest: source_digest,
-                },
-            ) {
-                let _ = loader_tx.send(LoaderEvent::Error {
-                    id,
-                    request_id,
-                    error,
-                });
-                return;
-            }
-            drop(requests);
-
-            progress.emit(
-                LoadProgressStage::Publishing,
-                1.0,
-                resampling_required,
-                true,
-            );
-            let _ = loader_tx.send(LoaderEvent::Success {
-                id,
-                request_id,
-                duration_s,
-                detected_loop_start_s,
-                cached_path,
-                analysis,
-            });
-        });
-
-        Ok(request_id)
+    /// Actual complete cold manifest; contains no accepted-timing claim.
+    pub fn cold_source_manifest(&self, id: usize) -> PyResult<Option<String>> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+        let _requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        let generation = self
+            .loaded_source_generations
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("source generation lock poisoned"))?[id]
+            .0;
+        if self.cold_loading[id].load(Ordering::Acquire) != 0
+            || self.cold_lease_generations[id].load(Ordering::Acquire) != generation
+            || generation == 0
+        {
+            return Ok(None);
+        }
+        let leases = self
+            .cold_leases
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("cold lease lock poisoned"))?;
+        leases[id].as_ref().map(|lease| serde_json::to_string(&serde_json::json!({"identity":lease.manifest.identity,"decoder_identity":lease.manifest.decoder_identity,"descriptor":lease.manifest.descriptor,"cache_path":lease.cache_path,"original_path":lease.original_path})).map_err(|error| PyRuntimeError::new_err(error.to_string()))).transpose()
     }
 
     /// Pin loaded PCM for the optional diagnostic adapter (not the default analyzer).
@@ -1426,6 +1268,12 @@ impl AudioEngine {
                 Ok(result) => result,
                 Err(error) => {
                     if !pad_request_matches(&pad_request_ids, id, request_id) {
+                        let _ = loader_tx.send(LoaderEvent::TaskError {
+                            id,
+                            request_id,
+                            task: BackgroundTaskKind::Analysis,
+                            error: "Analysis superseded by another pad request".into(),
+                        });
                         return;
                     }
                     let _ = loader_tx.send(LoaderEvent::TaskError {
@@ -1439,6 +1287,12 @@ impl AudioEngine {
             };
 
             if !pad_request_matches(&pad_request_ids, id, request_id) {
+                let _ = loader_tx.send(LoaderEvent::TaskError {
+                    id,
+                    request_id,
+                    task: BackgroundTaskKind::Analysis,
+                    error: "Analysis superseded by another pad request".into(),
+                });
                 return;
             }
 
@@ -1692,6 +1546,8 @@ impl AudioEngine {
                 }
             };
             let stale = requests.get(id) != Some(&request_id);
+            let timing_stale = stale
+                || matches!(&event, LoaderEvent::Success { timing_epoch: Some(epoch), .. } if self.prepared_source_epochs[id].load(Ordering::Acquire) != *epoch);
             if stale {
                 match &mut event {
                     LoaderEvent::Success { analysis, .. } => {
@@ -1723,7 +1579,13 @@ impl AudioEngine {
                     _ => continue,
                 }
             }
-            break (event, stale);
+            if timing_stale
+                && !stale
+                && let LoaderEvent::Success { analysis, .. } = &mut event
+            {
+                *analysis = None;
+            }
+            break (event, timing_stale);
         };
 
         let dict = PyDict::new(py);
@@ -1765,6 +1627,7 @@ impl AudioEngine {
                 detected_loop_start_s,
                 cached_path,
                 analysis,
+                timing_epoch: _,
             } => {
                 dict.set_item("type", "success")?;
                 dict.set_item("id", id)?;
@@ -2589,69 +2452,11 @@ impl AudioEngine {
 
     /// Unload a sample slot.
     pub fn unload_sample(&mut self, id: usize) -> PyResult<()> {
-        if id >= NUM_SAMPLES {
-            return Err(PyValueError::new_err(format!(
-                "id out of range (expected 0..{}, got {id})",
-                NUM_SAMPLES - 1
-            )));
-        }
-
         let handle = self
             .stream_handle
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
-        let mut requests = self
-            .pad_request_ids
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        let advance =
-            PadRequestAdvance::prepare(&mut requests[id], &self.prepared_source_epochs[id])
-                .map_err(PyRuntimeError::new_err)?;
-        let mut cache = self
-            .sample_cache
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?;
-        let mut digests = self
-            .loaded_source_digests
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("source digest lock poisoned"))?;
-
-        let mut producer_guard = handle
-            .producer
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
-
-        if producer_guard.is_full() {
-            return Err(PyRuntimeError::new_err(
-                "Failed to send UnloadSample - buffer may be full",
-            ));
-        }
-
-        let input_authority = self.input_runtime_ownership.next_authority(id)?;
-        self.input_runtime_ownership.revoke(id, input_authority);
-        advance.commit();
-        self.input_runtime_ownership.revoke_source(id);
-        producer_guard
-            .push(ControlMessage::UnloadSample { id })
-            .map_err(|_| PyRuntimeError::new_err("reserved single-producer capacity lost"))?;
-        cache[id] = None;
-        digests[id] = None;
-        drop(producer_guard);
-        drop(digests);
-        drop(cache);
-        drop(requests);
-        self.offline_jobs.cancel(Some(id));
-
-        if let Ok(mut set) = self.loading_sample_ids.lock() {
-            set.remove(&id);
-        }
-
-        if let Ok(mut set) = self.active_tasks.lock() {
-            set.retain(|(task_id, _)| *task_id != id);
-        }
-
-        Ok(())
+        cold_load::unload_for_producer(self, id, &handle.producer)
     }
 
     /// Send a ping message to the audio thread.
@@ -2774,6 +2579,7 @@ mod tests {
                 engine
                     .loader_tx
                     .send(LoaderEvent::Success {
+                        timing_epoch: None,
                         id: 3,
                         request_id: 7,
                         duration_s: 20.0,
@@ -2823,6 +2629,7 @@ mod tests {
                     engine
                         .loader_tx
                         .send(LoaderEvent::Success {
+                            timing_epoch: None,
                             id: 3,
                             request_id: 7,
                             duration_s,
@@ -3191,6 +2998,11 @@ mod tests {
                 generation_slot: &mut generation,
                 digest_slot: &mut digest,
                 digest: "a".repeat(64),
+                cold: false,
+                cold_epoch: None,
+                cold_adoption: None,
+                replace_assignment: false,
+                intent: None,
             },
         );
 
@@ -3239,5 +3051,12 @@ mod tests {
         assert!(next_pad_request_id(&ids, 0, &epoch).is_err());
         assert_eq!(ids.lock().unwrap()[0], 7);
         assert_eq!(epoch.load(Ordering::Acquire), u64::MAX);
+    }
+}
+
+impl Drop for AudioEngine {
+    fn drop(&mut self) {
+        self.cold_cancelled.store(true, Ordering::Release);
+        self.cold_jobs.shutdown();
     }
 }

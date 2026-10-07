@@ -100,7 +100,7 @@ class ApplyProjectState:
             if (
                 timing is None
                 and self._project.manual_bpm[sample_id] is None
-                and self._audio.pad_timing_intent(sample_id) == "automatic"
+                and self._bpm.awaiting_automatic_timing(sample_id)
             ):
                 continue
             self._transport.loop._apply_effective_pad_loop_region_to_audio(sample_id, timing=timing)

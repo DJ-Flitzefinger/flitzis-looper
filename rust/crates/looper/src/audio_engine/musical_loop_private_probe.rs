@@ -172,6 +172,11 @@ fn publish_actual_acceptance(
         0,
         sample.clone(),
         LoadedSourcePublication {
+            cold: false,
+            cold_epoch: None,
+            cold_adoption: None,
+            replace_assignment: false,
+            intent: None,
             ownership: &engine.input_runtime_ownership,
             generation: original_job.source_generation,
             rate: RATE,
@@ -675,6 +680,11 @@ fn private_actual_wav_pcm_budget_capture_prepare_publish_export() {
         0,
         sample.clone(),
         LoadedSourcePublication {
+            cold: false,
+            cold_epoch: None,
+            cold_adoption: None,
+            replace_assignment: false,
+            intent: None,
             ownership: &engine.input_runtime_ownership,
             generation: 7,
             rate: RATE,

@@ -72,7 +72,7 @@ class _HoldingAdapter:
         )
 
 
-def test_native_offline_analysis_reuses_pcm_after_source_files_are_removed(
+def test_native_offline_analysis_reuses_pcm_with_sealed_project_original(
     audio_engine: AudioEngine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -86,7 +86,12 @@ def test_native_offline_analysis_reuses_pcm_after_source_files_are_removed(
     cached_path = (tmp_path / cached).resolve()
     assert cached_path.is_relative_to(tmp_path.resolve())
     source.unlink()
-    cached_path.unlink()
+    if sys.platform == "win32":
+        with pytest.raises(PermissionError):
+            cached_path.unlink()
+        assert cached_path.is_file()
+    else:
+        cached_path.unlink()
     original_shape = audio_engine.loaded_sample_shape(0)
     adapter = _InspectingMissingAdapter()
 

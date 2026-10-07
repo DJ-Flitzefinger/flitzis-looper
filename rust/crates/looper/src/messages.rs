@@ -295,6 +295,17 @@ pub enum ControlMessage {
         source_version_hash: u64,
     },
 
+    /// Productive cold assignment; callback checks its fixed complete source fence.
+    LoadColdSample {
+        id: usize,
+        sample: SampleBuffer,
+        source_generation: u64,
+        adoption: Arc<std::sync::atomic::AtomicU8>,
+        epoch: Option<Arc<std::sync::atomic::AtomicU64>>,
+        captured_epoch: u64,
+        replace_assignment: bool,
+    },
+
     /// Select which prepared component stems are enabled for an all-stems pad.
     ///
     /// The mask uses known stem-kind bits and is source-version guarded. It must not contain file
@@ -390,6 +401,7 @@ impl ControlMessage {
             | ControlMessage::ResumeSample { .. }
             | ControlMessage::SeekSample { .. } => ControlMessageClass::PlaybackEvent,
             ControlMessage::LoadSample { .. }
+            | ControlMessage::LoadColdSample { .. }
             | ControlMessage::PublishPreparedStems { .. }
             | ControlMessage::PublishConstantTiming { .. }
             | ControlMessage::RefreshAcceptedTiming(_) => ControlMessageClass::Publication,
@@ -457,6 +469,7 @@ pub enum LoaderEvent {
     Success {
         id: usize,
         request_id: u64,
+        timing_epoch: Option<u64>,
         duration_s: f64,
         /// Frame before first finite near-zero tolerance crossing, in loaded-source seconds.
         /// Clamped at source frame zero; there is no fixed-duration pre-roll.

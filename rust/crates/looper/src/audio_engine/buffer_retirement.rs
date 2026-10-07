@@ -18,6 +18,7 @@ const RETIRED_AUDIO_BUFFER_BACKLOG_CAPACITY: usize = 128;
 #[allow(dead_code)]
 pub(crate) enum RetiredAudioBuffer {
     Sample(SampleBuffer),
+    ColdAdoption(Arc<std::sync::atomic::AtomicU8>),
     PreparedStems(PreparedStemSet),
     ConstantTiming(PreparedConstantTiming),
     GlobalPlaybackBatch(Arc<super::global_playback_batch::GlobalPlaybackBatch>),
@@ -25,6 +26,7 @@ pub(crate) enum RetiredAudioBuffer {
 }
 
 pub(crate) trait AudioBufferRetirement {
+    fn retire_cold_adoption(&mut self, adoption: Arc<std::sync::atomic::AtomicU8>);
     fn retire_sample(&mut self, sample: SampleBuffer);
     fn retire_prepared_stems(&mut self, stems: PreparedStemSet);
     fn retire_constant_timing(&mut self, timing: PreparedConstantTiming);
@@ -44,6 +46,7 @@ pub(crate) struct ImmediateAudioBufferRetirement;
 
 #[cfg(test)]
 impl AudioBufferRetirement for ImmediateAudioBufferRetirement {
+    fn retire_cold_adoption(&mut self, _: Arc<std::sync::atomic::AtomicU8>) {}
     fn retire_accepted_timing_refresh(
         &mut self,
         _: Arc<super::accepted_timing_refresh::AcceptedTimingRefresh>,
@@ -128,6 +131,9 @@ impl RtAudioBufferRetirement {
 }
 
 impl AudioBufferRetirement for RtAudioBufferRetirement {
+    fn retire_cold_adoption(&mut self, adoption: Arc<std::sync::atomic::AtomicU8>) {
+        self.retire_buffer(RetiredAudioBuffer::ColdAdoption(adoption));
+    }
     fn retire_accepted_timing_refresh(
         &mut self,
         refresh: Arc<super::accepted_timing_refresh::AcceptedTimingRefresh>,

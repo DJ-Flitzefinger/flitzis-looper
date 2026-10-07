@@ -1,4 +1,5 @@
 from contextlib import suppress
+from itertools import islice
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
@@ -32,6 +33,9 @@ def _reset_pad_value(values: list[_PadValue], sample_id: int, default: _PadValue
 
 
 class LoaderController(BaseController):
+    _COLD_QUEUE_FULL = "cold source queue full (2 workers, 32 queued jobs)"
+    _RESTORE_ADMISSIONS_PER_POLL = 8
+
     def __init__(
         self,
         project: ProjectState,
@@ -53,11 +57,14 @@ class LoaderController(BaseController):
         self._on_stem_generation_success = on_stem_generation_success
         self._on_stem_generation_error = on_stem_generation_error
         self._on_stems_deleted = on_stems_deleted
+        self._on_stems_invalidated: Callable[[int], None] | None = None
         self._on_restored_sample_loaded: Callable[[int], bool] | None = None
         self._on_new_sample_loaded: Callable[[int, float | None], None] | None = None
         self._on_sample_unloaded: Callable[[int], None] | None = None
         self._on_accepted_timing_refresh: Callable[[int], None] | None = None
         self._load_request_ids: dict[int, int] = {}
+        self._new_load_sample_ids: set[int] = set()
+        self._deferred_restores: dict[int, Path] = {}
         self._analysis_request_ids: dict[int, int] = {}
         self._accepted_restore = AcceptedTimingRestore(
             project, session, audio, self._finish_accepted_restore
@@ -82,6 +89,8 @@ class LoaderController(BaseController):
 
     def shut_down(self) -> None:
         """Drain owned timing restoration before native stream teardown."""
+        for sample_id in list(self._deferred_restores):
+            self._cancel_deferred_restore(sample_id)
         self._accepted_restore.shut_down()
 
     def set_new_sample_loaded_callback(self, callback: Callable[[int, float | None], None]) -> None:
@@ -96,16 +105,22 @@ class LoaderController(BaseController):
         """Register control-intent cleanup after a native unload is admitted."""
         self._on_sample_unloaded = callback
 
+    def set_stems_invalidated_callback(self, callback: Callable[[int], None]) -> None:
+        """Revoke retired stem eligibility without deleting readers' artifacts."""
+        self._on_stems_invalidated = callback
+
     def restore_samples_from_project_state(self) -> None:
         """Schedule async loads for cached samples referenced by `ProjectState`.
 
         Invalid/missing cached files are ignored by clearing the pad assignment.
+        Native queue saturation defers remaining restores to bounded UI polling.
         """
         output_sample_rate = self._output_sample_rate_hz()
         if output_sample_rate is None:
             return
 
         changed = False
+        defer_remaining = False
         for sample_id, path in enumerate(self._project.sample_paths):
             if path is None:
                 continue
@@ -122,9 +137,10 @@ class LoaderController(BaseController):
                 changed = True
                 continue
 
-            if not self._schedule_restored_load(sample_id, rel, run_analysis=False):
-                self._clear_restored_pad(sample_id)
-                changed = True
+            if defer_remaining:
+                self._defer_restored_load(sample_id, rel)
+            elif not self._schedule_restored_load(sample_id, rel, run_analysis=False):
+                defer_remaining = sample_id in self._deferred_restores
 
         if changed:
             self._mark_project_changed()
@@ -132,76 +148,54 @@ class LoaderController(BaseController):
     def load_sample_async(self, sample_id: int, path: str) -> None:
         """Load an audio file into a sample slot asynchronously.
 
-        The load work happens on a Rust background thread. UI code should call
-        `poll_loader_events()` each frame to apply completion/error updates.
+        Native admission and preparation retain the previous assignment. UI code
+        should call `poll_loader_events()` to apply an acknowledged replacement
+        or a failure that leaves the previous source and settings intact.
 
         Args:
             sample_id: Sample slot identifier.
             path: Path to an audio file on disk.
         """
         validate_sample_id(sample_id)
-        if self.is_sample_loaded(sample_id):
-            self.unload_sample(sample_id)
-        else:
-            self._reset_unloaded_pad_defaults(sample_id)
-            self._on_pad_bpm_changed(sample_id)
+        try:
+            request_id = self._audio.load_sample_async(
+                sample_id, path, run_analysis=True, replace_assignment=True
+            )
+        except (RuntimeError, ValueError) as error:
+            self._session.sample_load_errors[sample_id] = str(error)
+            return
 
-        self._project.sample_analysis[sample_id] = None
-        self._clear_stem_cache(sample_id)
-        self._mark_project_changed()
-
+        self._deferred_restores.pop(sample_id, None)
         self._session.sample_load_errors.pop(sample_id, None)
         self._session.sample_load_progress.pop(sample_id, None)
         self._session.sample_load_stage.pop(sample_id, None)
 
-        self._clear_analysis_task_state(sample_id)
-        self._clear_stem_generation_state(sample_id)
-
         self._session.pending_sample_paths[sample_id] = path
         self._session.loading_sample_ids.add(sample_id)
         self._load_request_ids.pop(sample_id, None)
-
-        request_id = self._audio.load_sample_async(sample_id, path, run_analysis=True)
+        self._new_load_sample_ids.add(sample_id)
         self._record_load_request_id(sample_id, request_id)
 
     def unload_sample(self, sample_id: int) -> None:
         """Stop playback and unload a sample slot."""
         validate_sample_id(sample_id)
+        self._audio.unload_sample(sample_id)
+        self._cancel_deferred_restore(sample_id)
         self._accepted_restore.cancel(sample_id)
-        self._session.active_sample_ids.discard(sample_id)
-        self._session.paused_sample_ids.discard(sample_id)
-        self._session.global_stop_restore_sample_ids.discard(sample_id)
+        self._clear_source_session(sample_id)
         self._session.loading_sample_ids.discard(sample_id)
         self._session.pending_sample_paths.pop(sample_id, None)
         self._load_request_ids.pop(sample_id, None)
+        self._new_load_sample_ids.discard(sample_id)
         self._session.sample_load_progress.pop(sample_id, None)
         self._session.sample_load_stage.pop(sample_id, None)
         self._session.sample_load_errors.pop(sample_id, None)
-        self._session.pressed_pads[sample_id] = False
-        self._session.pad_peak[sample_id] = 0.0
-        self._session.pad_peak_updated_at[sample_id] = 0.0
-        self._session.pad_clip_hold_until[sample_id] = 0.0
-        self._session.pad_playhead_s[sample_id] = None
-        self._session.pad_playhead_updated_at[sample_id] = 0.0
-        if self._session.waveform_editor_pad_id == sample_id:
-            self._session.waveform_editor_open = False
-            self._session.waveform_editor_pad_id = None
-        if self._session.waveform_pause_hold_pad_id == sample_id:
-            self._session.waveform_pause_hold_pad_id = None
-        if self._session.tap_bpm_pad_id == sample_id:
-            self._session.tap_bpm_pad_id = None
-            self._session.tap_bpm_timestamps.clear()
-
-        self._clear_analysis_task_state(sample_id)
-        self._clear_stem_generation_state(sample_id)
-
         old_path = self._project.sample_paths[sample_id]
         if self._on_stems_deleted is not None:
             self._on_stems_deleted(sample_id)
         else:
             self._clear_stem_cache(sample_id)
 
-        self._audio.unload_sample(sample_id)
         if self._on_sample_unloaded is not None:
             self._on_sample_unloaded(sample_id)
         self._reset_unloaded_pad_defaults(sample_id)
@@ -259,6 +253,7 @@ class LoaderController(BaseController):
         while True:
             event = self._audio.poll_loader_events()
             if event is None:
+                self._retry_deferred_restores()
                 return
 
             event_type = event.get("type")
@@ -433,17 +428,10 @@ class LoaderController(BaseController):
         if not self._matches_load_request(sample_id, _event):
             return
 
-        if self._project.sample_paths[sample_id] is None:
-            self._project.sample_analysis[sample_id] = None
-            self._clear_stem_cache(sample_id)
-            self._mark_project_changed()
-
         self._session.loading_sample_ids.add(sample_id)
         self._session.sample_load_errors.pop(sample_id, None)
         self._session.sample_load_progress.pop(sample_id, None)
         self._session.sample_load_stage.pop(sample_id, None)
-
-        self._clear_analysis_task_state(sample_id)
 
     def _handle_loader_progress(self, sample_id: int, event: dict[str, object]) -> None:
         if not self._matches_load_request(sample_id, event):
@@ -468,6 +456,8 @@ class LoaderController(BaseController):
         self._load_request_ids.pop(sample_id, None)
 
         pending = self._session.pending_sample_paths.pop(sample_id, None)
+        selected_assignment = sample_id in self._new_load_sample_ids
+        self._new_load_sample_ids.discard(sample_id)
         cached_path = event.get("cached_path")
 
         target_path: str | None = cached_path if isinstance(cached_path, str) else pending
@@ -475,18 +465,55 @@ class LoaderController(BaseController):
             target_path = self._normalize_project_path(target_path)
 
         previous_path = self._project.sample_paths[sample_id]
-        new_assignment = target_path is not None and previous_path != target_path
-        restored_assignment = target_path is not None and previous_path == target_path
+        normalized_previous = (
+            self._normalize_project_path(previous_path) if previous_path is not None else None
+        )
+        new_assignment = target_path is not None and (
+            selected_assignment or normalized_previous != target_path
+        )
+        restored_assignment = (
+            target_path is not None and not new_assignment and normalized_previous == target_path
+        )
+        timing_stale = event.get("timing_stale") is True
         if new_assignment:
+            if not timing_stale:
+                self._reset_completed_assignment(sample_id)
             self._project.sample_paths[sample_id] = target_path
             self._clear_stem_cache(sample_id)
+            self._mark_project_changed()
+        elif restored_assignment and previous_path != target_path:
+            self._project.sample_paths[sample_id] = target_path
             self._mark_project_changed()
 
         duration_s = event.get("duration_s")
         if isinstance(duration_s, float):
             self._project.sample_durations[sample_id] = duration_s
 
-        timing_stale = event.get("timing_stale") is True
+        try:
+            if new_assignment and not timing_stale:
+                self._publish_unloaded_pad_audio_defaults(sample_id, ProjectState())
+            self._finish_loaded_timing(
+                sample_id,
+                event,
+                new_assignment=new_assignment,
+                restored_assignment=restored_assignment,
+                timing_stale=timing_stale,
+            )
+        except (RuntimeError, ValueError) as error:
+            self._session.sample_load_errors[sample_id] = (
+                f"Loaded source control refresh failed: {error}"
+            )
+
+    def _finish_loaded_timing(
+        self,
+        sample_id: int,
+        event: dict[str, object],
+        *,
+        new_assignment: bool,
+        restored_assignment: bool,
+        timing_stale: bool,
+    ) -> None:
+        """Refresh derived intent after the complete matching assignment is recorded."""
         if self._begin_accepted_restore(
             sample_id, restored_assignment=restored_assignment, timing_stale=timing_stale
         ):
@@ -494,6 +521,8 @@ class LoaderController(BaseController):
         # A successful ordinary load owns its timing again. Passive refresh
         # cannot clear Automatic authority while acceptance is still pending.
         self._restore_legacy_timing_authority(sample_id, None, timing_stale=timing_stale)
+        if new_assignment and not timing_stale:
+            self._on_pad_bpm_changed(sample_id)
         # The source still belongs to this load, but a newer native request owns timing.
         # Settle source bookkeeping without replaying automatic or restored grid intent.
         if not timing_stale and new_assignment and self._on_new_sample_loaded is not None:
@@ -508,6 +537,38 @@ class LoaderController(BaseController):
 
         if restored_assignment and self._on_restored_sample_loaded is not None:
             self._on_restored_sample_loaded(sample_id)
+
+    def _reset_completed_assignment(self, sample_id: int) -> None:
+        """Reset retired track intent after native replacement, without a second unload."""
+        self._accepted_restore.cancel(sample_id)
+        if self._on_sample_unloaded is not None:
+            self._on_sample_unloaded(sample_id)
+        self._clear_source_session(sample_id)
+        if self._on_stems_invalidated is not None:
+            self._on_stems_invalidated(sample_id)
+        self._reset_unloaded_pad_project_defaults(sample_id, ProjectState())
+
+    def _clear_source_session(self, sample_id: int) -> None:
+        """Clear source projections shared by explicit unload and completed replacement."""
+        self._session.active_sample_ids.discard(sample_id)
+        self._session.paused_sample_ids.discard(sample_id)
+        self._session.global_stop_restore_sample_ids.discard(sample_id)
+        self._session.pressed_pads[sample_id] = False
+        self._session.pad_peak[sample_id] = 0.0
+        self._session.pad_peak_updated_at[sample_id] = 0.0
+        self._session.pad_clip_hold_until[sample_id] = 0.0
+        self._session.pad_playhead_s[sample_id] = None
+        self._session.pad_playhead_updated_at[sample_id] = 0.0
+        if self._session.waveform_editor_pad_id == sample_id:
+            self._session.waveform_editor_open = False
+            self._session.waveform_editor_pad_id = None
+        if self._session.waveform_pause_hold_pad_id == sample_id:
+            self._session.waveform_pause_hold_pad_id = None
+        if self._session.tap_bpm_pad_id == sample_id:
+            self._session.tap_bpm_pad_id = None
+            self._session.tap_bpm_timestamps.clear()
+        self._clear_analysis_task_state(sample_id)
+        self._clear_stem_generation_state(sample_id)
 
     def _apply_loaded_analysis(self, sample_id: int, analysis: object) -> None:
         if analysis is not None:
@@ -530,12 +591,7 @@ class LoaderController(BaseController):
         self._session.sample_load_stage.pop(sample_id, None)
         self._session.pending_sample_paths.pop(sample_id, None)
         self._load_request_ids.pop(sample_id, None)
-        self._clear_analysis_task_state(sample_id)
-
-        if self._project.sample_paths[sample_id] is not None:
-            self._reset_unloaded_pad_defaults(sample_id)
-            self._on_pad_bpm_changed(sample_id)
-            self._mark_project_changed()
+        self._new_load_sample_ids.discard(sample_id)
 
         msg = event.get("msg")
         if isinstance(msg, str):
@@ -700,6 +756,7 @@ class LoaderController(BaseController):
             self._audio.set_pad_bpm(sample_id, bpm)
 
     def _clear_restored_pad(self, sample_id: int) -> None:
+        self._cancel_deferred_restore(sample_id)
         self._reset_unloaded_pad_defaults(sample_id)
         self._on_pad_bpm_changed(sample_id)
 
@@ -744,27 +801,68 @@ class LoaderController(BaseController):
         return rel
 
     def _schedule_restored_load(self, sample_id: int, rel: Path, *, run_analysis: bool) -> bool:
+        try:
+            if self._wants_accepted_restore(sample_id):
+                request_id = self._audio.load_sample_async(
+                    sample_id,
+                    rel.as_posix(),
+                    run_analysis=run_analysis,
+                    restore_automatic=True,
+                    replace_assignment=True,
+                )
+            else:
+                request_id = self._audio.load_sample_async(
+                    sample_id,
+                    rel.as_posix(),
+                    run_analysis=run_analysis,
+                    replace_assignment=True,
+                )
+        except (RuntimeError, ValueError) as error:
+            if isinstance(error, RuntimeError) and str(error) == self._COLD_QUEUE_FULL:
+                self._defer_restored_load(sample_id, rel)
+                return False
+            self._cancel_deferred_restore(sample_id)
+            self._session.sample_load_errors[sample_id] = str(error)
+            return False
+        self._deferred_restores.pop(sample_id, None)
+        self._session.sample_load_errors.pop(sample_id, None)
+        self._session.sample_load_progress.pop(sample_id, None)
+        self._session.sample_load_stage.pop(sample_id, None)
         self._session.pending_sample_paths[sample_id] = rel.as_posix()
         self._session.loading_sample_ids.add(sample_id)
         self._load_request_ids.pop(sample_id, None)
-
-        try:
-            if self._wants_accepted_restore(sample_id):
-                # Reserve Automatic before startup projects BPM/grid/loop settings.
-                self._audio.set_pad_timing_intent(sample_id, "automatic")
-            request_id = self._audio.load_sample_async(
-                sample_id,
-                rel.as_posix(),
-                run_analysis=run_analysis,
-            )
-        except RuntimeError:
-            self._session.loading_sample_ids.discard(sample_id)
-            self._session.pending_sample_paths.pop(sample_id, None)
-            self._load_request_ids.pop(sample_id, None)
-            return False
-
+        self._new_load_sample_ids.discard(sample_id)
         self._record_load_request_id(sample_id, request_id)
         return True
+
+    def _defer_restored_load(self, sample_id: int, rel: Path) -> None:
+        self._deferred_restores[sample_id] = rel
+        self._session.pending_sample_paths[sample_id] = rel.as_posix()
+        self._session.loading_sample_ids.add(sample_id)
+        self._session.sample_load_errors.pop(sample_id, None)
+        self._session.sample_load_progress.pop(sample_id, None)
+        self._session.sample_load_stage[sample_id] = "Waiting for cold source admission"
+        self._load_request_ids.pop(sample_id, None)
+        self._new_load_sample_ids.discard(sample_id)
+
+    def _cancel_deferred_restore(self, sample_id: int) -> None:
+        if self._deferred_restores.pop(sample_id, None) is None:
+            return
+        self._session.pending_sample_paths.pop(sample_id, None)
+        self._session.loading_sample_ids.discard(sample_id)
+        self._session.sample_load_progress.pop(sample_id, None)
+        self._session.sample_load_stage.pop(sample_id, None)
+
+    def _retry_deferred_restores(self) -> None:
+        pending = list(islice(self._deferred_restores.items(), self._RESTORE_ADMISSIONS_PER_POLL))
+        for sample_id, rel in pending:
+            current_path = self._project.sample_paths[sample_id]
+            if current_path is None or self._parse_cached_sample_path(current_path) != rel:
+                self._cancel_deferred_restore(sample_id)
+                continue
+            admitted = self._schedule_restored_load(sample_id, rel, run_analysis=False)
+            if not admitted and sample_id in self._deferred_restores:
+                break
 
     def _record_load_request_id(self, sample_id: int, request_id: object) -> None:
         if isinstance(request_id, bool) or not isinstance(request_id, int):

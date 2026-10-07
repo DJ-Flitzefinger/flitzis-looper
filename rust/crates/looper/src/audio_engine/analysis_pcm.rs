@@ -11,7 +11,7 @@ use std::io::Write;
 #[cfg(test)]
 use std::sync::Arc;
 
-mod fft;
+pub(crate) mod fft;
 mod streamed;
 use fft::{RESAMPLE_CHUNK_FRAMES, tail_call_budget};
 pub(crate) use streamed::{PcmStagingPlan, key_input_from_f32_le};

@@ -29,9 +29,12 @@ def test_native_midi_capture_uses_exposed_engine_epoch(audio_engine: AudioEngine
     [(True, TypeError), (1.5, TypeError), (-1, ValueError), (1 << 64, ValueError)],
 )
 def test_native_play_timestamp_arguments_reject_invalid_values(
-    audio_engine: AudioEngine, timestamp: object, error: type[Exception]
+    uninitialized_audio_engine: AudioEngine, timestamp: object, error: type[Exception]
 ) -> None:
-    for play in (audio_engine.play_sample, audio_engine.play_sample_exclusive):
+    for play in (
+        uninitialized_audio_engine.play_sample,
+        uninitialized_audio_engine.play_sample_exclusive,
+    ):
         with pytest.raises(error, match="received_at_ns"):
             play(0, 1.0, received_at_ns=cast("int", timestamp))
 
