@@ -48,6 +48,7 @@ mod channels;
 pub(crate) mod constant_timing;
 mod constants;
 pub use constant_timing::ConstantTimingTicket;
+pub use constant_timing::SavedConstantTimingTicket;
 mod dsp;
 mod errors;
 mod initial_loop_start;
@@ -1122,6 +1123,47 @@ impl AudioEngine {
             return Ok(None);
         }
         constant_timing::current_metadata(self, py, sample_id)
+    }
+
+    /// Export only complete evidence for current acknowledged, content-verified timing.
+    pub fn export_current_constant_timing(
+        &self,
+        py: Python<'_>,
+        sample_id: usize,
+        source_path: String,
+    ) -> PyResult<Option<String>> {
+        if self.stream_handle.is_none() {
+            return Ok(None);
+        }
+        py.detach(|| constant_timing::export_current(self, sample_id, source_path))
+            .map_err(PyValueError::new_err)
+    }
+
+    /// Capture fresh source/request/authority before background restore starts.
+    pub fn capture_saved_constant_timing(
+        &self,
+        sample_id: usize,
+        record_json: &str,
+        source_path: String,
+    ) -> PyResult<SavedConstantTimingTicket> {
+        self.stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        constant_timing::capture_saved(self, sample_id, record_json, source_path)
+            .map_err(PyValueError::new_err)
+    }
+
+    /// Verify actual source/mono/analyzer evidence and enqueue fresh guarded adoption.
+    pub fn restore_constant_timing(
+        &self,
+        py: Python<'_>,
+        ticket: &SavedConstantTimingTicket,
+    ) -> PyResult<ConstantTimingTicket> {
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        py.detach(|| constant_timing::restore_saved(self, &handle.producer, ticket))
     }
 
     /// Explicitly run complete native QM evidence on the actual current loaded source.

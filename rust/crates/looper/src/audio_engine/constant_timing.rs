@@ -32,6 +32,10 @@ const MAX_PCM_BYTES: usize = 512 * 1024 * 1024;
 const MAX_HYPOTHESIS_JSON_BYTES: usize = 32 * 1024 * 1024;
 const SOURCE_PROVENANCE: &str = "native-loader-sha256-before-decode-and-project-copy-check-v1; loaded Arc association; immutable copy-first decode ABA is not proved";
 
+mod persistence;
+pub use persistence::SavedConstantTimingTicket;
+pub(super) use persistence::{capture_saved, export_current, restore_saved};
+
 /// Fixed callback feedback. Publication epochs identify retained native records;
 /// zero means no accepted projection is effective in the current mixer bank.
 /// These slots never own evidence or source buffers and polling cannot change them.
@@ -84,7 +88,7 @@ impl CurrentTimingAcknowledgements {
 /// Small non-realtime record with no PCM allocation owner. The address is only
 /// compared, never dereferenced; current monotonic generation/digest/rate and
 /// extent checks prevent a recycled address from authorizing another source.
-/// The full immutable accepted revision names the evidence retained by tickets.
+/// The complete immutable accepted evidence is retained independently of tickets.
 #[derive(Clone)]
 pub(super) struct CurrentConstantTimingRecord {
     source_address: usize,
@@ -99,6 +103,9 @@ pub(super) struct CurrentConstantTimingRecord {
     publication_epoch: u64,
     publication: PreparedSourcePermit,
     pub(super) projection: AcceptedTimingProjection,
+    // Complete accepted evidence must survive callers dropping opaque tickets.
+    // This owner is retained/destroyed exclusively outside realtime processing.
+    accepted: Arc<AcceptedConstantTiming>,
 }
 
 impl CurrentConstantTimingRecord {
@@ -113,7 +120,7 @@ impl CurrentConstantTimingRecord {
             source_address: ticket.sample.samples.as_ptr() as usize,
             sample_count: ticket.sample.samples.len(),
             channels: ticket.sample.channels,
-            binding: timing.evidence().binding().clone(),
+            binding: ticket.binding.clone(),
             revision: timing.revision().to_owned(),
             raw_revision: timing.evidence().source_identity().raw_revision.clone(),
             period_seconds: timing.period_seconds_per_quarter(),
@@ -122,6 +129,7 @@ impl CurrentConstantTimingRecord {
             publication_epoch,
             publication,
             projection,
+            accepted: Arc::new(timing.clone()),
         }
     }
 
@@ -292,6 +300,7 @@ pub struct ConstantTimingTicket {
     epoch: Arc<AtomicU64>,
     captured_epoch: u64,
     evidence: BoundTempoEvidence,
+    binding: PcmBindingMetadata,
     guard: Mutex<TimingAdoptionGuard>,
     adoption_ticket: TimingAdoptionTicket,
     publication: Mutex<Option<PreparedSourcePermit>>,
@@ -301,7 +310,7 @@ pub struct ConstantTimingTicket {
 impl ConstantTimingTicket {
     /// Complete native source/PCM/timebase and original QM arrays, outside realtime work.
     pub fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let binding = self.evidence.binding();
+        let binding = &self.binding;
         let dict = PyDict::new(py);
         dict.set_item("pad_id", self.id)?;
         dict.set_item("request_id", self.request_id)?;
@@ -624,6 +633,7 @@ pub(super) fn prepare(
         sample,
         epoch,
         captured_epoch,
+        binding: binding.metadata().clone(),
         evidence,
         guard: Mutex::new(guard),
         adoption_ticket,
@@ -796,6 +806,16 @@ pub(super) fn publish(
     let timing =
         AcceptedConstantTiming::from_raw(ticket.evidence.clone(), &borrowed, origin, decision)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    publish_record(engine, producer, ticket, timing, false)
+}
+
+fn publish_record(
+    engine: &AudioEngine,
+    producer: &Arc<Mutex<Producer<ControlMessage>>>,
+    ticket: &ConstantTimingTicket,
+    timing: AcceptedConstantTiming,
+    source_verified_restore: bool,
+) -> PyResult<()> {
     let requests = engine
         .pad_request_ids
         .lock()
@@ -835,9 +855,12 @@ pub(super) fn publish(
         .map_err(|_| PyRuntimeError::new_err("current timing record allocation failed"))?;
     let record = CurrentConstantTimingRecord::new(&timing, ticket, next, permit.clone(), projected);
     permit.mark_pending().map_err(PyRuntimeError::new_err)?;
-    guard
-        .adopt(&ticket.adoption_ticket, timing)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let adoption = if source_verified_restore {
+        guard.adopt_source_verified(&ticket.adoption_ticket, timing)
+    } else {
+        guard.adopt(&ticket.adoption_ticket, timing)
+    };
+    adoption.map_err(|e| PyValueError::new_err(e.to_string()))?;
     retire_old_current_records(engine, ticket.id, &mut current_records[ticket.id]);
     current_records[ticket.id].push(record);
     ticket.epoch.store(next, Ordering::Release);

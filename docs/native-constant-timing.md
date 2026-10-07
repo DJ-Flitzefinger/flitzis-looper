@@ -1,6 +1,6 @@
 # Native accepted timing adoption
 
-G3b2a-f connect the G3a accepted record to actual loaded-pad ownership, current
+G3b2a-g connect the G3a accepted record to actual loaded-pad ownership, current
 acknowledged authority, native SourceGrid, transport/output clock and playback
 rate. This is an explicit control API. Normal loading and analysis,
 manual/TAP controllers and saved legacy projects retain their existing routing;
@@ -325,7 +325,8 @@ Stop/unload clears the filter ledger before the owning voice pin retires;
 the ledger owns no additional PCM or native handle.
 
 G3b2f1 supplies continuous productive history binding. G3b2f2 adds the prepared
-native continuation below before G3b2g persistence. These ownership contracts
+native continuation below; G3b2g subsequently adds complete source-verified persistence.
+These ownership contracts
 supply no audible delay/crop/transition guarantee; that remains later B5 work.
 Existing neutral-reserve unavailability retains wet silence with canonical source
 progression. `key_lock_source_preparation` remains test-only.
@@ -414,13 +415,62 @@ The legacy partition fixture isolates continuous playback with preparation
 unavailable; productive readiness/adoption has separate tests. These are numerical
 ownership/continuation checks, not full G3c or later B5 acoustic acceptance.
 
+## Source-verified accepted project persistence
+
+`SampleAnalysis.accepted_timing` holds a versioned historical envelope. The
+supported encoding is `accepted-constant-timing-qm-raw-v1`, schema version 1.
+It retains the complete native raw QM/configuration/input-transform/count/error
+evidence, full canonical accepted revision, source/mono/rate/full extent/source
+zero, and independently declared origin and acceptance provenance. Binary64
+values are encoded as exact hexadecimal bits, including signed zero. Other
+evidence encodings, including refinement and Beat This, cannot be imported by
+this bounded codec. They remain unsupported without promotion or identity loss.
+
+`ProjectPersistence` binds its running native owner. Every actual flush creates
+a save snapshot from `export_current_constant_timing(sample_id, source_path)`,
+which requires current acknowledgement and rehashes actual project source bytes
+and full owned mono/analyzer input off realtime. A standalone save without this
+owner, unacknowledged Automatic, or nonaccepted authority omits historical
+accepted blobs. Source verification failure aborts the atomic write and preserves
+the previous file and dirty state. Debounced and immediate UI save paths report
+the pad error without escaping expected verification failures; rejected background
+save retries are throttled by the existing debounce interval. Shutdown drains
+restoration and tears down native audio even when verification rejects saving.
+Automatic remains explicit even when evidence
+is unavailable. Saving currently performs integrity work synchronously off the
+callback; its I/O/CPU cost has not been benchmarked.
+
+On restore, Automatic is reserved before startup can project old BPM/grid values.
+After successful matching async source load,
+`capture_saved_constant_timing(sample_id, record_json, source_path)` captures a
+fresh native source/request/authority epoch before a single Python worker calls
+`restore_constant_timing(ticket)`. It verifies actual source bytes and complete
+mono/rate/extent/source zero, reconstructs the supported assessment and canonical
+identity, then uses the existing `TimingAdoptionGuard` and native publication.
+The historical evidence job and accepted revision stay distinct from new runtime
+generation/request ownership. No persisted flag or ticket acknowledgement is
+CURRENT until genuine fresh callback adoption. Pending, failed, rejected or stale
+work leaves Automatic unavailable. Only matching current native acknowledgement
+triggers restored loop/master/stem intent refresh. General explicit publication
+and refresh orchestration remains the next separate consumer step.
+
+`ProjectState.pad_timing_intent` durably distinguishes Manual, Tap and Legacy.
+A manual BPM override suppresses Automatic restoration; Tap retains its origin
+as performer intent across startup. Missing intent in old projects migrates to
+Manual for existing overrides and otherwise Legacy. Unsupported envelope shape
+is dropped per analysis record without replacing valid legacy metadata or intent.
+Ordinary new load/analysis continues Legacy behavior. Original-byte rehashing
+preserves the observed native-loader association; it does not establish C1's
+immutable copy-first decoder input or defeat an original-file ABA replacement.
+
 ## Remaining shared-period and loop work
 
 G3b2f1/f2 supply productive continuous and prepared native/FIFO ownership with the
-numerical timed-adoption proof above. G3b2g accepted source-verified
-SampleAnalysis/ProjectState persistence and loader schema
-with fresh runtime adoption remain open; no opaque ticket is a saved identity and
-no saved Manual/Tap/Legacy BPM is accepted evidence. Source/accepted-bound
+numerical timed-adoption proof above. G3b2g adds source-verified persistence and
+fresh loader adoption of supported COMPLETE native QM raw accepted records;
+unsupported evidence is rejected rather than converted to compatible-only timing.
+No opaque ticket is a saved identity and no saved Manual/Tap/Legacy BPM is accepted
+evidence. Source/accepted-bound
 controller global START/STOP batch launch including MIDI, and explicit accepted
 publication/derived loop/master refresh orchestration remain follow-up consumers.
 Original hash association still does not prove C1 immutable copy-first/ABA lineage.

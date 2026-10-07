@@ -28,6 +28,7 @@ class AppController:
 
         self._audio = AudioEngine()
         self._audio.run()
+        self._persistence.bind_audio(self._audio, self._report_timing_save_error)
 
         self.settings = SettingsController(
             self._project,
@@ -87,11 +88,15 @@ class AppController:
         self.input_mapping.apply_project_state_to_input_runtime()
 
     def shut_down(self) -> None:
+        self.loader.shut_down()
         with suppress(OSError):
             self._persistence.flush()
 
         self._audio.stop_all()
         self._audio.shut_down()
+
+    def _report_timing_save_error(self, sample_id: int, message: str) -> None:
+        self._session.sample_analysis_errors[sample_id] = message
 
     def on_frame_render(self) -> None:
         for controller in self._controllers:

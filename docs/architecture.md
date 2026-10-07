@@ -123,8 +123,9 @@ G3b2b resolves current accepted metadata from actual source/authority and callba
 acknowledgement; transport/master/output clock and BPMLOCK consume binary64 periods
 and rates directly. G3b2c-f integrate precise Python consumers, guarded MIDI,
 prepared stems, continuous voice/native/FIFO history and source-specific worker
-preparation with timed native adoption. Persistence and global
-launch/adoption orchestration remain separate. See
+preparation with timed native adoption. G3b2g adds complete source-verified native
+QM persistence and fresh acknowledged loader adoption. Global
+launch/general adoption orchestration remains separate. See
 [accepted constant timing](accepted-constant-timing.md) for ownership and limits.
 Its shared `analyze_bpm` pipeline owns the legacy ODF/sample-hop conversion for
 both production and comparison fixtures. Private independent B2 input validation
@@ -234,6 +235,19 @@ global speed without
 redefining another pad's phase or the shared transport timeline.
 
 ## Sample Loading
+
+Supported COMPLETE native QM accepted timing is durably saved in
+`SampleAnalysis.accepted_timing` only through verified current native export.
+Historical evidence and exact canonical identity/binary64 values remain separate
+from fresh runtime generation/request ownership. After source load, the controller
+captures new native ownership synchronously, then one bounded restoration worker
+verifies actual source bytes and full mono/timebase evidence. Existing native
+guard/publication/callback acknowledgement establish CURRENT; pending/failed/stale
+records never replay legacy BPM. Automatic is reserved before startup projection.
+Manual/Tap/Legacy intent is explicit in `ProjectState.pad_timing_intent` and manual
+overrides suppress historical acceptance. Verification/export and atomic JSON
+writes stay off the callback. See [native timing](native-constant-timing.md) for
+supported schemas and C1 copy-first/ABA limits.
 
 Sample loading runs on non-realtime worker threads. The loader reads files,
 decodes audio, derives channel count and sample rate from decoded buffers when
@@ -482,9 +496,9 @@ clear; a newly captured nonaccepted set can safely reject in that interval,
 preserving prior PCM/audio, then succeed after a fresh capture following clear.
 G3b2f1 binds continuous productive StretchProcessor feed/native/FIFO history and
 active voice source/timing ownership; G3b2f2 adds productive worker-owned native
-continuation as described below. This native integration precedes G3b2g source-verified accepted
-SampleAnalysis/ProjectState persistence and loader schema with fresh runtime
-adoption, controller global START/STOP guarded batch launch including MIDI, and
+continuation as described below. G3b2g additionally connects source-verified
+accepted SampleAnalysis/ProjectState persistence with fresh native loader adoption.
+Controller global START/STOP guarded batch launch including MIDI and general
 explicit acceptance/derived loop/master refresh orchestration remain separate.
 Original hash association leaves C1 immutable copy-first/ABA proof open.
 
@@ -607,8 +621,9 @@ stale or full-recycle results keep previous effective audio/native history. Heav
 priming/catch-up and prepared-owner destruction remain on the worker. The fixed
 horizon is a preparation bound, not delay/crop/transition compensation, seamless
 handover or device-deadline acceptance. Actual productive ownership/output/failure
-tests must establish G3b2f2 completion before G3b2g accepted persistence/fresh loader
-adoption. Later B5 acoustic compensation remains separate.
+tests establish G3b2f2 completion; G3b2g separately source-verifies complete native
+QM accepted persistence and fresh loader adoption. Later B5 acoustic compensation
+remains separate.
 Stop/reset/wet deactivation cancels local preparation and retires source/stem pins
 through a separate bounded worker lane while retaining dirty native/FIFO state.
 Completed-request atomics settle discarded jobs. Inactive/paused voices poll the

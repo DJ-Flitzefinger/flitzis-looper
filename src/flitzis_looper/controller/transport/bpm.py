@@ -10,7 +10,7 @@ from flitzis_looper.controller.current_timing import (
 )
 from flitzis_looper.controller.scalar_grid import beat_duration_s
 from flitzis_looper.controller.validation import ensure_finite, normalize_bpm
-from flitzis_looper.models import validate_sample_id
+from flitzis_looper.models import TimingIntent, validate_sample_id
 
 if TYPE_CHECKING:
     from flitzis_looper.controller.transport import TransportController
@@ -39,6 +39,7 @@ class BpmController:
         self._project.manual_bpm[sample_id] = float(bpm)
         self.on_pad_bpm_changed(sample_id, publish_bpm=False)
         self._audio.set_pad_timing_intent(sample_id, "manual")
+        self._project.pad_timing_intent[sample_id] = "manual"
         self._transport._mark_project_changed()
 
     def clear_manual_bpm(self, sample_id: int) -> None:
@@ -47,6 +48,7 @@ class BpmController:
         analysis = self._project.sample_analysis[sample_id]
         self._audio.set_pad_bpm(sample_id, normalize_bpm(analysis.bpm if analysis else None))
         self._project.manual_bpm[sample_id] = None
+        self._project.pad_timing_intent[sample_id] = "legacy"
         self.on_pad_bpm_changed(sample_id, publish_bpm=False)
         self._transport._mark_project_changed()
 
@@ -84,6 +86,7 @@ class BpmController:
         self._project.manual_bpm[sample_id] = bpm
         self.on_pad_bpm_changed(sample_id, publish_bpm=False)
         self._audio.set_pad_timing_intent(sample_id, "tap")
+        self._project.pad_timing_intent[sample_id] = "tap"
         self._transport._mark_project_changed()
         return bpm
 
@@ -210,8 +213,15 @@ class BpmController:
         self._transport.loop.apply_grid_anchor_to_audio(sample_id, timing=timing)
         self._transport.loop._apply_effective_pad_loop_region_to_audio(sample_id, timing=timing)
 
-        if publish_bpm and self._project.manual_bpm[sample_id] is not None:
-            self._audio.set_pad_timing_intent(sample_id, "manual")
+        if publish_bpm and (
+            self._project.manual_bpm[sample_id] is not None
+            or self._project.pad_timing_intent[sample_id] in {"manual", "tap"}
+        ):
+            intent: TimingIntent = (
+                "tap" if self._project.pad_timing_intent[sample_id] == "tap" else "manual"
+            )
+            self._audio.set_pad_timing_intent(sample_id, intent)
+            self._project.pad_timing_intent[sample_id] = intent
 
         if self._session.bpm_lock_anchor_pad_id != sample_id:
             return

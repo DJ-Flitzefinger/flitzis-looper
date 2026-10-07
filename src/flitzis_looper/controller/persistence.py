@@ -14,10 +14,20 @@ import tempfile
 from contextlib import suppress
 from pathlib import Path
 from time import monotonic
+from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
+from flitzis_looper.controller.timing_persistence import (
+    TimingPersistenceError,
+    verified_project_timing,
+)
 from flitzis_looper.models import ProjectState
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from flitzis_looper_audio import AudioEngine
 
 PROJECT_ASSETS_DIR = Path("samples")
 PROJECT_CONFIG_PATH = PROJECT_ASSETS_DIR / "flitzis_looper.config.json"
@@ -35,6 +45,16 @@ class ProjectPersistence:
 
     def __init__(self, project: ProjectState | None = None):
         self.project = ProjectState() if project is None else project
+        self._audio: AudioEngine | None = None
+        self._on_timing_error: Callable[[int, str], None] | None = None
+        self._last_timing_rejection_monotonic: float | None = None
+
+    def bind_audio(
+        self, audio: AudioEngine, on_timing_error: Callable[[int, str], None] | None = None
+    ) -> None:
+        """Bind the native current owner used to verify accepted evidence at save."""
+        self._audio = audio
+        self._on_timing_error = on_timing_error
 
     def mark_dirty(self) -> None:
         """Mark the project as requiring a future save."""
@@ -46,12 +66,20 @@ class ProjectPersistence:
             return False
 
         now = monotonic() if now is None else now
+        if (
+            self._last_timing_rejection_monotonic is not None
+            and now - self._last_timing_rejection_monotonic < self.debounce_seconds
+        ):
+            return False
         if self._last_write_monotonic is not None:
             elapsed = now - self._last_write_monotonic
             if elapsed < self.debounce_seconds:
                 return False
 
-        self.flush(now=now)
+        try:
+            self.flush(now=now)
+        except TimingPersistenceError:
+            return False
         return True
 
     def flush_if_dirty(self, *, now: float | None = None) -> bool:
@@ -59,14 +87,25 @@ class ProjectPersistence:
         if not self._dirty:
             return False
 
-        self.flush(now=now)
+        try:
+            self.flush(now=now)
+        except TimingPersistenceError:
+            return False
         return True
 
     def flush(self, *, now: float | None = None) -> None:
         """Write config to disk (atomic)."""
         now = monotonic() if now is None else now
 
-        data = self.project.model_dump(mode="json")
+        try:
+            snapshot = verified_project_timing(self.project, self._audio)
+        except TimingPersistenceError as error:
+            self._dirty = True
+            self._last_timing_rejection_monotonic = now
+            if self._on_timing_error is not None:
+                self._on_timing_error(error.sample_id, f"Timing save rejected: {error}")
+            raise
+        data = snapshot.model_dump(mode="json")
         sample_paths = data.get("sample_paths")
         if isinstance(sample_paths, list):
             data["sample_paths"] = self._normalize_sample_paths_for_save(sample_paths)
@@ -81,6 +120,7 @@ class ProjectPersistence:
         self._atomic_write_text(text)
 
         self._dirty = False
+        self._last_timing_rejection_monotonic = None
         self._last_write_monotonic = now
 
     def _atomic_write_text(self, content: str) -> None:

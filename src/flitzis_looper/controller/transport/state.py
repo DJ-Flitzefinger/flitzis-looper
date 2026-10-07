@@ -115,6 +115,7 @@ class ApplyProjectState:
                 and self._project.sample_analysis[sample_id] is None
                 and self._project.pad_grid_offset_samples[sample_id] == 0
                 and self._project.pad_grid_anchor_s[sample_id] is None
+                and self._project.pad_timing_intent[sample_id] not in {"manual", "tap"}
             ):
                 continue
             self._bpm.on_pad_bpm_changed(sample_id)

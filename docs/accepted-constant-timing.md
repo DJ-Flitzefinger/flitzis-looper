@@ -1,14 +1,15 @@
 # Accepted constant timing foundation
 
 G3a adds `flitzis_looper_analysis::tempo_acceptance`. This is a pure offline/control
-API. G3b2a-f supply native current-pad acceptance and acknowledgement, precise
+API. G3b2a-g supply native current-pad acceptance and acknowledgement, precise
 native/Python grid/period/loop/control consumers, source-bound MIDI/prepared stems
 and productive continuous/prepared voice/native/FIFO history; see
 [native adoption](native-constant-timing.md). Acceptance remains explicit.
 Ordinary automatic analysis, manual/TAP, saved legacy projects and physical
 wrapping keep their established policy. G3b2f2 supplies productive native ownership
-and numerical timed-adoption proof; G3b2g accepted persistence,
-global launch and acceptance/derived-refresh orchestration remain incomplete.
+and numerical timed-adoption proof. G3b2g persists supported COMPLETE native QM
+evidence with source verification and fresh acknowledged loader adoption.
+Global launch and general acceptance/derived-refresh orchestration remain incomplete.
 
 ## Explicit construction
 
@@ -88,7 +89,7 @@ The pure guard alone does not establish these facts.
 | MIDI metadata | G3b2d binds actual native source/authority and complete accepted revision to one guarded loop/launch effect, including scheduled execution and fresh failed-direct fallback. |
 | Prepared source and same-source stems | G3b2e binds capture/admission/rendering to current source/authority/full accepted projection and retains one source trajectory. |
 | Productive Key Lock/voice/DSP history | G3b2f1 binds continuous native/FIFO/filter/pinned voice history; G3b2f2 adds worker-owned actual source-specific native/FIFO continuation and current-permit timed transactional adoption. |
-| Persistence and legacy restore | Preserve manual/TAP and saved legacy intent through an explicit source-verified migration contract. |
+| Persistence and legacy restore | G3b2g persists complete supported native QM evidence with exact identity/bits, explicit Manual/Tap/Legacy intent and fresh source-verified native adoption. |
 
 G3b1 protects productive stem preparation with actual loaded-source pointers,
 content identities, current request/preparation epochs, isolated worker artifacts
@@ -107,7 +108,9 @@ PCM/stems, retained native/FIFO ownership, full current source/load/preparation/
 authority/runtime/accepted permits and exact timed transactional adoption. Failed,
 stale, unready, late or saturated work retains old effective audio/history.
 Productive numerical output/ownership/failure tests establish that native gate.
-G3b2g source-verified accepted persistence/fresh loader adoption remains next.
+G3b2g source-verifies supported COMPLETE native QM persistence and fresh loader
+adoption while preserving historical accepted identity separately from runtime
+request ownership; unsupported evidence schemas fail closed.
 Controller global START/STOP batch
 launch including MIDI and explicit acceptance/derived loop/master refresh
 orchestration remain G3b2 work. Neutral warmed reserves and the separate test-only

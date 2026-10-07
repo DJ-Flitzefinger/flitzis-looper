@@ -6,10 +6,12 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    ValidationError,
     field_validator,
     model_validator,
 )
 
+from flitzis_looper.accepted_timing import PersistedAcceptedTiming
 from flitzis_looper.audio_gain import legacy_gain_value_to_db
 from flitzis_looper.constants import (
     DEFAULT_DEMUCS_OVERLAP,
@@ -55,6 +57,7 @@ type StemMixMode = Literal["full_mix", "all_stems"]
 type StemMaskDisplayMode = Literal["custom", "instrumental", "all"]
 type StemKind = Literal["vocals", "melody", "bass", "drums", "instrumental"]
 type StemGridIndicatorState = Literal["available", "generating", "blocked", "error"]
+type TimingIntent = Literal["automatic", "manual", "tap", "legacy"]
 
 TRIGGER_QUANTIZATION_STEPS: tuple[TriggerQuantizationStep, ...] = (
     "1_64",
@@ -122,6 +125,21 @@ class SampleAnalysis(BaseModel):
     bpm: float
     key: str
     beat_grid: BeatGrid
+    accepted_timing: PersistedAcceptedTiming | None = None
+    """Complete historical native evidence; never a current runtime timing claim."""
+
+    @field_validator("accepted_timing", mode="before")
+    @classmethod
+    def _discard_unsupported_accepted_envelope(
+        cls, value: object
+    ) -> PersistedAcceptedTiming | None:
+        if value is None:
+            return None
+        try:
+            return PersistedAcceptedTiming.model_validate(value)
+        except ValidationError:
+            # Incompatible evidence must not erase otherwise valid saved performer intent.
+            return None
 
 
 class StemFileSet(BaseModel):
@@ -184,6 +202,10 @@ def _default_pad_key_lock() -> list[bool]:
 
 def _default_manual_bpm() -> list[float | None]:
     return [None] * NUM_SAMPLES
+
+
+def _default_pad_timing_intent() -> list[TimingIntent]:
+    return ["legacy"] * NUM_SAMPLES
 
 
 def _default_manual_key() -> list[str | None]:
@@ -272,6 +294,18 @@ def _normalize_unloaded_pad_key_lock_fields(data: dict[str, object]) -> None:
     data["pad_key_lock"] = normalized
 
 
+def _migrate_legacy_timing_intent(data: dict[str, object]) -> None:
+    if "pad_timing_intent" in data:
+        return
+    intents = _default_pad_timing_intent()
+    manual_bpm = data.get("manual_bpm")
+    if isinstance(manual_bpm, list):
+        for sample_id, bpm in enumerate(manual_bpm[:NUM_SAMPLES]):
+            if bpm is not None:
+                intents[sample_id] = "manual"
+    data["pad_timing_intent"] = intents
+
+
 class ProjectState(BaseModel):
     """Persistent state. Saved to disk."""
 
@@ -288,6 +322,7 @@ class ProjectState(BaseModel):
         _migrate_legacy_pad_gain_field(data)
         _migrate_legacy_trigger_quantization_fields(data)
         _normalize_unloaded_pad_key_lock_fields(data)
+        _migrate_legacy_timing_intent(data)
 
         return data
 
@@ -311,6 +346,9 @@ class ProjectState(BaseModel):
 
     manual_bpm: list[float | None] = Field(default_factory=_default_manual_bpm)
     """Optional per-pad BPM override. When set, used for effective BPM display."""
+
+    pad_timing_intent: list[TimingIntent] = Field(default_factory=_default_pad_timing_intent)
+    """Explicit durable timing authority; saved evidence never establishes live ownership."""
 
     manual_key: list[str | None] = Field(default_factory=_default_manual_key)
     """Optional per-pad key override. When set, used for effective key display."""
@@ -495,6 +533,14 @@ class ProjectState(BaseModel):
     def _validate_pad_key_lock(cls, value: list[bool]) -> list[bool]:
         if len(value) != NUM_SAMPLES:
             msg = f"pad_key_lock must have length {NUM_SAMPLES}, got {len(value)}"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("pad_timing_intent", mode="after")
+    @classmethod
+    def _validate_pad_timing_intent(cls, value: list[TimingIntent]) -> list[TimingIntent]:
+        if len(value) != NUM_SAMPLES:
+            msg = f"pad_timing_intent must have length {NUM_SAMPLES}, got {len(value)}"
             raise ValueError(msg)
         return value
 

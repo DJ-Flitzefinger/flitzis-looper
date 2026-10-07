@@ -137,6 +137,31 @@ impl TimingAdoptionGuard {
         Ok(())
     }
 
+    /// Adopt a source-verified saved record under this fresh guard's request.
+    ///
+    /// Only historical job tokens differ. Complete content, extent, rate, zero,
+    /// mono rule and provenance must match the verified current binding. The
+    /// original accepted revision remains unchanged and never supplies freshness.
+    pub fn adopt_source_verified(
+        &mut self,
+        ticket: &TimingAdoptionTicket,
+        timing: AcceptedConstantTiming,
+    ) -> Result<(), TimingAdoptionError> {
+        if ticket.guard_id != self.guard_id || ticket.revision != self.revision {
+            return Err(TimingAdoptionError::StaleTicket);
+        }
+        if self.intent != TimingIntent::Automatic {
+            return Err(TimingAdoptionError::IntentNotAutomatic);
+        }
+        let binding = self.binding.as_ref().ok_or(TimingAdoptionError::NoSource)?;
+        timing
+            .check_source_binding(binding)
+            .map_err(|_| TimingAdoptionError::BindingMismatch)?;
+        self.advance()?;
+        self.accepted = Some(timing);
+        Ok(())
+    }
+
     /// Borrow the currently accepted record without allowing identity mutation.
     pub fn accepted(&self) -> Option<&AcceptedConstantTiming> {
         self.accepted.as_ref()

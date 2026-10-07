@@ -102,8 +102,9 @@
 
 ## Explicit remaining boundaries
 
-- [ ] G3b2g accepted source-verified SampleAnalysis/ProjectState persistence and loader
-  schema with fresh runtime adoption and explicit Manual/Tap/Legacy policy.
+- [x] G3b2g supported COMPLETE native QM source-verified SampleAnalysis/ProjectState
+  persistence and loader schema with fresh runtime adoption and explicit
+  Manual/Tap/Legacy policy (persist-source-verified-constant-timing).
 - [ ] Source/accepted-bound controller global batch launch (including MIDI
   START/STOP) and explicit adoption/derived refresh orchestration remain separate.
 - [ ] G3c separate: musical versus physical loop periods over 75/1000 cycles,

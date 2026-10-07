@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, TypeVar
 
 from pydantic import ValidationError
 
+from flitzis_looper.controller.accepted_restore import AcceptedTimingRestore
 from flitzis_looper.controller.base import BaseController
 from flitzis_looper.controller.validation import normalize_bpm
 from flitzis_looper.models import (
@@ -56,6 +57,19 @@ class LoaderController(BaseController):
         self._on_new_sample_loaded: Callable[[int, float | None], None] | None = None
         self._load_request_ids: dict[int, int] = {}
         self._analysis_request_ids: dict[int, int] = {}
+        self._accepted_restore = AcceptedTimingRestore(
+            project, session, audio, self._finish_accepted_restore
+        )
+
+    def _finish_accepted_restore(self, sample_id: int) -> None:
+        self._on_pad_bpm_changed(sample_id)
+        if self._on_restored_sample_loaded is not None:
+            self._on_restored_sample_loaded(sample_id)
+        self._mark_project_changed()
+
+    def shut_down(self) -> None:
+        """Drain owned timing restoration before native stream teardown."""
+        self._accepted_restore.shut_down()
 
     def set_new_sample_loaded_callback(self, callback: Callable[[int, float | None], None]) -> None:
         """Register behavior that runs after a newly assigned sample finishes loading."""
@@ -136,6 +150,7 @@ class LoaderController(BaseController):
     def unload_sample(self, sample_id: int) -> None:
         """Stop playback and unload a sample slot."""
         validate_sample_id(sample_id)
+        self._accepted_restore.cancel(sample_id)
         self._session.active_sample_ids.discard(sample_id)
         self._session.paused_sample_ids.discard(sample_id)
         self._session.global_stop_restore_sample_ids.discard(sample_id)
@@ -210,6 +225,7 @@ class LoaderController(BaseController):
 
     def poll_loader_events(self) -> None:
         """Drain pending loader events from the Rust audio engine."""
+        self._accepted_restore.poll()
         handlers = {
             "started": self._handle_loader_started,
             "progress": self._handle_loader_progress,
@@ -331,6 +347,9 @@ class LoaderController(BaseController):
             ),
             _reset_pad_value(self._project.manual_bpm, sample_id, defaults.manual_bpm[sample_id]),
             _reset_pad_value(self._project.manual_key, sample_id, defaults.manual_key[sample_id]),
+            _reset_pad_value(
+                self._project.pad_timing_intent, sample_id, defaults.pad_timing_intent[sample_id]
+            ),
         ))
 
     def _reset_unloaded_pad_mixing_defaults(self, sample_id: int, defaults: ProjectState) -> bool:
@@ -449,6 +468,10 @@ class LoaderController(BaseController):
             self._project.sample_durations[sample_id] = duration_s
 
         timing_stale = event.get("timing_stale") is True
+        if self._begin_accepted_restore(
+            sample_id, restored_assignment=restored_assignment, timing_stale=timing_stale
+        ):
+            return
         # A successful ordinary load owns its timing again. Passive refresh
         # cannot clear Automatic authority while acceptance is still pending.
         self._restore_legacy_timing_authority(sample_id, None, timing_stale=timing_stale)
@@ -460,26 +483,24 @@ class LoaderController(BaseController):
                 sample_id, detected_start if isinstance(detected_start, float) else None
             )
 
-        # If analysis is provided in the event (from normal loading), store it
-        analysis = event.get("analysis")
-
-        if not timing_stale and analysis is not None:
-            self._store_sample_analysis(sample_id, analysis)
-        # If no analysis in event (from restoration), keep existing analysis from project state
-        elif not timing_stale and (
-            self._project.sample_analysis[sample_id] is not None
-            or self._project.manual_bpm[sample_id] is not None
-            or self._project.pad_grid_offset_samples[sample_id] != 0
-            or self._project.pad_grid_anchor_s[sample_id] is not None
-        ):
-            # Restore the persisted source grid after native sample publication.
-            self._on_pad_bpm_changed(sample_id)
-
         if not timing_stale:
+            self._apply_loaded_analysis(sample_id, event.get("analysis"))
             self._clear_analysis_task_state(sample_id)
 
         if restored_assignment and self._on_restored_sample_loaded is not None:
             self._on_restored_sample_loaded(sample_id)
+
+    def _apply_loaded_analysis(self, sample_id: int, analysis: object) -> None:
+        if analysis is not None:
+            self._store_sample_analysis(sample_id, analysis)
+        elif (
+            self._project.sample_analysis[sample_id] is not None
+            or self._project.manual_bpm[sample_id] is not None
+            or self._project.pad_grid_offset_samples[sample_id] != 0
+            or self._project.pad_grid_anchor_s[sample_id] is not None
+            or self._project.pad_timing_intent[sample_id] in {"manual", "tap"}
+        ):
+            self._on_pad_bpm_changed(sample_id)
 
     def _handle_loader_error(self, sample_id: int, event: dict[str, object]) -> None:
         if not self._matches_load_request(sample_id, event):
@@ -642,6 +663,13 @@ class LoaderController(BaseController):
             sample_id, normalize_bpm(manual if manual is not None else parsed.bpm)
         )
         self._project.sample_analysis[sample_id] = parsed
+        self._project.pad_timing_intent[sample_id] = (
+            "tap"
+            if manual is not None and self._project.pad_timing_intent[sample_id] == "tap"
+            else "manual"
+            if manual is not None
+            else "legacy"
+        )
         self._on_pad_bpm_changed(sample_id)
         self._mark_project_changed()
 
@@ -655,6 +683,21 @@ class LoaderController(BaseController):
     def _clear_restored_pad(self, sample_id: int) -> None:
         self._reset_unloaded_pad_defaults(sample_id)
         self._on_pad_bpm_changed(sample_id)
+
+    def _wants_accepted_restore(self, sample_id: int) -> bool:
+        return (
+            self._project.pad_timing_intent[sample_id] == "automatic"
+            and self._project.manual_bpm[sample_id] is None
+        )
+
+    def _begin_accepted_restore(
+        self, sample_id: int, *, restored_assignment: bool, timing_stale: bool
+    ) -> bool:
+        if timing_stale or not restored_assignment or not self._wants_accepted_restore(sample_id):
+            return False
+        self._clear_analysis_task_state(sample_id)
+        self._accepted_restore.begin(sample_id)
+        return True
 
     @staticmethod
     def _normalize_project_path(value: str) -> str:
@@ -687,6 +730,9 @@ class LoaderController(BaseController):
         self._load_request_ids.pop(sample_id, None)
 
         try:
+            if self._wants_accepted_restore(sample_id):
+                # Reserve Automatic before startup projects BPM/grid/loop settings.
+                self._audio.set_pad_timing_intent(sample_id, "automatic")
             request_id = self._audio.load_sample_async(
                 sample_id,
                 rel.as_posix(),

@@ -186,7 +186,9 @@ Python package directories are already available to standalone test executables.
   swaps only after current source/loop/seek/stem/rate/full-trajectory rechecks and
   reserved worker recycling. Pending/failed/stale/late/unready/full-lane work keeps
   old effective audio/native history. Actual ownership/shifted-output/failure tests
-  establish this native gate before G3b2g persistence; acoustic B5 remains separate.
+  establish this native gate; G3b2g source-verifies complete native QM persistence
+  with fresh existing-guard/callback adoption and distinct historical/runtime
+  identities. Acoustic B5 remains separate.
   The worker checks local atomic voice cancellation before/after catch-up, and
   adoption checks the exact outstanding request ID. Stop/reset/wet deactivation
   retires source/stem pins through a separate bounded worker lane while retaining

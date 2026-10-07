@@ -23,6 +23,49 @@ pub struct QmRawAnalysis {
 }
 
 impl QmRawAnalysis {
+    /// Reconstruct complete persisted detector evidence without running inference.
+    ///
+    /// This verifies the retained timebase and arrays only. The evidence adapter
+    /// must independently verify actual source and analyzer-input content.
+    pub fn from_complete_capture(
+        beat_frames: Vec<f64>,
+        downbeat_raw_indices: Vec<usize>,
+        input_sample_rate_hz: u32,
+        input_frame_count: usize,
+        odf_hop_samples: usize,
+        configuration: AnalysisConfig,
+    ) -> Result<Self, String> {
+        let actual_hop = f64::from(input_sample_rate_hz) * configuration.step_secs;
+        if input_sample_rate_hz == 0
+            || input_frame_count == 0
+            || !actual_hop.is_finite()
+            || !(1.0..=MAX_ANALYSIS_WINDOW_SAMPLES as f64).contains(&actual_hop)
+            || odf_hop_samples != actual_hop as usize
+            || beat_frames.len() > crate::tempo_summary::MAX_RAW_POSITIONS
+            || downbeat_raw_indices.len() > beat_frames.len()
+            || beat_frames
+                .iter()
+                .any(|frame| !frame.is_finite() || *frame < 0.0)
+            || beat_frames.windows(2).any(|pair| pair[0] >= pair[1])
+            || downbeat_raw_indices
+                .iter()
+                .any(|index| *index >= beat_frames.len())
+            || downbeat_raw_indices
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+        {
+            return Err("invalid complete persisted QM capture".into());
+        }
+        Ok(Self {
+            beat_frames,
+            downbeat_raw_indices,
+            input_sample_rate_hz,
+            input_frame_count,
+            odf_hop_samples,
+            configuration,
+        })
+    }
+
     /// Complete detector coordinates in ODF frames, without seconds conversion.
     pub fn beat_frames(&self) -> &[f64] {
         &self.beat_frames

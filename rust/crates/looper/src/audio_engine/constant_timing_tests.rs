@@ -7,9 +7,9 @@ use flitzis_looper_analysis::tempo_evidence::{
 };
 use serde_json::json;
 
-const RATE: u32 = 8_000;
+pub(super) const RATE: u32 = 8_000;
 const COUNT: usize = 64;
-const PERIOD: f64 = 60.0 / 119.999;
+pub(super) const PERIOD: f64 = 60.0 / 119.999;
 
 #[path = "input_runtime_binding_tests.rs"]
 mod input_runtime_binding_tests;
@@ -17,7 +17,7 @@ mod input_runtime_binding_tests;
 #[path = "prepared_source_timing_tests.rs"]
 mod prepared_source_timing_tests;
 
-fn source() -> SampleBuffer {
+pub(super) fn source() -> SampleBuffer {
     let mut samples = vec![0.0_f32; (COUNT as f64 * PERIOD * f64::from(RATE)).ceil() as usize];
     for index in 0..COUNT {
         let frame = (index as f64 * PERIOD * f64::from(RATE)).round() as usize;
@@ -29,7 +29,7 @@ fn source() -> SampleBuffer {
     }
 }
 
-fn test_engine() -> AudioEngine {
+pub(super) fn test_engine() -> AudioEngine {
     Python::initialize();
     let engine = AudioEngine::new().unwrap();
     let loaded = source();
@@ -48,7 +48,7 @@ fn test_engine() -> AudioEngine {
 }
 
 /// Synthetic retained backend fixtures enter only inside tests, never through the public API.
-fn synthetic_ticket(engine: &AudioEngine) -> ConstantTimingTicket {
+pub(super) fn synthetic_ticket(engine: &AudioEngine) -> ConstantTimingTicket {
     let sample = engine.sample_cache.lock().unwrap()[0].clone().unwrap();
     let request_id = engine.pad_request_ids.lock().unwrap()[0];
     let binding = PcmBinding::verify(
@@ -120,9 +120,10 @@ fn synthetic_ticket(engine: &AudioEngine) -> ConstantTimingTicket {
         source_generation: 7,
         sample_rate_hz: RATE,
         source_digest: "a".repeat(64),
-        sample,
+        sample: sample.clone(),
         epoch: engine.prepared_source_epochs[0].clone(),
         captured_epoch: engine.prepared_source_epochs[0].load(Ordering::Acquire),
+        binding: binding.metadata().clone(),
         evidence,
         guard: Mutex::new(guard),
         adoption_ticket,
@@ -130,24 +131,24 @@ fn synthetic_ticket(engine: &AudioEngine) -> ConstantTimingTicket {
     }
 }
 
-fn hypotheses() -> String {
+pub(super) fn hypotheses() -> String {
     json!([{"id":"independent-generated-quarters", "provenance":"each independently generated fixture pulse is explicitly a quarter", "verification":"verified", "quarter_note_denominator":1, "quarter_counts":(0..COUNT).map(|i| Some(i as i64)).collect::<Vec<_>>() }]).to_string()
 }
 
-fn origin() -> IndependentTimingOrigin {
+pub(super) fn origin() -> IndependentTimingOrigin {
     IndependentTimingOrigin {
         seconds: -0.125_012_3,
         provenance: "independently chosen fractional signed fixture origin".into(),
     }
 }
-fn decision() -> TimingAcceptanceDecision {
+pub(super) fn decision() -> TimingAcceptanceDecision {
     TimingAcceptanceDecision {
         policy_version: "explicit-native-fixture-acceptance-v1".into(),
         provenance: "independent generated quarter truth; no musical/default acceptance".into(),
     }
 }
 
-fn queue(
+pub(super) fn queue(
     capacity: usize,
 ) -> (
     Arc<Mutex<Producer<ControlMessage>>>,
@@ -157,14 +158,14 @@ fn queue(
     (Arc::new(Mutex::new(producer)), consumer)
 }
 
-fn accept_message(mixer: &mut RtMixer, message: ControlMessage) -> bool {
+pub(super) fn accept_message(mixer: &mut RtMixer, message: ControlMessage) -> bool {
     let ControlMessage::PublishConstantTiming { id, timing } = message else {
         panic!("timing publication");
     };
     mixer.publish_constant_timing_rt(id, timing, &mut ImmediateAudioBufferRetirement)
 }
 
-fn acknowledged_mixer(engine: &AudioEngine) -> RtMixer {
+pub(super) fn acknowledged_mixer(engine: &AudioEngine) -> RtMixer {
     let mut mixer = RtMixer::new(1, RATE as f32);
     mixer.set_current_timing_acknowledgements(engine.current_timing_acknowledgements.clone());
     mixer.load_sample(0, engine.sample_cache.lock().unwrap()[0].clone().unwrap());

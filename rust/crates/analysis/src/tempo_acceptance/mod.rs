@@ -190,6 +190,20 @@ impl AcceptedConstantTiming {
     pub fn check_binding(&self, current: &PcmBindingMetadata) -> Result<(), TempoAcceptanceError> {
         check_exact_binding(self.evidence.binding(), current)
     }
+
+    /// Check verified fresh source content while retaining original accepted identity.
+    ///
+    /// Historical engine-local job tokens cannot identify restored content. Every
+    /// other binding field still matches exactly; the caller supplies freshly
+    /// verified actual PCM and separately guards current native ownership.
+    pub fn check_source_binding(
+        &self,
+        current: &PcmBindingMetadata,
+    ) -> Result<(), TempoAcceptanceError> {
+        let mut historical = current.clone();
+        historical.job = self.evidence.binding().job.clone();
+        self.check_binding(&historical)
+    }
 }
 
 fn check_exact_binding(

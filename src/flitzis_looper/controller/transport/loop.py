@@ -269,6 +269,7 @@ class PadLoopController:
                 ),
             )
         self._project.pad_grid_offset_samples[sample_id] = grid_offset_samples
+        self._project.pad_timing_intent[sample_id] = "legacy"
         self._transport._mark_project_changed()
         self._bpm.on_pad_bpm_changed(sample_id)
 
