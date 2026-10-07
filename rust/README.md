@@ -250,6 +250,12 @@ Python package directories are already available to standalone test executables.
   loop/intro/tail seek policy; source-selection ramps advance by fractional source
   distance. `StretchProcessor` receives the canonical already-resampled feed directly.
   These modules do not own native DSP state or perform source pre-roll.
+  G3c2 adds `SourceLoopDomain`: effective accepted compatible loops retain
+  musical source-frame period P alongside exact physical integer bounds H.
+  Virtual phase wraps by P; safe seam interpolation joins the last admitted PCM
+  knot to start at P without an H/P speed factor. Full/stem/transition/native
+  worker feed shares this domain, including exact period-bit adoption checks.
+  Manual/Tap/Legacy and incompatible loops retain physical wrapping.
   The maximum per-voice ratio step remains `0.05`, now every `512` active output frames
   in dry and Key Lock modes, with the first step at a newly accepted target. Render
   work splits at rate boundaries; pause freezes source and smoothing progress.

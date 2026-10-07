@@ -1414,9 +1414,10 @@ impl RtMixer {
         let sample_frames = voice.sample.as_ref()?.samples.len() / self.channels;
         let region = self.effective_loop_region(id, sample_frames)?;
         let mut playback = voice.source_playback;
-        playback.configure(sample_frames, region);
+        let timing = self.timing_for_voice(voice);
+        playback.configure_domain(timing.loop_domain(sample_frames, region));
         let position = playback.position();
-        self.timing_for_voice(voice)
+        timing
             .grid(f64::from(self.sample_rate_hz))?
             .beat_at_source(position.frame as f64 + position.fraction)
     }
@@ -1791,7 +1792,9 @@ impl RtMixer {
                     voice.stop_rt(retirement);
                     continue;
                 };
-                voice.source_playback.configure(sample_frames, loop_region);
+                voice
+                    .source_playback
+                    .configure_domain(voice.source_timing.loop_domain(sample_frames, loop_region));
                 let mut rendered = 0;
                 // Each iteration consumes output frames and crosses at most one fixed rate step.
                 // The enclosing render chunk is bounded by max_realtime_render_frames().
@@ -1811,6 +1814,7 @@ impl RtMixer {
                         sample_frames,
                         frame_pos: position.frame,
                         loop_region,
+                        loop_period: voice.source_playback.loop_period(),
                         seek_mode: position.seek_mode,
                         selection: current_selection,
                         transition: stem_transition,
@@ -1858,6 +1862,7 @@ impl RtMixer {
                         position,
                         next_position,
                         chunk_frames,
+                        Some(source_plan.domain()),
                     );
                     let pad_gain_smoother = &mut pad_gain_smoothers[voice.sample_id];
                     let output_buffers = voice.stretch.output_buffers();
@@ -1886,9 +1891,11 @@ impl RtMixer {
                     pad_loop_end_frame[voice.sample_id],
                     sample.samples.len() / channels,
                 ) {
-                    voice
-                        .source_playback
-                        .configure(sample.samples.len() / channels, region);
+                    voice.source_playback.configure_domain(
+                        voice
+                            .source_timing
+                            .loop_domain(sample.samples.len() / channels, region),
+                    );
                     let position = voice.source_playback.position();
                     voice.frame_pos = position.frame;
                     voice.explicit_seek_mode = position.seek_mode;

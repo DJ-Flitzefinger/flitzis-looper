@@ -1,0 +1,6 @@
+- [x] Implement shared accepted-only fractional loop domain, safe seam reads and productive mixer integration.
+- [x] Preserve copied preparation/domain guards, seeks/rate epochs, pinned timing and chronological native/FIFO/filter ownership.
+- [x] Pass independent actual 75/1000-cycle numerical/PCM/onset matrix at 44.1/48/96 kHz and integer controls.
+- [x] Pass actual native/stem/worker continuation consequences and unchanged private WAV probe.
+- [x] Validate final Debug/Release tree, affected strict changes and independent staged review.
+- [x] Record missing actual device/loopback and sustained human listening gates explicitly.

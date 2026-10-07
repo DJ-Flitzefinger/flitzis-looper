@@ -5,8 +5,10 @@
 //! allocation-free; pausing simply stops advancing this clock.
 
 use super::constants::{SPEED_MAX, SPEED_MIN};
+#[cfg(test)]
+use super::source_reader::FrameRange;
 use super::source_reader::{
-    ExplicitSeekMode, FrameRange, advance_playback_position, playhead_before_render,
+    ExplicitSeekMode, SourceLoopDomain, advance_playback_position, playhead_before_render,
 };
 
 const TEMPO_STEP: f64 = 0.05;
@@ -22,7 +24,7 @@ pub(crate) struct FractionalSourcePosition {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SourcePlayback {
     origin: FractionalSourcePosition,
-    domain: Option<(usize, FrameRange)>,
+    domain: Option<SourceLoopDomain>,
     elapsed_output_frames: u64,
     ratio: f64,
     target: f64,
@@ -84,25 +86,55 @@ impl SourcePlayback {
         self.target.to_bits() == other.target.to_bits()
     }
 
+    #[cfg(test)]
     pub(crate) fn configure(&mut self, sample_frames: usize, region: FrameRange) {
-        let domain = (sample_frames, region);
+        self.configure_domain(SourceLoopDomain::physical(sample_frames, region));
+    }
+
+    pub(crate) fn loop_period(&self) -> Option<f64> {
+        self.domain.and_then(|domain| domain.musical_period)
+    }
+
+    pub(crate) fn matches_domain(&self, domain: SourceLoopDomain) -> bool {
+        self.domain == Some(domain)
+    }
+
+    pub(crate) fn configure_domain(&mut self, domain: SourceLoopDomain) {
         if self.domain == Some(domain) {
             return;
         }
+        let same_geometry = self.domain.is_some_and(|previous| {
+            previous.sample_frames == domain.sample_frames && previous.region == domain.region
+        });
         self.rebase();
         self.domain = Some(domain);
-        let normalized = playhead_before_render(self.origin.frame, region, self.origin.seek_mode);
-        if normalized != self.origin.frame {
-            self.origin.frame = normalized;
+        let outside = if let Some(period) = domain.musical_period {
+            let offset =
+                self.origin.frame.saturating_sub(domain.region.start) as f64 + self.origin.fraction;
+            self.origin.seek_mode == ExplicitSeekMode::Normal
+                && (self.origin.frame < domain.region.start || offset >= period)
+        } else {
+            playhead_before_render(self.origin.frame, domain.region, self.origin.seek_mode)
+                != self.origin.frame
+        };
+        // A timing-only domain change wraps the retained virtual origin naturally.
+        // Actual loop/extent edits keep the established out-of-range clamp policy.
+        if outside && !same_geometry {
+            self.origin.frame = domain.region.start;
             self.origin.fraction = 0.0;
         }
     }
 
     pub(crate) fn clear_explicit_seek(&mut self) {
         self.rebase();
+        let was_explicit = self.origin.seek_mode != ExplicitSeekMode::Normal;
         self.origin.seek_mode = ExplicitSeekMode::Normal;
-        // The next configure must normalize against the newly accepted loop.
-        self.domain = None;
+        // Exiting intro/tail normalizes on the next configuration. An already normal
+        // cursor retains its geometry so a same-marker timing refresh cannot discard
+        // the virtual seam's fractional residue.
+        if was_explicit {
+            self.domain = None;
+        }
     }
 
     pub(crate) fn set_target(&mut self, target: f64) {
@@ -154,18 +186,24 @@ impl SourcePlayback {
                 .elapsed_output_frames
                 .saturating_add(output_offset as u64) as f64
                 * self.ratio;
+        if let Some(domain) = self.domain
+            && let Some(period) = domain.musical_period
+            && period != domain.region.len() as f64
+        {
+            return self.musical_position_at(distance, domain, period);
+        }
         let whole = distance.floor() as usize;
         let (frame, seek_mode) = self.domain.map_or(
             (
                 self.origin.frame.saturating_add(whole),
                 self.origin.seek_mode,
             ),
-            |(sample_frames, region)| {
+            |domain| {
                 advance_playback_position(
                     self.origin.frame,
                     whole,
-                    sample_frames,
-                    region,
+                    domain.sample_frames,
+                    domain.region,
                     self.origin.seek_mode,
                 )
             },
@@ -174,6 +212,50 @@ impl SourcePlayback {
             frame,
             fraction: distance - whole as f64,
             seek_mode,
+        }
+    }
+
+    /// Retain virtual phase in source-frame units, including the fractional seam.
+    /// Physical interpolation is the reader's responsibility; rebases never project
+    /// this value to a PCM tap and therefore cannot lose musical phase.
+    fn musical_position_at(
+        &self,
+        distance: f64,
+        domain: SourceLoopDomain,
+        period: f64,
+    ) -> FractionalSourcePosition {
+        let (phase, mode) = match self.origin.seek_mode {
+            ExplicitSeekMode::Normal => (
+                (self.origin.frame.saturating_sub(domain.region.start) as f64 + distance)
+                    .rem_euclid(period),
+                ExplicitSeekMode::Normal,
+            ),
+            ExplicitSeekMode::BeforeLoop | ExplicitSeekMode::AfterLoop => {
+                let boundary = if self.origin.seek_mode == ExplicitSeekMode::BeforeLoop {
+                    domain.region.start
+                } else {
+                    domain.sample_frames
+                };
+                let prefix = boundary.saturating_sub(self.origin.frame) as f64;
+                if distance < prefix {
+                    let whole = distance.floor() as usize;
+                    return FractionalSourcePosition {
+                        frame: self.origin.frame.saturating_add(whole),
+                        fraction: distance - whole as f64,
+                        seek_mode: self.origin.seek_mode,
+                    };
+                }
+                (
+                    (distance - prefix).rem_euclid(period),
+                    ExplicitSeekMode::Normal,
+                )
+            }
+        };
+        let whole = phase.floor() as usize;
+        FractionalSourcePosition {
+            frame: domain.region.start + whole,
+            fraction: phase - whole as f64,
+            seek_mode: mode,
         }
     }
 
@@ -201,6 +283,208 @@ fn checked_ratio(ratio: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn musical_domain_preserves_virtual_seam_phase_through_rebase_rate_seek_and_edits() {
+        let region = FrameRange { start: 2, end: 5 };
+        let domain = SourceLoopDomain::musical(6, region, 3.25).unwrap();
+        let mut playback = SourcePlayback::new(2, ExplicitSeekMode::Normal, 0.5);
+        playback.configure_domain(domain);
+        playback.advance(6);
+        assert_eq!(playback.position().frame, 5); // Virtual, exclusive physical end.
+        assert_eq!(playback.position().fraction, 0.0);
+        let before = playback.position();
+        playback.set_target(0.55);
+        assert_eq!(playback.chunk(1), (1, 0.55));
+        assert_eq!(playback.position(), before);
+        playback.advance(1);
+        assert!((playback.position().fraction - 0.3).abs() < 1.0e-14);
+        assert_eq!(playback.position().frame, 2);
+        let retained = playback.position();
+        playback.configure_domain(SourceLoopDomain::musical(6, region, 2.75).unwrap());
+        assert_eq!(playback.position(), retained);
+        playback.seek(5, ExplicitSeekMode::AfterLoop);
+        playback.configure_domain(domain);
+        assert_eq!(playback.position().seek_mode, ExplicitSeekMode::AfterLoop);
+        playback.advance(4);
+        assert_eq!(playback.position().seek_mode, ExplicitSeekMode::Normal);
+        assert!((playback.position().fraction - 0.2).abs() < 1.0e-14);
+        playback.clear_explicit_seek();
+        playback.configure_domain(domain);
+        assert!((playback.position().fraction - 0.2).abs() < 1.0e-14);
+    }
+
+    #[test]
+    fn subframe_period_change_wraps_fraction_without_changing_integer_frame() {
+        let region = FrameRange { start: 2, end: 3 };
+        let mut playback = SourcePlayback::new(2, ExplicitSeekMode::Normal, 0.7);
+        playback.configure(4, region);
+        playback.advance(1);
+        assert_eq!(playback.position().fraction, 0.7);
+        playback.configure_domain(SourceLoopDomain::musical(4, region, 0.25).unwrap());
+        assert_eq!(playback.position().frame, 2);
+        assert!((playback.position().fraction - 0.2).abs() < 1.0e-14);
+        playback.advance(13);
+        assert_eq!(playback.position().frame, 2);
+        assert!((playback.position().fraction - 0.05).abs() < 1.0e-14);
+    }
+
+    #[test]
+    fn same_geometry_period_shrink_and_clear_preserve_wrapped_fractional_residue() {
+        let region = FrameRange {
+            start: 10,
+            end: 1510,
+        };
+        let initial = SourceLoopDomain::musical(1600, region, 1500.25).unwrap();
+        let shorter = SourceLoopDomain::musical(1600, region, 1499.75).unwrap();
+        // The power-of-two divisor reaches this exact binary64 seam at a legal rate.
+        let mut playback = SourcePlayback::new(10, ExplicitSeekMode::Normal, 1500.125 / 2048.0);
+        playback.configure_domain(initial);
+        playback.advance(2048);
+        let before = playback.position();
+        assert_eq!(before.frame, 1510);
+        assert_eq!(before.fraction, 0.125);
+        let mut cleared = playback;
+        playback.clear_explicit_seek(); // Same physical marker reapplication.
+        playback.configure_domain(shorter);
+        assert_eq!(playback.position().frame, 10);
+        assert_eq!(playback.position().fraction, 0.375);
+        assert_eq!(
+            shorter.project_normal_position(before),
+            Some(playback.position())
+        );
+        cleared.clear_explicit_seek();
+        cleared.configure(1600, region);
+        assert_eq!(cleared.position().frame, 10);
+        assert_eq!(cleared.position().fraction, 0.125);
+        assert_eq!(
+            SourceLoopDomain::physical(1600, region).project_normal_position(before),
+            Some(cleared.position())
+        );
+        let changed_geometry = SourceLoopDomain::musical(
+            1600,
+            FrameRange {
+                start: 20,
+                end: 1520,
+            },
+            1500.25,
+        )
+        .unwrap();
+        playback.clear_explicit_seek();
+        playback.configure_domain(changed_geometry);
+        assert_eq!(playback.position().frame, 20);
+        assert_eq!(playback.position().fraction, 0.0);
+    }
+
+    #[test]
+    fn clearing_real_intro_or_tail_seek_still_normalizes_outside_loop_to_start() {
+        let region = FrameRange { start: 2, end: 5 };
+        let domain = SourceLoopDomain::musical(6, region, 3.25).unwrap();
+        for (frame, mode) in [
+            (0, ExplicitSeekMode::BeforeLoop),
+            (5, ExplicitSeekMode::AfterLoop),
+        ] {
+            let mut playback = SourcePlayback::new(frame, mode, 0.73);
+            playback.configure_domain(domain);
+            playback.advance(1);
+            assert_eq!(playback.position().seek_mode, mode);
+            playback.clear_explicit_seek();
+            playback.configure_domain(domain);
+            assert_eq!(playback.position().frame, 2);
+            assert_eq!(playback.position().fraction, 0.0);
+            assert_eq!(playback.position().seek_mode, ExplicitSeekMode::Normal);
+        }
+    }
+
+    #[test]
+    fn copied_musical_domain_requires_exact_period_and_preserves_integer_control_arithmetic() {
+        let region = FrameRange { start: 7, end: 101 };
+        let mut physical = SourcePlayback::new(7, ExplicitSeekMode::Normal, 0.73);
+        physical.configure(101, region);
+        let mut musical = SourcePlayback::new(7, ExplicitSeekMode::Normal, 0.73);
+        musical.configure_domain(SourceLoopDomain::musical(101, region, 94.0).unwrap());
+        for frames in [1, 31, 96, 257, 512, 1_000_001] {
+            physical.advance(frames);
+            musical.advance(frames);
+            assert_eq!(physical.position(), musical.position());
+        }
+        let mut changed = musical;
+        changed.configure_domain(
+            SourceLoopDomain::musical(101, region, f64::from_bits(94.0_f64.to_bits() + 1)).unwrap(),
+        );
+        assert!(!musical.matches_exact(&changed));
+        assert_eq!(musical.loop_period(), Some(94.0));
+    }
+
+    #[test]
+    fn intro_and_tail_traverse_physical_extent_once_then_use_fractional_musical_period() {
+        let region = FrameRange { start: 13, end: 71 };
+        let domain = SourceLoopDomain::musical(100, region, 58.25).unwrap();
+        for (frame, mode, prefix) in [
+            (0, ExplicitSeekMode::BeforeLoop, 13.0),
+            (89, ExplicitSeekMode::AfterLoop, 11.0),
+        ] {
+            let mut playback = SourcePlayback::new(frame, mode, 0.73);
+            playback.configure_domain(domain);
+            playback.advance(7);
+            let earlier = playback.position();
+            assert_eq!(earlier.seek_mode, mode);
+            assert!((earlier.frame as f64 + earlier.fraction - frame as f64 - 5.11).abs() < 1e-12);
+            playback.advance(93);
+            let phase = (100.0_f64 * 0.73 - prefix).rem_euclid(58.25);
+            let position = playback.position();
+            assert_eq!(position.seek_mode, ExplicitSeekMode::Normal);
+            assert_eq!(position.frame, 13 + phase.floor() as usize);
+            assert_eq!(position.fraction, phase.fract());
+        }
+    }
+
+    #[test]
+    fn musical_rate_epochs_and_copied_clock_are_partition_invariant_on_both_sides_of_physical_end()
+    {
+        let region = FrameRange { start: 7, end: 101 };
+        for period in [93.75, 94.25] {
+            let domain = SourceLoopDomain::musical(110, region, period).unwrap();
+            let run = |partition: &[usize]| {
+                let mut playback =
+                    SourcePlayback::new(7, ExplicitSeekMode::Normal, 0.9345678901234568);
+                playback.configure_domain(domain);
+                playback.advance(17);
+                playback.set_target(1.1234567890123457);
+                let mut trace = Vec::new();
+                let mut rendered = 0;
+                let mut segment = 0;
+                while rendered < 8_321 {
+                    let requested = partition[segment % partition.len()].min(8_321 - rendered);
+                    let mut remaining = requested;
+                    while remaining > 0 {
+                        let (frames, ratio) = playback.chunk(remaining);
+                        trace.extend(
+                            (0..frames).map(|offset| (ratio, playback.position_at(offset))),
+                        );
+                        playback.advance(frames);
+                        remaining -= frames;
+                    }
+                    rendered += requested;
+                    segment += 1;
+                }
+                (trace, playback)
+            };
+            let (reference, checkpoint) = run(&[1]);
+            let mut independent_distance: f64 = 17.0 * 0.9345678901234568;
+            for (ratio, position) in &reference {
+                let phase = independent_distance.rem_euclid(period);
+                let actual = position.frame as f64 + position.fraction - 7.0;
+                assert!((actual - phase).abs() < 1.0e-8);
+                independent_distance += ratio;
+            }
+            for partition in [&[512][..], &[31, 257, 1, 96, 777][..]] {
+                let (actual, copied) = run(partition);
+                assert_eq!(actual, reference);
+                assert!(checkpoint.matches_exact(&copied));
+            }
+        }
+    }
 
     #[test]
     fn prepared_adoption_requires_equal_future_rate_target_and_smoothing_interval() {

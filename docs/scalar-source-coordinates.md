@@ -73,7 +73,9 @@ execution; see [MIDI binding](native-constant-timing.md).
 The automatic metronome estimate remains `120.00128936767578`, so its scalar slope
 persists. G2 provides offline supported count/region/period fitting and uncertainty.
 G3a adds an [immutable accepted revision and control-only guard](accepted-constant-timing.md).
-G3b must connect actual current-pad validity and all consumers; G3c must separately
-verify musical versus physical loop periods. Numerical coordinates do
+G3b2a-i connect actual current-pad validity and all consumers. G3c2 separately
+uses accepted compatible musical periods for productive wrapping while preserving
+physical markers. Its virtual fractional source phase is projected to admitted
+PCM taps only by the reader; beat queries share the same domain. Numerical coordinates do
 not prove audible DSP/device alignment or musical model acceptance. See
 [the diagnosis](grid-timing-diagnosis.md) and [the design](beatmap-sync-design.md).

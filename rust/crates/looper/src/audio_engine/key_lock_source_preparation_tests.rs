@@ -49,6 +49,7 @@ impl Fixture {
                 sample_frames: self.sample.samples.len() / 2,
                 frame_pos: position.frame,
                 loop_region: self.region,
+                loop_period: None,
                 seek_mode: position.seek_mode,
                 selection,
                 transition: StemTransition::default(),

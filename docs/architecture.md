@@ -135,11 +135,11 @@ and one current-bound native loop/master refresh with execution acknowledgement.
 Source/authority/full accepted identity and control ordering guard both values;
 completion polling observes explicit work without owning audio timing. See
 [accepted constant timing](accepted-constant-timing.md) for ownership and limits.
-G3c1 separately characterizes actual dry mixer output and measured discrete PCM
-features under current accepted ownership. The shared SourcePlayback still wraps
-integer physical markers; fractional compatible musical duration can accumulate
-endpoint-rounding error. The [strict musical loop gate](loop-period-proof.md)
-and shared trajectory/reader correction remain incomplete.
+G3c1 characterized actual dry mixer output and exposed accumulated endpoint-rounding
+error. G3c2 uses the compatible accepted musical period in shared SourcePlayback
+and safe source-reader seam interpolation while preserving integer physical markers.
+The [strict musical loop gate](loop-period-proof.md) checks actual rendered output;
+actual device/loopback and sustained human listening remain separate open gates.
 Its shared `analyze_bpm` pipeline owns the legacy ODF/sample-hop conversion for
 both production and comparison fixtures. Private independent B2 input validation
 and sealing live separately in Python's analysis package and do not publish
@@ -390,6 +390,9 @@ Loaded full-mix buffers and prepared stems use the engine output rate, so their
 source-frame domain and the editor's sample-offset units use that loaded-buffer
 rate rather than the original file rate. Runtime source cursors retain a
 fractional remainder; integer playhead telemetry floors the next source cursor.
+For accepted fractional loops this is a virtual musical position: in a longer
+seam it can reach the physical exclusive end by at most the admitted one-frame
+mismatch. It is never an unchecked PCM index; reader taps stay inside the range.
 
 Waveform query bounds, returned X, loaded duration, seek messages and playhead
 telemetry retain `f64` source seconds through PyO3/Python. Amplitudes remain `f32`;
@@ -459,7 +462,8 @@ whole-bar loops retain beat/bar phase across wraps. Arbitrary physical loops
 remain playable and have bounded physical wrapping, with compatibility false
 and no sustained synchronization guarantee. Tempo ratios clipped outside the
 engine's `0.5..2.0` range also fall outside that guarantee. This helper prepares
-the phase contract; it does not yet change normal source-start reads.
+the entry phase contract. G3c2 also uses its compatibility rule for accepted-only
+productive musical wrapping; normal starts still read the effective loop start.
 
 Stem generation is offline/background work. G3b1 captures an opaque engine-owned
 source/request/preparation-epoch ticket before each job, requires a full original
@@ -567,6 +571,14 @@ and in-range loop edits preserve fractional carry. Source-selection ramps advanc
 fractional source distance. The productive `StretchProcessor` fills its fixed planar
 buffers from the actual borrowed source and canonical cursor instead of interpolating
 segment endpoints.
+For effective accepted timing, `SourceLoopDomain` keeps exact physical integer
+bounds and compatible musical period P in loaded frames. The cursor wraps virtual
+phase modulo P while the reader joins the last admitted integer PCM knot to loop
+start at P. This fractional seam can differ from one frame; it never reads the
+exclusive physical end or scales rate by H/P. Rebases retain virtual phase, and
+copied read plans compare complete period bits. Manual/Tap/Legacy and incompatible
+physical loops retain integer wrapping. Beat queries and paused configuration use
+the same accepted-only domain, including old voices with pinned source/timing.
 `SourceReadPlan::fill_fractional_buffers` supplies fixed planar feed in both the
 live mixer, productive worker and non-live source-preparation proof. These shared rules do not
 compensate audible delay.
@@ -597,7 +609,11 @@ processor checks expected next fractional position and seek mode before feed
 consumption. Source mismatch or discontinuity invalidates bounded adapter state
 and marks used native state dirty; existing worker recycling owns native reset
 and warming. Continuous same-source timing adoption/clear refreshes the complete
-projection on productive feed while preserving chronological history. Pending,
+projection on productive feed while preserving chronological history.
+Period-only refreshes with unchanged physical bounds preserve the wrapped
+fractional residue; native and filter guards compare the exact new-domain
+representation of their previously expected next phase. True source, seek and
+out-of-range marker discontinuities retain the existing reset rule. Pending,
 failed or rejected timing leaves that effective binding unchanged; rate smoothing,
 pause/resume and stem crossfades retain continuous history.
 

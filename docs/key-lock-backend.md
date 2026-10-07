@@ -78,6 +78,14 @@ neighbors through the shared half-open loop/seek policy. The lookahead tap wraps
 at loop end; explicit intro seeks play into the loop, and tail seeks play to
 track end before wrapping into the loop. Both channels and prepared-stem
 selections use the same addresses and fractional source transition progress.
+For compatible effective accepted timing, virtual source phase wraps at
+`P=loaded_rate*accepted_quarter_period*logical_beats` while physical integer
+markers remain exact. The final admitted PCM knot interpolates to loop start at
+P, safely inside admitted PCM for both P<H and P>H. Rate remains the existing
+source-period/master-period ratio. Legacy/manual/tap and incompatible loops use H.
+Copied live/worker read plans include exact P bits, so matching current phase
+cannot authorize prepared adoption with a different future period. Rate rebases
+retain virtual seam phase; the single feed still supplies dry and native output.
 
 Rate changes rebase from the current fractional position instead of independently
 rounding source consumption per segment. Pause freezes source and smoothing

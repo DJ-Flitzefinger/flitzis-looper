@@ -96,6 +96,11 @@ impl<'a> PreparedSourceStream<'a> {
             || sample.channels != channels
             || plan.loop_region.start >= plan.loop_region.end
             || plan.loop_region.end > plan.sample_frames
+            || plan.loop_period.is_some_and(|period| {
+                !period.is_finite()
+                    || period <= 0.0
+                    || (period - plan.loop_region.len() as f64).abs() > 1.0
+            })
             || stems.is_some_and(|stems| {
                 stems.channels != channels
                     || stems.frame_count != plan.sample_frames
@@ -120,7 +125,7 @@ impl<'a> PreparedSourceStream<'a> {
         let retained = prepared_feed - discard;
 
         let mut logical = request.logical.at_constant_ratio(request.tempo_ratio);
-        logical.configure(plan.sample_frames, plan.loop_region);
+        logical.configure_domain(plan.domain());
         let history_output_frames = request
             .source_history
             .map_or(0, |history| history.output_frames);
@@ -141,7 +146,7 @@ impl<'a> PreparedSourceStream<'a> {
                 return Err(PreparationError::InvalidHistory);
             }
             let mut origin = history.origin.at_constant_ratio(request.tempo_ratio);
-            origin.configure(plan.sample_frames, plan.loop_region);
+            origin.configure_domain(plan.domain());
             if origin.position() != origin_position {
                 return Err(PreparationError::InvalidHistory);
             }
@@ -323,7 +328,9 @@ fn valid_history_position(position: FractionalSourcePosition, plan: SourceReadPl
         && (0.0..1.0).contains(&position.fraction)
         && match position.seek_mode {
             ExplicitSeekMode::Normal => {
-                (plan.loop_region.start..plan.loop_region.end).contains(&position.frame)
+                position.frame >= plan.loop_region.start
+                    && (position.frame - plan.loop_region.start) as f64 + position.fraction
+                        < plan.loop_period.unwrap_or(plan.loop_region.len() as f64)
             }
             ExplicitSeekMode::BeforeLoop => position.frame < plan.loop_region.start,
             ExplicitSeekMode::AfterLoop => {
@@ -356,6 +363,7 @@ mod bounds {
             sample_frames: 64,
             frame_pos: 7,
             loop_region: FrameRange { start: 3, end: 59 },
+            loop_period: None,
             seek_mode: ExplicitSeekMode::Normal,
             selection: StemRenderSelection::full_mix(),
             transition: StemTransition::default(),

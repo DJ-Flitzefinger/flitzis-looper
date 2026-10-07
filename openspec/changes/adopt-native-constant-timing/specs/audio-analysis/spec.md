@@ -122,14 +122,14 @@ master output period, preserving binary64 rates and fractional source epochs.
 
 ### Requirement: Pitch ABI And Physical Wrap Preserve The Shared Trajectory
 The system SHALL use explicit Rubber Band pitch conversion at its ABI boundary
-without changing the shared source trajectory or existing physical-loop wrap
+without changing the shared source trajectory or shared loop-domain wrap
 policy. Rate clipping SHALL NOT redefine the authoritative master period.
 
 #### Scenario: Key Lock follows the shared binary64 source rate
 - **GIVEN** an acknowledged period-driven source trajectory
 - **WHEN** the native Key Lock adapter receives its inverse-rate pitch scale
 - **THEN** the existing native double ABI retains binary64 pitch conversion
-- **AND** pitch update thresholds, source epoch and physical wrap policy remain unchanged
+- **AND** pitch update thresholds, source epoch and shared loop-domain wrap policy remain unchanged
 
 ### Requirement: Python Consumers Resolve One Current Source Timing Projection
 The system SHALL resolve one Python source timing snapshot from manual intent,

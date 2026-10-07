@@ -4,7 +4,7 @@
 //! and non-realtime preparation code can therefore read the same source without sharing a voice,
 //! advancing transport, or changing persisted loop markers.
 
-use super::source_playback::SourcePlayback;
+use super::source_playback::{FractionalSourcePosition, SourcePlayback};
 use crate::messages::{
     PreparedStemSet, STEM_BUFFER_COUNT, STEM_COMPONENT_MASK, SampleBuffer, StemMixMode,
 };
@@ -28,6 +28,92 @@ impl FrameRange {
     pub(crate) fn len(self) -> usize {
         self.end.saturating_sub(self.start)
     }
+}
+
+/// One copied source-addressing domain. Musical duration is in loaded source frames;
+/// the admitted physical PCM range and its persisted integer endpoints stay unchanged.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SourceLoopDomain {
+    pub(crate) sample_frames: usize,
+    pub(crate) region: FrameRange,
+    pub(crate) musical_period: Option<f64>,
+}
+
+impl PartialEq for SourceLoopDomain {
+    fn eq(&self, other: &Self) -> bool {
+        self.sample_frames == other.sample_frames
+            && self.region == other.region
+            && same_loop_period(self.musical_period, other.musical_period)
+    }
+}
+
+impl SourceLoopDomain {
+    /// Canonicalize an already owned normal virtual source phase in this domain.
+    /// Callers separately guard source, physical geometry and timing ownership;
+    /// this projection alone never authorizes native/filter-history continuation.
+    pub(crate) fn project_normal_position(
+        self,
+        position: FractionalSourcePosition,
+    ) -> Option<FractionalSourcePosition> {
+        if position.seek_mode != ExplicitSeekMode::Normal
+            || !position.fraction.is_finite()
+            || !(0.0..1.0).contains(&position.fraction)
+            || position.frame < self.region.start
+            || self.region.start >= self.region.end
+            || self.region.end > self.sample_frames
+        {
+            return None;
+        }
+        let period = self.musical_period.unwrap_or(self.region.len() as f64);
+        if !period.is_finite() || period <= 0.0 || (period - self.region.len() as f64).abs() > 1.0 {
+            return None;
+        }
+        if period == self.region.len() as f64 {
+            return Some(FractionalSourcePosition {
+                frame: self.region.start + (position.frame - self.region.start) % self.region.len(),
+                ..position
+            });
+        }
+        let phase =
+            ((position.frame - self.region.start) as f64 + position.fraction).rem_euclid(period);
+        let whole = phase.floor() as usize;
+        Some(FractionalSourcePosition {
+            frame: self.region.start + whole,
+            fraction: phase - whole as f64,
+            seek_mode: ExplicitSeekMode::Normal,
+        })
+    }
+
+    pub(crate) fn physical(sample_frames: usize, region: FrameRange) -> Self {
+        debug_assert!(region.start < region.end && region.end <= sample_frames);
+        Self {
+            sample_frames,
+            region,
+            musical_period: None,
+        }
+    }
+
+    /// Accept only a bounded rounding mismatch. Accepted timing ownership and the
+    /// compatible logical beat count are resolved by the productive caller.
+    pub(crate) fn musical(sample_frames: usize, region: FrameRange, period: f64) -> Option<Self> {
+        if region.start >= region.end
+            || region.end > sample_frames
+            || !period.is_finite()
+            || period <= 0.0
+            || (period - region.len() as f64).abs() > 1.0
+        {
+            return None;
+        }
+        Some(Self {
+            sample_frames,
+            region,
+            musical_period: Some(period),
+        })
+    }
+}
+
+fn same_loop_period(left: Option<f64>, right: Option<f64>) -> bool {
+    left.map(f64::to_bits) == right.map(f64::to_bits)
 }
 
 pub(crate) fn effective_loop_region(
@@ -388,12 +474,22 @@ pub(crate) struct SourceReadPlan {
     pub(crate) sample_frames: usize,
     pub(crate) frame_pos: usize,
     pub(crate) loop_region: FrameRange,
+    /// Virtual compatible musical duration; never an additional playback-rate ratio.
+    pub(crate) loop_period: Option<f64>,
     pub(crate) seek_mode: ExplicitSeekMode,
     pub(crate) selection: StemRenderSelection,
     pub(crate) transition: StemTransition,
 }
 
 impl SourceReadPlan {
+    pub(crate) fn domain(self) -> SourceLoopDomain {
+        SourceLoopDomain {
+            sample_frames: self.sample_frames,
+            region: self.loop_region,
+            musical_period: self.loop_period,
+        }
+    }
+
     /// Compare actual source addressing and selection, including an unfinished transition.
     ///
     /// Source pins and current timing authority are checked separately by the owning permit.
@@ -402,6 +498,7 @@ impl SourceReadPlan {
             && self.sample_frames == other.sample_frames
             && self.frame_pos == other.frame_pos
             && self.loop_region == other.loop_region
+            && same_loop_period(self.loop_period, other.loop_period)
             && self.seek_mode == other.seek_mode
             && self.selection == other.selection
             && self.transition.matches_exact(other.transition)
@@ -415,6 +512,7 @@ impl SourceReadPlan {
         self.channels == other.channels
             && self.sample_frames == other.sample_frames
             && self.loop_region == other.loop_region
+            && same_loop_period(self.loop_period, other.loop_period)
             && self.selection == other.selection
     }
 
@@ -431,6 +529,7 @@ impl SourceReadPlan {
         output_frames: usize,
     ) {
         debug_assert!(self.channels > 0 && buffers.len() >= self.channels);
+        debug_assert!(playback.matches_domain(self.domain()));
         debug_assert_eq!(sample.samples.len() / self.channels, self.sample_frames);
         debug_assert!(
             buffers
@@ -532,6 +631,46 @@ impl SourceReadPlan {
         transition_progress: f64,
         channel: usize,
     ) -> f32 {
+        if let Some(period) = self.loop_period
+            && period != self.loop_region.len() as f64
+            && self.seek_mode == ExplicitSeekMode::Normal
+        {
+            // Integer knots retain their absolute physical source addresses. Only the
+            // final interval joins the last admitted knot to the first at virtual P.
+            // A longer P never reads the exclusive physical end; a shorter P never
+            // interpolates past the next virtual wrap.
+            let phase = (self.frame_pos.saturating_sub(self.loop_region.start) as f64 + fraction)
+                .rem_euclid(period);
+            let last = (period.ceil() as usize)
+                .saturating_sub(1)
+                .min(self.loop_region.len() - 1);
+            if phase >= last as f64 {
+                let alpha = (phase - last as f64) / (period - last as f64);
+                let last_plan = Self {
+                    frame_pos: self.loop_region.start + last,
+                    ..self
+                };
+                let first_plan = Self {
+                    frame_pos: self.loop_region.start,
+                    ..self
+                };
+                let left = last_plan.sample_at_offset_with_progress(
+                    sample,
+                    stems,
+                    0,
+                    transition_progress,
+                    channel,
+                );
+                let right = first_plan.sample_at_offset_with_progress(
+                    sample,
+                    stems,
+                    0,
+                    transition_progress,
+                    channel,
+                );
+                return left + (right - left) * alpha as f32;
+            }
+        }
         let left =
             self.sample_at_offset_with_progress(sample, stems, 0, transition_progress, channel);
         if fraction == 0.0 {
@@ -604,9 +743,104 @@ mod tests {
             sample_frames: 6,
             frame_pos,
             loop_region: FrameRange { start: 2, end: 5 },
+            loop_period: None,
             seek_mode,
             selection: StemRenderSelection::full_mix(),
             transition: StemTransition::default(),
+        }
+    }
+
+    #[test]
+    fn copied_read_plan_requires_exact_virtual_period_identity() {
+        let original = SourceReadPlan {
+            loop_period: Some(3.25),
+            ..plan(3, ExplicitSeekMode::Normal)
+        };
+        for period in [
+            None,
+            Some(3.0),
+            Some(f64::from_bits(3.25_f64.to_bits() + 1)),
+        ] {
+            let changed = SourceReadPlan {
+                loop_period: period,
+                ..original
+            };
+            assert!(!original.matches_exact(changed));
+            assert!(!original.matches_source_contract(changed));
+        }
+        assert_eq!(original.domain().musical_period, Some(3.25));
+        assert!(original.matches_exact(original));
+    }
+
+    #[test]
+    fn virtual_seam_uses_only_admitted_physical_knots_for_full_stems_and_transition() {
+        let sample = stereo_sample(1.0);
+        let stems = prepared_stems(&sample);
+        for (period, frame, fraction, seam_alpha, last) in [
+            (3.25, 4, 0.9, 0.9 / 1.25, 4),
+            (3.25, 5, 0.2, 1.2 / 1.25, 4),
+            (2.75, 4, 0.5, 0.5 / 0.75, 4),
+            (2.0, 3, 0.5, 0.5, 3),
+        ] {
+            let selection =
+                StemRenderSelection::from_state(StemMixMode::AllStems, 42, STEM_MASK_MELODY);
+            for transition in [
+                StemTransition::default(),
+                StemTransition::start(selection, 128),
+            ] {
+                let read_plan = SourceReadPlan {
+                    frame_pos: frame,
+                    loop_period: Some(period),
+                    transition,
+                    ..plan(2, ExplicitSeekMode::Normal)
+                };
+                let progress = 31.25;
+                for channel in 0..2 {
+                    let left = (last + channel * 10) as f32;
+                    let right = (2 + channel * 10) as f32;
+                    let dry = left + (right - left) * seam_alpha as f32;
+                    let expected = if transition.is_active() {
+                        let (from, to) = transition.gains_at(progress);
+                        dry * 10.0 * from + dry * to
+                    } else {
+                        dry
+                    };
+                    let actual = read_plan.sample_fractional(
+                        &sample,
+                        Some(&stems),
+                        fraction,
+                        progress,
+                        channel,
+                    );
+                    assert!((actual - expected).abs() < 1.0e-5);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn one_frame_physical_loop_and_subframe_virtual_period_read_only_its_single_knot() {
+        let sample = stereo_sample(1.0);
+        for period in [0.25, 1.0, 1.75] {
+            let read_plan = SourceReadPlan {
+                loop_region: FrameRange { start: 2, end: 3 },
+                loop_period: Some(period),
+                ..plan(2, ExplicitSeekMode::Normal)
+            };
+            for phase in [0.0, period * 0.25, period * 0.999] {
+                let positioned = SourceReadPlan {
+                    frame_pos: 2 + phase.floor() as usize,
+                    ..read_plan
+                };
+                assert_eq!(
+                    positioned.sample_fractional(&sample, None, phase.fract(), 0.0, 0),
+                    2.0
+                );
+                assert_eq!(
+                    positioned.sample_fractional(&sample, None, phase.fract(), 0.0, 1),
+                    12.0
+                );
+            }
         }
     }
 

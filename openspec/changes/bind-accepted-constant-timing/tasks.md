@@ -23,6 +23,6 @@
   DSP/onset/device acceptance before any audible sustained-SYNC claim.
 
 G3c1's productive physical-render characterization is tracked in
-`prove-musical-physical-loop-periods`. A fractional musical gate failure does not
-complete G3c: the shared productive correction and its full rendered matrix remain
-G3c2; actual device/listening evidence remains separate.
+`prove-musical-physical-loop-periods`. G3c2's shared productive correction and full
+numerical/rendered matrix are tracked in `correct-fractional-musical-loops`.
+Actual device/listening evidence remains separate and G3c stays open.

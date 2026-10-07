@@ -149,7 +149,8 @@ recorded in the step's validation/publication evidence.
 - [ ] G3c separate: musical versus physical loop periods over 75/1000 cycles,
   fractional periods/rates/wrap/partition proof and rendered/onset/device/listening gates.
   G3c1 physical-render evidence is tracked in `prove-musical-physical-loop-periods`;
-  a failed musical probe retains the complete G3c2 productive correction/gate.
+  G3c2's shared correction and numerical/rendered gate are tracked in
+  `correct-fractional-musical-loops`; actual device/listening remains open.
 - [ ] Later B5 audible crop/delay/transition compensation remains separate from
   required G3b2f2 native ownership/adoption integration.
 - [ ] C1 separate: original hash association does not prove copy-first immutable

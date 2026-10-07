@@ -350,10 +350,11 @@ impl PerPadDspChain {
         position: FractionalSourcePosition,
         next_position: FractionalSourcePosition,
         frames: usize,
+        domain: Option<super::source_reader::SourceLoopDomain>,
     ) {
         if self
             .source_history
-            .is_some_and(|history| !history.continues(binding, position))
+            .is_some_and(|history| !history.continues(binding, position, domain))
         {
             self.reset();
         }
@@ -363,6 +364,7 @@ impl PerPadDspChain {
         self.source_history = Some(ProductiveSourceHistory {
             binding,
             next_position,
+            domain,
             fed_output_frames: fed_output_frames.saturating_add(frames as u64),
         });
     }
@@ -561,7 +563,7 @@ mod tests {
         let mut chain = PerPadDspChain::new(0, 48_000.0, 1);
         set_and_snap_parameter(&mut chain, DspParameterSlot::Slot0, 0.0);
         let binding = ProductiveSourceBinding::new(source, 48_000, None);
-        chain.bind_source(binding, history_position(0), history_position(32), 32);
+        chain.bind_source(binding, history_position(0), history_position(32), 32, None);
         for sample in &source.samples[..32] {
             chain.begin_frame();
             chain.process_sample(0, *sample);
@@ -584,7 +586,13 @@ mod tests {
             publication_epoch: 7,
         };
         let binding = ProductiveSourceBinding::new(&source, 48_000, Some(projection));
-        chain.bind_source(binding, history_position(32), history_position(64), 32);
+        chain.bind_source(
+            binding,
+            history_position(32),
+            history_position(64),
+            32,
+            None,
+        );
         let history = chain.source_history().unwrap();
         assert_eq!(history.binding.accepted, Some(projection));
         assert_eq!(history.fed_output_frames, 64);
@@ -600,7 +608,7 @@ mod tests {
         }
         assert!(retained_tail > 0.0);
         let cleared = ProductiveSourceBinding::new(&source, 48_000, None);
-        chain.bind_source(cleared, history_position(64), history_position(65), 1);
+        chain.bind_source(cleared, history_position(64), history_position(65), 1, None);
         assert_eq!(chain.source_history().unwrap().binding.accepted, None);
         assert_eq!(chain.source_history().unwrap().fed_output_frames, 65);
     }
@@ -624,7 +632,13 @@ mod tests {
             ),
         ] {
             let mut chain = source_bound_impulse_chain(&source);
-            chain.bind_source(binding, position, history_position(position.frame + 1), 1);
+            chain.bind_source(
+                binding,
+                position,
+                history_position(position.frame + 1),
+                1,
+                None,
+            );
             chain.begin_frame();
             assert_eq!(chain.process_sample(0, 0.0), 0.0);
             assert_eq!(chain.source_history().unwrap().fed_output_frames, 1);

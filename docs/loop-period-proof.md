@@ -1,9 +1,9 @@
 # Musical and physical loop periods
 
-G3c measures a remaining productive timing defect. Current accepted period and
-source-rate precision do not remove repeated rounding of a physical loop length.
-The musical gate remains incomplete until the shared renderer is corrected and
-its strict fractional rendered/onset test passes.
+G3c1 measured a productive integer-wrap defect. G3c2 corrects the shared source
+trajectory and reader for compatible effective accepted timing. Hardware-free
+musical/PCM/onset proof remains distinct from actual device/loopback and sustained
+human listening acceptance.
 
 ## Independent domains
 
@@ -14,14 +14,14 @@ once-rounded physical endpoints `a/e`, and steady source rate `r`:
 P = Fs * T * b             musical source frames per cycle (possibly fractional)
 H = e - a                 physical source frames per cycle (integer)
 P / r                     intended output frames per cycle
-H / r                     current productive output frames per cycle
-k * (H - P) / r           unwrapped output discrepancy after k cycles
+H / r                     former physical output frames per cycle
+k * (H - P) / r           former unwrapped output discrepancy after k cycles
 ```
 
 Each endpoint is rounded absolutely once. Repeating `H` still repeats its rounding
-error. SourcePlayback retains fractional rate epochs independently of callback
-partitions but uses integer physical wrapping. SourceGrid's compatible-cycle
-diagnostic wraps musical time first. It cannot prove actual PCM recurrence.
+error. SourcePlayback now retains fractional rate epochs and wraps by P for
+compatible accepted loops. SourceGrid's numerical diagnostics alone still cannot
+prove actual PCM recurrence.
 
 At 44.1 kHz and 120 BPM a 1/64 note is `1378.125` source frames. Physical markers
 at 0 and 1378 give a 9.375-frame lead after 75 cycles and a 125-frame lead after
@@ -45,13 +45,12 @@ offset are distinct quantities. A modulo phase comparison could hide complete
 cycle slips and is insufficient. Fixed, irregular and one-frame callback
 partitions must agree independently of these period errors.
 
-The strict musical acceptance probe is deliberately separate from passing
-physical-output characterization. An ignored acceptance probe is an explicit
-incomplete gate, not a passing test. Device/loopback, human listening and sustained
+The strict musical acceptance probe is deliberately invoked separately from
+ordinary tests; an ignored count is not a passing gate. Device/loopback, human listening and sustained
 audible acceptance require actual evidence. Dry PCM results do not pass B5 native
 Key Lock crop/delay/transition compensation.
 
-## Actual fractional render
+## Preserved G3c1 failure
 
 The generated accepted-owner matrix covers 63 runs at 44.1/48/96 kHz: exact
 rational quarter periods near 120 BPM and true 119.999/123.45 BPM, rates 0.73,
@@ -61,7 +60,7 @@ accepted publication, source pins, accepted-period BPMLOCK, fractional cursor an
 wrapped source-beat queries are checked. Physical outputs are identical across
 partitions; the maximum independent PCM sample error is `1.86e-9`.
 
-Generated physical markers are independently nearest-even rounded from declared
+The original generated physical markers were independently nearest-even rounded from declared
 rational fixture positions and admitted as integer source-frame intent. Current
 accepted fitted timing supplies BPMLOCK and source-beat queries. At the 96-kHz
 half-frame endpoint tie, the fitted binary64 period is infinitesimally above the
@@ -102,19 +101,47 @@ sensitivity, while continuous musical/physical period difference is exactly zero
 for this integer control. The admitted IEEE oracle agrees exactly. These facts do
 not loosen the fractional musical-period gate or imply device/listening evidence.
 
-## Required productive correction
+## Productive fractional seam policy
 
-G3c2 must correct compatible fractional musical repetition through the shared
-source trajectory and reader. It must preserve physical persisted markers and
-one accepted timing/rate owner, safe fractional boundary taps, intro/tail/seek,
-same-source stem transitions, copied worker domains and productive native/FIFO/
-filter-history continuity. Scaling another BPMLOCK ratio or driving resets from
-UI polling does not satisfy this contract.
+The effective voice's accepted projection and existing compatible-cycle rule
+admit P. Physical persisted markers remain H. Manual/Tap/Legacy and incompatible
+arbitrary loops retain physical wrapping. Existing actual source/current/native
+guards admit new state; bank replacement cannot relabel an old pinned trajectory.
 
-After correction, rerun the complete 75/1000-cycle fractional period/rate/wrap/
-partition matrix and actual rendered/onset gate with independent oracles.
-Unwrapped continuous source-equivalent musical error must remain within one
-loaded frame; exact integer controls remain exact. C1 immutable copy-first/ABA,
-B5 audible compensation and unmeasured current 96-handle/save-integrity costs
+The virtual phase advances at the existing source rate and wraps modulo P.
+Rate rebases retain this phase, including the fractional seam.
+Period-only accepted refresh or clear with unchanged physical geometry retains
+the wrapped residue rather than resetting phase to zero. Native/FIFO/filter
+continuity compares the exact corresponding new-domain next phase; genuine
+seek/source/marker discontinuities still reset through the existing bounded path.
+For local integer PCM knots 0..H-1, the last knot below P joins knot0 at P. The final interval is
+`P-last`, shorter or longer than one source frame; every tap remains inside
+admitted PCM. Exact P=H retains the prior arithmetic. No H/P rate multiplier or
+UI seek/reset is involved. Source beat queries and paused configuration share
+the same domain. Intro/tail play their physical prefix before entering the loop.
+
+Full mix, stems and both transition sides share one trajectory. Copied worker
+SourcePlayback and SourceReadPlan include exact period bits. Equal current phase
+with a different future P fails prepared contract/adoption. Chronological actual
+native/FIFO/filter history remains continuous through ordinary wraps and source
+rate changes; real discontinuities retain existing bounded reset/retirement.
+
+The corrected 234-case matrix covers 44.1/48/96 kHz, compatible short, quarter and
+multibar loops, fractional rates, P<H/P>H and exact integer controls. It uses
+independent musical PCM/seam expectations and actual observed cursor drops at
+wraps 75 and 1000 in full one-frame callbacks. Unwrapped boundary distance is
+reconstructed from observed wrap output time and residual source phase, then
+compared with independent rational and admitted IEEE periods. Whole-output hashes,
+all measured onset counts and independent exported samples establish actual PCM
+recurrence across fixed, irregular and full one-frame partitions. Seam threshold
+feature offsets and IEEE/output rounding remain separate from the strict
+one-loaded-frame continuous gate; exact integer controls remain exact.
+Actual raw-native/adapter/FIFO continuation covers 144 steady fractional cases
+through 1000 cycles, plus current accepted worker adoption, full/stem transitions,
+filter continuity, replacement pinning and accepted refresh/clear consequences.
+Fractional-domain rate ramps have shared SourcePlayback trace/partition coverage;
+the new 144-case raw-native matrix uses steady rates. Existing physical-domain
+native ramp tests remain separate.
+C1 immutable copy-first/ABA, B5 audible compensation and unmeasured current 96-handle/save-integrity costs
 remain separate. See [native ownership](native-constant-timing.md) and
 [the migration design](beatmap-sync-design.md).

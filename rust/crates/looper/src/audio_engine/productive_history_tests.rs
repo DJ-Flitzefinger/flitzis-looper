@@ -9,6 +9,69 @@ use std::sync::atomic::AtomicU64;
 const RATE: u32 = 8_000;
 
 #[test]
+fn fractional_musical_domain_retains_pinned_timing_query_pause_and_filter_history() {
+    let original = sample(0.5);
+    let replacement = sample(0.2);
+    let mut mixer = setup(&original);
+    let accepted = AcceptedTimingProjection {
+        period_seconds: 250.25 * 16.0 / f64::from(RATE),
+        ..timing(11, 2, -0.031_25)
+    };
+    let expected_period = accepted.period_seconds * f64::from(RATE) / 16.0;
+    assert!((expected_period - 250.25).abs() < 1.0e-12);
+    assert!(adopt(&mut mixer, &original, accepted));
+    mixer.set_pad_loop_region(0, 80.0 / f64::from(RATE), Some(330.0 / f64::from(RATE)));
+    mixer.set_bpm_lock(true);
+    mixer.set_master_period(accepted.period_seconds / 1.37);
+    render(&mut mixer, 1657);
+    let native = voice(&mixer).stretch.native_state_address();
+    let before = history(&mixer);
+    let phase = voice(&mixer).source_playback.position();
+    assert_eq!(
+        voice(&mixer).source_playback.loop_period(),
+        Some(expected_period)
+    );
+    let expected_beat =
+        (phase.frame as f64 + phase.fraction + 250.0) / (accepted.period_seconds * f64::from(RATE));
+    assert_eq!(mixer.active_pad_beat_position(0), Some(expected_beat));
+    mixer.pause_sample(0);
+    assert!(render(&mut mixer, 127).iter().all(|value| *value == 0.0));
+    assert_eq!(voice(&mixer).source_playback.position(), phase);
+    assert_eq!(
+        voice(&mixer).source_playback.loop_period(),
+        Some(expected_period)
+    );
+    mixer.resume_sample(0);
+    assert!(mixer.load_sample_rt(0, replacement.clone(), &mut ImmediateAudioBufferRetirement));
+    let next = AcceptedTimingProjection {
+        period_seconds: 0.75,
+        ..timing(12, 3, 0.071)
+    };
+    assert!(adopt(&mut mixer, &replacement, next));
+    render(&mut mixer, 777);
+    assert_eq!(
+        voice(&mixer).source_playback.loop_period(),
+        Some(expected_period)
+    );
+    assert_eq!(voice(&mixer).source_timing.accepted, Some(accepted));
+    assert_eq!(voice(&mixer).stretch.native_state_address(), native);
+    let continued = history(&mixer);
+    assert_eq!(continued.binding.accepted, Some(accepted));
+    assert_eq!(continued.fed_output_frames, before.fed_output_frames + 777);
+    let filtered = mixer.pad_dsp_chains[0].source_history().unwrap();
+    assert_eq!(filtered.fed_output_frames, before.fed_output_frames + 777);
+    assert_eq!(
+        filtered.next_position,
+        voice(&mixer).source_playback.position()
+    );
+    let distance = phase.frame as f64 - 80.0 + phase.fraction + 777.0 * 1.37;
+    let expected = distance.rem_euclid(expected_period);
+    let actual = voice(&mixer).source_playback.position();
+    assert!((actual.frame as f64 - 80.0 + actual.fraction - expected).abs() < 1.0e-9);
+    assert_eq!(mixer.loop_region_frames(0), (80, Some(330)));
+}
+
+#[test]
 fn productive_history_seek_uses_retained_voice_extent_and_clears_fixed_history_before_same_phase_seek()
  {
     let original = sample(0.5);

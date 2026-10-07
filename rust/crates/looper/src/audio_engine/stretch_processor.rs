@@ -166,6 +166,7 @@ impl StretchProcessor {
                         feed.accepted,
                     ),
                     next_position: feed.playback.position(),
+                    domain: Some(feed.plan.domain()),
                     fed_output_frames: PREPARED_HISTORY_FRAMES as u64,
                 });
             }
@@ -192,7 +193,7 @@ impl StretchProcessor {
         let position = feed.playback.position();
         if self
             .productive_history
-            .is_some_and(|history| !history.continues(binding, position))
+            .is_some_and(|history| !history.continues(binding, position, Some(feed.plan.domain())))
         {
             // Discard only fixed adapter storage. Used native state stays uniquely owned until
             // the existing worker lane can exchange and reset it off the callback.
@@ -213,6 +214,7 @@ impl StretchProcessor {
             self.productive_history = Some(ProductiveSourceHistory {
                 binding,
                 next_position: feed.playback.position_at(frames),
+                domain: Some(feed.plan.domain()),
                 fed_output_frames: prior_frames.saturating_add(frames as u64),
             });
         } else {

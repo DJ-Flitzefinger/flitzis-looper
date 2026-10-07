@@ -4,6 +4,7 @@ use crate::audio_engine::key_lock_preparation::KeyLockPreparationLane;
 use crate::audio_engine::source_grid::SourceGrid;
 use crate::audio_engine::source_playback::SourcePlayback;
 pub(crate) use crate::audio_engine::source_reader::ExplicitSeekMode;
+use crate::audio_engine::source_reader::{FrameRange, SourceLoopDomain};
 use crate::audio_engine::stretch_processor::StretchProcessor;
 use crate::messages::SampleBuffer;
 
@@ -26,6 +27,21 @@ pub(crate) struct VoiceSourceTiming {
 }
 
 impl VoiceSourceTiming {
+    /// Only the effective accepted owner can admit musical repetition of physical PCM.
+    /// Legacy/manual/tap projection remains useful for display and entry, not this period.
+    pub(crate) fn loop_domain(self, sample_frames: usize, region: FrameRange) -> SourceLoopDomain {
+        let musical_period = self.accepted.and_then(|timing| {
+            SourceGrid::from_period(
+                timing.period_seconds * f64::from(timing.sample_rate_hz),
+                timing.origin_seconds * f64::from(timing.sample_rate_hz),
+            )?
+            .compatible_loop_period(region.start, region.end)
+        });
+        musical_period
+            .and_then(|period| SourceLoopDomain::musical(sample_frames, region, period))
+            .unwrap_or_else(|| SourceLoopDomain::physical(sample_frames, region))
+    }
+
     pub(crate) fn period_seconds(self) -> Option<f64> {
         self.accepted
             .map(|timing| timing.period_seconds)
@@ -196,5 +212,62 @@ impl VoiceSlot {
     pub fn resume(&mut self) {
         self.stretch.invalidate_prepared();
         self.paused = false;
+    }
+}
+
+#[cfg(test)]
+mod loop_domain_tests {
+    use super::*;
+
+    #[test]
+    fn only_effective_accepted_timing_admits_compatible_musical_duration() {
+        let region = FrameRange {
+            start: 19,
+            end: 1519,
+        };
+        let accepted = AcceptedTimingProjection {
+            revision: [7; 32],
+            period_seconds: 1500.25 * 16.0 / 48_000.0,
+            origin_seconds: -0.123,
+            sample_rate_hz: 48_000,
+            publication_epoch: 4,
+        };
+        let legacy = VoiceSourceTiming {
+            legacy_period_seconds: Some(accepted.period_seconds),
+            legacy_origin_frame: accepted.origin_seconds * 48_000.0,
+            ..VoiceSourceTiming::default()
+        };
+        assert_eq!(legacy.loop_domain(2000, region).musical_period, None);
+        let current = VoiceSourceTiming {
+            accepted: Some(accepted),
+            ..legacy
+        };
+        assert_eq!(
+            current.loop_domain(2000, region).musical_period,
+            Some(1500.25)
+        );
+        assert_eq!(
+            current
+                .loop_domain(
+                    2000,
+                    FrameRange {
+                        end: 1517,
+                        ..region
+                    }
+                )
+                .musical_period,
+            None
+        );
+        let another_origin = VoiceSourceTiming {
+            accepted: Some(AcceptedTimingProjection {
+                origin_seconds: 0.371,
+                ..accepted
+            }),
+            ..current
+        };
+        assert_eq!(
+            current.loop_domain(2000, region),
+            another_origin.loop_domain(2000, region)
+        );
     }
 }

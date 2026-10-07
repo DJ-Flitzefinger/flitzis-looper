@@ -418,16 +418,15 @@ Do not use repository docs as a substitute for OpenSpec requirements.
 
 ### Hardware-free G3c loop evidence
 
-The accepted-owner physical/rendered characterization is reproducible without
+The accepted-owner musical PCM/onset proof is reproducible without
 starting the app or an audio device:
 
 ```powershell
 .\scripts\run-rust-tests.ps1 -CargoArgs @('musical_loop_proof_tests')
 ```
 
-The separate ignored strict musical-period acceptance probe currently fails.
-Run it explicitly to reproduce the incomplete gate; an ordinary suite's ignored
-count does not pass musical acceptance:
+Run the separate ignored strict musical-period acceptance probe explicitly;
+an ordinary suite's ignored count does not pass that gate:
 
 ```powershell
 .\scripts\run-rust-tests.ps1 -CargoArgs @('strict_musical_rendered_onset_acceptance_gate', '--', '--ignored')

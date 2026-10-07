@@ -246,7 +246,8 @@ pub(super) mod tests {
     use crate::audio_engine::native_history_permit::NativeHistoryContext;
     use crate::audio_engine::prepared_source::PreparedSourcePermit;
     use crate::audio_engine::source_reader::{
-        ExplicitSeekMode, FrameRange, StemRenderSelection, StemTransition, full_stem_available_mask,
+        ExplicitSeekMode, FrameRange, SourceLoopDomain, StemRenderSelection, StemTransition,
+        full_stem_available_mask,
     };
     use crate::messages::StemMixMode;
     use std::sync::atomic::AtomicU64;
@@ -320,6 +321,7 @@ pub(super) mod tests {
             sample_frames: SOURCE_FRAMES,
             frame_pos: position.frame,
             loop_region: REGION,
+            loop_period: None,
             seek_mode: position.seek_mode,
             selection: if let Some(mask) = stem_mask {
                 StemRenderSelection::from_state(StemMixMode::AllStems, 17, mask)
@@ -736,5 +738,244 @@ pub(super) mod tests {
             }
         }
         assert_eq!(cases, 54);
+    }
+
+    const MUSICAL_REGION: FrameRange = FrameRange {
+        start: 13,
+        end: 140,
+    };
+
+    fn musical_fixture(
+        rate: u32,
+        ratio: f64,
+        period: f64,
+        mode: ExplicitSeekMode,
+        mask: Option<u8>,
+    ) -> NativeHistoryRequest {
+        let mut request = fixture(2, rate, ratio, mode, mask);
+        let origin = match mode {
+            ExplicitSeekMode::Normal => MUSICAL_REGION.start,
+            ExplicitSeekMode::BeforeLoop => 7,
+            ExplicitSeekMode::AfterLoop => SOURCE_FRAMES - 5,
+        };
+        let mut playback = SourcePlayback::new(origin, mode, ratio);
+        playback.configure_domain(
+            SourceLoopDomain::musical(SOURCE_FRAMES, MUSICAL_REGION, period).unwrap(),
+        );
+        request.playback = playback;
+        request.plan.frame_pos = origin;
+        request.plan.seek_mode = mode;
+        request.plan.loop_region = MUSICAL_REGION;
+        request.plan.loop_period = Some(period);
+        request
+    }
+
+    /// Independent continuous musical phase and physical-knot oracle. Neither production
+    /// addressing nor a SourceReadPlan/SourcePlayback supplies the reference feed. Intro/tail
+    /// distances are source frames; native blocks and the adapter prefix are output frames.
+    fn musical_oracle_feed(
+        request: &NativeHistoryRequest,
+        initial_mode: ExplicitSeekMode,
+        output_start: usize,
+        output_frames: usize,
+    ) -> Vec<Vec<f32>> {
+        let period = request.plan.loop_period.unwrap();
+        let ratio = request.playback.tempo_ratio();
+        let read = |frame: usize, channel: usize| {
+            if let Some(stems) = &request.stems {
+                [1, 3]
+                    .into_iter()
+                    .map(|index| stems.stems[index].samples[frame * 2 + channel])
+                    .sum::<f32>()
+            } else {
+                request.sample.samples[frame * 2 + channel]
+            }
+        };
+        (0..2)
+            .map(|channel| {
+                (output_start..output_start + output_frames)
+                    .map(|output_frame| {
+                        let distance = output_frame as f64 * ratio;
+                        let before = match initial_mode {
+                            ExplicitSeekMode::Normal => 0.0,
+                            ExplicitSeekMode::BeforeLoop => 6.0,
+                            ExplicitSeekMode::AfterLoop => 5.0,
+                        };
+                        let (left_frame, right_frame, fraction) = if distance < before {
+                            let origin = match initial_mode {
+                                ExplicitSeekMode::BeforeLoop => 7,
+                                ExplicitSeekMode::AfterLoop => SOURCE_FRAMES - 5,
+                                ExplicitSeekMode::Normal => unreachable!(),
+                            };
+                            let left_frame = origin + distance.floor() as usize;
+                            let right_frame = if left_frame + 1 == SOURCE_FRAMES {
+                                MUSICAL_REGION.start
+                            } else {
+                                left_frame + 1
+                            };
+                            (left_frame, right_frame, distance.fract())
+                        } else {
+                            let phase = (distance - before).rem_euclid(period);
+                            let last_knot = (period.ceil() as usize - 1)
+                                .min(MUSICAL_REGION.end - MUSICAL_REGION.start - 1);
+                            if phase >= last_knot as f64 {
+                                (
+                                    MUSICAL_REGION.start + last_knot,
+                                    MUSICAL_REGION.start,
+                                    (phase - last_knot as f64) / (period - last_knot as f64),
+                                )
+                            } else {
+                                let left_frame = MUSICAL_REGION.start + phase.floor() as usize;
+                                (left_frame, left_frame + 1, phase.fract())
+                            }
+                        };
+                        assert!(left_frame < SOURCE_FRAMES && right_frame < SOURCE_FRAMES);
+                        let left = read(left_frame, channel);
+                        let right = read(right_frame, channel);
+                        left + (right - left) * fraction as f32
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn fractional_musical_prepared_native_fifo_matches_independent_pcm_through_1000_cycles() {
+        let patterns = [&[512][..], &[1, 127, 384, 96, 257, 512, 31][..]];
+        let mut cases = 0;
+        for rate in [44_100, 48_000, 96_000] {
+            for ratio in [0.73_f64, 1.371_234_567_890_123] {
+                for period in [126.75_f64, 127.25] {
+                    // All 1000 continuous musical cycles, including the productive adapter's
+                    // real prefix. The 75-cycle checkpoint is part of the same retained PCM.
+                    let total_frames = ((1000.0 * period + 6.0) / ratio).ceil() as usize + 17;
+                    let continuation = total_frames - PREPARED_HISTORY_FRAMES;
+                    let checkpoint_75 = ((75.0 * period + 6.0) / ratio).ceil() as usize;
+                    assert!(checkpoint_75 > PREPARED_HISTORY_FRAMES);
+                    for mode in [
+                        ExplicitSeekMode::Normal,
+                        ExplicitSeekMode::BeforeLoop,
+                        ExplicitSeekMode::AfterLoop,
+                    ] {
+                        for mask in [None, Some(0b1010)] {
+                            let reference = musical_fixture(rate, ratio, period, mode, mask);
+                            let mut raw = RubberBandLiveShifter::new(rate, 2).unwrap();
+                            raw.prepare_exact_pitch(pitch_scale_for_tempo_ratio(ratio))
+                                .unwrap();
+                            let block = raw.block_size();
+                            let mut expected = vec![vec![0.0; block - 1]; 2];
+                            let mut shifted = vec![vec![0.0; block]; 2];
+                            for start in (0..total_frames.div_ceil(block) * block).step_by(block) {
+                                raw.shift(
+                                    &musical_oracle_feed(&reference, mode, start, block),
+                                    &mut shifted,
+                                )
+                                .unwrap();
+                                for channel in 0..2 {
+                                    expected[channel].extend_from_slice(&shifted[channel]);
+                                }
+                            }
+                            assert!(
+                                expected[0][checkpoint_75..total_frames]
+                                    .iter()
+                                    .any(|sample| sample.abs() > 0.01)
+                            );
+                            for pattern in patterns {
+                                let request = musical_fixture(rate, ratio, period, mode, mask);
+                                let mut state = NativeAdapterState::new(
+                                    Some(RubberBandLiveShifter::new(rate, 2).unwrap()),
+                                    2,
+                                );
+                                state.prepare_source(request).unwrap();
+                                let mut playback = state.source.as_ref().unwrap().playback;
+                                let mut plan = state.source.as_ref().unwrap().plan;
+                                assert_eq!(playback.loop_period(), Some(period));
+                                assert_eq!(plan.loop_period, Some(period));
+                                let mut feed = vec![vec![0.0; DEFAULT_BLOCK_SAMPLES]; 2];
+                                let mut output = vec![vec![0.0; DEFAULT_BLOCK_SAMPLES]; 2];
+                                let mut elapsed = 0;
+                                let mut step = 0;
+                                while elapsed < continuation {
+                                    let frames =
+                                        pattern[step % pattern.len()].min(continuation - elapsed);
+                                    let source = state.source.as_ref().unwrap();
+                                    plan.fill_fractional_buffers(
+                                        &source.sample,
+                                        source.stems.as_ref(),
+                                        &playback,
+                                        &mut feed,
+                                        frames,
+                                    );
+                                    state
+                                        .render(
+                                            &feed,
+                                            &mut output,
+                                            frames,
+                                            pitch_scale_for_tempo_ratio(ratio),
+                                        )
+                                        .unwrap();
+                                    for channel in 0..2 {
+                                        assert_eq!(
+                                            &output[channel][..frames],
+                                            &expected[channel][PREPARED_HISTORY_FRAMES + elapsed
+                                                ..PREPARED_HISTORY_FRAMES + elapsed + frames],
+                                            "fractional native FIFO rate={rate} ratio={ratio} P={period} mode={mode:?} mask={mask:?} n={elapsed}"
+                                        );
+                                    }
+                                    playback.advance(frames);
+                                    let position = playback.position();
+                                    plan.frame_pos = position.frame;
+                                    plan.seek_mode = position.seek_mode;
+                                    assert_eq!(
+                                        state.input_fifo[0].len() + state.output_fifo[0].len(),
+                                        block - 1
+                                    );
+                                    elapsed += frames;
+                                    step += 1;
+                                }
+                                cases += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(cases, 144);
+    }
+
+    #[test]
+    fn same_phase_rate_and_integer_bounds_do_not_authorize_different_musical_worker_domain() {
+        let request = musical_fixture(48_000, 0.73, 127.25, ExplicitSeekMode::Normal, None);
+        let mut changed_clock = request.playback;
+        changed_clock.configure_domain(
+            SourceLoopDomain::musical(SOURCE_FRAMES, MUSICAL_REGION, 126.75).unwrap(),
+        );
+        assert_eq!(request.playback.position(), changed_clock.position());
+        assert_eq!(request.playback.tempo_ratio(), changed_clock.tempo_ratio());
+        assert!(!request.playback.matches_exact(&changed_clock));
+        let changed_plan = SourceReadPlan {
+            loop_period: Some(126.75),
+            ..request.plan
+        };
+        assert!(!request.plan.matches_exact(changed_plan));
+        assert!(!request.plan.matches_source_contract(changed_plan));
+        let feed = ProductiveSourceFeed {
+            sample: &request.sample,
+            stems: None,
+            sample_rate_hz: 48_000,
+            accepted: None,
+            plan: changed_plan,
+            playback: &changed_clock,
+            permit: Some(&request.permit),
+            output_frame: Some(request.target_output_frame),
+        };
+        assert!(!request.matches_contract(&feed, request.epoch));
+        assert!(!request.matches_adoption(&feed, request.epoch, request.request_id));
+        // One binary64 change is still a distinct worker/source contract.
+        let changed_plan = SourceReadPlan {
+            loop_period: Some(f64::from_bits(127.25_f64.to_bits() + 1)),
+            ..request.plan
+        };
+        assert!(!request.plan.matches_source_contract(changed_plan));
     }
 }

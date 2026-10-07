@@ -109,6 +109,16 @@ impl SourceGrid {
         })
     }
 
+    /// Return the compatible musical duration in loaded source frames. The caller
+    /// must separately require actual effective accepted timing ownership.
+    pub(crate) fn compatible_loop_period(self, loop_start: usize, loop_end: usize) -> Option<f64> {
+        let beats = self
+            .loop_metrics(loop_start, loop_end)?
+            .compatible_cycle_beats?;
+        let period = self.frames_per_beat * beats;
+        (period.is_finite() && period > 0.0).then_some(period)
+    }
+
     pub(crate) fn source_at_master_beat(
         self,
         master_beat: f64,
@@ -179,6 +189,19 @@ mod tests {
 
     fn grid_with_100_frames_per_beat(origin_frame: f64) -> SourceGrid {
         SourceGrid::new(100.0, 60.0, origin_frame).unwrap()
+    }
+
+    #[test]
+    fn compatible_period_uses_logical_short_quarter_and_multibar_duration_independent_of_origin() {
+        for origin in [-217.25, 0.0, 10.25] {
+            let grid = SourceGrid::from_period(100.0, origin).unwrap();
+            assert_eq!(grid.compatible_loop_period(3, 9), Some(6.25));
+            assert_eq!(grid.compatible_loop_period(3, 103), Some(100.0));
+            assert_eq!(grid.compatible_loop_period(3, 803), Some(800.0));
+            assert_eq!(grid.compatible_loop_period(3, 126), None);
+        }
+        let grid = SourceGrid::from_period(24_004.0, -10.25).unwrap();
+        assert_eq!(grid.compatible_loop_period(10, 1510), Some(1500.25));
     }
 
     #[test]
