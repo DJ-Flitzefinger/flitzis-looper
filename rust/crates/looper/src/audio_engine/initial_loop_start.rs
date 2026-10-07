@@ -48,6 +48,7 @@ mod tests {
 
     fn sample(samples: Vec<f32>, channels: usize) -> SampleBuffer {
         SampleBuffer {
+            residency: None,
             samples: Arc::from(samples),
             channels,
         }

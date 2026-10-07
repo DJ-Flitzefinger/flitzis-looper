@@ -498,6 +498,12 @@ impl CommittedColdLease {
         }
     }
     pub(in crate::audio_engine) fn bind_pcm(&self, samples: &Arc<[f32]>) {
+        // The shared warm locator may reference only complete backing PCM.
+        if self.manifest.descriptor["playback"]["pcm"]["full_bytes"].as_u64()
+            != samples.len().checked_mul(4).map(|n| n as u64)
+        {
+            return;
+        }
         if let Ok(mut pcm) = self.cache.pcm.lock() {
             *pcm = Some(Arc::downgrade(samples));
         }
@@ -539,6 +545,10 @@ impl ColdTransaction {
     /// producer is waiting for its independent native ACK.
     pub(in crate::audio_engine) fn bind_pcm(&mut self, samples: &Arc<[f32]>) {
         assert!(self.verified);
+        let complete = self.manifest.as_ref().is_some_and(|manifest| {
+            manifest.descriptor["playback"]["pcm"]["full_bytes"].as_u64()
+                == samples.len().checked_mul(4).map(|n| n as u64)
+        });
         let cache = self.reused_cache.clone().unwrap_or_else(|| {
             let mut directories = std::mem::take(&mut self.directories);
             directories.push(self.committed_directory.take().expect("committed guard"));
@@ -564,7 +574,7 @@ impl ColdTransaction {
             }
             cache
         });
-        if let Ok(mut pcm) = cache.pcm.lock() {
+        if complete && let Ok(mut pcm) = cache.pcm.lock() {
             *pcm = Some(Arc::downgrade(samples));
         }
         self.shared_cache = Some(cache);

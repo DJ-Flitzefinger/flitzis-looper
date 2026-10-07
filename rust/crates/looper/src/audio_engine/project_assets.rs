@@ -256,6 +256,42 @@ impl ProjectAssets {
         Ok(())
     }
 
+    /// Extend an existing assignment with a real off-thread reader, without
+    /// inventing another pending metadata delivery or durable assignment ID.
+    pub(super) fn retain_cold_reader(
+        &self,
+        lease: &CommittedColdLease,
+        sample: &SampleBuffer,
+    ) -> io::Result<()> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("asset gate poisoned"))?;
+        let reader = state
+            .readers
+            .iter_mut()
+            .find(|reader| {
+                reader
+                    .cold
+                    .as_ref()
+                    .is_some_and(|owned| owned.assignment_id() == lease.assignment_id())
+            })
+            .ok_or_else(|| io::Error::other("complete reader has no native assignment owner"))?;
+        reader.pcm.retain(|pcm| pcm.strong_count() > 0);
+        if reader
+            .pcm
+            .iter()
+            .any(|pcm| pcm.ptr_eq(&Arc::downgrade(&sample.samples)))
+        {
+            return Ok(());
+        }
+        if reader.pcm.len() >= 128 {
+            return Err(io::Error::other("assignment live reader bound exceeded"));
+        }
+        reader.pcm.push(Arc::downgrade(&sample.samples));
+        Ok(())
+    }
+
     pub(super) fn retire(&self, root: &Path, path: &Path, recursive: bool) -> io::Result<()> {
         let (root, path) = owned_path(root, path)?;
         validate_target(&root, &path, recursive)?;

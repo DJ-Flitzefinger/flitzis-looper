@@ -95,6 +95,22 @@ long original files on each performance click.
 
 ## Artifacts and restoration
 
+C2a distinguishes complete source/set identity from resident PCM. Saved finite
+loops retain full duration/rate/evidence and absolute window offsets. A fresh
+ticket fences the current resident allocation/revision as well as the complete
+source and timing authority. Preparation temporarily reads a bounded complete
+source, aligns/hashes the complete stem set, and then retains only matching finite
+fullmix/component views. It does not align complete stems against a cropped
+reference or hide complete PCM behind an accepted ticket.
+
+Storage-only relocation uses the same bounded source preparation lane and native
+ACK. Active adoption requires the identical complete source and already accepted
+complete set token/content, matching fullmix/components and coverage of the actual
+voice trajectory. Source fraction, rate/ramp, filter and native/FIFO state stay
+coherent; old job/voice allocations remain pinned until their final reader retires.
+Introducing a new complete set or source generation remains inactive-only.
+Complete control/editor/nonresident-seek readiness is the following C2b stage.
+
 Each separator writes `samples/stems/#<pad>/.generation-<uuid>/`. Events retain the
 original ticket identity, so an old completion cannot consume a new job even after
 reloading identical bytes. Obsolete workers discard only their checked private

@@ -34,13 +34,13 @@
 
 ## C2a: complete-source authority and finite resident windows
 
-- [ ] Separate complete identity/metadata/evidence from resident handles/counts;
+- [x] Separate complete identity/metadata/evidence from resident handles/counts;
   update loaded shape, CURRENT/MIDI/source/history bindings coherently.
-- [ ] Derive and independently prove exact reader/loop/rate/DSP context; use
+- [x] Derive and independently prove exact reader/loop/rate/DSP context; use
   admitted full-track fallback for unsupported context, never guessed margins.
-- [ ] Restore saved short loops as finite resident windows with absolute offsets,
+- [x] Restore saved short loops as finite resident windows with absolute offsets,
   matching source/window revisions and full-mix/component-stem transactions.
-- [ ] Permit only same-source/same-complete-StemSet window relocation during
+- [x] Permit only same-source/same-complete-StemSet window relocation during
   active playback; preserve inactive-only generation/new complete-set adoption.
 
 ## C2b: readiness and all existing controls

@@ -18,6 +18,7 @@ const CHUNK_BYTES: usize = 64 * 1024;
 const SCHEMA_VERSION: u64 = 1;
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 mod lifecycle;
+mod residency;
 mod staging;
 mod warm;
 pub(super) use lifecycle::admit_original_owner;

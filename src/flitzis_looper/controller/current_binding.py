@@ -57,6 +57,16 @@ def capture_current_pad_binding(
                 "intent",
                 "authority_revision",
             )
+        )
+        + tuple(
+            metadata.get(key)
+            for key in (
+                "window_revision",
+                "resident_start_frame",
+                "resident_end_frame",
+                "resident_pcm_identity",
+                "resident_context",
+            )
         ),
         accepted_timing=accepted,
     )

@@ -32,6 +32,7 @@ struct Fixture {
 impl Fixture {
     fn new(rate: u32, ratio: f32, mode: ExplicitSeekMode, mask: Option<u8>) -> Self {
         let stems = std::array::from_fn(|component| SampleBuffer {
+            residency: None,
             channels: 2,
             samples: Arc::from(
                 (0..SOURCE_FRAMES)
@@ -46,6 +47,7 @@ impl Fixture {
             ),
         });
         let sample = SampleBuffer {
+            residency: None,
             channels: 2,
             samples: Arc::from(
                 (0..SOURCE_FRAMES * 2)
@@ -78,6 +80,7 @@ impl Fixture {
         Self {
             sample,
             stems: PreparedStemSet {
+                complete_set_identity: std::sync::Arc::new([0; 32]),
                 accepted_timing: None,
                 reference_samples,
                 publication:

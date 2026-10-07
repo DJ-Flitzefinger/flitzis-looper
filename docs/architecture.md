@@ -83,6 +83,7 @@ rust/crates/looper/src/
     |-- buffer_retirement.rs       # non-audio retirement of large handles
     |-- cold_jobs.rs               # bounded cold admission and fixed workers
     |-- cold_load.rs               # source/request guards and native adoption ACK
+    |-- cold_residency.rs          # saved absolute windows and complete source descriptors
     |-- cold_store.rs              # immutable copy, full manifests and atomic commit
     |-- constants.rs               # banks, grid size, slot count, ranges
     |-- dsp.rs                     # per-pad DSP chain and DJ isolator node
@@ -106,6 +107,7 @@ rust/crates/looper/src/
     |-- scalar_grid.rs             # pure binary64 scalar control projection facade
     |-- stem_cache.rs              # prepared-stem validation/loading
     |-- progress.rs
+    |-- resident_relocation.rs     # bounded same-source view preparation and adoption ACK
     |-- waveform.rs                # non-realtime frame bounds and waveform projection
     |-- channels.rs
     `-- errors.rs
@@ -263,8 +265,11 @@ redefining another pad's phase or the shared transport timeline.
 ## Sample Loading
 
 The [PCM cache/residency design](pcm-cache-residency.md) documents the productive
-copy-first full PCM cache and the separate finite-window C2/C3 work. Complete
-playback PCM remains resident. Two fixed workers and 32 queued reservations
+copy-first full PCM cache and C2a finite saved-loop residency. Complete source
+metadata remains authoritative while ordinary saved loops retain only their
+proved physical PCM range. Unsupported Key Lock context retains an explicitly
+admitted full-track fallback. C2b control readiness and C3 measurements remain.
+Two fixed workers and 32 queued reservations
 bound preparation; each worker admits at most 1 GiB transient PCM. Windows sealed
 source capture, full decoder/playback manifests and native adoption ACK establish
 the actual source assignment. Warm reuse must validate complete compatible bytes

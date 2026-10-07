@@ -49,7 +49,7 @@ impl RtMixer {
         let Some(region) = effective_loop_region(
             self.pad_loop_start_frame[id],
             self.pad_loop_end_frame[id],
-            sample.samples.len() / sample.channels,
+            sample.source_sample_count() / sample.channels,
         ) else {
             return result;
         };
@@ -62,7 +62,7 @@ impl RtMixer {
             sample,
             self.channels,
             self.sample_rate_hz,
-            sample.samples.len() / sample.channels,
+            sample.source_sample_count() / sample.channels,
             voice.source_timing.accepted,
         );
         let stems_ready = stems.is_some();
@@ -73,8 +73,8 @@ impl RtMixer {
             });
         result.0[0] = 1;
         result.0[6..15].copy_from_slice(&[
-            sample.samples.as_ptr() as usize as u64,
-            sample.samples.len() as u64,
+            sample.source_address() as u64,
+            sample.source_sample_count() as u64,
             sample.channels as u64,
             generation,
             self.input_runtime_ownership.authority[id].load(std::sync::atomic::Ordering::Acquire),

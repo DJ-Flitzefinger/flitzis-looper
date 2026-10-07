@@ -122,6 +122,18 @@ move loop markers or derive full duration from a window's allocation.
 - **THEN** full duration and source-relative waveform/grid/seek coordinates remain unchanged
 - **AND** CURRENT, MIDI, stems and history refer to matching complete-source and window ownership
 
+#### Scenario: Another assignment reuses identical complete bytes
+- **WHEN** a new source assignment reuses a verified compatible full PCM cache
+- **THEN** its native assignment identity is fresh even if complete content and backing PCM are shared
+- **AND** a storage-only window replacement of that assignment retains its complete identity and accepted evidence
+- **AND** a previous pinned voice cannot inherit the new assignment's timing or loop geometry
+
+#### Scenario: Complete evidence is verified from finite playback
+- **WHEN** timing restoration or export needs complete PCM while playback holds a finite window
+- **THEN** a bounded non-realtime reader verifies the same immutable complete source
+- **AND** the accepted ticket retains the finite reference rather than a hidden complete playback allocation
+- **AND** complete hashes, frame counts and source zero are unchanged
+
 ### Requirement: Proved loop and DSP context
 The system SHALL admit a loop window only with independently proved complete-
 buffer parity for the executed interpolation, bounds, fractional wrap, rate/
@@ -133,6 +145,17 @@ report preparation unavailable.
 - **WHEN** the required context exceeds the proposed loop window
 - **THEN** a guessed fixed margin cannot authorize playback
 - **AND** the system prepares proved context or a complete-track fallback before readiness
+
+#### Scenario: Normal interpolation and rate changes need no guard PCM
+- **WHEN** Normal loop playback uses the admitted physical interval and compatible musical period
+- **THEN** both executed taps including the fractional seam remain within that absolute interval
+- **AND** changing the source sampling rate or its smoothing does not invent a source lookbehind margin
+- **AND** native DSP contexts without independently proved finite continuation use a labelled complete-track exception
+
+#### Scenario: A control requests unprepared context
+- **WHEN** requested loop, seek or DSP context is outside the effective resident read set
+- **THEN** the request cannot replace effective audio with missing-sample silence
+- **AND** it reports unavailable until matching context is admitted or retains prior effective audio during finite preparation
 
 ### Requirement: Finite transactional readiness
 The system SHALL expose requested intent, preparation/pending/error state and
@@ -146,6 +169,11 @@ Pending work SHALL NOT claim an effective seek, loop, ALL or accepted timing cha
 - **WHEN** a newer edit supersedes a pending window
 - **THEN** the previous effective audio continues and the older completion is rejected
 - **AND** only the latest matching ready transaction can change effective playback
+
+#### Scenario: Saved geometry is applied again during initial preparation
+- **WHEN** startup applies the same saved physical loop and DSP context already captured for finite loading
+- **THEN** that identical intent does not invalidate its own preparation
+- **AND** a different admitted loop or DSP intent cancels that preparation through native adoption
 
 ### Requirement: Complete editor and analysis access
 The system SHALL preserve full-source waveform navigation, extreme sample zoom,
@@ -192,6 +220,12 @@ Stale permits/windows and incomplete sets SHALL remain unavailable.
 - **WHEN** same-source stems finish for an older window revision
 - **THEN** they cannot replace the matching current resident set
 - **AND** the prior valid full-mix/stem trajectory and mask continue
+
+#### Scenario: Active storage relocation preserves actual readers
+- **WHEN** a replacement covers the live loop and preserves the identical accepted complete source and StemSet
+- **THEN** one native adoption transaction changes full mix and components together
+- **AND** source fraction, rate smoothing, filter state and actual native/FIFO continuation remain coherent
+- **AND** old PCM allocations remain owned by queued jobs or readers until off-thread final retirement
 
 ### Requirement: Last-user cleanup and external-original safety
 The system SHALL invalidate pending work and retire pad, job, editor/analysis,

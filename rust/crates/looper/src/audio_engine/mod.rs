@@ -42,6 +42,9 @@ mod buffer_retirement;
 mod channels;
 mod cold_jobs;
 mod cold_load;
+mod cold_residency;
+#[cfg(all(test, windows))]
+mod cold_residency_tests;
 mod cold_store;
 pub(crate) mod constant_timing;
 mod constants;
@@ -67,6 +70,7 @@ pub(crate) mod prepared_source;
 mod productive_source_history;
 mod progress;
 mod project_assets;
+mod resident_relocation;
 pub use prepared_source::PreparedSourceTicket;
 use prepared_source::{enqueue_current_prepared_stems, next_epoch, validate_prepared_ticket};
 pub use project_assets::ProjectAssetLease;
@@ -272,6 +276,7 @@ fn admit_sample_analysis(engine: &AudioEngine, id: usize) -> PyResult<(SampleBuf
     let sample = cache[id]
         .clone()
         .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?;
+    require_complete_analysis_pcm(&sample)?;
     let generations = engine
         .loaded_source_generations
         .lock()
@@ -287,6 +292,26 @@ fn admit_sample_analysis(engine: &AudioEngine, id: usize) -> PyResult<(SampleBuf
     Ok((sample, request_id, rate))
 }
 
+fn require_complete_analysis_pcm(sample: &SampleBuffer) -> PyResult<()> {
+    if sample.resident_start() != 0 || sample.resident_end() != sample.frame_count() {
+        return Err(PyValueError::new_err(
+            "complete-source analysis requires a complete PCM reader",
+        ));
+    }
+    Ok(())
+}
+
+fn resident_seek_available(sample: &SampleBuffer, position_s: f64, rate: u32) -> bool {
+    if sample.resident_start() == 0 && sample.resident_end() == sample.frame_count() {
+        return true;
+    }
+    // Match the callback's existing source-second rounding and complete-extent clamp.
+    let frame = (position_s * f64::from(rate))
+        .round()
+        .clamp(0.0, sample.frame_count() as f64) as usize;
+    frame >= sample.resident_start() && frame < sample.resident_end()
+}
+
 struct LoadedSourcePublication<'a> {
     ownership: &'a input_runtime_binding::InputRuntimeOwnership,
     generation: u64,
@@ -298,6 +323,8 @@ struct LoadedSourcePublication<'a> {
     cold_epoch: Option<Arc<AtomicU64>>,
     cold_adoption: Option<Arc<std::sync::atomic::AtomicU8>>,
     replace_assignment: bool,
+    loop_region: Option<(usize, usize)>,
+    resident_cancelled: Option<Arc<AtomicBool>>,
     intent: Option<(
         &'a mut analysis::tempo_acceptance::TimingIntent,
         analysis::tempo_acceptance::TimingIntent,
@@ -356,6 +383,8 @@ fn publish_loaded_sample(
             epoch,
             captured_epoch,
             replace_assignment: publication.replace_assignment,
+            loop_region: publication.loop_region,
+            resident_cancelled: publication.resident_cancelled,
         }
     } else {
         ControlMessage::LoadSample { id, sample }
@@ -544,12 +573,87 @@ pub struct AudioEngine {
     cold_cancelled: Arc<AtomicBool>,
     cold_loading: Arc<Vec<AtomicU64>>,
     cold_leases: Arc<Mutex<Vec<Option<cold_store::CommittedColdLease>>>>,
+    resident_stem_cache: Arc<Mutex<Vec<resident_relocation::ResidentStemCache>>>,
+    resident_restore_guards: Mutex<Vec<Option<Arc<cold_residency::ResidentLoadGuard>>>>,
     cold_lease_generations: Arc<Vec<AtomicU64>>,
     cold_pcm_history: Arc<project_assets::PcmHistory>,
     project_assets: Arc<project_assets::ProjectAssets>,
     project_asset_engine_owner: Arc<()>,
     input_runtime: Option<InputRuntime>,
     input_clock: InputClock,
+}
+
+impl AudioEngine {
+    fn note_resident_loop_intent(&self, id: usize, start: f64, end: Option<f64>) -> PyResult<()> {
+        if let Some(guard) = self
+            .resident_restore_guards
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("resident intent lock poisoned"))?[id]
+            .as_ref()
+            && self.cold_loading[id].load(Ordering::Acquire) == guard.request
+        {
+            guard.loop_intent(start, end);
+        }
+        Ok(())
+    }
+
+    fn admit_resident_key_lock(&self, id: usize, enabled: bool) -> PyResult<()> {
+        if enabled
+            && self
+                .sample_cache
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?[id]
+                .as_ref()
+                .is_some_and(|sample| {
+                    sample.resident_start() != 0 || sample.resident_end() != sample.frame_count()
+                })
+        {
+            return Err(PyValueError::new_err(
+                "Key Lock requires an admitted complete-track resident context",
+            ));
+        }
+        Ok(())
+    }
+
+    fn note_resident_key_lock_intent(&self, id: usize, enabled: bool) -> PyResult<()> {
+        if let Some(guard) = self
+            .resident_restore_guards
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("resident intent lock poisoned"))?[id]
+            .as_ref()
+            && self.cold_loading[id].load(Ordering::Acquire) == guard.request
+        {
+            guard.key_lock_intent(enabled);
+        }
+        Ok(())
+    }
+
+    /// Materialize a bounded full-source reader for non-realtime evidence work.
+    /// It shares immutable source authority without changing the effective window.
+    pub(super) fn complete_sample(
+        &self,
+        id: usize,
+        sample: &SampleBuffer,
+        maximum: usize,
+    ) -> PyResult<SampleBuffer> {
+        if sample.resident_start() == 0 && sample.resident_end() == sample.frame_count() {
+            return Ok(sample.clone());
+        }
+        let lease = self
+            .cold_leases
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("cold lease lock poisoned"))?
+            .get(id)
+            .and_then(Clone::clone)
+            .ok_or_else(|| PyValueError::new_err("complete source lease unavailable"))?;
+        let complete = lease
+            .read_complete(sample, maximum)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        self.project_assets
+            .retain_cold_reader(&lease, &complete)
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        Ok(complete)
+    }
 }
 
 #[pymethods]
@@ -596,6 +700,12 @@ impl AudioEngine {
             cold_cancelled: Arc::new(AtomicBool::new(false)),
             cold_loading: Arc::new((0..NUM_SAMPLES).map(|_| AtomicU64::new(0)).collect()),
             cold_leases: Arc::new(Mutex::new((0..NUM_SAMPLES).map(|_| None).collect())),
+            resident_stem_cache: Arc::new(Mutex::new(
+                (0..NUM_SAMPLES)
+                    .map(|_| resident_relocation::ResidentStemCache::default())
+                    .collect(),
+            )),
+            resident_restore_guards: Mutex::new((0..NUM_SAMPLES).map(|_| None).collect()),
             cold_lease_generations: Arc::new((0..NUM_SAMPLES).map(|_| AtomicU64::new(0)).collect()),
             cold_pcm_history,
             project_assets,
@@ -759,6 +869,7 @@ impl AudioEngine {
     }
 
     pub fn loaded_sample_shape(&self, id: usize) -> PyResult<(u32, usize, usize)> {
+        resident_relocation::reconcile(self)?;
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err(format!(
                 "id out of range (expected 0..{}, got {id})",
@@ -782,13 +893,14 @@ impl AudioEngine {
                 .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?
         };
 
-        let frames = sample.samples.len() / sample.channels;
+        let frames = sample.frame_count();
         Ok((handle.output_sample_rate, sample.channels, frames))
     }
 
     /// Shut down the audio engine.
     pub fn shut_down(&mut self) -> PyResult<()> {
         self.cold_cancelled.store(true, Ordering::Release);
+        resident_relocation::cancel_all(self)?;
         self.cold_jobs.shutdown();
         self.offline_jobs.cancel(None);
         self.input_runtime = None;
@@ -928,7 +1040,8 @@ impl AudioEngine {
     }
 
     /// Admit copy-first complete cold preparation in the fixed worker lane.
-    #[pyo3(signature = (id, path, run_analysis=None, restore_automatic=false, replace_assignment=false))]
+    #[allow(clippy::too_many_arguments)] // Fixed public source/load options preserve the existing API.
+    #[pyo3(signature = (id, path, run_analysis=None, restore_automatic=false, replace_assignment=false, resident_loop_start_s=None, resident_loop_end_s=None, resident_key_lock=false))]
     pub fn load_sample_async(
         &self,
         id: usize,
@@ -936,6 +1049,9 @@ impl AudioEngine {
         run_analysis: Option<bool>,
         restore_automatic: bool,
         replace_assignment: bool,
+        resident_loop_start_s: Option<f64>,
+        resident_loop_end_s: Option<f64>,
+        resident_key_lock: bool,
     ) -> PyResult<u64> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
@@ -947,7 +1063,75 @@ impl AudioEngine {
             run_analysis.unwrap_or(true),
             restore_automatic,
             replace_assignment,
+            cold_residency::ResidentLoadHint::parse(
+                resident_loop_start_s,
+                resident_loop_end_s,
+                resident_key_lock,
+            )
+            .map_err(PyValueError::new_err)?,
         )
+    }
+
+    /// Current resident allocation and full-source extent; pending relocation
+    /// tickets expose their own ACK rather than relabelling this effective view.
+    pub fn loaded_residency(&self, py: Python<'_>, id: usize) -> PyResult<Py<PyDict>> {
+        resident_relocation::reconcile(self)?;
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+        if self.cold_loading[id].load(Ordering::Acquire) != 0 {
+            return Err(PyValueError::new_err(
+                "source/window is pending native adoption",
+            ));
+        }
+        let sample = self
+            .sample_cache
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?[id]
+            .clone()
+            .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?;
+        let dict = PyDict::new(py);
+        dict.set_item("full_frame_count", sample.frame_count())?;
+        dict.set_item("resident_start_frame", sample.resident_start())?;
+        dict.set_item("resident_end_frame", sample.resident_end())?;
+        dict.set_item(
+            "resident_frame_count",
+            sample.samples.len() / sample.channels,
+        )?;
+        dict.set_item(
+            "resident_pcm_bytes",
+            sample.samples.len() * size_of::<f32>(),
+        )?;
+        dict.set_item("window_revision", sample.window_revision())?;
+        dict.set_item("source_identity", sample.source_address())?;
+        dict.set_item(
+            "source_zero_frame",
+            sample
+                .residency
+                .as_ref()
+                .map_or(0, |view| view.source.source_zero_frame),
+        )?;
+        dict.set_item(
+            "context",
+            match sample.residency.as_ref().map(|view| view.context) {
+                Some(crate::messages::ResidentContext::FiniteLoop) => "finite-loop-exact-taps-v1",
+                Some(crate::messages::ResidentContext::KeyLockFullTrack) => {
+                    "full-track-key-lock-continuation-unproved-v1"
+                }
+                _ => "full-track-v1",
+            },
+        )?;
+        Ok(dict.unbind())
+    }
+
+    /// Prepare an acknowledged replacement view of the identical complete source.
+    pub fn relocate_resident_window(
+        &self,
+        id: usize,
+        start_s: f64,
+        end_s: f64,
+    ) -> PyResult<resident_relocation::ResidentWindowTicket> {
+        resident_relocation::relocate(self, id, start_s, end_s)
     }
 
     /// Actual complete cold manifest; contains no accepted-timing claim.
@@ -1062,6 +1246,7 @@ impl AudioEngine {
             .get(id)
             .and_then(Clone::clone)
             .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?;
+        require_complete_analysis_pcm(&sample)?;
         let (generation, loaded_rate) = self
             .loaded_source_generations
             .lock()
@@ -1474,14 +1659,22 @@ impl AudioEngine {
         let generation_lease = self.acquire_project_asset_lease(cache_dir.clone())?;
         let mut stems = py
             .detach(|| {
+                let peak = stem_cache::admitted_stem_pcm_bytes(sample.frame_count(), sample.channels)?
+                    .checked_add(sample.samples.len().checked_mul(4).ok_or("resident stem budget overflow")?)
+                    .ok_or("resident stem budget overflow")?;
+                if peak > cold_jobs::PCM_LIMIT_BYTES {
+                    return Err("complete stem preparation with resident window exceeds transient PCM admission".into());
+                }
+                let complete = self.complete_sample(id, &sample, cold_jobs::PCM_LIMIT_BYTES).map_err(|error| error.to_string())?;
                 prepare_stem_buffers_from_cache(
                     &source_version,
-                    &sample,
+                    &complete,
                     source_ticket.sample_rate_hz,
                     &cache_dir,
                 )
             })
             .map_err(PyValueError::new_err)?;
+        stems = stems.window_for(&sample).map_err(PyValueError::new_err)?;
         stems.publication = source_ticket.publication.clone();
         stems.accepted_timing = source_ticket.publication.accepted_projection();
         let (_, generation_path) = project_assets::owned_path(
@@ -1490,10 +1683,11 @@ impl AudioEngine {
         )
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
         self.project_assets
-            .retain_stems(generation_path, &stems)
+            .retain_stems(generation_path.clone(), &stems)
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
 
         // Source mutation, timing publication and enqueue all serialize here.
+        let retained_stems = stems.clone();
         let result = enqueue_current_prepared_stems(
             self,
             &handle.producer,
@@ -1501,6 +1695,15 @@ impl AudioEngine {
             &source_version,
             stems,
         );
+        if result.is_ok() {
+            self.record_stems(
+                id,
+                retained_stems,
+                source_version,
+                cache_dir.into(),
+                generation_path,
+            )?;
+        }
         drop(generation_lease);
         result
     }
@@ -1601,6 +1804,7 @@ impl AudioEngine {
     ///
     /// Returns `None` when no events are available.
     pub fn poll_loader_events(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        resident_relocation::reconcile(self)?;
         let loader_rx = self
             .loader_rx
             .lock()
@@ -2060,6 +2264,10 @@ impl AudioEngine {
     }
 
     pub fn set_key_lock(&mut self, enabled: bool) -> PyResult<()> {
+        resident_relocation::reconcile(self)?;
+        for id in 0..NUM_SAMPLES {
+            self.admit_resident_key_lock(id, enabled)?;
+        }
         let handle = self
             .stream_handle
             .as_ref()
@@ -2070,6 +2278,14 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
+        if producer_guard.is_full() {
+            return Err(PyRuntimeError::new_err(
+                "Failed to send SetKeyLock - buffer may be full",
+            ));
+        }
+        for id in 0..NUM_SAMPLES {
+            self.note_resident_key_lock_intent(id, enabled)?;
+        }
         push_control_message(
             &mut producer_guard,
             ControlMessage::SetKeyLock(enabled),
@@ -2081,6 +2297,8 @@ impl AudioEngine {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
         }
+        resident_relocation::reconcile(self)?;
+        self.admit_resident_key_lock(id, enabled)?;
 
         let handle = self
             .stream_handle
@@ -2092,6 +2310,12 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
+        if producer_guard.is_full() {
+            return Err(PyRuntimeError::new_err(
+                "Failed to send SetPadKeyLock - buffer may be full",
+            ));
+        }
+        self.note_resident_key_lock_intent(id, enabled)?;
         push_control_message(
             &mut producer_guard,
             ControlMessage::SetPadKeyLock { id, enabled },
@@ -2374,6 +2598,7 @@ impl AudioEngine {
         if end_s.is_some_and(|end_s| !end_s.is_finite() || end_s < 0.0) {
             return Err(PyValueError::new_err("end_s out of range"));
         }
+        resident_relocation::reconcile(self)?;
 
         let _requests = self
             .pad_request_ids
@@ -2384,6 +2609,25 @@ impl AudioEngine {
             .stream_handle
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        if let Some(sample) = self
+            .sample_cache
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?[id]
+            .as_ref()
+        {
+            let start = (start_s * f64::from(handle.output_sample_rate)).round() as usize;
+            let end =
+                end_s.map(|end| (end * f64::from(handle.output_sample_rate)).round() as usize);
+            if let Some(region) =
+                source_reader::effective_loop_region(start, end, sample.frame_count())
+                && (region.start < sample.resident_start() || region.end > sample.resident_end())
+            {
+                return Err(PyValueError::new_err(
+                    "loop requires a matching prepared resident window",
+                ));
+            }
+        }
 
         let mut producer_guard = handle
             .producer
@@ -2396,6 +2640,7 @@ impl AudioEngine {
             ));
         }
         let input_authority = self.input_runtime_ownership.next_authority(id)?;
+        self.note_resident_loop_intent(id, start_s, end_s)?;
         self.input_runtime_ownership.revoke(id, input_authority);
         producer_guard
             .push(ControlMessage::SetPadLoopRegion { id, start_s, end_s })
@@ -2416,6 +2661,19 @@ impl AudioEngine {
             .stream_handle
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+
+        resident_relocation::reconcile(self)?;
+        if let Some(sample) = self
+            .sample_cache
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?[id]
+            .as_ref()
+            && !resident_seek_available(sample, position_s, handle.output_sample_rate)
+        {
+            return Err(PyValueError::new_err(
+                "seek requires a matching prepared resident window",
+            ));
+        }
 
         let mut producer_guard = handle
             .producer
@@ -2611,7 +2869,9 @@ impl AudioEngine {
         };
 
         // Retrieve sample rate
-        let sample_rate = if let Some(handle) = self.stream_handle.as_ref() {
+        let sample_rate = if let Some(view) = sample.residency.as_ref() {
+            f64::from(view.source.sample_rate_hz)
+        } else if let Some(handle) = self.stream_handle.as_ref() {
             f64::from(handle.output_sample_rate)
         } else {
             44_100.0
@@ -2621,13 +2881,19 @@ impl AudioEngine {
         if channels == 0 {
             return Ok(None);
         }
-        let total_frames = sample.samples.len() / channels;
+        let total_frames = sample.frame_count();
         let region = waveform::source_frame_range(start_s, end_s, sample_rate, total_frames);
         if region.is_empty() {
             return Ok(None);
         }
+        if region.start < sample.resident_start() || region.end > sample.resident_end() {
+            return Err(PyValueError::new_err(
+                "waveform region requires a matching complete-source reader",
+            ));
+        }
         let Some(data) = waveform::render_region(
-            &sample.samples[region.start * channels..region.end * channels],
+            &sample.samples[(region.start - sample.resident_start()) * channels
+                ..(region.end - sample.resident_start()) * channels],
             channels,
             sample_rate,
             region.start,
@@ -2648,6 +2914,68 @@ impl AudioEngine {
 mod tests {
     use super::*;
     use rtrb::RingBuffer;
+
+    #[test]
+    fn resident_seek_admission_keeps_complete_end_clamp_and_matches_native_rounding() {
+        use crate::messages::ResidentContext;
+        let full = SampleBuffer {
+            channels: 1,
+            samples: Arc::from(vec![0.0; 100]),
+            residency: None,
+        }
+        .with_complete_source(48_000);
+        let finite = full.window(12, 23, 1, ResidentContext::FiniteLoop).unwrap();
+        assert!(resident_seek_available(&full, 1.0, 48_000));
+        assert!(resident_seek_available(&finite, 11.75 / 48_000.0, 48_000));
+        assert!(!resident_seek_available(&finite, 22.75 / 48_000.0, 48_000));
+        assert!(resident_seek_available(&finite, 22.25 / 48_000.0, 48_000));
+        assert!(!resident_seek_available(&finite, 11.25 / 48_000.0, 48_000));
+    }
+
+    #[test]
+    fn finite_waveform_uses_absolute_source_offsets_and_analysis_rejects_before_request_mutation() {
+        Python::initialize();
+        Python::attach(|py| {
+            let engine = AudioEngine::new().unwrap();
+            let sample = SampleBuffer {
+                channels: 1,
+                samples: Arc::from((0..100).map(|n| n as f32).collect::<Vec<_>>()),
+                residency: None,
+            }
+            .with_complete_source(48_000)
+            .window(12, 23, 1, crate::messages::ResidentContext::FiniteLoop)
+            .unwrap();
+            engine.sample_cache.lock().unwrap()[0] = Some(sample);
+            let (_, xs, ys, _) = engine
+                .get_waveform_render_data(py, 0, 16, 12.0 / 48_000.0, 17.0 / 48_000.0)
+                .unwrap()
+                .unwrap();
+            for n in 0..5 {
+                assert_eq!(
+                    xs.bind(py).get_item(n).unwrap().extract::<f64>().unwrap(),
+                    (12 + n) as f64 / 48_000.0
+                );
+                assert_eq!(
+                    ys.bind(py).get_item(n).unwrap().extract::<f32>().unwrap(),
+                    (12 + n) as f32
+                );
+            }
+            assert!(
+                engine
+                    .get_waveform_render_data(py, 0, 16, 0.0, 1.0)
+                    .is_err()
+            );
+            let request = engine.pad_request_ids.lock().unwrap()[0];
+            let epoch = engine.prepared_source_epochs[0].load(Ordering::Acquire);
+            assert!(admit_sample_analysis(&engine, 0).is_err());
+            assert_eq!(engine.pad_request_ids.lock().unwrap()[0], request);
+            assert_eq!(
+                engine.prepared_source_epochs[0].load(Ordering::Acquire),
+                epoch
+            );
+            assert!(engine.active_tasks.lock().unwrap().is_empty());
+        });
+    }
 
     #[test]
     fn load_success_preserves_request_identity_and_f64_activity_without_analysis() {
@@ -2742,6 +3070,7 @@ mod tests {
         Python::attach(|py| {
             let engine = AudioEngine::new().unwrap();
             engine.sample_cache.lock().unwrap()[0] = Some(SampleBuffer {
+                residency: None,
                 channels: 1,
                 samples: Arc::from([0.25_f32, -0.5, 0.75].as_slice()),
             });
@@ -3062,6 +3391,7 @@ mod tests {
         let producer = Arc::new(Mutex::new(producer));
         let sample_cache = Arc::new(Mutex::new(vec![None; 1]));
         let sample = SampleBuffer {
+            residency: None,
             channels: 1,
             samples: Arc::from([0.0_f32, 0.0].as_slice()),
         };
@@ -3085,6 +3415,8 @@ mod tests {
                 cold_epoch: None,
                 cold_adoption: None,
                 replace_assignment: false,
+                loop_region: None,
+                resident_cancelled: None,
                 intent: None,
             },
         );
@@ -3140,6 +3472,7 @@ mod tests {
 impl Drop for AudioEngine {
     fn drop(&mut self) {
         self.cold_cancelled.store(true, Ordering::Release);
+        let _ = resident_relocation::cancel_all(self);
         self.cold_jobs.shutdown();
     }
 }

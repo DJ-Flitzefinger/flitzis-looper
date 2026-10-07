@@ -156,6 +156,7 @@ fn loop_fixture(rate: u32, ratio: f32, mode: ExplicitSeekMode, stem_mask: Option
             })
             .collect::<Vec<_>>();
         SampleBuffer {
+            residency: None,
             channels: 2,
             samples: Arc::from(samples),
         }
@@ -164,6 +165,7 @@ fn loop_fixture(rate: u32, ratio: f32, mode: ExplicitSeekMode, stem_mask: Option
         .map(|index| stems[..4].iter().map(|stem| stem.samples[index]).sum())
         .collect::<Vec<_>>();
     let sample = SampleBuffer {
+        residency: None,
         channels: 2,
         samples: Arc::from(full_mix),
     };
@@ -171,6 +173,7 @@ fn loop_fixture(rate: u32, ratio: f32, mode: ExplicitSeekMode, stem_mask: Option
     Fixture {
         sample,
         stems: Some(PreparedStemSet {
+            complete_set_identity: std::sync::Arc::new([0; 32]),
             accepted_timing: None,
             reference_samples,
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
@@ -491,6 +494,7 @@ fn impulse_fixture(rate: u32, ratio: f32, marker: usize, output_frames: usize) -
     samples[source_marker * 2 + 1] = 0.5;
     Fixture {
         sample: SampleBuffer {
+            residency: None,
             channels: 2,
             samples: Arc::from(samples),
         },

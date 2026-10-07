@@ -30,6 +30,30 @@ pub(crate) struct NativeHistoryRequest {
 }
 
 impl NativeHistoryRequest {
+    pub(crate) fn matches_effective_contract(
+        &self,
+        feed: &ProductiveSourceFeed<'_>,
+        epoch: u64,
+    ) -> bool {
+        let binding = ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted);
+        self.epoch == epoch
+            && self.binding.same_source(binding)
+            && self.binding.accepted == binding.accepted
+            && self
+                .permit
+                .current_effective_source(feed.sample, feed.sample_rate_hz)
+            && self.permit.matches_projection(feed.accepted)
+            && self.plan.matches_source_contract(feed.plan)
+            && self.playback.matches_rate_target(feed.playback)
+            && match (self.stems.as_ref(), feed.stems) {
+                (None, None) => true,
+                (Some(old), Some(next)) => {
+                    Arc::ptr_eq(&old.complete_set_identity, &next.complete_set_identity)
+                        && old.accepted_timing == next.accepted_timing
+                }
+                _ => false,
+            }
+    }
     pub(crate) fn matches_contract(&self, feed: &ProductiveSourceFeed<'_>, epoch: u64) -> bool {
         self.epoch == epoch
             && self.binding
@@ -273,10 +297,12 @@ pub(super) mod tests {
             })
             .collect::<Vec<_>>();
         let sample = SampleBuffer {
+            residency: None,
             channels,
             samples: Arc::from(pcm),
         };
         let stems = stem_mask.map(|_| PreparedStemSet {
+            complete_set_identity: std::sync::Arc::new([0; 32]),
             accepted_timing: None,
             reference_samples: sample.samples.clone(),
             publication: PreparedSourcePermit::unrestricted(),
@@ -286,6 +312,7 @@ pub(super) mod tests {
             frame_count: SOURCE_FRAMES,
             available_mask: full_stem_available_mask(),
             stems: [0.1, 0.2, 0.3, 0.4, 0.7].map(|gain| SampleBuffer {
+                residency: None,
                 channels,
                 samples: sample
                     .samples

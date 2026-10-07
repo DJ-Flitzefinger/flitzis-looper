@@ -9,6 +9,7 @@ addresses. Automatic tempo estimation and variable-map playback/SYNC remain pend
 | --- | --- | --- |
 | Original decoded frames/rate | Original file | Decoder/resampler; not editor offset units. |
 | Loaded frames/rate | Resampled source at engine output rate | Waveform, markers, source reader and same-source stems. |
+| Resident range/storage | Absolute loaded-frame interval and local immutable allocation | Explicit translation by the reader; independent of complete extent/source zero. |
 | Source seconds | Binary64 from loaded source zero | Saved intent, waveform X/query, seek and playhead APIs. |
 | Source beat | Continuous scalar quarter-note coordinate | Pure Rust SourceGrid exposed as control-only ScalarSourceGrid. |
 | Grid origin | Signed source reference | Rounded activity/legacy base plus signed loaded-frame offset, independent of loop start. |
@@ -24,6 +25,12 @@ current snapshots retain full accepted identity and provenance; unavailable
 Automatic acknowledgement cannot authorize saved Legacy analysis replay.
 
 ## Projection and markers
+
+C2a resident windows retain complete loaded-source shape, duration and timing
+identity. Their local array start is not source zero. SourceLoopDomain uses the
+full frame count and absolute physical endpoints; only sample reads translate
+into resident storage. Source beat, playhead and labels remain absolute. A new
+window revision does not create accepted evidence or relabel a prior voice.
 
 `ScalarSourceGrid(origin_s, seconds_per_beat)` exposes `beat_at_source`,
 `source_at_beat` and `source_after_beats`, reusing pure Rust source-grid arithmetic

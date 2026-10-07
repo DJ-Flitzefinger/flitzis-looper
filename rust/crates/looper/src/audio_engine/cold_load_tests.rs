@@ -445,6 +445,8 @@ impl Retirement {
     }
 }
 impl AudioBufferRetirement for Retirement {
+    fn retire_resident_cancellation(&mut self, _: std::sync::Arc<std::sync::atomic::AtomicBool>) {}
+    fn retire_resident_transaction(&mut self, _: Box<crate::messages::ResidentTransaction>) {}
     fn retire_cold_adoption(&mut self, value: Arc<std::sync::atomic::AtomicU8>) {
         self.push(RetiredAudioBuffer::ColdAdoption(value));
     }
@@ -576,6 +578,7 @@ fn terminal(engine: &AudioEngine, request: u64) -> LoaderEvent {
 
 fn old(engine: &AudioEngine) -> SampleBuffer {
     let sample = SampleBuffer {
+        residency: None,
         channels: 2,
         samples: Arc::from([0.25; 64]),
     };

@@ -798,6 +798,8 @@ struct RetainedRefresh {
 }
 
 impl AudioBufferRetirement for RetainedRefresh {
+    fn retire_resident_cancellation(&mut self, _: std::sync::Arc<std::sync::atomic::AtomicBool>) {}
+    fn retire_resident_transaction(&mut self, _: Box<crate::messages::ResidentTransaction>) {}
     fn retire_cold_adoption(&mut self, _: Arc<std::sync::atomic::AtomicU8>) {}
     fn retire_sample(&mut self, _: SampleBuffer) {
         unreachable!()

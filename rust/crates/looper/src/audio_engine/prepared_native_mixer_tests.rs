@@ -12,6 +12,7 @@ const RATE: u32 = 8_000;
 
 fn source() -> SampleBuffer {
     SampleBuffer {
+        residency: None,
         channels: 1,
         samples: Arc::from(
             (0..16_000)
@@ -311,6 +312,7 @@ fn prepared_native_mixer_stem_selection_ramp_defers_then_adopts_actual_stem_hist
     let sample = source();
     let mut mixer = fixture(&sample);
     let stems = PreparedStemSet {
+        complete_set_identity: std::sync::Arc::new([0; 32]),
         reference_samples: sample.samples.clone(),
         publication: PreparedSourcePermit::unrestricted(),
         accepted_timing: Some(projection()),
@@ -320,6 +322,7 @@ fn prepared_native_mixer_stem_selection_ramp_defers_then_adopts_actual_stem_hist
         frame_count: sample.samples.len(),
         available_mask: 31,
         stems: std::array::from_fn(|index| SampleBuffer {
+            residency: None,
             channels: 1,
             samples: Arc::from(
                 sample
@@ -669,6 +672,7 @@ fn musical_full_stem_transition_and_continuous_filter_output_share_one_fractiona
             let mut reference_output = None;
             for pattern in [&[512][..], &[1][..], &[1, 127, 384, 96, 257, 512, 31][..]] {
                 let stems = PreparedStemSet {
+                    complete_set_identity: std::sync::Arc::new([0; 32]),
                     reference_samples: sample.samples.clone(),
                     publication: PreparedSourcePermit::unrestricted(),
                     accepted_timing: None,
@@ -678,6 +682,7 @@ fn musical_full_stem_transition_and_continuous_filter_output_share_one_fractiona
                     frame_count: sample.samples.len(),
                     available_mask: 31,
                     stems: std::array::from_fn(|index| SampleBuffer {
+                        residency: None,
                         channels: 1,
                         samples: sample
                             .samples
@@ -688,6 +693,7 @@ fn musical_full_stem_transition_and_continuous_filter_output_share_one_fractiona
                     }),
                 };
                 let selected = SampleBuffer {
+                    residency: None,
                     channels: 1,
                     samples: (0..sample.samples.len())
                         .map(|frame| stems.stems[1].samples[frame] + stems.stems[3].samples[frame])
@@ -782,6 +788,7 @@ fn musical_full_stem_transition_and_continuous_filter_output_share_one_fractiona
 fn replacement_bank_cannot_relabel_pinned_musical_source_domain_or_actual_pcm() {
     let sample = source();
     let replacement = SampleBuffer {
+        residency: None,
         channels: 1,
         samples: sample
             .samples

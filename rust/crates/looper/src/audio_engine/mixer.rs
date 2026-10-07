@@ -27,14 +27,13 @@ use crate::audio_engine::source_grid::SourceGrid;
 use crate::audio_engine::source_reader::{
     FrameRange, STEM_TRANSITION_RAMP_FRAMES, SourceReadPlan, StemRenderSelection, StemTransition,
     effective_loop_region, explicit_seek_mode_for_frame, prepared_stem_set_for_render,
-    prepared_stem_set_matches_sample,
+    prepared_stem_set_matches_sample, resident_read_context_available,
 };
 #[cfg(test)]
 use crate::audio_engine::source_reader::{
     full_stem_available_mask, render_source_sample, stem_index_mask,
 };
 use crate::audio_engine::stretch_processor::{DEFAULT_BLOCK_SAMPLES, ProductiveSourceFeed};
-#[cfg(test)]
 use crate::audio_engine::voice_slot::ExplicitSeekMode;
 use crate::audio_engine::voice_slot::{VoiceSlot, VoiceSourceTiming, VoiceStartConfig};
 #[cfg(test)]
@@ -389,9 +388,10 @@ impl RtMixer {
                 .binding_source_current(id, binding)
             && binding.sample_rate_hz as f32 == self.sample_rate_hz
             && self.sample_bank[id].as_ref().is_some_and(|sample| {
-                sample.samples.as_ptr() as usize == binding.source_address
-                    && sample.samples.len() == binding.sample_count
+                sample.source_address() == binding.source_address
+                    && sample.source_sample_count() == binding.sample_count
                     && sample.channels == binding.channels
+                    && sample.resident_binding() == binding.resident
             })
             && self.pad_accepted_timing[id] == binding.accepted
             && self.current_timing_acknowledgements.current_epoch(id)
@@ -417,9 +417,10 @@ impl RtMixer {
                 .filter(|voice| voice.active && voice.sample_id == id)
                 .all(|voice| {
                     voice.sample.as_ref().is_some_and(|sample| {
-                        sample.samples.as_ptr() as usize == binding.source_address
-                            && sample.samples.len() == binding.sample_count
+                        sample.source_address() == binding.source_address
+                            && sample.source_sample_count() == binding.sample_count
                             && sample.channels == binding.channels
+                            && sample.resident_binding() == binding.resident
                     }) && self.timing_for_voice(voice).accepted == binding.accepted
                 })
             && self.source_binding_current(id, binding)
@@ -428,6 +429,80 @@ impl RtMixer {
     #[cfg(test)]
     pub(crate) fn loop_region_frames(&self, id: usize) -> (usize, Option<usize>) {
         (self.pad_loop_start_frame[id], self.pad_loop_end_frame[id])
+    }
+
+    pub(crate) fn set_loop_region_frames(&mut self, id: usize, start: usize, end: Option<usize>) {
+        if id < NUM_SAMPLES && self.loop_context_available(id, start, end) {
+            self.pad_loop_start_frame[id] = start;
+            self.pad_loop_end_frame[id] = end;
+        }
+    }
+
+    fn loop_context_available(&self, id: usize, start: usize, end: Option<usize>) -> bool {
+        let bank = self.sample_bank[id].as_ref();
+        let available = |sample: &SampleBuffer| {
+            effective_loop_region(start, end, sample.frame_count()).is_some_and(|region| {
+                resident_read_context_available(
+                    sample,
+                    region,
+                    ExplicitSeekMode::Normal,
+                    self.pad_key_lock_enabled[id],
+                )
+            })
+        };
+        bank.is_none_or(available)
+            && self
+                .voices
+                .iter()
+                .filter(|voice| voice.active && voice.sample_id == id)
+                .all(|voice| {
+                    voice.sample.as_ref().is_some_and(|sample| {
+                        if bank.is_some_and(|bank| sample.same_source(bank)) {
+                            available(sample)
+                        } else {
+                            voice.source_loop_region.is_some_and(|region| {
+                                resident_read_context_available(
+                                    sample,
+                                    region,
+                                    voice.explicit_seek_mode,
+                                    self.pad_key_lock_enabled[id],
+                                )
+                            })
+                        }
+                    })
+                })
+    }
+
+    pub(crate) fn loop_intent_context_available(
+        &self,
+        id: usize,
+        start_s: f64,
+        end_s: Option<f64>,
+    ) -> bool {
+        if id >= NUM_SAMPLES
+            || !start_s.is_finite()
+            || start_s < 0.0
+            || end_s.is_some_and(|end| !end.is_finite() || end < 0.0)
+        {
+            return false;
+        }
+        let start = (start_s * f64::from(self.sample_rate_hz)).round() as usize;
+        let end = end_s.map(|end| {
+            ((end * f64::from(self.sample_rate_hz)).round() as usize).max(start.saturating_add(1))
+        });
+        self.loop_context_available(id, start, end)
+    }
+
+    fn full_context_available(&self, id: usize) -> bool {
+        let full = |sample: &SampleBuffer| {
+            sample.resident_start() == 0 && sample.resident_end() == sample.frame_count()
+        };
+        self.sample_bank[id].as_ref().is_none_or(full)
+            && self
+                .voices
+                .iter()
+                .filter(|voice| voice.active && voice.sample_id == id)
+                .all(|voice| voice.sample.as_ref().is_some_and(full))
     }
 
     /// Validate every live/paused pin against the exact source and effective projection.
@@ -448,8 +523,8 @@ impl RtMixer {
                         .find(|entry| entry.id == voice.sample_id)
                         .is_some_and(|entry| {
                             voice.sample.as_ref().is_some_and(|sample| {
-                                sample.samples.as_ptr() as usize == entry.binding.source_address
-                                    && sample.samples.len() == entry.binding.sample_count
+                                sample.source_address() == entry.binding.source_address
+                                    && sample.source_sample_count() == entry.binding.sample_count
                                     && sample.channels == entry.binding.channels
                             }) && self.timing_for_voice(voice).accepted == entry.binding.accepted
                         })
@@ -500,7 +575,9 @@ impl RtMixer {
         generation: u64,
     ) -> bool {
         id < NUM_SAMPLES
-            && sample.channels == self.channels
+            && sample.valid_residency(self.sample_rate_hz as u32, self.channels)
+            && (!self.pad_key_lock_enabled[id]
+                || (sample.resident_start() == 0 && sample.resident_end() == sample.frame_count()))
             && self.input_runtime_ownership.source_generation(
                 id,
                 sample,
@@ -519,7 +596,10 @@ impl RtMixer {
             return false;
         }
 
-        if sample.channels != self.channels {
+        if !sample.valid_residency(self.sample_rate_hz as u32, self.channels)
+            || (self.pad_key_lock_enabled[id]
+                && (sample.resident_start() != 0 || sample.resident_end() != sample.frame_count()))
+        {
             retirement.retire_sample(sample);
             return false;
         }
@@ -528,14 +608,20 @@ impl RtMixer {
         // render (including paused voices). Freeze the old pin's latest effective timing first.
         let previous_timing = self.timing_for_sample_id(id);
         if let Some(previous) = self.sample_bank[id].as_ref() {
+            let previous_region = effective_loop_region(
+                self.pad_loop_start_frame[id],
+                self.pad_loop_end_frame[id],
+                previous.frame_count(),
+            );
             for voice in &mut self.voices {
                 if voice.is_playing_sample(id)
                     && voice
                         .sample
                         .as_ref()
-                        .is_some_and(|active| Arc::ptr_eq(&active.samples, &previous.samples))
+                        .is_some_and(|active| active.same_source(previous))
                 {
                     voice.source_timing = previous_timing;
+                    voice.source_loop_region = previous_region;
                 }
             }
         }
@@ -548,10 +634,122 @@ impl RtMixer {
         }
 
         self.sample_bank[id] = Some(sample);
+        if let Some(sample) = &self.sample_bank[id]
+            && sample
+                .residency
+                .as_ref()
+                .is_some_and(|view| view.context == crate::messages::ResidentContext::FiniteLoop)
+        {
+            self.pad_loop_start_frame[id] = sample.resident_start();
+            self.pad_loop_end_frame[id] = Some(sample.resident_end());
+        }
         self.pad_accepted_timing[id] = None;
         self.current_timing_acknowledgements.clear(id);
         self.stem_enabled_mask[id] = STEM_COMPONENT_MASK;
         self.stem_transitions[id].clear();
+        true
+    }
+
+    /// Replace immutable storage for the same effective source/complete StemSet.
+    /// Voice clocks, native/FIFO/filter histories, selection and rate epochs stay owned.
+    pub(crate) fn relocate_resident_rt(
+        &mut self,
+        transaction: Box<crate::messages::ResidentTransaction>,
+        retirement: &mut impl AudioBufferRetirement,
+    ) -> bool {
+        let id = transaction.id;
+        let sample = &transaction.sample;
+        let stems = &transaction.stems;
+        let binding = transaction.binding;
+        let publication = &transaction.publication;
+        let expected_window_revision = transaction.expected_window_revision;
+        let valid = id < NUM_SAMPLES
+            && publication.current()
+            && sample.valid_residency(self.sample_rate_hz as u32, self.channels)
+            && self.source_binding_current(id, binding)
+            && self.sample_bank[id].as_ref().is_some_and(|old| {
+                old.same_source(sample)
+                    && old.window_revision() == expected_window_revision
+                    && sample.window_revision() > expected_window_revision
+                    && effective_loop_region(
+                        self.pad_loop_start_frame[id],
+                        self.pad_loop_end_frame[id],
+                        old.frame_count(),
+                    )
+                    .is_some_and(|region| {
+                        resident_read_context_available(
+                            sample,
+                            region,
+                            ExplicitSeekMode::Normal,
+                            self.pad_key_lock_enabled[id],
+                        )
+                    })
+            })
+            && match (&self.prepared_stems[id], stems) {
+                (None, None) => true,
+                (Some(old), Some(next)) => {
+                    Arc::ptr_eq(&old.complete_set_identity, &next.complete_set_identity)
+                        && next.accepted_timing == self.pad_accepted_timing[id]
+                        && prepared_stem_set_matches_sample(
+                            next,
+                            sample,
+                            self.channels,
+                            self.sample_rate_hz,
+                            sample.frame_count(),
+                        )
+                }
+                _ => false,
+            }
+            && self
+                .voices
+                .iter()
+                .filter(|voice| voice.active && voice.sample_id == id)
+                .all(|voice| {
+                    voice
+                        .sample
+                        .as_ref()
+                        .is_some_and(|old| old.same_source(sample))
+                        && effective_loop_region(
+                            self.pad_loop_start_frame[id],
+                            self.pad_loop_end_frame[id],
+                            sample.frame_count(),
+                        )
+                        .is_some_and(|region| {
+                            resident_read_context_available(
+                                sample,
+                                region,
+                                voice.explicit_seek_mode,
+                                self.pad_key_lock_enabled[id],
+                            )
+                        })
+                });
+        if !valid
+            || !publication.claim_resident()
+            || !publication.current()
+            || !self.source_binding_current(id, binding)
+        {
+            publication.mark_rejected();
+            retirement.retire_resident_transaction(transaction);
+            return false;
+        }
+        for voice in &mut self.voices {
+            if voice.active
+                && voice.sample_id == id
+                && let Some(old) = voice.sample.replace(sample.clone())
+            {
+                retirement.retire_sample(old);
+            }
+        }
+        self.input_runtime_ownership.publish_window(id, sample);
+        if let Some(old) = self.sample_bank[id].replace(sample.clone()) {
+            retirement.retire_sample(old);
+        }
+        if let Some(old) = self.prepared_stems[id].take() {
+            retirement.retire_prepared_stems(old);
+        }
+        self.prepared_stems[id] = stems.clone();
+        publication.mark_accepted();
+        retirement.retire_resident_transaction(transaction);
         true
     }
 
@@ -602,7 +800,7 @@ impl RtMixer {
             .is_some()
             && self.sample_bank[id].as_ref().is_some_and(|sample| {
                 sample.channels == timing.reference.channels
-                    && Arc::ptr_eq(&sample.samples, &timing.reference.samples)
+                    && sample.same_source(&timing.reference)
             });
         if valid {
             self.invalidate_prepared_for_pad(id);
@@ -741,7 +939,7 @@ impl RtMixer {
             return false;
         };
 
-        let sample_frames = sample.samples.len() / self.channels;
+        let sample_frames = sample.frame_count();
         prepared_stem_set_matches_sample(
             stems,
             sample,
@@ -769,6 +967,16 @@ impl RtMixer {
         };
         self.input_runtime_ownership
             .source_current(id, sample, self.sample_rate_hz as u32)
+            && self
+                .effective_loop_region(id, sample.frame_count())
+                .is_some_and(|region| {
+                    resident_read_context_available(
+                        sample,
+                        region,
+                        ExplicitSeekMode::Normal,
+                        self.pad_key_lock_enabled[id],
+                    )
+                })
             && self.input_runtime_ownership.source_timing_available(
                 id,
                 self.pad_accepted_timing[id],
@@ -793,7 +1001,7 @@ impl RtMixer {
                 && voice
                     .sample
                     .as_ref()
-                    .is_some_and(|old| !Arc::ptr_eq(&old.samples, &sample.samples))
+                    .is_some_and(|old| !old.same_source(sample))
         });
         !replaces_pin || retirement.available_retirement_slots() > 0
     }
@@ -908,7 +1116,7 @@ impl RtMixer {
         let tempo_ratio = self.tempo_ratio_for_sample_id(id);
         let source_timing = self.timing_for_sample_id(id);
 
-        let sample_frames = sample.samples.len() / self.channels;
+        let sample_frames = sample.frame_count();
         let initial_frame_pos = target_master_beat
             .map(|phase| self.phase_aligned_initial_sample_frame(id, sample_frames, phase))
             .unwrap_or_else(|| self.effective_loop_start_frame(id, sample_frames));
@@ -934,10 +1142,8 @@ impl RtMixer {
         end_s: Option<f64>,
     ) {
         self.set_pad_loop_region(config.sample_id, start_s, end_s);
-        config.initial_frame_pos = self.effective_loop_start_frame(
-            config.sample_id,
-            config.sample.samples.len() / self.channels,
-        );
+        config.initial_frame_pos =
+            self.effective_loop_start_frame(config.sample_id, config.sample.frame_count());
     }
 
     pub(crate) fn play_prepared_sample_rt(
@@ -956,7 +1162,7 @@ impl RtMixer {
                 if voice_slot
                     .sample
                     .as_ref()
-                    .is_some_and(|old| Arc::ptr_eq(&old.samples, &config.sample.samples))
+                    .is_some_and(|old| old.same_source(&config.sample))
                 {
                     voice_slot.source_timing = config.source_timing;
                     voice_slot.restart(
@@ -1026,12 +1232,18 @@ impl RtMixer {
     }
 
     pub fn set_key_lock(&mut self, enabled: bool) {
+        if enabled && (0..NUM_SAMPLES).any(|id| !self.full_context_available(id)) {
+            return;
+        }
         self.invalidate_prepared_for_all();
         self.pad_key_lock_enabled.fill(enabled);
     }
 
     pub fn set_pad_key_lock(&mut self, id: usize, enabled: bool) {
         if id >= NUM_SAMPLES {
+            return;
+        }
+        if enabled && !self.full_context_available(id) {
             return;
         }
 
@@ -1138,7 +1350,7 @@ impl RtMixer {
             .sample
             .as_ref()
             .zip(self.sample_bank[voice.sample_id].as_ref())
-            .is_some_and(|(active, bank)| Arc::ptr_eq(&active.samples, &bank.samples));
+            .is_some_and(|(active, bank)| active.same_source(bank));
         if current_source {
             self.timing_for_sample_id(voice.sample_id)
         } else {
@@ -1296,11 +1508,22 @@ impl RtMixer {
             None
         };
 
+        if !self.loop_context_available(id, start_frame, end_frame) {
+            return;
+        }
+
         self.pad_loop_start_frame[id] = start_frame;
         self.pad_loop_end_frame[id] = end_frame;
 
+        let bank = self.sample_bank[id].as_ref();
         for voice_slot in &mut self.voices {
-            if voice_slot.is_playing_sample(id) {
+            if voice_slot.is_playing_sample(id)
+                && voice_slot
+                    .sample
+                    .as_ref()
+                    .zip(bank)
+                    .is_some_and(|(sample, bank)| sample.same_source(bank))
+            {
                 voice_slot.clear_explicit_seek();
             }
         }
@@ -1332,24 +1555,33 @@ impl RtMixer {
 
         // A successfully replaced bank can coexist with a retained old voice until retrigger.
         // Seek addresses that voice's immutable source extent, never the future launch source.
-        let Some(sample) = self
-            .voices
-            .iter()
-            .find(|voice| voice.is_playing_sample(id))
-            .and_then(|voice| voice.sample.as_ref())
-        else {
+        let Some(voice) = self.voices.iter().find(|voice| voice.is_playing_sample(id)) else {
             return false;
         };
-        let sample_frames = sample.samples.len() / self.channels;
+        let Some(sample) = voice.sample.as_ref() else {
+            return false;
+        };
+        let sample_frames = sample.frame_count();
         if sample_frames == 0 {
             return false;
         }
 
-        let Some(loop_region) = self.effective_loop_region(id, sample_frames) else {
+        let Some(loop_region) = voice
+            .source_loop_region
+            .or_else(|| self.effective_loop_region(id, sample_frames))
+        else {
             return false;
         };
         let target_frame = self.source_frame_from_seconds(position_s, sample_frames);
         let seek_mode = explicit_seek_mode_for_frame(target_frame, loop_region, sample_frames);
+        if !resident_read_context_available(
+            sample,
+            loop_region,
+            seek_mode,
+            self.pad_key_lock_enabled[id],
+        ) {
+            return false;
+        }
 
         // Explicit seek is a discontinuity even if it names the same exact current phase.
         self.pad_dsp_chains[id].reset();
@@ -1388,7 +1620,7 @@ impl RtMixer {
             .iter()
             .find(|voice| voice.active && !voice.paused && voice.sample_id == id)?;
         let sample = voice.sample.as_ref()?;
-        let sample_frames = sample.samples.len() / self.channels;
+        let sample_frames = sample.frame_count();
 
         if sample_frames == 0 || voice.frame_pos >= sample_frames {
             return None;
@@ -1446,8 +1678,10 @@ impl RtMixer {
             .voices
             .iter()
             .find(|voice| voice.active && !voice.paused && voice.sample_id == id)?;
-        let sample_frames = voice.sample.as_ref()?.samples.len() / self.channels;
-        let region = self.effective_loop_region(id, sample_frames)?;
+        let sample_frames = voice.sample.as_ref()?.frame_count();
+        let region = voice
+            .source_loop_region
+            .or_else(|| self.effective_loop_region(id, sample_frames))?;
         let mut playback = voice.source_playback;
         let timing = self.timing_for_voice(voice);
         playback.configure_domain(timing.loop_domain(sample_frames, region));
@@ -1796,7 +2030,7 @@ impl RtMixer {
             voice.source_timing = voice_timings[voice_index];
 
             if !is_paused {
-                let sample_frames = sample.samples.len() / channels;
+                let sample_frames = sample.frame_count();
                 if sample_frames == 0 {
                     pad_dsp_chains[voice.sample_id].reset();
                     voice.stop_rt(retirement);
@@ -1818,11 +2052,13 @@ impl RtMixer {
 
                 voice.source_playback.set_target(tempo_ratios[voice_index]);
 
-                let Some(loop_region) = effective_loop_region(
-                    pad_loop_start_frame[voice.sample_id],
-                    pad_loop_end_frame[voice.sample_id],
-                    sample_frames,
-                ) else {
+                let Some(loop_region) = voice.source_loop_region.or_else(|| {
+                    effective_loop_region(
+                        pad_loop_start_frame[voice.sample_id],
+                        pad_loop_end_frame[voice.sample_id],
+                        sample_frames,
+                    )
+                }) else {
                     pad_dsp_chains[voice.sample_id].reset();
                     voice.stop_rt(retirement);
                     continue;
@@ -1863,7 +2099,7 @@ impl RtMixer {
                     };
                     let permit = bank_sources[voice.sample_id]
                         .as_ref()
-                        .filter(|bank| Arc::ptr_eq(&bank.samples, &sample.samples))
+                        .filter(|bank| bank.same_source(&sample))
                         .and_then(|_| {
                             context.capture(
                                 &sample,
@@ -1921,15 +2157,17 @@ impl RtMixer {
                 voice.frame_pos = position.frame;
                 voice.explicit_seek_mode = position.seek_mode;
             } else {
-                if let Some(region) = effective_loop_region(
-                    pad_loop_start_frame[voice.sample_id],
-                    pad_loop_end_frame[voice.sample_id],
-                    sample.samples.len() / channels,
-                ) {
+                if let Some(region) = voice.source_loop_region.or_else(|| {
+                    effective_loop_region(
+                        pad_loop_start_frame[voice.sample_id],
+                        pad_loop_end_frame[voice.sample_id],
+                        sample.frame_count(),
+                    )
+                }) {
                     voice.source_playback.configure_domain(
                         voice
                             .source_timing
-                            .loop_domain(sample.samples.len() / channels, region),
+                            .loop_domain(sample.frame_count(), region),
                     );
                     let position = voice.source_playback.position();
                     voice.frame_pos = position.frame;
@@ -1952,6 +2190,7 @@ mod tests {
     fn create_test_sample(channels: usize, frames: usize, value: f32) -> SampleBuffer {
         let samples = vec![value; channels * frames];
         SampleBuffer {
+            residency: None,
             channels,
             samples: Arc::from(samples.into_boxed_slice()),
         }
@@ -1965,6 +2204,7 @@ mod tests {
             .collect();
 
         SampleBuffer {
+            residency: None,
             channels: 1,
             samples: Arc::from(samples.into_boxed_slice()),
         }
@@ -1980,6 +2220,7 @@ mod tests {
         let silence = create_test_sample(1, frames, 0.0);
 
         PreparedStemSet {
+            complete_set_identity: std::sync::Arc::new([0; 32]),
             accepted_timing: None,
             reference_samples: reference.samples.clone(),
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
@@ -2000,6 +2241,7 @@ mod tests {
 
     fn create_frame_number_sample(frames: usize) -> SampleBuffer {
         SampleBuffer {
+            residency: None,
             channels: 1,
             samples: Arc::from(
                 (0..frames)
@@ -2135,6 +2377,12 @@ mod tests {
     }
 
     impl AudioBufferRetirement for CollectingRetirement {
+        fn retire_resident_cancellation(
+            &mut self,
+            _: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        ) {
+        }
+        fn retire_resident_transaction(&mut self, _: Box<crate::messages::ResidentTransaction>) {}
         fn retire_cold_adoption(&mut self, _: Arc<std::sync::atomic::AtomicU8>) {}
         fn retire_accepted_timing_refresh(
             &mut self,
@@ -2171,6 +2419,7 @@ mod tests {
     ) -> PreparedStemSet {
         let buffer = create_test_sample(channels, frames, 0.25);
         PreparedStemSet {
+            complete_set_identity: std::sync::Arc::new([0; 32]),
             accepted_timing: None,
             reference_samples: reference.samples.clone(),
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
@@ -2191,6 +2440,7 @@ mod tests {
         values: [f32; STEM_BUFFER_COUNT],
     ) -> PreparedStemSet {
         PreparedStemSet {
+            complete_set_identity: std::sync::Arc::new([0; 32]),
             accepted_timing: None,
             reference_samples: reference.samples.clone(),
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
@@ -2334,6 +2584,7 @@ mod tests {
         mixer.load_sample(
             0,
             SampleBuffer {
+                residency: None,
                 channels: 1,
                 samples,
             },
@@ -2360,6 +2611,7 @@ mod tests {
         let stem_samples: Arc<[f32]> = Arc::from(vec![0.25_f32; 32].into_boxed_slice());
         let weak = Arc::downgrade(&stem_samples);
         let stems = PreparedStemSet {
+            complete_set_identity: std::sync::Arc::new([0; 32]),
             accepted_timing: None,
             reference_samples: mixer.sample_bank[0].as_ref().unwrap().samples.clone(),
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
@@ -2369,6 +2621,7 @@ mod tests {
             frame_count: 32,
             available_mask: full_stem_available_mask(),
             stems: std::array::from_fn(|_| SampleBuffer {
+                residency: None,
                 channels: 1,
                 samples: stem_samples.clone(),
             }),
@@ -3552,12 +3805,14 @@ mod tests {
     fn test_stem_mask_change_crossfades_and_preserves_loop_relative_source_frame() {
         let mut mixer = RtMixer::new(1, 10.0);
         let full_mix = SampleBuffer {
+            residency: None,
             channels: 1,
             samples: Arc::from(vec![0.0; 8].into_boxed_slice()),
         };
         let vocals: Vec<f32> = (0..8).map(|frame| frame as f32).collect();
         let drums: Vec<f32> = (0..8).map(|frame| 100.0 + frame as f32).collect();
         let stems = PreparedStemSet {
+            complete_set_identity: std::sync::Arc::new([0; 32]),
             accepted_timing: None,
             reference_samples: full_mix.samples.clone(),
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
@@ -3568,12 +3823,14 @@ mod tests {
             available_mask: full_stem_available_mask(),
             stems: [
                 SampleBuffer {
+                    residency: None,
                     channels: 1,
                     samples: Arc::from(vocals.into_boxed_slice()),
                 },
                 create_test_sample(1, 8, 0.0),
                 create_test_sample(1, 8, 0.0),
                 SampleBuffer {
+                    residency: None,
                     channels: 1,
                     samples: Arc::from(drums.into_boxed_slice()),
                 },
@@ -3685,6 +3942,7 @@ mod tests {
     fn test_prepared_stem_render_source_uses_loop_relative_frame_positions() {
         let mut mixer = RtMixer::new(1, 10.0);
         let full_mix = SampleBuffer {
+            residency: None,
             channels: 1,
             samples: Arc::from(vec![100.0; 6].into_boxed_slice()),
         };
@@ -3696,6 +3954,7 @@ mod tests {
             [0.0; 6],
         ];
         let stems = PreparedStemSet {
+            complete_set_identity: std::sync::Arc::new([0; 32]),
             accepted_timing: None,
             reference_samples: full_mix.samples.clone(),
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
@@ -3705,6 +3964,7 @@ mod tests {
             frame_count: 6,
             available_mask: full_stem_available_mask(),
             stems: std::array::from_fn(|index| SampleBuffer {
+                residency: None,
                 channels: 1,
                 samples: Arc::from(stem_values[index].to_vec().into_boxed_slice()),
             }),
@@ -3933,6 +4193,7 @@ mod tests {
         let mut mixer = RtMixer::new(2, 44_100.0);
         let samples = vec![0.10, -0.20, 0.30, -0.40, -0.50, 0.60, 0.70, -0.80];
         let sample = SampleBuffer {
+            residency: None,
             channels: 2,
             samples: Arc::from(samples.clone().into_boxed_slice()),
         };
@@ -3996,6 +4257,7 @@ mod tests {
     fn test_speed_changes_affect_render_output() {
         let samples: Vec<f32> = (0..100).map(|i| i as f32 / 100.0).collect();
         let sample = SampleBuffer {
+            residency: None,
             channels: 1,
             samples: Arc::from(samples.into_boxed_slice()),
         };
@@ -4126,6 +4388,7 @@ mod tests {
     fn test_live_loop_update_preserves_source_frame_inside_new_region() {
         let mut mixer = RtMixer::new(1, 10.0);
         let sample = SampleBuffer {
+            residency: None,
             channels: 1,
             samples: Arc::from((0..10).map(|frame| frame as f32).collect::<Vec<_>>()),
         };
@@ -4487,6 +4750,14 @@ mod productive_history_tests;
 #[cfg(test)]
 #[path = "prepared_native_mixer_tests.rs"]
 mod prepared_native_mixer_tests;
+
+#[cfg(test)]
+#[path = "resident_mixer_tests.rs"]
+mod resident_mixer_tests;
+
+#[cfg(test)]
+#[path = "resident_context_proof_tests.rs"]
+mod resident_context_proof_tests;
 
 #[cfg(test)]
 #[path = "mixer_source_tests.rs"]

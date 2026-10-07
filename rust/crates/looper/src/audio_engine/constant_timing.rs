@@ -124,8 +124,8 @@ impl CurrentConstantTimingRecord {
         projection: AcceptedTimingProjection,
     ) -> Self {
         Self {
-            source_address: ticket.sample.samples.as_ptr() as usize,
-            sample_count: ticket.sample.samples.len(),
+            source_address: ticket.sample.source_address(),
+            sample_count: ticket.sample.source_sample_count(),
             channels: ticket.sample.channels,
             binding: ticket.binding.clone(),
             revision: timing.revision().to_owned(),
@@ -258,8 +258,8 @@ pub(super) fn current_record_for_source<'a>(
     records.iter().find(|record| {
         record.publication_epoch == acknowledged
             && record.channels == source.channels
-            && record.source_address == source.samples.as_ptr() as usize
-            && record.sample_count == source.samples.len()
+            && record.source_address == source.source_address()
+            && record.sample_count == source.source_sample_count()
             && generation_and_rate
                 == (
                     record.binding.job.source_generation,
@@ -433,6 +433,67 @@ impl Drop for PreparationLease<'_> {
     }
 }
 
+/// Full-source PCM is a bounded temporary analysis lease. Opaque tickets keep
+/// only their captured resident reference; accepting evidence never pins a
+/// complete playback allocation merely because this verifier needed it.
+fn timing_resident_reference_bytes(reference: &SampleBuffer) -> Result<usize, String> {
+    if reference.resident_start() == 0 && reference.resident_end() == reference.frame_count() {
+        Ok(0)
+    } else {
+        reference
+            .samples
+            .len()
+            .checked_mul(size_of::<f32>())
+            .ok_or_else(|| "timing resident-reference byte count overflow".into())
+    }
+}
+
+fn check_timing_pcm_geometry(
+    reference: &SampleBuffer,
+    rate: u32,
+    budget: PcmBudget,
+) -> Result<(), String> {
+    let retained = timing_resident_reference_bytes(reference)?;
+    let available = budget
+        .limit_bytes()
+        .checked_sub(retained)
+        .filter(|bytes| *bytes > 0)
+        .ok_or("constant timing PCM byte limit exceeded")?;
+    PcmBudget::new(available)?.check_loaded_geometry(
+        reference.source_sample_count(),
+        reference.channels,
+        rate,
+    )?;
+    if retained != 0
+        && reference
+            .source_sample_count()
+            .checked_mul(2 * size_of::<f32>())
+            .is_none_or(|bytes| bytes > available)
+    {
+        return Err("constant timing PCM byte limit exceeded".into());
+    }
+    Ok(())
+}
+
+fn complete_timing_sample(
+    engine: &AudioEngine,
+    id: usize,
+    reference: &SampleBuffer,
+    budget: PcmBudget,
+) -> Result<(SampleBuffer, usize), String> {
+    let retained_reference_bytes = timing_resident_reference_bytes(reference)?;
+    let complete = engine
+        .complete_sample(id, reference, budget.limit_bytes())
+        .map_err(|error| error.to_string())?;
+    if !complete.same_source(reference)
+        || complete.resident_start() != 0
+        || complete.resident_end() != reference.frame_count()
+    {
+        return Err("complete timing PCM lease differs from captured source".into());
+    }
+    Ok((complete, retained_reference_bytes))
+}
+
 pub(super) fn parse_intent(value: &str) -> PyResult<TimingIntent> {
     match value {
         "automatic" => Ok(TimingIntent::Automatic),
@@ -567,25 +628,10 @@ pub(super) fn capture_preparation_with_limit(
         if source_generation == 0 || requests[id] == 0 {
             return Err("loaded source identity unavailable".into());
         }
-        let frames = sample
-            .samples
-            .len()
-            .checked_div(sample.channels)
-            .unwrap_or(0);
-        pcm_budget.check_loaded_geometry(sample.samples.len(), sample.channels, sample_rate_hz)?;
-        let identity = PcmIdentity {
-            pad_id: id,
-            request_id: requests[id],
-            source_id: format!("loaded-{id}-{source_generation}"),
-            source_generation,
-        };
-        LoadedPcmSnapshot::new(
-            sample.clone(),
-            sample_rate_hz,
-            identity,
-            pcm_budget.limit_bytes(),
-        )
-        .map_err(|e| e.to_string())?;
+        let frames = sample.frame_count();
+        check_timing_pcm_geometry(&sample, sample_rate_hz, pcm_budget)?;
+        // Geometry admission uses the complete source extent. Reading complete
+        // PCM belongs to the detached preparation worker, after this capture.
         if timing_bound.halfwidth_seconds > frames as f64 / f64::from(sample_rate_hz) {
             return Err("timing error exceeds source duration".into());
         }
@@ -651,8 +697,16 @@ fn prepare_captured_inner(
     let epoch = captured.epoch.clone();
     let cancelled = || epoch.load(Ordering::Acquire) != captured_epoch;
     let pcm_limit_bytes = captured.pcm_budget.limit_bytes();
+    if cancelled() {
+        return Err("constant timing preparation cancelled".into());
+    }
+    let (complete, retained_reference_bytes) =
+        complete_timing_sample(engine, id, &sample, captured.pcm_budget)?;
+    if cancelled() {
+        return Err("constant timing preparation cancelled".into());
+    }
     let snapshot = LoadedPcmSnapshot::new(
-        sample.clone(),
+        complete,
         sample_rate_hz,
         PcmIdentity {
             pad_id: id,
@@ -663,16 +717,28 @@ fn prepare_captured_inner(
         pcm_limit_bytes,
     )
     .map_err(|e| e.to_string())?;
+    let mono_budget = pcm_limit_bytes
+        .checked_sub(snapshot.retained_bytes())
+        .and_then(|bytes| bytes.checked_sub(retained_reference_bytes))
+        .ok_or("constant timing PCM byte limit exceeded")?;
     let mono = snapshot
-        .prepare_complete_mono(pcm_limit_bytes, &cancelled)
+        .prepare_complete_mono(mono_budget, &cancelled)
         .map_err(|e| e.to_string())?;
     let retained_and_mono = snapshot
         .retained_bytes()
-        .checked_add(mono.capacity() * size_of::<f32>())
+        .checked_add(retained_reference_bytes)
+        .and_then(|bytes| bytes.checked_add(mono.capacity() * size_of::<f32>()))
         .ok_or("timing PCM byte count overflow")?;
     let converter_budget = pcm_limit_bytes
         .checked_sub(retained_and_mono)
         .ok_or("constant timing PCM byte limit exceeded")?;
+    if mono
+        .len()
+        .checked_mul(size_of::<f32>())
+        .is_none_or(|bytes| bytes > converter_budget)
+    {
+        return Err("constant timing PCM byte limit exceeded".into());
+    }
     let binding = PcmBinding::verify(
         &mono,
         PcmBindingMetadata {
@@ -779,9 +845,7 @@ fn validate_current(
         .lock()
         .map_err(|_| "sample cache lock poisoned")?;
     let current = cache[id].as_ref().ok_or("sample is not loaded")?;
-    if current.channels != ticket.sample.channels
-        || !Arc::ptr_eq(&current.samples, &ticket.sample.samples)
-    {
+    if !current.same_source(&ticket.sample) {
         return Err("current loaded source owner changed".into());
     }
     if engine

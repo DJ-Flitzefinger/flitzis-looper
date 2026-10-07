@@ -1,6 +1,7 @@
 //! Productive bounded cold preparation and request-serialized publication.
 
 use super::cold_jobs::PCM_LIMIT_BYTES;
+use super::cold_residency::{self, ResidentLoadGuard, ResidentLoadHint};
 use super::cold_store::{ColdTransaction, CommittedColdLease, PcmArtifactInput};
 use super::input_runtime_binding::InputRuntimeOwnership;
 use super::progress::{LoadProgressStage, ProgressReporter};
@@ -77,6 +78,8 @@ struct ColdLoad {
     run_analysis: bool,
     restore_automatic: bool,
     replace_assignment: bool,
+    resident_hint: Option<ResidentLoadHint>,
+    resident_guard: Option<Arc<ResidentLoadGuard>>,
     intents: Arc<Mutex<Vec<TimingIntent>>>,
     initial_source: Option<SampleBuffer>,
     requests: Arc<Mutex<Vec<u64>>>,
@@ -104,30 +107,37 @@ pub(super) fn admit(
     run_analysis: bool,
     restore_automatic: bool,
     replace_assignment: bool,
+    resident_hint: Option<ResidentLoadHint>,
 ) -> PyResult<u64> {
     let handle = engine
         .stream_handle
         .as_ref()
         .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-    admit_for_format(
+    admit_for_format_selected(
         engine,
         id,
         path,
-        run_analysis,
-        restore_automatic,
-        replace_assignment,
+        (
+            run_analysis,
+            restore_automatic,
+            replace_assignment,
+            resident_hint,
+        ),
         handle.producer.clone(),
-        handle.output_channels,
-        handle.output_sample_rate,
-        std::env::current_dir()
-            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
-            .join("samples"),
+        (
+            handle.output_channels,
+            handle.output_sample_rate,
+            std::env::current_dir()
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
+                .join("samples"),
+        ),
     )
 }
 
 // Kept separate so actual productive admission/preparation can be tested with a
 // virtual command consumer without creating an audio device or a CPAL stream.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(super) fn admit_for_format(
     engine: &AudioEngine,
     id: usize,
@@ -140,6 +150,26 @@ pub(super) fn admit_for_format(
     output_rate: u32,
     samples_root: PathBuf,
 ) -> PyResult<u64> {
+    admit_for_format_selected(
+        engine,
+        id,
+        path,
+        (run_analysis, restore_automatic, replace_assignment, None),
+        producer,
+        (output_channels, output_rate, samples_root),
+    )
+}
+
+pub(super) fn admit_for_format_selected(
+    engine: &AudioEngine,
+    id: usize,
+    path: String,
+    selection: (bool, bool, bool, Option<ResidentLoadHint>),
+    producer: Arc<Mutex<Producer<ControlMessage>>>,
+    output: (usize, u32, PathBuf),
+) -> PyResult<u64> {
+    let (output_channels, output_rate, samples_root) = output;
+    let (run_analysis, restore_automatic, replace_assignment, resident_hint) = selection;
     if id >= super::constants::NUM_SAMPLES {
         return Err(PyValueError::new_err("id out of range"));
     }
@@ -155,6 +185,10 @@ pub(super) fn admit_for_format(
         .loading_sample_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("loading lock poisoned"))?;
+    let mut resident_guards = engine
+        .resident_restore_guards
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("resident intent lock poisoned"))?;
     if loading.contains(&id) {
         return Err(PyValueError::new_err("sample is already loading"));
     }
@@ -180,6 +214,14 @@ pub(super) fn admit_for_format(
     } else {
         None
     };
+    let resident_guard = resident_hint.map(|hint| {
+        Arc::new(ResidentLoadGuard {
+            request: request_id,
+            hint,
+            rate: output_rate,
+            cancelled: Arc::new(AtomicBool::new(false)),
+        })
+    });
     let work = ColdLoad {
         id,
         request_id,
@@ -191,6 +233,8 @@ pub(super) fn admit_for_format(
         run_analysis,
         restore_automatic,
         replace_assignment,
+        resident_hint,
+        resident_guard: resident_guard.clone(),
         guard_epoch: run_analysis || restore_automatic || initial_source.is_some(),
         initial_source,
         epoch: engine.prepared_source_epochs[id].clone(),
@@ -235,9 +279,11 @@ pub(super) fn admit_for_format(
     // A worker's first current-request check takes this mutex. It cannot observe
     // the reservation before the request/loading commit has finished.
     advance.commit();
+    resident_guards[id] = resident_guard;
     engine.cold_loading[id].store(request_id, Ordering::Release);
     loading.insert(id);
     drop(loading);
+    drop(resident_guards);
     drop(requests);
     engine.offline_jobs.cancel(Some(id));
     Ok(request_id)
@@ -323,9 +369,16 @@ fn same_source(left: Option<&SampleBuffer>, right: Option<&SampleBuffer>) -> boo
 
 impl ColdLoad {
     fn is_cancelled(&self) -> bool {
+        self.flags_cancelled() || !pad_request_matches(&self.requests, self.id, self.request_id)
+    }
+
+    fn flags_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
+            || self
+                .resident_guard
+                .as_ref()
+                .is_some_and(|guard| guard.cancelled.load(Ordering::Acquire))
             || (self.guard_epoch && self.epoch.load(Ordering::Acquire) != self.expected_epoch)
-            || !pad_request_matches(&self.requests, self.id, self.request_id)
     }
 
     fn prepare(
@@ -369,10 +422,15 @@ impl ColdLoad {
             );
         };
         let mut sample = if let Some(sample) = transaction
-            .try_reuse(
+            .try_reuse_selected(
                 self.output_rate,
                 self.output_channels,
                 PCM_LIMIT_BYTES,
+                if self.run_analysis {
+                    None
+                } else {
+                    self.resident_hint
+                },
                 &cancelled,
             )
             .map_err(|error| error.to_string())?
@@ -420,7 +478,11 @@ impl ColdLoad {
             drop(decoded);
             sample
         };
-        // Existing same-pad CURRENT/history/stem/voice authority uses Arc identity.
+        cold_residency::attach(
+            &mut sample,
+            transaction.manifest().map_err(|error| error.to_string())?,
+        )?;
+        // Same-pad backing readers retain their prior distinct PCM allocation.
         // Share complete PCM between distinct pads, but never re-use that identity
         // for a new assignment while any previous generation is still pinned.
         {
@@ -449,7 +511,6 @@ impl ColdLoad {
                 sample.samples = Arc::from(sample.samples.as_ref());
                 transaction.record_assignment_copy((overlap / 2) as u64);
             }
-            history[self.id].push(Arc::downgrade(&sample.samples));
         }
         let resampling_required = transaction
             .playback_transform()
@@ -457,8 +518,11 @@ impl ColdLoad {
             .as_u64()
             .ok_or("missing prepared source rate")?
             != u64::from(self.output_rate);
-        let detected =
-            super::initial_loop_start::detect_initial_loop_start(&sample, self.output_rate);
+        let detected = if self.resident_hint.is_some() {
+            None
+        } else {
+            super::initial_loop_start::detect_initial_loop_start(&sample, self.output_rate)
+        };
         let analysis = if self.run_analysis {
             // Account full playback, channel-conversion copy, mono, resampler and
             // f32/f64 analyzer inputs before invoking existing bounded-input kernels.
@@ -489,6 +553,18 @@ impl ColdLoad {
         transaction
             .commit(&cancelled)
             .map_err(|error| error.to_string())?;
+        let sample = cold_residency::select(sample, self.resident_hint, PCM_LIMIT_BYTES)?;
+        {
+            let mut history = self
+                .pcm_history
+                .lock()
+                .map_err(|_| "PCM history lock poisoned")?;
+            history[self.id].retain(|reader| reader.strong_count() > 0);
+            if history[self.id].len() >= 128 {
+                return Err("same-pad source reader history full (128 live assignments)".into());
+            }
+            history[self.id].push(Arc::downgrade(&sample.samples));
+        }
         transaction.bind_pcm(&sample.samples);
         Ok((transaction, sample, analysis, detected))
     }
@@ -608,7 +684,7 @@ impl ColdLoad {
             )
             .map_err(|error| error.to_string())?;
         let requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
-        if self.cancelled.load(Ordering::Acquire)
+        if self.flags_cancelled()
             || requests[self.id] != self.request_id
             || (self.guard_epoch && self.epoch.load(Ordering::Acquire) != self.expected_epoch)
         {
@@ -648,8 +724,12 @@ impl ColdLoad {
             .map_err(|_| "project original escaped verified project root")?
             .to_string_lossy()
             .replace('\\', "/");
-        let duration_s =
-            (sample.samples.len() / sample.channels) as f64 / f64::from(self.output_rate);
+        let duration_s = sample.frame_count() as f64 / f64::from(self.output_rate);
+        let loop_region = self
+            .resident_hint
+            .map(|hint| hint.region(self.output_rate, sample.frame_count()))
+            .transpose()?
+            .map(|region| (region.start, region.end));
         publish_loaded_sample(
             producer,
             &self.cache,
@@ -666,6 +746,11 @@ impl ColdLoad {
                 cold_epoch: self.guard_epoch.then(|| self.epoch.clone()),
                 cold_adoption: Some(self.adoption.clone()),
                 replace_assignment: self.replace_assignment,
+                loop_region,
+                resident_cancelled: self
+                    .resident_guard
+                    .as_ref()
+                    .map(|guard| guard.cancelled.clone()),
                 intent: self
                     .restore_automatic
                     .then_some((&mut intents[self.id], TimingIntent::Automatic)),

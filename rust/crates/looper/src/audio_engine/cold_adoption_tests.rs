@@ -158,7 +158,7 @@ fn retirement_backpressure_keeps_cold_pending_and_pinned_adoption_needs_no_feedb
             .current_epoch(0),
         3
     );
-    fixture.callback.retirement.slots = 3;
+    fixture.callback.retirement.slots = 4;
     fixture.callback.feedback.slots = 0;
     assert_eq!(fixture.callback.drain(&mut fixture.consumer), 1);
     assert!(matches!(
@@ -188,7 +188,7 @@ fn explicit_assignment_replacement_stops_old_voice_only_after_real_callback_ack(
     assert_eq!(fixture.callback.drain(&mut fixture.consumer), 0);
     fixture.callback.assert_old_voice(&fixture.previous);
     fixture.assert_no_terminal();
-    fixture.callback.retirement.slots = MAX_VOICES + 3;
+    fixture.callback.retirement.slots = MAX_VOICES + 4;
     fixture.callback.feedback.slots = 0;
     assert_eq!(fixture.callback.drain(&mut fixture.consumer), 0);
     fixture.callback.assert_old_voice(&fixture.previous);

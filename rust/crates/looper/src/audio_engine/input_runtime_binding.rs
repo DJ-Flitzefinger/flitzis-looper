@@ -24,6 +24,11 @@ struct CurrentSourceFence {
     count: AtomicUsize,
     channels: AtomicUsize,
     rate: AtomicU32,
+    resident_address: AtomicUsize,
+    resident_start: AtomicUsize,
+    resident_end: AtomicUsize,
+    window_revision: AtomicU64,
+    resident_context: AtomicU8,
 }
 
 impl Default for CurrentSourceFence {
@@ -34,6 +39,11 @@ impl Default for CurrentSourceFence {
             count: AtomicUsize::new(0),
             channels: AtomicUsize::new(0),
             rate: AtomicU32::new(0),
+            resident_address: AtomicUsize::new(0),
+            resident_start: AtomicUsize::new(0),
+            resident_end: AtomicUsize::new(0),
+            window_revision: AtomicU64::new(0),
+            resident_context: AtomicU8::new(0),
         }
     }
 }
@@ -144,11 +154,65 @@ impl InputRuntimeOwnership {
         source.generation.store(0, Ordering::SeqCst);
         source
             .address
-            .store(sample.samples.as_ptr() as usize, Ordering::SeqCst);
-        source.count.store(sample.samples.len(), Ordering::SeqCst);
+            .store(sample.source_address(), Ordering::SeqCst);
+        source
+            .count
+            .store(sample.source_sample_count(), Ordering::SeqCst);
         source.channels.store(sample.channels, Ordering::SeqCst);
         source.rate.store(rate, Ordering::SeqCst);
+        self.publish_window(id, sample);
         source.generation.store(generation, Ordering::SeqCst);
+    }
+
+    /// Actual callback adoption is the window linearization point. Complete source
+    /// generation/authority stays unchanged; stale MIDI/preparation views are fenced.
+    pub(crate) fn publish_window(&self, id: usize, sample: &SampleBuffer) {
+        let source = &self.sources[id];
+        source.window_revision.store(0, Ordering::SeqCst);
+        source
+            .resident_address
+            .store(sample.samples.as_ptr() as usize, Ordering::SeqCst);
+        source
+            .resident_start
+            .store(sample.resident_start(), Ordering::SeqCst);
+        source
+            .resident_end
+            .store(sample.resident_end(), Ordering::SeqCst);
+        source.resident_context.store(
+            sample
+                .residency
+                .as_ref()
+                .map_or(0, |view| match view.context {
+                    crate::messages::ResidentContext::FiniteLoop => 1,
+                    crate::messages::ResidentContext::FullTrack => 2,
+                    crate::messages::ResidentContext::KeyLockFullTrack => 3,
+                }),
+            Ordering::SeqCst,
+        );
+        source
+            .window_revision
+            .store(sample.window_revision(), Ordering::SeqCst);
+    }
+
+    pub(crate) fn binding_window_current(&self, id: usize, binding: InputPadBinding) -> bool {
+        if !self.source_tracking {
+            return true;
+        }
+        let source = &self.sources[id];
+        let Some(resident) = binding.resident else {
+            return source.window_revision.load(Ordering::SeqCst) == 0;
+        };
+        let context = match resident.context {
+            crate::messages::ResidentContext::FiniteLoop => 1,
+            crate::messages::ResidentContext::FullTrack => 2,
+            crate::messages::ResidentContext::KeyLockFullTrack => 3,
+        };
+        source.window_revision.load(Ordering::SeqCst) == resident.revision
+            && source.resident_address.load(Ordering::SeqCst) == resident.address
+            && source.resident_start.load(Ordering::SeqCst) == resident.start
+            && source.resident_end.load(Ordering::SeqCst) == resident.end
+            && source.resident_context.load(Ordering::SeqCst) == context
+            && source.window_revision.load(Ordering::SeqCst) == resident.revision
     }
 
     pub(crate) fn source_current(&self, id: usize, sample: &SampleBuffer, rate: u32) -> bool {
@@ -169,8 +233,8 @@ impl InputRuntimeOwnership {
         let source = &self.sources[id];
         let generation = source.generation.load(Ordering::SeqCst);
         (generation != 0
-            && source.address.load(Ordering::SeqCst) == sample.samples.as_ptr() as usize
-            && source.count.load(Ordering::SeqCst) == sample.samples.len()
+            && source.address.load(Ordering::SeqCst) == sample.source_address()
+            && source.count.load(Ordering::SeqCst) == sample.source_sample_count()
             && source.channels.load(Ordering::SeqCst) == sample.channels
             && source.rate.load(Ordering::SeqCst) == rate
             && source.generation.load(Ordering::SeqCst) == generation)
@@ -213,6 +277,7 @@ impl InputRuntimeOwnership {
 
     pub(crate) fn current(&self, id: usize, binding: InputPadBinding) -> bool {
         self.authority_current(id, binding)
+            && self.binding_window_current(id, binding)
             && self.runtime[id].load(Ordering::Acquire) == binding.runtime_revision
     }
 
@@ -222,6 +287,7 @@ impl InputRuntimeOwnership {
 
     pub(crate) fn binding_source_current(&self, id: usize, binding: InputPadBinding) -> bool {
         self.binding_source_generation(id, binding).is_some()
+            && self.binding_window_current(id, binding)
     }
 
     /// Read-only fixed source fence, including its checked generation for evidence consumers.
@@ -252,6 +318,7 @@ impl InputRuntimeOwnership {
 /// reject source replacement/unload before the old callback bank is retired.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct InputPadBinding {
+    pub(crate) resident: Option<crate::messages::ResidentBinding>,
     pub(crate) source_address: usize,
     pub(crate) sample_count: usize,
     pub(crate) channels: usize,
@@ -284,6 +351,7 @@ impl InputRuntimePadBinding {
             sample_rate_hz: 48_000,
             intent: TimingIntent::Legacy,
             binding: InputPadBinding {
+                resident: None,
                 source_address: 0,
                 sample_count: 1,
                 channels: 1,
@@ -331,6 +399,38 @@ impl InputRuntimePadBinding {
             self.binding.sample_count / self.binding.channels,
         )?;
         metadata.set_item("channels", self.binding.channels)?;
+        metadata.set_item(
+            "window_revision",
+            self.binding.resident.map_or(0, |view| view.revision),
+        )?;
+        metadata.set_item(
+            "resident_start_frame",
+            self.binding.resident.map_or(0, |view| view.start),
+        )?;
+        metadata.set_item(
+            "resident_end_frame",
+            self.binding
+                .resident
+                .map_or(self.binding.sample_count / self.binding.channels, |view| {
+                    view.end
+                }),
+        )?;
+        metadata.set_item(
+            "resident_pcm_identity",
+            self.binding
+                .resident
+                .map_or(self.binding.source_address, |view| view.address),
+        )?;
+        metadata.set_item(
+            "resident_context",
+            self.binding
+                .resident
+                .map_or("legacy-full-track", |view| match view.context {
+                    crate::messages::ResidentContext::FiniteLoop => "finite-loop",
+                    crate::messages::ResidentContext::FullTrack => "full-track",
+                    crate::messages::ResidentContext::KeyLockFullTrack => "key-lock-full-track",
+                }),
+        )?;
         metadata.set_item("authority_revision", self.binding.authority_revision)?;
         metadata.set_item(
             "intent",
@@ -367,6 +467,7 @@ pub(super) fn capture_under_request_lock(
     engine: &AudioEngine,
     id: usize,
 ) -> PyResult<Option<InputRuntimePadBinding>> {
+    super::resident_relocation::reconcile_under_request_lock(engine)?;
     let intents = engine
         .timing_intents
         .lock()
@@ -423,8 +524,9 @@ pub(super) fn capture_under_request_lock(
         sample_rate_hz: rate,
         intent: intents[id],
         binding: InputPadBinding {
-            source_address: source.samples.as_ptr() as usize,
-            sample_count: source.samples.len(),
+            resident: source.resident_binding(),
+            source_address: source.source_address(),
+            sample_count: source.source_sample_count(),
             channels: source.channels,
             sample_rate_hz: rate,
             authority_revision: engine.input_runtime_ownership.authority[id]

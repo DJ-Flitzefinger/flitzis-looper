@@ -41,6 +41,7 @@ impl PreparedSourcePermit {
             0 => "captured",
             1 => "pending",
             2 => "accepted",
+            4 => "adopting",
             _ => "rejected",
         }
     }
@@ -115,11 +116,27 @@ impl PreparedSourcePermit {
         self.status.store(3, Ordering::Release);
     }
     pub(crate) fn current(&self) -> bool {
-        self.epoch.load(Ordering::Acquire) == self.expected
+        self.status.load(Ordering::Acquire) != 3
+            && self.epoch.load(Ordering::Acquire) == self.expected
             && self
                 .timing
                 .as_ref()
                 .is_none_or(PreparedTimingPermit::current)
+    }
+
+    pub(crate) fn claim_resident(&self) -> bool {
+        self.status
+            .compare_exchange(1, 4, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    pub(super) fn cancel_unclaimed(&self) -> bool {
+        let state = self.status.load(Ordering::Acquire);
+        state <= 1
+            && self
+                .status
+                .compare_exchange(state, 3, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
     }
 
     /// Exact fixed projection from the authoritative current record at capture.
@@ -162,7 +179,7 @@ pub(super) fn validate_prepared_ticket(
         || !Arc::ptr_eq(&ticket.publication.epoch, epoch)
         || !ticket.publication.current()
         || ticket.sample.channels != sample.channels
-        || !Arc::ptr_eq(&ticket.sample.samples, &sample.samples)
+        || !ticket.sample.same_window(sample)
     {
         return Err("stale or foreign prepared source ticket".into());
     }
@@ -352,6 +369,7 @@ mod tests {
     fn prepared_test_engine() -> (AudioEngine, String, SampleBuffer) {
         let engine = AudioEngine::new().unwrap();
         let sample = SampleBuffer {
+            residency: None,
             channels: 1,
             samples: Arc::from([0.25_f32; 16].as_slice()),
         };
@@ -368,6 +386,7 @@ mod tests {
 
     fn prepared_test_set(ticket: &PreparedSourceTicket) -> crate::messages::PreparedStemSet {
         crate::messages::PreparedStemSet {
+            complete_set_identity: std::sync::Arc::new([0; 32]),
             reference_samples: ticket.sample.samples.clone(),
             publication: ticket.publication.clone(),
             accepted_timing: ticket.publication.accepted_projection(),
@@ -461,6 +480,7 @@ mod tests {
         );
         // Identical values and shape, distinct immutable source owner.
         engine.sample_cache.lock().unwrap()[0] = Some(SampleBuffer {
+            residency: None,
             channels: 1,
             samples: Arc::from([0.25_f32; 16].as_slice()),
         });

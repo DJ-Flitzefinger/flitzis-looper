@@ -211,6 +211,276 @@ fn saved_timing_productive_native_qm_file_decode_export_fresh_adoption_roundtrip
 }
 
 #[test]
+#[cfg(windows)]
+fn saved_finite_resident_timing_uses_complete_evidence_without_complete_ticket_pin() {
+    use crate::audio_engine::LoaderEvent;
+    use crate::audio_engine::audio_stream::drain_control_messages;
+    use crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement;
+    use crate::audio_engine::cold_load::admit_for_format_selected;
+    use crate::audio_engine::cold_residency::ResidentLoadHint;
+    use crate::audio_engine::mixer::RtMixer;
+    use crate::audio_engine::scheduler::FixedCapacityScheduler;
+    use crate::audio_engine::transport::TransportTimeline;
+    use crate::messages::{AudioMessage, TriggerQuantization};
+    use std::time::{Duration, Instant};
+
+    let f = fixture();
+    let directory = temp_directory();
+    let mut engine = AudioEngine::new().unwrap();
+    engine.timing_intents.lock().unwrap()[0] = TimingIntent::Automatic;
+    engine
+        .input_runtime_ownership
+        .set_timing_intent(0, TimingIntent::Automatic);
+    let (producer, mut consumer) = queue(8);
+    let request = admit_for_format_selected(
+        &engine,
+        0,
+        f.path.clone(),
+        (
+            false,
+            true,
+            true,
+            Some(ResidentLoadHint {
+                start_s: 2.25,
+                end_s: 3.25,
+                key_lock: false,
+            }),
+        ),
+        producer.clone(),
+        (1, RATE, directory.path().join("samples")),
+    )
+    .unwrap();
+    let mut mixer = RtMixer::new(1, RATE as f32);
+    mixer.set_input_runtime_ownership(engine.input_runtime_ownership.clone());
+    mixer.set_current_timing_acknowledgements(engine.current_timing_acknowledgements.clone());
+    let mut scheduler = FixedCapacityScheduler::<8>::new();
+    let mut transport = TransportTimeline::new(RATE);
+    let mut quantization = TriggerQuantization::Immediate;
+    let (mut feedback, _feedback_reader) = rtrb::RingBuffer::<AudioMessage>::new(16);
+    let mut retirement = ImmediateAudioBufferRetirement;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while consumer.peek().is_err() {
+        assert!(
+            Instant::now() < deadline,
+            "finite cold publication timed out"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(
+        engine.input_runtime_ownership.cold_status(0, request),
+        Some(0)
+    );
+    assert_eq!(
+        drain_control_messages(
+            &mut consumer,
+            &mut scheduler,
+            0,
+            &mut quantization,
+            &mut transport,
+            &mut mixer,
+            &mut feedback,
+            &mut retirement,
+        ),
+        1
+    );
+    let loaded = loop {
+        if let Ok(event) = engine.loader_rx.lock().unwrap().try_recv() {
+            match event {
+                LoaderEvent::Success { request_id, .. } if request_id == request => break true,
+                LoaderEvent::Error { error, .. } => panic!("finite cold load failed: {error}"),
+                _ => {}
+            }
+        }
+        assert!(Instant::now() < deadline, "finite cold success timed out");
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    assert!(loaded);
+    while engine.cold_loading[0].load(Ordering::Acquire) != 0 {
+        assert!(
+            Instant::now() < deadline,
+            "finite cold completion timed out"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let resident = engine.sample_cache.lock().unwrap()[0].clone().unwrap();
+    assert_eq!(resident.frame_count(), f.sample.frame_count());
+    assert_eq!(resident.resident_start(), 18_000);
+    assert_eq!(resident.resident_end(), 26_000);
+    assert_eq!(resident.samples.len(), 8_000);
+    assert_eq!(mixer.loop_region_frames(0), (18_000, Some(26_000)));
+    let actual_original = engine.cold_leases.lock().unwrap()[0]
+        .as_ref()
+        .unwrap()
+        .original_path
+        .to_string_lossy()
+        .into_owned();
+    let materialization_peak =
+        resident.samples.len() * size_of::<f32>() + f.sample.samples.len() * 2 * size_of::<f32>();
+    assert!(
+        engine
+            .complete_sample(0, &resident, materialization_peak - 1)
+            .is_err()
+    );
+    let complete = engine.complete_sample(0, &resident, MAX_PCM_BYTES).unwrap();
+    assert_eq!(complete.samples.as_ref(), f.sample.samples.as_ref());
+    assert!(complete.same_source(&resident));
+    let temporary_full = Arc::downgrade(&complete.samples);
+    drop(complete);
+    assert!(temporary_full.upgrade().is_none());
+
+    let captured = capture_saved(&engine, 0, &f.envelope, actual_original.clone()).unwrap();
+    assert!(captured.sample.same_window(&resident));
+    let ticket = restore_saved(&engine, &producer, &captured).unwrap();
+    assert!(ticket.sample.same_window(&resident));
+    assert_eq!(ticket.sample.samples.len(), 8_000);
+    assert_eq!(ticket.binding.frame_count, f.sample.frame_count() as u64);
+    assert!(Arc::ptr_eq(&ticket.sample.samples, &resident.samples));
+    assert_eq!(ticket.publication_status().unwrap(), "pending");
+    assert_eq!(
+        drain_control_messages(
+            &mut consumer,
+            &mut scheduler,
+            0,
+            &mut quantization,
+            &mut transport,
+            &mut mixer,
+            &mut feedback,
+            &mut retirement,
+        ),
+        1
+    );
+    assert_eq!(ticket.publication_status().unwrap(), "accepted");
+    assert_eq!(
+        export_current(&engine, 0, actual_original)
+            .unwrap()
+            .unwrap(),
+        f.envelope
+    );
+    Python::attach(|py| {
+        let current = current_metadata(&engine, py, 0).unwrap().unwrap();
+        let metadata = current.bind(py).cast::<PyDict>().unwrap();
+        assert_eq!(
+            metadata
+                .get_item("frame_count")
+                .unwrap()
+                .unwrap()
+                .extract::<usize>()
+                .unwrap(),
+            f.sample.frame_count()
+        );
+        assert_eq!(
+            metadata
+                .get_item("source_zero_seconds")
+                .unwrap()
+                .unwrap()
+                .extract::<f64>()
+                .unwrap(),
+            0.0
+        );
+        let binding = crate::audio_engine::input_runtime_binding::capture(&engine, 0)
+            .unwrap()
+            .unwrap();
+        assert!(binding.current());
+        assert_eq!(
+            binding
+                .metadata(py)
+                .unwrap()
+                .bind(py)
+                .cast::<PyDict>()
+                .unwrap()
+                .get_item("frame_count")
+                .unwrap()
+                .unwrap()
+                .extract::<usize>()
+                .unwrap(),
+            f.sample.frame_count()
+        );
+    });
+    assert!(mixer.play_sample(0, 1.0));
+    let physical = 8_000;
+    let period = f.period * f64::from(RATE) * 2.0;
+    let last = ((period.ceil() as usize) - 1).min(physical - 1);
+    let mut rendered = 0;
+    let mut peaks = [0.0; NUM_SAMPLES];
+    while rendered < 16_731 {
+        let frames = 512.min(16_731 - rendered);
+        let mut output = vec![0.0; frames];
+        mixer.render(&mut output, &mut peaks);
+        for (offset, actual) in output.iter().enumerate() {
+            // Independent raw complete-source knot oracle: no production reader,
+            // SourcePlayback, relative window address or advancement helper.
+            let phase = ((rendered + offset) as f64).rem_euclid(period);
+            let (left, right, alpha) = if phase >= last as f64 {
+                (last, 0, (phase - last as f64) / (period - last as f64))
+            } else {
+                let left = phase.floor() as usize;
+                (left, left + 1, phase - left as f64)
+            };
+            let a = f.sample.samples[18_000 + left];
+            let b = f.sample.samples[18_000 + right];
+            let expected = a + (b - a) * alpha as f32;
+            assert!((*actual - expected).abs() < 1.0e-6);
+        }
+        rendered += frames;
+    }
+    assert!(temporary_full.upgrade().is_none());
+    assert_eq!(
+        engine.sample_cache.lock().unwrap()[0]
+            .as_ref()
+            .unwrap()
+            .samples
+            .len(),
+        8_000
+    );
+    engine.shut_down().unwrap();
+}
+
+#[test]
+fn finite_timing_known_materialization_budget_failure_preserves_request() {
+    let rate = 384_000;
+    let complete = SampleBuffer {
+        residency: None,
+        channels: 32,
+        samples: Arc::from(vec![0.125_f32; 400 * 32]),
+    }
+    .with_complete_source(rate);
+    let finite = complete
+        .window(71, 91, 2, crate::messages::ResidentContext::FiniteLoop)
+        .unwrap();
+    let limit =
+        complete.samples.len() * 2 * size_of::<f32>() + finite.samples.len() * size_of::<f32>() - 1;
+    // The old complete-geometry estimate passes: the rejected peak is the
+    // separately retained finite view plus the complete materializer Vec/Arc.
+    assert!(
+        PcmBudget::new(limit)
+            .unwrap()
+            .check_loaded_geometry(complete.source_sample_count(), complete.channels, rate,)
+            .is_ok()
+    );
+    let engine = test_engine();
+    engine.sample_cache.lock().unwrap()[0] = Some(finite);
+    engine.loaded_source_generations.lock().unwrap()[0] = (7, rate);
+    let before_request = engine.pad_request_ids.lock().unwrap()[0];
+    let before_epoch = engine.prepared_source_epochs[0].load(Ordering::Acquire);
+    let rejected = capture_preparation_with_limit(
+        &engine,
+        0,
+        TimingBound {
+            halfwidth_seconds: 0.0,
+            provenance: "independent finite materialization budget boundary".into(),
+        },
+        None,
+        limit,
+    );
+    assert!(matches!(rejected, Err(ref error) if error.contains("PCM byte limit")));
+    assert_eq!(engine.pad_request_ids.lock().unwrap()[0], before_request);
+    assert_eq!(
+        engine.prepared_source_epochs[0].load(Ordering::Acquire),
+        before_epoch
+    );
+}
+
+#[test]
 fn current_export_keeps_admitted_runtime_budget_without_encoding_or_restoring_it() {
     let f = fixture();
     let engine = fresh_engine();
@@ -657,7 +927,7 @@ fn saved_timing_signed_zero_roundtrip_and_nonaccepted_unsupported_export() {
     let f = fixture();
     let engine = fresh_engine();
     let saved = capture_saved(&engine, 0, &f.envelope, f.path.clone()).unwrap();
-    let (accepted, _, _) = verify(&saved).unwrap();
+    let (accepted, _, _) = verify(&engine, &saved).unwrap();
     let hypotheses = parse_hypotheses(&saved.record["hypotheses"].to_string()).unwrap();
     let borrowed: Vec<_> = hypotheses
         .iter()
@@ -681,7 +951,7 @@ fn saved_timing_signed_zero_roundtrip_and_nonaccepted_unsupported_export() {
     .unwrap();
     let json = encode(&minus_zero).unwrap();
     let saved = capture_saved(&engine, 0, &json.to_string(), f.path.clone()).unwrap();
-    let (a, _, _) = verify(&saved).unwrap();
+    let (a, _, _) = verify(&engine, &saved).unwrap();
     assert_eq!(a.origin().seconds.to_bits(), (-0.0_f64).to_bits());
     assert_eq!(a.revision(), minus_zero.revision());
 }

@@ -561,6 +561,7 @@ mod tests {
         let mut samples = vec![0.0; 128];
         samples[0] = 1.0;
         SampleBuffer {
+            residency: None,
             samples: Arc::from(samples),
             channels: 1,
         }

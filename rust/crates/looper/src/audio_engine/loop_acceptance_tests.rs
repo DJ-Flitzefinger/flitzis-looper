@@ -146,6 +146,7 @@ fn effective_snapshot_rejects_authority_edit_and_source_replacement_without_rela
     assert_status(&engine, request, false);
 
     let replacement = SampleBuffer {
+        residency: None,
         channels: 1,
         samples: Arc::from(vec![0.25; 8000]),
     };

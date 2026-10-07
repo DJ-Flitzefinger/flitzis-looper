@@ -16,6 +16,7 @@ const ORIGIN: f64 = -0.125_012_3;
 
 fn productive_source(value: f32) -> SampleBuffer {
     SampleBuffer {
+        residency: None,
         channels: 1,
         samples: Arc::from(
             (0..RATE)
@@ -62,6 +63,8 @@ fn productive_history_native_loaded_source_publication_fences_new_launch_during_
             cold_epoch: None,
             cold_adoption: None,
             replace_assignment: false,
+            loop_region: None,
+            resident_cancelled: None,
             intent: None,
             ownership: &ownership,
             generation: 1,
@@ -99,6 +102,8 @@ fn productive_history_native_loaded_source_publication_fences_new_launch_during_
             cold_epoch: None,
             cold_adoption: None,
             replace_assignment: false,
+            loop_region: None,
+            resident_cancelled: None,
             intent: None,
             ownership: &ownership,
             generation: 1,
@@ -174,6 +179,8 @@ fn productive_history_native_loaded_source_publication_fences_new_launch_during_
             cold_epoch: None,
             cold_adoption: None,
             replace_assignment: false,
+            loop_region: None,
+            resident_cancelled: None,
             intent: None,
             ownership: &ownership,
             generation: 3,
@@ -329,6 +336,8 @@ struct AuthorityRaceRetirement {
 }
 
 impl AudioBufferRetirement for AuthorityRaceRetirement {
+    fn retire_resident_cancellation(&mut self, _: std::sync::Arc<std::sync::atomic::AtomicBool>) {}
+    fn retire_resident_transaction(&mut self, _: Box<crate::messages::ResidentTransaction>) {}
     fn retire_cold_adoption(&mut self, _: Arc<std::sync::atomic::AtomicU8>) {}
     fn retire_accepted_timing_refresh(
         &mut self,
@@ -396,6 +405,7 @@ fn productive_history_exclusive_preflight_failure_preserves_loop_and_other_audio
         end_s: Some(0.7),
         exclusive: true,
         binding: InputPadBinding {
+            resident: None,
             source_address: replacement.samples.as_ptr() as usize,
             sample_count: replacement.samples.len(),
             channels: 1,
@@ -525,6 +535,7 @@ fn productive_history_exclusive_commit_uses_admitted_source_when_authority_chang
 
 fn sample() -> SampleBuffer {
     SampleBuffer {
+        residency: None,
         channels: 1,
         samples: Arc::from(vec![0.0_f32; RATE as usize]),
     }
@@ -706,6 +717,8 @@ struct LimitedRetirement {
     stems: Vec<PreparedStemSet>,
 }
 impl AudioBufferRetirement for LimitedRetirement {
+    fn retire_resident_cancellation(&mut self, _: std::sync::Arc<std::sync::atomic::AtomicBool>) {}
+    fn retire_resident_transaction(&mut self, _: Box<crate::messages::ResidentTransaction>) {}
     fn retire_cold_adoption(&mut self, _: Arc<std::sync::atomic::AtomicU8>) {}
     fn retire_accepted_timing_refresh(
         &mut self,
@@ -772,10 +785,12 @@ fn prepared_stems_actual_callback_backpressure_and_stale_revision_preserve_exist
         let permit = PreparedSourcePermit::unrestricted();
         permit.mark_pending().unwrap();
         let pcm = SampleBuffer {
+            residency: None,
             channels: 1,
             samples: Arc::from(vec![value; RATE as usize]),
         };
         PreparedStemSet {
+            complete_set_identity: std::sync::Arc::new([0; 32]),
             reference_samples: source.samples.clone(),
             publication: permit,
             accepted_timing: Some(projection),

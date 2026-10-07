@@ -33,6 +33,7 @@ pub(super) fn source() -> SampleBuffer {
         samples[frame..frame + 4].copy_from_slice(&[1.0, -0.5, 0.25, -0.125]);
     }
     SampleBuffer {
+        residency: None,
         channels: 1,
         samples: Arc::from(samples),
     }

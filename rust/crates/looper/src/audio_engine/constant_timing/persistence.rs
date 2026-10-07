@@ -347,6 +347,7 @@ fn decode(
 }
 
 fn verify(
+    engine: &AudioEngine,
     ticket: &SavedConstantTimingTicket,
 ) -> Result<
     (
@@ -365,8 +366,14 @@ fn verify(
     if actual_digest != ticket.source_digest {
         return Err("actual source file differs from loaded source".into());
     }
+    check_timing_pcm_geometry(&ticket.sample, ticket.sample_rate_hz, ticket.pcm_budget)?;
+    let (complete, retained_reference_bytes) =
+        complete_timing_sample(engine, ticket.id, &ticket.sample, ticket.pcm_budget)?;
+    if cancelled() {
+        return Err("saved timing restore cancelled".into());
+    }
     let snapshot = LoadedPcmSnapshot::new(
-        ticket.sample.clone(),
+        complete,
         ticket.sample_rate_hz,
         PcmIdentity {
             pad_id: ticket.id,
@@ -377,16 +384,28 @@ fn verify(
         pcm_limit_bytes,
     )
     .map_err(|e| e.to_string())?;
+    let mono_budget = pcm_limit_bytes
+        .checked_sub(snapshot.retained_bytes())
+        .and_then(|bytes| bytes.checked_sub(retained_reference_bytes))
+        .ok_or("timing PCM byte limit exceeded")?;
     let mono = snapshot
-        .prepare_complete_mono(pcm_limit_bytes, &cancelled)
+        .prepare_complete_mono(mono_budget, &cancelled)
         .map_err(|e| e.to_string())?;
     let retained = snapshot
         .retained_bytes()
-        .checked_add(mono.capacity() * 4)
+        .checked_add(retained_reference_bytes)
+        .and_then(|bytes| bytes.checked_add(mono.capacity() * 4))
         .ok_or("timing PCM bytes overflow")?;
     let budget = pcm_limit_bytes
         .checked_sub(retained)
         .ok_or("timing PCM byte limit exceeded")?;
+    if mono
+        .len()
+        .checked_mul(size_of::<f32>())
+        .is_none_or(|bytes| bytes > budget)
+    {
+        return Err("timing PCM byte limit exceeded".into());
+    }
     let converted = resample_mono_cancellable(
         mono.clone(),
         ticket.sample_rate_hz,
@@ -454,8 +473,7 @@ fn validate_capture(
         .lock()
         .map_err(|_| "sample cache lock poisoned")?;
     let source = cache[ticket.id].as_ref().ok_or("source unavailable")?;
-    if !Arc::ptr_eq(&source.samples, &ticket.sample.samples)
-        || source.channels != ticket.sample.channels
+    if !source.same_source(&ticket.sample)
         || engine
             .loaded_source_generations
             .lock()
@@ -574,7 +592,7 @@ pub(in crate::audio_engine) fn restore_saved(
     }
     let _lease = PreparationLease(&engine.constant_timing_busy);
     validate_capture(engine, saved).map_err(PyValueError::new_err)?;
-    let (accepted, binding, mut guard) = verify(saved).map_err(PyValueError::new_err)?;
+    let (accepted, binding, mut guard) = verify(engine, saved).map_err(PyValueError::new_err)?;
     validate_capture(engine, saved).map_err(PyValueError::new_err)?;
     // Fresh verified binding initializes the guard; historical accepted evidence
     // stays immutable and is admitted only through source-verified adoption.
@@ -682,7 +700,7 @@ pub(in crate::audio_engine) fn export_current(
     }
     let _lease = PreparationLease(&engine.constant_timing_busy);
     // A failed content/source verification cannot save previously accepted data.
-    verify(&captured.0)?;
+    verify(engine, &captured.0)?;
     validate_capture(engine, &captured.0)?;
     if engine.current_timing_acknowledgements.current_epoch(id) != captured.1 {
         return Ok(None);

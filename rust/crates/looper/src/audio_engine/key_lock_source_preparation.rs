@@ -355,6 +355,7 @@ mod bounds {
 
     fn fixture() -> (SampleBuffer, SourcePreparation) {
         let sample = SampleBuffer {
+            residency: None,
             channels: 2,
             samples: Arc::from(vec![0.25; 128]),
         };

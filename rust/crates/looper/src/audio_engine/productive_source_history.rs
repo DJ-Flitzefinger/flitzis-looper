@@ -10,6 +10,7 @@ use crate::messages::SampleBuffer;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ProductiveSourceBinding {
+    pub(crate) resident: Option<crate::messages::ResidentBinding>,
     pub(crate) source_address: usize,
     pub(crate) sample_count: usize,
     pub(crate) channels: usize,
@@ -24,15 +25,16 @@ impl ProductiveSourceBinding {
         accepted: Option<AcceptedTimingProjection>,
     ) -> Self {
         Self {
-            source_address: sample.samples.as_ptr() as usize,
-            sample_count: sample.samples.len(),
+            resident: sample.resident_binding(),
+            source_address: sample.source_address(),
+            sample_count: sample.source_sample_count(),
             channels: sample.channels,
             sample_rate_hz,
             accepted,
         }
     }
 
-    fn same_source(self, other: Self) -> bool {
+    pub(crate) fn same_source(self, other: Self) -> bool {
         self.source_address == other.source_address
             && self.sample_count == other.sample_count
             && self.channels == other.channels
@@ -94,6 +96,7 @@ mod tests {
     #[test]
     fn period_projection_alias_requires_changed_accepted_owner_and_exact_physical_geometry() {
         let sample = SampleBuffer {
+            residency: None,
             channels: 1,
             samples: Arc::from(vec![0.0; 2000]),
         };
@@ -168,6 +171,7 @@ mod tests {
             Some(next_domain)
         ));
         let replacement = SampleBuffer {
+            residency: None,
             channels: 1,
             samples: Arc::from(vec![0.0; 2000]),
         };

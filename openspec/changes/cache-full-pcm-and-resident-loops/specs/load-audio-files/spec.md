@@ -25,6 +25,13 @@ Invalid id/path/format or failed native admission SHALL not publish a new source
 - **AND** decoding uses that snapshot unless a complete compatible PCM entry is validated and reused
 - **AND** the project records the byte-exact non-colliding project original
 
+#### Scenario: Saved finite loop restores in absolute source coordinates
+- **WHEN** startup restores a short saved loop from a complete validated long source
+- **THEN** its finite resident PCM retains absolute physical offsets and matching complete identity
+- **AND** duration, original decoder/device domains and timing metadata still describe the full source
+- **AND** matching native source/window adoption ACK precedes source Success
+- **AND** ordinary finite playback does not retain the complete PCM backing allocation
+
 #### Scenario: Loading replaces an already-loaded sample
 - **WHEN** a native bank publication replaces the source for a loaded slot
 - **THEN** new starts use the newly published source

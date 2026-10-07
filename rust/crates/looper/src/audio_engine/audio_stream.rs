@@ -336,6 +336,7 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
             received_at_ns: _,
         } => {
             if !mixer.input_binding_current(id, binding)
+                || !mixer.loop_intent_context_available(id, start_s, end_s)
                 || (exclusive && retirement.available_retirement_slots() < MAX_VOICES)
                 || (!exclusive
                     && !mixer
@@ -414,6 +415,7 @@ fn execute_accepted_timing_refresh<R: AudioBufferRetirement>(
     if retirement.available_retirement_slots() < 1
         || !refresh.global_current()
         || !mixer.refresh_binding_current(refresh.id, refresh.binding)
+        || !mixer.loop_intent_context_available(refresh.id, refresh.start_s, refresh.end_s)
     {
         return false;
     }
@@ -474,11 +476,10 @@ fn execute_global_playback_batch<S: AudioMessageSink, R: AudioBufferRetirement>(
         stop_all_samples(mixer, audio_messages, retirement);
         return true;
     }
-    if !batch
-        .entries
-        .iter()
-        .all(|entry| mixer.source_binding_current(entry.id, entry.binding))
-    {
+    if !batch.entries.iter().all(|entry| {
+        mixer.source_binding_current(entry.id, entry.binding)
+            && mixer.loop_intent_context_available(entry.id, entry.start_s, entry.end_s)
+    }) {
         return false;
     }
     let free = mixer.voices.iter().filter(|voice| !voice.active).count();
@@ -781,14 +782,15 @@ fn publish_pad_telemetry<S: AudioMessageSink>(
 fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
     match message {
         ControlMessage::GlobalPlaybackBatch(_) => MAX_VOICES + 1,
+        ControlMessage::RelocateResident(_) => MAX_VOICES + 3,
         ControlMessage::LoadColdSample {
             replace_assignment: true,
             ..
-        } => MAX_VOICES + 3,
+        } => MAX_VOICES + 4,
         ControlMessage::LoadColdSample {
             replace_assignment: false,
             ..
-        } => 3,
+        } => 4,
         ControlMessage::LoadSample { .. } | ControlMessage::PublishPreparedStems { .. } => 2,
         ControlMessage::PublishConstantTiming { .. } | ControlMessage::RefreshAcceptedTiming(_) => {
             1
@@ -1197,11 +1199,16 @@ pub(super) fn process_control_message<
             epoch,
             captured_epoch,
             replace_assignment,
+            loop_region,
+            resident_cancelled,
         } => {
             let epoch_current = || {
-                epoch.as_ref().is_none_or(|epoch| {
-                    epoch.load(std::sync::atomic::Ordering::Acquire) == captured_epoch
-                })
+                resident_cancelled
+                    .as_ref()
+                    .is_none_or(|cancelled| !cancelled.load(std::sync::atomic::Ordering::Acquire))
+                    && epoch.as_ref().is_none_or(|epoch| {
+                        epoch.load(std::sync::atomic::Ordering::Acquire) == captured_epoch
+                    })
             };
             if epoch_current()
                 && mixer.cold_source_current(id, &sample, source_generation)
@@ -1223,6 +1230,9 @@ pub(super) fn process_control_message<
                     adoption.store(3, std::sync::atomic::Ordering::Release);
                     retirement.retire_sample(sample);
                     retirement.retire_cold_adoption(adoption);
+                    if let Some(cancelled) = resident_cancelled {
+                        retirement.retire_resident_cancellation(cancelled);
+                    }
                     return;
                 }
                 if replace_assignment {
@@ -1230,6 +1240,9 @@ pub(super) fn process_control_message<
                     mixer.stop_sample_rt(id, retirement);
                 }
                 mixer.load_sample_rt(id, sample, retirement);
+                if let Some((start, end)) = loop_region {
+                    mixer.set_loop_region_frames(id, start, Some(end));
+                }
                 mixer.accept_cold(id, source_generation);
                 adoption.store(2, std::sync::atomic::Ordering::Release);
                 if replace_assignment {
@@ -1246,9 +1259,15 @@ pub(super) fn process_control_message<
                 retirement.retire_sample(sample);
             }
             retirement.retire_cold_adoption(adoption);
+            if let Some(cancelled) = resident_cancelled {
+                retirement.retire_resident_cancellation(cancelled);
+            }
         }
         ControlMessage::PublishPreparedStems { id, stems } => {
             mixer.publish_prepared_stems_rt(id, stems, retirement);
+        }
+        ControlMessage::RelocateResident(transaction) => {
+            mixer.relocate_resident_rt(transaction, retirement);
         }
         ControlMessage::PublishConstantTiming { id, timing } => {
             mixer.publish_constant_timing_rt(id, timing, retirement);
@@ -1633,6 +1652,7 @@ mod tests {
     fn create_test_sample(channels: usize, frames: usize, value: f32) -> SampleBuffer {
         let samples = vec![value; channels * frames];
         SampleBuffer {
+            residency: None,
             channels,
             samples: Arc::from(samples.into_boxed_slice()),
         }

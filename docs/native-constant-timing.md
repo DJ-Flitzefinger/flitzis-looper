@@ -104,14 +104,24 @@ endpoints and active fractional source progression intact.
 
 ## Source verification limits
 
-The complete mono PCM digest verifies the actual loaded sample bytes under the
-existing arithmetic-channel-mean rule. Arc, generation and loaded timebase checks
-bind that PCM to the current native pad. The original digest remains the loader's
-observed file-content association. Decode-before-copy and path replacement/ABA
-limits are unchanged: this does not prove an immutable original was the exact
-decoder input. Copy-first ownership and a full versioned PCM cache remain C1.
-The loaded buffer is resampled/channel-mapped at the existing engine rate;
-original, loaded and QM analyzer timebases remain distinct.
+The complete mono PCM digest verifies the entire source under the existing
+arithmetic-channel-mean rule. C1's productive copy-first loader establishes exact
+immutable decoder input and complete versioned decoder/playback cache lineage.
+C2a's complete source descriptor, loaded generation and timebase bind evidence
+independently of a resident PCM allocation. Finite playback does not become
+complete analysis input: detached preparation/restoration/export materializes a
+bounded complete reader from the sealed same-FileID lease and releases that PCM
+after verification. Accepted tickets keep their finite source references.
+Original, loaded/device and QM analyzer timebases remain distinct.
+
+Resident window guards separately bind absolute range, allocation, context and
+revision. CURRENT and complete evidence retain full extent/source zero; MIDI and
+prepared jobs additionally check their captured resident view. Same-source storage
+relocation preserves accepted authority, voice trajectory and effective native/
+FIFO/filter history, while stale queued jobs retain their old actual readers
+until off-thread retirement. A new load assignment gets fresh runtime source
+authority even for identical complete cache content. See
+[finite residency](pcm-cache-residency.md).
 
 ## Native shared-period and rate consumers
 

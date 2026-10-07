@@ -115,6 +115,7 @@ fn accepted_mixer(case: Case) -> (AudioEngine, ConstantTimingTicket, RtMixer) {
         samples[frame..frame + PULSE_FRAMES].fill(0.5);
     }
     let sample = SampleBuffer {
+        residency: None,
         channels: 1,
         samples: Arc::from(samples),
     };

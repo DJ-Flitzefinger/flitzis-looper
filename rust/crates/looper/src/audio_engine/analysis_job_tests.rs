@@ -4,6 +4,7 @@ use std::sync::mpsc::{Receiver, channel};
 
 fn sample() -> SampleBuffer {
     SampleBuffer {
+        residency: None,
         samples: Arc::from(vec![0.0_f32; 2048]),
         channels: 2,
     }
@@ -166,6 +167,7 @@ fn failed_partial_export_retires_source_before_cleanup_without_publishing_pcm() 
     let mut samples = vec![0.25; 8193];
     *samples.last_mut().unwrap() = f32::NAN;
     let source = SampleBuffer {
+        residency: None,
         samples: samples.into(),
         channels: 1,
     };

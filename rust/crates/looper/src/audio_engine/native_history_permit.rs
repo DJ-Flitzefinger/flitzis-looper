@@ -40,8 +40,9 @@ impl NativeHistoryContext<'_> {
         let permit = NativeHistoryPermit {
             id: self.id,
             binding: InputPadBinding {
-                source_address: sample.samples.as_ptr() as usize,
-                sample_count: sample.samples.len(),
+                resident: sample.resident_binding(),
+                source_address: sample.source_address(),
+                sample_count: sample.source_sample_count(),
                 channels: sample.channels,
                 sample_rate_hz: rate,
                 authority_revision: self.ownership.authority[self.id].load(Ordering::Acquire),
@@ -59,6 +60,32 @@ impl NativeHistoryContext<'_> {
 }
 
 impl NativeHistoryPermit {
+    /// Already adopted history owns chronological native/FIFO/filter state. A
+    /// storage-only window ACK may fence pending preparation without invalidating
+    /// that same source's established trajectory or timing owner.
+    pub(crate) fn current_effective_source(&self, sample: &SampleBuffer, rate: u32) -> bool {
+        let current = || {
+            self.preparation_epoch.load(Ordering::Acquire) == self.expected_epoch
+                && self.ownership.authority_current(self.id, self.binding)
+                && self.ownership.source_generation(self.id, sample, rate)
+                    == Some(self.source_generation)
+                && sample.source_address() == self.binding.source_address
+                && sample.source_sample_count() == self.binding.sample_count
+                && sample.channels == self.binding.channels
+                && rate == self.binding.sample_rate_hz
+                && self.acknowledgements.current_epoch(self.id)
+                    == self
+                        .binding
+                        .accepted
+                        .map_or(0, |value| value.publication_epoch)
+                && self.ownership.source_timing_available(
+                    self.id,
+                    self.binding.accepted,
+                    &self.acknowledgements,
+                )
+        };
+        current() && current()
+    }
     /// Preparation/request and current source/authority are rechecked at ACTUAL native adoption.
     /// The double check is bounded and has no spin, owner allocation or address dereference.
     pub(crate) fn current(&self, sample: &SampleBuffer, rate: u32) -> bool {
@@ -67,8 +94,8 @@ impl NativeHistoryPermit {
                 && self.ownership.current(self.id, self.binding)
                 && self.ownership.source_generation(self.id, sample, rate)
                     == Some(self.source_generation)
-                && sample.samples.as_ptr() as usize == self.binding.source_address
-                && sample.samples.len() == self.binding.sample_count
+                && sample.source_address() == self.binding.source_address
+                && sample.source_sample_count() == self.binding.sample_count
                 && sample.channels == self.binding.channels
                 && rate == self.binding.sample_rate_hz
                 && self.acknowledgements.current_epoch(self.id)
@@ -98,6 +125,7 @@ mod tests {
     #[test]
     fn retained_pin_cannot_authorize_replaced_generation_or_new_request() {
         let sample = SampleBuffer {
+            residency: None,
             samples: Arc::from([0.25; 32]),
             channels: 1,
         };
@@ -125,6 +153,7 @@ mod tests {
     #[test]
     fn full_accepted_projection_and_current_authority_are_required() {
         let sample = SampleBuffer {
+            residency: None,
             samples: Arc::from([0.25; 32]),
             channels: 1,
         };

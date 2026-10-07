@@ -185,11 +185,9 @@ impl StretchProcessor {
         }
         if wet
             && !self.request_pending
-            && !self
-                .native
-                .source
-                .as_ref()
-                .is_some_and(|source| source.matches_contract(&feed, self.preparation_epoch))
+            && !self.native.source.as_ref().is_some_and(|source| {
+                source.matches_effective_contract(&feed, self.preparation_epoch)
+            })
             && let Some(request_id) = self.request_id.checked_add(1)
             && self.preparation_epoch != u64::MAX
             && self

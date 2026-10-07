@@ -12,6 +12,7 @@ fn version() -> String {
 
 fn prepared(ticket: &PreparedSourceTicket) -> PreparedStemSet {
     PreparedStemSet {
+        complete_set_identity: std::sync::Arc::new([0; 32]),
         reference_samples: ticket.sample.samples.clone(),
         publication: ticket.publication.clone(),
         accepted_timing: ticket.publication.accepted_projection(),

@@ -21,10 +21,204 @@ pub(crate) const STEM_COMPONENT_MASK: u8 =
 pub struct SampleBuffer {
     pub channels: usize,
     pub samples: Arc<[f32]>,
+    /// Complete source authority is independent of this resident PCM allocation.
+    pub residency: Option<Arc<ResidentSourceView>>,
+}
+
+/// Immutable complete-content descriptor. This owner never retains complete PCM.
+#[derive(Debug)]
+pub struct CompleteSourceIdentity {
+    pub frame_count: usize,
+    pub channels: usize,
+    pub sample_rate_hz: u32,
+    pub original_sha256: [u8; 32],
+    pub playback_sha256: [u8; 32],
+    pub mono_sha256: [u8; 32],
+    pub transform_sha256: [u8; 32],
+    pub source_zero_frame: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResidentContext {
+    /// Both interpolation taps, including virtual P seams, wrap within these bounds.
+    FiniteLoop,
+    FullTrack,
+    /// Native/FIFO continuation is preserved by an explicitly admitted full-track view.
+    KeyLockFullTrack,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResidentSourceView {
+    pub source: Arc<CompleteSourceIdentity>,
+    pub start_frame: usize,
+    pub window_revision: u64,
+    pub context: ResidentContext,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ResidentBinding {
+    pub(crate) address: usize,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) revision: u64,
+    pub(crate) context: ResidentContext,
+}
+
+impl SampleBuffer {
+    pub(crate) fn valid_residency(&self, rate: u32, channels: usize) -> bool {
+        self.channels != 0
+            && self.channels == channels
+            && !self.samples.is_empty()
+            && self.samples.len().is_multiple_of(channels)
+            && self.residency.as_ref().is_none_or(|view| {
+                view.source.channels == channels
+                    && view.source.sample_rate_hz == rate
+                    && view.source.source_zero_frame == 0
+                    && view.window_revision != 0
+                    && view.source.frame_count.checked_mul(channels).is_some()
+                    && view.start_frame < self.resident_end()
+                    && self.resident_end() <= view.source.frame_count
+                    && (view.context == ResidentContext::FiniteLoop
+                        || (view.start_frame == 0
+                            && self.resident_end() == view.source.frame_count))
+            })
+    }
+    pub(crate) fn resident_binding(&self) -> Option<ResidentBinding> {
+        self.residency.as_ref().map(|view| ResidentBinding {
+            address: self.samples.as_ptr() as usize,
+            start: view.start_frame,
+            end: self.resident_end(),
+            revision: view.window_revision,
+            context: view.context,
+        })
+    }
+    pub(crate) fn source_address(&self) -> usize {
+        self.residency
+            .as_ref()
+            .map_or(self.samples.as_ptr() as usize, |view| {
+                Arc::as_ptr(&view.source) as usize
+            })
+    }
+
+    pub(crate) fn source_sample_count(&self) -> usize {
+        self.frame_count() * self.channels
+    }
+
+    pub(crate) fn frame_count(&self) -> usize {
+        self.residency.as_ref().map_or_else(
+            || self.samples.len() / self.channels.max(1),
+            |view| view.source.frame_count,
+        )
+    }
+
+    pub(crate) fn resident_start(&self) -> usize {
+        self.residency.as_ref().map_or(0, |view| view.start_frame)
+    }
+
+    pub(crate) fn resident_end(&self) -> usize {
+        self.resident_start() + self.samples.len() / self.channels.max(1)
+    }
+
+    pub(crate) fn window_revision(&self) -> u64 {
+        self.residency
+            .as_ref()
+            .map_or(0, |view| view.window_revision)
+    }
+
+    pub(crate) fn same_source(&self, other: &Self) -> bool {
+        self.source_address() == other.source_address()
+            && self.source_sample_count() == other.source_sample_count()
+            && self.channels == other.channels
+    }
+
+    pub(crate) fn same_window(&self, other: &Self) -> bool {
+        self.same_source(other)
+            && self.resident_start() == other.resident_start()
+            && self.resident_end() == other.resident_end()
+            && self.window_revision() == other.window_revision()
+            && self.residency.as_ref().map(|view| view.context)
+                == other.residency.as_ref().map(|view| view.context)
+    }
+
+    pub(crate) fn sample_at_absolute(&self, frame: usize, channel: usize) -> f32 {
+        // Bounds are admitted outside RT and rechecked at publication. Fail closed
+        // for an unavailable read rather than indexing another source coordinate.
+        if channel >= self.channels {
+            return 0.0;
+        }
+        frame
+            .checked_sub(self.resident_start())
+            .and_then(|local| local.checked_mul(self.channels))
+            .and_then(|base| base.checked_add(channel))
+            .and_then(|index| self.samples.get(index))
+            .copied()
+            .unwrap_or(0.0)
+    }
+
+    /// Copy a finite window off-thread; it never pins the complete PCM backing.
+    pub(crate) fn window(
+        &self,
+        start: usize,
+        end: usize,
+        revision: u64,
+        context: ResidentContext,
+    ) -> Result<Self, String> {
+        let view = self
+            .residency
+            .as_ref()
+            .ok_or("complete source identity is required")?;
+        if self.channels == 0
+            || start >= end
+            || start < self.resident_start()
+            || end > self.resident_end()
+            || revision == 0
+            || (context != ResidentContext::FiniteLoop && (start != 0 || end != self.frame_count()))
+        {
+            return Err("resident window is outside its admitted source/context".into());
+        }
+        let begin = (start - self.resident_start()) * self.channels;
+        let finish = (end - self.resident_start()) * self.channels;
+        Ok(Self {
+            channels: self.channels,
+            samples: if begin == 0 && finish == self.samples.len() {
+                self.samples.clone()
+            } else {
+                Arc::from(&self.samples[begin..finish])
+            },
+            residency: Some(Arc::new(ResidentSourceView {
+                source: view.source.clone(),
+                start_frame: start,
+                window_revision: revision,
+                context,
+            })),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_complete_source(mut self, rate: u32) -> Self {
+        self.residency = Some(Arc::new(ResidentSourceView {
+            source: Arc::new(CompleteSourceIdentity {
+                frame_count: self.frame_count(),
+                channels: self.channels,
+                sample_rate_hz: rate,
+                original_sha256: [0; 32],
+                playback_sha256: [0; 32],
+                mono_sha256: [0; 32],
+                transform_sha256: [0; 32],
+                source_zero_frame: 0,
+            }),
+            start_frame: 0,
+            window_revision: 1,
+            context: ResidentContext::FullTrack,
+        }));
+        self
+    }
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedStemSet {
+    /// One already accepted complete-set generation; window copies share this owner.
+    pub(crate) complete_set_identity: Arc<[u8; 32]>,
     /// Effective native projection for these same-source PCM readers, refreshed
     /// only by successful callback timing adoption/clear. Never a raw revision.
     pub(crate) accepted_timing: Option<AcceptedTimingProjection>,
@@ -36,6 +230,46 @@ pub(crate) struct PreparedStemSet {
     pub frame_count: usize,
     pub available_mask: u8,
     pub stems: [SampleBuffer; STEM_BUFFER_COUNT],
+}
+
+impl PreparedStemSet {
+    /// Crop all components and fullmix reference in one off-thread transaction.
+    pub(crate) fn window_for(mut self, reference: &SampleBuffer) -> Result<Self, String> {
+        if self.frame_count != reference.frame_count() || self.channels != reference.channels {
+            return Err("complete stem/source geometry differs".into());
+        }
+        if let Some(view) = &reference.residency {
+            for stem in &mut self.stems {
+                if stem.residency.is_none() {
+                    stem.residency = Some(Arc::new(ResidentSourceView {
+                        source: view.source.clone(),
+                        start_frame: 0,
+                        window_revision: view.window_revision,
+                        context: ResidentContext::FullTrack,
+                    }));
+                }
+                *stem = stem.window(
+                    reference.resident_start(),
+                    reference.resident_end(),
+                    view.window_revision,
+                    view.context,
+                )?;
+            }
+        }
+        self.reference_samples = reference.samples.clone();
+        Ok(self)
+    }
+}
+
+/// One prebuilt all-or-none callback payload, allocated by the bounded worker.
+#[derive(Debug, Clone)]
+pub(crate) struct ResidentTransaction {
+    pub(crate) id: usize,
+    pub(crate) sample: SampleBuffer,
+    pub(crate) stems: Option<PreparedStemSet>,
+    pub(crate) binding: InputPadBinding,
+    pub(crate) publication: PreparedSourcePermit,
+    pub(crate) expected_window_revision: u64,
 }
 
 /// Message that is emitted from the audio thread.
@@ -223,7 +457,10 @@ pub enum ControlMessage {
     SetKeyLock(bool),
 
     /// Enable or disable Key Lock for one pad.
-    SetPadKeyLock { id: usize, enabled: bool },
+    SetPadKeyLock {
+        id: usize,
+        enabled: bool,
+    },
 
     /// Set bounded per-pad beatgrid/downbeat timing metadata.
     #[cfg(test)]
@@ -240,7 +477,10 @@ pub enum ControlMessage {
     },
 
     /// Clear precise timing through this native publication epoch without erasing newer state.
-    ClearPadConstantTiming { id: usize, through_epoch: u64 },
+    ClearPadConstantTiming {
+        id: usize,
+        through_epoch: u64,
+    },
 
     /// Coupled derived controls from current acknowledged timing.
     RefreshAcceptedTiming(
@@ -254,10 +494,14 @@ pub enum ControlMessage {
     },
 
     /// Request transport downbeat anchoring from a selected playing pad.
-    AnchorTransportPhaseFromPad { id: usize },
+    AnchorTransportPhaseFromPad {
+        id: usize,
+    },
 
     /// Arm one selected reference for one-time session grid bootstrap.
-    BootstrapTransportFromPad { id: usize },
+    BootstrapTransportFromPad {
+        id: usize,
+    },
 
     /// Set per-pad loop region in seconds.
     ///
@@ -277,13 +521,19 @@ pub enum ControlMessage {
     /// # Parameters
     /// * `id` - Unique identifier for the sample slot (0..NUM_SAMPLES)
     /// * `sample` - Pre-decoded immutable sample buffer (shared handle)
-    LoadSample { id: usize, sample: SampleBuffer },
+    LoadSample {
+        id: usize,
+        sample: SampleBuffer,
+    },
 
     /// Publish validated prepared stems into an audio-thread slot.
     ///
     /// The message carries bounded metadata plus shared immutable buffer handles. It must not
     /// contain file paths, Python objects, or copied full audio payloads.
-    PublishPreparedStems { id: usize, stems: PreparedStemSet },
+    PublishPreparedStems {
+        id: usize,
+        stems: PreparedStemSet,
+    },
 
     /// Select whether a pad renders from the full mix or all prepared stems.
     ///
@@ -304,7 +554,11 @@ pub enum ControlMessage {
         epoch: Option<Arc<std::sync::atomic::AtomicU64>>,
         captured_epoch: u64,
         replace_assignment: bool,
+        loop_region: Option<(usize, usize)>,
+        resident_cancelled: Option<Arc<std::sync::atomic::AtomicBool>>,
     },
+
+    RelocateResident(Box<ResidentTransaction>),
 
     /// Select which prepared component stems are enabled for an all-stems pad.
     ///
@@ -355,7 +609,9 @@ pub enum ControlMessage {
     ///
     /// # Parameters
     /// * `id` - Identifier of the sample to stop
-    StopSample { id: usize },
+    StopSample {
+        id: usize,
+    },
 
     /// Stop all currently active voices.
     StopAll(),
@@ -364,18 +620,25 @@ pub enum ControlMessage {
     ///
     /// If the sample is playing, its voice becomes silent but retains its
     /// current playback position. If the sample is not playing, this has no effect.
-    PauseSample { id: usize },
+    PauseSample {
+        id: usize,
+    },
 
     /// Resume playback of a paused sample from its saved position.
     ///
     /// If the sample was paused, playback continues from that point.
     /// If the sample was not paused, this has no effect.
-    ResumeSample { id: usize },
+    ResumeSample {
+        id: usize,
+    },
 
     /// Seek an active or paused sample voice to a source position in seconds.
     ///
     /// If the sample has no active or paused voice, this has no effect.
-    SeekSample { id: usize, position_s: f64 },
+    SeekSample {
+        id: usize,
+        position_s: f64,
+    },
 
     /// Unload a sample slot.
     ///
@@ -383,7 +646,9 @@ pub enum ControlMessage {
     ///
     /// # Parameters
     /// * `id` - Identifier of the sample slot to unload
-    UnloadSample { id: usize },
+    UnloadSample {
+        id: usize,
+    },
 }
 
 #[cfg(test)]
@@ -402,6 +667,7 @@ impl ControlMessage {
             | ControlMessage::SeekSample { .. } => ControlMessageClass::PlaybackEvent,
             ControlMessage::LoadSample { .. }
             | ControlMessage::LoadColdSample { .. }
+            | ControlMessage::RelocateResident(_)
             | ControlMessage::PublishPreparedStems { .. }
             | ControlMessage::PublishConstantTiming { .. }
             | ControlMessage::RefreshAcceptedTiming(_) => ControlMessageClass::Publication,
@@ -630,10 +896,12 @@ mod tests {
     #[test]
     fn prepared_stem_publication_message_carries_fixed_size_handles() {
         let buffer = SampleBuffer {
+            residency: None,
             channels: 1,
             samples: Arc::from([0.0_f32, 0.0].as_slice()),
         };
         let stems = PreparedStemSet {
+            complete_set_identity: std::sync::Arc::new([0; 32]),
             accepted_timing: None,
             reference_samples: buffer.samples.clone(),
             publication: PreparedSourcePermit::unrestricted(),
@@ -651,6 +919,7 @@ mod tests {
             ControlMessage::PublishPreparedStems {
                 id: 3,
                 stems: PreparedStemSet {
+                    complete_set_identity: _,
                     accepted_timing: None,
                     source_version_hash: 42,
                     sample_rate_hz: 44_100,
@@ -667,10 +936,12 @@ mod tests {
     #[test]
     fn prepared_stem_publication_reports_ring_buffer_full() {
         let buffer = SampleBuffer {
+            residency: None,
             channels: 1,
             samples: Arc::from([0.0_f32, 0.0].as_slice()),
         };
         let stems = PreparedStemSet {
+            complete_set_identity: std::sync::Arc::new([0; 32]),
             accepted_timing: None,
             reference_samples: buffer.samples.clone(),
             publication: PreparedSourcePermit::unrestricted(),
@@ -764,6 +1035,7 @@ mod tests {
             ControlMessage::LoadSample {
                 id: 1,
                 sample: SampleBuffer {
+                    residency: None,
                     channels: 1,
                     samples: Arc::from([0.0_f32].as_slice()),
                 },

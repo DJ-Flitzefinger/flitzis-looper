@@ -23,9 +23,16 @@ pub(crate) enum RetiredAudioBuffer {
     ConstantTiming(PreparedConstantTiming),
     GlobalPlaybackBatch(Arc<super::global_playback_batch::GlobalPlaybackBatch>),
     AcceptedTimingRefresh(Arc<super::accepted_timing_refresh::AcceptedTimingRefresh>),
+    ResidentTransaction(Box<crate::messages::ResidentTransaction>),
+    ResidentCancellation(Arc<AtomicBool>),
 }
 
 pub(crate) trait AudioBufferRetirement {
+    fn retire_resident_cancellation(&mut self, cancelled: Arc<AtomicBool>);
+    fn retire_resident_transaction(
+        &mut self,
+        publication: Box<crate::messages::ResidentTransaction>,
+    );
     fn retire_cold_adoption(&mut self, adoption: Arc<std::sync::atomic::AtomicU8>);
     fn retire_sample(&mut self, sample: SampleBuffer);
     fn retire_prepared_stems(&mut self, stems: PreparedStemSet);
@@ -46,6 +53,8 @@ pub(crate) struct ImmediateAudioBufferRetirement;
 
 #[cfg(test)]
 impl AudioBufferRetirement for ImmediateAudioBufferRetirement {
+    fn retire_resident_cancellation(&mut self, _: Arc<AtomicBool>) {}
+    fn retire_resident_transaction(&mut self, _: Box<crate::messages::ResidentTransaction>) {}
     fn retire_cold_adoption(&mut self, _: Arc<std::sync::atomic::AtomicU8>) {}
     fn retire_accepted_timing_refresh(
         &mut self,
@@ -131,6 +140,15 @@ impl RtAudioBufferRetirement {
 }
 
 impl AudioBufferRetirement for RtAudioBufferRetirement {
+    fn retire_resident_cancellation(&mut self, cancelled: Arc<AtomicBool>) {
+        self.retire_buffer(RetiredAudioBuffer::ResidentCancellation(cancelled));
+    }
+    fn retire_resident_transaction(
+        &mut self,
+        publication: Box<crate::messages::ResidentTransaction>,
+    ) {
+        self.retire_buffer(RetiredAudioBuffer::ResidentTransaction(publication));
+    }
     fn retire_cold_adoption(&mut self, adoption: Arc<std::sync::atomic::AtomicU8>) {
         self.retire_buffer(RetiredAudioBuffer::ColdAdoption(adoption));
     }
@@ -227,6 +245,7 @@ mod tests {
         let weak = Arc::downgrade(&samples);
         (
             SampleBuffer {
+                residency: None,
                 channels: 1,
                 samples,
             },

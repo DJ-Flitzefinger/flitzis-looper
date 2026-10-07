@@ -7,6 +7,7 @@ use std::io::{Cursor, Error, ErrorKind};
 fn loaded(samples: Vec<f32>, channels: usize, rate_hz: u32) -> LoadedPcmSnapshot {
     LoadedPcmSnapshot::new(
         SampleBuffer {
+            residency: None,
             channels,
             samples: samples.into(),
         },

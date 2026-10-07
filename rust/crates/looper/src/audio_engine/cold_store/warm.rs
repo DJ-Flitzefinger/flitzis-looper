@@ -2,7 +2,9 @@
 //! interleaved+mono verification and exact executed playback transform.
 use super::lifecycle::{OpeningGuard, store};
 use super::*;
+use crate::audio_engine::cold_residency::{self, ResidentLoadHint};
 use crate::audio_engine::sample_loader::{decoder_cache_selector, playback_cache_transform};
+use crate::messages::{ResidentContext, ResidentSourceView};
 
 const MAX_MANIFEST_BYTES: u64 = 256 * 1024;
 const MAX_CANDIDATES: usize = 4096;
@@ -153,11 +155,23 @@ impl ColdTransaction {
 
     /// Invoke under preparation_gate through commit. The gate is digest/device
     /// scoped; a source-path/mtime index is never a content-authority shortcut.
+    #[cfg(test)]
     pub(in crate::audio_engine) fn try_reuse(
         &mut self,
         output_rate: u32,
         output_channels: usize,
         maximum: usize,
+        cancelled: &impl Fn() -> bool,
+    ) -> io::Result<Option<SampleBuffer>> {
+        self.try_reuse_selected(output_rate, output_channels, maximum, None, cancelled)
+    }
+
+    pub(in crate::audio_engine) fn try_reuse_selected(
+        &mut self,
+        output_rate: u32,
+        output_channels: usize,
+        maximum: usize,
+        resident_hint: Option<ResidentLoadHint>,
         cancelled: &impl Fn() -> bool,
     ) -> io::Result<Option<SampleBuffer>> {
         check_cancelled(cancelled)?;
@@ -187,9 +201,9 @@ impl ColdTransaction {
             match self.open_candidate(
                 &path,
                 &selector,
-                output_rate,
-                output_channels,
+                (output_rate, output_channels),
                 maximum,
+                resident_hint,
                 cancelled,
             ) {
                 Ok(sample) => {
@@ -214,11 +228,12 @@ impl ColdTransaction {
         &mut self,
         path: &Path,
         selector: &Value,
-        output_rate: u32,
-        output_channels: usize,
+        output: (u32, usize),
         maximum: usize,
+        resident_hint: Option<ResidentLoadHint>,
         cancelled: &impl Fn() -> bool,
     ) -> io::Result<SampleBuffer> {
+        let (output_rate, output_channels) = output;
         let _admission = OpeningGuard::acquire(path)?;
         reject_links(path)?;
         if fs::canonicalize(path)?.parent() != Some(self.cache_root.as_path()) {
@@ -340,12 +355,39 @@ impl ColdTransaction {
                 .map_err(|_| invalid("warm ownership poisoned"))?;
             state.caches.get(path).and_then(Weak::upgrade)
         };
-        let samples = if let Some(shared) = existing.as_ref() {
+        let source = cold_residency::identity(&manifest).map_err(io::Error::other)?;
+        let selected = resident_hint
+            .map(|hint| hint.region(rate, frames))
+            .transpose()
+            .map_err(io::Error::other)?;
+        let (start, end, context) = match (resident_hint, selected) {
+            (Some(hint), Some(region)) if !hint.key_lock => {
+                (region.start, region.end, ResidentContext::FiniteLoop)
+            }
+            (Some(_), _) => (0, frames, ResidentContext::KeyLockFullTrack),
+            _ => (0, frames, ResidentContext::FullTrack),
+        };
+        let finite = start != 0 || end != frames;
+        let samples = if finite {
+            read_playback_range(
+                &mut readers[1],
+                start,
+                end - start,
+                channels,
+                maximum,
+                cancelled,
+                &mut self.integrity,
+            )?
+        } else if let Some(shared) = existing.as_ref() {
             let mut pcm = shared
                 .pcm
                 .lock()
                 .map_err(|_| invalid("warm PCM ownership poisoned"))?;
-            if let Some(samples) = pcm.as_ref().and_then(Weak::upgrade) {
+            if let Some(samples) = pcm
+                .as_ref()
+                .and_then(Weak::upgrade)
+                .filter(|pcm| pcm.len() == frames * channels)
+            {
                 samples
             } else {
                 let samples = read_playback(
@@ -384,7 +426,7 @@ impl ColdTransaction {
                 root: self.cache_root.clone(),
                 readers,
                 directories: vec![directory],
-                pcm: Mutex::new(Some(Arc::downgrade(&samples))),
+                pcm: Mutex::new((!finite).then(|| Arc::downgrade(&samples))),
                 retired: AtomicBool::new(retiring),
                 durable_assignments: Mutex::new(HashSet::new()),
                 identity: directory_identity,
@@ -409,12 +451,33 @@ impl ColdTransaction {
         self.manifest = Some(manifest);
         self.reused_cache = Some(shared);
         self.committed_cache = Some(path.to_owned());
-        Ok(SampleBuffer { samples, channels })
+        Ok(SampleBuffer {
+            residency: Some(Arc::new(ResidentSourceView {
+                source,
+                start_frame: start,
+                window_revision: 1,
+                context,
+            })),
+            samples,
+            channels,
+        })
     }
 }
 
-fn read_playback(
+pub(super) fn read_playback(
     reader: &mut File,
+    frames: usize,
+    channels: usize,
+    maximum: usize,
+    cancelled: &impl Fn() -> bool,
+    metrics: &mut IntegrityMetrics,
+) -> io::Result<Arc<[f32]>> {
+    read_playback_range(reader, 0, frames, channels, maximum, cancelled, metrics)
+}
+
+fn read_playback_range(
+    reader: &mut File,
+    start: usize,
     frames: usize,
     channels: usize,
     maximum: usize,
@@ -438,7 +501,11 @@ fn read_playback(
     {
         return Err(invalid("warm PCM conversion exceeds whole-job budget"));
     }
-    reader.seek(SeekFrom::Start(0))?;
+    let offset = start
+        .checked_mul(channels)
+        .and_then(|n| n.checked_mul(4))
+        .ok_or_else(|| invalid("resident offset overflow"))?;
+    reader.seek(SeekFrom::Start(offset as u64))?;
     let mut bytes = [0_u8; CHUNK_BYTES];
     let mut left = count * 4;
     while left > 0 {

@@ -76,6 +76,7 @@ fn productive_history_seek_uses_retained_voice_extent_and_clears_fixed_history_b
  {
     let original = sample(0.5);
     let shorter = SampleBuffer {
+        residency: None,
         channels: 1,
         samples: Arc::from(vec![0.2; RATE as usize / 4]),
     };
@@ -114,6 +115,7 @@ fn productive_history_seek_uses_retained_voice_extent_and_clears_fixed_history_b
 
 fn sample(value: f32) -> SampleBuffer {
     SampleBuffer {
+        residency: None,
         channels: 1,
         samples: Arc::from(
             (0..RATE * 2)
@@ -234,6 +236,7 @@ fn productive_history_rate_ramps_pause_stem_transition_and_in_range_loop_keep_ch
     let mut mixer = setup(&source);
     mixer.stop_sample(0);
     let stems = PreparedStemSet {
+        complete_set_identity: std::sync::Arc::new([0; 32]),
         reference_samples: source.samples.clone(),
         publication: PreparedSourcePermit::unrestricted(),
         source_version_hash: 42,
@@ -388,6 +391,8 @@ struct RetainedSamples {
     samples: Vec<SampleBuffer>,
 }
 impl AudioBufferRetirement for RetainedSamples {
+    fn retire_resident_cancellation(&mut self, _: std::sync::Arc<std::sync::atomic::AtomicBool>) {}
+    fn retire_resident_transaction(&mut self, _: Box<crate::messages::ResidentTransaction>) {}
     fn retire_cold_adoption(&mut self, _: Arc<std::sync::atomic::AtomicU8>) {}
     fn retire_accepted_timing_refresh(
         &mut self,

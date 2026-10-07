@@ -30,6 +30,21 @@ impl FrameRange {
     }
 }
 
+/// A finite Normal loop needs exactly its admitted physical knots. Unsupported
+/// native/FIFO context and explicit intro/tail access require a complete view.
+pub(crate) fn resident_read_context_available(
+    sample: &SampleBuffer,
+    region: FrameRange,
+    mode: ExplicitSeekMode,
+    key_lock: bool,
+) -> bool {
+    let full = sample.resident_start() == 0 && sample.resident_end() == sample.frame_count();
+    if key_lock || mode != ExplicitSeekMode::Normal {
+        return full;
+    }
+    sample.resident_start() <= region.start && sample.resident_end() >= region.end
+}
+
 /// One copied source-addressing domain. Musical duration is in loaded source frames;
 /// the admitted physical PCM range and its persisted integer endpoints stay unchanged.
 #[derive(Debug, Clone, Copy)]
@@ -367,7 +382,10 @@ pub(crate) fn prepared_stem_set_matches_sample(
     sample_rate_hz: f32,
     sample_frames: usize,
 ) -> bool {
-    if channels == 0 || sample_frames == 0 || sample.samples.len() != sample_frames * channels {
+    if channels == 0
+        || sample_frames == 0
+        || sample.source_sample_count() != sample_frames * channels
+    {
         return false;
     }
 
@@ -388,10 +406,11 @@ pub(crate) fn prepared_stem_set_matches_sample(
         return false;
     }
 
-    stems
-        .stems
-        .iter()
-        .all(|stem| stem.channels == channels && stem.samples.len() == sample.samples.len())
+    stems.stems.iter().all(|stem| {
+        stem.channels == channels
+            && stem.samples.len() == sample.samples.len()
+            && (sample.residency.is_none() || stem.same_window(sample))
+    })
 }
 
 pub(crate) fn prepared_stem_set_for_render<'a>(
@@ -422,7 +441,7 @@ pub(crate) fn render_source_sample(
     channels: usize,
     channel: usize,
 ) -> f32 {
-    let index = frame * channels + channel;
+    debug_assert_eq!(channels, sample.channels);
     if let Some(stems) = stems {
         let enabled_stem_mask = enabled_stem_mask & STEM_COMPONENT_MASK;
         stems
@@ -430,10 +449,10 @@ pub(crate) fn render_source_sample(
             .iter()
             .enumerate()
             .filter(|(stem_index, _)| enabled_stem_mask & stem_index_mask(*stem_index) != 0)
-            .map(|(_, stem)| stem.samples[index])
+            .map(|(_, stem)| stem.sample_at_absolute(frame, channel))
             .sum()
     } else {
-        sample.samples[index]
+        sample.sample_at_absolute(frame, channel)
     }
 }
 
@@ -446,7 +465,7 @@ pub(crate) fn render_source_selection_sample(
     channel: usize,
 ) -> f32 {
     match selection.mode {
-        StemMixMode::FullMix => sample.samples[frame * channels + channel],
+        StemMixMode::FullMix => sample.sample_at_absolute(frame, channel),
         StemMixMode::AllStems => {
             let matching_stems = stems.filter(|stems| {
                 selection.source_version_hash != 0
@@ -530,7 +549,7 @@ impl SourceReadPlan {
     ) {
         debug_assert!(self.channels > 0 && buffers.len() >= self.channels);
         debug_assert!(playback.matches_domain(self.domain()));
-        debug_assert_eq!(sample.samples.len() / self.channels, self.sample_frames);
+        debug_assert_eq!(sample.frame_count(), self.sample_frames);
         debug_assert!(
             buffers
                 .iter()
@@ -696,7 +715,7 @@ impl SourceReadPlan {
     ) {
         let channels = self.channels;
         debug_assert!(channels > 0 && input.len() >= channels);
-        debug_assert_eq!(sample.samples.len() / channels, self.sample_frames);
+        debug_assert_eq!(sample.frame_count(), self.sample_frames);
         for (channel, buffer) in input.iter_mut().enumerate().take(channels) {
             debug_assert!(buffer.len() >= input_frames);
             for (offset, sample_ref) in buffer.iter_mut().enumerate().take(input_frames) {
@@ -714,6 +733,7 @@ mod tests {
 
     fn stereo_sample(gain: f32) -> SampleBuffer {
         SampleBuffer {
+            residency: None,
             channels: 2,
             samples: Arc::from(
                 (0..6)
@@ -725,6 +745,7 @@ mod tests {
 
     fn prepared_stems(reference: &SampleBuffer) -> PreparedStemSet {
         PreparedStemSet {
+            complete_set_identity: std::sync::Arc::new([0; 32]),
             accepted_timing: None,
             reference_samples: reference.samples.clone(),
             publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),

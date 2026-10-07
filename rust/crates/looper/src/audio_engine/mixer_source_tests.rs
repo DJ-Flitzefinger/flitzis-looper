@@ -20,6 +20,7 @@ fn immutable_source(tag: usize) -> SampleBuffer {
         })
         .collect();
     SampleBuffer {
+        residency: None,
         channels: CHANNELS,
         samples: Arc::from(samples.into_boxed_slice()),
     }
@@ -254,6 +255,7 @@ fn explicit_intro_and_tail_seek_taps_and_cursors_are_partition_invariant() {
 
 fn prepared_sources(reference: &SampleBuffer, sample_rate: f32) -> PreparedStemSet {
     PreparedStemSet {
+        complete_set_identity: std::sync::Arc::new([0; 32]),
         accepted_timing: None,
         reference_samples: reference.samples.clone(),
         publication: crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted(),
@@ -278,6 +280,7 @@ fn component_sum(stems: &PreparedStemSet, mask: u8) -> SampleBuffer {
         })
         .collect();
     SampleBuffer {
+        residency: None,
         channels: CHANNELS,
         samples: Arc::from(samples.into_boxed_slice()),
     }

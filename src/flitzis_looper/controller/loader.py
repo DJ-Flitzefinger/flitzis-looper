@@ -1,6 +1,6 @@
 from itertools import islice
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, NotRequired, TypedDict, TypeVar
 
 from pydantic import ValidationError
 
@@ -10,6 +10,7 @@ from flitzis_looper.controller.asset_lifecycle import (
     ProjectAssetLifecycle,
 )
 from flitzis_looper.controller.base import BaseController
+from flitzis_looper.controller.saved_residency import saved_resident_loop
 from flitzis_looper.controller.validation import normalize_bpm
 from flitzis_looper.models import (
     ProjectState,
@@ -25,6 +26,15 @@ if TYPE_CHECKING:
 
 
 _PadValue = TypeVar("_PadValue")
+
+
+class _RestoredLoadOptions(TypedDict):
+    run_analysis: bool
+    replace_assignment: bool
+    restore_automatic: NotRequired[bool]
+    resident_loop_start_s: NotRequired[float]
+    resident_loop_end_s: NotRequired[float]
+    resident_key_lock: NotRequired[bool]
 
 
 def _reset_pad_value(values: list[_PadValue], sample_id: int, default: _PadValue) -> bool:
@@ -841,21 +851,22 @@ class LoaderController(BaseController):
         reservation = None
         try:
             reservation = self._assets.reserve()
+            options: _RestoredLoadOptions = {
+                "run_analysis": run_analysis,
+                "replace_assignment": True,
+            }
             if self._wants_accepted_restore(sample_id):
-                request_id = self._audio.load_sample_async(
-                    sample_id,
-                    rel.as_posix(),
-                    run_analysis=run_analysis,
-                    restore_automatic=True,
-                    replace_assignment=True,
+                options["restore_automatic"] = True
+            sample_rate_hz = self._output_sample_rate_hz()
+            if sample_rate_hz is not None:
+                resident = saved_resident_loop(
+                    self._project, sample_id, sample_rate_hz=sample_rate_hz
                 )
-            else:
-                request_id = self._audio.load_sample_async(
-                    sample_id,
-                    rel.as_posix(),
-                    run_analysis=run_analysis,
-                    replace_assignment=True,
-                )
+                if resident is not None:
+                    options["resident_loop_start_s"] = resident.start_seconds
+                    options["resident_loop_end_s"] = resident.end_seconds
+                    options["resident_key_lock"] = resident.key_lock
+            request_id = self._audio.load_sample_async(sample_id, rel.as_posix(), **options)
         except (RuntimeError, ValueError) as error:
             if reservation is not None:
                 reservation.close()

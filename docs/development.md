@@ -357,6 +357,30 @@ and dependent tests run serially because Windows retains open extension handles.
 The warm source probe and 32-second save/export fixture provide preliminary
 integrity accounting; C3 owns the separate 200-pad startup/RAM acceptance.
 
+### C2a finite saved-loop and accepted-set relocation probes
+
+The ordinary native suite covers productive saved finite loads at 44.1/48/96 kHz,
+source/window ACK, cancellation/backpressure, complete evidence without complete
+ticket pins, exact interpolation/rate oracles and live native-history preservation.
+Run these two additional ignored probes separately in both Debug and Release;
+they isolate their project directory and never open a stream or device:
+
+```powershell
+$env:FLITZI_COLD_LONG_SOURCE = (Resolve-Path -LiteralPath '..\exports\g3c3-startup-corrected-20261007\wholequarter-unity\samples\acceptance-source.wav').Path
+$env:FLITZI_C2A_FINITE_EVIDENCE = Join-Path (Resolve-Path -LiteralPath '..\scratch\c2a-residency-20261007').Path 'finite-debug-evidence.json'
+.\scripts\run-rust-tests.ps1 -CargoArgs @('audio_engine::cold_residency_tests::c2a_productive_saved_finite_warm_restore_identity_bytes', '--', '--ignored', '--exact', '--nocapture')
+.\scripts\run-rust-tests.ps1 -CargoArgs @('audio_engine::cold_residency_tests::productive_worker_stem_relocation_keeps_complete_set_and_live_reader', '--', '--ignored', '--exact', '--nocapture')
+```
+
+Add `'--release'` to each CargoArgs list and use a distinct evidence filename for
+Release. The long probe independently hashes complete PCM24 decoder/playback
+content, verifies actual cold and fresh warm ACK, and compares two loop seams
+against original PCM while only `[42,42.5)` seconds remain resident. The other
+probe prepares real complete stem artifacts, adopts their finite views, then
+relocates the same already accepted complete set through the productive worker
+and native callback with uninterrupted PCM output. These are identity, ownership
+and output proofs; C3 owns startup/RAM measurements and human acceptance stays open.
+
 The optional Beat This boundary is available only through explicit diagnostic
 API calls and does not change normal load/manual analysis routing. Its
 unconfigured mode needs no Beat This installation; real B1b inference uses the

@@ -665,6 +665,7 @@ pub(crate) fn prepare_playback(
     };
     Ok((
         SampleBuffer {
+            residency: None,
             samples,
             channels: output_channels,
         },

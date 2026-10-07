@@ -3,9 +3,11 @@
 //! These helpers run only on background/control-plane threads. They must never be called from the
 //! real-time audio callback.
 
-use std::fs;
+use sha2::{Digest, Sha256};
 #[cfg(test)]
+use std::fs;
 use std::fs::File;
+use std::io::Read;
 #[cfg(test)]
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
@@ -20,6 +22,23 @@ const STEM_ALIGNMENT_PRE_ONSET_SECONDS: f32 = 0.5;
 const STEM_ALIGNMENT_MIN_SCORE: f32 = 0.35;
 const STEM_ALIGNMENT_MIN_IMPROVEMENT: f32 = 0.08;
 const STEM_ALIGNMENT_ONSET_THRESHOLD_RATIO: f32 = 0.05;
+
+/// Maximum simultaneous PCM includes complete reference, five retained stems,
+/// WAV-to-f32/Arc overlap, shifted Vec-to-Arc overlap, two mono onset arrays and
+/// bounded coarse analysis scratch. Existing pad/voice readers are separate owners.
+pub(super) fn admitted_stem_pcm_bytes(frames: usize, channels: usize) -> Result<usize, String> {
+    frames
+        .checked_mul(channels)
+        .and_then(|n| n.checked_mul(4))
+        .and_then(|bytes| bytes.checked_mul(8))
+        .and_then(|bytes| {
+            frames
+                .checked_mul(8)
+                .and_then(|mono| bytes.checked_add(mono))
+        })
+        .and_then(|bytes| bytes.checked_add(4 * 1024 * 1024))
+        .ok_or_else(|| "complete stem transient PCM geometry overflow".into())
+}
 
 pub(crate) fn project_stem_cache_dir(cache_dir: &str) -> Result<PathBuf, String> {
     let path = Path::new(cache_dir);
@@ -124,7 +143,15 @@ fn prepare_stem_buffers_from_cache_at_project_root(
     }
 
     validate_sample_buffer(reference, output_sample_rate)?;
-    let expected_frames = reference.samples.len() / reference.channels;
+    let expected_frames = reference.frame_count();
+    if admitted_stem_pcm_bytes(expected_frames, reference.channels)?
+        > super::cold_jobs::PCM_LIMIT_BYTES
+    {
+        return Err("complete stem preparation exceeds the 1-GiB transient PCM admission".into());
+    }
+    if reference.resident_start() != 0 || reference.resident_end() != expected_frames {
+        return Err("complete reference PCM is required for stem alignment".into());
+    }
     if expected_frames == 0 {
         return Err("reference sample must contain at least one frame".to_string());
     }
@@ -155,7 +182,18 @@ fn prepare_stem_buffers_from_cache_at_project_root(
         .try_into()
         .map_err(|_| "stem set is incomplete".to_string())?;
 
+    let mut identity = Sha256::new();
+    identity.update(b"aligned-complete-stem-set-v1");
+    identity.update(source_version.as_bytes());
+    identity.update(output_sample_rate.to_le_bytes());
+    identity.update((expected_frames as u64).to_le_bytes());
+    for stem in &stems {
+        for value in stem.samples.iter() {
+            identity.update(value.to_bits().to_le_bytes());
+        }
+    }
     Ok(PreparedStemSet {
+        complete_set_identity: std::sync::Arc::new(identity.finalize().into()),
         accepted_timing: None,
         reference_samples: reference.samples.clone(),
         publication: super::prepared_source::PreparedSourcePermit::unbound(),
@@ -457,7 +495,30 @@ fn read_aligned_pcm16_wav(
     expected_channels: usize,
     expected_frames: usize,
 ) -> Result<SampleBuffer, String> {
-    let bytes = fs::read(path).map_err(|err| format!("Failed to read WAV file: {err}"))?;
+    let maximum_file_bytes = expected_frames
+        .checked_mul(expected_channels)
+        .and_then(|n| n.checked_mul(2))
+        .and_then(|n| n.checked_add(1024 * 1024))
+        .ok_or("stem file geometry overflow")?;
+    let mut reader = File::open(path).map_err(|err| format!("Failed to open WAV file: {err}"))?;
+    let length = reader
+        .metadata()
+        .map_err(|err| format!("Failed to inspect WAV file: {err}"))?
+        .len();
+    if length > maximum_file_bytes as u64 {
+        return Err("stem WAV exceeds bounded input extent".into());
+    }
+    let mut bytes = vec![0; length as usize];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|err| format!("Failed to read complete WAV file: {err}"))?;
+    if reader
+        .read(&mut [0_u8; 1])
+        .map_err(|err| format!("Failed to check WAV extent: {err}"))?
+        != 0
+    {
+        return Err("stem WAV grew beyond bounded admitted extent".into());
+    }
     let (format, data) = parse_pcm16_wav(&bytes)?;
 
     if format.sample_rate_hz != expected_sample_rate_hz {
@@ -493,6 +554,7 @@ fn read_aligned_pcm16_wav(
     }
 
     Ok(SampleBuffer {
+        residency: None,
         channels: format.channels,
         samples: samples.into_boxed_slice().into(),
     })
@@ -703,6 +765,7 @@ mod tests {
     fn write_deterministic_stem_artifacts_creates_aligned_wav_files() {
         let tmp = tempfile::tempdir().unwrap();
         let sample = SampleBuffer {
+            residency: None,
             channels: 2,
             samples: Arc::from([0.5_f32, -0.5, 1.5, -1.5].as_slice()),
         };
@@ -751,6 +814,7 @@ mod tests {
     fn prepare_stem_buffers_from_cache_validates_and_loads_aligned_wavs() {
         let tmp = tempfile::tempdir().unwrap();
         let sample = SampleBuffer {
+            residency: None,
             channels: 2,
             samples: Arc::from([0.5_f32, -0.5, 0.25, -0.25].as_slice()),
         };
@@ -793,6 +857,7 @@ mod tests {
         reference_samples[8] = 1.0;
         reference_samples[24] = 0.5;
         let sample = SampleBuffer {
+            residency: None,
             channels: 1,
             samples: reference_samples.into_boxed_slice().into(),
         };
@@ -849,6 +914,7 @@ mod tests {
     fn prepare_stem_buffers_rejects_sample_rate_mismatch() {
         let tmp = tempfile::tempdir().unwrap();
         let sample = SampleBuffer {
+            residency: None,
             channels: 1,
             samples: Arc::from([0.5_f32, -0.5].as_slice()),
         };
@@ -885,6 +951,7 @@ mod tests {
     fn prepare_stem_buffers_rejects_frame_count_mismatch() {
         let tmp = tempfile::tempdir().unwrap();
         let sample = SampleBuffer {
+            residency: None,
             channels: 1,
             samples: Arc::from([0.5_f32, -0.5, 0.25].as_slice()),
         };

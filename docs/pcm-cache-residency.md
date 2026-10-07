@@ -1,10 +1,11 @@
 # Complete PCM cache and finite loop residency
 
-Status: C1a/C1b productive bounded cold/warm loading, 2026-10-07; C0 baseline `1be58def`.
+Status: C1a/C1b cold/warm loading and C2a finite saved-loop residency, 2026-10-07.
 The existing `AudioEngine.load_sample_async` now runs the copy-first path below.
-Validated warm reuse and last-owner lifecycle are implemented. Residency (C2)
-and measured startup/RAM acceptance (C3) remain pending. Full-buffer playback and fresh accepted-timing verification
-remain authoritative; no startup/RAM or device/listening acceptance is claimed.
+Validated warm reuse and last-owner lifecycle remain authoritative. C2a separates
+complete source authority from resident storage and restores saved finite loops.
+C2b's complete control/readiness matrix and C3's measured startup/RAM acceptance
+remain pending; no startup/RAM or device/listening acceptance is claimed.
 The active [OpenSpec change](../openspec/changes/cache-full-pcm-and-resident-loops/proposal.md)
 contains the remaining contracts and bounded implementation tasks.
 
@@ -70,7 +71,7 @@ intervening timing edits; initial empty Legacy restoration admits its existing
 startup settings through enqueue and native adoption. Reserved single-producer capacity makes source,
 digest, generation, intent and queued handle publication one transaction. A fixed
 source/epoch guard and scalar acknowledgement govern `LoadColdSample`; the
-callback reserves MAX_VOICES+3 retirement slots and one feedback slot before
+callback reserves MAX_VOICES+4 retirement slots and one feedback slot before
 stopping the application's old voices and adopting the complete new bank. The application explicitly requests `replace_assignment=True`; direct native
 `load_sample_async` defaults to false and retains active voices pinned to their
 previous source, as does `LoadSample` bank replacement.
@@ -261,6 +262,97 @@ in [development](development.md) record full integrity bytes and wall/process CP
 These preliminary costs preserve complete save verification, fresh timing ACK and
 atomic previous-config/dirty-state failure behavior. They do not establish C3
 200-pad startup/readiness/RAM improvement or device/listening acceptance.
+
+## Finite saved-loop residency (C2a)
+
+`CompleteSourceIdentity` retains complete rate/channels/frame count, source zero
+and immutable original/playback/mono/canonical-transform digests without owning
+PCM. Each new load assignment gets a fresh runtime identity even when its full
+cache bytes or PCM backing are shared. `ResidentSourceView` shares that identity
+and declares absolute start, resident extent, guarded revision and context.
+CURRENT/loaded shape/accepted evidence describe complete source geometry;
+MIDI/prepared permits additionally fence the effective resident allocation and
+revision. A same-source view replacement does not create another accepted record.
+Old voices retain their actual source, timing and loop geometry.
+
+Python startup resolves existing durable physical loop intent through the shared
+marker/grid projection and passes absolute seconds to `load_sample_async`.
+Historical Automatic period/origin are geometry hints only; fresh complete
+evidence verification and timing ACK still establish CURRENT. Missing/unsupported
+finite geometry keeps an explicit complete view. Source Success follows actual
+native source/window ACK, and complete duration remains source-relative.
+An identical saved setting applied during preparation is allowed; a different
+admitted loop or DSP context cancels the captured window through callback adoption.
+
+Normal dry playback needs the admitted physical `[a,e)` and no guard PCM. Physical
+`H=e-a` and compatible accepted musical `P` remain distinct. The actual reader's
+last knot is `min(ceil(P)-1,H-1)` and its seam joins that knot to `a` at `P`.
+Both taps stay inside `[a,e)`; source rate/smoothing alter phase frequency rather
+than this read set. Per-pad filters consume rendered samples and retain their
+fixed history. C2a labels unproved finite native continuation as
+`full-track-key-lock-continuation-unproved-v1`; saved Key Lock admits complete
+PCM instead of guessing source margins from the 4096-output-frame worker horizon.
+This fallback is a finite allocation, not a streaming pipeline.
+
+Warm restoration still verifies the complete original, decoder and playback
+bytes. It then reads only the selected absolute resident range into playback RAM.
+Cold loading writes and verifies complete artifacts before copying the admitted
+window and releasing temporary full PCM. The shared warm PCM locator accepts
+only exact complete extents, so a cropped window cannot become another load's
+complete PCM. The bounded same-pad reader history registers the final window.
+Fresh complete timing readers compare the full descriptor and the already sealed
+FileID, admit their overlap budget, and register their real weak PCM ownership
+with the existing assignment. Accepted tickets retain finite references; complete
+temporary evidence PCM retires when that work finishes.
+
+Stem preparation aligns complete artifact PCM against a bounded complete source
+reader, hashes the complete set, then retains matching resident component views.
+Full mix and stems share absolute geometry/revision and exact accepted projection.
+Only four component bits can feed the live mixer; cached instrumental is not a
+fifth live component. A new complete set remains inactive-only. Storage relocation
+can adopt while active only for the same complete source and already accepted
+complete set, with current trajectory read coverage and matching history context.
+The old effective handles remain until guarded native ACK; actual native/FIFO,
+filter, fraction and rate history stay with their source. Queued/prepared readers
+continue pinning old allocations until final off-thread retirement.
+
+`relocate_resident_window` uses the existing two-worker/32-queued preparation lane
+with checked 1-GiB transient PCM admission. Its opaque ticket separates preparing,
+pending/adopting, accepted, rejected, failed and cancelled state. Callback adoption
+claims the transaction, reserves retirement, swaps matching fullmix/components,
+publishes the resident fence and acknowledges. Control reconciliation observes
+ACK without driving audio progression. Complete-source identities/reader records
+remain within the existing bounded ownership registry.
+
+C2a does not claim the full C2b readiness/control/editor/analysis/nonresident-seek/
+ALL matrix. Unprepared context cannot silently become missing-sample output:
+admission or native guards preserve effective audio. The next slice prepares
+those complete-source exceptions and finishes shared control routing. C3 still
+must measure actual 200-pad startup/RAM/I/O/CPU, fallback cost and lifecycle;
+source/window byte counts alone are not those measurements. Hearing and devices
+remain open until the final human-run acceptance stage.
+
+The current finite view renders waveform requests only when their complete-source
+range is resident, preserving absolute x coordinates. Wider navigation/waveform,
+complete-source legacy/offline analysis and nonresident seeks report unavailable
+instead of analyzing or labeling a cropped source as complete. Existing complete
+views keep their source-end seek clamping. Saved Automatic geometry is only a
+hint: unsupported complete evidence cannot establish CURRENT, and a changed
+fresh loop outside the window requires C2b preparation. The isolated productive
+probes and their invocation are recorded in [development](development.md).
+
+The productive 600-second PCM24 fixture restores the saved absolute 42.0–42.5
+second loop as 24,000 stereo frames: 192,000 resident PCM bytes, while complete
+source metadata remains 28,800,000 frames with source zero at frame zero. Cold
+import and fresh warm restore both receive actual native ACK and render the same
+bit-exact output against an independent raw-integer PCM24 oracle. Complete
+decoder/playback digests still cover 115,200,000/230,400,000 bytes. Warm validation
+verifies those full extents, then materializes only 192,000 playback bytes; the
+complete cached PCM weak locator has no live backing after either finite load.
+These are logical PCM/integrity byte proofs, not measured process RAM or startup
+performance. The separate productive five-file stem probe checks complete-set
+identity, finite component geometry and bit-exact active continuation across
+native window ACK and cancellation; it does not evaluate separation quality.
 
 ## Preliminary C1b integrity measurements
 

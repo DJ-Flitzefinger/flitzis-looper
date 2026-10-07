@@ -71,6 +71,8 @@ pub struct VoiceSlot {
     pub volume: f32,
     pub(crate) source_playback: SourcePlayback,
     pub(crate) source_timing: VoiceSourceTiming,
+    /// Frozen only when this voice keeps an old source after bank replacement.
+    pub(crate) source_loop_region: Option<FrameRange>,
     pub stretch: StretchProcessor,
     pub paused: bool,
     pub(crate) explicit_seek_mode: ExplicitSeekMode,
@@ -89,6 +91,7 @@ impl VoiceSlot {
             volume: 0.0,
             source_playback: SourcePlayback::new(0, ExplicitSeekMode::Normal, 1.0),
             source_timing: VoiceSourceTiming::default(),
+            source_loop_region: None,
             stretch: StretchProcessor::with_preparation_lane(channels, preparation),
             paused: false,
             explicit_seek_mode: ExplicitSeekMode::Normal,
@@ -123,6 +126,7 @@ impl VoiceSlot {
         self.sample_id = sample_id;
         self.sample = Some(sample);
         self.source_timing = source_timing;
+        self.source_loop_region = None;
         self.frame_pos = initial_frame_pos;
         self.volume = volume;
         self.source_playback = SourcePlayback::new(
@@ -156,6 +160,7 @@ impl VoiceSlot {
         self.volume = 0.0;
         self.source_playback = SourcePlayback::new(0, ExplicitSeekMode::Normal, 1.0);
         self.source_timing = VoiceSourceTiming::default();
+        self.source_loop_region = None;
         self.paused = false;
         self.explicit_seek_mode = ExplicitSeekMode::Normal;
     }
