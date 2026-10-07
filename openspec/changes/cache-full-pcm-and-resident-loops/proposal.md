@@ -2,8 +2,8 @@
 
 ## Why
 
-Every restore currently decodes a complete source into a device-format buffer.
-The loader hashes a path before decode and copies it afterwards, which cannot
+At the C0 audit, every restore decoded a complete source into a device-format buffer.
+The loader hashed a path before decode and copied it afterwards, which could not
 prove the decoder consumed the bytes of the retained original under replacement
 or ABA. Short saved loops still retain complete-track playback PCM. Existing
 editor, explicit seek, ALL, analysis, stems and accepted-timing consumers depend
@@ -19,19 +19,21 @@ loop descriptors, proved reader/DSP context, explicit readiness, guarded atomic
 publication and last-owner cleanup. Keep full-source editor/analysis and
 full-track seek/ALL exceptions.
 
-C1a delivers the bounded Windows copy-first complete cold artifacts and native
-ACK publication described in the maintained design. Warm/lifecycle, residency
-and measured performance remain the later slices.
+C1a delivers bounded Windows copy-first complete cold artifacts and native ACK
+publication. C1b adds complete fresh immutable warm validation, shared preparation
+and assignment/read ownership, immutable stem generations and contained bounded
+last-reader cleanup, plus preliminary real integrity/save costs. Residency and
+measured startup/RAM acceptance remain the later slices.
 
 C0 delivers the contract audit and maintained design in
-`docs/pcm-cache-residency.md`, plus this focused change. C1b-C3 implementation,
+`docs/pcm-cache-residency.md`, plus this focused change. C2/C3 implementation,
 integration and measurements remain unchecked in tasks.md. The MODIFIED deltas
 resolve existing unconditional decode/immediate-region/delete wording and the
 old bank-replacement scenario against the already specified pinned-voice behavior.
 
 ## Non-goals and realtime constraints
 
-No warm reuse/residency implementation in C1a, continuous streaming system, callback disk
+No resident-window implementation in C1a/C1b, continuous streaming system, callback disk
 access, forced 48-kHz conversion, analyzer-default cutover, new timing evidence,
 new pitch/FX backend, acoustic-delay compensation or full application Rust-port
 planning/implementation. Actual device/hearing acceptance stays open and occurs

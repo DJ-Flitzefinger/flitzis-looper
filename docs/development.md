@@ -339,6 +339,24 @@ real audio device. Use `uv run pytest --audio-devices` only for an explicitly
 authorized human/device session. Native cold-load tests exercise the productive
 worker and callback command drain with virtual PCM output and no CPAL stream.
 
+C1b warm/lifecycle checks use the same productive loader, guarded ACK and native
+retirement paths. Fresh warm leases perform complete source and decoder/playback
+verification; their hashing CPU and I/O are part of the workload. Explicit private
+probes record the actual 600-second source path and save/export costs:
+
+```powershell
+$env:FLITZI_COLD_LONG_SOURCE = (Resolve-Path -LiteralPath '..\exports\g3c3-startup-corrected-20261007\wholequarter-unity\samples\acceptance-source.wav').Path
+$env:FLITZI_C1B_WARM_EVIDENCE = [IO.Path]::GetFullPath('..\scratch\c1b-warm-lifecycle-20261007\warm-evidence.json')
+.\scripts\run-rust-tests.ps1 -CargoArgs @('c1b_productive_long_warm_integrity_cost', '--', '--ignored', '--nocapture')
+$env:FLITZI_C1B_SAVE_EVIDENCE = [IO.Path]::GetFullPath('..\scratch\c1b-warm-lifecycle-20261007\save-evidence.json')
+.\scripts\run-rust-tests.ps1 -CargoArgs @('c1b_actual_native_export_and_project_save_integrity_cost', '--', '--ignored', '--nocapture')
+```
+
+Use a fresh output filename for each profile/run. Native Debug/Release installation
+and dependent tests run serially because Windows retains open extension handles.
+The warm source probe and 32-second save/export fixture provide preliminary
+integrity accounting; C3 owns the separate 200-pad startup/RAM acceptance.
+
 The optional Beat This boundary is available only through explicit diagnostic
 API calls and does not change normal load/manual analysis routing. Its
 unconfigured mode needs no Beat This installation; real B1b inference uses the

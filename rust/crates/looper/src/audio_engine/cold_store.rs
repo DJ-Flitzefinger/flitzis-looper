@@ -1,17 +1,28 @@
 //! Copy-first cold PCM transactions. Every operation here runs on a load worker.
-//! Successful entries remain durable; shared reuse and last-owner deletion are C1b.
+//! Fresh warm leases verify complete immutable files; ownership retires off-thread.
 
 use super::analysis_pcm::MONO_RULE;
+use super::project_assets::{FileIdentity, file_identity};
+use crate::messages::SampleBuffer;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
+use std::time::{Duration, Instant};
 
 const CHUNK_BYTES: usize = 64 * 1024;
 const SCHEMA_VERSION: u64 = 1;
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+mod lifecycle;
+mod staging;
+mod warm;
+pub(super) use lifecycle::admit_original_owner;
+pub(super) use lifecycle::cleanup_admission_status;
+pub(super) use lifecycle::cleanup_status;
 
 /// Complete PCM in its own rate/layout domain, before any residency selection.
 pub(super) struct PcmArtifactInput<'a> {
@@ -36,14 +47,66 @@ impl ColdManifest {
     }
 }
 
-/// Non-realtime engine ownership of sealed complete files. It never enters the callback.
+/// Actual integrity work, including the copy-first warm source read. CPU is the
+/// worker's kernel+user time, not elapsed time or a claim of negligible hashing.
+#[derive(Clone, Debug, Default)]
+pub(super) struct IntegrityMetrics {
+    pub source_copied_bytes: u64,
+    pub snapshot_verify_bytes: u64,
+    pub original_verify_bytes: u64,
+    pub original_copied_bytes: u64,
+    pub decoder_verify_bytes: u64,
+    pub playback_verify_bytes: u64,
+    pub manifest_verify_bytes: u64,
+    pub playback_read_bytes: u64,
+    pub assignment_copy_bytes: u64,
+    pub warm: bool,
+    pub wall_nanos: u64,
+    pub cpu_nanos: Option<u64>,
+}
+
+struct CacheReaders {
+    path: PathBuf,
+    root: PathBuf,
+    readers: Vec<File>,
+    directories: Vec<File>,
+    pcm: Mutex<Option<Weak<[f32]>>>,
+    retired: AtomicBool,
+    durable_assignments: Mutex<HashSet<u64>>,
+    identity: FileIdentity,
+    file_identities: Vec<FileIdentity>,
+    cleanup: Option<lifecycle::CleanupSlot>,
+}
+
+struct CacheAssignment {
+    id: u64,
+    retired: AtomicBool,
+}
+
+struct OriginalReader {
+    path: PathBuf,
+    root: PathBuf,
+    reader: Option<File>,
+    owned_creation: bool,
+    rollback: AtomicBool,
+    identity: FileIdentity,
+    cleanup: Option<lifecycle::CleanupSlot>,
+    durable_assignments: Mutex<HashSet<u64>>,
+}
+
+/// Shared immutable cache ownership is separate from each original assignment.
+/// These handles never enter the callback; the PCM reader registry retires them.
+#[derive(Clone)]
 pub(super) struct CommittedColdLease {
     pub manifest: ColdManifest,
     pub cache_path: PathBuf,
     pub original_path: PathBuf,
-    // These handles enforce the same immutable objects that were fully verified.
-    _readers: Vec<File>,
-    _directories: Vec<File>,
+    pub integrity: IntegrityMetrics,
+    cache: Arc<CacheReaders>,
+    _original: Arc<OriginalReader>,
+    assignment: Arc<CacheAssignment>,
+    created_original: bool,
+    created_cache: bool,
 }
 
 /// Until adopted, Drop reverses only this transaction's exclusive creations.
@@ -67,6 +130,17 @@ pub(super) struct ColdTransaction {
     committed_directory: Option<File>,
     verified: bool,
     adopted: bool,
+    reused_cache: Option<Arc<CacheReaders>>,
+    shared_cache: Option<Arc<CacheReaders>>,
+    original_identity: Option<FileIdentity>,
+    committed_identity: Option<FileIdentity>,
+    artifact_identities: Vec<FileIdentity>,
+    staging_identity: FileIdentity,
+    staging_directory: Option<File>,
+    staging_slot: Option<lifecycle::CleanupSlot>,
+    cache_slot: Option<lifecycle::CleanupSlot>,
+    original_slot: Option<lifecycle::CleanupSlot>,
+    integrity: IntegrityMetrics,
 }
 
 fn invalid(message: &'static str) -> io::Error {
@@ -192,6 +266,7 @@ fn ensure_owned_root(samples: &Path) -> io::Result<(PathBuf, Vec<File>)> {
         }
         directories.push(directory_guard(&root)?);
     }
+    staging::recover(&root)?;
     Ok((root, directories))
 }
 
@@ -200,7 +275,13 @@ fn unique_staging(root: &Path) -> io::Result<PathBuf> {
         let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
         let path = root.join(format!(".staging-{}-{generation}", std::process::id()));
         match fs::create_dir(&path) {
-            Ok(()) => return Ok(path),
+            Ok(()) => {
+                if let Err(error) = staging::record_owner(root, &path) {
+                    let _ = staging::remove_generation(root, &path, None);
+                    return Err(error);
+                }
+                return Ok(path);
+            }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error),
         }
@@ -352,6 +433,17 @@ impl ColdTransaction {
         cancelled: &impl Fn() -> bool,
     ) -> io::Result<Self> {
         check_cancelled(cancelled)?;
+        let slots = lifecycle::reserve_cleanup::<3>()?;
+        Self::capture_reserved(samples_dir, source_path, import, cancelled, slots)
+    }
+
+    fn capture_reserved(
+        samples_dir: &Path,
+        source_path: &Path,
+        import: bool,
+        cancelled: &impl Fn() -> bool,
+        [staging_slot, cache_slot, original_slot]: [lifecycle::CleanupSlot; 3],
+    ) -> io::Result<Self> {
         // Establish write/delete exclusion before creating staging or reading any bytes.
         let mut source = sealed_reader(source_path)?;
         if !source.metadata()?.is_file() {
@@ -379,6 +471,8 @@ impl ColdTransaction {
             }
         }
         let staging = unique_staging(&cache_root)?;
+        let staging_directory = directory_guard(&staging)?;
+        let staging_identity = file_identity(&staging_directory)?;
         let snapshot_path = staging.join("snapshot.original");
         let mut transaction = Self {
             cache_root,
@@ -388,7 +482,7 @@ impl ColdTransaction {
             snapshot: None,
             source_reader: None,
             original_reader: None,
-            original_path: source_path.to_owned(),
+            original_path: fs::canonicalize(source_path)?,
             owned_original: false,
             import,
             source_digest: String::new(),
@@ -403,6 +497,17 @@ impl ColdTransaction {
             committed_directory: None,
             verified: false,
             adopted: false,
+            reused_cache: None,
+            shared_cache: None,
+            original_identity: Some(file_identity(&source)?),
+            committed_identity: None,
+            artifact_identities: Vec::new(),
+            staging_identity,
+            staging_directory: Some(staging_directory),
+            staging_slot: Some(staging_slot),
+            cache_slot: Some(cache_slot),
+            original_slot: Some(original_slot),
+            integrity: IntegrityMetrics::default(),
         };
         let mut writer = OpenOptions::new()
             .write(true)
@@ -414,6 +519,8 @@ impl ColdTransaction {
         verify_file(&mut snapshot, &digest, bytes, cancelled)?;
         transaction.source_digest = digest;
         transaction.source_bytes = bytes;
+        transaction.integrity.source_copied_bytes = bytes;
+        transaction.integrity.snapshot_verify_bytes = bytes;
         transaction.snapshot = Some(snapshot);
         // Restore retains the actual project original under the same lease. Import
         // may release the external path now: subsequent work reads only the snapshot.
@@ -440,6 +547,7 @@ impl ColdTransaction {
     pub(super) fn source_bytes(&self) -> u64 {
         self.source_bytes
     }
+    #[cfg(test)]
     pub(super) fn original_path(&self) -> &Path {
         &self.original_path
     }
@@ -464,12 +572,22 @@ impl ColdTransaction {
         let (decoder_pcm, decoder_reader) =
             write_pcm(&staging.join("decoder.f32le"), decoder, cancelled)?;
         self.artifact_readers.push(decoder_reader);
+        self.integrity.decoder_verify_bytes = self.integrity.decoder_verify_bytes.saturating_add(
+            decoder_pcm["full_bytes"]
+                .as_u64()
+                .expect("written decoder bytes"),
+        );
         let decoder_descriptor = json!({"schema_version":SCHEMA_VERSION,
             "original":{"sha256":self.source_digest,"bytes":self.source_bytes},"pcm":decoder_pcm});
         let decoder_identity = descriptor_digest(&decoder_descriptor)?;
         let (playback_pcm, playback_reader) =
             write_pcm(&staging.join("playback.f32le"), playback, cancelled)?;
         self.artifact_readers.push(playback_reader);
+        self.integrity.playback_verify_bytes = self.integrity.playback_verify_bytes.saturating_add(
+            playback_pcm["full_bytes"]
+                .as_u64()
+                .expect("written playback bytes"),
+        );
         let descriptor = json!({"schema_version":SCHEMA_VERSION,"decoder":decoder_descriptor,
             "playback":{"parent_identity":decoder_identity,"pcm":playback_pcm,"transform":playback_transform}});
         let manifest = ColdManifest {
@@ -496,6 +614,10 @@ impl ColdTransaction {
             cancelled,
         )?;
         self.artifact_readers.push(reader);
+        self.integrity.manifest_verify_bytes = self
+            .integrity
+            .manifest_verify_bytes
+            .saturating_add(bytes.len() as u64);
         self.manifest = Some(manifest.clone());
         Ok(manifest)
     }
@@ -558,15 +680,21 @@ impl ColdTransaction {
             };
             self.original_path = candidate;
             self.owned_original = true;
+            self.original_identity = Some(file_identity(&writer)?);
             let mut snapshot = self.snapshot_file()?;
             let (digest, bytes) = copy_hashed(&mut snapshot, &mut writer, cancelled)?;
+            self.integrity.original_copied_bytes = bytes;
             drop(writer);
             if digest != self.source_digest || bytes != self.source_bytes {
                 return Err(invalid("project original differs from immutable snapshot"));
             }
             let mut reader = sealed_reader(&self.original_path)?;
             verify_file(&mut reader, &digest, bytes, cancelled)?;
+            self.integrity.original_verify_bytes = bytes;
             self.original_reader = Some(reader);
+            self.original_identity = Some(file_identity(
+                self.original_reader.as_ref().expect("sealed original"),
+            )?);
             return Ok(());
         }
         Err(io::Error::new(
@@ -582,6 +710,22 @@ impl ColdTransaction {
             .as_ref()
             .ok_or_else(|| invalid("incomplete cold artifacts"))?
             .clone();
+        if self.reused_cache.is_some() {
+            self.create_original(cancelled)?;
+            self.snapshot.take();
+            fs::remove_file(&self.snapshot_path)?;
+            self.staging_directory.take();
+            if let Some(staging) = self.staging.as_ref() {
+                fs::remove_file(staging.join("owner.json"))?;
+                fs::remove_dir(staging)?;
+            }
+            self.staging = None;
+            self.verified = true;
+            return self
+                .committed_cache
+                .clone()
+                .ok_or_else(|| invalid("missing warm directory"));
+        }
         if self.committed_cache.is_some() {
             return Err(invalid("cold transaction already committed"));
         }
@@ -597,6 +741,8 @@ impl ColdTransaction {
         // FILE_SHARE_DELETE. Close only after verification, immediately before rename;
         // reopen and verify committed artifacts before allowing pad publication.
         self.artifact_readers.clear();
+        self.staging_directory.take();
+        fs::remove_file(staging.join("owner.json"))?;
         let generation = staging
             .file_name()
             .ok_or_else(|| invalid("missing staging generation"))?
@@ -630,6 +776,14 @@ impl ColdTransaction {
             .ok_or_else(|| invalid("missing committed PCM directory"))?;
         reject_links(destination)?;
         self.committed_directory = Some(directory_guard(destination)?);
+        self.committed_identity = Some(file_identity(
+            self.committed_directory.as_ref().expect("committed guard"),
+        )?);
+        if self.committed_identity.as_ref() != Some(&self.staging_identity) {
+            return Err(invalid(
+                "atomic cache generation was replaced during commit",
+            ));
+        }
         let manifest = self
             .manifest
             .as_ref()
@@ -652,6 +806,19 @@ impl ColdTransaction {
                 cancelled,
             )?;
             self.artifact_readers.push(reader);
+            self.artifact_identities.push(file_identity(
+                self.artifact_readers.last().expect("sealed PCM"),
+            )?);
+            let length = descriptor["full_bytes"]
+                .as_u64()
+                .expect("verified PCM bytes");
+            if file_name == "decoder.f32le" {
+                self.integrity.decoder_verify_bytes =
+                    self.integrity.decoder_verify_bytes.saturating_add(length);
+            } else {
+                self.integrity.playback_verify_bytes =
+                    self.integrity.playback_verify_bytes.saturating_add(length);
+            }
         }
         let expected =
             serde_json::to_vec(&canonical(&manifest.encoded())).map_err(io::Error::other)?;
@@ -665,13 +832,26 @@ impl ColdTransaction {
             cancelled,
         )?;
         self.artifact_readers.push(reader);
+        self.artifact_identities.push(file_identity(
+            self.artifact_readers.last().expect("sealed manifest"),
+        )?);
+        self.integrity.manifest_verify_bytes = self
+            .integrity
+            .manifest_verify_bytes
+            .saturating_add(expected.len() as u64);
         Ok(())
     }
 
     /// A successful commit establishes every invariant before native queue admission.
     /// Adoption only moves preallocated ownership and cannot return a late failure.
     pub(super) fn into_lease(mut self) -> CommittedColdLease {
-        assert!(self.verified && self.artifact_readers.len() == 3);
+        assert!(
+            self.verified
+                && (self.shared_cache.is_some()
+                    || self.reused_cache.is_some()
+                    || self.artifact_readers.len() == 3)
+        );
+        let created_cache = self.reused_cache.is_none();
         let manifest = self.manifest.take().expect("verified cold manifest");
         let cache_path = self
             .committed_cache
@@ -681,21 +861,103 @@ impl ColdTransaction {
             .original_reader
             .take()
             .expect("verified original reader");
-        let mut readers = std::mem::take(&mut self.artifact_readers);
-        readers.push(original);
-        let mut directories = std::mem::take(&mut self.directories);
-        directories.push(
-            self.committed_directory
-                .take()
-                .expect("verified directory guard"),
-        );
+        let cache = self
+            .shared_cache
+            .take()
+            .or_else(|| self.reused_cache.take())
+            .unwrap_or_else(|| {
+                let mut directories = std::mem::take(&mut self.directories);
+                directories.push(
+                    self.committed_directory
+                        .take()
+                        .expect("verified directory guard"),
+                );
+                let cache = Arc::new(CacheReaders {
+                    path: cache_path.clone(),
+                    root: self.cache_root.clone(),
+                    readers: std::mem::take(&mut self.artifact_readers),
+                    directories,
+                    pcm: Mutex::new(None),
+                    retired: AtomicBool::new(false),
+                    durable_assignments: Mutex::new(HashSet::new()),
+                    identity: self
+                        .committed_identity
+                        .take()
+                        .expect("verified cache identity"),
+                    file_identities: std::mem::take(&mut self.artifact_identities),
+                    cleanup: self.staging_slot.take(),
+                });
+                if let Ok(mut state) = lifecycle::store().state.lock() {
+                    state
+                        .caches
+                        .insert(cache_path.clone(), Arc::downgrade(&cache));
+                }
+                cache
+            });
+        let original_path = std::mem::take(&mut self.original_path);
+        let original = {
+            let mut state = lifecycle::store()
+                .state
+                .lock()
+                .expect("verified store ownership");
+            state
+                .originals
+                .get(&original_path)
+                .and_then(Weak::upgrade)
+                .unwrap_or_else(|| {
+                    let reader = Arc::new(OriginalReader {
+                        path: original_path.clone(),
+                        root: self
+                            .cache_root
+                            .parent()
+                            .and_then(Path::parent)
+                            .expect("samples root")
+                            .to_owned(),
+                        reader: Some(original),
+                        owned_creation: self.owned_original,
+                        rollback: AtomicBool::new(false),
+                        identity: self
+                            .original_identity
+                            .take()
+                            .expect("verified original identity"),
+                        cleanup: if self.owned_original {
+                            self.original_slot.take()
+                        } else {
+                            None
+                        },
+                        durable_assignments: Mutex::new(HashSet::new()),
+                    });
+                    state
+                        .originals
+                        .insert(original_path.clone(), Arc::downgrade(&reader));
+                    reader
+                })
+        };
         self.adopted = true;
+        let assignment = Arc::new(CacheAssignment {
+            id: NEXT_GENERATION.fetch_add(1, Ordering::Relaxed),
+            retired: AtomicBool::new(false),
+        });
+        cache
+            .durable_assignments
+            .lock()
+            .expect("verified assignment ownership")
+            .insert(assignment.id);
+        original
+            .durable_assignments
+            .lock()
+            .expect("verified original assignment ownership")
+            .insert(assignment.id);
         CommittedColdLease {
             manifest,
             cache_path,
-            original_path: std::mem::take(&mut self.original_path),
-            _readers: readers,
-            _directories: directories,
+            original_path,
+            integrity: self.integrity.clone(),
+            cache,
+            _original: original,
+            assignment,
+            created_original: self.owned_original,
+            created_cache,
         }
     }
 }
@@ -710,14 +972,64 @@ impl Drop for ColdTransaction {
         self.original_reader.take();
         self.artifact_readers.clear();
         self.committed_directory.take();
-        if let Some(path) = self.staging.take() {
-            let _ = fs::remove_dir_all(path);
+        self.staging_directory.take();
+        if let Some(path) = self.staging.take()
+            && staging::remove_generation(&self.cache_root, &path, Some(&self.staging_identity))
+                .is_err()
+        {
+            lifecycle::queue_generation(
+                path,
+                self.cache_root.clone(),
+                self.staging_identity.clone(),
+                self.staging_slot
+                    .take()
+                    .expect("staging cleanup capacity reserved"),
+            );
         }
-        if let Some(path) = self.committed_cache.take() {
-            let _ = fs::remove_dir_all(path);
+        if let Some(cache) = self.shared_cache.take() {
+            // A committed follower owns this exact immutable generation now.
+            // Only an otherwise unowned attempt can request its rollback.
+            if Arc::strong_count(&cache) == 1 {
+                cache.retired.store(true, Ordering::Release);
+            }
+            drop(cache);
+        } else if self.reused_cache.is_none()
+            && let Some(path) = self.committed_cache.take()
+            && staging::remove_generation(&self.cache_root, &path, Some(&self.staging_identity))
+                .is_err()
+        {
+            lifecycle::queue_generation(
+                path,
+                self.cache_root.clone(),
+                self.staging_identity.clone(),
+                self.staging_slot
+                    .take()
+                    .expect("generation cleanup capacity reserved"),
+            );
         }
-        if self.owned_original {
-            let _ = fs::remove_file(&self.original_path);
+        if self.owned_original
+            && let Some(parent) = self.original_path.parent()
+            && let Ok(_guards) = super::project_assets::directory_guards(parent)
+        {
+            let result = super::project_assets::remove_owned_file(
+                &self.original_path,
+                self.original_identity.as_ref(),
+            );
+            if result.is_err()
+                && let (Some(identity), Some(slot)) =
+                    (self.original_identity.take(), self.original_slot.take())
+            {
+                lifecycle::queue_original(
+                    self.original_path.clone(),
+                    self.cache_root
+                        .parent()
+                        .and_then(Path::parent)
+                        .expect("samples root")
+                        .to_owned(),
+                    identity,
+                    slot,
+                );
+            }
         }
         self.directories.clear();
     }
@@ -725,3 +1037,5 @@ impl Drop for ColdTransaction {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod warm_tests;

@@ -1,9 +1,9 @@
 # Complete PCM cache and finite loop residency
 
-Status: C1a productive bounded cold loading, 2026-10-07; C0 baseline `1be58def`.
+Status: C1a/C1b productive bounded cold/warm loading, 2026-10-07; C0 baseline `1be58def`.
 The existing `AudioEngine.load_sample_async` now runs the copy-first path below.
-Warm reuse/last-owner lifecycle (C1b), residency (C2) and measured performance
-(C3) remain pending. Full-buffer playback and fresh accepted-timing verification
+Validated warm reuse and last-owner lifecycle are implemented. Residency (C2)
+and measured startup/RAM acceptance (C3) remain pending. Full-buffer playback and fresh accepted-timing verification
 remain authoritative; no startup/RAM or device/listening acceptance is claimed.
 The active [OpenSpec change](../openspec/changes/cache-full-pcm-and-resident-loops/proposal.md)
 contains the remaining contracts and bounded implementation tasks.
@@ -49,15 +49,19 @@ selected playback/device rate, with no forced 48-kHz conversion.
 Files are flushed, the exclusive complete directory is renamed on the same
 filesystem to `<full-identity>-<pid>-<generation>`, and every committed file is
 reopened with immutable sharing and fully reverified before native publication.
-Existing identical, partial or corrupt generations are never overwritten or
-reused in C1a. Fault/cancellation cleanup deletes only this attempt's creations,
+Existing partial or corrupt generations are never overwritten or reused.
+Fault/cancellation cleanup deletes only this attempt's creations,
 after closing dependent readers; external sources/private evidence survive.
 Sealed successful original/PCM/manifest/directory leases stay outside realtime
-ownership. Successful entries remain durable; shared reuse, deferred reader
-retirement and eventual last-owner cleanup are C1b. File flush plus atomic rename
+ownership. Successful entries remain durable until explicit assignment retirement
+and the last dependent reader. File flush plus atomic rename
 and post-rename verification prove atomic complete visibility and injected failure
 rollback, not a Windows power-loss durability/recovery guarantee. Crash-left
-staging/partial entries are ineligible; C1b will handle recovery/cleanup.
+staging/partial entries are ineligible. Recovery recognizes only owned staging
+markers with matching root, generation and dead process creation identity;
+live matching or unqueryable process identities, unknown files and unrelated
+directories survive. A reused PID with a different process creation time proves
+the original creator has exited and permits recognized unreferenced recovery.
 
 `cold_load.rs` retains previous source/digest/generation/lease through admission
 and preparation. Source/request/device format and timing-intent epoch are
@@ -71,7 +75,8 @@ stopping the application's old voices and adopting the complete new bank. The ap
 `load_sample_async` defaults to false and retains active voices pinned to their
 previous source, as does `LoadSample` bank replacement.
 
-The worker emits Success and transfers its sealed lease only after native ACK.
+The worker registers retained sealed ownership before native enqueue. Pad adoption
+and the Success event wait for matching native ACK.
 Blocked retirement/feedback keeps old audio and project metadata effective.
 Pending adoption has a 30-second deadline; cancellation/rejection restores only
 its still-current proposed control source, preserving a newer unload/load or
@@ -83,10 +88,13 @@ shutdown), retains complete files/sealed ownership while still current, and
 reports unconfirmed adoption without Success or an unsafe source rollback. A
 superseding generation cannot overwrite a job's unique fixed scalar ACK.
 Unconfirmed current source is fenced from new starts until explicit unload/restart
-or a fresh successful assignment. C1b owns subsequent reconciliation/cleanup.
+or a fresh successful assignment. Off-thread reader ownership now reconciles
+subsequent explicit retirement and shutdown without inventing adoption.
 Prior-audio preservation is proved for rejection before
 this irreversible callback tail, not a stalled backend after it starts. ACKed
-files stay durable even if unload/reload wins before metadata delivery.
+files remain protected through metadata delivery. A stale delivered Success
+retires its exact original; a pending delivery retains ownership even when the
+native bank has already unloaded. Engine shutdown reconciles undelivered orphans.
 Only prebuilt PCM and a bounded per-job atomic token allocated by control enter
 the callback; even the atomic token is retired through the reserved off-thread
 queue. No filesystem/hashing/decoding/JSON/GIL/locks or heavy allocation/
@@ -105,9 +113,8 @@ records complete source metadata and then refreshes defaults/derived control int
 failure is visible while that new source and its matching metadata stay valid.
 Native unload admission now precedes Python source/task/settings mutation, so a
 full native queue preserves the previous project/session and deferred restore.
-The existing successful explicit-unload deletion policy remains for C1b to
-replace with last-reader cleanup; successful replacement does not eagerly delete
-old original/stem data. Saved Automatic intent remains unresolved even after an
+Explicit unload/replacement revoke Python eligibility and schedule last-reader
+cleanup for the exact original and stem generation. Saved Automatic intent remains unresolved even after an
 initial admission/preparation error. Only existing full-content verification
 and fresh timing ACK can establish CURRENT. Historical acceptance is never upgraded
 by the PCM manifest. Existing save-integrity verification remains in force.
@@ -164,6 +171,142 @@ these stay explicit `--audio-devices` opt-in. Their native core contracts are
 tested headlessly; the skipped Python service-to-stream glue is not counted as
 passed. This step runs offline checks.
 Actual human/device/hearing gates remain OPEN until final pre-port acceptance.
+
+## Delivered warm reuse and ownership (C1b)
+
+Each load still captures and verifies the complete actual original before reuse.
+The bounded candidate scan (4096 entries, 256-KiB manifest) selects the actual
+sealed decoder configuration and output rate/channel transform. Fresh immutable
+file leases rehash every decoder/playback sample, recompute each mono digest,
+check checked byte extents/EOF and canonical versioned descriptors. Invalid,
+partial, old-version or incompatible candidates cause ordinary cold regeneration
+in a new exclusive generation. A complete compatible candidate skips decoding
+and conversion. Verified live PCM can be shared across pads; a per-digest/device
+preparation gate serializes preparation through commit and binding, then releases
+before native ACK. Every subscriber keeps its own request/cancellation guard.
+
+Failed publication revokes only its own assignment ID. Its rollback can request
+physical cache deletion only for a generation created by that attempt; a
+preexisting complete warm generation survives a failed fresh-process restore.
+A saved original with matching captured file identity keeps one bounded
+validated descriptor and a separate durable file-only ID after such failure,
+with no dead PCM backing pin. A transient source job cannot create that saved
+ownership, and the failed native ID stays retired without Success. Later explicit
+last-owner unload still retires the known original and cache off-thread; ordinary
+shutdown preserves them even if another original sharing the cache has retired.
+Within the existing 1024-record bound, ordinary token/engine shutdown retains one
+saved file-only descriptor per original/cache relation until explicit retirement
+or process exit. Repeated restores compact that descriptor instead of accumulating
+unreachable durable IDs; dead PCM backing storage is still released.
+
+Same-pad source identity remains distinct even for identical content: if an old
+same-pad queued/bank/voice/job/history PCM reader still lives, off-thread admission
+makes a complete new Arc within the checked 1-GiB overlap budget. The bounded
+128-entry live same-pad history rejects further admission rather than evicting a
+live reader. Cross-pad readers can share PCM and immutable cache files. Rollback
+requires the exact request/generation and proposed source, preserving newer loads.
+
+`project_assets.rs` keeps a process-wide off-thread registry of exact assignment
+tokens, pending deliveries and weak native PCM readers (1024 native records,
+1024 retirement requests, 4096 path owners and 1024 registered history books).
+Dead historical duplicates compact under the gate while live/pending readers
+remain protected. The worker removes dead PCM Weak references from history,
+reader metadata and cache objects so they cannot retain backing allocations after
+the last reader. Python `asset_lifecycle.py` acquires every surviving
+assignment before releasing removed ones and pins active separator jobs.
+Removing one of several current assignments to the exact same original releases
+only that token; path retirement starts only after its last project assignment
+is removed. A stale delivered Success for a still-assigned original acknowledges
+metadata ownership without scheduling that path for deletion. Native
+queued commands, banks, pinned voices and prepared/offline jobs keep actual PCM
+alive. A cache has separate retirement ownership for each concrete original;
+one failed subscriber or retired pad cannot delete another live validated cache
+assignment or its original. A different saved original whose digest has not yet
+been prepared owns its original path; if its optional PCM is retired before that
+preparation, its next load safely regenerates from the untouched original.
+Shutdown releases Python assignment tokens and marks undelivered native metadata
+orphaned. Actual queued/job/PCM readers retire as they drain; a stopped engine may
+retain loaded PCM for restart. Saved originals and caches survive ordinary shutdown.
+
+Stem generation writes a private `.generation-<uuid>` and publishes an immutable
+`.ready-<uuid>` only after all five stems and the complete marker exist. Metadata
+selects that exact set after native publication admission; failure restores the
+previous set. Cleanup removes only known leaves from its own retired generation.
+Validated legacy canonical sets remain restorable and retire only declared files.
+Reacquiring a saved assignment revokes its older deferred retirement before retry
+admission. A canonical legacy pad container revokes only its six declared direct
+files; cleanup of a failed newer generation remains scheduled.
+Unknown files and newer generations are preserved. A final empty pad container
+can be removed nonrecursively under the gate only when no owner, reader or pending
+retirement remains; an empty container may also remain as harmless metadata.
+
+Windows cleanup excludes rename/delete of checked ancestors and the generation,
+checks captured file identity, and deletes the validated opened file by handle.
+Traversal, reparse points, external originals and reserved project metadata are
+rejected. Missing files are harmless; sharing violations retry off-thread with
+at most eight eligible deletions per poll. Python retains ownership and retries
+native retirement admission failures. The store reserves three cleanup slots
+before any exclusive capture writes; at most 4096 slots cover live file owners
+and deferred deletions, so saturation cannot create untracked rollback files.
+Python separately bounds pending targets, retained owners and future reservations
+to 4096 weighted slots (16 per source admission, 18 per separator job, two
+transferred to a pending stem ACK). Backpressure precedes intent mutation.
+Retry selection rotates, and terminal preservation errors are capped at 16
+reported paths per service while leaving the affected bytes intact.
+Recognized exclusive failed/crash staging uses the same contained ownership rules.
+No file handle, JSON, lock, hash or filesystem destructor enters the callback.
+
+The actual long-source warm and real native export/project-save probes described
+in [development](development.md) record full integrity bytes and wall/process CPU.
+These preliminary costs preserve complete save verification, fresh timing ACK and
+atomic previous-config/dirty-state failure behavior. They do not establish C3
+200-pad startup/readiness/RAM improvement or device/listening acceptance.
+
+## Preliminary C1b integrity measurements
+
+The isolated 600-second, 48-kHz PCM24 mono source contains 86,400,690 bytes
+(SHA256 `96ffe98cf44215719b0b57d605d6dc586c9c4e763ad3d47d512d0ba787d204ef`).
+After an actual cold import/ACK and engine shutdown, a fresh engine restores the
+saved relative original through the productive warm lane and actual native-bank
+ACK. An independent streaming integer PCM24 oracle checks every complete
+115,200,000-byte decoder and 230,400,000-byte stereo playback digest against
+both cache files and actual adopted native PCM. This is headless source restore;
+it does not establish app Automatic timing restore or device acceptance.
+
+Warm capture reads and writes 86,400,690 bytes into its exclusive snapshot and
+rereads those bytes for snapshot verification. Cache validation reads the full
+115,200,000 decoder and 230,400,000 playback bytes, then materializes playback
+with another 230,400,000-byte read. Restoring copies zero additional durable
+original bytes. Manifest bytes are recorded separately. These are counted logical
+payload extents, excluding container/header selection and filesystem metadata;
+they are not physical disk traffic or peak RAM. The OS file cache is warm after
+cold import and was not flushed. No disk-cold label or 200-pad benefit is implied.
+
+| Native profile | Warm validation wall / process CPU (s) | Capture through actual ACK wall / process CPU (s) |
+| --- | --- | --- |
+| Debug | 16.600 / 16.594 | 19.207 / 19.844 |
+| Release | 0.437 / 0.422 | 0.596 / 0.547 |
+
+Save/export uses the existing real accepted-QM verifier and actual Python atomic
+`ProjectPersistence.flush`, with a 256,003-frame/8-kHz source (32.000375 seconds,
+512,050 bytes; SHA256
+`7a961e08a6d7735e7c0993f77af6596b7d5a790b44333d3d9970eee611fda21b`).
+Each successful verification performs two complete source hash reads, totaling
+1,024,100 bytes, plus full loaded-mono conversion, 44.1-kHz resampling and PCM/
+backend digest CPU work. It performs no PCM disk read. Three exports and three
+saves per profile produced the medians below; JSON/config extents remain in local
+probe evidence. Same-size source corruption rejects native export and leaves the
+previous config byte-exact and the project dirty after a failed save.
+
+| Native profile | Export median wall / process CPU (s) | Atomic save median wall / process CPU (s) |
+| --- | --- | --- |
+| Debug | 0.713 / 0.719 | 0.724 / 0.719 |
+| Release | 0.013 / 0.016 | 0.017 / 0.016 |
+
+These are preliminary integrity costs on this machine, with one long warm run
+per profile and three small save/export repetitions. They preserve full integrity
+and existing timing authority; C3 still owes controlled 200-pad cold/warm readiness,
+RAM, lifecycle and performance acceptance. Human hearing/device gates remain open.
 
 ## Audited C0 baseline (historical)
 
@@ -408,8 +551,9 @@ Stem eligibility/metadata is revoked immediately, but old generation readers
 retain their files until retirement. Keep the pad-labelled `samples/stems/#N/`
 container and isolate owned generations within it. An old cleanup job deletes
 only its own retired generation; it cannot recursively delete a container now
-holding a newer canonical set. Remove the container only after all generations
-and readers are gone, under the same cleanup/admission gate.
+holding a newer canonical set. Any container removal requires all generations,
+readers and unknown content to be gone under the same cleanup/admission gate;
+C1b only attempts nonrecursive final empty-container removal under those checks.
 Crash recovery removes recognized unreferenced staging safely; it cannot treat
 unknown files, project config, originals or private audio as garbage.
 
@@ -422,7 +566,7 @@ unknown files, project config, originals or private audio as garbage.
   full-buffer playback. Resolve/prove decoder boundary
   policy and reuse the stronger resampler dimension/tail rules. Integrate cold
   path with existing guards; do not implement resident windows.
-- **C1b:** complete validated warm reuse extending guarded cold publication, shared
+- **C1b, delivered:** complete validated warm reuse extending guarded cold publication, shared
   digest/assignment leases, containment, cancellation/unload/shutdown and eventual
   last-owner cleanup. Measure integrity bytes/CPU preliminarily, without startup
   improvement claims. Preserve current accepted save/export behavior.

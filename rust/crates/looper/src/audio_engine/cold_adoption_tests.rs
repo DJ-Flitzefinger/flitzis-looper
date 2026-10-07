@@ -121,12 +121,22 @@ impl Fixture {
         );
         assert!(self.engine.cold_leases.lock().unwrap()[0].is_none());
         assert_eq!(fs::read(&self.source).unwrap(), self.original);
-        let cache = self.directory.path().join("samples/.pcm-cache/v1");
-        if cache.exists() {
-            assert_eq!(fs::read_dir(cache).unwrap().count(), 0);
-        }
-        assert!(!self.directory.path().join("samples/external.wav").exists());
+        // Source rollback does not retire a still-queued/native/retirement PCM
+        // reader. File cleanup is asserted separately after those handles drain.
         self.callback.assert_old_voice(&self.previous);
+    }
+
+    fn assert_orphan_files_eventually_retired(&mut self) {
+        self.callback.retirement.retired.clear();
+        let root = self.directory.path().join("samples");
+        let cache = root.join(".pcm-cache/v1");
+        wait_until(|| {
+            (!cache.exists() || fs::read_dir(&cache).unwrap().count() == 0)
+                && (!root.exists()
+                    || fs::read_dir(&root)
+                        .unwrap()
+                        .all(|entry| !entry.unwrap().path().is_file()))
+        });
     }
 }
 
@@ -408,6 +418,14 @@ fn actual_unload_and_new_load_cannot_let_old_failure_rollback_new_source_or_disk
     let lease = leases[0].as_ref().unwrap();
     assert_eq!(fs::read(&lease.original_path).unwrap(), new_original);
     assert!(lease.cache_path.join("manifest.json").is_file());
+    fixture.callback.retirement.retired.clear();
+    wait_until(|| {
+        !fixture
+            .directory
+            .path()
+            .join("samples/external.wav")
+            .exists()
+    });
     assert_eq!(
         fs::read_dir(fixture.directory.path().join("samples/.pcm-cache/v1"))
             .unwrap()
@@ -541,6 +559,7 @@ fn shutdown_cancels_pending_and_queued_jobs_and_drains_owned_disk_artifacts() {
     assert!(!failures.contains(&(2, queued))); // Queued work never starts; its guard retires.
     assert_eq!(fixture.callback.drain(&mut fixture.consumer), 2);
     fixture.callback.assert_old_voice(&fixture.previous);
+    fixture.assert_orphan_files_eventually_retired();
 }
 
 #[test]
@@ -590,6 +609,188 @@ fn admission_capacity_and_generation_overflow_fail_before_request_or_source_muta
         epoch
     );
     fixture.assert_rolled_back();
+}
+
+#[test]
+#[cfg(windows)]
+fn productive_shared_warm_subscriber_survives_leader_cancel_and_final_readers_cleanup() {
+    let mut fixture = Fixture::new();
+    let leader = fixture.admit(0, false);
+    fixture.pending(0, leader);
+    let follower = fixture.admit(1, false);
+    fixture.pending(1, follower);
+    let cache = fixture.engine.sample_cache.lock().unwrap();
+    assert!(Arc::ptr_eq(
+        &cache[0].as_ref().unwrap().samples,
+        &cache[1].as_ref().unwrap().samples
+    ));
+    drop(cache);
+    unload_for_producer(&fixture.engine, 0, &fixture.producer).unwrap();
+    assert!(matches!(
+        terminal(&fixture.engine, leader),
+        LoaderEvent::Error { .. }
+    ));
+    assert_eq!(fixture.callback.drain(&mut fixture.consumer), 3);
+    assert!(matches!(
+        terminal(&fixture.engine, follower),
+        LoaderEvent::Success { id: 1, .. }
+    ));
+    let lease = fixture.engine.cold_leases.lock().unwrap()[1]
+        .as_ref()
+        .unwrap()
+        .clone();
+    assert!(lease.integrity.warm);
+    assert_eq!(
+        lease.integrity.playback_read_bytes, 0,
+        "follower must share already verified in-process PCM"
+    );
+    assert!(lease.cache_path.join("decoder.f32le").is_file());
+    fixture.callback.retirement.retired.clear();
+    assert!(lease.original_path.is_file());
+    let original_path = lease.original_path.clone();
+    let cache_path = lease.cache_path.clone();
+    fixture
+        .engine
+        .project_assets
+        .retire(
+            &fixture.directory.path().join("samples"),
+            &original_path,
+            false,
+        )
+        .unwrap();
+    unload_for_producer(&fixture.engine, 1, &fixture.producer).unwrap();
+    assert!(
+        original_path.exists(),
+        "queued/native bank source is still a reader"
+    );
+    assert_eq!(fixture.callback.drain(&mut fixture.consumer), 1);
+    fixture.callback.retirement.retired.clear();
+    drop(lease);
+    wait_until(|| !original_path.exists() && !cache_path.exists());
+    assert_eq!(
+        fs::read(&fixture.source).unwrap(),
+        fixture.original,
+        "external original remains intact"
+    );
+}
+
+#[test]
+#[cfg(windows)]
+fn productive_same_pad_warm_reassignment_has_fresh_authority_and_preserves_pinned_voice_timing() {
+    let mut fixture = Fixture::new();
+    let first = fixture.admit_replacing(0, false, true);
+    fixture.pending(0, first);
+    assert_eq!(fixture.callback.drain(&mut fixture.consumer), 1);
+    assert!(matches!(
+        terminal(&fixture.engine, first),
+        LoaderEvent::Success { .. }
+    ));
+    wait_until(|| fixture.engine.cold_loading[0].load(Ordering::Acquire) == 0);
+    let original_assignment = fixture.engine.sample_cache.lock().unwrap()[0]
+        .as_ref()
+        .unwrap()
+        .clone();
+    fixture.previous = original_assignment.clone();
+    fixture.accept_old_timing();
+    assert!(fixture.callback.mixer.play_sample(0, 1.0));
+    let previous_projection = fixture
+        .callback
+        .mixer
+        .voices
+        .iter()
+        .find(|voice| voice.is_playing_sample(0))
+        .unwrap()
+        .source_timing
+        .accepted
+        .unwrap();
+    let second = fixture.admit(0, false);
+    fixture.pending(0, second);
+    let replacement = fixture.engine.sample_cache.lock().unwrap()[0]
+        .as_ref()
+        .unwrap()
+        .clone();
+    assert!(!Arc::ptr_eq(
+        &original_assignment.samples,
+        &replacement.samples
+    ));
+    assert_eq!(
+        original_assignment.samples.as_ref(),
+        replacement.samples.as_ref()
+    );
+    assert_eq!(fixture.callback.drain(&mut fixture.consumer), 1);
+    assert!(matches!(
+        terminal(&fixture.engine, second),
+        LoaderEvent::Success { .. }
+    ));
+    let voice = fixture
+        .callback
+        .mixer
+        .voices
+        .iter()
+        .find(|voice| voice.is_playing_sample(0))
+        .unwrap();
+    assert!(Arc::ptr_eq(
+        &voice.sample.as_ref().unwrap().samples,
+        &original_assignment.samples
+    ));
+    assert_eq!(
+        voice.source_timing.accepted.unwrap().revision,
+        previous_projection.revision
+    );
+    assert_eq!(
+        voice.source_timing.accepted.unwrap().period_seconds,
+        previous_projection.period_seconds
+    );
+    assert_eq!(
+        fixture
+            .engine
+            .current_timing_acknowledgements
+            .current_epoch(0),
+        0
+    );
+    let leases = fixture.engine.cold_leases.lock().unwrap();
+    assert!(leases[0].as_ref().unwrap().integrity.warm);
+    assert_eq!(
+        leases[0].as_ref().unwrap().integrity.assignment_copy_bytes,
+        replacement.samples.len() as u64 * 4
+    );
+}
+
+#[test]
+#[cfg(windows)]
+fn successful_metadata_waiting_for_ui_rejection_retains_original_and_cache_after_native_unload() {
+    let mut fixture = Fixture::new();
+    let request = fixture.admit(0, false);
+    fixture.pending(0, request);
+    assert_eq!(fixture.callback.drain(&mut fixture.consumer), 1);
+    wait_until(|| fixture.engine.cold_loading[0].load(Ordering::Acquire) == 0);
+    // Success is deliberately left queued until after effective unload/retirement.
+    let lease = fixture.engine.cold_leases.lock().unwrap()[0]
+        .as_ref()
+        .unwrap()
+        .clone();
+    let original = lease.original_path.clone();
+    let cache = lease.cache_path.clone();
+    unload_for_producer(&fixture.engine, 0, &fixture.producer).unwrap();
+    assert_eq!(fixture.callback.drain(&mut fixture.consumer), 1);
+    fixture.callback.retirement.retired.clear();
+    drop(lease);
+    std::thread::sleep(Duration::from_millis(40));
+    assert!(
+        original.exists() && cache.exists(),
+        "unclaimed Success retains its exact logical assignment"
+    );
+    assert!(matches!(
+        terminal(&fixture.engine, request),
+        LoaderEvent::Success { .. }
+    ));
+    fixture
+        .engine
+        .project_assets
+        .retire(&fixture.directory.path().join("samples"), &original, false)
+        .unwrap();
+    wait_until(|| !original.exists() && !cache.exists());
+    assert_eq!(fs::read(&fixture.source).unwrap(), fixture.original);
 }
 
 #[test]

@@ -319,6 +319,135 @@ fn saved_timing_actual_project_atomic_save_load_to_fresh_native_callback_adoptio
     assert_eq!(current.accepted.evidence().binding().job.request_id, 8);
 }
 
+/// Real native content verification and Python atomic persistence, without CPAL.
+/// This small fixture measures costs; it is not C3 startup or device acceptance.
+#[test]
+#[ignore = "explicit C1b save/export accounting writes private evidence"]
+fn c1b_actual_native_export_and_project_save_integrity_cost() {
+    let output = std::env::var("FLITZI_C1B_SAVE_EVIDENCE")
+        .expect("FLITZI_C1B_SAVE_EVIDENCE must name a workspace evidence file");
+    let f = fixture();
+    let engine = Arc::new(fresh_engine());
+    let (producer, mut consumer) = queue(1);
+    let mut mixer = acknowledged_mixer(&engine);
+    let saved = capture_saved(&engine, 0, &f.envelope, f.path.clone()).unwrap();
+    let ticket = restore_saved(&engine, &producer, &saved).unwrap();
+    assert!(accept_message(&mut mixer, consumer.pop().unwrap()));
+    assert_eq!(ticket.publication_status().unwrap(), "accepted");
+    let directory = temp_directory();
+    let config = directory.path().join("flitzis_looper.config.json");
+    Python::attach(|py| {
+        let locals = PyDict::new(py);
+        locals
+            .set_item(
+                "native_owner",
+                Py::new(py, NativeSaveOwner { engine }).unwrap(),
+            )
+            .unwrap();
+        for (key, value) in [
+            ("source_path", f.path.as_str()),
+            ("config_path", config.to_str().unwrap()),
+            ("output_path", output.as_str()),
+            ("expected_revision", f.revision.as_str()),
+        ] {
+            locals.set_item(key, value).unwrap();
+        }
+        locals
+            .set_item("loaded_frames", f.sample.samples.len())
+            .unwrap();
+        locals.set_item("loaded_rate", RATE).unwrap();
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(3)
+            .unwrap();
+        locals
+            .set_item(
+                "source_modules",
+                repo.join("src").to_string_lossy().as_ref(),
+            )
+            .unwrap();
+        let code = std::ffi::CString::new(r#"
+import hashlib
+import json
+import sys
+import time
+from pathlib import Path
+sys.path.insert(0, source_modules)
+from flitzis_looper.controller.persistence import ProjectPersistence
+from flitzis_looper.models import ProjectState
+
+source = Path(source_path)
+source_bytes = source.stat().st_size
+source_digest = hashlib.sha256(source.read_bytes()).hexdigest()
+def measured(operation):
+    wall = time.perf_counter()
+    cpu = time.process_time()
+    result = operation()
+    return result, {'wall_seconds': time.perf_counter() - wall,
+                    'process_cpu_seconds': time.process_time() - cpu}
+
+exports = []
+for _ in range(3):
+    record, cost = measured(lambda: native_owner.export_current_constant_timing(0, source_path))
+    parsed = json.loads(record)
+    assert parsed['record']['accepted_revision'] == expected_revision
+    cost['json_bytes'] = len(record.encode())
+    exports.append(cost)
+
+project = ProjectState()
+project.sample_paths[0] = source_path
+project.pad_timing_intent[0] = 'automatic'
+persistence = ProjectPersistence(project)
+persistence.config_path = Path(config_path)
+persistence.bind_audio(native_owner)
+saves = []
+for _ in range(3):
+    persistence.mark_dirty()
+    _, cost = measured(persistence.flush)
+    assert not persistence._dirty
+    loaded = ProjectPersistence.from_config_path(Path(config_path)).project
+    assert loaded.sample_analysis[0].accepted_timing.record['accepted_revision'] == expected_revision
+    cost['config_bytes'] = Path(config_path).stat().st_size
+    saves.append(cost)
+
+previous_config = Path(config_path).read_bytes()
+original = source.read_bytes()
+corrupted = bytearray(original)
+corrupted[-1] ^= 1
+source.write_bytes(corrupted)
+try:
+    try:
+        native_owner.export_current_constant_timing(0, source_path)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('same-size source corruption must reject native export')
+    persistence.mark_dirty()
+    assert not persistence.flush_if_dirty()
+    assert persistence._dirty
+    assert Path(config_path).read_bytes() == previous_config
+finally:
+    source.write_bytes(original)
+assert hashlib.sha256(source.read_bytes()).hexdigest() == source_digest
+
+Path(output_path).write_text(json.dumps({
+    'scope': 'real native accepted-QM export plus actual Python atomic project save; 32-second 8kHz fixture',
+    'source_sha256': source_digest, 'source_bytes': source_bytes,
+    'loaded_frames': loaded_frames, 'loaded_rate_hz': loaded_rate,
+    'source_hash_reads_per_verification': 2,
+    'source_hash_bytes_per_verification': 2 * source_bytes,
+    'byte_accounting_basis': 'unchanged production verify() invokes two complete file_sha256 reads; no PCM disk reads',
+    'pcm_cpu_work': 'full loaded mono conversion, 44100Hz resampling, actual complete PCM/backend digest verification',
+    'exports': exports, 'saves': saves,
+    'same_size_corruption_rejected': True, 'failed_save_retains_previous_config_and_dirty_state': True,
+    'manual_device_hearing_acceptance': 'OPEN; no stream or device',
+    'limits': 'preliminary warm-file-cache measurements; no C3 200-pad or startup/RAM benefit claim'
+}, indent=2) + '\n', encoding='utf-8')
+"#).unwrap();
+        py.run(&code, Some(&locals), None).unwrap();
+    });
+}
+
 #[test]
 fn saved_timing_pending_failed_and_rejected_replacement_preserve_previous_current_record() {
     let f = fixture();

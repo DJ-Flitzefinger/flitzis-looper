@@ -1,4 +1,3 @@
-from contextlib import suppress
 from itertools import islice
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
@@ -6,6 +5,10 @@ from typing import TYPE_CHECKING, TypeVar
 from pydantic import ValidationError
 
 from flitzis_looper.controller.accepted_restore import AcceptedTimingRestore
+from flitzis_looper.controller.asset_lifecycle import (
+    AssetRetirementReservation,
+    ProjectAssetLifecycle,
+)
 from flitzis_looper.controller.base import BaseController
 from flitzis_looper.controller.validation import normalize_bpm
 from flitzis_looper.models import (
@@ -52,6 +55,7 @@ class LoaderController(BaseController):
         super().__init__(project, session, audio, on_project_changed)
 
         self._on_pad_bpm_changed = on_pad_bpm_changed
+        self._assets = ProjectAssetLifecycle(project, audio)
         self._on_stem_generation_started = on_stem_generation_started
         self._on_stem_generation_progress = on_stem_generation_progress
         self._on_stem_generation_success = on_stem_generation_success
@@ -63,6 +67,7 @@ class LoaderController(BaseController):
         self._on_sample_unloaded: Callable[[int], None] | None = None
         self._on_accepted_timing_refresh: Callable[[int], None] | None = None
         self._load_request_ids: dict[int, int] = {}
+        self._load_retirements: dict[tuple[int, int | None], AssetRetirementReservation] = {}
         self._new_load_sample_ids: set[int] = set()
         self._deferred_restores: dict[int, Path] = {}
         self._analysis_request_ids: dict[int, int] = {}
@@ -92,10 +97,17 @@ class LoaderController(BaseController):
         for sample_id in list(self._deferred_restores):
             self._cancel_deferred_restore(sample_id)
         self._accepted_restore.shut_down()
+        for reservation in self._load_retirements.values():
+            reservation.close()
+        self._load_retirements.clear()
 
     def set_new_sample_loaded_callback(self, callback: Callable[[int, float | None], None]) -> None:
         """Register behavior that runs after a newly assigned sample finishes loading."""
         self._on_new_sample_loaded = callback
+
+    def bind_asset_lifecycle(self, lifecycle: ProjectAssetLifecycle) -> None:
+        """Share assignment and separator owners with the application controller."""
+        self._assets = lifecycle
 
     def set_restored_sample_loaded_callback(self, callback: Callable[[int], bool]) -> None:
         """Register behavior that runs after a restored sample finishes loading."""
@@ -157,11 +169,15 @@ class LoaderController(BaseController):
             path: Path to an audio file on disk.
         """
         validate_sample_id(sample_id)
+        reservation = None
         try:
+            reservation = self._assets.reserve()
             request_id = self._audio.load_sample_async(
                 sample_id, path, run_analysis=True, replace_assignment=True
             )
         except (RuntimeError, ValueError) as error:
+            if reservation is not None:
+                reservation.close()
             self._session.sample_load_errors[sample_id] = str(error)
             return
 
@@ -175,10 +191,16 @@ class LoaderController(BaseController):
         self._load_request_ids.pop(sample_id, None)
         self._new_load_sample_ids.add(sample_id)
         self._record_load_request_id(sample_id, request_id)
+        self._record_load_retirement(sample_id, reservation)
 
     def unload_sample(self, sample_id: int) -> None:
         """Stop playback and unload a sample slot."""
         validate_sample_id(sample_id)
+        with self._assets.admission():
+            self._unload_sample(sample_id)
+
+    def _unload_sample(self, sample_id: int) -> None:
+        self._assets.sync_assignments()
         self._audio.unload_sample(sample_id)
         self._cancel_deferred_restore(sample_id)
         self._accepted_restore.cancel(sample_id)
@@ -190,7 +212,6 @@ class LoaderController(BaseController):
         self._session.sample_load_progress.pop(sample_id, None)
         self._session.sample_load_stage.pop(sample_id, None)
         self._session.sample_load_errors.pop(sample_id, None)
-        old_path = self._project.sample_paths[sample_id]
         if self._on_stems_deleted is not None:
             self._on_stems_deleted(sample_id)
         else:
@@ -201,16 +222,7 @@ class LoaderController(BaseController):
         self._reset_unloaded_pad_defaults(sample_id)
         self._on_pad_bpm_changed(sample_id)
         self._mark_project_changed()
-
-        if old_path is None or "\\" in old_path:
-            return
-
-        rel = Path(old_path)
-        if rel.is_absolute() or not rel.parts or rel.parts[0] != "samples":
-            return
-
-        with suppress(OSError):
-            (Path.cwd() / rel).unlink(missing_ok=True)
+        self._assets.sync_assignments()
 
     def analyze_sample_async(self, sample_id: int) -> None:
         """Analyze a previously loaded sample asynchronously."""
@@ -239,6 +251,7 @@ class LoaderController(BaseController):
     def poll_loader_events(self) -> None:
         """Drain pending loader events from the Rust audio engine."""
         self._accepted_restore.poll()
+        self._assets.retry_retirements()
         handlers = {
             "started": self._handle_loader_started,
             "progress": self._handle_loader_progress,
@@ -446,8 +459,23 @@ class LoaderController(BaseController):
             self._session.sample_load_progress[sample_id] = float(percent)
 
     def _handle_loader_success(self, sample_id: int, event: dict[str, object]) -> None:
+        reservation = self._take_load_retirement(sample_id, event)
+        if reservation is None:
+            reservation = self._assets.reserve()
+        try:
+            with reservation.activate():
+                self._apply_loader_success(sample_id, event)
+        finally:
+            reservation.close()
+
+    def _apply_loader_success(self, sample_id: int, event: dict[str, object]) -> None:
         if not self._matches_load_request(sample_id, event):
+            cached_path = event.get("cached_path")
+            if isinstance(cached_path, str):
+                self._assets.retire_unassigned_original(cached_path)
             return
+
+        self._assets.sync_assignments()
 
         self._session.loading_sample_ids.discard(sample_id)
         self._session.sample_load_errors.pop(sample_id, None)
@@ -476,8 +504,7 @@ class LoaderController(BaseController):
         )
         timing_stale = event.get("timing_stale") is True
         if new_assignment:
-            if not timing_stale:
-                self._reset_completed_assignment(sample_id)
+            self._reset_completed_assignment(sample_id, timing_stale=timing_stale)
             self._project.sample_paths[sample_id] = target_path
             self._clear_stem_cache(sample_id)
             self._mark_project_changed()
@@ -489,7 +516,10 @@ class LoaderController(BaseController):
         if isinstance(duration_s, float):
             self._project.sample_durations[sample_id] = duration_s
 
+        self._assets.sync_assignments()
+
         try:
+            self._assets.acknowledge_original(self._project.sample_paths[sample_id])
             if new_assignment and not timing_stale:
                 self._publish_unloaded_pad_audio_defaults(sample_id, ProjectState())
             self._finish_loaded_timing(
@@ -538,8 +568,12 @@ class LoaderController(BaseController):
         if restored_assignment and self._on_restored_sample_loaded is not None:
             self._on_restored_sample_loaded(sample_id)
 
-    def _reset_completed_assignment(self, sample_id: int) -> None:
+    def _reset_completed_assignment(self, sample_id: int, *, timing_stale: bool = False) -> None:
         """Reset retired track intent after native replacement, without a second unload."""
+        if timing_stale:
+            if self._on_stems_invalidated is not None:
+                self._on_stems_invalidated(sample_id)
+            return
         self._accepted_restore.cancel(sample_id)
         if self._on_sample_unloaded is not None:
             self._on_sample_unloaded(sample_id)
@@ -583,6 +617,9 @@ class LoaderController(BaseController):
             self._on_pad_bpm_changed(sample_id)
 
     def _handle_loader_error(self, sample_id: int, event: dict[str, object]) -> None:
+        reservation = self._take_load_retirement(sample_id, event)
+        if reservation is not None:
+            reservation.close()
         if not self._matches_load_request(sample_id, event):
             return
 
@@ -801,7 +838,9 @@ class LoaderController(BaseController):
         return rel
 
     def _schedule_restored_load(self, sample_id: int, rel: Path, *, run_analysis: bool) -> bool:
+        reservation = None
         try:
+            reservation = self._assets.reserve()
             if self._wants_accepted_restore(sample_id):
                 request_id = self._audio.load_sample_async(
                     sample_id,
@@ -818,6 +857,8 @@ class LoaderController(BaseController):
                     replace_assignment=True,
                 )
         except (RuntimeError, ValueError) as error:
+            if reservation is not None:
+                reservation.close()
             if isinstance(error, RuntimeError) and str(error) == self._COLD_QUEUE_FULL:
                 self._defer_restored_load(sample_id, rel)
                 return False
@@ -833,6 +874,7 @@ class LoaderController(BaseController):
         self._load_request_ids.pop(sample_id, None)
         self._new_load_sample_ids.discard(sample_id)
         self._record_load_request_id(sample_id, request_id)
+        self._record_load_retirement(sample_id, reservation)
         return True
 
     def _defer_restored_load(self, sample_id: int, rel: Path) -> None:
@@ -868,6 +910,22 @@ class LoaderController(BaseController):
         if isinstance(request_id, bool) or not isinstance(request_id, int):
             return
         self._load_request_ids[sample_id] = request_id
+
+    def _record_load_retirement(
+        self, sample_id: int, reservation: AssetRetirementReservation
+    ) -> None:
+        key = (sample_id, self._load_request_ids.get(sample_id))
+        previous = self._load_retirements.pop(key, None)
+        if previous is not None:
+            previous.close()
+        self._load_retirements[key] = reservation
+
+    def _take_load_retirement(
+        self, sample_id: int, event: dict[str, object]
+    ) -> AssetRetirementReservation | None:
+        value = event.get("request_id")
+        request = value if isinstance(value, int) and not isinstance(value, bool) else None
+        return self._load_retirements.pop((sample_id, request), None)
 
     def _record_analysis_request_id(self, sample_id: int, request_id: object) -> None:
         if isinstance(request_id, bool) or not isinstance(request_id, int):

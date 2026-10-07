@@ -10,9 +10,11 @@ authority and complete acknowledged accepted projection.
 `PreparedSourceTicket`. The version contains normalized original path and
 `|sha256-v1:<digest>`. Its digest must match the original-file content retained
 by the native loader; same-size/mtime replacement before admission is rejected.
-The loader hashes before decoding and checks the byte-exact project copy against
-that digest. This observes persistent changes, not an immutable decode snapshot:
-the complete copy-first/ABA provenance proof remains the separate PCM-cache work.
+The productive loader copies/hashes stable bytes first and decodes that sealed
+snapshot, or validates complete compatible warm PCM on retained immutable readers.
+Its byte-exact project original remains separate from the shared digest cache.
+The [PCM cache](pcm-cache-residency.md) records complete decoder/playback lineage;
+the prepared ticket still requires its own current source/timing permit.
 
 Capture serializes with real load/unload publication under the request mutex and
 pins the actual sample Arc, request, loaded rate and engine-specific preparation
@@ -98,11 +100,20 @@ original ticket identity, so an old completion cannot consume a new job even aft
 reloading identical bytes. Obsolete workers discard only their checked private
 directory and cannot overwrite current canonical artifacts.
 
-Current completion validates a complete private set, removes canonical
-`.complete.json` before replacing any WAV, and atomically publishes the marker
-last. The `stem-set-sha256-v1` marker binds source version and all five WAV digests.
-Missing, partial, mixed or tampered sets remain unavailable. This bounded stem
-protocol is separate from the future full PCM disk cache.
+Current completion validates a complete private set, writes `.complete.json`
+last and publishes it as an immutable `.ready-<uuid>` generation inside the pad
+container. Metadata points to that exact generation. The `stem-set-sha256-v1`
+marker binds source version and all five WAV digests. Missing, partial, mixed or
+tampered sets remain unavailable. The marker and current permit remain separate
+from the full-mix PCM cache.
+
+Assignment and separator-job tokens protect original and generation paths under
+the native admission/cleanup gate. Native PCM readers cover queued, bank, voice
+and history owners until off-thread retirement. Unload or Delete Stems revokes
+eligibility immediately, then retires exact owned paths after the last reader.
+Legacy canonical sets retire only their declared files; unknown content and newer
+generations survive. Windows sharing failures are retried off-thread. Shutdown
+drains jobs and closes runtime tokens while preserving persisted assignments.
 
 Restore verifies source/marker, waits for matching full-mix load and captures a
 fresh ticket. Stat-only legacy stems invalidate and need regeneration. Manual,
@@ -131,10 +142,11 @@ START/STOP batches including MIDI to current native source/authority and complet
 acknowledged accepted timing. G3b2i adds general explicit publication and guarded
 derived loop/master completion, shared with fresh saved adoption before restored
 stem intent completion in the application.
-The original hash association does not complete
-C1 immutable copy-first/ABA proof. G3c separately proves musical versus physical
+Immutable loader lineage does not replace the current prepared-source permit
+or promote historical timing. G3c separately proves musical versus physical
 loops over 75/1000 cycles, fractional periods/rates, callback partitions/wrap and
 rendered/onset/device/listening gates. Numerical ownership tests supply no human
 listening, label or device acceptance. Later B5 audible crop/delay/transition
-compensation stays separate; current 96-native-handle setup/RAM and source-verifying
-save I/O/CPU costs remain unmeasured.
+compensation stays separate; current 96-native-handle setup/RAM and C3 multi-pad
+save costs remain unmeasured. Preliminary complete native export/project-save
+integrity accounting is recorded in [PCM cache and residency](pcm-cache-residency.md).

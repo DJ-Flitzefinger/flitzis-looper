@@ -10,6 +10,9 @@ mod flitzis_looper_audio {
     use super::audio_engine::AudioEngine;
 
     #[pymodule_export]
+    use super::audio_engine::ProjectAssetLease;
+
+    #[pymodule_export]
     use super::audio_engine::OfflineAnalysisJob;
 
     #[pymodule_export]

@@ -1,4 +1,4 @@
-# C0 decisions and C1a cold integration
+# C0 decisions and C1a/C1b integration
 
 The maintained design and audited code/test/spec map live in
 [PCM cache and residency](../../../docs/pcm-cache-residency.md).
@@ -44,8 +44,30 @@ failure roll back exclusively owned cold creations and their still-current
 proposed control source. Newer source or Manual/Tap intent is never overwritten.
 A stalled backend after the bounded irreversible callback tail begins has a
 finite unconfirmed-adoption error: complete files remain durable and no Success
-or unsafe rollback is invented. Subsequent reconciliation is C1b.
+or unsafe rollback is invented. C1b retains actual native readers off-thread and
+reconciles explicit retirement, stale metadata delivery and shutdown.
 Power-loss directory durability and portable stable capture remain unproved;
-non-Windows capture fails safely. Warm reuse/shared ownership/last-owner cleanup,
-resident windows and measured performance remain C1b/C2/C3. See maintained docs
+non-Windows capture fails safely. Resident windows and measured startup/RAM
+acceptance remain C2/C3. See maintained docs
 for exact policies, independent decoder/FFT evidence and the realtime boundary.
+
+## C1b implementation boundary
+
+Warm admission verifies the complete actual source, selected decoder configuration,
+canonical manifest, every decoder/playback PCM byte and recomputed mono digest on
+fresh immutable readers. A bounded candidate scan rejects incompatible/corrupt
+generations without overwriting them. Shared preparation is gated by digest/device;
+native publication remains request/generation/intent guarded and ACK based.
+Cross-pad PCM can share, while live former same-pad readers require an admitted
+complete copy to preserve existing address-based source/history authority.
+
+Non-realtime assignment/job tokens and weak queued/bank/voice/history PCM readers
+protect exact originals, cache assignments and immutable stem generations. Pending
+delivered metadata has bounded retained ownership until claim, stale retirement
+or engine shutdown. Persisted assignments survive ordinary process shutdown.
+Cleanup checks resolved containment, reparse attributes and captured file identity,
+uses exact Windows handles and bounded sharing retries, and preserves unknown or
+newer generation content. Recognized dead-process staging is recovered only under
+ownership exclusion. Final empty stem containers can be removed nonrecursively
+under the same gate; otherwise they remain. Warm integrity and real export/save probes record costs without
+weakening verification or claiming C3 performance. Full-buffer playback remains.

@@ -14,6 +14,7 @@ use crate::messages::SampleBuffer;
 
 mod cold;
 pub(crate) use cold::{decode_audio_snapshot, prepare_playback};
+pub(crate) use cold::{decoder_cache_selector, playback_cache_transform};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SampleLoadSubtask {

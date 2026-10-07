@@ -3,7 +3,7 @@ import json
 import struct
 import wave
 from typing import TYPE_CHECKING
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -17,7 +17,6 @@ from flitzis_looper.models import STEM_KINDS
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from pathlib import Path
-    from unittest.mock import Mock
 
     from flitzis_looper.models import ProjectState, SessionState
 
@@ -28,6 +27,17 @@ class FakePreparedSourceTicket:
 
     def publication_status(self) -> str:
         return self.status
+
+
+class FakeProjectAssetLease:
+    """Control-flow substitute; actual filesystem/readers are native-tested."""
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self.released = False
+
+    def release(self) -> None:
+        self.released = True
 
 
 class FakeGlobalPlaybackBatchTicket:
@@ -193,6 +203,11 @@ def audio_engine_mock() -> Iterator[Mock]:
             FakeGlobalPlaybackBatchTicket()
         )
         audio_engine.return_value.capture_prepared_source.return_value = FakePreparedSourceTicket()
+        audio_engine.return_value.acquire_project_asset_lease = Mock(
+            side_effect=FakeProjectAssetLease
+        )
+        audio_engine.return_value.retire_project_asset = Mock()
+        audio_engine.return_value.project_asset_cleanup_status = Mock(return_value=(0, 0, 0, []))
         if hasattr(audio_engine.return_value, "loaded_sample_shape"):
             audio_engine.return_value.loaded_sample_shape.return_value = (44_100, 1, 128)
         yield audio_engine.return_value

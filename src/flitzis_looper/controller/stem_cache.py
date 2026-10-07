@@ -1,7 +1,8 @@
 import hashlib
 import json
 import os
-import shutil
+import re
+import stat
 from pathlib import Path
 
 from flitzis_looper.models import STEM_KINDS, StemCacheEntry, StemFileSet, validate_sample_id
@@ -64,7 +65,16 @@ def _safe_stem_cache_dir_path(cache_dir: str) -> Path | None:
         return None
 
     root = (Path.cwd() / STEM_CACHE_ROOT).resolve(strict=False)
-    target = (Path.cwd() / rel).resolve(strict=False)
+    unresolved = Path.cwd() / rel
+    for path in (unresolved, *unresolved.parents):
+        if path.exists() and (
+            path.is_symlink()
+            or getattr(path.lstat(), "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+        ):
+            return None
+        if path == Path.cwd():
+            break
+    target = unresolved.resolve(strict=False)
 
     try:
         target.relative_to(root)
@@ -77,22 +87,14 @@ def _safe_stem_cache_dir_path(cache_dir: str) -> Path | None:
     return target
 
 
-def delete_stem_cache_dirs(sample_id: int, *cache_dirs: str | None) -> bool:
-    """Delete known project-local stem cache directories for a pad."""
-    validate_sample_id(sample_id)
-    deleted = False
-    seen: set[Path] = set()
-    for cache_dir in (*cache_dirs, cache_dir_for_sample_id(sample_id)):
-        if cache_dir is None:
-            continue
-        target = _safe_stem_cache_dir_path(cache_dir)
-        if target is None or target in seen:
-            continue
-        seen.add(target)
-        if target.exists():
-            shutil.rmtree(target)
-            deleted = True
-    return deleted
+def cache_dir_matches_sample_id(sample_id: int, cache_dir: str) -> bool:
+    """Accept a legacy pad set or its immutable published generation only."""
+    root = Path(cache_dir_for_sample_id(sample_id))
+    candidate = Path(cache_dir)
+    return candidate == root or (
+        candidate.parent == root
+        and re.fullmatch(r"\.ready-[0-9a-f]{32}", candidate.name) is not None
+    )
 
 
 def expected_stem_files(cache_dir: str) -> StemFileSet:
@@ -112,36 +114,47 @@ def _validated_cache_path(entry: StemCacheEntry) -> Path:
 
 
 def _file_digest(path: Path) -> str:
-    path.resolve().relative_to((Path.cwd() / STEM_CACHE_ROOT).resolve())
-    with path.open("rb") as artifact:
+    relative = path.absolute().relative_to(Path.cwd().absolute())
+    target = _safe_stem_cache_dir_path(relative.as_posix())
+    if target is None:
+        message = "Stem artifact path contains an unsafe reference"
+        raise ValueError(message)
+    with target.open("rb") as artifact:
         return hashlib.file_digest(artifact, "sha256").hexdigest()
 
 
-def promote_generation_artifacts(entry: StemCacheEntry, generation_dir: Path) -> None:
-    """Promote one complete private generation, writing its integrity marker last."""
+def promote_generation_artifacts(entry: StemCacheEntry, generation_dir: Path) -> StemCacheEntry:
+    """Atomically publish an immutable complete generation with its marker last."""
     target = _validated_cache_path(entry)
     private = _validated_generation_path(generation_dir)
-    if private.parent != target:
+    if private.parent not in {target, target.parent}:
         msg = "Generation artifacts do not belong to the pad's cache directory"
         raise ValueError(msg)
     if any(not (private / f"{kind}.wav").is_file() for kind in STEM_KINDS):
         msg = "Stem generation completed but cache files are incomplete"
         raise OSError(msg)
     digests = {kind: _file_digest(private / f"{kind}.wav") for kind in STEM_KINDS}
-    marker = target / STEM_SET_MARKER_NAME
-    marker.unlink(missing_ok=True)
-    for kind in STEM_KINDS:
-        (private / f"{kind}.wav").replace(target / f"{kind}.wav")
+    published = private.with_name(private.name.replace(".generation-", ".ready-", 1))
+    if published.exists():
+        message = "Stem generation already has a published owner"
+        raise FileExistsError(message)
     marker_temp = private / STEM_SET_MARKER_NAME
-    marker_temp.write_text(
-        json.dumps({
-            "schema": STEM_SET_MARKER_SCHEMA,
-            "source_version": entry.source_version,
-            "stems": digests,
-        }),
-        encoding="utf-8",
+    with marker_temp.open("x", encoding="utf-8") as marker:
+        json.dump(
+            {
+                "schema": STEM_SET_MARKER_SCHEMA,
+                "source_version": entry.source_version,
+                "stems": digests,
+            },
+            marker,
+        )
+        marker.flush()
+        os.fsync(marker.fileno())
+    private.rename(published)
+    cache_dir = published.relative_to(Path.cwd()).as_posix()
+    return entry.model_copy(
+        update={"cache_dir": cache_dir, "stems": expected_stem_files(cache_dir)}
     )
-    marker_temp.replace(marker)
 
 
 def verified_stem_cache_available(entry: StemCacheEntry) -> bool:
@@ -149,7 +162,8 @@ def verified_stem_cache_available(entry: StemCacheEntry) -> bool:
     try:
         target = _validated_cache_path(entry)
         marker_path = target / STEM_SET_MARKER_NAME
-        marker_path.resolve().relative_to(target)
+        if _safe_stem_cache_dir_path(marker_path.relative_to(Path.cwd()).as_posix()) is None:
+            return False
         marker: object = json.loads(marker_path.read_text(encoding="utf-8"))
         expected = {
             "schema": STEM_SET_MARKER_SCHEMA,
@@ -162,16 +176,9 @@ def verified_stem_cache_available(entry: StemCacheEntry) -> bool:
 
 
 def _validated_generation_path(cache_dir: Path) -> Path:
-    relative = cache_dir.resolve().relative_to(Path.cwd().resolve())
+    relative = cache_dir.absolute().relative_to(Path.cwd().absolute())
     target = _safe_stem_cache_dir_path(relative.as_posix())
-    if target is None or not target.name.startswith(".generation-"):
+    if target is None or re.fullmatch(r"\.generation-[0-9a-f]{32}", target.name) is None:
         msg = "Generation artifact path is outside its private cache directory"
         raise ValueError(msg)
     return target
-
-
-def discard_generation_artifacts(cache_dir: Path) -> None:
-    """Delete only a completed job's checked project-local private artifact directory."""
-    target = _validated_generation_path(cache_dir)
-    if target.exists():
-        shutil.rmtree(target)

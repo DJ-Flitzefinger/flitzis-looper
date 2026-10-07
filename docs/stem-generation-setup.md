@@ -99,6 +99,14 @@ for packaged PyTorch wheels; a compatible/current NVIDIA driver is required.
 
 ## Expected Runtime Errors
 
+Generated sets stay inside `samples/stems/#<pad>/`: workers write private
+`.generation-<uuid>` directories and complete sets publish as immutable
+`.ready-<uuid>` directories. Project metadata selects an exact set. Replacing
+or deleting stems revokes eligibility first; contained native cleanup waits for
+assignment, separator-job and native PCM readers before deleting that generation.
+An old cleanup cannot remove a newer set or unknown files in the pad container.
+See [prepared publication](prepared-stem-publication.md) for current ownership.
+
 - `no Model installed`: run the Demucs model install command above.
 - `FFmpeg/ffprobe unavailable`: install FFmpeg or set `FLITZIS_FFMPEG_DIR`.
 - `TorchCodec unavailable`: rerun `uv --no-cache sync`; if this persists, rebuild the environment.

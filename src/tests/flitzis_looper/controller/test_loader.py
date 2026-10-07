@@ -1707,10 +1707,10 @@ def test_unload_sample_windows_path(controller: AppController, audio_engine_mock
     assert controller.project.sample_paths[sample_id] is None
 
 
-def test_unload_sample_deletes_cached_file(
+def test_unload_sample_defers_original_deletion_to_native_last_reader(
     tmp_path: Path, controller: AppController, audio_engine_mock: Mock
 ) -> None:
-    """Test unloading a sample deletes cached file."""
+    """Native cleanup owns deletion after the UI assignment has been revoked."""
     samples_dir = tmp_path / "samples"
     samples_dir.mkdir()
     cached_file = samples_dir / "test.wav"
@@ -1720,13 +1720,16 @@ def test_unload_sample_deletes_cached_file(
 
     controller.loader.unload_sample(0)
 
-    assert not cached_file.exists()
+    assert cached_file.exists()
+    audio_engine_mock.retire_project_asset.assert_called_once_with(
+        str(cached_file), recursive=False
+    )
 
 
-def test_unload_sample_deletes_stem_cache_dir(
+def test_unload_sample_retires_only_declared_legacy_stem_files(
     tmp_path: Path, controller: AppController, audio_engine_mock: Mock
 ) -> None:
-    """Test unloading a sample deletes the pad stem cache directory."""
+    """Legacy cleanup leaves the pad container and unknown files untouched."""
     cache_dir = cache_dir_for_sample_id(0)
     stems_dir = tmp_path / cache_dir
     stems_dir.mkdir(parents=True)
@@ -1743,7 +1746,15 @@ def test_unload_sample_deletes_stem_cache_dir(
 
     controller.loader.unload_sample(0)
 
-    assert not stems_dir.exists()
+    assert stems_dir.exists()
+    for kind in STEM_KINDS:
+        audio_engine_mock.retire_project_asset.assert_any_call(
+            str(stems_dir / f"{kind}.wav"), recursive=False
+        )
+    assert all(
+        not call.kwargs["recursive"]
+        for call in audio_engine_mock.retire_project_asset.call_args_list
+    )
     assert controller.project.stem_cache[0] is None
 
 
@@ -1780,8 +1791,9 @@ def test_unload_sample_clears_restored_stem_runtime_eligibility(
     restored_publish_result = controller.stems.publish_restored_stem_cache_if_available(0)
 
     assert restored_publish_result is True
-    assert not stems_dir.exists()
-    assert not sample_path.exists()
+    assert stems_dir.exists()
+    assert sample_path.exists()
+    audio_engine_mock.retire_project_asset.assert_any_call(str(sample_path), recursive=False)
     assert controller.project.sample_paths[0] is None
     assert controller.project.stem_cache[0] is None
     assert controller.project.pad_stem_mix_mode[0] == "full_mix"

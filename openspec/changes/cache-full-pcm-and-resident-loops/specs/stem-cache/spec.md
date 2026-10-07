@@ -34,12 +34,19 @@ introduce new generated samples, complete-set content or accepted timing evidenc
 The system SHALL store project stem artifacts under the pad-labelled container
 `samples/stems/#N/` for pads 1 through 216, with generation-specific ownership.
 
+New complete sets SHALL publish as immutable generation directories with their
+complete content marker written last; metadata SHALL name the exact generation.
+Previously saved canonical sets MAY restore after existing full validation,
+but their cleanup SHALL target only declared known files, preserving unknown
+content and any newer generation in the pad container.
+
 Delete Stems and unload SHALL immediately revoke the pad's tracked stem eligibility
 and metadata. Physical deletion SHALL occur off-thread only after that generation's
 last assignment and reader/job/queued/voice owner retires. A cleanup job SHALL
 delete only resolved owned paths of its generation, preserve other pad/shared
-owners and never delete a newer generation or external original. The pad container
-SHALL be removed only when no generation/reader remains.
+owners and never delete a newer generation or external original. Any pad-container
+removal SHALL require that no generation, reader or unknown content remains;
+an empty container MAY remain as harmless directory metadata.
 
 #### Scenario: Generated stems use the pad label directory
 - **WHEN** inactive pad 1 generates a current stem set
@@ -58,3 +65,13 @@ SHALL be removed only when no generation/reader remains.
 #### Scenario: Old cleanup races a new source assignment
 - **WHEN** a newer generation now owns files under the same pad-labelled container
 - **THEN** the old cleanup cannot remove those files or the live container
+
+#### Scenario: Complete generation becomes the selected set
+- **WHEN** a current inactive-pad job completes its five validated stem artifacts
+- **THEN** the complete marker and immutable generation become eligible together
+- **AND** native current-source/timing adoption ACK still governs playback availability
+
+#### Scenario: Rejected replacement restores a saved canonical legacy set
+- **WHEN** a replacement is rejected after retirement of the previous canonical set was deferred
+- **THEN** restoring the saved legacy assignment revokes retirement of only its six declared direct files
+- **AND** cleanup of the failed newer generation remains scheduled after its last owner retires

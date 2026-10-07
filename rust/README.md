@@ -74,10 +74,11 @@ rust/
             `-- window.rs
 ```
 
-The productive cold load API admits fixed workers and transient PCM before
-copy-first snapshot decode, complete artifact commit and guarded native ACK.
-File ownership stays off realtime; full-buffer playback remains. Windows stable
-sharing, decoder/resampler evidence, pending/fault behavior and C1b/C2/C3 limits
+The productive load API admits fixed workers and transient PCM before
+copy-first capture, complete compatible warm reuse or snapshot decode, atomic
+artifact commit and guarded native ACK. File ownership and last-reader cleanup
+stay off realtime; full-buffer playback remains. Windows stable sharing,
+decoder/resampler evidence, pending/fault behavior and separate C2/C3 limits
 are maintained in [PCM cache and residency](../docs/pcm-cache-residency.md).
 
 Most modules are `pub(crate)`. `lib.rs`, `audio_engine/mod.rs`, and

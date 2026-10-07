@@ -517,7 +517,10 @@ mod windows {
         artifacts(&mut transaction);
         transaction.commit(&|| false).unwrap();
         let lease = transaction.into_lease();
-        assert_eq!(lease.original_path, fixture.samples.join("restored.wav"));
+        assert_eq!(
+            lease.original_path,
+            fs::canonicalize(fixture.samples.join("restored.wav")).unwrap()
+        );
         assert_eq!(fs::read_dir(&fixture.samples).unwrap().count(), 2);
         assert!(
             OpenOptions::new()

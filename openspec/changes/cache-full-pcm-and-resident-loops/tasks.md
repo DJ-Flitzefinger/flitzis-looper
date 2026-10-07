@@ -23,13 +23,13 @@
 
 ## C1b: reuse and last-owner lifecycle
 
-- [ ] Validate full cache/source content on fresh immutable leases, reuse complete
+- [x] Validate full cache/source content on fresh immutable leases, reuse complete
   compatible entries and regenerate partial/corrupt/version-incompatible entries.
-- [ ] Extend atomic guarded cold publication to validated warm reuse, deduplicated
+- [x] Extend atomic guarded cold publication to validated warm reuse, deduplicated
   digest ownership and shared-subscriber cancellation/shutdown.
-- [ ] Replace eager project-asset deletion with safe last-reader/job/pad/voice
+- [x] Replace eager project-asset deletion with safe last-reader/job/pad/voice
   cleanup; prove containment, retry, shared ownership and external-original safety.
-- [ ] Capture warm-integrity byte/CPU accounting; preserve save/export integrity
+- [x] Capture warm-integrity byte/CPU accounting; preserve save/export integrity
   and rerun meaningful productive checks with independent final-tree review.
 
 ## C2a: complete-source authority and finite resident windows

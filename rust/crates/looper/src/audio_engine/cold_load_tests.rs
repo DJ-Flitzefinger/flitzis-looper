@@ -28,6 +28,274 @@ fn wait_until_for(timeout: Duration, mut condition: impl FnMut() -> bool) {
 
 #[test]
 #[cfg(windows)]
+#[ignore = "isolated complete 600s cold/import then fresh warm/restore integrity measurement"]
+fn c1b_productive_long_warm_integrity_cost() {
+    use std::io::{Read, Seek, SeekFrom};
+    fn full_hash(path: &std::path::Path) -> String {
+        let mut file = fs::File::open(path).unwrap();
+        let mut hash = Sha256::new();
+        let mut bytes = [0_u8; 64 * 1024];
+        loop {
+            let count = file.read(&mut bytes).unwrap();
+            if count == 0 {
+                break;
+            }
+            hash.update(&bytes[..count]);
+        }
+        format!("{:x}", hash.finalize())
+    }
+    // Independent integer PCM24 oracle: no productive decoder, resampler or
+    // manifest helper participates in deriving complete expected sample bytes.
+    fn pcm24_oracle(path: &std::path::Path) -> (String, String) {
+        let mut file = fs::File::open(path).unwrap();
+        let mut header = [0_u8; 12];
+        file.read_exact(&mut header).unwrap();
+        assert_eq!(&header[..4], b"RIFF");
+        assert_eq!(&header[8..], b"WAVE");
+        let mut decoder = Sha256::new();
+        let mut playback = Sha256::new();
+        let mut found_format = false;
+        loop {
+            let mut chunk = [0_u8; 8];
+            file.read_exact(&mut chunk).unwrap();
+            let length = u32::from_le_bytes(chunk[4..].try_into().unwrap());
+            if &chunk[..4] == b"fmt " {
+                let mut format = [0_u8; 16];
+                file.read_exact(&mut format).unwrap();
+                assert_eq!(u16::from_le_bytes(format[..2].try_into().unwrap()), 1);
+                assert_eq!(u16::from_le_bytes(format[2..4].try_into().unwrap()), 1);
+                assert_eq!(u32::from_le_bytes(format[4..8].try_into().unwrap()), 48_000);
+                assert_eq!(u16::from_le_bytes(format[14..16].try_into().unwrap()), 24);
+                file.seek(SeekFrom::Current(i64::from(length - 16 + length % 2)))
+                    .unwrap();
+                found_format = true;
+            } else if &chunk[..4] == b"data" {
+                assert!(found_format);
+                assert_eq!(length, 86_400_000);
+                let mut remaining = length as usize;
+                let mut bytes = [0_u8; 64 * 1024 * 3];
+                while remaining > 0 {
+                    let count = remaining.min(bytes.len());
+                    file.read_exact(&mut bytes[..count]).unwrap();
+                    for raw in bytes[..count].chunks_exact(3) {
+                        let integer =
+                            (i32::from(raw[0]) | i32::from(raw[1]) << 8 | i32::from(raw[2]) << 16)
+                                << 8
+                                >> 8;
+                        let sample = (integer as f32 / 8_388_608.0).to_le_bytes();
+                        decoder.update(sample);
+                        playback.update(sample);
+                        playback.update(sample);
+                    }
+                    remaining -= count;
+                }
+                return (
+                    format!("{:x}", decoder.finalize()),
+                    format!("{:x}", playback.finalize()),
+                );
+            } else {
+                file.seek(SeekFrom::Current(i64::from(length + length % 2)))
+                    .unwrap();
+            }
+        }
+    }
+    struct CurrentDirectory(PathBuf);
+    impl Drop for CurrentDirectory {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.0).unwrap();
+        }
+    }
+    fn cpu_nanos() -> u64 {
+        #[repr(C)]
+        #[derive(Default)]
+        struct Time {
+            low: u32,
+            high: u32,
+        }
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetCurrentProcess() -> *mut std::ffi::c_void;
+            fn GetProcessTimes(
+                handle: *mut std::ffi::c_void,
+                creation: *mut Time,
+                exit: *mut Time,
+                kernel: *mut Time,
+                user: *mut Time,
+            ) -> i32;
+        }
+        let (mut creation, mut exit, mut kernel, mut user) = (
+            Time::default(),
+            Time::default(),
+            Time::default(),
+            Time::default(),
+        );
+        // SAFETY: all FILETIME destinations are live, correctly sized values.
+        assert_ne!(
+            unsafe {
+                GetProcessTimes(
+                    GetCurrentProcess(),
+                    &mut creation,
+                    &mut exit,
+                    &mut kernel,
+                    &mut user,
+                )
+            },
+            0
+        );
+        ((u64::from(kernel.high) << 32 | u64::from(kernel.low))
+            + (u64::from(user.high) << 32 | u64::from(user.low)))
+            * 100
+    }
+    let source = PathBuf::from(
+        std::env::var_os("FLITZI_COLD_LONG_SOURCE").expect("retained long source path"),
+    );
+    assert!(source.is_absolute());
+    let original_hash = full_hash(&source);
+    let (decoder_oracle, playback_oracle) = pcm24_oracle(&source);
+    let directory = tempfile::tempdir().unwrap();
+    let samples_root = directory.path().join("samples");
+    let previous_directory = CurrentDirectory(std::env::current_dir().unwrap());
+    std::env::set_current_dir(directory.path()).unwrap();
+    let mut cold = AudioEngine::new().unwrap();
+    let previous = old(&cold);
+    let mut callback = Callback::new(&cold, &previous);
+    let (producer, mut consumer) = rtrb::RingBuffer::new(4);
+    let request = admit_for_format(
+        &cold,
+        0,
+        source.to_string_lossy().into(),
+        false,
+        false,
+        true,
+        Arc::new(Mutex::new(producer)),
+        2,
+        48_000,
+        samples_root.clone(),
+    )
+    .unwrap();
+    wait_until_for(Duration::from_secs(300), || consumer.peek().is_ok());
+    assert_eq!(callback.drain(&mut consumer), 1);
+    let LoaderEvent::Success { cached_path, .. } = terminal(&cold, request) else {
+        panic!("cold import failed");
+    };
+    wait_until(|| cold.cold_loading[0].load(Ordering::Acquire) == 0);
+    let manifest = cold.cold_source_manifest(0).unwrap().unwrap();
+    let cold_manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+    let mut assignment = cold
+        .acquire_project_asset_lease(cached_path.clone())
+        .unwrap();
+    cold.shut_down().unwrap();
+    drop(callback);
+    drop(previous);
+    drop(cold);
+    // The durable assignment protects originals/caches across engine shutdown.
+    assert!(directory.path().join(&cached_path).is_file());
+    let warm = AudioEngine::new().unwrap();
+    let previous = old(&warm);
+    let mut callback = Callback::new(&warm, &previous);
+    let (producer, mut consumer) = rtrb::RingBuffer::new(4);
+    let wall = Instant::now();
+    let cpu = cpu_nanos();
+    let request = admit_for_format(
+        &warm,
+        0,
+        cached_path.clone(),
+        false,
+        false,
+        false,
+        Arc::new(Mutex::new(producer)),
+        2,
+        48_000,
+        samples_root.clone(),
+    )
+    .unwrap();
+    wait_until_for(Duration::from_secs(300), || consumer.peek().is_ok());
+    assert_eq!(callback.drain(&mut consumer), 1);
+    let LoaderEvent::Success {
+        cached_path: restored,
+        duration_s,
+        ..
+    } = terminal(&warm, request)
+    else {
+        panic!("warm restore failed");
+    };
+    wait_until(|| warm.cold_loading[0].load(Ordering::Acquire) == 0);
+    assert_eq!(restored, cached_path);
+    assert_eq!(duration_s, 600.0);
+    let wall_nanos = wall.elapsed().as_nanos();
+    let process_cpu_nanos = cpu_nanos() - cpu;
+    let warm_manifest: serde_json::Value =
+        serde_json::from_str(&warm.cold_source_manifest(0).unwrap().unwrap()).unwrap();
+    assert_eq!(warm_manifest["cache_path"], cold_manifest["cache_path"]);
+    assert_eq!(warm_manifest["identity"], cold_manifest["identity"]);
+    assert_eq!(warm_manifest["descriptor"], cold_manifest["descriptor"]);
+    let cache_path = PathBuf::from(warm_manifest["cache_path"].as_str().unwrap());
+    assert_eq!(full_hash(&cache_path.join("decoder.f32le")), decoder_oracle);
+    assert_eq!(
+        full_hash(&cache_path.join("playback.f32le")),
+        playback_oracle
+    );
+    assert_eq!(
+        full_hash(&directory.path().join(&cached_path)),
+        original_hash
+    );
+    assert_eq!(
+        warm_manifest["descriptor"]["decoder"]["pcm"]["interleaved_sha256"],
+        decoder_oracle
+    );
+    assert_eq!(
+        warm_manifest["descriptor"]["playback"]["pcm"]["interleaved_sha256"],
+        playback_oracle
+    );
+    let mut actual_native_pcm = Sha256::new();
+    for sample in warm.sample_cache.lock().unwrap()[0]
+        .as_ref()
+        .unwrap()
+        .samples
+        .iter()
+    {
+        actual_native_pcm.update(sample.to_le_bytes());
+    }
+    assert_eq!(
+        format!("{:x}", actual_native_pcm.finalize()),
+        playback_oracle
+    );
+    let metrics = &warm_manifest["integrity"];
+    assert_eq!(metrics["warm"], true);
+    assert_eq!(
+        metrics["source_copied_bytes"],
+        fs::metadata(&source).unwrap().len()
+    );
+    assert_eq!(
+        metrics["snapshot_verify_bytes"],
+        fs::metadata(&source).unwrap().len()
+    );
+    assert_eq!(metrics["decoder_verify_bytes"], 115_200_000_u64);
+    assert_eq!(metrics["playback_verify_bytes"], 230_400_000_u64);
+    assert_eq!(metrics["playback_read_bytes"], 230_400_000_u64);
+    assert_eq!(metrics["original_copied_bytes"], 0);
+    let evidence = serde_json::json!({
+        "test":"c1b-productive-complete-warm-restore-v1", "seconds":duration_s,
+        "actual_native_bank_ack":true, "wall_nanos_capture_through_ack":wall_nanos,
+        "process_cpu_nanos_capture_through_ack":process_cpu_nanos,
+        "independent_original_sha256":original_hash,
+        "independent_pcm24_decoder_sha256":decoder_oracle,
+        "independent_pcm24_stereo_playback_sha256":playback_oracle,
+        "warm":warm_manifest, "cold":cold_manifest,
+        "scope":"fresh engine saved original restore; full immutable integrity; no app automatic restore, device or performance acceptance",
+    });
+    let evidence_path =
+        PathBuf::from(std::env::var_os("FLITZI_C1B_WARM_EVIDENCE").expect("evidence output path"));
+    fs::write(evidence_path, serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
+    drop(callback);
+    drop(previous);
+    drop(warm);
+    assignment.release();
+    drop(previous_directory);
+}
+
+#[test]
+#[cfg(windows)]
 #[ignore = "explicit retained 600s PCM24 source via FLITZI_COLD_LONG_SOURCE"]
 fn productive_long_cold_restore_has_full_decoder_and_playback_artifacts_before_actual_ack() {
     use std::io::Read;
@@ -467,13 +735,13 @@ fn full_native_queue_rolls_back_artifacts_and_preserves_all_old_source_ownership
             .source_current(0, &previous, 48_000)
     );
     assert!(engine.cold_leases.lock().unwrap()[0].is_none());
-    assert_eq!(
+    wait_until(|| {
         fs::read_dir(directory.path().join("samples/.pcm-cache/v1"))
             .unwrap()
-            .count(),
-        0
-    );
-    assert!(!directory.path().join("samples/external.wav").exists());
+            .count()
+            == 0
+            && !directory.path().join("samples/external.wav").exists()
+    });
 }
 
 #[test]

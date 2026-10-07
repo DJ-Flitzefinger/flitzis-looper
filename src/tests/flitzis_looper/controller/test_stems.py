@@ -44,6 +44,13 @@ def _load_project_sample(controller: AppController, tmp_path: Path, name: str = 
     return project_path
 
 
+def _published_cache_dir(controller: AppController) -> str:
+    entry = controller.project.stem_cache[0]
+    assert entry is not None
+    assert Path(entry.cache_dir).name.startswith(".ready-")
+    return entry.cache_dir
+
+
 def test_source_version_uses_project_path_and_full_sha256(tmp_path: Path) -> None:
     samples_dir = tmp_path / "samples"
     samples_dir.mkdir()
@@ -293,7 +300,7 @@ def test_stem_backend_success_publishes_prepared_stems(
 
     version = source_version_for_sample_path("samples/loop.wav")
     assert version is not None
-    cache_dir = cache_dir_for_sample_id(0)
+    cache_dir = _published_cache_dir(controller)
     entry = controller.project.stem_cache[0]
     assert entry is not None
     assert entry.available is True
@@ -316,8 +323,10 @@ def test_stem_publication_retains_admission_ticket_when_timing_changes(
 
     version = source_version_for_sample_path("samples/loop.wav")
     audio_engine_mock.capture_prepared_source.assert_called_once_with(0, version)
+    attempted_cache_dir = audio_engine_mock.publish_prepared_stems.call_args.args[2]
+    assert Path(attempted_cache_dir).name.startswith(".ready-")
     audio_engine_mock.publish_prepared_stems.assert_called_once_with(
-        0, version, cache_dir_for_sample_id(0), ticket
+        0, version, attempted_cache_dir, ticket
     )
     entry = controller.project.stem_cache[0]
     assert entry is not None
@@ -502,14 +511,14 @@ def test_same_source_reload_does_not_accept_old_job_completion(
 
     assert 0 in controller.session.stem_generating_sample_ids
     assert controller.session.stem_generation_source_versions[0] == original_version
-    assert not stem_backend.requests[0].cache_dir.exists()
+    assert stem_backend.requests == []
     audio_engine_mock.publish_prepared_stems.assert_not_called()
     targets[1]()
     controller.stems.on_frame_render()
     audio_engine_mock.publish_prepared_stems.assert_called_once_with(
-        0, original_version, cache_dir_for_sample_id(0), current_ticket
+        0, original_version, _published_cache_dir(controller), current_ticket
     )
-    assert not stem_backend.requests[1].cache_dir.exists()
+    assert not stem_backend.requests[0].cache_dir.exists()
 
 
 def test_obsolete_worker_cannot_overwrite_current_canonical_stems(
@@ -532,7 +541,7 @@ def test_obsolete_worker_cannot_overwrite_current_canonical_stems(
     targets[1]()
     controller.stems.on_frame_render()
     current_files = {
-        kind: (tmp_path / cache_dir_for_sample_id(0) / f"{kind}.wav").read_bytes()
+        kind: (tmp_path / _published_cache_dir(controller) / f"{kind}.wav").read_bytes()
         for kind in STEM_KINDS
     }
 
@@ -541,8 +550,11 @@ def test_obsolete_worker_cannot_overwrite_current_canonical_stems(
     controller.stems.on_frame_render()
 
     for kind, expected in current_files.items():
-        assert (tmp_path / cache_dir_for_sample_id(0) / f"{kind}.wav").read_bytes() == expected
-    assert not stem_backend.requests[1].cache_dir.exists()
+        assert (
+            tmp_path / _published_cache_dir(controller) / f"{kind}.wav"
+        ).read_bytes() == expected
+    assert len(stem_backend.requests) == 1
+    assert not stem_backend.requests[0].cache_dir.exists()
     assert audio_engine_mock.publish_prepared_stems.call_count == 1
 
 
@@ -683,7 +695,7 @@ def test_restored_cache_uses_fresh_native_ticket_for_loaded_source(
     version = source_version_for_sample_path("samples/loop.wav")
     audio_engine_mock.capture_prepared_source.assert_called_once_with(0, version)
     audio_engine_mock.publish_prepared_stems.assert_called_once_with(
-        0, version, cache_dir_for_sample_id(0), restored_ticket
+        0, version, _published_cache_dir(controller), restored_ticket
     )
 
 
@@ -736,7 +748,7 @@ def test_restore_requires_complete_set_marker(
     assert controller.stems.generate_stems_async(0) is True
     controller.stems.on_frame_render()
     audio_engine_mock.publish_prepared_stems.reset_mock()
-    (tmp_path / cache_dir_for_sample_id(0) / ".complete.json").unlink()
+    (tmp_path / _published_cache_dir(controller) / ".complete.json").unlink()
 
     controller.stems.restore_stem_cache_from_project_state()
     assert controller.stems.publish_restored_stem_cache_if_available(0) is True
@@ -754,7 +766,7 @@ def test_restore_rejects_changed_stem_bytes_despite_complete_file_set(
     assert controller.stems.generate_stems_async(0) is True
     controller.stems.on_frame_render()
     audio_engine_mock.publish_prepared_stems.reset_mock()
-    vocals = tmp_path / cache_dir_for_sample_id(0) / "vocals.wav"
+    vocals = tmp_path / _published_cache_dir(controller) / "vocals.wav"
     original = vocals.read_bytes()
     vocals.write_bytes(original[:-2] + b"\x00\x00")
 
@@ -778,15 +790,19 @@ def test_interrupted_promotion_cannot_restore_mixed_generation(
     assert controller.stems.generate_stems_async(0) is True
     controller.stems.on_frame_render()
     audio_engine_mock.publish_prepared_stems.reset_mock()
-    original_replace = Path.replace
+    previous_cache_dir = _published_cache_dir(controller)
+    previous_files = {
+        kind: (tmp_path / previous_cache_dir / f"{kind}.wav").read_bytes() for kind in STEM_KINDS
+    }
+    original_rename = Path.rename
 
     def fail_after_first_artifact(source: Path, target: Path) -> Path:
-        if source.name == "drums.wav" and source.parent.name.startswith(".generation-"):
+        if source.name.startswith(".generation-"):
             msg = "interrupted artifact promotion"
             raise OSError(msg)
-        return original_replace(source, target)
+        return original_rename(source, target)
 
-    monkeypatch.setattr(Path, "replace", fail_after_first_artifact)
+    monkeypatch.setattr(Path, "rename", fail_after_first_artifact)
     stem_backend.sample_value = -1024
     assert controller.stems.generate_stems_async(0) is True
 
@@ -797,9 +813,12 @@ def test_interrupted_promotion_cannot_restore_mixed_generation(
     assert not (tmp_path / cache_dir_for_sample_id(0) / ".complete.json").exists()
     entry = controller.project.stem_cache[0]
     assert entry is not None
-    assert entry.available is False
+    assert entry.available is True
+    assert entry.cache_dir == previous_cache_dir
     assert "interrupted artifact promotion" in controller.session.stem_generation_errors[0]
-    audio_engine_mock.publish_prepared_stems.assert_not_called()
+    assert audio_engine_mock.publish_prepared_stems.call_args.args[2] == previous_cache_dir
+    for kind, previous in previous_files.items():
+        assert (tmp_path / previous_cache_dir / f"{kind}.wav").read_bytes() == previous
 
 
 def test_restore_invalidates_legacy_stat_identity_without_promoting_timing(
@@ -878,7 +897,7 @@ def test_invalidate_stem_cache_clears_cache_and_generation_state(
     assert controller.session.pad_stem_mask_display_mode[0] == "all"
 
 
-def test_delete_stems_removes_pad_cache_and_resets_mix_state(
+def test_delete_stems_defers_declared_files_and_resets_mix_state(
     controller: AppController,
     audio_engine_mock: Mock,
     tmp_path: Path,
@@ -904,7 +923,11 @@ def test_delete_stems_removes_pad_cache_and_resets_mix_state(
     deleted = controller.stems.delete_stems(0)
 
     assert deleted is True
-    assert not stems_dir.exists()
+    assert stems_dir.exists()
+    for kind in STEM_KINDS:
+        audio_engine_mock.retire_project_asset.assert_any_call(
+            str(stems_dir / f"{kind}.wav"), recursive=False
+        )
     assert controller.project.stem_cache[0] is None
     assert controller.project.pad_stem_mix_mode[0] == "full_mix"
     assert controller.stems.has_stem_cache(0) is False

@@ -31,6 +31,25 @@ struct LoadingGuard {
     loading: Arc<Mutex<HashSet<usize>>>,
 }
 
+/// Any outcome without metadata Success is an orphan assignment. Its files can
+/// retire only after the registry's queued/bank/voice/job PCM readers disappear.
+struct PublicationLease {
+    lease: CommittedColdLease,
+    adopted: bool,
+    assets: Arc<super::project_assets::ProjectAssets>,
+    _pcm: Arc<[f32]>,
+}
+
+impl Drop for PublicationLease {
+    fn drop(&mut self) {
+        if !self.adopted {
+            self.assets.orphan_cold(&self.lease);
+            self.lease.rollback_unadopted_original();
+            self.lease.rollback_unadopted_cache();
+        }
+    }
+}
+
 impl Drop for LoadingGuard {
     fn drop(&mut self) {
         if self.slots[self.id]
@@ -69,6 +88,10 @@ struct ColdLoad {
     digests: Arc<Mutex<Vec<Option<String>>>>,
     leases: Arc<Mutex<Vec<Option<CommittedColdLease>>>>,
     lease_generations: Arc<Vec<AtomicU64>>,
+    pcm_history: Arc<super::project_assets::PcmHistory>,
+    assets: Arc<super::project_assets::ProjectAssets>,
+    engine_asset_owner: Arc<()>,
+    _source_pin: Option<super::project_assets::ProjectAssetLease>,
     ownership: Arc<InputRuntimeOwnership>,
     cancelled: Arc<AtomicBool>,
     events: Sender<LoaderEvent>,
@@ -148,6 +171,15 @@ pub(super) fn admit_for_format(
         .lock()
         .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?[id]
         .clone();
+    let source_pin = if samples_root.exists() {
+        super::project_assets::owned_path(&samples_root, &PathBuf::from(&path))
+            .ok()
+            .map(|(_, owned)| engine.project_assets.acquire_pin(&samples_root, &owned))
+            .transpose()
+            .map_err(|error| PyValueError::new_err(error.to_string()))?
+    } else {
+        None
+    };
     let work = ColdLoad {
         id,
         request_id,
@@ -170,6 +202,10 @@ pub(super) fn admit_for_format(
         digests: engine.loaded_source_digests.clone(),
         leases: engine.cold_leases.clone(),
         lease_generations: engine.cold_lease_generations.clone(),
+        pcm_history: engine.cold_pcm_history.clone(),
+        assets: engine.project_assets.clone(),
+        engine_asset_owner: engine.project_asset_engine_owner.clone(),
+        _source_pin: source_pin,
         ownership: engine.input_runtime_ownership.clone(),
         cancelled: engine.cold_cancelled.clone(),
         events: engine.loader_tx.clone(),
@@ -313,6 +349,11 @@ impl ColdLoad {
         let mut transaction =
             ColdTransaction::capture(&self.samples_root, &self.path, !restore, &cancelled)
                 .map_err(|error| error.to_string())?;
+        // Each request keeps its own cancellation/ACK guard. Only full-content
+        // preparation is serialized for the same digest/device interpretation.
+        let _preparation = transaction
+            .preparation_gate(self.output_rate, self.output_channels, &cancelled)
+            .map_err(|error| error.to_string())?;
         let mut progress = ProgressReporter::new(self.id, self.request_id, self.events.clone());
         let mut report = |update: SampleLoadProgress| {
             let stage = match update.subtask {
@@ -327,45 +368,95 @@ impl ColdLoad {
                 update.percent <= 0.0 || update.percent >= 1.0,
             );
         };
-        let decoded = decode_audio_snapshot(
-            transaction
-                .snapshot_file()
-                .map_err(|error| error.to_string())?,
-            &self.path,
-            self.output_rate,
-            PCM_LIMIT_BYTES,
-            &cancelled,
-            &mut report,
-        )
-        .map_err(|error| error.to_string())?;
-        let (sample, transform) = prepare_playback(
-            &decoded,
-            self.output_channels,
-            self.output_rate,
-            PCM_LIMIT_BYTES,
-            &cancelled,
-            &mut report,
-        )
-        .map_err(|error| error.to_string())?;
-        transaction
-            .write_pcm_artifacts(
-                PcmArtifactInput {
-                    samples: &decoded.samples,
-                    rate_hz: decoded.rate_hz,
-                    channels: decoded.channels,
-                    provenance: decoded.decoder.to_json(),
-                },
-                PcmArtifactInput {
-                    samples: &sample.samples,
-                    rate_hz: self.output_rate,
-                    channels: sample.channels,
-                    provenance: serde_json::json!({"processing":"full-buffer-playback-v1"}),
-                },
-                transform.to_json(),
+        let mut sample = if let Some(sample) = transaction
+            .try_reuse(
+                self.output_rate,
+                self.output_channels,
+                PCM_LIMIT_BYTES,
                 &cancelled,
             )
+            .map_err(|error| error.to_string())?
+        {
+            sample
+        } else {
+            let decoded = decode_audio_snapshot(
+                transaction
+                    .snapshot_file()
+                    .map_err(|error| error.to_string())?,
+                &self.path,
+                self.output_rate,
+                PCM_LIMIT_BYTES,
+                &cancelled,
+                &mut report,
+            )
             .map_err(|error| error.to_string())?;
-        drop(decoded);
+            let (sample, transform) = prepare_playback(
+                &decoded,
+                self.output_channels,
+                self.output_rate,
+                PCM_LIMIT_BYTES,
+                &cancelled,
+                &mut report,
+            )
+            .map_err(|error| error.to_string())?;
+            transaction
+                .write_pcm_artifacts(
+                    PcmArtifactInput {
+                        samples: &decoded.samples,
+                        rate_hz: decoded.rate_hz,
+                        channels: decoded.channels,
+                        provenance: decoded.decoder.to_json(),
+                    },
+                    PcmArtifactInput {
+                        samples: &sample.samples,
+                        rate_hz: self.output_rate,
+                        channels: sample.channels,
+                        provenance: serde_json::json!({"processing":"full-buffer-playback-v1"}),
+                    },
+                    transform.to_json(),
+                    &cancelled,
+                )
+                .map_err(|error| error.to_string())?;
+            drop(decoded);
+            sample
+        };
+        // Existing same-pad CURRENT/history/stem/voice authority uses Arc identity.
+        // Share complete PCM between distinct pads, but never re-use that identity
+        // for a new assignment while any previous generation is still pinned.
+        {
+            let mut history = self
+                .pcm_history
+                .lock()
+                .map_err(|_| "PCM history lock poisoned")?;
+            history[self.id].retain(|reader| reader.strong_count() > 0);
+            if history[self.id].len() >= 128 {
+                return Err("same-pad source reader history full (128 live assignments)".into());
+            }
+            let reused_assignment = same_source(self.initial_source.as_ref(), Some(&sample))
+                || history[self.id]
+                    .iter()
+                    .filter_map(std::sync::Weak::upgrade)
+                    .any(|reader| Arc::ptr_eq(&reader, &sample.samples));
+            if reused_assignment {
+                let overlap = sample
+                    .samples
+                    .len()
+                    .checked_mul(8)
+                    .ok_or("assignment PCM extent overflow")?;
+                if overlap > PCM_LIMIT_BYTES {
+                    return Err("same-pad warm assignment exceeds transient PCM byte limit".into());
+                }
+                sample.samples = Arc::from(sample.samples.as_ref());
+                transaction.record_assignment_copy((overlap / 2) as u64);
+            }
+            history[self.id].push(Arc::downgrade(&sample.samples));
+        }
+        let resampling_required = transaction
+            .playback_transform()
+            .map_err(|error| error.to_string())?["source_rate_hz"]
+            .as_u64()
+            .ok_or("missing prepared source rate")?
+            != u64::from(self.output_rate);
         let detected =
             super::initial_loop_start::detect_initial_loop_start(&sample, self.output_rate);
         let analysis = if self.run_analysis {
@@ -380,13 +471,7 @@ impl ColdLoad {
             if cancelled() {
                 return Err("cold load cancelled".into());
             }
-            progress.emit(
-                LoadProgressStage::Analyzing,
-                0.0,
-                self.output_rate
-                    != transform.to_json()["source_rate_hz"].as_u64().unwrap_or(0) as u32,
-                true,
-            );
+            progress.emit(LoadProgressStage::Analyzing, 0.0, resampling_required, true);
             let result = analyze_sample(&sample, self.output_rate)?;
             if cancelled() {
                 return Err("cold load cancelled".into());
@@ -398,12 +483,13 @@ impl ColdLoad {
         progress.emit(
             LoadProgressStage::Publishing,
             0.0,
-            transform.to_json()["source_rate_hz"] != transform.to_json()["output_rate_hz"],
+            resampling_required,
             true,
         );
         transaction
             .commit(&cancelled)
             .map_err(|error| error.to_string())?;
+        transaction.bind_pcm(&sample.samples);
         Ok((transaction, sample, analysis, detected))
     }
 
@@ -477,7 +563,9 @@ impl ColdLoad {
             .digests
             .lock()
             .map_err(|_| "source digest lock poisoned")?;
-        if same_source(cache[self.id].as_ref(), Some(prepared)) {
+        if generations[self.id] == (self.request_id, self.output_rate)
+            && same_source(cache[self.id].as_ref(), Some(prepared))
+        {
             cache[self.id] = self.initial_source.clone();
             generations[self.id] = previous_generation;
             digests[self.id] = previous_digest;
@@ -501,6 +589,24 @@ impl ColdLoad {
 
     fn publish(&self, producer: &Arc<Mutex<Producer<ControlMessage>>>) -> Result<(), String> {
         let (transaction, sample, analysis, detected_loop_start_s) = self.prepare()?;
+        let source_digest = transaction.source_digest().to_owned();
+        let lease = transaction.into_lease();
+        lease.bind_pcm(&sample.samples);
+        // Register before enqueue. Ordinary pre-ACK rejection still leaves a
+        // queued PCM owner; file cleanup must follow that actual reader lifetime.
+        let mut publication = PublicationLease {
+            lease: lease.clone(),
+            adopted: false,
+            assets: self.assets.clone(),
+            _pcm: sample.samples.clone(),
+        };
+        self.assets
+            .retain_cold(
+                lease.clone(),
+                &sample,
+                Arc::downgrade(&self.engine_asset_owner),
+            )
+            .map_err(|error| error.to_string())?;
         let requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
         if self.cancelled.load(Ordering::Acquire)
             || requests[self.id] != self.request_id
@@ -533,10 +639,13 @@ impl ColdLoad {
         let previous_digest = digests[self.id].clone();
         let previous_intent = intents[self.id];
         let enqueue_epoch = self.epoch.load(Ordering::Acquire);
-        let cached_path = transaction
-            .original_path()
-            .strip_prefix(self.samples_root.parent().ok_or("samples parent missing")?)
-            .unwrap_or(transaction.original_path())
+        let project_root =
+            std::fs::canonicalize(self.samples_root.parent().ok_or("samples parent missing")?)
+                .map_err(|error| error.to_string())?;
+        let cached_path = lease
+            .original_path
+            .strip_prefix(&project_root)
+            .map_err(|_| "project original escaped verified project root")?
             .to_string_lossy()
             .replace('\\', "/");
         let duration_s =
@@ -552,7 +661,7 @@ impl ColdLoad {
                 rate: self.output_rate,
                 generation_slot: &mut generations[self.id],
                 digest_slot: &mut digests[self.id],
-                digest: transaction.source_digest().to_owned(),
+                digest: source_digest,
                 cold: true,
                 cold_epoch: self.guard_epoch.then(|| self.epoch.clone()),
                 cold_adoption: Some(self.adoption.clone()),
@@ -568,13 +677,19 @@ impl ColdLoad {
         drop(requests);
         if let Err((error, may_be_adopted)) = self.await_adoption() {
             if may_be_adopted {
-                let lease = transaction.into_lease();
+                lease.rollback_unadopted_original();
                 let _requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
                 let cache = self
                     .cache
                     .lock()
                     .map_err(|_| "sample cache lock poisoned")?;
-                if same_source(cache[self.id].as_ref(), Some(&sample)) {
+                let generations = self
+                    .generations
+                    .lock()
+                    .map_err(|_| "source generation lock poisoned")?;
+                if generations[self.id] == (self.request_id, self.output_rate)
+                    && same_source(cache[self.id].as_ref(), Some(&sample))
+                {
                     self.ownership.revoke_source(self.id);
                     self.leases.lock().map_err(|_| "cold lease lock poisoned")?[self.id] =
                         Some(lease);
@@ -582,6 +697,8 @@ impl ColdLoad {
                 }
                 return Err(error);
             }
+            lease.rollback_unadopted_original();
+            lease.rollback_unadopted_cache();
             self.rollback_pending(
                 &sample,
                 previous_generation,
@@ -591,30 +708,39 @@ impl ColdLoad {
             )?;
             return Err(error);
         }
-        // ACK makes files durable even if a newer request wins before metadata delivery.
-        let lease = transaction.into_lease();
+        // ACK retains native readers even if a newer request wins before metadata delivery.
         let requests = self.requests.lock().map_err(|_| "request lock poisoned")?;
         let cache = self
             .cache
             .lock()
             .map_err(|_| "sample cache lock poisoned")?;
+        let generations = self
+            .generations
+            .lock()
+            .map_err(|_| "source generation lock poisoned")?;
         if requests[self.id] != self.request_id
+            || generations[self.id] != (self.request_id, self.output_rate)
             || !same_source(cache[self.id].as_ref(), Some(&sample))
         {
+            lease.rollback_unadopted_original();
+            lease.rollback_unadopted_cache();
             return Err("adopted cold source superseded".into());
         }
         // Only callback ACK transfers sealed original/artifact ownership and project metadata.
         self.leases.lock().map_err(|_| "cold lease lock poisoned")?[self.id] = Some(lease);
         self.lease_generations[self.id].store(self.request_id, Ordering::Release);
-        let _ = self.events.send(LoaderEvent::Success {
-            timing_epoch: Some(enqueue_epoch),
-            id: self.id,
-            request_id: self.request_id,
-            duration_s,
-            detected_loop_start_s,
-            cached_path,
-            analysis,
-        });
+        self.events
+            .send(LoaderEvent::Success {
+                timing_epoch: Some(enqueue_epoch),
+                id: self.id,
+                request_id: self.request_id,
+                duration_s,
+                detected_loop_start_s,
+                cached_path,
+                analysis,
+            })
+            .map_err(|_| "native adoption metadata receiver closed")?;
+        publication.adopted = true;
         Ok(())
     }
 }

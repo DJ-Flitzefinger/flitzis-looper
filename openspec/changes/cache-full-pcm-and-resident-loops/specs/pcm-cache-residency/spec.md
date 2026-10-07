@@ -63,6 +63,18 @@ CPU cost SHALL be accounted for in warm and save measurements.
 - **THEN** it is not treated as ready or reused
 - **AND** regeneration cannot expose a partially written artifact
 
+#### Scenario: Warm reuse preserves actual decoder and device domains
+- **WHEN** a fresh lease requests an existing complete cache for a device format
+- **THEN** the complete original, decoder and playback bytes and canonical manifest are verified
+- **AND** only the current decoder/processing policy and requested playback rate/channels can authorize reuse
+- **AND** an incompatible candidate is regenerated without overwriting any reader-owned generation
+
+#### Scenario: Two subscribers prepare identical content
+- **WHEN** two admitted requests have identical stable source content and compatible transforms
+- **THEN** preparation shares the compatible digest artifact under serialized admission
+- **AND** each subscriber retains its own original assignment and native request/intent/ACK guards
+- **AND** cancellation of one subscriber does not cancel or retire the other's preparation or files
+
 ### Requirement: Bounded preparation and guarded publication
 The system SHALL bound admission, queue size, worker concurrency and transient
 PCM bytes for copy/decode/validation/resampling/window preparation.
@@ -193,6 +205,48 @@ be deleted.
 - **WHEN** the first pad unloads while the second pad or a voice/job retains a reader
 - **THEN** the shared PCM and required project original remain available
 - **AND** final deletion occurs only after the last owner and reader safely retire
+
+#### Scenario: One exact-original assignment survives another pad unload and shutdown
+- **WHEN** one pad unloads while another saved project assignment retains the same exact original path and the engine later shuts down normally
+- **THEN** removal of the first token does not schedule path retirement and the surviving saved original/cache remain durable after shutdown
+- **AND** a stale delivered Success for that still-assigned path cannot schedule its deletion
+- **AND** explicit removal of the final project assignment still requests safe last-reader cleanup
+
+#### Scenario: Fresh-process warm publication fails for a saved original
+- **WHEN** a saved original has a surviving assignment and a fresh process validates its preexisting complete cache but publication fails
+- **THEN** rollback revokes only the failed attempt and cannot acquire deletion rights over that preexisting cache
+- **AND** a bounded descriptor without dead PCM backing preserves the validated original-to-cache relation for later explicit last-owner cleanup
+- **AND** an already retired descriptor cannot replace a valid durable assignment ID
+
+#### Scenario: Native ownership outlives control assignment
+- **WHEN** unload, replacement or shutdown releases a control assignment while a queued handle, job, native history or pinned voice still owns its source
+- **THEN** its verified immutable files remain retained until that final reader retires off-thread
+- **AND** a claimed but unconfirmed adoption is reconciled without reporting Success or rolling back possibly effective audio
+
+#### Scenario: Repeated restore and ordinary shutdown retain bounded saved ownership
+- **WHEN** saved originals sharing a cache repeatedly restore and shut down without explicit unload
+- **THEN** bounded file-only descriptors preserve their durable cache relation without retaining dead PCM backing storage
+- **AND** explicit last-owner retirement can still remove the cache without unreachable assignment IDs
+
+#### Scenario: Saved assignment reacquires before a deferred retirement retries
+- **WHEN** retirement admission was deferred and the same saved assignment acquires ownership again
+- **THEN** its older deferred request is revoked before retry admission
+- **AND** ordinary shutdown preserves the reassigned original and cache
+
+#### Scenario: An old stem generation retires after a newer set exists
+- **WHEN** deferred cleanup of an old generation runs after a newer stem generation is admitted
+- **THEN** only the old exclusively owned generation can be removed
+- **AND** the newer generation and shared pad container remain intact
+
+#### Scenario: Sharing violation defers deletion
+- **WHEN** Windows prevents deletion of a safely retired owned artifact
+- **THEN** bounded off-thread cleanup retries while preserving exclusive admission and ownership checks
+- **AND** active readers, external originals and unknown files remain untouched
+
+#### Scenario: Recovery encounters crash staging
+- **WHEN** cache admission inspects leftover staging
+- **THEN** only recognized exclusively owned unreferenced staging can be reclaimed under the cleanup/admission gate
+- **AND** live process staging, unknown files and private data remain untouched
 
 ### Requirement: Realtime residency boundary
 The system SHALL perform disk access, integrity scans, decoding, resampling, JSON,

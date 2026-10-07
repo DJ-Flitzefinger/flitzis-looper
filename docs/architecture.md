@@ -262,11 +262,13 @@ redefining another pad's phase or the shared transport timeline.
 
 ## Sample Loading
 
-The [PCM cache/residency design](pcm-cache-residency.md) audits the current loader,
-editor, seek, ALL, stem and Key Lock contracts and specifies the proposed C1-C3
-copy-first/full-cache/finite-window work. C0 changes documentation and OpenSpec
-only. Complete playback PCM is still resident today; copy-first snapshot lineage,
-bounded cache workers and last-reader disk cleanup are not yet implemented.
+The [PCM cache/residency design](pcm-cache-residency.md) documents the productive
+copy-first full PCM cache and the separate finite-window C2/C3 work. Complete
+playback PCM remains resident. Two fixed workers and 32 queued reservations
+bound preparation; each worker admits at most 1 GiB transient PCM. Windows sealed
+source capture, full decoder/playback manifests and native adoption ACK establish
+the actual source assignment. Warm reuse must validate complete compatible bytes
+on the same immutable readers; path/stat metadata cannot authorize it.
 
 Supported COMPLETE native QM accepted timing is durably saved in
 `SampleAnalysis.accepted_timing` only through verified current native export.
@@ -279,7 +281,7 @@ records never replay legacy BPM. Automatic is reserved before startup projection
 Manual/Tap/Legacy intent is explicit in `ProjectState.pad_timing_intent` and manual
 overrides suppress historical acceptance. Verification/export and atomic JSON
 writes stay off the callback. See [native timing](native-constant-timing.md) for
-supported schemas and C1 copy-first/ABA limits.
+supported schemas and the separate immutable cache lineage.
 
 Sample loading runs on non-realtime worker threads. The loader reads files,
 decodes audio, derives channel count and sample rate from decoded buffers when
@@ -542,7 +544,9 @@ current native source/authority and acknowledged full accepted timing. G3b2i
 integrates general explicit accepted publication and derived loop/master completion,
 shared with fresh saved adoption. Both native execution and current control intent
 must still agree before Python projects completion.
-Original hash association leaves C1 immutable copy-first/ABA proof open.
+The productive full-mix loader now establishes immutable copy-first lineage;
+historical timing records retain their versioned provenance and still require
+fresh complete evidence verification and native acknowledgement.
 
 Active full-mix/stem mode and enabled-mask changes use bounded Rust-owned
 transition state with a short 128 source-frame crossfade. Both sides read the
@@ -550,11 +554,15 @@ same loop-relative source frame before Key Lock, Gain/Trim, DSP, metering, and
 telemetry. The `I` performance preset means Drums + Melody + Bass; cached
 `instrumental.wav` is cache data, not a fifth live component.
 
-Unload Audio and Delete Stems both route through stem cleanup before a pad is
-considered empty. The cleanup deletes tracked project-local stem artifacts,
-clears durable stem-cache metadata, returns durable stem mode to `full_mix`,
-resets session-only stem masks, and publishes neutral/full-mix state to Rust.
-Rust `UnloadSample` also retires any prepared stem buffers held by the mixer.
+Unload Audio and Delete Stems revoke durable stem-cache eligibility, return
+durable stem mode to `full_mix`, reset session-only masks and publish neutral
+Rust state. Artifact retirement is separate: original assignments, jobs, queued
+handles, native history and pinned voices retain their source until the final
+reader retires off-thread. Shared digest PCM survives another pad's unload.
+Stem cleanup targets one owned generation inside the pad-labelled container;
+it cannot recursively remove a newer set. Windows sharing failures defer cleanup.
+Shutdown retires runtime readers as they drain while preserving saved assets;
+a stopped live engine may retain loaded PCM for restart.
 
 ## Speed, BPM Lock, And Key Lock
 

@@ -2,6 +2,7 @@ from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from flitzis_looper.controller.accepted_publication import AcceptedTimingController
+from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
 from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.controller.metering import MeteringController
 from flitzis_looper.controller.persistence import ProjectPersistence
@@ -39,6 +40,8 @@ class AppController:
 
         self._audio = AudioEngine()
         self._audio.run()
+        self._assets = ProjectAssetLifecycle(self._project, self._audio)
+        self._assets.sync_assignments()
         self._persistence.bind_audio(self._audio, self._report_timing_save_error)
 
         self.settings = SettingsController(
@@ -62,6 +65,7 @@ class AppController:
             on_project_changed=self._persistence.mark_dirty,
             stem_backend=stem_backend,
             stem_task_runner=stem_task_runner,
+            asset_lifecycle=self._assets,
         )
         self.loader = LoaderController(
             self._project,
@@ -75,6 +79,7 @@ class AppController:
             on_stem_generation_error=self.stems._handle_stem_generation_error,
             on_stems_deleted=self.stems.delete_stems,
         )
+        self.loader.bind_asset_lifecycle(self._assets)
         self.loader.set_stems_invalidated_callback(self.stems.invalidate_stem_cache)
         self.loader.set_restored_sample_loaded_callback(
             self.stems.publish_restored_stem_cache_if_available
@@ -107,10 +112,12 @@ class AppController:
     def shut_down(self) -> None:
         self.accepted_timing.shut_down()
         self.loader.shut_down()
+        self.stems.shut_down()
         with suppress(OSError):
             self._persistence.flush()
 
         self._audio.stop_all()
+        self._assets.release_saved_assignments()
         self._audio.shut_down()
 
     def _report_timing_save_error(self, sample_id: int, message: str) -> None:

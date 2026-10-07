@@ -66,8 +66,10 @@ mod prepared_native_history;
 pub(crate) mod prepared_source;
 mod productive_source_history;
 mod progress;
+mod project_assets;
 pub use prepared_source::PreparedSourceTicket;
 use prepared_source::{enqueue_current_prepared_stems, next_epoch, validate_prepared_ticket};
+pub use project_assets::ProjectAssetLease;
 pub(crate) mod rubberband_backend;
 mod sample_loader;
 mod scalar_grid;
@@ -543,6 +545,9 @@ pub struct AudioEngine {
     cold_loading: Arc<Vec<AtomicU64>>,
     cold_leases: Arc<Mutex<Vec<Option<cold_store::CommittedColdLease>>>>,
     cold_lease_generations: Arc<Vec<AtomicU64>>,
+    cold_pcm_history: Arc<project_assets::PcmHistory>,
+    project_assets: Arc<project_assets::ProjectAssets>,
+    project_asset_engine_owner: Arc<()>,
     input_runtime: Option<InputRuntime>,
     input_clock: InputClock,
 }
@@ -553,6 +558,11 @@ impl AudioEngine {
     #[new]
     pub fn new() -> PyResult<Self> {
         let (loader_tx, loader_rx) = std::sync::mpsc::channel();
+        let project_assets = project_assets::ProjectAssets::shared();
+        let cold_pcm_history = Arc::new(Mutex::new((0..NUM_SAMPLES).map(|_| Vec::new()).collect()));
+        project_assets
+            .watch_history(Arc::downgrade(&cold_pcm_history))
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
 
         Ok(AudioEngine {
             stream_handle: None,
@@ -587,6 +597,9 @@ impl AudioEngine {
             cold_loading: Arc::new((0..NUM_SAMPLES).map(|_| AtomicU64::new(0)).collect()),
             cold_leases: Arc::new(Mutex::new((0..NUM_SAMPLES).map(|_| None).collect())),
             cold_lease_generations: Arc::new((0..NUM_SAMPLES).map(|_| AtomicU64::new(0)).collect()),
+            cold_pcm_history,
+            project_assets,
+            project_asset_engine_owner: Arc::new(()),
             input_runtime: None,
             input_clock: InputClock::new(),
         })
@@ -780,6 +793,10 @@ impl AudioEngine {
         self.offline_jobs.cancel(None);
         self.input_runtime = None;
         self.stream_handle = None;
+        // Pending metadata without a durable Python assignment becomes orphaned
+        // at shutdown. Actual PCM readers and assignment/job tokens still protect
+        // its bytes; the stopped engine object need not be destroyed to reconcile.
+        self.project_asset_engine_owner = Arc::new(());
         self.loop_acceptance.reset();
         self.current_timing_acknowledgements.clear_all();
         for records in self
@@ -957,7 +974,60 @@ impl AudioEngine {
             .cold_leases
             .lock()
             .map_err(|_| PyRuntimeError::new_err("cold lease lock poisoned"))?;
-        leases[id].as_ref().map(|lease| serde_json::to_string(&serde_json::json!({"identity":lease.manifest.identity,"decoder_identity":lease.manifest.decoder_identity,"descriptor":lease.manifest.descriptor,"cache_path":lease.cache_path,"original_path":lease.original_path})).map_err(|error| PyRuntimeError::new_err(error.to_string()))).transpose()
+        leases[id].as_ref().map(|lease| serde_json::to_string(&serde_json::json!({"identity":lease.manifest.identity,"decoder_identity":lease.manifest.decoder_identity,"descriptor":lease.manifest.descriptor,"cache_path":lease.cache_path,"original_path":lease.original_path,"integrity":{
+            "warm":lease.integrity.warm,
+            "source_copied_bytes":lease.integrity.source_copied_bytes,
+            "snapshot_verify_bytes":lease.integrity.snapshot_verify_bytes,
+            "original_copied_bytes":lease.integrity.original_copied_bytes,
+            "original_verify_bytes":lease.integrity.original_verify_bytes,
+            "decoder_verify_bytes":lease.integrity.decoder_verify_bytes,
+            "playback_verify_bytes":lease.integrity.playback_verify_bytes,
+            "manifest_verify_bytes":lease.integrity.manifest_verify_bytes,
+            "playback_read_bytes":lease.integrity.playback_read_bytes,
+            "assignment_copy_bytes":lease.integrity.assignment_copy_bytes,
+            "warm_validation_wall_nanos":lease.integrity.wall_nanos,
+            "warm_validation_cpu_nanos":lease.integrity.cpu_nanos,
+        }})).map_err(|error| PyRuntimeError::new_err(error.to_string()))).transpose()
+    }
+
+    /// Pin an owned project original or exact stem generation for assignment/job use.
+    pub fn acquire_project_asset_lease(&self, path: String) -> PyResult<ProjectAssetLease> {
+        self.project_assets
+            .acquire(&self.project_assets_root()?, std::path::Path::new(&path))
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    #[pyo3(signature = (path, recursive=false))]
+    pub fn retire_project_asset(&self, path: String, recursive: bool) -> PyResult<()> {
+        self.project_assets
+            .retire(
+                &self.project_assets_root()?,
+                std::path::Path::new(&path),
+                recursive,
+            )
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    /// Pending targets, retained native records, successful deletions, terminal errors.
+    pub fn project_asset_cleanup_status(&self) -> PyResult<(usize, usize, u64, Vec<String>)> {
+        let (pending, readers, deleted, mut errors) = self
+            .project_assets
+            .status()
+            .map_err(PyRuntimeError::new_err)?;
+        let (cache_pending, cache_deleted, cache_errors) = cold_store::cleanup_status()
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        errors.extend(cache_errors);
+        Ok((
+            pending.saturating_add(cache_pending),
+            readers,
+            deleted.saturating_add(cache_deleted),
+            errors,
+        ))
+    }
+
+    /// Reserved cold-store cleanup slots and their finite admission capacity.
+    pub fn project_asset_cleanup_admission_status(&self) -> (usize, usize) {
+        cold_store::cleanup_admission_status()
     }
 
     /// Pin loaded PCM for the optional diagnostic adapter (not the default analyzer).
@@ -1399,6 +1469,9 @@ impl AudioEngine {
         .map_err(PyValueError::new_err)?;
         drop(requests);
 
+        // Preparation owns the exact generation while disk reads run detached.
+        // Successful registration below transfers protection to PCM readers.
+        let generation_lease = self.acquire_project_asset_lease(cache_dir.clone())?;
         let mut stems = py
             .detach(|| {
                 prepare_stem_buffers_from_cache(
@@ -1411,15 +1484,25 @@ impl AudioEngine {
             .map_err(PyValueError::new_err)?;
         stems.publication = source_ticket.publication.clone();
         stems.accepted_timing = source_ticket.publication.accepted_projection();
+        let (_, generation_path) = project_assets::owned_path(
+            &self.project_assets_root()?,
+            std::path::Path::new(&cache_dir),
+        )
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        self.project_assets
+            .retain_stems(generation_path, &stems)
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
 
         // Source mutation, timing publication and enqueue all serialize here.
-        enqueue_current_prepared_stems(
+        let result = enqueue_current_prepared_stems(
             self,
             &handle.producer,
             source_ticket,
             &source_version,
             stems,
-        )
+        );
+        drop(generation_lease);
+        result
     }
 
     /// Select whether a pad renders from the loaded full mix or all prepared stems.

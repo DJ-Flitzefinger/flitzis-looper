@@ -22,7 +22,7 @@ use symphonia::core::{
     audio::SampleBuffer as DecoderBuffer,
     codecs::{CODEC_TYPE_ALAC, CodecParameters, DecoderOptions},
     errors::Error as DecoderError,
-    formats::FormatOptions,
+    formats::{FormatOptions, FormatReader},
     io::MediaSourceStream,
     meta::MetadataOptions,
     probe::Hint,
@@ -223,16 +223,10 @@ fn decoder_dimensions(params: &CodecParameters) -> Result<(usize, usize), Sample
     ))
 }
 
-/// Decode the supplied immutable snapshot handle; never reopen its source path.
-pub(crate) fn decode_audio_snapshot(
+fn probe_snapshot(
     mut file: File,
     hint_path: &Path,
-    output_rate_hz: u32,
-    max_pcm_bytes: usize,
-    cancelled: &impl Fn() -> bool,
-    mut progress: impl FnMut(SampleLoadProgress),
-) -> Result<DecodedAudio, SampleLoadError> {
-    check_cancelled(cancelled)?;
+) -> Result<(Box<dyn FormatReader>, CodecParameters, DecoderDescriptor), SampleLoadError> {
     file.seek(SeekFrom::Start(0))?;
     let mut header = [0_u8; 16];
     let header_length = file.metadata()?.len().min(header.len() as u64) as usize;
@@ -273,14 +267,14 @@ pub(crate) fn decode_audio_snapshot(
         ..Default::default()
     };
     let probed = get_probe().format(&hint, mss, &format_options, &MetadataOptions::default())?;
-    let mut format = probed.format;
+    let format = probed.format;
     let track = format
         .default_track()
         .ok_or(SampleLoadError::NoDefaultTrack)?;
     let track_id = track.id;
     let params = track.codec_params.clone();
-    let (max_packet_frames, max_packet_channels) = decoder_dimensions(&params)?;
-    let mut descriptor = DecoderDescriptor {
+    let (max_packet_frames, _) = decoder_dimensions(&params)?;
+    let descriptor = DecoderDescriptor {
         codec: format!("{:?}", params.codec),
         container,
         default_track_id: track_id,
@@ -296,6 +290,86 @@ pub(crate) fn decode_audio_snapshot(
         silenced_frames: 0,
         skipped_packets: 0,
     };
+    Ok((format, params, descriptor))
+}
+
+/// Warm selection probes the exact immutable original with the executing
+/// decoder library. Packet-result counters are checked separately; all declared
+/// codec/configuration/options/origin/version fields must match this probe.
+pub(crate) fn decoder_cache_selector(
+    file: File,
+    hint_path: &Path,
+) -> Result<Value, SampleLoadError> {
+    Ok(probe_snapshot(file, hint_path)?.2.to_json())
+}
+
+pub(crate) fn playback_cache_transform(
+    source_rate: u32,
+    source_channels: usize,
+    source_frames: usize,
+    output_rate: u32,
+    output_channels: usize,
+    max_pcm_bytes: usize,
+) -> Result<Value, SampleLoadError> {
+    validate_rate_channels(source_rate, source_channels)?;
+    validate_rate_channels(output_rate, output_channels)?;
+    if source_channels != output_channels
+        && !matches!((source_channels, output_channels), (1, 2) | (2, 1))
+    {
+        return Err(SampleLoadError::UnsupportedChannels {
+            file_channels: source_channels,
+            output_channels,
+        });
+    }
+    let output_frames = usize::try_from(
+        (source_frames as u128 * u128::from(output_rate)).div_ceil(u128::from(source_rate)),
+    )
+    .map_err(|_| SampleLoadError::Limit("warm output frame count"))?;
+    let delay_frames = if source_rate == output_rate {
+        0
+    } else {
+        let (input, output) = fft_dimensions(source_rate, output_rate);
+        let workspace = input
+            .checked_add(output)
+            .and_then(|n| n.checked_mul(source_channels))
+            .and_then(|n| n.checked_mul(64 * size_of::<f32>()))
+            .ok_or(SampleLoadError::Limit("warm FFT workspace"))?;
+        check_bytes(workspace, max_pcm_bytes)?;
+        Fft::<f32>::new(
+            source_rate as usize,
+            output_rate as usize,
+            RESAMPLE_CHUNK_FRAMES,
+            1,
+            source_channels,
+            FixedSync::Input,
+        )?
+        .output_delay()
+    };
+    Ok(PlaybackTransform {
+        source_rate,
+        output_rate,
+        source_channels,
+        output_channels,
+        source_frames,
+        output_frames,
+        delay_frames,
+    }
+    .to_json())
+}
+
+/// Decode the supplied immutable snapshot handle; never reopen its source path.
+pub(crate) fn decode_audio_snapshot(
+    file: File,
+    hint_path: &Path,
+    output_rate_hz: u32,
+    max_pcm_bytes: usize,
+    cancelled: &impl Fn() -> bool,
+    mut progress: impl FnMut(SampleLoadProgress),
+) -> Result<DecodedAudio, SampleLoadError> {
+    check_cancelled(cancelled)?;
+    let (mut format, params, mut descriptor) = probe_snapshot(file, hint_path)?;
+    let track_id = descriptor.default_track_id;
+    let (max_packet_frames, max_packet_channels) = decoder_dimensions(&params)?;
     if max_packet_channels > MAX_CHANNELS {
         return Err(SampleLoadError::InvalidInput(
             "decoder declared channels exceed bound",
