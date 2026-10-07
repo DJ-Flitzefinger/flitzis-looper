@@ -258,6 +258,12 @@ redefining another pad's phase or the shared transport timeline.
 
 ## Sample Loading
 
+The [PCM cache/residency design](pcm-cache-residency.md) audits the current loader,
+editor, seek, ALL, stem and Key Lock contracts and specifies the proposed C1-C3
+copy-first/full-cache/finite-window work. C0 changes documentation and OpenSpec
+only. Complete playback PCM is still resident today; copy-first snapshot lineage,
+bounded cache workers and last-reader disk cleanup are not yet implemented.
+
 Supported COMPLETE native QM accepted timing is durably saved in
 `SampleAnalysis.accepted_timing` only through verified current native export.
 Historical evidence and exact canonical identity/binary64 values remain separate

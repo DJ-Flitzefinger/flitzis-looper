@@ -31,6 +31,7 @@ For focused areas:
 | File | Purpose |
 | --- | --- |
 | `architecture.md` | Current Rust/Python runtime architecture and ownership boundaries. |
+| `pcm-cache-residency.md` | C0 audited design for copy-first originals, complete versioned PCM, finite loop residency, readiness, reader lifecycle and C1-C3 proofs; not implemented yet. |
 | `development.md` | Setup, validation, OpenSpec workflow, package layout, and generated-file notes. |
 | `ui-toolkit.md` | Project-specific Dear ImGui design and state-flow rules. |
 | `stem-generation-setup.md` | External requirements for offline Demucs stem generation. |
