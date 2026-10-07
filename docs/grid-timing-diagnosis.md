@@ -113,6 +113,11 @@ not the source positions of grid lines.
   not remove that discrepancy. No rendered-DSP or acoustic onset measurement
   was collected for this risk; it is not the cause of the static screenshot.
 
+The subsequent [G3c loop-period proof](loop-period-proof.md) measures this separate
+productive dry-render risk with actual current accepted ownership. Its failed
+fractional musical-period gate is retained explicitly; grid diagnostics and
+correct integer physical rendering cannot certify sustained musical looping.
+
 The existing source/output-clock separation, actual-hop correction, activity
 anchor and resampler-tail repair remain justified. These findings do not
 support reverting them or blaming the source audio.

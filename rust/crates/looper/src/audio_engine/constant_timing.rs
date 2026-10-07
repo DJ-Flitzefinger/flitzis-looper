@@ -1086,3 +1086,11 @@ pub(super) fn publish_legacy_origin(
 #[cfg(test)]
 #[path = "constant_timing_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "musical_loop_proof_tests.rs"]
+mod musical_loop_proof_tests;
+
+#[cfg(test)]
+#[path = "musical_loop_private_probe.rs"]
+mod musical_loop_private_probe;

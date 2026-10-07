@@ -15,9 +15,14 @@
   acceptance, bounded callback acknowledgement and precise SourceGrid.
 - [x] G3b2b/c (`adopt-native-constant-timing`): current native authority and exact
   native/Python grid, loop, presentation and transport/BPMLOCK period consumers.
-- [ ] G3b remaining: full-revision MIDI metadata, preparation, same-source stems,
+- [x] G3b remaining: full-revision MIDI metadata, preparation, same-source stems,
   productive Key Lock history and source-verified accepted persistence; preserve
   manual/TAP/legacy and complete productive acceptance refresh integration.
 - [ ] G3c: prove musical versus physical loop duration for 75/1000 cycles,
   fractional periods/rates and callback partitions; retain separate rendered
   DSP/onset/device acceptance before any audible sustained-SYNC claim.
+
+G3c1's productive physical-render characterization is tracked in
+`prove-musical-physical-loop-periods`. A fractional musical gate failure does not
+complete G3c: the shared productive correction and its full rendered matrix remain
+G3c2; actual device/listening evidence remains separate.

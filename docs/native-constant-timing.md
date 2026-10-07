@@ -583,6 +583,13 @@ G3c remains separate: musical period versus rounded physical loops over 75/1000
 cycles, nonintegral periods/rates and callback partitions/wrap. Numerical grid
 tests do not pass rendered DSP, onset, device, listening or sustained audible SYNC gates.
 
+G3c1's [loop-period proof](loop-period-proof.md) separately characterizes productive
+dry PCM and threshold features against independent oracles. Integer physical
+wrapping repeats endpoint-rounding error when the intended musical duration is
+fractional. A passing physical oracle is not musical success; the strict musical
+probe and shared trajectory/reader correction remain G3c2, followed by actual
+device and sustained listening evidence.
+
 See [accepted record identity](accepted-constant-timing.md),
 [prepared stem ownership](prepared-stem-publication.md) and
 [source coordinates](scalar-source-coordinates.md).

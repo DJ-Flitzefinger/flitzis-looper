@@ -135,6 +135,11 @@ and one current-bound native loop/master refresh with execution acknowledgement.
 Source/authority/full accepted identity and control ordering guard both values;
 completion polling observes explicit work without owning audio timing. See
 [accepted constant timing](accepted-constant-timing.md) for ownership and limits.
+G3c1 separately characterizes actual dry mixer output and measured discrete PCM
+features under current accepted ownership. The shared SourcePlayback still wraps
+integer physical markers; fractional compatible musical duration can accumulate
+endpoint-rounding error. The [strict musical loop gate](loop-period-proof.md)
+and shared trajectory/reader correction remain incomplete.
 Its shared `analyze_bpm` pipeline owns the legacy ODF/sample-hop conversion for
 both production and comparison fixtures. Private independent B2 input validation
 and sealing live separately in Python's analysis package and do not publish

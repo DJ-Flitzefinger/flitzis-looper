@@ -416,6 +416,30 @@ cmd /c npx @fission-ai/openspec@latest validate <change-id> --strict
 
 Do not use repository docs as a substitute for OpenSpec requirements.
 
+### Hardware-free G3c loop evidence
+
+The accepted-owner physical/rendered characterization is reproducible without
+starting the app or an audio device:
+
+```powershell
+.\scripts\run-rust-tests.ps1 -CargoArgs @('musical_loop_proof_tests')
+```
+
+The separate ignored strict musical-period acceptance probe currently fails.
+Run it explicitly to reproduce the incomplete gate; an ordinary suite's ignored
+count does not pass musical acceptance:
+
+```powershell
+.\scripts\run-rust-tests.ps1 -CargoArgs @('strict_musical_rendered_onset_acceptance_gate', '--', '--ignored')
+```
+
+The private actual-WAV ignored probe requires `FLITZIS_G3C_WAV` pointing to the
+unchanged workspace `test-audio/metronom_120_BPM.wav` and
+`FLITZIS_G3C_OUTPUT_DIR` under workspace `scratch/` or `exports/`. It also requires
+the retained complete G2 gate input (default local path, or
+`FLITZIS_G3C_GATE_INPUT`). Private inputs, JSON evidence and audio snippets are
+never repository fixtures. See [the proof domains and remaining gates](loop-period-proof.md).
+
 ## Python Packages Under `src/`
 
 There are two Python packages by design:
