@@ -382,8 +382,14 @@ def _validate_summary(
     workspace: Path,
     track: ReferenceTrack,
     summary: HistoricalSummary,
+    *,
+    verified_source_bytes: int | None = None,
 ) -> int:
-    source_bytes = _validate_source(workspace, track, summary)
+    source_bytes = (
+        _validate_source(workspace, track, summary)
+        if verified_source_bytes is None
+        else verified_source_bytes
+    )
     export, pcm = summary.export, track.identity.pcm
     if (
         export.sha256,
@@ -464,6 +470,7 @@ def _validate_publications(
     summary: HistoricalSummary,
     *,
     retained: bool,
+    metadata_type: type[NativeMetadata] = NativeMetadata,
 ) -> None:
     envelope_name = "result-envelope.raw.json" if retained else "result-envelope.json"
     result = decode_result(raw[envelope_name].decode("utf-8"), request)
@@ -493,7 +500,7 @@ def _validate_publications(
     if event_result.key != result.key:
         fail("candidate_completion_key_mismatch")
     if retained:
-        _validate_retained_publication(raw, request, summary, result, wire)
+        _validate_retained_publication(raw, request, summary, result, wire, metadata_type)
 
 
 def _validate_retained_publication(
@@ -502,6 +509,7 @@ def _validate_retained_publication(
     summary: HistoricalSummary,
     result: PublishedAnalysisResult,
     wire: str,
+    metadata_type: type[NativeMetadata],
 ) -> None:
     finish = decode_result(raw["native-finish-input.raw.json"].decode("utf-8"), request)
     completion = decode_result(raw["completion-event-0.raw.json"].decode("utf-8"), request)
@@ -523,11 +531,14 @@ def _validate_retained_publication(
     )
     if export != summary.export:
         fail("candidate_retained_native_export_mismatch")
-    _validate_observations(raw["native-observations.json"], request, summary)
+    _validate_observations(raw["native-observations.json"], request, summary, metadata_type)
 
 
 def _validate_observations(
-    raw: bytes, request: BeatWorkerRequest, summary: HistoricalSummary
+    raw: bytes,
+    request: BeatWorkerRequest,
+    summary: HistoricalSummary,
+    metadata_type: type[NativeMetadata] = NativeMetadata,
 ) -> None:
     observations = json.loads(raw)
     if not isinstance(observations, list) or not observations:
@@ -536,7 +547,7 @@ def _validate_observations(
     for observation in observations:
         if not isinstance(observation, dict):
             fail("candidate_native_observation_invalid")
-        native = TypeAdapter(NativeMetadata).validate_json(
+        native = TypeAdapter(metadata_type).validate_json(
             json.dumps(observation.get("metadata")), strict=True
         )
         _validate_native(native, request, summary.loaded_shape_rate_channels_frames[1])

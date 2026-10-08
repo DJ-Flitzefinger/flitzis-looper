@@ -282,6 +282,16 @@ self-hashed lineage. Reports SHALL retain every original raw prediction and dist
 missing inputs and original failed attempts. A missing or incomplete input SHALL NOT be
 reported as complete diagnostics or acceptance.
 
+Fresh native imports SHALL use separately approved fixed producer profiles binding actual
+copy-first original bytes, complete finite loaded PCM, cold-source transform and generation,
+finite resident window, complete mono export, actual worker request and frozen CPU model,
+configuration, lock, producer implementation and executing native build identities.
+They SHALL retain the retired export path separately from its retained complete copy,
+require successful native finish and one identity-matched lossless ready-v2 completion,
+and verify bit-exact full raw/component/finish/snapshot/completion arrays and actual retirement.
+An installed extension unused by an embedded native probe SHALL remain a separate identity.
+Historical rejected v1 evidence SHALL remain unchanged and rejected.
+
 Explicit T01/T02 source-path aliases SHALL retain the unchanged frozen manifest and original
 paths, bind actual replacement content by frozen size/SHA-256 and remain private workspace
 artifacts. The workflow SHALL NOT derive labels from candidates, fit offsets, trim extents,
@@ -313,6 +323,14 @@ decisions and blocked adoption, operate outside realtime and leave live state un
 - **WHEN** the workflow produces a private missing-input report
 - **THEN** blocked or incomplete status and missing inputs remain explicit
 - **AND** absent predictions are never fabricated and no musical/default pass is produced
+
+#### Scenario: Fresh hardware-free native lineage replaces a rejected import selection
+- **GIVEN** original complete v1 completion arrays lost bits and remain preserved
+- **WHEN** a separately approved hardware-free cold-source/native-worker/v2 probe retains
+  complete finite PCM and the exact producer, model, request and publication lineage
+- **THEN** only the fresh profile is eligible for reference-first import after all checks pass
+- **AND** neither engineering provenance nor successful inference supplies a reference seal,
+  musical score, human acceptance or analyzer default promotion
 
 ### Requirement: Diagnostic Boundary Precedes Model And Default Activation
 The system SHALL expose the loaded-PCM and real local worker boundary only through explicitly

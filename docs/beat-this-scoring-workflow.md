@@ -38,7 +38,7 @@ uv run --no-sync python -m flitzis_looper.analysis.beat_scoring_cli score --work
 `inventory` validates protocol/inventory bytes and actual full finite listening
 PCM and original sources. It opens no predictions, creates no seal and lists
 all five independent sealed references as unsupplied. `draft` requires a valid
-complete ReferenceSeal before preparing historical selections. `score` first
+complete ReferenceSeal before preparing supported selections. `score` first
 revalidates seal/bundle bytes, inventory, every source and full loaded PCM,
 independence declarations, labels/split and recomputed coverage. Only then does
 it open the plan or candidates. Missing seal/material or plan produces an
@@ -66,14 +66,64 @@ The original temporary export retired; actual independently materialized
 listening PCM must match its complete identity. This records historical lineage
 and does not claim a new request or export.
 
-Actual byte/semantic inspection finds complete bit-exact publication lineage
+Within the historical profiles, complete bit-exact publication lineage passes
 only for T04/T05. T01-T03 raw/component/snapshot arrays agree, but their original
 version-1 completion events changed some binary64 logits during the old native
-JSON roundtrip. Those actual profiles reject with a raw-parity mismatch; they
-need fresh complete native candidate lineage before scoring. Their snapshots
-and failed events remain unchanged. A draft lists import attempts, not certified
-valid candidates. Selecting only T04/T05 can yield partial diagnostics after
-genuine full reference sealing; it cannot close the five-track B2 gate.
+JSON roundtrip. Those historical profiles still reject with a raw-parity mismatch.
+Their snapshots and failed events remain unchanged; the separate fresh profiles
+below provide the corrected engineering lineage. A supported selection does not
+certify musical labels. Selecting only T04/T05 can yield partial diagnostics
+after genuine full reference sealing; it cannot close the five-track B2 gate.
+
+### Fresh fixed native v2 profiles
+
+Fresh T01-T03 profiles have a separate `fresh_native_v2` lineage. The producer is
+an explicitly ignored native test, `b2_fresh_native_candidate_probe`, with a private
+`FLITZIS_B2_NATIVE_CONFIG`. It uses real copy-first cold loading and finite-bank
+command ACK, scans the complete immutable native source through its production
+reader, then runs the existing service, configured CPU worker and actual native
+finish/completion. It opens no stream, app, GUI, audio device or recorder.
+
+The fixed approval registry pins complete producer packets independently of
+candidate-supplied hashes. Imports rehash original and sealed copied source,
+complete finite interleaved PCM, full native mono export and listening PCM,
+cold manifest/transform, config, executing native test binary, producer copies,
+model, installed worker/interpreter, lock and setup identities. Five native
+complete-source metadata fields remain present at every observed stage. The
+finite resident window is separate from full analysis extent and does not crop
+inference. Original paths, explicit aliases, full arrays and all rejected
+historical evidence remain intact.
+
+Only successful native finish, one outer-and-inner identity-matched ready-v2
+completion and exact full raw/component/finish/snapshot/event binary64 parity
+pass. Retirement and a subsequent request preserve the same source generation;
+request advancement never relabels that source. The request keeps its retired
+temporary export path; the retained export is a separate binding. The embedded
+probe executes the native test executable whose complete bytes are separately
+retained and bound. Its separately copied installed PYD is reported with
+`native_extension_used_by_candidate: false`; application suites test their actual
+installed extension separately.
+
+All six actual T01-T03 probes passed: Debug under `probes/debug-v2/` and Release
+under `probes/release/`. The seven retained representations preserve all four
+complete prediction arrays bit-exactly, and actual KeyNet outcomes are ready.
+The first Debug T01 attempt under `probes/debug/` completed native source/PCM
+verification but failed the embedded Python import. Its original producer,
+runtime, source proof and failure log remain retained. The revised producer
+checks its verified repository Python imports before expensive cold preparation
+and uses the repository working directory for the ordinary KeyNet resolver.
+
+The registered Release identifiers are `T01-native-fresh-v2-release`,
+`T02-native-fresh-v2-release` and `T03-native-fresh-v2-release`. The CLI draft
+selects these for T01-T03. Explicit old selections remain available and keep
+their original version-1 parity rejection. Recorded Release `job_wall_seconds`
+are 20.2726, 14.8532 and 18.3885 for T01, T02 and T03 respectively. These probes
+did not measure live-process RSS and establish no resource or timing acceptance.
+
+Reference validation still precedes every plan/candidate read. No probe packet
+or approval registry creates independent annotations, a ReferenceSeal, a musical
+score, resource acceptance, human acceptance or a default switch. Actual fresh
+producer data remains private under `scratch/b2-fresh-lineage-20261008/`.
 
 The existing strict worker and versioned envelope readers validate both final
 versions. Duplicate-safe bounded parsing precedes each reader. Full frontend
@@ -81,8 +131,9 @@ logit counts are checked against complete PCM extent; raw/component/published
 arrays must agree without a removed prefix/tail, downcast, fitted offset or new
 exclusion. Reports preserve all raw positions/logits, identities and lineage
 digests. Original failed attempts remain distinct private evidence. Unapproved
-metadata, worker-only decodes and generic self-hashed claims reject. Fresh native
-and corrected-legacy imports require their own supported provenance contracts.
+metadata, worker-only decodes and generic self-hashed claims reject. The fresh
+native contract above is implemented; corrected-legacy imports still require
+their own supported provenance contract and newly collected actual evidence.
 
 Private JSON remains bounded to 16 MiB; unchanged worker-response, final-envelope
 and array limits apply. Oversize output fails without truncation or overwriting.
@@ -96,7 +147,12 @@ evidence only. Full independent count/meter/bar/critical/split/class/uncertainty
 labels, actual scores/remediation, corrected-legacy evidence and six balanced
 paired human sessions remain open, including absolute caps, 20% operations/time
 and zero-baseline gates. Full selected-backend BPM and representative-region
-policy/evaluation, gated new-analysis cutover, saved/manual/TAP/accepted/cache
+policy/integration/evaluation, gated new-analysis cutover, saved/manual/TAP/accepted/cache
 preservation, unavailable/atomic/freshness/end-to-end tests and setup/rollback
 docs remain open. Human/device hearing and corrections are deferred to the final
 pre-port phase. No temporal score promotes an analyzer default.
+
+The next bounded B2 step is full-sequence selected-backend BPM and
+representative-region policy, integration and evaluation, reusing the existing
+G2/G3 evidence and timing boundaries. The complete B2 acceptance and cutover
+remain open.

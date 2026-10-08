@@ -7,6 +7,9 @@ mod resident_control_worker_tests;
 #[path = "c3_measurement.rs"]
 mod c3_measurement;
 
+#[path = "b2_native_candidate_probe.rs"]
+mod b2_native_candidate_probe;
+
 use super::audio_stream::drain_control_messages;
 use super::buffer_retirement::{
     AudioBufferRetirement, AudioBufferRetirementWorker, RtAudioBufferRetirement,

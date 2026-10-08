@@ -118,7 +118,20 @@
   follows. Full independent reference, paired correction, BPM/region and cutover parent gates
   below remain open. See docs/beat-this-scoring-workflow.md.
   Actual T04/T05 archived lineages are complete; T01-T03 original completion-event
-  logit roundtrip mismatches are rejected and need fresh complete native evidence.
+  logit roundtrip mismatches remain rejected with all historical failures retained.
+- [x] B2 fresh native lineage only: obtain fresh complete T01-T03 copy-first native
+  source/finite playback/full PCM/export/request/raw-worker/component/native-finish/v2
+  publication chains through hardware-free productive preparation and the existing
+  service/worker. Pin and rehash source, cold manifest, full native PCM, model/lock/setup,
+  actual executing native binary and retained producer bytes through an explicit
+  supported provenance contract. All six actual Debug-v2/Release probes pass with
+  seven complete bit-exact array representations, actual ready KeyNet, native finish,
+  retirement and same-source subsequent admission. Preserve the first Debug import
+  failure and original historical v1 parity failures. Register the three fixed fresh
+  Release profiles for draft selection; old IDs retain strict rejection. Recorded
+  Release job walls are 20.2726/14.8532/18.3885 seconds, without RSS/resource acceptance.
+  No ReferenceSeal, musical score, human acceptance or default cutover follows;
+  all parent B2 gates below remain open. See docs/beat-this-scoring-workflow.md.
 - [ ] Obtain independent full-span labels, certify recording groups/class coverage and
   measure paired held-out correction burden. Sparse manually verified grids alone do not
   satisfy whole-track quality/count continuity; raw predictions never serve as labels.
@@ -126,6 +139,8 @@
   beat results, with explicit beat units, distant-interval checks and uncertainty handling.
   Preserve true fractional BPM, raw/local timing and manual/TAP overrides; do not use
   integer rounding as musical truth or a summary as variable-map playback authority.
+  This is the next bounded B2 step with the representative-region task below; reuse
+  existing G2/G3 evidence and timing contracts for policy, integration and evaluation.
 - [ ] Evaluate longer representative middle-region selection/weighting for pad-load BPM
   against complete-track and distant-window evidence. Freeze the policy before held-out
   validation; cover sparse intro/outro, an ambiguous middle, variable/fractional tempo

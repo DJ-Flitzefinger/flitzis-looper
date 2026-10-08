@@ -44,6 +44,28 @@ def _selections() -> list[dict[str, str]]:
     return [{"track_id": track, "profile_id": f"synthetic-{track}"} for track in TRACK_IDS]
 
 
+def test_draft_prefers_fresh_profiles_and_preserves_historical_tracks(
+    sealed: Sealed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """All eight supported attempts still produce one explicit selection per track."""
+    supported = _selections() + [
+        {"track_id": track, "profile_id": f"fresh-{track}"} for track in TRACK_IDS[:3]
+    ]
+    monkeypatch.setattr(cli, "available_candidate_profiles", lambda: supported)
+    _reject_candidate_read(monkeypatch)
+    path = cli.draft_plan(sealed.workspace, sealed.seal_path.name, "fresh-plan.json", None)
+    plan = TypeAdapter(ScoringPlan).validate_json(path.read_bytes(), strict=True)
+    assert [selection.track_id for selection in plan.candidates] == list(TRACK_IDS)
+    assert [selection.profile_id for selection in plan.candidates] == [
+        "fresh-T01",
+        "fresh-T02",
+        "fresh-T03",
+        "synthetic-T04",
+        "synthetic-T05",
+    ]
+    assert len(supported) == 8
+
+
 @dataclass(frozen=True)
 class Sealed:
     prepared: Prepared
@@ -61,7 +83,7 @@ def sealed(prepared: Prepared, monkeypatch: pytest.MonkeyPatch) -> Sealed:
     reference = prepared.workspace / "reference.json"
     reference.write_text(prepared.bundle.model_dump_json(), encoding="utf-8")
     receipt = reference_cli.seal_reference(prepared.workspace, reference.name, "seal.json")
-    monkeypatch.setattr(cli, "available_historical_profiles", _selections)
+    monkeypatch.setattr(cli, "available_candidate_profiles", _selections)
     return Sealed(prepared, receipt, hashlib.sha256(receipt.read_bytes()).hexdigest())
 
 

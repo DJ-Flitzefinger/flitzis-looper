@@ -15,7 +15,10 @@ from typing import TYPE_CHECKING
 
 from pydantic import TypeAdapter, ValidationError
 
-from flitzis_looper.analysis.beat_candidates import available_historical_profiles, load_candidate
+from flitzis_looper.analysis.beat_candidate_reader import (
+    available_candidate_profiles,
+    load_candidate,
+)
 from flitzis_looper.analysis.beat_scoring import score_track_timing
 from flitzis_looper.analysis.beat_scoring_inputs import ScoringPlan
 from flitzis_looper.analysis.reference_inputs_models import TRACK_IDS
@@ -164,7 +167,9 @@ def draft_plan(workspace: Path, seal_path: str, output: str, aliases_path: str |
         "schema_version": 1,
         "status": "ready_for_temporal_scoring",
         "reference_seal_sha256": digest,
-        "candidates": available_historical_profiles(),
+        "candidates": list(
+            {item["track_id"]: item for item in available_candidate_profiles()}.values()
+        ),
     }
     return _write(workspace, output, data)
 
@@ -194,7 +199,7 @@ def _validate_plan(plan: ScoringPlan, digest: str) -> None:
     if len({selection.track_id for selection in plan.candidates}) != len(plan.candidates):
         msg = "duplicate_candidate_track"
         raise ValueError(msg)
-    supported = {item["profile_id"]: item["track_id"] for item in available_historical_profiles()}
+    supported = {item["profile_id"]: item["track_id"] for item in available_candidate_profiles()}
     for selection in plan.candidates:
         if selection.profile_id not in supported:
             msg = "unsupported_candidate_lineage"

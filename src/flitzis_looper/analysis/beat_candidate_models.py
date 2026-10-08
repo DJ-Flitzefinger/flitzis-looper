@@ -59,6 +59,14 @@ class HistoricalProfile:
 
 
 @dataclass(frozen=True, slots=True)
+class FreshNativeProfile:
+    """The verifier owns these anchors; candidate JSON never supplies them."""
+
+    lineage: HistoricalProfile
+    provenance_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
 class NativeCandidate:
     """Complete raw predictions bound to verified historical native provenance.
 
@@ -69,7 +77,7 @@ class NativeCandidate:
 
     profile_id: str
     track_id: TrackId
-    lineage_kind: Literal["retained_request", "verified_historical_summary"]
+    lineage_kind: Literal["retained_request", "verified_historical_summary", "fresh_native_v2"]
     historical_source_path: str
     source_sha256: str
     source_bytes: int
@@ -80,6 +88,7 @@ class NativeCandidate:
     artifact_bindings: tuple[ArtifactBinding, ...]
     excluded_historical_attempts: tuple[ArtifactBinding, ...]
     native_extension_sha256: str = ""
+    actual_source_path: str | None = None
 
     def report(self) -> dict[str, object]:
         """Preserve every raw array and separate original from materialized paths."""
@@ -93,6 +102,11 @@ class NativeCandidate:
             "pcm_sha256": self.pcm_sha256,
             "native_channels": self.native_channels,
             "native_extension_sha256": self.native_extension_sha256,
+            "native_extension_used_by_candidate": self.lineage_kind != "fresh_native_v2",
+            "executing_native_artifact_role": "actual_native_test_executable"
+            if self.lineage_kind == "fresh_native_v2"
+            else "historical_native_extension",
+            "actual_source_path": self.actual_source_path,
             "request": TypeAdapter(BeatWorkerRequest).dump_python(self.request, mode="json"),
             "predictions": TypeAdapter(BeatPredictions).dump_python(self.predictions, mode="json"),
             "artifact_bindings": [asdict(binding) for binding in self.artifact_bindings],

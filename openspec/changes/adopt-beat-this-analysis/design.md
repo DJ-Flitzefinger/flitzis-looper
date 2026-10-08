@@ -48,6 +48,20 @@ callback work. Non-goals include human reference generation, legacy comparator
 import, musical acceptance, BPM integration and analyzer cutover. See
 [scoring workflow](../../../docs/beat-this-scoring-workflow.md).
 
+Fresh T01-T03 provenance uses an explicitly invoked test-only hardware-free native
+bridge: actual copy-first cold loading, finite resident-window ACK/command drain,
+the production complete-source reader/job, existing Python service and frozen CPU
+worker, then actual native v2 finish/event and natural readmission. Fixed reviewed
+profiles pin all retained artifacts and producer bytes. The import reader runs no
+native code and rehashes full finite loaded/export/reference PCM, originals, cold
+manifest, runtime/model/config/lock bytes and complete prediction arrays. It keeps
+the old rejected profiles distinct, requires actual v2 completion/outer identity
+and successful finish, and never accepts a generic candidate's self-hashed receipt.
+Executing test binary and unused installed extension are separate recorded identities.
+This adds no GUI, CPAL stream, recorder, callback work or routing/persistence change.
+Musical references, scores, BPM/region policy, human acceptance and cutover remain
+explicit non-goals of this bounded provenance step.
+
 The 2026-10-06 user refinement also requires improved automatic BPM estimation
 from the selected full beat sequence. Freeze a versioned aggregation/beat-unit
 policy and validate stable integer/fractional tempo, distant intervals, local
