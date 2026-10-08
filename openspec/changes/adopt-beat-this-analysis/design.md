@@ -37,6 +37,17 @@ See [reference input contract](../../../docs/beat-this-reference-inputs.md).
 
 ## Input domains and preprocessing
 
+The private temporal scoring CLI revalidates full ReferenceSeal/source/PCM/
+coverage before candidate inspection. Approved byte-pinned historical native
+profiles bind complete raw/component/final arrays; retired request metadata
+stays explicit, and generic self-hashed claims fail closed. Content-verified
+T01/T02 aliases retain original manifest paths. Reports preserve raw arrays,
+failed attempts and missing inputs without labels, offset fitting or default
+promotion. This is offline Python only: no native/device/model operation or
+callback work. Non-goals include human reference generation, legacy comparator
+import, musical acceptance, BPM integration and analyzer cutover. See
+[scoring workflow](../../../docs/beat-this-scoring-workflow.md).
+
 The 2026-10-06 user refinement also requires improved automatic BPM estimation
 from the selected full beat sequence. Freeze a versioned aggregation/beat-unit
 policy and validate stable integer/fractional tempo, distant intervals, local

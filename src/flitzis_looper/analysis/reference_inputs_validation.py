@@ -7,7 +7,7 @@ import struct
 from bisect import bisect_left, bisect_right
 from datetime import UTC, datetime
 from itertools import pairwise
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Never
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
@@ -27,6 +27,7 @@ from flitzis_looper.analysis.reference_inputs_models import (
     ReferenceSeal,
     TrackCoverage,
 )
+from flitzis_looper.analysis.reference_source_aliases import SourcePathAlias, SourcePathAliases
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -65,7 +66,7 @@ class FrozenCorpus(BaseModel):
     tracks: tuple[FrozenTrack, ...]
 
 
-def fail(reason: str) -> None:
+def fail(reason: str) -> Never:
     """Raise a stable, actionable validation reason."""
     raise ValueError(reason)
 
@@ -110,17 +111,23 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
+def unique_json(raw: bytes | str) -> object:
+    """Parse bounded JSON including nested artifact text with duplicate-key rejection."""
+    size = len(raw.encode("utf-8")) if isinstance(raw, str) else len(raw)
+    if size > MAX_JSON_BYTES:
+        fail("json_size_limit")
+    try:
+        return json.loads(raw, object_pairs_hook=_unique_object)
+    except RecursionError as error:
+        msg = "json_nesting_limit"
+        raise ValueError(msg) from error
+
+
 def read_json_bytes(path: Path) -> bytes:
     """Read bounded JSON and reject ambiguous duplicate keys before strict parsing."""
     with path.open("rb") as handle:
         raw = handle.read(MAX_JSON_BYTES + 1)
-    if len(raw) > MAX_JSON_BYTES:
-        fail("json_size_limit")
-    try:
-        json.loads(raw, object_pairs_hook=_unique_object)
-    except RecursionError as error:
-        msg = "json_nesting_limit"
-        raise ValueError(msg) from error
+    unique_json(raw)
     return raw
 
 
@@ -144,9 +151,14 @@ def frozen_corpus(workspace: Path) -> FrozenCorpus:
     """Require both original immutable protocol byte identities before any input work."""
     manifest = private_path(workspace, "scratch/b2a/frozen-manifest.json")
     scoring = private_path(workspace, "scratch/b2a/scoring-addendum.json")
-    if sha256_file(manifest) != MANIFEST_SHA256 or sha256_file(scoring) != SCORING_SHA256:
+    manifest_bytes = read_json_bytes(manifest)
+    scoring_bytes = read_json_bytes(scoring)
+    if (
+        hashlib.sha256(manifest_bytes).hexdigest() != MANIFEST_SHA256
+        or hashlib.sha256(scoring_bytes).hexdigest() != SCORING_SHA256
+    ):
         fail("frozen_protocol_hash_mismatch")
-    corpus = TypeAdapter(FrozenCorpus).validate_json(read_json_bytes(manifest), strict=True)
+    corpus = TypeAdapter(FrozenCorpus).validate_json(manifest_bytes, strict=True)
     expected: dict[str, str] = {
         track: "development" if track in TRACK_IDS[:2] else "held_out" for track in TRACK_IDS
     }
@@ -158,7 +170,9 @@ def frozen_corpus(workspace: Path) -> FrozenCorpus:
 
 def validate_identities(identities: LoadedIdentities, corpus: FrozenCorpus) -> None:
     """Bind all and only T01-T05 to their unchanged original hashes and frozen split."""
-    if {item.track_id for item in identities.tracks} != set(TRACK_IDS):
+    if len(identities.tracks) != len(TRACK_IDS) or {
+        item.track_id for item in identities.tracks
+    } != set(TRACK_IDS):
         fail("complete_T01_T05_identities_required_R01_resource_only")
     frozen = {track.id: track for track in corpus.tracks}
     for identity in identities.tracks:
@@ -169,13 +183,69 @@ def validate_identities(identities: LoadedIdentities, corpus: FrozenCorpus) -> N
 def loaded_identities(workspace: Path, path: str | Path) -> LoadedIdentities:
     """Read the independently verified private native inventory, never model outputs."""
     identity_path = private_path(workspace, path)
-    if sha256_file(identity_path) != LOADED_IDENTITIES_SHA256:
+    raw = read_json_bytes(identity_path)
+    if hashlib.sha256(raw).hexdigest() != LOADED_IDENTITIES_SHA256:
         fail("approved_loaded_identity_inventory_hash_mismatch")
-    return read_input(workspace, identity_path, TypeAdapter(LoadedIdentities))
+    return TypeAdapter(LoadedIdentities).validate_json(raw, strict=True)
 
 
-def _validate_material(workspace: Path, identity: LoadedIdentity, source: FrozenTrack) -> None:
-    original = private_path(workspace, source.source_relative)
+def validate_source_aliases(
+    workspace: Path, corpus: FrozenCorpus, aliases: tuple[SourcePathAlias, ...] = ()
+) -> tuple[SourcePathAlias, ...]:
+    """Recheck explicit T01/T02 aliases against frozen paths, sizes and actual source bytes."""
+    if len(aliases) > 2:
+        fail("source_alias_limit_T01_T02_only")
+    sources = {track.id: track for track in corpus.tracks}
+    tracks: set[str] = set()
+    paths: set[Path] = set()
+    for alias in aliases:
+        if alias.track_id not in {"T01", "T02"}:
+            fail("source_alias_unsupported_track")
+        if alias.track_id in tracks:
+            fail("duplicate_source_alias_track")
+        tracks.add(alias.track_id)
+        source = sources[alias.track_id]
+        if alias.original_source_relative != source.source_relative:
+            fail("source_alias_original_path_mismatch")
+        actual = private_path(workspace, alias.actual_source_path)
+        if actual == private_path(workspace, source.source_relative):
+            fail("source_alias_must_identify_a_different_path")
+        if actual in paths:
+            fail("duplicate_source_alias_actual_path")
+        paths.add(actual)
+        if (
+            actual.stat().st_size != source.source_bytes
+            or sha256_file(actual) != source.source_sha256
+        ):
+            fail("source_alias_hash_or_size_mismatch")
+    return aliases
+
+
+def read_source_aliases(
+    workspace: Path, path: str | Path, corpus: FrozenCorpus | None = None
+) -> tuple[SourcePathAlias, ...]:
+    """Read bounded strict private alias JSON and verify its immutable manifest/content binding."""
+    return parse_source_aliases(workspace, read_json_bytes(private_path(workspace, path)), corpus)
+
+
+def parse_source_aliases(
+    workspace: Path, raw: bytes, corpus: FrozenCorpus | None = None
+) -> tuple[SourcePathAlias, ...]:
+    """Verify aliases from the same exact bytes retained by a caller's report binding."""
+    unique_json(raw)
+    supplied = TypeAdapter(SourcePathAliases).validate_json(raw, strict=True)
+    if supplied.manifest_sha256 != MANIFEST_SHA256:
+        fail("source_alias_manifest_hash_mismatch")
+    frozen = frozen_corpus(workspace) if corpus is None else corpus
+    return validate_source_aliases(workspace, frozen, supplied.aliases)
+
+
+def _validate_material(
+    workspace: Path, identity: LoadedIdentity, source: FrozenTrack, source_path: Path | None = None
+) -> None:
+    original = (
+        source_path if source_path is not None else private_path(workspace, source.source_relative)
+    )
     if (
         original.stat().st_size != source.source_bytes
         or sha256_file(original) != source.source_sha256
@@ -186,6 +256,26 @@ def _validate_material(workspace: Path, identity: LoadedIdentity, source: Frozen
         fail("complete_loaded_pcm_size_mismatch")
     if sha256_file(pcm, pcm=True) != identity.pcm.sha256:
         fail("loaded_pcm_hash_mismatch")
+
+
+def validate_source_material(
+    workspace: Path,
+    identity: LoadedIdentity,
+    source: FrozenTrack,
+    *,
+    source_aliases: tuple[SourcePathAlias, ...] = (),
+) -> None:
+    """Verify complete native/source material without reading labels or predictions."""
+    corpus = frozen_corpus(workspace)
+    if source not in corpus.tracks or (identity.track_id, identity.source_sha256) != (
+        source.id,
+        source.source_sha256,
+    ):
+        fail("source_material_frozen_identity_mismatch")
+    aliases = validate_source_aliases(workspace, corpus, source_aliases)
+    actual = next((alias for alias in aliases if alias.track_id == source.id), None)
+    source_path = private_path(workspace, actual.actual_source_path) if actual is not None else None
+    _validate_material(workspace, identity, source, source_path)
 
 
 def _validate_regions(track: ReferenceTrack, duration: float) -> tuple[float, float]:
@@ -349,7 +439,11 @@ def _validate_certification(track: ReferenceTrack) -> None:
 
 
 def validate_reference(
-    workspace: Path, bundle: ReferenceBundle, corpus: FrozenCorpus
+    workspace: Path,
+    bundle: ReferenceBundle,
+    corpus: FrozenCorpus,
+    *,
+    source_aliases: tuple[SourcePathAlias, ...] = (),
 ) -> tuple[tuple[TrackCoverage, ...], tuple[MusicalClass, ...]]:
     """Validate real listening files and independent full-span/count/coverage assertions."""
     if (bundle.manifest_sha256, bundle.scoring_sha256) != (MANIFEST_SHA256, SCORING_SHA256):
@@ -357,6 +451,8 @@ def validate_reference(
     if bundle.loaded_identities_sha256 != LOADED_IDENTITIES_SHA256:
         fail("reference_loaded_inventory_identity_mismatch")
     inventory = loaded_identities(workspace, bundle.loaded_identities_path)
+    if len({track.identity.track_id for track in bundle.tracks}) != len(bundle.tracks):
+        fail("duplicate_reference_track")
     supplied = {track.identity.track_id: track.identity for track in bundle.tracks}
     if supplied != {identity.track_id: identity for identity in inventory.tracks}:
         fail("supplied_pcm_not_bound_to_native_loaded_export")
@@ -364,6 +460,10 @@ def validate_reference(
         LoadedIdentities(schema_version=1, tracks=tuple(t.identity for t in bundle.tracks)), corpus
     )
     sources = {track.id: track for track in corpus.tracks}
+    aliases: dict[str, Path] = {
+        alias.track_id: private_path(workspace, alias.actual_source_path)
+        for alias in validate_source_aliases(workspace, corpus, source_aliases)
+    }
     groups: dict[str, str] = {}
     coverage: list[TrackCoverage] = []
     present_classes: set[str] = set()
@@ -371,7 +471,7 @@ def validate_reference(
         source = sources[track.identity.track_id]
         if track.split != source.split:
             fail("reference_split_mismatch")
-        _validate_material(workspace, track.identity, source)
+        _validate_material(workspace, track.identity, source, aliases.get(track.identity.track_id))
         _validate_certification(track)
         for group in track.recording_groups:
             if group in groups and groups[group] != track.split:
@@ -420,17 +520,25 @@ def utc_time(value: datetime) -> None:
         fail("future_human_session_timestamp")
 
 
-def reference_seal(workspace: Path, path: str | Path) -> tuple[ReferenceSeal, ReferenceBundle, str]:
+def reference_seal(
+    workspace: Path,
+    path: str | Path,
+    *,
+    source_aliases: tuple[SourcePathAlias, ...] = (),
+) -> tuple[ReferenceSeal, ReferenceBundle, str]:
     """Revalidate receipt-bound original bytes and listening material before session work."""
     receipt_path = private_path(workspace, path)
     raw = read_json_bytes(receipt_path)
     seal = TypeAdapter(ReferenceSeal).validate_json(raw, strict=True)
     utc_time(seal.sealed_at_utc)
     bundle_path = private_path(workspace, seal.bundle_path)
-    if sha256_file(bundle_path) != seal.bundle_sha256:
+    bundle_bytes = read_json_bytes(bundle_path)
+    if hashlib.sha256(bundle_bytes).hexdigest() != seal.bundle_sha256:
         fail("sealed_reference_bundle_changed")
-    bundle = TypeAdapter(ReferenceBundle).validate_json(read_json_bytes(bundle_path), strict=True)
-    coverage, absent = validate_reference(workspace, bundle, frozen_corpus(workspace))
+    bundle = TypeAdapter(ReferenceBundle).validate_json(bundle_bytes, strict=True)
+    coverage, absent = validate_reference(
+        workspace, bundle, frozen_corpus(workspace), source_aliases=source_aliases
+    )
     if seal.coverage != coverage or tuple(seal.absent_classes) != absent:
         fail("reference_receipt_coverage_mismatch")
     if (seal.manifest_sha256, seal.scoring_sha256) != (MANIFEST_SHA256, SCORING_SHA256):

@@ -34,6 +34,7 @@ from flitzis_looper.analysis.reference_inputs_validation import (
     order_seal,
     private_path,
     read_json_bytes,
+    read_source_aliases,
     reference_seal,
     utc_now,
     validate_corrections,
@@ -45,6 +46,11 @@ from flitzis_looper.analysis.reference_inputs_validation import (
 
 if TYPE_CHECKING:
     from flitzis_looper.analysis.reference_inputs_models import LoadedIdentity
+    from flitzis_looper.analysis.reference_source_aliases import SourcePathAlias
+
+
+def _aliases(workspace: Path, path: str | None) -> tuple[SourcePathAlias, ...]:
+    return () if path is None else read_source_aliases(workspace, path)
 
 
 def _json(data: object) -> bytes:
@@ -96,12 +102,19 @@ def draft_reference(workspace: Path, identities_path: str, output: str) -> Path:
     return write_output(workspace, output, _json(data))
 
 
-def seal_reference(workspace: Path, input_path: str, output: str) -> Path:
+def seal_reference(
+    workspace: Path, input_path: str, output: str, source_aliases_path: str | None = None
+) -> Path:
     """Seal complete independently certified reference input; acceptance stays pending."""
     path = private_path(workspace, input_path)
     raw = read_json_bytes(path)
     bundle = TypeAdapter(ReferenceBundle).validate_json(raw, strict=True)
-    coverage, absent = validate_reference(workspace, bundle, frozen_corpus(workspace))
+    coverage, absent = validate_reference(
+        workspace,
+        bundle,
+        frozen_corpus(workspace),
+        source_aliases=_aliases(workspace, source_aliases_path),
+    )
     seal = ReferenceSeal(
         schema_version=1,
         status="sealed_reference_inputs",
@@ -119,9 +132,13 @@ def seal_reference(workspace: Path, input_path: str, output: str) -> Path:
     return write_output(workspace, output, seal.model_dump_json(indent=2).encode("utf-8"))
 
 
-def draft_order(workspace: Path, seal_path: str, output: str) -> Path:
+def draft_order(
+    workspace: Path, seal_path: str, output: str, source_aliases_path: str | None = None
+) -> Path:
     """Prepare a balanced draft; humans confirm the schedule before sealing it."""
-    _, _, reference_hash = reference_seal(workspace, seal_path)
+    _, _, reference_hash = reference_seal(
+        workspace, seal_path, source_aliases=_aliases(workspace, source_aliases_path)
+    )
     slots = [
         {"session_id": f"{track}-{position + 1}", "track_id": track, "backend": backend}
         for index, track in enumerate(HELD_OUT)
@@ -143,9 +160,17 @@ def draft_order(workspace: Path, seal_path: str, output: str) -> Path:
     return write_output(workspace, output, _json(data))
 
 
-def seal_order(workspace: Path, input_path: str, seal_path: str, output: str) -> Path:
+def seal_order(
+    workspace: Path,
+    input_path: str,
+    seal_path: str,
+    output: str,
+    source_aliases_path: str | None = None,
+) -> Path:
     """Freeze the exact paired schedule before any actual correction session."""
-    reference, _, reference_hash = reference_seal(workspace, seal_path)
+    reference, _, reference_hash = reference_seal(
+        workspace, seal_path, source_aliases=_aliases(workspace, source_aliases_path)
+    )
     path = private_path(workspace, input_path)
     raw = read_json_bytes(path)
     order = TypeAdapter(CorrectionOrder).validate_json(raw, strict=True)
@@ -166,9 +191,17 @@ def seal_order(workspace: Path, input_path: str, seal_path: str, output: str) ->
     return write_output(workspace, output, receipt.model_dump_json(indent=2).encode("utf-8"))
 
 
-def draft_corrections(workspace: Path, reference_path: str, order_path: str, output: str) -> Path:
+def draft_corrections(
+    workspace: Path,
+    reference_path: str,
+    order_path: str,
+    output: str,
+    source_aliases_path: str | None = None,
+) -> Path:
     """Create empty paired session fields without inventing operations or timings."""
-    reference_receipt, reference, reference_hash = reference_seal(workspace, reference_path)
+    reference_receipt, reference, reference_hash = reference_seal(
+        workspace, reference_path, source_aliases=_aliases(workspace, source_aliases_path)
+    )
     order_receipt, order, order_hash = order_seal(workspace, order_path, reference_hash)
     if order_receipt.sealed_at_utc < reference_receipt.sealed_at_utc:
         msg = "order_must_follow_reference_seal"
@@ -215,9 +248,12 @@ def validate_measured_corrections(
     reference_path: str,
     order_path: str,
     output: str,
+    source_aliases_path: str | None = None,
 ) -> Path:
     """Issue a validated-input receipt, never comparative or musical acceptance."""
-    reference_receipt, reference, reference_hash = reference_seal(workspace, reference_path)
+    reference_receipt, reference, reference_hash = reference_seal(
+        workspace, reference_path, source_aliases=_aliases(workspace, source_aliases_path)
+    )
     order_receipt, order, order_hash = order_seal(workspace, order_path, reference_hash)
     if order_receipt.sealed_at_utc < reference_receipt.sealed_at_utc:
         msg = "order_must_follow_reference_seal"
@@ -265,6 +301,7 @@ def _parser() -> argparse.ArgumentParser:
         sub = subcommands.add_parser(command)
         sub.add_argument("--workspace", type=Path, required=True)
         sub.add_argument("--output", required=True)
+        sub.add_argument("--source-aliases")
         if command == "draft":
             sub.add_argument("--identities", required=True)
         if command in {"seal-reference", "seal-order", "validate-corrections"}:
@@ -281,15 +318,24 @@ def _execute(args: argparse.Namespace) -> Path:
     if args.command == "draft":
         return draft_reference(workspace, args.identities, args.output)
     if args.command == "seal-reference":
-        return seal_reference(workspace, args.input, args.output)
+        return seal_reference(workspace, args.input, args.output, args.source_aliases)
     if args.command == "draft-order":
-        return draft_order(workspace, args.reference_seal, args.output)
+        return draft_order(workspace, args.reference_seal, args.output, args.source_aliases)
     if args.command == "seal-order":
-        return seal_order(workspace, args.input, args.reference_seal, args.output)
+        return seal_order(
+            workspace, args.input, args.reference_seal, args.output, args.source_aliases
+        )
     if args.command == "draft-corrections":
-        return draft_corrections(workspace, args.reference_seal, args.order_seal, args.output)
+        return draft_corrections(
+            workspace, args.reference_seal, args.order_seal, args.output, args.source_aliases
+        )
     return validate_measured_corrections(
-        workspace, args.input, args.reference_seal, args.order_seal, args.output
+        workspace,
+        args.input,
+        args.reference_seal,
+        args.order_seal,
+        args.output,
+        args.source_aliases,
     )
 
 

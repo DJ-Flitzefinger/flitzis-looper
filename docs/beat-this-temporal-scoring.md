@@ -36,8 +36,10 @@ feature role and bar ID. Candidate bar identity remains `unchecked`;
 quarter-count/bar-identity and paired-correction decisions remain `pending`.
 
 These shape checks do not establish that any input came from the actual frozen
-source, complete native analysis or independent listening. There is no file
-importer, CLI, receipt writer or seal-validation integration in this core.
+source, complete native analysis or independent listening. The core has no file
+importer, CLI or receipt writer. The separate
+[private workflow](beat-this-scoring-workflow.md) revalidates receipts and native
+lineage before calling this core.
 
 ## Frozen matching and uncertainty
 
@@ -112,13 +114,11 @@ resource gates. All allocation and matching belongs outside realtime paths.
 
 ## Acceptance and next integration boundary
 
-The next bounded integration is a private seal-bound scoring workflow. It must
-revalidate the [independent reference receipt](beat-this-reference-inputs.md)
-before opening candidates and bind the exact complete native original-source,
-loaded-PCM, request, raw-response and published-envelope lineage. Generic
-self-hashed arrays cannot establish that lineage. No new independent references
-may be derived from candidate predictions, and no offset fitting, trimming or
-post-hoc exclusions may improve a score.
+The [private seal-bound workflow](beat-this-scoring-workflow.md) now revalidates
+independent reference receipts before opening candidates and binds approved
+complete historical native source/PCM/request/raw/envelope lineage. Generic
+self-hashed arrays cannot establish lineage. No independent reference is derived
+from candidates; offset fitting, trimming and post-hoc exclusions remain forbidden.
 
 The full B2 program remains open: complete independent T01-T05 labels and
 recording-group/class certification; actual corrected-legacy comparison and

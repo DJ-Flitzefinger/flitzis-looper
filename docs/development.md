@@ -38,6 +38,13 @@ uv run python -m flitzis_looper
 Use `uv run cargo ...`, not plain `cargo ...`, so the Rust/PyO3 build uses the
 project Python environment consistently.
 
+Private B2 reference-first diagnostics run through
+`python -m flitzis_looper.analysis.beat_scoring_cli`; see
+[scoring workflow](beat-this-scoring-workflow.md) for source aliases, strict
+plans, complete native lineage and explicit missing-input reports. They require
+actual independent reference receipts for scoring and never start the app or
+worker. Synthetic tests verify the contract without declaring musical acceptance.
+
 ### Windows Start Files
 
 Double-click a start file in the repository root, or call it from a terminal:

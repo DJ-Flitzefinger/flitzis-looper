@@ -10,9 +10,9 @@ correction measurements. Valid input is not an acceptance result.
 The separate [temporal metric core](beat-this-temporal-scoring.md) accepts supplied
 in-memory timestamps and regions only. It verifies no seal or candidate lineage
 and retains unchecked input certification, pending musical acceptance and blocked
-default adoption. Connecting these receipts to complete native candidates through
-a private scoring workflow remains the next integration boundary; neither this
-input CLI nor the metric core supplies missing human observations.
+default adoption. The [private scoring workflow](beat-this-scoring-workflow.md)
+connects receipts to approved complete native lineage. None of these components
+supplies missing human observations or acceptance.
 
 ## Private identity and listening material
 

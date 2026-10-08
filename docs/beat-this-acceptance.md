@@ -137,9 +137,10 @@ reference sealing, source/PCM/request verification or candidate-lineage check.
 
 Every core report keeps input certification `unchecked_by_metric_core`, musical
 acceptance `pending` and default adoption `blocked`. No actual independent musical
-scores or acceptance results have been collected in this slice. The next bounded
-integration must bind verified reference seals to complete native candidate
-source/PCM/request/raw-response/envelope evidence. Complete references, certified
+scores or acceptance results have been collected. The separate
+[private scoring workflow](beat-this-scoring-workflow.md) binds verified seals to
+approved complete native source/PCM/request/raw/envelope evidence, including
+explicit content-verified renamed T01/T02 paths. Complete references, certified
 counts/bar identities, corrected-legacy paired human measurements, BPM/region
 evaluation, default cutover, persistence/cache and end-to-end gates remain open.
 

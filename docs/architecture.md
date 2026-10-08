@@ -51,6 +51,14 @@ unbounded loops, heavy allocation, or long-running work.
 
 ## Source Layout
 
+Private B2 diagnostics use `analysis/beat_scoring_cli.py` to revalidate independent
+reference receipts before reading candidates. `beat_candidates.py` binds approved
+historical full native exports/requests/raw/final artifacts; the pure metric core
+retains unchecked certification and pending acceptance. Explicit T01/T02 path
+aliases preserve frozen source identities. These modules load no engine/model and
+have no application-state or realtime authority. See
+[scoring workflow](beat-this-scoring-workflow.md).
+
 ```text
 src/flitzis_looper/
     Python application package: controllers, UI, models, persistence,

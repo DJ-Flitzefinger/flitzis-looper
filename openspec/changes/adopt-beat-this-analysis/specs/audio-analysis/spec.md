@@ -268,6 +268,52 @@ human time; another phase's measured time SHALL NOT satisfy that phase's evidenc
 - **THEN** the unmeasured operation phase is rejected despite positive session-wide time
 - **AND** genuine zero-operation zero-time baselines remain representable under the existing policy
 
+### Requirement: Private Temporal Scoring Revalidates Complete Native Lineage
+The system SHALL provide an explicitly invoked private offline scoring workflow that
+revalidates full ReferenceSeal, bundle, protocol and inventory bytes, actual original
+source and complete loaded PCM identities, independent declarations and recomputed
+coverage before opening candidate plans or predictions.
+
+The workflow SHALL bind approved native source/export/request identities or explicitly
+approved byte-verified historical metadata to complete raw worker, component and final
+envelope lineage through the existing strict readers. It SHALL reject duplicate fields,
+duplicate candidates, mismatched source/model/request/PCM, incomplete arrays and unsupported
+self-hashed lineage. Reports SHALL retain every original raw prediction and distinguish
+missing inputs and original failed attempts. A missing or incomplete input SHALL NOT be
+reported as complete diagnostics or acceptance.
+
+Explicit T01/T02 source-path aliases SHALL retain the unchanged frozen manifest and original
+paths, bind actual replacement content by frozen size/SHA-256 and remain private workspace
+artifacts. The workflow SHALL NOT derive labels from candidates, fit offsets, trim extents,
+invent human observations or promote temporal metrics to musical/default acceptance.
+It SHALL retain unchecked metric-core certification, pending musical/correction/count-bar
+decisions and blocked adoption, operate outside realtime and leave live state unchanged.
+
+#### Scenario: A changed reference blocks candidate inspection
+- **GIVEN** a sealed bundle, source, PCM or recomputed coverage no longer matches its receipt
+- **WHEN** private scoring is invoked
+- **THEN** validation rejects before reading candidate plans or predictions
+- **AND** no temporal score or adoption is created
+
+#### Scenario: Complete historical native lineage remains explicit
+- **GIVEN** approved byte-verified historical native metadata and matching full listening PCM
+- **WHEN** worker/component/final artifacts retain identical complete arrays and identities
+- **THEN** the workflow reports complete raw predictions and temporal diagnostics
+- **AND** the retired export path and verified historical request reconstruction remain explicit
+- **AND** musical truth and analyzer default acceptance remain pending and blocked
+
+#### Scenario: A renamed frozen source preserves its original identity
+- **GIVEN** T01 or T02 has an explicit private alias with its exact frozen historical path
+- **WHEN** the replacement file matches the original byte size and SHA-256
+- **THEN** the workflow verifies that content and retains both paths and alias bytes
+- **AND** the frozen manifest and original reference provenance remain unchanged
+
+#### Scenario: Missing inputs cannot produce full acceptance
+- **GIVEN** a required reference/material/plan or selected candidate artifact is missing
+- **WHEN** the workflow produces a private missing-input report
+- **THEN** blocked or incomplete status and missing inputs remain explicit
+- **AND** absent predictions are never fabricated and no musical/default pass is produced
+
 ### Requirement: Diagnostic Boundary Precedes Model And Default Activation
 The system SHALL expose the loaded-PCM and real local worker boundary only through explicitly
 invoked diagnostic analysis until the separate default-cutover acceptance gate is satisfied.

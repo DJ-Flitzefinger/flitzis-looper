@@ -43,6 +43,7 @@ from flitzis_looper.analysis.reference_inputs_models import (
     Region,
     SessionSlot,
 )
+from flitzis_looper.analysis.reference_source_aliases import SourcePathAlias, SourcePathAliases
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -964,3 +965,236 @@ def test_track_temporal_projection_rejects_clipped_extent_or_unknown_critical_ba
     feature = track.critical_features[0].model_copy(update={"bar_ids": (99,)})
     with pytest.raises(ValueError, match="supplied reference bar"):
         score_track_timing(track.model_copy(update={"critical_features": (feature,)}), predictions)
+
+
+def _relocate_sources(prepared: Prepared) -> tuple[SourcePathAlias, ...]:
+    audio = prepared.workspace / "test-audio"
+    audio.mkdir()
+    aliases = []
+    for index, name in enumerate(("1.mp3", "2.wav")):
+        source = prepared.corpus.tracks[index]
+        (prepared.workspace / source.source_relative).rename(audio / name)
+        aliases.append(
+            SourcePathAlias(
+                track_id="T01" if index == 0 else "T02",
+                original_source_relative=source.source_relative,
+                actual_source_path=f"test-audio/{name}",
+            )
+        )
+    return tuple(aliases)
+
+
+def test_explicit_aliases_revalidate_seal_without_rewriting_frozen_identity(
+    prepared: Prepared,
+) -> None:
+    bundle_path = prepared.workspace / "reference.json"
+    bundle_path.write_text(prepared.bundle.model_dump_json())
+    receipt = cli.seal_reference(prepared.workspace, bundle_path.name, "reference-seal.json")
+    manifest = prepared.workspace / "scratch/b2a/frozen-manifest.json"
+    original_manifest = manifest.read_bytes()
+    original_bundle = bundle_path.read_bytes()
+    original_receipt = receipt.read_bytes()
+    aliases = _relocate_sources(prepared)
+    with pytest.raises(FileNotFoundError):
+        validation.reference_seal(prepared.workspace, receipt.name)
+    seal, bundle, digest = validation.reference_seal(
+        prepared.workspace, receipt.name, source_aliases=aliases
+    )
+    assert digest == _digest(original_receipt)
+    assert bundle == prepared.bundle
+    assert seal.default_adoption == "blocked"
+    assert seal.musical_acceptance == seal.corrections == "pending"
+    assert manifest.read_bytes() == original_manifest
+    assert bundle_path.read_bytes() == original_bundle
+    assert receipt.read_bytes() == original_receipt
+    validation.validate_reference(
+        prepared.workspace, prepared.bundle, prepared.corpus, source_aliases=aliases
+    )
+
+
+def test_alias_file_binds_manifest_and_every_relocated_byte(prepared: Prepared) -> None:
+    aliases = _relocate_sources(prepared)
+    path = prepared.workspace / "source-aliases.json"
+    data = SourcePathAliases(
+        schema_version=1, manifest_sha256=validation.MANIFEST_SHA256, aliases=aliases
+    )
+    path.write_text(data.model_dump_json())
+    assert validation.read_source_aliases(prepared.workspace, path.name) == aliases
+    changed = data.model_copy(update={"manifest_sha256": "a" * 64})
+    path.write_text(changed.model_dump_json())
+    with pytest.raises(ValueError, match="alias_manifest_hash"):
+        validation.read_source_aliases(prepared.workspace, path.name, prepared.corpus)
+    path.write_text(data.model_dump_json())
+    (prepared.workspace / aliases[1].actual_source_path).write_bytes(b"changed")
+    with pytest.raises(ValueError, match="alias_hash_or_size"):
+        validation.read_source_aliases(prepared.workspace, path.name, prepared.corpus)
+
+
+@pytest.mark.parametrize("changed", [b"changed", b"synthetic source BAD"])
+def test_validated_aliases_never_bypass_fresh_source_checks(
+    prepared: Prepared, changed: bytes
+) -> None:
+    aliases = _relocate_sources(prepared)
+    validation.validate_source_aliases(prepared.workspace, prepared.corpus, aliases)
+    (prepared.workspace / aliases[0].actual_source_path).write_bytes(changed)
+    with pytest.raises(ValueError, match="alias_hash_or_size"):
+        validation.validate_reference(
+            prepared.workspace, prepared.bundle, prepared.corpus, source_aliases=aliases
+        )
+
+
+@pytest.mark.parametrize(
+    ("updates", "reason"),
+    [
+        ({"track_id": "T03"}, "alias_unsupported_track"),
+        ({"original_source_relative": "T02.source"}, "alias_original_path"),
+        ({"actual_source_path": "T01.source"}, "different_path"),
+        ({"actual_source_path": "../outside.source"}, "private_path"),
+        ({"actual_source_path": "repo/private.source"}, "private_path"),
+    ],
+)
+def test_aliases_reject_unsupported_origins_and_unsafe_paths(
+    prepared: Prepared, updates: dict[str, object], reason: str
+) -> None:
+    alias = SourcePathAlias(
+        track_id="T01", original_source_relative="T01.source", actual_source_path="new.source"
+    ).model_copy(update=updates)
+    with pytest.raises(ValueError, match=reason):
+        validation.validate_source_aliases(prepared.workspace, prepared.corpus, (alias,))
+
+
+def test_duplicate_alias_tracks_and_resolved_paths_are_rejected(prepared: Prepared) -> None:
+    aliases = _relocate_sources(prepared)
+    with pytest.raises(ValueError, match="duplicate_source_alias_track"):
+        validation.validate_source_aliases(
+            prepared.workspace, prepared.corpus, (aliases[0], aliases[0])
+        )
+    repeated_path = aliases[1].model_copy(update={"actual_source_path": "test-audio/./1.mp3"})
+    with pytest.raises(ValueError, match="duplicate_source_alias_actual_path"):
+        validation.validate_source_aliases(
+            prepared.workspace, prepared.corpus, (aliases[0], repeated_path)
+        )
+    with pytest.raises(ValueError, match="alias_limit"):
+        validation.validate_source_aliases(
+            prepared.workspace, prepared.corpus, (*aliases, aliases[0])
+        )
+
+
+@pytest.mark.parametrize(
+    ("changed", "reason"),
+    [
+        ({"schema_version": True}, "int_type"),
+        ({"extra": "forbidden"}, "extra_forbidden"),
+        ({"aliases": []}, "too_short"),
+        (
+            {
+                "aliases": [
+                    {
+                        "track_id": "T03",
+                        "original_source_relative": "T03.source",
+                        "actual_source_path": "other.source",
+                    }
+                ]
+            },
+            "literal_error",
+        ),
+    ],
+)
+def test_alias_json_schema_is_bounded_and_strict(
+    prepared: Prepared, changed: dict[str, object], reason: str
+) -> None:
+    aliases = _relocate_sources(prepared)
+    data = SourcePathAliases(
+        schema_version=1, manifest_sha256=validation.MANIFEST_SHA256, aliases=aliases
+    ).model_dump(mode="json")
+    data.update(changed)
+    path = prepared.workspace / "source-aliases.json"
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValidationError, match=reason):
+        validation.read_source_aliases(prepared.workspace, path.name)
+
+
+def test_alias_json_duplicate_fields_are_rejected_before_content_reads(prepared: Prepared) -> None:
+    path = prepared.workspace / "source-aliases.json"
+    path.write_bytes(b'{"schema_version":1,"schema_version":1}')
+    with pytest.raises(ValueError, match="duplicate_json_key"):
+        validation.read_source_aliases(prepared.workspace, path.name)
+
+
+def test_source_material_inventory_validation_needs_no_labels_or_predictions(
+    prepared: Prepared,
+) -> None:
+    aliases = _relocate_sources(prepared)
+    identity = prepared.bundle.tracks[0].identity
+    source = prepared.corpus.tracks[0]
+    validation.validate_source_material(
+        prepared.workspace, identity, source, source_aliases=aliases
+    )
+    with pytest.raises(ValueError, match="source_material_frozen_identity"):
+        validation.validate_source_material(
+            prepared.workspace, identity, prepared.corpus.tracks[1], source_aliases=aliases
+        )
+    (prepared.workspace / identity.pcm.path).write_bytes(b"partial PCM")
+    with pytest.raises(ValueError, match="complete_loaded_pcm_size"):
+        validation.validate_source_material(
+            prepared.workspace, identity, source, source_aliases=aliases
+        )
+
+
+def test_duplicate_reference_tracks_are_explicitly_rejected(prepared: Prepared) -> None:
+    bundle = prepared.bundle.model_copy(
+        update={"tracks": (*prepared.bundle.tracks[:-1], prepared.bundle.tracks[0])}
+    )
+    with pytest.raises(ValueError, match="duplicate_reference_track"):
+        validation.validate_reference(prepared.workspace, bundle, prepared.corpus)
+
+
+def test_reference_seal_rechecks_coverage_and_alias_pcm_bytes(prepared: Prepared) -> None:
+    bundle_path = prepared.workspace / "reference.json"
+    bundle_path.write_text(prepared.bundle.model_dump_json())
+    receipt = cli.seal_reference(prepared.workspace, bundle_path.name, "reference-seal.json")
+    original_receipt = receipt.read_bytes()
+    seal = TypeAdapter(ReferenceSeal).validate_json(original_receipt, strict=True)
+    incorrect = seal.coverage[0].model_copy(update={"reference_beats": 31})
+    receipt.write_text(
+        seal.model_copy(update={"coverage": (incorrect, *seal.coverage[1:])}).model_dump_json()
+    )
+    aliases = _relocate_sources(prepared)
+    with pytest.raises(ValueError, match="reference_receipt_coverage"):
+        validation.reference_seal(prepared.workspace, receipt.name, source_aliases=aliases)
+    receipt.write_bytes(original_receipt)
+    (prepared.workspace / prepared.bundle.tracks[0].identity.pcm.path).write_bytes(bytes(512))
+    with pytest.raises(ValueError, match="loaded_pcm_hash"):
+        validation.reference_seal(prepared.workspace, receipt.name, source_aliases=aliases)
+
+
+def test_receipt_inventory_and_protocol_bind_the_same_raw_bytes_that_are_parsed(
+    prepared: Prepared, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle_path = prepared.workspace / "reference.json"
+    bundle_path.write_text(prepared.bundle.model_dump_json())
+    receipt = cli.seal_reference(prepared.workspace, bundle_path.name, "reference-seal.json")
+    identity_path = prepared.workspace / "identities.json"
+    bound_paths = {
+        bundle_path,
+        identity_path,
+        prepared.workspace / "scratch/b2a/frozen-manifest.json",
+        prepared.workspace / "scratch/b2a/scoring-addendum.json",
+    }
+    original_hash = validation.sha256_file
+    original_read = validation.read_json_bytes
+    counts: dict[Path, int] = {}
+
+    def no_separate_hash(path: Path, *, pcm: bool = False) -> str:
+        assert path not in bound_paths, "parsed JSON must be hashed from the same read bytes"
+        return original_hash(path, pcm=pcm)
+
+    def counted_read(path: Path) -> bytes:
+        counts[path] = counts.get(path, 0) + 1
+        return original_read(path)
+
+    monkeypatch.setattr(validation, "sha256_file", no_separate_hash)
+    monkeypatch.setattr(validation, "read_json_bytes", counted_read)
+    _, reference, _ = validation.reference_seal(prepared.workspace, receipt.name)
+    assert reference == prepared.bundle
+    assert all(counts[path] == 1 for path in bound_paths)

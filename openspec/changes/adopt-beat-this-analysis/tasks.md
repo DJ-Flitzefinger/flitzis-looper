@@ -105,10 +105,20 @@
   complete supplied beat/downbeat timing reports with frozen uncertainty eligibility,
   explicit event/region denominators and companion interval errors on the same point pairs.
   Keep input certification unchecked, musical acceptance pending and default adoption blocked.
-  No file/CLI/seal integration or actual musical scores are supplied; the next bounded slice
-  must bind reference seals to complete native source/PCM/request/raw/envelope lineage.
+  The core supplies no file/CLI/seal integration or actual musical scores; the separate
+  orchestration below binds complete native source/PCM/request/raw/envelope lineage.
   All independent-reference, count/bar, paired-human, BPM/region and cutover/restore/end-to-end
   parent tasks below remain open. See docs/beat-this-temporal-scoring.md for the exact boundary.
+- [x] B2 private scoring orchestration/CLI only: revalidate full reference receipt bytes,
+  source/PCM/coverage before opening candidates; bind approved historical native lineage,
+  complete raw worker/component/final arrays and strict request identities. Support explicit
+  content-verified T01/T02 path aliases while retaining the original manifest. Reject partial
+  arrays, mismatches, duplicates and unsupported lineage; preserve original failed attempts
+  and explicit missing inputs. No actual musical score, human acceptance or default promotion
+  follows. Full independent reference, paired correction, BPM/region and cutover parent gates
+  below remain open. See docs/beat-this-scoring-workflow.md.
+  Actual T04/T05 archived lineages are complete; T01-T03 original completion-event
+  logit roundtrip mismatches are rejected and need fresh complete native evidence.
 - [ ] Obtain independent full-span labels, certify recording groups/class coverage and
   measure paired held-out correction burden. Sparse manually verified grids alone do not
   satisfy whole-track quality/count continuity; raw predictions never serve as labels.
