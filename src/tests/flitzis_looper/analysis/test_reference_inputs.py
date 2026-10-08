@@ -13,6 +13,8 @@ from pydantic import TypeAdapter, ValidationError
 
 from flitzis_looper.analysis import reference_inputs as cli
 from flitzis_looper.analysis import reference_inputs_validation as validation
+from flitzis_looper.analysis.beat_scoring import score_track_timing
+from flitzis_looper.analysis.contracts import BeatPredictions
 from flitzis_looper.analysis.reference_inputs_models import (
     BACKENDS,
     HELD_OUT,
@@ -909,3 +911,56 @@ def test_changed_reference_and_forged_pre_reference_order_are_rejected(prepared:
     bundle_path.write_text(bundle_path.read_text() + " ")
     with pytest.raises(ValueError, match="sealed_reference_bundle_changed"):
         validation.reference_seal(prepared.workspace, seal_path.name)
+
+
+def test_pure_temporal_projection_preserves_critical_timing_without_certifying_bar_identity(
+    prepared: Prepared,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    track = prepared.bundle.tracks[0]
+    predictions = BeatPredictions(
+        beat_seconds=tuple(beat.seconds for beat in track.beats),
+        downbeat_seconds=tuple(bar.seconds for bar in track.bars),
+        beat_logits=(0.0, -1.0),
+        downbeat_logits=(1.0, 0.0),
+    )
+    monkeypatch.setattr(
+        Path, "open", lambda *_args, **_kwargs: pytest.fail("pure core opens no files")
+    )
+    report = score_track_timing(track, predictions)
+    assert report.beats.tolerances[2].f1 == report.downbeats.tolerances[2].f1 == 1.0
+    assert tuple(result.bar_id for result in report.critical_downbeat_timing) == (0, 7)
+    assert all(
+        result.candidate_bar_identity == "unchecked" for result in report.critical_downbeat_timing
+    )
+    assert report.input_certification == "unchecked_by_metric_core"
+    assert report.quarter_count_and_bar_identity == report.paired_correction_burden == "pending"
+    assert report.musical_acceptance == "pending"
+    assert report.default_adoption == "blocked"
+    assert report.regional_scope == "supplied_regions_only_no_inferred_startup_break_tail"
+
+
+@pytest.mark.parametrize(
+    ("beat_logits", "downbeat_logits"), [((0.0,), ()), ((float("nan"),), (0.0,))]
+)
+def test_track_temporal_projection_rejects_incomplete_or_nonfinite_logits(
+    prepared: Prepared,
+    beat_logits: tuple[float, ...],
+    downbeat_logits: tuple[float, ...],
+) -> None:
+    with pytest.raises(ValueError, match=r"logits.*equal|logits.*finite"):
+        score_track_timing(
+            prepared.bundle.tracks[0], BeatPredictions((), (), beat_logits, downbeat_logits)
+        )
+
+
+def test_track_temporal_projection_rejects_clipped_extent_or_unknown_critical_bar(
+    prepared: Prepared,
+) -> None:
+    track = prepared.bundle.tracks[0]
+    predictions = BeatPredictions((), (), (), ())
+    with pytest.raises(ValueError, match="complete native"):
+        score_track_timing(track.model_copy(update={"extent_end_seconds": 15.0}), predictions)
+    feature = track.critical_features[0].model_copy(update={"bar_ids": (99,)})
+    with pytest.raises(ValueError, match="supplied reference bar"):
+        score_track_timing(track.model_copy(update={"critical_features": (feature,)}), predictions)

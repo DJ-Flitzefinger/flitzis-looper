@@ -7,6 +7,13 @@ Reference-only sealing is supported. Every receipt retains pending musical
 acceptance and blocked default adoption; reference receipts retain pending
 correction measurements. Valid input is not an acceptance result.
 
+The separate [temporal metric core](beat-this-temporal-scoring.md) accepts supplied
+in-memory timestamps and regions only. It verifies no seal or candidate lineage
+and retains unchecked input certification, pending musical acceptance and blocked
+default adoption. Connecting these receipts to complete native candidates through
+a private scoring workflow remains the next integration boundary; neither this
+input CLI nor the metric core supplies missing human observations.
+
 ## Private identity and listening material
 
 Run commands from the active repository with its existing Python environment:

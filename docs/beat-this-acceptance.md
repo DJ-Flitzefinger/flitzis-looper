@@ -126,6 +126,23 @@ three paired held-out correction measurements remain pending. R01 is resource
 only; sparse H01/H02 anchors cannot replace those references. Musical scoring,
 default cutover and live-map adoption remain pending.
 
+## Temporal metric core boundary
+
+The [offline temporal core](beat-this-temporal-scoring.md) now implements the
+frozen exact matching and timing-report mechanics as pure APIs. It accepts
+complete supplied timestamp sequences and regions, retains separate uncertainty
+eligibility/prediction denominators, and reports point-error, fixed-region and
+critical-reference-event diagnostics. It performs no file access, CLI import,
+reference sealing, source/PCM/request verification or candidate-lineage check.
+
+Every core report keeps input certification `unchecked_by_metric_core`, musical
+acceptance `pending` and default adoption `blocked`. No actual independent musical
+scores or acceptance results have been collected in this slice. The next bounded
+integration must bind verified reference seals to complete native candidate
+source/PCM/request/raw-response/envelope evidence. Complete references, certified
+counts/bar identities, corrected-legacy paired human measurements, BPM/region
+evaluation, default cutover, persistence/cache and end-to-end gates remain open.
+
 ## Resource and publication gates
 
 | Property | Frozen limit |

@@ -99,6 +99,54 @@ reanalysis SHALL create a new raw result without silently overwriting an accepte
 
 ## ADDED Requirements
 
+### Requirement: Frozen Temporal Scoring Remains Separate From Musical Acceptance
+The system SHALL provide an explicitly invoked offline temporal metric core for the frozen B2
+protocol, using monotone one-to-one maximum-cardinality matching, then minimum summed absolute
+timing error, then the lexicographically smallest reference/prediction index-pair sequence.
+It SHALL evaluate beats and downbeats separately at 10, 20, 40 and 70 ms, with reference timing
+uncertainty half-width limits of 2.5, 5, 10 and 10 ms respectively. It SHALL retain original
+indices, all eligibility denominators, signed errors, absolute error distributions, missing/extra
+counts and predeclared regional results. Predictions SHALL be excluded only by the supplied
+predeclared nonmetrical regions, never by proximity to ineligible reference labels.
+
+The core SHALL bound each complete event sequence to 250000 events and each matching to
+1000000 eligible pairs, rejecting an exceeded bound without truncation or approximation.
+Its longest matched run SHALL stop at an unmatched/ineligible reference, an intervening extra
+prediction or a predeclared region boundary. Interval-distance diagnostics SHALL describe the
+same point matches and SHALL NOT replace point-tolerance evidence. The core SHALL perform no
+file access, inference, audio-device operation, playback adoption or project persistence.
+
+The core SHALL identify its reference/candidate certification as unchecked and retain pending
+musical acceptance and blocked default adoption. Input structure, synthetic tests and temporal
+matches SHALL NOT certify independent labels, raw-artifact lineage, quarter counts, bar identity,
+paired human correction burden, listening acceptance or default replacement. The separate
+sealed-reference/artifact orchestration and all original B2 acceptance gates SHALL remain required.
+
+#### Scenario: Broad uncertainty cannot erase a candidate extra
+- **GIVEN** a metrical reference contains a label ineligible at the chosen tolerance
+- **WHEN** the temporal metric core evaluates the complete candidate sequence
+- **THEN** the ineligible reference is reported separately
+- **AND** a prediction near it remains in the prediction denominator unless it belongs to a
+  predeclared nonmetrical region
+
+#### Scenario: Matching selects the frozen global optimum
+- **GIVEN** several monotone one-to-one matchings meet the inclusive tolerance
+- **WHEN** the offline core evaluates them
+- **THEN** maximum count takes precedence over timing cost and exact timing cost over index order
+- **AND** a tie retains the lexicographically smallest original index-pair sequence
+
+#### Scenario: A metric result cannot release the new default
+- **GIVEN** synthetic or structurally valid events produce perfect temporal scores
+- **WHEN** the core returns its report
+- **THEN** reference/candidate certification remains unchecked, musical acceptance pending and
+  default adoption blocked
+- **AND** no file, model, audio device, saved result or live timing is accessed or adopted
+
+#### Scenario: Dense input exceeds the bounded scorer
+- **GIVEN** the complete input would require more than 1000000 eligible pairs
+- **WHEN** matching starts
+- **THEN** it fails explicitly without returning a truncated or approximate score
+
 ### Requirement: Automatic BPM Summary Preserves Full Beat Evidence And Manual Intent
 The system SHALL derive automatic BPM metadata from the selected backend's complete valid
 beat results using a documented versioned estimation method and explicit beat-unit policy.

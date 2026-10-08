@@ -101,6 +101,14 @@
 - [x] Prepare and validate the independent reference and measured paired-correction input
   workflow with exact frozen source/PCM/protocol hashes, private drafts/seals and an honest
   missing-input inventory. Input validation does not supply labels or certify acceptance.
+- [x] B2 temporal metric core only: implement pure exact bounded monotone matching and
+  complete supplied beat/downbeat timing reports with frozen uncertainty eligibility,
+  explicit event/region denominators and companion interval errors on the same point pairs.
+  Keep input certification unchecked, musical acceptance pending and default adoption blocked.
+  No file/CLI/seal integration or actual musical scores are supplied; the next bounded slice
+  must bind reference seals to complete native source/PCM/request/raw/envelope lineage.
+  All independent-reference, count/bar, paired-human, BPM/region and cutover/restore/end-to-end
+  parent tasks below remain open. See docs/beat-this-temporal-scoring.md for the exact boundary.
 - [ ] Obtain independent full-span labels, certify recording groups/class coverage and
   measure paired held-out correction burden. Sparse manually verified grids alone do not
   satisfy whole-track quality/count continuity; raw predictions never serve as labels.
