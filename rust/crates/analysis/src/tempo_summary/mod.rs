@@ -6,8 +6,8 @@
 //! Counts and their musical interpretation are supplied explicitly; this module
 //! never infers quarter units or declares accepted musical timing.
 
-mod fit;
-mod math;
+pub(crate) mod fit;
+pub(crate) mod math;
 mod types;
 
 pub use types::*;

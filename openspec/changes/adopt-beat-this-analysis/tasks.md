@@ -107,7 +107,7 @@
   Keep input certification unchecked, musical acceptance pending and default adoption blocked.
   The core supplies no file/CLI/seal integration or actual musical scores; the separate
   orchestration below binds complete native source/PCM/request/raw/envelope lineage.
-  All independent-reference, count/bar, paired-human, BPM/region and cutover/restore/end-to-end
+  All independent-reference, count/bar, paired-human and cutover/restore/end-to-end
   parent tasks below remain open. See docs/beat-this-temporal-scoring.md for the exact boundary.
 - [x] B2 private scoring orchestration/CLI only: revalidate full reference receipt bytes,
   source/PCM/coverage before opening candidates; bind approved historical native lineage,
@@ -115,7 +115,7 @@
   content-verified T01/T02 path aliases while retaining the original manifest. Reject partial
   arrays, mismatches, duplicates and unsupported lineage; preserve original failed attempts
   and explicit missing inputs. No actual musical score, human acceptance or default promotion
-  follows. Full independent reference, paired correction, BPM/region and cutover parent gates
+  follows. Full independent reference, paired correction and cutover parent gates
   below remain open. See docs/beat-this-scoring-workflow.md.
   Actual T04/T05 archived lineages are complete; T01-T03 original completion-event
   logit roundtrip mismatches remain rejected with all historical failures retained.
@@ -131,22 +131,35 @@
   Release profiles for draft selection; old IDs retain strict rejection. Recorded
   Release job walls are 20.2726/14.8532/18.3885 seconds, without RSS/resource acceptance.
   No ReferenceSeal, musical score, human acceptance or default cutover follows;
-  all parent B2 gates below remain open. See docs/beat-this-scoring-workflow.md.
+  remaining parent B2 gates below remain open. See docs/beat-this-scoring-workflow.md.
 - [ ] Obtain independent full-span labels, certify recording groups/class coverage and
   measure paired held-out correction burden. Sparse manually verified grids alone do not
   satisfy whole-track quality/count continuity; raw predictions never serve as labels.
-- [ ] Implement and validate a versioned automatic BPM summary from full selected-backend
+- [x] Implement and validate a versioned automatic BPM summary from full selected-backend
   beat results, with explicit beat units, distant-interval checks and uncertainty handling.
   Preserve true fractional BPM, raw/local timing and manual/TAP overrides; do not use
   integer rounding as musical truth or a summary as variable-map playback authority.
-  This is the next bounded B2 step with the representative-region task below; reuse
-  existing G2/G3 evidence and timing contracts for policy, integration and evaluation.
-- [ ] Evaluate longer representative middle-region selection/weighting for pad-load BPM
+  `selected-backend-bpm-v1` reuses G2 fitting with complete all-assigned OLS and separate
+  robust/distant diagnostics, full local intervals, unverified quarter assumptions and
+  explicit rational count maps. Integrate only into diagnostic background snapshots after
+  native finish; all5 complete candidates and actual unchanged G2 PCM evaluated. No routing
+  cutover, accepted timing, musical certification or human/device acceptance follows.
+  See docs/selected-backend-bpm.md for policy, actual results and honest uncertainty.
+- [x] Evaluate longer representative middle-region selection/weighting for pad-load BPM
   against complete-track and distant-window evidence. Freeze the policy before held-out
   validation; cover sparse intro/outro, an ambiguous middle, variable/fractional tempo
   and explicit quarter-note counts across comparable transient spans (for example snares).
   Preserve full raw inference, source/grid/loop origins, selected-region provenance and
   uncertainty; reject unsupported peak pairing and half/double-tempo assumptions.
+  Freeze `representative-middle-region-v1`: complete-source middle20-80/thirds,
+  original indices/counts, equal-weight retained OLS,24positions/30s/60%span/20%edges,
+  <=10%/2consecutive exclusions and G2 affine feasibility. Prefer viable middle,
+  then longest/count/earliest third. All5 real candidates retain unsupported global
+  status/no eligible region rather than tuning gates; real600s metadata120 retains
+  separate zero measured slope/raw-lattice sensitivity and earlier G2 feature bounds.
+  Debug/Release hardware-free actual native jobs retain complete snapshot arrays,
+  resolved fitter-PYD/source-EXE identities, native finish and readmission. Regression
+  fixtures are numerical contracts, not new musical references or audible acceptance.
 - [x] Measure every frozen complete track's admission, raw response and final publication,
   time and actual live-process memory. Preserve full raw output even on publication failure;
   explicit size/admission rejection remains an acceptance failure, not a truncated success.

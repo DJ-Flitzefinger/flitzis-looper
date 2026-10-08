@@ -44,6 +44,14 @@ PRODUCER_FILES = (
     "rust/crates/looper/src/audio_engine/analysis_pcm/streamed.rs",
     "rust/crates/looper/src/audio_engine/analysis_pcm/fft.rs",
     "src/flitzis_looper/analysis/jobs.py",
+    "src/flitzis_looper/analysis/selected_bpm.py",
+    "src/flitzis_looper/analysis/selected_bpm_models.py",
+    "rust/crates/looper/src/selected_bpm.rs",
+    "rust/crates/analysis/src/selected_bpm/mod.rs",
+    "rust/crates/analysis/src/selected_bpm/types.rs",
+    "rust/crates/analysis/src/selected_bpm/regions.rs",
+    "rust/crates/analysis/src/tempo_summary/fit.rs",
+    "rust/crates/analysis/src/tempo_summary/math.rs",
     "src/flitzis_looper/analysis/publication.py",
     "src/flitzis_looper/analysis/contracts.py",
     "src/flitzis_looper/analysis/worker.py",
@@ -322,6 +330,7 @@ class Probe:
             self.binding(self.output / "native-test-executable.exe", "native_test_executable"),
             self.binding(self.output / "complete-native-loaded-pcm.f32le", "native_loaded_pcm"),
             self.binding(self.output / "complete-native-export.f32le", "native_export_pcm"),
+            self.binding(self.output / "bpm-metadata.json", "derived_bpm_metadata"),
             self.binding(self.config_path, "probe_configuration"),
             self.binding(self.workspace / "scratch/b2a/frozen-manifest.json", "frozen_manifest"),
             self.binding(
@@ -365,6 +374,8 @@ class Probe:
         files.append(self.binding(self.output / "producer-sources.json", "producer_sources"))
         pyds = list((self.repository / "src/flitzis_looper_audio").glob("*.pyd"))
         assert len(pyds) == 1
+        executing = Path(sys.modules["flitzis_looper_audio.flitzis_looper_audio"].__file__)
+        assert executing.resolve(strict=True) == pyds[0].resolve(strict=True)
         self.runtime["embedded_python"] = {
             "version": sys.version,
             "executable": sys.executable,
@@ -378,8 +389,10 @@ class Probe:
         )
         self.runtime["installed_native_extension"] = {
             "binding": self.binding(retained_pyd),
-            "used_by_probe": False,
+            "used_by_probe": True,
+            "role": "pure BPM numerical helper only; source bridge executes native test EXE",
             "original_path": str(pyds[0]),
+            "executing_resolved_path": str(executing.resolve(strict=True)),
         }
         files.append(self.binding(retained_pyd, "installed_pyd"))
         worker_configuration = {
@@ -398,7 +411,7 @@ class Probe:
         )
         return {
             "schema_version": 1,
-            "producer": "hardware-free-native-b2-v1",
+            "producer": "hardware-free-native-b2-bpm-v1",
             "track_id": self.track_id,
             "original_source_relative": self.track.source_relative,
             "actual_source_path": self.source.relative_to(self.workspace).as_posix(),
@@ -503,13 +516,23 @@ class Probe:
         assert isinstance(raw, str)
         (self.output / "result-envelope.raw.json").write_text(raw, encoding="utf-8")
         publication = self.publication_evidence(raw, request)
+        snapshot = self.job.snapshot()
+        bpm = snapshot.bpm_summary
+        assert bpm is not None
+        assert snapshot.bpm_summary_error is None
+        assert bpm.identity == request.identity
+        assert bpm.model == request.model
+        assert array_identity(bpm.predictions) == publication["prediction_arrays"]
+        assert bpm.assessment.raw_position_count == len(bpm.predictions.beat_seconds)
+        assert bpm.assessment.global_status in {"unverified", "unsupported"}
+        write_json(self.output / "bpm-metadata.json", bpm.report())
         retirement = self.retirement_evidence(request, native)
         admitted = native.observations[0]["metadata"]
         pyd = self.provenance(admitted)
         write_json(self.output / "producer-provenance.json", pyd)
         summary = {
             "schema_version": 1,
-            "measurement_slice": "b2-fresh-hardware-free-native-lineage",
+            "measurement_slice": "b2-bpm-regions-hardware-free-native-integration",
             "track_id": self.track_id,
             "mode": "ready",
             "source": str(self.source),
@@ -519,7 +542,7 @@ class Probe:
                 pyd["runtime"]["installed_native_extension"]["binding"]["sha256"]
             ),
             "native_extension_scope": (
-                "installed PYD on disk; native harness executes retained test EXE"
+                "installed PYD executes pure BPM fitting; source harness executes retained test EXE"
             ),
             "loaded_shape_rate_channels_frames": [
                 request.pcm.sample_rate_hz,
@@ -530,6 +553,10 @@ class Probe:
             "model": asdict(request.model),
             "export": self.adapter.export,
             **publication,
+            "bpm_metadata": self.binding(self.output / "bpm-metadata.json"),
+            "bpm_policies": [bpm.assessment.policy_version, bpm.assessment.region_policy_version],
+            "bpm_global_status": bpm.assessment.global_status,
+            "bpm_selected_region": bpm.assessment.selected_region_id,
             **retirement,
             "wire_outcome": self.wire_outcome,
             "job_wall_seconds": time.monotonic() - self.started,

@@ -66,6 +66,7 @@ rust/
             |-- tempo_acceptance/  # immutable accepted timing and control-only adoption guard
             |-- tempo_refinement/  # isolated repeated PCM features and explicit count correspondence
             |-- tempo_summary/     # offline count hypotheses and robust period diagnostics
+            |-- selected_bpm/      # complete/region BPM metadata reusing G2 numerical fitting
             |-- detection_function.rs
             |-- tempotrack.rs
             |-- phase_vocoder.rs
@@ -125,10 +126,16 @@ the existing automatic/manual analyzer remains selected. See
 component semantics and remaining Beat This setup/inference work.
 
 The analysis crate's `tempo_evidence`, `tempo_refinement` and `tempo_summary`
-APIs assess complete source-bound evidence offline. They have no automatic
-load, manual Analyze, callback or runtime-publication caller. Their narrow
+APIs assess complete source-bound evidence offline without implicit automatic
+adoption. Explicit G3 preparation and restoration separately revalidate this
+evidence and guard runtime publication and acknowledgement. Their narrow
 repeated-attack policy and independent-count assertion boundaries are described
 in [constant-tempo candidates](../docs/constant-tempo-summary.md).
+The pure detached `summarize_selected_bpm_json` binding additionally reuses the
+same numerical machinery for diagnostic job metadata. It requires no fabricated
+source/PCM seal and never creates G3 accepted timing. Complete OLS, unchanged G2
+diagnostics and regional metadata remain separate and unverified; see
+[frozen selected-backend policies](../docs/selected-backend-bpm.md).
 `analysis_pcm/tempo_gate.rs` is a test-only, explicitly ignored private-reference
 gate. It uses the existing native complete-input resampler and independently
 verified retained native PCM/Beat This evidence, with input/output paths supplied
@@ -281,9 +288,9 @@ Python package directories are already available to standalone test executables.
   the callback; fixed-size messages preserve existing source seek semantics.
 - The pure `ScalarSourceGrid` PyO3 facade reuses `source_grid.rs` with a `f64`
   control period for editor lines, snap and automatic ends. The live constructor
-  accepts native `f32` BPM for legacy state, while G3b2a acknowledged explicit
-  acceptance supplies the binary64 period/origin directly. Transport/BPMLOCK
-  rates are not yet migrated. See
+  accepts binary64 BPM; acknowledged explicit acceptance supplies the binary64
+  period/origin directly. Native Transport/BPMLOCK periods and rates also retain
+  binary64 precision. See
   [scalar source coordinates](../docs/scalar-source-coordinates.md).
 - Transport stores complete musical position across BPM changes. The dedicated
   `bootstrap_transport_from_pad(id)` request latches the selected BPMLOCK

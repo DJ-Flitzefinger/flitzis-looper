@@ -77,6 +77,24 @@ pub(super) fn diagnose(
     evidence: &RawTempoEvidence<'_>,
     hypothesis: &QuarterNoteHypothesis<'_>,
 ) -> HypothesisDiagnostic {
+    let source = evidence.source;
+    diagnose_numerical(
+        evidence.beat_seconds,
+        source.loaded_frame_count as f64 / source.loaded_sample_rate_hz as f64,
+        source.timing_error_halfwidth_seconds,
+        hypothesis,
+    )
+}
+
+/// Shared numerical assessment after the caller validates its input domain.
+/// Source-bound G2 remains the validating wrapper; metadata must not invent a
+/// source identity to obtain the same bounded fit and distant-window checks.
+pub(crate) fn diagnose_numerical(
+    beat_seconds: &[f64],
+    duration: f64,
+    halfwidth: f64,
+    hypothesis: &QuarterNoteHypothesis<'_>,
+) -> HypothesisDiagnostic {
     let mut result = initial_diagnostic(hypothesis);
     let points: Vec<_> = hypothesis
         .quarter_counts
@@ -86,7 +104,7 @@ pub(super) fn diagnose(
             quarter.map(|quarter| Point {
                 raw_index,
                 quarter,
-                seconds: evidence.beat_seconds[raw_index],
+                seconds: beat_seconds[raw_index],
             })
         })
         .collect();
@@ -94,9 +112,6 @@ pub(super) fn diagnose(
         result.reasons.push(RejectionReason::InsufficientPositions);
         return result;
     }
-    let source = evidence.source;
-    let duration = source.loaded_frame_count as f64 / source.loaded_sample_rate_hz as f64;
-    let halfwidth = source.timing_error_halfwidth_seconds;
     let denominator = f64::from(hypothesis.quarter_note_denominator);
     let numerical_tolerance =
         points.last().expect("nonempty points").seconds.max(1.0) * 64.0 * f64::EPSILON;

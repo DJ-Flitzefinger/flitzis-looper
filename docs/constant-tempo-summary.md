@@ -1,6 +1,10 @@
 # Offline constant-tempo candidates
 
 G2a adds `flitzis_looper_analysis::tempo_summary::summarize_constant_tempo`.
+The bounded B2 [selected-backend metadata](selected-backend-bpm.md) reuses its
+numerical fitting/feasibility code while keeping the original source-bound G2
+policy and G3 acceptance unchanged. Its complete and regional estimates remain
+unverified diagnostics and never become accepted timing.
 This pure Rust API assesses explicit count hypotheses against complete binary64
 timestamps. G2b adds the offline `tempo_evidence` binding/adapters and narrow
 `tempo_refinement` PCM feature assessment. These APIs do not update pads or publish
@@ -61,12 +65,13 @@ Beat This downbeats stay independent; the worker protocol does not require a
 beat-index subset association. Analyzer-input dimensions never replace loaded
 PCM dimensions. Origin and the fitted intercept remain distinct.
 
-The adapter checks identity assertions and PCM content, not the historical truth
-of the original-file-to-loaded-buffer relationship. Current loading decodes
-before copying the original. This slice has no production load/job caller and
-does not establish the planned copy-first source-byte ownership or PCM cache.
-The existing immutable snapshot/job retirement boundary remains authoritative
-when a later caller adopts the API.
+The standalone adapter checks identity assertions and PCM content; callers must
+establish the original-file-to-loaded-buffer relationship. Productive C1 loading
+now copies source bytes first and derives loaded PCM and the full-source cache
+from that same immutable snapshot. That separate ownership path does not turn
+this adapter's assertions into independent count evidence. Explicit G3 adoption
+revalidates its source-bound evidence and remains subject to publication guards
+and callback acknowledgement.
 
 `PcmBinding::verify` checks the actual samples against `PcmBindingMetadata`.
 `BoundTempoEvidence::from_qm` takes the retained capture, actual complete binary64

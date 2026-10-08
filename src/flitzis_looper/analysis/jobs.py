@@ -7,7 +7,7 @@ import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Event, Lock, Thread
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from flitzis_looper.analysis.contracts import (
     AnalysisIdentity,
@@ -19,7 +19,11 @@ from flitzis_looper.analysis.contracts import (
     validate_component_result,
 )
 from flitzis_looper.analysis.publication import encode_result
+from flitzis_looper.analysis.selected_bpm import summarize_published
 from flitzis_looper.analysis.worker import BeatWorkerAdapter
+
+if TYPE_CHECKING:
+    from flitzis_looper.analysis.selected_bpm_models import SelectedBpmReport
 
 _POLL_SECONDS = 0.02
 _MAX_KEY_JSON_BYTES = 16_384
@@ -71,6 +75,8 @@ class JobSnapshot:
     cancellation_requested: bool
     detail: str = ""
     result_json: str | None = None
+    bpm_summary: SelectedBpmReport | None = None
+    bpm_summary_error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,16 +250,7 @@ class AnalysisJob:
             self._cancelled.set()
         if self._cancelled.is_set():
             return self._failed_beats("Analysis cancelled before inference")
-        request = BeatWorkerRequest(
-            identity=self._loaded.identity,
-            pcm=MonoPcmInput(
-                path=pcm_path,
-                sample_rate_hz=self._loaded.sample_rate_hz,
-                frame_count=self._loaded.frame_count,
-                origin_seconds=self._loaded.origin_seconds,
-            ),
-            model=self._model,
-        )
+        request = self._request(pcm_path)
         self._key_thread = Thread(
             target=self._run_key,
             args=(key_results,),
@@ -266,6 +263,32 @@ class AnalysisJob:
         result = self._adapter.run(request, self._cancelled)
         validate_component_result(result, request, WorkerLimits())
         return result
+
+    def _request(self, pcm_path: Path) -> BeatWorkerRequest:
+        return BeatWorkerRequest(
+            identity=self._loaded.identity,
+            pcm=MonoPcmInput(
+                path=pcm_path,
+                sample_rate_hz=self._loaded.sample_rate_hz,
+                frame_count=self._loaded.frame_count,
+                origin_seconds=self._loaded.origin_seconds,
+            ),
+            model=self._model,
+        )
+
+    def _summarize(
+        self, result_json: str, directory: Path | None
+    ) -> tuple[SelectedBpmReport | None, str | None]:
+        if directory is None:
+            return None, None
+        try:
+            # Retain the actual request metadata after PCM retirement; the numerical
+            # reader never opens this now-retired file or the optional model.
+            _, summary = summarize_published(result_json, self._request(directory / "mono.f32le"))
+        except (RuntimeError, TypeError, ValueError) as error:
+            # Metadata failure must not strand native admission or replace full beats/key.
+            return None, str(error)[:1024]
+        return summary, None
 
     def _supervise(self) -> None:
         directory: Path | None = None
@@ -312,6 +335,9 @@ class AnalysisJob:
             beat = replace(beat, status="cancelled", reason="Analysis cancelled", predictions=None)
             key = _key_failure("Analysis cancelled", cancelled=True)
         result_json = self._encode_result(beat, key)
+        # Derive only from the bounded published representation. Oversize beats
+        # already have a failed component here; full raw inference is not cropped.
+        bpm_summary, bpm_summary_error = self._summarize(result_json, directory)
         try:
             accepted = self._native.finish(result_json)
         except (RuntimeError, ValueError) as error:
@@ -325,8 +351,16 @@ class AnalysisJob:
             beat = replace(beat, status="cancelled", reason="Analysis cancelled", predictions=None)
             key = _key_failure("Analysis cancelled", cancelled=True)
             result_json = self._encode_result(beat, key)
+            bpm_summary = None
+            bpm_summary_error = None
         with self._lock:
-            self._snapshot = replace(self._snapshot, stage="finished", result_json=result_json)
+            self._snapshot = replace(
+                self._snapshot,
+                stage="finished",
+                result_json=result_json,
+                bpm_summary=bpm_summary,
+                bpm_summary_error=bpm_summary_error,
+            )
         self.done.set()
 
     def _encode_result(self, beat: BeatComponentResult, key: dict[str, object]) -> str:

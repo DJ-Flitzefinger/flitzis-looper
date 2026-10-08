@@ -198,7 +198,10 @@ fn b2_fresh_native_candidate_probe() {
             .components()
             .any(|part| part == std::path::Component::ParentDir)
     );
-    assert!(output.starts_with(workspace.join("scratch/b2-fresh-lineage-20261008/probes")));
+    assert!(
+        output.starts_with(workspace.join("scratch/b2-fresh-lineage-20261008/probes"))
+            || output.starts_with(workspace.join("scratch/b2-bpm-regions-20261008/native-probes"))
+    );
     assert!(
         !output.exists(),
         "fresh output directory must not already exist"

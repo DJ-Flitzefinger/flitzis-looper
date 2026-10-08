@@ -4,14 +4,14 @@ const SAMPLE_POSITIONS: usize = 65;
 const REFIT_PASSES: usize = 3;
 
 #[derive(Clone, Copy)]
-pub(super) struct Point {
+pub(crate) struct Point {
     pub raw_index: usize,
     pub quarter: i64,
     pub seconds: f64,
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct Line {
+pub(crate) struct Line {
     pub reference: i64,
     pub mean_quarters: f64,
     pub mean_seconds: f64,
@@ -53,7 +53,7 @@ fn sum(values: impl Iterator<Item = f64>) -> f64 {
     total
 }
 
-fn least_squares(points: &[Point], halfwidth: f64) -> Option<Line> {
+pub(crate) fn least_squares(points: &[Point], halfwidth: f64) -> Option<Line> {
     let first = *points.first()?;
     if points.len() < 2 {
         return None;
@@ -117,7 +117,7 @@ fn seed_line(points: &[Point]) -> Option<Line> {
 }
 
 /// Seed from a bounded pair sample, then refit at most three times on all evidence.
-pub(super) fn robust_line(
+pub(crate) fn robust_line(
     seed: &[Point],
     points: &[Point],
     threshold: f64,
@@ -161,7 +161,7 @@ pub(super) fn robust_line(
 /// subgradient, so a fixed 64-step bisection over the conditional OLS slope bound
 /// suffices up to the separately reported numerical tolerance. This does not
 /// enlarge the declared timing bound to fit alternating or correlated variation.
-pub(super) fn feasible_timing_bound(
+pub(crate) fn feasible_timing_bound(
     points: &[Point],
     line: Line,
     halfwidth: f64,

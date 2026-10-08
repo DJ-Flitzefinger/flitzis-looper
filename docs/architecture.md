@@ -59,6 +59,13 @@ aliases preserve frozen source identities. These modules load no engine/model an
 have no application-state or realtime authority. See
 [scoring workflow](beat-this-scoring-workflow.md).
 
+`analysis/selected_bpm.py` adds separate typed full-sequence and regional metadata
+to background diagnostic job snapshots after bounded final publication and native
+finish acceptance. A detached pure Rust helper reuses G2 fitting; request-bound
+metadata stays unverified and does not alter project/accepted/live timing. The
+ordinary scoring readers keep their native-free path. See
+[frozen BPM/region policy](selected-backend-bpm.md).
+
 ```text
 src/flitzis_looper/
     Python application package: controllers, UI, models, persistence,

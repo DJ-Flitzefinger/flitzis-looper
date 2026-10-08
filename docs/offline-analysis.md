@@ -30,10 +30,11 @@ request generation and explicit analyzer transforms. `tempo_refinement` assesses
 only isolated bit-identical attacks and preserves their conditional discrete
 feature uncertainty. Generated count proposals stay unverified; matching
 independent source/PCM-bound count evidence alone can assert quarter-note units.
-These offline APIs have no production loading/service caller, add no runtime
-publication and do not make the current decode-before-copy loader a verified
-original-byte snapshot. Source-byte/cache ownership and G3 timing adoption are
-separate stages.
+These standalone offline APIs do not implicitly publish or adopt timing. Their
+evidence alone does not establish original-byte lineage: productive C1 loading
+separately copies source bytes first and derives PCM/cache data from the same
+snapshot. Explicit G3 preparation and restoration revalidate bound evidence and
+apply their own publication and acknowledgement guards.
 The shared entry point rejects nonfinite/nonpositive timebase parameters before
 FFT allocation and bounds its ODF window, sample hop and decimated downbeat
 window to at most `2^20` samples. The normal defaults remain well within this
@@ -74,6 +75,15 @@ service/job. Use `job.snapshot()` for nonblocking state, `job.cancel()` to
 invalidate work and `service.shutdown()` to stop admission and request
 cancellation. Shutdown reports current state; it does not join native inference.
 `job.done` is set only after actual component and resource retirement.
+
+B2 also exposes `JobSnapshot.bpm_summary` beside the unchanged final envelope.
+The supervisor derives it from validated full final bytes after PCM retirement,
+then exposes it only after matching native finish accepts the request. It retains
+all raw arrays and separate complete/local/representative-region estimates under
+[frozen unverified policies](selected-backend-bpm.md). Unavailable/cancelled/stale
+or oversize beat publication has no summary. `bpm_summary_error` records a numerical
+metadata failure without replacing full beat/key outcomes or blocking retirement.
+This metadata is not adopted into pad-load timing until the separate B2 cutover.
 
 The service obtains `AudioEngine.begin_offline_analysis(pad_id)` and an
 `OfflineAnalysisJob` reservation. Native methods expose metadata, prepare a

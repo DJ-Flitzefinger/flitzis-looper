@@ -1,7 +1,17 @@
+from collections.abc import Sequence
 from typing import Literal
 
 import numpy as np
 from numpy.typing import NDArray
+
+def summarize_selected_bpm_json(
+    beat_seconds: Sequence[float],
+    sample_rate_hz: int,
+    frame_count: int,
+    quarter_counts: Sequence[int | None] | None = None,
+    quarter_note_denominator: int = 1,
+    count_provenance: str = "selected-backend ordinal assumption",
+) -> str: ...
 
 class ScalarSourceGrid:
     # Pure source-second projection, independent of live native BPM/rate state.

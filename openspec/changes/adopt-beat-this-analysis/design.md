@@ -81,6 +81,24 @@ Retain selected windows, uncertainty and local tempo evidence without cropping
 the adopted full-track model input or replacing immutable raw predictions.
 An intro/outro cause for the observed fractional BPM remains unproven.
 
+The bounded B2 metadata slice freezes `selected-backend-bpm-v1` and
+`representative-middle-region-v1`; see [exact policy](../../../docs/selected-backend-bpm.md).
+Rust reuses G2's centered fit, robust fit and feasibility code without changing source-bound
+G2 acceptance. A pure detached PyO3 helper returns full all-assigned OLS, separate global
+G2 diagnostics and fixed middle/third fits. No fabricated source hash is used to invoke G2.
+Default ordinal quarter units and explicit rational count assertions stay unverified.
+The lattice halfwidth is conditional quantization only, never a G3 TimingBound.
+Complete/region/local evidence and original indices remain separate; a central seed or
+metadata choice never moves source/grid/loop origin or replaces complete timing.
+
+The existing background diagnostic supervisor derives a typed report from validated bounded
+v1/v2 final bytes after resource retirement, and retains it only after matching native finish.
+Metadata failure is explicit without replacing full beats/key or blocking retirement.
+Existing envelope/worker bytes and native-free scoring readers remain unchanged. There is
+no new default routing, saved/manual/TAP/accepted adoption, live map, device operation or
+callback work. The policy is frozen before the actual five-candidate/G2 numerical evaluation;
+candidate-derived labels, musical quality, human acceptance and cutover remain non-goals.
+
 Contracts implemented by the B1a records, plus explicitly deferred model/map layers:
 
 | Record | Contract |

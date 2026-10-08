@@ -173,6 +173,34 @@ preserve complete adopted model input/raw results and assess half/double tempo, 
 events, syncopation and genuine local variation. Region selection SHALL NOT relocate the
 grid origin or loop start, or flatten variable timing into one playback tempo.
 
+The bounded diagnostic implementation SHALL freeze `selected-backend-bpm-v1` and
+`representative-middle-region-v1` before private evaluation. Its complete estimate SHALL
+use centered binary64 least squares on all assigned complete-sequence observations with
+equal observation weights, and SHALL retain complete residuals and separate unchanged
+G2 `constant-period-candidate-v1` robust/distant-window diagnostics. Default ordinal quarter
+counts, half/double alternatives and supplied rational count assertions SHALL remain
+unverified; fit quality SHALL NOT certify their musical truth. Explicit missing-count jumps
+and excluded extras SHALL retain their original raw index and source-time coordinates.
+
+Regional candidates SHALL be the complete-source middle `[20%,80%)` and each temporal
+third. Regional fits SHALL reuse G2 numerical fitting, require at least 24 assigned and
+retained observations, 30 seconds retained span, 60% window coverage, support in its
+first/last 20%, no more than 10% raw exclusions or two consecutive exclusions, and affine
+feasibility under the conditional lattice bound. The threshold SHALL remain below one
+quarter of the fitted quarter-note period. Eligible middle SHALL win; otherwise longest
+retained-span third SHALL win, then most inliers, then earliest window. Unsupported
+candidates SHALL remain explicit; no eligible window SHALL yield no representative BPM.
+Regional metadata SHALL NOT overwrite the complete estimate or complete-source status.
+
+The diagnostic report SHALL distinguish the conditional 0.01-second detector-lattice
+halfwidth and slope sensitivity from unestablished acoustic/count uncertainty. It SHALL
+retain every raw beat/downbeat/logit array, local intervals, request/model identity and
+complete loaded extent. It SHALL NOT supply a G3 timing bound, accepted revision, map or
+default adoption. The diagnostic supervisor SHALL expose a summary only from validated
+bounded final bytes after retirement and matching native finish acceptance. Cancelled,
+stale, failed or oversize beat publications SHALL expose no summary. Metadata failure
+SHALL remain explicit without stranding admission or replacing complete beat/key outcomes.
+
 #### Scenario: Constant source tempo is assessed across the complete beat sequence
 - **GIVEN** complete valid beat evidence with a consistent pulse interpretation
 - **WHEN** automatic BPM metadata is computed after the cutover gate
@@ -217,6 +245,31 @@ grid origin or loop start, or flatten variable timing into one playback tempo.
 - **THEN** BPM uses that explicit count rather than assuming one beat between events
 - **AND** missing or ambiguous event/count evidence cannot silently create half/double tempo
 - **AND** original source anchors and raw beat results remain available
+
+#### Scenario: A sparse-edge region remains scoped unverified metadata
+- **GIVEN** only a longer middle has viable constant numerical evidence
+- **WHEN** the diagnostic report selects that region
+- **THEN** its estimate retains original raw indices and an unverified status
+- **AND** complete-source coverage failure and the full estimate remain visible
+- **AND** no accepted timing or live map is created
+
+#### Scenario: Short sources have no silently shortened representative policy
+- **GIVEN** no predeclared region has 30 seconds of retained evidence
+- **WHEN** the complete sequence is summarized
+- **THEN** the complete estimate remains available when numerically defined
+- **AND** no representative region is selected
+
+#### Scenario: A stale or oversize publication cannot retain a metadata summary
+- **GIVEN** the background worker has complete raw beat results
+- **WHEN** native finish rejects freshness or bounded final publication fails
+- **THEN** the finished diagnostic snapshot exposes no BPM summary
+- **AND** prior saved/manual/TAP/accepted timing remains unchanged
+
+#### Scenario: Metadata failure retires the original job normally
+- **GIVEN** complete validated beat/key publication succeeds but numerical metadata fails
+- **WHEN** native finish accepts the matching request
+- **THEN** full publication remains available with an explicit metadata error
+- **AND** resources retire and later admission remains possible
 
 ### Requirement: Independent Acceptance Inputs Preserve Evidence Boundaries
 The system SHALL provide an explicitly invoked offline preparation and validation workflow
