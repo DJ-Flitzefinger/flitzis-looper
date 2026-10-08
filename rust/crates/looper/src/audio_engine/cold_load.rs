@@ -519,6 +519,8 @@ impl ColdLoad {
             .as_u64()
             .ok_or("missing prepared source rate")?
             != u64::from(self.output_rate);
+        #[cfg(test)]
+        super::c3_observation::owned_pcm(sample.samples.len() * 4);
         let detected = if self.resident_hint.is_some() {
             None
         } else {

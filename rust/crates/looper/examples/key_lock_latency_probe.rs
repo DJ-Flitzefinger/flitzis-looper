@@ -394,7 +394,7 @@ fn measure_pool(rate: u32, voices: usize) {
         trial: 0,
     };
     case.emit("pool", "voices", voices, "count");
-    case.emit("pool", "native_handles", voices * 2, "count");
+    case.emit("pool", "native_handles", voices * 3, "count");
     let before = process_memory();
     let (lanes, worker) = case.measure("pool_construct_and_warm", || {
         key_lock_preparation::create_key_lock_preparation(2, rate, voices).unwrap()
@@ -415,7 +415,7 @@ fn measure_pool(rate: u32, voices: usize) {
             case.emit(
                 "pool_memory",
                 &format!("{metric}_delta_per_handle"),
-                (new as f64 - old as f64) / (voices * 2) as f64,
+                (new as f64 - old as f64) / (voices * 3) as f64,
                 "bytes",
             );
         }

@@ -278,6 +278,17 @@ impl RtMixer {
         Self::try_new(channels, sample_rate_hz).expect("failed to prepare test mixer")
     }
 
+    /// Observe the actual adopted bank without manufacturing a control-side Ready state.
+    #[cfg(test)]
+    pub(super) fn bank_for_measurement(&self) -> &[Option<SampleBuffer>; NUM_SAMPLES] {
+        &self.sample_bank
+    }
+
+    #[cfg(test)]
+    pub(super) fn key_lock_for_measurement(&self, id: usize) -> bool {
+        self.pad_key_lock_enabled[id]
+    }
+
     pub(crate) fn try_new(
         channels: usize,
         sample_rate_hz: f32,

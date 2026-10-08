@@ -169,6 +169,92 @@ fn rewrite_manifest(path: &Path, mutate: impl FnOnce(&mut Value)) -> PathBuf {
 }
 
 #[test]
+fn warm_contended_validation_waits_for_existing_generation() {
+    let fixture = Fixture::new(48_000, 1);
+    let (cold, first) = fixture.cold(48_000, 2);
+    let opening = lifecycle::OpeningGuard::acquire(&first.cache_path, &|| false).unwrap();
+    let mut transaction =
+        ColdTransaction::capture(&fixture.samples, &fixture.source, true, &|| false).unwrap();
+    let (waiting_tx, waiting_rx) = std::sync::mpsc::channel();
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+    let follower = std::thread::spawn(move || {
+        let _gate = transaction.preparation_gate(48_000, 2, &|| false).unwrap();
+        let entered = AtomicBool::new(false);
+        let result = transaction.try_reuse(48_000, 2, PCM_LIMIT_BYTES, &|| {
+            if !entered.swap(true, Ordering::Relaxed) {
+                waiting_tx.send(()).unwrap();
+            }
+            false
+        });
+        finished_tx.send(()).unwrap();
+        let warm = result
+            .unwrap()
+            .expect("busy compatible cache must not become a cold miss");
+        transaction.commit(&|| false).unwrap();
+        transaction.bind_pcm(&warm.samples);
+        let lease = transaction.into_lease();
+        (warm, lease)
+    });
+    waiting_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(
+        finished_rx.recv_timeout(Duration::from_millis(100)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+    );
+    drop(opening);
+    finished_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let (warm, second) = follower.join().unwrap();
+    assert!(second.integrity.warm);
+    assert_eq!(first.cache_path, second.cache_path);
+    assert_eq!(first.manifest.identity, second.manifest.identity);
+    assert!(Arc::ptr_eq(&cold.samples, &warm.samples));
+}
+
+#[test]
+fn warm_contended_validation_cancellation_preserves_peer_cache() {
+    let fixture = Fixture::new(48_000, 1);
+    let (cold, first) = fixture.cold(48_000, 2);
+    let opening = lifecycle::OpeningGuard::acquire(&first.cache_path, &|| false).unwrap();
+    let original_manifest = fs::read(first.cache_path.join("manifest.json")).unwrap();
+    let mut transaction =
+        ColdTransaction::capture(&fixture.samples, &fixture.source, true, &|| false).unwrap();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let flag = cancelled.clone();
+    let (waiting_tx, waiting_rx) = std::sync::mpsc::channel();
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+    let follower = std::thread::spawn(move || {
+        let _gate = transaction.preparation_gate(48_000, 2, &|| false).unwrap();
+        let entered = AtomicBool::new(false);
+        let result = transaction.try_reuse(48_000, 2, PCM_LIMIT_BYTES, &|| {
+            if !entered.swap(true, Ordering::Relaxed) {
+                waiting_tx.send(()).unwrap();
+            }
+            flag.load(Ordering::Acquire)
+        });
+        finished_tx.send(()).unwrap();
+        result
+            .err()
+            .expect("cancelling a validation wait must interrupt the subscriber")
+            .kind()
+    });
+    waiting_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(
+        finished_rx.recv_timeout(Duration::from_millis(100)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+    );
+    cancelled.store(true, Ordering::Release);
+    assert_eq!(follower.join().unwrap(), io::ErrorKind::Interrupted);
+    assert_eq!(
+        fs::read(first.cache_path.join("manifest.json")).unwrap(),
+        original_manifest
+    );
+    drop(opening);
+    let (warm, second) = fixture.warm(&fixture.source, true, 48_000, 2);
+    assert!(second.integrity.warm);
+    assert_eq!(first.cache_path, second.cache_path);
+    assert!(Arc::ptr_eq(&cold.samples, &warm.samples));
+}
+
+#[test]
 fn fresh_warm_leases_verify_full_content_and_share_pcm_at_all_device_rates() {
     for source_rate in [44_100, 48_000, 96_000] {
         for output_rate in [44_100, 48_000, 96_000] {

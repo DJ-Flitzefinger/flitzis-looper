@@ -129,6 +129,9 @@ impl RubberBandLiveShifter {
         };
         let handle = NonNull::new(raw_handle).ok_or(RubberBandError::ConstructionFailed)?;
 
+        #[cfg(test)]
+        super::c3_observation::native_created();
+
         let mut shifter = Self {
             handle,
             channels,
@@ -314,6 +317,8 @@ impl Drop for RubberBandLiveShifter {
         unsafe {
             rubberband_live_delete(self.handle.as_ptr());
         }
+        #[cfg(test)]
+        super::c3_observation::native_deleted();
     }
 }
 

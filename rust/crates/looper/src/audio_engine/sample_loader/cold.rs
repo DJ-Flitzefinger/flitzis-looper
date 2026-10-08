@@ -639,6 +639,9 @@ pub(crate) fn prepare_playback(
             }
             output.extend_from_slice(&chunk);
         }
+        // Mapping no longer needs the resampled input. Release it before the
+        // separately admitted Vec-to-Arc overlap below.
+        drop(converted);
         output
     };
     check_cancelled(cancelled)?;
@@ -647,7 +650,9 @@ pub(crate) fn prepare_playback(
     let arc_workspace = sum_bytes(bytes(mapped.capacity())?, bytes(mapped.len())?)?;
     check_bytes(sum_bytes(source_bytes, arc_workspace)?, max_pcm_bytes)?;
     mapped.shrink_to_fit();
-    let samples = Arc::from(mapped.into_boxed_slice());
+    let samples: Arc<[f32]> = Arc::from(mapped.into_boxed_slice());
+    #[cfg(test)]
+    super::super::c3_observation::owned_pcm(source_bytes + samples.len() * 4);
     check_cancelled(cancelled)?;
     progress(SampleLoadProgress {
         subtask: SampleLoadSubtask::ChannelMapping,

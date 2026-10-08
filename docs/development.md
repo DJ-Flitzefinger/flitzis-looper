@@ -185,7 +185,9 @@ add fractional BPM, loops, seeks and prepared stems.
 The current engine constructs 96 unique handles for 32 voices: 64 effective/
 neutral-reserve handles are warmed at setup; 32 source reserves receive exact
 pitch/reset and actual source priming on the worker. Historical 64-handle startup/
-memory figures do not measure this extension's added cost. The fixed wet adapter
+memory figures retain their original scope; current
+[96-handle setup/resource measurements](pcm-cache-measurements.md) are separate.
+The fixed wet adapter
 lead remains 511 frames. Native reset/cold pitch work stays off the callback;
 reserve starvation produces bounded wet silence, while dry processing remains
 reactive. See [Key Lock backend](key-lock-backend.md) for the allocation audit,
@@ -354,8 +356,9 @@ $env:FLITZI_C1B_SAVE_EVIDENCE = [IO.Path]::GetFullPath('..\scratch\c1b-warm-life
 
 Use a fresh output filename for each profile/run. Native Debug/Release installation
 and dependent tests run serially because Windows retains open extension handles.
-The warm source probe and 32-second save/export fixture provide preliminary
-integrity accounting; C3 owns the separate 200-pad startup/RAM acceptance.
+The historical C1b warm source probe and 32-second save/export fixture provide
+preliminary integrity accounting. Current 200-pad startup/resources and long-source
+save costs are reported separately in [C3 measurements](pcm-cache-measurements.md).
 
 ### C2a finite saved-loop and accepted-set relocation probes
 
@@ -379,7 +382,8 @@ against original PCM while only `[42,42.5)` seconds remain resident. The other
 probe prepares real complete stem artifacts, adopts their finite views, then
 relocates the same already accepted complete set through the productive worker
 and native callback with uninterrupted PCM output. These are identity, ownership
-and output proofs; C3 owns startup/RAM measurements and human acceptance stays open.
+and output proofs. [C3 measurements](pcm-cache-measurements.md) report startup/RAM
+separately; human acceptance stays open.
 
 The optional Beat This boundary is available only through explicit diagnostic
 API calls and does not change normal load/manual analysis routing. Its
@@ -505,8 +509,22 @@ Repeat native checks with `--release` and install the matching debug/release
 extension before the Python suite, serially. The long-cycle test compares the
 actual native ACK/render route with complete-buffer output and an independent
 PCM/period oracle at 75 and 1000 observed cycles. It certifies those numerical
-contracts only. C3 process-memory/performance and human device/listening gates
-remain separate. Generated source and proof exports stay outside the repository.
+contracts only. [C3 process-memory/performance measurements](pcm-cache-measurements.md)
+remain separate from these numerical proofs and the open human device/listening
+gates. Generated source and proof exports stay outside the repository.
+
+### C3 measured startup/resource acceptance
+
+The [C3 measurement report](pcm-cache-measurements.md) records the isolated
+Debug/Release productive controller cold/warm matrix, actual native readiness/ACK,
+PCM and process-resource scopes, current 96-handle setup, complete-context
+exceptions, long-source save and cancellation/cleanup results. Its paired
+finite/current-full comparisons include regressions and single-run/OS-cache limits.
+
+Full Debug/Release numerical validation remains a separate required gate; isolated
+phase-origin-zero dry renders do not replace it. Actual human/device/listening
+acceptance remains open until the final pre-port stage. C3 does not begin full
+application Rust-port planning or implementation.
 
 ### G3c productive device and listening preparation
 

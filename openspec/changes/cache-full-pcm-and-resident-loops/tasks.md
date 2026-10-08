@@ -56,12 +56,14 @@
 
 ## C3: measured acceptance
 
-- [ ] Freeze real cold/warm protocol, independent oracles and source/cache identities.
-- [ ] Measure 200 occupied pads, short loops in long sources, duplicate/shared
+Results and measurement limits: [C3 measurement report](../../../docs/pcm-cache-measurements.md).
+
+- [x] Freeze real cold/warm protocol, independent oracles and source/cache identities.
+- [x] Measure 200 occupied pads, short loops in long sources, duplicate/shared
   sources and ALL/editor/analysis/outside-loop-seek/full-context exceptions.
-- [ ] Measure readiness, worker/handle counts, retained/transient PCM and process
+- [x] Measure readiness, worker/handle counts, retained/transient PCM and process
   peak RAM, disk/validation/save I/O, CPU and cancellations/cleanup in Debug/Release.
-- [ ] Report current 96-native-handle setup/reserve costs and <=1-frame/parity/
+- [x] Report current 96-native-handle setup/reserve costs and <=1-frame/parity/
   realtime results; compare identical sources/conditions and report regressions.
-- [ ] Update docs with measured results; leave actual human/device acceptance open
+- [x] Update docs with measured results; leave actual human/device acceptance open
   for the final authorized acceptance stage. Stop before Rust-port planning.

@@ -234,7 +234,7 @@ impl ColdTransaction {
         cancelled: &impl Fn() -> bool,
     ) -> io::Result<SampleBuffer> {
         let (output_rate, output_channels) = output;
-        let _admission = OpeningGuard::acquire(path)?;
+        let _admission = OpeningGuard::acquire(path, cancelled)?;
         reject_links(path)?;
         if fs::canonicalize(path)?.parent() != Some(self.cache_root.as_path()) {
             return Err(invalid("warm entry escaped cache root"));
@@ -522,5 +522,7 @@ fn read_playback_range(
     }
     check_cancelled(cancelled)?;
     data.shrink_to_fit();
+    #[cfg(test)]
+    super::super::c3_observation::owned_pcm(data.capacity() * 4);
     Ok(Arc::from(data.into_boxed_slice()))
 }

@@ -75,6 +75,20 @@ CPU cost SHALL be accounted for in warm and save measurements.
 - **AND** each subscriber retains its own original assignment and native request/intent/ACK guards
 - **AND** cancellation of one subscriber does not cancel or retire the other's preparation or files
 
+### Requirement: Cancellable concurrent cache validation
+The system SHALL wait cancellably for a busy cache candidate's validation
+admission outside the realtime callback, then perform all complete integrity
+checks before reuse. Transient contention MUST NOT trigger redundant cold decoding
+or a new cache generation. Cancelling the waiting subscriber SHALL preserve
+other subscribers' ownership.
+
+#### Scenario: Concurrent candidate validation preserves warm eligibility
+- **GIVEN** a complete compatible cache whose validation admission is held by another request
+- **WHEN** a worker searches for its compatible cache
+- **THEN** it waits cancellably for that admission and validates the same complete generation after release
+- **AND** transient contention does not trigger redundant cold decoding or a new cache generation
+- **AND** cancelling the waiting subscriber preserves the peer's cache and ownership
+
 ### Requirement: Bounded preparation and guarded publication
 The system SHALL bound admission, queue size, worker concurrency and transient
 PCM bytes for copy/decode/validation/resampling/window preparation.

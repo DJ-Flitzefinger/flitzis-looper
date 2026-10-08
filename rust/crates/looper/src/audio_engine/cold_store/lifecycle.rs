@@ -368,27 +368,38 @@ pub(super) struct OpeningGuard {
 }
 
 impl OpeningGuard {
-    pub(super) fn acquire(path: &Path) -> io::Result<Self> {
-        let mut state = store()
-            .state
-            .lock()
-            .map_err(|_| invalid("cache admission poisoned"))?;
-        if !state.opening.insert(path.to_owned()) {
-            return Err(io::Error::new(
-                io::ErrorKind::WouldBlock,
-                "cache is being validated",
-            ));
+    pub(super) fn acquire(path: &Path, cancelled: &impl Fn() -> bool) -> io::Result<Self> {
+        let shared = store();
+        loop {
+            // Cancellation may inspect request ownership; do not call it while
+            // holding the store mutex. This admission runs only on cold workers.
+            check_cancelled(cancelled)?;
+            let mut state = shared
+                .state
+                .lock()
+                .map_err(|_| invalid("cache admission poisoned"))?;
+            if state.opening.insert(path.to_owned()) {
+                return Ok(Self {
+                    path: path.to_owned(),
+                });
+            }
+            // A busy candidate can still be the complete compatible cache.
+            // Release the mutex while waiting and recheck cancellation/predicate.
+            let (state, _) = shared
+                .changed
+                .wait_timeout(state, Duration::from_millis(10))
+                .map_err(|_| invalid("cache admission poisoned"))?;
+            drop(state);
         }
-        Ok(Self {
-            path: path.to_owned(),
-        })
     }
 }
 
 impl Drop for OpeningGuard {
     fn drop(&mut self) {
-        if let Ok(mut state) = store().state.lock() {
+        let shared = store();
+        if let Ok(mut state) = shared.state.lock() {
             state.opening.remove(&self.path);
+            shared.changed.notify_all();
         }
     }
 }

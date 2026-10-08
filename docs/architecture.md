@@ -272,7 +272,9 @@ proved physical PCM range. Unsupported Key Lock context retains an explicitly
 admitted full-track fallback. Complete waveform/analysis leases and source-bound
 loop/ALL/seek/Key Lock preparation share guarded native adoption. The controller
 keeps requested project intent separate from effective audio and routes UI/MIDI
-fallback through one bounded readiness behavior. C3 measurements remain.
+fallback through one bounded readiness behavior.
+[C3 measurements](pcm-cache-measurements.md) report current cold/warm readiness,
+resource costs, exceptions and lifecycle with paired finite/full results.
 Two fixed workers and 32 queued reservations
 bound preparation; each worker admits at most 1 GiB transient PCM. Windows sealed
 source capture, full decoder/playback manifests and native adoption ACK establish
@@ -631,7 +633,8 @@ cold stereo setup took 151.35 ms
 at 48 kHz with 146.67 MiB additional private memory, and 270.09 ms at 96 kHz
 with 230.72 MiB additional private memory. These process deltas belong to
 startup/resource profiling, not the callback budget or the extended 96-handle pool.
-The extra state adds unmeasured startup/memory cost. Native reset and cold
+Current [96-handle setup and memory measurements](pcm-cache-measurements.md)
+are recorded separately. Native reset and cold
 pitch setup allocate inside Rubber Band 4.0.0, so only setup/worker preparation
 calls them. Start/retrigger, stop, seek, and leaving wet processing clear adapter
 storage and mark used native state dirty.

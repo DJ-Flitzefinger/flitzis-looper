@@ -37,6 +37,8 @@ mod analysis_predictions;
 mod audio_stream;
 pub use analysis_jobs::OfflineAnalysisJob;
 mod buffer_retirement;
+#[cfg(test)]
+mod c3_observation;
 mod channels;
 mod cold_jobs;
 mod cold_load;

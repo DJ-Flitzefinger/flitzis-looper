@@ -619,6 +619,22 @@ pub(in crate::audio_engine) fn restore_saved(
     Ok(ticket)
 }
 
+/// Isolated measurements may explicitly admit the existing larger verifier budget.
+/// Saved files and ordinary restoration retain the product's 512-MiB default.
+#[cfg(test)]
+pub(in crate::audio_engine) fn capture_saved_with_measurement_limit(
+    engine: &AudioEngine,
+    id: usize,
+    encoded: &str,
+    source_path: String,
+    limit: usize,
+) -> Result<SavedConstantTimingTicket, String> {
+    let budget = PcmBudget::new(limit)?;
+    let mut saved = capture_saved(engine, id, encoded, source_path)?;
+    saved.pcm_budget = budget;
+    Ok(saved)
+}
+
 pub(in crate::audio_engine) fn export_current(
     engine: &AudioEngine,
     id: usize,

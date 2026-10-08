@@ -1,14 +1,24 @@
 # Complete PCM cache and finite loop residency
 
-Status: C1a/C1b cold/warm loading, C2a finite saved-loop residency and C2b control
-readiness, 2026-10-07.
+Status: C1a/C1b cold/warm loading, C2a finite saved-loop residency, C2b control
+readiness and C3 measured acceptance, 2026-10-08.
 The existing `AudioEngine.load_sample_async` now runs the copy-first path below.
 Validated warm reuse and last-owner lifecycle remain authoritative. C2a separates
 complete source authority from resident storage and restores saved finite loops.
-C3's measured startup/RAM acceptance remains pending; no startup/RAM or
-device/listening acceptance is claimed.
-The active [OpenSpec change](../openspec/changes/cache-full-pcm-and-resident-loops/proposal.md)
-contains the remaining contracts and bounded implementation tasks.
+[C3 measurements](pcm-cache-measurements.md) record actual cold/warm readiness,
+PCM ownership, process resources, exceptions and lifecycle costs with paired
+finite/full results and their limits. Actual human/device/listening acceptance
+remains open. The active
+[OpenSpec change](../openspec/changes/cache-full-pcm-and-resident-loops/proposal.md)
+records the contracts; its
+[task list](../openspec/changes/cache-full-pcm-and-resident-loops/tasks.md)
+records the completed bounded implementation tasks.
+
+C3 preparation releases an unused converted intermediate Vec after channel mapping,
+before playback Arc creation and its declared PCM checkpoint. Complete-cache
+[validation waits cancellably](../openspec/changes/cache-full-pcm-and-resident-loops/specs/pcm-cache-residency/spec.md#requirement-cancellable-concurrent-cache-validation)
+off-thread for admission, so transient validation contention cannot trigger
+redundant cold decoding or a new cache generation.
 
 ## Delivered cold path (C1a)
 
@@ -258,11 +268,12 @@ reported paths per service while leaving the affected bytes intact.
 Recognized exclusive failed/crash staging uses the same contained ownership rules.
 No file handle, JSON, lock, hash or filesystem destructor enters the callback.
 
-The actual long-source warm and real native export/project-save probes described
-in [development](development.md) record full integrity bytes and wall/process CPU.
-These preliminary costs preserve complete save verification, fresh timing ACK and
-atomic previous-config/dirty-state failure behavior. They do not establish C3
-200-pad startup/readiness/RAM improvement or device/listening acceptance.
+The historical C1b long-source warm and native export/project-save probes
+described in [development](development.md) record preliminary integrity costs.
+They preserve complete save verification, fresh timing ACK and atomic
+previous-config/dirty-state failure behavior. The separate
+[C3 measurements](pcm-cache-measurements.md) cover current 200-pad readiness,
+resources and actual long-source save costs; device/listening acceptance stays open.
 
 ## Finite saved-loop residency (C2a)
 
@@ -327,9 +338,10 @@ remain within the existing bounded ownership registry.
 
 C2a supplied the saved-loop foundation. C2b adds the control/editor/analysis/
 nonresident-seek/ALL matrix below. Unprepared context cannot silently become
-missing-sample output: admission or native guards preserve effective audio. C3 still
-must measure actual 200-pad startup/RAM/I/O/CPU, fallback cost and lifecycle;
-source/window byte counts alone are not those measurements. Hearing and devices
+missing-sample output: admission or native guards preserve effective audio.
+[C3 measurements](pcm-cache-measurements.md) report actual 200-pad startup,
+process resources, I/O/CPU, fallback cost and lifecycle separately from logical
+source/window byte counts. Hearing and devices
 remain open until the final human-run acceptance stage.
 
 Saved Automatic geometry remains only a hint: unsupported complete evidence
@@ -457,10 +469,11 @@ Hardware-free proofs exercise actual worker admission, native command drain,
 ACK, complete/window/source identity, independent full-buffer PCM and finite
 output, lifecycle and off-thread retirement. Accepted musical P and integer H
 remain separate, with the existing <=1-loaded-frame 75/1000-cycle gate. Resource
-limits and logical resident bytes are not C3 process-RAM or startup measurements.
-The 200-pad measurement and actual human/device acceptance remain separate.
+limits and logical resident bytes remain distinct from the
+[C3 process-RAM and startup measurements](pcm-cache-measurements.md).
+Actual human/device acceptance remains separate and open.
 
-## Preliminary C1b integrity measurements
+## Historical preliminary C1b integrity measurements
 
 The isolated 600-second, 48-kHz PCM24 mono source contains 86,400,690 bytes
 (SHA256 `96ffe98cf44215719b0b57d605d6dc586c9c4e763ad3d47d512d0ba787d204ef`).
@@ -501,10 +514,11 @@ previous config byte-exact and the project dirty after a failed save.
 | Debug | 0.713 / 0.719 | 0.724 / 0.719 |
 | Release | 0.013 / 0.016 | 0.017 / 0.016 |
 
-These are preliminary integrity costs on this machine, with one long warm run
-per profile and three small save/export repetitions. They preserve full integrity
-and existing timing authority; C3 still owes controlled 200-pad cold/warm readiness,
-RAM, lifecycle and performance acceptance. Human hearing/device gates remain open.
+These historical preliminary integrity costs used one long warm run per profile
+and three small save/export repetitions. They preserve full integrity and existing
+timing authority. Current 200-pad cold/warm, resource, lifecycle and save results
+are recorded separately in [C3 measurements](pcm-cache-measurements.md).
+Human hearing/device gates remain open.
 
 ## Audited C0 baseline (historical)
 
@@ -537,8 +551,9 @@ are relative to `rust/crates/looper/src/audio_engine/`; `messages.rs` is in
 | Save integrity | `controller/timing_persistence.py:28-53`; `constant_timing/persistence.rs:364-415,658-689` rehashes original twice and reconstructs full mono/44.1-kHz evidence. Tests `controller/test_accepted_persistence.py:95,140,475,523` preserve atomic failure, throttle, fresh ACK and drain. | Save I/O/CPU is unmeasured. Cache reuse cannot turn a historical record into CURRENT or bypass integrity. |
 
 The current native pool has three states per 32 voices, or 96 handles
-(`key_lock_preparation.rs:471-503`). Setup/RAM costs for this pool remain
-**unmeasured**; older 64-handle observations are not current evidence.
+(`key_lock_preparation.rs:471-503`). Current setup/RAM measurements are recorded
+in [C3 measurements](pcm-cache-measurements.md); historical 64-handle observations
+retain their original scope.
 
 ## Data and time domains
 
@@ -633,7 +648,8 @@ length and exact file EOF. The lease protects exactly the verified immutable
 objects from writes/replacement. Existing verified in-process leases can be
 shared across consumers; reopening a mutable path requires verification again.
 This deliberately incurs O(full source + required PCM bytes) warm I/O. An index
-or size/mtime shortcut cannot weaken it. C3 must report that cost.
+or size/mtime shortcut cannot weaken it.
+[C3 measurements](pcm-cache-measurements.md) report that verification cost.
 
 Use one bounded preparation lane with explicit maximum active workers, queued
 requests and transient PCM bytes, separate from existing realtime/native lanes.
@@ -774,8 +790,9 @@ unknown files, project config, originals or private audio as garbage.
 - **C2b:** finite readiness across controls, full editor/analysis access and explicit
   nonresident seek/ALL/full-DSP exceptions, real source/output/history parity and
   <=1-loaded-frame loop gates. No streaming framework.
-- **C3:** actual cold/warm measurements and lifecycle/resource/parity acceptance on
-  200 occupied pads before claiming a startup/RAM benefit.
+- **C3, measured:** actual cold/warm readiness, lifecycle and resource results on
+  200 occupied pads, with paired finite/full outcomes, regressions and measurement
+  limits in [C3 measurements](pcm-cache-measurements.md).
 
 For each implementation slice use meaningful changed-area tests, full required
 Debug/Release checks for productive audio/persistence/control changes, official
@@ -796,19 +813,18 @@ callback partitions, both interpolation taps, native Key Lock/history, stem/filt
 clear changes, intro/tail/paused/stopped seek, ALL, editor/analysis complete extents,
 stale window/source/accepted revision and saturated command/retirement lanes.
 
-C3 freezes identical original hashes, durations, saved loops, processing/device
-versions and pad assignments for old/new comparisons. Test 200 occupied pads
-with short loops from long sources, shared/unique digests and separate explicit
-full-track/Key Lock/editor/analysis/seek/ALL cases. Occupied is not 200 simultaneous
-voices; report voice/native-handle limits and 1/2/4/6 active-pad plus bounded stress.
-Cold means no compatible committed PCM; warm means validated complete caches.
-Record filesystem page-cache conditions separately; do not call an OS-warm run
-disk-cold. Measure time to each/all Ready, process and resident/transient PCM RAM,
-worker/queue/96-handle peaks, copy/decode/cache/verification bytes, disk capacity,
-CPU, save-integrity latency/I/O and final-reader cleanup under cancellation.
+[C3 measurements](pcm-cache-measurements.md) bind identical original hashes,
+durations, saved loops, processing versions and pad assignments for paired
+finite/current-full comparisons. The 200 occupied pads cover shared, duplicate and
+unique long sources plus explicit full-track/Key Lock/editor/analysis/seek/ALL
+exceptions. Occupied pads remain distinct from simultaneous voices; active-pad
+renders and bounded stress retain the voice/native-handle limits.
 
-Publish outcomes and regressions with source identity, timing revisions and
-realtime review. Improvements remain a hypothesis until those measurements.
+Artifact-cold means no compatible committed PCM; fresh-process warm means validated
+complete caches. OS page cache was uncontrolled. Retained PCM, declared per-operation
+checkpoints, process lifetime peaks and sampled observations have separate scopes;
+exact simultaneous aggregate transient PCM remains unmeasured. Readiness, resource,
+verification/save and cancellation/cleanup outcomes include signed regressions.
 Numerical/native parity does not prove human hearing or real devices; those
 gates remain open for final pre-port acceptance. No part of C0-C3 starts planning
 or implementing the full application Rust port.

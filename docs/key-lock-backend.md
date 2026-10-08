@@ -140,8 +140,9 @@ Historical standalone Windows measurements for 32 stereo voices observed:
 
 These are single-run process deltas on the measured system, not portable memory
 limits, live callback costs or measurements of the extended 96-handle pool.
-The third state adds unmeasured startup/memory cost. Fixed reserves bound ownership
-exchange; resource and preparation throughput remain part of later profiling.
+Current [96-handle setup/resource measurements](pcm-cache-measurements.md)
+are recorded separately for the production pool. Fixed reserves bound ownership
+exchange; source preparation throughput remains a separate profiling scope.
 
 The pinned Rubber Band 4.0.0 source audit found that native `reset()` and a
 pitch change before the first `shift()` call `measureResamplerDelay()`, which
