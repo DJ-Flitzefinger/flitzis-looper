@@ -49,6 +49,16 @@ original identity. Corrected output must be measured anew before it is used as a
 comparator; it is never an independent musical label. See the
 [private reference input workflow](beat-this-reference-inputs.md).
 
+The explicit `OfflineAnalysisJob.analyze_corrected_legacy` diagnostic now reads
+the already completed native mono export, executes the same normal converter
+and shared QM raw tracker, and optionally retains its full binary64 analyzer
+input. `finish_corrected_legacy` requires the original native-produced JSON bytes
+and the existing request freshness and retirement boundary. The separate fixed
+[corrected legacy reader and engineering comparison](beat-this-corrected-legacy.md)
+retain complete raw arrays, float32 compatibility output and executing provenance.
+This diagnostic uses the G2 f64 channel mean; ordinary f32 channel mapping remains
+a distinct preprocessing contract. It changes no normal Analyze routing or timing.
+
 ## Entry points and ownership
 
 ### Normal-load analysis resampler repair

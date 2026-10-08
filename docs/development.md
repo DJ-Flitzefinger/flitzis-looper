@@ -45,6 +45,15 @@ plans, complete native lineage and explicit missing-input reports. They require
 actual independent reference receipts for scoring and never start the app or
 worker. Synthetic tests verify the contract without declaring musical acceptance.
 
+After a genuine full reference seal is available, `draft --include-corrected-legacy`
+adds explicitly supported QM comparators alongside selected Beat This candidates.
+It preserves separate candidate/comparator selections and complete native provenance.
+Neither a receipt hash nor installed binaries register a producer. Engineering
+comparisons are pure explicit APIs with complete-array disagreements and unverified ordinal
+fits. See [corrected legacy diagnostics](beat-this-corrected-legacy.md). The ignored
+hardware-free native probe uses `FLITZIS_B2_LEGACY_CONFIG` and the existing Windows
+Rust test runner. It starts no CPAL stream, app, device or model worker.
+
 ### Windows Start Files
 
 Double-click a start file in the repository root, or call it from a terminal:

@@ -45,6 +45,7 @@ For focused areas:
 | `beat-this-reference-inputs.md` | Private independent annotation and paired human correction inputs, validation and sealing; no musical scoring or default adoption. |
 | `beat-this-temporal-scoring.md` | Pure bounded B2 timing metrics, exact matching and uncertainty/region denominators; source certification and full musical/default acceptance remain open. |
 | `beat-this-scoring-workflow.md` | Private reference-first CLI, explicit content-verified source aliases and approved complete native candidate lineage; acceptance remains open. |
+| `beat-this-corrected-legacy.md` | Separate full-array native QM comparator provenance, fixed reader profiles and engineering versus sealed-reference comparison boundaries. |
 | `grid-timing-diagnosis.md` | Reproduced endpoint-derived BPM/grid drift, long-file precision evidence and remaining correction limits. |
 | `loop-period-proof.md` | G3c independent musical/physical duration, productive fractional seam policy and rendered-feature proof; device/listening remain gated. |
 | `device-loop-acceptance.md` | G3c3 productive human-run preparation, real capture/clock comparison and uninterrupted 30-minute listening packet; actual gates remain open. |

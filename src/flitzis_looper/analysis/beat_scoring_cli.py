@@ -21,6 +21,11 @@ from flitzis_looper.analysis.beat_candidate_reader import (
 )
 from flitzis_looper.analysis.beat_scoring import score_track_timing
 from flitzis_looper.analysis.beat_scoring_inputs import ScoringPlan
+from flitzis_looper.analysis.corrected_legacy_evaluation import engineering_compare
+from flitzis_looper.analysis.corrected_legacy_reader import (
+    available_corrected_legacy_profiles,
+    load_corrected_legacy,
+)
 from flitzis_looper.analysis.reference_inputs_models import TRACK_IDS
 from flitzis_looper.analysis.reference_inputs_validation import (
     frozen_corpus,
@@ -37,7 +42,12 @@ from flitzis_looper.analysis.reference_inputs_validation import (
 
 if TYPE_CHECKING:
     from flitzis_looper.analysis.beat_candidate_models import NativeCandidate
-    from flitzis_looper.analysis.reference_inputs_models import ReferenceBundle, ReferenceSeal
+    from flitzis_looper.analysis.reference_inputs_models import (
+        ReferenceBundle,
+        ReferenceSeal,
+        ReferenceTrack,
+        TrackId,
+    )
     from flitzis_looper.analysis.reference_source_aliases import SourcePathAlias
 
 
@@ -159,7 +169,14 @@ def inventory(workspace: Path, identities: str, output: str, aliases_path: str |
     )
 
 
-def draft_plan(workspace: Path, seal_path: str, output: str, aliases_path: str | None) -> Path:
+def draft_plan(
+    workspace: Path,
+    seal_path: str,
+    output: str,
+    aliases_path: str | None,
+    *,
+    include_corrected_legacy: bool = False,
+) -> Path:
     """Prepare explicit historical selections after revalidating the supplied reference."""
     aliases, _ = _aliases(workspace, aliases_path)
     _, _, digest = reference_seal(workspace, seal_path, source_aliases=aliases)
@@ -170,6 +187,7 @@ def draft_plan(workspace: Path, seal_path: str, output: str, aliases_path: str |
         "candidates": list(
             {item["track_id"]: item for item in available_candidate_profiles()}.values()
         ),
+        "comparators": available_corrected_legacy_profiles() if include_corrected_legacy else [],
     }
     return _write(workspace, output, data)
 
@@ -207,6 +225,16 @@ def _validate_plan(plan: ScoringPlan, digest: str) -> None:
         if supported[selection.profile_id] != selection.track_id:
             msg = "candidate_profile_track_mismatch"
             raise ValueError(msg)
+    comparators = {
+        item["profile_id"]: item["track_id"] for item in available_corrected_legacy_profiles()
+    }
+    if len({selection.track_id for selection in plan.comparators}) != len(plan.comparators):
+        msg = "duplicate_comparator_track"
+        raise ValueError(msg)
+    for selection in plan.comparators:
+        if comparators.get(selection.profile_id) != selection.track_id:
+            msg = "unsupported_corrected_legacy_selection"
+            raise ValueError(msg)
 
 
 def _scores(
@@ -243,7 +271,48 @@ def _scores(
         }
         for candidate in candidates
     ]
+    _comparators(workspace, references, candidates, scores, plan, missing)
     return scores, missing
+
+
+def _comparators(
+    workspace: Path,
+    references: dict[TrackId, ReferenceTrack],
+    candidates: list[NativeCandidate],
+    scores: list[dict[str, object]],
+    plan: ScoringPlan,
+    missing: list[dict[str, object]],
+) -> None:
+    # Called only after the actual full ReferenceSeal and strict plan pass.
+    selected = {candidate.track_id: candidate for candidate in candidates}
+    scored = {
+        candidate.track_id: score for candidate, score in zip(candidates, scores, strict=True)
+    }
+    for selection in plan.comparators:
+        candidate = selected.get(selection.track_id)
+        if candidate is None:
+            missing.append({
+                "track_id": selection.track_id,
+                "input": "selected_candidate_for_comparator_missing",
+            })
+            continue
+        reference = references[selection.track_id]
+        try:
+            comparator = load_corrected_legacy(workspace, reference, selection.profile_id)
+        except FileNotFoundError as error:
+            missing.append({
+                "track_id": selection.track_id,
+                "input": "corrected_legacy_artifact",
+                "path": error.filename,
+            })
+        else:
+            scored[selection.track_id]["corrected_legacy"] = {
+                "comparator": comparator.report(),
+                "temporal": asdict(
+                    score_track_timing(reference, comparator.result.timing_predictions())
+                ),
+                "engineering": engineering_compare(candidate, comparator),
+            }
 
 
 def score_private(
@@ -317,6 +386,8 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--reference-seal", required=True)
         if name == "score":
             command.add_argument("--input", required=True)
+        if name == "draft":
+            command.add_argument("--include-corrected-legacy", action="store_true")
     return parser
 
 
@@ -328,7 +399,11 @@ def main() -> int:
             result = inventory(args.workspace, args.identities, args.output, args.source_aliases)
         elif args.command == "draft":
             result = draft_plan(
-                args.workspace, args.reference_seal, args.output, args.source_aliases
+                args.workspace,
+                args.reference_seal,
+                args.output,
+                args.source_aliases,
+                include_corrected_legacy=args.include_corrected_legacy,
             )
         else:
             result = score_private(

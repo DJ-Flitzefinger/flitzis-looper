@@ -17,3 +17,4 @@ class ScoringPlan(StrictInput):
     status: Literal["ready_for_temporal_scoring"]
     reference_seal_sha256: Digest
     candidates: Annotated[tuple[CandidateSelection, ...], Field(max_length=5)]
+    comparators: Annotated[tuple[CandidateSelection, ...], Field(max_length=5)] = ()

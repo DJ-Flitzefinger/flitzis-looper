@@ -66,6 +66,23 @@ metadata stays unverified and does not alter project/accepted/live timing. The
 ordinary scoring readers keep their native-free path. See
 [frozen BPM/region policy](selected-backend-bpm.md).
 
+`analysis/corrected_legacy_models.py`, `corrected_legacy_reader.py` and
+`corrected_legacy_evaluation.py` retain a separate diagnostic-only QM comparator.
+Explicit native `OfflineAnalysisJob.analyze_corrected_legacy` and
+`finish_corrected_legacy` reuse the complete-source export, existing converter
+and shared corrected `QmRawAnalysis` pipeline off GIL/realtime. Complete loaded
+PCM, loaded-rate mono and 44100-Hz analyzer PCM stay distinct; raw binary64
+positions, uint64 downbeat indices and the separate binary32 compatibility projection
+survive exact native finish and actual event publication; the retained result
+copy is distinct from a Python service JobSnapshot. Fixed independently
+reviewed producer profiles bind actual executing programs/dependencies separately
+from unused installed extensions. The private CLI validates genuine reference
+material before optional comparator selection/artifact reads; the pure
+engineering API separately reports complete and region-scoped unverified
+backend disagreement. These paths have no project, saved/manual/TAP/accepted,
+default-selection or realtime authority. See
+[corrected legacy evidence](beat-this-corrected-legacy.md).
+
 ```text
 src/flitzis_looper/
     Python application package: controllers, UI, models, persistence,

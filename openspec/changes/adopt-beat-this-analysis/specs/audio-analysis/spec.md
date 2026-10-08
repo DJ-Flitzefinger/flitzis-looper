@@ -385,6 +385,154 @@ decisions and blocked adoption, operate outside realtime and leave live state un
 - **AND** neither engineering provenance nor successful inference supplies a reference seal,
   musical score, human acceptance or analyzer default promotion
 
+### Requirement: Corrected Legacy Comparator Retains Complete Native Provenance
+The system SHALL provide an explicitly invoked diagnostic-only corrected QM comparator
+through the existing immutable complete-source, mono export, analysis conversion and
+`QmRawAnalysis` pipeline under an actual reserved native offline-analysis job.
+
+The comparator SHALL retain the unchanged original/copy-first source, complete native
+loaded PCM and mono export separately from complete 44100-Hz analyzer PCM, with actual
+content hashes, rates, frame counts, source-zero origin, transform revision and mono rule.
+Its complete raw packet SHALL identify `corrected-qm-native-v1`, `schema_version: 1` and
+`diagnostic_only: true`, bind pad/request/source/generation and all requested configuration
+fields, and preserve binary64 detector frames/beat/downbeat seconds and unsigned 64-bit
+downbeat raw indices. It SHALL retain the same analysis's binary32 compatibility BPM,
+beat/downbeat/bar projection separately without rerunning the detector. The actual integer
+ODF hop SHALL determine time conversion; analyzer dimensions SHALL NOT replace loaded
+dimensions. Diagnostic and ordinary mono methods SHALL remain explicit when their bits differ.
+
+Raw binary64, unsigned index and compatibility binary32 arrays SHALL use canonical padded
+standard Base64 of complete uncompressed little-endian values under the existing bounded
+diagnostic publication limits. Validation SHALL reject malformed encodings, nonfinite
+values, invalid extents or index associations, domain/identity mismatches and incomplete
+arrays without sorting, truncation, downcasting raw values, cropping or fitting an offset.
+Native finish SHALL require the exact raw JSON string locally produced successfully by
+that job and still-current request/source generation; reformatting or duplicate-key JSON
+SHALL NOT replace it. The reader SHALL verify complete raw/finish/retained-result/completion
+bit parity, one matching outer/inner completion identity and actual retirement/readmission.
+
+Approved imports SHALL use fixed independently reviewed/frozen producer profiles binding
+the complete source/PCM/request/producer/runtime/dependency chain. A submitted hash receipt
+SHALL NOT register a supported producer. Actual executing native programs, used dependencies
+and producer sources SHALL remain separate from installed unused extensions or later pure
+numerical helpers. QM SHALL retain its own legacy identity without claiming a Beat This
+worker, model or neural logits. Original legacy/candidate artifacts and original failed
+attempts SHALL remain unchanged and distinguishable from fresh comparator evidence.
+
+All preparation, analysis, parsing, encoding, hashing, cleanup and evaluation SHALL execute
+outside the realtime callback under existing ownership/admission limits. The comparator
+SHALL claim its reservation exclusively from native KeyNet work through retirement;
+reciprocal admission checks SHALL prevent unaccounted concurrent complete PCM stages.
+An unstarted-job abort SHALL reject a claimed QM job before waiting on its PCM reader.
+The comparator
+SHALL NOT change settings/default routing, provide an unavailable-model fallback, adopt
+accepted/live timing or overwrite saved/manual/TAP intent.
+
+#### Scenario: Fresh corrected comparator preserves both PCM domains
+- **GIVEN** a frozen original track cold-loaded into a finite playback bank
+- **WHEN** the explicit native corrected QM diagnostic analyzes its complete source
+- **THEN** complete loaded/mono and 44100-Hz analyzer data retain separate verified identities
+- **AND** the packet retains every raw detector position/index and its compatibility projection
+- **AND** no finite playback window, first-five-seconds exclusion or fitted offset shortens input
+
+#### Scenario: A self-hashed registration cannot approve a producer
+- **GIVEN** a caller supplies a new comparator packet and a matching hash receipt
+- **WHEN** no fixed independently reviewed producer profile supports that chain
+- **THEN** the reader rejects the import despite internally consistent submitted hashes
+- **AND** no source, runtime or complete publication provenance is invented
+
+#### Scenario: A foreign or modified packet cannot finish a native job
+- **GIVEN** a reserved job has produced its exact successful corrected QM packet
+- **WHEN** finish receives altered/reformatted bytes, duplicate-key JSON, another job's packet
+  or stale source identity
+- **THEN** native finish rejects publication
+- **AND** playback, accepted timing and saved/manual/TAP data remain unchanged
+
+#### Scenario: Lossy event arrays cannot replace complete raw evidence
+- **GIVEN** raw binary64 QM arrays and their native publication lineage
+- **WHEN** a retained diagnostic copy or actual completion loses bits, omits positions or
+  changes raw indices
+- **THEN** the reader rejects full-chain parity rather than trusting an event summary
+- **AND** the original failed evidence is retained separately from any later successful attempt
+
+#### Scenario: Runtime identities describe the actual executing legacy procedure
+- **GIVEN** an embedded native test executes QM while an installed PYD is unused
+- **WHEN** its producer provenance is imported
+- **THEN** the native executable, used build/dependencies and producer sources are bound
+- **AND** the installed PYD is explicitly unused and no Beat This worker/model/logits are claimed
+
+#### Scenario: Native branch claims preserve bounded ownership
+- **GIVEN** a reservation has already claimed native KeyNet or corrected QM
+- **WHEN** the opposite branch or an unstarted abort is requested
+- **THEN** reciprocal branch admission rejects before allocating a second full PCM stage
+- **AND** an abort of claimed QM rejects before waiting on its PCM mutex
+- **AND** normal retirement and source-fresh publication remain authoritative
+
+### Requirement: Comparator Engineering And Musical Evaluation Remain Distinct
+The system SHALL provide a complete T01-T05 corrected-legacy engineering evaluation that
+retains every approved comparator and candidate array, full identities and separately scoped
+count/extent/numerical timing comparisons without treating either backend as musical truth.
+
+Engineering evaluation SHALL preserve unsupported numerical hypotheses and actual failures,
+unverified ordinal counts, separate actual QM-hop and Beat This-lattice assumptions and
+complete-source status. It SHALL NOT drop difficult tracks, relax frozen gates, create
+reference labels, report musical scores without independent references, claim universal
+sample accuracy or equate observed job durations/PCM bytes with human correction time or
+measured RSS/aggregate peak/resource acceptance.
+
+The frozen `corrected-legacy-engineering-v1` policy SHALL require identical original-byte
+and complete loaded-mono identities, retain complete declared-array identities and values,
+fit complete beat and downbeat event ordinals separately with exact-rational equal-weight OLS
+on supplied binary64 times and retain every residual/local interval. These ordinal fits SHALL
+NOT certify quarter-note or musical-bar units. Beat/downbeat disagreement SHALL reuse the existing
+bounded monotone matcher at 10/20/40/70 ms with original pair/unmatched indices and signed
+Beat-This-minus-QM timing distributions, without a ground-truth precision/recall/F1 verdict.
+The complete-source middle `[20%,80%)` and temporal thirds SHALL retain separate beat/downbeat
+regional ordinal fits, every regional local interval, fixed-tolerance regional disagreement
+arrays and explicit regional-to-original index maps. Regional matching SHALL remain separate
+from complete-track matching and cross-boundary pairs without replacing complete comparisons,
+creating new exclusions, selecting a policy winner or shortening evaluation. Conditional lattice
+halfwidths SHALL retain actual QM `hop / 88200` seconds and Beat This `0.01` seconds without
+establishing acoustic uncertainty or replacing existing G2/BPM/region acceptance decisions.
+
+The private scoring workflow SHALL optionally select a supported corrected comparator
+alongside the selected candidate, validate a genuine complete independent ReferenceSeal
+and source/PCM coverage before reading either backend, and use the same frozen matcher
+against that reference for each complete backend. Draft selection SHALL retain Beat This
+candidate profiles and SHALL add optional comparators only with explicit
+`--include-corrected-legacy`; it SHALL NOT substitute the comparator as a candidate.
+Every plan selection SHALL validate before any backend read after reference validation.
+An omitted or unavailable selected candidate SHALL prevent its comparator artifact read
+and retain explicit missing-input status. Musical count,
+meter/bar/critical-feature/group/class/uncertainty, paired human correction and default
+acceptance SHALL remain separately gated; an engineering or temporal report SHALL NOT
+promote the analyzer default or manufacture a pass for those gates.
+
+#### Scenario: Complete engineering disagreement remains an observation
+- **GIVEN** all five approved corrected QM and Beat This chains pass their lineage checks
+- **WHEN** the engineering evaluator compares their complete arrays
+- **THEN** it retains all identities, array values and count/extent/numerical differences
+- **AND** no backend is called ground truth and musical scores remain unrun without references
+
+#### Scenario: Missing seal blocks both backend reads
+- **GIVEN** a scoring plan selects a candidate and a corrected comparator
+- **WHEN** the complete independent reference is missing, changed or invalid
+- **THEN** scoring blocks or rejects before opening either backend's plan/artifacts
+- **AND** it produces no fabricated reference or musical score
+
+#### Scenario: Comparator selection does not alter the draft candidate
+- **GIVEN** supported Beat This candidates and corrected QM comparator profiles exist
+- **WHEN** the private workflow drafts a reference-bound scoring plan
+- **THEN** its candidate selection remains the approved Beat This profile for each track
+- **AND** corrected QM is an explicit separate comparator rather than a default or fallback
+
+#### Scenario: Job duration cannot satisfy paired human correction acceptance
+- **GIVEN** engineering provenance passes and actual QM job wall time is recorded
+- **WHEN** human operations/active intervals or measured live RSS are absent
+- **THEN** human improvement and the corresponding resource gates remain unproven
+- **AND** the six balanced held-out sessions and frozen absolute/20-percent/zero-baseline gates
+  remain required separately
+
 ### Requirement: Diagnostic Boundary Precedes Model And Default Activation
 The system SHALL expose the loaded-PCM and real local worker boundary only through explicitly
 invoked diagnostic analysis until the separate default-cutover acceptance gate is satisfied.

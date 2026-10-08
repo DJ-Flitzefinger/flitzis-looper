@@ -35,6 +35,57 @@ observations. The workflow reads no candidate predictions during reference
 preparation/sealing, invokes no models and changes no routing/persistence/callback.
 See [reference input contract](../../../docs/beat-this-reference-inputs.md).
 
+### Corrected native QM provenance and engineering comparison
+
+The corrected comparator reuses `QmRawAnalysis` and the single shared QM
+pipeline after the integer-hop and analysis-resampler-tail repairs. An explicit
+`OfflineAnalysisJob` diagnostic derives complete 44100-Hz input from the actual
+native loaded-rate mono export, then produces `corrected-qm-native-v1`. The raw
+binary64 detector frames/seconds and uint64 downbeat indices stay separate from
+the binary32 compatibility BPM/grid. The backend has no Beat This worker/model
+or neural logits and is never registered as a Beat This candidate.
+
+The hardware-free cold-source producer retains immutable original bytes,
+native finite-bank acknowledgement, complete loaded/mono/analyzer PCM, actual
+request, successful native execution, exact finish input, retained diagnostic
+result copy and actual completion-event bytes. The retained copy is not a
+Python service JobSnapshot.
+Native finish requires the exact raw JSON string produced successfully by that
+job and current request/source generation; altered/reformatted/duplicate-key
+submissions reject. Cleanup and subsequent same-source
+admission establish retirement independently of final publication. Executing
+native test EXE, actual `loaded_libraries` paths and bound dependencies/producer
+sources, and unused installed PYD
+remain separate runtime identities. Diagnostic f64-accumulated/f32-rounded mono
+and ordinary f32 channel mapping can differ; the actual method is retained
+rather than declaring byte parity with normal loading.
+
+Fixed independently reviewed profiles bind those complete chains. Offline
+readers rehash artifacts and reject arbitrary self-hashed registrations,
+partial/ambiguous arrays, domain/identity errors, unsupported producers and
+invented finish claims. The selected original T01-T05 comparator chains remain
+distinct from every unchanged historical legacy/candidate result and failure.
+See [the contract](../../../docs/beat-this-corrected-legacy.md).
+
+An engineering evaluator retains complete approved comparator and candidate
+arrays and their identities while describing counts, extents and separately
+scoped complete-track and middle/third regional beat/downbeat ordinal fits, local intervals
+and beat/downbeat disagreements. Regional sequences retain explicit original
+index maps and remain separate from global cross-boundary matches; they neither
+replace complete comparisons nor select a representative timing winner.
+Backend disagreement and unverified
+ordinal fits do not verify quarter-note or musical-bar units; actual QM hop and Beat This lattice limits
+remain separate. The reference-first CLI can explicitly score each backend
+against a genuine sealed independent reference, validated before opening either
+backend. Its draft still selects Beat This candidates; optional `comparators`
+are included only with `--include-corrected-legacy`. Every selection is checked
+before the first backend read; an unavailable/unselected candidate prevents its
+comparator read. The pure engineering API has no CLI and is exercised by an
+explicit private inventory-bound harness without musical scoring. No comparator result
+creates labels, human operation/time measurements, RSS/aggregate peak evidence,
+settings selection, automatic fallback, saved/manual/TAP/accepted adoption or a
+default switch. All execution stays off realtime; the callback is unchanged.
+
 ## Input domains and preprocessing
 
 The private temporal scoring CLI revalidates full ReferenceSeal/source/PCM/
@@ -44,8 +95,9 @@ stays explicit, and generic self-hashed claims fail closed. Content-verified
 T01/T02 aliases retain original manifest paths. Reports preserve raw arrays,
 failed attempts and missing inputs without labels, offset fitting or default
 promotion. This is offline Python only: no native/device/model operation or
-callback work. Non-goals include human reference generation, legacy comparator
-import, musical acceptance, BPM integration and analyzer cutover. See
+callback work. Human reference generation, musical acceptance and analyzer
+cutover remain non-goals; corrected legacy import has its separate contract
+above and BPM metadata has the separate bounded policy below. See
 [scoring workflow](../../../docs/beat-this-scoring-workflow.md).
 
 Fresh T01-T03 provenance uses an explicitly invoked test-only hardware-free native
@@ -59,8 +111,8 @@ the old rejected profiles distinct, requires actual v2 completion/outer identity
 and successful finish, and never accepts a generic candidate's self-hashed receipt.
 Executing test binary and unused installed extension are separate recorded identities.
 This adds no GUI, CPAL stream, recorder, callback work or routing/persistence change.
-Musical references, scores, BPM/region policy, human acceptance and cutover remain
-explicit non-goals of this bounded provenance step.
+Musical references, scores, human acceptance and cutover remain explicit
+non-goals of this bounded fresh-candidate provenance step.
 
 The 2026-10-06 user refinement also requires improved automatic BPM estimation
 from the selected full beat sequence. Freeze a versioned aggregation/beat-unit

@@ -162,6 +162,16 @@ fn native_source_proof(engine: &AudioEngine, output: &Path, rate: u32) -> Value 
 #[test]
 #[ignore = "explicit private source/model probe; no device, app, stream or recorder"]
 fn b2_fresh_native_candidate_probe() {
+    run_native_probe(false);
+}
+
+#[test]
+#[ignore = "explicit private corrected QM probe; no device, app, stream or model"]
+fn b2_corrected_legacy_native_probe() {
+    run_native_probe(true);
+}
+
+fn run_native_probe(corrected_legacy: bool) {
     let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(3)
@@ -169,7 +179,12 @@ fn b2_fresh_native_candidate_probe() {
         .to_path_buf();
     let attached_workspace = repository.parent().unwrap();
     let config_path = PathBuf::from(
-        std::env::var_os("FLITZIS_B2_NATIVE_CONFIG").expect("explicit fresh B2 probe config"),
+        std::env::var_os(if corrected_legacy {
+            "FLITZIS_B2_LEGACY_CONFIG"
+        } else {
+            "FLITZIS_B2_NATIVE_CONFIG"
+        })
+        .expect("explicit private B2 probe config"),
     );
     assert!(config_path.is_absolute());
     assert!(
@@ -201,6 +216,9 @@ fn b2_fresh_native_candidate_probe() {
     assert!(
         output.starts_with(workspace.join("scratch/b2-fresh-lineage-20261008/probes"))
             || output.starts_with(workspace.join("scratch/b2-bpm-regions-20261008/native-probes"))
+            || (corrected_legacy
+                && output
+                    .starts_with(workspace.join("scratch/b2-corrected-legacy-20261008/probes")))
     );
     assert!(
         !output.exists(),
@@ -223,11 +241,12 @@ fn b2_fresh_native_candidate_probe() {
         include_str!("b2_native_candidate_probe.rs"),
     )
     .unwrap();
-    fs::write(
-        output.join("compiled-producer.py"),
-        include_str!("b2_native_candidate_probe.py"),
-    )
-    .unwrap();
+    let python_producer = if corrected_legacy {
+        include_str!("b2_corrected_legacy_probe.py")
+    } else {
+        include_str!("b2_native_candidate_probe.py")
+    };
+    fs::write(output.join("compiled-producer.py"), python_producer).unwrap();
     let executable = std::env::current_exe().unwrap();
     let executable_copy = output.join("native-test-executable.exe");
     fs::copy(&executable, &executable_copy).unwrap();
@@ -268,7 +287,7 @@ fn b2_fresh_native_candidate_probe() {
             .unwrap();
         PyModule::from_code(
             py,
-            &CString::new(include_str!("b2_native_candidate_probe.py")).unwrap(),
+            &CString::new(python_producer).unwrap(),
             c"b2_native_candidate_probe.py",
             c"b2_native_candidate_probe",
         )
@@ -302,7 +321,9 @@ fn b2_fresh_native_candidate_probe() {
         )
     });
     let mut callback = Python::attach(|py| Callback::new(&engine.borrow(py), rate));
-    let deadline = Instant::now() + Duration::from_secs(120);
+    // Test-only collection deadline accommodates unoptimized Windows cold loading
+    // of the full private corpus; production and acceptance budgets are unchanged.
+    let deadline = Instant::now() + Duration::from_secs(900);
     let event = loop {
         callback.drain(&mut consumer);
         let event = Python::attach(|py| engine.borrow(py).poll_loader_events(py).unwrap());

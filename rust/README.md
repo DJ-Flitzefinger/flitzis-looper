@@ -14,6 +14,15 @@ src/flitzis_looper_audio/
 
 `maturin develop` builds the platform extension into that wrapper package.
 
+The explicit corrected-QM diagnostic reuses `audio_engine/analysis_jobs.rs`
+reservation/export/retirement and publication ownership. Its focused
+`corrected_legacy.rs` module runs the normal converter and shared `analyze_bpm_raw`
+pipeline off realtime, retains full binary64 detections and separate compatibility
+float32 output, and publishes only the exact locally produced result bytes.
+The hardware-free ignored B2 probe records the actual executing test EXE and
+loaded dependencies separately from an installed Looper extension. See
+[corrected legacy provenance](../docs/beat-this-corrected-legacy.md).
+
 ## Module Structure
 
 ```text

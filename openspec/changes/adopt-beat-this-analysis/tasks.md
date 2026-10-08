@@ -166,7 +166,16 @@
   Historical B2a resource gate failed: three native staging rejections and two oversize worker-only
   publication probes. T03 key-name validation was corrected and the release rerun retired
   naturally. Musical labels/correction comparison and default cutover remain pending.
-- [ ] Compare corrected legacy results as evidence, not a model vote; record pass/fail and
+- [x] B2 corrected-legacy engineering slice: collect fresh native corrected QM T01-T05
+  complete original/loaded/mono/analyzer/request/raw/finish/retained-result/completion/retirement
+  chains through existing cold loading, complete-source reading, converter and QmRawAnalysis;
+  bind executing runtime/dependencies and reviewed producer bytes separately from unused PYD.
+  Add fixed independently reviewed fail-closed complete-array profiles, explicit reference-first
+  comparator selections and complete five-track engineering evaluation without labels, musical
+  scores, RSS/human claims or candidate/default substitution. Preserve original legacy/candidate
+  failures and pass full final-source regression/build/strict validation before marking complete.
+- [ ] Compare corrected legacy results against independent musical references and paired human
+  correction measurements as evidence, not a model vote; record pass/fail and
   bounded remediation. Do not claim sample accuracy from 20-ms detections or 70-ms F1.
 - [ ] After B1b and B2 acceptance pass, make `final0`/minimal the default for NEW beat analysis;
   remove qm from normal selected-backend routing without a hidden unavailable-model fallback.

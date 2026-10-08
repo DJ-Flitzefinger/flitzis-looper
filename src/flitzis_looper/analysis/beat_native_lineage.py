@@ -218,7 +218,13 @@ def _publication(raw: dict[str, bytes], request: BeatWorkerRequest) -> None:
 
 
 def _cold_source(
-    workspace: Path, native: dict[str, object], metadata: FreshNativeMetadata, summary: FreshSummary
+    workspace: Path,
+    native: dict[str, object],
+    metadata: FreshNativeMetadata,
+    *,
+    shape: tuple[int, int, int],
+    source_sha256: str,
+    source_bytes: int,
 ) -> list[ArtifactBinding]:
     declared = TypeAdapter(FreshNativeMetadata).validate_json(
         json.dumps(native.get("native_metadata")), strict=True
@@ -230,7 +236,6 @@ def _cold_source(
     ):
         fail("fresh_native_cold_source_metadata_mismatch")
     loaded = _object(native.get("complete_loaded_pcm"))
-    shape = summary.loaded_shape_rate_channels_frames
     if (
         loaded.get("rate_hz"),
         loaded.get("channels"),
@@ -250,7 +255,7 @@ def _cold_source(
         _file(workspace, native.get("cold_manifest"), "actual_cold_source_manifest"),
         _file(workspace, native.get("cached_original"), "actual_sealed_cached_original"),
     ]
-    if (bindings[2].sha256, bindings[2].bytes) != (summary.source_sha256, summary.source_bytes):
+    if (bindings[2].sha256, bindings[2].bytes) != (source_sha256, source_bytes):
         fail("fresh_native_sealed_original_mismatch")
     manifest = _object(json.loads(read_json_bytes(private_path(workspace, bindings[1].path))))
     descriptor = _object(manifest.get("descriptor"))
@@ -270,8 +275,8 @@ def _cold_source(
         pcm.get("mono_revision"),
     ) != (
         metadata.complete_source_identity,
-        summary.source_sha256,
-        summary.source_bytes,
+        source_sha256,
+        source_bytes,
         *shape,
         shape[1] * shape[2] * 4,
         metadata.complete_playback_sha256,
@@ -359,12 +364,21 @@ def _provenance(
         or provenance.get("diagnostic_only") is not True
     ):
         fail("fresh_native_supported_producer_required")
+    if summary.source_bytes is None:
+        fail("fresh_native_sealed_original_mismatch")
     bindings = [
         _file(workspace, provenance.get("frozen_manifest"), "frozen_manifest"),
         _file(workspace, provenance.get("probe_config"), "actual_native_probe_config"),
     ]
     bindings.extend(
-        _cold_source(workspace, _object(provenance.get("native_source")), metadata, summary)
+        _cold_source(
+            workspace,
+            _object(provenance.get("native_source")),
+            metadata,
+            shape=summary.loaded_shape_rate_channels_frames,
+            source_sha256=summary.source_sha256,
+            source_bytes=summary.source_bytes,
+        )
     )
     bindings.extend(_runtime(workspace, _object(provenance.get("runtime")), summary))
     bindings.extend(_worker(workspace, _object(provenance.get("worker_configuration")), summary))

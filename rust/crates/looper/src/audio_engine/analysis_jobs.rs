@@ -24,6 +24,9 @@ use std::sync::{Arc, Mutex, Weak, mpsc::Sender};
 const MAX_PCM_BYTES: usize = 512 * 1024 * 1024;
 const MAX_RESULT_BYTES: usize = 1024 * 1024;
 
+#[path = "corrected_legacy.rs"]
+mod corrected_legacy;
+
 /// Shared current-request publication boundary and its actual callback freshness epoch.
 pub(super) struct OfflineRequestOwner {
     pub request_ids: Arc<Mutex<Vec<u64>>>,
@@ -172,6 +175,9 @@ impl OfflineJobs {
             preparing: AtomicBool::new(false),
             key_started: AtomicBool::new(false),
             key_running: AtomicBool::new(false),
+            legacy_started: AtomicBool::new(false),
+            legacy_running: AtomicBool::new(false),
+            legacy_result: Mutex::new(None),
             finished: AtomicBool::new(false),
             transitions: Mutex::new(()),
             busy: self.busy.clone(),
@@ -266,6 +272,9 @@ struct JobState {
     preparing: AtomicBool,
     key_started: AtomicBool,
     key_running: AtomicBool,
+    legacy_started: AtomicBool,
+    legacy_running: AtomicBool,
+    legacy_result: Mutex<Option<String>>,
     finished: AtomicBool,
     transitions: Mutex<()>,
     busy: Arc<AtomicBool>,
@@ -381,6 +390,7 @@ impl JobState {
             || self.cancelled()
             || self.retirement_started.load(Ordering::Acquire)
             || self.pcm_retired.load(Ordering::Acquire)
+            || self.legacy_started.load(Ordering::Acquire)
             || self.key_started.swap(true, Ordering::AcqRel)
         {
             return Err("offline key branch already started or retired".into());
@@ -430,19 +440,85 @@ impl JobState {
         .to_string())
     }
 
+    fn corrected_legacy(&self, analyzer_output: Option<&str>) -> Result<String, String> {
+        let transition = self
+            .transitions
+            .lock()
+            .map_err(|_| "offline transition lock poisoned")?;
+        if self.finished.load(Ordering::Acquire)
+            || self.cancelled()
+            || self.retirement_started.load(Ordering::Acquire)
+            || self.pcm_retired.load(Ordering::Acquire)
+            || self.preparing.load(Ordering::Acquire)
+            || self.key_started.load(Ordering::Acquire)
+            || self.legacy_started.swap(true, Ordering::AcqRel)
+        {
+            return Err("corrected legacy analysis is unavailable".into());
+        }
+        self.legacy_running.store(true, Ordering::Release);
+        let _running = RunningGuard(&self.legacy_running);
+        drop(transition);
+        let result = {
+            let mut staged = self
+                .staged_pcm
+                .lock()
+                .map_err(|_| "offline staged PCM lock poisoned")?;
+            let file = staged.as_mut().ok_or("offline PCM not prepared")?;
+            corrected_legacy::analyze(
+                file,
+                &self.identity,
+                self.rate,
+                self.frames,
+                analyzer_output,
+                &|| self.cancelled(),
+            )?
+        };
+        // Retain only the bounded complete diagnostic, never PCM. The exact
+        // successful native result is the publication authority: caller-created
+        // results cannot become supported simply by supplying matching hashes.
+        let encoded = result.to_string();
+        if encoded.len() > MAX_RESULT_BYTES {
+            return Err("corrected legacy result limit exceeded".into());
+        }
+        *self
+            .legacy_result
+            .lock()
+            .map_err(|_| "corrected legacy result lock poisoned")? = Some(encoded.clone());
+        Ok(encoded)
+    }
+
     fn finish(&self, result: &str) -> Result<bool, String> {
+        self.finish_result(result, false)
+    }
+
+    fn finish_corrected_legacy(&self, result: &str) -> Result<bool, String> {
+        self.finish_result(result, true)
+    }
+
+    fn finish_result(&self, result: &str, legacy: bool) -> Result<bool, String> {
         let _transition = self
             .transitions
             .lock()
             .map_err(|_| "offline transition lock poisoned")?;
-        if self.preparing.load(Ordering::Acquire) || self.key_running.load(Ordering::Acquire) {
+        if self.preparing.load(Ordering::Acquire)
+            || self.key_running.load(Ordering::Acquire)
+            || self.legacy_running.load(Ordering::Acquire)
+        {
             return Err("offline native work is still retiring".into());
         }
-        let parsed = validate_envelope(
-            result,
-            &self.identity,
-            self.frames as f64 / f64::from(self.rate),
-        )?;
+        let parsed = if legacy {
+            let expected = self
+                .legacy_result
+                .lock()
+                .map_err(|_| "corrected legacy result lock poisoned")?;
+            corrected_legacy::validate_publication(result, &self.identity, expected.as_deref())?
+        } else {
+            validate_envelope(
+                result,
+                &self.identity,
+                self.frames as f64 / f64::from(self.rate),
+            )?
+        };
         if self.finished.load(Ordering::Acquire) {
             return Err("offline request already retired".into());
         }
@@ -464,7 +540,11 @@ impl JobState {
             let _ = self.tx.send(LoaderEvent::OfflineAnalysisCompleted {
                 id: self.identity.pad_id,
                 request_id: self.identity.request_id,
-                result_json: parsed.to_string(),
+                result_json: if legacy {
+                    result.to_owned()
+                } else {
+                    parsed.to_string()
+                },
             });
         }
         self.finished.store(true, Ordering::Release);
@@ -493,7 +573,10 @@ impl JobState {
             .transitions
             .lock()
             .map_err(|_| "offline transition lock poisoned")?;
-        if self.preparing.load(Ordering::Acquire) || self.key_running.load(Ordering::Acquire) {
+        if self.preparing.load(Ordering::Acquire)
+            || self.key_running.load(Ordering::Acquire)
+            || self.legacy_running.load(Ordering::Acquire)
+        {
             return Err("offline native work is still retiring".into());
         }
         self.pcm_retired.store(true, Ordering::Release);
@@ -681,6 +764,20 @@ impl OfflineAnalysisJob {
         py.detach(|| self.state().key())
             .map_err(PyRuntimeError::new_err)
     }
+    /// Execute the shared corrected QM tracker on the complete staged native mono.
+    /// Optional explicit export retains the actual binary64 analyzer input.
+    #[pyo3(signature = (analyzer_output_path = None))]
+    pub fn analyze_corrected_legacy(
+        &self,
+        py: Python<'_>,
+        analyzer_output_path: Option<String>,
+    ) -> PyResult<String> {
+        py.detach(|| {
+            self.state()
+                .corrected_legacy(analyzer_output_path.as_deref())
+        })
+        .map_err(PyRuntimeError::new_err)
+    }
     pub fn is_cancelled(&self) -> bool {
         self.state().cancelled()
     }
@@ -704,6 +801,7 @@ impl OfflineAnalysisJob {
             .map_err(|_| PyRuntimeError::new_err("offline transition lock poisoned"))?;
         if state.preparing.load(Ordering::Acquire)
             || state.key_started.load(Ordering::Acquire)
+            || state.legacy_started.load(Ordering::Acquire)
             || state.finished.load(Ordering::Acquire)
             || state
                 .staged_pcm
@@ -736,6 +834,11 @@ impl OfflineAnalysisJob {
     }
     pub fn finish(&self, py: Python<'_>, result_json: String) -> PyResult<bool> {
         py.detach(|| self.state().finish(&result_json))
+            .map_err(PyRuntimeError::new_err)
+    }
+    /// Publish only this reservation's actual successful corrected QM diagnostic.
+    pub fn finish_corrected_legacy(&self, py: Python<'_>, result_json: String) -> PyResult<bool> {
+        py.detach(|| self.state().finish_corrected_legacy(&result_json))
             .map_err(PyRuntimeError::new_err)
     }
 }
