@@ -13,12 +13,23 @@ classifiers = [
 dynamic = ["version"]
 dependencies = [
     "demucs>=4.0.1,<5",
+    "flitzis-bs-roformer==0.1.0",
     "imgui-bundle>=1.92.5",
     "pydantic>=2.12.5",
-    "torch>=2.12,<3",
-    "torchaudio>=2.11,<3",
-    "torchcodec>=0.9",
+    "torch==2.12.0",
+    "torchaudio==2.11.0",
+    "torchcodec==0.13.0",
 ]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu130", marker = "sys_platform == 'win32'" }]
+torchaudio = [{ index = "pytorch-cu130", marker = "sys_platform == 'win32'" }]
+flitzis-bs-roformer = { path = "vendor/bs_roformer" }
 
 [dependency-groups]
 dev = [

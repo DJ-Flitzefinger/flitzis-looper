@@ -8,11 +8,12 @@ from flitzis_looper.constants import (
     MIN_DEMUCS_SHIFTS,
 )
 from flitzis_looper.controller.base import BaseController
+from flitzis_looper.models import STEM_SEPARATORS
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from flitzis_looper.models import ProjectState, SessionState
+    from flitzis_looper.models import ProjectState, SessionState, StemSeparator
     from flitzis_looper_audio import AudioEngine
 
 
@@ -27,6 +28,16 @@ class SettingsController(BaseController):
         on_project_changed: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(project, session, audio, on_project_changed)
+
+    def set_stem_separator(self, separator: StemSeparator) -> None:
+        """Choose the separator/model for future jobs without changing existing stems."""
+        if separator not in STEM_SEPARATORS:
+            msg = "stem separator must be a supported separator/model identity"
+            raise ValueError(msg)
+        if separator == self._project.stem_separator:
+            return
+        self._project.stem_separator = separator
+        self._mark_project_changed()
 
     def set_demucs_quality(self, *, shifts: int, overlap: float) -> None:
         """Set persistent Demucs stem-generation quality controls."""

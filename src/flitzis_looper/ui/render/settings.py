@@ -9,6 +9,8 @@ from flitzis_looper.constants import (
     MIN_DEMUCS_SHIFTS,
 )
 from flitzis_looper.models import (
+    STEM_SEPARATOR_LABELS,
+    STEM_SEPARATORS,
     TRIGGER_QUANTIZATION_STEP_LABELS,
     TRIGGER_QUANTIZATION_STEPS,
 )
@@ -61,8 +63,8 @@ def settings_overlay(ctx: UiContext) -> None:
         imgui.text_colored(TEXT_MUTED_RGBA, "Trigger Quantize")
         _trigger_quantization_controls(ctx)
         imgui.separator()
-        imgui.text_colored(TEXT_MUTED_RGBA, "Stem Quality")
-        _demucs_quality_controls(ctx)
+        imgui.text_colored(TEXT_MUTED_RGBA, "Stem Generation")
+        _stem_generation_controls(ctx)
 
 
 def _input_mapping_controls(ctx: UiContext) -> None:
@@ -97,6 +99,24 @@ def _trigger_quantization_controls(ctx: UiContext) -> None:
                 if selected:
                     imgui.set_item_default_focus()
             imgui.end_combo()
+
+
+def _stem_generation_controls(ctx: UiContext) -> None:
+    separator = ctx.state.project.stem_separator
+    with item_width(240):
+        if imgui.begin_combo("Separator / Model", STEM_SEPARATOR_LABELS[separator]):
+            for option in STEM_SEPARATORS:
+                selected = option == separator
+                label = STEM_SEPARATOR_LABELS[option]
+                if imgui.selectable(f"{label}##stem_separator_{option}", selected)[0]:
+                    ctx.ui.settings.set_stem_separator(option)
+                    ctx.persistence.flush_if_dirty()
+                if selected:
+                    imgui.set_item_default_focus()
+            imgui.end_combo()
+    imgui.text_colored(TEXT_MUTED_RGBA, "Applies to new stem generations.")
+    if ctx.state.project.stem_separator == "demucs:htdemucs":
+        _demucs_quality_controls(ctx)
 
 
 def _demucs_quality_controls(ctx: UiContext) -> None:

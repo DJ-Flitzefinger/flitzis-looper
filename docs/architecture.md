@@ -535,6 +535,28 @@ productive musical wrapping; normal starts still read the effective loop start.
 Stem generation is offline/background work. G3b1 captures an opaque engine-owned
 source/request/preparation-epoch ticket before each job, requires a full original
 content digest matching the loaded source, and isolates worker artifact writes.
+`StemGenerationRequest.separator` captures either `demucs:htdemucs` or
+`bs-roformer:musdb18hq` at admission. Settings changes affect future requests;
+existing sets and model-free restoration keep their source/timing eligibility.
+`SelectedStemGenerationBackend` routes both through the same file/artifact
+protocol and streaming alignment writer, then the existing controller handles
+promotion and native ACK. No model objects or tensors enter project state or
+Rust messages. Two Python separator workers admit at most 32 additional jobs;
+shutdown cancels job eligibility and drains retained reads without blocking UI.
+The separate native cold lane retains its existing two/32 admission and 1 GiB
+transient PCM limits; startup admissions, assignments and preparation budgets
+remain unchanged. These limits do not describe total process RSS.
+
+BS-RoFormer uses the pinned ZFTurbo v1.0.12 MUSDB18HQ network/config/checkpoint in
+a disposable subprocess, with bounded stereo 44.1-kHz chunks and rolling CPU
+overlap-add. Decoded long inputs are temporary disk PCM; complete tracks are never
+placed on the GPU. The shared artifact writer aligns all components in bounded
+blocks and preserves the previous scalar PCM16 math, including pre-quantization
+instrumental summation. Both adapters resolve CUDA/CPU outside the callback.
+The exact model, explicit installer and CUDA/dependency setup are described in
+[stem generation setup](stem-generation-setup.md). Beat This default acceptance
+is a separate gate; separator selection has no analyzer authority.
+
 The owner rechecks actual state through enqueue; callback adoption checks the
 actual source Arc and atomic permit. G3b2e also captures current native source/
 declared authority and complete acknowledged accepted revision, exact binary64

@@ -1,6 +1,7 @@
 """Tests for Pydantic model validation in flitzis_looper.models."""
 
 import json
+from typing import cast
 
 import pytest
 from pydantic import ValidationError
@@ -35,6 +36,7 @@ from flitzis_looper.models import (
     SessionState,
     StemCacheEntry,
     StemFileSet,
+    StemSeparator,
 )
 
 
@@ -215,6 +217,7 @@ class TestModelSerialization:
         assert "key_lock" in data
         assert "demucs_shifts" in data
         assert "demucs_overlap" in data
+        assert "stem_separator" in data
         assert "input_mapping_enabled" in data
         assert "selected_pad" in data
 
@@ -270,6 +273,7 @@ def test_project_state_defaults(project_state: ProjectState) -> None:
     assert project_state.trigger_quantization_step == DEFAULT_TRIGGER_QUANTIZATION_STEP
     assert project_state.demucs_shifts == DEFAULT_DEMUCS_SHIFTS
     assert project_state.demucs_overlap == DEFAULT_DEMUCS_OVERLAP
+    assert project_state.stem_separator == "demucs:htdemucs"
     assert project_state.input_mapping_enabled is True
     assert project_state.speed == 1.0
     assert project_state.volume == 1.0
@@ -468,6 +472,18 @@ def test_demucs_quality_settings_validation(project_state: ProjectState) -> None
 
     with pytest.raises(ValidationError, match="demucs_overlap"):
         ProjectState(demucs_overlap=float("nan"))
+
+
+@pytest.mark.parametrize("unknown", ["bs-roformer:other", "demucs:other", ""])
+def test_separator_identity_validation_preserves_last_valid_selection(unknown: str) -> None:
+    project = ProjectState(stem_separator="bs-roformer:musdb18hq")
+
+    with pytest.raises(ValidationError, match="stem_separator"):
+        ProjectState.model_validate({"stem_separator": unknown})
+    with pytest.raises(ValidationError, match="stem_separator"):
+        project.stem_separator = cast("StemSeparator", unknown)
+
+    assert project.stem_separator == "bs-roformer:musdb18hq"
 
 
 def test_stem_mix_mode_validation(project_state: ProjectState) -> None:

@@ -29,6 +29,14 @@ uv sync
 uv run maturin develop
 ```
 
+On Windows the lock resolves Torch 2.12.0 and TorchAudio 2.11.0 from the explicit
+official CUDA 13.0 index. CUDA wheels still support CPU execution. The local
+`vendor/bs_roformer` distribution provides the pinned offline MUSDB18HQ worker;
+it installs through `uv sync`, without installing training/model families.
+Model assets remain an explicit separate installation. See
+[stem setup](stem-generation-setup.md) for identities, driver verification and rollback.
+The optional Beat This environment and its frozen CPU/model acceptance are unchanged.
+
 Start the app:
 
 ```powershell
@@ -567,6 +575,13 @@ There are two Python packages by design:
 - `src/flitzis_looper_audio/`: the import package for the native Rust extension.
   Its `__init__.py` re-exports the compiled module, `__init__.pyi` describes
   the native API for type checking, and `py.typed` marks the package as typed.
+
+`vendor/bs_roformer` is a separately installable, versioned local inference
+dependency. Its `network/bs_roformer.py` and `network/attend.py` retain exact
+upstream bytes and MIT notices; `NOTICE.md` binds their identities. Owned worker
+modules and tests are checked separately with Ruff (the unchanged upstream
+network is reviewed as third-party source). Main `src/` checks retain strict
+typing and lint policy; model/tensor imports stay in the subprocess package.
 
 After `uv run maturin develop`, a generated platform extension such as
 `flitzis_looper_audio.cp314-win_amd64.pyd` may appear in

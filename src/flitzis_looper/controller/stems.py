@@ -22,13 +22,16 @@ from flitzis_looper.controller.stem_cache import (
 )
 from flitzis_looper.controller.stem_generation import (
     AudioShape,
-    DemucsStemGenerationBackend,
     StemGenerationBackend,
     StemGenerationRequest,
     StemGenerationResult,
-    default_demucs_model_cache_dir,
 )
 from flitzis_looper.controller.stem_job import StemGenerationJob
+from flitzis_looper.controller.stem_separators import (
+    SelectedStemGenerationBackend,
+    separator_model_cache_dir,
+)
+from flitzis_looper.controller.stem_workers import StemWorkerPool
 from flitzis_looper.models import (
     STEM_COMPONENT_MASK,
     STEM_MASK_DISPLAY_MODES,
@@ -70,11 +73,6 @@ class _PendingStemPublication:
     retirement: AssetRetirementReservation
 
 
-def _start_stem_generation_thread(target: Callable[[], None]) -> None:
-    thread = threading.Thread(target=target, daemon=True)
-    thread.start()
-
-
 class StemController(BaseController):  # noqa: PLR0904
     """Manage offline stem cache metadata and generation task gating."""
 
@@ -94,11 +92,14 @@ class StemController(BaseController):  # noqa: PLR0904
         self._generation_event_lock = threading.Lock()
         self._shutting_down = False
         self._stem_backend = (
-            stem_backend if stem_backend is not None else DemucsStemGenerationBackend()
+            stem_backend if stem_backend is not None else SelectedStemGenerationBackend()
         )
-        self._stem_task_runner = (
-            stem_task_runner if stem_task_runner is not None else _start_stem_generation_thread
-        )
+        self._stem_worker_pool: StemWorkerPool | None = None
+        if stem_task_runner is None:
+            self._stem_worker_pool = StemWorkerPool()
+            self._stem_task_runner: StemTaskRunner = self._stem_worker_pool
+        else:
+            self._stem_task_runner = stem_task_runner
         self._stem_generation_events: SimpleQueue[_StemBackendEvent] = SimpleQueue()
         self._generation_source_tickets: dict[int, PreparedSourceTicket] = {}
         self._pending_stem_publications: dict[int, _PendingStemPublication] = {}
@@ -128,6 +129,8 @@ class StemController(BaseController):  # noqa: PLR0904
         self._restored_stem_candidates.clear()
         self._session.stem_generating_sample_ids.clear()
         self._session.stem_generation_source_versions.clear()
+        if self._stem_worker_pool is not None:
+            self._stem_worker_pool.shutdown()
 
     def generate_stems_async(self, sample_id: int) -> bool:
         """Schedule offline stem generation for a stopped loaded pad when allowed."""
@@ -176,7 +179,8 @@ class StemController(BaseController):  # noqa: PLR0904
             source_version=source_version,
             cache_dir=Path.cwd() / cache_dir / f".generation-{uuid4().hex}",
             target_shape=target_shape,
-            model_cache_dir=default_demucs_model_cache_dir(project_root=Path.cwd()),
+            model_cache_dir=separator_model_cache_dir(self._project.stem_separator),
+            separator=self._project.stem_separator,
             device_policy="auto",
             demucs_shifts=self._project.demucs_shifts,
             demucs_overlap=self._project.demucs_overlap,

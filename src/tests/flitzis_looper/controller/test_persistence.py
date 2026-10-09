@@ -14,6 +14,7 @@ from flitzis_looper.models import (
     ProjectState,
     SampleAnalysis,
     SessionState,
+    StemCacheEntry,
 )
 from tests.conftest import write_mono_pcm16_wav
 
@@ -23,6 +24,52 @@ def test_load_project_state_missing_returns_defaults(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     assert ProjectPersistence.from_config_path().project == ProjectState()
+
+
+def test_separator_persistence_and_demucs_rollback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = ProjectState(stem_separator="bs-roformer:musdb18hq", demucs_shifts=4)
+    persistence = ProjectPersistence(project)
+    persistence.mark_dirty()
+    persistence.flush(now=0.0)
+
+    loaded = ProjectPersistence.from_config_path().project
+    assert loaded.stem_separator == "bs-roformer:musdb18hq"
+    assert loaded.demucs_shifts == 4
+
+    loaded.stem_separator = "demucs:htdemucs"
+    persistence = ProjectPersistence(loaded)
+    persistence.mark_dirty()
+    persistence.flush(now=1.0)
+
+    restored = ProjectPersistence.from_config_path().project
+    assert restored.stem_separator == "demucs:htdemucs"
+    assert restored.demucs_shifts == 4
+
+
+def test_legacy_config_uses_demucs_without_changing_saved_stem_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = ProjectState(demucs_shifts=6, demucs_overlap=0.4)
+    entry = StemCacheEntry(source_version="saved-source", cache_dir="saved-set", available=True)
+    project.stem_cache[0] = entry
+    project.pad_stem_mix_mode[0] = "all_stems"
+    data = project.model_dump(mode="json")
+    data.pop("stem_separator")
+    config_path = tmp_path / PROJECT_CONFIG_PATH
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+
+    loaded = ProjectPersistence.from_config_path().project
+
+    assert loaded.stem_separator == "demucs:htdemucs"
+    assert loaded.demucs_shifts == 6
+    assert loaded.demucs_overlap == 0.4
+    assert loaded.stem_cache[0] == entry
+    assert loaded.pad_stem_mix_mode[0] == "all_stems"
 
 
 def test_persistence_roundtrip_writes_atomic_json(

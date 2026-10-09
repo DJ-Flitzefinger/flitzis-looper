@@ -34,6 +34,7 @@ if TYPE_CHECKING:
         StemGridIndicatorState,
         StemMaskDisplayMode,
         StemMixMode,
+        StemSeparator,
         TriggerQuantizationMode,
         TriggerQuantizationStep,
     )
@@ -1005,6 +1006,9 @@ class SettingsActions:
 
     def set_demucs_quality(self, *, shifts: int, overlap: float) -> None:
         self._controller.settings.set_demucs_quality(shifts=shifts, overlap=overlap)
+
+    def set_stem_separator(self, separator: StemSeparator) -> None:
+        self._controller.settings.set_stem_separator(separator)
 
     def set_trigger_quantization_step(self, step: TriggerQuantizationStep) -> None:
         self._controller.transport.global_params.set_trigger_quantization_step(step)

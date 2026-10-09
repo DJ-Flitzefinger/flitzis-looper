@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flitzis-bs-roformer"
+version = "0.1.0"
+description = "Pinned offline BS-RoFormer MUSDB18HQ inference worker for Flitzis Looper"
+readme = "NOTICE.md"
+requires-python = ">=3.14"
+license = "MIT"
+license-files = ["LICENSE-ZFTURBO", "LICENSE-LUCIDRAINS"]
+dependencies = [
+    "beartype==0.22.9",
+    "einops==0.6.1",
+    "packaging>=24",
+    "rotary-embedding-torch==0.3.5",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

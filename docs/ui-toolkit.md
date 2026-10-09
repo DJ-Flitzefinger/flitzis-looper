@@ -266,9 +266,19 @@ Current examples:
 - sample loading through `LoaderController`,
 - audio analysis through loader/analysis flow,
 - offline Demucs stem generation through `StemController`,
+- offline BS-RoFormer MUSDB18HQ through the same request/publication controller,
 - Rust audio telemetry through `AppController.poll_runtime_events()`.
 
 Render functions should never hide slow work behind a button click.
+
+Settings exposes a persistent Stem Separator combo: Demucs htdemucs or
+BS-RoFormer MUSDB18HQ. Choosing it is a small controller/persistence action;
+the admitted job retains its selection and future jobs use the new choice.
+Demucs quality sliders remain stored and appear when Demucs is selected,
+including after a return from BS-RoFormer. Existing caches/playback remain
+eligible under their current source/timing contracts. The combo performs no
+model loading, download, cache scan or inference, and is independent of the
+automatic beat-analyzer acceptance gate.
 
 ## Audio Boundary
 

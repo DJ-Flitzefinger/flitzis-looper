@@ -57,6 +57,7 @@ type StemMixMode = Literal["full_mix", "all_stems"]
 type StemMaskDisplayMode = Literal["custom", "instrumental", "all"]
 type StemKind = Literal["vocals", "melody", "bass", "drums", "instrumental"]
 type StemGridIndicatorState = Literal["available", "generating", "blocked", "error"]
+type StemSeparator = Literal["demucs:htdemucs", "bs-roformer:musdb18hq"]
 type TimingIntent = Literal["automatic", "manual", "tap", "legacy"]
 
 TRIGGER_QUANTIZATION_STEPS: tuple[TriggerQuantizationStep, ...] = (
@@ -91,6 +92,11 @@ LEGACY_TRIGGER_QUANTIZATION_TO_STEP: dict[str, TriggerQuantizationStep] = {
 STEM_KINDS: tuple[StemKind, ...] = ("vocals", "melody", "bass", "drums", "instrumental")
 STEM_MIX_MODES: tuple[StemMixMode, ...] = ("full_mix", "all_stems")
 STEM_MASK_DISPLAY_MODES: tuple[StemMaskDisplayMode, ...] = ("custom", "instrumental", "all")
+STEM_SEPARATORS: tuple[StemSeparator, ...] = ("demucs:htdemucs", "bs-roformer:musdb18hq")
+STEM_SEPARATOR_LABELS: dict[StemSeparator, str] = {
+    "demucs:htdemucs": "Demucs htdemucs",
+    "bs-roformer:musdb18hq": "BS-RoFormer MUSDB18HQ",
+}
 STEM_MASK_VOCALS = 1 << 0
 STEM_MASK_MELODY = 1 << 1
 STEM_MASK_BASS = 1 << 2
@@ -396,6 +402,8 @@ class ProjectState(BaseModel):
     """Global pad trigger quantization grid step."""
     input_mapping_enabled: bool = True
     """Enable performer MIDI/keyboard input mappings."""
+    stem_separator: StemSeparator = "demucs:htdemucs"
+    """Separator/model used by future offline stem-generation requests."""
     demucs_shifts: int = Field(
         default=DEFAULT_DEMUCS_SHIFTS,
         ge=MIN_DEMUCS_SHIFTS,

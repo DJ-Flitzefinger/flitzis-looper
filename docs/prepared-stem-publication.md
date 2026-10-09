@@ -1,8 +1,14 @@
 # Source-bound prepared stem publication
 
-G3b1 binds the productive Demucs/restored-stem path to the actual immutable loaded
+G3b1 binds the productive Demucs/BS-RoFormer/restored-stem path to the actual immutable loaded
 source. G3b2e also binds preparation and adoption to its current native timing
 authority and complete acknowledged accepted projection.
+
+The bounded Settings selection is captured in each separator request. Both
+adapters produce the same five aligned artifacts through a streaming writer;
+neither controls promotion, retirement or native availability. Selecting another
+model does not invalidate a complete current set. Restoration never imports or
+requires a separator model, even when the selected model is absent.
 
 ## Native API and ownership
 

@@ -1,11 +1,9 @@
 import math
 import os
 import shutil
-import struct
 import subprocess
 import sys
 import tempfile
-import wave
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,18 +17,25 @@ from flitzis_looper.constants import (
     MIN_DEMUCS_OVERLAP,
     MIN_DEMUCS_SHIFTS,
 )
-from flitzis_looper.models import STEM_KINDS
+from flitzis_looper.controller.stem_artifacts import (
+    AudioData,
+    read_pcm16_wav,
+    validate_target_shape,
+)
+from flitzis_looper.controller.stem_artifacts import (
+    StemArtifactError as StemGenerationError,
+)
+from flitzis_looper.controller.stem_artifacts import (
+    write_project_cache_artifacts as _write_project_cache_artifacts,
+)
+from flitzis_looper.models import STEM_KINDS, StemSeparator
+
+__all__ = ["StemGenerationError", "_write_project_cache_artifacts"]
 
 type StemDevicePolicy = Literal["auto", "cpu"]
 type StemDevice = Literal["cuda", "cpu"]
 type StemProgressCallback = Callable[[float, str], None]
 
-DEMUCS_PROJECT_STEM_MAP: tuple[tuple[str, str], ...] = (
-    ("vocals", "vocals"),
-    ("drums", "drums"),
-    ("bass", "bass"),
-    ("melody", "other"),
-)
 DEMUCS_REQUIRED_CHECKPOINTS: dict[str, tuple[str, ...]] = {
     "htdemucs": ("955717e8-8726e21a.th",),
 }
@@ -71,6 +76,7 @@ class StemGenerationRequest:
     device_policy: StemDevicePolicy = "auto"
     demucs_shifts: int = DEFAULT_DEMUCS_SHIFTS
     demucs_overlap: float = DEFAULT_DEMUCS_OVERLAP
+    separator: StemSeparator = "demucs:htdemucs"
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,10 +89,6 @@ class StemGenerationResult:
     cpu_fallback: bool
     artifact_count: int
     diagnostic: str | None = None
-
-
-class StemGenerationError(RuntimeError):
-    """Stem generation failed before valid cache artifacts were produced."""
 
 
 class CommandRunner(Protocol):
@@ -115,17 +117,6 @@ class StemGenerationBackend(Protocol):
         request: StemGenerationRequest,
         progress: StemProgressCallback,
     ) -> StemGenerationResult: ...
-
-
-@dataclass(frozen=True, slots=True)
-class _AudioData:
-    sample_rate_hz: int
-    channels: int
-    samples: list[float]
-
-    @property
-    def frame_count(self) -> int:
-        return len(self.samples) // self.channels
 
 
 def run_command(
@@ -321,6 +312,7 @@ def _validate_request(request: StemGenerationRequest) -> None:
     if not request.source_path.is_file():
         msg = "source audio file is missing"
         raise StemGenerationError(msg)
+    validate_target_shape(request.target_shape)
     shape = request.target_shape
     if shape.sample_rate_hz <= 0 or shape.channels <= 0 or shape.frame_count <= 0:
         msg = "target audio shape must be non-empty"
@@ -514,146 +506,6 @@ def _bounded_text(text: str | None, *, limit: int = 1000) -> str:
     return f"{compact[: limit - 3]}..."
 
 
-def _write_project_cache_artifacts(
-    *,
-    output_root: Path,
-    cache_dir: Path,
-    target_shape: AudioShape,
-    progress: StemProgressCallback,
-) -> None:
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    aligned: dict[str, list[float]] = {}
-
-    for index, (project_stem, demucs_stem) in enumerate(DEMUCS_PROJECT_STEM_MAP):
-        progress(0.85 + index * 0.025, "Aligning stem cache")
-        source = _find_demucs_output_file(output_root, demucs_stem)
-        aligned[project_stem] = _align_audio(_read_pcm16_wav(source), target_shape)
-
-    aligned["instrumental"] = _sum_stems(
-        aligned["drums"],
-        aligned["bass"],
-        aligned["melody"],
-    )
-
-    for stem_name in STEM_KINDS:
-        _write_pcm16_wav(cache_dir / f"{stem_name}.wav", target_shape, aligned[stem_name])
-
-    progress(1.0, "Stem cache ready")
-
-
-def _find_demucs_output_file(output_root: Path, stem_name: str) -> Path:
-    matches = sorted(output_root.rglob(f"{stem_name}.wav"))
-    if not matches:
-        msg = f"Demucs output is missing {stem_name}.wav"
-        raise StemGenerationError(msg)
-    return matches[0]
-
-
-def _read_pcm16_wav(path: Path) -> _AudioData:
-    with wave.open(str(path), "rb") as wav:
-        channels = wav.getnchannels()
-        sample_rate_hz = wav.getframerate()
-        sample_width = wav.getsampwidth()
-        frames = wav.getnframes()
-        raw = wav.readframes(frames)
-
-    if channels <= 0 or sample_rate_hz <= 0 or frames <= 0:
-        msg = f"{path.name} has an invalid audio shape"
-        raise StemGenerationError(msg)
-    if sample_width != 2:
-        msg = f"{path.name} must be 16-bit PCM WAV"
-        raise StemGenerationError(msg)
-
-    expected_bytes = frames * channels * sample_width
-    if len(raw) != expected_bytes:
-        msg = f"{path.name} has incomplete PCM data"
-        raise StemGenerationError(msg)
-
-    samples = [_pcm16_to_float(value[0]) for value in struct.iter_unpack("<h", raw)]
-    return _AudioData(sample_rate_hz=sample_rate_hz, channels=channels, samples=samples)
-
-
-def _align_audio(audio: _AudioData, target: AudioShape) -> list[float]:
-    output = [0.0] * (target.frame_count * target.channels)
-    if audio.frame_count == 0:
-        return output
-
-    rate_ratio = audio.sample_rate_hz / target.sample_rate_hz
-    for target_frame in range(target.frame_count):
-        source_position = target_frame * rate_ratio
-        source_frame = math.floor(source_position)
-        fraction = source_position - source_frame
-        for channel in range(target.channels):
-            before = _sample_at(audio, source_frame, channel, target.channels)
-            after = _sample_at(audio, source_frame + 1, channel, target.channels)
-            output[target_frame * target.channels + channel] = before + (after - before) * fraction
-    return output
-
-
-def _sample_at(
-    audio: _AudioData,
-    frame: int,
-    target_channel: int,
-    target_channels: int,
-) -> float:
-    if frame < 0 or frame >= audio.frame_count:
-        return 0.0
-
-    if audio.channels == target_channels:
-        return audio.samples[frame * audio.channels + target_channel]
-
-    if audio.channels == 1:
-        return audio.samples[frame * audio.channels]
-
-    if target_channels == 1:
-        start = frame * audio.channels
-        stop = start + audio.channels
-        return sum(audio.samples[start:stop]) / audio.channels
-
-    if target_channel < audio.channels:
-        return audio.samples[frame * audio.channels + target_channel]
-    return 0.0
-
-
-def _sum_stems(*stems: list[float]) -> list[float]:
-    if not stems:
-        return []
-    summed = [0.0] * len(stems[0])
-    for stem in stems:
-        if len(stem) != len(summed):
-            msg = "aligned stem lengths do not match"
-            raise StemGenerationError(msg)
-        for index, sample in enumerate(stem):
-            summed[index] = max(-1.0, min(1.0, summed[index] + sample))
-    return summed
-
-
-def _write_pcm16_wav(path: Path, shape: AudioShape, samples: list[float]) -> None:
-    if len(samples) != shape.frame_count * shape.channels:
-        msg = "aligned stem length does not match target shape"
-        raise StemGenerationError(msg)
-
-    temp_path = path.with_name(f"{path.name}.tmp")
-    with wave.open(str(temp_path), "wb") as wav:
-        wav.setnchannels(shape.channels)
-        wav.setsampwidth(2)
-        wav.setframerate(shape.sample_rate_hz)
-        wav.writeframes(b"".join(struct.pack("<h", _float_to_pcm16(sample)) for sample in samples))
-
-    temp_path.replace(path)
-
-
-def _pcm16_to_float(sample: int) -> float:
-    if sample == -32768:
-        return -1.0
-    return sample / 32767.0
-
-
-def _float_to_pcm16(sample: float) -> int:
-    value = sample if math.isfinite(sample) else 0.0
-    value = max(-1.0, min(1.0, value))
-    if value >= 1.0:
-        return 32767
-    if value <= -1.0:
-        return -32768
-    return round(value * 32767.0)
+def _read_pcm16_wav(path: Path) -> AudioData:
+    """Read bounded compatibility PCM; productive alignment uses streaming blocks."""
+    return read_pcm16_wav(path)

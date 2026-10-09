@@ -766,6 +766,19 @@ class TestSettingsActions:
         assert controller.session.stem_generating_sample_ids == set()
         assert controller.session.stem_generation_source_versions == {}
 
+    def test_separator_selection_delegates_to_settings_without_starting_job(
+        self, controller: AppController, audio_engine_mock: Mock
+    ) -> None:
+        settings_actions = SettingsActions(controller)
+        audio_engine_mock.reset_mock()
+
+        settings_actions.set_stem_separator("bs-roformer:musdb18hq")
+
+        assert controller.project.stem_separator == "bs-roformer:musdb18hq"
+        assert controller.persistence._dirty is True
+        assert controller.session.stem_generating_sample_ids == set()
+        assert audio_engine_mock.mock_calls == []
+
     def test_set_trigger_quantization_step_delegates_to_global_params(
         self, controller: AppController
     ) -> None:

@@ -34,7 +34,7 @@ For focused areas:
 | `pcm-cache-residency.md` | Productive copy-first originals/full PCM cache, validated reuse and reader lifecycle; separate C2 residency and C3 measurement contracts. |
 | `development.md` | Setup, validation, OpenSpec workflow, package layout, and generated-file notes. |
 | `ui-toolkit.md` | Project-specific Dear ImGui design and state-flow rules. |
-| `stem-generation-setup.md` | External requirements for offline Demucs stem generation. |
+| `stem-generation-setup.md` | Pinned Demucs/BS-RoFormer assets, offline worker, CUDA setup and separator rollback. |
 | `prepared-stem-publication.md` | Content identity, current accepted timing permits, artifact integrity, callback adoption and shared stem trajectory. |
 | `native-constant-timing.md` | G3b2a-i actual-pad timing, native/FIFO history, verified persistence/fresh adoption, guarded global batches and explicit publication/derived refresh; separate loop gates. |
 | `key-lock-backend.md` | Current Rubber Band Key Lock backend, timing semantics, realtime constraints, and native dependency requirements. |
