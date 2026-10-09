@@ -662,6 +662,11 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
     if sample_duration_s is None:
         return
 
+    # Status rows must consume layout space before the plot fills the remainder.
+    # Appending them afterwards toggles the child scrollbar and invalidates the
+    # width-keyed asynchronous waveform request on otherwise stationary frames.
+    _render_context_readiness(ctx, pad_id)
+
     if not implot.begin_plot(
         f"##waveform-{pad_id}",
         (-1, -1),
@@ -681,8 +686,7 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
     ctx.ui.waveform.record_view_range(pad_id, start_s, end_s)
 
     # Get plot resolution
-    plot_width_px = int(imgui.get_content_region_avail().x)
-    plot_width_px = max(plot_width_px, 100)  # Safety fallback
+    plot_width_px = max(1, int(implot.get_plot_size().x))
 
     # Call Rust for data (fast aggregation, cached)
     data = ctx.ui.waveform.get_render_data(pad_id, plot_width_px, start_s, end_s, timing=timing)
@@ -705,7 +709,6 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
     _draw_zero_line(draw_list, start_s, end_s)
 
     implot.end_plot()
-    _render_context_readiness(ctx, pad_id)
 
 
 def _render_editor_body(ctx: UiContext, pad_id: int) -> None:

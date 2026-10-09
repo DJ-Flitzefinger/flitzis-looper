@@ -316,7 +316,7 @@ def test_waveform_plot_uses_one_current_snapshot_and_actual_extent_for_clipping(
     plot_limits.x.min = 0.0
     plot_limits.x.max = 800.0
     monkeypatch.setattr(implot, "get_plot_limits", lambda: plot_limits)
-    monkeypatch.setattr(imgui, "get_content_region_avail", lambda: Mock(x=320.0))
+    monkeypatch.setattr(implot, "get_plot_size", lambda: Mock(x=320.0))
     draw_list = Mock()
     monkeypatch.setattr(implot, "get_plot_draw_list", lambda: draw_list)
     render_data = Mock(return_value=None)

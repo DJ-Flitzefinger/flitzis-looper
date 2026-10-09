@@ -313,6 +313,21 @@ needed. Its pattern is:
 - loop edits still go through transport loop actions,
 - playback controls in the editor go through playback actions.
 
+Readiness/error rows and their retry/cancel controls are laid out before ImPlot
+fills the remaining editor height. Appending rows below that full-height plot
+creates a scrollbar/width feedback cycle: pending and ready frames alternate
+between different resolutions and repeatedly supersede the asynchronous read.
+Waveform resolution uses the actual ImPlot interior width after axis setup,
+excluding axis labels and padding. A stationary view therefore retains its
+cache key across readiness and playback updates. Genuine zoom, resize and source
+replacement still request the matching view through the existing cache.
+
+This restores the existing `waveform-editor` cached mono waveform and single-grid
+contracts; it introduces no new timing, label, marker or playback semantics.
+Binary64 source seconds and the existing loop-relative musical labels remain
+unchanged (`preserve-scalar-source-precision` and
+`auto-place-new-track-loop-start`).
+
 The editor grid uses effective pad BPM (manual override before analysis) and
 the persisted activity base (or legacy analysis onset when absent) rounded at
 the loaded-buffer rate plus the persisted signed sample offset. Loop control publishes that same signed origin as precise native
@@ -379,6 +394,14 @@ Preferred tests:
 - helper tests for derived labels, display values, gesture math, and formatting,
 - targeted render-helper tests where a calculation is pure enough to exercise
   without a live UI backend.
+
+`test_waveform_render_stability.py` exercises the production renderer and real
+UI/controller cache in isolated ImGui/ImPlot draw contexts. A delayed worker
+boundary reproduces readiness without a graphics backend or audio device.
+It checks stable plot/axis geometry and plot draw vertices and indices at full-track, loop
+and individual-sample zoom, then pending/error/retry, playhead, residency, zoom,
+resize and source-cache invalidation. These numerical draw-data checks do not
+constitute human visual, listening or device acceptance.
 
 If a behavior can only be verified by exact pixel interaction, too much logic is
 probably in rendering code.
