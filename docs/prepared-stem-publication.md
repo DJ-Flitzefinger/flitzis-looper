@@ -224,3 +224,18 @@ listening, label or device acceptance. Later B5 audible crop/delay/transition
 compensation stays separate; current 96-native-handle setup/RAM and C3 multi-pad
 save costs remain unmeasured. Preliminary complete native export/project-save
 integrity accounting is recorded in [PCM cache and residency](pcm-cache-residency.md).
+
+## Pending R0 origin independent versions
+
+R0 revises the physical target to canonical immutable materials with equal content
+users. Current cache_dir_matches_sample_id/restore and native project_stem_cache_dir/
+project_assets validation are still slot-container-bound; P1a/b must reconcile
+writer/capture/reader/restore/retirement consistently. Material/StemSet identity
+alone cannot supply a copied current SourceTicket/history permit/ACK. Copy gets
+fresh independent content authority, Move/Swap needs a proven bounded native remap
+without resetting voices/FIFO/filter/history; raw historical evidence is unchanged.
+Jobs keep remaining subscriber interests and retain physical leases until actual
+read end. All-bank assignments/old voices/actions/version/native unload ACK determine
+cleanup, not origin-to-copy hierarchy. Complete five-WAV/five-f32 joint integrity
+and four-live-component semantics are preserved. The current runtime above is
+unchanged; these are pending program/R2/R4/P6/V0 and HC-01..HC-26 obligations.

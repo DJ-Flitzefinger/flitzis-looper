@@ -1,21 +1,21 @@
 ## MODIFIED Requirements
 
 ### Requirement: Stem Cache Is Pad-Scoped And Deletable
-The system SHALL store each pad's five generated WAV artifacts beneath
-`samples/#N/stems/` and all additional aligned stem playback PCM beneath that
-pad's `samples/#N/.pcm-cache/` owner for N1..216.
+The system SHALL store each immutable material version's five generated WAV artifacts beneath
+`samples/materials/M<stable-id>/stems/` and aligned stem playback PCM beneath its
+`.pcm-cache/`, with equal content assignments across slots1..216.
 
 Immutable generation names and complete markers SHALL bind source/content/schema/
 transform identities without overwriting leased files. Delete Stems and unload
 SHALL revoke exact tracked eligibility immediately after control admission;
-physical cleanup SHALL wait off-thread for final assignment/job/queued/native/
-voice/history owners. Legacy layouts SHALL migrate transactionally and SHALL NOT
-remain a permanent global-cache wrapper. Unknown files/newer generations and
+physical cleanup SHALL wait off-thread for final all-bank assignment/job/subscriber/action/queued/native-ACK/
+voice/history/version owners. Legacy layouts SHALL migrate transactionally and SHALL NOT
+remain a permanent obsolete legacy-cache wrapper or origin-pad dependency. Unknown files/newer generations and
 other owners SHALL survive cleanup.
 
-#### Scenario: Generated stems use the pad label directory
+#### Scenario: Generated stems use the canonical material directory
 - **WHEN** stopped pad1 generates a current set
-- **THEN** WAVs use `samples/#1/stems/` and aligned PCM uses `samples/#1/.pcm-cache/`
+- **THEN** WAVs use `samples/materials/M<id>/stems/` and aligned PCM uses `samples/materials/M<id>/.pcm-cache/`
 - **AND** tracked source/set selection requires complete joint verification
 
 #### Scenario: Unload removes pad stems
@@ -28,9 +28,9 @@ other owners SHALL survive cleanup.
 - **THEN** only its owned final-reader retired generations are eligible for cleanup
 - **AND** FullMix remains playable
 
-#### Scenario: Pad-owned generation commits a complete set
+#### Scenario: Material-owned generation commits a complete set
 - **WHEN** an inactive pad1 finishes valid generation
-- **THEN** five WAVs commit under `samples/#1/stems/` and their complete PCM derivative set under `samples/#1/.pcm-cache/`
+- **THEN** five WAVs commit under `samples/materials/M<id>/stems/` and their complete PCM derivative set under `samples/materials/M<id>/.pcm-cache/`
 - **AND** incomplete staging cannot become eligible or overwrite a live generation
 
 #### Scenario: Deletion preserves FullMix and other generations
@@ -110,7 +110,7 @@ musical meanings and complete five-artifact integrity SHALL remain mandatory.
 - **AND** bounded rebuilding occurs off-thread without overwriting readers
 
 #### Scenario: Crash between WAV and PCM area commits
-- **WHEN** only one pad-owned artifact generation committed before a crash
+- **WHEN** only one material-owned artifact generation committed before a crash
 - **THEN** the pair has no eligible joint marker and cannot become resident-ready
 - **AND** bounded retry/rollback recognizes exact owned generations while preserving old selected sets
 
@@ -126,3 +126,23 @@ demand, enabled preload policy or existing valid reader ownership.
 - **THEN** complete WAV/PCM artifacts remain durable on disk
 - **AND** unused temporary component buffers retire without losing existing live readers
 - **AND** disk completion alone does not report resident-ready or effective ALL STEMS
+
+
+### Requirement: Prepared StemSet versions have equal independent users
+The system SHALL bind a complete prepared immutable StemSet version independently of its origin slot and SHALL give each content its own current source/timing/window eligibility and native ACK.
+
+New versions SHALL leave existing users' selected data immutable. Removing one
+assignment or Delete Stems request SHALL NOT cancel another interested subscriber,
+delete shared files, or revoke a surviving content's accepted set. Physical leases
+SHALL retire only after actual job/read/action/voice/native unload completion.
+
+#### Scenario: Origin removed while copies use an old version
+- **GIVEN** A and copied C use V1 and a replacement V2 is prepared for A
+- **WHEN** A selects V2 or unloads
+- **THEN** C retains V1, its independent masks/loops/DSP and fresh current authority
+- **AND** V1 survives until every owner and actual reader/native ACK retires
+
+#### Scenario: Last subscriber cancels a pending job
+- **WHEN** one subscriber removes its assignment while another still wants the shared job
+- **THEN** the job continues for the remaining interest and late results cannot change reused slots
+- **AND** only the final interest may request cancellation; lease release waits for real read end

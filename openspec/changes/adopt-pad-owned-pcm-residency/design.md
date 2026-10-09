@@ -1,8 +1,9 @@
-# Design: pad-owned assets and proved resident PCM
+# Design: equal material users and proved resident PCM
 
-Status: P0 target design only, based on `b4b264be30a67379c6e3cc81b39c1c52d68551d9`
-(2026-10-09). No feature implementation or performance acceptance is claimed.
-Implementation remains the existing Python/UI + Rust audio hybrid.
+Status: R0 compatibility target, 2026-10-09, on published source
+`dc5a7e5f89a1cb4147b2055746eb5a18c1fb8ce5`, tree
+`a3cc602c6874da642658a67f0b1bcf09f625b38c`. R0 changes documentation/specs only;
+implementation and performance acceptance remain OPEN. The runtime remains hybrid.
 
 ## Verified starting point
 
@@ -10,8 +11,8 @@ Current symbols, not old line labels, establish these constraints:
 
 | Area | Current implementation | Required change |
 | --- | --- | --- |
-| Originals/PCM | `cold_store.rs`, `sample_loader/cold.rs` and `warm.rs`: copy-first sealed originals; complete versioned decoder/playback PCM under `samples/.pcm-cache/v1`; warm initial range read already exists | Move physical ownership to each pad; keep stable capture and full integrity rules |
-| Stem disk ownership | `controller/stem_cache.py`: `STEM_CACHE_ROOT = samples/stems`, `.ready-<uuid>` and five-file marker | Pad-owned `stems`; short visible container, immutable generations |
+| Originals/PCM | `cold_store.rs`, `sample_loader/cold.rs` and `warm.rs`: copy-first sealed originals; complete versioned decoder/playback PCM under `samples/.pcm-cache/v1`; warm initial range read already exists | Canonical immutable material with equal assignment users; keep stable capture and full integrity rules |
+| Stem disk ownership | `controller/stem_cache.py`: `STEM_CACHE_ROOT = samples/stems`, `.ready-<uuid>` and five-file marker | Material-version `stems`; short visible container, immutable generations |
 | Stem playback | `stem_cache.rs::prepare_stem_buffers_from_cache`: complete PCM16 WAV decode/conversion/shared alignment, then finite views | Persist complete aligned f32 playback artifacts once |
 | Window changes | `resident_relocation.rs::WindowWork::prepare`: complete FullMix read and complete WAV preparation before cropping | Direct descriptor range reads without repeated complete conversion/alignment |
 | First live activation | `mixer.rs::can_accept_prepared_stems` rejects active pads; resident adoption matches only None/None or identical Some/Some | Separate guarded first residency of an already selected valid disk set from generation/content replacement |
@@ -25,53 +26,75 @@ alignment, missing durable stem f32 lineage and unnecessary residency.
 
 ## Ownership and visible layout
 
-For zero-based native/UI slot `id`, the visible owner is `samples/#(id+1)`:
+One existing cold_store/project_assets/stem_cache lifecycle owns these target paths:
 
 ```text
 samples/
   flitzis_looper.config.json
-  #1/
-    Original track.wav
-    .pcm-cache/v1/.ready-<uuid>/
-      decoder.f32le
-      playback.f32le
-      manifest.json
-    .pcm-cache/stems/v1/.ready-<uuid>/
-      vocals.f32le  melody.f32le  bass.f32le  drums.f32le  instrumental.f32le
-      manifest.json
-    stems/.ready-<uuid>/
-      vocals.wav  melody.wav  bass.wav  drums.wav  instrumental.wav
-      .complete.json
-  ... #216/
+  materials/M<stable-id>/
+    original/<Originalname.ext>
+    .pcm-cache/v1/.ready-<generation>/decoder.f32le playback.f32le manifest.json
+    .pcm-cache/stems/v1/.ready-<generation>/<five aligned f32 files> manifest.json
+    stems/.ready-<generation>/<five WAV files> .complete.json
+  #1/<optional small membership descriptor>
+  ... #216/<optional small membership descriptor>
 ```
 
-The tree illustrates namespace and ownership, not a claim that implementation
-already uses these paths. Original filename, extension and bytes preserve actual
-encoding. Do not rename every source to MP3. Native slot mapping is exactly 0..215;
-reject #0, #217, traversal, absolute out-of-root references, symlinks/reparse points
-and changed checked ancestors. Project metadata remains at its current root path.
+Material/source/analysis/StemSet versions are immutable. A MaterialId is a stable
+locator; content/decoder/transform/rate/schema and full integrity determine reuse.
+Preserve original filename, extension, actual encoding and byte-exact content;
+different bytes with the same basename obtain a different material version or
+collision-safe internal generation. Never overwrite leased originals/manifests.
+No hardlink, symlink/reparse alias, phantom origin pad or second cache implements
+sharing. Copy adds references and fresh stopped content, not files or decode work.
+Independent imports may reuse compatible bytes only after complete existing
+content/transform validation, never by filename/mtime. New analysis/stem versions
+cannot overwrite data used by other assignments, readers or voices.
 
-Use one authoritative pad-path resolver shared by import, restore, generation,
-migration and cleanup. Reuse the existing stable capture, atomic generation and
-asset lifecycle mechanisms. Internal manifests retain content/source/decoder/
-transform/rate/schema/generation identities; `.ready-<uuid>` prevents live leased
-files being overwritten. Hashes need not be visible long directory names. A same
-basename replacement cannot overwrite a leased original: use an owned short
-collision suffix and retain original-name metadata, or defer the canonical name
-until the prior owner retires. Never silently replace its encoding/content.
+PadSlotId 0..215 is fixed controller layout; #1..#216 are membership/cleanup UX.
+ContentInstanceId plus nonreused lifetime generation owns mutable musical intent;
+Copy creates a fresh identity, Move/Swap preserve it, accepted replacement retires it
+even for identical source bytes. Current source/timing/window/NativeHistoryPermit,
+SourceTicket and ACK authority remain explicit, never copied from an origin.
+Existing slot-bound permits/projections need proven native remap in R2; changing
+Python arrays or unloading/reloading is not continuity-preserving Move. Historical
+evidence stays immutable. Stable slots do not confer action/release authority.
+Save preserves durable content lineage and musical intent; reopening allocates a
+fresh nonreused runtime lifetime. Saved action/feedback/hold tokens never regain
+authority, even when durable content and material IDs are unchanged.
 
-Physical pad ownership includes duplicate content in different pad folders.
-Verified in-process immutable PCM backing may still be shared by compatible
-content/transform/range. Each assignment, original path and cleanup lease remains
-independent. No final global cache, cosmetic wrapper, hardlink, symlink or reparse
-alias substitutes for this layout. Measure physical disk duplication separately
-from shared resident allocations. Unknown files and other project owners survive.
+Use one authoritative contained material/slot resolver for import/restore/generation/
+migration/cleanup. Reject #0/#217, native ids outside0..215, traversal, out-of-root
+references, symlinks/reparse points and changed checked ancestors. Native/project/
+config/journal layout commits are guarded all-or-none; reserve new refs/feedback/
+retirement/action/native capacity before releasing old refs. Pre-claim failure is
+no-op. Irreversible claim without ACK fences conflicts and retains old/new pins;
+never invent rollback or publish a guessed layout.
+
+Assignments across all banks, readers, jobs and remaining subscribers, queued
+actions/HoldActions, old voices/history/FIFO/filter state, immutable version users
+and native unload ACK are genuine owners. Remove slot membership first; empty slot
+directories may retire while material survives other users. Delete Stems revokes
+only that content's selection/demand. Jobs cancel only after last interest and their
+physical leases retire only after actual read end. Final material cleanup is off-thread
+by verified owned identity after every owner has ended. Unknown, external and private
+files survive. Copies work after origin slot/bank deletion and new-process restore
+without new analysis, separation or complete decoding when prepared data are valid.
+
+The complete musical snapshot includes source, valid analysis/available selected set,
+loops/excerpts/grid/manualTAP/timing, correction/base/extra/KeyLock/playback settings,
+Gain/EQ, current session-derived stem mask/custom mask/preset/mutes and retrigger flag.
+These musical choices become durable independent intent. Voices/cursors/meters/
+progress/pressed holds/temp job handles and native tokens are excluded. Suitable
+resident inputs share backing; varied ranges use separate views; each content has
+independent DSP/voices/settings. No full-source pitch PCM is generated.
 
 ## Transactional migration and rollback
 
 Migration is control/background work and never a new automatic analysis request.
-P1 installs safe old/new readers and new-write destinations. P2 migrates existing
-assignments using a versioned per-project journal whose entries name actual paths,
+P1a installs safe typed legacy/new readers and canonical new writes; P1b extends
+equal all-bank owners/subscribers after J0. P2a/P2b migrate existing
+assignments once per distinct verified immutable material using a versioned per-project journal whose entries name actual paths,
 digests, generations and phase, with bounded scanning and exclusive contained writes.
 
 1. Capture the **current** config/assignment revision and leased original/PCM/WAV
@@ -107,7 +130,8 @@ digests, generations and phase, with bounded scanning and exclusive contained wr
    retire and crash/retry verification is complete. Cleanup is by owned file identity
    off-thread, never an unconditional recursive move/delete. Reference-safe staged
    retirement removes obsolete global storage only when proven unreferenced; there
-   must be no permanent global-cache dependency at final acceptance.
+   must be no obsolete legacy-container dependency at final acceptance; the new
+   canonical shared material store is intentional.
 
 Test multiple pads/projects sharing a source, same/different basenames, duplicate
 content, corrupt/partial/missing files, cancelled/stale jobs, unload/same-pad reuse,
@@ -125,7 +149,7 @@ loaded rate/layout/full frames, resampler/channel policy, single signed alignmen
 offset, alignment algorithm/version, PCM hashes/dimensions and immutable StemSet
 identity in the descriptor. No independently shifted component or guessed alignment.
 
-All additional stem PCM lives in the pad's `.pcm-cache`, not its WAV `stems` area.
+All additional stem PCM lives in the material version's `.pcm-cache`, not its WAV `stems` area.
 The five-derivative PCM directory commits immutably as a complete set and its
 manifest references the exact committed five-WAV generation in `stems`. A
 versioned joint commit descriptor binds both generation identities/source/rate/
@@ -299,7 +323,10 @@ cold-job limits or the32-voice/96-handle pool.
 
 ## Acceptance and serial boundaries
 
-[Tasks](tasks.md) owns the serial P0/P1/P2/P3/P4a/P4b/P5a/P5b/P6 program. Each
+[Tasks](tasks.md) and [extended program](../../../docs/pad-owned-pcm-program.md)
+own the unchanged38-ID/48-edge C1 order including R0-CLOSURE/J0/split P1-P2,
+K-META/R1-R5/V0 and genuine H-LIVE/H-FINAL. R2/R4 prove HC-01..HC-26 layout
+release integration; P6/V0 repeat its resource/pitch workload. All future cases stay OPEN. Each
 implementation slice freezes current source/runtime/test identities, completes
 hardware-free native/control/worker/drain/render tests, affected strict OpenSpec,
 maintained docs, independent nonauthor semantic and complete raw/index/blob/tree

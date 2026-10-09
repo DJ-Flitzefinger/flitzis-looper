@@ -44,8 +44,11 @@ This proposal SHALL NOT activate a new live control or reinterpret existing Key 
 The system SHALL validate and report the supported combined pitch/rate domain before accepting
 diagnostic transposition, retaining separate requested, pending, effective and rejected state.
 
-The [-12,+12] semitone and [0.5,2] rate matrix SHALL be treated as diagnostic coverage requiring
-LiveShifter p in [0.25,4], not a promised UX range or proven native operating envelope. Unsupported
+The expanded B5 matrix SHALL cover base -5..+6, every37 extra values -18..+18,
+total k=-23..+24 and actual accepted r(n) extrema. At equal-rate r=.5..2 the
+lockON h/r path requires p approximately.132433..8; lockOFF SHALL evaluate p=h.
+The old [-12,+12]/[.25,4] examples SHALL remain regressions, not replacement coverage
+or proof of native quality/RT/readiness/latency/finite-context support. Unsupported
 requests SHALL retain the previous effective value with a reason. No hidden clamp, map change,
 rate change, phase shift or clock movement SHALL make an unsupported request appear accepted.
 
@@ -61,8 +64,12 @@ render-cache identity and compare old/new states at the same intended output n a
 
 The identity SHALL also include KEYLOCK mode and intended output range alongside source, map,
 loop, tempo, channel/stem topology, renderer options/version and initial history.
-Pitch-only edits SHALL preserve raw source/map/stem identity. A newer pitch revision SHALL reject
-stale prepared output without rerounding the captured launch target. Pending, late and rejected
+Pitch-only edits SHALL preserve raw source/map/stem identity. A newer requested-state revision SHALL reject preparation falsely presented as
+that newer request without rerounding its captured launch target. Each already
+admitted SET_RETRIGGER SHALL instead retain its own frozen tuple/action sequence/
+source-lifetime/current permit and existing scheduler event; a later pitch request
+SHALL NOT automatically stale or replace that admitted attack. Only preparation
+work MAY coalesce; removal/invalid current lifetime SHALL still fence unsafe events. Pending, late and rejected
 adoption SHALL record the effective pitch and declared fallback/defer outcome. Native feed,
 buffered output and estimated audible position SHALL remain distinct timing domains.
 

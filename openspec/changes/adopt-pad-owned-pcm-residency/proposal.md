@@ -8,17 +8,18 @@ still decodes and aligns complete PCM16 WAVs before cropping. Startup eagerly
 publishes restored stems, and the UI cannot request an existing disk set whose
 RAM is absent. Native active publication rejects first residency activation.
 
-The requested final product owns each occupied pad's assets in `samples/#1` through
-`samples/#216`, retains reusable aligned stem PCM on disk, prepares actual required
+The revised target gives all occupied slots equal references to canonical immutable
+material versions in `samples/materials/M<stable-id>/`, with #1..#216 identifying
+stable slot membership rather than duplicate audio ownership. It retains reusable aligned stem PCM on disk, prepares actual required
 source ranges, and loads stems deliberately. All 216 occupied resident slots are
 a required case. Faster triggers and lower RAM require actual measured evidence.
 
 ## What changes
 
-- Put byte-exact originals, `.pcm-cache` and `stems` in each pad's visible folder,
-  with transactional migration and immutable internal generations.
-- Commit aligned complete stem playback PCM in each pad's `.pcm-cache` and five
-  WAV artifacts in its `stems`, with a joint verified immutable set descriptor;
+- Put byte-exact originals in each immutable material version's `original` area,
+  complete FullMix/aligned stem PCM in `.pcm-cache`, and five WAVs in `stems`.
+  Copy adds equal references without analysis, decoding or file duplication.
+- Commit aligned complete stem playback PCM and five WAV artifacts per material, with a joint verified immutable set descriptor;
   read proved resident ranges from retained verified descriptors.
 - Preserve FullMix until guarded native first-residency adoption and effective-mode
   acknowledgement; retain the existing bounded live crossfade and source continuity.
@@ -29,11 +30,21 @@ a required case. Faster triggers and lower RAM require actual measured evidence.
 - Prove complete 216-slot admission, changed-pad-only refresh, Windows ownership,
   finite DSP coverage, migration/rollback and cold/warm resource/performance behavior.
 
-P0 delivers only this official plan, deltas, maintained documentation and serial
-handoff. P1-P6 below deliver the complete feature. No intermediate layout, labelled
+P0 is the historical published plan. R0 revises its incompatible physical topology
+after independent bounded P0 and complete C1 plan acceptance; R0's separate native
+nonauthor closure and publication are required before J0/P1a/P1b. The extended
+serial program in [tasks](tasks.md) delivers the feature. No intermediate layout, labelled
 full-track fallback, deferred admission or document check completes that feature.
 
 ## Contract lineage
+
+The direct seven-group extension supersedes only the incompatible per-pad
+physical-duplication/no-shared-store contract and session-only musical-mask target.
+All original integrity, migration, finite-DSP, lazy216, resource, performance and
+human gates remain. The companion changes `add-key-transposition-performance` and
+`add-rearrange-shared-pad-content` extend control/identity contracts. Existing base
+specs describe delivered behavior until these pending deltas are implemented; archive
+merge must use their effective targets, including durable masks.
 
 This change builds on the delivered `cache-full-pcm-and-resident-loops` and
 `bind-prepared-stem-publication` foundations. Their accepted evidence/tasks remain
@@ -49,8 +60,8 @@ than reinstate a predecessor's superseded wording.
 ## Non-goals and realtime constraints
 
 No product code, model acquisition/inference, GUI/app/CPAL/recorder/device run in
-P0. No separator reimplementation, new analyzer selector/default cutover, timing
-evidence invention, musical mask change, new FX/plugin hosting or application
+P0 or R0. No separator reimplementation, new analyzer selector/default cutover, timing
+evidence invention, automatic harmony or scale correction, new FX/plugin hosting or application
 Rust-port planning/implementation/Slice8. Existing clickfix acceptance is separate.
 Original B2-B8/K1/Slice7 and final human/device/hearing/correction gates stay OPEN.
 

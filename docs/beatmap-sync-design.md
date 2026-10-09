@@ -249,16 +249,17 @@ is a different feature and is not promised by a KEY selector.
 ### Current implementation traps that the plan must remove
 
 - `PadController.set_manual_key` and `ProjectState.manual_key` correct/display source-key
-  metadata; they send no audio transposition command. Preserve that meaning. Reserve a separate
-  future `pad_pitch_shift_semitones` intent, default 0, plus a derived output-key label.
+  metadata; they send no audio transposition command. Preserve that meaning. Persist separate source correction+epoch, numeric base_shift and extra_shift
+  plus retrigger flag under the R0 Key + Transposition contract, all neutral by default.
   Preserve legacy arbitrary key strings; unknown source key still permits relative semitone
   changes. Target-key UI must define octave/tritone choices; KEYLOCK-off with varying r cannot
   display an unqualified fixed output key. Source replacement resets source-bound k; restoring
   the same verified source retains saved k.
 - The existing global Pitch/Speed control changes speed/BPM. It is not a semitone controller.
-- `pitch_scale_for_tempo_ratio` currently clamps compensation to 0.5..2. Combining k=+/-12
-  with r=0.5..2 requires p=0.25..4 on the current pipeline. This is a diagnostic stress range,
-  not a promised product range or evidence of native quality/safety. Reject unsupported pairs
+- `pitch_scale_for_tempo_ratio` currently clamps compensation to 0.5..2. The desired base -5..+6/all37 extra -18..+18 give total -23..+24.
+  For r=.5..2 lockON h/r desires p~.132433..8; actual r(n) extrema must also be
+  proved. The old +/-12/.25..4 diagnostic corners remain regressions, not full
+  desired support or evidence of quality/RT/readiness/latency/finite context. Reject unsupported pairs
   explicitly rather than clipping pitch or changing r to make them fit.
 - Pitch processing may be required at r=1 when k is nonzero. Conversely p=h/r can cross 1 at
   nonneutral tempo (e.g. +12 semitones and r=2). Existing unity/dry bypass assumptions can change
@@ -289,8 +290,11 @@ pad processing/preparation, not the original analysis or other pads.
 Distinguish requested, prepared and effective pitch/mode revisions. Prepare cold state/history
 off-thread. The old and new processors must represent the same intended output-frame range at
 handover; compare their actual native delay/history, not just source cursor or nominal delay.
-Reject a stale prepared launch if its key/map/source revision changed. A latest-request coalescer
-is bounded, ordered at the authoritative apply frame and cannot adopt an older request later.
+Reject preparation falsely presented as newer requested pitch and fence invalid
+source/map/lifetime authority. Each already admitted pitch attack instead retains
+its own tuple/action/timestamp/current prepared permit and existing scheduler event;
+later requests cannot globally stale or replace it. Only preparation work may
+coalesce. Pitch+retrigger applies atomically at its captured dueframe, no early detune.
 
 Use a common output timeline and explicit per-path latency/readiness accounting, including dry,
 pitch-only and stretched pads. A bounded session headroom reservation may cover the measured
@@ -326,9 +330,10 @@ changes. Keep generated/private evidence outside the repository.
 | B5: independent time/pitch proof | Implement diagnostic/core contract for r and k, test-only nonzero k; compare Rubber Band routes and state transitions on exact and accepted maps. Depends on map semantics, not completion of B4 UI. | Matrix below and original acoustic gates; document supported joint envelope, measured readiness and chosen render architecture. No production KEY UI or live SYNC yet. |
 | B6: live mapped ownership | Prepared map/trajectory/state publication, bounded source/DSP progression, pitch-ready revisions, per-path output alignment, rollback and deferred/rejected updates. Depends on B5, then device evidence. | No stale state, callback violations, accumulating phase or concealed per-pad delay; full-mix/stems and mode transitions pass. Keep activation guarded until evidence passes. |
 | B7: unified entry and SYNC | One captured-input launch policy plus independent continuous SYNC; all four Quantize/SYNC combinations, preserved phi, tempo changes, stop/pause/seek/retrigger/cancel. Depends on B6 and explicit remaining launch UX choices. | Source and audible phase tests across MIDI/native/fallback/keyboard/mouse, headroom/lateness/loops; no 500-ms reset. Old launch path remains available until accepted. |
-| B8: performance release | Existing optimization and live release slices 5/6, including 30-minute recording and future-k test injection; docs/UI truthfulness and portability measurements. | Device/driver/voices/callback conditions and all failures recorded. Only supported reviewed maps and joint ranges advertised as locked. |
-| K1: later user feature | Actual per-pad KEY controls, mappings, persistence and output-key display, using already proven k contract. Not implemented by this planning request. | Confirm range/KEYLOCK-off/formant UX, test all B5 transitions through real controls; never reuse metadata-key setter or speed control. |
-| Existing remaining program | Separator replacement/optional inference slice 7, then full Rust-port PLAN slice 8 remain after live acceptance. | Beat analysis native export is a separate parity task. Full application port still needs the user's explicit post-bugfix authorization. |
+| B8-E: guarded engineering | Existing optimization/stress/Human-ready packet, future-k diagnostics, docs/UI/portability. | Hardware-free evidence does not close B6/B8 device release; genuine H-LIVE remains required. |
+| K1a/K1b: guarded performer integration | Stable SET/SET_RETRIGGER mappings/persistence and independent playable source correction/base/extra menus after B5/B7 proofs. | Engineering/test integration only until real live gates; all B5 transitions through new controls repeat in V0. |
+| H-LIVE | Actual human-operated B6/B8 devices/1-2-4-6-pad/30-minute capture/listening. | Must pass before live-dependent Slice7 production; K1/B8-E cannot certify it. |
+| Existing remaining program | Remaining separator/optional inference/dependency/GPU native-ort parity/docs/rollback Slice7 after H-LIVE, then H-FINAL/corrections. | STOP before full Rust-app port planning or implementation/Slice8; H-LIVE does not replace final human acceptance after all changes. |
 
 The B1b setup/reference implementation precedes B2's frozen quality/resource acceptance.
 Model choice is settled; do not reopen the general survey or let the known legacy detector
@@ -348,8 +353,8 @@ Freeze expected coordinates and original acoustic gates before running candidate
 
 - 44.1/48/96 kHz, fixed/irregular/one-frame partitions; constant tempo, vinyl-like drift, ramps,
   abrupt accepted/rejected changes, signed origins, fractional BPM, short/whole-bar loops.
-- r=0.5/1/2 and trajectories crossing unity; k=-12/-7/0/+7/+12 as diagnostic stress values,
-  plus user-range edges once selected. Test r=1 with k!=0 and p=1 at r!=1 explicitly.
+- r=0.5/1/2 and trajectories crossing unity; all37 extra values/base -5..+6/total -23..+24 at actual r(n), keeping
+  k=-12/-7/0/+7/+12 as regression stress values. Test r=1 with k!=0 and p=1 at r!=1 explicitly.
 - One, four and eight pads with distinct maps/k values on the same M; full mix, prepared stems,
   masks and stereo/mono. Same-source stems share one map; separately warped stems require
   additional coherence tests rather than assuming they sum like a single processed mix.
@@ -375,7 +380,8 @@ The active planned changes are `adopt-beat-this-analysis`, `prepare-versioned-so
 `prepare-independent-pitch-timing`. B1a/B1b in the analysis change implement the diagnostic path;
 all other implementation tasks remain pending. Later live
 ownership and Quantize/SYNC activation need their own focused deltas after B5 measurements;
-future KEY UI needs its own user-facing delta. Current runtime docs remain accurate until an
+R0's `add-key-transposition-performance` and `add-rearrange-shared-pad-content`
+provide pending user-facing deltas and share the revised material/hold contracts. Current runtime docs remain accurate until an
 implementation slice changes behavior, at which point that slice updates them too.
 
 Public source evidence is supplemented by [local reference checks](beat-this-reference-evidence.md).
@@ -383,3 +389,15 @@ No new live render strategy has been activated. B1a/B1b supply the diagnostic of
 and optional real worker; the normal analyzer and playback behavior remain
 unchanged. The selected design is deliberately testable before any claim of perfect
 musical grids or audibly sample-exact independent transposition is made.
+
+## R0 extended compatibility and preserved gates
+
+The [extended program](pad-owned-pcm-program.md) and [coverage](pre-rust-program-coverage.json)
+preserve all old stages/56+9,38 IDs/48 edges and all literal seven-group details.
+R0 requires accepted bounded P0 AND complete C1 PLAN; its own actual terminal then
+separate native nonauthor R0-CLOSURE is required before J0/P1a/P1b. B5 depends B3
+map semantics, not B4 UI. B3a exact-fixture offline B/S may follow P6 without B2.
+B2 independent full T01-T05/six balanced paired T03-T05/absolute caps/20% operations
+AND active human time/zero baseline/music/default/remediation remain unchanged.
+H-LIVE precedes live Slice7; H-FINAL follows all later changes. Real device/final
+hearing gates remain human, and every failed acoustic/causal evidence remains.

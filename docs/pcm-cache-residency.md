@@ -23,7 +23,8 @@ redundant cold decoding or a new cache generation.
 ## Delivered cold path (C1a)
 
 The pending [pad-owned PCM program](pad-owned-pcm-program.md) extends this delivered
-foundation. It replaces final global physical ownership with per-pad folders,
+foundation. It replaces obsolete legacy physical containers with canonical immutable material
+versions and equal all-bank content users, with #1..#216 only stable membership,
 adds persistent aligned stem PCM/direct range reads, and requires actual216-slot
 residency plus finite DSP proof. Existing measured200-pad evidence and labelled
 full-track KEYLOCK fallback do not complete those new requirements. SourceVersion
@@ -858,3 +859,17 @@ verification/save and cancellation/cleanup outcomes include signed regressions.
 Numerical/native parity does not prove human hearing or real devices; those
 gates remain open for final pre-port acceptance. No part of C0-C3 starts planning
 or implementing the full application Rust port.
+
+## R0 shared material and content boundary
+
+The pending target reuses cold_store/project_assets/asset_lifecycle/stem_cache;
+canonical `samples/materials/M<id>/original`, `.pcm-cache` and `stems` replace
+physical per-pad duplicates. No second cache/hardlink/reparse/phantom origin.
+Current last-assignment acquire-before-release and native reader registry are
+foundations; current pad-bound stem capture/restore/cleanup still need P1a/b changes.
+Copy adds equal immutable refs and fresh stopped content/native ACK, not analysis/
+decode/separation/files. New versions keep old users; current/old voices, jobs,
+subscribers, actions/holds/history/native unload ACK participate in true last use.
+Move/Swap carries exact DSP/history/cohort; all36 operations preflight full capacity,
+acquire refs first and never free unconfirmed native claims. Origin bank deletion
+and new-process restore require actual evidence; full finite216/P6/V0 proofs remain.

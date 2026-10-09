@@ -1,8 +1,8 @@
 ## ADDED Requirements
 
-### Requirement: Pad-owned complete PCM and retained range readers
+### Requirement: Shared material complete PCM and retained range readers
 The system SHALL own complete versioned FullMix PCM and all aligned complete
-stem PCM beneath each occupied pad's `.pcm-cache` while
+stem PCM beneath each immutable material version's `.pcm-cache` while
 retaining original/content/rate/transform/schema/generation and assignment identities.
 
 #### Scenario: Verified descriptors supply a new window
@@ -11,11 +11,11 @@ retaining original/content/rate/transform/schema/generation and assignment ident
 - **AND** only requested ranges/required context are loaded under byte reservation
 - **AND** adoption still requires guarded native ACK and final-reader retirement
 - **AND** fresh leases SHALL verify complete integrity while retained verified descriptors supply ranges without full WAV decode/alignment or hidden complete f32 allocation
-- **AND** compatible backing MAY share in-process with distinct physical owners
+- **AND** compatible backing MAY share in-process with equal independent content owners without duplicated files
 - **AND** reads/validation/allocation/retirement SHALL remain bounded and off-thread
 
 #### Scenario: Cross-area complete set ownership remains coupled
-- **WHEN** WAVs reside in the pad's `stems` and all PCM resides in its `.pcm-cache`
+- **WHEN** WAVs reside in the material version's `stems` and all PCM resides in that version's `.pcm-cache`
 - **THEN** common descriptors SHALL bind both immutable generations/source/transforms/digests
 - **AND** joint publication/final-reader retirement SHALL prevent half-complete eligible pairs
 
@@ -44,7 +44,7 @@ within a declared sufficient supported resource configuration.
 
 ### Requirement: Finite DSP coverage is a feature completion gate
 The system SHALL prove and implement finite source-domain supply for the supported
-loop/DSP context before claiming completion of pad-owned loop residency.
+loop/DSP context before claiming completion of shared-material loop residency.
 
 #### Scenario: Dry parity is insufficient for KEYLOCK completion
 - **WHEN** dry interpolation passes but finite native continuation remains unproved
@@ -103,3 +103,28 @@ bound paired measurements and causal path checks for the implemented feature.
 - **WHEN** feature performance/RAM acceptance is evaluated
 - **THEN** actual repeated runs SHALL include216 unique/shared content, preload off/on, cold/new-process/in-process warm, first live switch, ready triggers, single edits, disk/integrity and final-owner lifecycle
 - **AND** actual logs/negative runs/process scope and human/device gates SHALL remain explicit
+
+
+### Requirement: True last use governs shared material retirement
+The system SHALL acquire all new assignment/action/version references before retiring old references and SHALL reclaim managed material only after every all-bank assignment, voice/old voice, reader, job/subscriber, queued action, history/FIFO and native unload ACK owner has ended.
+
+Slot removal SHALL revoke playback authority without granting a queued old action
+authority over a replacement. Cleanup SHALL resolve verified contained owned file
+identities off-thread and SHALL preserve external/private/unknown files. Unconfirmed
+irreversible native claims SHALL keep old/new pins and fence conflicting input.
+
+#### Scenario: Swap and overwrite do not create a zero-owner gap
+- **WHEN** contents sharing a material move/swap or a stopped copy overwrites a target
+- **THEN** new refs/reservations are secured before old refs retire
+- **AND** shared material never becomes temporarily eligible for deletion
+
+#### Scenario: Assignment count zero still has a real reader
+- **WHEN** the final assignment disappears while an old voice/job/action/native ACK is pending
+- **THEN** bytes remain pinned until actual terminal/read end
+- **AND** cleanup runs only after that last use, without changing external user files
+
+#### Scenario: Copies share input without sharing DSP
+- **WHEN** compatible copies request the same resident interval
+- **THEN** verified immutable input backing is shared once in accounting
+- **AND** each copy retains independent DSP/voice/settings and varied ranges remain valid separate views
+- **AND** Copy/transposition creates no original/PCM/stem file duplicates or complete pitch PCM

@@ -447,3 +447,29 @@ Before changing UI code, check:
 - Is slow work represented by progress/completion/error state?
 - Can the behavior be tested without pixel automation?
 - Does the change preserve the audio callback boundary described above?
+
+## Pending R0 playable pitch and arrangement surfaces
+
+Key + Transposition groups source correction/base/extra/result/retrigger checkbox.
+Two independent header-toggle menus stay open after repeats/MIDI; common content
+state drives open highlights, closed summaries and padchanges. Keyboard middle0,
+signed steps/unique enharmonics/-12/0/+12 use the base root, white/black only; no
+green/Camelot/scale recommendations or first-sample-note claim. NoteOff preserves
+choice/highlights. Checkbox affects GUI/new Learn only, learned SET/SET_RETRIGGER
+variants stay immutable. SET keeps cursor/stopped state; every repeated RETRIGGER
+is a distinct accepted event with tuple applied at the same existing dueframe.
+The delivered stem-start pending coalescer above is preserved; its replacement
+semantics MUST NOT be extended to distinct admitted pitch attacks. Only preparation
+work may share. Native/fallback/pending use captured content/lifetime, not late selection.
+
+Re-Arrange prefers warning-colored bottom-left toggle/help, OFF on restart. Gesture
+owner branches before pad trigger/stop; MIDI stays alive. LeftMove/Swap, rightCopy/
+overwrite with clear preview/no single-pad dialog; cancel/self/invalid/empty no-op.
+Other-bank pulse/leftcopyall36incl empties keeps source selected/no navigation;
+occupied target exact OVERWRITE/CANCEL, right exact clicked CLEAR BANK/CANCEL
+includingcurrent. Draghover/end cannot leak bank actions. Rendering holds snapshots,
+not disk/native truth. Selection/editor follows living content; waveform hold release
+is independent, delivered by existing input/control tick outside rendered controls.
+Current musical stem selections become independent durable CopySnapshot choices;
+physical presses/holds/voices/cursors/meters/progress/job tokens remain transient.
+All implementations/native effects/full216/quality/human evidence remain pending.

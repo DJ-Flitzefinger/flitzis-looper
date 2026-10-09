@@ -32,7 +32,8 @@ For focused areas:
 | --- | --- |
 | `architecture.md` | Current Rust/Python runtime architecture and ownership boundaries. |
 | `pcm-cache-residency.md` | Productive copy-first originals/full PCM cache, validated reuse and reader lifecycle; separate C2 residency and C3 measurement contracts. |
-| `pad-owned-pcm-program.md` | Pending official pad-owned migration/stem PCM/lazy residency/216-slot program and its serial acceptance boundaries. |
+| `pad-owned-pcm-program.md` | Pending R0 shared-material/pitch/rearrangement/full pre-Rust serial program and genuine acceptance boundaries. |
+| `pre-rust-program-coverage.json` | Required seven-group detail rows, original56/nine obligation trace map, aliases and unchanged38-ID/48-edge dependencies; plan-only, no completion evidence. |
 | `development.md` | Setup, validation, OpenSpec workflow, package layout, and generated-file notes. |
 | `ui-toolkit.md` | Project-specific Dear ImGui design and state-flow rules. |
 | `stem-generation-setup.md` | Pinned Demucs/BS-RoFormer assets, offline worker, CUDA setup and separator rollback. |

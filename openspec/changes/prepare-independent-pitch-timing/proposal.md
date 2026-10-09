@@ -11,7 +11,10 @@ establish independent transposition or aligned transitions across variable rates
   trajectory and common output-frame coordinates.
 - Prepare test-only nonzero transposition diagnostics for retained Rubber Band render paths,
   combined pitch/rate bounds, native state identity, readiness and pitch-change latency.
-- Keep current production transposition at zero and reserve user-facing KEY for a later change.
+- Expand B5 diagnostics to all37 extra steps/base -5..+6/total -23..+24 and actual
+  r(n), preserving original acoustic/RT/latency gates and individually admitted events.
+- Keep current production transposition at zero; the pending
+  `add-key-transposition-performance` change owns later guarded performer activation.
 
 Status: planning draft, with uncompleted implementation tasks. This is internal contract and
 diagnostic preparation, not a KEY control or live SYNC activation. It uses accepted map semantics

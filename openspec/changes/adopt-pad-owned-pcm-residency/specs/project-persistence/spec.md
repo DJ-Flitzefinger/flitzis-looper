@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Persist Stem Cache Metadata
-The system SHALL persist per-pad source-version and complete pad-owned stem
+The system SHALL persist per-pad source-version and complete shared material-version stem
 artifact references separately from transient residency and effective native mode.
 
 Restore SHALL validate current source and complete immutable artifacts before
@@ -58,9 +58,10 @@ of selected disk artifacts, pending work, resident readiness and effective mode.
 New/older projects without a preference SHALL default to FullMix. Passive restore,
 validation/preparation failure and resource pressure SHALL NOT erase saved ALL
 STEMS. Explicit FULL MIX, Delete Stems, unload and genuine source replacement
-SHALL follow their intentional existing track-bound reset semantics. Momentary
-solo/mute, enabled masks, progress, blocked reasons/errors and native ACK state
-SHALL remain session-only.
+SHALL follow their intentional existing track-bound reset semantics. Current musical enabled/custom masks, presets and mute choices, including choices
+currently derived from SessionState, SHALL become independent durable content intent
+and SHALL be included in CopySnapshot. Physical pressed/solo gesture tokens, progress,
+blocked reasons/errors, temporary job handles and native ACK state SHALL remain transient.
 
 #### Scenario: Stem mix preference round-trips
 - **WHEN** a project saved with ALL STEMS is restored
@@ -75,14 +76,15 @@ SHALL remain session-only.
 - **WHEN** saving occurs during generation/preparation
 - **THEN** progress, blocked reason and transient errors are not durable settings
 
-#### Scenario: Runtime stem mask is not persisted
-- **WHEN** saving occurs after performer mask changes
-- **THEN** enabled masks remain session-only and durable mode is independent
+#### Scenario: Musical stem selection round-trips independently
+- **WHEN** saving or copying occurs after performer mask/custom-preset/mute choices
+- **THEN** those musical choices round-trip as independent content intent
+- **AND** changing the copy does not change its source or another material user
 
 #### Scenario: Session progress does not become durable intent
 - **WHEN** a project is saved during pending ALL STEMS preparation
 - **THEN** desired mode is saved independently
-- **AND** progress, masks, transient errors and native completion tokens are not persisted
+- **AND** physical gesture tokens, progress, transient errors and native completion tokens are not persisted
 
 #### Scenario: Older project and explicit unload defaults
 - **WHEN** an older project has no mode preference or a pad explicitly unloads
@@ -92,7 +94,7 @@ SHALL remain session-only.
 ## ADDED Requirements
 
 ### Requirement: Transactional pad asset migration preserves current intent
-The system SHALL copy and verify existing original/PCM/WAV assets into pad-owned
+The system SHALL copy and verify existing original/PCM/WAV assets once per distinct verified material into canonical
 immutable generations before atomic project-reference migration and SHALL use
 genuinely fresh native source/timing ownership and ACK for changed path identities.
 

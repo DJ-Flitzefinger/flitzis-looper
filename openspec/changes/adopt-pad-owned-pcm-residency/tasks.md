@@ -1,180 +1,244 @@
-# Serial delivery and measurable acceptance
+# Serial extended delivery and measurable acceptance
 
-All steps operate on the current verified hybrid app; only the coordinator starts
-successor chats. P0 is planning. P1-P6 are pending implementation, not a backlog
-invitation or permission to port the full app. Do not run GUI/CPAL/devices/recorders;
-human operation/listening and required corrections remain the final pre-port phase.
+P0 is the historical published plan. Its physical topology is explicitly superseded
+by the new human shared-material contract; its bounded accepted evidence and
+historical FAIL/UNKNOWN are not rewritten. R0 is docs/spec-only and awaits its own
+separate native nonauthor closure. Product implementation is entirely pending.
 
-## Common exit gate for each implementation slice
+The [extended program](../../../docs/pad-owned-pcm-program.md) and
+[complete coverage map](../../../docs/pre-rust-program-coverage.json) own the
+canonical38-ID/48-edge order, all56+9, seven groups and full exit gates. Companion
+arrangement and pitch changes share those IDs, not alternative product plans.
 
-- [ ] Freeze actual source, runtime/PYD/native EXE and fixture/model identities used
-  by that slice; retain actual argv/cwd/logs/exit and all failed attempts.
-- [ ] Use genuine hardware-free controller/native admission, worker, command-drain
-  and render tests. Select relevant tests listed below; full validation for runtime/
-  persistence/shared audio changes: `uv sync`, `uv run maturin develop`,
-  `uv run cargo check --manifest-path rust/Cargo.toml`,
-  `uv run cargo test --manifest-path rust/Cargo.toml`, `uv run pytest`,
-  `uv run ruff check src`, `uv run mypy src`, and format checks. Serialize Windows
-  builds/tests; use the maintained Rust test harness where applicable. Debug/Release
-  and installed PYD are separate roles; do not transfer prior acceptance to a new build.
-- [ ] Official strict validation for this change and each other actually touched
-  active change; doc/diff/link/identity/ownership checks and private preservation.
-- [ ] Complete independent nonauthor semantic review of all final changed source/
-  tests/specs/docs, plus raw/canonical/index/blob/tree review before commit.
-- [ ] Coherent Conventional Commit, authorized normal publication, fresh clean
-  main/HEAD=origin/main=network main proof and coordinator bounded acceptance.
-  Keep entire remaining program and original gates in the absolute local handoff.
+## R0 compatibility revision
 
-## P0: Official bounded plan (this chat)
+- [ ] Reconcile canonical material/slot/lifetime identity, full CopySnapshot, durable
+  masks, all-bank last actual users/leases/native ACK and atomic layout/recovery.
+- [ ] Reconcile pitch bounds and all control/hold contracts across affected deltas/docs.
+- [ ] Official strict for every affected change and exact coverage/dependency/source/
+  document/diff checks; freeze attempts/exits and preserved inputs.
+- [ ] Actual author terminal, then distinct complete native nonauthor R0-CLOSURE;
+  publication only after genuine independent acceptance, then coordinator dispatch.
 
-- [x] Read actual source/contracts and prior root clickfix acceptance; preserve its
-  separate completed engineering scope and all original gates.
-- [x] Define final pad-owned layout/migration/PCM/residency/lazy live mode/Settings/
-  all216/resource contracts in real proposal/design and six capability deltas.
-- [x] Maintain affected architecture/development/PCM/stem/UI/KeyLock docs and the
-  absolute serial handoff with exact next P1 scope.
-- [x] Pass official strict, document/diff/link checks and complete independent
-  nonauthor semantic review. Final index/tree and publication evidence must be
-  retained locally before reporting P0 terminal completion.
+## Canonical future slices
 
-No product/runtime/test code changes, model inference or full build matrix is
-needed for P0. A plan cannot close feature, finite DSP, performance or human gates.
+### P0-CLOSURE
 
-## P1: Central pad path/ownership and new-write foundation
+- [x] Actual bounded current P0 author and distinct independent closure are terminal and accepted in v10.
+- [x] Exact frozen receipts retain historical FAIL/UNKNOWN/archive and inference limits; no broader product, audio or human acceptance.
 
-- [ ] Introduce one authoritative contained pad asset resolver (native0..215 ->
-  #1..#216), extending existing stable capture/lifecycle boundaries, with typed
-  legacy/new layout recognition; no standalone product branch/global wrapper.
-- [ ] Route new import originals/complete FullMix PCM/new stem WAV generations to
-  pad-owned roots with original encoding/name and short immutable internal names.
-  Keep verified legacy read/cleanup paths; do not migrate existing assignments yet.
-- [ ] Prove same-name/different-content replacement, #1/#216 endpoints, invalid
-  #0/#217/traversal/absolute/reparse paths, two pads/same bytes, sealed retained
-  readers and cancellation/rollback/cleanup generation isolation on Windows.
-- [ ] Update architecture/development/PCM/stem docs; relevant loader/stem artifact/
-  lifecycle/persistence tests, native cold_store/project_assets/publication tests.
+### PLAN-AUTHOR-TERMINAL
 
-Exact boundary: new destinations and safe dual readers only. No mass migration,
-stem-f32 format, lazy-mode/DSP redesign, separator rebuild or feature completion.
-P1 is implementable without questions using the design's collision/lineage policy.
+- [x] The original corrected C1 author turn is actually terminal.
+- [x] Actual final/terminal and exact frozen C1 plan/matrix/task/output manifest are bound by accepted v10 prerequisites.
 
-## P2: Transactional idempotent migration
+### PLAN-CLOSURE
 
-- [ ] Implement bounded journal/copy-verify/immutable commit and atomic current
-  config reference transaction serialized with autosave.
-- [ ] Establish fresh path-bound SourceVersion/native source ownership/ACK and
-  fresh accepted-timing verification/adoption; preserve raw saved/manual/TAP/
-  accepted analysis, loop markers/key/settings/mode with explicit alias lineage.
-- [ ] Prove retry/crash/cancellation at every copy/flush/rename/reopen/config/native
-  boundary, changed session revision, unconfirmed native claim, partial/corrupt/
-  missing sources and duplicate/multi-project references; old leased bytes/config
-  remain valid for recovery. Retire only unreferenced old global storage safely.
-- [ ] Update persistence/architecture/development docs and genuine save/restore/
-  loader/native-ACK/lifecycle tests. No private audio/model/evidence migration.
+- [x] A distinct native nonauthor completed the full C1 review after actual author terminal.
+- [x] Complete literal human/all56+9/old gates/contracts/coverage/graph are accepted at PLAN level only; exact receipts and finals are frozen in v10, not replaced by author/subagent QA.
 
-## P3: Complete aligned persistent stem PCM
+### R0
 
-- [ ] Produce five complete f32le derivatives under the pad's `.pcm-cache`, with
-  WAVs under its `stems`; common descriptor lineage/hash/dimension/shared offset
-  selects the verified immutable pair only after both area commits. Reuse alignment.
-- [ ] Prove cross-area partial/flush/rename/reopen/joint-marker failure, crash/retry/
-  rollback and paired last-reader retirement without exposing half-complete sets.
-- [ ] Add actual retained sealed PCM descriptors and fresh complete integrity
-  verification, cancellation/partial/corrupt/incompatible transform handling.
-- [ ] Separate five-artifact disk integrity from four-component runtime readiness;
-  instrumental PCM remains disk/on-demand offline data. Test masks/sum/source zero
-  and no stale-generation publication; document format/version/retirement policy.
+- [ ] **Erster naechster offizieller Plan-/OpenSpec-/Doc-Revisionsauftrag**, nach BEIDEN P0-CLOSURE UND PLAN-CLOSURE
+- [ ] Beide echten accepted Receiptsets mit Scope/aktueller Version/absoluten Pfaden/Bytes/SHA/TurnFinals vor Dispatch; Topologiekonflikt, volle 56+9+7, HoldRelease-Spec/Szenarien/Exitgates, pitch, jede affected strict; neue P1-Auftraege bleiben vorbereitet
 
-## P4a: Direct source-range residency
+### R0-CLOSURE
 
-- [ ] Replace complete reread/redecode/re-align relocation with cancellable direct
-  FullMix/stem PCM range reads from retained descriptors and final-window allocation.
-- [ ] Reuse exact unchanged handles/revisions; prepare only affected pad windows.
-  Prove old voice/source/window/history/queued owners, real ACK, STOP/unload/
-  source/bank races, seeks/ALL and source-relative complete metadata.
-- [ ] Run dry interpolation/fractional P-H/seam/75-and1000-cycle complete-buffer
-  oracles and instrument zero complete WAV conversion/alignment on warm changes.
-  Update PCM/native timing/publication docs; labelled KEYLOCK fallback stays open.
+- [ ] Tatsaechlich terminale offizielle R0-Revisionsarbeit, danach eigener separater nativer Nichtautor-Abschluss
+- [ ] Vollstaendige kompatible offizielle Specs/docs/handoff/Matrix inkl Holdvertrag und echte affected strict; frozen eigene R0-Receipts/TurnFinals/Publication nach Goalrechten; zwingend vor J0/P1a/P1b
 
-## P4b: Finite DSP supply and continuation
+### J0
 
-- [ ] Audit executed source-domain feed/lookahead/history/FIFO/filter/seam and
-  two-selection dependencies; derive bounded context descriptors and feasibility.
-- [ ] Implement necessary finite native/history continuation outside realtime,
-  preserving current source-specific permits/ownership and preallocated callback work.
-- [ ] Prove parity/causality across current supported rate/unity at production k=0, loop/
-  seek/old-voice/transition cases and the1598-frame33.292-ms unavailable-input fixture.
-  Preserve original acoustic/latency gates and Rubber Band backend; no guessed halo.
-- [ ] Use already available isolated nonzero-k diagnostic fixtures only as future
-  compatibility checks; do not add production KEY/pitch here. Original B5/K1 full
-  nonzero-k/rate/unity/latency matrix remains OPEN for its own original stages.
-- [ ] Remove fallback dependence for supported finite loop contexts only after
-  these proofs. If a context remains unsupported, keep explicit fallback/error and
-  this step OPEN with its concrete bounded remediation; do not close the feature.
-  Update KeyLock/PCM/architecture docs and native processor/history tests.
+- [ ] Bereits geforderte B6-SHUTDOWN-ORDER-Korrektur vor shared subscriber fanout
+- [ ] Echter deterministischer interleaving/order-Test plus native/control shutdown/cancel. Schliesst nur diesen konkreten Race, nicht B6 oder alle Fehlerursachen
 
-This coupled DSP proof merits an Astra Ultra recommendation in the next handoff
-before starting it; model choice stays with the user/coordinator. Routine P1-P3
-and measured P6 stay Sol Ultra. No model change is performed by P0.
+### P1a
 
-## P5a: Safe first active residency and effective-mode truth
+- [ ] Ein authoritative material/slot Resolver, durable IDs/generations, neue canonical writes, sichere typed legacy/new readers
+- [ ] Originalname/Encoding, #1/#216 endpoints, invalid/reparse/path/collision/old lease, echte import/native ACK; keine mass migration, kein neuer Separator
 
-- [ ] Add a typed None->Some residency transaction for the current selected
-  committed disk set; retain inactive inference/generation/content replacement.
-- [ ] Preserve all source/cache/ticket/request/STOP/voice/geometry/accepted timing/
-  native/history/FIFO/lease guards and reserved retirement/feedback before adoption.
-- [ ] Add genuine current-bound effective-mode feedback; preserve the bounded
-  live128-source-frame crossfade, same voice/playhead/loop/output timeline and
-  FullMix while pending. No stop/restart simplification or enqueue-as-ACK.
-- [ ] Headless native/controller/drain/render tests: first lazy switch while
-  FullMix plays, active KEYLOCK, queue pressure, rejected/stale/cancelled work,
-  source/set/window/bank/STOP changes, older pinned source, warm toggles and clickfix
-  ready starts under saturated cold lane. Update alignment/publication/UI docs.
+### P1b
 
-## P5b: Lazy policy, project Settings and complete216 admission
+- [ ] Existing central lifecycle fuer all-bank equal assignment/material/subscriber owners; originunabhaengige StemSet binding/read eligibility
+- [ ] Acquire-new-before-release, late/stale/cancel/queue/retirement, new version keeps old users, echte SourceTicket/ACK/projection. Noch keine GUI-Copy/Move
 
-- [ ] Separate durable desire/disk eligibility/pending/error/resident-ready/
-  effective mode; explicit ALL STEMS always requests missing windows despite
-  saved equality. Default startup/generation retain only FullMix absent demand.
-- [ ] Persist preload off/default and aggregate resident budget128..16384MiB/
-  default512 in ProjectState; render warning/estimate/exact counts/bytes/errors
-  through existing Settings/sidebar snapshots. No disk work in rendering.
-- [ ] Implement bounded216 scheduler and aggregate unique-backing/old/new/pending
-  reservations; preserve 2/32/8/1GiB and separate512MiB preparation limits. Prove
-  descriptor capacity (roughly432 base owners plus actual overlap), not216voices
-  or a fictional216*96-handle requirement; justify any concrete capacity delta.
-- [ ] Prove complete216 unique FullMix and eligible four-component demand windows
-  actually usable after matching ACK at sufficient declared budget, preload off/on
-  and explicit lazy cases. Mocked/deferred/partial counts are not acceptance.
-- [ ] Verify215 unchanged handles after one edit, warm idle reuse, pinned readers
-  under budget reduction, fair backpressure, invalid settings, saved ALL STEMS and
-  passive failure/retry. Update persistence/Settings/PCM docs and real tests.
+### K-META
 
-## P6: Full feature engineering/resource/performance acceptance
+- [ ] Pure key-policy+neutral persistent source-correction/base/extra/Haken schema und epochs nach P1
+- [ ] Legacy sound-neutral restore/reset/race/idempotence/mode/unknown/copy schema tests; **keine hoerbare KEY-Freigabe**
 
-- [ ] Verify all occupied owners and successful migrated projects have final
-  pad-owned originals/.pcm-cache/stems; obsolete global storage has no remaining
-  dependency. Complete copy/restore/crash/retry/rollback/private integrity evidence.
-- [ ] Run matched actual cold/new-process warm/in-process warm 216 unique and
-  duplicate-content workloads, FullMix/stems/preload off/on and first live activation.
-  Include longer loops requiring deliberate RAM budget, not only tiny fixtures.
-- [ ] Measure repeated unchanged starts, single-loop edit, native ACK/effective
-  mode latency, I/O bytes/full decode/alignment counts, disk duplication, resident/
-  transient overlap, whole-process working set/commit/peaks, integrity/save costs
-  and lifecycle final retirement. Publish individual repeated runs/spread/negative
-  outcomes and exact source/runtime identity; no Arc-bytes-as-RSS or folder speed proof.
-- [ ] Re-run original affected timing/seam/history/STOP/bank/ownership/clickfix
-  regressions with complete216 actual ACK proof and bounded admission failures.
-  Record separate engineering versus human/device/hearing completion status.
-- [ ] Independent complete final nonauthor review and coordinator acceptance;
-  return to the retained original pre-port program, not Slice8/full-app port.
+### P2a
 
-Original B2 independent references/six paired human sessions/absolute20%-zero-
-baseline musical/default/remediation gates, B3-B8/K1/Slice7, B6 terminal ordering
-fix, pitch/RubberBand/nonzero-k/rate/unity/latency,1/2/4/6-pad,30-minute device/live
-and final visual/hearing/corrections remain required. Exact-fixture B3 offline B/S
-preparation may follow without B2 closure; no synthetic human acceptance.
+- [ ] Migration journal/current reference transaction pro material; Autosave serialized
+- [ ] Verifizierte copy/reopen/source/timing fresh ACK/alias lineage; settings/newer revisions prevail, alte rollback owners bleiben
 
-Original power-loss/non-Windows immutable-capture gates stay OPEN; fault injection
-does not establish either. Original model-unavailable/independent-component/
-atomic/freshness/E2E obligations remain required.
+### P2b
+
+- [ ] Crash/retry/recovery/rollback und erkannte staging/final-owner cleanup
+- [ ] Alle flush/rename/config/native boundaries, mehrere gleiche/verschiedene material users; keine historische ACK, kein Power-loss-/NonWindows-PASS aus injection
+
+### P3
+
+- [ ] Fuenf aligned persistent Stem-f32+fuenf WAVs, joint immutable pair/descriptor in canonical material container
+- [ ] Source/rate/layout/offset/digests/EOF, cross-area fault/retry, retained readers; vier Live-Komponenten, instrumental disk/offline, keine wiederholte complete alignment
+
+### P4a
+
+- [ ] Direct verified retained descriptor ranges/shared eligible backing, changed-content-only refresh
+- [ ] Complete-buffer dry tap/P-H/seam oracles 75/1000 cycles; echte ACK, old voice/job/window races; unveraenderte215 Handles
+
+### P4b
+
+- [ ] Wirkliche finite DSP/KEYLOCK-Versorgung+Continuation fuer heutigen production k=0
+- [ ] Executed feed/lookahead/history/FIFO/filter/seams/crossfade/oldvoices; causality1598/33.292ms erhalten, fallback-only laesst Gate offen. Nonzero k bleibt B5
+
+### P5a
+
+- [ ] Guarded erster aktiver None->Some fuer schon selected same committed Set plus resident/effective-mode ACK
+- [ ] FullMix laeuft weiter, continuous128 sourceframes, voice/cursor/loop/timing/history; active generation/content replacement bleibt gesperrt
+
+### P5b
+
+- [ ] Lazy savedALL/generation/explicit requests, Settings preloadOFF/budget128..16384MiB default512, fair echte216 admission
+- [ ] Exact requested/preparing/ACK/error+unique backing/old-new overlap; 2/32/8/1GiB und timing/analysis512 separat. Keine216voices/96-handle-fantasy, echter ausreichender supported Budgetfall
+
+### R1
+
+- [ ] Expliziter musical CopySnapshot und sourceunabhaengiger save/reopen restore
+- [ ] Deep-copy mutable intent incl aktuelle **Sessionstemmask/preset/Mutes**, loop/grid/timing/correction/base/extra/KeyLock/GainEQ/Haken; same material refs, neue gestoppte instance/DSP, keine cursor/voice/progress/jobhandle Kopie; source-delete/reopen ohne model/analysis/decode
+
+### R2
+
+- [ ] Atomarer nativer pair move/swap/copy-overwrite plus selected-content follow UND angenommene HoldRelease-Uebernahme
+- [ ] Zwei laufende Quellen ohne Restart/FIFO-/Filterreset; gestoppte Kopien ohne Holdtoken, nur removed target stop; slot-MIDI unveraendert; ContentInstance/Lifetime/PauseEffect/acceptedAction/NativeACK atomar remapped oder retired; alle R2-Holdfaelle der gebundenen Evidence-Matrix und eigenstaendige Nichtautor-Closure vor R3/R4
+
+### R3
+
+- [ ] Re-Arrange toggle/Gestenhilfe/Pad-left move-swap/right copy-overwrite UI
+- [ ] DefaultOFF nach restart, Warnfarbe bevorzugt untenlinks, keine mouse trigger/stop bei dragbegin, MIDI nutzbar; eindeutig target/op, kein single-pad dialog; cancel/self/invalid/empty no-op
+
+### R4
+
+- [ ] Vollstaendiger nativer Bank-copy/clear transaction ueber genau36 Zielslots inkl HoldRelease-Retirement
+- [ ] Leere Sourceplaetze loeschen Targets; reserve all refs/voices/feedback/actions, pre/post-claim failures, no partial mutation; gestoppte Kopien ohne Holds, Sourcevoices/sourcehold intakt, alle entfernten Targetlifetimes/Holds gefenced; alle R4-Holdfaelle und eigene Nichtautor-Closure vor R5
+
+### R5
+
+- [ ] Bank-UI anderer Banken pulse/copy warning/clear dialog+gesture fences
+- [ ] Andere Bank links: Overwrite Bank X?/OVERWRITE/CANCEL nur wenn belegt, Source bleibt gewaehlt/keine Navigation/Selbstcopy; rechts genau clicked Bank clear incl current, CLEAR BANK/CANCEL; hover/dragrelease erzeugt keine Bankaktion
+
+### P6
+
+- [ ] Volle bisherige Engineering-/Ressourcen-/Migration-/Performanceabnahme **plus R1-R5 und komplette HoldRelease-Integration**
+- [ ] 216unique/shared, preloadOFF/ON, cold/new-processwarm/in-processwarm, firstlive/ready/oneedit/long loops, disk/no-copy-duplicates/IObytes/integrity/RSS+commit+peaks; origin/sourcebank-delete+restore, leases/finalcleanup+repeat negative runs. Kein nonzero-k/Human/Goal-PASS
+
+### B3a
+
+- [ ] Erlaubte genaue Fixture/offline/control B/S-Vorbereitung nach P6
+- [ ] Kein B2/default/live/SYNC-PASS, keine musical labels erfinden
+
+### B2
+
+- [ ] Volle retained reference/temporal/musical/human/default acceptance und remediation
+- [ ] Genuine komplette T01-T05 + sechs balanced paired T03-T05; absolute/20%-time-operations/zero-baseline. Ohne Human bleibt Gate echt offen; BeatThis1.1.0/final0/minimal soleNEW erst danach
+
+### B3
+
+- [ ] Versioned monotone Rust B/S/shared interpolation/raw accepted gaps/units/scalar/restore
+- [ ] Content/material revisions kompatibel, numerische <=1frame/longloop/provenance; keine aus displays kommende audio authority
+
+### B4
+
+- [ ] Gleicher B/S editor/snap/auto-loop/anchors/localsource BPM/revision uncertainty
+- [ ] Source-sample precision, looprelative labels, master target getrennt; copy unabhängige edits, metadata correction kein beat truth
+
+### B5
+
+- [ ] Original time/pitch proof **erweitert auf total -23..+24/all37 extra, aktuelle real r(n)**
+- [ ] RubberBand route, rate/unity/latency/nonzero/current finite context/fullmix/stems/mono-stereo/rates/partitions; fixe acoustics/cents criteria vor runs, kein stilles +/-12-Limit. B5 haengt an Mapsemantik, nicht an fertig B4 UI
+
+### B6-K-AUDIO
+
+- [ ] Original mapped live ownership/prepared pitch/current-output alignment, ein DSPpfad lockON/OFF
+- [ ] Stable moved/cloned content ownership, separate processors/history, actual pitch-readyACK/RT allocations/deadlines; J0 nicht voller B6. Device/acoustic liveactivation weiter gated
+
+### B7-K-ATOMIC
+
+- [ ] Original unified captured input/Quantize/SYNC **mit atomic pitch+retrigger envelope**
+- [ ] Selected/native projection, no detune-before-due, every admitted repeat event, immutable generations/tuples/time/authority, allfour QuantizeSYNC, original routes/timing; kein zweiter Scheduler
+
+### B8-E
+
+- [ ] Original optimization/stress/live Engineering-Paket und Human-ready packet
+- [ ] 1/2/4/6 live target und 1/4/8 distinct-map DSP diagnostics erhalten; supported envelope/callback/latency tests. **Kein B8 device/listening/live-release Abschluss**
+
+### K1a
+
+- [ ] Stabile SET/SET_RETRIGGER MIDI actions/learn/persistence auf bewiesenem k und B7-Envelope
+- [ ] Zwei simultaneous variants/checkbox immutable/selected pad/multidevice-channel/NoteOff/vel0/fallback; unsupported absolute mode/unknown reject; runtime Freigabe bleibt an volle Originalgates gebunden
+
+### K1b
+
+- [ ] Gemeinsames Key+Transposition UI, correction/reset/result und zwei independent stay-open playable menus
+- [ ] Heads toggle, repeats/MIDI never collapse/block, compact scroll/highlight/both whiteblack, middle0/signed notes/root-relative enharmonic unique pitches/-12/0/+12; no harmony green/Camelot/scale correction, padchanges/closed summaries follow state
+
+### V0
+
+- [ ] Gemeinsame Software-Reabnahme nach neuen nichtneutralen K1-Controls
+- [ ] P6 relevante measurements/216 sharing/independent DSP/pending actions/cleanup/bank races erneut fuer neuen pitch workload; actual B5 transitions via controls, restore origin-deleted copies, full docs/spec/types/negative preservation. Kein erfundener Geraete-/Hoerpass
+
+### H-LIVE
+
+- [ ] Menschlicher B6/B8 Geraete-/Akustik-/Live-Gate im finalen pre-port Abschnitt
+- [ ] Mensch startet/bedient App/CPAL/recorder, echte1/2/4/6-pad+30min recording/listening; sustained new pitches/copies/stems/moves/routes. Erst dieser Beleg darf B6/B8 live-release Gates schliessen
+
+### SLICE7
+
+- [ ] Verbleibende urspruengliche separator/optional inference/dependency/GPU/native-ort same-model parity/docs/rollback Arbeit
+- [ ] Production nach echter live acceptance laut Originaldesign; schon accepted BS/Demucs nicht duplizieren, default analyzer gates separat; echte source/runtime/model parity oder konkretes offenes Gate
+
+### H-FINAL
+
+- [ ] Schluss-Human-Gesamtabnahme **nach** Slice7
+- [ ] Alle sieben neuen Workflows+originales UI/device/hearing/corrections, save-close-reopen nach Origindelete und no-glitches; keine Fake hearing/time/labels. Fruehere H-LIVE ersetzt diese Schlussrunde nicht
+
+### C-FINAL
+
+- [ ] Alle echten Befunde bounded korrigieren, unabhaengig erneut pruefen; geaenderte Humanaspekte erneut abnehmen
+- [ ] Keine automatische Abnahme bei retries oder schrumpfendem Scope. Alle Original56/9/new rows haben spezifische terminal receipts, kein offenes required Gate
+
+### STOP
+
+- [ ] Goal erst nach voller Abschlusspruefung complete; **vor fullRust-App-Portplanung/-implementation/Slice8 stoppen**
+- [ ] Keine Vollportplanung in diesem oder einem Nachfolger aus diesem Goal
+
+## Common exit gate and retained proofs
+
+Every implementation slice needs genuine source/runtime-bound hardware-free native,
+controller/worker/drain/render tests; full `uv sync`, `uv run maturin develop`,
+`uv run cargo check --manifest-path rust/Cargo.toml`, `uv run cargo test --manifest-path
+rust/Cargo.toml`, `uv run pytest`, `uv run ruff check src`, `uv run mypy src` and
+format checks for changed runtime/shared/persistence/audio. Serialize Windows
+build/install/tests and retain actual installed-PYD versus debug/release EXE roles.
+R0 runs none of that runtime matrix. Each affected change needs actual official
+--strict, maintained docs and complete semantic/raw/index/blob/tree independent
+nonauthor review. Negative outcomes never disappear. Later publication requires
+the genuine independent terminal, authorized coherent commit/normal push and fresh
+clean main/HEAD=origin/main=network-main equality plus coordinator acceptance.
+Human controls device/listening;
+no document check closes B2/H-LIVE/H-FINAL/C-FINAL or full Goal.
+
+P2a/P2b retain full journal/copy-verify/flush/rename/reopen/config/native crash and
+rollback matrix, newer intent wins/autosave serialization and fresh native ACK.
+P3 retains five aligned derivative/five WAV joint commit, complete integrity/fault
+recovery, four live components and instrumental offline. P4a preserves both dry
+taps/P-H/seams/75/1000 cycles/215 unchanged handles. P4b must prove executed finite
+feed/lookahead/history/FIFO/filter/oldvoice/two-side context at production k=0;
+fallback-only/guessed halo never closes it. P5a retains matching current None->Some,
+128-source-frame continuous live crossfade and real resident/effective ACK. P5b
+retains default lazy savedALL/explicit retry, preloadOFF, finite separate budget,
+fair all216 actual readiness and bounded negative admission. P6 repeats full cold/
+new-process warm/in-process warm/firstlive/ready/oneedit/216unique+shared/preloadOFF-ON/
+long-loop/no-copy-duplicates/integrity I/O/disk/PCM/RSS/commit/peaks/last-owner/restore
+measurements with individual repeated runs and negatives; V0 repeats under new pitch.
+No deferred216, Arc-bytes-as-RSS, directory-only speed claim or device substitute.

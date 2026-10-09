@@ -11,9 +11,13 @@
 - [ ] Cover equal-rate h/r versus q=1/r,p=h paths and proposed KEYLOCK-off p=h behavior.
 - [ ] Verify inverse-map seconds to loaded-frame conversion before deriving rate; equal physical
   progression at equal sample rates must yield r=1, including across supported device rates.
-- [ ] Test combined 0.25..4 pitch corners, unsupported bounds and finite-value validation without clipping.
+- [ ] Test all37 extras/base -5..+6/total -23..+24 at actual r(n), lockON h/r
+  (~.132433..8 for r=.5..2), lockOFF h, original .25..4 corners and finite bounds
+  without clipping; prove quality/RT/readiness/latency/finite context/unity transitions.
 - [ ] Test unit-rate transposition, p=1 crossings, prepared old/new output alignment and native history.
-- [ ] Test pending launch/KEY revisions, late preparation, cancellation, queue failure and stale state.
+- [ ] Test pending launch/KEY revisions, late preparation, cancellation, queue failure and stale state;
+  distinguish superseded prepare-work from distinct admitted attacks with frozen tuples/permits,
+  no early quantized retune, no accepted repeat coalescing and no removed-lifetime execution.
 - [ ] Compare partitions, variable maps, loop seams, stem masks and isolated edits among 1/4/8 pads.
 - [ ] Export logical invariants and separate pitch/acoustic/resource failures with original gates intact.
 

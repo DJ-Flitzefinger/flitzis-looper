@@ -704,3 +704,19 @@ artifact and account for Rubber Band licensing before binary distribution.
 Reference URLs:
 
 - https://breakfastquay.com/rubberband/integration.html
+
+## Pending R0 Key + Transposition envelope
+
+The separate future controls persist source correction+epoch, numeric base_shift
+(-5..+6 with fixed+6 tie), all37 extra_shift(-18..+18) and retrigger flag. Legacy
+manual_key stays neutral metadata. Correction relabels without retune/position change;
+base and extra combine once into total k=-23..+24, h=2^(k/12). Equal-rate current
+varispeed route requires lockON p=h/r, lockOFF p=h preserving speed coupling r*h.
+Actual r(n) extrema expand the B5 joint proof; r=.5..2 implies desired p~.132433..8.
+Current .5..2 compensation clamp/dry bypass/positive-finite API do not prove support.
+Require full desired quality/RT/readiness/latency/finite context/unity-transition
+evidence; concrete measured restrictions must be shared UI/MIDI/storage/audio
+rejections, never silent clamp/tempo change. No cascade or complete pitch PCM.
+R2 layout/hold and B7 captured pitch+retrigger use prepared guarded ownership;
+K1 remains engineering/guarded until real B6/B8 H-LIVE device acceptance. B5 remains
+test-only nonzero k; this R0 document activates no audio processing.

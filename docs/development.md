@@ -609,7 +609,7 @@ resolution during one validation batch.
 ## Runtime Local Data
 
 The [pad-owned PCM program](pad-owned-pcm-program.md) is an official pending
-P0-P6 contract. P0 uses real strict OpenSpec and document/diff/link checks only;
+extended serial contract. P0 and R0 use real strict OpenSpec and document/diff/link checks only;
 it changes no product/test/runtime code and establishes no performance acceptance.
 Each later runtime slice needs the actual relevant full validation, frozen runtime
 identity and independent final review in its OpenSpec tasks. Do not run the app,
@@ -620,9 +620,10 @@ The app may create local runtime files:
 - `samples/`: project-local copied samples, stem cache, and project config.
 
 Current global original/PCM/stem containers remain readable during the planned
-transition. New pad-owned targets are `samples/#N/<original>`, `.pcm-cache` and
-`stems`; final acceptance requires verified migration and no permanent global
-cache dependency. Do not move/delete current runtime assets as a documentation
+transition. New canonical material targets are `samples/materials/M<id>/original/<original>`,
+`.pcm-cache` and `stems`; #N is stable slot membership. Final acceptance requires
+material-wise verified migration and no obsolete legacy-container dependence; the
+canonical shared material store is intentional, without Copy-induced duplicates. Do not move/delete current runtime assets as a documentation
 cleanup or confuse old root preservation snapshots with current session state.
 - `config/input/`: local input mapping JSON files.
 - `.pytest-tmp*`, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `.venv`, and
@@ -652,3 +653,14 @@ Rules:
   intentionally abandoned.
 - Do not use TODO items as a substitute for OpenSpec. User-visible behavior
   changes still need specs, tests, and validation.
+
+## R0 documentation validation boundary
+
+R0 changes official plans/deltas/docs and local handoff only, with no build/install/
+runtime suite or P0 re-audit. Validate each actually affected active change using
+real `openspec validate <id> --strict`; retain genuine failed attempts/exits and
+unaffected historical strict FAIL/archive INFO separately. Check full seven-group/
+56+9 coverage,38 IDs/48 edges, affected links/diff/source/input preservation.
+Actual author terminal and distinct native nonauthor final semantic/raw/canonical/
+index/blob/tree review precede publication or J0/P1 dispatch. The extended program
+owns later complete serialized runtime validation; devices/hearing remain human.

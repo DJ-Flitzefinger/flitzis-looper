@@ -51,10 +51,13 @@ saved k. These are forward constraints for K1, not a persistence/UI rollout in B
 ## Native bounds and transitions
 
 Current `rubberband_backend.rs:75` clamps inverse-tempo pitch to [0.5,2], while current source
-speed is [0.5,2]. An illustrative diagnostic k range [-12,+12] therefore requires LiveShifter
-p in [0.25,4]. For r=0.5,k=+12 or r=2,k=-12, reusing the present clamp produces source pitch
-instead of the requested octave shift. This diagnostic range is not a promised future UX range
-or a verified native quality/realtime domain.
+speed is [0.5,2]. The new desired base=-5..+6 and all37 extra=-18..+18 give total
+k=-23..+24. At r=.5..2 lockON h/r desires p~.132433..8; lockOFF p=h.
+B5 must test actual accepted r(n) extrema and the entire desired envelope.
+The historical illustrative [-12,+12] requiring p=.25..4 remains a regression. For r=0.5,k=+12 or r=2,k=-12, reusing the present clamp produces source pitch
+instead of the requested octave shift. Neither the old corners nor positive-finite API acceptance verifies the new
+quality/RT/readiness/latency/finite-history/unity envelope. A concrete measured
+restriction needs consistent explicit UI/MIDI/storage/audio rejection, not clamp.
 
 Validate the combined domain explicitly. For a certified native interval [p_min,p_max] and
 one fixed r, accepted k lies within [12*log2(p_min*r),12*log2(p_max*r)]. Across a variable r
@@ -86,14 +89,21 @@ and the previous effective value. Never equate enqueue success with audible adop
 Prepared state identity includes source/map/loop/tempo revisions, starting source/output phase,
 pitch revision/trajectory, KEYLOCK mode, intended output range, renderer version/options,
 channel/stem topology and native history.
-A k change invalidates an old-pitch prepared result without invalidating raw PCM, beat analysis
-or raw stem caches. Derived warped/pitched caches include k and their complete render identity.
+A newer requested k invalidates preparation presented as that latest request,
+without invalidating raw PCM, beat analysis or raw stem caches. It does not
+invalidate a distinct already admitted attack's frozen tuple and permit. Derived
+warped/pitched caches include k and their complete render identity.
 
-If k changes while a launch is pending, keep the captured trigger T. Reprepare for T only if
-ready. A late or superseded result is rejected; defer the KEY change with the previous effective
+For an unaccepted launch preparation request whose requested k changes, keep the
+captured trigger T. Reprepare that request for T only if ready. A late or superseded
+result for the latest-request path is rejected; defer the KEY change with the previous effective
 pitch or exercise the explicitly declared launch fallback. The diagnostic records this choice.
 It must never silently move T, restart a voice, change phi or reanchor M to conceal unreadiness.
-Queue failure, unload and newer revisions cannot adopt stale pitch state.
+Queue failure, unload and invalid current authority cannot adopt stale state.
+Already admitted pitch attacks have distinct frozen tuple/action/lifetime/permits:
+newer attacks do not automatically stale them. Only unaccepted/superseded preparation
+work may coalesce. Preserve captured T and one event per accepted attack in the
+existing scheduler, including repeats; distinguish this from latest requested intent.
 
 ## Common output coordinates and audible limits
 
@@ -121,7 +131,7 @@ phase or require reset. Other pads retain independent k and identical timing whe
 
 Freeze a staged diagnostic matrix before tuning:
 
-- Arithmetic/static audio: r={0.5,0.8,1,1.25,2}, k={-12,-7,-1,0,+1,+7,+12}, rates 44.1/48/96 kHz.
+- Arithmetic/static audio: r={0.5,0.8,1,1.25,2}, all37 extras plus base extrema/total{-23,+24}, keeping k={-12,-7,-1,0,+1,+7,+12} regressions, rates 44.1/48/96 kHz.
   Include unit rate/nonzero k, both clamp corners, known tones/attacks and correlated stereo.
 - Variable map: drift, ramps, abrupt slope, fractional BPM, loop seams and p=1 crossings from
   either changing r or changing k. Preserve accepted map interpolation between anchors.

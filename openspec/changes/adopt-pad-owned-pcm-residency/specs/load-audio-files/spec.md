@@ -3,16 +3,20 @@
 ### Requirement: Load Audio File Into Sample Slot
 The system SHALL expose the existing asynchronous Python audio-load API for
 zero-based sample slots 0 through 215 and copy byte-exact original audio into the
-corresponding project-local `samples/#1` through `samples/#216` owner before the
+canonical immutable project-local `samples/materials/M<stable-id>/original/` material version before the
 assignment becomes part of the current project.
 
-The persisted sample path SHALL name that pad-owned original using its original
+The persisted assignment SHALL bind durable ContentInstance identity/lineage and
+the shared material version. Reopen SHALL allocate a fresh nonreused runtime
+lifetime and SHALL NOT restore saved action/feedback/HoldRelease authority. Its
+sample path SHALL name that material-owned original using its original
 filename and actual extension/encoding. A same-name collision with different or
 leased content SHALL use a non-colliding short suffix or safe deferred naming,
 never overwrite live bytes. The decoder SHALL retain WAV, FLAC, MP3, AIFF and OGG
 support and existing imperfect-MP3 policy. Safe legacy references SHALL remain
 readable during verified migration; the final layout SHALL NOT depend on permanent
-global original/PCM/stem containers or filesystem aliases.
+legacy global containers or filesystem aliases. Canonical shared material storage
+SHALL be the final target, with #1..#216 identifying stable slot membership.
 
 Source capture, decoding/resampling, full lineage validation, assignment admission
 and cleanup SHALL remain off-thread with real native source adoption ACK. App
@@ -22,12 +26,12 @@ failure SHALL leave previous assignment state intact.
 
 #### Scenario: Load succeeds
 - **WHEN** an existing supported audio file is loaded into a valid slot
-- **THEN** its stable original is copied under that pad's owner and decoded/resampled off-thread
+- **THEN** its stable original is captured under the immutable material owner and decoded/resampled off-thread
 - **AND** matching native ACK precedes assignment Success and project path update
 
 #### Scenario: Loading replaces an already-loaded sample
 - **WHEN** app replacement of a loaded slot completes successfully
-- **THEN** its new buffer and pad-owned project path become effective together
+- **THEN** its fresh content lifetime, new buffer and material project path become effective together
 - **AND** previous app voices stop through bounded native retirement
 
 #### Scenario: Sample id is out of range
@@ -42,14 +46,14 @@ failure SHALL leave previous assignment state intact.
 - **WHEN** a source has no usable supported decodable audio
 - **THEN** loading fails without changing previous assignment state
 
-#### Scenario: Original format and visible owner are preserved
+#### Scenario: Original format and material membership are preserved
 - **WHEN** WAV audio named `Take.wav` is imported into slot215
-- **THEN** its byte-exact original is owned below `samples/#216/Take.wav`
-- **AND** its `.pcm-cache` and `stems` use the same pad owner without MP3 relabelling
+- **THEN** its byte-exact original is owned below `samples/materials/M<id>/original/Take.wav` with slot#216 membership
+- **AND** its `.pcm-cache` and `stems` use the same immutable material version without MP3 relabelling
 
 #### Scenario: Same basename is imported to different pads
 - **WHEN** two pads import different source bytes named `Take.wav`
-- **THEN** each pad owns its own original in its own folder
+- **THEN** each different material version has a collision-safe original and independent content assignment
 - **AND** neither import overwrites another pad or an earlier leased generation
 
 #### Scenario: Replacement cannot overwrite a retained original
@@ -69,7 +73,7 @@ changing its project intent.
 
 Track-bound settings SHALL reset as already specified. Owned originals, PCM and
 stem generations SHALL be physically retired off-thread only after their final
-assignment/project/job/queued/history/voice reader retires. Cleanup SHALL target
+all-bank assignment/project/job/subscriber/action/queued/history/voice/native-ACK reader retires. Cleanup SHALL target
 resolved captured file identities, preserve other owners and unknown content,
 and tolerate missing files. A full admission queue SHALL preserve previous state.
 
@@ -101,9 +105,20 @@ and tolerate missing files. A full admission queue SHALL preserve previous state
 - **WHEN** slot0 unloads while an old owned immutable reader remains
 - **THEN** slot0 cannot launch new voices and existing app voices stop safely
 - **AND** its tracked asset bytes remain until the reader retires off-thread
-- **AND** another pad's assets and unrelated content are preserved
+- **AND** all surviving equal material users and unrelated content are preserved
 
 #### Scenario: Missing sample and missing files are harmless
 - **WHEN** unload targets an empty valid slot or an already missing owned file
 - **THEN** it is handled safely without a crash or external deletion
 - **AND** an out-of-range slot fails without mutation
+
+#### Scenario: Removing an origin preserves copies through reopen
+- **GIVEN** independent contents in different banks share prepared material
+- **WHEN** the origin slot or source bank is removed and the project saves/closes/reopens
+- **THEN** surviving contents restore with fresh native source/timing ACK and remain usable
+- **AND** no new analysis, separation, complete decoding or file duplication occurs for valid prepared data
+
+#### Scenario: Admission failure preserves content and hold ownership
+- **WHEN** unload or replacement cannot reserve full native/action/feedback retirement capacity
+- **THEN** old content, hold ownership, settings, source authority and files remain intact
+- **AND** successful removal later fences old content-bound actions before slot reuse

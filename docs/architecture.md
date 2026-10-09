@@ -930,7 +930,10 @@ old live-audio state.
 ## Persistence And Restore
 
 The pending [pad-owned PCM program](pad-owned-pcm-program.md) changes asset
-ownership and restore policy in serial slices. Its target keeps durable ALL STEMS
+ownership/content identity and restore policy in serial slices. Canonical immutable
+material users replace physical per-pad duplicates; #N remains fixed slot membership.
+Its target keeps current musical masks/custom/preset/mutes as independent durable
+CopySnapshot intent and keeps durable ALL STEMS
 desire, disk eligibility, pending work, resident readiness and effective native
 mode distinct; preload defaults off. It requires guarded first lazy activation
 during FullMix playback and actual effective-mode feedback. The startup sequence
@@ -979,3 +982,28 @@ telemetry must not silently change durable project intent.
 
 These are not forbidden forever. They need explicit user direction, OpenSpec
 coverage, focused design, and validation.
+
+## Pending R0 content and admitted action ownership
+
+Current runtime above remains slot-based. The pending arrangement contract separates
+fixed PadSlotId/epoch, movable ContentInstance/lifetime, immutable material/analysis/
+StemSet versions and current native source/timing/window/ACK authority. Copy creates
+fresh stopped content with musical settings and shared immutable input; Move/Swap
+requires actual voice/history/FIFO/filter/ramps/cohort continuation, not unload/load.
+Prepared pair/all36 transactions linearize native/project/config/journal with full
+ref/capacity reservation; claim-without-ACK retains pins and fences conflicts.
+
+Accepted waveform holds bind lifetime/action/native caused PauseEffect/control
+revision/cohort, follow living moves/swaps, fence removals and never copy tokens.
+Outside release survives selection/editor close/focus through existing control tick;
+release-before-ACK/saturation retains one bounded identity-bound request. Later
+STOP/retrigger/resume/intentional pause supersedes the old claim. Slot-only Python
+paused state is no native effect proof; current successful unload already clears
+the hold. Global middle-hold mute stays output-global/latest intended volume.
+Accepted pitch actions capture selected lifetime/full numeric tuple/timestamp/
+prepared permit; each attack remains distinct in the existing scheduler. Material
+equality, current selection and old telemetry cannot redirect an admitted action.
+Persistence preserves durable content lineage and musical intent, while reopen
+allocates a fresh nonreused runtime lifetime and rejects saved action/hold authority.
+All-bank assignments, readers/old voices/history/jobs/subscribers/actions/versions/
+native unload ACK determine real last use. Full HC/P6/V0 and human gates stay OPEN.
