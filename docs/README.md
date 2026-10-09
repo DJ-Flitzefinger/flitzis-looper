@@ -32,6 +32,7 @@ For focused areas:
 | --- | --- |
 | `architecture.md` | Current Rust/Python runtime architecture and ownership boundaries. |
 | `pcm-cache-residency.md` | Productive copy-first originals/full PCM cache, validated reuse and reader lifecycle; separate C2 residency and C3 measurement contracts. |
+| `pad-owned-pcm-program.md` | Pending official pad-owned migration/stem PCM/lazy residency/216-slot program and its serial acceptance boundaries. |
 | `development.md` | Setup, validation, OpenSpec workflow, package layout, and generated-file notes. |
 | `ui-toolkit.md` | Project-specific Dear ImGui design and state-flow rules. |
 | `stem-generation-setup.md` | Pinned Demucs/BS-RoFormer assets, offline worker, CUDA setup and separator rollback. |

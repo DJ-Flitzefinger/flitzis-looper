@@ -7,6 +7,14 @@ plugin hosting, a separate FX graph, or realtime stem generation.
 
 ## Runtime Modules
 
+The pending [pad-owned PCM program](pad-owned-pcm-program.md) gives finite DSP
+supply its own P4b proof/implementation slice. Current saved KEYLOCK still uses a
+labelled full-track fallback for unproved continuation. Dry loop tap parity does
+not prove native feed/lookahead/FIFO/history/seam coverage or causal availability.
+Keep the1598-frame/33.292-ms fixture, Rubber Band and existing rate/nonzero-k/unity/
+latency gates; neither range caching nor directory migration removes acoustic
+latency. No fallback-only intermediate state completes the requested finite supply.
+
 The active backend is implemented behind:
 
 ```text

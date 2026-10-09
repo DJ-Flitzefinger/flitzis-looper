@@ -929,6 +929,13 @@ old live-audio state.
 
 ## Persistence And Restore
 
+The pending [pad-owned PCM program](pad-owned-pcm-program.md) changes asset
+ownership and restore policy in serial slices. Its target keeps durable ALL STEMS
+desire, disk eligibility, pending work, resident readiness and effective native
+mode distinct; preload defaults off. It requires guarded first lazy activation
+during FullMix playback and actual effective-mode feedback. The startup sequence
+below describes the current eager implementation, not that pending target.
+
 `ProjectState` stores durable performer intent such as sample paths, loop
 regions, BPM metadata, dB Gain/Trim and EQ intent, stem cache metadata,
 settings, and global controls.

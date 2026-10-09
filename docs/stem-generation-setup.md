@@ -8,6 +8,16 @@ callback never runs separators, FFmpeg, disk I/O, model loading, GIL/UI or infer
 
 ## What `uv sync` Installs
 
+The pending [pad-owned PCM program](pad-owned-pcm-program.md) changes generated
+asset destinations and residency, not separator/model setup. It plans per-pad
+WAV outputs in `samples/#N/stems` plus stable aligned f32 disk derivatives in
+`samples/#N/.pcm-cache`, with a joint verified set commit across both areas.
+It retains temporary buffers
+only until commit/validation completes. FULL MIX generation with preload off
+will not retain unused stem windows. Existing eager publication and global stem
+container descriptions below remain current until implementation. No model
+download/inference is needed for P0 planning or model-free cache restoration.
+
 The Python runtime dependencies for stem generation are declared in
 `pyproject.toml` and locked in `uv.lock`:
 

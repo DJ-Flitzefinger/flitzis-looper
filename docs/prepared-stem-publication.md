@@ -12,6 +12,15 @@ requires a separator model, even when the selected model is absent.
 
 ## Native API and ownership
 
+The pending [pad-owned PCM program](pad-owned-pcm-program.md) retains these guards
+and adds an explicit residency-only first None->Some adoption while FullMix plays.
+Current generic publication rejects active pads; current relocation requires an
+already accepted identical StemSet. Those APIs do not yet implement lazy first
+activation. Future active residency must preserve source/ticket/voice/geometry/
+history/DSP/lease guards and effective-mode feedback, without permitting active
+generation/different-content replacement or restarting playback. Complete durable
+five-artifact integrity remains separate from four live component-window readiness.
+
 `capture_prepared_source(id, source_version)` returns an opaque
 `PreparedSourceTicket`. The version contains normalized original path and
 `|sha256-v1:<digest>`. Its digest must match the original-file content retained

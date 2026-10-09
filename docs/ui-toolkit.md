@@ -112,6 +112,14 @@ src/flitzis_looper_audio/
 
 ## State Ownership
 
+The pending [pad-owned PCM program](pad-owned-pcm-program.md) specifies lazy
+ALL STEMS requests from valid disk artifacts, distinct desire/pending/ready/
+effective state, and project-persisted startup preload plus RAM estimates/budget
+on the existing Settings surface. Current mode buttons still require resident
+availability; disk existence is not native readiness. Implementation must route
+requests through the shared controller, preserve FullMix during preparation and
+obtain effective native feedback. Rendering continues to use snapshots only.
+
 New-track loading initializes loop and an independent persisted scalar grid base
 at the loaded frame immediately before the first crossing of the symmetric
 fixed deadzone [-0.01, +0.01] full scale, without millisecond pre-roll or scaling

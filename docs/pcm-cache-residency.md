@@ -22,6 +22,15 @@ redundant cold decoding or a new cache generation.
 
 ## Delivered cold path (C1a)
 
+The pending [pad-owned PCM program](pad-owned-pcm-program.md) extends this delivered
+foundation. It replaces final global physical ownership with per-pad folders,
+adds persistent aligned stem PCM/direct range reads, and requires actual216-slot
+residency plus finite DSP proof. Existing measured200-pad evidence and labelled
+full-track KEYLOCK fallback do not complete those new requirements. SourceVersion
+path migration needs verified lineage and fresh native source/timing ACK; existing
+cache/manifests/readers are not edited in place. This document's delivered path
+descriptions remain current until those serial slices implement the new targets.
+
 `cold_jobs.rs` admits at most two active workers and 32 queued/reserved jobs.
 The queue bound includes reservations made before request mutation. Each active
 job admits at most 1 GiB of transient PCM, including decoder packet/workspace,

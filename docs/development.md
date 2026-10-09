@@ -608,9 +608,22 @@ resolution during one validation batch.
 
 ## Runtime Local Data
 
+The [pad-owned PCM program](pad-owned-pcm-program.md) is an official pending
+P0-P6 contract. P0 uses real strict OpenSpec and document/diff/link checks only;
+it changes no product/test/runtime code and establishes no performance acceptance.
+Each later runtime slice needs the actual relevant full validation, frozen runtime
+identity and independent final review in its OpenSpec tasks. Do not run the app,
+CPAL or devices automatically; human hearing/device gates remain separate.
+
 The app may create local runtime files:
 
 - `samples/`: project-local copied samples, stem cache, and project config.
+
+Current global original/PCM/stem containers remain readable during the planned
+transition. New pad-owned targets are `samples/#N/<original>`, `.pcm-cache` and
+`stems`; final acceptance requires verified migration and no permanent global
+cache dependency. Do not move/delete current runtime assets as a documentation
+cleanup or confuse old root preservation snapshots with current session state.
 - `config/input/`: local input mapping JSON files.
 - `.pytest-tmp*`, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `.venv`, and
   `rust/target/`: tool/build artifacts.
