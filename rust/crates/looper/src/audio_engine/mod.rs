@@ -613,6 +613,98 @@ pub struct AudioEngine {
 }
 
 impl AudioEngine {
+    /// Prepare, lease and enqueue a current stem set through the actual control producer.
+    /// Stream startup supplies the producer; hardware-free probes use the same kernel.
+    pub(super) fn publish_prepared_stems_with_producer(
+        &self,
+        py: Python<'_>,
+        id: usize,
+        source_version: String,
+        cache_dir: String,
+        source_ticket: &PreparedSourceTicket,
+        producer: &Arc<Mutex<Producer<ControlMessage>>>,
+    ) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+        if source_version.trim().is_empty() {
+            return Err(PyValueError::new_err("source_version must not be empty"));
+        }
+        project_stem_cache_dir(&cache_dir).map_err(PyValueError::new_err)?;
+        let requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        let sample = {
+            let cache = self
+                .sample_cache
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err("Failed to acquire sample cache lock"))?;
+            cache
+                .get(id)
+                .and_then(|slot| slot.clone())
+                .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?
+        };
+        validate_prepared_ticket(
+            source_ticket,
+            id,
+            &source_version,
+            requests[id],
+            &self.prepared_source_epochs[id],
+            &sample,
+        )
+        .map_err(PyValueError::new_err)?;
+        drop(requests);
+
+        // Preparation owns the exact generation while disk reads run detached.
+        // Successful registration below transfers protection to PCM readers.
+        let generation_lease = self.acquire_project_asset_lease(cache_dir.clone())?;
+        let mut stems = py
+            .detach(|| {
+                let peak = stem_cache::admitted_stem_pcm_bytes(sample.frame_count(), sample.channels)?
+                    .checked_add(sample.samples.len().checked_mul(4).ok_or("resident stem budget overflow")?)
+                    .ok_or("resident stem budget overflow")?;
+                if peak > cold_jobs::PCM_LIMIT_BYTES {
+                    return Err("complete stem preparation with resident window exceeds transient PCM admission".into());
+                }
+                let complete = self.complete_sample(id, &sample, cold_jobs::PCM_LIMIT_BYTES).map_err(|error| error.to_string())?;
+                prepare_stem_buffers_from_cache(
+                    &source_version,
+                    &complete,
+                    source_ticket.sample_rate_hz,
+                    &cache_dir,
+                )
+            })
+            .map_err(PyValueError::new_err)?;
+        stems = stems.window_for(&sample).map_err(PyValueError::new_err)?;
+        stems.publication = source_ticket.publication.clone();
+        stems.accepted_timing = source_ticket.publication.accepted_projection();
+        let (_, generation_path) = project_assets::owned_path(
+            &self.project_assets_root()?,
+            std::path::Path::new(&cache_dir),
+        )
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        self.project_assets
+            .retain_stems(generation_path.clone(), &stems)
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+
+        // Source mutation, timing publication and enqueue all serialize here.
+        let retained_stems = stems.clone();
+        let result =
+            enqueue_current_prepared_stems(self, producer, source_ticket, &source_version, stems);
+        if result.is_ok() {
+            self.record_stems(
+                id,
+                retained_stems,
+                source_version,
+                cache_dir.into(),
+                generation_path,
+            )?;
+        }
+        drop(generation_lease);
+        result
+    }
+
     fn note_resident_loop_intent(&self, id: usize, start: f64, end: Option<f64>) -> PyResult<()> {
         if let Some(guard) = self
             .resident_restore_guards
@@ -1644,83 +1736,14 @@ impl AudioEngine {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
 
-        let requests = self
-            .pad_request_ids
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        let sample = {
-            let cache = self
-                .sample_cache
-                .lock()
-                .map_err(|_| PyRuntimeError::new_err("Failed to acquire sample cache lock"))?;
-            cache
-                .get(id)
-                .and_then(|slot| slot.clone())
-                .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?
-        };
-        validate_prepared_ticket(
-            source_ticket,
+        self.publish_prepared_stems_with_producer(
+            py,
             id,
-            &source_version,
-            requests[id],
-            &self.prepared_source_epochs[id],
-            &sample,
-        )
-        .map_err(PyValueError::new_err)?;
-        drop(requests);
-
-        // Preparation owns the exact generation while disk reads run detached.
-        // Successful registration below transfers protection to PCM readers.
-        let generation_lease = self.acquire_project_asset_lease(cache_dir.clone())?;
-        let mut stems = py
-            .detach(|| {
-                let peak = stem_cache::admitted_stem_pcm_bytes(sample.frame_count(), sample.channels)?
-                    .checked_add(sample.samples.len().checked_mul(4).ok_or("resident stem budget overflow")?)
-                    .ok_or("resident stem budget overflow")?;
-                if peak > cold_jobs::PCM_LIMIT_BYTES {
-                    return Err("complete stem preparation with resident window exceeds transient PCM admission".into());
-                }
-                let complete = self.complete_sample(id, &sample, cold_jobs::PCM_LIMIT_BYTES).map_err(|error| error.to_string())?;
-                prepare_stem_buffers_from_cache(
-                    &source_version,
-                    &complete,
-                    source_ticket.sample_rate_hz,
-                    &cache_dir,
-                )
-            })
-            .map_err(PyValueError::new_err)?;
-        stems = stems.window_for(&sample).map_err(PyValueError::new_err)?;
-        stems.publication = source_ticket.publication.clone();
-        stems.accepted_timing = source_ticket.publication.accepted_projection();
-        let (_, generation_path) = project_assets::owned_path(
-            &self.project_assets_root()?,
-            std::path::Path::new(&cache_dir),
-        )
-        .map_err(|error| PyValueError::new_err(error.to_string()))?;
-        self.project_assets
-            .retain_stems(generation_path.clone(), &stems)
-            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-
-        // Source mutation, timing publication and enqueue all serialize here.
-        let retained_stems = stems.clone();
-        let result = enqueue_current_prepared_stems(
-            self,
-            &handle.producer,
+            source_version,
+            cache_dir,
             source_ticket,
-            &source_version,
-            stems,
-        );
-        if result.is_ok() {
-            self.record_stems(
-                id,
-                retained_stems,
-                source_version,
-                cache_dir.into(),
-                generation_path,
-            )?;
-        }
-        drop(generation_lease);
-        result
+            &handle.producer,
+        )
     }
 
     /// Select whether a pad renders from the loaded full mix or all prepared stems.

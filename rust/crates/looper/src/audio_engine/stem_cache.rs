@@ -61,9 +61,16 @@ pub(crate) fn project_stem_cache_dir(cache_dir: &str) -> Result<PathBuf, String>
         })
         .collect::<Result<_, _>>()?;
 
-    if parts.len() != 3 || parts[0] != "samples" || parts[1] != "stems" {
+    let published_generation = parts.len() == 4
+        && super::project_assets::is_pad_name(std::ffi::OsStr::new(&parts[2]))
+        && parts[2][1..]
+            .parse::<usize>()
+            .is_ok_and(|pad| (1..=super::constants::NUM_SAMPLES).contains(&pad))
+        && super::project_assets::is_ready_generation(&parts[3]);
+    if (parts.len() != 3 && !published_generation) || parts[0] != "samples" || parts[1] != "stems" {
         return Err(
-            "stem cache directory must be under samples/stems/<source-version>".to_string(),
+            "stem cache directory must name a legacy set or an immutable ready generation under samples/stems"
+                .to_string(),
         );
     }
 
@@ -745,6 +752,34 @@ mod tests {
         let path = project_stem_cache_dir("samples/stems/abcdef0123456789").unwrap();
 
         assert!(path.ends_with(Path::new("samples/stems/abcdef0123456789")));
+        assert_eq!(
+            project_stem_cache_dir("samples/stems/#1").unwrap(),
+            Path::new("samples/stems/#1")
+        );
+    }
+
+    #[test]
+    fn project_stem_cache_dir_accepts_only_published_pad_generations() {
+        for pad in [1, 216] {
+            let cache_dir = format!("samples/stems/#{pad}/.ready-0123456789abcdef0123456789abcdef");
+            assert_eq!(
+                project_stem_cache_dir(&cache_dir).unwrap(),
+                Path::new(&cache_dir)
+            );
+        }
+        for cache_dir in [
+            "samples/stems/#1/.generation-0123456789abcdef0123456789abcdef",
+            "samples/stems/cache/.ready-0123456789abcdef0123456789abcdef",
+            "samples/stems/#0/.ready-0123456789abcdef0123456789abcdef",
+            "samples/stems/#217/.ready-0123456789abcdef0123456789abcdef",
+            "samples/stems/#1/.ready-0123456789abcdef0123456789abcde",
+            "samples/stems/#1/.ready-0123456789abcdef0123456789abcdeg",
+            "samples/stems/#1/.ready-0123456789ABCDEF0123456789ABCDEF",
+            "samples/stems/#1/.ready-0123456789abcdef0123456789abcdef/extra",
+            "samples/stems/#1/../.ready-0123456789abcdef0123456789abcdef",
+        ] {
+            assert!(project_stem_cache_dir(cache_dir).is_err(), "{cache_dir}");
+        }
     }
 
     #[test]

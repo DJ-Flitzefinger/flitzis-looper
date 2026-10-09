@@ -128,6 +128,15 @@ marker binds source version and all five WAV digests. Missing, partial, mixed or
 tampered sets remain unavailable. The marker and current permit remain separate
 from the full-mix PCM cache.
 
+Native artifact preparation accepts the exact published
+`samples/stems/#<pad>/.ready-<uuid>` path as well as direct legacy cache sets.
+Published names use the lifecycle owner's pad/generation checks and a 32-character
+lowercase hexadecimal UUID. Private `.generation-<uuid>` directories and arbitrary
+nested paths are not publication inputs. The contained asset lease still rejects
+traversal, links and Windows reparse points before native preparation reads files.
+Source identity comes from the content marker and current native ticket, rather
+than from the cache directory name.
+
 Assignment and separator-job tokens protect original and generation paths under
 the native admission/cleanup gate. Native PCM readers cover queued, bank, voice
 and history owners until off-thread retirement. Unload or Delete Stems revokes
@@ -145,6 +154,18 @@ it cannot overwrite canonical files during preparation. Its artifact writer is
 retained only in Rust test fixtures. Content integrity and declared association do not
 certify musical correctness of arbitrary separator outputs. No audible SYNC or
 device acceptance is claimed.
+
+The hardware-free regression runs the productive Python stem controller and
+generation events, native preparation/enqueue, command drain, adoption feedback
+and PCM renderer against a deterministic offline artifact backend:
+
+```powershell
+.\scripts\run-rust-tests.ps1 -CargoArgs @('stem_publication_tests')
+```
+
+Its injected command producer uses the same native publication core as the
+stream-backed API. It opens no CPAL stream and measures no model quality,
+inference performance or human/device acceptance.
 
 ## Remaining G3 boundaries
 

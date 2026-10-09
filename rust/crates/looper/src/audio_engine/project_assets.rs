@@ -663,7 +663,11 @@ fn is_generation(name: &str) -> bool {
     })
 }
 
-fn is_pad_name(name: &std::ffi::OsStr) -> bool {
+pub(super) fn is_ready_generation(name: &str) -> bool {
+    name.starts_with(".ready-") && is_generation(name)
+}
+
+pub(super) fn is_pad_name(name: &std::ffi::OsStr) -> bool {
     name.to_string_lossy()
         .strip_prefix('#')
         .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
