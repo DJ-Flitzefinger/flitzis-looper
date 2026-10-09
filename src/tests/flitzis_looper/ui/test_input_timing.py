@@ -46,7 +46,7 @@ def test_mouse_pad_captures_time_before_loop_publication(
     controller.project.sample_paths[0] = "samples/foo.wav"
     audio_engine_mock.reset_mock()
     audio_engine_mock.attach_mock(Mock(return_value=0), "capture_input_timestamp_ns")
-    monkeypatch.setattr(imgui, "is_mouse_clicked", lambda _button: False)
+    monkeypatch.setattr(imgui, "is_mouse_clicked", lambda button: button == imgui.MouseButton_.left)
     monkeypatch.setattr(imgui, "is_mouse_down", lambda button: button == imgui.MouseButton_.left)
 
     performance_view._pad_button_input(UiContext(controller), 0, is_loaded=True)
@@ -57,6 +57,83 @@ def test_mouse_pad_captures_time_before_loop_publication(
         call.set_pad_loop_region(0, 0.0, None),
         call.play_sample_exclusive(0, 1.0, received_at_ns=0),
     ]
+
+
+def _pad_mouse_state(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    mouse = SimpleNamespace(clicked=None, down=None, hovered=True)
+    monkeypatch.setattr(imgui, "is_mouse_clicked", lambda button: button == mouse.clicked)
+    monkeypatch.setattr(imgui, "is_mouse_down", lambda button: button == mouse.down)
+    monkeypatch.setattr(imgui, "is_item_hovered", lambda: mouse.hovered)
+    monkeypatch.setattr(imgui, "button", lambda *_args: False)
+    monkeypatch.setattr(performance_view, "button_style", lambda _style: nullcontext())
+    monkeypatch.setattr(performance_view, "_pad_button_label", lambda *_args, **_kwargs: ("", None))
+    monkeypatch.setattr(performance_view, "_pad_button_overlays", lambda *_args, **_kwargs: None)
+    return mouse
+
+
+def test_mouse_pad_release_outside_does_not_suppress_the_next_down_edge(
+    controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controller.project.sample_paths[0] = "samples/foo.wav"
+    audio_engine_mock.reset_mock()
+    audio_engine_mock.capture_input_timestamp_ns.side_effect = range(1, 21)
+    mouse = _pad_mouse_state(monkeypatch)
+    ctx = UiContext(controller)
+
+    for index in range(1, 21):
+        mouse.hovered = True
+        mouse.clicked = mouse.down = imgui.MouseButton_.left
+        performance_view._pad_button(ctx, 0, (100.0, 100.0))
+        assert audio_engine_mock.play_sample_exclusive.call_count == index
+        assert controller.session.pressed_pads[0]
+
+        mouse.clicked = None
+        performance_view._pad_button(ctx, 0, (100.0, 100.0))
+        assert audio_engine_mock.play_sample_exclusive.call_count == index
+
+        # The release occurs outside the hovered-pad input handler, as in the real grid.
+        mouse.hovered, mouse.down = False, None
+        performance_view._pad_button(ctx, 0, (100.0, 100.0))
+
+    assert not controller.session.pressed_pads[0]
+    assert audio_engine_mock.capture_input_timestamp_ns.call_count == 20
+    assert audio_engine_mock.play_sample_exclusive.call_args_list == [
+        call(0, 1.0, received_at_ns=timestamp) for timestamp in range(1, 21)
+    ]
+
+
+def test_mouse_held_drag_into_pad_requires_a_new_down_edge(
+    controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controller.project.sample_paths[0] = "samples/foo.wav"
+    mouse = _pad_mouse_state(monkeypatch)
+    audio_engine_mock.reset_mock()
+    audio_engine_mock.capture_input_timestamp_ns.return_value = 1
+    mouse.down = imgui.MouseButton_.left
+
+    performance_view._pad_button(UiContext(controller), 0, (100.0, 100.0))
+
+    audio_engine_mock.capture_input_timestamp_ns.assert_not_called()
+    audio_engine_mock.play_sample_exclusive.assert_not_called()
+    assert controller.session.pressed_pads[0]
+
+
+def test_mouse_right_hold_stops_on_each_hovered_frame(
+    controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controller.project.sample_paths[0] = "samples/foo.wav"
+    controller.session.active_sample_ids.add(0)
+    mouse = _pad_mouse_state(monkeypatch)
+    mouse.down = imgui.MouseButton_.right
+    ctx = UiContext(controller)
+    audio_engine_mock.reset_mock()
+
+    for _ in range(3):
+        performance_view._pad_button(ctx, 0, (100.0, 100.0))
+
+    assert audio_engine_mock.stop_sample.call_args_list == [call(0)] * 3
+    audio_engine_mock.capture_input_timestamp_ns.assert_not_called()
+    audio_engine_mock.play_sample_exclusive.assert_not_called()
 
 
 def test_start_stop_mouse_input_captures_once_for_whole_restart_batch(

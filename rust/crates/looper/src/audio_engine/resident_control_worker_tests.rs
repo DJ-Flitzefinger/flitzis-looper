@@ -1,4 +1,7 @@
 //! Real bounded worker -> command drain -> ACK control proofs with raw WAV oracles.
+#[path = "resident_ready_control_tests.rs"]
+mod resident_ready_control_tests;
+
 use super::*;
 use crate::audio_engine::resident_relocation::{
     ResidentWindowTicket, WindowRequest, prepare_window_with_producer, reconcile,

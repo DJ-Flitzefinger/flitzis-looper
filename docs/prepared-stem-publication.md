@@ -104,13 +104,24 @@ long original files on each performance click.
 C2a distinguishes complete source/set identity from resident PCM. Saved finite
 loops retain full duration/rate/evidence and absolute window offsets. A fresh
 ticket fences the current resident allocation/revision as well as the complete
-source and timing authority. Preparation temporarily reads a bounded complete
+source and timing authority. Stem admission temporarily reads a bounded complete
 source, aligns/hashes the complete stem set, and then retains only matching finite
 fullmix/component views. It does not align complete stems against a cropped
 reference or hide complete PCM behind an accepted ticket.
 
-Storage-only relocation uses the same bounded source preparation lane and native
-ACK. Active adoption requires the identical complete source and already accepted
+Changed storage uses the same bounded source preparation lane and native ACK.
+An unchanged start reuses the exact immutable fullmix/component PCM handles and
+window revision, with matching complete-set identity and acknowledged timing
+projection. It requires the native transaction's callback ACK and guarded launch,
+but neither cold-worker admission nor complete stem reload/alignment/hashing.
+Pending stem publication and mismatched source/set/window remain unavailable.
+Repeated identical pending starts keep that preparation and retain only the
+latest gesture's original timestamp for launch; STOP can revoke that launch.
+Replacement complete-set admission atomically registers its pending owner and
+retires older resident start intents before enqueue becomes visible. A new click
+uses bounded publication retries and fresh ACK, rather than coalescing a retired
+ticket. Queue-full rejection preserves the previous owner and start authority.
+Active adoption requires the identical complete source and already accepted
 complete set token/content, matching fullmix/components and coverage of the actual
 voice trajectory. Source fraction, rate/ramp, filter and native/FIFO state stay
 coherent; old job/voice allocations remain pinned until their final reader retires.
@@ -170,7 +181,13 @@ and PCM renderer against a deterministic offline artifact backend:
 ```
 
 Its injected command producer uses the same native publication core as the
-stream-backed API. It opens no CPAL stream and measures no model quality,
+stream-backed API. The mouse regression also drives real ImGui press/hold/release
+frames through `UiContext`, input mapping, playback and residency controllers,
+then the native transaction ACK, guarded command drain and PCM renderer. It
+compares full-mix and accepted-stem starts while the cold lane is deterministically
+occupied, preserving the original Rust input timestamp. This is a control-path
+regression proof, with no acoustic-delay or general throughput claim.
+It opens no CPAL stream and measures no model quality,
 inference performance or human/device acceptance.
 
 ## Remaining G3 boundaries

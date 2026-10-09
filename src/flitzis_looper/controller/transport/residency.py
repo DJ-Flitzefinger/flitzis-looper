@@ -35,6 +35,7 @@ class _Pending:
     ticket: ResidentWindowTicket | None = None
     waiting_ticket: ResidentWindowTicket | None = None
     waiting_intent: _Intent | None = None
+    waiting_owner: tuple[object, ...] | None = None
     attempts: int = 0
     deadline: float = 0.0
     unconfirmed: bool = False
@@ -182,7 +183,38 @@ class ResidencyController:
             play()
             return
         self.remember(sample_id)
-        self._request(sample_id, start, end, after_ack=prepared_play or (lambda _ticket: play()))
+        launch: Callable[[ResidentWindowTicket], bool | None] = prepared_play or (
+            lambda _ticket: play()
+        )
+        pending = self._pending.get(sample_id)
+        if self._continue_start(sample_id, pending, start, end):
+            assert pending is not None
+            # An identical gesture changes launch time, not preparation ownership.
+            # Keep the existing retry budget/deadline and actual native ACK gate.
+            pending.after_ack = launch
+            self._launch_errors.pop(sample_id, None)
+            if pending.ticket is not None and pending.ticket.publication_status() == "accepted":
+                self._poll_one(sample_id, pending)
+            return
+        self._request(sample_id, start, end, after_ack=launch)
+
+    def _continue_start(
+        self, sample_id: int, pending: _Pending | None, start: float, end: float | None
+    ) -> bool:
+        if pending is None or pending.unconfirmed or pending.position is not None:
+            return False
+        if (
+            pending.start != start
+            or pending.end != end
+            or pending.requested != self._intent(sample_id)
+            or not self._same_owner(sample_id, pending)
+        ):
+            return False
+        ticket = pending.ticket
+        return ticket is None or (
+            ticket.is_current()
+            and ticket.publication_status() in {"preparing", "pending", "adopting", "accepted"}
+        )
 
     def _request(
         self,
@@ -206,11 +238,17 @@ class ResidencyController:
             if previous
             else None
         )
+        waiting_owner = (
+            previous.owner
+            if previous and previous.ticket
+            else previous.waiting_owner
+            if previous
+            else None
+        )
         if (
             waiting is not None
-            and waiting.publication_status() == "accepted"
-            and waiting.is_current()
             and waiting_intent is not None
+            and self._acknowledged_window(sample_id, waiting, waiting_owner)
         ):
             baseline = waiting_intent
         pending = _Pending(
@@ -224,6 +262,7 @@ class ResidencyController:
             seek_only=position is not None and previous is None,
             waiting_ticket=waiting,
             waiting_intent=waiting_intent,
+            waiting_owner=waiting_owner,
             deadline=time.monotonic() + 30.0,
         )
         self._pending[sample_id] = pending
@@ -231,6 +270,25 @@ class ResidencyController:
         if after_ack is not None:
             self._launch_errors.pop(sample_id, None)
         self._submit(sample_id, pending)
+
+    def _acknowledged_window(
+        self, sample_id: int, ticket: ResidentWindowTicket, owner: tuple[object, ...] | None
+    ) -> bool:
+        """Keep actual ACKed geometry after a stem replacement retires launch authority."""
+        if ticket.publication_status() != "accepted":
+            return False
+        if ticket.is_current():
+            return True
+        if owner is None:
+            return False
+        try:
+            return (
+                self._owner(sample_id) == owner
+                and self._audio.loaded_residency(sample_id).get("window_revision")
+                == ticket.window_revision
+            )
+        except RuntimeError, ValueError:
+            return False
 
     def prepare_trigger(
         self, sample_id: int, start: float, end: float | None, play: Callable[[], None]
@@ -269,10 +327,12 @@ class ResidencyController:
                 and pending.ticket.previous_window_revision
                 == pending.waiting_ticket.window_revision
                 and pending.waiting_intent is not None
+                and pending.waiting_owner == pending.owner
             ):
                 pending.previous = pending.waiting_intent
             pending.waiting_ticket = None
             pending.waiting_intent = None
+            pending.waiting_owner = None
             self._errors.pop(sample_id, None)
 
     def _restore(self, sample_id: int, intent: _Intent) -> None:
@@ -380,10 +440,13 @@ class ResidencyController:
             if status in {"preparing", "pending", "adopting"}:
                 self._check_deadline(sample_id, pending, waiting, status)
                 return
-            if status == "accepted" and waiting.is_current() and pending.waiting_intent is not None:
+            if pending.waiting_intent is not None and self._acknowledged_window(
+                sample_id, waiting, pending.waiting_owner
+            ):
                 pending.previous = pending.waiting_intent
             pending.waiting_ticket = None
             pending.waiting_intent = None
+            pending.waiting_owner = None
             if pending.unconfirmed:
                 self._fail(sample_id, pending, "latest intent retired after unconfirmed adoption")
                 return

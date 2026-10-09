@@ -223,15 +223,12 @@ def _pad_button_input(ctx: UiContext, pad_id: int, *, is_loaded: bool) -> None:
     if imgui.is_mouse_clicked(imgui.MouseButton_.middle):
         ctx.ui.select_pad(pad_id)
 
-    if imgui.is_mouse_down(imgui.MouseButton_.left):
-        if not ctx.state.pads.is_pressed(pad_id):
-            if is_loaded:
-                received_at_ns = ctx.input.capture_timestamp_ns()
-                ctx.audio.pads.trigger_pad(pad_id, received_at_ns=received_at_ns)
-            ctx.ui.select_pad(pad_id)
-        ctx.ui.store_pressed_pad_state(pad_id, pressed=True)
-    else:
-        ctx.ui.store_pressed_pad_state(pad_id, pressed=False)
+    if imgui.is_mouse_clicked(imgui.MouseButton_.left):
+        if is_loaded:
+            received_at_ns = ctx.input.capture_timestamp_ns()
+            ctx.audio.pads.trigger_pad(pad_id, received_at_ns=received_at_ns)
+        ctx.ui.select_pad(pad_id)
+    ctx.ui.store_pressed_pad_state(pad_id, pressed=imgui.is_mouse_down(imgui.MouseButton_.left))
 
     if imgui.is_mouse_clicked(imgui.MouseButton_.right):
         ctx.ui.select_pad(pad_id)
@@ -301,6 +298,8 @@ def _pad_button(ctx: UiContext, pad_id: int, size: imgui.ImVec2Like) -> None:
 
         if imgui.is_item_hovered():
             _pad_button_input(ctx, pad_id, is_loaded=is_loaded)
+        else:
+            ctx.ui.store_pressed_pad_state(pad_id, pressed=False)
 
     _pad_button_overlays(ctx, pad_id, is_active=is_active, is_loaded=is_loaded)
 

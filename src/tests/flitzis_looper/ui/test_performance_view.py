@@ -109,10 +109,18 @@ class _StemIndicatorContext:
 
 
 class _Context:
-    __slots__ = ("state",)
+    __slots__ = ("state", "ui")
 
     def __init__(self) -> None:
         self.state = _State()
+        self.ui = _Ui()
+
+
+class _Ui:
+    __slots__ = ()
+
+    def store_pressed_pad_state(self, _pad_id: int, *, pressed: bool) -> None:
+        assert not pressed
 
 
 @contextmanager

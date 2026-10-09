@@ -7,17 +7,26 @@ import wave
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
 
+from imgui_bundle import imgui
+
+from flitzis_looper.controller import AppController
+from flitzis_looper.controller.loader import LoaderController
+from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.controller.stem_cache import verified_stem_cache_available
 from flitzis_looper.controller.stem_generation import StemGenerationResult
 from flitzis_looper.controller.stems import StemController
+from flitzis_looper.controller.transport import TransportController
+from flitzis_looper.input_mapping import InputMappingController
 from flitzis_looper.models import ProjectState, SessionState
+from flitzis_looper.ui.context import UiContext
+from flitzis_looper.ui.render import performance_view
 
 if TYPE_CHECKING:
     from flitzis_looper.controller.stem_generation import (
         StemGenerationRequest,
         StemProgressCallback,
     )
-    from flitzis_looper_audio import AudioEngine, PreparedSourceTicket
+    from flitzis_looper_audio import AudioEngine, PreparedSourceTicket, ResidentWindowTicket
 
 
 class NativeProducerBridge(Protocol):
@@ -29,10 +38,33 @@ class NativeProducerBridge(Protocol):
 
     def loaded_sample_shape(self, sample_id: int) -> tuple[int, int, int]: ...
 
+    def prepare_resident_control(
+        self,
+        sample_id: int,
+        *,
+        start_s: float | None,
+        end_s: float | None,
+        position_s: float | None,
+        key_lock: bool | None,
+    ) -> ResidentWindowTicket: ...
+
+    def play_resident_control(
+        self,
+        ticket: ResidentWindowTicket,
+        *,
+        exclusive: bool,
+        received_at_ns: int | None,
+    ) -> bool: ...
+
+    def cancel_pad_launches(self, sample_id: int) -> bool: ...
+
+    def stop_sample(self, sample_id: int) -> None: ...
+
 
 class Audio:
     def __init__(self, bridge: NativeProducerBridge) -> None:
         self.bridge = bridge
+        self.timestamps: list[int] = []
 
     def __getattr__(self, name: str) -> object:
         return getattr(self.bridge.engine, name)
@@ -44,6 +76,50 @@ class Audio:
 
     def loaded_sample_shape(self, sample_id: int) -> tuple[int, int, int]:
         return self.bridge.loaded_sample_shape(sample_id)
+
+    def output_sample_rate(self) -> int:
+        return self.loaded_sample_shape(0)[0]
+
+    def capture_input_timestamp_ns(self) -> int:
+        timestamp = self.bridge.engine.capture_input_timestamp_ns()
+        self.timestamps.append(timestamp)
+        return timestamp
+
+    def prepare_resident_control(
+        self,
+        sample_id: int,
+        *,
+        start_s: float | None,
+        end_s: float | None,
+        position_s: float | None,
+        key_lock: bool | None,
+    ) -> ResidentWindowTicket:
+        return self.bridge.prepare_resident_control(
+            sample_id,
+            start_s=start_s,
+            end_s=end_s,
+            position_s=position_s,
+            key_lock=key_lock,
+        )
+
+    def play_resident_control(
+        self,
+        ticket: ResidentWindowTicket,
+        *,
+        exclusive: bool,
+        received_at_ns: int | None,
+    ) -> bool:
+        return self.bridge.play_resident_control(
+            ticket,
+            exclusive=exclusive,
+            received_at_ns=received_at_ns,
+        )
+
+    def cancel_pad_launches(self, sample_id: int) -> bool:
+        return self.bridge.cancel_pad_launches(sample_id)
+
+    def stop_sample(self, sample_id: int) -> None:
+        self.bridge.stop_sample(sample_id)
 
 
 class OfflineFixtureBackend:
@@ -100,6 +176,66 @@ class Probe:
             stem_backend=self.backend,
             stem_task_runner=lambda work: work(),
         )
+
+    def mouse_setup(self) -> None:
+        """Compose the real controller/facade without app startup or a device."""
+        self.app = AppController.__new__(AppController)
+        self.app._project = self.project
+        self.app._session = self.session
+        self.app._audio = self.audio
+        self.app._persistence = ProjectPersistence(self.project)
+        self.app.transport = TransportController(self.project, self.session, self.audio)
+        self.app.stems = self.controller
+        self.app.loader = LoaderController(
+            self.project, self.session, self.audio, lambda _pad: None
+        )
+        self.app.input_mapping = InputMappingController(self.app)
+        self.project.pad_loop_auto[0] = False
+        self.context = UiContext(self.app)
+        self.mouse_context = imgui.create_context()
+        imgui.set_current_context(self.mouse_context)
+        io = imgui.get_io()
+        io.set_ini_filename(None)
+        io.display_size = imgui.ImVec2(400, 300)
+        io.delta_time = 1 / 60
+        io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
+        self.inside = (60.0, 80.0)
+        self.mouse_frame(inside=False, down=False)
+
+    def mouse_frame(self, *, inside: bool, down: bool) -> int:
+        """Feed actual ImGui mouse events; UI delta_time is not a timing proof."""
+        imgui.set_current_context(self.mouse_context)
+        io = imgui.get_io()
+        io.add_mouse_pos_event(*(self.inside if inside else (350.0, 250.0)))
+        io.add_mouse_button_event(imgui.MouseButton_.left, down)
+        imgui.new_frame()
+        imgui.set_next_window_pos((20, 20))
+        imgui.set_next_window_size((200, 220))
+        imgui.begin("native mouse trigger proof")
+        performance_view._pad_button(self.context, 0, (100, 100))
+        lo, hi = imgui.get_item_rect_min(), imgui.get_item_rect_max()
+        self.inside = ((lo.x + hi.x) / 2, (lo.y + hi.y) / 2)
+        imgui.end()
+        imgui.render()
+        timestamps = cast("Audio", self.audio).timestamps
+        return timestamps[-1] if timestamps else 0
+
+    def mouse_poll(self) -> None:
+        self.app.transport.residency.poll()
+
+    def mouse_capture_count(self) -> int:
+        return len(cast("Audio", self.audio).timestamps)
+
+    def mouse_status(self) -> str:
+        return repr(self.app.transport.residency.status(0))
+
+    def mouse_stop(self) -> None:
+        self.app.transport.playback.stop_pad(0)
+
+    def mouse_close(self) -> None:
+        imgui.destroy_context(self.mouse_context)
+        self.app.loader.shut_down()
+        self.app.loader._assets.release_saved_assignments()
 
     def begin(self) -> str:
         assert self.controller.generate_stems_async(0)

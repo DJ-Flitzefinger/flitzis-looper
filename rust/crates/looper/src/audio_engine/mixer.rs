@@ -959,7 +959,10 @@ impl RtMixer {
             && self.sample_bank[id].as_ref().is_some_and(|old| {
                 old.same_source(sample)
                     && old.window_revision() == expected_window_revision
-                    && sample.window_revision() > expected_window_revision
+                    && (sample.window_revision() > expected_window_revision
+                        || (intent.seek_position_s.is_none()
+                            && old.same_window(sample)
+                            && Arc::ptr_eq(&old.samples, &sample.samples)))
                     && loop_region.is_some_and(|region| {
                         resident_read_context_available(
                             sample,
@@ -979,6 +982,12 @@ impl RtMixer {
                 (None, None) => true,
                 (Some(old), Some(next)) => {
                     Arc::ptr_eq(&old.complete_set_identity, &next.complete_set_identity)
+                        && (sample.window_revision() > expected_window_revision
+                            || old
+                                .stems
+                                .iter()
+                                .zip(&next.stems)
+                                .all(|(old, next)| Arc::ptr_eq(&old.samples, &next.samples)))
                         && next.accepted_timing == self.pad_accepted_timing[id]
                         && prepared_stem_set_matches_sample(
                             next,

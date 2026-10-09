@@ -62,6 +62,125 @@ def resident(controller: AppController, audio: Mock) -> Ticket:
     return ticket
 
 
+def test_repeated_starts_preserve_failed_admission_budget_and_deadline(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    resident(controller, audio_engine_mock)
+    audio_engine_mock.prepare_resident_control.side_effect = RuntimeError("cold source queue full")
+    residency = controller.transport.residency
+    controller.transport.playback.trigger_pad(0, received_at_ns=1)
+    pending = residency._pending[0]
+    deadline = pending.deadline
+    for attempt in range(1, 9):
+        for gesture in range(10):
+            controller.transport.playback.trigger_pad(0, received_at_ns=attempt * 10 + gesture)
+            assert residency._pending[0] is pending
+            assert pending.attempts == attempt
+            assert pending.deadline == deadline
+        residency.poll()
+    assert audio_engine_mock.prepare_resident_control.call_count == 8
+    assert residency.status(0) == (None, "resident admission retry limit reached")
+    audio_engine_mock.play_resident_control.assert_not_called()
+
+
+def test_retired_pending_ticket_requires_fresh_ack_for_latest_start(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    old = resident(controller, audio_engine_mock)
+    new = Ticket()
+    audio_engine_mock.prepare_resident_control.side_effect = [old, new]
+    controller.transport.playback.trigger_pad(0, received_at_ns=1)
+    old.current = False
+    controller.transport.playback.trigger_pad(0, received_at_ns=2)
+    assert audio_engine_mock.prepare_resident_control.call_count == 2
+    old.status = "accepted"
+    controller.transport.residency.poll()
+    audio_engine_mock.play_resident_control.assert_not_called()
+    new.status = "accepted"
+    controller.transport.residency.poll()
+    audio_engine_mock.play_resident_control.assert_called_once_with(
+        new, exclusive=True, received_at_ns=2
+    )
+
+
+@pytest.mark.parametrize("ack_before_click", [False, True])
+def test_retired_launch_preserves_actual_ack_geometry_after_failed_replacement(
+    controller: AppController, audio_engine_mock: Mock, *, ack_before_click: bool
+) -> None:
+    old = resident(controller, audio_engine_mock)
+    controller.transport.loop.set_end(0, 7.0)
+    old.current = False
+    if ack_before_click:
+        old.status = "accepted"
+    audio_engine_mock.loaded_residency.return_value["window_revision"] = old.window_revision
+    audio_engine_mock.prepare_resident_control.side_effect = RuntimeError(
+        "resident stem publication is pending"
+    )
+    residency = controller.transport.residency
+    controller.transport.playback.trigger_pad(0, received_at_ns=2)
+    old.status = "accepted"
+    residency.poll()
+    residency._pending[0].deadline = 0.0
+    residency.poll()
+    assert residency.status(0) == (None, "resident admission retry limit reached")
+    assert controller.project.pad_loop_end_s[0] == 7.0
+    audio_engine_mock.play_resident_control.assert_not_called()
+
+
+@pytest.mark.parametrize("changed_owner", ["source", "authority", "window"])
+def test_retired_launch_ack_cannot_project_geometry_into_another_native_owner(
+    controller: AppController, audio_engine_mock: Mock, changed_owner: str
+) -> None:
+    ticket = resident(controller, audio_engine_mock)
+    residency = controller.transport.residency
+    owner = residency._owner(0)
+    ticket.status, ticket.current = "accepted", False
+    audio_engine_mock.loaded_residency.return_value["window_revision"] = ticket.window_revision
+    if changed_owner == "source":
+        audio_engine_mock.loaded_residency.return_value["source_identity"] = 456
+    elif changed_owner == "authority":
+        audio_engine_mock.current_input_runtime_pad_binding.return_value = (
+            FakeInputRuntimePadBinding(authority_revision=2)
+        )
+    else:
+        audio_engine_mock.loaded_residency.return_value["window_revision"] += 1
+    assert not residency._acknowledged_window(
+        0, audio_engine_mock.prepare_resident_control.return_value, owner
+    )
+
+
+def test_new_click_after_unconfirmed_adoption_requires_a_fresh_ticket_and_ack(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    old = resident(controller, audio_engine_mock)
+    fresh = Ticket()
+    audio_engine_mock.prepare_resident_control.side_effect = [
+        old,
+        RuntimeError("resident native adoption is in progress"),
+        fresh,
+    ]
+    residency = controller.transport.residency
+    controller.transport.playback.trigger_pad(0, received_at_ns=1)
+    original = residency._pending[0]
+    old.status = "adopting"
+    original.deadline = 0.0
+    residency.poll()
+    assert original.unconfirmed
+    assert original.after_ack is None
+    controller.transport.playback.trigger_pad(0, received_at_ns=2)
+    assert residency._pending[0] is not original
+    old.status = "accepted"
+    residency.poll()
+    assert residency._pending[0].ticket is not None
+    assert residency._pending[0].ticket is not original.ticket
+    audio_engine_mock.play_resident_control.assert_not_called()
+    fresh.status = "accepted"
+    residency.poll()
+    audio_engine_mock.play_resident_control.assert_called_once_with(
+        fresh, exclusive=True, received_at_ns=2
+    )
+
+
 def test_loop_requested_and_effective_separate_until_matching_ack(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
@@ -234,6 +353,69 @@ def test_trigger_preserves_input_timestamp_and_launches_only_after_current_ack(
         ticket, exclusive=True, received_at_ns=12345
     )
     audio_engine_mock.play_sample_exclusive.assert_not_called()
+
+
+@pytest.mark.parametrize("status", ["preparing", "pending", "adopting"])
+def test_repeated_identical_trigger_keeps_preparation_and_latest_input_timestamp(
+    controller: AppController, audio_engine_mock: Mock, status: str
+) -> None:
+    ticket = resident(controller, audio_engine_mock)
+    ticket.status = status
+    controller.transport.playback.trigger_pad(0, received_at_ns=123)
+    pending = controller.transport.residency._pending[0]
+    for timestamp in range(124, 144):
+        controller.transport.playback.trigger_pad(0, received_at_ns=timestamp)
+    assert controller.transport.residency._pending[0] is pending
+    assert audio_engine_mock.prepare_resident_control.call_count == 1
+    audio_engine_mock.play_resident_control.assert_not_called()
+    ticket.status = "accepted"
+    controller.transport.residency.poll()
+    audio_engine_mock.play_resident_control.assert_called_once_with(
+        ticket, exclusive=True, received_at_ns=143
+    )
+
+
+def test_trigger_observes_already_received_ack_without_waiting_for_another_frame(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    ticket = resident(controller, audio_engine_mock)
+    controller.transport.playback.trigger_pad(0, received_at_ns=123)
+    ticket.status = "accepted"
+    controller.transport.playback.trigger_pad(0, received_at_ns=456)
+    assert audio_engine_mock.prepare_resident_control.call_count == 1
+    audio_engine_mock.play_resident_control.assert_called_once_with(
+        ticket, exclusive=True, received_at_ns=456
+    )
+
+
+@pytest.mark.parametrize("change", ["region", "key-lock", "source", "authority"])
+def test_changed_trigger_context_still_admits_new_preparation(
+    controller: AppController, audio_engine_mock: Mock, change: str
+) -> None:
+    old = resident(controller, audio_engine_mock)
+    controller.transport.playback.trigger_pad(0, received_at_ns=123)
+    if change == "region":
+        controller.project.pad_loop_end_s[0] = 5.0
+    elif change == "key-lock":
+        controller.project.pad_key_lock[0] = True
+    elif change == "source":
+        audio_engine_mock.loaded_residency.return_value["source_identity"] = 456
+    else:
+        audio_engine_mock.current_input_runtime_pad_binding.return_value = (
+            FakeInputRuntimePadBinding(authority_revision=2)
+        )
+    new = Ticket()
+    audio_engine_mock.prepare_resident_control.return_value = new
+    controller.transport.playback.trigger_pad(0, received_at_ns=456)
+    assert audio_engine_mock.prepare_resident_control.call_count == 2
+    old.status = "accepted"
+    controller.transport.residency.poll()
+    audio_engine_mock.play_resident_control.assert_not_called()
+    new.status = "accepted"
+    controller.transport.residency.poll()
+    audio_engine_mock.play_resident_control.assert_called_once_with(
+        new, exclusive=True, received_at_ns=456
+    )
 
 
 def test_shutdown_invalidates_pending_launch_without_reopening_admission(

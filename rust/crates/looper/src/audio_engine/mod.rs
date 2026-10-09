@@ -74,7 +74,9 @@ mod project_assets;
 pub(crate) mod resident_relocation;
 pub(crate) mod resident_seek;
 pub use prepared_source::PreparedSourceTicket;
-use prepared_source::{enqueue_current_prepared_stems, next_epoch, validate_prepared_ticket};
+use prepared_source::{
+    enqueue_current_prepared_stems_with_owner, next_epoch, validate_prepared_ticket,
+};
 pub use project_assets::ProjectAssetLease;
 pub(crate) mod rubberband_backend;
 mod sample_loader;
@@ -689,18 +691,14 @@ impl AudioEngine {
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
 
         // Source mutation, timing publication and enqueue all serialize here.
-        let retained_stems = stems.clone();
-        let result =
-            enqueue_current_prepared_stems(self, producer, source_ticket, &source_version, stems);
-        if result.is_ok() {
-            self.record_stems(
-                id,
-                retained_stems,
-                source_version,
-                cache_dir.into(),
-                generation_path,
-            )?;
-        }
+        let result = enqueue_current_prepared_stems_with_owner(
+            self,
+            producer,
+            source_ticket,
+            &source_version,
+            stems,
+            (cache_dir.into(), generation_path),
+        );
         drop(generation_lease);
         result
     }

@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::audio_engine::PreparedSourceTicket;
+use crate::audio_engine::resident_relocation::{ResidentWindowTicket, WindowRequest};
 use crate::messages::StemMixMode;
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyModule};
@@ -16,6 +17,9 @@ const FRAMES: usize = 4_096;
 const VOCALS_AMPLITUDE: f32 = 2_048.0 / 32_767.0;
 const TEST_NAME: &str = "audio_engine::cold_residency_tests::stem_publication_tests::worker_generation_publishes_native_stems_and_restores_with_fresh_ticket";
 const CHILD_MARKER: &str = "FLITZI_STEM_PUBLICATION_TEST_CHILD";
+
+#[path = "stem_mouse_trigger_tests.rs"]
+mod mouse_triggers;
 
 #[pyclass]
 struct NativeBridge {
@@ -49,6 +53,67 @@ impl NativeBridge {
         let cache = engine.sample_cache.lock().unwrap();
         let sample = cache[id].as_ref().unwrap();
         Ok((RATE, sample.channels, sample.frame_count()))
+    }
+
+    #[pyo3(signature = (id, start_s=None, end_s=None, position_s=None, key_lock=None))]
+    fn prepare_resident_control(
+        &self,
+        py: Python<'_>,
+        id: usize,
+        start_s: Option<f64>,
+        end_s: Option<f64>,
+        position_s: Option<f64>,
+        key_lock: Option<bool>,
+    ) -> PyResult<ResidentWindowTicket> {
+        super::super::resident_relocation::prepare_window_with_producer(
+            &self.engine.borrow(py),
+            id,
+            WindowRequest {
+                loop_region: start_s.map(|start| (start, end_s)),
+                seek_position_s: position_s,
+                key_lock,
+                ..WindowRequest::default()
+            },
+            self.producer.clone(),
+        )
+    }
+
+    #[pyo3(signature = (ticket, exclusive=false, received_at_ns=None))]
+    fn play_resident_control(
+        &self,
+        py: Python<'_>,
+        ticket: &ResidentWindowTicket,
+        exclusive: bool,
+        received_at_ns: Option<u64>,
+    ) -> PyResult<bool> {
+        let engine = self.engine.borrow(py);
+        let now = engine.capture_input_timestamp_ns();
+        super::super::resident_relocation::launch_with_producer(
+            &engine,
+            ticket,
+            exclusive,
+            super::super::timing::validated_input_timestamp(received_at_ns, now).unwrap_or(now),
+            &self.producer,
+        )
+    }
+
+    fn cancel_pad_launches(&self, py: Python<'_>, id: usize) -> PyResult<bool> {
+        super::super::input_runtime_binding::cancel_launches_with_producer(
+            &self.engine.borrow(py).input_runtime_ownership,
+            Some(&self.producer),
+            Some(id),
+        )
+        .map(|targets| !targets.is_empty())
+    }
+
+    fn stop_sample(&self, py: Python<'_>, id: usize) -> PyResult<()> {
+        super::super::input_runtime_binding::enqueue_stop_with_producer(
+            &self.engine.borrow(py).input_runtime_ownership,
+            &mut self.producer.lock().unwrap(),
+            Some(id),
+        )
+        .then_some(())
+        .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("stop queue is full"))
     }
 }
 
@@ -85,12 +150,24 @@ fn render(callback: &mut Callback, expected: f32) {
 
 #[test]
 fn worker_generation_publishes_native_stems_and_restores_with_fresh_ticket() {
-    if std::env::var_os(CHILD_MARKER).is_none() {
+    run_publication_and_mouse_proof(TEST_NAME, false);
+}
+
+#[test]
+fn accepted_stem_mouse_start_uses_native_ack_and_render_under_cold_pressure() {
+    run_publication_and_mouse_proof(
+        "audio_engine::cold_residency_tests::stem_publication_tests::accepted_stem_mouse_start_uses_native_ack_and_render_under_cold_pressure",
+        true,
+    );
+}
+
+fn run_publication_and_mouse_proof(test_name: &str, accepted_only: bool) {
+    if std::env::var(CHILD_MARKER).as_deref() != Ok(test_name) {
         // Python controllers use project-relative paths. A fresh test process
         // isolates their cwd and embedded interpreter from concurrent Rust tests.
         let output = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", TEST_NAME, "--nocapture", "--test-threads=1"])
-            .env(CHILD_MARKER, "1")
+            .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+            .env(CHILD_MARKER, test_name)
             .output()
             .unwrap();
         assert!(
@@ -187,6 +264,16 @@ fn worker_generation_publishes_native_stems_and_restores_with_fresh_ticket() {
             .unwrap()
             .unbind()
     });
+    if !accepted_only {
+        mouse_triggers::prove_ready_mouse_triggers(
+            &engine,
+            &probe,
+            &mut callback,
+            &producer,
+            &mut consumer,
+            None,
+        );
+    }
     let version: String = Python::attach(|py| {
         probe
             .call_method0(py, "begin")
@@ -196,6 +283,14 @@ fn worker_generation_publishes_native_stems_and_restores_with_fresh_ticket() {
     });
     assert_eq!(callback.drain(&mut consumer), 1);
     call(&probe, "accepted");
+    mouse_triggers::prove_ready_mouse_triggers(
+        &engine,
+        &probe,
+        &mut callback,
+        &producer,
+        &mut consumer,
+        Some(&version),
+    );
     let version_hash = super::super::stem_cache::source_version_hash(&version);
     {
         let mut producer = producer.lock().unwrap();

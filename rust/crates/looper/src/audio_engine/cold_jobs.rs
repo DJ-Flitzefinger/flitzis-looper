@@ -95,6 +95,21 @@ impl ColdJobs {
         Ok(lane)
     }
 
+    /// Worker-free control admission shares the lane's shutdown fence without
+    /// reserving one of its PCM preparation jobs. Callers retain their native
+    /// request/producer/ownership fences until their command is enqueued.
+    pub(super) fn ensure_open(&self) -> Result<(), String> {
+        let state = self
+            .shared
+            .state
+            .lock()
+            .map_err(|_| "cold admission lock poisoned")?;
+        if state.stopped {
+            return Err("cold source lane stopped".into());
+        }
+        Ok(())
+    }
+
     pub(super) fn reserve(&self) -> Result<Reservation, String> {
         let mut state = self
             .shared

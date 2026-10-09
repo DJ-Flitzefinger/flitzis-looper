@@ -196,6 +196,41 @@ Admission retries SHALL be finite; unload/shutdown or newer source/timing intent
 SHALL revoke older continuations. A claimed native tail SHALL complete or report
 unconfirmed state before a dependent intent is treated as adopted.
 
+Unchanged start context SHALL reuse matching immutable resident full-mix and
+accepted component PCM without cold-worker admission or complete stem file
+reload/alignment/hashing, while still requiring matching native transaction ACK and
+guarded launch. Repeated starts for the same pending source owner and requested
+context SHALL retain that transaction, bounded retry/deadline state and the latest
+gesture's original input timestamp without cancelling or restarting preparation.
+
+#### Scenario: An unchanged ready stem start meets a full cold lane
+- **GIVEN** a pad owns an acknowledged immutable source/window and matching accepted complete StemSet
+- **AND** both cold workers and all queued/reserved job capacity are occupied
+- **WHEN** UI or fallback control requests a start with the same resident range and DSP context
+- **THEN** the transaction reuses the same full-mix/component PCM and window revision without cold admission or stem reload/alignment/hashing
+- **AND** playback waits for that transaction's actual native ACK and retains the original input timestamp
+- **AND** queued or scheduled execution rechecks source/window, request, timing authority, latest intent and launch cancellation before playback or exclusive stops
+
+#### Scenario: Identical starts arrive before preparation is acknowledged
+- **WHEN** repeated start gestures request the same pending source owner and loop/Key Lock context before native ACK
+- **THEN** the existing preparation and ticket remain current without cancellation, restart or supersession
+- **AND** only the latest waiting launch action and its original input timestamp replace the prior launch intent
+- **AND** retry count and deadline remain bounded without resetting on each gesture
+- **AND** matching native ACK and current guarded ownership are still required, and STOP revokes the waiting launch
+
+#### Scenario: A start requires different storage or processing context
+- **WHEN** a start requires a different resident range or DSP context, or a replacement source retires the old owner
+- **THEN** a prior ready ticket cannot authorize the changed request
+- **AND** the new source/context passes applicable load or bounded preparation and native ACK before guarded launch
+- **AND** required preparation keeps its capacity-before-supersession admission and preserves previous effective audio until adoption
+
+#### Scenario: A complete stem replacement retires a waiting start
+- **WHEN** a replacement complete StemSet is admitted while an older resident start waits for ACK or launch
+- **THEN** native pending-owner registration and retirement of the old start authority occur under the source/producer/ownership fence before publication is enqueued
+- **AND** a later click cannot coalesce the retired ticket and waits through bounded publication retries for fresh matching ACK
+- **AND** reconciliation preserves actual adopted geometry without restoring the replaced component owner
+- **AND** rejected queue-full admission preserves the previous owner and start authority, while mode/mask edits alone do not retire readiness
+
 #### Scenario: Queue pressure while a latest edit waits for a claimed predecessor
 - **WHEN** bounded admission cannot prepare the latest edit before its retry limit or deadline
 - **THEN** previous acknowledged audio and source/timing/stem ownership remain valid

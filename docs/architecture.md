@@ -305,6 +305,15 @@ admitted full-track fallback. Complete waveform/analysis leases and source-bound
 loop/ALL/seek/Key Lock preparation share guarded native adoption. The controller
 keeps requested project intent separate from effective audio and routes UI/MIDI
 fallback through one bounded readiness behavior.
+Starts for an identical immutable source/window and DSP context reuse the same
+full-mix and accepted-stem PCM handles without cold-lane admission or stem-file
+reload. The existing native transaction still requires callback ACK and current
+source/window/timing/intent guards before launch; changed storage/context uses
+bounded preparation. Repeated identical pending starts retain their preparation,
+retry count and deadline, replacing only the waiting launch with the latest
+gesture's original timestamp. STOP revokes that launch through the same native
+admission fence. See [prepared publication](prepared-stem-publication.md).
+
 [C3 measurements](pcm-cache-measurements.md) report current cold/warm readiness,
 resource costs, exceptions and lifecycle with paired finite/full results.
 Two fixed workers and 32 queued reservations

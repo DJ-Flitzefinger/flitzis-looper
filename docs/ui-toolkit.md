@@ -386,6 +386,15 @@ Rules:
   after an accepted keyboard/mouse input condition. Pass `received_at_ns` through
   action facades/controllers before loop preparation; global restart batches
   reuse one captured value. Waveform restart uses the same timestamp path.
+- Performance pads trigger on the left-button down edge (`is_mouse_clicked`),
+  not a held-button/per-pad latch. Holding or dragging into a pad does not create
+  another trigger, and releasing outside the pad cannot suppress the next click.
+  The pressed projection clears when the rendered pad is no longer hovered.
+  Right-button hold retains the existing per-frame stop behavior.
+- Identical pending starts share the existing residency transaction and replace
+  only its waiting launch with the latest original input timestamp. Unchanged
+  resident PCM still needs native ACK and guarded launch, but no cold-worker or
+  stem-file preparation; readiness belongs to the shared controller/native path.
 - MIDI fallback preserves the event's original Rust timestamp. Never recapture
   a delayed event or mix Python monotonic time with the Rust engine epoch.
   Timestamp metadata stays transient and current launch behavior is unchanged.

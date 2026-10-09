@@ -392,6 +392,16 @@ handles, loop and processing state remain valid until actual native ACK. The
 callback reserves retirement/feedback capacity before claiming and changing
 state. Preparation, large owners and file readers retire off-thread.
 
+When a start requests the same immutable source, exact resident range and DSP
+context, the transaction reuses the existing full-mix PCM and matching accepted
+StemSet handles at the same window revision. It consumes no cold-worker slot and
+does not reload, align or hash stem files. It still queues the native transaction
+and waits for its actual callback ACK before guarded launch. Equal window
+revisions are admitted only with identical full-mix/component PCM ownership;
+source, request, authority, accepted timing and latest intent guards remain in
+force. A different required range or DSP context uses bounded preparation before
+adoption, and an old source's ticket cannot authorize a replacement source.
+
 Normal finite loop edits use the exact proved physical tap interval. ALL admits
 complete playback. Nonresident seeks admit complete context so physical intro
 and tail continue to the existing loop/full-source boundary. Source-end clamping
@@ -422,6 +432,17 @@ deadline; a claimed predecessor is observed before a newer attempt. A claimed
 native tail cannot be rolled back. A deadline exposes unconfirmed ownership and
 revokes its waiting launch until actual completion is observed. Freshness requires actual source generation,
 authority, unique latest intent and adopted window, rather than ACK alone.
+
+Repeated starts for the same pending source owner and requested loop/Key Lock
+context retain that preparation and replace only its waiting launch action with
+the latest gesture's original input timestamp. They do not cancel/restart the
+work, supersede its ticket or reset its retry count/deadline. Changed owner or
+intent uses the existing replacement path; STOP still revokes the waiting launch.
+Admission of a replacement complete StemSet retires older resident start intents
+under the same native source/producer/ownership fence. A subsequent click waits
+through pending stem publication and obtains a fresh matching transaction; an
+older ACK cannot authorize it or restore the replaced component owner. Mode/mask
+edits do not replace the complete set or retire this readiness.
 
 Prepared UI starts retain their original input timestamp. MIDI fallback uses
 the same preparation and then refreshes its native current-source guard before

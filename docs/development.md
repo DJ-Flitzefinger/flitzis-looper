@@ -526,8 +526,19 @@ control transactions run without an app or device:
 .\scripts\run-rust-tests.ps1 -CargoArgs @('resident_control_worker_tests')
 .\scripts\run-rust-tests.ps1 -CargoArgs @('resident_transaction_parity_tests')
 .\scripts\run-rust-tests.ps1 -CargoArgs @('resident_long_cycle_tests')
-uv run pytest src/tests/flitzis_looper/controller/transport/test_residency.py
+.\scripts\run-rust-tests.ps1 -CargoArgs @('stem_publication_tests')
+uv run pytest src/tests/flitzis_looper/controller/transport/test_residency.py src/tests/flitzis_looper/ui/test_input_timing.py
 ```
+
+The ready-trigger regressions hold both cold workers and all queue reservations
+deterministically, then drive real ImGui mouse frames through the shared
+controller, native ACK/guarded launch and PCM renderer for full mix and accepted
+stems. Identical resident handles require ACK but no cold-lane admission or
+stem reload; changed windows/context still require preparation. Repeated identical
+pending starts retain their preparation and latest original input timestamp.
+Controller/input unit tests separately check coalescing, outside-pad release and
+bounded retries. These checks establish the input/readiness contract without
+claiming acoustic latency, general resource performance or human/device acceptance.
 
 Repeat native checks with `--release` and install the matching debug/release
 extension before the Python suite, serially. The long-cycle test compares the

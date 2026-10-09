@@ -620,7 +620,7 @@ fn finite_replacement_waits_for_actual_native_retirement_feedback_and_ack() {
 }
 
 fn exercise_productive_relocation(directory: &Path, with_stems: bool) {
-    use super::prepared_source::enqueue_current_prepared_stems;
+    use super::prepared_source::enqueue_current_prepared_stems_with_owner;
     use super::resident_relocation::{reconcile, relocate_with_producer};
     use super::stem_cache::{
         STEM_FILE_NAMES, prepare_stem_buffers_from_cache, source_version_hash,
@@ -726,10 +726,15 @@ fn exercise_productive_relocation(directory: &Path, with_stems: bool) {
             .project_assets
             .retain_stems(generation.clone(), &set)
             .unwrap();
-        enqueue_current_prepared_stems(&engine, &producer, &ticket, &version, set.clone()).unwrap();
-        engine
-            .record_stems(0, set, version.clone(), cache_dir, generation)
-            .unwrap();
+        enqueue_current_prepared_stems_with_owner(
+            &engine,
+            &producer,
+            &ticket,
+            &version,
+            set,
+            (cache_dir, generation),
+        )
+        .unwrap();
         assert_eq!(ticket.publication_status(), "pending");
         assert_eq!(callback.drain(&mut consumer), 1);
         assert_eq!(ticket.publication_status(), "accepted");

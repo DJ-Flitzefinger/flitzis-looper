@@ -340,27 +340,47 @@ impl ResidentWindowTicket {
     }
 }
 
-impl AudioEngine {
-    pub(super) fn record_stems(
-        &self,
-        id: usize,
-        set: PreparedStemSet,
-        source_version: String,
-        cache_dir: PathBuf,
-        generation_path: PathBuf,
-    ) -> PyResult<()> {
-        let mut owners = self
-            .resident_stem_cache
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("resident stem ownership lock poisoned"))?;
-        owners[id].pending = Some(StemOwner {
-            set,
-            source_version,
+/// Called only after source/ticket validation and reserved producer capacity.
+/// Register the pending generation and retire old resident intent before the
+/// publication can be observed. Only fixed epoch guards enter queued launches.
+pub(super) fn admit_stem_publication(
+    engine: &AudioEngine,
+    id: usize,
+    set: &PreparedStemSet,
+    source_version: &str,
+    registration: Option<(PathBuf, PathBuf)>,
+) -> PyResult<()> {
+    let mut owners = engine
+        .resident_stem_cache
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("resident stem ownership lock poisoned"))?;
+    let owner = &mut owners[id];
+    let next_intent =
+        super::prepared_source::next_epoch(&owner.intent_epoch).map_err(PyRuntimeError::new_err)?;
+    set.publication
+        .mark_pending()
+        .map_err(PyValueError::new_err)?;
+    if let Some(pending) = &owner.relocation
+        && pending.publication.cancel_unclaimed()
+    {
+        pending.state.fail(
+            "resident preparation superseded by stem publication".into(),
+            true,
+        );
+        engine
+            .input_runtime_ownership
+            .finish_resident_control(id, pending.publication.expected);
+    }
+    owner.intent_epoch.store(next_intent, Ordering::Release);
+    if let Some((cache_dir, generation_path)) = registration {
+        owner.pending = Some(StemOwner {
+            set: set.clone(),
+            source_version: source_version.to_owned(),
             cache_dir,
             generation_path,
         });
-        Ok(())
     }
+    Ok(())
 }
 
 pub(super) fn reconcile(engine: &AudioEngine) -> PyResult<()> {
@@ -440,6 +460,10 @@ pub(super) fn reconcile_under_request_lock(engine: &AudioEngine) -> PyResult<()>
                     cache[id] = pending.sample;
                     if let Some(accepted) = &mut owner.accepted
                         && let Some(stems) = pending.stems
+                        && Arc::ptr_eq(
+                            &accepted.set.complete_set_identity,
+                            &stems.complete_set_identity,
+                        )
                     {
                         accepted.set = stems;
                     }
@@ -794,10 +818,6 @@ pub(super) fn prepare_window_with_producer(
     let binding = input_runtime_binding::capture(engine, id)?
         .filter(|current| (seek_only || current.available()) && current.current())
         .ok_or_else(|| PyValueError::new_err("current complete source/timing unavailable"))?;
-    let reservation = engine
-        .cold_jobs
-        .reserve()
-        .map_err(PyRuntimeError::new_err)?;
     if producer
         .lock()
         .map_err(|_| PyRuntimeError::new_err("producer lock poisoned"))?
@@ -820,10 +840,6 @@ pub(super) fn prepare_window_with_producer(
         .residency
         .as_ref()
         .ok_or_else(|| PyValueError::new_err("complete cache residency is unavailable"))?;
-    let revision = old
-        .window_revision()
-        .checked_add(1)
-        .ok_or_else(|| PyValueError::new_err("window revision exhausted"))?;
     let rate = binding.binding.sample_rate_hz;
     let intent = ResidentControlIntent {
         loop_region: request.loop_region.map(|(start, end)| {
@@ -895,10 +911,67 @@ pub(super) fn prepare_window_with_producer(
             "resident stem publication is pending",
         ));
     }
-    if !seek_only {
-        admitted_window_peak(&old, start, end, owners[id].accepted.is_some())
+    // Identical storage reuses already owned immutable PCM. It still queues the
+    // existing native transaction and requires its real callback ACK before launch.
+    // No seek capture or changed context can enter this worker-free branch.
+    let reuse_window = request.seek_position_s.is_none()
+        && start == old.resident_start()
+        && end == old.resident_end()
+        && context == view.context
+        && binding.current()
+        && old.resident_binding() == binding.binding.resident;
+    let ready_stems = if reuse_window {
+        owners[id]
+            .accepted
+            .as_ref()
+            .map(|owner| {
+                let mut set = owner.set.clone();
+                // Accepted source PCM follows the actual acknowledged projection;
+                // native timing adoption may have refreshed it since owner capture.
+                set.accepted_timing = binding.binding.accepted;
+                if !super::source_reader::prepared_stem_set_matches_sample(
+                    &set,
+                    &old,
+                    old.channels,
+                    rate as f32,
+                    old.frame_count(),
+                ) {
+                    return Err(PyValueError::new_err(
+                        "accepted resident stem/source window differs",
+                    ));
+                }
+                Ok(set)
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    // Required heavy preparation retains its original capacity-before-supersession
+    // rule. A valid ready start never consumes or waits for a cold-lane slot.
+    let reservation = if reuse_window {
+        engine
+            .cold_jobs
+            .ensure_open()
             .map_err(PyRuntimeError::new_err)?;
-    }
+        None
+    } else {
+        let reservation = engine
+            .cold_jobs
+            .reserve()
+            .map_err(PyRuntimeError::new_err)?;
+        if !seek_only {
+            admitted_window_peak(&old, start, end, owners[id].accepted.is_some())
+                .map_err(PyRuntimeError::new_err)?;
+        }
+        Some(reservation)
+    };
+    let revision = if reuse_window {
+        old.window_revision()
+    } else {
+        old.window_revision()
+            .checked_add(1)
+            .ok_or_else(|| PyValueError::new_err("window revision exhausted"))?
+    };
     if owners[id]
         .relocation
         .as_ref()
@@ -959,6 +1032,34 @@ pub(super) fn prepare_window_with_producer(
         state: state.clone(),
         admitted: Instant::now(),
     });
+    if reuse_window {
+        let pending = owners[id].relocation.as_mut().expect("new resident owner");
+        pending.sample = Some(old.clone());
+        pending.stems = ready_stems.clone();
+        *state
+            .adopted_binding
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("resident binding lock poisoned"))? =
+            Some(binding.binding);
+        publication
+            .mark_pending()
+            .map_err(PyRuntimeError::new_err)?;
+        admission_producer
+            .push(ControlMessage::RelocateResident(Box::new(
+                crate::messages::ResidentTransaction {
+                    id,
+                    sample: old,
+                    stems: ready_stems,
+                    binding: binding.binding,
+                    publication,
+                    expected_window_revision: revision,
+                    intent,
+                    seek_pin: None,
+                },
+            )))
+            .map_err(|_| PyRuntimeError::new_err("reserved single-producer capacity lost"))?;
+        return Ok(ticket);
+    }
     let (capture, seek_receiver) = if seek_only {
         let (sender, receiver) = rtrb::RingBuffer::new(1);
         (
@@ -1026,17 +1127,20 @@ pub(super) fn prepare_window_with_producer(
     };
     engine
         .cold_jobs
-        .submit(reservation, move || match work.prepare() {
-            Ok(()) => guard.mark_enqueued(),
-            Err(error) => {
-                let cancelled = !work.current();
-                work.state.fail(error, cancelled);
-                work.publication.cancel_unclaimed();
-                work.binding
-                    .ownership
-                    .finish_resident_control(work.id, work.publication.expected);
-            }
-        })
+        .submit(
+            reservation.expect("new storage reserved cold capacity"),
+            move || match work.prepare() {
+                Ok(()) => guard.mark_enqueued(),
+                Err(error) => {
+                    let cancelled = !work.current();
+                    work.state.fail(error, cancelled);
+                    work.publication.cancel_unclaimed();
+                    work.binding
+                        .ownership
+                        .finish_resident_control(work.id, work.publication.expected);
+                }
+            },
+        )
         .map_err(PyRuntimeError::new_err)?;
     Ok(ticket)
 }

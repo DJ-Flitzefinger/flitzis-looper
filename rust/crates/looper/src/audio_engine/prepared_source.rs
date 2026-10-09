@@ -12,7 +12,7 @@ use rtrb::Producer;
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -318,12 +318,42 @@ pub(super) fn push_preparation_epoch_message<T>(
         .map_err(|_| PyRuntimeError::new_err("reserved single-producer capacity lost"))
 }
 
+#[cfg(test)]
 pub(super) fn enqueue_current_prepared_stems(
     engine: &AudioEngine,
     producer: &Arc<Mutex<Producer<ControlMessage>>>,
     ticket: &PreparedSourceTicket,
     source_version: &str,
     stems: crate::messages::PreparedStemSet,
+) -> PyResult<()> {
+    enqueue_prepared_stems(engine, producer, ticket, source_version, stems, None)
+}
+
+pub(super) fn enqueue_current_prepared_stems_with_owner(
+    engine: &AudioEngine,
+    producer: &Arc<Mutex<Producer<ControlMessage>>>,
+    ticket: &PreparedSourceTicket,
+    source_version: &str,
+    stems: crate::messages::PreparedStemSet,
+    registration: (PathBuf, PathBuf),
+) -> PyResult<()> {
+    enqueue_prepared_stems(
+        engine,
+        producer,
+        ticket,
+        source_version,
+        stems,
+        Some(registration),
+    )
+}
+
+fn enqueue_prepared_stems(
+    engine: &AudioEngine,
+    producer: &Arc<Mutex<Producer<ControlMessage>>>,
+    ticket: &PreparedSourceTicket,
+    source_version: &str,
+    stems: crate::messages::PreparedStemSet,
+    registration: Option<(PathBuf, PathBuf)>,
 ) -> PyResult<()> {
     let id = ticket.id;
     let requests = engine
@@ -354,10 +384,13 @@ pub(super) fn enqueue_current_prepared_stems(
             "Failed to send PublishPreparedStems - buffer may be full",
         ));
     }
-    ticket
-        .publication
-        .mark_pending()
-        .map_err(PyValueError::new_err)?;
+    super::resident_relocation::admit_stem_publication(
+        engine,
+        id,
+        &stems,
+        source_version,
+        registration,
+    )?;
     producer
         .push(ControlMessage::PublishPreparedStems { id, stems })
         .map_err(|_| {
