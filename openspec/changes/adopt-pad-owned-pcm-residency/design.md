@@ -31,8 +31,8 @@ One existing cold_store/project_assets/stem_cache lifecycle owns these target pa
 ```text
 samples/
   flitzis_looper.config.json
-  materials/M<stable-id>/
-    original/<Originalname.ext>
+  <Originalfilename>/
+    <Originalfilename>
     .pcm-cache/v1/.ready-<generation>/decoder.f32le playback.f32le manifest.json
     .pcm-cache/stems/v1/.ready-<generation>/<five aligned f32 files> manifest.json
     stems/.ready-<generation>/<five WAV files> .complete.json
@@ -200,7 +200,7 @@ FULL MIX generation commits disk WAV/PCM but does not retain component windows
 unless explicit ALL STEMS demand or the enabled preload policy applies. Release
 temporary decode/alignment/validation buffers after completion; keep live readers
 and old sets until their actual final owners retire. Selection/replacement of a
-new complete content set stays inactive-only, even if the artifact writer is done.
+new complete content set requires the separate E11-05/19 active-generation transition proof and own ACK. Offline immutable generation may proceed while playing; actual runtime replacement guards remain closed until that proof.
 
 ## Source-domain resident read plans
 
@@ -405,7 +405,7 @@ models or generate missing stems. With it off startup prepares FullMix only,
 even if saved ALL STEMS intent or five WAVs exist. State this exception visibly.
 
 Keep 2 workers, 32 queued/reserved jobs, 8 startup admissions per poll and 1-GiB
-transient PCM per job. The existing 512-MiB `constant_timing::PcmBudget` bounds
+maximum simultaneous transient scratch PCM per job, not a total on-disk extent bound. E11-03 streams complete source/stem conversion and fresh warm validation. The existing 512-MiB `constant_timing::PcmBudget` bounds
 complete timing preparation (explicit maximum 1 GiB); the analysis lane has its
 own 512-MiB bound. Neither is an aggregate resident-pad limit. Keep these separate
 and retain existing registry/pool bounds until a measured typed-capacity change.
@@ -498,3 +498,17 @@ Original power-loss durability and non-Windows immutable-capture acceptance also
 remain OPEN; injected crash/retry tests do not substitute for those proofs.
 Original model-unavailable, independent-component/atomic/freshness/E2E obligations
 remain required alongside these new contracts.
+
+## X11 bounded extension to this design
+
+E11-01/02 preserve explicit global broadcast then local override, with actual current-window ACK/effective Native output and no unsolicited inheritance flag. The accepted NormalLoop/lifecycle checkpoint is the narrow prerequisite; seek/intro/tail/new pitch/full P4b and P5a guards do not open wholesale.
+
+E11-03 replaces complete arrays in stem_cache.rs::prepare_complete_stems_at_project_root and the full-extent warm gate in stem_pair.rs with retained-reader streaming passes. Full reference/mono scans first determine the exact global peak and then the first threshold crossing (including all-silent behavior). Retained positioned reads extract the existing pre-onset 0.5-second and four-second bounded region for the exact +/-0.25-second alignment oracle. A subsequent streaming output pass applies one signed loaded-frame offset, exact PCM16 normalization and edge zero padding while writing five immutable f32 derivatives and full digests. The old complete-array conversion is the independent small-fixture oracle. Warm verification streams all leaves through EOF before reuse. Use existing sealed/source/range readers and job lanes; no callback file access or new pool. Memory peaks include scratch, worker overlap, resident old/new users and process RSS separately; actual Demucs inference remains a separate measured limitation. No total-duration cap, cap raise or complete multi-GB allocation substitutes for the streaming implementation. User loop/ALL demand and aggregate budget remain authoritative.
+
+E11-08..10 separate hidden full-content identity from `samples/<Originalfilename>/` visible roots. First canonical verified name wins for equal bytes under different names; unsafe/case-colliding directories use a readable prefix plus sufficiently extended content SHA suffix. Exact supported original leaf names/bytes stay intact. Native material_paths/cold_store/project_assets plus Python material migration/persistence share one resolver and existing journal. Copy-to-new-root and atomic current-reference/config commit precede eventual old-root retirement; no rename beneath readers, no unknown deletion, no saved ACK replay or data reset. Cross-name dedup currently includes filename in cold_store identity and requires an actual bounded correction, not a documentation assertion.
+
+Concrete implementation slices, dependencies, source seams and full acceptance gates are in [the extension](../../../docs/pre-rust-extension-20261011.md). This is engineering planning only; original accepted/negative evidence remains scoped and immutable.
+
+### KEYLOCK feedback/preparation phases
+
+An existing warmed unique Native handle can render initial wet audio from the actual current feed after a supported mode/window change; a later source-specific preparation candidate adopts only at its exact output-frame/SourcePlayback/read-plan match (existing4096 output-frame horizon). Mode/window callback ACK, actual wet processing and source-candidate adoption are distinct. Do not add an unconditional candidate wait or treat WindowACK as source Native adoption. Pause/resume follows actual SourcePlayback, not elapsed global clock. Existing Residency requested/previous/owner, effective/error/unconfirmed, eight-attempt/30-second retry and claimed-tail semantics remain the authoritative status pipeline. Global broadcasts collect bounded per-pad outcomes across all targets and expose partial/mixed failures; unchanged requested values are not proof of convergence. Current controller/UI source seams must be reread against the implemented result.

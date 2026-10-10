@@ -9,9 +9,9 @@ callback never runs separators, FFmpeg, disk I/O, model loading, GIL/UI or infer
 ## What `uv sync` Installs
 
 The pending [pad-owned PCM program](pad-owned-pcm-program.md) changes generated
-asset destinations and residency, not separator/model setup. It plans per-pad
-WAV outputs in `samples/#N/stems` plus stable aligned f32 disk derivatives in
-`samples/#N/.pcm-cache`, with a joint verified set commit across both areas.
+asset destinations and residency, not separator/model setup. The direct E11 extension targets shared readable source roots, with
+WAV outputs in `samples/<Originalfilename>/stems` and aligned f32 derivatives in
+`samples/<Originalfilename>/.pcm-cache`, with a joint verified set commit across both areas.
 It retains temporary buffers
 only until commit/validation completes. FULL MIX generation with preload off
 will not retain unused stem windows. Existing eager publication and global stem
@@ -198,3 +198,9 @@ See [prepared publication](prepared-stem-publication.md) for current ownership.
 - `Stem queue full (2 workers, 32 queued jobs)`: wait for a job to finish and retry.
 - `FFmpeg/ffprobe unavailable`: install FFmpeg or set `FLITZIS_FFMPEG_DIR`.
 - `TorchCodec unavailable`: rerun `uv --no-cache sync`; if this persists, rebuild the environment.
+
+## Pending direct live/long-source extension
+
+The [E11 plan](pre-rust-extension-20261011.md) requires streamed full source/five-WAV/PCM/mono alignment and fresh full warm verification without a total-duration/1-GiB extent cap. Simultaneous scratch and live user budgets remain separate; current complete-array limits are still runtime behavior until X11-LONG implements the change. Demucs inference/model/activation peaks are not bounded by postprocessing claims.
+
+X11-LIVE-STEMS separately proves immutable offline jobs during playback, complete disk commit and current-voice/history/own-native-ACK new-set adoption. One discoverable current model/config fingerprint replaces the full verified pair atomically; independent older assignments/readers retain immutable predecessors until actual last use. Selected-model duplicates are disabled in UI and rejected/joined consistently in direct/batch paths. X11-BULK uses all216 loaded slots/all banks, bounded fair2-worker/32-queue feeding and own-interest cooperative cancellation. These are required pending behaviors, not delivered safety or acceptance. Existing model installation and model-free validated restore remain unchanged.

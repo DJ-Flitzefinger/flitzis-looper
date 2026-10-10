@@ -83,3 +83,7 @@ Use docs for explanatory context:
 - If behavior changes, update OpenSpec before or alongside implementation.
 - If a doc becomes only historical, remove it or move the durable facts into a
   maintained document.
+
+## Required pre-Rust direct extension
+
+[Direct extension2026-10-11](pre-rust-extension-20261011.md) maps all20 E11 requirements to normative OpenSpec contracts, bounded implementation slices, actual source seams and real acceptance gates. The maintained program/coverage retains old38/48 and169/56/9/HC26 while adding10 IDs (48 total) and30 edges (78 total). This is planning only; runtime, final Human testing and correction gates remain OPEN.

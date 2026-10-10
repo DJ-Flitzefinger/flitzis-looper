@@ -40,7 +40,7 @@ CUDA auto policy SHALL try CUDA when available and MAY retry the same model on C
 ### Requirement: Separators Share Bounded Publication
 The system SHALL use the existing source-ticket, private-generation, lease,
 complete-set integrity and native-ACK publication path for both separators, keep
-generation inactive-only and bound admission to two workers and 32 queued jobs.
+offline generation independent of playback under E11-05 immutable source leases and bound admission to two workers and 32 queued jobs. Active different-set adoption SHALL require separately proved current voice/history/window permits and own native ACKs; current runtime guards SHALL stay closed until that proof.
 
 #### Scenario: Late obsolete completion
 - **GIVEN** a source or timing ticket is superseded during model inference
@@ -60,12 +60,12 @@ generation inactive-only and bound admission to two workers and 32 queued jobs.
 
 ### Requirement: Explicit PCM Buffers Are Bounded
 The system SHALL cap explicit live PCM buffers in the BS-RoFormer worker and shared
-alignment at 1 GiB per job before allocation and preserve existing native
+alignment at 1 GiB maximum simultaneous scratch per job before allocation, stream complete source/five-stem postprocessing and fresh warm integrity verification without charging total file extent to that scratch bound and preserve existing native
 cold/preparation caps. This cap SHALL NOT be presented as total Demucs neural
 inference memory or whole-process RSS.
 
 #### Scenario: Allocation exceeds the PCM bound
-- **WHEN** BS-RoFormer or shared alignment would exceed its 1 GiB PCM bound
+- **WHEN** BS-RoFormer or shared alignment would exceed its 1 GiB simultaneous scratch PCM bound
 - **THEN** it fails with a bounded generation error before that allocation
 - **AND** current effective audio remains available
 

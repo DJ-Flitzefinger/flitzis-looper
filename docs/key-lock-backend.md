@@ -831,3 +831,9 @@ rejections, never silent clamp/tempo change. No cascade or complete pitch PCM.
 R2 layout/hold and B7 captured pitch+retrigger use prepared guarded ownership;
 K1 remains engineering/guarded until real B6/B8 H-LIVE device acceptance. B5 remains
 test-only nonzero k; K-META grants no native pitch, device or hearing acceptance.
+
+## Pending direct extension2026-10-11
+
+[E11-01/02](pre-rust-extension-20261011.md) require the prioritized fixed NormalLoop k=0 correction through actual global/pad command, current-window/native ACK and wet Native/FIFO/filter output at nonunity SPEED/BPM-lock. Global actions broadcast to loaded pads, later pad actions affect only that pad, and a later explicit same-value global action broadcasts again. Pending/error UI follows actual feedback. Accepted lifecycle proof is a narrow prerequisite; remaining whole P4b/P5a/nonzero B5 and Human hearing gates remain OPEN.
+
+The pending correction keeps mode/window ACK, initial wet processing through an already warmed unique handle, and later exact source-candidate adoption separate. Initial wet output need not await that later4096-frame candidate; WindowACK alone does not prove source-specific adoption. Actual current SourcePlayback/feed and matching history permits remain authoritative through pause/resume and old voices.

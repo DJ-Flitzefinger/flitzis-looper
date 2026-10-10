@@ -166,7 +166,7 @@ before mutation while preserving separate existing bounded preparation limits.
 
 ### Requirement: Existing bounded lanes and exact ownership capacity
 The system SHALL keep two workers,32 queued/reserved jobs,eight startup admissions
-per poll,1GiB transient PCM per job and ordinary512MiB timing/analysis preparation.
+per poll,1GiB maximum simultaneous transient scratch PCM per job and ordinary512MiB timing/analysis preparation. Complete on-disk source/stem extent SHALL NOT be charged as simultaneous scratch or rejected by its total length; E11-03 requires the separate streaming path.
 Assignment/descriptor capacity SHALL cover216 plus bounded pending/old owners
 with checked reservation, overflow rejection and off-thread retirement.
 
@@ -229,3 +229,50 @@ The system SHALL acquire all new assignment/action/version references before ret
 - **THEN** typed roots, file identities, full five-WAV/five-PCM integrity and the common descriptor SHALL be reverified before pair eligibility
 - **AND** current content UUIDs, key intent and newer performer edits SHALL survive
 - **AND** native source/timing/window captures and callback ACKs SHALL be freshly acquired, never restored from durable pair metadata
+
+### Requirement: E11-01 Live KEYLOCK mode changes preserve finite playback
+The system SHALL apply global and per-pad KEYLOCK OFF-to-ON and ON-to-OFF commands during stopped, playing and paused states through current preparation, each voice's own callback mode/window ACK and actual Native processing, preserving source position, loop geometry and continuing audio without stop or retrigger.
+An already warmed unique Native handle MAY initially render wet from the actual current feed before a later source-specific candidate is adopted. Window/mode ACK, actual wet processing and later exact source-candidate adoption SHALL remain distinct; every later candidate SHALL still satisfy the exact output-frame/SourcePlayback/read-plan match and own permits. Actual nonneutral-rate Native wet output SHALL establish successful ON; queued intent, button color, a dry fallback or another pad's ACK SHALL NOT establish success. Effective, pending and failed UI states SHALL follow current engine feedback and reject stale completion.
+
+#### Scenario: OFF-started finite NormalLoop enables live processing
+- **GIVEN** a production k=0 finite NormalLoop started with KEYLOCK OFF at a nonunity SPEED or BPM-lock rate
+- **WHEN** global or pad ON is requested
+- **THEN** matching current-window preparation and native ACK SHALL precede effective ON
+- **AND** actual subsequent Native/FIFO/filter output SHALL match independent complete-PCM and raw-Native chronology beyond the first callback without a source-position jump
+
+#### Scenario: Both directions and old voices retain authority
+- **WHEN** repeated ON/OFF commands cross pause, rate smoothing, FullMix/selected stems, queued work or bank replacement
+- **THEN** the actual current or old voice SHALL keep its own source/timing/window/selection/history permits and readers until safe adoption
+- **AND** stale, failed or superseded work SHALL leave effective audio intact with truthful pending/error state
+- **AND** supported fixed NormalLoop correction SHALL NOT open unproved seek/intro/tail, nonzero-pitch, P5a or whole-P4b guards
+
+### Requirement: E11-02 Explicit global broadcast and pad override
+The system SHALL broadcast every explicit global KEYLOCK action to all loaded pads, allow a later pad action to override only that pad, and broadcast a later global action again without an additional inheritance flag.
+Each target SHALL settle through the same existing per-pad pending/retry/unconfirmed transaction. A target failure SHALL NOT abort remaining loaded targets or roll back successful targets; partial/mixed/unconfirmed/error global status SHALL remain visible separately from requested intent. Stale predecessor feedback SHALL NOT rewind superseding intent or new content.
+
+#### Scenario: Global ON then one pad OFF then global ON
+- **WHEN** global ON is followed by pad4 OFF and another explicit global ON
+- **THEN** only pad4 SHALL change on its local action and the final global action SHALL address all loaded pads including pad4
+- **AND** stopped, playing and paused pads SHALL expose their independently ACKed effective/pending/error status
+
+#### Scenario: Global OFF then one pad ON with out-of-order results
+- **WHEN** global OFF, pad ON and repeated toggles have queued or stale results
+- **THEN** current command ownership SHALL determine each effective result and unrelated pads SHALL retain their actual state
+- **AND** neither a green global intent nor a brief local blink SHALL substitute for actual successful Native output
+
+### Requirement: E11-03 Complete source extent is independent of scratch admission
+The system SHALL prepare and verify complete FullMix, all five aligned stem WAV/PCM derivatives and mono integrity through bounded streaming blocks and disk-backed immutable generations without an artificial duration or total-PCM 1-GiB limit.
+A track longer than ten minutes or a multi-GB complete PCM extent SHALL remain admissible when actual storage and selected live residency budgets suffice. Existing per-job scratch, worker/queue, native cold/analysis and user-selected loop/ALL residency bounds SHALL remain explicit, separately accounted and fail visibly on real resource exhaustion. Demucs inference/activations/model memory SHALL remain separately measured and SHALL NOT be claimed bounded by streaming postprocessing.
+
+#### Scenario: Long complete conversion and new-process warm validation
+- **WHEN** a source longer than ten minutes with complete PCM above 1 GiB is prepared and reopened
+- **THEN** complete frame counts, full EOF digests, finite PCM values, exact PCM16 normalization, common signed loaded-frame alignment offset and zero padding SHALL match the independent existing conversion oracle
+- **AND** the first-onset four-second analysis with at most plus/minus 0.25-second shift SHALL retain existing semantics across arbitrary chunk boundaries
+- **AND** fresh warm verification SHALL stream the full source/five-WAV/five-PCM/mono integrity from retained immutable readers without complete arrays
+- **AND** measured scratch and actual process peak SHALL be reported separately at multiple source lengths, while live RAM SHALL follow requested loop/ALL demand and the user budget
+
+#### Scenario: Cancel and real storage failure preserve prior data
+- **WHEN** long preparation is cancelled, truncated, changed at final EOF or encounters disk/RAM failure
+- **THEN** only exact attempt-owned staging SHALL retire after actual readers return and incomplete pairs SHALL remain unavailable
+- **AND** the prior source/set/config SHALL remain usable with a visible error
+- **AND** raising a total-size cap or allocating full multi-GB buffers SHALL NOT satisfy this requirement

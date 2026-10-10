@@ -9,8 +9,7 @@ First missing residency SHALL be prepared off-thread and pass a dedicated
 source/cache/set/ticket/voice/window/geometry/history/DSP/lease guarded native
 adoption ACK before effective selection changes. FullMix SHALL remain effective
 while pending/error. A queued mode command SHALL NOT establish effective-mode
-acknowledgement. Active generation/different-content replacement SHALL remain
-inactive-only. Existing128-source-frame crossfade and fixed-size state SHALL
+acknowledgement. Offline generation MAY run under immutable leases while playing; active different-content replacement SHALL remain guarded until E11-05/19 separately prove new-set current-voice/history/own-ACK continuity. Existing128-source-frame crossfade and fixed-size state SHALL
 preserve playhead, loop, voice, transport/quantization and musical timing without
 stop/restart. No audio payload/path/dynamic chain or unbounded work enters ramps.
 

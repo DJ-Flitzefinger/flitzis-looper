@@ -652,7 +652,7 @@ The app may create local runtime files:
 - `samples/`: project-local copied samples, stem cache, and project config.
 
 Current global original/PCM/stem containers remain readable during the planned
-transition. New canonical material targets are `samples/materials/M<id>/original/<original>`,
+transition. The E11 pending readable canonical material target is `samples/<Originalfilename>/<Originalfilename>`,
 `.pcm-cache` and `stems`; #N is stable slot membership. Final acceptance requires
 material-wise verified migration and no obsolete legacy-container dependence; the
 canonical shared material store is intentional, without Copy-induced duplicates. Do not move/delete current runtime assets as a documentation
@@ -696,3 +696,7 @@ unaffected historical strict FAIL/archive INFO separately. Check full seven-grou
 Actual author terminal and distinct native nonauthor final semantic/raw/canonical/
 index/blob/tree review precede publication or J0/P1 dispatch. The extended program
 owns later complete serialized runtime validation; devices/hearing remain human.
+
+## Pending recording/local data contract
+
+The [E11 plan](pre-rust-extension-20261011.md) adds bounded native exact-segment capture and a nonRT writer/encoder, with persistent WAV/FLAC/MP3 settings. Implementation must place output under repo-root record/ and add /record/ to .gitignore, with unique recoverable incomplete spools, stop/drain/finalize on shutdown and no overwrite. X11-PLAN creates no runtime output or product implementation; capture, format and control are separate delivery gates. Existing M-ID/legacy data remains supported until verified readable-root migration and fresh current native ACKs complete; documentation updates never move private runtime files.

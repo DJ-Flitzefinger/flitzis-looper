@@ -2,7 +2,7 @@
 
 ### Requirement: Stem Cache Is Pad-Scoped And Deletable
 The system SHALL store each immutable material version's five generated WAV artifacts beneath
-`samples/materials/M<stable-id>/stems/` and aligned stem playback PCM beneath its
+`samples/<Originalfilename>/stems/` and aligned stem playback PCM beneath its
 `.pcm-cache/`, with equal content assignments across slots1..216.
 
 Immutable generation names and complete markers SHALL bind source/content/schema/
@@ -15,7 +15,7 @@ other owners SHALL survive cleanup.
 
 #### Scenario: Generated stems use the canonical material directory
 - **WHEN** stopped pad1 generates a current set
-- **THEN** WAVs use `samples/materials/M<id>/stems/` and aligned PCM uses `samples/materials/M<id>/.pcm-cache/`
+- **THEN** WAVs use `samples/<Originalfilename>/stems/` and aligned PCM uses `samples/<Originalfilename>/.pcm-cache/`
 - **AND** tracked source/set selection requires complete joint verification
 
 #### Scenario: Generated stems use the pad label directory
@@ -36,7 +36,7 @@ other owners SHALL survive cleanup.
 
 #### Scenario: Material-owned generation commits a complete set
 - **WHEN** an inactive pad1 finishes valid generation
-- **THEN** five WAVs commit under `samples/materials/M<id>/stems/` and their complete PCM derivative set under `samples/materials/M<id>/.pcm-cache/`
+- **THEN** five WAVs commit under `samples/<Originalfilename>/stems/` and their complete PCM derivative set under `samples/<Originalfilename>/.pcm-cache/`
 - **AND** incomplete staging cannot become eligible or overwrite a live generation
 
 #### Scenario: Deletion preserves FullMix and other generations
@@ -45,42 +45,24 @@ other owners SHALL survive cleanup.
 - **AND** only its exact owned retired generation is deleted after final readers
 
 ### Requirement: Stem Generation And Replacement Require An Inactive Pad
-The system SHALL permit inference/generation and selection or adoption of a
-different complete stem content set only while the target pad is inactive.
+The system SHALL separate offline generation and verified disk publication from active new-set adoption: generation MAY proceed for a playing pad under an immutable source lease, while active adoption SHALL remain fail-closed until the E11-05 and E11-19 new-generation continuity, ownership and own-native-ACK gates are implemented and proved.
+This pending target supersedes the historical heading's inactive-generation restriction. P5a first residency of an already selected committed set and same-set relocation SHALL retain their distinct guarded identities; neither SHALL authorize a new generation, new timing evidence or another user's result. Existing source/cache/set/ticket/request/geometry/window/voice/DSP/history/FIFO leases and native ACKs SHALL remain required.
 
-If the pad starts during generation, its result SHALL NOT replace the active set.
-First **residency activation** of an already committed, selected, validated disk
-set MAY occur while FullMix plays, using a dedicated guarded transaction that
-cannot select new content or adopt an unfinished/late generation. Same-set window
-relocation MAY retain the already accepted complete identity while active.
-Both exceptions SHALL prove source/cache/set/ticket/request/geometry/window/
-accepted timing, current voice/DSP/history/FIFO coverage, leases and native ACK;
-they SHALL NOT establish new accepted timing or waive active replacement guards.
+#### Scenario: Background generation while playback continues
+- **WHEN** a playing pad requests a different selected model
+- **THEN** the background job MAY generate and verify private immutable artifacts while actual old FullMix/stems and Native/FIFO/filter audio continues
+- **AND** job completion alone SHALL NOT replace effective live audio or report new resident readiness
 
-#### Scenario: Playing pad blocks generation
-- **WHEN** a playing pad requests generation
-- **THEN** the request is rejected/deferred and no inference runs in the callback
+#### Scenario: Safe active replacement requires its own proof
+- **WHEN** a verified different set requests active adoption
+- **THEN** current source/timing/window/voice/history permits, new/old capacity and each affected pad's own ACK SHALL precede a bounded continuous transition
+- **AND** unsupported, stale, cancelled or failed adoption SHALL preserve actual old effective audio and visible pending/error state
 
-#### Scenario: Pad starts during generation
-- **WHEN** an inactive generation job's pad starts before completion
-- **THEN** its newly generated content cannot replace active buffers
-- **AND** old effective audio remains intact
-
-#### Scenario: Active generation and content replacement stay blocked
-- **WHEN** generation is requested for an active pad or a job completes after it starts
-- **THEN** inference/adoption follows the inactive rule
-- **AND** old effective FullMix/stem audio remains valid
-
-#### Scenario: First residency while FullMix plays
-- **GIVEN** a current selected complete disk set exists but no component window is resident
-- **WHEN** ALL STEMS is explicitly requested during FullMix playback
-- **THEN** the system prepares verified PCM ranges off-thread
-- **AND** native guarded first-residency ACK precedes the existing continuous live transition
-
-#### Scenario: Different cache set cannot use residency exception
-- **WHEN** a prepared residency transaction names different content, source or set selection
-- **THEN** active adoption is rejected without stopping or restarting FullMix
-- **AND** a queued mode command cannot report effective ALL STEMS
+#### Scenario: First residency is not generation replacement
+- **GIVEN** a current selected complete disk set exists without resident components
+- **WHEN** ALL is requested during FullMix playback
+- **THEN** P5a SHALL require its same-selected-set ranges, permits and native ACK
+- **AND** E11-05/19 new-generation gates SHALL remain separate and unproved by that path
 
 ### Requirement: Prepared Stem Buffers Are Aligned For Playback
 The system SHALL commit complete immutable aligned f32 playback PCM derivatives

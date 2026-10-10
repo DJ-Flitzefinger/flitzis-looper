@@ -358,7 +358,7 @@ Stale permits/windows and incomplete sets SHALL remain unavailable.
 #### Scenario: Active relocation or new stem generation
 - **WHEN** a stem window is relocated while playback is active
 - **THEN** the complete source and already accepted complete StemSet SHALL remain identical
-- **AND** generation/adoption of a new complete set SHALL require an inactive pad
+- **AND** offline generation SHALL follow E11-05 immutable source leases, while active different-set adoption SHALL remain guarded until its separately proved current-voice/history/own-ACK transition
 - **AND** cached instrumental data SHALL NOT become a fifth live component
 
 #### Scenario: Stem result races a window edit

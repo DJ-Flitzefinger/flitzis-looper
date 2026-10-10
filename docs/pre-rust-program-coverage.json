@@ -3,9 +3,10 @@
   "status": "PLAN_ONLY_ALL_IMPLEMENTATION_AND_HUMAN_GATES_OPEN",
   "lineage": {
     "acceptedC1PlanSHA256": "d9d23d48182b95b48a47c4e3bfaf37d9a4bb06b705797b6bcb5af3394ad63dd1",
-    "literalHumanSHA256": "f6cc51bb474f53c05f1491901c0b301d4721bba6849cf30eec0e7ed6bc00dd22"
+    "literalHumanSHA256": "f6cc51bb474f53c05f1491901c0b301d4721bba6849cf30eec0e7ed6bc00dd22",
+    "extensionHumanSHA256": "63fe3ea59965fe091a82da5cfd79149c6e33a7ad0dc4d08a3ddb5da54a1fc6f3"
   },
-  "scope": "All seven literal groups plus unchanged original56/nine feature obligations. Historical topology wording is preserved as history with explicit R0 supersession; no evidence acceptance from catalog labels.",
+  "scope": "All seven literal groups plus unchanged original56/nine feature obligations. Historical topology wording is preserved as history with explicit R0 supersession; no evidence acceptance from catalog labels. Direct Human extension2026-10-11 adds20 E11 requirements and10 bounded delivery IDs; retained original38/48 remain an exact subset. No implementation/acceptance inferred.",
   "counts": {
     "primary_group_detail_rows": 164,
     "groups": 7,
@@ -13,9 +14,14 @@
     "additional_explicit_crosslinks": 5,
     "old_featurepoints": 9,
     "old_original_entries": 56,
-    "ordered_slices": 38,
-    "dependency_edges": 48,
-    "correction_findings": 2
+    "ordered_slices": 48,
+    "dependency_edges": 78,
+    "correction_findings": 2,
+    "retained_ordered_slices": 38,
+    "retained_dependency_edges": 48,
+    "extension_requirements": 20,
+    "total_detail_and_extension_rows": 189,
+    "additive_delivery_slices": 10
   },
   "ordered_slice_ids": [
     "P0-CLOSURE",
@@ -31,9 +37,19 @@
     "P2b",
     "P3",
     "P4a",
+    "X11-PLAN",
+    "X11-KEYLOCK",
+    "X11-UI",
+    "X11-LONG",
+    "X11-MATERIAL",
+    "X11-RECORD-CAPTURE",
+    "X11-RECORD-FORMAT",
+    "X11-RECORD-CONTROL",
     "P4b",
     "P5a",
     "P5b",
+    "X11-LIVE-STEMS",
+    "X11-BULK",
     "R1",
     "R2",
     "R3",
@@ -297,6 +313,156 @@
       "from": "R0-CLOSURE",
       "to": "P1b",
       "reason": "Independent R0 closure before compatible ownership implementation; J0 and P1a also required."
+    },
+    {
+      "from": "P3",
+      "to": "X11-PLAN",
+      "reason": "E11 required bounded dependency: Official full E11 integration, source-grounded slices, strict validation and independent nonauthor plan review; publication is plan acceptance only."
+    },
+    {
+      "from": "P4a",
+      "to": "X11-PLAN",
+      "reason": "E11 required bounded dependency: Official full E11 integration, source-grounded slices, strict validation and independent nonauthor plan review; publication is plan acceptance only."
+    },
+    {
+      "from": "X11-PLAN",
+      "to": "X11-KEYLOCK",
+      "reason": "E11 required bounded dependency: Prioritized controller/global/pad intent -> productive finite Native prepare/adopt -> truthful effective/pending/error UI correction at k=0 fixed NormalLoop."
+    },
+    {
+      "from": "X11-KEYLOCK",
+      "to": "X11-UI",
+      "reason": "E11 required bounded dependency: One coherent performance editor/control correction: geometry/cache draw, content-bound confirmations, Adjust placement and shared close."
+    },
+    {
+      "from": "X11-KEYLOCK",
+      "to": "X11-LONG",
+      "reason": "E11 required bounded dependency: Bounded streaming complete source/five-stem conversion, alignment and full-integrity warm verifier using existing readers/jobs."
+    },
+    {
+      "from": "P3",
+      "to": "X11-LONG",
+      "reason": "E11 required bounded dependency: Bounded streaming complete source/five-stem conversion, alignment and full-integrity warm verifier using existing readers/jobs."
+    },
+    {
+      "from": "X11-LONG",
+      "to": "X11-MATERIAL",
+      "reason": "E11 required bounded dependency: Readable roots/hidden full-SHA resolver, cross-name canonical reuse and verified M-ID/legacy migration with current reference/config/fresh ACK."
+    },
+    {
+      "from": "P1b",
+      "to": "X11-MATERIAL",
+      "reason": "E11 required bounded dependency: Readable roots/hidden full-SHA resolver, cross-name canonical reuse and verified M-ID/legacy migration with current reference/config/fresh ACK."
+    },
+    {
+      "from": "P2b",
+      "to": "X11-MATERIAL",
+      "reason": "E11 required bounded dependency: Readable roots/hidden full-SHA resolver, cross-name canonical reuse and verified M-ID/legacy migration with current reference/config/fresh ACK."
+    },
+    {
+      "from": "X11-KEYLOCK",
+      "to": "X11-RECORD-CAPTURE",
+      "reason": "E11 required bounded dependency: Native exact-segment master-mix capture with preallocated bounded queue and nonRT writer lifecycle, recoverable unique files and record ignore."
+    },
+    {
+      "from": "X11-RECORD-CAPTURE",
+      "to": "X11-RECORD-FORMAT",
+      "reason": "E11 required bounded dependency: Persistent format/quality and writer readiness transaction with actual WAV/FLAC/MP3 encoding/probe/RF64/failed-encoder tests."
+    },
+    {
+      "from": "X11-RECORD-FORMAT",
+      "to": "X11-RECORD-CONTROL",
+      "reason": "E11 required bounded dependency: Shared RECORD button and existing global active/remembered group transaction, left atomic loop-start+capture and right capture-only state machine."
+    },
+    {
+      "from": "X11-UI",
+      "to": "X11-RECORD-CONTROL",
+      "reason": "E11 required bounded dependency: Shared RECORD button and existing global active/remembered group transaction, left atomic loop-start+capture and right capture-only state machine."
+    },
+    {
+      "from": "X11-MATERIAL",
+      "to": "X11-LIVE-STEMS",
+      "reason": "E11 required bounded dependency: Existing immutable job/subscriber source lease -> full disk commit -> own-current native new-generation transition; single-current-model/fingerprint replacement and duplicate gates."
+    },
+    {
+      "from": "X11-KEYLOCK",
+      "to": "X11-LIVE-STEMS",
+      "reason": "E11 required bounded dependency: Existing immutable job/subscriber source lease -> full disk commit -> own-current native new-generation transition; single-current-model/fingerprint replacement and duplicate gates."
+    },
+    {
+      "from": "P5a",
+      "to": "X11-LIVE-STEMS",
+      "reason": "E11 required bounded dependency: Existing immutable job/subscriber source lease -> full disk commit -> own-current native new-generation transition; single-current-model/fingerprint replacement and duplicate gates."
+    },
+    {
+      "from": "X11-LIVE-STEMS",
+      "to": "X11-BULK",
+      "reason": "E11 required bounded dependency: Global warning-confirmed all-bank216 inventory, fair deduplicated Generate/own-interest Cancel and safe Delete with partial/error state."
+    },
+    {
+      "from": "X11-KEYLOCK",
+      "to": "P4b",
+      "reason": "Prioritized fixed NormalLoop reported correction before remaining P4b proof, without accepting whole P4b."
+    },
+    {
+      "from": "X11-MATERIAL",
+      "to": "R1",
+      "reason": "CopySnapshot/reopen must use final readable canonical full-SHA source identity."
+    },
+    {
+      "from": "X11-BULK",
+      "to": "P6",
+      "reason": "Full engineering/resource cleanup integration includes live/new-model/bulk workload."
+    },
+    {
+      "from": "X11-RECORD-CONTROL",
+      "to": "P6",
+      "reason": "Capture/writer/control resources and failure recovery included in aggregate engineering acceptance."
+    },
+    {
+      "from": "X11-KEYLOCK",
+      "to": "V0",
+      "reason": "All E11 software/resource/UI contracts integrated with later R2/B7/key controls before Human gates."
+    },
+    {
+      "from": "X11-UI",
+      "to": "V0",
+      "reason": "All E11 software/resource/UI contracts integrated with later R2/B7/key controls before Human gates."
+    },
+    {
+      "from": "X11-LONG",
+      "to": "V0",
+      "reason": "All E11 software/resource/UI contracts integrated with later R2/B7/key controls before Human gates."
+    },
+    {
+      "from": "X11-MATERIAL",
+      "to": "V0",
+      "reason": "All E11 software/resource/UI contracts integrated with later R2/B7/key controls before Human gates."
+    },
+    {
+      "from": "X11-RECORD-CAPTURE",
+      "to": "V0",
+      "reason": "All E11 software/resource/UI contracts integrated with later R2/B7/key controls before Human gates."
+    },
+    {
+      "from": "X11-RECORD-FORMAT",
+      "to": "V0",
+      "reason": "All E11 software/resource/UI contracts integrated with later R2/B7/key controls before Human gates."
+    },
+    {
+      "from": "X11-RECORD-CONTROL",
+      "to": "V0",
+      "reason": "All E11 software/resource/UI contracts integrated with later R2/B7/key controls before Human gates."
+    },
+    {
+      "from": "X11-LIVE-STEMS",
+      "to": "V0",
+      "reason": "All E11 software/resource/UI contracts integrated with later R2/B7/key controls before Human gates."
+    },
+    {
+      "from": "X11-BULK",
+      "to": "V0",
+      "reason": "All E11 software/resource/UI contracts integrated with later R2/B7/key controls before Human gates."
     }
   ],
   "aliases": {
@@ -11034,5 +11200,766 @@
       "H-AUDIO": "Future HUMAN ONLY hearing/loopback/CPAL: intended base/extra and lockoff coupling, original timing/acoustic gates, independent copied fullmix/stems; retain1/2/4/6pad and30minute/finalhuman/corrections. Source/model tests cannot close these."
     }
   },
-  "future_proof_catalog_limit": "Required future case oracles only; inclusion is neither executed product evidence nor independent acceptance. Local dispatch/history/private-source metadata remain outside the repository."
+  "future_proof_catalog_limit": "Required future case oracles only; inclusion is neither executed product evidence nor independent acceptance. Local dispatch/history/private-source metadata remain outside the repository.",
+  "extension_delivery_slices": [
+    {
+      "id": "X11-PLAN",
+      "depends": [
+        "P3",
+        "P4a"
+      ],
+      "requirements": [],
+      "work": "Official full E11 integration, source-grounded slices, strict validation and independent nonauthor plan review; publication is plan acceptance only.",
+      "gates": [
+        "Actual accepted finite NormalLoop vertical/resident-transition/lifecycle checkpoint at published 694cd61e; no whole P4b premise.",
+        "All20 normative/scenarios/gates; exact old38/48 and169/56/9/HC26 retention; forward DAG, doc links, strict each affected change; frozen independent reviewed tree."
+      ]
+    },
+    {
+      "id": "X11-KEYLOCK",
+      "depends": [
+        "X11-PLAN"
+      ],
+      "requirements": [
+        "E11-01",
+        "E11-02"
+      ],
+      "work": "Prioritized controller/global/pad intent -> productive finite Native prepare/adopt -> truthful effective/pending/error UI correction at k=0 fixed NormalLoop.",
+      "gates": [
+        "Uses accepted NormalLoop/lifecycle proofs as narrow explicit input, never requires whole P4b or B5 first.",
+        "Actual installed controller/native routes, independent wet output both directions and override/stale matrix; closes only reported fixed-domain defect, all remaining P4b/P5a/nonzero gates open."
+      ]
+    },
+    {
+      "id": "X11-UI",
+      "depends": [
+        "X11-KEYLOCK"
+      ],
+      "requirements": [
+        "E11-04",
+        "E11-16",
+        "E11-17",
+        "E11-18"
+      ],
+      "work": "One coherent performance editor/control correction: geometry/cache draw, content-bound confirmations, Adjust placement and shared close.",
+      "gates": [
+        "Full editor headless draw geometry/font/DPI/toolbar and dialog routes; actual Human visual confirmation remains at H-FINAL.",
+        "No guessed root cause or invented Human binary identity; no private config changes."
+      ]
+    },
+    {
+      "id": "X11-LONG",
+      "depends": [
+        "X11-KEYLOCK",
+        "P3"
+      ],
+      "requirements": [
+        "E11-03"
+      ],
+      "work": "Bounded streaming complete source/five-stem conversion, alignment and full-integrity warm verifier using existing readers/jobs.",
+      "gates": [
+        "Legacy full-array small-fixture oracle + actual >10-minute/>1GiB complete PCM/frame/EOF/digest/Cancel/failure/memory tests; PAD4 real source case if accessible.",
+        "Live residency follows user loop/ALL/budget. Explicit scratch/process peaks and Demucs inference separate."
+      ]
+    },
+    {
+      "id": "X11-MATERIAL",
+      "depends": [
+        "X11-LONG",
+        "P1b",
+        "P2b"
+      ],
+      "requirements": [
+        "E11-08",
+        "E11-09",
+        "E11-10"
+      ],
+      "work": "Readable roots/hidden full-SHA resolver, cross-name canonical reuse and verified M-ID/legacy migration with current reference/config/fresh ACK.",
+      "gates": [
+        "M1 resolver/content dedup then M2 journal/migration; both bounded internal checkpoints require focused native/control/persistence tests and independent whole result review.",
+        "All216 users, duplicate names/bytes, active old reader/unknown files, fault boundaries and fresh-process current intent/ACK proof."
+      ]
+    },
+    {
+      "id": "X11-RECORD-CAPTURE",
+      "depends": [
+        "X11-KEYLOCK"
+      ],
+      "requirements": [
+        "E11-15"
+      ],
+      "work": "Native exact-segment master-mix capture with preallocated bounded queue and nonRT spool writer lifecycle; file encoding/output-ignore/recovery finish in FORMAT.",
+      "gates": [
+        "Record end/start at scheduled segmented boundaries, overflow/disk/shutdown drain and callback allocation/lock/I/O review; no GUI/device run.",
+        "Capture internal API is bounded foundation, no RECORD UI behavior acceptance yet."
+      ]
+    },
+    {
+      "id": "X11-RECORD-FORMAT",
+      "depends": [
+        "X11-RECORD-CAPTURE"
+      ],
+      "requirements": [
+        "E11-14",
+        "E11-15"
+      ],
+      "work": "Persistent format/quality and writer readiness transaction with actual WAV/FLAC/MP3 encoding/probe/RF64/failed-encoder tests.",
+      "gates": [
+        "Actual output file codec/rate/channels/frames and chosen quality; no hidden normalization; writer ready before later atomic group launch.",
+        "Missing encoder/disk/readiness failure cannot create a partial launch/take."
+      ]
+    },
+    {
+      "id": "X11-RECORD-CONTROL",
+      "depends": [
+        "X11-RECORD-FORMAT",
+        "X11-UI"
+      ],
+      "requirements": [
+        "E11-11",
+        "E11-12",
+        "E11-13"
+      ],
+      "work": "Shared RECORD button and existing global active/remembered group transaction, left atomic loop-start+capture and right capture-only state machine.",
+      "gates": [
+        "Same Rust start frame and first recorded frame across actual batch scheduler and effective starts/MultiLoop ON/OFF/stems; preflight/no partial group/emptygroup.",
+        "R2 and B7 are later moved-content/scheduler reacceptance in V0, not cycles or prerequisites for the existing global-group RECORD correction."
+      ]
+    },
+    {
+      "id": "X11-LIVE-STEMS",
+      "depends": [
+        "X11-MATERIAL",
+        "X11-KEYLOCK",
+        "P5a"
+      ],
+      "requirements": [
+        "E11-05",
+        "E11-19",
+        "E11-20"
+      ],
+      "work": "Existing immutable job/subscriber source lease -> full disk commit -> own-current native new-generation transition; single-current-model/fingerprint replacement and duplicate gates.",
+      "gates": [
+        "L1 captured job identity/fingerprint, L2 offline generation/disk commit, L3 own-ACK active transition, L4 current-model/controller/UI/retirement each explicit source-grounded proof; active adoption guard opens only after L3.",
+        "Full Native/FIFO/filter old/new continuity and true last readers; P5a selected same-set None/Some not generation proof."
+      ]
+    },
+    {
+      "id": "X11-BULK",
+      "depends": [
+        "X11-LIVE-STEMS"
+      ],
+      "requirements": [
+        "E11-06",
+        "E11-07"
+      ],
+      "work": "Global warning-confirmed all-bank216 inventory, fair deduplicated Generate/own-interest Cancel and safe Delete with partial/error state.",
+      "gates": [
+        "B1 generate then B2 delete through existing jobs/owners; no216 concurrent worker/voice promise.",
+        "Cancel preserves foreign subscribers; FullMix remains safe, final leased-file retirement and exact shared scope."
+      ]
+    }
+  ],
+  "extension_requirements": [
+    {
+      "id": "E11-01",
+      "requirement": "Live global KEYLOCK both directions",
+      "delivery_owner": "X11-KEYLOCK",
+      "normative_spec": "openspec/changes/adopt-pad-owned-pcm-residency/specs/pcm-cache-residency/spec.md",
+      "acceptance_gate": "Native productive nonunity fixed NormalLoop OFF-start->ON and ON-start->OFF; command->current window/native ACK->actual wet/output and UI, no stop/retrigger/jump; FullMix and selected stems, SPEED/BPM-lock, stopped/playing/paused, old/current voice, queue/saturation/stale/failure. Independent complete PCM+raw Native/FIFO/filter chronology across later callbacks. Mode/window ACK, warmed current-feed wet output and later exact4096-frame source-candidate adoption remain distinct; no unconditional candidate wait.",
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "final_coverage_receipts_required": [
+        "V0",
+        "H-LIVE",
+        "H-FINAL",
+        "C-FINAL"
+      ],
+      "normative_requirements": [
+        {
+          "path": "openspec/changes/adopt-pad-owned-pcm-residency/specs/pcm-cache-residency/spec.md",
+          "heading": "E11-01 Live KEYLOCK mode changes preserve finite playback"
+        }
+      ],
+      "implementation_slices": [
+        "X11-KEYLOCK"
+      ],
+      "dependencies": [
+        "X11-PLAN"
+      ]
+    },
+    {
+      "id": "E11-02",
+      "requirement": "Global broadcast and later pad override",
+      "delivery_owner": "X11-KEYLOCK",
+      "normative_spec": "openspec/changes/adopt-pad-owned-pcm-residency/specs/pcm-cache-residency/spec.md",
+      "acceptance_gate": "Global ON/pad OFF and global OFF/pad ON across multiple all-bank loaded pads; later explicit same global value rebroadcasts; only targeted pad changes locally; per-pad effective/pending/error follows fresh engine ACK, repeated/out-of-order results fenced. Existing pending/retry/unconfirmed/claimed-tail state reused, every target attempted despite partial failure; global mixed/error truthful.",
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "final_coverage_receipts_required": [
+        "V0",
+        "H-LIVE",
+        "H-FINAL",
+        "C-FINAL"
+      ],
+      "normative_requirements": [
+        {
+          "path": "openspec/changes/adopt-pad-owned-pcm-residency/specs/pcm-cache-residency/spec.md",
+          "heading": "E11-02 Explicit global broadcast and pad override"
+        }
+      ],
+      "implementation_slices": [
+        "X11-KEYLOCK"
+      ],
+      "dependencies": [
+        "X11-PLAN"
+      ]
+    },
+    {
+      "id": "E11-03",
+      "requirement": "Unlimited complete source extent through bounded streaming",
+      "delivery_owner": "X11-LONG",
+      "normative_spec": "openspec/changes/adopt-pad-owned-pcm-residency/specs/pcm-cache-residency/spec.md",
+      "acceptance_gate": "Actual >10-minute and >1-GiB complete PCM source; small oracle exact bit normalization/offset/padding/late first-onset four-second +/-0.25 alignment/chunk partitions; full five WAV/PCM+mono hashes/EOF/truncation/late mutation; fresh-process warm reopening; Cancel/disk/RAM error; measured scratch/worker overlap/process peak across growing lengths; actual PAD4 Boris Divider case when authorized source accessible. Demucs inference measured separately.",
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "final_coverage_receipts_required": [
+        "V0",
+        "H-LIVE",
+        "H-FINAL",
+        "C-FINAL"
+      ],
+      "normative_requirements": [
+        {
+          "path": "openspec/changes/adopt-pad-owned-pcm-residency/specs/pcm-cache-residency/spec.md",
+          "heading": "Existing bounded lanes and exact ownership capacity"
+        },
+        {
+          "path": "openspec/changes/adopt-pad-owned-pcm-residency/specs/pcm-cache-residency/spec.md",
+          "heading": "E11-03 Complete source extent is independent of scratch admission"
+        }
+      ],
+      "implementation_slices": [
+        "X11-LONG"
+      ],
+      "dependencies": [
+        "X11-KEYLOCK",
+        "P3"
+      ]
+    },
+    {
+      "id": "E11-04",
+      "requirement": "Stable zoom waveform and number row",
+      "delivery_owner": "X11-UI",
+      "normative_spec": "openspec/changes/refine-loop-editor-performance-actions/specs/waveform-editor/spec.md",
+      "acceptance_gate": "Full editor headless draw records X/Y geometry, count, clip/cache/font/DPI and toolbar across zoom history/sizes/scales; one waveform and one upper number row with no shifted copy. Existing plot-only tests insufficient; actual Human visual gate remains.",
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "final_coverage_receipts_required": [
+        "V0",
+        "H-LIVE",
+        "H-FINAL",
+        "C-FINAL"
+      ],
+      "normative_requirements": [
+        {
+          "path": "openspec/changes/refine-loop-editor-performance-actions/specs/waveform-editor/spec.md",
+          "heading": "Zoom maintains one waveform and upper number row (E11-04)"
+        }
+      ],
+      "implementation_slices": [
+        "X11-UI"
+      ],
+      "dependencies": [
+        "X11-KEYLOCK"
+      ]
+    },
+    {
+      "id": "E11-05",
+      "requirement": "Generate while playback continues with separate adoption",
+      "delivery_owner": "X11-LIVE-STEMS",
+      "normative_spec": "openspec/changes/extend-shared-stem-generation/specs/stem-cache/spec.md",
+      "acceptance_gate": "Actual background job while FullMix/selected stems/KEYLOCK play at nonneutral rate; immutable source lease/verified disk commit separate from own current-window/voice/history/native ACK adoption; continuous old Native/FIFO/filter through later callbacks; stop/unload/replacement/stale/cancel and other users preserve old audio. P5a same selected set not proof.",
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "final_coverage_receipts_required": [
+        "V0",
+        "H-LIVE",
+        "H-FINAL",
+        "C-FINAL"
+      ],
+      "normative_requirements": [
+        {
+          "path": "openspec/changes/extend-shared-stem-generation/specs/stem-cache/spec.md",
+          "heading": "E11-05 Offline Generation Is Independent Of Pad Playback"
+        },
+        {
+          "path": "openspec/changes/extend-shared-stem-generation/specs/stem-cache/spec.md",
+          "heading": "E11-05 New Stem Sets Adopt With Independent Native Acknowledgement"
+        },
+        {
+          "path": "openspec/changes/extend-shared-stem-generation/specs/stem-cache/spec.md",
+          "heading": "Stem Generation And Replacement Require An Inactive Pad"
+        }
+      ],
+      "implementation_slices": [
+        "X11-LIVE-STEMS"
+      ],
+      "dependencies": [
+        "X11-MATERIAL",
+        "X11-KEYLOCK",
+        "P5a"
+      ]
+    },
+    {
+      "id": "E11-06",
+      "requirement": "Generate all loaded pads with cancel",
+      "delivery_owner": "X11-BULK",
+      "normative_spec": "openspec/changes/extend-shared-stem-generation/specs/background-tasks/spec.md",
+      "acceptance_gate": "Warning confirmation snapshot covers all 216 slots/all banks, including sparse/duplicate sources and model fingerprints; exact one job per material/config, existing2 workers/32queue fair refill; progress successes/skips/errors/partial; Cancel removes batch interests/own processes cooperatively and preserves unrelated subscribers.",
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "final_coverage_receipts_required": [
+        "V0",
+        "H-LIVE",
+        "H-FINAL",
+        "C-FINAL"
+      ],
+      "normative_requirements": [
+        {
+          "path": "openspec/changes/extend-shared-stem-generation/specs/background-tasks/spec.md",
+          "heading": "E11-06 Shared Stem Jobs Deduplicate Material And Model Intent"
+        },
+        {
+          "path": "openspec/changes/extend-shared-stem-generation/specs/background-tasks/spec.md",
+          "heading": "E11-06 All Loaded Pads Generate Through A Bounded Fair Batch"
+        },
+        {
+          "path": "openspec/changes/extend-shared-stem-generation/specs/background-tasks/spec.md",
+          "heading": "E11-06 Stem Batch Cancel Detaches Only Its Own Interests"
+        },
+        {
+          "path": "openspec/changes/extend-shared-stem-generation/specs/performance-ui/spec.md",
+          "heading": "E11-06 All Loaded Stem Actions Require Scoped Confirmation"
+        }
+      ],
+      "implementation_slices": [
+        "X11-BULK"
+      ],
+      "dependencies": [
+        "X11-LIVE-STEMS"
+      ]
+    },
+    {
+      "id": "E11-07",
+      "requirement": "Delete all loaded pads safely",
+      "delivery_owner": "X11-BULK",
+      "normative_spec": "openspec/changes/extend-shared-stem-generation/specs/performance-ui/spec.md",
+      "acceptance_gate": "Warned all-bank captured inventory, Cancel no effect; revoke exact affected current selections and ACK safe FullMix transition; shared outside batch interests/old voices/history/job/reader pins protect files; last actual reader retirement only, no leased overwrite/external deletion.",
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "final_coverage_receipts_required": [
+        "V0",
+        "H-LIVE",
+        "H-FINAL",
+        "C-FINAL"
+      ],
+      "normative_requirements": [
+        {
+          "path": "openspec/changes/extend-shared-stem-generation/specs/performance-ui/spec.md",
+          "heading": "E11-07 All Loaded Stem Deletion Uses Confirmed Shared-Material Scope"
+        },
+        {
+          "path": "openspec/changes/extend-shared-stem-generation/specs/stem-cache/spec.md",
+          "heading": "E11-19 Stem Retirement Waits For Actual Last Readers"
+        }
+      ],
+      "implementation_slices": [
+        "X11-BULK"
+      ],
+      "dependencies": [
+        "X11-LIVE-STEMS"
+      ]
+    },
+    {
+      "id": "E11-08",
+      "requirement": "Readable source roots with safe names",
+      "delivery_owner": "X11-MATERIAL",
+      "normative_spec": "openspec/changes/adopt-pad-owned-pcm-residency/specs/load-audio-files/spec.md",
+      "acceptance_gate": "samples/<Originalfilename>/exact source leaf plus stems/.pcm-cache; Windows case/reserved/unsafe/trailing/path-length/hash suffix collision tests, contained resolver native+Python consistency, original bytes/encoding preserved; hidden stable identity separate; no #nnn folders required.",
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "final_coverage_receipts_required": [
+        "V0",
+        "H-LIVE",
+        "H-FINAL",
+        "C-FINAL"
+      ],
+      "normative_requirements": [
+        {
+          "path": "openspec/changes/adopt-pad-owned-pcm-residency/specs/load-audio-files/spec.md",
+          "heading": "E11-08 Readable source directories with hidden stable identity"
+        }
+      ],
+      "implementation_slices": [
+        "X11-MATERIAL"
+      ],
+      "dependencies": [
+        "X11-LONG",
+        "P1b",
+        "P2b"
+      ]
+    },
+    {
+      "id": "E11-09",
+      "requirement": "Complete SHA reuse and independent pad state",
+      "delivery_owner": "X11-MATERIAL",
+      "normative_spec": "openspec/changes/adopt-pad-owned-pcm-residency/specs/load-audio-files/spec.md",
+      "acceptance_gate": "Equalbytes/differentnames canonical root reuse and no new source/PCM/stem/decode/inference; samename+size/differentbytes separate; independent loop/rate/key/masks/GainEQ/DSP/voices, copy/move origin-deletion/reopen and all-bank ownership.",
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "final_coverage_receipts_required": [
+        "V0",
+        "H-LIVE",
+        "H-FINAL",
+        "C-FINAL"
+      ],
+      "normative_requirements": [
+        {
+          "path": "openspec/changes/adopt-pad-owned-pcm-residency/specs/load-audio-files/spec.md",
+          "heading": "E11-09 Full-content reuse keeps pad state independent"
+        }
+      ],
+      "implementation_slices": [
+        "X11-MATERIAL"
+      ],
+      "dependencies": [
+        "X11-LONG",
+        "P1b",
+        "P2b"
+      ]
+    },
+    {
+      "id": "E11-10",
+      "requirement": "Safe migration from existing material/legacy layouts",
+      "delivery_owner": "X11-MATERIAL",
+      "normative_spec": "openspec/changes/adopt-pad-owned-pcm-residency/specs/project-persistence/spec.md",
+      "acceptance_gate": "Existing M-ID and legacy fixtures current config preserved; copy/flush/rename/config/native claim interruption/retry/fresh-process reopen; new intent wins, no saved ACK replay; atomic journal/current-reference commit, new refs first; unknown/reparse/private preserved, no rename under active/paused/history/job readers, last-reader cleanup.",
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "final_coverage_receipts_required": [
+        "V0",
+        "H-LIVE",
+        "H-FINAL",
+        "C-FINAL"
+      ],
+      "normative_requirements": [
+        {
+          "path": "openspec/changes/adopt-pad-owned-pcm-residency/specs/project-persistence/spec.md",
+          "heading": "E11-10 Readable-layout migration preserves current owners and intent"
+        }
+      ],
+      "implementation_slices": [
+        "X11-MATERIAL"
+      ],
+      "dependencies": [
+        "X11-LONG",
+        "P1b",
+        "P2b"
+      ]
+    },
+    {
+      "id": "E11-11",
+      "requirement": "Shared RECORD control with deliberate placement",
+      "delivery_owner": "X11-RECORD-CONTROL",
+      "normative_spec": "openspec/changes/add-live-mix-recording/specs/live-mix-recording/spec.md",
+      "acceptance_gate": "RECORD left of global START/STOP with deliberate measured gap; same button/event helper and GlobalPlaybackController path; left/right one edge=one action; Idle/Preparing/Recording/Finalizing/error truth, repeat during finalization no second take; standard StartStop remains independent.",
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "final_coverage_receipts_required": [
+        "V0",
+        "H-LIVE",
+        "H-FINAL",
+        "C-FINAL"
+      ],
+      "normative_requirements": [
+        {
+          "path": "openspec/changes/add-live-mix-recording/specs/live-mix-recording/spec.md",
+          "heading": "RECORD uses shared performance controls and effective state (E11-11)"
+        }
+      ],
+      "implementation_slices": [
+        "X11-RECORD-CONTROL"
+      ],
+      "dependencies": [
+        "X11-RECORD-FORMAT",
+        "X11-UI"
+      ]
+    },
+    {
+      "id": "E11-12",
+      "requirement": "Right-click record without transport mutation",
+      "delivery_owner": "X11-RECORD-CONTROL",
+      "normative_spec": "openspec/changes/add-live-mix-recording/specs/live-mix-recording/spec.md",
+      "acceptance_gate": "Right-click Idle starts mix capture, Recording stops/drains/finalizes; empty audio session and repeated gesture/error/finalizing cases; transport/voices/loop positions unchanged.",
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "final_coverage_receipts_required": [
+        "V0",
+        "H-LIVE",
+        "H-FINAL",
+        "C-FINAL"
+      ],
+      "normative_requirements": [
+        {
+          "path": "openspec/changes/add-live-mix-recording/specs/live-mix-recording/spec.md",
+          "heading": "Right RECORD toggles capture without playback changes (E11-12)"
+        }
+      ],
+      "implementation_slices": [
+        "X11-RECORD-CONTROL"
+      ],
+      "dependencies": [
+        "X11-RECORD-FORMAT",
+        "X11-UI"
+      ]
+    },
+    {
+      "id": "E11-13",
+      "requirement": "Atomic left-click capture and effective-loop group launch",
+      "delivery_owner": "X11-RECORD-CONTROL",
+      "normative_spec": "openspec/changes/add-live-mix-recording/specs/live-mix-recording/spec.md",
+      "acceptance_gate": "Real existing active/remembered group and effective per-pad loop starts, one Rust start frame/first recorded frame from segmented rendering; MULTILOOP ON/OFF, saved stem masks/current rates, queue failure/empty group preflight; writer/format ready before reserve/launch, no partial take or mutated group on failure. Reaccept moved content in R2 and scheduled timing in B7/V0.",
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "final_coverage_receipts_required": [
+        "V0",
+        "H-LIVE",
+        "H-FINAL",
+        "C-FINAL"
+      ],
+      "normative_requirements": [
+        {
+          "path": "openspec/changes/add-live-mix-recording/specs/live-mix-recording/spec.md",
+          "heading": "Left RECORD atomically captures the existing playback group (E11-13)"
+        }
+      ],
+      "implementation_slices": [
+        "X11-RECORD-CONTROL"
+      ],
+      "dependencies": [
+        "X11-RECORD-FORMAT",
+        "X11-UI"
+      ]
+    },
+    {
+      "id": "E11-14",
+      "requirement": "Persist formats and explicit quality defaults",
+      "delivery_owner": "X11-RECORD-FORMAT",
+      "normative_spec": "openspec/changes/add-live-mix-recording/specs/live-mix-recording/spec.md",
+      "acceptance_gate": "Persist/reopen WAV/FLAC/MP3 format and per-format quality; explicit defaults (writer design fixes values), malformed settings and missing/failed encoders; actual decode/probe verifies codec/rate/channels/duration/quality, RF64 long WAV, no hidden gain normalization.",
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "final_coverage_receipts_required": [
+        "V0",
+        "H-LIVE",
+        "H-FINAL",
+        "C-FINAL"
+      ],
+      "normative_requirements": [
+        {
+          "path": "openspec/changes/add-live-mix-recording/specs/live-mix-recording/spec.md",
+          "heading": "Recording formats quality and readiness persist explicitly (E11-14)"
+        }
+      ],
+      "implementation_slices": [
+        "X11-RECORD-FORMAT"
+      ],
+      "dependencies": [
+        "X11-RECORD-CAPTURE"
+      ]
+    },
+    {
+      "id": "E11-15",
+      "requirement": "Ignored recordings and bounded RT capture",
+      "delivery_owner": "X11-RECORD-CAPTURE",
+      "normative_spec": "openspec/changes/add-live-mix-recording/specs/live-mix-recording/spec.md",
+      "acceptance_gate": "Preallocated finite RT capturequeue exact start/end segments to nonRT writer/encoder; bounded no I/O/GIL/lock/log/allocate callback; first/end frame oracle and overflow visibly fails take while playback continues; disk/encoder/shutdown StopDrainFinalize, unique incomplete recovery/no overwrite; repo/record and /record/ gitignore implementation gate.",
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "final_coverage_receipts_required": [
+        "V0",
+        "H-LIVE",
+        "H-FINAL",
+        "C-FINAL"
+      ],
+      "normative_requirements": [
+        {
+          "path": "openspec/changes/add-live-mix-recording/specs/live-mix-recording/spec.md",
+          "heading": "Capture is frame exact bounded and realtime safe (E11-15)"
+        },
+        {
+          "path": "openspec/changes/add-live-mix-recording/specs/live-mix-recording/spec.md",
+          "heading": "Record files drain finalize and recover without overwrite (E11-15)"
+        }
+      ],
+      "implementation_slices": [
+        "X11-RECORD-CAPTURE",
+        "X11-RECORD-FORMAT"
+      ],
+      "dependencies": [
+        "X11-KEYLOCK",
+        "X11-RECORD-CAPTURE"
+      ]
+    },
+    {
+      "id": "E11-16",
+      "requirement": "Content-bound Unload/Analyze confirmation",
+      "delivery_owner": "X11-UI",
+      "normative_spec": "openspec/changes/refine-loop-editor-performance-actions/specs/performance-ui/spec.md",
+      "acceptance_gate": "Real confirmation event routes bind pad+content lifetime/revision; Cancel no mutation; selection/source/unload/replacement change while dialog open cannot unload/analyze another content; acceptance once invokes existing authoritative action.",
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "final_coverage_receipts_required": [
+        "V0",
+        "H-LIVE",
+        "H-FINAL",
+        "C-FINAL"
+      ],
+      "normative_requirements": [
+        {
+          "path": "openspec/changes/refine-loop-editor-performance-actions/specs/performance-ui/spec.md",
+          "heading": "Sidebar Load/Unload Actions For Selected Pad"
+        },
+        {
+          "path": "openspec/changes/refine-loop-editor-performance-actions/specs/audio-analysis/spec.md",
+          "heading": "Analysis Can Be Triggered Automatically And Manually"
+        }
+      ],
+      "implementation_slices": [
+        "X11-UI"
+      ],
+      "dependencies": [
+        "X11-KEYLOCK"
+      ]
+    },
+    {
+      "id": "E11-17",
+      "requirement": "Adjust Loop between Pad and BPM",
+      "delivery_owner": "X11-UI",
+      "normative_spec": "openspec/changes/refine-loop-editor-performance-actions/specs/performance-ui/spec.md",
+      "acceptance_gate": "Full sidebar draw checks label/order/separators under DPI/font sizes; existing toggle handles same pad open/close and selection behavior without transport change.",
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "final_coverage_receipts_required": [
+        "V0",
+        "H-LIVE",
+        "H-FINAL",
+        "C-FINAL"
+      ],
+      "normative_requirements": [
+        {
+          "path": "openspec/changes/refine-loop-editor-performance-actions/specs/performance-ui/spec.md",
+          "heading": "Selected-pad sidebar offers loop editing"
+        }
+      ],
+      "implementation_slices": [
+        "X11-UI"
+      ],
+      "dependencies": [
+        "X11-KEYLOCK"
+      ]
+    },
+    {
+      "id": "E11-18",
+      "requirement": "Visible shared CLOSE LOOP EDITOR",
+      "delivery_owner": "X11-UI",
+      "normative_spec": "openspec/changes/refine-loop-editor-performance-actions/specs/waveform-editor/spec.md",
+      "acceptance_gate": "Label CLOSE LOOP EDITOR right of Grid Offset with stable hit rectangle, exact same close/toggle path as Adjust Loop; no timing/transport mutation; supersedes old icon-only far-right X contract; Human visual gate retained.",
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "final_coverage_receipts_required": [
+        "V0",
+        "H-LIVE",
+        "H-FINAL",
+        "C-FINAL"
+      ],
+      "normative_requirements": [
+        {
+          "path": "openspec/changes/refine-loop-editor-performance-actions/specs/waveform-editor/spec.md",
+          "heading": "Waveform editor renders only in-frame with toolbar close"
+        }
+      ],
+      "implementation_slices": [
+        "X11-UI"
+      ],
+      "dependencies": [
+        "X11-KEYLOCK"
+      ]
+    },
+    {
+      "id": "E11-19",
+      "requirement": "One current model atomic replacement",
+      "delivery_owner": "X11-LIVE-STEMS",
+      "normative_spec": "openspec/changes/extend-shared-stem-generation/specs/stem-cache/spec.md",
+      "acceptance_gate": "Model/config fingerprint captured durably; full WAV+PCM+descriptor new set verified/atomic pointer publication; old actual live audio/reader set continues through generation/adoption; fail/cancel old remains usable, true final-reader old cleanup, no leased overwrite/no parallel user model library.",
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "final_coverage_receipts_required": [
+        "V0",
+        "H-LIVE",
+        "H-FINAL",
+        "C-FINAL"
+      ],
+      "normative_requirements": [
+        {
+          "path": "openspec/changes/extend-shared-stem-generation/specs/stem-cache/spec.md",
+          "heading": "E11-19 Selected Stem Model Has One Current Verified Set"
+        },
+        {
+          "path": "openspec/changes/extend-shared-stem-generation/specs/stem-cache/spec.md",
+          "heading": "E11-19 Stem Retirement Waits For Actual Last Readers"
+        },
+        {
+          "path": "openspec/changes/extend-shared-stem-generation/specs/stem-cache/spec.md",
+          "heading": "E11-19 Independent copied assignments retain selected predecessors"
+        }
+      ],
+      "implementation_slices": [
+        "X11-LIVE-STEMS"
+      ],
+      "dependencies": [
+        "X11-MATERIAL",
+        "X11-KEYLOCK",
+        "P5a"
+      ]
+    },
+    {
+      "id": "E11-20",
+      "requirement": "Duplicate selected-model generation prevented",
+      "delivery_owner": "X11-LIVE-STEMS",
+      "normative_spec": "openspec/changes/extend-shared-stem-generation/specs/stem-cache/spec.md",
+      "acceptance_gate": "Valid selected fingerprint disables Generate; UI/controller/direct/batch revalidation dedup current and in-flight work; selected model change enables and successful replace disables; stale/fail/cancel rechecks preserve correct model-free old set availability.",
+      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "final_coverage_receipts_required": [
+        "V0",
+        "H-LIVE",
+        "H-FINAL",
+        "C-FINAL"
+      ],
+      "normative_requirements": [
+        {
+          "path": "openspec/changes/extend-shared-stem-generation/specs/stem-cache/spec.md",
+          "heading": "E11-20 Selected Model Fingerprint Prevents Duplicate Generation"
+        }
+      ],
+      "implementation_slices": [
+        "X11-LIVE-STEMS"
+      ],
+      "dependencies": [
+        "X11-MATERIAL",
+        "X11-KEYLOCK",
+        "P5a"
+      ]
+    }
+  ],
+  "extension_authoritative_document": "docs/pre-rust-extension-20261011.md",
+  "historical_observation_limit": "unresolved_technical_limits and actual_R0_prerequisite_disposition retain R0 planning observations, not current implementation-status claims; current scoped acceptance is documented in pad-owned-pcm-program.md. All E11 outcomes are unimplemented planning obligations.",
+  "extension_checkpoint_prerequisites": {
+    "status": "SCOPED_HISTORICAL_ACCEPTANCE_ONLY",
+    "baseline": "694cd61e50a3fc81bc6a41d88269f6458c4ae269",
+    "required": [
+      "accepted NormalLoop vertical",
+      "accepted resident-transition",
+      "accepted finite fixed-geometry lifecycle/source custody"
+    ],
+    "not_accepted": [
+      "whole P4b",
+      "P5a None-to-Some/retention/effective-mode/ordinary warm return",
+      "nonzero B5",
+      "Human visual/device/hearing",
+      "E11 implementation"
+    ]
+  }
 }

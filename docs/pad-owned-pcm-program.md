@@ -157,7 +157,7 @@ not a scope substitute. Source labels are historical maps, not new acceptance.
 
 The direct extension supersedes physical duplication under #N/no-final-shared-store
 and session-only musical-mask targets. Use one canonical material version with
-original filename/encoding in `samples/materials/M<stable-id>/original`, complete
+original filename/encoding directly in `samples/<Originalfilename>/`, complete
 FullMix/aligned stem PCM in `.pcm-cache` and five WAVs in `stems`. #1..#216 identify
 stable slot membership; equal copies survive deleting origin slot/bank and reopen.
 Copy needs no new analysis/decode/separation/files when prepared data are valid;
@@ -177,7 +177,7 @@ old; cancellation does not end physical read leases. External/private files surv
 Claim-without-ACK keeps pins and fences input; no optimistic rollback/current layout.
 
 R0 has no audio run. Every future slice has bounded author work and a distinct
-native nonauthor closure. The unchanged canonical serial order is:
+native nonauthor closure. The original canonical38-ID order below remains an unchanged subsequence of the additive X11 order in the coverage map. New delivery IDs and dependencies are defined in the extension section below:
 
 | ID | Deliverable / prerequisite | Required evidence and limits |
 | --- | --- | --- |
@@ -195,8 +195,8 @@ native nonauthor closure. The unchanged canonical serial order is:
 | P3 | Fuenf aligned persistent Stem-f32+fuenf WAVs, joint immutable pair/descriptor in canonical material container | Source/rate/layout/offset/digests/EOF, cross-area fault/retry, retained readers; vier Live-Komponenten, instrumental disk/offline, keine wiederholte complete alignment |
 | P4a | Direct verified retained descriptor ranges/shared eligible backing, changed-content-only refresh | Complete-buffer dry tap/P-H/seam oracles 75/1000 cycles; echte ACK, old voice/job/window races; unveraenderte215 Handles |
 | P4b | Wirkliche finite DSP/KEYLOCK-Versorgung+Continuation fuer heutigen production k=0 | Executed feed/lookahead/history/FIFO/filter/seams/crossfade/oldvoices; causality1598/33.292ms erhalten, fallback-only laesst Gate offen. Nonzero k bleibt B5 |
-| P5a | Guarded erster aktiver None->Some fuer schon selected same committed Set plus resident/effective-mode ACK | FullMix laeuft weiter, continuous128 sourceframes, voice/cursor/loop/timing/history; active generation/content replacement bleibt gesperrt |
-| P5b | Lazy savedALL/generation/explicit requests, Settings preloadOFF/budget128..16384MiB default512, fair echte216 admission | Exact requested/preparing/ACK/error+unique backing/old-new overlap; 2/32/8/1GiB und timing/analysis512 separat. Keine216voices/96-handle-fantasy, echter ausreichender supported Budgetfall |
+| P5a | Guarded erster aktiver None->Some fuer schon selected same committed Set plus resident/effective-mode ACK | FullMix laeuft weiter, continuous128 sourceframes, voice/cursor/loop/timing/history; new-generation adoption remains separately guarded under E11-05/19; offline activity restrictions are superseded only after the new job safety proof |
+| P5b | Lazy savedALL/generation/explicit requests, Settings preloadOFF/budget128..16384MiB default512, fair echte216 admission | Exact requested/preparing/ACK/error+unique backing/old-new overlap; 2/32/8 and1GiB simultaneous scratch (not total file extent) with timing/analysis512 separate. Keine216voices/96-handle-fantasy, echter ausreichender supported Budgetfall |
 | R1 | Expliziter musical CopySnapshot und sourceunabhaengiger save/reopen restore | Deep-copy mutable intent incl aktuelle **Sessionstemmask/preset/Mutes**, loop/grid/timing/correction/base/extra/KeyLock/GainEQ/Haken; same material refs, neue gestoppte instance/DSP, keine cursor/voice/progress/jobhandle Kopie; source-delete/reopen ohne model/analysis/decode |
 | R2 | Atomarer nativer pair move/swap/copy-overwrite plus selected-content follow UND angenommene HoldRelease-Uebernahme | Zwei laufende Quellen ohne Restart/FIFO-/Filterreset; gestoppte Kopien ohne Holdtoken, nur removed target stop; slot-MIDI unveraendert; ContentInstance/Lifetime/PauseEffect/acceptedAction/NativeACK atomar remapped oder retired; alle R2-Holdfaelle der gebundenen Evidence-Matrix und eigenstaendige Nichtautor-Closure vor R3/R4 |
 | R3 | Re-Arrange toggle/Gestenhilfe/Pad-left move-swap/right copy-overwrite UI | DefaultOFF nach restart, Warnfarbe bevorzugt untenlinks, keine mouse trigger/stop bei dragbegin, MIDI nutzbar; eindeutig target/op, kein single-pad dialog; cancel/self/invalid/empty no-op |
@@ -237,7 +237,7 @@ All original SourceTicket/ACK/freshness/complete StemSet/old-voice/FIFO/filter/s
 STOP/bank/accepted P/integer H/one rate-owner obligations remain. Keep36 mixtures/
 288 cases/24 failed nonneutral and1598 frames/33.292ms unavailable-at-T,75/1000-cycle
 oracles. Current32 voices/96 preparation handles are distinct from216 residents;
-keep2 workers/32 queue/8 startup admissions/1GiB job/separate512MiB timing/analysis.
+keep2 workers/32 queue/8 startup admissions/1GiB simultaneous scratch (not total complete extent)/separate512MiB timing/analysis.
 The new aggregate resident budget128..16384MiB/default512 is separately admitted.
 Power-loss/non-Windows capture, model-unavailable, GPU/native ORT same-model parity,
 independent components, process peaks, dependency/rollback and final human gates
@@ -262,3 +262,11 @@ runtime proof. Human alone operates GUI/CPAL/devices/recorder/listening.
 Model recommendation: Sol Ultra for routine storage/control/measurement work;
 recommend Astra Ultra before P4b/B5 coupled finite-DSP/latency reasoning. The user
 controls switching. STOP before full Rust-app port planning/implementation/Slice8.
+
+## Required direct extension 2026-10-11
+
+The [complete E11 engineering plan](pre-rust-extension-20261011.md) integrates all20 new direct requirements and exact normative owners/acceptance gates. This is PLAN_ONLY; no implementation or Human acceptance follows. Existing38 IDs/48 edges,169 rows,56+9 and HC01..26 remain exact; ten additive bounded delivery IDs make48 IDs/78 forward DAG edges, with20 extension rows separately tracked (189 detail/crosslink plus extension rows).
+
+X11-KEYLOCK is prioritized after X11-PLAN and the accepted NormalLoop/lifecycle checkpoint, before remaining P4b. It does not depend on whole P4b/B5 and does not close those parents. X11-UI/LONG/MATERIAL and RECORD-CAPTURE→FORMAT→CONTROL are independently bounded results before their later integration; MATERIAL feeds R1. X11-LIVE-STEMS follows MATERIAL/KEYLOCK and genuine P5a, with separate offline/disk/new-generation ACK proof; X11-BULK then feeds P6 along with RECORD. All extension deliveries feed V0 before H-LIVE/SLICE7/H-FINAL/C-FINAL. R2/B7 reaccept recording's later content/scheduler integration, with no prerequisite cycle. The full ordered list and exact edges live in coverage JSON, while the original table remains the retained historical/program subsequence.
+
+The E11 targets replace opaque browsing roots with `samples/<Originalfilename>/`, total-complete-PCM rejection with streamed complete conversion/full warm integrity, activity-only offline generation restrictions with source leases and independent active new-set gates, and icon-only X with labeled CLOSE LOOP EDITOR. Shared hidden SHA identity, immutable generations/readers, original-source preservation, fresh own ACKs, RT constraints, actual resource/music/Human gates and final stop boundary remain. Completed historical subtasks are not reopened; new outcomes remain OPEN. No full Rust-port plan/implementation/Slice8 is authorized here.

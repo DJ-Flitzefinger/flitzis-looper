@@ -265,3 +265,18 @@ timing/analysis/per-job bounds and constrain unique backing plus pending/live ov
 - **WHEN** a reduced budget is below already pinned ownership
 - **THEN** it SHALL preserve pinned readers and show temporary over-budget state until safe retirement
 - **AND** these fields SHALL use ProjectState without machine/credential configuration or persisted runtime readiness
+
+### Requirement: E11-10 Readable-layout migration preserves current owners and intent
+The system SHALL migrate existing M-ID and legacy source/WAV/PCM references to the readable source layout through the existing verified material-wise journal/config/reference transaction and fresh native source/timing/window ACKs without data reset.
+Migration SHALL copy/verify into a new contained root while current readers exist, reserve new owners before releasing old, publish references atomically only for the captured current revision, and retire old files only at actual last assignment/voice/job/action/history/reader/native-ACK release across all banks. Unknown files/journals and external originals SHALL survive.
+
+#### Scenario: Reopen after each migration boundary
+- **WHEN** migration is interrupted before or after copy, flush, rename, config claim or native adoption
+- **THEN** retry/reopen SHALL recognize verified attempt-owned state and require fresh ACKs rather than replay saved runtime authority
+- **AND** a newer source, loop, key, mask or config revision SHALL win over stale captured intent
+- **AND** current owners SHALL retain old usable paths until safe release without rename beneath readers
+
+#### Scenario: Shared legacy materials and unknown files
+- **WHEN** equal sources occur in different banks with active/paused old voices and unknown adjacent files
+- **THEN** one verified canonical content root SHALL serve equal users while their state remains independent
+- **AND** only declared retired old artifacts SHALL be cleaned after genuine final use, preserving unknown and private data

@@ -3,7 +3,7 @@
 ### Requirement: Load Audio File Into Sample Slot
 The system SHALL expose the existing asynchronous Python audio-load API for
 zero-based sample slots 0 through 215 and copy byte-exact original audio into the
-canonical immutable project-local `samples/materials/M<stable-id>/original/` material version before the
+canonical immutable project-local `samples/<Originalfilename>/` material version before the
 assignment becomes part of the current project.
 
 The persisted assignment SHALL bind durable ContentInstance identity/lineage and
@@ -48,7 +48,7 @@ failure SHALL leave previous assignment state intact.
 
 #### Scenario: Original format and material membership are preserved
 - **WHEN** WAV audio named `Take.wav` is imported into slot215
-- **THEN** its byte-exact original is owned below `samples/materials/M<id>/original/Take.wav` with slot#216 membership
+- **THEN** its byte-exact original is owned below `samples/Take.wav/Take.wav` with slot#216 membership
 - **AND** its `.pcm-cache` and `stems` use the same immutable material version without MP3 relabelling
 
 #### Scenario: Canonical absolute restore reuses its material
@@ -142,3 +142,25 @@ and tolerate missing files. A full admission queue SHALL preserve previous state
 - **WHEN** unload or replacement cannot reserve full native/action/feedback retirement capacity
 - **THEN** old content, hold ownership, settings, source authority and files remain intact
 - **AND** successful removal later fences old content-bound actions before slot reuse
+
+### Requirement: E11-08 Readable source directories with hidden stable identity
+The system SHALL store each canonical source directly in `samples/<Originalfilename>/` with its exact original filename/encoding, stems/ and .pcm-cache/ children, while retaining stable hidden full-content identity separately from visible naming.
+The contained resolver SHALL deterministically sanitize unsafe Windows directory characters, reserved names, trailing-dot/space aliases, case-insensitive collisions and path length, using a readable prefix plus content-hash suffix when needed. It SHALL reject traversal/reparse/outside references and SHALL NOT require numbered pad folders or opaque M-ID browsing roots.
+
+#### Scenario: Different bytes have identical case-insensitive names
+- **WHEN** two different full-content hashes arrive as Take.wav and TAKE.wav, or a directory name is unsafe
+- **THEN** distinct collision-safe readable directories SHALL preserve the exact supported source leaf and verified bytes
+- **AND** existing directories/files/readers SHALL never be overwritten or renamed beneath owners
+
+### Requirement: E11-09 Full-content reuse keeps pad state independent
+The system SHALL reuse one verified compatible canonical source/PCM/stem material for byte-identical imports, including different filenames and copied/moved pads, using the complete content SHA and transform identities rather than name, size or stat metadata.
+
+#### Scenario: Equal content under different filenames
+- **WHEN** identical bytes are imported again under another name or a pad is copied/moved
+- **THEN** the first verified canonical readable root SHALL be reused without another source-file copy, complete decode or separation when compatible data exist
+- **AND** each pad SHALL retain independent loop/range, rate, KEYLOCK/key, masks, Gain/EQ, DSP/voice and content lifetime
+- **AND** deleting the origin slot/bank SHALL preserve every other actual user
+
+#### Scenario: Equal name and size but different bytes
+- **WHEN** another input has the same filename and size but a different complete SHA
+- **THEN** it SHALL receive distinct verified material identity and a collision-safe readable root

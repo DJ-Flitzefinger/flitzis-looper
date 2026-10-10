@@ -473,3 +473,7 @@ is independent, delivered by existing input/control tick outside rendered contro
 Current musical stem selections become independent durable CopySnapshot choices;
 physical presses/holds/voices/cursors/meters/progress/job tokens remain transient.
 All implementations/native effects/full216/quality/human evidence remain pending.
+
+## Pending direct extension2026-10-11
+
+The [E11 UI/control plan](pre-rust-extension-20261011.md) requires full editor geometry/cache/Y/clip/font/DPI/toolbar draw checks and final Human visual confirmation; existing plot-only tests do not settle the reported duplicate. Unload/Analyze confirmations bind captured content, Adjust moves between Pad/BPM, and visible CLOSE LOOP EDITOR follows Grid Offset through the same close action. RECORD reuses the global button/group implementation with a deliberate gap, single-edge left/right behavior and truthful Preparing/Recording/Finalizing/error state. This is a pending contract, not delivered UI acceptance.

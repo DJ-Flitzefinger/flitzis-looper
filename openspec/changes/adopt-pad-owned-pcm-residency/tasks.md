@@ -403,3 +403,16 @@ new-process warm/in-process warm/firstlive/ready/oneedit/216unique+shared/preloa
 long-loop/no-copy-duplicates/integrity I/O/disk/PCM/RSS/commit/peaks/last-owner/restore
 measurements with individual repeated runs and negatives; V0 repeats under new pitch.
 No deferred216, Arc-bytes-as-RSS, directory-only speed claim or device substitute.
+
+## X11 direct extension — new unchecked delivery only
+
+The [full extension](../../../docs/pre-rust-extension-20261011.md) and [additive coverage](../../../docs/pre-rust-program-coverage.json) own exact dependencies and real gates. Original38/48 and all historical checked subtasks remain intact.48 IDs/78 edges include ten new bounded deliveries; none is implementation-complete here.
+
+- [ ] X11-PLAN: strict every affected change, exact full20+169/56/9/HC26/old38/48 retention, forward DAG/docs/diff, independent NONAUTHOR frozen source review and coherent publication at plan scope only.
+- [ ] X11-KEYLOCK: productive installed global/pad routes, both directions at nonneutral rate, own-window/native ACK and actual wet continuity/override/UI/stale/error matrix. Accepted NormalLoop/lifecycle prerequisites only; no full P4b/B5 prerequisite or guard waiver.
+- [ ] X11-LONG: replace complete preparation and warm-verifier total-extent gates with bounded retained-reader streaming; exact normalization/first-onset/alignment/padding and full EOF digests, >10-minute/>1-GiB real cases, reported PAD4 source when accessible, measured scratch/process/live peaks and Cancel/real disk/RAM failure.
+- [ ] X11-MATERIAL M1: readable contained roots, full-SHA cross-name dedup/unsafe-case collisions, exact original preservation and independent content settings/DSP/owners through copy/move/origin-delete.
+- [ ] X11-MATERIAL M2: existing M-ID/legacy journal/config/current-reference migration with fresh native ACK and fault/reopen/latest-intent/unknown/true-last-reader proof; no rename beneath owners or reset.
+- [ ] X11-UI, X11-LIVE-STEMS, X11-BULK and RECORD-CAPTURE/FORMAT/CONTROL: implement through their focused companion tasks, keeping separate new-generation proof and final Human gates.
+- [ ] P6/V0: repeat aggregate resources, all216/bank/dedup/cleanup/negative cases under new generation and capture workload, including later R2/B7 atomic-content/scheduler integration.
+- [ ] H-LIVE/H-FINAL/C-FINAL: actual final Human device/visual/recording/hearing testing and bounded corrections; preserve all original parent gates; STOP before full Rust-port planning/implementation/Slice8.

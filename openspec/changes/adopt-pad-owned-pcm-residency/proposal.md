@@ -9,7 +9,7 @@ publishes restored stems, and the UI cannot request an existing disk set whose
 RAM is absent. Native active publication rejects first residency activation.
 
 The revised target gives all occupied slots equal references to canonical immutable
-material versions in `samples/materials/M<stable-id>/`, with #1..#216 identifying
+material versions in `samples/<Originalfilename>/`, with #1..#216 identifying
 stable slot membership rather than duplicate audio ownership. It retains reusable aligned stem PCM on disk, prepares actual required
 source ranges, and loads stems deliberately. All 216 occupied resident slots are
 a required case. Faster triggers and lower RAM require actual measured evidence.
@@ -50,8 +50,7 @@ This change builds on the delivered `cache-full-pcm-and-resident-loops` and
 `bind-prepared-stem-publication` foundations. Their accepted evidence/tasks remain
 historical. Its new PCM requirements add stronger end-state obligations; its
 MODIFIED stem requirements replace the former global container and inactive-only
-first-adoption wording **when implemented**, retaining inactive generation and
-content replacement. Project persistence explicitly replaces eager restored
+first-adoption wording **when implemented**, retaining independently guarded active new-generation adoption under E11-05/19. Project persistence explicitly replaces eager restored
 publication. Performance UI explicitly replaces the disabled-unless-resident
 mode control. Base specs and delivered-runtime docs remain distinguishable from
 this pending target. Archive/merge must reconcile these effective deltas rather
@@ -71,3 +70,9 @@ with bounded guards, acknowledgements, transitions and retirement capacity; no
 disk I/O, Python/GIL/UI, blocking locks, logging, inference, plugin scanning,
 unbounded loops or heavy allocation. [Design](design.md) and [tasks](tasks.md)
 define the serial implementation and acceptance boundaries.
+
+## Direct Human extension 2026-10-11 — PLAN_ONLY
+
+The [bounded extension](../../../docs/pre-rust-extension-20261011.md) adds all E11-01..20 without reopening completed historical subtasks or accepting unimplemented behavior. It supersedes the opaque material root with `samples/<Originalfilename>/<Originalfilename>`, stems/ and .pcm-cache/; hidden full-content SHA identity and immutable generations remain. It supersedes total-extent 1-GiB rejection with bounded streaming conversion/full warm verification, preserving separate scratch/live/analysis limits. Offline generation during playback is separated from verified disk commit and independently guarded active adoption; existing runtime guards are unchanged by this plan. Companion changes extend-shared-stem-generation, refine-loop-editor-performance-actions and add-live-mix-recording own new stem/UI/recording behavior.
+
+X11-KEYLOCK is the prioritized bounded production k=0 fixed NormalLoop correction built on accepted vertical and lifecycle proofs, not whole P4b/B5 acceptance. Full scope, original 38 IDs/48 edges, 169 rows, 56+9 and HC01..26 remain; additive DAG and actual gates are in the maintained program/coverage. No product implementation, runtime acceptance or full Rust-port planning is part of X11-PLAN.

@@ -1173,3 +1173,7 @@ pass, or report a preserved error. New saved ownership cancels queued obsolete
 retirement with a terminal preservation outcome. Config inventory binds opened
 handles and current file identities while allowing access-time changes caused by
 reading alone.
+
+## Pending direct extension2026-10-11
+
+The [E11 plan](pre-rust-extension-20261011.md) adds required bounded source-streaming/readable identity, immutable offline generation with separate active new-set ACK, all-bank bulk interests and exact native segment mix capture. Existing source readers, scheduler, project-assets leases/retirement and worker lanes remain authoritative. Capture requires one preallocated RT data ring and a nonRT spool/encoder; it grants no new playback capacity. Current runtime guards and scoped proofs remain unchanged until each delivery passes. All RT and final Human gates remain.

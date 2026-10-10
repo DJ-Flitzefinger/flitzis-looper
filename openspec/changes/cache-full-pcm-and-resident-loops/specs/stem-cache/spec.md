@@ -1,34 +1,24 @@
 ## MODIFIED Requirements
 
 ### Requirement: Stem Generation And Replacement Require An Inactive Pad
-The system SHALL allow stem generation and adoption of a new complete stem set
-only while the target pad is not currently playing.
+The system SHALL separate offline generation and verified disk publication from active new-set adoption: generation MAY proceed for a playing pad under an immutable source lease, while active adoption SHALL remain fail-closed until the E11-05 and E11-19 new-generation continuity, ownership and own-native-ACK gates are implemented and proved.
+This pending target supersedes the historical heading's inactive-generation restriction. P5a first residency of an already selected committed set and same-set relocation SHALL retain their distinct guarded identities; neither SHALL authorize a new generation, new timing evidence or another user's result. Existing source/cache/set/ticket/request/geometry/window/voice/DSP/history/FIFO leases and native ACKs SHALL remain required.
 
-If playback starts during generation, completed results SHALL wait for the pad
-to stop and still pass current source/request/timing ownership before adoption.
-Finite resident-window relocation MAY occur while playing only when it retains
-the identical complete source and already accepted complete StemSet identity,
-matching source/window revisions and proved shared read/native/history context.
-This narrow relocation SHALL require transactional native ACK and SHALL NOT
-introduce new generated samples, complete-set content or accepted timing evidence.
+#### Scenario: Background generation while playback continues
+- **WHEN** a playing pad requests a different selected model
+- **THEN** the background job MAY generate and verify private immutable artifacts while actual old FullMix/stems and Native/FIFO/filter audio continues
+- **AND** job completion alone SHALL NOT replace effective live audio or report new resident readiness
 
-#### Scenario: Playing pad blocks generation
-- **WHEN** stem generation is requested for a playing pad
-- **THEN** the request is rejected or deferred outside the callback
+#### Scenario: Safe active replacement requires its own proof
+- **WHEN** a verified different set requests active adoption
+- **THEN** current source/timing/window/voice/history permits, new/old capacity and each affected pad's own ACK SHALL precede a bounded continuous transition
+- **AND** unsupported, stale, cancelled or failed adoption SHALL preserve actual old effective audio and visible pending/error state
 
-#### Scenario: Pad starts during generation
-- **WHEN** a pad begins playing before a new generated set completes
-- **THEN** the new set cannot replace its active prepared audio
-- **AND** the previous effective full-mix/stem audio remains valid
-
-#### Scenario: Active same-set window relocation
-- **WHEN** a live loop edit, seek or ALL needs another window of the same accepted StemSet
-- **THEN** the matching finite full-mix/component transaction may adopt after native ACK
-- **AND** old effective audio remains valid before adoption
-
-#### Scenario: Different set cannot use the relocation exception
-- **WHEN** a pending window supplies a different complete source or StemSet digest
-- **THEN** active adoption is rejected and the inactive-only set rule remains in force
+#### Scenario: First residency is not generation replacement
+- **GIVEN** a current selected complete disk set exists without resident components
+- **WHEN** ALL is requested during FullMix playback
+- **THEN** P5a SHALL require its same-selected-set ranges, permits and native ACK
+- **AND** E11-05/19 new-generation gates SHALL remain separate and unproved by that path
 
 ### Requirement: Stem Cache Is Pad-Scoped And Deletable
 The system SHALL store project stem artifacts under the pad-labelled container
