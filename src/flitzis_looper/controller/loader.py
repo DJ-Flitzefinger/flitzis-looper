@@ -1,6 +1,7 @@
 from itertools import islice
 from pathlib import Path
-from typing import TYPE_CHECKING, NotRequired, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict, TypeVar
+from uuid import uuid4
 
 from pydantic import ValidationError
 
@@ -13,11 +14,14 @@ from flitzis_looper.controller.base import BaseController
 from flitzis_looper.controller.saved_residency import saved_resident_loop
 from flitzis_looper.controller.validation import normalize_bpm
 from flitzis_looper.models import (
+    PadContentIdentity,
     ProjectState,
     SampleAnalysis,
     SessionState,
     validate_sample_id,
 )
+from flitzis_looper.project_materials import original_asset
+from flitzis_looper_audio import ProjectAssetLease
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -31,6 +35,7 @@ _PadValue = TypeVar("_PadValue")
 class _RestoredLoadOptions(TypedDict):
     run_analysis: bool
     replace_assignment: bool
+    source_intent: Literal["restore"]
     restore_automatic: NotRequired[bool]
     resident_loop_start_s: NotRequired[float]
     resident_loop_end_s: NotRequired[float]
@@ -183,7 +188,7 @@ class LoaderController(BaseController):
         try:
             reservation = self._assets.reserve()
             request_id = self._audio.load_sample_async(
-                sample_id, path, run_analysis=True, replace_assignment=True
+                sample_id, path, run_analysis=True, replace_assignment=True, source_intent="import"
             )
         except (RuntimeError, ValueError) as error:
             if reservation is not None:
@@ -361,6 +366,7 @@ class LoaderController(BaseController):
             _reset_pad_value(
                 self._project.sample_paths, sample_id, defaults.sample_paths[sample_id]
             ),
+            _reset_pad_value(self._project.pad_content, sample_id, defaults.pad_content[sample_id]),
             _reset_pad_value(
                 self._project.sample_durations,
                 sample_id,
@@ -485,51 +491,46 @@ class LoaderController(BaseController):
                 self._assets.retire_unassigned_original(cached_path)
             return
 
-        self._assets.sync_assignments()
-
-        self._session.loading_sample_ids.discard(sample_id)
-        self._session.sample_load_errors.pop(sample_id, None)
-        self._session.sample_load_progress.pop(sample_id, None)
-        self._session.sample_load_stage.pop(sample_id, None)
-        self._load_request_ids.pop(sample_id, None)
-
-        pending = self._session.pending_sample_paths.pop(sample_id, None)
-        selected_assignment = sample_id in self._new_load_sample_ids
-        self._new_load_sample_ids.discard(sample_id)
+        pending = self._session.pending_sample_paths.get(sample_id)
         cached_path = event.get("cached_path")
+        target_path = cached_path if isinstance(cached_path, str) else pending
+        if target_path is None:
+            self._settle_load_request(sample_id)
+            self._session.sample_load_errors[sample_id] = "Loaded source has no original reference"
+            return
+        try:
+            self._assets.sync_assignments()
+            target_path, previous_path, new_assignment, content, prepared = (
+                self._prepare_completed_assignment(sample_id, target_path, event)
+            )
+        except (OSError, RuntimeError, ValueError) as error:
+            self._settle_load_request(sample_id)
+            self._session.sample_load_errors[sample_id] = (
+                f"Loaded source assignment failed: {error}"
+            )
+            return
 
-        target_path: str | None = cached_path if isinstance(cached_path, str) else pending
-        if isinstance(target_path, str):
-            target_path = self._normalize_project_path(target_path)
-
-        previous_path = self._project.sample_paths[sample_id]
-        normalized_previous = (
-            self._normalize_project_path(previous_path) if previous_path is not None else None
-        )
-        new_assignment = target_path is not None and (
-            selected_assignment or normalized_previous != target_path
-        )
-        restored_assignment = (
-            target_path is not None and not new_assignment and normalized_previous == target_path
-        )
+        self._settle_load_request(sample_id)
+        self._session.sample_load_errors.pop(sample_id, None)
+        restored_assignment = not new_assignment
         timing_stale = event.get("timing_stale") is True
         if new_assignment:
             self._reset_completed_assignment(sample_id, timing_stale=timing_stale)
             self._project.sample_paths[sample_id] = target_path
             self._clear_stem_cache(sample_id)
-            self._mark_project_changed()
         elif restored_assignment and previous_path != target_path:
             self._project.sample_paths[sample_id] = target_path
-            self._mark_project_changed()
+
+        self._record_completed_identity(
+            sample_id, content, prepared, changed=new_assignment or previous_path != target_path
+        )
 
         duration_s = event.get("duration_s")
         if isinstance(duration_s, float):
             self._project.sample_durations[sample_id] = duration_s
 
-        self._assets.sync_assignments()
-
         try:
-            self._assets.acknowledge_original(self._project.sample_paths[sample_id])
+            self._assets.sync_assignments()
             if new_assignment and not timing_stale:
                 self._publish_unloaded_pad_audio_defaults(sample_id, ProjectState())
             self._finish_loaded_timing(
@@ -543,6 +544,52 @@ class LoaderController(BaseController):
             self._session.sample_load_errors[sample_id] = (
                 f"Loaded source control refresh failed: {error}"
             )
+
+    def _settle_load_request(self, sample_id: int) -> None:
+        self._session.loading_sample_ids.discard(sample_id)
+        self._session.sample_load_progress.pop(sample_id, None)
+        self._session.sample_load_stage.pop(sample_id, None)
+        self._session.pending_sample_paths.pop(sample_id, None)
+        self._load_request_ids.pop(sample_id, None)
+        self._new_load_sample_ids.discard(sample_id)
+
+    def _record_completed_identity(
+        self,
+        sample_id: int,
+        content: PadContentIdentity,
+        prepared: tuple[Path, ProjectAssetLease],
+        *,
+        changed: bool,
+    ) -> None:
+        changed = changed or self._project.pad_content[sample_id] != content
+        self._project.pad_content[sample_id] = content
+        self._assets.adopt_original(sample_id, prepared)
+        if changed:
+            self._mark_project_changed()
+
+    def _prepare_completed_assignment(
+        self, sample_id: int, target_path: str, event: dict[str, object]
+    ) -> tuple[str, str | None, bool, PadContentIdentity, tuple[Path, ProjectAssetLease]]:
+        """Reserve the complete original/identity tuple before resetting old intent."""
+        asset = original_asset(target_path)
+        target_path = asset.path.relative_to(Path.cwd()).as_posix()
+        previous_path = self._project.sample_paths[sample_id]
+        normalized_previous = (
+            self._normalize_project_path(previous_path) if previous_path is not None else None
+        )
+        new_assignment = (
+            sample_id in self._new_load_sample_ids or normalized_previous != target_path
+        )
+        content = self._project.pad_content[sample_id]
+        if new_assignment or content is None:
+            content = PadContentIdentity(instance_id=uuid4().hex, material_id=asset.material_id)
+        else:
+            self._validate_restored_material_identity(sample_id, asset.material_id)
+        delivered = event.get("original_lease")
+        prepared = self._assets.prepare_original(
+            target_path, delivered if isinstance(delivered, ProjectAssetLease) else None
+        )
+        return target_path, previous_path, new_assignment, content, prepared
 
     def _finish_loaded_timing(
         self,
@@ -633,12 +680,7 @@ class LoaderController(BaseController):
         if not self._matches_load_request(sample_id, event):
             return
 
-        self._session.loading_sample_ids.discard(sample_id)
-        self._session.sample_load_progress.pop(sample_id, None)
-        self._session.sample_load_stage.pop(sample_id, None)
-        self._session.pending_sample_paths.pop(sample_id, None)
-        self._load_request_ids.pop(sample_id, None)
-        self._new_load_sample_ids.discard(sample_id)
+        self._settle_load_request(sample_id)
 
         msg = event.get("msg")
         if isinstance(msg, str):
@@ -838,22 +880,21 @@ class LoaderController(BaseController):
         return rel.as_posix()
 
     def _parse_cached_sample_path(self, path: str) -> Path | None:
-        # Accept both separators in persisted configs (Windows may emit backslashes).
-        path = path.replace("\\", "/")
-
-        rel = Path(path)
-        if rel.is_absolute() or not rel.parts or rel.parts[0] != "samples":
+        try:
+            return original_asset(path).path.relative_to(Path.cwd())
+        except OSError, ValueError:
             return None
-
-        return rel
 
     def _schedule_restored_load(self, sample_id: int, rel: Path, *, run_analysis: bool) -> bool:
         reservation = None
         try:
+            asset = original_asset(rel)
+            self._validate_restored_material_identity(sample_id, asset.material_id)
             reservation = self._assets.reserve()
             options: _RestoredLoadOptions = {
                 "run_analysis": run_analysis,
                 "replace_assignment": True,
+                "source_intent": "restore",
             }
             if self._wants_accepted_restore(sample_id):
                 options["restore_automatic"] = True
@@ -887,6 +928,12 @@ class LoaderController(BaseController):
         self._record_load_request_id(sample_id, request_id)
         self._record_load_retirement(sample_id, reservation)
         return True
+
+    def _validate_restored_material_identity(self, sample_id: int, material_id: str | None) -> None:
+        content = self._project.pad_content[sample_id]
+        if content is not None and content.material_id != material_id:
+            message = "Saved material identity does not match its original"
+            raise ValueError(message)
 
     def _defer_restored_load(self, sample_id: int, rel: Path) -> None:
         self._deferred_restores[sample_id] = rel

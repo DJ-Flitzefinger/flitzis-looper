@@ -2,8 +2,9 @@
 
 P0 is the historical published plan. Its physical topology is explicitly superseded
 by the new human shared-material contract; its bounded accepted evidence and
-historical FAIL/UNKNOWN are not rewritten. R0 is docs/spec-only and awaits its own
-separate native nonauthor closure. Product implementation is entirely pending.
+historical FAIL/UNKNOWN are not rewritten. R0 is the retained docs/spec revision.
+J0 is published; P1a implementation and fresh
+validation are in progress. Final independent P1a acceptance remains open.
 
 The [extended program](../../../docs/pad-owned-pcm-program.md) and
 [complete coverage map](../../../docs/pre-rust-program-coverage.json) own the
@@ -54,8 +55,13 @@ arrangement and pitch changes share those IDs, not alternative product plans.
 
 ### P1a
 
-- [ ] Ein authoritative material/slot Resolver, durable IDs/generations, neue canonical writes, sichere typed legacy/new readers
-- [ ] Originalname/Encoding, #1/#216 endpoints, invalid/reparse/path/collision/old lease, echte import/native ACK; keine mass migration, kein neuer Separator
+Implementation: native rooted typed resolver, canonical material-original/PCM/stem
+roots, explicit import/restore intent and durable per-assignment content/material IDs.
+Fresh focused storage/control/persistence validation and independent final review
+must pass before checking the bounded slice below. No P1b or mass migration claim.
+
+- [x] Ein authoritative material/slot Resolver, durable IDs/generations, neue canonical writes, sichere typed legacy/new readers
+- [x] Originalname/Encoding, #1/#216 endpoints, invalid/reparse/path/collision/old lease, echte import/native ACK; keine mass migration, kein neuer Separator
 
 ### P1b
 

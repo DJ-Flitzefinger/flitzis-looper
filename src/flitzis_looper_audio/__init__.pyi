@@ -4,6 +4,10 @@ from typing import Literal
 import numpy as np
 from numpy.typing import NDArray
 
+def resolve_project_asset(
+    samples_root: str, path: str
+) -> tuple[str, str, str | None]: ...
+
 def summarize_selected_bpm_json(
     beat_seconds: Sequence[float],
     sample_rate_hz: int,
@@ -90,6 +94,7 @@ class ResidentWindowTicket:
 class ProjectAssetLease:
     # Opaque process owner; final cleanup is serialized on the native control worker.
     def release(self) -> None: ...
+    def acknowledge(self, expected_path: str) -> None: ...
     @property
     def released(self) -> bool: ...
 
@@ -193,6 +198,7 @@ class AudioEngine:
         resident_loop_start_s: float | None = None,
         resident_loop_end_s: float | None = None,
         resident_key_lock: bool = False,
+        source_intent: Literal["auto", "import", "restore"] = "auto",
     ) -> int: ...
     def cold_source_manifest(self, sample_id: int) -> str | None: ...
     def analyze_sample_async(self, sample_id: int) -> int: ...

@@ -48,7 +48,11 @@ def test_load_sample_async(controller: AppController, audio_engine_mock: Mock) -
     controller.loader.load_sample_async(sample_id, path)
 
     audio_engine_mock.load_sample_async.assert_called_with(
-        sample_id, path, run_analysis=True, replace_assignment=True
+        sample_id,
+        path,
+        run_analysis=True,
+        replace_assignment=True,
+        source_intent="import",
     )
     assert controller.session.pending_sample_paths[sample_id] == path
     assert sample_id in controller.session.loading_sample_ids
@@ -73,7 +77,11 @@ def test_load_sample_async_preserves_existing_until_success(
 
     audio_engine_mock.unload_sample.assert_not_called()
     audio_engine_mock.load_sample_async.assert_called_with(
-        sample_id, new_path, run_analysis=True, replace_assignment=True
+        sample_id,
+        new_path,
+        run_analysis=True,
+        replace_assignment=True,
+        source_intent="import",
     )
     assert controller.project.sample_paths[sample_id] == old_path
     assert controller.project.stem_cache[sample_id] is not None
@@ -325,6 +333,7 @@ def test_restored_admission_failure_retains_assignment_and_timing_authority(
         run_analysis=False,
         restore_automatic=True,
         replace_assignment=True,
+        source_intent="restore",
     )
     audio_engine_mock.set_pad_timing_intent.assert_not_called()
     audio_engine_mock.set_pad_bpm.assert_not_called()
@@ -436,6 +445,12 @@ def test_startup_restores_all_pads_through_bounded_deferred_admission(
     assert not controller.session.sample_load_errors
     previous_project["sample_durations"] = [600.0] * NUM_SAMPLES
     previous_project["sample_paths"] = ["samples/old.wav"] * NUM_SAMPLES
+    contents = project.pad_content
+    assert all(content is not None and content.material_id is None for content in contents)
+    assert len({content.instance_id for content in contents if content is not None}) == NUM_SAMPLES
+    previous_project["pad_content"] = [
+        content.model_dump() for content in contents if content is not None
+    ]
     assert project.model_dump() == previous_project
     audio_engine_mock.unload_sample.assert_not_called()
 
@@ -622,7 +637,11 @@ def test_load_success_resets_stale_empty_pad_settings(
     disabled = False
     audio_engine_mock.set_pad_key_lock.assert_called_with(sample_id, disabled)
     audio_engine_mock.load_sample_async.assert_called_with(
-        sample_id, "/path/to/new.wav", run_analysis=True, replace_assignment=True
+        sample_id,
+        "/path/to/new.wav",
+        run_analysis=True,
+        replace_assignment=True,
+        source_intent="import",
     )
 
 
@@ -1838,4 +1857,5 @@ def test_poll_loader_events_with_malformed_events(
 
     assert 0 not in controller.session.loading_sample_ids
     assert 1 in controller.session.loading_sample_ids
-    assert controller.project.sample_durations[0] == 1.0
+    assert controller.project.sample_durations[0] is None
+    assert controller.session.sample_load_errors[0] == "Loaded source has no original reference"

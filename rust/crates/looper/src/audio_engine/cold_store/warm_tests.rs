@@ -265,7 +265,8 @@ fn fresh_warm_leases_verify_full_content_and_share_pcm_at_all_device_rates() {
                 assert!(Arc::ptr_eq(&cold.samples, &warm.samples));
                 assert_eq!(&*cold.samples, &*warm.samples);
                 assert_eq!(first.cache_path, second.cache_path);
-                assert_ne!(first.original_path, second.original_path);
+                assert_eq!(first.original_path, second.original_path);
+                assert_eq!(first.material_id, second.material_id);
                 assert_eq!(first.manifest.identity, second.manifest.identity);
                 assert!(second.integrity.warm);
                 assert_eq!(
@@ -287,8 +288,8 @@ fn fresh_warm_leases_verify_full_content_and_share_pcm_at_all_device_rates() {
                     second.integrity.source_copied_bytes
                 );
                 assert_eq!(
-                    second.integrity.original_copied_bytes,
-                    second.integrity.source_copied_bytes
+                    second.integrity.original_copied_bytes, 0,
+                    "compatible material imports verify their original without duplicating it"
                 );
                 assert_eq!(
                     second.integrity.original_verify_bytes,
@@ -507,11 +508,18 @@ fn failed_shared_subscriber_then_shutdown_preserves_surviving_durable_warm_resto
     let cache = first.cache_path.clone();
     let (failed_pcm, failed) = fixture.warm(&fixture.source, true, 48_000, 2);
     let failed_original = failed.original_path.clone();
+    assert_eq!(failed_original, original);
+    assert!(!failed.created_original);
     assert!(Arc::ptr_eq(&first_pcm.samples, &failed_pcm.samples));
     failed.rollback_unadopted_original();
     failed.retire_cache();
     drop((failed_pcm, failed));
-    wait_absent(&failed_original);
+    // Rejection owns only its new subscriber. The shared immutable original
+    // still belongs to the successful first assignment and must remain.
+    assert_eq!(
+        fs::read(&failed_original).unwrap(),
+        fs::read(&fixture.source).unwrap()
+    );
     drop((first_pcm, first)); // ordinary reader shutdown, surviving saved assignment
     std::thread::sleep(Duration::from_millis(100));
     assert!(cache.join("decoder.f32le").exists());

@@ -169,7 +169,11 @@ def test_restore_loads_valid_audio_files_without_reanalysis(
     assert project.sample_paths[0] == "samples/sample.wav"
     assert project.sample_analysis[0] is not None
     audio.load_sample_async.assert_called_with(
-        0, "samples/sample.wav", run_analysis=False, replace_assignment=True
+        0,
+        "samples/sample.wav",
+        run_analysis=False,
+        replace_assignment=True,
+        source_intent="restore",
     )
     on_project_changed.assert_not_called()
 

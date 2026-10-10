@@ -755,6 +755,8 @@ pub enum LoaderEvent {
         /// Independent of beat/downbeat analysis; `None` means no physical suggestion.
         detected_loop_start_s: Option<f64>,
         cached_path: String,
+        /// Pre-adoption owner reservation, promoted only by matching metadata.
+        original_lease: Option<crate::audio_engine::ProjectAssetLease>,
         analysis: Option<SampleAnalysis>,
     },
 

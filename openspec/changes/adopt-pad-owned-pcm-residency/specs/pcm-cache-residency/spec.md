@@ -108,10 +108,11 @@ bound paired measurements and causal path checks for the implemented feature.
 ### Requirement: True last use governs shared material retirement
 The system SHALL acquire all new assignment/action/version references before retiring old references and SHALL reclaim managed material only after every all-bank assignment, voice/old voice, reader, job/subscriber, queued action, history/FIFO and native unload ACK owner has ended.
 
-Slot removal SHALL revoke playback authority without granting a queued old action
-authority over a replacement. Cleanup SHALL resolve verified contained owned file
-identities off-thread and SHALL preserve external/private/unknown files. Unconfirmed
-irreversible native claims SHALL keep old/new pins and fence conflicting input.
+#### Scenario: Retirement preserves authority and exact ownership
+- **WHEN** a slot is removed or native ownership is irreversibly claimed without confirmation
+- **THEN** slot removal revokes playback authority without giving queued old actions authority over replacements
+- **AND** unconfirmed claims retain old/new pins and fence conflicting input
+- **AND** cleanup resolves verified contained owned file identities off-thread and preserves external, private and unknown files
 
 #### Scenario: Swap and overwrite do not create a zero-owner gap
 - **WHEN** contents sharing a material move/swap or a stopped copy overwrites a target

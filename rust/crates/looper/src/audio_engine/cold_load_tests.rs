@@ -10,7 +10,52 @@ use crate::audio_engine::transport::TransportTimeline;
 use crate::messages::{AudioMessage, TriggerQuantization};
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::path::Path;
 use std::time::{Duration, Instant};
+
+fn cache_entries(samples: &Path) -> Vec<PathBuf> {
+    let mut roots = vec![samples.join(".pcm-cache/v1")];
+    if let Ok(materials) = fs::read_dir(samples.join("materials")) {
+        roots.extend(materials.map(|entry| entry.unwrap().path().join(".pcm-cache/v1")));
+    }
+    roots
+        .into_iter()
+        .filter_map(|root| fs::read_dir(root).ok())
+        .flatten()
+        .map(|entry| entry.unwrap().path())
+        .collect()
+}
+
+fn original_files(samples: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<_> = fs::read_dir(samples)
+        .into_iter()
+        .flatten()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_file())
+        .collect();
+    if let Ok(materials) = fs::read_dir(samples.join("materials")) {
+        for material in materials {
+            if let Ok(originals) = fs::read_dir(material.unwrap().path().join("original")) {
+                files.extend(originals.map(|entry| entry.unwrap().path()));
+            }
+        }
+    }
+    files
+}
+
+fn expected_imported_original(samples: &Path, filename: &str, bytes: &[u8]) -> PathBuf {
+    let digest = format!("{:x}", Sha256::digest(bytes));
+    let id = format!(
+        "{:x}",
+        Sha256::digest(format!("{digest}|{filename}").as_bytes())
+    )[..32]
+        .to_owned();
+    samples
+        .join("materials")
+        .join(format!("M{id}"))
+        .join("original")
+        .join(filename)
+}
 
 fn wait_until(mut condition: impl FnMut() -> bool) {
     wait_until_for(Duration::from_secs(10), &mut condition);
@@ -744,11 +789,8 @@ fn full_native_queue_rolls_back_artifacts_and_preserves_all_old_source_ownership
     );
     assert!(engine.cold_leases.lock().unwrap()[0].is_none());
     wait_until(|| {
-        fs::read_dir(directory.path().join("samples/.pcm-cache/v1"))
-            .unwrap()
-            .count()
-            == 0
-            && !directory.path().join("samples/external.wav").exists()
+        cache_entries(&directory.path().join("samples")).is_empty()
+            && original_files(&directory.path().join("samples")).is_empty()
     });
 }
 

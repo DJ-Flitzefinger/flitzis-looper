@@ -8,6 +8,8 @@ mod selected_bpm;
 #[pymodule]
 mod flitzis_looper_audio {
     #[pymodule_export]
+    use super::audio_engine::resolve_project_asset;
+    #[pymodule_export]
     use super::selected_bpm::summarize_selected_bpm_json;
 
     #[pymodule_export]

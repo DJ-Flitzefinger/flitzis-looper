@@ -10,7 +10,7 @@ use std::fs::File;
 use std::io::Read;
 #[cfg(test)]
 use std::io::{self, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use crate::messages::{PreparedStemSet, STEM_BUFFER_COUNT, SampleBuffer};
 
@@ -46,35 +46,19 @@ pub(crate) fn project_stem_cache_dir(cache_dir: &str) -> Result<PathBuf, String>
         return Err("stem cache directory must be project-relative".to_string());
     }
 
-    let parts: Vec<String> = path
-        .components()
-        .map(|component| match component {
-            Component::Normal(value) => value
-                .to_str()
-                .filter(|part| !part.is_empty())
-                .map(str::to_string)
-                .ok_or_else(|| "stem cache directory contains invalid UTF-8".to_string()),
-            _ => Err(
-                "stem cache directory must not contain root, current, or parent components"
-                    .to_string(),
-            ),
-        })
-        .collect::<Result<_, _>>()?;
-
-    let published_generation = parts.len() == 4
-        && super::project_assets::is_pad_name(std::ffi::OsStr::new(&parts[2]))
-        && parts[2][1..]
-            .parse::<usize>()
-            .is_ok_and(|pad| (1..=super::constants::NUM_SAMPLES).contains(&pad))
-        && super::project_assets::is_ready_generation(&parts[3]);
-    if (parts.len() != 3 && !published_generation) || parts[0] != "samples" || parts[1] != "stems" {
+    let kind = super::material_paths::classify(path)
+        .map_err(|error| format!("invalid stem cache directory: {error}"))?;
+    if !matches!(kind, super::material_paths::AssetKind::StemDirectory { .. })
+        || path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(".generation-"))
+    {
         return Err(
-            "stem cache directory must name a legacy set or an immutable ready generation under samples/stems"
-                .to_string(),
+            "stem cache directory must name a legacy set or an immutable ready generation".into(),
         );
     }
-
-    Ok(parts.iter().collect())
+    Ok(path.to_owned())
 }
 
 #[cfg(test)]

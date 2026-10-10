@@ -2,10 +2,10 @@ import hashlib
 import json
 import os
 import re
-import stat
 from pathlib import Path
 
 from flitzis_looper.models import STEM_KINDS, StemCacheEntry, StemFileSet, validate_sample_id
+from flitzis_looper.project_materials import original_asset, resolve_asset
 
 STEM_CACHE_ROOT = Path("samples") / "stems"
 STEM_SET_MARKER_NAME = ".complete.json"
@@ -53,44 +53,36 @@ def source_version_for_sample_path(
     return f"{normalized_path}|sha256-v1:{digest}"
 
 
-def cache_dir_for_sample_id(sample_id: int) -> str:
+def cache_dir_for_sample_id(sample_id: int, sample_path: str | None = None) -> str:
     """Return the project-relative stem cache directory for a pad."""
     validate_sample_id(sample_id)
+    if sample_path is not None:
+        asset = original_asset(sample_path)
+        if asset.material_id is not None:
+            return (asset.path.parent.parent / "stems").relative_to(Path.cwd()).as_posix()
     return (STEM_CACHE_ROOT / f"#{sample_id + 1}").as_posix()
 
 
 def _safe_stem_cache_dir_path(cache_dir: str) -> Path | None:
-    rel = Path(cache_dir)
-    if rel.is_absolute():
-        return None
-
-    root = (Path.cwd() / STEM_CACHE_ROOT).resolve(strict=False)
-    unresolved = Path.cwd() / rel
-    for path in (unresolved, *unresolved.parents):
-        if path.exists() and (
-            path.is_symlink()
-            or getattr(path.lstat(), "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
-        ):
-            return None
-        if path == Path.cwd():
-            break
-    target = unresolved.resolve(strict=False)
-
     try:
-        target.relative_to(root)
-    except ValueError:
+        asset = resolve_asset(cache_dir)
+    except (OSError, ValueError):
         return None
-
-    if target == root:
-        return None
-
-    return target
+    return asset.path if asset.kind in {"stem_directory", "stem_artifact"} else None
 
 
-def cache_dir_matches_sample_id(sample_id: int, cache_dir: str) -> bool:
+def cache_dir_matches_sample_id(
+    sample_id: int, cache_dir: str, sample_path: str | None = None
+) -> bool:
     """Accept a legacy pad set or its immutable published generation only."""
-    root = Path(cache_dir_for_sample_id(sample_id))
-    candidate = Path(cache_dir)
+    try:
+        root = Path(cache_dir_for_sample_id(sample_id, sample_path))
+        resolved = resolve_asset(cache_dir)
+        if resolved.kind != "stem_directory":
+            return False
+        candidate = resolved.path.relative_to(Path.cwd())
+    except (OSError, ValueError):
+        return False
     return candidate == root or (
         candidate.parent == root
         and re.fullmatch(r"\.ready-[0-9a-f]{32}", candidate.name) is not None

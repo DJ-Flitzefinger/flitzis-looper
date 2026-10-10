@@ -102,6 +102,7 @@ pub(super) struct CommittedColdLease {
     pub manifest: ColdManifest,
     pub cache_path: PathBuf,
     pub original_path: PathBuf,
+    pub material_id: Option<String>,
     pub integrity: IntegrityMetrics,
     cache: Arc<CacheReaders>,
     _original: Arc<OriginalReader>,
@@ -113,6 +114,8 @@ pub(super) struct CommittedColdLease {
 /// Until adopted, Drop reverses only this transaction's exclusive creations.
 pub(super) struct ColdTransaction {
     cache_root: PathBuf,
+    original_root: PathBuf,
+    material_id: Option<String>,
     staging: Option<PathBuf>,
     committed_cache: Option<PathBuf>,
     snapshot_path: PathBuf,
@@ -243,32 +246,131 @@ fn directory_guard(path: &Path) -> io::Result<File> {
 }
 
 fn ensure_owned_root(samples: &Path) -> io::Result<(PathBuf, Vec<File>)> {
-    let samples = if samples.is_absolute() {
-        samples.to_owned()
-    } else {
-        std::env::current_dir()?.join(samples)
-    };
-    reject_existing_links(&samples)?;
-    fs::create_dir_all(&samples)?;
-    reject_links(&samples)?;
-    let samples = fs::canonicalize(&samples)?;
-    let mut directories = vec![directory_guard(&samples)?];
-    let mut root = samples;
+    // The caller retains guarded ancestors and has already created this root.
+    reject_links(samples)?;
+    let mut directories = vec![directory_guard(samples)?];
+    let mut root = fs::canonicalize(samples)?;
     for component in [".pcm-cache", "v1"] {
-        root = root.join(component);
-        match fs::create_dir(&root) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error),
-        }
-        reject_links(&root)?;
-        if !root.is_dir() {
-            return Err(invalid("managed PCM root is not a directory"));
-        }
-        directories.push(directory_guard(&root)?);
+        directories.push(guarded_child(&root, component)?);
+        root = fs::canonicalize(root.join(component))?;
     }
     staging::recover(&root)?;
     Ok((root, directories))
+}
+
+fn guarded_samples_root(samples: &Path) -> io::Result<(PathBuf, Vec<File>)> {
+    reject_existing_links(samples)?;
+    let mut existing = samples;
+    let mut missing = Vec::new();
+    while !existing.exists() {
+        missing.push(
+            existing
+                .file_name()
+                .ok_or_else(|| invalid("samples ancestor missing"))?,
+        );
+        existing = existing
+            .parent()
+            .ok_or_else(|| invalid("samples ancestor missing"))?;
+    }
+    reject_links(existing)?;
+    let mut root = fs::canonicalize(existing)?;
+    let mut guards = super::project_assets::directory_guards(&root)?;
+    // Each existing parent is held against replacement before creating its child.
+    for name in missing.into_iter().rev() {
+        let name = name
+            .to_str()
+            .ok_or_else(|| invalid("samples ancestor is not UTF-8"))?;
+        guards.push(guarded_child(&root, name)?);
+        root = fs::canonicalize(root.join(name))?;
+    }
+    Ok((root, guards))
+}
+
+fn guarded_child(parent: &Path, name: &str) -> io::Result<File> {
+    let path = parent.join(name);
+    match fs::create_dir(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    reject_links(&path)?;
+    if !path.is_dir() || fs::canonicalize(&path)?.parent() != Some(parent) {
+        return Err(invalid("managed directory escaped its guarded parent"));
+    }
+    directory_guard(&path)
+}
+
+fn source_hash(reader: &mut File, cancelled: &impl Fn() -> bool) -> io::Result<String> {
+    reader.seek(SeekFrom::Start(0))?;
+    let mut hash = Sha256::new();
+    let mut bytes = [0_u8; CHUNK_BYTES];
+    loop {
+        check_cancelled(cancelled)?;
+        let count = reader.read(&mut bytes)?;
+        if count == 0 {
+            break;
+        }
+        hash.update(&bytes[..count]);
+    }
+    reader.seek(SeekFrom::Start(0))?;
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+/// Compatible imports with the same filename and full bytes reuse one immutable
+/// material. A corrupt/colliding existing original is preserved, never overwritten.
+fn import_material(
+    samples: &Path,
+    source: &Path,
+    reader: &mut File,
+    cancelled: &impl Fn() -> bool,
+) -> io::Result<(PathBuf, String)> {
+    let digest = source_hash(reader, cancelled)?;
+    let length = reader.metadata()?.len();
+    let name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| invalid("source filename is not UTF-8"))?;
+    if !super::material_paths::filename(name) {
+        return Err(invalid("source filename is not a safe original leaf"));
+    }
+    let base = format!("{digest}|{name}");
+    for attempt in 0..1024 {
+        check_cancelled(cancelled)?;
+        let key = if attempt == 0 {
+            base.clone()
+        } else {
+            format!(
+                "{base}|{}|{}",
+                std::process::id(),
+                NEXT_GENERATION.fetch_add(1, Ordering::Relaxed)
+            )
+        };
+        let material = format!("{:x}", Sha256::digest(key.as_bytes()))[..32].to_owned();
+        let root = samples.join("materials").join(format!("M{material}"));
+        reject_existing_links(&root)?;
+        let original = root.join("original").join(name);
+        if original.exists() {
+            reject_links(&original)?;
+            match sealed_reader(&original)
+                .and_then(|mut file| verify_file(&mut file, &digest, length, cancelled))
+            {
+                Ok(()) => return Ok((root, material)),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(error),
+                Err(_) => continue,
+            }
+        }
+        // Claim the material container exclusively. An existing unbound root,
+        // including unknown data, cannot become this material by inference.
+        match fs::create_dir(&root) {
+            Ok(()) => return Ok((root, material)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "material collisions exhausted",
+    ))
 }
 
 fn unique_staging(root: &Path) -> io::Result<PathBuf> {
@@ -446,16 +548,39 @@ impl ColdTransaction {
         [staging_slot, cache_slot, original_slot]: [lifecycle::CleanupSlot; 3],
     ) -> io::Result<Self> {
         // Establish write/delete exclusion before creating staging or reading any bytes.
+        if source_path
+            .to_string_lossy()
+            .split(['/', '\\'])
+            .any(|part| [".", ".."].contains(&part))
+        {
+            return Err(invalid("source path contains traversal"));
+        }
+        if import
+            && !source_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(super::material_paths::filename)
+        {
+            return Err(invalid("source filename is not a safe original leaf"));
+        }
         let mut source = sealed_reader(source_path)?;
         if !source.metadata()?.is_file() {
             return Err(invalid("source snapshot requires a regular file"));
         }
-        let (cache_root, directories) = ensure_owned_root(samples_dir)?;
-        if !import {
-            let samples_root = cache_root
-                .parent()
-                .and_then(Path::parent)
-                .ok_or_else(|| invalid("missing project samples root"))?;
+        let samples = if samples_dir.is_absolute() {
+            samples_dir.to_owned()
+        } else {
+            std::env::current_dir()?.join(samples_dir)
+        };
+        let (samples_root, mut ancestor_guards) = guarded_samples_root(&samples)?;
+        if import {
+            ancestor_guards.push(guarded_child(&samples_root, "materials")?);
+        }
+        let (store_root, material_id) = if import {
+            let (root, material) =
+                import_material(&samples_root, source_path, &mut source, cancelled)?;
+            (root, Some(material))
+        } else {
             let checked_source = if source_path.is_absolute() {
                 source_path.to_owned()
             } else {
@@ -463,13 +588,39 @@ impl ColdTransaction {
             };
             reject_links(&checked_source)?;
             let resolved_source = fs::canonicalize(&checked_source)?;
-            if !resolved_source.starts_with(samples_root)
-                || resolved_source.starts_with(cache_root.parent().expect("cache parent"))
-            {
-                return Err(invalid(
-                    "restored original is outside the managed samples root",
-                ));
+            let resolved = super::material_paths::resolve(&samples_root, &resolved_source)?;
+            match resolved.kind {
+                super::material_paths::AssetKind::Original {
+                    material: Some(material),
+                } => (
+                    samples_root.join("materials").join(format!("M{material}")),
+                    Some(material),
+                ),
+                super::material_paths::AssetKind::Original { material: None } => {
+                    (samples_root.clone(), None)
+                }
+                _ => return Err(invalid("restored source is not a typed project original")),
             }
+        };
+        if material_id.is_some() {
+            if !import {
+                ancestor_guards.push(directory_guard(&samples_root.join("materials"))?);
+            }
+            let name = store_root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| invalid("material name"))?;
+            ancestor_guards.push(guarded_child(&samples_root.join("materials"), name)?);
+        }
+        let (cache_root, mut directories) = ensure_owned_root(&store_root)?;
+        directories.append(&mut ancestor_guards);
+        let original_root = if material_id.is_some() {
+            store_root.join("original")
+        } else {
+            samples_root.clone()
+        };
+        if material_id.is_some() {
+            directories.push(guarded_child(&store_root, "original")?);
         }
         let staging = unique_staging(&cache_root)?;
         let staging_directory = directory_guard(&staging)?;
@@ -477,6 +628,8 @@ impl ColdTransaction {
         let snapshot_path = staging.join("snapshot.original");
         let mut transaction = Self {
             cache_root,
+            original_root,
+            material_id,
             staging: Some(staging),
             committed_cache: None,
             snapshot_path,
@@ -628,11 +781,50 @@ impl ColdTransaction {
             self.original_reader = self.source_reader.take();
             return Ok(());
         }
-        let samples = self
-            .cache_root
-            .parent()
-            .and_then(Path::parent)
-            .ok_or_else(|| invalid("invalid samples root"))?;
+        if self.material_id.is_some() {
+            let filename = self
+                .original_path
+                .file_name()
+                .ok_or_else(|| invalid("missing original filename"))?;
+            let candidate = self.original_root.join(filename);
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&candidate)
+            {
+                Ok(mut writer) => {
+                    self.original_path = candidate;
+                    self.owned_original = true;
+                    self.original_identity = Some(file_identity(&writer)?);
+                    let mut snapshot = self.snapshot_file()?;
+                    let (digest, bytes) = copy_hashed(&mut snapshot, &mut writer, cancelled)?;
+                    self.integrity.original_copied_bytes = bytes;
+                    drop(writer);
+                    if digest != self.source_digest || bytes != self.source_bytes {
+                        return Err(invalid(
+                            "canonical original differs from immutable snapshot",
+                        ));
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    self.original_path = candidate;
+                }
+                Err(error) => return Err(error),
+            }
+            reject_links(&self.original_path)?;
+            let mut reader = sealed_reader(&self.original_path)?;
+            verify_file(
+                &mut reader,
+                &self.source_digest,
+                self.source_bytes,
+                cancelled,
+            )?;
+            self.integrity.original_verify_bytes = self.source_bytes;
+            self.original_identity = Some(file_identity(&reader)?);
+            self.original_reader = Some(reader);
+            return Ok(());
+        }
+        let samples = &self.original_root;
         let stem = self
             .original_path
             .file_stem()
@@ -748,11 +940,21 @@ impl ColdTransaction {
             .file_name()
             .ok_or_else(|| invalid("missing staging generation"))?
             .to_string_lossy();
-        let destination = self.cache_root.join(format!(
-            "{}-{}",
-            manifest.identity,
-            generation.trim_start_matches(".staging-")
-        ));
+        let destination = self.cache_root.join(if self.material_id.is_some() {
+            format!(
+                ".ready-{}",
+                &format!(
+                    "{:x}",
+                    Sha256::digest(format!("{}|{generation}", manifest.identity).as_bytes())
+                )[..32]
+            )
+        } else {
+            format!(
+                "{}-{}",
+                manifest.identity,
+                generation.trim_start_matches(".staging-")
+            )
+        });
         check_cancelled(cancelled)?;
         if destination.try_exists()? {
             return Err(io::Error::new(
@@ -908,12 +1110,7 @@ impl ColdTransaction {
                 .unwrap_or_else(|| {
                     let reader = Arc::new(OriginalReader {
                         path: original_path.clone(),
-                        root: self
-                            .cache_root
-                            .parent()
-                            .and_then(Path::parent)
-                            .expect("samples root")
-                            .to_owned(),
+                        root: self.original_root.clone(),
                         reader: Some(original),
                         owned_creation: self.owned_original,
                         rollback: AtomicBool::new(false),
@@ -953,6 +1150,7 @@ impl ColdTransaction {
             manifest,
             cache_path,
             original_path,
+            material_id: self.material_id.clone(),
             integrity: self.integrity.clone(),
             cache,
             _original: original,
@@ -1022,11 +1220,7 @@ impl Drop for ColdTransaction {
             {
                 lifecycle::queue_original(
                     self.original_path.clone(),
-                    self.cache_root
-                        .parent()
-                        .and_then(Path::parent)
-                        .expect("samples root")
-                        .to_owned(),
+                    self.original_root.clone(),
                     identity,
                     slot,
                 );

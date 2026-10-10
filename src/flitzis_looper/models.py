@@ -312,6 +312,18 @@ def _migrate_legacy_timing_intent(data: dict[str, object]) -> None:
     data["pad_timing_intent"] = intents
 
 
+class PadContentIdentity(BaseModel):
+    """Durable content instance and material identity; live authority is never saved."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    instance_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    material_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+
+
+def _default_pad_content() -> list[PadContentIdentity | None]:
+    return [None] * NUM_SAMPLES
+
+
 class ProjectState(BaseModel):
     """Persistent state. Saved to disk."""
 
@@ -334,6 +346,11 @@ class ProjectState(BaseModel):
 
     sample_paths: list[str | None] = Field(default_factory=_default_sample_paths)
     """Maps pad IDs to file paths."""
+
+    pad_content: list[PadContentIdentity | None] = Field(
+        default_factory=_default_pad_content, min_length=NUM_SAMPLES, max_length=NUM_SAMPLES
+    )
+    """Stable content identity, separate from its slot and any native runtime ticket."""
 
     sample_durations: list[float | None] = Field(default_factory=_default_sample_durations)
     """Maps pad IDs to sample durations (in seconds)."""

@@ -1039,6 +1039,7 @@ fn constant_timing_loader_delivery_strips_retired_timing_preserves_source_bookke
     engine
         .loader_tx
         .send(crate::messages::LoaderEvent::Success {
+            original_lease: None,
             timing_epoch: None,
             id: 0,
             request_id: 7,
@@ -1122,6 +1123,7 @@ fn constant_timing_loader_delivery_discards_old_success_after_source_clear_and_c
         engine
             .loader_tx
             .send(crate::messages::LoaderEvent::Success {
+                original_lease: None,
                 timing_epoch: None,
                 id: 0,
                 request_id: 7,

@@ -74,6 +74,8 @@ mod project_assets;
 pub(crate) mod resident_relocation;
 pub(crate) mod resident_seek;
 pub use prepared_source::PreparedSourceTicket;
+mod material_paths;
+pub use material_paths::resolve_project_asset;
 use prepared_source::{
     enqueue_current_prepared_stems_with_owner, next_epoch, validate_prepared_ticket,
 };
@@ -1170,7 +1172,7 @@ impl AudioEngine {
 
     /// Admit copy-first complete cold preparation in the fixed worker lane.
     #[allow(clippy::too_many_arguments)] // Fixed public source/load options preserve the existing API.
-    #[pyo3(signature = (id, path, run_analysis=None, restore_automatic=false, replace_assignment=false, resident_loop_start_s=None, resident_loop_end_s=None, resident_key_lock=false))]
+    #[pyo3(signature = (id, path, run_analysis=None, restore_automatic=false, replace_assignment=false, resident_loop_start_s=None, resident_loop_end_s=None, resident_key_lock=false, source_intent="auto"))]
     pub fn load_sample_async(
         &self,
         id: usize,
@@ -1181,6 +1183,7 @@ impl AudioEngine {
         resident_loop_start_s: Option<f64>,
         resident_loop_end_s: Option<f64>,
         resident_key_lock: bool,
+        source_intent: &str,
     ) -> PyResult<u64> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
@@ -1198,6 +1201,7 @@ impl AudioEngine {
                 resident_key_lock,
             )
             .map_err(PyValueError::new_err)?,
+            source_intent,
         )
     }
 
@@ -1338,7 +1342,7 @@ impl AudioEngine {
             .cold_leases
             .lock()
             .map_err(|_| PyRuntimeError::new_err("cold lease lock poisoned"))?;
-        leases[id].as_ref().map(|lease| serde_json::to_string(&serde_json::json!({"identity":lease.manifest.identity,"decoder_identity":lease.manifest.decoder_identity,"descriptor":lease.manifest.descriptor,"cache_path":lease.cache_path,"original_path":lease.original_path,"integrity":{
+        leases[id].as_ref().map(|lease| serde_json::to_string(&serde_json::json!({"identity":lease.manifest.identity,"decoder_identity":lease.manifest.decoder_identity,"descriptor":lease.manifest.descriptor,"cache_path":lease.cache_path,"original_path":lease.original_path,"material_id":lease.material_id,"integrity":{
             "warm":lease.integrity.warm,
             "source_copied_bytes":lease.integrity.source_copied_bytes,
             "snapshot_verify_bytes":lease.integrity.snapshot_verify_bytes,
@@ -1951,6 +1955,7 @@ impl AudioEngine {
                 cached_path,
                 analysis,
                 timing_epoch: _,
+                original_lease,
             } => {
                 dict.set_item("type", "success")?;
                 dict.set_item("id", id)?;
@@ -1958,6 +1963,9 @@ impl AudioEngine {
                 dict.set_item("duration_s", duration_s)?;
                 dict.set_item("detected_loop_start_s", detected_loop_start_s)?;
                 dict.set_item("cached_path", cached_path)?;
+                if let Some(lease) = original_lease {
+                    dict.set_item("original_lease", Py::new(py, lease)?)?;
+                }
 
                 if let Some(analysis) = analysis {
                     let analysis_dict = PyDict::new(py);
@@ -3148,6 +3156,7 @@ mod tests {
                 engine
                     .loader_tx
                     .send(LoaderEvent::Success {
+                        original_lease: None,
                         timing_epoch: None,
                         id: 3,
                         request_id: 7,
@@ -3198,6 +3207,7 @@ mod tests {
                     engine
                         .loader_tx
                         .send(LoaderEvent::Success {
+                            original_lease: None,
                             timing_epoch: None,
                             id: 3,
                             request_id: 7,

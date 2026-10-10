@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::thread;
 use std::time::Duration;
@@ -33,15 +34,17 @@ const STEM_FILES: [&str; 6] = [
 
 pub(super) type PcmHistory = Mutex<Vec<Vec<Weak<[f32]>>>>;
 
+#[derive(Debug)]
 struct PathOwner {
+    root: PathBuf,
     path: PathBuf,
     identity: Option<FileIdentity>,
-    saved_assignment: bool,
+    saved_assignment: AtomicBool,
 }
 
 impl PathOwner {
     fn owns_original(&self, lease: &CommittedColdLease) -> bool {
-        self.saved_assignment
+        self.saved_assignment.load(Ordering::Acquire)
             && self.path == lease.original_path
             && self
                 .identity
@@ -52,12 +55,33 @@ impl PathOwner {
 
 /// An assignment or Python/background job pin; release performs no file I/O.
 #[pyclass]
+#[derive(Clone, Debug)]
 pub struct ProjectAssetLease {
     owner: Option<Arc<PathOwner>>,
 }
 
 #[pymethods]
 impl ProjectAssetLease {
+    /// Promote a reserved delivered original without another owner allocation.
+    /// The load worker reserved this pin before irreversible native adoption.
+    pub fn acknowledge(&self, expected_path: String) -> PyResult<()> {
+        let owner = self
+            .owner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("asset lease released"))?;
+        if super::material_paths::resolve(&owner.root, Path::new(&expected_path))
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
+            .path
+            != owner.path
+        {
+            return Err(PyRuntimeError::new_err(
+                "delivered lease does not match its original reference",
+            ));
+        }
+        ProjectAssets::shared()
+            .acknowledge_delivered(owner)
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))
+    }
     pub fn release(&mut self) {
         self.owner = None;
     }
@@ -83,7 +107,7 @@ struct Retirement {
     identity: Option<FileIdentity>,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct FileIdentity([u64; 3]);
 
 #[derive(Default)]
@@ -104,6 +128,66 @@ pub(super) struct ProjectAssets {
 }
 
 impl ProjectAssets {
+    #[cfg(test)]
+    pub(super) fn isolated() -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::default(),
+        })
+    }
+    pub(super) fn prune_material_if_unowned(&self, path: &Path) {
+        let Some(root) = super::material_paths::material_root(path) else {
+            return;
+        };
+        let Ok(state) = self.state.lock() else { return };
+        if state
+            .owners
+            .iter()
+            .filter_map(Weak::upgrade)
+            .any(|owner| intersects(&owner.path, root))
+            || state
+                .readers
+                .iter()
+                .any(|reader| intersects(&reader.path, root))
+            || state.retiring.keys().any(|path| intersects(path, root))
+        {
+            return;
+        }
+        super::material_paths::prune_empty_material(path);
+    }
+    fn acknowledge_delivered(&self, owner: &Arc<PathOwner>) -> io::Result<()> {
+        if !matches!(
+            super::material_paths::resolve(&owner.root, &owner.path)?.kind,
+            super::material_paths::AssetKind::Original { .. }
+        ) {
+            return Err(io::Error::other(
+                "only a typed original can acknowledge delivery",
+            ));
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("asset gate poisoned"))?;
+        if capture_identity(&owner.path)? != owner.identity {
+            return Err(io::Error::other(
+                "delivered original was replaced; preserved",
+            ));
+        }
+        super::cold_store::admit_original_owner(&owner.path)?;
+        owner.saved_assignment.store(true, Ordering::Release);
+        state.retiring.remove(&owner.path);
+        for reader in &mut state.readers {
+            if reader.path == owner.path
+                && reader
+                    .cold
+                    .as_ref()
+                    .is_some_and(|lease| owner.owns_original(lease))
+            {
+                reader.pending_assignment = false;
+                reader.saved_claim = true;
+            }
+        }
+        Ok(())
+    }
     pub(super) fn watch_history(&self, history: Weak<PcmHistory>) -> io::Result<()> {
         let mut state = self
             .state
@@ -164,7 +248,11 @@ impl ProjectAssets {
             return Err(io::Error::other("project asset owner registry full"));
         }
         let identity = capture_identity(&path)?;
-        if claim_pending && path.parent() == Some(root.as_path()) && path.exists() {
+        let original = matches!(
+            super::material_paths::resolve(&root, &path)?.kind,
+            super::material_paths::AssetKind::Original { .. }
+        );
+        if claim_pending && original && path.exists() {
             super::cold_store::admit_original_owner(&path)?;
         }
         if claim_pending {
@@ -194,9 +282,10 @@ impl ProjectAssets {
         // Admission and deletion serialize. A new exact owner cancels its pending
         // retirement before the worker can remove bytes; ancestor pins defer it.
         let owner = Arc::new(PathOwner {
+            root: root.to_path_buf(),
             path,
             identity,
-            saved_assignment: claim_pending,
+            saved_assignment: AtomicBool::new(claim_pending),
         });
         state.owners.push(Arc::downgrade(&owner));
         let _ = root;
@@ -541,6 +630,16 @@ impl ProjectAssets {
                 Ok(()) => {
                     state.retiring.remove(&path);
                     state.deleted += 1;
+                    if let Some(material) = super::material_paths::material_root(&path)
+                        && !owners.iter().any(|owner| intersects(&owner.path, material))
+                        && !state
+                            .readers
+                            .iter()
+                            .any(|reader| intersects(&reader.path, material))
+                        && !state.retiring.keys().any(|path| intersects(path, material))
+                    {
+                        super::material_paths::prune_empty_material(&path);
+                    }
                     if remove_empty_pad {
                         let pad = path.parent().expect("validated generation has pad parent");
                         if !owners.iter().any(|owner| intersects(&owner.path, pad))
@@ -585,7 +684,7 @@ fn intersects(left: &Path, right: &Path) -> bool {
     left.starts_with(right) || right.starts_with(left)
 }
 
-fn reject_links(path: &Path) -> io::Result<()> {
+pub(super) fn reject_links(path: &Path) -> io::Result<()> {
     for ancestor in path.ancestors() {
         let metadata = match fs::symlink_metadata(ancestor) {
             Ok(metadata) => metadata,
@@ -627,9 +726,17 @@ pub(super) fn owned_path(root: &Path, path: &Path) -> io::Result<(PathBuf, PathB
     {
         return Err(io::Error::other("asset path contains traversal"));
     }
-    reject_links(&absolute)?;
+    let path = canonical_with_missing(&absolute)?;
+    if path == root || !path.starts_with(&root) {
+        return Err(io::Error::other("asset path is outside owned samples"));
+    }
+    Ok((root, path))
+}
+
+pub(super) fn canonical_with_missing(absolute: &Path) -> io::Result<PathBuf> {
+    reject_links(absolute)?;
     // Resolve the nearest existing ancestor, preserving a missing exact leaf.
-    let mut existing = absolute.as_path();
+    let mut existing = absolute;
     let mut missing = Vec::new();
     while !existing.exists() {
         missing.push(
@@ -646,10 +753,7 @@ pub(super) fn owned_path(root: &Path, path: &Path) -> io::Result<(PathBuf, PathB
     for part in missing.into_iter().rev() {
         path.push(part);
     }
-    if path == root || !path.starts_with(&root) {
-        return Err(io::Error::other("asset path is outside owned samples"));
-    }
-    Ok((root, path))
+    Ok(path)
 }
 
 fn is_generation(name: &str) -> bool {
@@ -663,17 +767,33 @@ fn is_generation(name: &str) -> bool {
     })
 }
 
-pub(super) fn is_ready_generation(name: &str) -> bool {
-    name.starts_with(".ready-") && is_generation(name)
-}
-
 pub(super) fn is_pad_name(name: &std::ffi::OsStr) -> bool {
-    name.to_string_lossy()
-        .strip_prefix('#')
-        .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+    name.to_str()
+        .is_some_and(|name| super::material_paths::slot_number(name).is_some())
 }
 
 fn validate_target(root: &Path, path: &Path, recursive: bool) -> io::Result<()> {
+    let typed = super::material_paths::resolve(root, path)?;
+    if matches!(
+        typed.kind,
+        super::material_paths::AssetKind::Original { .. }
+    ) && !recursive
+    {
+        return Ok(());
+    }
+    if matches!(
+        typed.kind,
+        super::material_paths::AssetKind::StemDirectory {
+            material: Some(_),
+            generation: true
+        }
+    ) && recursive
+    {
+        return Ok(());
+    }
+    if matches!(typed.kind, super::material_paths::AssetKind::StemArtifact) && !recursive {
+        return Ok(());
+    }
     let relative = path
         .strip_prefix(root)
         .map_err(|_| io::Error::other("asset outside samples"))?;
@@ -763,6 +883,18 @@ fn delete_owned(
 }
 
 pub(super) fn remove_owned_file(path: &Path, identity: Option<&FileIdentity>) -> io::Result<()> {
+    remove_exact_object(path, identity, false)
+}
+
+pub(super) fn remove_empty_directory(path: &Path, identity: &FileIdentity) -> io::Result<()> {
+    remove_exact_object(path, Some(identity), true)
+}
+
+fn remove_exact_object(
+    path: &Path,
+    identity: Option<&FileIdentity>,
+    directory: bool,
+) -> io::Result<()> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
@@ -772,15 +904,26 @@ pub(super) fn remove_owned_file(path: &Path, identity: Option<&FileIdentity>) ->
         let file = fs::OpenOptions::new()
             .access_mode(0x0001_0080)
             .share_mode(1)
-            .custom_flags(0x0020_0000)
+            .custom_flags(0x0020_0000 | if directory { 0x0200_0000 } else { 0 })
             .open(path)?;
         let metadata = file.metadata()?;
-        if !metadata.is_file() || metadata.file_attributes() & 0x400 != 0 {
+        if (if directory {
+            !metadata.is_dir()
+        } else {
+            !metadata.is_file()
+        }) || metadata.file_attributes() & 0x400 != 0
+        {
             return Err(io::Error::other("retired original is not an ordinary file"));
         }
         let opened_identity = file_identity(&file)?;
         if identity.is_some_and(|identity| &opened_identity != identity) {
             return Err(io::Error::other("retired original was replaced; preserved"));
+        }
+        if directory && fs::read_dir(path)?.next().is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::DirectoryNotEmpty,
+                "unknown children preserve container",
+            ));
         }
         #[link(name = "kernel32")]
         unsafe extern "system" {
@@ -818,7 +961,11 @@ pub(super) fn remove_owned_file(path: &Path, identity: Option<&FileIdentity>) ->
         }) {
             return Err(io::Error::other("retired original was replaced; preserved"));
         }
-        fs::remove_file(path)
+        if directory {
+            fs::remove_dir(path)
+        } else {
+            fs::remove_file(path)
+        }
     }
 }
 
@@ -939,6 +1086,38 @@ mod tests {
     fn service() -> ProjectAssets {
         ProjectAssets {
             state: Mutex::default(),
+        }
+    }
+
+    #[test]
+    fn canonical_original_last_owner_cleanup_prunes_only_empty_known_material_containers() {
+        for unknown in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path().join("samples");
+            let material = root.join("materials/M0123456789abcdef0123456789abcdef");
+            let original = material.join("original/Take.wav");
+            fs::create_dir_all(original.parent().unwrap()).unwrap();
+            fs::create_dir_all(material.join(".pcm-cache/v1")).unwrap();
+            fs::create_dir_all(material.join("stems")).unwrap();
+            fs::write(&original, b"immutable original").unwrap();
+            if unknown {
+                fs::write(material.join("private.keep"), b"preserved").unwrap();
+            }
+            let assets = service();
+            let mut owner = assets.acquire(&root, &original).unwrap();
+            assets.retire(&root, &original, false).unwrap();
+            assets.collect();
+            assert!(original.exists());
+            owner.release();
+            assets.collect();
+            assert!(!original.exists());
+            assert_eq!(material.exists(), unknown);
+            if unknown {
+                assert_eq!(
+                    fs::read(material.join("private.keep")).unwrap(),
+                    b"preserved"
+                );
+            }
         }
     }
 
@@ -1268,12 +1447,25 @@ mod tests {
             engine: Arc::downgrade(&engine),
         });
         let mut pin = assets.acquire_pin(&root, &path).unwrap();
-        assert!(!pin.owner.as_ref().unwrap().saved_assignment);
+        assert!(
+            !pin.owner
+                .as_ref()
+                .unwrap()
+                .saved_assignment
+                .load(Ordering::Acquire)
+        );
         pin.release();
         assets.collect();
         assert!(assets.state.lock().unwrap().readers[0].pending_assignment);
         let _assignment = assets.acquire(&root, &path).unwrap();
-        assert!(_assignment.owner.as_ref().unwrap().saved_assignment);
+        assert!(
+            _assignment
+                .owner
+                .as_ref()
+                .unwrap()
+                .saved_assignment
+                .load(Ordering::Acquire)
+        );
         assert!(!assets.state.lock().unwrap().readers[0].pending_assignment);
     }
 
@@ -1420,10 +1612,18 @@ mod tests {
         wav.extend(b"data");
         wav.extend(4_u32.to_le_bytes());
         wav.extend([0_u8, 0, 0, 32]);
-        fs::write(&source, wav).unwrap();
-        let (first_pcm, first) = prepared(&root, &source, true, 2);
+        fs::write(&source, &wav).unwrap();
+        // Keep the legacy distinct-original/shared-cache contract explicit.
+        // Canonical imports intentionally reuse one material binding instead.
+        fs::create_dir(&root).unwrap();
+        let legacy_first = root.join("legacy-first.wav");
+        let legacy_other = root.join("legacy-other.wav");
+        fs::write(&legacy_first, &wav).unwrap();
+        fs::write(&legacy_other, &wav).unwrap();
+        let (first_pcm, first) = prepared(&root, &legacy_first, false, 2);
         let (repeat_pcm, repeat) = prepared(&root, &first.original_path, false, 2);
-        let (other_pcm, other) = prepared(&root, &source, true, 2);
+        let (other_pcm, other) = prepared(&root, &legacy_other, false, 2);
+        assert_ne!(first.original_path, other.original_path);
         assert_eq!(first.cache_path, other.cache_path);
         assert_ne!(first.assignment_id(), repeat.assignment_id());
         let first_path = first.original_path.clone();
@@ -1478,9 +1678,46 @@ mod tests {
         }
         assert_eq!(fs::read(&source).unwrap().len(), 48);
 
+        // Canonical same-binding imports have distinct assignment authority but
+        // compact to one original/cache descriptor and survive either owner.
+        let (first_pcm, first) = prepared(&root, &source, true, 2);
+        let (second_pcm, second) = prepared(&root, &source, true, 2);
+        assert_eq!(first.original_path, second.original_path);
+        assert_eq!(first.cache_path, second.cache_path);
+        assert_ne!(first.assignment_id(), second.assignment_id());
+        let shared_path = first.original_path.clone();
+        let shared_cache = first.cache_path.clone();
+        assets
+            .retain_cold(first.clone(), &first_pcm, Weak::new())
+            .unwrap();
+        assets
+            .retain_cold(second.clone(), &second_pcm, Weak::new())
+            .unwrap();
+        // Delivery ACK follows native reader registration, as in production.
+        let mut first_owner = assets.acquire(&root, &shared_path).unwrap();
+        let mut second_owner = assets.acquire(&root, &shared_path).unwrap();
+        drop((first_pcm, second_pcm, first, second));
+        assets.collect();
+        assert_eq!(assets.status().unwrap().1, 1);
+        assets.retire(&root, &shared_path, false).unwrap();
+        first_owner.release();
+        assets.collect();
+        assert!(shared_path.exists() && shared_cache.exists());
+        second_owner.release();
+        assets.collect();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while shared_path.exists() || shared_cache.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "canonical last owner did not retire"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+
         // A failed prepare in another playback layout must not become the dead
         // representative ahead of a later successful layout-B warm assignment.
-        let (saved_pcm, saved) = prepared(&root, &source, true, 2);
+        fs::write(&legacy_first, &wav).unwrap();
+        let (saved_pcm, saved) = prepared(&root, &legacy_first, false, 2);
         let saved_path = saved.original_path.clone();
         let (orphan_pcm, orphan) = prepared(&root, &saved_path, false, 1);
         orphan.retire_cache();
@@ -1588,7 +1825,9 @@ mod tests {
         // Another original can explicitly retire its own ID in this same cache.
         // The surviving saved A file assignment must still outlive a subsequent
         // ordinary shutdown, even though B requested generation retirement.
-        let (shared_pcm, shared) = prepared(&root, &source, true, 1);
+        fs::write(&legacy_other, &wav).unwrap();
+        let (shared_pcm, shared) = prepared(&root, &legacy_other, false, 1);
+        assert_ne!(shared.original_path, saved_path);
         assert_eq!(shared.cache_path, saved_layout_cache);
         let shared_path = shared.original_path.clone();
         assets

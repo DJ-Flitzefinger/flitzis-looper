@@ -350,7 +350,11 @@ class TestAudioActions:  # noqa: PLR0904
         audio_actions.pads.load_sample_async(0, "/path/to/sample.wav")
 
         audio_engine_mock.load_sample_async.assert_called_once_with(
-            0, "/path/to/sample.wav", run_analysis=True, replace_assignment=True
+            0,
+            "/path/to/sample.wav",
+            run_analysis=True,
+            replace_assignment=True,
+            source_intent="import",
         )
         assert controller.session.pending_sample_paths[0] == "/path/to/sample.wav"
         assert controller.project.sample_paths[0] is None

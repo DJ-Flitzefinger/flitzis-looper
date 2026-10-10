@@ -1,3 +1,4 @@
+import subprocess
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -5,7 +6,6 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from flitzis_looper.controller import stem_generation
-from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
 from flitzis_looper.models import STEM_KINDS
 from tests.conftest import write_mono_pcm16_wav
 from tests.flitzis_looper.conftest import FakeProjectAssetLease
@@ -284,18 +284,26 @@ def test_reparse_original_is_never_admitted_or_retired(
     controller: AppController,
     audio_engine_mock: Mock,
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = _source(controller, tmp_path)
-    monkeypatch.setattr(
-        ProjectAssetLifecycle, "_is_reparse_point", staticmethod(lambda path: path == source)
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    source = foreign / "shared.wav"
+    write_mono_pcm16_wav(source, 44_100)
+    samples = tmp_path / "samples"
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(samples), str(foreign)],
+        capture_output=True,
+        check=False,
     )
+    assert result.returncode == 0, result.stderr
+    controller.project.sample_paths[0] = "samples/shared.wav"
 
     controller.loader.unload_sample(0)
 
     assert source.exists()
     audio_engine_mock.acquire_project_asset_lease.assert_not_called()
     audio_engine_mock.retire_project_asset.assert_not_called()
+    samples.rmdir()
 
 
 def test_cancelled_unstarted_separator_never_reads_source(

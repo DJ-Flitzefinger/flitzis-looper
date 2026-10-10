@@ -51,6 +51,26 @@ failure SHALL leave previous assignment state intact.
 - **THEN** its byte-exact original is owned below `samples/materials/M<id>/original/Take.wav` with slot#216 membership
 - **AND** its `.pcm-cache` and `stems` use the same immutable material version without MP3 relabelling
 
+#### Scenario: Canonical absolute restore reuses its material
+- **WHEN** an existing canonical original is restored using a relative, ordinary absolute or Windows extended absolute path
+- **THEN** explicit restore intent preserves its material binding and original without creating another copy
+- **AND** the attempt still receives fresh native adoption authority
+
+#### Scenario: Invalid namespace cannot become an import
+- **WHEN** a managed source reference contains lexical traversal, a reparse ancestor, a Windows leaf alias, an invalid material/slot ID or a non-original artifact kind
+- **THEN** the shared native resolver rejects it before normalization, filesystem writes or assignment mutation
+- **AND** external bytes and previous assignment state remain intact
+
+#### Scenario: Owner admission fails after productive preparation
+- **WHEN** original owner capacity is exhausted before a prepared source can be enqueued
+- **THEN** its rollback guard retires only that attempt's original and PCM creations
+- **AND** previous source, voice and saved assignment ownership remain intact
+
+#### Scenario: Supported original basename starts with a dot
+- **WHEN** supported audio named `.Take.wav` is imported
+- **THEN** its canonical original keeps the exact basename and bytes
+- **AND** isolated material metadata cannot be mistaken for that original
+
 #### Scenario: Same basename is imported to different pads
 - **WHEN** two pads import different source bytes named `Take.wav`
 - **THEN** each different material version has a collision-safe original and independent content assignment

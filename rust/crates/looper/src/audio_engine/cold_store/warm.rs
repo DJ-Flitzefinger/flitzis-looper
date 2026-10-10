@@ -189,12 +189,7 @@ impl ColdTransaction {
             let Some(name) = name.to_str() else {
                 continue;
             };
-            if name.starts_with('.')
-                || name
-                    .split('-')
-                    .next()
-                    .is_none_or(|id| id.len() != 64 || !id.bytes().all(|c| c.is_ascii_hexdigit()))
-            {
+            if !super::super::material_paths::pcm_generation(name) {
                 continue;
             }
             let path = entry.path();
@@ -268,11 +263,15 @@ impl ColdTransaction {
             || saved["identity"] != identity
             || saved["decoder_identity"] != decoder_identity
             || playback["parent_identity"] != decoder_identity
-            || path
+            || (!path
                 .file_name()
-                .and_then(|v| v.to_str())
-                .and_then(|v| v.split('-').next())
-                != Some(identity.as_str())
+                .and_then(|name| name.to_str())
+                .is_some_and(super::super::material_paths::ready_generation)
+                && path
+                    .file_name()
+                    .and_then(|v| v.to_str())
+                    .and_then(|v| v.split('-').next())
+                    != Some(identity.as_str()))
             || decoder["original"] != json!({"sha256":self.source_digest,"bytes":self.source_bytes})
         {
             return Err(invalid("warm full identity mismatch"));

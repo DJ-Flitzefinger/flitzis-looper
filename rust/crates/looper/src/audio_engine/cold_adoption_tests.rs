@@ -129,13 +129,120 @@ impl Fixture {
     fn assert_orphan_files_eventually_retired(&mut self) {
         self.callback.retirement.retired.clear();
         let root = self.directory.path().join("samples");
-        let cache = root.join(".pcm-cache/v1");
+        wait_until(|| cache_entries(&root).is_empty() && original_files(&root).is_empty());
+    }
+}
+
+#[test]
+#[cfg(windows)]
+fn canonical_owner_capacity_failure_retires_created_files_before_any_native_adoption() {
+    let mut fixture = Fixture::new();
+    fixture.engine.project_assets = crate::audio_engine::project_assets::ProjectAssets::isolated();
+    let samples = fixture.directory.path().join("samples");
+    fs::create_dir(&samples).unwrap();
+    let existing = samples.join("previous.wav");
+    fs::write(&existing, b"saved previous").unwrap();
+    let owners: Vec<_> = (0..4096)
+        .map(|_| {
+            fixture
+                .engine
+                .project_assets
+                .acquire_pin(&samples, &existing)
+                .unwrap()
+        })
+        .collect();
+    let request = fixture.admit(0, false);
+    assert!(matches!(
+        terminal(&fixture.engine, request),
+        LoaderEvent::Error { .. }
+    ));
+    fixture.assert_rolled_back();
+    assert!(fixture.consumer.peek().is_err());
+    wait_until(|| cache_entries(&samples).is_empty());
+    let imported = expected_imported_original(&samples, "external.wav", &fixture.original);
+    wait_until(|| !imported.exists());
+    assert_eq!(fs::read(&existing).unwrap(), b"saved previous");
+    drop(owners);
+}
+
+#[test]
+#[cfg(windows)]
+fn absolute_canonical_restore_keeps_material_path_and_pcm_generation_at_slot_216() {
+    let mut fixture = Fixture::new();
+    let first = fixture.admit(0, false);
+    fixture.pending(0, first);
+    assert_eq!(fixture.callback.drain(&mut fixture.consumer), 1);
+    let LoaderEvent::Success {
+        cached_path,
+        original_lease,
+        ..
+    } = terminal(&fixture.engine, first)
+    else {
+        panic!("cold delivery missing")
+    };
+    let lease = original_lease.unwrap();
+    let path = fixture.directory.path().join(&cached_path);
+    lease
+        .acknowledge(path.to_string_lossy().into_owned())
+        .unwrap();
+    let first_lease = fixture.engine.cold_leases.lock().unwrap()[0]
+        .clone()
+        .unwrap();
+    wait_until(|| {
+        !fixture
+            .engine
+            .loading_sample_ids
+            .lock()
+            .unwrap()
+            .contains(&0)
+    });
+    for spelling in [
+        cached_path.clone(),
+        path.to_string_lossy().into_owned(),
+        first_lease.original_path.to_string_lossy().into_owned(),
+    ] {
+        let request = admit_for_format_selected_intent(
+            &fixture.engine,
+            215,
+            spelling,
+            (false, false, true, None),
+            fixture.producer.clone(),
+            (2, 48_000, fixture.directory.path().join("samples")),
+            "restore",
+        )
+        .unwrap();
+        fixture.pending(215, request);
+        assert_eq!(fixture.callback.drain(&mut fixture.consumer), 1);
+        let LoaderEvent::Success {
+            cached_path: restored_path,
+            original_lease,
+            ..
+        } = terminal(&fixture.engine, request)
+        else {
+            panic!("restore delivery missing")
+        };
+        original_lease
+            .unwrap()
+            .acknowledge(path.to_string_lossy().into_owned())
+            .unwrap();
+        assert_eq!(restored_path, cached_path);
+        let restored = fixture.engine.cold_leases.lock().unwrap()[215]
+            .clone()
+            .unwrap();
+        assert_eq!(restored.material_id, first_lease.material_id);
+        assert_eq!(restored.cache_path, first_lease.cache_path);
+        assert_ne!(restored.assignment_id(), first_lease.assignment_id());
+        assert_eq!(
+            original_files(&fixture.directory.path().join("samples")).len(),
+            1
+        );
         wait_until(|| {
-            (!cache.exists() || fs::read_dir(&cache).unwrap().count() == 0)
-                && (!root.exists()
-                    || fs::read_dir(&root)
-                        .unwrap()
-                        .all(|entry| !entry.unwrap().path().is_file()))
+            !fixture
+                .engine
+                .loading_sample_ids
+                .lock()
+                .unwrap()
+                .contains(&215)
         });
     }
 }
@@ -299,7 +406,12 @@ fn superseding_after_actual_ack_keeps_adopted_files_durable_before_new_assignmen
         LoaderEvent::Success { .. } | LoaderEvent::Error { .. }
     ));
     assert_eq!(
-        fs::read(fixture.directory.path().join("samples/external.wav")).unwrap(),
+        fs::read(expected_imported_original(
+            &fixture.directory.path().join("samples"),
+            "external.wav",
+            &fixture.original
+        ))
+        .unwrap(),
         fixture.original
     );
     assert_eq!(fixture.callback.drain(&mut fixture.consumer), 2);
@@ -311,9 +423,7 @@ fn superseding_after_actual_ack_keeps_adopted_files_durable_before_new_assignmen
     let lease = leases[0].as_ref().unwrap();
     assert_eq!(fs::read(&lease.original_path).unwrap(), new_original);
     assert_eq!(
-        fs::read_dir(fixture.directory.path().join("samples/.pcm-cache/v1"))
-            .unwrap()
-            .count(),
+        cache_entries(&fixture.directory.path().join("samples")).len(),
         2
     );
     assert!(fixture.callback.mixer.play_sample(0, 1.0));
@@ -420,24 +530,24 @@ fn actual_unload_and_new_load_cannot_let_old_failure_rollback_new_source_or_disk
     assert!(lease.cache_path.join("manifest.json").is_file());
     fixture.callback.retirement.retired.clear();
     wait_until(|| {
-        !fixture
-            .directory
-            .path()
-            .join("samples/external.wav")
-            .exists()
+        !expected_imported_original(
+            &fixture.directory.path().join("samples"),
+            "external.wav",
+            &fixture.original,
+        )
+        .exists()
     });
     assert_eq!(
-        fs::read_dir(fixture.directory.path().join("samples/.pcm-cache/v1"))
-            .unwrap()
-            .count(),
+        cache_entries(&fixture.directory.path().join("samples")).len(),
         1
     );
     assert!(
-        !fixture
-            .directory
-            .path()
-            .join("samples/external.wav")
-            .exists()
+        !expected_imported_original(
+            &fixture.directory.path().join("samples"),
+            "external.wav",
+            &fixture.original
+        )
+        .exists()
     );
     drop(leases);
     wait_until(|| fixture.engine.cold_loading[0].load(Ordering::Acquire) == 0);

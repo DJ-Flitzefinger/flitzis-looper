@@ -1,6 +1,5 @@
 import os
 import re
-import stat
 import threading
 from contextlib import contextmanager
 from itertools import islice
@@ -8,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from flitzis_looper.models import STEM_KINDS
+from flitzis_looper.project_materials import original_asset, resolve_asset
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -141,6 +141,33 @@ class ProjectAssetLifecycle:
                 lease.release()
             else:
                 self._retire_assignment(kind, path, lease)
+
+    def prepare_original(
+        self, source: str, delivered: ProjectAssetLease | None = None
+    ) -> tuple[Path, ProjectAssetLease]:
+        """Validate and acquire/acknowledge before the durable assignment changes."""
+        path = original_asset(source, project_root=self._root).path
+        lease = self.acquire(path) if delivered is None else delivered
+        if delivered is not None:
+            delivered.acknowledge(str(path))
+        return path, lease
+
+    def adopt_original(self, sample_id: int, prepared: tuple[Path, ProjectAssetLease]) -> None:
+        """Install the reserved new owner before releasing the previous owner."""
+        key = ("original", sample_id)
+        previous = self._assignments.get(key)
+        if previous is not None and previous[0] == prepared[0]:
+            prepared[1].release()
+            return
+        self._assignments[key] = prepared
+        if previous is not None:
+            if any(
+                k[0] == "original" and path == previous[0]
+                for k, (path, _) in self._assignments.items()
+            ):
+                previous[1].release()
+            else:
+                self._retire_assignment("original", *previous)
 
     def acquire(self, path: Path) -> ProjectAssetLease:
         """Pin one checked project asset for a Python reader or separator job."""
@@ -294,10 +321,20 @@ class ProjectAssetLifecycle:
                 if not (self._root / "samples").is_dir():
                     continue
                 path = self._checked_path(Path(entry.cache_dir))
-                path.relative_to(self._root / "samples" / "stems")
+                resolved = resolve_asset(path, project_root=self._root)
             except OSError, ValueError:
                 continue
-            pad = self._root / "samples" / "stems" / f"#{sample_id + 1}"
+            original = self._owned_original(self._project.sample_paths[sample_id])
+            material = (
+                original_asset(original, project_root=self._root).material_id
+                if original is not None else None
+            )
+            pad = (
+                self._root / "samples" / "materials" / f"M{material}" / "stems"
+                if material is not None else self._root / "samples" / "stems" / f"#{sample_id + 1}"
+            )
+            if resolved.kind != "stem_directory":
+                continue
             if (path == pad and (entry.available or (path / ".complete.json").is_file())) or (
                 path.parent == pad and re.fullmatch(r"\.ready-[0-9a-f]{32}", path.name) is not None
             ):
@@ -308,42 +345,21 @@ class ProjectAssetLifecycle:
         if source is None:
             return None
         try:
-            path = self._checked_path(Path(source.replace("\\", "/")))
-            relative = path.relative_to(self._root / "samples")
+            path = original_asset(source, project_root=self._root).path
         except OSError, ValueError:
-            return None
-        if not relative.parts or relative.parts[0] in {"stems", ".pcm-cache"}:
             return None
         return path
 
     def _absolute_path(self, path: Path) -> Path:
         """Use one lexical key for relative and absolute retirement/reader paths."""
+        if ".." in path.parts:
+            message = "Project asset path contains traversal"
+            raise ValueError(message)
         target = path if path.is_absolute() else self._root / path
         return Path(os.path.abspath(target))
 
     def _checked_path(self, path: Path) -> Path:
-        absolute = self._absolute_path(path)
-        root = self._root / "samples"
-        absolute.relative_to(root)
-        if absolute == root:
-            message = "Project asset cannot be the samples container"
-            raise ValueError(message)
-        # Reject reparse points before resolve can hide a symlink/junction target.
-        for ancestor in (root, *absolute.relative_to(root).parents):
-            candidate = ancestor if ancestor.is_absolute() else root / ancestor
-            if candidate.exists() and self._is_reparse_point(candidate):
-                message = "Project asset path contains a reparse point"
-                raise ValueError(message)
-        if absolute.exists() and self._is_reparse_point(absolute):
-            message = "Project asset path contains a reparse point"
-            raise ValueError(message)
-        absolute.resolve(strict=False).relative_to(root.resolve(strict=False))
-        return absolute
-
-    @staticmethod
-    def _is_reparse_point(path: Path) -> bool:
-        attributes = getattr(path.lstat(), "st_file_attributes", 0)
-        return path.is_symlink() or bool(attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+        return resolve_asset(path, project_root=self._root).path
 
     def _retire_assignment(self, kind: str, path: Path, lease: ProjectAssetLease) -> None:
         if kind == "original":

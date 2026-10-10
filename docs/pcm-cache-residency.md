@@ -40,8 +40,27 @@ adds persistent aligned stem PCM/direct range reads, and requires actual216-slot
 residency plus finite DSP proof. Existing measured200-pad evidence and labelled
 full-track KEYLOCK fallback do not complete those new requirements. SourceVersion
 path migration needs verified lineage and fresh native source/timing ACK; existing
-cache/manifests/readers are not edited in place. This document's delivered path
-descriptions remain current until those serial slices implement the new targets.
+cache/manifests/readers are not edited in place. P1a now supplies typed canonical
+import/restore storage and durable material/content identity; equal subscribers,
+migration, arrangement and further residency remain pending.
+
+New imports preserve the exact filename and bytes under
+`samples/materials/M<32-lowercase-hex>/original/`. The material ID binds the full
+original hash and filename; a conflicting existing container gets a fresh ID
+without overwriting unknown data. Complete PCM generations live in that material's
+`.pcm-cache/v1/.ready-<32-lowercase-hex>/`; stem generation uses its `stems/` root.
+Explicit import and restore intent prevents an absolute canonical restore from
+being recopied as an external import. Safe legacy flat originals, global PCM
+generations and slot stem sets remain readable without mass migration.
+
+The native typed resolver rejects traversal before normalization, reparse ancestors,
+Windows leaf aliases, invalid IDs and wrong artifact kinds. Directory ancestors are
+guarded before child creation. Native Success reserves an original owner before
+enqueue; Python validates and acknowledges the delivered exact original lease
+before publishing its project path and durable content ID. Registry saturation,
+stale/no-receiver events and rejected adoption retain prior assignments and retire
+only the attempt's creations. Cleanup still waits for actual readers and removes
+only exact known files and empty recognized material containers.
 
 `cold_jobs.rs` admits at most two active workers and 32 queued/reserved jobs.
 The queue bound includes reservations made before request mutation. Each active
@@ -70,7 +89,8 @@ is proved. Imports retain a byte-exact collision-safe original; restoration
 captures a contained existing original without another durable original.
 
 Each cold attempt creates complete `decoder.f32le`, `playback.f32le` and
-`manifest.json` under `samples/.pcm-cache/v1/.staging-<pid>-<generation>/`.
+`manifest.json` under its material's `.pcm-cache/v1/.staging-<pid>-<generation>/`;
+restored legacy flat originals retain the existing global `samples/.pcm-cache/v1/`.
 Canonical versioned descriptors bind actual original digest/bytes, decoder
 container/codec/library/options/packet error policy, full decoder interleaved and
 arithmetic-channel-mean-f64-to-f32 digests, actual rate/channels/full frames/zero,
@@ -80,7 +100,8 @@ these identities. Original decoder rate/layout is retained independently of the
 selected playback/device rate, with no forced 48-kHz conversion.
 
 Files are flushed, the exclusive complete directory is renamed on the same
-filesystem to `<full-identity>-<pid>-<generation>`, and every committed file is
+filesystem to `.ready-<32-lowercase-hex>` for canonical materials or the existing
+`<full-identity>-<pid>-<generation>` for legacy storage, and every committed file is
 reopened with immutable sharing and fully reverified before native publication.
 Existing partial or corrupt generations are never overwritten or reused.
 Fault/cancellation cleanup deletes only this attempt's creations,

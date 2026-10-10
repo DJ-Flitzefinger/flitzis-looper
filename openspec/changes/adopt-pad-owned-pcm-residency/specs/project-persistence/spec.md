@@ -1,3 +1,29 @@
+## ADDED Requirements
+
+### Requirement: Persist durable material and content identity
+The system SHALL persist durable content-instance IDs and optional material IDs
+beside exact project original references. New assignments SHALL receive fresh IDs;
+valid restore SHALL preserve IDs without dirtying unchanged intent. Legacy identity
+upgrade SHALL occur only after successful native restoration. Identity, artifact
+kind and delivered owner admission SHALL precede durable tuple mutation; terminal
+failure SHALL settle loading and preserve prior intent and ownership.
+
+#### Scenario: Durable assignment reopens unchanged
+- **WHEN** a project with matching original, material and content IDs reopens
+- **THEN** those durable IDs remain equal after fresh runtime loading and native ACK
+- **AND** unchanged restore alone does not dirty the project
+
+#### Scenario: Legacy assignment acquires durable content identity
+- **WHEN** a safe legacy original without content identity restores successfully
+- **THEN** a fresh content ID with a legacy material binding is saved once
+- **AND** existing source settings and original bytes remain unchanged
+
+#### Scenario: Saved identity or delivered owner is rejected
+- **WHEN** a saved material ID disagrees with its original or final owner admission fails
+- **THEN** previous durable path, identity, settings and saved owner remain intact
+- **AND** terminal loading/progress/request state is settled with a visible error
+- **AND** saved material/artifact validation precedes native restore admission and delivered owner validation precedes project path/identity/settings mutation
+
 ## MODIFIED Requirements
 
 ### Requirement: Persist Stem Cache Metadata
@@ -75,6 +101,11 @@ blocked reasons/errors, temporary job handles and native ACK state SHALL remain 
 #### Scenario: Runtime stem progress is not persisted
 - **WHEN** saving occurs during generation/preparation
 - **THEN** progress, blocked reason and transient errors are not durable settings
+
+#### Scenario: Runtime stem mask is not persisted
+- **WHEN** a project is saved with a runtime effective mask or temporary gesture override
+- **THEN** that effective/gesture state is not stored as runtime authority
+- **AND** the performer's durable musical mask and mix preference remain independently saved
 
 #### Scenario: Musical stem selection round-trips independently
 - **WHEN** saving or copying occurs after performer mask/custom-preset/mute choices

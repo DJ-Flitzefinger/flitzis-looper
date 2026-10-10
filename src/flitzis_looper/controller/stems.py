@@ -152,7 +152,7 @@ class StemController(BaseController):  # noqa: PLR0904
 
         self._session.stem_generating_sample_ids.add(sample_id)
         self._session.stem_generation_source_versions[sample_id] = source_version
-        cache_dir = cache_dir_for_sample_id(sample_id)
+        cache_dir = cache_dir_for_sample_id(sample_id, self._project.sample_paths[sample_id])
         target_shape = self._target_shape_for_pad(sample_id)
         if target_shape is None:
             self._clear_stem_generation_state(sample_id)
@@ -231,7 +231,9 @@ class StemController(BaseController):  # noqa: PLR0904
             if (
                 source_version is None
                 or source_version != entry.source_version
-                or not cache_dir_matches_sample_id(sample_id, entry.cache_dir)
+                or not cache_dir_matches_sample_id(
+                    sample_id, entry.cache_dir, self._project.sample_paths[sample_id]
+                )
             ):
                 self._project.stem_cache[sample_id] = None
                 if self._project.pad_stem_mix_mode[sample_id] != "full_mix":
@@ -690,7 +692,7 @@ class StemController(BaseController):  # noqa: PLR0904
             return None
         if sample_id in self._session.active_sample_ids:
             return None
-        cache_dir = cache_dir_for_sample_id(sample_id)
+        cache_dir = cache_dir_for_sample_id(sample_id, self._project.sample_paths[sample_id])
         return StemCacheEntry(
             source_version=source_version,
             cache_dir=cache_dir,

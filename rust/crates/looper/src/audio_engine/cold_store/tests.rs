@@ -70,12 +70,118 @@ mod windows {
         }
 
         fn entries(&self) -> Vec<PathBuf> {
-            let cache = self.samples.join(".pcm-cache").join("v1");
-            fs::read_dir(cache)
-                .unwrap()
+            let mut roots = vec![self.samples.join(".pcm-cache/v1")];
+            if let Ok(materials) = fs::read_dir(self.samples.join("materials")) {
+                roots.extend(materials.map(|entry| entry.unwrap().path().join(".pcm-cache/v1")));
+            }
+            roots
+                .into_iter()
+                .filter_map(|root| fs::read_dir(root).ok())
+                .flatten()
                 .map(|entry| entry.unwrap().path())
                 .collect()
         }
+    }
+
+    #[test]
+    fn canonical_material_preserves_name_bytes_and_absolute_restore_reuses_binding() {
+        let fixture = Fixture::new();
+        let renamed = fixture.source.with_file_name("Mélodie 東京.flac");
+        fs::rename(&fixture.source, &renamed).unwrap();
+        let mut transaction =
+            ColdTransaction::capture(&fixture.samples, &renamed, true, &|| false).unwrap();
+        artifacts(&mut transaction);
+        let cache = transaction.commit(&|| false).unwrap();
+        let lease = transaction.into_lease();
+        let digest = format!("{:x}", Sha256::digest(&fixture.bytes));
+        let id = format!(
+            "{:x}",
+            Sha256::digest(format!("{digest}|Mélodie 東京.flac").as_bytes())
+        )[..32]
+            .to_owned();
+        assert_eq!(lease.material_id.as_deref(), Some(id.as_str()));
+        assert_eq!(
+            lease.original_path.file_name().unwrap(),
+            "Mélodie 東京.flac"
+        );
+        assert_eq!(fs::read(&lease.original_path).unwrap(), fixture.bytes);
+        assert!(
+            cache
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".ready-")
+        );
+        assert_eq!(
+            cache.parent().unwrap(),
+            lease
+                .original_path
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join(".pcm-cache/v1")
+        );
+        let restored =
+            ColdTransaction::capture(&fixture.samples, &lease.original_path, false, &|| false)
+                .unwrap();
+        assert_eq!(restored.material_id, lease.material_id);
+        assert_eq!(restored.original_path, lease.original_path);
+        assert!(!restored.owned_original);
+        drop(restored);
+        assert!(lease.original_path.exists());
+    }
+
+    #[test]
+    fn dot_leading_audio_name_is_preserved_and_invalid_leaf_creates_no_samples() {
+        let fixture = Fixture::new();
+        let dot = fixture.source.with_file_name(".Take.wav");
+        fs::rename(&fixture.source, &dot).unwrap();
+        let mut transaction =
+            ColdTransaction::capture(&fixture.samples, &dot, true, &|| false).unwrap();
+        artifacts(&mut transaction);
+        transaction.commit(&|| false).unwrap();
+        let lease = transaction.into_lease();
+        assert_eq!(lease.original_path.file_name().unwrap(), ".Take.wav");
+        assert_eq!(fs::read(&lease.original_path).unwrap(), fixture.bytes);
+
+        let untouched = fixture._temp.path().join("never-created").join("samples");
+        assert!(
+            ColdTransaction::capture(
+                &untouched,
+                &dot.with_file_name("bad.wav:stream"),
+                true,
+                &|| false
+            )
+            .is_err()
+        );
+        assert!(!untouched.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn occupied_unbound_material_id_never_adopts_or_overwrites_unknown_binding() {
+        let fixture = Fixture::new();
+        let digest = format!("{:x}", Sha256::digest(&fixture.bytes));
+        let id = format!(
+            "{:x}",
+            Sha256::digest(format!("{digest}|loop.wav").as_bytes())
+        )[..32]
+            .to_owned();
+        let occupied = fixture.samples.join("materials").join(format!("M{id}"));
+        fs::create_dir_all(occupied.join("original")).unwrap();
+        fs::write(occupied.join("original/Other.wav"), b"unknown material").unwrap();
+        fs::write(occupied.join("private.keep"), b"preserved").unwrap();
+        let transaction = fixture.capture(true);
+        assert_ne!(transaction.material_id.as_deref(), Some(id.as_str()));
+        assert_eq!(
+            fs::read(occupied.join("original/Other.wav")).unwrap(),
+            b"unknown material"
+        );
+        assert_eq!(
+            fs::read(occupied.join("private.keep")).unwrap(),
+            b"preserved"
+        );
+        assert!(!occupied.join("original/loop.wav").exists());
     }
 
     fn artifacts(transaction: &mut ColdTransaction) -> ColdManifest {
@@ -292,11 +398,7 @@ mod windows {
         let first_manifest = artifacts(&mut first);
         let first_path = first.commit(&|| false).unwrap();
         let first = first.into_lease();
-        let partial = fixture
-            .samples
-            .join(".pcm-cache")
-            .join("v1")
-            .join(&first_manifest.identity);
+        let partial = first_path.parent().unwrap().join(&first_manifest.identity);
         fs::create_dir(&partial).unwrap();
         fs::write(partial.join("private.partial"), b"keep").unwrap();
         let mut second = fixture.capture(true);
@@ -305,7 +407,7 @@ mod windows {
         let second = second.into_lease();
         assert_eq!(first_manifest.identity, second_manifest.identity);
         assert_ne!(first_path, second_path);
-        assert_ne!(first.original_path, second.original_path);
+        assert_eq!(first.original_path, second.original_path);
         assert_eq!(fs::read(partial.join("private.partial")).unwrap(), b"keep");
         drop((first, second));
     }
@@ -425,9 +527,11 @@ mod windows {
         let staging = transaction.staging.as_ref().unwrap();
         let generation = staging.file_name().unwrap().to_string_lossy();
         let destination = transaction.cache_root.join(format!(
-            "{}-{}",
-            manifest.identity,
-            generation.trim_start_matches(".staging-")
+            ".ready-{}",
+            &format!(
+                "{:x}",
+                Sha256::digest(format!("{}|{generation}", manifest.identity).as_bytes())
+            )[..32]
         ));
         fs::create_dir(&destination).unwrap();
         fs::write(destination.join("private.failed"), b"preserve").unwrap();
@@ -558,7 +662,7 @@ mod windows {
                 fixture.samples.clone()
             } else {
                 fs::create_dir(&fixture.samples).unwrap();
-                fixture.samples.join(".pcm-cache")
+                fixture.samples.join("materials")
             };
             let output = std::process::Command::new("cmd")
                 .args(["/C", "mklink", "/J"])

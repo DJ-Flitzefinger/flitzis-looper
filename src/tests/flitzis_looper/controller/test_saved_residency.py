@@ -160,6 +160,7 @@ def test_productive_restore_admits_saved_finite_loop_before_native_ack(
         resident_loop_start_s=321.25,
         resident_loop_end_s=325.25,
         resident_key_lock=key_lock,
+        source_intent="restore",
     )
     assert project.model_dump() == before
     assert 0 in controller.session.loading_sample_ids

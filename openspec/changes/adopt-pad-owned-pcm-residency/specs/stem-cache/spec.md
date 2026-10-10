@@ -18,6 +18,12 @@ other owners SHALL survive cleanup.
 - **THEN** WAVs use `samples/materials/M<id>/stems/` and aligned PCM uses `samples/materials/M<id>/.pcm-cache/`
 - **AND** tracked source/set selection requires complete joint verification
 
+#### Scenario: Generated stems use the pad label directory
+- **GIVEN** an existing safe legacy set uses `samples/stems/#N/` before verified migration
+- **WHEN** its matching legacy source and complete set are restored
+- **THEN** the typed legacy reader preserves eligibility without aliases or rewriting leased artifacts
+- **AND** new canonical material generation uses the material directory rather than creating another legacy container
+
 #### Scenario: Unload removes pad stems
 - **WHEN** a pad unloads
 - **THEN** its old stem eligibility is revoked immediately after admission
@@ -131,10 +137,11 @@ demand, enabled preload policy or existing valid reader ownership.
 ### Requirement: Prepared StemSet versions have equal independent users
 The system SHALL bind a complete prepared immutable StemSet version independently of its origin slot and SHALL give each content its own current source/timing/window eligibility and native ACK.
 
-New versions SHALL leave existing users' selected data immutable. Removing one
-assignment or Delete Stems request SHALL NOT cancel another interested subscriber,
-delete shared files, or revoke a surviving content's accepted set. Physical leases
-SHALL retire only after actual job/read/action/voice/native unload completion.
+#### Scenario: Existing StemSet users retain their version and authority
+- **WHEN** a new version is produced, one assignment is removed or one user requests Delete Stems
+- **THEN** existing users' selected data remain immutable
+- **AND** no other interested subscriber is cancelled, shared files deleted or surviving content's accepted set revoked
+- **AND** physical leases retire only after actual job/read/action/voice/native unload completion
 
 #### Scenario: Origin removed while copies use an old version
 - **GIVEN** A and copied C use V1 and a replacement V2 is prepared for A

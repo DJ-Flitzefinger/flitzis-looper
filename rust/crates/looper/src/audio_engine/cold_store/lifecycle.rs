@@ -113,6 +113,7 @@ pub(super) fn store() -> &'static Arc<Store> {
                         state = next;
                     }
                     let count = state.deleting.len().min(CLEANUP_PER_POLL);
+                    let mut prunes = Vec::with_capacity(count);
                     for _ in 0..count {
                         let task = state.deleting.pop_front().expect("bounded cleanup count");
                         let occupied = state.opening.contains(&task.path)
@@ -132,7 +133,10 @@ pub(super) fn store() -> &'static Arc<Store> {
                             continue;
                         }
                         match remove_owned(&task) {
-                            Ok(()) => state.deleted += 1,
+                            Ok(()) => {
+                                state.deleted += 1;
+                                prunes.push(task.path.clone());
+                            }
                             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                                 state.deleted += 1
                             }
@@ -152,6 +156,10 @@ pub(super) fn store() -> &'static Arc<Store> {
                         }
                     }
                     drop(state);
+                    for path in prunes {
+                        super::super::project_assets::ProjectAssets::shared()
+                            .prune_material_if_unowned(&path);
+                    }
                     std::thread::sleep(Duration::from_millis(25));
                 }
             })
@@ -219,11 +227,7 @@ fn remove_owned(task: &DeleteTask) -> io::Result<()> {
             .file_name()
             .and_then(|v| v.to_str())
             .ok_or_else(|| invalid("cache name"))?;
-        let identity = name
-            .split('-')
-            .next()
-            .ok_or_else(|| invalid("cache identity"))?;
-        if identity.len() != 64 || !identity.bytes().all(|v| v.is_ascii_hexdigit()) {
+        if !super::super::material_paths::pcm_generation(name) {
             return Err(invalid("unrecognized owned cache directory"));
         }
         let entries = fs::read_dir(&task.path)?

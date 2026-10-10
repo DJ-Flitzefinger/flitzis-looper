@@ -1,10 +1,12 @@
 # Shared-material PCM and extended pre-Rust delivery program
 
-Status: official R0 compatibility revision, 2026-10-09; no product/runtime/human
-completion. The independent bounded P0 and complete C1 PLAN prerequisites are
-accepted within their frozen scopes. R0 requires its own actual author terminal
-and distinct native nonauthor closure before J0/P1a/P1b. No publication occurs in
-the R0 author turn. Historical FAIL/UNKNOWN evidence remains intact.
+Status: P1a implementation and current regression validation, 2026-10-10; no
+whole-program or human completion. J0 is published. Typed native material/slot
+resolution, canonical import/restore storage, durable material/content IDs and
+guarded exact cleanup are implemented; independent final P1a review remains open.
+P1b subscriber fanout, migration, arrangement and pitch controls remain pending.
+The accepted bounded P0/C1/R0 prerequisites and historical FAIL/UNKNOWN evidence
+remain intact.
 
 The [PCM proposal](../openspec/changes/adopt-pad-owned-pcm-residency/proposal.md),
 [design](../openspec/changes/adopt-pad-owned-pcm-residency/design.md),

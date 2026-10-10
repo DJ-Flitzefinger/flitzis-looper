@@ -72,6 +72,7 @@ struct ColdLoad {
     request_id: u64,
     adoption: Arc<AtomicU8>,
     path: PathBuf,
+    restore: bool,
     samples_root: PathBuf,
     output_channels: usize,
     output_rate: u32,
@@ -108,12 +109,13 @@ pub(super) fn admit(
     restore_automatic: bool,
     replace_assignment: bool,
     resident_hint: Option<ResidentLoadHint>,
+    source_intent: &str,
 ) -> PyResult<u64> {
     let handle = engine
         .stream_handle
         .as_ref()
         .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-    admit_for_format_selected(
+    admit_for_format_selected_intent(
         engine,
         id,
         path,
@@ -131,6 +133,7 @@ pub(super) fn admit(
                 .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
                 .join("samples"),
         ),
+        source_intent,
     )
 }
 
@@ -160,6 +163,7 @@ pub(super) fn admit_for_format(
     )
 }
 
+#[cfg(test)]
 pub(super) fn admit_for_format_selected(
     engine: &AudioEngine,
     id: usize,
@@ -168,11 +172,94 @@ pub(super) fn admit_for_format_selected(
     producer: Arc<Mutex<Producer<ControlMessage>>>,
     output: (usize, u32, PathBuf),
 ) -> PyResult<u64> {
+    admit_for_format_selected_intent(engine, id, path, selection, producer, output, "auto")
+}
+
+fn admit_for_format_selected_intent(
+    engine: &AudioEngine,
+    id: usize,
+    path: String,
+    selection: (bool, bool, bool, Option<ResidentLoadHint>),
+    producer: Arc<Mutex<Producer<ControlMessage>>>,
+    output: (usize, u32, PathBuf),
+    source_intent: &str,
+) -> PyResult<u64> {
     let (output_channels, output_rate, samples_root) = output;
     let (run_analysis, restore_automatic, replace_assignment, resident_hint) = selection;
     if id >= super::constants::NUM_SAMPLES {
         return Err(PyValueError::new_err("id out of range"));
     }
+    let requested_path = PathBuf::from(&path);
+    if requested_path
+        .to_string_lossy()
+        .split(['/', '\\'])
+        .any(|part| [".", ".."].contains(&part))
+    {
+        return Err(PyValueError::new_err("source path contains traversal"));
+    }
+    let managed = if samples_root.exists() {
+        super::material_paths::resolve(&samples_root, &requested_path).ok()
+    } else {
+        None
+    };
+    if managed.as_ref().is_some_and(|asset| {
+        !matches!(
+            asset.kind,
+            super::material_paths::AssetKind::Original { .. }
+        )
+    }) || (managed.is_none()
+        && samples_root.exists()
+        && super::project_assets::owned_path(&samples_root, &requested_path).is_ok())
+    {
+        return Err(PyValueError::new_err(
+            "managed source reference must name a typed original",
+        ));
+    }
+    let restore = match source_intent {
+        "import" => false,
+        "restore" => {
+            if !managed.as_ref().is_some_and(|asset| {
+                matches!(
+                    asset.kind,
+                    super::material_paths::AssetKind::Original { .. }
+                )
+            }) {
+                return Err(PyValueError::new_err(
+                    "restore requires a typed project original",
+                ));
+            }
+            true
+        }
+        "auto" => managed.as_ref().is_some_and(|asset| {
+            matches!(
+                asset.kind,
+                super::material_paths::AssetKind::Original { .. }
+            )
+        }),
+        _ => {
+            return Err(PyValueError::new_err(
+                "source_intent must be import, restore, or auto",
+            ));
+        }
+    };
+    if !restore
+        && !requested_path.is_absolute()
+        && requested_path.components().next() == Some(Component::Normal("samples".as_ref()))
+    {
+        // A malformed managed reference cannot become an external import.
+        if managed.is_none() {
+            return Err(PyValueError::new_err("invalid managed source reference"));
+        }
+    }
+    let source_path = if restore {
+        managed
+            .as_ref()
+            .expect("restore validated above")
+            .path
+            .clone()
+    } else {
+        requested_path
+    };
     let reservation = engine
         .cold_jobs
         .reserve()
@@ -206,7 +293,7 @@ pub(super) fn admit_for_format_selected(
         .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?[id]
         .clone();
     let source_pin = if samples_root.exists() {
-        super::project_assets::owned_path(&samples_root, &PathBuf::from(&path))
+        super::project_assets::owned_path(&samples_root, &source_path)
             .ok()
             .map(|(_, owned)| engine.project_assets.acquire_pin(&samples_root, &owned))
             .transpose()
@@ -226,7 +313,8 @@ pub(super) fn admit_for_format_selected(
         id,
         request_id,
         adoption: Arc::new(AtomicU8::new(0)),
-        path: PathBuf::from(path),
+        path: source_path,
+        restore,
         samples_root,
         output_channels,
         output_rate,
@@ -394,14 +482,8 @@ impl ColdLoad {
         String,
     > {
         let cancelled = || self.is_cancelled();
-        let restore = !self.path.is_absolute()
-            && self.path.components().next() == Some(Component::Normal("samples".as_ref()))
-            && self
-                .path
-                .components()
-                .all(|part| matches!(part, Component::Normal(_)));
         let mut transaction =
-            ColdTransaction::capture(&self.samples_root, &self.path, !restore, &cancelled)
+            ColdTransaction::capture(&self.samples_root, &self.path, !self.restore, &cancelled)
                 .map_err(|error| error.to_string())?;
         // Each request keeps its own cancellation/ACK guard. Only full-content
         // preparation is serialized for the same digest/device interpretation.
@@ -683,6 +765,12 @@ impl ColdLoad {
             assets: self.assets.clone(),
             _pcm: sample.samples.clone(),
         };
+        // Reserve before enqueue, with rollback guarded even if capacity fails.
+        // The pin acknowledges only when the matching Python delivery is adopted.
+        let original_lease = self
+            .assets
+            .acquire_pin(&self.samples_root, &lease.original_path)
+            .map_err(|error| error.to_string())?;
         self.assets
             .retain_cold(
                 lease.clone(),
@@ -829,6 +917,7 @@ impl ColdLoad {
                 duration_s,
                 detected_loop_start_s,
                 cached_path,
+                original_lease: Some(original_lease),
                 analysis,
             })
             .map_err(|_| "native adoption metadata receiver closed")?;
