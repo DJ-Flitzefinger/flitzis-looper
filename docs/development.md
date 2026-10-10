@@ -37,9 +37,9 @@ Model assets remain an explicit separate installation. See
 [stem setup](stem-generation-setup.md) for identities, driver verification and rollback.
 The optional Beat This environment and its frozen CPU/model acceptance are unchanged.
 
-On Windows, build the Release once with `start-release.bat --build-only`, then
-use the official `start.bat` entrypoint for normal starts. For direct development
-source runs:
+On Windows, double-click `build-release.bat` to build the Release once, then
+double-click the official `start.bat` entrypoint for normal starts. For direct
+development source runs:
 
 ```powershell
 uv run python -m flitzis_looper
@@ -66,10 +66,14 @@ Rust test runner. It starts no CPAL stream, app, device or model worker.
 
 ### Windows Start Files
 
-Double-click a start file in the repository root, or call it from a terminal:
+Double-click a BAT file in the repository root, or call it from a terminal:
 
 - `start.bat` is the official normal start: it runs the already installed Rust
   Release build without synchronizing dependencies, installing, or compiling.
+- `build-release.bat` builds and verifies the Rust Release profile without
+  starting the app. It accepts no arguments and keeps the result visible until
+  a key is pressed, on both success and failure. No shortcut arguments need to
+  be configured.
 - `start-dev.bat` builds and starts the app with the Rust Debug profile.
 - `start-release.bat` builds and starts the app with the optimized Rust Release
   profile.
@@ -82,12 +86,15 @@ missing extension/profile getter, import failure, or Debug build stops startup
 with instructions to run `start-release.bat --build-only`. It never silently
 builds or switches profiles.
 
-The two build starters synchronize dependencies with `uv sync --locked`, install
+All build entrypoints synchronize dependencies with `uv sync --locked`, install
 the selected native profile with
 `uv run --no-sync maturin develop --locked` (adding `--release` for Release),
-verify the installed profile, then run `.venv\Scripts\python.exe -m flitzis_looper`.
-Existing build artifacts are reused by the build tools. The shared implementation
-is `scripts/start-app.bat`.
+and verify the installed profile. `build-release.bat` then reports completion
+and waits for a key; the build-and-start files run
+`.venv\Scripts\python.exe -m flitzis_looper`. Existing build artifacts are reused
+by the build tools. All four root BAT files use `scripts/start-app.bat`, so the
+dedicated Release builder uses the same build pipeline as the Release starter.
+It preserves the actual setup, build or profile-check exit code after waiting.
 
 For checks that do not open the app or an audio device:
 
@@ -101,10 +108,10 @@ For checks that do not open the app or an audio device:
 `--build-only` performs the normal setup, native build and profile verification
 and exits before the app. Both return nonzero failures without pausing.
 
-Close all running Looper windows before using either build starter: both profiles
+Close all running Looper windows before using any build entrypoint: both profiles
 install the same native extension, which Windows cannot replace while the app is
 using it. A failed setup or build stops the launch. Normal double-click starts
-keep the terminal open on failure to show the error. Only the build starters
+keep the terminal open on failure to show the error. Only the build entrypoints
 require `uv` on `PATH` and the native build setup described below; `start.bat`
 uses the existing environment. Release still runs the Python source app; these
 files do not create the future standalone installer.

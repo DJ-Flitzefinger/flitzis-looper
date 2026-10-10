@@ -31,11 +31,11 @@ provide `start.bat --check` and build-starter `--build-only` modes that stop bef
 the application entrypoint or any audio engine/device initialization.
 
 #### Scenario: Preserve the checked build and failure contracts
-- **WHEN** a check or build-only mode runs
+- **WHEN** a CLI check or `--build-only` mode runs
 - **THEN** the check mode MUST execute the same existing-Release preflight as normal startup.
-  Build-only modes MUST perform locked dependency setup, the selected native build
+  CLI build-only modes MUST perform locked dependency setup, the selected native build
   and actual installed-profile verification. Failures SHALL preserve nonzero exit
-  codes; check/build-only modes SHALL report failures without an interactive pause.
+  codes; these CLI modes SHALL report failures without an interactive pause.
 
 #### Scenario: Check the installed Release without starting the app
 - **GIVEN** the existing project environment and native module are usable
@@ -54,3 +54,42 @@ the application entrypoint or any audio engine/device initialization.
 - **WHEN** the user invokes its build starter without an option
 - **THEN** the selected installed native profile is verified
 - **AND** the app starts from the repository using the existing project Python environment
+
+### Requirement: Build Release by double-click with a visible result
+The system SHALL provide `build-release.bat` as a no-argument Windows Release
+build-only entrypoint using the existing shared locked dependency setup, native
+Release build and actual installed-profile verification pipeline. It SHALL
+report success or the failed step, wait for a key on both success and failure,
+and return the actual exit code after waiting without entering the application
+or initializing an audio engine or device.
+
+#### Scenario: Double-click a successful Release build
+- **GIVEN** the Release build toolchain is usable
+- **WHEN** the user invokes `build-release.bat` without arguments, including from
+  a different working directory or a repository path containing spaces
+- **THEN** the entrypoint runs locked dependency setup and the native Release
+  build from its own repository directory
+- **AND** it verifies that the actual installed native module reports Release
+- **AND** it shows successful build completion and waits for a key before returning exit code zero
+- **AND** no shortcut arguments are required and no application entrypoint is run
+
+#### Scenario: Dependency setup or native build fails
+- **GIVEN** dependency setup or the Release build returns a nonzero exit code
+- **WHEN** the user invokes `build-release.bat` without arguments
+- **THEN** subsequent build/profile/application steps do not run
+- **AND** the diagnostic identifies the failed step and its exit code and waits for a key
+- **AND** the entrypoint returns exactly the failed step's exit code after waiting
+
+#### Scenario: The installed profile check fails after building
+- **GIVEN** setup and the Release build complete but the installed-profile check
+  fails, including an unusable native module or a module reporting Debug
+- **WHEN** the user invokes `build-release.bat` without arguments
+- **THEN** the entrypoint shows the profile-check failure and waits for a key
+- **AND** it preserves the profile-check failure code after waiting and does not start the app
+
+#### Scenario: Reject options before work
+- **WHEN** the user supplies an option or extra argument to `build-release.bat`,
+  including `--build-only` or `--check`
+- **THEN** the entrypoint reports usage and argument-validation failure before
+  directory setup, dependency tools or Python execution
+- **AND** it waits for a key and returns exit code two without starting the app

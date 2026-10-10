@@ -48,6 +48,7 @@ class _Launchers:
     tool_log: Path
     profile_log: Path
     app_log: Path
+    pause_prompt: str
 
     def run(self, name: str, *arguments: str) -> subprocess.CompletedProcess[str]:
         command = f'call "{self.repository / name}"'
@@ -77,8 +78,23 @@ class _Launchers:
         assert self.tool_calls() == []
 
 
+@pytest.fixture(scope="session")
+def pause_prompt() -> str:
+    result = subprocess.run(
+        [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", "pause"],
+        input="\n",
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=True,
+    )
+    prompt = result.stdout.strip()
+    assert prompt
+    return prompt
+
+
 @pytest.fixture
-def launchers(tmp_path: Path) -> _Launchers:
+def launchers(tmp_path: Path, pause_prompt: str) -> _Launchers:
     repository = tmp_path / "repository with spaces"
     caller = tmp_path / "unrelated working directory"
     tools = tmp_path / "harmless tools"
@@ -86,7 +102,13 @@ def launchers(tmp_path: Path) -> _Launchers:
     caller.mkdir()
     tools.mkdir()
     (repository / "scripts").mkdir()
-    for relative in ("start.bat", "start-dev.bat", "start-release.bat", "scripts/start-app.bat"):
+    for relative in (
+        "start.bat",
+        "start-dev.bat",
+        "start-release.bat",
+        "build-release.bat",
+        "scripts/start-app.bat",
+    ):
         shutil.copyfile(_REPOSITORY / relative, repository / relative)
     venv.EnvBuilder(with_pip=False).create(repository / ".venv")
     (repository / "flitzis_looper_audio.py").write_text(_NATIVE_STUB, encoding="utf-8")
@@ -112,7 +134,7 @@ def launchers(tmp_path: Path) -> _Launchers:
     )
     environment.pop("PYTHONHOME", None)
     environment.pop("PYTHONPATH", None)
-    return _Launchers(repository, caller, environment, tool_log, profile_log, app_log)
+    return _Launchers(repository, caller, environment, tool_log, profile_log, app_log, pause_prompt)
 
 
 @pytest.mark.parametrize("option", ["", "--check"])
@@ -126,11 +148,28 @@ def test_release_start_uses_existing_python_without_any_uv_call(
     assert result.returncode == 0, result.stdout + result.stderr
     assert launchers.profile_log.read_text() == "checked"
     assert launchers.tool_calls() == []
+    assert launchers.pause_prompt not in result.stdout
     assert launchers.app_log.exists() is (not option)
     if not option:
         receipt = json.loads(launchers.app_log.read_text())
         assert Path(receipt["cwd"]) == launchers.repository
         assert Path(receipt["python"]) == launchers.repository / ".venv/Scripts/python.exe"
+
+
+def test_double_click_release_build_checks_profile_and_keeps_success_visible(
+    launchers: _Launchers,
+) -> None:
+    result = launchers.run("build-release.bat")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert launchers.tool_calls() == [
+        "sync --locked",
+        "run --no-sync maturin develop --locked --release",
+    ]
+    assert launchers.profile_log.read_text() == "checked"
+    assert "Native build profile: release" in result.stdout
+    assert "Release build completed. The app was not started." in result.stdout
+    assert launchers.pause_prompt in result.stdout
+    assert not launchers.app_log.exists()
 
 
 @pytest.mark.parametrize("profile", ["debug", "older", "import-error", "missing"])
@@ -144,7 +183,7 @@ def test_release_rejects_wrong_older_or_unimportable_native_build(
     result = launchers.run("start.bat", "--check")
     assert result.returncode != 0
     assert "start-release.bat --build-only" in result.stdout
-    assert "Press any key" not in result.stdout
+    assert launchers.pause_prompt not in result.stdout
     assert launchers.profile_log.exists() is (profile != "missing")
     launchers.assert_no_app_or_tools()
 
@@ -175,34 +214,57 @@ def test_build_starters_keep_locked_build_and_optional_app(
     assert launchers.tool_calls() == ["sync --locked", build_call]
     assert launchers.profile_log.read_text() == "checked"
     assert launchers.app_log.exists() is (not option)
+    assert launchers.pause_prompt not in result.stdout
 
 
 @pytest.mark.parametrize(
     ("failed_step", "exit_code", "call_count"),
     [("SYNC", 41, 1), ("BUILD", 42, 2)],
 )
+@pytest.mark.parametrize("starter", ["start-release.bat", "build-release.bat"])
 def test_failed_build_step_returns_exact_exit_without_app_or_profile_check(
     launchers: _Launchers,
     failed_step: str,
     exit_code: int,
     call_count: int,
+    starter: str,
 ) -> None:
     launchers.environment[f"LAUNCHER_{failed_step}_EXIT"] = str(exit_code)
-    result = launchers.run("start-release.bat", "--build-only")
+    arguments = ("--build-only",) if starter == "start-release.bat" else ()
+    result = launchers.run(starter, *arguments)
     assert result.returncode == exit_code
     assert len(launchers.tool_calls()) == call_count
     assert not launchers.profile_log.exists()
     assert not launchers.app_log.exists()
-    assert "Press any key" not in result.stdout
+    assert f"failed (exit code {exit_code})." in result.stdout
+    assert (launchers.pause_prompt in result.stdout) is (starter == "build-release.bat")
 
 
-def test_build_success_must_match_actual_installed_profile(launchers: _Launchers) -> None:
-    launchers.environment["LAUNCHER_NATIVE_MODE"] = "debug"
-    result = launchers.run("start-release.bat", "--build-only")
-    assert result.returncode == 3
+@pytest.mark.parametrize("starter", ["start-release.bat", "build-release.bat"])
+@pytest.mark.parametrize(
+    ("profile", "exit_code"),
+    [("debug", 3), ("older", 3), ("import-error", 1), ("missing", 1), ("no-python", 3)],
+)
+def test_build_success_must_match_actual_installed_profile(
+    launchers: _Launchers,
+    starter: str,
+    profile: str,
+    exit_code: int,
+) -> None:
+    launchers.environment["LAUNCHER_NATIVE_MODE"] = profile
+    if profile == "missing":
+        (launchers.repository / "flitzis_looper_audio.py").unlink()
+    if profile == "no-python":
+        (launchers.repository / ".venv/Scripts/python.exe").unlink()
+    arguments = ("--build-only",) if starter == "start-release.bat" else ()
+    result = launchers.run(starter, *arguments)
+    assert result.returncode == exit_code
     assert len(launchers.tool_calls()) == 2
-    assert launchers.profile_log.exists()
+    assert launchers.profile_log.exists() is (profile not in {"missing", "no-python"})
     assert not launchers.app_log.exists()
+    assert "A usable Release native build is required." in result.stdout
+    assert f"failed (exit code {exit_code})." in result.stdout
+    assert (launchers.pause_prompt in result.stdout) is (starter == "build-release.bat")
 
 
 @pytest.mark.parametrize("starter", ["start.bat", "start-release.bat"])
@@ -212,6 +274,7 @@ def test_application_exit_code_is_preserved(launchers: _Launchers, starter: str)
     assert result.returncode == 17
     assert launchers.profile_log.exists()
     assert launchers.app_log.exists()
+    assert launchers.pause_prompt in result.stdout
 
 
 @pytest.mark.parametrize(
@@ -221,6 +284,12 @@ def test_application_exit_code_is_preserved(launchers: _Launchers, starter: str)
         ("start-release.bat", ("--check",)),
         ("start-dev.bat", ("--unknown",)),
         ("start.bat", ("--check", "extra")),
+        ("build-release.bat", ("--build-only",)),
+        ("build-release.bat", ("--check",)),
+        ("build-release.bat", ("--unknown",)),
+        ("build-release.bat", ("extra", "more")),
+        ("build-release.bat", ('""',)),
+        ("build-release.bat", ('"two words"',)),
     ],
 )
 def test_invalid_arguments_stop_before_setup_or_python(
@@ -233,3 +302,6 @@ def test_invalid_arguments_stop_before_setup_or_python(
     assert "Usage:" in result.stdout
     assert not launchers.profile_log.exists()
     launchers.assert_no_app_or_tools()
+    if starter == "build-release.bat":
+        assert "build-release.bat" in result.stdout
+        assert launchers.pause_prompt in result.stdout

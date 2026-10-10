@@ -8,6 +8,7 @@ set "APP_LAUNCH_ONLY="
 set "APP_CHECK_ONLY="
 set "APP_BUILD_ONLY="
 set "APP_NO_PAUSE="
+set "APP_KEEP_OPEN="
 
 if /i "%~2"=="--check" set "APP_NO_PAUSE=1"
 if /i "%~2"=="--build-only" set "APP_NO_PAUSE=1"
@@ -20,6 +21,14 @@ if /i "%~1"=="release" (
     set "APP_PROFILE_KEY=release"
     set "APP_BUILD_ARGS=--release"
 )
+if /i "%~1"=="build-release" (
+    set "APP_PROFILE=Release"
+    set "APP_PROFILE_KEY=release"
+    set "APP_BUILD_ARGS=--release"
+    set "APP_BUILD_ONLY=1"
+    set "APP_KEEP_OPEN=1"
+    set "APP_NO_PAUSE="
+)
 if /i "%~1"=="launch" (
     set "APP_PROFILE=Release"
     set "APP_PROFILE_KEY=release"
@@ -27,6 +36,10 @@ if /i "%~1"=="launch" (
 )
 if not defined APP_PROFILE goto invalid_profile
 if not "%~3"=="" goto invalid_options
+if defined APP_KEEP_OPEN (
+    if not [%2]==[] goto invalid_options
+    goto selected
+)
 if "%~2"=="" goto selected
 if defined APP_LAUNCH_ONLY (
     if /i not "%~2"=="--check" goto invalid_options
@@ -85,11 +98,12 @@ set "APP_EXIT_CODE=%errorlevel%"
 if not "%APP_EXIT_CODE%"=="0" goto failed
 
 :succeeded
+if defined APP_KEEP_OPEN pause
 popd
 exit /b 0
 
 :invalid_profile
-set "APP_STEP=profile selection; use start.bat, start-dev.bat or start-release.bat"
+set "APP_STEP=profile selection; use start.bat, start-dev.bat, start-release.bat or build-release.bat"
 set "APP_EXIT_CODE=2"
 goto failed
 
@@ -97,6 +111,7 @@ goto failed
 echo Usage: start.bat [--check]
 echo        start-dev.bat [--build-only]
 echo        start-release.bat [--build-only]
+echo        build-release.bat
 set "APP_STEP=argument validation"
 set "APP_EXIT_CODE=2"
 goto failed
