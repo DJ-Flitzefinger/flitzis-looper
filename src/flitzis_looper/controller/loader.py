@@ -11,8 +11,10 @@ from flitzis_looper.controller.asset_lifecycle import (
     ProjectAssetLifecycle,
 )
 from flitzis_looper.controller.base import BaseController
+from flitzis_looper.controller.key_metadata import KeyMetadataAnalysis
 from flitzis_looper.controller.saved_residency import saved_resident_loop
 from flitzis_looper.controller.validation import normalize_bpm
+from flitzis_looper.key_intent import PadKeyIntent
 from flitzis_looper.models import (
     PadContentIdentity,
     ProjectState,
@@ -30,6 +32,15 @@ if TYPE_CHECKING:
 
 
 _PadValue = TypeVar("_PadValue")
+
+
+def _parse_sample_analysis(analysis: object) -> SampleAnalysis | None:
+    if not isinstance(analysis, dict):
+        return None
+    try:
+        return SampleAnalysis.model_validate(analysis)
+    except ValidationError:
+        return None
 
 
 class _RestoredLoadOptions(TypedDict):
@@ -86,6 +97,7 @@ class LoaderController(BaseController):
         self._new_load_sample_ids: set[int] = set()
         self._deferred_restores: dict[int, Path] = {}
         self._analysis_request_ids: dict[int, int] = {}
+        self._key_analysis = KeyMetadataAnalysis(project, audio)
         self._accepted_restore = AcceptedTimingRestore(
             project, session, audio, self._finish_accepted_restore
         )
@@ -245,23 +257,28 @@ class LoaderController(BaseController):
         if self.is_sample_loading(sample_id):
             return
 
-        self._clear_analysis_task_messages(sample_id)
         if not self.is_sample_loaded(sample_id):
-            self._session.analyzing_sample_ids.discard(sample_id)
-            self._analysis_request_ids.pop(sample_id, None)
+            self._clear_analysis_task_state(sample_id)
             self._session.sample_analysis_errors[sample_id] = "sample is not loaded"
             return
 
-        self._session.analyzing_sample_ids.add(sample_id)
-        self._analysis_request_ids.pop(sample_id, None)
-
         try:
+            key_admission = self._key_analysis.prepare(sample_id)
             request_id = self._audio.analyze_sample_async(sample_id)
         except (RuntimeError, ValueError) as err:
-            self._session.analyzing_sample_ids.discard(sample_id)
             self._session.sample_analysis_errors[sample_id] = str(err)
         else:
+            self._clear_analysis_task_messages(sample_id)
+            self._session.analyzing_sample_ids.add(sample_id)
+            self._analysis_request_ids.pop(sample_id, None)
             self._record_analysis_request_id(sample_id, request_id)
+            try:
+                if self._key_analysis.admit(sample_id, key_admission, request_id):
+                    self._mark_project_changed()
+            except (RuntimeError, ValueError) as error:
+                message = f"Analysis key metadata admission failed: {error}"
+                self._key_analysis.record_error(sample_id, request_id, message)
+                self._session.sample_analysis_errors[sample_id] = message
 
     def poll_loader_events(self) -> None:
         """Drain pending loader events from the Rust audio engine."""
@@ -329,6 +346,7 @@ class LoaderController(BaseController):
     def _clear_analysis_task_state(self, sample_id: int) -> None:
         self._session.analyzing_sample_ids.discard(sample_id)
         self._analysis_request_ids.pop(sample_id, None)
+        self._key_analysis.cancel(sample_id)
         self._clear_analysis_task_messages(sample_id)
 
     def _clear_analysis_task_messages(self, sample_id: int) -> None:
@@ -389,7 +407,9 @@ class LoaderController(BaseController):
                 defaults.pad_key_lock[sample_id],
             ),
             _reset_pad_value(self._project.manual_bpm, sample_id, defaults.manual_bpm[sample_id]),
-            _reset_pad_value(self._project.manual_key, sample_id, defaults.manual_key[sample_id]),
+            _reset_pad_value(
+                self._project.pad_key_intent, sample_id, defaults.pad_key_intent[sample_id]
+            ),
             _reset_pad_value(
                 self._project.pad_timing_intent, sample_id, defaults.pad_timing_intent[sample_id]
             ),
@@ -515,6 +535,9 @@ class LoaderController(BaseController):
         restored_assignment = not new_assignment
         timing_stale = event.get("timing_stale") is True
         if new_assignment:
+            # Source adoption is complete even if a newer timing edit owns timing now.
+            self._project.pad_key_intent[sample_id] = PadKeyIntent()
+            self._key_analysis.cancel(sample_id)
             self._reset_completed_assignment(sample_id, timing_stale=timing_stale)
             self._project.sample_paths[sample_id] = target_path
             self._clear_stem_cache(sample_id)
@@ -619,7 +642,11 @@ class LoaderController(BaseController):
             )
 
         if not timing_stale:
-            self._apply_loaded_analysis(sample_id, event.get("analysis"))
+            self._apply_loaded_analysis(
+                sample_id,
+                event.get("analysis"),
+                key_request_id=event.get("request_id") if new_assignment else None,
+            )
             self._clear_analysis_task_state(sample_id)
 
         if restored_assignment and self._on_restored_sample_loaded is not None:
@@ -661,9 +688,15 @@ class LoaderController(BaseController):
         self._clear_analysis_task_state(sample_id)
         self._clear_stem_generation_state(sample_id)
 
-    def _apply_loaded_analysis(self, sample_id: int, analysis: object) -> None:
+    def _apply_loaded_analysis(
+        self, sample_id: int, analysis: object, *, key_request_id: object = None
+    ) -> None:
         if analysis is not None:
-            self._store_sample_analysis(sample_id, analysis)
+            parsed = self._store_sample_analysis(sample_id, analysis)
+            if parsed is not None and self._key_analysis.loaded(
+                sample_id, key_request_id, parsed.key
+            ):
+                self._mark_project_changed()
         elif (
             self._project.sample_analysis[sample_id] is not None
             or self._project.manual_bpm[sample_id] is not None
@@ -705,6 +738,9 @@ class LoaderController(BaseController):
 
         self._session.analyzing_sample_ids.add(sample_id)
         self._clear_analysis_task_messages(sample_id)
+        key_error = self._key_analysis.error_for_request(sample_id, event.get("request_id"))
+        if key_error is not None:
+            self._session.sample_analysis_errors[sample_id] = key_error
 
     def _handle_task_progress(self, sample_id: int, event: dict[str, object]) -> None:
         task = event.get("task")
@@ -761,9 +797,23 @@ class LoaderController(BaseController):
         if not self._matches_analysis_request(sample_id, event):
             return
 
+        analysis = event.get("analysis")
+        parsed = _parse_sample_analysis(analysis)
+        key_error = self._key_analysis.error_for_request(sample_id, event.get("request_id"))
+        try:
+            if (
+                parsed is not None
+                and key_error is None
+                and self._key_analysis.complete(sample_id, event.get("request_id"), parsed.key)
+            ):
+                self._mark_project_changed()
+        except (RuntimeError, ValueError) as error:
+            key_error = f"Analysis key metadata completion failed: {error}"
         if event.get("timing_stale") is not True:
-            self._store_sample_analysis(sample_id, event.get("analysis"))
+            self._store_sample_analysis(sample_id, analysis)
         self._clear_analysis_task_state(sample_id)
+        if key_error is not None:
+            self._session.sample_analysis_errors[sample_id] = key_error
 
     def _handle_stem_generation_success(self, sample_id: int) -> None:
         if sample_id not in self._session.stem_generating_sample_ids:
@@ -806,6 +856,7 @@ class LoaderController(BaseController):
 
         self._session.analyzing_sample_ids.discard(sample_id)
         self._analysis_request_ids.pop(sample_id, None)
+        self._key_analysis.cancel(sample_id)
         self._session.sample_analysis_progress.pop(sample_id, None)
         self._session.sample_analysis_stage.pop(sample_id, None)
 
@@ -813,14 +864,10 @@ class LoaderController(BaseController):
         if isinstance(msg, str):
             self._session.sample_analysis_errors[sample_id] = msg
 
-    def _store_sample_analysis(self, sample_id: int, analysis: object) -> None:
-        if not isinstance(analysis, dict):
-            return
-
-        try:
-            parsed = SampleAnalysis.model_validate(analysis)
-        except ValidationError:
-            return
+    def _store_sample_analysis(self, sample_id: int, analysis: object) -> SampleAnalysis | None:
+        parsed = _parse_sample_analysis(analysis)
+        if parsed is None:
+            return None
 
         manual = self._project.manual_bpm[sample_id]
         self._restore_legacy_timing_authority(
@@ -836,6 +883,7 @@ class LoaderController(BaseController):
         )
         self._on_pad_bpm_changed(sample_id)
         self._mark_project_changed()
+        return parsed
 
     def _restore_legacy_timing_authority(
         self, sample_id: int, bpm: float | None, *, timing_stale: bool = False
@@ -999,5 +1047,5 @@ class LoaderController(BaseController):
     def _matches_analysis_request(self, sample_id: int, event: dict[str, object]) -> bool:
         request_id = event.get("request_id")
         if isinstance(request_id, bool) or not isinstance(request_id, int):
-            return True
+            return not self._key_analysis.has_request(sample_id)
         return self._analysis_request_ids.get(sample_id) == request_id

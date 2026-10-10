@@ -1,4 +1,7 @@
 import math
+
+# Pydantic resolves the computed serializer annotation at runtime.
+from collections.abc import MutableSequence  # noqa: TC003
 from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import (
@@ -7,6 +10,8 @@ from pydantic import (
     ConfigDict,
     Field,
     ValidationError,
+    computed_field,
+    field_serializer,
     field_validator,
     model_validator,
 )
@@ -35,6 +40,7 @@ from flitzis_looper.constants import (
     VOLUME_MAX,
     VOLUME_MIN,
 )
+from flitzis_looper.key_intent import KeyCorrectionView, PadKeyIntent, SourceKeyVersion
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -214,8 +220,8 @@ def _default_pad_timing_intent() -> list[TimingIntent]:
     return ["legacy"] * NUM_SAMPLES
 
 
-def _default_manual_key() -> list[str | None]:
-    return [None] * NUM_SAMPLES
+def _default_pad_key_intent() -> list[PadKeyIntent]:
+    return [PadKeyIntent() for _ in range(NUM_SAMPLES)]
 
 
 def _default_pad_gain_db() -> list[float]:
@@ -324,6 +330,34 @@ def _default_pad_content() -> list[PadContentIdentity | None]:
     return [None] * NUM_SAMPLES
 
 
+def _migrate_legacy_key_intent(data: dict[str, object]) -> None:
+    """Import legacy display metadata only when the authoritative field is absent."""
+    if "pad_key_intent" in data:
+        return
+    manual = data.get("manual_key")
+    analyses = data.get("sample_analysis")
+    intents = _default_pad_key_intent()
+    for sample_id in range(NUM_SAMPLES):
+        correction = (
+            manual[sample_id] if isinstance(manual, list) and sample_id < len(manual) else None
+        )
+        analysis = (
+            analyses[sample_id]
+            if isinstance(analyses, list) and sample_id < len(analyses)
+            else None
+        )
+        raw = (
+            analysis.get("key")
+            if isinstance(analysis, dict)
+            else (analysis.key if isinstance(analysis, SampleAnalysis) else None)
+        )
+        intents[sample_id] = PadKeyIntent(
+            correction=correction if isinstance(correction, str) else None,
+            source=SourceKeyVersion(raw_key=raw) if isinstance(raw, str) else None,
+        )
+    data["pad_key_intent"] = intents
+
+
 class ProjectState(BaseModel):
     """Persistent state. Saved to disk."""
 
@@ -341,6 +375,7 @@ class ProjectState(BaseModel):
         _migrate_legacy_trigger_quantization_fields(data)
         _normalize_unloaded_pad_key_lock_fields(data)
         _migrate_legacy_timing_intent(data)
+        _migrate_legacy_key_intent(data)
 
         return data
 
@@ -373,8 +408,21 @@ class ProjectState(BaseModel):
     pad_timing_intent: list[TimingIntent] = Field(default_factory=_default_pad_timing_intent)
     """Explicit durable timing authority; saved evidence never establishes live ownership."""
 
-    manual_key: list[str | None] = Field(default_factory=_default_manual_key)
-    """Optional per-pad key override. When set, used for effective key display."""
+    pad_key_intent: list[PadKeyIntent] = Field(
+        default_factory=_default_pad_key_intent, min_length=NUM_SAMPLES, max_length=NUM_SAMPLES
+    )
+    """Durable per-content key metadata and neutral pitch intent; no native permits."""
+
+    # Mypy cannot yet type Pydantic's computed-field decorator over a property.
+    @computed_field(return_type=list[str | None])  # type: ignore[prop-decorator]
+    @property
+    def manual_key(self) -> MutableSequence[str | None]:
+        """Expose legacy correction access without a second independent saved truth."""
+        return KeyCorrectionView(self.pad_key_intent)
+
+    @field_serializer("manual_key")
+    def _serialize_manual_key(self, value: MutableSequence[str | None]) -> list[str | None]:
+        return list(value)
 
     pad_gain_db: list[float] = Field(default_factory=_default_pad_gain_db)
     """Per-pad Gain/Trim in dB."""

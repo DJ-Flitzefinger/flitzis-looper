@@ -1,10 +1,14 @@
 # Pending serial implementation and genuine acceptance
 
-R0 writes contracts only. All implementation and human checks below remain OPEN.
+R0 introduced the contracts. Only bounded neutral K-META is independently accepted;
+all remaining implementation and human checks below remain OPEN.
 Use the canonical extended program and exact coverage rows; no alternative order.
 
-- [ ] K-META: neutral persisted source correction/epochs/base/extra/retrigger model;
+- [x] K-META: neutral persisted source correction/epochs/base/extra/retrigger model;
   all12x12 same-mode roots, +6 tie/idempotence/unknown/mode/reset/late-analysis races.
+  Actual2978 Python PASS/35 device skips plus strengthened reset regression;
+  current lint/types/changed-file formatting and affected official strict pass.
+  Unchanged native checks are reused; this closes no audible/UI/MIDI/Human gate.
 - [ ] B5: prove all37 extra values and total -23..+24 at actual r(n), lockON h/r and
   lockOFF h; original acoustic/finite/causal/latency/native RT/unity matrix intact.
   B5 depends map semantics, not B4 UI completion; production k remains0 in diagnostics.

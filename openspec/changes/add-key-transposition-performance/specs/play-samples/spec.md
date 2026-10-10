@@ -9,6 +9,12 @@ The system SHALL keep SET position-preserving without starting stopped content a
 - **AND** retrigger never toggles Play/Stop or disappears because target equals current value
 
 ### Requirement: Pitch tuple and attack use one existing scheduled event
+The system SHALL apply pitch and retrigger atomically through the existing scheduler.
+
+#### Scenario: Existing timing and failure rules apply to the complete event
+- **WHEN** a pitch tuple and SET_RETRIGGER attack are admitted
+- **THEN** the following complete scheduling and atomic failure contracts SHALL apply:
+
 The system SHALL apply an admitted pitch tuple and its SET_RETRIGGER attack atomically at the same existing trigger dueframe with current guarded permits and original Quantize/SYNC intent.
 
 Quantized waiting SHALL NOT retune currently playing audio early. Unquantized

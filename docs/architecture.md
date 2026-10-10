@@ -951,6 +951,22 @@ below describes the current eager implementation, not that pending target.
 regions, BPM metadata, dB Gain/Trim and EQ intent, stem cache metadata,
 settings, and global controls.
 
+`key_intent.py` owns the immutable, validated per-content source key version,
+correction and epochs, base/extra shifts and retrigger intent. `pad_key_intent`
+is the saved truth for all216 slots; legacy `manual_key` is a fixed-size facade
+over that same table. K-META edits remain metadata-only and issue no native pitch
+or playback commands. The existing analyzer publishes a new key version only
+against its real integer request ID, captured content instance and current native
+waveform generation/digest/shape; timing staleness does not erase a newer key
+correction. Native getter failures preserve intent and settle the real request.
+Accepted source replacement resets this intent, including when a newer timing
+edit owns the timing projection. Same-source restore preserves it.
+
+Legacy migration imports correction only when `pad_key_intent` is absent. An
+explicit new correction `None` remains authoritative on every reopen. Key-only
+validation failure recovers valid fields of each slot locally; it preserves other
+performer settings and never restores runtime ownership, requests or native ACKs.
+
 `SessionState` stores recoverable UI projections such as active pads, paused
 pads, load/generation progress, meters, playheads, and edit buffers.
 

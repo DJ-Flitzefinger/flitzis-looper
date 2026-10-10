@@ -705,11 +705,21 @@ Reference URLs:
 
 - https://breakfastquay.com/rubberband/integration.html
 
-## Pending R0 Key + Transposition envelope
+## Durable key intent and pending audible transposition
 
-The separate future controls persist source correction+epoch, numeric base_shift
-(-5..+6 with fixed+6 tie), all37 extra_shift(-18..+18) and retrigger flag. Legacy
-manual_key stays neutral metadata. Correction relabels without retune/position change;
+K-META implements `key_intent.py` and the saved fixed216 `pad_key_intent` table:
+immutable source versions, independent correction/analysis epochs, numeric
+base_shift(-5..+6 with fixed+6 tie), all37 extra_shift(-18..+18) and retrigger flag.
+Legacy `manual_key` delegates to this same table. Its three resets are independent;
+unknown source text remains display metadata without guessed root or mode.
+Failed deliberate analysis admission preserves correction; a genuinely admitted
+request can remove its prior correction, while later corrections survive its
+guarded result. Accepted replacement resets source-bound intent; restore retains
+it. New explicit correction `None` prevents legacy resurrection on reopen and
+malformed new fields recover locally without discarding valid performer settings.
+These pure/controller/persistence changes activate no audible pitch controls.
+
+Correction relabels without retune/position change;
 base and extra combine once into total k=-23..+24, h=2^(k/12). Equal-rate current
 varispeed route requires lockON p=h/r, lockOFF p=h preserving speed coupling r*h.
 Actual r(n) extrema expand the B5 joint proof; r=.5..2 implies desired p~.132433..8.
@@ -719,4 +729,4 @@ evidence; concrete measured restrictions must be shared UI/MIDI/storage/audio
 rejections, never silent clamp/tempo change. No cascade or complete pitch PCM.
 R2 layout/hold and B7 captured pitch+retrigger use prepared guarded ownership;
 K1 remains engineering/guarded until real B6/B8 H-LIVE device acceptance. B5 remains
-test-only nonzero k; this R0 document activates no audio processing.
+test-only nonzero k; K-META grants no native pitch, device or hearing acceptance.

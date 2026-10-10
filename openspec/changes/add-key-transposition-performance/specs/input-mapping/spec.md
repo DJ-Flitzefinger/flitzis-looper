@@ -12,6 +12,12 @@ for the same target SHALL be simultaneously learnable and restorable.
 - **THEN** each saved binding keeps its semantic target/variant through save/reopen
 
 ### Requirement: Pitch input captures selected content at authoritative admission
+The system SHALL capture and guard each pitch action at authoritative admission.
+
+#### Scenario: Immutable action envelope and lifetime fencing
+- **WHEN** GUI or MIDI pitch input reaches authoritative admission
+- **THEN** the following complete capture and lifetime contracts SHALL apply:
+
 The system SHALL capture explicit GUI content or authoritative native selected ContentInstance/lifetime for MIDI with unique accepted action sequence, original timestamp, full numeric/render tuple, source/timing/native/prepared permit and existing trigger intent.
 
 Direct native, controller fallback and pending retries SHALL use the same captured

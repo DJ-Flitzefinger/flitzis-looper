@@ -7,6 +7,7 @@ from flitzis_looper.models import validate_sample_id
 
 if TYPE_CHECKING:
     from flitzis_looper.controller.transport import TransportController
+    from flitzis_looper.key_intent import MusicalKey, PadKeyIntent
 
 
 class PadController:
@@ -70,22 +71,58 @@ class PadController:
         if not key:
             msg = "key must be a non-empty string"
             raise ValueError(msg)
-        self._project.manual_key[sample_id] = key
-        self._transport._mark_project_changed()
+        self._set_key_intent(sample_id, self._project.pad_key_intent[sample_id].corrected(key))
 
     def clear_manual_key(self, sample_id: int) -> None:
         """Clear a pad's manual key override."""
         validate_sample_id(sample_id)
-        self._project.manual_key[sample_id] = None
+        self._set_key_intent(sample_id, self._project.pad_key_intent[sample_id].corrected(None))
+
+    def set_base_key_intent(self, sample_id: int, target: MusicalKey) -> None:
+        """Save neutral absolute-key intent; audible application remains a later gate."""
+        validate_sample_id(sample_id)
+        self._set_key_intent(
+            sample_id, self._project.pad_key_intent[sample_id].with_base_key(target)
+        )
+
+    def reset_base_key_intent(self, sample_id: int) -> None:
+        """Reset only the numerical base shift, preserving correction and extra shift."""
+        validate_sample_id(sample_id)
+        self._set_key_intent(
+            sample_id, self._project.pad_key_intent[sample_id].changed(base_shift=0)
+        )
+
+    def set_extra_shift_intent(self, sample_id: int, semitones: int) -> None:
+        """Save a validated extra shift without changing current native audio."""
+        validate_sample_id(sample_id)
+        self._set_key_intent(
+            sample_id, self._project.pad_key_intent[sample_id].changed(extra_shift=semitones)
+        )
+
+    def reset_extra_shift_intent(self, sample_id: int) -> None:
+        """Reset only the numerical extra shift."""
+        self.set_extra_shift_intent(sample_id, 0)
+
+    def set_pitch_retrigger_intent(self, sample_id: int, *, enabled: bool) -> None:
+        """Persist the future pitch-choice variant without scheduling any attack."""
+        validate_sample_id(sample_id)
+        self._set_key_intent(
+            sample_id, self._project.pad_key_intent[sample_id].changed(retrigger=enabled)
+        )
+
+    def _set_key_intent(self, sample_id: int, intent: PadKeyIntent) -> None:
+        if self._project.pad_key_intent[sample_id] == intent:
+            return
+        self._project.pad_key_intent[sample_id] = intent
         self._transport._mark_project_changed()
 
     def effective_key(self, sample_id: int) -> str | None:
         """Return the effective key for a pad (manual overrides detected)."""
         validate_sample_id(sample_id)
 
-        manual = self._project.manual_key[sample_id]
-        if manual is not None:
-            return manual
+        label = self._project.pad_key_intent[sample_id].source_label
+        if label is not None:
+            return label
 
         analysis = self._project.sample_analysis[sample_id]
         return analysis.key if analysis is not None else None

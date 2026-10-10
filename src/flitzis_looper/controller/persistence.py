@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
+from flitzis_looper.controller.key_metadata_persistence import load_project_with_key_recovery
 from flitzis_looper.controller.timing_persistence import (
     TimingPersistenceError,
     verified_project_timing,
@@ -165,10 +166,25 @@ class ProjectPersistence:
         else:
             try:
                 state = ProjectState.model_validate_json(raw)
-            except (json.JSONDecodeError, ValidationError) as _:
+            except json.JSONDecodeError:
                 state = ProjectState()
+            except ValidationError as error:
+                state = ProjectPersistence._recover_key_fields(raw, error)
 
         return ProjectPersistence(state)
+
+    @staticmethod
+    def _recover_key_fields(raw: str, error: ValidationError) -> ProjectState:
+        """Recover only new key validation failures; preserve existing invalid-file policy."""
+        if any(item["loc"][0] != "pad_key_intent" for item in error.errors() if item["loc"]):
+            return ProjectState()
+        try:
+            recovered = load_project_with_key_recovery(raw)
+            return (
+                ProjectState.model_validate(recovered) if recovered is not None else ProjectState()
+            )
+        except json.JSONDecodeError, ValidationError:
+            return ProjectState()
 
     @staticmethod
     def _normalize_sample_paths_for_save(sample_paths: list[str | None]) -> list[str | None]:

@@ -34,6 +34,22 @@ The system SHALL remove only a preexisting correction at successful deliberate n
 - **THEN** existing correction and shifts remain; reopen is not a new analysis
 - **AND** late results for removed/reassigned lifetimes cannot affect a replacement
 
+#### Scenario: Real admission and metadata-only version publication
+- **GIVEN** the current content instance and native waveform source generation, digest and shape
+- **WHEN** deliberate analysis returns a real integer request ID after successful native admission
+- **THEN** analysis epoch advances and only its preexisting correction is removed
+- **AND** the result may update a source key version only while that captured content, native source, request and analysis epoch still match
+- **AND** missing or boolean request IDs and duplicated, older or equal-byte replacement results grant no new key metadata authority
+- **AND** a later correction is retained, independently of whether a newer timing edit has made the analysis timing projection stale
+
+### Requirement: Durable key policy remains neutral before audible activation
+The system SHALL keep persisted key correction, base, extra and retrigger policy separate from native audio until the required pitch application gates are implemented and accepted.
+
+#### Scenario: Neutral policy edit during ordinary playback
+- **WHEN** correction is changed or removed, absolute base intent is chosen, either numeric shift is reset or extra/retrigger intent changes in K-META
+- **THEN** no native pitch, trigger, stop, cursor, Key Lock or timing command is issued
+- **AND** immutable source versions and independent per-content settings persist without restoring live tokens
+
 ### Requirement: Absolute base key selection has deterministic octave and mode
 The system SHALL set base_shift from the corrected known source root to a same-mode target using d=(target-source) mod12 and d>6 then d-=12, with a fixed +6 tie and no accumulation.
 
@@ -56,6 +72,12 @@ The system SHALL offer all37 desired fixed integer extra_shift values -18..+18 i
 - **AND** base reset0 independently preserves extra and correction
 
 ### Requirement: One pitch route preserves tempo and explicit lock behavior
+The system SHALL use one integrated pitch route with explicit lock behavior and proven support.
+
+#### Scenario: One route retains the complete pitch and readiness contract
+- **WHEN** transposition is prepared, admitted or applied
+- **THEN** the following complete route, domain and failure contracts SHALL apply:
+
 The system SHALL apply k=base_shift+extra_shift through one integrated pitch route while preserving source time, tempo, M/B/S/phi, loop/launch and all other pads.
 
 The desired total SHALL cover -23..+24 plus actual r(n). Equal-rate varispeed route

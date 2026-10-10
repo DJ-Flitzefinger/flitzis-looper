@@ -5,6 +5,8 @@ by the new human shared-material contract; its bounded accepted evidence and
 historical FAIL/UNKNOWN are not rewritten. R0 is the retained docs/spec revision.
 J0 and P1a are independently accepted and published. P1b implementation,
 current regression validation and final independent review are complete.
+K-META neutral key policy, persistence and source/request guards are independently
+accepted; audible pitch, UI/MIDI and subsequent storage slices remain pending.
 
 The [extended program](../../../docs/pad-owned-pcm-program.md) and
 [complete coverage map](../../../docs/pre-rust-program-coverage.json) own the
@@ -78,8 +80,14 @@ for this bounded slice. GUI Copy/Move and subsequent storage stages stay pending
 
 ### K-META
 
-- [ ] Pure key-policy+neutral persistent source-correction/base/extra/Haken schema und epochs nach P1
-- [ ] Legacy sound-neutral restore/reset/race/idempotence/mode/unknown/copy schema tests; **keine hoerbare KEY-Freigabe**
+Current hardware-free validation passed2978 Python tests with35 genuine device
+skips, the strengthened reset oracle, lint/types, changed-file formatting and
+affected official strict. Unchanged native validation is reused from P1b; the
+whole-source formatting baseline failure remains scoped to unchanged files.
+This acceptance grants no native pitch, hearing or whole-program completion.
+
+- [x] Pure key-policy+neutral persistent source-correction/base/extra/Haken schema und epochs nach P1
+- [x] Legacy sound-neutral restore/reset/race/idempotence/mode/unknown/copy schema tests; **keine hoerbare KEY-Freigabe**
 
 ### P2a
 

@@ -17,7 +17,11 @@ Use shared state for two stay-open menus and persistent independent musical inte
 
 ## Delivery and lineage
 
-This is R0 contract revision only. [Extended program](../../../docs/pad-owned-pcm-program.md)
+K-META now implements only the pure durable key policy and source/request-bound
+metadata lifecycle. Its saved numeric shifts are neutral intent; they issue no
+audible pitch or retrigger command and add no new GUI or MIDI action.
+
+R0 introduced the contract revision. The [extended program](../../../docs/pad-owned-pcm-program.md)
 and [coverage](../../../docs/pre-rust-program-coverage.json) own all56+9/seven groups,
 38 IDs/48 edges. K-META supplies neutral policy/storage; B5 expanded diagnostics,
 B6-K-AUDIO/B7-K-ATOMIC native ownership/events; K1a/b guarded controls; V0 combined
@@ -28,7 +32,8 @@ not reimplemented. Musical mask durability is owned by the revised PCM change.
 
 ## Non-goals and realtime constraints
 
-No implementation, runtime/build/app/GUI/device/hearing/model operation in R0.
+R0 introduced contracts only. K-META performs metadata/persistence work and
+hardware-free software validation, with no app/GUI/device/hearing/model operation.
 No audible major/minor conversion, harmony recommendations, automatic scale/pad
 compensation, second scheduler/cache/pitch cascade or full-source pitch PCM.
 Preparation, validation, persistence and large retirement stay off callback;

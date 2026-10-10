@@ -1,12 +1,18 @@
 # Shared-material PCM and extended pre-Rust delivery program
 
-Status: P1a and P1b independently accepted, 2026-10-10; no whole-program or human
+Status: P1a, P1b and K-META independently accepted, 2026-10-10; no whole-program or human
 completion. J0 and P1a are published. Typed native material/slot
 resolution, canonical import/restore storage, durable material/content IDs and
 guarded exact cleanup are implemented.
 P1b implements shared immutable backing, independent subscriber ACK/ownership and
 all-bank last-user cleanup; current regression validation and final independent
 review passed for that bounded slice.
+K-META implements immutable durable source-key versions, correction and epochs,
+neutral base/extra/retrigger policy, guarded analysis/load races and local legacy
+recovery. Current2978 Python tests/35 device skips, focused reset regression,
+lint/types/changed-file formatting and affected strict passed; unchanged native
+checks are reused and the unchanged whole-format baseline failure is preserved.
+This metadata slice grants no audible pitch or native/Human acceptance.
 Migration, arrangement and pitch controls remain pending.
 The accepted bounded P0/C1/R0 prerequisites and historical FAIL/UNKNOWN evidence
 remain intact.

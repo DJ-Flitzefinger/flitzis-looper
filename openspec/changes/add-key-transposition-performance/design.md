@@ -1,6 +1,7 @@
 # Independent metadata, pitch intent and admitted events
 
-Status: R0 pending target; no current audio/UI support asserted.
+Status: K-META neutral policy/storage implementation; no current audible pitch
+or new pitch UI support asserted.
 
 Use existing ProjectState/PadController/LooperAction/input routing and Rust
 source-reader/processor/preparation/scheduler ownership. Current manual_key is
