@@ -20,6 +20,17 @@ before playback Arc creation and its declared PCM checkpoint. Complete-cache
 off-thread for admission, so transient validation contention cannot trigger
 redundant cold decoding or a new cache generation.
 
+Resident-window failure/cancellation settles its exact control-intent generation
+before publishing `WindowState.terminal` with Release ordering. An observer of that
+terminal state therefore cannot still observe that failed job's pending owner;
+a newer replacement intent remains protected by the existing generation CAS.
+This applies to queued shutdown, panic, worker errors, cancellation, timeout and
+supersession. It clears only scalar control readiness: worker/queued PCM and
+immutable-reader pins retain their actual lifetimes. Native publication/ACK status
+and claimed callback-tail behavior remain separate from this failure settlement.
+The deterministic terminal-observation tests freeze the real guard before join;
+this bounded J0 correction supplies no full B6 or shared-subscriber acceptance.
+
 ## Delivered cold path (C1a)
 
 The pending [pad-owned PCM program](pad-owned-pcm-program.md) extends this delivered

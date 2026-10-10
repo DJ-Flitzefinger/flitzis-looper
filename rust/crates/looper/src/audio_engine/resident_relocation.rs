@@ -111,15 +111,31 @@ struct WindowState {
     error: Mutex<Option<String>>,
     adopted_binding: Mutex<Option<InputPadBinding>>,
     launch_cancelled: Arc<AtomicBool>,
+    #[cfg(test)]
+    terminal_observation: Mutex<Option<terminal_order_tests::TerminalObservation>>,
 }
 
 impl WindowState {
-    fn fail(&self, error: String, cancelled: bool) {
+    /// Settle this exact control intent before publishing terminal failure.
+    /// This scalar CAS neither clears a replacement intent nor retires job/read pins.
+    fn fail(
+        &self,
+        ownership: &InputRuntimeOwnership,
+        id: usize,
+        expected: u64,
+        error: String,
+        cancelled: bool,
+    ) {
+        ownership.finish_resident_control(id, expected);
         if let Ok(mut message) = self.error.lock() {
             *message = Some(error);
         }
         self.terminal
             .store(if cancelled { 2 } else { 1 }, Ordering::Release);
+        #[cfg(test)]
+        if let Some(observation) = self.terminal_observation.lock().unwrap().take() {
+            observation.observe();
+        }
     }
 }
 
@@ -145,11 +161,12 @@ impl Drop for JobGuard {
             && self.state.terminal.load(Ordering::Acquire) == 0
         {
             self.state.fail(
+                &self.ownership,
+                self.id,
+                self.publication.expected,
                 "resident preparation cancelled before native enqueue".into(),
                 true,
             );
-            self.ownership
-                .finish_resident_control(self.id, self.publication.expected);
         }
     }
 }
@@ -331,10 +348,13 @@ impl ResidentWindowTicket {
     pub fn cancel(&self) -> bool {
         let cancelled = self.publication.cancel_unclaimed();
         if cancelled {
-            self.state
-                .fail("resident preparation cancelled".into(), true);
-            self.ownership
-                .finish_resident_control(self.id, self.publication.expected);
+            self.state.fail(
+                &self.ownership,
+                self.id,
+                self.publication.expected,
+                "resident preparation cancelled".into(),
+                true,
+            );
         }
         cancelled
     }
@@ -364,12 +384,12 @@ pub(super) fn admit_stem_publication(
         && pending.publication.cancel_unclaimed()
     {
         pending.state.fail(
+            &engine.input_runtime_ownership,
+            id,
+            pending.publication.expected,
             "resident preparation superseded by stem publication".into(),
             true,
         );
-        engine
-            .input_runtime_ownership
-            .finish_resident_control(id, pending.publication.expected);
     }
     owner.intent_epoch.store(next_intent, Ordering::Release);
     if let Some((cache_dir, generation_path)) = registration {
@@ -400,12 +420,13 @@ pub(super) fn cancel_all(engine: &AudioEngine) -> PyResult<()> {
         if let Some(pending) = &owner.relocation
             && pending.publication.cancel_unclaimed()
         {
-            pending
-                .state
-                .fail("resident preparation cancelled by shutdown".into(), true);
-            engine
-                .input_runtime_ownership
-                .finish_resident_control(id, pending.publication.expected);
+            pending.state.fail(
+                &engine.input_runtime_ownership,
+                id,
+                pending.publication.expected,
+                "resident preparation cancelled by shutdown".into(),
+                true,
+            );
         }
     }
     Ok(())
@@ -440,9 +461,13 @@ pub(super) fn reconcile_under_request_lock(engine: &AudioEngine) -> PyResult<()>
             if pending.admitted.elapsed() >= ADOPTION_DEADLINE
                 && pending.publication.cancel_unclaimed()
             {
-                pending
-                    .state
-                    .fail("resident native adoption deadline expired".into(), true);
+                pending.state.fail(
+                    &engine.input_runtime_ownership,
+                    id,
+                    pending.publication.expected,
+                    "resident native adoption deadline expired".into(),
+                    true,
+                );
             }
             let status = pending.publication.status();
             if status == "accepted" {
@@ -990,6 +1015,9 @@ pub(super) fn prepare_window_with_producer(
             ));
         }
         previous.state.fail(
+            &engine.input_runtime_ownership,
+            id,
+            previous.publication.expected,
             "resident preparation superseded by newer intent".into(),
             true,
         );
@@ -1110,11 +1138,14 @@ pub(super) fn prepare_window_with_producer(
             .push(ControlMessage::CaptureResidentSeek(capture))
             .is_err()
     {
-        state.fail("resident command queue is full".into(), false);
         publication.cancel_unclaimed();
-        engine
-            .input_runtime_ownership
-            .finish_resident_control(id, publication.expected);
+        state.fail(
+            &engine.input_runtime_ownership,
+            id,
+            publication.expected,
+            "resident command queue is full".into(),
+            false,
+        );
         return Err(PyRuntimeError::new_err("resident command queue is full"));
     }
     drop(admission_producer);
@@ -1133,17 +1164,24 @@ pub(super) fn prepare_window_with_producer(
                 Ok(()) => guard.mark_enqueued(),
                 Err(error) => {
                     let cancelled = !work.current();
-                    work.state.fail(error, cancelled);
                     work.publication.cancel_unclaimed();
-                    work.binding
-                        .ownership
-                        .finish_resident_control(work.id, work.publication.expected);
+                    work.state.fail(
+                        &work.binding.ownership,
+                        work.id,
+                        work.publication.expected,
+                        error,
+                        cancelled,
+                    );
                 }
             },
         )
         .map_err(PyRuntimeError::new_err)?;
     Ok(ticket)
 }
+
+#[cfg(test)]
+#[path = "resident_terminal_order_tests.rs"]
+mod terminal_order_tests;
 
 #[cfg(test)]
 mod tests {
