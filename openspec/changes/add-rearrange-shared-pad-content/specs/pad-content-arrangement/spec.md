@@ -11,6 +11,12 @@ The system SHALL distinguish fixed PadSlotId/slot-binding epoch, movable Content
 ### Requirement: Musical copies are independent stopped equal users
 The system SHALL copy all musical source/analysis/selected-stems/loop/excerpt/grid/timing/manualTAP/correction/base/extra/KeyLock/playback/GainEQ/current mask/custom/preset/mutes/retrigger intent into fresh stopped content, sharing only verified immutable data.
 
+#### Scenario: Copy and transposition preserve immutable sharing and independent state
+- **WHEN** musical content is copied, transposed or independently played
+- **THEN** the following complete normative contract applies:
+
+The system SHALL copy all musical source/analysis/selected-stems/loop/excerpt/grid/timing/manualTAP/correction/base/extra/KeyLock/playback/GainEQ/current mask/custom/preset/mutes/retrigger intent into fresh stopped content, sharing only verified immutable data.
+
 Voices/cursors/DSP state/meters/progress/pressed/hold/job/native tokens SHALL NOT
 be copied. Suitable input ranges SHALL share RAM backing, varied ranges MAY need
 separate views and all DSP/settings SHALL remain independent. Copy/transposition

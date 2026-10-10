@@ -1,7 +1,7 @@
 import threading
 import wave
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from queue import Empty, SimpleQueue
 from typing import TYPE_CHECKING, Literal
@@ -26,7 +26,7 @@ from flitzis_looper.controller.stem_generation import (
     StemGenerationRequest,
     StemGenerationResult,
 )
-from flitzis_looper.controller.stem_job import StemGenerationJob
+from flitzis_looper.controller.stem_job import StemGenerationJob, StemSubscriber
 from flitzis_looper.controller.stem_separators import (
     SelectedStemGenerationBackend,
     separator_model_cache_dir,
@@ -58,13 +58,14 @@ class _StemBackendEvent:
     source_ticket: PreparedSourceTicket
     cache_dir: Path
     event_type: _StemBackendEventType
+    content_id: str | None = None
     percent: float | None = None
     stage: str | None = None
     error: str | None = None
     result: StemGenerationResult | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class _PendingStemPublication:
     source_ticket: PreparedSourceTicket
     entry: StemCacheEntry
@@ -188,13 +189,20 @@ class StemController(BaseController):  # noqa: PLR0904
 
         try:
             source_ticket = self._capture_source_ticket(sample_id, source_version)
-            job = StemGenerationJob(request, source_ticket, self._assets)
-        except (AttributeError, RuntimeError, TypeError, ValueError) as err:
+            content = self._project.pad_content[sample_id]
+            content_id = content.instance_id if content is not None else None
+            job = next((job for job in self._jobs.values() if job.matches(request)), None)
+            shared = job is not None
+            if job is None:
+                job = StemGenerationJob(request, source_ticket, self._assets, content_id)
+            else:
+                job.add_subscriber(sample_id, source_ticket, content_id)
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as err:
             self._clear_stem_generation_state(sample_id)
             self._session.stem_generation_errors[sample_id] = f"Stem admission failed: {err}"
             return False
         self._generation_source_tickets[sample_id] = source_ticket
-        self._jobs[request.cache_dir] = job
+        self._jobs[job.request.cache_dir] = job
 
         if self._project.stem_cache[sample_id] is None:
             self._project.stem_cache[sample_id] = StemCacheEntry(
@@ -204,8 +212,7 @@ class StemController(BaseController):  # noqa: PLR0904
                 available=False,
             )
             self._mark_project_changed()
-        self._assets.sync_assignments()
-        return self._schedule_stem_job(job)
+        return True if shared else self._schedule_stem_job(job)
 
     def _schedule_stem_job(self, job: StemGenerationJob) -> bool:
         try:
@@ -584,31 +591,61 @@ class StemController(BaseController):  # noqa: PLR0904
             except Empty:
                 return
 
-            if not self._is_current_generation(event):
-                if event.event_type != "progress":
-                    if self._generation_source_tickets.get(event.sample_id) is event.source_ticket:
-                        self._generation_source_tickets.pop(event.sample_id, None)
-                    self._discard_generation_artifacts(event.sample_id, event.cache_dir)
+            job = self._jobs.get(event.cache_dir)
+            if job is None:
                 continue
+            self._dispatch_job_event(event, job)
 
-            if event.event_type == "progress":
-                self._handle_stem_generation_progress(
-                    event.sample_id,
-                    event.percent,
-                    event.stage,
-                    event.source_ticket,
+    def _dispatch_job_event(self, event: _StemBackendEvent, job: StemGenerationJob) -> None:
+        current = tuple(
+            subscriber
+            for subscriber in job.subscribers()
+            if self._is_current_generation(
+                replace(
+                    event,
+                    sample_id=subscriber.sample_id,
+                    source_ticket=subscriber.ticket,
+                    content_id=subscriber.content_id,
                 )
-            elif event.event_type == "success":
-                self._record_generation_result(event.sample_id, event.result)
-                self._handle_stem_generation_success(
-                    event.sample_id, event.source_ticket, event.cache_dir
-                )
-            elif event.error is not None:
-                self._handle_stem_generation_error(
-                    event.sample_id, event.error, event.source_ticket
-                )
-            if event.event_type != "progress":
-                self._discard_generation_artifacts(event.sample_id, event.cache_dir)
+            )
+        )
+        if event.event_type == "success":
+            self._finish_shared_generation(event, current)
+        else:
+            for subscriber in current:
+                if event.event_type == "progress":
+                    self._handle_stem_generation_progress(
+                        subscriber.sample_id, event.percent, event.stage, subscriber.ticket
+                    )
+                elif event.error is not None:
+                    self._handle_stem_generation_error(
+                        subscriber.sample_id, event.error, subscriber.ticket
+                    )
+        if event.event_type != "progress":
+            # Promote/fan out once before dropping the job's physical ownership.
+            for subscriber in job.subscribers():
+                if self._generation_source_tickets.get(subscriber.sample_id) is subscriber.ticket:
+                    self._clear_stem_generation_state(subscriber.sample_id)
+            self._discard_generation_artifacts(event.sample_id, event.cache_dir)
+
+    def _finish_shared_generation(
+        self, event: _StemBackendEvent, current: tuple[StemSubscriber, ...]
+    ) -> None:
+        eligible = tuple(
+            subscriber for subscriber in current
+            if self._eligible_generation_entry(subscriber.sample_id, event.source_version)
+            is not None
+        )
+        for subscriber in current:
+            self._record_generation_result(subscriber.sample_id, event.result)
+        first = eligible[0] if eligible else None
+        for subscriber in current:
+            if subscriber is not first:
+                self._clear_stem_generation_state(subscriber.sample_id)
+        if first is not None:
+            self._handle_stem_generation_success(
+                first.sample_id, first.ticket, event.cache_dir, eligible
+            )
 
     def _handle_stem_generation_started(self, sample_id: int) -> None:
         """Apply a stem-generation start event from a backend event source."""
@@ -648,6 +685,7 @@ class StemController(BaseController):  # noqa: PLR0904
         sample_id: int,
         source_ticket: PreparedSourceTicket | None = None,
         generation_cache_dir: Path | None = None,
+        subscribers: tuple[StemSubscriber, ...] = (),
     ) -> None:
         """Publish a completed job using its original native admission ticket."""
         validate_sample_id(sample_id)
@@ -669,7 +707,7 @@ class StemController(BaseController):  # noqa: PLR0904
             if job is not None:
                 with job.retirement.activate():
                     self._publish_generation_cache(
-                        sample_id, source_ticket, entry, generation_cache_dir
+                        sample_id, source_ticket, entry, generation_cache_dir, subscribers
                     )
 
     def _reject_legacy_stem_completion(self, sample_id: int) -> None:
@@ -706,6 +744,7 @@ class StemController(BaseController):  # noqa: PLR0904
         source_ticket: PreparedSourceTicket,
         entry: StemCacheEntry,
         generation_cache_dir: Path | None,
+        subscribers: tuple[StemSubscriber, ...] = (),
     ) -> None:
         if generation_cache_dir is None:
             self._session.stem_generation_errors[sample_id] = (
@@ -720,6 +759,12 @@ class StemController(BaseController):  # noqa: PLR0904
             # Admission can fail while the private directory is still intact.
             # The future immutable path is pinned before the atomic rename.
             lease = self._assets.acquire(published_path)
+            # Legacy #N containers locate data; a surviving subscriber may be in
+            # another slot after the producer's origin assignment disappears.
+            cache_root = generation_cache_dir.parent.relative_to(Path.cwd()).as_posix()
+            entry = entry.model_copy(
+                update={"cache_dir": cache_root, "stems": expected_stem_files(cache_root)}
+            )
             entry = promote_generation_artifacts(entry, generation_cache_dir)
         except (OSError, RuntimeError, ValueError) as err:
             self._session.stem_generation_errors[sample_id] = f"Stem cache promotion failed: {err}"
@@ -733,12 +778,25 @@ class StemController(BaseController):  # noqa: PLR0904
             self._assets.retire(Path(entry.cache_dir), recursive=True, lease=lease)
             return
 
-        try:
-            self._queue_stem_publication(sample_id, entry, source_ticket)
-        except (RuntimeError, ValueError) as err:
-            self._session.stem_generation_errors[sample_id] = (
-                f"Stem generation completed but publication failed: {err}"
-            )
+        queued = False
+        targets = subscribers or (
+            StemSubscriber(sample_id, source_ticket, None, self._assets.reserve_pending(16)),
+        )
+        for subscriber in targets:
+            try:
+                with subscriber.retirement.activate():
+                    self._queue_stem_publication(
+                        subscriber.sample_id, entry.model_copy(deep=True), subscriber.ticket
+                    )
+            except (OSError, RuntimeError, ValueError) as err:
+                self._session.stem_generation_errors[subscriber.sample_id] = (
+                    f"Stem generation completed but publication failed: {err}"
+                )
+            else:
+                queued = True
+            finally:
+                subscriber.retirement.close()
+        if not queued:
             self._assets.retire(Path(entry.cache_dir), recursive=True, lease=lease)
         else:
             lease.release()
@@ -746,16 +804,20 @@ class StemController(BaseController):  # noqa: PLR0904
     def _queue_stem_publication(
         self, sample_id: int, entry: StemCacheEntry, source_ticket: PreparedSourceTicket
     ) -> bool:
-        retirement = self._assets.reserve_pending(2)
+        retirement = self._assets.reserve_pending(16)
         previous_entry = self._project.stem_cache[sample_id]
         previous_lease = None
+        new_lease = None
         try:
+            new_lease = self._assets.acquire(Path(entry.cache_dir))
             if previous_entry is not None:
                 previous_lease = self._assets.acquire(Path(previous_entry.cache_dir))
             self._audio.publish_prepared_stems(
                 sample_id, entry.source_version, entry.cache_dir, source_ticket
             )
-        except RuntimeError, ValueError:
+        except OSError, RuntimeError, ValueError:
+            if new_lease is not None:
+                new_lease.release()
             if previous_lease is not None:
                 previous_lease.release()
             retirement.close()
@@ -764,7 +826,8 @@ class StemController(BaseController):  # noqa: PLR0904
         if entry.available:
             queued_entry = entry.model_copy(update={"available": False})
         self._project.stem_cache[sample_id] = queued_entry
-        self._assets.sync_assignments()
+        with retirement.activate():
+            self._assets.adopt_stems(sample_id, (Path(entry.cache_dir).absolute(), new_lease))
         self._mark_project_changed()
         self._restored_stem_candidates.pop(sample_id, None)
         pending = _PendingStemPublication(
@@ -793,32 +856,45 @@ class StemController(BaseController):  # noqa: PLR0904
         try:
             status = pending.source_ticket.publication_status()
         except (AttributeError, RuntimeError, TypeError, ValueError) as err:
-            self._pending_stem_publications.pop(sample_id, None)
             self._session.stem_generation_errors[sample_id] = (
                 f"Stem publication status failed: {err}"
             )
-            self._restore_previous_stems(sample_id, pending)
-            self._release_pending_stems(pending)
+            self._reject_stem_publication(sample_id, pending)
             return False
         if status in {"captured", "pending"}:
             return True
-        self._pending_stem_publications.pop(sample_id, None)
         self._restored_stem_candidates.pop(sample_id, None)
         if status != "accepted":
             self._session.stem_generation_errors[sample_id] = (
                 "Prepared stem publication rejected by native source/request/timing validation"
             )
-            self._restore_previous_stems(sample_id, pending)
-            self._release_pending_stems(pending)
+            self._reject_stem_publication(sample_id, pending)
             return False
+        self._pending_stem_publications.pop(sample_id, None)
         self._project.stem_cache[sample_id] = pending.entry.model_copy(update={"available": True})
         self._release_pending_stems(pending)
         self._mark_project_changed()
         return self._publish_all_stems_mode_if_preferred(sample_id, pending.entry.source_version)
 
+    def _reject_stem_publication(self, sample_id: int, pending: _PendingStemPublication) -> None:
+        try:
+            self._restore_previous_stems(sample_id, pending)
+        except (OSError, RuntimeError, ValueError) as err:
+            self._session.stem_generation_errors[sample_id] = (
+                f"Previous stem assignment restore deferred: {err}"
+            )
+            return  # Same held owner and bounded reservation remain reachable for retry.
+        self._pending_stem_publications.pop(sample_id, None)
+        self._release_pending_stems(pending)
+
     def _restore_previous_stems(self, sample_id: int, pending: _PendingStemPublication) -> None:
+        prepared = None
+        if pending.previous_entry is not None and pending.previous_lease is not None:
+            prepared = (Path(pending.previous_entry.cache_dir).absolute(), pending.previous_lease)
+        self._assets.restore_stems(sample_id, prepared)
+        if prepared is not None:
+            pending.previous_lease = None
         self._project.stem_cache[sample_id] = pending.previous_entry
-        self._assets.sync_assignments()
         self._mark_project_changed()
 
     @staticmethod
@@ -1002,16 +1078,18 @@ class StemController(BaseController):  # noqa: PLR0904
 
     def _cancel_jobs(self, sample_id: int) -> None:
         for path, job in tuple(self._jobs.items()):
-            if job.request.sample_id == sample_id:
-                job.cancel()
+            if not job.remove_subscriber(sample_id):
                 self._jobs.pop(path, None)
 
     def _is_current_generation(self, event: _StemBackendEvent) -> bool:
+        content = self._project.pad_content[event.sample_id]
+        content_id = content.instance_id if content is not None else None
         return (
             event.sample_id in self._session.stem_generating_sample_ids
             and self._session.stem_generation_source_versions.get(event.sample_id)
             == event.source_version
             and self._generation_source_tickets.get(event.sample_id) is event.source_ticket
+            and event.content_id == content_id
         )
 
     def _discard_generation_artifacts(self, sample_id: int, cache_dir: Path) -> None:

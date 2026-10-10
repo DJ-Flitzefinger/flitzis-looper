@@ -3,6 +3,7 @@
 # ruff: noqa: INP001
 
 import struct
+import shutil
 import wave
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
@@ -12,12 +13,12 @@ from imgui_bundle import imgui
 from flitzis_looper.controller import AppController
 from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.controller.persistence import ProjectPersistence
-from flitzis_looper.controller.stem_cache import verified_stem_cache_available
+from flitzis_looper.controller.stem_cache import expected_stem_files, verified_stem_cache_available
 from flitzis_looper.controller.stem_generation import StemGenerationResult
 from flitzis_looper.controller.stems import StemController
 from flitzis_looper.controller.transport import TransportController
 from flitzis_looper.input_mapping import InputMappingController
-from flitzis_looper.models import ProjectState, SessionState
+from flitzis_looper.models import PadContentIdentity, ProjectState, SessionState
 from flitzis_looper.ui.context import UiContext
 from flitzis_looper.ui.render import performance_view
 
@@ -267,6 +268,22 @@ class Probe:
         assert entry.cache_dir == self.saved_path
         assert verified_stem_cache_available(entry)
 
+    def save_survivor(self) -> None:
+        entry = self.project.stem_cache[0]
+        assert entry is not None and entry.available
+        self.project.sample_paths[215] = self.project.sample_paths[0]
+        self.project.sample_durations[215] = self.project.sample_durations[0]
+        self.project.pad_content[215] = PadContentIdentity(instance_id="2" * 32)
+        self.project.stem_cache[215] = entry.model_copy(deep=True)
+        self.controller._assets.sync_assignments()
+        self.controller.invalidate_stem_cache(0)
+        self.project.sample_paths[0] = None
+        self.project.sample_durations[0] = None
+        self.project.pad_content[0] = None
+        self.controller._assets.sync_assignments()
+        Path("p1b-survivor.json").write_text(self.project.model_dump_json(), encoding="utf-8")
+        assert Path(entry.cache_dir).is_dir()
+
     def restore(self) -> None:
         self.restored_project = ProjectState.model_validate_json(self.project.model_dump_json())
         self.restored_session = SessionState()
@@ -294,7 +311,22 @@ class Probe:
         original = artifact.read_bytes()
         corrupted = bytearray(original)
         corrupted[-1] ^= 1
-        artifact.write_bytes(corrupted)
+        try:
+            artifact.write_bytes(corrupted)
+        except PermissionError:
+            assert artifact.read_bytes() == original
+        else:
+            raise AssertionError("active immutable stem generation permitted a write")
+        # A cold, unregistered damaged generation still fails the SHA verifier.
+        inactive = Path(self.saved_path).parent / f".ready-{'e' * 32}"
+        shutil.copytree(Path(self.saved_path), inactive)
+        previous = self.restored_project.stem_cache[0]
+        assert previous is not None
+        damaged = previous.model_copy(update={"cache_dir": str(inactive), "stems": expected_stem_files(str(inactive))})
+        assert verified_stem_cache_available(damaged)
+        (inactive / "vocals.wav").write_bytes(corrupted)
+        assert not verified_stem_cache_available(damaged)
+        self.restored_project.stem_cache[0] = damaged
         try:
             self.restored.restore_stem_cache_from_project_state()
             assert not self.restored.stems_available(0)
@@ -303,7 +335,7 @@ class Probe:
             assert self.restored_ticket.publication_status() == "accepted"
             assert artifact.is_file()
         finally:
-            artifact.write_bytes(original)
+            self.restored_project.stem_cache[0] = previous
         entry = self.restored_project.stem_cache[0]
         assert entry is not None
         assert verified_stem_cache_available(entry)
@@ -327,3 +359,27 @@ class Probe:
         self.restored.shut_down()
         self.controller._assets.release_saved_assignments()
         self.restored._assets.release_saved_assignments()
+
+
+class SavedMaterialProbe:
+    """Fresh interpreter/project/engine restores the surviving far-bank assignment."""
+
+    def __init__(self, bridge: NativeProducerBridge) -> None:
+        self.project = ProjectState.model_validate_json(Path("p1b-survivor.json").read_text(encoding="utf-8"))
+        assert self.project.sample_paths[0] is None
+        assert self.project.stem_cache[0] is None
+        assert self.project.pad_content[215].instance_id == "2" * 32
+        self.controller = StemController(self.project, SessionState(), cast("AudioEngine", Audio(bridge)))
+
+    def begin(self) -> None:
+        self.controller.restore_stem_cache_from_project_state()
+        assert not self.controller.stems_available(215)
+        assert self.controller.publish_restored_stem_cache_if_available(215)
+        self.ticket = self.controller._pending_stem_publications[215].source_ticket
+        assert self.ticket.publication_status() == "pending"
+
+    def accepted(self) -> None:
+        assert self.ticket.publication_status() == "accepted"
+        self.controller.on_frame_render()
+        assert self.controller.stems_available(215)
+        assert verified_stem_cache_available(self.project.stem_cache[215])

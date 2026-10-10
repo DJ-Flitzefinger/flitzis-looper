@@ -12,7 +12,7 @@ from flitzis_looper.project_materials import original_asset, resolve_asset
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from flitzis_looper.models import ProjectState
+    from flitzis_looper.models import ProjectState, StemCacheEntry
     from flitzis_looper_audio import AudioEngine, ProjectAssetLease
 
 
@@ -123,24 +123,40 @@ class ProjectAssetLifecycle:
     def sync_assignments(self) -> None:
         """Acquire every current assignment before retiring removed assignments."""
         current = self._current_assignments()
+        acquired = self._acquire_assignments(current)
         retired: list[tuple[str, Path, ProjectAssetLease]] = []
         for key, path in current.items():
             previous = self._assignments.get(key)
             if previous is not None and previous[0] == path:
                 continue
-            lease = self.acquire(path)
             if previous is not None:
                 retired.append((key[0], *previous))
-            self._assignments[key] = (path, lease)
+            self._assignments[key] = acquired[key]
         for key in self._assignments.keys() - current.keys():
             path, lease = self._assignments.pop(key)
             retired.append((key[0], path, lease))
-        current_originals = {path for key, path in current.items() if key[0] == "original"}
+        current_paths = set(current.values())
         for kind, path, lease in retired:
-            if kind == "original" and path in current_originals:
+            if path in current_paths:
                 lease.release()
             else:
                 self._retire_assignment(kind, path, lease)
+
+    def _acquire_assignments(
+        self, current: dict[tuple[str, int], Path]
+    ) -> dict[tuple[str, int], tuple[Path, ProjectAssetLease]]:
+        """Prepare the entire reference image; admission failure leaves old owners intact."""
+        acquired: dict[tuple[str, int], tuple[Path, ProjectAssetLease]] = {}
+        try:
+            for key, path in current.items():
+                previous = self._assignments.get(key)
+                if previous is None or previous[0] != path:
+                    acquired[key] = (path, self.acquire(path))
+        except (OSError, RuntimeError, ValueError):
+            for _, lease in acquired.values():
+                lease.release()
+            raise
+        return acquired
 
     def prepare_original(
         self, source: str, delivered: ProjectAssetLease | None = None
@@ -154,40 +170,66 @@ class ProjectAssetLifecycle:
 
     def adopt_original(self, sample_id: int, prepared: tuple[Path, ProjectAssetLease]) -> None:
         """Install the reserved new owner before releasing the previous owner."""
-        key = ("original", sample_id)
+        self._adopt_assignment("original", sample_id, prepared)
+
+    def adopt_stems(
+        self, sample_id: int, prepared: tuple[Path, ProjectAssetLease] | None
+    ) -> None:
+        """Transfer a reserved stem owner after native enqueue, before old retirement."""
+        self._adopt_assignment("stems", sample_id, prepared)
+
+    def restore_stems(
+        self, sample_id: int, prepared: tuple[Path, ProjectAssetLease] | None
+    ) -> None:
+        """Restore an already held old owner without capacity-dependent reacquisition."""
+        if prepared is not None:
+            prepared[1].reclaim_stems(str(prepared[0]))
+            with self._retirement_lock:
+                self._cancel_retirements_locked(prepared[0])
+        self._adopt_assignment("stems", sample_id, prepared)
+
+    def _adopt_assignment(
+        self, kind: str, sample_id: int, prepared: tuple[Path, ProjectAssetLease] | None
+    ) -> None:
+        key = (kind, sample_id)
         previous = self._assignments.get(key)
-        if previous is not None and previous[0] == prepared[0]:
+        if prepared is not None and previous is not None and previous[0] == prepared[0]:
             prepared[1].release()
             return
-        self._assignments[key] = prepared
+        if prepared is None:
+            self._assignments.pop(key, None)
+        else:
+            self._assignments[key] = prepared
         if previous is not None:
             if any(
-                k[0] == "original" and path == previous[0]
-                for k, (path, _) in self._assignments.items()
+                path == previous[0] for path, _ in self._assignments.values()
             ):
                 previous[1].release()
             else:
-                self._retire_assignment("original", *previous)
+                self._retire_assignment(kind, *previous)
 
     def acquire(self, path: Path) -> ProjectAssetLease:
         """Pin one checked project asset for a Python reader or separator job."""
         path = self._checked_path(path)
         with self._retirement_lock:
             lease = self._audio.acquire_project_asset_lease(str(path))
-            targets = {path}
-            if (
-                path.parent == self._root / "samples" / "stems"
-                and re.fullmatch(r"#[1-9][0-9]*", path.name) is not None
-            ):
-                targets.update(path / name for name in self._LEGACY_STEM_FILES)
-            for key in tuple(self._pending):
-                if key[0] in targets:
-                    for previous in self._pending.pop(key):
-                        previous.release()
-            for target in targets:
-                self.retirement_errors.pop(target, None)
-            self._release_settled_groups_locked()
+            self._cancel_retirements_locked(path)
             return lease
+
+    def _cancel_retirements_locked(self, path: Path) -> None:
+        targets = {path}
+        if (
+            path.parent == self._root / "samples" / "stems"
+            and re.fullmatch(r"#[1-9][0-9]*", path.name) is not None
+        ):
+            targets.update(path / name for name in self._LEGACY_STEM_FILES)
+        for key in tuple(self._pending):
+            if key[0] in targets:
+                for previous in self._pending.pop(key):
+                    previous.release()
+        for target in targets:
+            self.retirement_errors.pop(target, None)
+        self._release_settled_groups_locked()
 
     def retire(
         self,
@@ -317,29 +359,41 @@ class ProjectAssetLifecycle:
         for sample_id, entry in enumerate(self._project.stem_cache):
             if entry is None:
                 continue
-            try:
-                if not (self._root / "samples").is_dir():
-                    continue
-                path = self._checked_path(Path(entry.cache_dir))
-                resolved = resolve_asset(path, project_root=self._root)
-            except OSError, ValueError:
-                continue
-            original = self._owned_original(self._project.sample_paths[sample_id])
-            material = (
-                original_asset(original, project_root=self._root).material_id
-                if original is not None else None
-            )
-            pad = (
-                self._root / "samples" / "materials" / f"M{material}" / "stems"
-                if material is not None else self._root / "samples" / "stems" / f"#{sample_id + 1}"
-            )
-            if resolved.kind != "stem_directory":
-                continue
-            if (path == pad and (entry.available or (path / ".complete.json").is_file())) or (
-                path.parent == pad and re.fullmatch(r"\.ready-[0-9a-f]{32}", path.name) is not None
-            ):
+            path = self._stem_assignment_path(sample_id, entry)
+            if path is not None:
                 result["stems", sample_id] = path
         return result
+
+    def _stem_assignment_path(self, sample_id: int, entry: StemCacheEntry) -> Path | None:
+        try:
+            if not (self._root / "samples").is_dir():
+                return None
+            path = self._checked_path(Path(entry.cache_dir))
+            resolved = resolve_asset(path, project_root=self._root)
+        except OSError, ValueError:
+            return None
+        original = self._owned_original(self._project.sample_paths[sample_id])
+        material = (
+            original_asset(original, project_root=self._root).material_id
+            if original is not None else None
+        )
+        pad = (
+            self._root / "samples" / "materials" / f"M{material}" / "stems"
+            if material is not None else self._root / "samples" / "stems" / f"#{sample_id + 1}"
+        )
+        if resolved.kind != "stem_directory":
+            return None
+        # A verified legacy set can have equal subscribers in other slots.
+        # Slot names locate old material; they confer no origin ownership.
+        if material is None:
+            legacy = path.parent if path.name.startswith(".ready-") else path
+            if legacy.parent == self._root / "samples" / "stems":
+                pad = legacy
+        if (path == pad and (entry.available or (path / ".complete.json").is_file())) or (
+            path.parent == pad and re.fullmatch(r"\.ready-[0-9a-f]{32}", path.name) is not None
+        ):
+            return path
+        return None
 
     def _owned_original(self, source: str | None) -> Path | None:
         if source is None:

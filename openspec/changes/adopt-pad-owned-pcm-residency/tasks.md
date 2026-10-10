@@ -3,8 +3,8 @@
 P0 is the historical published plan. Its physical topology is explicitly superseded
 by the new human shared-material contract; its bounded accepted evidence and
 historical FAIL/UNKNOWN are not rewritten. R0 is the retained docs/spec revision.
-J0 is published; P1a implementation and fresh
-validation are in progress. Final independent P1a acceptance remains open.
+J0 and P1a are independently accepted and published. P1b implementation,
+current regression validation and final independent review are complete.
 
 The [extended program](../../../docs/pad-owned-pcm-program.md) and
 [complete coverage map](../../../docs/pre-rust-program-coverage.json) own the
@@ -65,8 +65,16 @@ must pass before checking the bounded slice below. No P1b or mass migration clai
 
 ### P1b
 
-- [ ] Existing central lifecycle fuer all-bank equal assignment/material/subscriber owners; originunabhaengige StemSet binding/read eligibility
-- [ ] Acquire-new-before-release, late/stale/cancel/queue/retirement, new version keeps old users, echte SourceTicket/ACK/projection. Noch keine GUI-Copy/Move
+The bounded implementation uses ordinary independent cold/warm CacheAssignment
+admission, the existing central ProjectAssets weak-reader registry and registered
+StemGenerationJob interests with individual content/ticket/cleanup ownership.
+Shared ready-generation promotion precedes per-subscriber native publication/ACK;
+old-version rejection restores the already reserved owner without reacquisition.
+Fresh relevant native/controller regressions and final independent review passed
+for this bounded slice. GUI Copy/Move and subsequent storage stages stay pending.
+
+- [x] Existing central lifecycle fuer all-bank equal assignment/material/subscriber owners; originunabhaengige StemSet binding/read eligibility
+- [x] Acquire-new-before-release, late/stale/cancel/queue/retirement, new version keeps old users, echte SourceTicket/ACK/projection. Noch keine GUI-Copy/Move
 
 ### K-META
 

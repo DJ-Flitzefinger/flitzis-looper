@@ -28,8 +28,12 @@ state unchanged, and hover/end of pad drag SHALL NOT produce bank actions.
 - **WHEN** Re-Arrange is off a bank is clicked, or active drag merely hovers/releases over a bank
 - **THEN** normal click selects its bank, while consumed drag performs no bank action/navigation
 
-#### Scenario: Existing selection highlighting and startup are preserved
-- **WHEN** the UI starts with Re-Arrange off
-- **THEN** Bank1 is highlighted as selected below the pad grid
-- **WHEN** normal selection changes to Bank3
-- **THEN** Bank3 is selected/highlighted and Bank1 is not
+#### Scenario: Bank 1 is selected by default
+- **WHEN** the UI is started with Re-Arrange off
+- **THEN** Bank 1 is visually indicated as selected below the pad grid
+
+#### Scenario: Selecting a different bank updates the selection
+- **GIVEN** Re-Arrange is off
+- **WHEN** the user selects Bank 3
+- **THEN** Bank 3 is visually indicated as selected
+- **AND** Bank 1 is visually indicated as not selected

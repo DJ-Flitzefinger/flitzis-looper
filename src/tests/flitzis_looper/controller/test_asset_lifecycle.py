@@ -46,9 +46,16 @@ def _track_leases(audio_engine_mock: Mock) -> list[FakeProjectAssetLease]:
 
 
 class _EagerLease(FakeProjectAssetLease):
-    def __init__(self, path: str, drain: Callable[[], None]) -> None:
+    def __init__(
+        self, path: str, drain: Callable[[], None], reclaim: Callable[[Path], None]
+    ) -> None:
         super().__init__(path)
         self._drain = drain
+        self._reclaim = reclaim
+
+    def reclaim_stems(self, expected_path: str) -> None:
+        super().reclaim_stems(expected_path)
+        self._reclaim(Path(expected_path))
 
     def release(self) -> None:
         super().release()
@@ -76,9 +83,12 @@ def _install_eager_registry(audio: Mock) -> None:
             else:
                 target.unlink(missing_ok=True)
 
+    def reclaim(target: Path) -> None:
+        pending.pop(target, None)
+
     def acquire(path: str) -> _EagerLease:
         pending.pop(Path(path), None)
-        lease = _EagerLease(path, drain)
+        lease = _EagerLease(path, drain, reclaim)
         leases.append(lease)
         return lease
 
@@ -609,6 +619,7 @@ def test_previous_stem_files_survive_pending_ack_and_rejection_with_eager_cleanu
     assert current_path != previous_path
     assert pending.previous_lease is not None
     assert not pending.previous_lease.released
+    previous_lease = pending.previous_lease
     assert all(
         (previous_path / f"{kind}.wav").read_bytes() == content
         for kind, content in previous_bytes.items()
@@ -628,7 +639,14 @@ def test_previous_stem_files_survive_pending_ack_and_rejection_with_eager_cleanu
             ticket.status = outcome
         controller.stems.on_frame_render()
 
-    assert pending.previous_lease.released
+    if outcome in {"rejected", "status_error"}:
+        assert pending.previous_lease is None
+        assert controller._assets._assignments["stems", 0][1] is previous_lease
+        assert not previous_lease.released
+    else:
+        assert previous_lease.released
+    assert pending.retirement.remaining == 0
+    assert controller._assets._reserved == 0
     if outcome == "accepted":
         assert not previous_path.exists()
         assert current_path.exists()

@@ -932,6 +932,14 @@ old live-audio state.
 The pending [pad-owned PCM program](pad-owned-pcm-program.md) changes asset
 ownership/content identity and restore policy in serial slices. Canonical immutable
 material users replace physical per-pad duplicates; #N remains fixed slot membership.
+Current P1b storage/control admission shares compatible immutable PCM in the existing
+ProjectAssets weak-reader registry while retaining ordinary independent assignment
+IDs and fresh native source/window/timing permits. Registered separator interests
+fan out one ready generation with individual ACKs; cancellation detaches one user,
+and actual reads keep their existing physical leases until completion. All-bank
+saved stem owners suppress retirement until the last saved user. Rejection transfers
+the reserved old generation owner under the same registry gate without new owner
+allocation. These operations add no callback file ownership or I/O.
 Its target keeps current musical masks/custom/preset/mutes as independent durable
 CopySnapshot intent and keeps durable ALL STEMS
 desire, disk eligibility, pending work, resident readiness and effective native

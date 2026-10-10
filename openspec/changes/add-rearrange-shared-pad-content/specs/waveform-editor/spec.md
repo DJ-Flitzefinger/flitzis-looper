@@ -3,6 +3,12 @@
 ### Requirement: Accepted hold releases bind the caused content pause
 The system SHALL bind each admitted waveform PauseHold and its later matching release to the same ContentInstanceId, lifetime generation and native caused-pause effect, independently of its current PadSlotId or UI selection.
 
+#### Scenario: Pause hold admission and repeated input preserve caused-effect authority
+- **WHEN** waveform PauseHold presses, matching releases or duplicate observations are processed
+- **THEN** the following complete normative contract applies:
+
+The system SHALL bind each admitted waveform PauseHold and its later matching release to the same ContentInstanceId, lifetime generation and native caused-pause effect, independently of its current PadSlotId or UI selection.
+
 The bounded effect SHALL identify the native current playback cohort/control
 revision that this hold actually changed from playing to paused. Material equality,
 slot reuse and Python paused-set membership SHALL NOT confer release authority.
@@ -49,6 +55,12 @@ SHALL change atomically; a resolved numeric slot alone SHALL NOT authorize relea
 - **AND** the single release cannot affect an earlier slot's later occupant
 
 ### Requirement: Removed lifetimes fence old releases and actions
+The system SHALL terminally fence HoldRelease and all other accepted content-bound actions for every removed lifetime in the same guarded native transaction that deletes, reassigns or overwrites that content.
+
+#### Scenario: Replacement and unload retain complete lifetime fencing
+- **WHEN** content is removed, successfully replaced or unloaded, or replacement preparation or admission fails
+- **THEN** the following complete normative contract applies:
+
 The system SHALL terminally fence HoldRelease and all other accepted content-bound actions for every removed lifetime in the same guarded native transaction that deletes, reassigns or overwrites that content.
 
 Successful source replacement SHALL use a fresh lifetime even for equal bytes or
@@ -115,6 +127,12 @@ contract; this hold requirement SHALL NOT reduce that snapshot.
 ### Requirement: Release remains observable outside the original controls
 The system SHALL deliver a matching release or explicit input-cancellation request through the existing non-realtime input/control tick even when the original control is not hovered, rendered or selected.
 
+#### Scenario: Control changes and cancellation retain one observable release obligation
+- **WHEN** selection, waveform-editor target, editor visibility or input focus changes while a hold exists, or that hold releases outside its original control
+- **THEN** the following complete normative contract applies:
+
+The system SHALL deliver a matching release or explicit input-cancellation request through the existing non-realtime input/control tick even when the original control is not hovered, rendered or selected.
+
 Selection, waveform-editor target change, editor close and focus cancellation
 SHALL NOT redirect the target or strand a still-live owned pause. Removal may
 settle the old claim through guarded retirement instead of resumption. This
@@ -141,6 +159,12 @@ SHALL NOT introduce a second scheduler or persist physical hold state.
 - **THEN** A resumes as before the attempted mutation
 
 ### Requirement: Release-before-ACK and capacity failure settle honestly
+The system SHALL retain one bounded identity-bound release-requested record when release precedes pause-effect ACK or complete release admission, and SHALL settle it through the existing ordered native command/ACK path.
+
+#### Scenario: Admission failure and delayed feedback preserve release settlement
+- **WHEN** release precedes ACK, admission fails, feedback is delayed or stale, or a native claim has no observed ACK
+- **THEN** the following complete normative contract applies:
+
 The system SHALL retain one bounded identity-bound release-requested record when release precedes pause-effect ACK or complete release admission, and SHALL settle it through the existing ordered native command/ACK path.
 
 Admission failure SHALL NOT optimistically create a pause effect or discard the
@@ -198,6 +222,12 @@ musical ContentInstance and source bytes remain equal.
 ### Requirement: MIDI input does not invent or redirect holds
 The system SHALL preserve the existing NoteOff/NoteOn-velocity0 nonattack/nonreset semantics and fixed-slot binding layout while future accepted pitch actions bind their captured selected ContentInstance and lifetime through direct, fallback and pending execution.
 
+#### Scenario: MIDI admission and release preserve existing attack and hold semantics
+- **WHEN** MIDI NoteOn, NoteOff, velocity-zero or queued direct, fallback or pending pitch input is handled
+- **THEN** the following complete normative contract applies:
+
+The system SHALL preserve the existing NoteOff/NoteOn-velocity0 nonattack/nonreset semantics and fixed-slot binding layout while future accepted pitch actions bind their captured selected ContentInstance and lifetime through direct, fallback and pending execution.
+
 No new MIDI PauseHold action is introduced by this plan. NoteOff SHALL NOT resume
 a waveform hold or reset chosen pitch/highlight. Accepted attacks SHALL remain
 distinct under the existing Quantize/SYNC event semantics; preparation alone may
@@ -218,6 +248,12 @@ point rather than be falsely described as already content-bound.
 - **AND** later matching mouse release still settles H correctly
 
 ### Requirement: Related pressed projections and last-user release remain bounded
+The system SHALL preserve distinct content, gesture, global-output and immutable-resource ownership, and SHALL retire material only after every assignment, voice, reader, job, accepted action and native ACK owner has ended.
+
+#### Scenario: Shared resource and callback ownership remain bounded during mutation
+- **WHEN** content is moved, swapped, copied or retired, or its prepared native callback work is applied
+- **THEN** the following complete normative contract applies:
+
 The system SHALL preserve distinct content, gesture, global-output and immutable-resource ownership, and SHALL retire material only after every assignment, voice, reader, job, accepted action and native ACK owner has ended.
 
 Move/Swap SHALL acquire new references before retiring old ones. Copy SHALL NOT

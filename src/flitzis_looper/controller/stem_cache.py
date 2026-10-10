@@ -74,13 +74,17 @@ def _safe_stem_cache_dir_path(cache_dir: str) -> Path | None:
 def cache_dir_matches_sample_id(
     sample_id: int, cache_dir: str, sample_path: str | None = None
 ) -> bool:
-    """Accept a legacy pad set or its immutable published generation only."""
+    """Accept the material set; legacy slot labels do not restrict its subscribers."""
     try:
         root = Path(cache_dir_for_sample_id(sample_id, sample_path))
         resolved = resolve_asset(cache_dir)
         if resolved.kind != "stem_directory":
             return False
         candidate = resolved.path.relative_to(Path.cwd())
+        if sample_path is not None and original_asset(sample_path).material_id is None:
+            legacy = candidate.parent if candidate.name.startswith(".ready-") else candidate
+            if legacy.parent == STEM_CACHE_ROOT:
+                root = legacy
     except (OSError, ValueError):
         return False
     return candidate == root or (

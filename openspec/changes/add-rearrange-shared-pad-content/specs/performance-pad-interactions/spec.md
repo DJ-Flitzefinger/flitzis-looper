@@ -3,14 +3,19 @@
 ### Requirement: Trigger and Retrigger Pads
 The system SHALL trigger or retrigger loaded pads on left mouse-down using existing loop-start or sample-start rules when Re-Arrange is off, and SHALL let arrangement gesture ownership consume pad-surface presses first when it is on.
 
-#### Scenario: Normal left mouse down starts or restarts
-- **WHEN** Re-Arrange is off and left mouse-down targets loadedA
-- **THEN** normal trigger/retrigger starts at loop start when configured, otherwise sample start
+#### Scenario: Left mouse down triggers a loaded pad
+- **GIVEN** Re-Arrange is off
+- **WHEN** a sample is loaded into the pad's sample slot
+- **AND** the performer presses the left mouse button down on the pad
+- **THEN** the system triggers playback from the pad's loop start when configured
+- **AND** otherwise triggers playback from the start of the sample
 
-#### Scenario: Normal playing-pad retrigger retains deterministic stop then start
-- **GIVEN** Re-Arrange is off and A already plays
-- **WHEN** left mouse-down targets A
-- **THEN** existing bounded semantics stop its prior playback and trigger again from normal loop/sample start
+#### Scenario: Left mouse down retriggers deterministically
+- **GIVEN** Re-Arrange is off
+- **WHEN** a sample is currently playing for a pad
+- **AND** the performer presses the left mouse button down on the same pad
+- **THEN** the system stops playback for that pad
+- **AND** the system triggers playback again using the same loop/sample start-point rules
 
 #### Scenario: Arrangement left mouse down never triggers before drag
 - **WHEN** Re-Arrange is on and left drag begins onA
@@ -20,9 +25,11 @@ The system SHALL trigger or retrigger loaded pads on left mouse-down using exist
 ### Requirement: Stop Pads Quickly
 The system SHALL stop a pad promptly on right mouse-down when Re-Arrange is off and SHALL consume right arrangement drag before normal stop when it is on.
 
-#### Scenario: Normal right click stops
-- **WHEN** Re-Arrange is off and playingA receives right mouse-down
-- **THEN** A stops through existing native behavior
+#### Scenario: Right mouse down stops the pad
+- **GIVEN** Re-Arrange is off
+- **WHEN** a sample is currently playing for a pad
+- **AND** the performer presses the right mouse button down on the pad
+- **THEN** playback for that pad stops promptly
 
 #### Scenario: Existing held-right stop behavior remains in normal mode
 - **WHEN** Re-Arrange is off and the existing hovered held-right stop path observes A

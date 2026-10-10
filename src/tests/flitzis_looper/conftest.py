@@ -39,6 +39,10 @@ class FakeProjectAssetLease:
     def release(self) -> None:
         self.released = True
 
+    def reclaim_stems(self, expected_path: str) -> None:
+        assert expected_path == self.path
+        assert not self.released
+
 
 class FakeGlobalPlaybackBatchTicket:
     """Controller-only feedback substitute for a native global transaction."""

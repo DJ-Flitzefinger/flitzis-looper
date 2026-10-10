@@ -5,6 +5,7 @@
 //! handle without introducing a file-lease destructor into the audio callback.
 
 use super::cold_store::CommittedColdLease;
+pub(super) mod stem_readers;
 use crate::messages::{PreparedStemSet, SampleBuffer};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -16,6 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::thread;
 use std::time::Duration;
+use stem_readers::SharedStemReaders;
 
 const MAX_RETIREMENTS: usize = 1024;
 const MAX_REPORTED_ERRORS: usize = 16;
@@ -86,6 +88,29 @@ impl ProjectAssetLease {
         self.owner = None;
     }
 
+    /// Restore this already reserved stem assignment without another owner admission.
+    pub fn reclaim_stems(&self, expected_path: String) -> PyResult<()> {
+        let owner = self
+            .owner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("asset lease released"))?;
+        let typed = super::material_paths::resolve(&owner.root, Path::new(&expected_path))
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        if typed.path != owner.path
+            || !matches!(
+                typed.kind,
+                super::material_paths::AssetKind::StemDirectory { .. }
+            )
+        {
+            return Err(PyRuntimeError::new_err(
+                "reserved lease does not match its stem assignment",
+            ));
+        }
+        ProjectAssets::shared()
+            .reclaim_stems(owner)
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))
+    }
+
     #[getter]
     pub fn released(&self) -> bool {
         self.owner.is_none()
@@ -99,6 +124,7 @@ struct Reader {
     pending_assignment: bool,
     saved_claim: bool,
     engine: Weak<()>,
+    shared_stems: Option<SharedStemReaders>,
 }
 
 struct Retirement {
@@ -128,6 +154,34 @@ pub(super) struct ProjectAssets {
 }
 
 impl ProjectAssets {
+    fn reclaim_stems(&self, owner: &Arc<PathOwner>) -> io::Result<()> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("asset gate poisoned"))?;
+        let expected = owner
+            .identity
+            .as_ref()
+            .ok_or_else(|| io::Error::other("reserved stem generation never existed"))?;
+        let _guards = directory_guards(&owner.path)?;
+        if capture_identity(&owner.path)?.as_ref() != Some(expected) {
+            return Err(io::Error::other(
+                "reserved stem generation was replaced; preserved",
+            ));
+        }
+        owner.saved_assignment.store(true, Ordering::Release);
+        let legacy = owner.path.parent() == Some(owner.root.join("stems").as_path())
+            && owner.path.file_name().is_some_and(is_pad_name);
+        state.retiring.retain(|target, _| {
+            target != &owner.path
+                && !(legacy
+                    && target.parent() == Some(owner.path.as_path())
+                    && target
+                        .file_name()
+                        .is_some_and(|name| STEM_FILES.contains(&name.to_string_lossy().as_ref())))
+        });
+        Ok(())
+    }
     #[cfg(test)]
     pub(super) fn isolated() -> Arc<Self> {
         Arc::new(Self {
@@ -317,6 +371,7 @@ impl ProjectAssets {
             pending_assignment: true,
             saved_claim,
             engine,
+            shared_stems: None,
         });
         Ok(())
     }
@@ -341,6 +396,7 @@ impl ProjectAssets {
             pending_assignment: false,
             saved_claim: false,
             engine: Weak::new(),
+            shared_stems: None,
         });
         Ok(())
     }
@@ -1139,6 +1195,7 @@ mod tests {
             pending_assignment: false,
             saved_claim: false,
             engine: Weak::new(),
+            shared_stems: None,
         });
         assets.retire(&root, &path, false).unwrap();
         first.release();
@@ -1419,6 +1476,7 @@ mod tests {
             pending_assignment: true,
             saved_claim: false,
             engine: Arc::downgrade(&engine),
+            shared_stems: None,
         });
         assert_eq!(Arc::weak_count(&pcm), 1);
         drop(pcm);
@@ -1445,6 +1503,7 @@ mod tests {
             pending_assignment: true,
             saved_claim: false,
             engine: Arc::downgrade(&engine),
+            shared_stems: None,
         });
         let mut pin = assets.acquire_pin(&root, &path).unwrap();
         assert!(
@@ -1649,6 +1708,7 @@ mod tests {
                     pending_assignment: false,
                     saved_claim: false,
                     engine: Weak::new(),
+                    shared_stems: None,
                 });
             }
         }
@@ -1735,6 +1795,7 @@ mod tests {
                     pending_assignment: false,
                     saved_claim: false,
                     engine: Weak::new(),
+                    shared_stems: None,
                 });
             }
         }

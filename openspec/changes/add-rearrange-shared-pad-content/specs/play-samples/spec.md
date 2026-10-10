@@ -3,6 +3,12 @@
 ### Requirement: Native content mutation and owned pause release linearize
 The system SHALL atomically validate content/lifetime/slot epochs and native source/voice/cohort/control/effect guards at layout or release application and SHALL publish matching complete ACK-bound projections.
 
+#### Scenario: Content mutation and delayed telemetry retain lifetime ownership
+- **WHEN** content is moved, swapped, deleted, reassigned, overwritten or removed with a bank, or its delayed telemetry arrives
+- **THEN** the following complete normative contract applies:
+
+The system SHALL atomically validate content/lifetime/slot epochs and native source/voice/cohort/control/effect guards at layout or release application and SHALL publish matching complete ACK-bound projections.
+
 Move/Swap SHALL carry living history/voices/owned effects without unload/reload.
 Delete/reassign/overwrite/bank removal SHALL fence every removed lifetime/action
 before reuse; queued reader pins SHALL survive until real native terminal retirement.

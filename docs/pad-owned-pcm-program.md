@@ -1,10 +1,13 @@
 # Shared-material PCM and extended pre-Rust delivery program
 
-Status: P1a implementation and current regression validation, 2026-10-10; no
-whole-program or human completion. J0 is published. Typed native material/slot
+Status: P1a and P1b independently accepted, 2026-10-10; no whole-program or human
+completion. J0 and P1a are published. Typed native material/slot
 resolution, canonical import/restore storage, durable material/content IDs and
-guarded exact cleanup are implemented; independent final P1a review remains open.
-P1b subscriber fanout, migration, arrangement and pitch controls remain pending.
+guarded exact cleanup are implemented.
+P1b implements shared immutable backing, independent subscriber ACK/ownership and
+all-bank last-user cleanup; current regression validation and final independent
+review passed for that bounded slice.
+Migration, arrangement and pitch controls remain pending.
 The accepted bounded P0/C1/R0 prerequisites and historical FAIL/UNKNOWN evidence
 remain intact.
 

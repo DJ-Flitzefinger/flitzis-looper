@@ -39,6 +39,11 @@ The waveform rendering MUST be performance-friendly and MUST NOT require iterati
 - **THEN** individual sample points/segments become visible in the waveform display
 
 ### Requirement: Waveform editor provides transport and navigation controls
+The waveform editor SHALL provide control buttons in an upper area above the waveform display.
+
+#### Scenario: Transport toolbar layout and press behavior retain the complete contract
+- **WHEN** the waveform editor toolbar is rendered or its transport and navigation controls are pressed
+- **THEN** the following complete normative contract applies:
 
 The waveform editor SHALL provide control buttons in an upper area above the waveform display.
 
@@ -148,6 +153,12 @@ The loop region visualization SHALL use:
 ### Requirement: Waveform editor provides a per-pad Grid Offset control
 The waveform editor SHALL provide a "Grid Offset" knob/control in its toolbar.
 
+#### Scenario: Grid Offset placement persistence and interaction retain the complete contract
+- **WHEN** the per-pad Grid Offset control is rendered, initialized or dragged
+- **THEN** the following complete normative contract applies:
+
+The waveform editor SHALL provide a "Grid Offset" knob/control in its toolbar.
+
 The control SHALL be placed to the right of the current right-most control in the toolbar and SHALL be sized consistently with the existing toolbar controls.
 
 The Grid Offset value SHALL be expressed and displayed as a signed integer in samples (`grid_offset_samples`).
@@ -171,6 +182,12 @@ The Grid Offset value SHALL be stored per pad. If no stored value exists for a p
 - **THEN** the `grid_offset_samples` value changes in 10-sample steps
 
 ### Requirement: Waveform editor displays a single musical grid aligned to loop snapping
+The waveform editor SHALL render a SINGLE musical time grid overlay.
+
+#### Scenario: Musical grid alignment readability and subdivision retain the complete contract
+- **WHEN** the waveform editor grid is rendered at any zoom level with or without an effective BPM
+- **THEN** the following complete normative contract applies:
+
 The waveform editor SHALL render a SINGLE musical time grid overlay.
 
 This grid SHALL be aligned to the same musical 1/64-note grid concept used for loop marker snapping (see `loop-region`).
@@ -278,6 +295,13 @@ musical grid overlays without changing playback, loop marker, or audio-thread be
 The waveform editor SHALL render its musical grid and loop snapping on the same 1/64-note unit
 basis used by trigger quantization and Rust pad timing metadata.
 
+#### Scenario: Grid basis and timing edits retain source-side alignment
+- **WHEN** the waveform editor grid is rendered or its pad timing or playback controls change
+- **THEN** the following complete normative contract applies:
+
+The waveform editor SHALL render its musical grid and loop snapping on the same 1/64-note unit
+basis used by trigger quantization and Rust pad timing metadata.
+
 The finest loop editor musical grid line spacing SHALL be one sixteenth of a beat in 4/4. This is
 the same subdivision exposed as the minimum `1/64` trigger quantization grid step, while the
 default trigger quantization Settings value remains `1/16`.
@@ -321,6 +345,12 @@ performer explicitly edits the pad's loop/grid settings.
 ### Requirement: Loop Editor Source Grid Remains Stable During Playback Sync Changes
 The system SHALL keep the Loop Editor source-side grid anchor and snapped loop markers stable when playback sync state changes.
 
+#### Scenario: Playback sync changes preserve every source-domain editing anchor
+- **WHEN** playback sync, transport, pitch, speed, locks, quantization or another pad's playback changes
+- **THEN** the following complete normative contract applies:
+
+The system SHALL keep the Loop Editor source-side grid anchor and snapped loop markers stable when playback sync state changes.
+
 Changing global Pitch/Speed, enabling or disabling BPM Lock, recomputing master BPM, enabling or disabling Key Lock, toggling trigger quantization, changing the trigger quantization step, or starting/stopping/retriggering another pad SHALL NOT move a pad's Loop Editor Grid Offset anchor, snapped loop start, snapped loop end, or visible source-side grid lines unless the performer edits that pad's loop or grid settings.
 
 The Loop Editor grid SHALL remain a source-domain editing grid. The Rust transport timeline and trigger quantization grid MAY share the same 1/64-note unit basis, but they SHALL NOT reinterpret or move the source-side Loop Editor grid.
@@ -349,6 +379,13 @@ The Loop Editor grid SHALL remain a source-domain editing grid. The Rust transpo
 
 <!-- Added from rework-waveform-loop-editor -->
 ### Requirement: Waveform editor provides bounded bar stepping controls
+The waveform editor SHALL provide per-pad auto-loop bar controls that support bounded musical bar
+stepping for the selected pad.
+
+#### Scenario: Bar-step gestures retain sequence increments and track bounds
+- **WHEN** the selected pad's auto-loop bar decrement or increment control receives left or right mouse-down
+- **THEN** the following complete normative contract applies:
+
 The waveform editor SHALL provide per-pad auto-loop bar controls that support bounded musical bar
 stepping for the selected pad.
 
@@ -438,6 +475,13 @@ playback.
 The waveform editor SHALL render only in the Looper center surface and SHALL NOT open as a separate
 ImGui or platform window.
 
+#### Scenario: In-frame editor layout close control and target sizes retain the complete contract
+- **WHEN** the waveform editor is opened, rendered or resized, or its toolbar controls are used
+- **THEN** the following complete normative contract applies:
+
+The waveform editor SHALL render only in the Looper center surface and SHALL NOT open as a separate
+ImGui or platform window.
+
 The waveform editor SHALL replace the performance surface while it is open, similar to the
 Settings page, and SHALL resize with the Looper main window.
 
@@ -467,6 +511,3 @@ Toolbar icon hit targets SHALL be at least 32 logical pixels on both axes and no
 - **WHEN** the toolbar is rendered
 - **THEN** Play, Pause, view-jump, bar-step, `ALL`, grid-offset, and close controls each expose hit
   targets at least 32 logical pixels on both axes
-
-## MODIFIED Requirements
-

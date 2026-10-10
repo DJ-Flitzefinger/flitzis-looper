@@ -26,7 +26,7 @@ pub struct SampleBuffer {
 }
 
 /// Immutable complete-content descriptor. This owner never retains complete PCM.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct CompleteSourceIdentity {
     pub frame_count: usize,
     pub channels: usize,

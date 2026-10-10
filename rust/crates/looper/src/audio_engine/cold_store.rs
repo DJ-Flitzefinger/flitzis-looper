@@ -164,7 +164,7 @@ fn check_cancelled(cancelled: &impl Fn() -> bool) -> io::Result<()> {
 
 /// Portable metadata/open protocols cannot exclude a writer or pathname ABA.
 /// Until a platform-specific protocol exists, other platforms fail safely.
-fn sealed_reader(path: &Path) -> io::Result<File> {
+pub(super) fn sealed_reader(path: &Path) -> io::Result<File> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;

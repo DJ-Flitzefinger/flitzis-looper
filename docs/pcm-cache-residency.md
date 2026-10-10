@@ -897,8 +897,34 @@ or implementing the full application Rust port.
 The pending target reuses cold_store/project_assets/asset_lifecycle/stem_cache;
 canonical `samples/materials/M<id>/original`, `.pcm-cache` and `stems` replace
 physical per-pad duplicates. No second cache/hardlink/reparse/phantom origin.
-Current last-assignment acquire-before-release and native reader registry are
-foundations; current pad-bound stem capture/restore/cleanup still need P1a/b changes.
+P1a supplies canonical typed material roots and durable per-content IDs. P1b extends
+the existing central ownership registry: each normal cold/warm admission creates its
+own CacheAssignment ID while sharing verified immutable backing; cloning a lease
+continues to represent the same assignment. All-bank saved stem assignments release
+one owner individually, and physical retirement starts only after the last saved user.
+
+One registered StemGenerationJob can serve compatible same-source/processing
+interests in different slots. Each interest captures its own content instance and
+native PreparedSourceTicket and reserves its own cleanup capacity before admission.
+Removing the origin detaches only that interest; the backend source/private-generation
+leases survive until actual read completion, and cancellation occurs after the final
+interest. One ready generation is promoted before individual native publications.
+Source/content/timing/queue rejection affects that subscriber alone.
+
+ProjectAssets retains weak references to the five aligned PCM allocations and sealed
+artifact handles under its existing bounded reader gate. A compatible subscriber
+reuses actual retained PCM, then binds its own current source/window, publication
+permit and accepted timing projection. It receives its own native ACK. Equal hashes
+and paths supply no publication authority. Different ranges/processing/version do
+not reuse incompatible PCM, and the registry never keeps complete PCM alive itself.
+Sealed artifact handles are released off-thread after the last actual component
+reader. A pending regeneration holds a reserved old owner; rejection reclaims that
+exact existing stem lease under the same gate and captured directory identity,
+without another capacity-dependent owner allocation. Missing, replaced or reparse
+directories fail closed. No callback file handles or I/O are introduced.
+
+These bounded storage/control changes do not implement CopySnapshot/GUI operations,
+mass migration, persistent aligned stem-f32 caches or the later resource/preload gates.
 Copy adds equal immutable refs and fresh stopped content/native ACK, not analysis/
 decode/separation/files. New versions keep old users; current/old voices, jobs,
 subscribers, actions/holds/history/native unload ACK participate in true last use.

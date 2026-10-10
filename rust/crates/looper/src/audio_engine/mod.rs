@@ -662,9 +662,21 @@ impl AudioEngine {
 
         // Preparation owns the exact generation while disk reads run detached.
         // Successful registration below transfers protection to PCM readers.
+        let (_, generation_path) = project_assets::owned_path(
+            &self.project_assets_root()?,
+            std::path::Path::new(&cache_dir),
+        )
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
         let generation_lease = self.acquire_project_asset_lease(cache_dir.clone())?;
-        let mut stems = py
-            .detach(|| {
+        let (mut stems, files) = py
+            .detach(|| -> Result<(crate::messages::PreparedStemSet, Option<Vec<std::fs::File>>), String> {
+                if let Some(shared) = self.project_assets.shared_stems(
+                    &generation_path, &sample, &source_version, source_ticket.sample_rate_hz
+                ).map_err(|error| error.to_string())? {
+                    return Ok((shared, None));
+                }
+                let files = project_assets::stem_readers::seal_stem_artifacts(&generation_path)
+                    .map_err(|error| error.to_string())?;
                 let peak = stem_cache::admitted_stem_pcm_bytes(sample.frame_count(), sample.channels)?
                     .checked_add(sample.samples.len().checked_mul(4).ok_or("resident stem budget overflow")?)
                     .ok_or("resident stem budget overflow")?;
@@ -672,25 +684,33 @@ impl AudioEngine {
                     return Err("complete stem preparation with resident window exceeds transient PCM admission".into());
                 }
                 let complete = self.complete_sample(id, &sample, cold_jobs::PCM_LIMIT_BYTES).map_err(|error| error.to_string())?;
-                prepare_stem_buffers_from_cache(
+                let stems = prepare_stem_buffers_from_cache(
                     &source_version,
                     &complete,
                     source_ticket.sample_rate_hz,
                     &cache_dir,
-                )
+                )?;
+                Ok((stems, Some(files)))
             })
             .map_err(PyValueError::new_err)?;
         stems = stems.window_for(&sample).map_err(PyValueError::new_err)?;
         stems.publication = source_ticket.publication.clone();
         stems.accepted_timing = source_ticket.publication.accepted_projection();
-        let (_, generation_path) = project_assets::owned_path(
-            &self.project_assets_root()?,
-            std::path::Path::new(&cache_dir),
-        )
-        .map_err(|error| PyValueError::new_err(error.to_string()))?;
-        self.project_assets
-            .retain_stems(generation_path.clone(), &stems)
-            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        if let Some(files) = files {
+            self.project_assets.retain_shared_stems(
+                generation_path.clone(),
+                &stems,
+                &sample,
+                &source_version,
+                files,
+            )
+        } else {
+            // The existing weak backing record covers every actual Arc reader,
+            // including this subscriber. A failed enqueue must add no redundant
+            // record that remains pinned merely because another user survives.
+            Ok(())
+        }
+        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
 
         // Source mutation, timing publication and enqueue all serialize here.
         let result = enqueue_current_prepared_stems_with_owner(

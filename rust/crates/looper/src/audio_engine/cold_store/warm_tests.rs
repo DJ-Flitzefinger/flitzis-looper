@@ -472,9 +472,14 @@ fn retired_shared_cache_survives_other_owner_and_windows_partial_delete_retries(
     let fixture = Fixture::new(44_100, 1);
     let (sample, first) = fixture.cold(48_000, 2);
     let (warm, second) = fixture.warm(&fixture.source, true, 48_000, 2);
+    assert_ne!(first.assignment_id(), second.assignment_id());
+    assert_eq!(first.cache_assignment_count(), 2);
+    assert_eq!(first.clone().assignment_id(), first.assignment_id());
     let path = first.cache_path.clone();
     let original = first.original_path.clone();
     first.retire_cache();
+    assert!(!second.assignment_retired());
+    assert_eq!(second.cache_assignment_count(), 1);
     drop((first, sample));
     std::thread::sleep(Duration::from_millis(75));
     assert!(path.join("decoder.f32le").exists());

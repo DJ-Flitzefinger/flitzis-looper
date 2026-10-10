@@ -17,6 +17,7 @@ const FRAMES: usize = 4_096;
 const VOCALS_AMPLITUDE: f32 = 2_048.0 / 32_767.0;
 const TEST_NAME: &str = "audio_engine::cold_residency_tests::stem_publication_tests::worker_generation_publishes_native_stems_and_restores_with_fresh_ticket";
 const CHILD_MARKER: &str = "FLITZI_STEM_PUBLICATION_TEST_CHILD";
+const SAVED_ROOT_MARKER: &str = "FLITZI_P1B_SAVED_RESTORE_ROOT";
 
 #[path = "stem_mouse_trigger_tests.rs"]
 mod mouse_triggers;
@@ -150,7 +151,7 @@ fn render(callback: &mut Callback, expected: f32) {
 
 #[test]
 fn worker_generation_publishes_native_stems_and_restores_with_fresh_ticket() {
-    run_publication_and_mouse_proof(TEST_NAME, false);
+    run_publication_and_mouse_proof(TEST_NAME, false, false);
 }
 
 #[test]
@@ -158,10 +159,20 @@ fn accepted_stem_mouse_start_uses_native_ack_and_render_under_cold_pressure() {
     run_publication_and_mouse_proof(
         "audio_engine::cold_residency_tests::stem_publication_tests::accepted_stem_mouse_start_uses_native_ack_and_render_under_cold_pressure",
         true,
+        false,
     );
 }
 
-fn run_publication_and_mouse_proof(test_name: &str, accepted_only: bool) {
+#[test]
+fn shared_material_publish_reuses_pcm_with_own_native_subscriber_ack() {
+    run_publication_and_mouse_proof(
+        "audio_engine::cold_residency_tests::stem_publication_tests::shared_material_publish_reuses_pcm_with_own_native_subscriber_ack",
+        true,
+        true,
+    );
+}
+
+fn run_publication_and_mouse_proof(test_name: &str, accepted_only: bool, shared: bool) {
     if std::env::var(CHILD_MARKER).as_deref() != Ok(test_name) {
         // Python controllers use project-relative paths. A fresh test process
         // isolates their cwd and embedded interpreter from concurrent Rust tests.
@@ -177,6 +188,10 @@ fn run_publication_and_mouse_proof(test_name: &str, accepted_only: bool) {
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+        return;
+    }
+    if shared && let Ok(root) = std::env::var(SAVED_ROOT_MARKER) {
+        restore_saved_material(Path::new(&root));
         return;
     }
     let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -283,6 +298,47 @@ fn run_publication_and_mouse_proof(test_name: &str, accepted_only: bool) {
     });
     assert_eq!(callback.drain(&mut consumer), 1);
     call(&probe, "accepted");
+    if shared {
+        prove_shared_material(
+            &engine,
+            &probe,
+            &version,
+            &root,
+            &producer,
+            &mut consumer,
+            &mut callback,
+        );
+        call(&probe, "save_survivor");
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+            .env(CHILD_MARKER, test_name)
+            .env(SAVED_ROOT_MARKER, directory.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "saved #216 fresh-process restore failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+        Python::attach(|py| {
+            probe
+                .getattr(py, "controller")
+                .unwrap()
+                .call_method0(py, "shut_down")
+                .unwrap();
+            probe
+                .getattr(py, "controller")
+                .unwrap()
+                .getattr(py, "_assets")
+                .unwrap()
+                .call_method0(py, "release_saved_assignments")
+                .unwrap();
+            engine.borrow_mut(py).shut_down().unwrap();
+        });
+        return;
+    }
     mouse_triggers::prove_ready_mouse_triggers(
         &engine,
         &probe,
@@ -332,4 +388,287 @@ fn run_publication_and_mouse_proof(test_name: &str, accepted_only: bool) {
     // Late rejection preserves the previously accepted native stem set.
     render(&mut callback, VOCALS_AMPLITUDE);
     Python::attach(|py| engine.borrow_mut(py).shut_down().unwrap());
+}
+
+fn restore_saved_material(directory: &Path) {
+    std::env::set_current_dir(directory).unwrap();
+    let root = directory.join("samples");
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .unwrap();
+    Python::initialize();
+    let engine = Python::attach(|py| Py::new(py, AudioEngine::new().unwrap()).unwrap());
+    let (producer, mut consumer) = rtrb::RingBuffer::new(16);
+    let producer = Arc::new(Mutex::new(producer));
+    let mut callback = Python::attach(|py| Callback::new(&engine.borrow(py), RATE));
+    let probe = Python::attach(|py| {
+        py.import("sys")
+            .unwrap()
+            .getattr("path")
+            .unwrap()
+            .call_method1(
+                "insert",
+                (0, repository.join("src").to_string_lossy().as_ref()),
+            )
+            .unwrap();
+        let module = PyModule::from_code(
+            py,
+            &CString::new(include_str!("stem_publication_probe.py")).unwrap(),
+            c"stem_publication_probe.py",
+            c"stem_publication_probe",
+        )
+        .unwrap();
+        let bridge = Py::new(
+            py,
+            NativeBridge {
+                engine: engine.clone_ref(py),
+                producer: producer.clone(),
+            },
+        )
+        .unwrap();
+        module
+            .getattr("SavedMaterialProbe")
+            .unwrap()
+            .call1((bridge,))
+            .unwrap()
+            .unbind()
+    });
+    let source = Python::attach(|py| {
+        probe
+            .getattr(py, "project")
+            .unwrap()
+            .getattr(py, "sample_paths")
+            .unwrap()
+            .bind(py)
+            .get_item(215)
+            .unwrap()
+            .extract::<String>()
+            .unwrap()
+    });
+    load_slot(
+        &engine,
+        215,
+        source,
+        &root,
+        &producer,
+        &mut consumer,
+        &mut callback,
+    );
+    call(&probe, "begin");
+    assert_eq!(callback.drain(&mut consumer), 1);
+    call(&probe, "accepted");
+    Python::attach(|py| {
+        probe
+            .getattr(py, "controller")
+            .unwrap()
+            .call_method0(py, "shut_down")
+            .unwrap();
+        probe
+            .getattr(py, "controller")
+            .unwrap()
+            .getattr(py, "_assets")
+            .unwrap()
+            .call_method0(py, "release_saved_assignments")
+            .unwrap();
+        engine.borrow_mut(py).shut_down().unwrap();
+    });
+}
+
+fn load_slot(
+    engine: &Py<AudioEngine>,
+    slot: usize,
+    source: String,
+    root: &Path,
+    producer: &Arc<Mutex<rtrb::Producer<ControlMessage>>>,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    callback: &mut Callback,
+) {
+    let request = Python::attach(|py| {
+        admit_for_format_selected(
+            &engine.borrow(py),
+            slot,
+            source,
+            (false, false, false, None),
+            producer.clone(),
+            (2, RATE, root.to_path_buf()),
+        )
+        .unwrap()
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        callback.drain(consumer);
+        let event = Python::attach(|py| engine.borrow(py).loader_rx.lock().unwrap().try_recv());
+        match event {
+            Ok(LoaderEvent::Success { request_id, .. }) if request_id == request => break,
+            Ok(LoaderEvent::Error { error, .. }) => {
+                panic!("saved subscriber source load failed: {error}")
+            }
+            _ => {}
+        }
+        assert!(Instant::now() < deadline, "saved subscriber timed out");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+fn prove_shared_material(
+    engine: &Py<AudioEngine>,
+    probe: &Py<PyAny>,
+    version: &str,
+    root: &Path,
+    producer: &Arc<Mutex<rtrb::Producer<ControlMessage>>>,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    callback: &mut Callback,
+) {
+    let (source, generation): (String, String) = Python::attach(|py| {
+        (
+            probe
+                .getattr(py, "project")
+                .unwrap()
+                .getattr(py, "sample_paths")
+                .unwrap()
+                .bind(py)
+                .get_item(0)
+                .unwrap()
+                .extract()
+                .unwrap(),
+            probe
+                .getattr(py, "saved_path")
+                .unwrap()
+                .extract(py)
+                .unwrap(),
+        )
+    });
+    load_slot(engine, 215, source, root, producer, consumer, callback);
+    let ticket = Python::attach(|py| {
+        engine
+            .borrow(py)
+            .capture_prepared_source(215, version.to_owned())
+            .unwrap()
+    });
+    let existing = Python::attach(|py| {
+        let engine = engine.borrow(py);
+        let reference = engine.sample_cache.lock().unwrap()[0].clone().unwrap();
+        let (_, path) =
+            super::super::project_assets::owned_path(root, Path::new(&generation)).unwrap();
+        engine
+            .project_assets
+            .shared_stems(&path, &reference, version, RATE)
+            .unwrap()
+            .unwrap()
+    });
+    let readers = Python::attach(|py| engine.borrow(py).project_assets.status().unwrap().1);
+    {
+        let mut producer = producer.lock().unwrap();
+        while !producer.is_full() {
+            producer.push(ControlMessage::Ping()).unwrap();
+        }
+    }
+    for _ in 0..32 {
+        Python::attach(|py| {
+            let engine = engine.borrow(py);
+            let rejected = engine
+                .capture_prepared_source(215, version.to_owned())
+                .unwrap();
+            assert!(
+                engine
+                    .publish_prepared_stems_with_producer(
+                        py,
+                        215,
+                        version.to_owned(),
+                        generation.clone(),
+                        &rejected,
+                        producer
+                    )
+                    .is_err()
+            );
+            assert_eq!(rejected.publication_status(), "captured");
+            assert_eq!(
+                engine.project_assets.status().unwrap().1,
+                readers,
+                "failed shared subscriber left a reader booking"
+            );
+        });
+    }
+    while consumer.pop().is_ok() {}
+    Python::attach(|py| {
+        engine
+            .borrow(py)
+            .publish_prepared_stems_with_producer(
+                py,
+                215,
+                version.to_owned(),
+                generation,
+                &ticket,
+                producer,
+            )
+            .unwrap()
+    });
+    assert_eq!(ticket.publication_status(), "pending");
+    let message = consumer.pop().unwrap();
+    let ControlMessage::PublishPreparedStems { id, stems } = &message else {
+        panic!("expected publication");
+    };
+    assert_eq!(*id, 215);
+    for index in 0..crate::messages::STEM_BUFFER_COUNT {
+        assert!(
+            Arc::ptr_eq(&existing.stems[index].samples, &stems.stems[index].samples),
+            "subscriber allocated duplicate aligned PCM"
+        );
+    }
+    assert!(Arc::ptr_eq(
+        &existing.complete_set_identity,
+        &stems.complete_set_identity
+    ));
+    producer.lock().unwrap().push(message).unwrap();
+    assert_eq!(callback.drain(consumer), 1);
+    assert_eq!(ticket.publication_status(), "accepted");
+    {
+        let mut producer = producer.lock().unwrap();
+        producer
+            .push(ControlMessage::SetStemMixMode {
+                id: 215,
+                mode: StemMixMode::AllStems,
+                source_version_hash: super::super::stem_cache::source_version_hash(version),
+            })
+            .unwrap();
+        producer
+            .push(ControlMessage::SetStemEnabledMask {
+                id: 215,
+                enabled_stem_mask: 8,
+                source_version_hash: super::super::stem_cache::source_version_hash(version),
+            })
+            .unwrap();
+    }
+    assert_eq!(callback.drain(consumer), 2);
+    // An independently invalidated origin cannot revoke the accepted other slot.
+    Python::attach(|py| {
+        let engine = engine.borrow(py);
+        super::super::next_pad_request_id(
+            &engine.pad_request_ids,
+            0,
+            &engine.prepared_source_epochs[0],
+        )
+        .unwrap();
+    });
+    assert_eq!(ticket.publication_status(), "accepted");
+    assert!(
+        callback
+            .mixer
+            .play_sample_rt(215, 1.0, &mut callback.retirement)
+    );
+    let mut output = [0.0; 64];
+    callback.mixer.render_rt_at_output_frame(
+        &mut output,
+        &mut [0.0; NUM_SAMPLES],
+        0,
+        &mut callback.retirement,
+    );
+    assert!(
+        output
+            .iter()
+            .all(|value| (*value - 5120.0 / 32767.0).abs() < 1e-6),
+        "second pad independent stem mask did not render its shared data"
+    );
+    callback.mixer.stop_sample_rt(215, &mut callback.retirement);
 }
