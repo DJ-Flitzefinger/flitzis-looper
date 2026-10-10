@@ -33,6 +33,45 @@ impl PreparedSourceTicket {
     pub fn publication_status(&self) -> &'static str {
         self.publication.status()
     }
+
+    /// Fixed callback rejection feedback, never persisted as source authority.
+    pub fn rejection_reason(&self) -> Option<&'static str> {
+        self.publication.rejection_reason()
+    }
+
+    /// Same actual source/request, allowing a freshly acknowledged resident window.
+    pub fn same_source_request(&self, other: &PreparedSourceTicket) -> bool {
+        self.id == other.id
+            && self.request_id == other.request_id
+            && self.source_version == other.source_version
+            && self.sample_rate_hz == other.sample_rate_hz
+            && Arc::ptr_eq(&self.publication.epoch, &other.publication.epoch)
+            && self.sample.same_source(&other.sample)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+pub(crate) enum PreparedStemRejection {
+    Unspecified = 1,
+    PadPlaying = 2,
+    SourceRequestChanged = 3,
+    TimingChanged = 4,
+    WindowChanged = 5,
+    InvalidGeometry = 6,
+}
+
+impl PreparedStemRejection {
+    fn name(value: u8) -> &'static str {
+        match value {
+            2 => "pad-playing",
+            3 => "source-request-changed",
+            4 => "timing-changed",
+            5 => "window-changed",
+            6 => "invalid-geometry",
+            _ => "unspecified",
+        }
+    }
 }
 
 impl PreparedSourcePermit {
@@ -53,6 +92,7 @@ pub(crate) struct PreparedSourcePermit {
     pub(super) epoch: Arc<AtomicU64>,
     pub(super) expected: u64,
     status: Arc<AtomicU8>,
+    rejection: Arc<AtomicU8>,
     resident_seek_bits: Arc<AtomicU64>,
     source_epoch: Option<(Arc<AtomicU64>, u64)>,
     timing: Option<PreparedTimingPermit>,
@@ -132,6 +172,7 @@ impl PreparedSourcePermit {
             epoch,
             expected,
             status: Arc::new(AtomicU8::new(0)),
+            rejection: Arc::new(AtomicU8::new(0)),
             resident_seek_bits: Arc::new(AtomicU64::new(f64::NAN.to_bits())),
             source_epoch: None,
             timing: None,
@@ -169,7 +210,36 @@ impl PreparedSourcePermit {
     }
 
     pub(crate) fn mark_rejected(&self) {
+        self.mark_rejected_reason(PreparedStemRejection::Unspecified);
+    }
+
+    pub(crate) fn mark_rejected_reason(&self, reason: PreparedStemRejection) {
+        self.rejection.store(reason as u8, Ordering::Relaxed);
         self.status.store(3, Ordering::Release);
+    }
+
+    fn rejection_reason(&self) -> Option<&'static str> {
+        (self.status.load(Ordering::Acquire) == 3)
+            .then(|| PreparedStemRejection::name(self.rejection.load(Ordering::Relaxed)))
+    }
+
+    pub(crate) fn current_rejection(&self) -> Option<PreparedStemRejection> {
+        if self.timing.as_ref().is_some_and(|timing| {
+            timing
+                .ownership
+                .binding_source_generation(timing.id, timing.binding)
+                .is_none()
+        }) {
+            Some(PreparedStemRejection::SourceRequestChanged)
+        } else if self.timing.as_ref().is_some_and(|timing| !timing.current()) {
+            Some(PreparedStemRejection::TimingChanged)
+        } else if self.status.load(Ordering::Acquire) == 3
+            || !publication_epochs_current(&self.epoch, self.expected, &self.source_epoch)
+        {
+            Some(PreparedStemRejection::SourceRequestChanged)
+        } else {
+            None
+        }
     }
     pub(crate) fn current(&self) -> bool {
         self.status.load(Ordering::Acquire) != 3
@@ -437,6 +507,9 @@ pub(super) fn capture_prepared_source(
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    // Reconciliation may adopt an ACKed resident window into the control cache.
+    // Capture that window after reconciliation, under the same request guard.
+    let timing = input_runtime_binding::capture_under_request_lock(engine, id)?;
     let sample = {
         let cache = engine
             .sample_cache
@@ -446,7 +519,7 @@ pub(super) fn capture_prepared_source(
             .clone()
             .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?
     };
-    let timing = input_runtime_binding::capture_under_request_lock(engine, id)?
+    let timing = timing
         .filter(|binding| binding.available() && binding.current())
         .ok_or_else(|| PyValueError::new_err("current source timing unavailable"))?;
     let generations = engine

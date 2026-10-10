@@ -28,6 +28,7 @@ pub(super) struct StemPairOwner {
     pub root: PathBuf,
     pub descriptor_reference: String,
     pub source_lease: CommittedColdLease,
+    pub reader: Arc<super::stem_pair::VerifiedStemPair>,
 }
 
 #[derive(Clone)]
@@ -57,17 +58,14 @@ impl StemOwner {
         cancelled: &impl Fn() -> bool,
     ) -> Result<PreparedStemSet, String> {
         if let Some(owner) = &self.pair {
-            let material = super::material_migration::PreparedMigrationMaterial::from_current(
-                &owner.root,
-                complete.clone(),
-                owner.source_lease.clone(),
-            )?;
-            let pair = super::stem_pair::open_verified_pair(
-                &owner.root,
-                &owner.descriptor_reference,
-                &material,
-                cancelled,
-            )?;
+            owner
+                .source_lease
+                .verify_reference(window)
+                .map_err(|error| error.to_string())?;
+            let pair = &owner.reader;
+            if pair.descriptor_reference != owner.descriptor_reference {
+                return Err("retained pair descriptor differs from owner".into());
+            }
             if pair.descriptor.stem_set_identity
                 != self
                     .set
@@ -78,6 +76,30 @@ impl StemOwner {
             {
                 return Err("complete accepted stem pair changed".into());
             }
+            let same_range = self.set.stems.iter().all(|stem| {
+                stem.same_source(window)
+                    && stem.resident_start() == window.resident_start()
+                    && stem.resident_end() == window.resident_end()
+            });
+            let stems = if same_range {
+                self.set
+                    .stems
+                    .clone()
+                    .map(|stem| {
+                        stem.window(
+                            window.resident_start(),
+                            window.resident_end(),
+                            window.window_revision(),
+                            window.residency.as_ref().unwrap().context,
+                        )
+                    })
+                    .into_iter()
+                    .collect::<Result<Vec<_>, _>>()?
+                    .try_into()
+                    .map_err(|_| "retained component count differs".to_string())?
+            } else {
+                pair.prepare_component_views_cancellable(window, cancelled)?
+            };
             let set = PreparedStemSet {
                 complete_set_identity: self.set.complete_set_identity.clone(),
                 accepted_timing: self.set.accepted_timing,
@@ -88,7 +110,7 @@ impl StemOwner {
                 channels: window.channels,
                 frame_count: window.frame_count(),
                 available_mask: self.set.available_mask,
-                stems: pair.prepare_component_views(window)?,
+                stems,
             };
             assets
                 .retain_stem_pair(
@@ -97,7 +119,7 @@ impl StemOwner {
                     &self.source_version,
                     &set.complete_set_identity,
                     Some(&set),
-                    pair.into_pins(owner.root.parent().ok_or("pair project root missing")?),
+                    pair.clone_pins(owner.root.parent().ok_or("pair project root missing")?)?,
                     owner.source_lease.clone(),
                 )
                 .map_err(|error| error.to_string())?;
@@ -195,6 +217,16 @@ struct WindowState {
     launch_cancelled: Arc<AtomicBool>,
     #[cfg(test)]
     terminal_observation: Mutex<Option<terminal_order_tests::TerminalObservation>>,
+    #[cfg(test)]
+    range_observation: Mutex<Option<WindowReadObservation>>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(super) struct WindowReadObservation {
+    pub source: super::cold_store::WindowReadObservation,
+    pub stems: super::stem_pair::PairReadObservation,
+    pub admitted_peak_bytes: usize,
 }
 
 impl WindowState {
@@ -300,6 +332,10 @@ pub struct ResidentWindowTicket {
 }
 
 impl ResidentWindowTicket {
+    #[cfg(test)]
+    pub(super) fn read_observation_for_test(&self) -> Option<WindowReadObservation> {
+        self.state.range_observation.lock().unwrap().clone()
+    }
     pub(super) fn launch_message(
         &self,
         exclusive: bool,
@@ -681,25 +717,79 @@ fn admitted_window_peak(
     old: &SampleBuffer,
     start: usize,
     end: usize,
-    with_stems: bool,
+    stems: Option<&StemOwner>,
 ) -> Result<usize, String> {
     let frames = old.frame_count();
-    let full_bytes = frames
+    let window_bytes = end
+        .checked_sub(start)
+        .filter(|frames| *frames > 0)
+        .ok_or("invalid resident range")?
         .checked_mul(old.channels)
         .and_then(|n| n.checked_mul(4))
         .ok_or("resident PCM geometry overflow")?;
-    let window_bytes = (end - start)
-        .checked_mul(old.channels)
-        .and_then(|n| n.checked_mul(4))
-        .ok_or("resident PCM geometry overflow")?;
-    let peak = if with_stems {
+    if start >= end || end > frames {
+        return Err("resident range exceeds complete source".into());
+    }
+    let mut backing = vec![old.samples.clone()];
+    if let Some(owner) = stems {
+        for samples in std::iter::once(&owner.set.reference_samples)
+            .chain(owner.set.stems.iter().map(|stem| &stem.samples))
+        {
+            if !backing.iter().any(|held| Arc::ptr_eq(held, samples)) {
+                backing.push(samples.clone());
+            }
+        }
+    }
+    let held = backing.iter().try_fold(0_usize, |sum, samples| {
+        samples
+            .len()
+            .checked_mul(4)
+            .and_then(|bytes| sum.checked_add(bytes))
+            .ok_or("resident held PCM overlap overflow")
+    })?;
+    let peak = if stems.is_some_and(|owner| owner.pair.is_none()) {
+        // Legacy conversion still owns its old set while constructing complete
+        // derivatives and the new crops. Those real old backings are additional
+        // to the converter's reference/decode/alignment peak.
         super::stem_cache::admitted_stem_pcm_bytes(frames, old.channels)?
-            .checked_add(window_bytes)
+            .checked_add(held)
+            .and_then(|bytes| {
+                window_bytes
+                    .checked_mul(5)
+                    .and_then(|windows| bytes.checked_add(windows))
+            })
+            .and_then(|bytes| bytes.checked_add(64 * 1024))
             .ok_or("resident PCM overlap overflow")?
     } else {
-        full_bytes
-            .checked_mul(2)
-            .and_then(|n| n.checked_add(window_bytes))
+        let source_new = if old.resident_start() == start && old.resident_end() == end {
+            0
+        } else {
+            window_bytes
+        };
+        let stems_new = if let Some(owner) = stems {
+            if owner.set.stems.iter().all(|stem| {
+                stem.same_source(old)
+                    && stem.resident_start() == start
+                    && stem.resident_end() == end
+            }) {
+                0
+            } else {
+                window_bytes
+                    .checked_mul(4)
+                    .ok_or("resident component overlap overflow")?
+            }
+        } else {
+            0
+        };
+        held.checked_add(source_new)
+            .and_then(|bytes| bytes.checked_add(stems_new))
+            .and_then(|bytes| {
+                bytes.checked_add(if source_new != 0 || stems_new != 0 {
+                    64 * 1024
+                } else {
+                    0
+                })
+            })
             .ok_or("resident PCM overlap overflow")?
     };
     if peak > super::cold_jobs::PCM_LIMIT_BYTES {
@@ -770,24 +860,27 @@ impl WindowWork {
         if !self.current() {
             return Err("resident source/window was superseded".into());
         }
-        let frames = self.old.frame_count();
-        admitted_window_peak(&self.old, self.start, self.end, self.stem_owner.is_some())?;
-        let complete = if self.old.resident_start() == 0 && self.old.resident_end() == frames {
-            self.old.clone()
-        } else {
-            self.source_lease
-                .read_complete_cancellable(&self.old, super::cold_jobs::PCM_LIMIT_BYTES, &|| {
-                    !self.current()
-                })
-                .map_err(|error| error.to_string())?
-        };
-        self.assets
-            .retain_cold_reader(&self.source_lease, &complete)
+        let peak = admitted_window_peak(&self.old, self.start, self.end, self.stem_owner.as_ref())?;
+        #[cfg(test)]
+        {
+            super::cold_store::reset_window_read_observation_for_test();
+            super::stem_pair::reset_range_observation_for_test();
+        }
+        let sample = self
+            .source_lease
+            .read_window_cancellable(
+                &self.old,
+                self.start,
+                self.end,
+                self.revision,
+                self.context,
+                super::cold_jobs::PCM_LIMIT_BYTES,
+                &|| !self.current(),
+            )
             .map_err(|error| error.to_string())?;
         if !self.current() {
-            return Err("resident preparation cancelled after complete read".into());
+            return Err("resident preparation cancelled after range read".into());
         }
-        let sample = complete.window(self.start, self.end, self.revision, self.context)?;
         self.assets
             .retain_cold_reader(&self.source_lease, &sample)
             .map_err(|error| error.to_string())?;
@@ -795,8 +888,23 @@ impl WindowWork {
             .stem_owner
             .as_ref()
             .map(|owner| -> Result<PreparedStemSet, String> {
+                // Only an unconverted legacy set still needs its complete WAV
+                // converter. Accepted paired sets use their held PCM reader.
+                let legacy_complete = if owner.pair.is_none() {
+                    Some(
+                        self.source_lease
+                            .read_complete_cancellable(
+                                &self.old,
+                                super::cold_jobs::PCM_LIMIT_BYTES,
+                                &|| !self.current(),
+                            )
+                            .map_err(|error| error.to_string())?,
+                    )
+                } else {
+                    None
+                };
                 let mut set = owner.prepare_window(
-                    &complete,
+                    legacy_complete.as_ref().unwrap_or(&sample),
                     &sample,
                     self.binding.binding.sample_rate_hz,
                     &self.assets,
@@ -814,7 +922,16 @@ impl WindowWork {
                 Ok(set)
             })
             .transpose()?;
-        drop(complete);
+        #[cfg(test)]
+        {
+            *self.state.range_observation.lock().unwrap() = Some(WindowReadObservation {
+                source: super::cold_store::window_read_observation_for_test(),
+                stems: super::stem_pair::range_observation_for_test(),
+                admitted_peak_bytes: peak,
+            });
+        }
+        #[cfg(not(test))]
+        let _ = peak;
         // Preparation owns the already-admitted payload while the realtime command
         // lane is briefly full. Retry is bounded, off-thread and cancellable.
         for attempt in 0..8 {
@@ -1114,7 +1231,7 @@ pub(super) fn prepare_window_with_producer(
             .reserve()
             .map_err(PyRuntimeError::new_err)?;
         if !seek_only {
-            admitted_window_peak(&old, start, end, owners[id].accepted.is_some())
+            admitted_window_peak(&old, start, end, owners[id].accepted.as_ref())
                 .map_err(PyRuntimeError::new_err)?;
         }
         Some(reservation)
@@ -1315,6 +1432,60 @@ mod terminal_order_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_peak_charges_distinct_live_old_component_backing_before_conversion() {
+        // This is an admission-only geometry fixture, not a source/ACK oracle.
+        // Tiny real arrays expose a boundary without allocating complete PCM.
+        let held = 64 * 4;
+        let crop = 4;
+        let fixed = 4 * 1024 * 1024 + 64 * 1024 + crop * 5 + held;
+        let frames = (super::super::cold_jobs::PCM_LIMIT_BYTES - fixed) / 40;
+        let old = SampleBuffer {
+            channels: 1,
+            samples: Arc::from([0.0; 64]),
+            residency: Some(Arc::new(crate::messages::ResidentSourceView {
+                source: Arc::new(crate::messages::CompleteSourceIdentity {
+                    frame_count: frames,
+                    channels: 1,
+                    sample_rate_hz: 48_000,
+                    original_sha256: [0; 32],
+                    playback_sha256: [0; 32],
+                    mono_sha256: [0; 32],
+                    transform_sha256: [0; 32],
+                    source_zero_frame: 0,
+                }),
+                start_frame: 0,
+                window_revision: 1,
+                context: ResidentContext::FiniteLoop,
+            })),
+        };
+        let mut owner = StemOwner {
+            set: PreparedStemSet {
+                complete_set_identity: Arc::new([0; 32]),
+                accepted_timing: None,
+                reference_samples: old.samples.clone(),
+                publication: PreparedSourcePermit::unbound(),
+                source_version_hash: 0,
+                sample_rate_hz: 48_000,
+                channels: 1,
+                frame_count: frames,
+                available_mask: 0b1111,
+                stems: std::array::from_fn(|_| old.clone()),
+            },
+            source_version: "admission-only".into(),
+            cache_dir: PathBuf::new(),
+            generation_path: PathBuf::new(),
+            pair: None,
+        };
+        let shared = admitted_window_peak(&old, 1, 2, Some(&owner)).unwrap();
+        for stem in &mut owner.set.stems {
+            stem.samples = Arc::from([0.0; 64]);
+        }
+        assert!(admitted_window_peak(&old, 1, 2, Some(&owner)).is_err());
+        let smaller = admitted_window_peak(&old, 1, 2, None).unwrap();
+        assert!(smaller < shared);
+        assert_eq!(old.samples.len(), 64);
+    }
     use std::sync::{Condvar, mpsc};
 
     fn source() -> SampleBuffer {

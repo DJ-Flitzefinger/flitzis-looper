@@ -31,6 +31,10 @@ from flitzis_looper.controller.stem_pair_preparation import (
     PairPreparation,
     StemPairPreparationQueue,
 )
+from flitzis_looper.controller.stem_publication_retry import (
+    StemPublicationRetries,
+    StemPublicationRetry,
+)
 from flitzis_looper.controller.stem_separators import (
     SelectedStemGenerationBackend,
     separator_model_cache_dir,
@@ -83,6 +87,8 @@ class _PendingStemPublication:
     previous_lease: ProjectAssetLease | None
     retirement: AssetRetirementReservation
     prepared_pair: PreparedStemPair | None = None
+    content_id: str | None = None
+    source_path: str | None = None
 
 
 class StemController(BaseController):  # noqa: PLR0904
@@ -120,11 +126,13 @@ class StemController(BaseController):  # noqa: PLR0904
             audio, self._assets, self._stem_task_runner
         )
         self._resident_pairs: set[int] = set()
+        self._publication_retries = StemPublicationRetries()
         self._pair_release_ordered: set[int] = set()
         self._fenced_pair_ids: set[int] = set()
         self._on_frame_render_callbacks.append(self._poll_generation_events)
         self._on_frame_render_callbacks.append(self._poll_stem_publications)
         self._on_frame_render_callbacks.append(self._poll_pair_preparations)
+        self._on_frame_render_callbacks.append(self._poll_publication_retries)
 
     def shut_down(self) -> None:
         """Cancel separator publication while retaining every running file reader."""
@@ -140,7 +148,10 @@ class StemController(BaseController):  # noqa: PLR0904
                     break
         self._generation_source_tickets.clear()
         for sample_id, pending in tuple(self._pending_stem_publications.items()):
-            if self._project.stem_cache[sample_id] is pending.entry:
+            retry = self._publication_retries.pending.get(sample_id)
+            if self._project.stem_cache[sample_id] is pending.entry and (
+                retry is None or not self._publication_retry_current(retry)
+            ):
                 with pending.retirement.activate():
                     self._restore_previous_stems(sample_id, pending)
             self._release_pending_stems(pending)
@@ -421,6 +432,10 @@ class StemController(BaseController):  # noqa: PLR0904
 
         if mode == "full_mix":
             return self._set_full_mix(sample_id)
+        if sample_id in self._publication_retries.pending:
+            self._project.pad_stem_mix_mode[sample_id] = mode
+            self._mark_project_changed()
+            return True
 
         source_version = self._current_prepared_source_version(sample_id)
         if source_version is None:
@@ -883,6 +898,7 @@ class StemController(BaseController):  # noqa: PLR0904
     ) -> bool:
         if prepared_pair is None and callable(getattr(self._audio, "prepare_stem_pair", None)):
             return self._prepare_pair(sample_id, entry, source_ticket)
+        previous_pending = self._publication_replacement_owner(sample_id, entry)
         retirement = self._assets.reserve_pending(16)
         previous_entry = self._project.stem_cache[sample_id]
         previous_lease = None
@@ -922,7 +938,11 @@ class StemController(BaseController):  # noqa: PLR0904
             previous_lease=previous_lease,
             retirement=retirement,
             prepared_pair=prepared_pair,
+            content_id=self._content_id(sample_id),
+            source_path=self._project.sample_paths[sample_id],
         )
+        if previous_pending is not None:
+            self._transfer_publication_retry(previous_pending, pending)
         self._pending_stem_publications[sample_id] = pending
         return self._poll_stem_publication(sample_id, pending)
 
@@ -989,18 +1009,26 @@ class StemController(BaseController):  # noqa: PLR0904
         if prepared is None:
             return
         # Recheck current native source/request/timing even for disk-only selection.
-        self._capture_source_ticket(sample_id, selected.source_version)
+        ticket = self._capture_source_ticket(sample_id, selected.source_version)
+        if not request.ticket.same_source_request(ticket):
+            message = "Stem source request changed during complete pair preparation"
+            raise RuntimeError(message)
         with request.retirement.activate():
             if (
                 prepared.has_components()
                 and self._project.pad_stem_mix_mode[sample_id] == "all_stems"
             ):
-                self._queue_stem_publication(sample_id, selected, request.ticket, prepared)
+                self._queue_stem_publication(sample_id, selected, ticket, prepared)
                 return
             lease = self._assets.acquire(Path(selected.cache_dir))
             self._project.stem_cache[sample_id] = selected.model_copy(update={"available": True})
             self._assets.adopt_stems(sample_id, (Path(selected.cache_dir).absolute(), lease))
             prepared.select()
+            if sample_id in self._publication_retries.pending:
+                self._session.stem_generation_errors.pop(sample_id, None)
+            pending = self._pending_stem_publications.pop(sample_id, None)
+            if pending is not None:
+                self._release_pending_stems(pending)
             self._resident_pairs.discard(sample_id)
             self._restored_stem_candidates.pop(sample_id, None)
             self._mark_project_changed()
@@ -1014,7 +1042,11 @@ class StemController(BaseController):  # noqa: PLR0904
             return self._apply_stem_publication(sample_id, pending)
 
     def _apply_stem_publication(self, sample_id: int, pending: _PendingStemPublication) -> bool:
-        if self._project.stem_cache[sample_id] is not pending.entry:
+        if (
+            self._project.stem_cache[sample_id] is not pending.entry
+            or self._content_id(sample_id) != pending.content_id
+            or self._project.sample_paths[sample_id] != pending.source_path
+        ):
             self._pending_stem_publications.pop(sample_id, None)
             self._release_pending_stems(pending)
             return True
@@ -1030,13 +1062,23 @@ class StemController(BaseController):  # noqa: PLR0904
             return True
         self._restored_stem_candidates.pop(sample_id, None)
         if status != "accepted":
+            reason = pending.source_ticket.rejection_reason() or "unspecified"
             self._session.stem_generation_errors[sample_id] = (
-                "Prepared stem publication rejected by native source/request/timing validation"
+                "Prepared stem publication rejected by native source/request/timing "
+                f"validation ({reason})"
             )
+            if pending.prepared_pair is not None and reason != "invalid-geometry":
+                # Choosing already verified disk references cancels this producer's
+                # rollback rights only. It grants no live ACK or availability.
+                pending.prepared_pair.select()
+                self._publication_retries.retain(pending, pending.content_id, pending.source_path)
+                return False
             self._reject_stem_publication(sample_id, pending)
             return False
         self._pending_stem_publications.pop(sample_id, None)
         self._project.stem_cache[sample_id] = pending.entry.model_copy(update={"available": True})
+        if sample_id in self._publication_retries.pending:
+            self._session.stem_generation_errors.pop(sample_id, None)
         if pending.prepared_pair is not None:
             pending.prepared_pair.select()
             if sample_id not in self._pair_release_ordered:
@@ -1074,6 +1116,7 @@ class StemController(BaseController):  # noqa: PLR0904
             self._session.stem_generation_errors[sample_id] = f"Stem pair cleanup deferred: {error}"
 
     def _release_pending_stems(self, pending: _PendingStemPublication) -> None:
+        self._publication_retries.forget(pending)
         try:
             if pending.prepared_pair is not None:
                 self._discard_pair(pending.sample_id, pending.prepared_pair)
@@ -1083,6 +1126,104 @@ class StemController(BaseController):  # noqa: PLR0904
                     pending.previous_lease.release()
             finally:
                 pending.retirement.close()
+
+    def _content_id(self, sample_id: int) -> str | None:
+        content = self._project.pad_content[sample_id]
+        return content.instance_id if content else None
+
+    def _publication_replacement_owner(
+        self, sample_id: int, entry: StemCacheEntry
+    ) -> _PendingStemPublication | None:
+        previous = self._pending_stem_publications.get(sample_id)
+        if previous is None:
+            return None
+        retry = self._publication_retries.pending.get(sample_id)
+        if (
+            retry is None
+            or retry.pending is not previous
+            or not self._publication_retry_current(retry)
+            or previous.entry.pair != entry.pair
+            or previous.entry.source_version != entry.source_version
+        ):
+            message = "Another stem publication still owns this pad"
+            raise RuntimeError(message)
+        return previous
+
+    def _transfer_publication_retry(
+        self, previous: _PendingStemPublication, replacement: _PendingStemPublication
+    ) -> None:
+        if not self._publication_retries.replace(previous, replacement):
+            return
+        if replacement.previous_lease is not None:
+            replacement.previous_lease.release()
+        replacement.previous_entry = previous.previous_entry
+        replacement.previous_lease = previous.previous_lease
+        previous.previous_lease = None
+        self._release_pending_stems(previous)
+
+    def _poll_publication_retries(self) -> None:
+        for retry in tuple(self._publication_retries.pending.values())[:8]:
+            sample_id = retry.pending.sample_id
+            if self._shutting_down or not self._publication_retry_current(retry):
+                self._settle_publication_retry(retry)
+                continue
+            # A newly admitted retry owns an independent ACK. Polling must not
+            # start another worker or exhaust its budget while that ACK is pending.
+            if retry.pending.source_ticket.publication_status() != "rejected":
+                continue
+            if (
+                sample_id in self._pair_preparations.pending
+                or sample_id in self._session.active_sample_ids
+                or sample_id in self._session.loading_sample_ids
+                or sample_id in self._session.analyzing_sample_ids
+            ):
+                continue
+            if retry.attempts >= self._publication_retries.MAX_ATTEMPTS:
+                self._session.stem_generation_errors[sample_id] = (
+                    "Stem publication retry limit reached; verified disk selection retained"
+                )
+                self._settle_publication_retry(retry)
+                continue
+            self._submit_publication_retry(retry)
+
+    def _publication_retry_current(self, retry: StemPublicationRetry) -> bool:
+        sample_id = retry.pending.sample_id
+        return (
+            self._project.stem_cache[sample_id] is retry.pending.entry
+            and self._content_id(sample_id) == retry.content_id
+            and self._project.sample_paths[sample_id] == retry.source_path
+        )
+
+    def _submit_publication_retry(self, retry: StemPublicationRetry) -> None:
+        pending = retry.pending
+        sample_id = pending.sample_id
+        retry.attempts += 1
+        try:
+            ticket = self._capture_source_ticket(sample_id, pending.entry.source_version)
+            if not pending.source_ticket.same_source_request(ticket):
+                self._settle_publication_retry(retry)
+                self._session.stem_generation_errors[sample_id] = (
+                    "Stem publication cancelled because its source request changed"
+                )
+                return
+            self._prepare_pair(sample_id, pending.entry, ticket)
+        except (OSError, RuntimeError, TypeError, ValueError) as error:
+            self._session.stem_generation_errors[sample_id] = (
+                f"Stem publication reprepare deferred: {error}"
+            )
+
+    def _settle_publication_retry(self, retry: StemPublicationRetry) -> None:
+        pending = retry.pending
+        if self._pending_stem_publications.get(pending.sample_id) is pending:
+            self._pending_stem_publications.pop(pending.sample_id)
+        request = self._pair_preparations.pending.get(pending.sample_id)
+        if (
+            request is not None
+            and request.previous_entry is pending.entry
+            and request.content_id == retry.content_id
+        ):
+            self._pair_preparations.cancel(pending.sample_id)
+        self._release_pending_stems(pending)
 
     def _capture_source_ticket(self, sample_id: int, source_version: str) -> PreparedSourceTicket:
         ticket = self._audio.capture_prepared_source(sample_id, source_version)

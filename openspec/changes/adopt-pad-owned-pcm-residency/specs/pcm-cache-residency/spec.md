@@ -14,6 +14,14 @@ retaining original/content/rate/transform/schema/generation and assignment ident
 - **AND** compatible backing MAY share in-process with equal independent content owners without duplicated files
 - **AND** reads/validation/allocation/retirement SHALL remain bounded and off-thread
 
+#### Scenario: A held verified pair supplies four final ranges
+- **WHEN** an acknowledged paired set prepares a different finite source interval
+- **THEN** its retained sealed reader SHALL supply exactly the four requested PCM intervals without reopening the complete pair verifier or decoding or realigning WAVs
+- **AND** complete integrity work SHALL be measured separately from interval read bytes and final PCM allocations
+- **AND** checked admission SHALL include distinct old backing, new final ranges and bounded conversion scratch before allocation
+- **AND** an unchanged eligible interval SHALL share its actual backing while each pad keeps independent source, timing and window authority
+- **AND** cancellation or rejection SHALL preserve prior effective audio and keep each old voice, job and history reader until its own final use
+
 #### Scenario: Cross-area complete set ownership remains coupled
 - **WHEN** WAVs reside in the material version's `stems` and all PCM resides in that version's `.pcm-cache`
 - **THEN** common descriptors SHALL bind both immutable generations/source/transforms/digests

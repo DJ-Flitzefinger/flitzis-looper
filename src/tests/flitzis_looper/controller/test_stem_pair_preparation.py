@@ -183,6 +183,7 @@ def test_discard_queue_failure_is_visible_reachable_and_reservations_close(
     controller.stems._poll_pair_preparations()
     if boundary == "publication_rejection":
         ticket.status = "rejected"
+        ticket.reason = "invalid-geometry"
         controller.stems._poll_stem_publications()
     assert controller.project.stem_cache[0] is entry
     assert not controller.stems._pending_stem_publications

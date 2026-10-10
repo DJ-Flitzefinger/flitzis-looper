@@ -101,12 +101,32 @@ its source-specific native/FIFO adoption rechecks their actual buffer identities
 and effective timing. Active selection ramps defer preparation until complete.
 
 `ticket.publication_status()` reports `captured`, `pending`, `accepted` or
-`rejected` through bounded atomics. Python leaves controls unavailable while queued
+`rejected` through bounded atomics. `rejection_reason()` observes a fixed callback
+reason for own-pad activity, changed source/request, timing, window or geometry;
+it neither weakens validation nor supplies a persisted acknowledgement.
+Python leaves controls unavailable while queued
 and enables them only after actual mixer acceptance. Late rejection reports an
 error and preserves prior mixer state (full mix when no stems were previously
 accepted). Polling observes adoption without driving
 audio timing. Mode/mask commands check native loaded identity without rehashing
 long original files on each performance click.
+
+A complete pair rejected after enqueue keeps its verified disk selection unavailable
+and retains its original pending/rollback owners. Choosing those exact disk references
+cancels the producer's rollback rights; it neither accepts components nor marks them
+available. This also preserves the files after saved runtime owners end at shutdown.
+A stopped, still-identical content
+assignment can request at most eight fresh preparations through the existing bounded
+worker pool, without rerunning separation. Each attempt captures the current native
+source/request, reads the actual current window, checks the original source request
+again and needs its own callback acknowledgement. New content, source requests or
+pair selection cancel only that old retry; an active target pad is never replaced.
+The new admission reserves native capacity before the original rollback owners are
+transferred or released. Polling a newly pending attempt cannot start another worker
+or consume another attempt. Exhaustion keeps disk selection unavailable with a
+visible error and releases retry owners. Current FULL MIX can instead select a
+fully verified disk-only result after actual worker return, without component ACK
+or residency. Neither another pad's playback nor durable pair metadata grants an ACK.
 
 ## Artifacts and restoration
 

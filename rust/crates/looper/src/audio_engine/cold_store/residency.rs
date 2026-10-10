@@ -12,6 +12,107 @@ impl ColdTransaction {
 }
 
 impl CommittedColdLease {
+    /// Read final absolute source coordinates under this verified immutable lease.
+    /// The independent file cursor and all allocations stay on the calling worker.
+    pub(in crate::audio_engine) fn read_window_cancellable(
+        &self,
+        reference: &SampleBuffer,
+        start: usize,
+        end: usize,
+        revision: u64,
+        context: ResidentContext,
+        maximum: usize,
+        cancelled: &dyn Fn() -> bool,
+    ) -> io::Result<SampleBuffer> {
+        if cancelled() {
+            return Err(invalid("resident source read cancelled"));
+        }
+        self.verify_reference(reference)?;
+        let view = reference
+            .residency
+            .as_ref()
+            .ok_or_else(|| invalid("source descriptor missing"))?;
+        if !(1..=32).contains(&reference.channels)
+            || reference.samples.is_empty()
+            || !reference.samples.len().is_multiple_of(reference.channels)
+            || reference
+                .resident_start()
+                .checked_add(reference.samples.len() / reference.channels)
+                .is_none()
+            || !reference.valid_residency(view.source.sample_rate_hz, view.source.channels)
+            || start >= end
+            || end > view.source.frame_count
+            || revision == 0
+            || (context != ResidentContext::FiniteLoop
+                && (start != 0 || end != view.source.frame_count))
+        {
+            return Err(invalid(
+                "resident range is outside its admitted source/context",
+            ));
+        }
+        let count = (end - start)
+            .checked_mul(reference.channels)
+            .ok_or_else(|| invalid("resident range sample extent overflow"))?;
+        let length = count
+            .checked_mul(4)
+            .ok_or_else(|| invalid("resident range byte extent overflow"))?;
+        start
+            .checked_mul(reference.channels)
+            .and_then(|n| n.checked_mul(4))
+            .and_then(|n| n.checked_add(length))
+            .ok_or_else(|| invalid("resident absolute byte extent overflow"))?;
+        let held = reference
+            .samples
+            .len()
+            .checked_mul(4)
+            .ok_or_else(|| invalid("held resident extent overflow"))?;
+        let maximum = maximum.min(PCM_LIMIT_BYTES);
+        let same_range = start == reference.resident_start() && end == reference.resident_end();
+        let peak = if same_range {
+            held
+        } else {
+            held.checked_add(length)
+                .and_then(|n| n.checked_add(CHUNK_BYTES))
+                .ok_or_else(|| invalid("resident range peak overflow"))?
+        };
+        if peak > maximum {
+            return Err(invalid("resident range exceeds transient PCM admission"));
+        }
+        // Even the sharing path validates the actual held FileID and full extent.
+        let mut reader = self.open_complete_reader(reference)?;
+        if cancelled() {
+            return Err(invalid("resident source read cancelled"));
+        }
+        let samples = if same_range {
+            #[cfg(test)]
+            warm::observe_window_start(start, end);
+            reference.samples.clone()
+        } else {
+            warm::read_playback_range(
+                &mut reader,
+                start,
+                end - start,
+                reference.channels,
+                maximum - held,
+                &|| cancelled(),
+                &mut IntegrityMetrics::default(),
+            )?
+        };
+        if cancelled() {
+            return Err(invalid("resident source read cancelled"));
+        }
+        Ok(SampleBuffer {
+            channels: reference.channels,
+            samples,
+            residency: Some(Arc::new(ResidentSourceView {
+                source: view.source.clone(),
+                start_frame: start,
+                window_revision: revision,
+                context,
+            })),
+        })
+    }
+
     pub(in crate::audio_engine) fn verify_reference(
         &self,
         reference: &SampleBuffer,

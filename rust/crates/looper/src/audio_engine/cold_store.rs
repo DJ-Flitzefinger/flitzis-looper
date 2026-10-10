@@ -20,6 +20,10 @@ static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 mod lifecycle;
 mod migration;
 mod residency;
+#[cfg(test)]
+pub(super) use warm::{
+    WindowReadObservation, reset_window_read_observation_for_test, window_read_observation_for_test,
+};
 mod staging;
 mod warm;
 pub(super) use lifecycle::admit_original_owner;
@@ -1236,6 +1240,8 @@ impl Drop for ColdTransaction {
 
 #[cfg(test)]
 mod migration_tests;
+#[cfg(test)]
+mod range_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

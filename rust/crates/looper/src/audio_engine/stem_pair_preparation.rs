@@ -38,6 +38,14 @@ pub struct PreparedStemPair {
     discarded: AtomicBool,
     source_lease: super::cold_store::CommittedColdLease,
     descriptor_reference: String,
+    pair_reader: Arc<VerifiedStemPair>,
+}
+
+#[cfg(test)]
+impl PreparedStemPair {
+    pub(super) fn reader_lifetime_for_test(&self) -> std::sync::Weak<VerifiedStemPair> {
+        Arc::downgrade(&self.pair_reader)
+    }
 }
 
 #[pymethods]
@@ -262,6 +270,7 @@ impl AudioEngine {
                 root: prepared.root.clone(),
                 descriptor_reference: prepared.descriptor_reference.clone(),
                 source_lease: prepared.source_lease.clone(),
+                reader: prepared.pair_reader.clone(),
             },
         )
     }
@@ -433,7 +442,7 @@ impl StemPairPreparationWork {
                 source_version,
                 &identity,
                 stems.as_ref(),
-                pair.into_pins(root.parent().ok_or("project root missing")?),
+                pair.clone_pins(root.parent().ok_or("project root missing")?)?,
                 material.lease.clone(),
             )
             .map_err(|error| error.to_string())?;
@@ -451,6 +460,7 @@ impl StemPairPreparationWork {
             discarded: AtomicBool::new(false),
             source_lease: material.lease.clone(),
             descriptor_reference,
+            pair_reader: Arc::new(pair),
         })
     }
 }

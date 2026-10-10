@@ -48,7 +48,18 @@ publication cases and 46 affected Python cases passed. FullPython 3287/35 skips,
 168 Analysis and unchanged broad positive scopes are impact-bound reuse; broad
 native 923/4 remains FAILED with separate current 3+14 regression closure.
 Five fresh long musical tests, the strict 75/1000 gate and current static/format/
-official strict passed. P4a/P4b, later stages and Human/hearing gates remain open.
+official strict passed. P4a now reads final FullMix and four-component ranges from
+retained verified readers with checked peak admission and cancellation. Actual
+216 own-ACK users and separate #1/#216 edits preserve the other 215 users' audio,
+ownership, demand and usability. Current 66 pair and 16 remaining native tests
+passed; unchanged long musical/control evidence is impact-bound reuse. Terminal
+stem rejection retains verified disk selection, then bounded fresh preparation
+requires its own ACK. First-created Close/Retry preserves files after all owners
+end and supports exclusive reopen and fresh-engine adoption. FullPython 3299/1
+remains FAILED with scoped closure of its unchanged unloaded-pad oracle; current
+13 affected native cases and the corrected optimized Release/check passed.
+The original Human rejection reason remains UNKNOWN. P4b, later stages and final
+Human/hearing gates remain open.
 The accepted bounded P0/C1/R0 prerequisites and historical FAIL/UNKNOWN evidence
 remain intact.
 

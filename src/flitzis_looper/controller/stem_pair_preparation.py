@@ -165,6 +165,9 @@ class StemPairPreparationQueue:
             message = "Complete stem pair worker returned no result"
             raise RuntimeError(message)
         selection = StemPairSelection.model_validate_json(request.prepared.selection_json())
+        if request.entry.pair is not None and selection != request.entry.pair:
+            message = "Prepared pair selection changed during reuse"
+            raise RuntimeError(message)
         return StemCacheEntry(
             source_version=request.entry.source_version,
             cache_dir=selection.wav_generation,

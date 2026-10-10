@@ -456,6 +456,23 @@ position even within that near-start interval.
 
 ## Playback, Loops, And Stems
 
+Resident loop-window preparation reads absolute loaded-source intervals directly
+from already verified immutable PCM. A complete FullMix lease binds the sealed
+playback FileID and extent. Paired stem owners retain a shared verified reader
+for the five complete derivatives, while the existing asset registry holds
+equivalent sealed pins for both generations and their common descriptor. A loop
+edit reads only four component intervals into their final f32 backing; it does
+not repeat the complete WAV/PCM verifier, WAV conversion or alignment. Fresh
+pair admission still performs complete integrity verification.
+
+Workers check range arithmetic, complete identity, context, cancellation and
+old/new backing plus bounded scratch before allocating. Exact unchanged views
+share actual backing. Source, timing and window permits and callback adoption
+remain independent per pad; old voices, jobs and live logical history retain
+their own readers. Explicit full-track consumers and the current admitted Key
+Lock fallback retain their complete context. Dry range coverage does not close
+the separate finite Key Lock/DSP gate.
+
 The runtime keeps two time domains separate:
 
 - Output frames: transport and scheduler timing.
@@ -592,6 +609,13 @@ stem-available, but restored prepared stems are published to Rust only after the
 matching restored full-mix sample has completed its async load. If publication
 is rejected, Python marks the cache unavailable for controls and preserves Rust's
 previous playback state. Late callback rejection is observed before availability.
+The callback exposes a fixed rejection reason. A current fully verified pair can
+remain chosen on disk without a component ACK: Python retains its rollback owners
+and uses the existing bounded pool for at most eight current-window preparations.
+Each attempt reserves admission before owner transfer and needs a fresh own ACK;
+pending feedback never starts another attempt. Own-pad activity waits, newer
+source/UUID/selection wins, and shutdown or exhaustion preserves the chosen files
+unavailable without producer rollback. See [prepared publication](prepared-stem-publication.md).
 The preparation epoch is not the G3a accepted revision. G3b2a publishes precise
 accepted SourceGrid metadata; G3b2b/c adds current authority and native/Python
 period/rate/grid/loop/global-control consumers. Frozen Python source timing retains

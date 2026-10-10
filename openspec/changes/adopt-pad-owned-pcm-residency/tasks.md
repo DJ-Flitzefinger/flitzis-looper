@@ -143,8 +143,21 @@ hearing, Human or whole-program acceptance follows.
 
 ### P4a
 
-- [ ] Direct verified retained descriptor ranges/shared eligible backing, changed-content-only refresh
-- [ ] Complete-buffer dry tap/P-H/seam oracles 75/1000 cycles; echte ACK, old voice/job/window races; unveraenderte215 Handles
+The independently accepted range path reads final FullMix and four-component
+views from retained verified readers, with checked admission and cancellation.
+Current 66 pair tests and 16 remaining native checks passed, including actual
+216 own-ACK users and separate endpoint edits preserving the other 215. Five
+fresh long musical tests and current control evidence are impact-bound reuse.
+Terminal stem rejection now retains verified disk selection and uses bounded
+fresh preparation with its own ACK; first-created Close/Retry survives all owner
+ends and exclusive reopen. FullPython 3299/1 remains FAILED; the unchanged public
+unloaded-pad oracle and 13 affected native cases passed after the narrow capture
+error-priority correction. Current optimized Release/check and official strict
+passed without App start. The original Human rejection reason remains UNKNOWN;
+P4b, later stages and final Human/hearing acceptance remain open.
+
+- [x] Direct verified retained descriptor ranges/shared eligible backing, changed-content-only refresh
+- [x] Complete-buffer dry tap/P-H/seam oracles 75/1000 cycles; echte ACK, old voice/job/window races; unveraenderte215 Handles
 
 ### P4b
 

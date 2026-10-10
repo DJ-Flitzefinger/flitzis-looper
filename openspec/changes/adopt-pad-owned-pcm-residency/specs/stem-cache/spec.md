@@ -225,3 +225,13 @@ The system SHALL bind a complete prepared immutable StemSet version independentl
 - **AND** initial FULL MIX SHALL request disk-only preparation, await actual worker return and avoid live component publication
 - **AND** ALL STEMS requested during disk-only work SHALL await that return before fresh component work with an independent publication ticket and ACK
 - **AND** worker failures and newer stem selections SHALL preserve current intent and unresolved owners without synchronous frame-thread conversion
+
+#### Scenario: Rejected pair publication retains exact selection for bounded fresh preparation
+- **WHEN** a complete pair was enqueued but its own callback rejects activity or changed source, request, timing or window binding
+- **THEN** the system SHALL expose a bounded fixed rejection reason without disabling any native validation
+- **AND** retaining the current fully verified disk selection SHALL cancel its producer-only rollback rights without setting component availability or importing any ACK
+- **AND** while the exact content assignment, source request and pair selection remain current, a stopped target MAY reprepare its actual current views through the bounded background pool at most eight times without rerunning separation
+- **AND** each fresh publication SHALL require its own callback ACK, keep availability false while pending and retain or transfer the original rollback owners only after new native capacity admission
+- **AND** pending ACK polling SHALL NOT create another preparation or consume another attempt
+- **AND** newer content, source requests or selection SHALL win without cancellation of a newer worker, while an active target SHALL remain unchanged
+- **AND** exhaustion or shutdown SHALL retain a current verified disk selection unavailable with its error while releasing retry owners; it SHALL NOT restore a first selection to absent or persist an ACK

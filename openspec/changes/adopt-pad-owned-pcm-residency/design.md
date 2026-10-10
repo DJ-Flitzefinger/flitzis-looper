@@ -213,6 +213,17 @@ Unchanged views share handles; a loop edit prepares only the affected pad/read s
 Other occupied pad views remain usable and byte/identity unchanged. Initial loop/
 source configuration reconciles required FullMix windows for all occupied slots.
 
+The paired owner retains an immutable shared `VerifiedStemPair` after the fresh
+complete verifier. Equivalent sealed handle copies remain in the existing asset
+registry; current owners, jobs and live logical history retain the range reader.
+Window preparation uses positioned reads on those PCM handles, not another
+complete pair open. FullMix uses an independently opened sealed playback handle
+bound to the held complete lease. Both paths construct the final f32 Arc in
+bounded chunks without a whole encoded buffer or a second Vec-to-Arc PCM copy.
+Admission counts distinct old backing, required new ranges and bounded scratch;
+the exact existing interval shares its Arc. Revision/context changes and every
+publication still use the existing request/source/timing and callback ACK gates.
+
 Dry loop coverage is already proved for both interpolation taps and the fractional
 musical seam. Accepted binary64 P, physical integer H, rate ownership and source
 zero remain distinct. Seek/ALL/editor/analysis retain explicitly admitted complete

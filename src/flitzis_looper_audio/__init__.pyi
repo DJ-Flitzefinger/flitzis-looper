@@ -64,6 +64,20 @@ class OfflineAnalysisJob:
 class PreparedSourceTicket:
     # Opaque native source/request/timing admission identity; not persistable.
     def publication_status(self) -> Literal["captured", "pending", "accepted", "rejected"]: ...
+    def same_source_request(self, other: PreparedSourceTicket) -> bool: ...
+    def rejection_reason(
+        self,
+    ) -> (
+        Literal[
+            "pad-playing",
+            "source-request-changed",
+            "timing-changed",
+            "window-changed",
+            "invalid-geometry",
+            "unspecified",
+        ]
+        | None
+    ): ...
 
 class PreparedStemPair:
     # Complete disk selection and optional four-component worker result; never an ACK.

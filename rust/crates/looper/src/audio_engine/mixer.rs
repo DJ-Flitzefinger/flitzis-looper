@@ -286,6 +286,20 @@ impl RtMixer {
     }
 
     #[cfg(test)]
+    pub(super) fn stems_for_measurement(&self) -> &[Option<PreparedStemSet>; NUM_SAMPLES] {
+        &self.prepared_stems
+    }
+
+    #[cfg(test)]
+    pub(super) fn stem_demand_for_measurement(&self, id: usize) -> (StemMixMode, u8, u64) {
+        (
+            self.stem_mix_mode[id],
+            self.stem_enabled_mask[id],
+            self.stem_mix_source_version_hash[id],
+        )
+    }
+
+    #[cfg(test)]
     pub(super) fn key_lock_for_measurement(&self, id: usize) -> bool {
         self.pad_key_lock_enabled[id]
     }
@@ -1109,8 +1123,8 @@ impl RtMixer {
         stems: PreparedStemSet,
         retirement: &mut impl AudioBufferRetirement,
     ) -> bool {
-        if !self.can_accept_prepared_stems(id, &stems) {
-            stems.publication.mark_rejected();
+        if let Some(reason) = self.prepared_stem_rejection(id, &stems) {
+            stems.publication.mark_rejected_reason(reason);
             retirement.retire_prepared_stems(stems);
             return false;
         }
@@ -1301,28 +1315,38 @@ impl RtMixer {
         }
     }
 
-    fn can_accept_prepared_stems(&self, id: usize, stems: &PreparedStemSet) -> bool {
-        if id >= NUM_SAMPLES
-            || self.channels == 0
-            || self.sample_is_active(id)
-            || !stems.publication.current()
-            || stems.accepted_timing != self.pad_accepted_timing[id]
-        {
-            return false;
+    fn prepared_stem_rejection(
+        &self,
+        id: usize,
+        stems: &PreparedStemSet,
+    ) -> Option<super::prepared_source::PreparedStemRejection> {
+        use super::prepared_source::PreparedStemRejection;
+        if id >= NUM_SAMPLES || self.channels == 0 {
+            return Some(PreparedStemRejection::InvalidGeometry);
+        }
+        if self.sample_is_active(id) {
+            return Some(PreparedStemRejection::PadPlaying);
+        }
+        if let Some(reason) = stems.publication.current_rejection() {
+            return Some(reason);
+        }
+        if stems.accepted_timing != self.pad_accepted_timing[id] {
+            return Some(PreparedStemRejection::TimingChanged);
         }
 
         let Some(sample) = self.sample_bank[id].as_ref() else {
-            return false;
+            return Some(PreparedStemRejection::SourceRequestChanged);
         };
 
         let sample_frames = sample.frame_count();
-        prepared_stem_set_matches_sample(
+        (!prepared_stem_set_matches_sample(
             stems,
             sample,
             self.channels,
             self.sample_rate_hz,
             sample_frames,
-        )
+        ))
+        .then_some(PreparedStemRejection::WindowChanged)
     }
 
     fn sample_is_active(&self, id: usize) -> bool {

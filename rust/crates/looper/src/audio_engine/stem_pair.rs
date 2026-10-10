@@ -21,6 +21,41 @@ const JSON_LIMIT: usize = 256 * 1024;
 const PAIR_LIMIT: usize = 256;
 
 #[cfg(test)]
+#[derive(Clone, Debug, Default)]
+pub(super) struct PairReadObservation {
+    pub read_bytes: [u64; 5],
+    pub byte_ranges: [Option<(usize, usize)>; 5],
+    pub allocated_bytes: usize,
+    pub fresh_opens: usize,
+    pub integrity_bytes: u64,
+}
+#[cfg(test)]
+thread_local! {
+    static RANGE_OBSERVATION: std::cell::RefCell<PairReadObservation> = std::cell::RefCell::new(PairReadObservation::default());
+}
+#[cfg(test)]
+pub(super) fn reset_range_observation_for_test() {
+    RANGE_OBSERVATION.with(|value| *value.borrow_mut() = PairReadObservation::default());
+}
+#[cfg(test)]
+pub(super) fn range_observation_for_test() -> PairReadObservation {
+    RANGE_OBSERVATION.with(|value| value.borrow().clone())
+}
+#[cfg(test)]
+fn observe_range_read(index: usize, start: usize, bytes: usize) {
+    RANGE_OBSERVATION.with(|value| {
+        let mut value = value.borrow_mut();
+        value.read_bytes[index] += bytes as u64;
+        let begin = value.byte_ranges[index].map_or(start, |range| range.0);
+        value.byte_ranges[index] = Some((begin, start + bytes));
+    });
+}
+#[cfg(test)]
+fn observe_range_allocation(bytes: usize) {
+    RANGE_OBSERVATION.with(|value| value.borrow_mut().allocated_bytes += bytes);
+}
+
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum StemPairFault {
     PcmFlush,
@@ -156,6 +191,8 @@ fn full_hash(file: &mut File, cancelled: &impl Fn() -> bool) -> Result<(String, 
             return Err("sealed stem grew during verification".into());
         }
         hash.update(&buffer[..count]);
+        #[cfg(test)]
+        RANGE_OBSERVATION.with(|value| value.borrow_mut().integrity_bytes += count as u64);
     }
     if total != extent {
         return Err("sealed stem EOF mismatch".into());
@@ -207,7 +244,25 @@ pub(super) struct VerifiedStemPair {
 }
 
 impl VerifiedStemPair {
+    /// Equivalent sealed pins for the registry while the worker/history keeps this reader.
+    pub(super) fn clone_pins(
+        &self,
+        project_root: &Path,
+    ) -> Result<super::project_assets::stem_readers::PairPins, String> {
+        let files = self
+            .files
+            .iter()
+            .chain(&self.pcm)
+            .map(|file| file.try_clone().map_err(error))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(super::project_assets::stem_readers::PairPins {
+            files,
+            pcm_path: project_root.join(&self.descriptor.pcm_generation),
+            descriptor_path: project_root.join(&self.descriptor_reference),
+        })
+    }
     /// Move every sealed reader to the existing off-thread ownership registry.
+    #[cfg(test)]
     pub(super) fn into_pins(
         self,
         project_root: &Path,
@@ -220,7 +275,13 @@ impl VerifiedStemPair {
             descriptor_path: project_root.join(self.descriptor_reference),
         }
     }
-    fn read_range(&self, index: usize, current: &SampleBuffer) -> Result<SampleBuffer, String> {
+    fn read_range(
+        &self,
+        index: usize,
+        current: &SampleBuffer,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<SampleBuffer, String> {
+        check_cancelled(cancelled)?;
         let identity = &self.descriptor.content.source;
         let view = current
             .residency
@@ -254,36 +315,57 @@ impl VerifiedStemPair {
             .checked_mul(current.channels)
             .and_then(|n| n.checked_mul(4))
             .ok_or("stem window origin overflow")?;
-        let mut encoded = vec![0_u8; length];
+        // Construct the one final Arc directly. A bounded encoded chunk is the
+        // only transient PCM, and positioned reads never share a seek cursor.
+        let mut samples = Arc::<[f32]>::new_uninit_slice(length / 4);
+        let values = Arc::get_mut(&mut samples).ok_or("private stem allocation is shared")?;
+        let mut encoded = [0_u8; 64 * 1024];
         #[cfg(windows)]
         {
             use std::os::windows::fs::FileExt;
             let mut read = 0;
             while read < length {
-                let count = self.pcm[index]
-                    .seek_read(&mut encoded[read..], (start + read) as u64)
-                    .map_err(error)?;
-                if count == 0 {
-                    return Err("stem range EOF mismatch".into());
+                check_cancelled(cancelled)?;
+                let chunk_length = (length - read).min(encoded.len());
+                let mut filled = 0;
+                while filled < chunk_length {
+                    check_cancelled(cancelled)?;
+                    let offset = start
+                        .checked_add(read)
+                        .and_then(|n| n.checked_add(filled))
+                        .ok_or("stem range position overflow")?;
+                    let count = self.pcm[index]
+                        .seek_read(&mut encoded[filled..chunk_length], offset as u64)
+                        .map_err(error)?;
+                    if count == 0 {
+                        return Err("stem range EOF mismatch".into());
+                    }
+                    filled += count;
                 }
-                read += count;
+                for (local, chunk) in encoded[..chunk_length].chunks_exact(4).enumerate() {
+                    let value = f32::from_bits(u32::from_le_bytes(chunk.try_into().unwrap()));
+                    if !value.is_finite() {
+                        return Err("aligned stem PCM is nonfinite".into());
+                    }
+                    values[read / 4 + local].write(value);
+                }
+                #[cfg(test)]
+                observe_range_read(index, start + read, chunk_length);
+                read += chunk_length;
             }
         }
         #[cfg(not(windows))]
         {
             return Err("stem range requires tested positioned Windows read".into());
         }
-        let mut values = Vec::with_capacity(length / 4);
-        for chunk in encoded.chunks_exact(4) {
-            let value = f32::from_bits(u32::from_le_bytes(chunk.try_into().unwrap()));
-            if !value.is_finite() {
-                return Err("aligned stem PCM is nonfinite".into());
-            }
-            values.push(value);
-        }
+        check_cancelled(cancelled)?;
+        #[cfg(test)]
+        observe_range_allocation(length);
+        // Every element was initialized by the checked complete chunk loop above.
+        let samples = unsafe { samples.assume_init() };
         Ok(SampleBuffer {
             channels: current.channels,
-            samples: Arc::from(values),
+            samples,
             residency: Some(Arc::new(ResidentSourceView {
                 source: view.source.clone(),
                 start_frame: view.start_frame,
@@ -297,13 +379,21 @@ impl VerifiedStemPair {
         &self,
         current: &SampleBuffer,
     ) -> Result<[SampleBuffer; 4], String> {
+        self.prepare_component_views_cancellable(current, &|| false)
+    }
+    pub(super) fn prepare_component_views_cancellable(
+        &self,
+        current: &SampleBuffer,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<[SampleBuffer; 4], String> {
+        check_cancelled(cancelled)?;
         let maximum = admitted_component_view_bytes(current.samples.len())?;
         if maximum > super::cold_jobs::PCM_LIMIT_BYTES {
             return Err("component transient PCM admission exceeded".into());
         }
         let mut buffers = Vec::with_capacity(4);
         for index in 0..4 {
-            buffers.push(self.read_range(index, current)?);
+            buffers.push(self.read_range(index, current, cancelled)?);
         }
         buffers
             .try_into()
@@ -320,7 +410,7 @@ impl VerifiedStemPair {
         if maximum > super::cold_jobs::PCM_LIMIT_BYTES {
             return Err("instrumental transient PCM admission exceeded".into());
         }
-        self.read_range(4, current)
+        self.read_range(4, current, &|| false)
     }
 }
 
@@ -331,6 +421,8 @@ pub(super) fn open_verified_pair(
     material: &PreparedMigrationMaterial,
     cancelled: &impl Fn() -> bool,
 ) -> Result<VerifiedStemPair, String> {
+    #[cfg(test)]
+    RANGE_OBSERVATION.with(|value| value.borrow_mut().fresh_opens += 1);
     let (root, root_guards) = guarded_root(root, material)?;
     let root = root.as_path();
     let typed = material_paths::resolve(root, Path::new(pair_reference)).map_err(error)?;
@@ -792,11 +884,12 @@ pub(super) fn prepare_complete_pair(
     )
 }
 
-/// Existing source, four final views and encoded/Vec/Arc-copy overlap for the last view.
+/// Existing source plus four final Arc views and one bounded encoded read chunk.
 pub(super) fn admitted_component_view_bytes(sample_count: usize) -> Result<usize, String> {
     sample_count
         .checked_mul(4)
-        .and_then(|bytes| bytes.checked_mul(7))
+        .and_then(|bytes| bytes.checked_mul(5))
+        .and_then(|bytes| bytes.checked_add(64 * 1024))
         .ok_or_else(|| "component transient extent overflow".into())
 }
 

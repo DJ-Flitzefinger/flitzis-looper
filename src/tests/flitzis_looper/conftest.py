@@ -24,9 +24,17 @@ if TYPE_CHECKING:
 class FakePreparedSourceTicket:
     def __init__(self, status: str = "accepted") -> None:
         self.status = status
+        self.reason: str | None = None
+        self.source_request = 1
 
     def publication_status(self) -> str:
         return self.status
+
+    def rejection_reason(self) -> str | None:
+        return self.reason
+
+    def same_source_request(self, other: FakePreparedSourceTicket) -> bool:
+        return self.source_request == other.source_request
 
 
 class FakeProjectAssetLease:

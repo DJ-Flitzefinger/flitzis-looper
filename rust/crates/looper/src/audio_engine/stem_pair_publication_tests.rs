@@ -22,6 +22,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[path = "stem_pair_borrow_tests.rs"]
 mod stem_pair_borrow_tests;
 
+#[path = "resident_range_worker_tests.rs"]
+mod resident_range_worker_tests;
+
+#[path = "stem_pair_rejection_tests.rs"]
+mod stem_pair_rejection_tests;
+
 const RATE: u32 = 48_000;
 const GENERATION: &str = "0123456789abcdef0123456789abcdef";
 
@@ -604,13 +610,15 @@ fn explicit_instrumental_reader_holds_both_areas_without_creating_fifth_live_com
 }
 
 #[test]
-fn component_peak_accounts_for_seven_windows_and_rejects_checked_overflow() {
-    assert_eq!(admitted_component_view_bytes(0).unwrap(), 0);
-    assert_eq!(admitted_component_view_bytes(1).unwrap(), 28);
+fn component_peak_accounts_for_final_arcs_and_scratch_and_rejects_checked_overflow() {
+    const SCRATCH: usize = 64 * 1024;
+    assert_eq!(admitted_component_view_bytes(0).unwrap(), SCRATCH);
+    assert_eq!(admitted_component_view_bytes(1).unwrap(), SCRATCH + 20);
     let limit = crate::audio_engine::cold_jobs::PCM_LIMIT_BYTES;
-    assert!(admitted_component_view_bytes(limit / 28).unwrap() <= limit);
-    assert!(admitted_component_view_bytes(limit / 28 + 1).unwrap() > limit);
-    assert!(admitted_component_view_bytes(usize::MAX / 28 + 1).is_err());
+    let bound = (limit - SCRATCH) / 20;
+    assert!(admitted_component_view_bytes(bound).unwrap() <= limit);
+    assert!(admitted_component_view_bytes(bound + 1).unwrap() > limit);
+    assert!(admitted_component_view_bytes(usize::MAX / 20 + 1).is_err());
     assert!(admitted_component_view_bytes(usize::MAX).is_err());
 }
 
@@ -1084,6 +1092,7 @@ fn full_mix_releases_actual_component_owners_after_sink_job_and_voice_then_fresh
         let pair = harness.prepare(0, &ticket, true, None);
         let selected = selection(&pair);
         let _saved_wav = harness.save(&pair);
+        let pair_reader = pair.reader_lifetime_for_test();
         harness
             .engine
             .publish_stem_pair_with_producer(&pair, &ticket, &harness.producer)
@@ -1200,10 +1209,16 @@ fn full_mix_releases_actual_component_owners_after_sink_job_and_voice_then_fresh
             resident_relocation::history_count_for_test(&harness.engine, 0),
             1
         );
+        assert!(pair_reader.strong_count() > 0);
         resident_relocation::reconcile(&harness.engine).unwrap();
         assert_eq!(
             resident_relocation::history_count_for_test(&harness.engine, 0),
             0
+        );
+        assert_eq!(
+            pair_reader.strong_count(),
+            0,
+            "dead logical history must release its actual retained verified pair reader"
         );
         harness.engine.project_assets.collect_for_test();
         assert_complete_selection(&harness.root, &selected);
@@ -1811,6 +1826,26 @@ fn accepted_pair_reprepares_finite_window_and_relocation_with_own_callback_acks(
         }
         _ => panic!("expected actual paired finite-window command"),
     };
+    let observed = first.read_observation_for_test().unwrap();
+    let bytes = (frames - 2) * initial_set.channels * 4;
+    assert_eq!(observed.source.read_bytes, bytes as u64);
+    assert_eq!(observed.source.allocated_bytes, bytes);
+    assert_eq!(
+        (observed.source.start_frame, observed.source.end_frame),
+        (1, frames - 1)
+    );
+    assert_eq!(
+        observed.stems.read_bytes,
+        [bytes as u64, bytes as u64, bytes as u64, bytes as u64, 0]
+    );
+    assert_eq!(observed.stems.allocated_bytes, bytes * 4);
+    assert_eq!(observed.stems.fresh_opens, 0);
+    assert_eq!(observed.stems.integrity_bytes, 0);
+    let begin = initial_set.channels * 4;
+    for range in &observed.stems.byte_ranges[..4] {
+        assert_eq!(*range, Some((begin, begin + bytes)));
+    }
+    assert!(observed.admitted_peak_bytes < crate::audio_engine::cold_jobs::PCM_LIMIT_BYTES);
     assert_eq!(harness.callback.drain(&mut harness.consumer), 1);
     assert_eq!(first.publication_status(), "accepted");
     assert!(first.is_current());

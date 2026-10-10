@@ -9,6 +9,46 @@ use crate::messages::{ResidentContext, ResidentSourceView};
 const MAX_MANIFEST_BYTES: u64 = 256 * 1024;
 const MAX_CANDIDATES: usize = 4096;
 
+/// Range I/O observations are independent of fresh complete integrity work.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::audio_engine) struct WindowReadObservation {
+    pub read_bytes: u64,
+    pub allocated_bytes: usize,
+    pub start_frame: usize,
+    pub end_frame: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    static WINDOW_READ_OBSERVATION: std::cell::Cell<WindowReadObservation> = const {
+        std::cell::Cell::new(WindowReadObservation {
+            read_bytes: 0, allocated_bytes: 0, start_frame: 0, end_frame: 0,
+        })
+    };
+}
+
+#[cfg(test)]
+pub(in crate::audio_engine) fn reset_window_read_observation_for_test() {
+    WINDOW_READ_OBSERVATION.with(|observation| observation.set(WindowReadObservation::default()));
+}
+
+#[cfg(test)]
+pub(in crate::audio_engine) fn window_read_observation_for_test() -> WindowReadObservation {
+    WINDOW_READ_OBSERVATION.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(super) fn observe_window_start(start_frame: usize, end_frame: usize) {
+    WINDOW_READ_OBSERVATION.with(|observation| {
+        observation.set(WindowReadObservation {
+            start_frame,
+            end_frame,
+            ..WindowReadObservation::default()
+        });
+    });
+}
+
 fn number(value: &Value, key: &str) -> io::Result<u64> {
     value[key]
         .as_u64()
@@ -474,7 +514,7 @@ pub(super) fn read_playback(
     read_playback_range(reader, 0, frames, channels, maximum, cancelled, metrics)
 }
 
-fn read_playback_range(
+pub(super) fn read_playback_range(
     reader: &mut File,
     start: usize,
     frames: usize,
@@ -483,20 +523,22 @@ fn read_playback_range(
     cancelled: &impl Fn() -> bool,
     metrics: &mut IntegrityMetrics,
 ) -> io::Result<Arc<[f32]>> {
+    check_cancelled(cancelled)?;
+    if frames == 0 || !(1..=32).contains(&channels) {
+        return Err(invalid("warm range geometry"));
+    }
+    let end = start
+        .checked_add(frames)
+        .ok_or_else(|| invalid("warm range end overflow"))?;
     let count = frames
         .checked_mul(channels)
         .ok_or_else(|| invalid("warm sample extent"))?;
-    if count.checked_mul(8).is_none_or(|n| n > maximum) {
-        return Err(invalid("warm PCM conversion exceeds whole-job budget"));
-    }
-    let mut data = Vec::new();
-    data.try_reserve_exact(count)
-        .map_err(|_| io::Error::other("warm PCM allocation failed"))?;
-    if data
-        .capacity()
+    let length = count
         .checked_mul(4)
-        .and_then(|n| n.checked_add(count * 4))
-        .is_none_or(|n| n > maximum)
+        .ok_or_else(|| invalid("warm PCM extent overflow"))?;
+    if length
+        .checked_add(CHUNK_BYTES)
+        .is_none_or(|n| n > maximum.min(crate::audio_engine::cold_jobs::PCM_LIMIT_BYTES))
     {
         return Err(invalid("warm PCM conversion exceeds whole-job budget"));
     }
@@ -504,24 +546,64 @@ fn read_playback_range(
         .checked_mul(channels)
         .and_then(|n| n.checked_mul(4))
         .ok_or_else(|| invalid("resident offset overflow"))?;
-    reader.seek(SeekFrom::Start(offset as u64))?;
+    let expected_end = end
+        .checked_mul(channels)
+        .and_then(|n| n.checked_mul(4))
+        .ok_or_else(|| invalid("resident byte end overflow"))?;
+    let offset =
+        u64::try_from(offset).map_err(|_| invalid("resident offset exceeds file domain"))?;
+    if u64::try_from(expected_end).map_err(|_| invalid("resident file end overflow"))?
+        > reader.metadata()?.len()
+    {
+        return Err(invalid("resident range exceeds complete file extent"));
+    }
+    reader.seek(SeekFrom::Start(offset))?;
+    check_cancelled(cancelled)?;
+    #[cfg(test)]
+    observe_window_start(start, end);
+    // Initialize the final Arc in place. A partial/error result remains an
+    // uninitialized allocation and is dropped without ever exposing its values.
+    let mut data = Arc::<[f32]>::new_uninit_slice(count);
+    #[cfg(test)]
+    WINDOW_READ_OBSERVATION.with(|observation| {
+        let mut value = observation.get();
+        value.allocated_bytes = length;
+        observation.set(value);
+    });
+    let target =
+        Arc::get_mut(&mut data).ok_or_else(|| invalid("range allocation unexpectedly shared"))?;
     let mut bytes = [0_u8; CHUNK_BYTES];
-    let mut left = count * 4;
+    let mut left = length;
+    let mut initialized = 0;
     while left > 0 {
         check_cancelled(cancelled)?;
         let length = left.min(CHUNK_BYTES);
         reader.read_exact(&mut bytes[..length])?;
         metrics.playback_read_bytes = metrics.playback_read_bytes.saturating_add(length as u64);
-        data.extend(
-            bytes[..length]
-                .chunks_exact(4)
-                .map(|b| f32::from_le_bytes(b.try_into().expect("f32 bytes"))),
-        );
+        #[cfg(test)]
+        WINDOW_READ_OBSERVATION.with(|observation| {
+            let mut value = observation.get();
+            value.read_bytes = value.read_bytes.saturating_add(length as u64);
+            observation.set(value);
+        });
+        check_cancelled(cancelled)?;
+        for sample in bytes[..length].chunks_exact(4) {
+            let value = f32::from_le_bytes(sample.try_into().expect("f32 bytes"));
+            if !value.is_finite() {
+                return Err(invalid("nonfinite resident PCM range"));
+            }
+            target[initialized].write(value);
+            initialized += 1;
+        }
         left -= length;
     }
     check_cancelled(cancelled)?;
-    data.shrink_to_fit();
+    if initialized != count {
+        return Err(invalid("resident range initialization mismatch"));
+    }
     #[cfg(test)]
-    super::super::c3_observation::owned_pcm(data.capacity() * 4);
-    Ok(Arc::from(data.into_boxed_slice()))
+    super::super::c3_observation::owned_pcm(length);
+    // SAFETY: each of exactly `count` elements was initialized once above with
+    // a finite f32. No shared Arc or result escaped before the final count check.
+    Ok(unsafe { data.assume_init() })
 }
