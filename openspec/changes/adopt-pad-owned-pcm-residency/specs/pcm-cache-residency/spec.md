@@ -80,7 +80,30 @@ loop/DSP context before claiming completion of shared-material loop residency.
 - **WHEN** an acknowledged same-source Normal-loop finite window changes only resident storage while native history is already adopted
 - **THEN** pending native preparation SHALL remain bound to its exact captured window
 - **AND** adopted history MAY retain the same effective-source permit, actual native handle, FIFO and filter chronology while its original reader pins remain held until final use
-- **AND** active selection transitions, old-source replacement, seek/intro/tail and other unproved finite contexts SHALL retain their guards and keep the complete P4b gate open
+- **AND** old-source replacement, seek/intro/tail and other unproved finite contexts SHALL retain their guards and keep the complete P4b gate open
+
+#### Scenario: An already resident selected set supplies both finite transition sides
+- **WHEN** current-source NormalLoop KEYLOCK playback at production k=0 and a non-unity ratio receives an existing native scalar mode or mask command for the identical already ACKed resident selected committed StemSet
+- **THEN** prospective admission and executed feed SHALL cover both the actual target selection and active outgoing selection against held FullMix and four component ranges, including FullMix-to-stems, stems-to-FullMix and nonempty or empty masks
+- **AND** complete source/component-owner equality, source/window/revision, accepted timing, loop period/seek mode and canonical smoothed-rate trajectory SHALL remain bound by the existing independent permits and ACKs
+- **AND** SourceReadPlan/fractional_taps and SourcePlayback SHALL remain the actual source-address/domain/rate authority through the existing 128-source-frame ramp and interruption policy
+- **AND** an inactive verified pair publication followed by playback and those scalar commands SHALL provide the real admitted Some/Some seam, without private fixture flags or target-default substitutions for an outgoing selection
+- **AND** a missing tap, changed owner/selection or stale ACK SHALL preserve prior effective audio rather than authorizing missing-input silence
+
+#### Scenario: Finite ramp deferral preserves wet chronology before later actual adoption
+- **WHEN** both sides of an admitted resident-selection ramp have proved finite NormalLoop coverage while source-specific preparation is deferred until the ramp settles
+- **THEN** the actual wet native handle, input/output FIFOs, logical cursor/loop/timing and chronological filter SHALL continue throughout the ramp without reset or dry fallback
+- **AND** subsequent settled-selection preparation SHALL process real source input and adopt through the existing request/ready/recycle lanes only with matching Source/Window/Stem/History permits and the exact checkpoint
+- **AND** independent complete PCM and algebraic raw-native/chronological-filter oracles SHALL verify continued nontrivial output, both executed taps/feed and irregular callback partitions crossing adoption with rate smoothing
+- **AND** cancellation, late/stale results or saturated admission/recycle capacity SHALL preserve the prior owner and audio until actual safe retirement
+
+#### Scenario: Outgoing components and history retire at their distinct final uses
+- **WHEN** the existing pair-FullMix command completes an admitted finite stems-to-FullMix transition
+- **THEN** resident components SHALL remain held through the outgoing selection's actual final ramp use and SHALL retire through the existing producer/callback path
+- **AND** native-history, job, old and new reader pins SHALL remain held until each actual final use and SHALL release through existing lifecycle/registry/recycle paths with checked peak admission
+- **AND** instrumental SHALL NOT become a fifth live component or a hidden complete backing
+- **AND** this resident Some/Some transition proof SHALL NOT close initial active None-to-Some, retention/effective-mode ACK or ordinary StemController warm return, which remain P5a obligations
+- **AND** finite seek/intro/tail, pause/resume/retrigger/timing refresh, old-source voices and the complete P4b musical/resource/causality matrix SHALL remain separate open gates
 
 ### Requirement: Separate aggregate residency and preparation accounting
 The system SHALL reserve unique resident backing and simultaneous pending/old

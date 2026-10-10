@@ -18,6 +18,570 @@ use crate::audio_engine::source_reader::{
 use crate::messages::StemMixMode;
 use std::mem::size_of;
 
+fn range_voice(mixer: &RtMixer) -> &crate::audio_engine::voice_slot::VoiceSlot {
+    mixer
+        .voices
+        .iter()
+        .find(|voice| voice.is_playing_sample(0))
+        .unwrap()
+}
+
+fn range_voice_mut(mixer: &mut RtMixer) -> &mut crate::audio_engine::voice_slot::VoiceSlot {
+    mixer
+        .voices
+        .iter_mut()
+        .find(|voice| voice.is_playing_sample(0))
+        .unwrap()
+}
+
+fn paired_range_render(
+    h: &mut Harness,
+    reference: &mut RtMixer,
+    frame: &mut u64,
+    frames: usize,
+) -> Vec<f32> {
+    let mut actual = vec![0.0; frames * 2];
+    reset_tap_observation_for_test();
+    h.callback.mixer.render_rt_at_output_frame(
+        &mut actual,
+        &mut [0.0; NUM_SAMPLES],
+        *frame,
+        &mut h.callback.retirement,
+    );
+    let taps = tap_observation_for_test();
+    assert_eq!(taps.left_reads, frames * 2);
+    assert!(taps.right_reads > 0);
+    assert_eq!(taps.missing_reads, 0);
+    assert!(taps.min_frame.is_some_and(|value| value >= 1));
+    assert!(taps.max_frame.is_some_and(|value| value < 6));
+    let mut expected = vec![0.0; frames * 2];
+    reference.render_at_output_frame(*frame, &mut expected, &mut [0.0; NUM_SAMPLES]);
+    assert_eq!(actual, expected, "finite/native transition at {}", *frame);
+    assert!(
+        range_voice(&h.callback.mixer)
+            .source_playback
+            .matches_exact(&range_voice(reference).source_playback)
+    );
+    assert_eq!(
+        range_voice(&h.callback.mixer).stretch.pending_fifo_frames(),
+        range_voice(reference).stretch.pending_fifo_frames()
+    );
+    *frame += frames as u64;
+    actual
+}
+
+fn adopt_range_native(
+    h: &mut Harness,
+    reference: &mut RtMixer,
+    frame: &mut u64,
+    request_id: u64,
+) -> usize {
+    wait_until(|| {
+        range_voice_mut(&mut h.callback.mixer)
+            .stretch
+            .source_preparation_ready()
+            && range_voice_mut(reference)
+                .stretch
+                .source_preparation_ready()
+    });
+    let target = range_voice_mut(&mut h.callback.mixer)
+        .stretch
+        .prepared_target_output_frame()
+        .unwrap();
+    assert_eq!(
+        range_voice_mut(reference)
+            .stretch
+            .prepared_target_output_frame(),
+        Some(target)
+    );
+    let prepared = range_voice_mut(&mut h.callback.mixer)
+        .stretch
+        .prepared_native_address();
+    let prepared_taps = range_voice_mut(&mut h.callback.mixer)
+        .stretch
+        .prepared_tap_observation()
+        .unwrap();
+    assert_eq!(prepared_taps.left_reads, 4096 * 2);
+    assert!(prepared_taps.right_reads > 0);
+    assert_eq!(prepared_taps.missing_reads, 0);
+    assert!(prepared_taps.min_frame.is_some_and(|value| value >= 1));
+    assert!(prepared_taps.max_frame.is_some_and(|value| value < 6));
+    assert_ne!(prepared, 0);
+    assert_ne!(
+        prepared,
+        range_voice(&h.callback.mixer)
+            .stretch
+            .native_state_address()
+    );
+    assert_eq!(
+        range_voice_mut(&mut h.callback.mixer)
+            .stretch
+            .prepared_fifo_frames(),
+        range_voice_mut(reference).stretch.prepared_fifo_frames()
+    );
+    let mut partition = [31_usize, 777, 1024, 1, 257, 512].into_iter().cycle();
+    while *frame < target {
+        let frames = partition.next().unwrap().min((target - *frame) as usize);
+        paired_range_render(h, reference, frame, frames);
+    }
+    let output = paired_range_render(h, reference, frame, 137);
+    assert!(output.iter().any(|value| value.abs() > 0.001));
+    assert_eq!(
+        range_voice(&h.callback.mixer)
+            .stretch
+            .native_state_address(),
+        prepared
+    );
+    assert_eq!(
+        range_voice(&h.callback.mixer).stretch.adopted_request_id(),
+        Some(request_id)
+    );
+    assert_eq!(
+        range_voice(&h.callback.mixer)
+            .stretch
+            .native_tap_observation(),
+        Some(prepared_taps)
+    );
+    prepared
+}
+
+#[test]
+fn actual_finite_selection_commands_keep_native_ramps_then_retire_from_job_and_history() {
+    use crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement;
+    use crate::audio_engine::input_runtime_binding::InputRuntimeOwnership;
+    use crate::audio_engine::prepared_source::PreparedSourcePermit;
+    use crate::audio_engine::resident_relocation::{
+        history_count_for_test, set_stem_pair_full_mix_with_producer,
+    };
+
+    let mut h = Harness::new();
+    let source_ticket = h.ticket(0);
+    let pair = h.prepare(0, &source_ticket, true, None);
+    let selected = selection(&pair);
+    let _saved = h.save(&pair);
+    let pair_reader = pair.reader_lifetime_for_test();
+    h.engine
+        .publish_stem_pair_with_producer(&pair, &source_ticket, &h.producer)
+        .unwrap();
+    let published = queued_stems(&mut h.consumer);
+    let hash = published.source_version_hash;
+    assert_eq!(h.callback.drain(&mut h.consumer), 1);
+    assert_eq!(source_ticket.publication_status(), "accepted");
+    reconcile(&h.engine).unwrap();
+    assert_eq!(
+        h.callback.mixer.stem_demand_for_measurement(0),
+        (StemMixMode::FullMix, 0b1111, 0)
+    );
+    h.callback.mixer.set_speed(0.73);
+    let ticket = prepare_window_with_producer(
+        &h.engine,
+        0,
+        WindowRequest {
+            loop_region: Some((1.0 / f64::from(RATE), Some(6.0 / f64::from(RATE)))),
+            key_lock: Some(true),
+            ..WindowRequest::default()
+        },
+        h.producer.clone(),
+    )
+    .unwrap();
+    wait_until(|| {
+        h.consumer.peek().is_ok() || matches!(ticket.publication_status(), "failed" | "cancelled")
+    });
+    assert_eq!(
+        ticket.publication_status(),
+        "pending",
+        "{:?}",
+        ticket.error().unwrap()
+    );
+    let ranges = ticket.read_observation_for_test().unwrap();
+    let bytes = 5 * 2 * size_of::<f32>();
+    assert_eq!(ranges.source.read_bytes, bytes as u64);
+    assert_eq!(ranges.source.allocated_bytes, bytes);
+    assert_eq!(
+        ranges.stems.read_bytes,
+        [bytes as u64, bytes as u64, bytes as u64, bytes as u64, 0]
+    );
+    assert_eq!(ranges.stems.allocated_bytes, bytes * 4);
+    assert_eq!(ranges.stems.fresh_opens, 0);
+    assert_eq!(ranges.stems.integrity_bytes, 0);
+    assert_eq!(
+        ranges.stems.byte_ranges,
+        [
+            Some((8, 8 + bytes)),
+            Some((8, 8 + bytes)),
+            Some((8, 8 + bytes)),
+            Some((8, 8 + bytes)),
+            None
+        ]
+    );
+    assert!(ranges.admitted_peak_bytes < crate::audio_engine::cold_jobs::PCM_LIMIT_BYTES);
+    assert_eq!(h.callback.drain(&mut h.consumer), 1);
+    assert_eq!(ticket.publication_status(), "accepted");
+    reconcile(&h.engine).unwrap();
+    assert_eq!(
+        h.callback.mixer.stem_demand_for_measurement(0),
+        (StemMixMode::FullMix, 0b1111, 0)
+    );
+    let mut job = h.callback.mixer.stems_for_measurement()[0].clone().unwrap();
+    let mut components = job
+        .stems
+        .each_ref()
+        .map(|stem| Arc::downgrade(&stem.samples));
+    assert!(job.stems.iter().all(|stem| stem.samples.len() == 10));
+    assert!(h.callback.mixer.key_lock_for_measurement(0));
+    h.callback.mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
+    assert!(launch_with_producer(&h.engine, &ticket, false, 1, &h.producer).unwrap());
+    assert_eq!(h.callback.drain(&mut h.consumer), 1);
+    drop(published);
+    drop(pair);
+    h.callback.retirement.retired.clear();
+
+    // Independent original WAV integers supply complete FullMix and component PCM.
+    // The reference has its own identity; it cannot keep productive History alive.
+    let integers = [0_i16, 8192, -16384, 32767, 0, -4096, 16384];
+    let full = SampleBuffer {
+        channels: 2,
+        residency: None,
+        samples: Arc::from(
+            integers
+                .into_iter()
+                .flat_map(|value| [f32::from(value) / 32768.0; 2])
+                .collect::<Vec<_>>(),
+        ),
+    }
+    .with_complete_source(RATE);
+    let control_stems = PreparedStemSet {
+        complete_set_identity: Arc::new([97; 32]),
+        reference_samples: full.samples.clone(),
+        publication: PreparedSourcePermit::unrestricted(),
+        accepted_timing: None,
+        source_version_hash: hash,
+        sample_rate_hz: RATE,
+        channels: 2,
+        frame_count: full.frame_count(),
+        available_mask: 0b1111,
+        stems: std::array::from_fn(|_| SampleBuffer {
+            channels: 2,
+            residency: full.residency.clone(),
+            // The committed pair's explicit PCM16 conversion divides by32767;
+            // the original decoder above divides by32768. Build each separately.
+            samples: integers
+                .into_iter()
+                .flat_map(|value| [f32::from(value) / 32767.0; 2])
+                .collect::<Vec<_>>()
+                .into(),
+        }),
+    };
+    let mut reference = RtMixer::new(2, RATE as f32);
+    let ownership = Arc::new(InputRuntimeOwnership::tracked());
+    ownership.publish_source(0, &full, RATE, 1);
+    reference.set_input_runtime_ownership(ownership);
+    reference.load_sample(0, full);
+    assert!(reference.publish_prepared_stems(0, control_stems));
+    reference.set_pad_loop_region(0, 1.0 / f64::from(RATE), Some(6.0 / f64::from(RATE)));
+    reference.set_speed(0.73);
+    reference.set_pad_key_lock(0, true);
+    reference.set_pad_eq(0, -12.0, -3.0, 4.0);
+    assert!(reference.play_sample_at_output_frame(0, 1.0, 0));
+    let mut frame = 0;
+    paired_range_render(&mut h, &mut reference, &mut frame, 13);
+    let full_native = adopt_range_native(&mut h, &mut reference, &mut frame, 1);
+
+    let fifo = range_voice(&h.callback.mixer).stretch.pending_fifo_frames();
+    let fed = range_voice(&h.callback.mixer)
+        .stretch
+        .productive_history()
+        .unwrap()
+        .fed_output_frames;
+    h.producer
+        .lock()
+        .unwrap()
+        .push(ControlMessage::SetStemMixMode {
+            id: 0,
+            mode: StemMixMode::AllStems,
+            source_version_hash: hash,
+        })
+        .unwrap();
+    assert_eq!(h.callback.drain(&mut h.consumer), 1);
+    assert!(reference.set_stem_mix_mode(0, StemMixMode::AllStems, hash));
+    assert!(
+        h.callback
+            .mixer
+            .stem_transition_for_measurement(0)
+            .is_active()
+    );
+    assert_eq!(
+        range_voice(&h.callback.mixer)
+            .stretch
+            .native_state_address(),
+        full_native
+    );
+    assert_eq!(
+        range_voice(&h.callback.mixer).stretch.pending_fifo_frames(),
+        fifo
+    );
+    paired_range_render(&mut h, &mut reference, &mut frame, 31);
+    assert!(
+        h.callback
+            .mixer
+            .stem_transition_for_measurement(0)
+            .is_active()
+    );
+    let old_components = components.clone();
+    let old_source = Arc::downgrade(
+        &range_voice(&h.callback.mixer)
+            .sample
+            .as_ref()
+            .unwrap()
+            .samples,
+    );
+    let old = h.callback.mixer.bank_for_measurement()[0].as_ref().unwrap();
+    let lease = h.engine.project_assets.cold_lease_for_reader(old).unwrap();
+    let generation = selected_path(&h.root, &selected, "wav_generation");
+    let registered = h
+        .engine
+        .project_assets
+        .held_reader_backings(&lease, Some(&generation))
+        .unwrap();
+    assert!(
+        registered
+            .iter()
+            .any(|samples| old_source.ptr_eq(&Arc::downgrade(samples)))
+    );
+    assert!(old_components.iter().all(|component| {
+        registered
+            .iter()
+            .any(|samples| component.ptr_eq(&Arc::downgrade(samples)))
+    }));
+    let held_bytes: usize = registered
+        .iter()
+        .map(|samples| samples.len() * size_of::<f32>())
+        .sum();
+    drop(registered);
+    let refresh = prepare_window_with_producer(
+        &h.engine,
+        0,
+        WindowRequest {
+            storage_range: Some((0.0, 6.0 / f64::from(RATE))),
+            ..WindowRequest::default()
+        },
+        h.producer.clone(),
+    )
+    .unwrap();
+    wait_until(|| {
+        h.consumer.peek().is_ok() || matches!(refresh.publication_status(), "failed" | "cancelled")
+    });
+    assert_eq!(
+        refresh.publication_status(),
+        "pending",
+        "{:?}",
+        refresh.error().unwrap()
+    );
+    let observation = refresh.read_observation_for_test().unwrap();
+    assert_eq!(observation.source.read_bytes, 48);
+    assert_eq!(observation.stems.read_bytes, [48, 48, 48, 48, 0]);
+    assert_eq!(observation.stems.allocated_bytes, 48 * 4);
+    assert_eq!(
+        observation.admitted_peak_bytes,
+        held_bytes + 48 * 5 + 64 * 1024
+    );
+    let playback_before = range_voice(&h.callback.mixer).source_playback;
+    let fifo_before = range_voice(&h.callback.mixer).stretch.pending_fifo_frames();
+    assert_eq!(h.callback.drain(&mut h.consumer), 1);
+    assert_eq!(refresh.publication_status(), "accepted");
+    reconcile(&h.engine).unwrap();
+    assert!(refresh.is_current());
+    assert!(
+        range_voice(&h.callback.mixer)
+            .source_playback
+            .matches_exact(&playback_before)
+    );
+    assert_eq!(
+        range_voice(&h.callback.mixer)
+            .stretch
+            .native_state_address(),
+        full_native
+    );
+    assert_eq!(
+        range_voice(&h.callback.mixer).stretch.pending_fifo_frames(),
+        fifo_before
+    );
+    assert!(
+        h.callback
+            .mixer
+            .stem_transition_for_measurement(0)
+            .is_active()
+    );
+    job = h.callback.mixer.stems_for_measurement()[0].clone().unwrap();
+    components = job
+        .stems
+        .each_ref()
+        .map(|stem| Arc::downgrade(&stem.samples));
+    assert!(
+        components
+            .iter()
+            .all(|component| !old_components.iter().any(|old| old.ptr_eq(component)))
+    );
+    h.callback.retirement.retired.clear();
+    assert!(old_source.strong_count() > 0);
+    assert!(
+        old_components
+            .iter()
+            .all(|component| component.strong_count() > 0),
+        "Native A must retain all four outgoing History crops across the actual B ACK"
+    );
+    for frames in [1, 127, 37] {
+        paired_range_render(&mut h, &mut reference, &mut frame, frames);
+        assert_eq!(
+            range_voice(&h.callback.mixer)
+                .stretch
+                .native_state_address(),
+            full_native
+        );
+        assert!(
+            !range_voice_mut(&mut h.callback.mixer)
+                .stretch
+                .source_preparation_ready()
+        );
+    }
+    assert!(
+        !h.callback
+            .mixer
+            .stem_transition_for_measurement(0)
+            .is_active()
+    );
+    assert!(
+        range_voice(&h.callback.mixer)
+            .stretch
+            .productive_history()
+            .unwrap()
+            .fed_output_frames
+            > fed
+    );
+    paired_range_render(&mut h, &mut reference, &mut frame, 1);
+    let stem_native = adopt_range_native(&mut h, &mut reference, &mut frame, 2);
+    wait_until(|| {
+        old_components
+            .iter()
+            .all(|component| component.strong_count() == 0)
+    });
+    assert_eq!(old_source.strong_count(), 0);
+
+    set_stem_pair_full_mix_with_producer(&h.engine, 0, &h.producer).unwrap();
+    reconcile(&h.engine).unwrap();
+    assert_eq!(history_count_for_test(&h.engine, 0), 1);
+    h.callback.retirement.slots = 0;
+    assert_eq!(h.callback.drain(&mut h.consumer), 0);
+    assert_eq!(
+        h.callback.mixer.stem_demand_for_measurement(0).0,
+        StemMixMode::AllStems
+    );
+    assert!(
+        components
+            .iter()
+            .all(|component| component.strong_count() > 0)
+    );
+    let fifo = range_voice(&h.callback.mixer).stretch.pending_fifo_frames();
+    h.callback.retirement.slots = 3;
+    assert_eq!(h.callback.drain(&mut h.consumer), 1);
+    reference.set_stem_pair_full_mix_rt(0, &mut ImmediateAudioBufferRetirement);
+    assert_eq!(
+        range_voice(&h.callback.mixer).stretch.pending_fifo_frames(),
+        fifo
+    );
+    assert!(
+        h.callback
+            .mixer
+            .stem_transition_for_measurement(0)
+            .is_active()
+    );
+    h.callback.retirement.slots = 0;
+    for frames in [31, 1, 127] {
+        paired_range_render(&mut h, &mut reference, &mut frame, frames);
+        assert!(
+            h.callback
+                .mixer
+                .stem_transition_for_measurement(0)
+                .is_active()
+        );
+        assert!(h.callback.mixer.stems_for_measurement()[0].is_some());
+        assert_eq!(
+            range_voice(&h.callback.mixer)
+                .stretch
+                .native_state_address(),
+            stem_native
+        );
+    }
+    // The last FROM samples are consumed before a real bank owner reaches the sink.
+    h.callback.retirement.slots = 1;
+    paired_range_render(&mut h, &mut reference, &mut frame, 37);
+    assert!(
+        !h.callback
+            .mixer
+            .stem_transition_for_measurement(0)
+            .is_active()
+    );
+    assert!(h.callback.mixer.stems_for_measurement()[0].is_none());
+    assert_eq!(
+        range_voice(&h.callback.mixer)
+            .stretch
+            .native_state_address(),
+        stem_native
+    );
+    assert_eq!(
+        h.callback
+            .retirement
+            .retired
+            .iter()
+            .filter(|owner| matches!(owner, RetiredAudioBuffer::PreparedStems(_)))
+            .count(),
+        2,
+        "control and bank owners must reach the actual retirement sink"
+    );
+    h.callback.retirement.retired.clear();
+    assert!(
+        components
+            .iter()
+            .all(|component| component.strong_count() > 0),
+        "Job/History remain real owners after FROM and sink retirement"
+    );
+    drop(job);
+    assert!(
+        components
+            .iter()
+            .all(|component| component.strong_count() > 0),
+        "native History must outlive the held Job"
+    );
+    assert!(pair_reader.strong_count() > 0);
+    h.callback.retirement.slots = usize::MAX;
+    paired_range_render(&mut h, &mut reference, &mut frame, 1);
+    let released_native = adopt_range_native(&mut h, &mut reference, &mut frame, 3);
+    assert_ne!(released_native, stem_native);
+    wait_until(|| {
+        components
+            .iter()
+            .all(|component| component.strong_count() == 0)
+    });
+    assert_eq!(history_count_for_test(&h.engine, 0), 1);
+    reconcile(&h.engine).unwrap();
+    assert_eq!(history_count_for_test(&h.engine, 0), 0);
+    assert_eq!(
+        pair_reader.strong_count(),
+        0,
+        "final historical verified pair reader must end"
+    );
+    h.engine.project_assets.collect_for_test();
+    assert_complete_selection(&h.root, &selected);
+    let continued = paired_range_render(&mut h, &mut reference, &mut frame, 2048);
+    assert!(continued.iter().any(|value| value.abs() > 0.001));
+    assert_eq!(
+        range_voice(&h.callback.mixer)
+            .stretch
+            .native_state_address(),
+        released_native
+    );
+}
+
 #[test]
 fn actual_finite_pair_keylock_window_ack_reads_four_components_then_preserves_native_continuation()
 {

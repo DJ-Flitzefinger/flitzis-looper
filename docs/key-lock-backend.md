@@ -30,11 +30,34 @@ without resetting native/FIFO/filter chronology or dropping its original pins.
 
 `KeyLockFiniteLoop` has snapshot fence4 and the `key-lock-finite-loop` metadata
 label, but the tag does not grant coverage or source/window/history authority.
-Missing input fails preparation/render admission. Active selection transitions,
-finite seek/intro/tail, old voices and broader pause/retrigger/timing-refresh
+Missing input fails preparation/render admission. Finite seek/intro/tail, old
+voices and broader pause/retrigger/timing-refresh
 contexts remain subsequent P4b gates. Current saved-load KEYLOCK retains its
 labelled complete fallback; normal-loop control preparation can obtain finite
 supply. The full P4b gate and device/acoustic acceptance remain open.
+
+The bounded resident-selection context additionally admits FullMix->Stems,
+Stems->FullMix and enabled-mask changes for active current-source NormalLoop
+voices with the identical already ACKed resident committed StemSet. An inactive
+verified pair publication can retain that set while FullMix is selected; after
+playback starts, the existing scalar native mode/mask commands use this real
+Some/Some path. Their prospective read plan and productive feed validate both
+target and active `transition.from` against the actual four component backings,
+matching source/window/timing and canonical fractional/rate trajectory. Empty
+masks do not stand in for absent owners. The existing ramp advances by 128 source
+frames, including fractional progress and its existing interruption policy.
+
+The wet native handle, input/output FIFOs and chronological filter continue
+through the entire ramp. New source-specific preparation remains deferred while
+the ramp is active, then actual settled-selection catch-up and guarded adoption
+use the existing worker and exact Source/Window/Stem/History permits. Storage-only
+ACKs do not restart chronology or release still-used pins. The retiring
+`SetStemPairFullMix` path releases components only after the outgoing ramp; history
+and job readers retire separately through the existing registry/recycle paths.
+The ordinary StemController FullMix path uses that retiring command. Its active
+initial None->Some, warm return, retention policy and effective-mode ACK remain
+P5a. No resident-transition result closes those workflows or the remaining P4b
+matrix.
 
 The active backend is implemented behind:
 
@@ -239,7 +262,9 @@ The worker applies exact starting inverse-rate pitch before reset and processes
 4096 active frames through the same fixed adapter and source reader, including
 copied canonical rate smoothing. It retains the resulting handle and full FIFO
 continuation with request pins. Active stem-selection transitions defer requests
-until complete, while effective playback continues. This bounded horizon is not
+until complete, while effective wet playback continues through both proved finite
+selections; the settled request must still complete real preparation and adoption.
+This bounded horizon is not
 a native-delay estimate, pre-target crop or accepted musical onset policy.
 
 The deadline is the captured absolute request output frame plus 4096.

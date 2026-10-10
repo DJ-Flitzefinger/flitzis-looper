@@ -12,6 +12,9 @@ use crate::messages::ResidentContext;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+#[path = "finite_stem_transition_tests.rs"]
+mod finite_stem_transition_tests;
+
 const RATE: u32 = 8_000;
 
 fn source() -> SampleBuffer {

@@ -159,6 +159,9 @@ impl KeyLockPreparationLane {
         };
         if !permit.current(feed.sample, feed.sample_rate_hz)
             || !permit.matches_projection(feed.accepted)
+            // Keep the existing deferred preparation policy. The productive native adapter
+            // consumes both finite selection sides until the actual source-frame ramp ends;
+            // a later request catches up the settled selection without resetting that adapter.
             || feed.plan.transition.is_active()
         {
             return false;

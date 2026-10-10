@@ -322,8 +322,15 @@ callback continuation checks its actual taps against held ranges. Stopped setup
 and current-source storage-only refresh are the first P4b vertical. Pending native
 work is exact-window-bound, while already adopted history preserves native/FIFO/
 filter chronology across a storage-only ACK and retains original reader pins.
-Finite seek/intro/tail, old voices, active selection transitions and wider lifecycle
-oracles remain open. See [Key Lock coverage](key-lock-backend.md).
+The bounded resident-selection context is active current-source NormalLoop changes
+with the same already ACKed resident committed StemSet. Prospective native
+mode/mask commands check the real current and outgoing selections against their
+held component ranges before mutation; executed feed checks both active sides
+through the existing 128-source-frame ramp. SourceReadPlan/SourcePlayback retain
+tap, fractional period and smoothed-rate authority. Active ramps defer new native
+preparation while the existing wet adapter continues; later preparation/adoption
+still requires its own exact permits and checkpoint. Finite seek/intro/tail, old
+voices and wider lifecycle oracles remain open. See [Key Lock coverage](key-lock-backend.md).
 
 [C3 measurements](pcm-cache-measurements.md) report current cold/warm readiness,
 resource costs, exceptions and lifecycle with paired finite/full results.
@@ -663,6 +670,20 @@ same loop-relative source frame before Key Lock, Gain/Trim, DSP, metering, and
 telemetry. The `I` performance preset means Drums + Melody + Bass; cached
 `instrumental.wav` is cache data, not a fifth live component.
 
+Finite KEYLOCK admits those scalar mode/mask commands only for proved current-source
+NormalLoop voices with the same already accepted resident component owner. The
+real Some/Some path publishes the verified pair while inactive, keeps FullMix
+selected, then starts playback before `SetStemMixMode`/`SetStemEnabledMask`. Both
+selection sides, including an outgoing stem selection toward FullMix and empty
+masks, remain covered until their actual last ramp use. An interrupted ramp uses
+the existing Rust transition policy and must pass the same prospective coverage
+check. Strict complete-source/component-owner equality remains in force.
+`SetStemPairFullMix` retains its existing component retirement after the ramp;
+native history and preparation owners keep their separate pins until existing
+worker/recycle retirement. The ordinary StemController round-trip uses this
+retiring command, so initial active None->Some, warm return, retention policy and
+effective-mode ACK remain P5a rather than following from the scalar Some/Some path.
+
 Unload Audio and Delete Stems revoke durable stem-cache eligibility, return
 durable stem mode to `full_mix`, reset session-only masks and publish neutral
 Rust state. Artifact retirement is separate: original assignments, jobs, queued
@@ -776,8 +797,12 @@ epoch checks cancellation before/after worker catch-up; adoption additionally
 requires the exact outstanding request ID.
 The worker prepares exact pitch/reset and processes 4096 active output frames
 through the same fixed native adapter and reader, including rate smoothing.
-Active stem-selection transitions defer preparation. Native handle, input/output
-FIFOs and request pins remain one coherent owner until adoption or recycling.
+Active stem-selection transitions defer preparation. Proved finite NormalLoop
+ramps continue through the existing wet native handle, input/output FIFOs and
+chronological filter; deferral does not select dry fallback or reset that owner.
+The subsequent settled-selection request still processes real source input and
+adopts only at its exact checkpoint. Native handle, input/output FIFOs and request
+pins remain one coherent owner until adoption or recycling.
 Large adapter states and pending-request retention are heap-owned before rendering:
 `StretchProcessor` holds `Box<NativeAdapterState>`, and ready/recycle lanes move
 those preallocated boxes. This avoids embedding large retained payloads in all 32

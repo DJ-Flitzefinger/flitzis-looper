@@ -469,8 +469,8 @@ fn native_keylock_finite_context_relocation_keeps_actual_handle_fifo_history_fil
             voice(&actual).sample.as_ref().unwrap().resident_binding(),
             next.resident_binding()
         );
-        // This slice admits storage-only continuation. Direct seek, active loop edits and
-        // active selection changes remain unavailable until their own finite proof exists.
+        // Direct finite seek and active loop edits remain unavailable. Same-resident scalar
+        // selection ramps now have their own wet Native/FIFO/filter proof in separate tests.
         let selection = actual.stem_demand_for_measurement(0);
         assert!(!actual.seek_sample_at_output_frame(
             0,
@@ -487,8 +487,6 @@ fn native_keylock_finite_context_relocation_keeps_actual_handle_fifo_history_fil
             (START + 1) as f64 / f64::from(RATE),
             Some((END - 1) as f64 / f64::from(RATE)),
         );
-        actual.set_stem_mix_mode(0, StemMixMode::FullMix, 0);
-        actual.set_stem_enabled_mask(0, 0b0101, 91);
         assert_eq!(actual.loop_region_frames(0), (START, Some(END)));
         assert_eq!(actual.stem_demand_for_measurement(0), selection);
         assert!(voice(&actual).source_playback.matches_exact(&playback));

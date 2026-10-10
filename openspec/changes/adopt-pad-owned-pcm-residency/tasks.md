@@ -162,20 +162,46 @@ P4b, later stages and final Human/hearing acceptance remain open.
 ### P4b
 
 - [x] First vertical: stopped/current same-source NormalLoop finite FullMix/four-component WindowWork ACK, real production-k=0 non-unity native prepare/FIFO adoption and continued render against independent complete PCM/raw-native oracles
+- [x] Resident-transition vertical: finite current-source NormalLoop production-k=0 non-unity FullMix->Stems, Stems->FullMix and masks over the same already ACKed resident selected committed set; actual two-side taps/128-source-frame wet Native-FIFO/filter continuation, deferred then real preparation/adoption and outgoing/history/job final-reader retirement
 - [ ] Wirkliche finite DSP/KEYLOCK-Versorgung+Continuation fuer heutigen production k=0
 - [ ] Executed feed/lookahead/history/FIFO/filter/seams/crossfade/oldvoices; causality1598/33.292ms erhalten, fallback-only laesst Gate offen. Nonzero k bleibt B5
 
 The first vertical is bounded to NormalLoop and storage-only current-source ACK.
-Current validation passed51 focused native cases,168 Analysis,3318 Python/FFI
+First-vertical validation passed51 focused native cases,168 Analysis,3318 Python/FFI
 with35 device skips and the unchanged strict75/1000 musical gate. The fresh broad
 Release958/2 and incomplete Debug attempts remain FAILED;3 publication tests in
 both profiles close the two obsolete terminal-error assertions. Remaining broad
 production/test inputs are unchanged; no final whole-suite rerun is claimed.
-Seek/intro/tail, pause/resume/retrigger/timing refresh, current plus old voices,
-both active FullMix/stem-transition sides and their complete feed/filter/history/
-resource/musical oracles remain required by the two open parent tasks. Active
-finite selection transitions remain guarded. No first-vertical result closes
-whole P4b, nonzero KEY/pitch, P5a or any Human/device/hearing gate.
+The resident-transition vertical uses actual inactive verified pair publication,
+its source/stem/window ACKs, playback and native scalar commands. Finite complete-
+PCM and algebraic raw-native/chronological-filter oracles exercise both active
+selections, nonempty/empty masks and interrupted ramps; complete-PCM controls
+also exercise stale selection/ACKs, rate smoothing and irregular partitions
+crossing actual adoption. Executed taps/feed, native/FIFO/history and continued
+nontrivial wet output are observed. Four actual component ranges and zero live
+instrumental remain explicit. The retiring-command/EQ lifecycle checks a storage-
+only ACK during the ramp, old/new/history peak and outgoing/job/history ownership
+through actual final-reader release using existing producer/callback/recycle paths.
+Existing queue/admission/cancel/late and source/owner rejection proofs remain.
+Preparation stays deferred during active ramps; later real prepare/adoption is
+exercised rather than inferred. Missing-tap zeros or target-default substitutions
+cannot satisfy this gate.
+
+Fresh focused receipts report17 Debug and79 unique Release cases; repeated actual
+EQ-lifecycle runs once per profile do not increase unique counts. The genuine
+Python-worker parent is included; the child-only no-op is excluded. Fresh3318
+Python/FFI with35 device skips, check/fmt/ruff/mypy/official strict and optimized
+Release build-only/install/--check passed without App start. No new Analysis or
+whole-Rust batch is claimed; historical FAILED/UNKNOWN receipts remain intact.
+The resident-transition checkbox may close only after these measured inputs and
+the actual final source receive independent nonauthor acceptance.
+
+Seek/intro/tail, pause/resume/retrigger/timing refresh, current plus old voices and
+the remaining complete feed/filter/history/resource/musical oracles remain required
+by the two open parent tasks. Initial active None->Some, retention policy,
+effective-mode ACK and ordinary StemController round-trip/warm return remain P5a;
+the controller's FullMix path retires components after the ramp. Neither bounded
+P4b vertical closes whole P4b, nonzero KEY/pitch, P5a or Human/device/hearing gates.
 
 ### P5a
 

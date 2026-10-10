@@ -79,7 +79,6 @@ pub(crate) fn normal_loop_feed_available(
         || plan.channels != sample.channels
         || plan.sample_frames != sample.frame_count()
         || !sample.valid_residency(sample_rate_hz, plan.channels)
-        || plan.transition.is_active()
         || !playback.matches_domain(plan.domain())
         || !playback.tempo_ratio().is_finite()
         || !playback.rate_target().is_finite()
@@ -99,11 +98,19 @@ pub(crate) fn normal_loop_feed_available(
     {
         return false;
     }
-    if let Some(hash) = plan.selection.required_stem_hash() {
+    // Both sides are real inputs until the source-frame ramp ends. A FullMix target
+    // cannot stand in for an unavailable outgoing stem selection (including an empty mask).
+    for selection in
+        std::iter::once(plan.selection).chain(plan.transition.required_from_selection())
+    {
+        let Some(hash) = selection.required_stem_hash() else {
+            continue;
+        };
         let Some(stems) = stems else {
             return false;
         };
-        if stems.source_version_hash != hash
+        if hash == 0
+            || stems.source_version_hash != hash
             || stems.accepted_timing != accepted
             || !prepared_stem_set_matches_sample(
                 stems,
@@ -216,6 +223,10 @@ impl NormalLoopCoverage {
             && self.binding.accepted == accepted
             && (!exact_window || sample.resident_binding() == Some(self.resident))
             && self.plan.matches_source_contract(plan)
+            && self
+                .plan
+                .transition
+                .matches_source_contract(plan.transition)
             && self.playback.matches_rate_target(playback)
             && normal_loop_feed_available(sample, stems, sample_rate_hz, accepted, plan, playback)
             && match (&self.stems, stems) {
@@ -529,10 +540,6 @@ mod tests {
                 ),
                 ..fixture.plan
             },
-            SourceReadPlan {
-                transition: StemTransition::start(StemRenderSelection::full_mix(), 128),
-                ..fixture.plan
-            },
         ] {
             assert!(capture(plan, &fixture.playback, RATE, Some(&fixture.stems)).is_none());
         }
@@ -568,6 +575,60 @@ mod tests {
             &fixture.playback,
             false
         ));
+    }
+
+    #[test]
+    fn finite_coverage_requires_real_outgoing_and_incoming_selections_even_with_empty_masks() {
+        let fixture = Fixture::new(1000.25);
+        for mask in [0, 1, 10, 15] {
+            let stem = StemRenderSelection::from_state(StemMixMode::AllStems, 17, mask);
+            for (from, to) in [
+                (stem, StemRenderSelection::full_mix()),
+                (StemRenderSelection::full_mix(), stem),
+            ] {
+                let plan = SourceReadPlan {
+                    selection: to,
+                    transition: StemTransition::start(from, 128),
+                    ..fixture.plan
+                };
+                let capture = |stems: Option<&PreparedStemSet>| {
+                    NormalLoopCoverage::capture(
+                        &fixture.sample,
+                        stems,
+                        RATE,
+                        None,
+                        plan,
+                        &fixture.playback,
+                    )
+                };
+                let coverage = capture(Some(&fixture.stems)).unwrap();
+                assert!(capture(None).is_none());
+                let mut stale = fixture.stems.clone();
+                stale.source_version_hash += 1;
+                assert!(capture(Some(&stale)).is_none());
+                let changed = SourceReadPlan {
+                    transition: StemTransition::start(
+                        StemRenderSelection::from_state(StemMixMode::AllStems, 17, 2),
+                        128,
+                    ),
+                    ..plan
+                };
+                assert!(!coverage.matches(
+                    &fixture.sample,
+                    Some(&fixture.stems),
+                    RATE,
+                    None,
+                    changed,
+                    &fixture.playback,
+                    true
+                ));
+                for index in 0..STEM_BUFFER_COUNT {
+                    let mut missing = fixture.stems.clone();
+                    missing.stems[index].samples = Arc::from([0.0; 2]);
+                    assert!(capture(Some(&missing)).is_none());
+                }
+            }
+        }
     }
 
     #[test]

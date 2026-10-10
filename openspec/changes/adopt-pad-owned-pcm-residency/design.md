@@ -260,8 +260,32 @@ WindowWork admission/transaction and the Key Lock worker perform finite read,
 own window ACK, actual native/FIFO preparation and continued callback rendering.
 Pending history stays exact-window-bound; already adopted same-source history
 may survive storage-only ACK without resetting native/FIFO/filter chronology.
-Active selection transitions and finite seek/intro/tail, old voices and wider
-refresh/retrigger contexts remain guarded and are subsequent P4b work. The parent
+The second bounded context is current-source NormalLoop selection transitions
+with the identical already ACKed resident selected committed StemSet. Verified
+pair publication while inactive may attach Some without changing FullMix; playback
+followed by the existing scalar SetStemMixMode/SetStemEnabledMask commands is the
+actual Some/Some product seam. Prospective admission checks every relevant current
+voice and the real target/outgoing selection before mutation. Productive coverage
+checks both selection and active transition.from against the four real component
+ranges and timing, including empty masks. SourceReadPlan/fractional_taps and copied
+SourcePlayback remain the sole address/domain/rate authority; strict complete
+source/component-owner equality is unchanged. The existing 128-source-frame ramp
+and interruption policy advance by actual fractional source distance.
+
+Source-specific requests remain deferred during active ramps. Real wet native,
+input/output FIFO, cursor/loop/timing and chronological filter continuation must
+be proved for the entire ramp, followed by actual settled-selection preparation
+and exact adoption through the existing worker/permits. Storage-only ACK changes
+no chronological DSP state. Existing SetStemPairFullMix retirement must wait for
+the outgoing selection's final use; native-history/job reader pins continue to
+their own final use through existing registry/recycle retirement. No new reader,
+lifecycle, worker pool or scheduler is needed. This slice does not implement
+initial active None->Some, retention/effective-mode ACK or ordinary StemController
+warm return: the controller FullMix command retires component ownership and those
+remain P5a, not a permanent-retained-fixture claim.
+
+Finite seek/intro/tail, old voices and wider refresh/retrigger contexts remain
+guarded and are subsequent P4b work. The parent
 P4b tasks remain open until their complete musical/resource/causality matrix is
 proved. No new reader, scheduler, worker lane or callback I/O is introduced.
 

@@ -306,6 +306,11 @@ impl RtMixer {
         self.pad_key_lock_enabled[id]
     }
 
+    #[cfg(test)]
+    pub(super) fn stem_transition_for_measurement(&self, id: usize) -> StemTransition {
+        self.stem_transitions[id]
+    }
+
     pub(crate) fn try_new(
         channels: usize,
         sample_rate_hz: f32,
@@ -606,6 +611,23 @@ impl RtMixer {
         sample: &SampleBuffer,
         stems: Option<&PreparedStemSet>,
     ) -> bool {
+        self.normal_key_lock_voice_selection_available(
+            id,
+            voice,
+            sample,
+            stems,
+            (self.stem_render_selection(id), self.stem_transitions[id]),
+        )
+    }
+
+    fn normal_key_lock_voice_selection_available(
+        &self,
+        id: usize,
+        voice: &VoiceSlot,
+        sample: &SampleBuffer,
+        stems: Option<&PreparedStemSet>,
+        (selection, transition): (StemRenderSelection, StemTransition),
+    ) -> bool {
         let playback = &voice.source_playback;
         let Some(region) = voice
             .source_loop_region
@@ -626,8 +648,8 @@ impl RtMixer {
                 loop_region: region,
                 loop_period: playback.loop_period(),
                 seek_mode: position.seek_mode,
-                selection: self.stem_render_selection(id),
-                transition: self.stem_transitions[id],
+                selection,
+                transition,
             },
             playback,
         )
@@ -1340,7 +1362,7 @@ impl RtMixer {
         let previous = self.stem_render_selection(id);
         let next =
             StemRenderSelection::from_state(mode, source_version_hash, self.stem_enabled_mask[id]);
-        if previous != next && self.finite_key_lock_voice_active(id) {
+        if !self.stem_selection_context_available(id, previous, next) {
             return false;
         }
         match mode {
@@ -1415,12 +1437,15 @@ impl RtMixer {
         if source_version_hash == 0 || stems.source_version_hash != source_version_hash {
             return false;
         }
-        if self.stem_enabled_mask[id] != enabled_stem_mask && self.finite_key_lock_voice_active(id)
-        {
+        let previous = self.stem_render_selection(id);
+        let next = StemRenderSelection::from_state(
+            self.stem_mix_mode[id],
+            self.stem_mix_source_version_hash[id],
+            enabled_stem_mask,
+        );
+        if !self.stem_selection_context_available(id, previous, next) {
             return false;
         }
-
-        let previous = self.stem_render_selection(id);
         self.stem_enabled_mask[id] = enabled_stem_mask;
         let next = self.stem_render_selection(id);
         self.arm_stem_transition(id, previous, next);
@@ -1505,9 +1530,51 @@ impl RtMixer {
                 voice.active
                     && voice.sample_id == id
                     && voice.sample.as_ref().is_some_and(|sample| {
-                        sample.resident_start() != 0
-                            || sample.resident_end() != sample.frame_count()
+                        !super::native_source_coverage::complete_view_available(sample)
                     })
+            })
+    }
+
+    /// Scalar selection changes can reuse only the already installed set and the
+    /// proved current-source NormalLoop trajectory. Publication/owner rules are unchanged.
+    fn stem_selection_context_available(
+        &self,
+        id: usize,
+        previous: StemRenderSelection,
+        next: StemRenderSelection,
+    ) -> bool {
+        if previous == next || !self.pad_key_lock_enabled[id] {
+            return true;
+        }
+        let transition = StemTransition::start(previous, STEM_TRANSITION_RAMP_FRAMES);
+        self.voices
+            .iter()
+            .filter(|voice| voice.active && voice.sample_id == id)
+            .all(|voice| {
+                voice.sample.as_ref().is_some_and(|sample| {
+                    super::native_source_coverage::complete_view_available(sample)
+                        || (!voice.paused
+                            && self.sample_bank[id]
+                                .as_ref()
+                                .is_some_and(|bank| bank.same_source(sample))
+                            && self.input_runtime_ownership.source_current(
+                                id,
+                                sample,
+                                self.sample_rate_hz as u32,
+                            )
+                            && self.input_runtime_ownership.source_timing_available(
+                                id,
+                                self.timing_for_voice(voice).accepted,
+                                &self.current_timing_acknowledgements,
+                            )
+                            && self.normal_key_lock_voice_selection_available(
+                                id,
+                                voice,
+                                sample,
+                                self.prepared_stems[id].as_ref(),
+                                (next, transition),
+                            ))
+                })
             })
     }
 

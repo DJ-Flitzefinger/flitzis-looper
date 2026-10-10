@@ -49,9 +49,14 @@ the retained readers and existing WindowWork transaction. Actual tap coverage,
 complete source/window/timing/selection binding and native history permits guard
 real native/FIFO catch-up and continued callback input. A storage-only ACK keeps
 already adopted native/FIFO/filter chronology and old reader ownership intact;
-pending native work remains exact-window-bound. Active transitions, finite seek,
-intro/tail and broader old-voice/lifecycle coverage remain guarded and the parent
-P4b gate remains open. The saved-load full-track fallback remains labelled.
+pending native work remains exact-window-bound. The bounded resident-transition
+context checks both actual FullMix/stem sides for current-source NormalLoop voices
+with an already ACKed identical resident committed set before native mode/mask
+mutation and on productive feed. New history preparation waits for the ramp to
+settle while the wet native/FIFO/filter owner continues; later actual catch-up and
+adoption retain their own permits. Finite seek, intro/tail and broader old-voice/
+lifecycle coverage remain guarded and the parent P4b gate remains open. The
+saved-load full-track fallback remains labelled.
 
 New imports preserve the exact filename and bytes under
 `samples/materials/M<32-lowercase-hex>/original/`. The material ID binds the full
@@ -453,6 +458,22 @@ source, request, authority, accepted timing and latest intent guards remain in
 force. A different required range or DSP context uses bounded preparation before
 adoption, and an old source's ticket cannot authorize a replacement source.
 
+For finite current-source NormalLoop KEYLOCK, scalar stem mode/mask changes use
+the already ACKed same resident committed set. Inactive verified pair publication
+keeps FullMix selected; subsequent playback and native scalar commands provide the
+real Some/Some route. Admission and feed include target and active outgoing
+selection, all four real component ranges, accepted timing, source/window revisions
+and canonical tap/rate trajectory. Empty masks still require the actual admitted
+set. No hidden complete backing or default target selection replaces a missing
+outgoing input. The existing 128-source-frame ramp preserves cursor/loop/timing,
+wet native/FIFOs and chronological filter while new preparation is deferred; its
+later settled-selection prepare/adoption remains independently guarded.
+`SetStemPairFullMix` retires the resident components after their final ramp use,
+with history/jobs retaining their own readers until existing off-thread retirement.
+Ordinary controller FullMix/AllStems warm return and active initial None->Some
+require P5a retention/effective-mode ACK work; permanent retained scalar fixtures
+cannot close that workflow.
+
 Normal finite loop edits use the exact proved physical tap interval. ALL admits
 complete playback. Nonresident seeks admit complete context so physical intro
 and tail continue to the existing loop/full-source boundary. Source-end clamping
@@ -801,7 +822,7 @@ Coalesce rapid edits to the latest intent without resetting audio progression.
 | Seek before/after resident loop | Selected simple policy: prepare full-track resident exception. After ACK, intro reaches loop; tail reaches actual full end then wraps. Preserve the old effective playhead until ACK. No small target-only window or background continuous streaming. |
 | ALL | Requested manual [0,full duration), auto disabled; prepare full-track exception unless already resident. Failure retains prior effective audio. |
 | Return to finite loop | Explicit finite replacement prepared against current cursor/history; release full exception after final voice/job reader retires. Never evict an active trajectory's required samples. |
-| Stems/masks | Full mix plus the four component windows use matching source/window revisions, range coverage and current accepted projection. A finite window relocation may adopt while active only for the identical complete source and already accepted complete StemSet, with proved history and ACK; it cannot introduce generated audio or new timing evidence. Preserve shared cursor/taps/ramp/filter history and full-mix fallback. Instrumental is not a fifth live component. |
+| Stems/masks | Full mix plus the four component windows use matching source/window revisions, range coverage and current accepted projection. Current-source NormalLoop scalar commands admit already ACKed same-set transitions only when both actual active sides are covered, including the outgoing stem side and empty masks. A finite window relocation may adopt while active only for the identical complete source and already accepted complete StemSet, with proved history and ACK; it cannot introduce generated audio or new timing evidence. Preserve shared cursor/taps/ramp/filter/native-FIFO history. Initial active None->Some, ordinary controller warm return and effective-mode ACK remain P5a. Instrumental is not a fifth live component. |
 
 Initially reuse a bounded complete PCM reader/lease for editor and analyzer
 integration rather than invent a paged editor framework. Share concurrent readers

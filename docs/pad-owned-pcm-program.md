@@ -73,9 +73,31 @@ Debug. All other production/test inputs remain unchanged from that broad run;
 there is no final whole-suite rerun claim. The incomplete Debug broad attempt
 also remains FAILED. Fresh168 Analysis,3318 Python/FFI with35 genuine device skips,
 the unchanged strict75/1000 musical gate, lint/types, Rust formatting, optimized
-Release/check and affected official strict passed. Seek/intro/tail, pause/resume/retrigger/
-timing refresh, current plus old voices, both active selection-transition sides
-and their full resource/musical/causality matrix remain required. The original
+Release/check and affected official strict passed.
+
+A second bounded P4b vertical implements finite current-source NormalLoop
+FullMix->Stems, Stems->FullMix and mask changes at production k=0 and non-unity
+rate over the identical already ACKed resident selected committed StemSet.
+Actual inactive verified pair publication, playback and native scalar commands
+supply the Some/Some path. Both active selections and their 128-source-frame
+progression use held finite ranges. Complete-PCM and algebraic raw-native/filter
+oracles verify continued wet Native/FIFO/EQ chronology during deferred preparation,
+later actual adoption, masks, interruptions and irregular callback partitions;
+complete-PCM controls also cover adoption while rates still smooth. The actual
+retiring-command/EQ lifecycle verifies storage-only ACK during the ramp, four
+component crops with zero live instrumental, checked old/new/history peak and
+distinct outgoing/job/history final-reader release through existing paths.
+Fresh focused receipts report17 Debug and79 unique Release cases; repeated
+EQ-lifecycle runs once per profile do not increase those totals. The genuine
+Python-worker parent is included; its earlier child-only no-op is excluded.
+Fresh3318 Python/FFI with35 device skips, check/fmt/ruff/mypy/official strict and
+optimized Release build-only/install/--check passed without App start. No new
+Analysis or whole-Rust batch is claimed; historical FAILED outcomes remain intact.
+The resident-transition checkbox records only bounded independent acceptance.
+Active initial None->Some, retention/effective-mode ACK and ordinary StemController
+warm return remain P5a. Seek/intro/tail, pause/resume/retrigger/timing refresh,
+current plus old voices and the remaining full resource/musical/causality matrix
+remain required. The original
 Human rejection reason remains UNKNOWN. Whole P4b, later stages and final Human/
 hearing gates remain open.
 The accepted bounded P0/C1/R0 prerequisites and historical FAIL/UNKNOWN evidence
