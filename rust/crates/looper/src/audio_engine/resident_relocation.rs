@@ -24,11 +24,19 @@ use std::time::{Duration, Instant};
 const ADOPTION_DEADLINE: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
+pub(super) struct StemPairOwner {
+    pub root: PathBuf,
+    pub descriptor_reference: String,
+    pub source_lease: CommittedColdLease,
+}
+
+#[derive(Clone)]
 struct StemOwner {
     set: PreparedStemSet,
     source_version: String,
     cache_dir: PathBuf,
     generation_path: PathBuf,
+    pair: Option<StemPairOwner>,
 }
 
 struct StemDescriptor {
@@ -36,6 +44,78 @@ struct StemDescriptor {
     source_version: String,
     cache_dir: PathBuf,
     generation_path: PathBuf,
+    pair: Option<StemPairOwner>,
+}
+
+impl StemOwner {
+    fn prepare_window(
+        &self,
+        complete: &SampleBuffer,
+        window: &SampleBuffer,
+        rate: u32,
+        assets: &super::project_assets::ProjectAssets,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<PreparedStemSet, String> {
+        if let Some(owner) = &self.pair {
+            let material = super::material_migration::PreparedMigrationMaterial::from_current(
+                &owner.root,
+                complete.clone(),
+                owner.source_lease.clone(),
+            )?;
+            let pair = super::stem_pair::open_verified_pair(
+                &owner.root,
+                &owner.descriptor_reference,
+                &material,
+                cancelled,
+            )?;
+            if pair.descriptor.stem_set_identity
+                != self
+                    .set
+                    .complete_set_identity
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            {
+                return Err("complete accepted stem pair changed".into());
+            }
+            let set = PreparedStemSet {
+                complete_set_identity: self.set.complete_set_identity.clone(),
+                accepted_timing: self.set.accepted_timing,
+                reference_samples: window.samples.clone(),
+                publication: self.set.publication.clone(),
+                source_version_hash: self.set.source_version_hash,
+                sample_rate_hz: rate,
+                channels: window.channels,
+                frame_count: window.frame_count(),
+                available_mask: self.set.available_mask,
+                stems: pair.prepare_component_views(window)?,
+            };
+            assets
+                .retain_stem_pair(
+                    self.generation_path.clone(),
+                    window,
+                    &self.source_version,
+                    &set.complete_set_identity,
+                    Some(&set),
+                    pair.into_pins(owner.root.parent().ok_or("pair project root missing")?),
+                    owner.source_lease.clone(),
+                )
+                .map_err(|error| error.to_string())?;
+            return Ok(set);
+        }
+        let path = self.cache_dir.to_str().ok_or("invalid stem cache path")?;
+        let mut set = super::stem_cache::prepare_stem_buffers_from_cache(
+            &self.source_version,
+            complete,
+            rate,
+            path,
+        )?;
+        if *set.complete_set_identity != *self.set.complete_set_identity {
+            return Err("complete accepted stem set changed".into());
+        }
+        set.complete_set_identity = self.set.complete_set_identity.clone();
+        set.window_for(window)
+    }
 }
 
 struct PendingWindow {
@@ -79,6 +159,7 @@ impl ResidentStemCache {
             source_version: owner.source_version.clone(),
             cache_dir: owner.cache_dir.clone(),
             generation_path: owner.generation_path.clone(),
+            pair: owner.pair.clone(),
         });
         Ok(())
     }
@@ -101,6 +182,7 @@ impl ResidentStemCache {
             source_version: descriptor.source_version.clone(),
             cache_dir: descriptor.cache_dir.clone(),
             generation_path: descriptor.generation_path.clone(),
+            pair: descriptor.pair.clone(),
         })
     }
 }
@@ -368,7 +450,7 @@ pub(super) fn admit_stem_publication(
     id: usize,
     set: &PreparedStemSet,
     source_version: &str,
-    registration: Option<(PathBuf, PathBuf)>,
+    registration: Option<(PathBuf, PathBuf, Option<StemPairOwner>)>,
 ) -> PyResult<()> {
     let mut owners = engine
         .resident_stem_cache
@@ -392,14 +474,55 @@ pub(super) fn admit_stem_publication(
         );
     }
     owner.intent_epoch.store(next_intent, Ordering::Release);
-    if let Some((cache_dir, generation_path)) = registration {
+    if let Some((cache_dir, generation_path, pair)) = registration {
         owner.pending = Some(StemOwner {
             set: set.clone(),
             source_version: source_version.to_owned(),
             cache_dir,
             generation_path,
+            pair,
         });
     }
+    Ok(())
+}
+
+pub(super) fn set_stem_pair_full_mix_with_producer(
+    engine: &AudioEngine,
+    id: usize,
+    producer: &Arc<Mutex<Producer<ControlMessage>>>,
+) -> PyResult<()> {
+    if id >= NUM_SAMPLES {
+        return Err(PyValueError::new_err("id out of range"));
+    }
+    let _requests = engine
+        .pad_request_ids
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    let mut producer = producer
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("control queue lock poisoned"))?;
+    if producer.is_full() {
+        return Err(PyRuntimeError::new_err("stem full-mix queue is full"));
+    }
+    let mut owners = engine
+        .resident_stem_cache
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("resident stem ownership lock poisoned"))?;
+    let owner = &mut owners[id];
+    if let Some(previous) = owner.accepted.clone() {
+        owner.remember(&previous)?;
+    }
+    let retired = [
+        owner.accepted.as_ref().map(|value| value.set.clone()),
+        owner.pending.as_ref().map(|value| value.set.clone()),
+    ];
+    producer
+        .push(ControlMessage::SetStemPairFullMix { id, retired })
+        .map_err(|_| PyRuntimeError::new_err("stem full-mix queue is full"))?;
+    // The queued fixed handles, callback bank and actual jobs retain the PCM.
+    // No potentially final large-buffer destruction occurs in this control path.
+    owner.accepted = None;
+    owner.pending = None;
     Ok(())
 }
 
@@ -409,6 +532,11 @@ pub(super) fn reconcile(engine: &AudioEngine) -> PyResult<()> {
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
     reconcile_under_request_lock(engine)
+}
+
+#[cfg(test)]
+pub(super) fn history_count_for_test(engine: &AudioEngine, id: usize) -> usize {
+    engine.resident_stem_cache.lock().unwrap()[id].history.len()
 }
 
 pub(super) fn cancel_all(engine: &AudioEngine) -> PyResult<()> {
@@ -443,6 +571,11 @@ pub(super) fn reconcile_under_request_lock(engine: &AudioEngine) -> PyResult<()>
         .map_err(|_| PyRuntimeError::new_err("resident stem ownership lock poisoned"))?;
     for id in 0..NUM_SAMPLES {
         let owner = &mut owners[id];
+        // Historical file leases are justified only by a real logical set
+        // still held by a voice, queued transaction or job.
+        owner
+            .history
+            .retain(|entry| entry.identity.strong_count() > 0);
         if let Some(pending) = owner.pending.as_ref() {
             match pending.set.publication.status() {
                 "accepted" => {
@@ -662,23 +795,19 @@ impl WindowWork {
             .stem_owner
             .as_ref()
             .map(|owner| -> Result<PreparedStemSet, String> {
-                let path = owner.cache_dir.to_str().ok_or("invalid stem cache path")?;
-                let mut set = super::stem_cache::prepare_stem_buffers_from_cache(
-                    &owner.source_version,
+                let mut set = owner.prepare_window(
                     &complete,
+                    &sample,
                     self.binding.binding.sample_rate_hz,
-                    path,
+                    &self.assets,
+                    &|| !self.current(),
                 )?;
-                if *set.complete_set_identity != *owner.set.complete_set_identity {
-                    return Err("complete accepted stem set changed".into());
-                }
                 set.complete_set_identity = owner.set.complete_set_identity.clone();
                 set.accepted_timing = self
                     .seek_pin
                     .as_ref()
                     .map_or(self.binding.binding.accepted, |pin| pin.timing.accepted);
                 set.publication = owner.set.publication.clone();
-                let set = set.window_for(&sample)?;
                 self.assets
                     .retain_stems(owner.generation_path.clone(), &set)
                     .map_err(|error| error.to_string())?;

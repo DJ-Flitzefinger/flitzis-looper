@@ -1,6 +1,6 @@
 # Shared-material PCM and extended pre-Rust delivery program
 
-Status: P1a, P1b, K-META, bounded P2a and P2b independently accepted, 2026-10-10; no whole-program or human
+Status: P1a, P1b, K-META, bounded P2a, P2b and P3 independently accepted, 2026-10-10; no whole-program or human
 completion. J0 and P1a are published. Typed native material/slot
 resolution, canonical import/restore storage, durable material/content IDs and
 guarded exact cleanup are implemented.
@@ -37,6 +37,18 @@ recovery/cleanup regressions and current lint/types/format/official strict.
 The stale Python exception oracle was corrected without a production change;
 the broad native timeout cause remains unproven. No power-loss, non-Windows,
 audible or human acceptance follows from these bounded fault/Windows checks.
+P3 stores five WAV artifacts and their aligned f32 derivatives as one immutable
+verified pair, with four live components and instrumental available offline. Independent
+source/timing/window ACKs, paired final-reader cleanup, current selection and
+ordinary background work preserve other users. The public Python engine borrow
+ends before worker I/O, fixing simultaneous UI reception during stem preparation.
+The actual optimized Release is installed; `start.bat` is the official launch-only
+entry point and its check starts no App. Current 57 pair tests, three ordinary
+publication cases and 46 affected Python cases passed. FullPython 3287/35 skips,
+168 Analysis and unchanged broad positive scopes are impact-bound reuse; broad
+native 923/4 remains FAILED with separate current 3+14 regression closure.
+Five fresh long musical tests, the strict 75/1000 gate and current static/format/
+official strict passed. P4a/P4b, later stages and Human/hearing gates remain open.
 The accepted bounded P0/C1/R0 prerequisites and historical FAIL/UNKNOWN evidence
 remain intact.
 

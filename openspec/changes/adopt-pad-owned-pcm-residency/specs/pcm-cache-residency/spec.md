@@ -129,3 +129,16 @@ The system SHALL acquire all new assignment/action/version references before ret
 - **THEN** verified immutable input backing is shared once in accounting
 - **AND** each copy retains independent DSP/voice/settings and varied ranges remain valid separate views
 - **AND** Copy/transposition creates no original/PCM/stem file duplicates or complete pitch PCM
+
+#### Scenario: Paired WAV and PCM owners end together
+- **WHEN** the final assignment ends while any paired descriptor, component or instrumental reader, voice, history, queued action or job still retains either area
+- **THEN** both immutable WAV and PCM areas SHALL remain protected
+- **AND** all new pair owners SHALL be acquired before old selection or readers retire
+- **AND** only the actual final reader end SHALL permit existing off-thread exact-leaf retirement and bounded empty-container cleanup
+- **AND** replacement/content-change outcomes SHALL preserve the affected files and settle visibly while retaining inventory protection until terminal
+
+#### Scenario: Paired restart obtains fresh authority
+- **WHEN** a new process reconciles a selected pair and current journal/config
+- **THEN** typed roots, file identities, full five-WAV/five-PCM integrity and the common descriptor SHALL be reverified before pair eligibility
+- **AND** current content UUIDs, key intent and newer performer edits SHALL survive
+- **AND** native source/timing/window captures and callback ACKs SHALL be freshly acquired, never restored from durable pair metadata

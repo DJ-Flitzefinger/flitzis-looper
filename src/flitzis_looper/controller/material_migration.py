@@ -18,6 +18,7 @@ from flitzis_looper.controller.material_migration_history import (
     rollback_artifacts,
     successor_aliases,
 )
+from flitzis_looper.controller.material_migration_pair import prepare_migrated_pair
 from flitzis_looper.controller.material_migration_recovery import inspect_migration_recovery
 from flitzis_looper.controller.stem_cache import expected_stem_files
 from flitzis_looper.material_migration_model import (
@@ -32,6 +33,7 @@ from flitzis_looper.models import (
     validate_sample_id,
 )
 from flitzis_looper.project_materials import original_asset
+from flitzis_looper.stem_pair_selection import StemPairSelection
 from flitzis_looper_audio import MaterialMigrationJournalStore, ProjectAssetLease
 
 if TYPE_CHECKING:
@@ -44,6 +46,7 @@ if TYPE_CHECKING:
     from flitzis_looper.controller.loader import LoaderController
     from flitzis_looper.controller.material_migration_cleanup import ArtifactCapture
     from flitzis_looper.controller.persistence import ProjectPersistence
+    from flitzis_looper.controller.stems import StemTaskRunner
     from flitzis_looper.models import SessionState
     from flitzis_looper_audio import (
         AudioEngine,
@@ -53,6 +56,7 @@ if TYPE_CHECKING:
         MaterialMigrationSourceTicket,
         MaterialMigrationStemPreparation,
         PreparedSourceTicket,
+        PreparedStemPair,
     )
 
 
@@ -67,6 +71,10 @@ class _Subscriber:
     timing_ticket: ConstantTimingTicket | None = None
     timing_ready: bool = False
     stem_ticket: PreparedSourceTicket | None = None
+    pair_future: Future[PreparedStemPair] | None = None
+    pair_prepared: PreparedStemPair | None = None
+    pair_selection: StemPairSelection | None = None
+    pair_release_ordered: bool = False
     timing_revision: str | None = None
 
 
@@ -80,6 +88,8 @@ class MaterialMigrationController:
         audio: AudioEngine,
         assets: ProjectAssetLifecycle,
         loader: LoaderController,
+        *,
+        stem_task_runner: StemTaskRunner | None = None,
     ) -> None:
         self._persistence = persistence
         self._project = persistence.project
@@ -87,6 +97,7 @@ class MaterialMigrationController:
         self._audio = audio
         self._assets = assets
         self._loader = loader
+        self._stem_task_runner = stem_task_runner
         self._journal: MaterialMigrationJournal | None = None
         self._store: MaterialMigrationJournalStore | None = None
         self._capture_logged = False
@@ -341,9 +352,20 @@ class MaterialMigrationController:
             entry = self._project.stem_cache[item.sample_id]
             if entry is not None and entry.cache_dir not in seen:
                 requests.append(
-                    ArtifactRequest(entry.cache_dir, "rollback", required=entry.available)
+                    ArtifactRequest(
+                        entry.cache_dir,
+                        "target" if entry.pair else "rollback",
+                        required=entry.available,
+                    )
                 )
                 seen.add(entry.cache_dir)
+            if entry is not None and entry.pair is not None:
+                for reference in (entry.pair.pcm_generation, entry.pair.descriptor_reference):
+                    if reference not in seen:
+                        # Existing canonical pair targets are reused, never producer-owned
+                        # rollback artifacts of the legacy Original migration.
+                        requests.append(ArtifactRequest(reference, "target"))
+                        seen.add(reference)
         self._artifact_future = self._ensure_artifacts().capture(requests)
 
     def _poll_artifact_capture(self) -> bool:
@@ -564,7 +586,7 @@ class MaterialMigrationController:
                 self._poll_sources()
             if self.status == "ack_confirmed":
                 self._commit_current_image()
-        except (OSError, RuntimeError, ValueError) as error:
+        except (OSError, RuntimeError, TypeError, ValueError) as error:
             self._settle_poll_error(str(error))
 
     def _settle_poll_error(self, message: str) -> None:
@@ -679,7 +701,7 @@ class MaterialMigrationController:
             self._stem_work[entry.cache_dir] = self._audio.prepare_material_migration_stems(
                 preparation,
                 entry.cache_dir,
-                entry.source_version,
+                alias.new_source_version if entry.pair else entry.source_version,
                 alias.new_source_version,
                 uuid4().hex,
             )
@@ -803,6 +825,8 @@ class MaterialMigrationController:
         entry = self._old_stems.get(sample_id)
         if entry is None or not entry.available:
             return True
+        if entry.pair is not None or getattr(self._audio, "prepare_stem_pair", None) is not None:
+            return self._poll_pair_ack(sample_id, subscriber, entry)
         if subscriber.stem_ticket is None:
             ticket = self._audio.capture_prepared_source(
                 sample_id, self._alias().new_source_version
@@ -820,6 +844,113 @@ class MaterialMigrationController:
         if status != "accepted":
             message = "fresh migrated stem publication was rejected"
             raise RuntimeError(message)
+        return True
+
+    def _poll_pair_ack(
+        self, sample_id: int, subscriber: _Subscriber, entry: StemCacheEntry
+    ) -> bool:
+        if self._project.stem_cache[sample_id] != entry:
+            message = "newer stem selection wins over captured migration pair"
+            raise ValueError(message)
+        if self._project.pad_stem_mix_mode[sample_id] == "full_mix":
+            return self._settle_pair_full_mix(sample_id, subscriber, entry)
+        if subscriber.pair_release_ordered:
+            self._start_pair_work(sample_id, subscriber, entry, components=True)
+        if subscriber.pair_future is None:
+            self._start_pair_work(sample_id, subscriber, entry, components=True)
+        prepared = self._returned_pair(subscriber, entry)
+        if prepared is None:
+            return False
+        if not prepared.has_components():
+            # Finish the real metadata worker before admitting a new live demand.
+            prepared.select()
+            self._start_pair_work(sample_id, subscriber, entry, components=True)
+            return False
+        return self._settle_prepared_pair_ack(subscriber, prepared)
+
+    def _settle_prepared_pair_ack(
+        self, subscriber: _Subscriber, prepared: PreparedStemPair
+    ) -> bool:
+        ticket = subscriber.stem_ticket
+        if ticket is None:
+            message = "Migrated pair has no independent source ticket"
+            raise RuntimeError(message)
+        if ticket.publication_status() == "captured":
+            self._audio.publish_stem_pair(prepared, ticket)
+        status = ticket.publication_status()
+        if status in {"captured", "pending"}:
+            return False
+        if status != "accepted":
+            message = "Fresh migrated pair publication was rejected"
+            raise RuntimeError(message)
+        prepared.select()
+        return True
+
+    def _start_pair_work(
+        self,
+        sample_id: int,
+        subscriber: _Subscriber,
+        entry: StemCacheEntry,
+        *,
+        components: bool,
+    ) -> None:
+        alias = self._alias()
+        target = self._new_stems[entry.cache_dir]
+        migrated = StemCacheEntry.model_validate(
+            entry.model_dump()
+            | {
+                "source_version": alias.new_source_version,
+                "cache_dir": target,
+                "stems": expected_stem_files(target),
+            }
+        )
+        ticket = self._audio.capture_prepared_source(sample_id, alias.new_source_version)
+        future = prepare_migrated_pair(
+            self._audio,
+            self._stem_task_runner,
+            sample_id,
+            alias.new_source_version,
+            migrated,
+            ticket,
+            components=components,
+        )
+        subscriber.stem_ticket = ticket
+        subscriber.pair_future = future
+        subscriber.pair_prepared = None
+        subscriber.pair_release_ordered = False
+
+    def _returned_pair(
+        self, subscriber: _Subscriber, entry: StemCacheEntry
+    ) -> PreparedStemPair | None:
+        future = subscriber.pair_future
+        if future is None or not future.done():
+            return None
+        if subscriber.pair_prepared is None:
+            prepared = future.result()
+            selection = StemPairSelection.model_validate_json(prepared.selection_json())
+            if selection.wav_generation != self._new_stems[entry.cache_dir]:
+                message = "Prepared migrated pair differs from the verified WAV target"
+                raise ValueError(message)
+            # Keep even an invalid result owned by the Future until visible settlement.
+            subscriber.pair_selection = selection
+            subscriber.pair_prepared = prepared
+        return subscriber.pair_prepared
+
+    def _settle_pair_full_mix(
+        self, sample_id: int, subscriber: _Subscriber, entry: StemCacheEntry
+    ) -> bool:
+        # A legacy WAV selection still needs a complete background-created disk pair.
+        if subscriber.pair_future is None and entry.pair is None:
+            self._start_pair_work(sample_id, subscriber, entry, components=False)
+        if subscriber.pair_future is None:
+            return True
+        prepared = self._returned_pair(subscriber, entry)
+        if prepared is None:
+            return False
+        prepared.select()
+        if prepared.has_components() and not subscriber.pair_release_ordered:
+            self._audio.set_stem_pair_full_mix(sample_id)
+            subscriber.pair_release_ordered = True
         return True
 
     def _require_preparation(self) -> MaterialMigrationPreparation:
@@ -911,21 +1042,32 @@ class MaterialMigrationController:
             candidate.pad_content[sample_id] = PadContentIdentity(
                 instance_id=content.instance_id, material_id=alias.material_id
             )
-            old = self._old_stems.get(sample_id)
-            current = candidate.stem_cache[sample_id]
-            if old is not None:
-                if current != old:
-                    message = "newer stem version wins over captured migration entry"
-                    raise ValueError(message)
-                updates: dict[str, object] = {"source_version": alias.new_source_version}
-                if old.cache_dir in self._new_stems:
-                    target = self._new_stems[old.cache_dir]
-                    updates |= {"cache_dir": target, "stems": expected_stem_files(target)}
-                candidate.stem_cache[sample_id] = StemCacheEntry.model_validate(
-                    old.model_dump() | updates
-                )
+            self._candidate_stems(candidate, sample_id, subscriber)
         candidate.material_migrations = successor_aliases(candidate, alias, self._recovery_active)
         return candidate
+
+    def _candidate_stems(
+        self, candidate: ProjectState, sample_id: int, subscriber: _Subscriber
+    ) -> None:
+        old = self._old_stems.get(sample_id)
+        current = candidate.stem_cache[sample_id]
+        if old is not None:
+            if current != old:
+                message = "newer stem version wins over captured migration entry"
+                raise ValueError(message)
+            updates: dict[str, object] = {"source_version": self._alias().new_source_version}
+            if old.cache_dir in self._new_stems:
+                target = self._new_stems[old.cache_dir]
+                selection = subscriber.pair_selection or old.pair
+                if selection is not None and selection.wav_generation != target:
+                    message = "migrated WAV lineage differs from the saved complete pair"
+                    raise ValueError(message)
+                updates |= {"cache_dir": target, "stems": expected_stem_files(target)}
+            if subscriber.pair_selection is not None:
+                updates["pair"] = subscriber.pair_selection
+            candidate.stem_cache[sample_id] = StemCacheEntry.model_validate(
+                old.model_dump() | updates
+            )
 
     def _commit_current_image(self) -> None:
         if self._journal is None or self._retirement is None:
@@ -1034,6 +1176,8 @@ class MaterialMigrationController:
             if subscriber.original_owner is not None:
                 subscriber.original_owner[1].release()
                 subscriber.original_owner = None
+            subscriber.pair_prepared = None
+            subscriber.pair_future = None
         for owner in self._owners:
             owner.release()
         self._owners.clear()

@@ -9,7 +9,8 @@ use crate::audio_engine::prepared_source::PreparedSourcePermit;
 use pyo3::prelude::*;
 use std::sync::Arc;
 
-pub(crate) const STEM_BUFFER_COUNT: usize = 5;
+/// Resident render layers; the fifth instrumental artifact stays in the complete disk pair.
+pub(crate) const STEM_BUFFER_COUNT: usize = 4;
 pub(crate) const STEM_MASK_VOCALS: u8 = 1 << 0;
 pub(crate) const STEM_MASK_MELODY: u8 = 1 << 1;
 pub(crate) const STEM_MASK_BASS: u8 = 1 << 2;
@@ -554,6 +555,12 @@ pub enum ControlMessage {
         source_version_hash: u64,
     },
 
+    /// Select full mix and release unneeded paired component residency off-callback.
+    SetStemPairFullMix {
+        id: usize,
+        retired: [Option<PreparedStemSet>; 2],
+    },
+
     /// Productive cold assignment; callback checks its fixed complete source fence.
     LoadColdSample {
         id: usize,
@@ -695,6 +702,7 @@ impl ControlMessage {
             | ControlMessage::SetPadLoopRegion { .. }
             | ControlMessage::SetTriggerQuantization(_)
             | ControlMessage::SetStemMixMode { .. }
+            | ControlMessage::SetStemPairFullMix { .. }
             | ControlMessage::SetStemEnabledMask { .. }
             | ControlMessage::UnloadSample { .. } => ControlMessageClass::OrderedState,
         }
@@ -924,7 +932,7 @@ mod tests {
             sample_rate_hz: 44_100,
             channels: 1,
             frame_count: 2,
-            available_mask: 0b1_1111,
+            available_mask: 0b1111,
             stems: std::array::from_fn(|_| buffer.clone()),
         };
         let message = ControlMessage::PublishPreparedStems { id: 3, stems };
@@ -940,7 +948,7 @@ mod tests {
                     sample_rate_hz: 44_100,
                     channels: 1,
                     frame_count: 2,
-                    available_mask: 0b1_1111,
+                    available_mask: 0b1111,
                     stems: _,
                     ..
                 }
@@ -964,7 +972,7 @@ mod tests {
             sample_rate_hz: 44_100,
             channels: 1,
             frame_count: 2,
-            available_mask: 0b1_1111,
+            available_mask: 0b1111,
             stems: std::array::from_fn(|_| buffer.clone()),
         };
         let (mut producer, _consumer) = rtrb::RingBuffer::<ControlMessage>::new(1);

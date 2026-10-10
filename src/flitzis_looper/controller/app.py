@@ -68,6 +68,7 @@ class AppController:
             stem_task_runner=stem_task_runner,
             asset_lifecycle=self._assets,
         )
+        self.stems.fence_pair_metadata(self._persistence.invalid_stem_pair_ids)
         self.loader = LoaderController(
             self._project,
             self._session,
@@ -91,7 +92,12 @@ class AppController:
         self.loader.set_sample_unloaded_callback(self._on_sample_unloaded)
         self.loader.set_accepted_timing_refresh_callback(self._refresh_restored_accepted_timing)
         self.material_migration = MaterialMigrationController(
-            self._persistence, self._session, self._audio, self._assets, self.loader
+            self._persistence,
+            self._session,
+            self._audio,
+            self._assets,
+            self.loader,
+            stem_task_runner=self.stems._stem_task_runner,
         )
         self.metering = MeteringController(self._project, self._session, self._audio)
         self.input_mapping = InputMappingController(

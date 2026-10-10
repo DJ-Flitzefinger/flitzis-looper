@@ -1,9 +1,11 @@
 //! Real offline worker, immutable cache, native publication/ACK and render regression.
-//! Only CPAL startup and neural separation are replaced; the native kernel is shared.
+//! Explicit root/producer replaces device startup; separation writes synthetic WAVs.
+//! The initial injected task runner executes real worker bodies inline; restored
+//! controllers use the ordinary pool. Source, Pair and callback kernels are genuine.
 
 use super::*;
-use crate::audio_engine::PreparedSourceTicket;
 use crate::audio_engine::resident_relocation::{ResidentWindowTicket, WindowRequest};
+use crate::audio_engine::{PreparedSourceTicket, PreparedStemPair};
 use crate::messages::StemMixMode;
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyModule};
@@ -27,10 +29,106 @@ struct NativeBridge {
     #[pyo3(get)]
     engine: Py<AudioEngine>,
     producer: Arc<Mutex<rtrb::Producer<ControlMessage>>>,
+    root: PathBuf,
 }
 
 #[pymethods]
 impl NativeBridge {
+    #[pyo3(signature = (id, source_version, cache_dir, source_ticket, components, descriptor_reference=None))]
+    fn prepare_stem_pair(
+        &self,
+        py: Python<'_>,
+        id: usize,
+        source_version: String,
+        cache_dir: String,
+        source_ticket: &PreparedSourceTicket,
+        components: bool,
+        descriptor_reference: Option<String>,
+    ) -> PyResult<PreparedStemPair> {
+        let held = self.engine.borrow(py);
+        let engine: &AudioEngine = &held;
+        py.detach(|| {
+            engine.prepare_stem_pair_at_root(
+                &self.root,
+                id,
+                &source_version,
+                &cache_dir,
+                source_ticket,
+                components,
+                descriptor_reference.as_deref(),
+            )
+        })
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+    }
+
+    fn publish_stem_pair(
+        &self,
+        py: Python<'_>,
+        prepared: &PreparedStemPair,
+        source_ticket: &PreparedSourceTicket,
+    ) -> PyResult<()> {
+        self.engine.borrow(py).publish_stem_pair_with_producer(
+            prepared,
+            source_ticket,
+            &self.producer,
+        )
+    }
+
+    #[pyo3(signature = (id, mode, source_version=None))]
+    fn set_stem_mix_mode(
+        &self,
+        id: usize,
+        mode: &str,
+        source_version: Option<String>,
+    ) -> PyResult<()> {
+        let (mode, source_version_hash) = match mode {
+            "full_mix" => (StemMixMode::FullMix, 0),
+            "all_stems" => (
+                StemMixMode::AllStems,
+                super::super::stem_cache::source_version_hash(
+                    source_version.as_deref().ok_or_else(|| {
+                        pyo3::exceptions::PyValueError::new_err("missing source version")
+                    })?,
+                ),
+            ),
+            _ => return Err(pyo3::exceptions::PyValueError::new_err("invalid stem mode")),
+        };
+        self.producer
+            .lock()
+            .unwrap()
+            .push(ControlMessage::SetStemMixMode {
+                id,
+                mode,
+                source_version_hash,
+            })
+            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("stem mode queue full"))
+    }
+
+    fn set_stem_enabled_mask(
+        &self,
+        id: usize,
+        enabled_stem_mask: u8,
+        source_version: String,
+    ) -> PyResult<()> {
+        self.producer
+            .lock()
+            .unwrap()
+            .push(ControlMessage::SetStemEnabledMask {
+                id,
+                enabled_stem_mask,
+                source_version_hash: super::super::stem_cache::source_version_hash(&source_version),
+            })
+            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("stem mask queue full"))
+    }
+
+    fn set_stem_pair_full_mix(&self, py: Python<'_>, id: usize) -> PyResult<()> {
+        super::super::resident_relocation::set_stem_pair_full_mix_with_producer(
+            &self.engine.borrow(py),
+            id,
+            &self.producer,
+        )
+    }
+
     fn publish_prepared_stems(
         &self,
         py: Python<'_>,
@@ -269,6 +367,7 @@ fn run_publication_and_mouse_proof(test_name: &str, accepted_only: bool, shared:
             NativeBridge {
                 engine: engine.clone_ref(py),
                 producer: producer.clone(),
+                root: root.clone(),
             },
         )
         .unwrap();
@@ -298,6 +397,9 @@ fn run_publication_and_mouse_proof(test_name: &str, accepted_only: bool, shared:
     });
     assert_eq!(callback.drain(&mut consumer), 1);
     call(&probe, "accepted");
+    // The current ALL preference publishes its real mode and component mask only
+    // after the independently accepted Pair ticket; keep later queue oracles exact.
+    assert_eq!(callback.drain(&mut consumer), 2);
     if shared {
         prove_shared_material(
             &engine,
@@ -370,6 +472,7 @@ fn run_publication_and_mouse_proof(test_name: &str, accepted_only: bool, shared:
     call(&probe, "restore");
     assert_eq!(callback.drain(&mut consumer), 1);
     call(&probe, "restored_accepted");
+    assert_eq!(callback.drain(&mut consumer), 2);
     render(&mut callback, VOCALS_AMPLITUDE);
     call(&probe, "reject_tampered_restore");
     assert_eq!(callback.drain(&mut consumer), 0);
@@ -424,6 +527,7 @@ fn restore_saved_material(directory: &Path) {
             NativeBridge {
                 engine: engine.clone_ref(py),
                 producer: producer.clone(),
+                root: root.clone(),
             },
         )
         .unwrap();
@@ -458,6 +562,7 @@ fn restore_saved_material(directory: &Path) {
     call(&probe, "begin");
     assert_eq!(callback.drain(&mut consumer), 1);
     call(&probe, "accepted");
+    assert_eq!(callback.drain(&mut consumer), 2);
     Python::attach(|py| {
         probe
             .getattr(py, "controller")
@@ -520,25 +625,40 @@ fn prove_shared_material(
     consumer: &mut rtrb::Consumer<ControlMessage>,
     callback: &mut Callback,
 ) {
-    let (source, generation): (String, String) = Python::attach(|py| {
-        (
-            probe
-                .getattr(py, "project")
-                .unwrap()
-                .getattr(py, "sample_paths")
-                .unwrap()
-                .bind(py)
-                .get_item(0)
-                .unwrap()
-                .extract()
-                .unwrap(),
-            probe
-                .getattr(py, "saved_path")
-                .unwrap()
-                .extract(py)
-                .unwrap(),
-        )
-    });
+    let (source, generation, descriptor_reference): (String, String, String) =
+        Python::attach(|py| {
+            (
+                probe
+                    .getattr(py, "project")
+                    .unwrap()
+                    .getattr(py, "sample_paths")
+                    .unwrap()
+                    .bind(py)
+                    .get_item(0)
+                    .unwrap()
+                    .extract()
+                    .unwrap(),
+                probe
+                    .getattr(py, "saved_path")
+                    .unwrap()
+                    .extract(py)
+                    .unwrap(),
+                probe
+                    .getattr(py, "project")
+                    .unwrap()
+                    .getattr(py, "stem_cache")
+                    .unwrap()
+                    .bind(py)
+                    .get_item(0)
+                    .unwrap()
+                    .getattr("pair")
+                    .unwrap()
+                    .getattr("descriptor_reference")
+                    .unwrap()
+                    .extract()
+                    .unwrap(),
+            )
+        });
     load_slot(engine, 215, source, root, producer, consumer, callback);
     let ticket = Python::attach(|py| {
         engine
@@ -557,6 +677,32 @@ fn prove_shared_material(
             .unwrap()
             .unwrap()
     });
+    // This subscriber names the legacy original, while the complete canonical
+    // pair marker names its verified canonical copy. The ordinary Pair opener
+    // keeps that disk lineage separate from this subscriber's own runtime ticket.
+    let pair = Python::attach(|py| {
+        let held = engine.borrow(py);
+        let native: &AudioEngine = &held;
+        py.detach(|| {
+            native.prepare_stem_pair_at_root(
+                root,
+                215,
+                version,
+                &generation,
+                &ticket,
+                true,
+                Some(&descriptor_reference),
+            )
+        })
+        .unwrap()
+    });
+    assert!(pair.has_components());
+    let selection: serde_json::Value = serde_json::from_str(pair.selection_json()).unwrap();
+    assert_eq!(selection["descriptor_reference"], descriptor_reference);
+    assert_eq!(selection["wav_generation"], generation);
+    assert_eq!(ticket.publication_status(), "captured");
+    // Background preparation legitimately registers the fully sealed Pair.
+    // Queue admission failures must add no further subscriber/reader booking.
     let readers = Python::attach(|py| engine.borrow(py).project_assets.status().unwrap().1);
     {
         let mut producer = producer.lock().unwrap();
@@ -572,14 +718,7 @@ fn prove_shared_material(
                 .unwrap();
             assert!(
                 engine
-                    .publish_prepared_stems_with_producer(
-                        py,
-                        215,
-                        version.to_owned(),
-                        generation.clone(),
-                        &rejected,
-                        producer
-                    )
+                    .publish_stem_pair_with_producer(&pair, &rejected, producer)
                     .is_err()
             );
             assert_eq!(rejected.publication_status(), "captured");
@@ -594,14 +733,7 @@ fn prove_shared_material(
     Python::attach(|py| {
         engine
             .borrow(py)
-            .publish_prepared_stems_with_producer(
-                py,
-                215,
-                version.to_owned(),
-                generation,
-                &ticket,
-                producer,
-            )
+            .publish_stem_pair_with_producer(&pair, &ticket, producer)
             .unwrap()
     });
     assert_eq!(ticket.publication_status(), "pending");

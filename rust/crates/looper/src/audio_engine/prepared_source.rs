@@ -110,6 +110,10 @@ impl std::fmt::Debug for PreparedTimingPermit {
 impl PreparedTimingPermit {
     fn current(&self) -> bool {
         self.ownership.authority[self.id].load(Ordering::Acquire) == self.binding.authority_revision
+            && self
+                .ownership
+                .binding_source_generation(self.id, self.binding)
+                .is_some()
             && self.acknowledgements.current_epoch(self.id)
                 == self
                     .binding
@@ -343,7 +347,26 @@ pub(super) fn enqueue_current_prepared_stems_with_owner(
         ticket,
         source_version,
         stems,
-        Some(registration),
+        Some((registration.0, registration.1, None)),
+    )
+}
+
+pub(super) fn enqueue_current_prepared_pair_with_owner(
+    engine: &AudioEngine,
+    producer: &Arc<Mutex<Producer<ControlMessage>>>,
+    ticket: &PreparedSourceTicket,
+    source_version: &str,
+    stems: crate::messages::PreparedStemSet,
+    wav_path: PathBuf,
+    pair: super::resident_relocation::StemPairOwner,
+) -> PyResult<()> {
+    enqueue_prepared_stems(
+        engine,
+        producer,
+        ticket,
+        source_version,
+        stems,
+        Some((wav_path.clone(), wav_path, Some(pair))),
     )
 }
 
@@ -353,7 +376,11 @@ fn enqueue_prepared_stems(
     ticket: &PreparedSourceTicket,
     source_version: &str,
     stems: crate::messages::PreparedStemSet,
-    registration: Option<(PathBuf, PathBuf)>,
+    registration: Option<(
+        PathBuf,
+        PathBuf,
+        Option<super::resident_relocation::StemPairOwner>,
+    )>,
 ) -> PyResult<()> {
     let id = ticket.id;
     let requests = engine
@@ -500,7 +527,7 @@ mod tests {
             sample_rate_hz: ticket.sample_rate_hz,
             channels: 1,
             frame_count: 16,
-            available_mask: 31,
+            available_mask: ((1_u16 << crate::messages::STEM_BUFFER_COUNT) - 1) as u8,
             stems: std::array::from_fn(|_| ticket.sample.clone()),
         }
     }

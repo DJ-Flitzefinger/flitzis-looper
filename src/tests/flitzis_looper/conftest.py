@@ -210,6 +210,9 @@ def audio_engine_mock() -> Iterator[Mock]:
             FakeGlobalPlaybackBatchTicket()
         )
         audio_engine.return_value.capture_prepared_source.return_value = FakePreparedSourceTicket()
+        # Historical WAV controller oracles exercise the explicit compatibility
+        # route. New ordinary pair-worker tests install their own typed result.
+        audio_engine.return_value.prepare_stem_pair = None
         audio_engine.return_value.acquire_project_asset_lease = Mock(
             side_effect=FakeProjectAssetLease
         )

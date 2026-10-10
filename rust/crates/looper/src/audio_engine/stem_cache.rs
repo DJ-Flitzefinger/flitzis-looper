@@ -7,9 +7,9 @@ use sha2::{Digest, Sha256};
 #[cfg(test)]
 use std::fs;
 use std::fs::File;
-use std::io::Read;
 #[cfg(test)]
 use std::io::{self, Write};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use crate::messages::{PreparedStemSet, STEM_BUFFER_COUNT, SampleBuffer};
@@ -133,6 +133,53 @@ pub(super) fn prepare_stem_buffers_from_cache_at_project_root(
         return Err("source_version must not be empty".to_string());
     }
 
+    let complete = prepare_complete_stems_at_project_root(
+        reference,
+        output_sample_rate,
+        cache_dir,
+        project_root,
+    )?;
+    let complete_stems = complete.stems;
+    let expected_frames = reference.frame_count();
+    let mut identity = Sha256::new();
+    identity.update(b"aligned-complete-stem-set-v1");
+    identity.update(source_version.as_bytes());
+    identity.update(output_sample_rate.to_le_bytes());
+    identity.update((expected_frames as u64).to_le_bytes());
+    for stem in &complete_stems {
+        for value in stem.samples.iter() {
+            identity.update(value.to_bits().to_le_bytes());
+        }
+    }
+    let [vocals, melody, bass, drums, _instrumental] = complete_stems;
+    Ok(PreparedStemSet {
+        complete_set_identity: std::sync::Arc::new(identity.finalize().into()),
+        accepted_timing: None,
+        reference_samples: reference.samples.clone(),
+        publication: super::prepared_source::PreparedSourcePermit::unbound(),
+        source_version_hash: source_version_hash(source_version),
+        sample_rate_hz: output_sample_rate,
+        channels: reference.channels,
+        frame_count: expected_frames,
+        available_mask: ((1_u16 << STEM_BUFFER_COUNT) - 1) as u8,
+        stems: [vocals, melody, bass, drums],
+    })
+}
+
+/// Complete five-artifact conversion result; offset uses loaded/output-rate frames.
+/// Temporary instrumental PCM belongs here rather than in an offline-only descriptor.
+pub(super) struct CompleteAlignedStems {
+    pub stems: [SampleBuffer; 5],
+    pub offset_frames: isize,
+}
+
+/// Execute the existing exact-geometry PCM16 conversion and one shared alignment.
+pub(super) fn prepare_complete_stems_at_project_root(
+    reference: &SampleBuffer,
+    output_sample_rate: u32,
+    cache_dir: &str,
+    project_root: &Path,
+) -> Result<CompleteAlignedStems, String> {
     validate_sample_buffer(reference, output_sample_rate)?;
     let expected_frames = reference.frame_count();
     if admitted_stem_pcm_bytes(expected_frames, reference.channels)?
@@ -148,7 +195,7 @@ pub(super) fn prepare_stem_buffers_from_cache_at_project_root(
     }
 
     let cache_dir = project_root.join(project_stem_cache_dir(cache_dir)?);
-    let mut buffers = Vec::with_capacity(STEM_BUFFER_COUNT);
+    let mut buffers = Vec::with_capacity(STEM_FILE_NAMES.len());
 
     for stem_name in STEM_FILE_NAMES {
         let path = cache_dir.join(format!("{stem_name}.wav"));
@@ -162,38 +209,20 @@ pub(super) fn prepare_stem_buffers_from_cache_at_project_root(
         buffers.push(buffer);
     }
 
-    align_component_stems_to_reference(
+    let offset_frames = align_component_stems_to_reference(
         reference,
         &mut buffers,
         output_sample_rate,
         expected_frames,
     );
 
-    let stems: [SampleBuffer; STEM_BUFFER_COUNT] = buffers
+    let stems: [SampleBuffer; 5] = buffers
         .try_into()
         .map_err(|_| "stem set is incomplete".to_string())?;
 
-    let mut identity = Sha256::new();
-    identity.update(b"aligned-complete-stem-set-v1");
-    identity.update(source_version.as_bytes());
-    identity.update(output_sample_rate.to_le_bytes());
-    identity.update((expected_frames as u64).to_le_bytes());
-    for stem in &stems {
-        for value in stem.samples.iter() {
-            identity.update(value.to_bits().to_le_bytes());
-        }
-    }
-    Ok(PreparedStemSet {
-        complete_set_identity: std::sync::Arc::new(identity.finalize().into()),
-        accepted_timing: None,
-        reference_samples: reference.samples.clone(),
-        publication: super::prepared_source::PreparedSourcePermit::unbound(),
-        source_version_hash: source_version_hash(source_version),
-        sample_rate_hz: output_sample_rate,
-        channels: reference.channels,
-        frame_count: expected_frames,
-        available_mask: ((1_u16 << STEM_BUFFER_COUNT) - 1) as u8,
+    Ok(CompleteAlignedStems {
         stems,
+        offset_frames,
     })
 }
 
@@ -202,20 +231,21 @@ fn align_component_stems_to_reference(
     buffers: &mut [SampleBuffer],
     output_sample_rate: u32,
     expected_frames: usize,
-) {
-    if buffers.len() != STEM_BUFFER_COUNT || reference.channels == 0 || expected_frames == 0 {
-        return;
+) -> isize {
+    if buffers.len() != STEM_FILE_NAMES.len() || reference.channels == 0 || expected_frames == 0 {
+        return 0;
     }
 
     let frame_offset =
         detected_stem_alignment_offset(reference, buffers, output_sample_rate, expected_frames);
     if frame_offset == 0 {
-        return;
+        return 0;
     }
 
     for buffer in buffers {
         shift_sample_buffer(buffer, expected_frames, frame_offset);
     }
+    frame_offset
 }
 
 fn detected_stem_alignment_offset(
@@ -486,12 +516,54 @@ fn read_aligned_pcm16_wav(
     expected_channels: usize,
     expected_frames: usize,
 ) -> Result<SampleBuffer, String> {
+    let mut reader = File::open(path).map_err(|err| format!("Failed to open WAV file: {err}"))?;
+    let bytes = read_complete_wav(&mut reader, expected_channels, expected_frames)?;
+    let (format, data) = validated_pcm16_geometry(
+        &bytes,
+        expected_sample_rate_hz,
+        expected_channels,
+        expected_frames,
+    )?;
+    let mut samples = Vec::with_capacity(data.len() / 2);
+    for chunk in data.chunks_exact(2) {
+        let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
+        samples.push(pcm16_to_float(sample));
+    }
+    Ok(SampleBuffer {
+        residency: None,
+        channels: format.channels,
+        samples: samples.into_boxed_slice().into(),
+    })
+}
+
+/// Check the same decoder geometry on a held sealed reader without conversion/alignment.
+pub(super) fn verify_pcm16_wav_geometry(
+    reader: &mut File,
+    sample_rate_hz: u32,
+    channels: usize,
+    frames: usize,
+) -> Result<(), String> {
+    let bytes = read_complete_wav(reader, channels, frames)?;
+    validated_pcm16_geometry(&bytes, sample_rate_hz, channels, frames)?;
+    reader
+        .seek(SeekFrom::Start(0))
+        .map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+fn read_complete_wav(
+    reader: &mut File,
+    expected_channels: usize,
+    expected_frames: usize,
+) -> Result<Vec<u8>, String> {
     let maximum_file_bytes = expected_frames
         .checked_mul(expected_channels)
         .and_then(|n| n.checked_mul(2))
         .and_then(|n| n.checked_add(1024 * 1024))
         .ok_or("stem file geometry overflow")?;
-    let mut reader = File::open(path).map_err(|err| format!("Failed to open WAV file: {err}"))?;
+    reader
+        .seek(SeekFrom::Start(0))
+        .map_err(|err| err.to_string())?;
     let length = reader
         .metadata()
         .map_err(|err| format!("Failed to inspect WAV file: {err}"))?
@@ -510,7 +582,16 @@ fn read_aligned_pcm16_wav(
     {
         return Err("stem WAV grew beyond bounded admitted extent".into());
     }
-    let (format, data) = parse_pcm16_wav(&bytes)?;
+    Ok(bytes)
+}
+
+fn validated_pcm16_geometry(
+    bytes: &[u8],
+    expected_sample_rate_hz: u32,
+    expected_channels: usize,
+    expected_frames: usize,
+) -> Result<(WavFormat, &[u8]), String> {
+    let (format, data) = parse_pcm16_wav(bytes)?;
 
     if format.sample_rate_hz != expected_sample_rate_hz {
         return Err(format!(
@@ -538,17 +619,7 @@ fn read_aligned_pcm16_wav(
         ));
     }
 
-    let mut samples = Vec::with_capacity(data.len() / 2);
-    for chunk in data.chunks_exact(2) {
-        let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
-        samples.push(pcm16_to_float(sample));
-    }
-
-    Ok(SampleBuffer {
-        residency: None,
-        channels: format.channels,
-        samples: samples.into_boxed_slice().into(),
-    })
+    Ok((format, data))
 }
 
 fn parse_pcm16_wav(bytes: &[u8]) -> Result<(WavFormat, &[u8]), String> {
@@ -859,7 +930,7 @@ mod tests {
         assert_eq!(prepared.sample_rate_hz, 48_000);
         assert_eq!(prepared.channels, 2);
         assert_eq!(prepared.frame_count, 2);
-        assert_eq!(prepared.available_mask, 0b1_1111);
+        assert_eq!(prepared.available_mask, 0b1111);
         assert!(prepared.source_version_hash != 0);
         for stem in prepared.stems {
             assert_eq!(stem.channels, 2);
@@ -911,8 +982,7 @@ mod tests {
         )
         .unwrap();
 
-        let prepared = prepare_stem_buffers_from_cache_at_project_root(
-            "samples/loop.wav|64|10",
+        let prepared = prepare_complete_stems_at_project_root(
             &sample,
             48_000,
             "samples/stems/cache",

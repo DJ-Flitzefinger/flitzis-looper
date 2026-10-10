@@ -817,6 +817,7 @@ fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
         } => MAX_VOICES + 4,
         ControlMessage::LoadSample { .. } => MAX_VOICES + 2,
         ControlMessage::PublishPreparedStems { .. } => 2,
+        ControlMessage::SetStemPairFullMix { .. } => 3,
         ControlMessage::PublishConstantTiming { .. } | ControlMessage::RefreshAcceptedTiming(_) => {
             1
         }
@@ -1309,6 +1310,12 @@ pub(super) fn process_control_message<
             source_version_hash,
         } => {
             mixer.set_stem_mix_mode(id, mode, source_version_hash);
+        }
+        ControlMessage::SetStemPairFullMix { id, retired } => {
+            for stems in retired.into_iter().flatten() {
+                retirement.retire_prepared_stems(stems);
+            }
+            mixer.set_stem_pair_full_mix_rt(id, retirement);
         }
         ControlMessage::SetStemEnabledMask {
             id,

@@ -243,7 +243,7 @@ fn productive_history_rate_ramps_pause_stem_transition_and_in_range_loop_keep_ch
         sample_rate_hz: RATE,
         channels: 1,
         frame_count: source.samples.len(),
-        available_mask: 31,
+        available_mask: ((1_u16 << crate::messages::STEM_BUFFER_COUNT) - 1) as u8,
         accepted_timing: None,
         stems: std::array::from_fn(|_| sample(0.1)),
     };

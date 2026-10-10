@@ -89,7 +89,7 @@ fn prepared_stems(
         sample_rate_hz: 48_000,
         channels: 2,
         frame_count: reference.frame_count(),
-        available_mask: 31,
+        available_mask: ((1_u16 << crate::messages::STEM_BUFFER_COUNT) - 1) as u8,
         stems: std::array::from_fn(|index| SampleBuffer {
             channels: 2,
             samples: Arc::from(vec![

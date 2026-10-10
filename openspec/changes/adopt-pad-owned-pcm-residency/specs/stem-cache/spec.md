@@ -120,6 +120,33 @@ musical meanings and complete five-artifact integrity SHALL remain mandatory.
 - **THEN** the pair has no eligible joint marker and cannot become resident-ready
 - **AND** bounded retry/rollback recognizes exact owned generations while preserving old selected sets
 
+#### Scenario: One executed loaded-rate offset binds all five artifacts
+- **WHEN** the existing exact-geometry PCM16 conversion and shared alignment execute once
+- **THEN** every persisted f32 derivative SHALL match that executed result bit-for-bit
+- **AND** the signed offset SHALL use complete playback frames at the loaded output rate, separately from source_zero_frame
+- **AND** the descriptor SHALL bind the supported conversion/alignment revisions, full source identity and exact five WAV/PCM lengths, digests and EOF
+- **AND** incompatible WAV rate/layout/extent SHALL fail rather than imply an unexecuted resampling policy
+
+#### Scenario: Instrumental corruption invalidates complete pair reuse
+- **GIVEN** the instrumental derivative is not resident for live playback
+- **WHEN** any instrumental WAV or PCM leaf is missing, replaced, truncated, nonfinite or differs from the complete descriptor
+- **THEN** fresh pair reuse and four-component readiness SHALL fail before native publication
+- **AND** old selected verified readers SHALL remain protected
+
+#### Scenario: Common eligibility leaf commits last
+- **WHEN** a verified WAV generation and its complete PCM generation are prepared
+- **THEN** a strict common descriptor under the material's `.pcm-cache/stems/v1/.pairs/` SHALL become eligible only after both immutable areas have flushed, renamed, reopened and fully reverified
+- **AND** neither area rename alone SHALL grant complete selection or playback eligibility
+- **AND** compatible retries SHALL verify and reuse the same logical source/transform/five-artifact pair without duplicate creation rights
+- **AND** unknown metadata, unsupported revisions, extra children and half-pairs SHALL remain protected rather than be adopted or recursively deleted
+
+#### Scenario: Shared complete pair has independent callback authority
+- **GIVEN** pads #1 and #216 select the same fully verified immutable pair
+- **WHEN** each prepares its current four-component source window
+- **THEN** each SHALL require its own current source/timing/window permit and native callback ACK
+- **AND** a durable descriptor, shared PCM or another subscriber's ACK SHALL grant no publication permission
+- **AND** `I` SHALL remain Drums + Melody + Bass while instrumental remains disk/offline
+
 ## ADDED Requirements
 
 ### Requirement: Generated artifacts do not imply resident stems
@@ -132,6 +159,19 @@ demand, enabled preload policy or existing valid reader ownership.
 - **THEN** complete WAV/PCM artifacts remain durable on disk
 - **AND** unused temporary component buffers retire without losing existing live readers
 - **AND** disk completion alone does not report resident-ready or effective ALL STEMS
+
+#### Scenario: Background pair preparation permits simultaneous UI control
+- **GIVEN** one pad is playing while another pad prepares its complete stem pair
+- **WHEN** the background worker performs artifact reads, conversion, alignment or writes
+- **THEN** it SHALL hold captured immutable source readers and current publication fences without retaining a Python borrow of the AudioEngine
+- **AND** ordinary UI message reception and control commands SHALL remain callable on that same engine throughout preparation
+- **AND** the returned pair SHALL still require its own current source, timing and window validation before callback adoption
+
+#### Scenario: Instrumental offline access is a real paired reader
+- **WHEN** an explicit offline consumer requests instrumental from a selected verified pair
+- **THEN** the consumer SHALL acquire and retain the same complete pair before reading its instrumental PCM
+- **AND** this request SHALL NOT create a fifth live layer or imply ALL STEMS residency
+- **AND** FULL MIX with preload off SHALL release temporary five-buffer conversion/alignment data after durable selection
 
 
 ### Requirement: Prepared StemSet versions have equal independent users
@@ -153,3 +193,35 @@ The system SHALL bind a complete prepared immutable StemSet version independentl
 - **WHEN** one subscriber removes its assignment while another still wants the shared job
 - **THEN** the job continues for the remaining interest and late results cannot change reused slots
 - **AND** only the final interest may request cancellation; lease release waits for real read end
+
+#### Scenario: A newer pair selection supersedes pending migration work
+- **GIVEN** a subscriber has captured a saved complete pair for material migration
+- **WHEN** its current StemCache selection changes before preparation or publication
+- **THEN** migration SHALL preserve the newer selection and SHALL NOT publish the captured older components
+- **AND** unresolved work SHALL retain its real owners and current project settings instead of granting authority from the saved selection
+
+#### Scenario: FullMix intent waits for a running pair worker to return
+- **WHEN** FULL MIX is requested after pair preparation has entered the bounded worker pool
+- **THEN** settlement SHALL wait for actual worker return and retain the verified disk selection without unnecessary resident components
+- **AND** a late old publication ACK SHALL NOT recreate resident demand after a successfully ordered FULL MIX release
+- **AND** a later ALL STEMS request SHALL prepare current components and require its own publication ACK
+
+#### Scenario: Weak history retires its historical source lease
+- **GIVEN** historical pair descriptors retain a canonical source lease for living logical readers
+- **WHEN** the final voice, queued set, job and retirement sink release that logical identity
+- **THEN** bounded control reconciliation SHALL remove the dead historical descriptor and release its source lease
+- **AND** saved selections and other actual readers SHALL continue to protect their independent paired artifacts
+
+#### Scenario: Standalone pair recovery readers remain coupled
+- **WHEN** a verified PCM or common-descriptor recovery reader is reopened
+- **THEN** it SHALL reverify the complete source, five WAVs and five PCM artifacts and pin any recognized matching common eligibility leaf
+- **AND** it SHALL NOT carry a saved source, timing or stem publication ACK
+- **AND** a recognized PCM half-pair without common eligibility SHALL remain a retry target without playback eligibility
+
+#### Scenario: Legacy migration prepares its complete pair off the frame thread
+- **GIVEN** a verified available legacy WAV selection has no saved complete-pair descriptor
+- **WHEN** material migration copies that selection into its canonical material
+- **THEN** the ordinary bounded stem worker SHALL prepare and return a fully verified pair from the copied canonical WAV generation before migration saves its strict selection
+- **AND** initial FULL MIX SHALL request disk-only preparation, await actual worker return and avoid live component publication
+- **AND** ALL STEMS requested during disk-only work SHALL await that return before fresh component work with an independent publication ticket and ACK
+- **AND** worker failures and newer stem selections SHALL preserve current intent and unresolved owners without synchronous frame-thread conversion

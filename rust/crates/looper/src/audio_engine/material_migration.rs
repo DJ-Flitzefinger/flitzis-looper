@@ -19,6 +19,29 @@ pub(super) struct PreparedMigrationMaterial {
 }
 
 impl PreparedMigrationMaterial {
+    /// Borrow existing admitted immutable material for off-thread derivative preparation.
+    /// Cloning the held lease grants no new subscriber or source/ACK authority.
+    pub(super) fn from_current(
+        samples_root: &Path,
+        sample: SampleBuffer,
+        lease: CommittedColdLease,
+    ) -> Result<Self, String> {
+        lease
+            .verify_reference(&sample)
+            .map_err(|error| error.to_string())?;
+        if lease.material_id.is_none() {
+            return Err("canonical material is required for current stem pair".into());
+        }
+        let new_reference = reference(samples_root, &lease.original_path)?;
+        let cache_reference = reference(samples_root, &lease.cache_path)?;
+        Ok(Self {
+            sample,
+            lease,
+            old_reference: new_reference.clone(),
+            new_reference,
+            cache_reference,
+        })
+    }
     /// Durable evidence only. Runtime assignment IDs, publication and ACK stay outside JSON.
     pub(super) fn metadata(&self) -> Value {
         json!({

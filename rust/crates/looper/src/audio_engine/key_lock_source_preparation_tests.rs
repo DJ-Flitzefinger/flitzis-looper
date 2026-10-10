@@ -141,7 +141,7 @@ fn component_sample(frame: usize, channel: usize, component: usize) -> f32 {
 }
 
 fn loop_fixture(rate: u32, ratio: f32, mode: ExplicitSeekMode, stem_mask: Option<u8>) -> Fixture {
-    let stems: [SampleBuffer; 5] = std::array::from_fn(|component| {
+    let stems: [SampleBuffer; 4] = std::array::from_fn(|component| {
         let samples = (0..1939)
             .flat_map(|frame| {
                 (0..2).map(move |channel| {

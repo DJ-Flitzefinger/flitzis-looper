@@ -677,7 +677,7 @@ fn material_migration_journal_holds_directory_identity_and_rejects_replacement_u
     assert!(current["error"].is_string());
 }
 
-fn migration_callback_8000(engine: &AudioEngine) -> Callback {
+pub(super) fn migration_callback_8000(engine: &AudioEngine) -> Callback {
     let mut callback = Callback {
         mixer: RtMixer::new(1, 8_000.0),
         scheduler: FixedCapacityScheduler::new(),
@@ -701,7 +701,7 @@ fn migration_callback_8000(engine: &AudioEngine) -> Callback {
     callback
 }
 
-fn restore_migration_timing_with_actual_ack(
+pub(super) fn restore_migration_timing_with_actual_ack(
     engine: &AudioEngine,
     callback: &mut Callback,
     producer: &Arc<Mutex<Producer<ControlMessage>>>,

@@ -22,6 +22,10 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from flitzis_looper.controller.key_metadata_persistence import recover_project_key_intent
+from flitzis_looper.controller.stem_pair_persistence import (
+    is_pair_metadata_error,
+    recover_stem_pair_metadata,
+)
 from flitzis_looper.controller.timing_persistence import (
     TimingPersistenceError,
     verified_project_timing,
@@ -65,6 +69,7 @@ class ProjectPersistence:
         self._migration_owner: str | None = None
         self._dirty = False
         self.load_error: str | None = None
+        self.invalid_stem_pair_ids: set[int] = set()
         self._last_write_monotonic = None
         self._audio: AudioEngine | None = None
         self._on_timing_error: Callable[[int, str], None] | None = None
@@ -225,6 +230,8 @@ class ProjectPersistence:
 
     def _write_snapshot(self, project: ProjectState, revision: int, now: float) -> str:
         """Verify and write while retaining changes newer than the captured revision."""
+        if self.load_error is not None:
+            raise PersistenceFenceError(self.load_error)
         try:
             snapshot = verified_project_timing(project, self._audio)
         except TimingPersistenceError as error:
@@ -312,6 +319,13 @@ class ProjectPersistence:
                     if item["loc"]
                 ):
                     persistence.load_error = "Unsupported migration metadata retained on disk"
+                if any(is_pair_metadata_error(item["loc"]) for item in error.errors()):
+                    persistence.load_error = "Unsupported stem pair metadata retained on disk"
+                    persistence.invalid_stem_pair_ids = {
+                        item["loc"][1]
+                        for item in error.errors()
+                        if is_pair_metadata_error(item["loc"]) and isinstance(item["loc"][1], int)
+                    }
                 return persistence
 
         return ProjectPersistence(state)
@@ -321,6 +335,7 @@ class ProjectPersistence:
         """Neutralize only malformed new metadata, preserving all valid performer intent."""
         if any(
             item["loc"][0] not in {"pad_key_intent", "material_migrations", "config_revision"}
+            and not is_pair_metadata_error(item["loc"])
             for item in error.errors()
             if item["loc"]
         ):
@@ -331,6 +346,7 @@ class ProjectPersistence:
                 return ProjectState()
             if "pad_key_intent" in recovered:
                 recovered = recover_project_key_intent(recovered)
+            recover_stem_pair_metadata(recovered, error)
             revision = recovered.get("config_revision", 0)
             if type(revision) is not int or revision < 0:
                 recovered["config_revision"] = 0

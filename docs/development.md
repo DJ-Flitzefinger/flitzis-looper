@@ -37,7 +37,9 @@ Model assets remain an explicit separate installation. See
 [stem setup](stem-generation-setup.md) for identities, driver verification and rollback.
 The optional Beat This environment and its frozen CPU/model acceptance are unchanged.
 
-Start the app:
+On Windows, build the Release once with `start-release.bat --build-only`, then
+use the official `start.bat` entrypoint for normal starts. For direct development
+source runs:
 
 ```powershell
 uv run python -m flitzis_looper
@@ -66,23 +68,46 @@ Rust test runner. It starts no CPAL stream, app, device or model worker.
 
 Double-click a start file in the repository root, or call it from a terminal:
 
+- `start.bat` is the official normal start: it runs the already installed Rust
+  Release build without synchronizing dependencies, installing, or compiling.
 - `start-dev.bat` builds and starts the app with the Rust Debug profile.
 - `start-release.bat` builds and starts the app with the optimized Rust Release
   profile.
 
-Both files run from their own repository directory, synchronize dependencies
-with `uv sync --locked`, install the selected native profile with
-`uv run --no-sync maturin develop --locked` (adding `--release` for Release),
-then run `uv run --no-sync python -m flitzis_looper`. Existing build artifacts
-are reused by the build tools. The shared implementation is
-`scripts/start-app.bat`.
+All files run from their own repository directory, including when called from
+another working directory or a path containing spaces. `start.bat` uses the
+existing `.venv\Scripts\python.exe` directly. It checks the loaded native
+module's `native_build_profile()` before starting the app. A missing environment,
+missing extension/profile getter, import failure, or Debug build stops startup
+with instructions to run `start-release.bat --build-only`. It never silently
+builds or switches profiles.
 
-Close all running Looper windows before using either file: both profiles install
-the same native extension, which Windows cannot replace while the app is using
-it. A failed setup or build stops the launch, and the terminal stays open to
-show the error. The launchers require `uv` on `PATH` and the native build setup
-described below. Release still runs the Python source app; these files do not
-create the future standalone installer.
+The two build starters synchronize dependencies with `uv sync --locked`, install
+the selected native profile with
+`uv run --no-sync maturin develop --locked` (adding `--release` for Release),
+verify the installed profile, then run `.venv\Scripts\python.exe -m flitzis_looper`.
+Existing build artifacts are reused by the build tools. The shared implementation
+is `scripts/start-app.bat`.
+
+For checks that do not open the app or an audio device:
+
+```powershell
+.\start-release.bat --build-only
+.\start.bat --check
+.\start-dev.bat --build-only
+```
+
+`--check` uses exactly the normal Release preflight and exits before the app.
+`--build-only` performs the normal setup, native build and profile verification
+and exits before the app. Both return nonzero failures without pausing.
+
+Close all running Looper windows before using either build starter: both profiles
+install the same native extension, which Windows cannot replace while the app is
+using it. A failed setup or build stops the launch. Normal double-click starts
+keep the terminal open on failure to show the error. Only the build starters
+require `uv` on `PATH` and the native build setup described below; `start.bat`
+uses the existing environment. Release still runs the Python source app; these
+files do not create the future standalone installer.
 
 ## Native Rubber Band Dependency
 

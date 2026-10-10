@@ -250,11 +250,41 @@ pub(super) fn prove_ready_mouse_triggers(
         );
         assert_eq!(callback.drain(consumer), 1);
         call(probe, "restored_accepted");
-        call(probe, "mouse_poll");
+        // Current Pair completion sends the genuine ALL mode and component mask
+        // only after its own native ACK. Drain those scalars before asking the
+        // residency controller for the replacement's independently required ACK.
+        let mode = consumer.pop().unwrap();
+        let mask = consumer.pop().unwrap();
+        let version_hash = super::super::super::stem_cache::source_version_hash(version.unwrap());
         assert!(matches!(
-            consumer.peek(),
-            Ok(ControlMessage::RelocateResident(_))
+            &mode,
+            ControlMessage::SetStemMixMode {
+                id: 0,
+                mode: StemMixMode::AllStems,
+                source_version_hash,
+            } if *source_version_hash == version_hash
         ));
+        assert!(matches!(
+            &mask,
+            ControlMessage::SetStemEnabledMask {
+                id: 0,
+                enabled_stem_mask: 1,
+                source_version_hash,
+            } if *source_version_hash == version_hash
+        ));
+        producer.lock().unwrap().push(mode).unwrap();
+        producer.lock().unwrap().push(mask).unwrap();
+        assert_eq!(callback.drain(consumer), 2);
+        call(probe, "mouse_poll");
+        assert!(
+            matches!(consumer.peek(), Ok(ControlMessage::RelocateResident(_))),
+            "replacement requires a current Pair window and its own native ACK: {}",
+            Python::attach(|py| probe
+                .call_method0(py, "mouse_status")
+                .unwrap()
+                .extract::<String>(py)
+                .unwrap())
+        );
         assert!(
             !callback
                 .mixer

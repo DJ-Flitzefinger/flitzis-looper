@@ -25,6 +25,14 @@ const STEM_NAMES: [&str; 6] = [
     ".complete.json",
 ];
 const PCM_NAMES: [&str; 3] = ["decoder.f32le", "playback.f32le", "manifest.json"];
+const STEM_PCM_NAMES: [&str; 6] = [
+    "vocals.f32le",
+    "melody.f32le",
+    "bass.f32le",
+    "drums.f32le",
+    "instrumental.f32le",
+    "manifest.json",
+];
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::other(message.into())
@@ -45,6 +53,8 @@ enum ArtifactKind {
     Original,
     StemDirectory,
     PcmDirectory,
+    StemPcmDirectory,
+    StemPairDescriptor,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -350,6 +360,16 @@ fn seal_artifact(root: &Path, reference: &Path) -> io::Result<SealedArtifact> {
     let kind = match typed.kind {
         AssetKind::Original { .. } => ArtifactKind::Original,
         AssetKind::PcmDirectory => ArtifactKind::PcmDirectory,
+        AssetKind::StemPcmDirectory {
+            generation: true, ..
+        } if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(material_paths::ready_generation) =>
+        {
+            ArtifactKind::StemPcmDirectory
+        }
+        AssetKind::StemPairDescriptor { .. } => ArtifactKind::StemPairDescriptor,
         AssetKind::StemDirectory {
             material,
             generation,
@@ -369,7 +389,8 @@ fn seal_artifact(root: &Path, reference: &Path) -> io::Result<SealedArtifact> {
         _ => return Err(invalid("artifact reference has the wrong type")),
     };
     let original = kind == ArtifactKind::Original;
-    guards.extend(project_assets::directory_guards(if original {
+    let leaf = original || kind == ArtifactKind::StemPairDescriptor;
+    guards.extend(project_assets::directory_guards(if leaf {
         path.parent()
             .ok_or_else(|| invalid("original parent missing"))?
     } else {
@@ -377,7 +398,7 @@ fn seal_artifact(root: &Path, reference: &Path) -> io::Result<SealedArtifact> {
     })?);
     let identity = project_assets::capture_identity(&path)?
         .ok_or_else(|| invalid("artifact identity missing"))?;
-    let names = if original {
+    let names = if leaf {
         vec![
             path.file_name()
                 .and_then(|name| name.to_str())
@@ -385,10 +406,10 @@ fn seal_artifact(root: &Path, reference: &Path) -> io::Result<SealedArtifact> {
                 .to_owned(),
         ]
     } else {
-        let known: &[&str] = if kind == ArtifactKind::PcmDirectory {
-            &PCM_NAMES
-        } else {
-            &STEM_NAMES
+        let known: &[&str] = match kind {
+            ArtifactKind::PcmDirectory => &PCM_NAMES,
+            ArtifactKind::StemPcmDirectory => &STEM_PCM_NAMES,
+            _ => &STEM_NAMES,
         };
         let entries = fs::read_dir(&path)?
             .take(known.len() + 1)
@@ -411,11 +432,7 @@ fn seal_artifact(root: &Path, reference: &Path) -> io::Result<SealedArtifact> {
     let mut files = Vec::with_capacity(names.len());
     let mut proof = Vec::with_capacity(names.len());
     for name in names {
-        let file_path = if original {
-            path.clone()
-        } else {
-            path.join(&name)
-        };
+        let file_path = if leaf { path.clone() } else { path.join(&name) };
         let mut file = sealed_reader(&file_path)?;
         let file_identity = project_assets::file_identity(&file)?;
         let (bytes, sha256) = hash_file(&mut file)?;
@@ -427,12 +444,15 @@ fn seal_artifact(root: &Path, reference: &Path) -> io::Result<SealedArtifact> {
         });
         files.push(file);
     }
-    if original && proof[0].identity != identity {
+    if leaf && proof[0].identity != identity {
         return Err(invalid("original identity changed during sealing"));
     }
     match kind {
         ArtifactKind::PcmDirectory => verify_pcm_metadata(&path, &mut files, &proof)?,
         ArtifactKind::StemDirectory => verify_stem_metadata(&mut files, &proof)?,
+        ArtifactKind::StemPcmDirectory | ArtifactKind::StemPairDescriptor => {
+            files.extend(super::stem_pair::verify_recovery_area(&root, &path).map_err(invalid)?);
+        }
         ArtifactKind::Original => (),
     }
     let receipt = Receipt {

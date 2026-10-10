@@ -1,14 +1,26 @@
-use pyo3::pymodule;
+use pyo3::{pyfunction, pymodule};
 
 mod audio_engine;
 mod messages;
 mod selected_bpm;
+
+/// Report the profile of this loaded native module without opening an engine.
+#[pyfunction]
+fn native_build_profile() -> &'static str {
+    if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    }
+}
 
 /// The Python module implemented in Rust.
 #[pymodule]
 mod flitzis_looper_audio {
     #[pymodule_export]
     use super::audio_engine::resolve_project_asset;
+    #[pymodule_export]
+    use super::native_build_profile;
     #[pymodule_export]
     use super::selected_bpm::summarize_selected_bpm_json;
 
@@ -40,7 +52,11 @@ mod flitzis_looper_audio {
     use super::audio_engine::OfflineAnalysisJob;
 
     #[pymodule_export]
+    use super::audio_engine::InstrumentalStemReader;
+    #[pymodule_export]
     use super::audio_engine::PreparedSourceTicket;
+    #[pymodule_export]
+    use super::audio_engine::PreparedStemPair;
 
     #[pymodule_export]
     use super::audio_engine::ConstantTimingTicket;

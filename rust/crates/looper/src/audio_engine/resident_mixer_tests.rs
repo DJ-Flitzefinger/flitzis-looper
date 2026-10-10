@@ -122,8 +122,8 @@ fn stems(sample: &SampleBuffer) -> PreparedStemSet {
         sample_rate_hz: RATE,
         channels: 1,
         frame_count: sample.frame_count(),
-        available_mask: 31,
-        stems: [0.1, 0.2, 0.3, 0.4, 0.7].map(|gain| SampleBuffer {
+        available_mask: ((1_u16 << crate::messages::STEM_BUFFER_COUNT) - 1) as u8,
+        stems: [0.1, 0.2, 0.3, 0.4].map(|gain| SampleBuffer {
             residency: sample.residency.clone(),
             channels: 1,
             samples: Arc::from(

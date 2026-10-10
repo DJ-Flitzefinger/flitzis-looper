@@ -589,6 +589,15 @@ class MigrationArtifactReconciler:
                     paths.add(
                         resolve_asset(Path(entry.cache_dir), project_root=self._samples.parent).path
                     )
+                    if entry.pair is not None:
+                        paths.update(
+                            resolve_asset(reference, project_root=self._samples.parent).path
+                            for reference in (
+                                entry.pair.wav_generation,
+                                entry.pair.pcm_generation,
+                                entry.pair.descriptor_reference,
+                            )
+                        )
                 except (OSError, RuntimeError, ValueError) as error:
                     errors.append(str(error))
 

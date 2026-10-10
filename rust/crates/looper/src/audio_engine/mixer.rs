@@ -256,6 +256,7 @@ pub struct RtMixer {
 
     /// Per-pad bounded transition state for accepted stem source-selection changes.
     stem_transitions: [StemTransition; NUM_SAMPLES],
+    release_pair_components: [bool; NUM_SAMPLES],
 
     /// Active voices with MAX_VOICES slots.
     pub voices: [VoiceSlot; MAX_VOICES],
@@ -333,6 +334,7 @@ impl RtMixer {
             stem_mix_source_version_hash: std::array::from_fn(|_| 0),
             stem_enabled_mask: std::array::from_fn(|_| STEM_COMPONENT_MASK),
             stem_transitions: std::array::from_fn(|_| StemTransition::default()),
+            release_pair_components: [false; NUM_SAMPLES],
             voices: std::array::from_fn(|_| {
                 VoiceSlot::with_preparation_lane(
                     channels,
@@ -1119,6 +1121,7 @@ impl RtMixer {
 
         stems.publication.mark_accepted();
         self.prepared_stems[id] = Some(stems);
+        self.release_pair_components[id] = false;
         self.stem_transitions[id].clear();
         self.invalidate_prepared_for_pad(id);
         true
@@ -1208,6 +1211,37 @@ impl RtMixer {
                 self.arm_stem_transition(id, previous, next);
                 true
             }
+        }
+    }
+
+    pub(crate) fn set_stem_pair_full_mix_rt(
+        &mut self,
+        id: usize,
+        retirement: &mut impl AudioBufferRetirement,
+    ) {
+        if self.set_stem_mix_mode(id, StemMixMode::FullMix, 0) {
+            self.release_pair_components[id] = true;
+            self.retire_unused_pair_components(retirement);
+        }
+    }
+
+    fn retire_unused_pair_components(&mut self, retirement: &mut impl AudioBufferRetirement) {
+        for id in 0..NUM_SAMPLES {
+            if !self.release_pair_components[id]
+                || self.stem_mix_mode[id] != StemMixMode::FullMix
+                || (self.sample_is_active(id) && self.stem_transitions[id].is_active())
+            {
+                continue;
+            }
+            if self.prepared_stems[id].is_some() && retirement.available_retirement_slots() == 0 {
+                return; // Keep the exact owner; retry in a later bounded render pass.
+            }
+            if let Some(stems) = self.prepared_stems[id].take() {
+                retirement.retire_prepared_stems(stems);
+            }
+            // Keep the full-mix policy through an older window worker's return.
+            // A new ordinary stem publication explicitly clears it above.
+            self.stem_transitions[id].clear();
         }
     }
 
@@ -2556,6 +2590,7 @@ impl RtMixer {
             }
             pad_playhead_frame[voice.sample_id] = Some(voice.frame_pos);
         }
+        self.retire_unused_pair_components(retirement);
     }
 }
 
@@ -2609,13 +2644,7 @@ mod tests {
             channels: 1,
             frame_count: frames,
             available_mask: full_stem_available_mask(),
-            stems: [
-                source,
-                silence.clone(),
-                silence.clone(),
-                silence.clone(),
-                silence,
-            ],
+            stems: [source, silence.clone(), silence.clone(), silence],
         }
     }
 
@@ -3525,7 +3554,7 @@ mod tests {
                 1,
                 SAMPLE_RATE_HZ as u32,
                 stem_loop_frames,
-                [0.1, 0.05, 0.0, 0.0, 0.05],
+                [0.1, 0.05, 0.0, 0.0],
             ),
         ));
         assert!(mixer.set_stem_mix_mode(1, StemMixMode::AllStems, 42));
@@ -4059,7 +4088,7 @@ mod tests {
             1,
             44_100,
             20,
-            [0.1, 0.2, 0.05, 0.0, 0.15],
+            [0.1, 0.2, 0.05, 0.0],
         );
         assert!(mixer.publish_prepared_stems(0, stems));
         assert!(mixer.play_sample(0, 1.0));
@@ -4081,7 +4110,7 @@ mod tests {
             1,
             44_100,
             20,
-            [0.1, 0.2, 0.05, 0.0, 0.15],
+            [0.1, 0.2, 0.05, 0.0],
         );
         assert!(mixer.publish_prepared_stems(0, stems));
         assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
@@ -4104,7 +4133,7 @@ mod tests {
             1,
             44_100,
             20,
-            [0.1, 0.2, 0.05, 0.4, 0.15],
+            [0.1, 0.2, 0.05, 0.4],
         );
         assert!(mixer.publish_prepared_stems(0, stems));
         assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
@@ -4132,7 +4161,7 @@ mod tests {
             1,
             44_100,
             20,
-            [0.1, 0.2, 0.05, 0.4, 0.8],
+            [0.1, 0.2, 0.05, 0.4],
         );
         assert!(mixer.publish_prepared_stems(0, stems));
         assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));
@@ -4156,7 +4185,7 @@ mod tests {
             1,
             44_100,
             20,
-            [0.1, 0.2, 0.05, 0.0, 0.15],
+            [0.1, 0.2, 0.05, 0.0],
         );
         assert!(mixer.publish_prepared_stems(0, stems));
         assert!(mixer.play_sample(0, 1.0));
@@ -4219,7 +4248,6 @@ mod tests {
                     channels: 1,
                     samples: Arc::from(drums.into_boxed_slice()),
                 },
-                create_test_sample(1, 8, 0.0),
             ],
         };
         mixer.load_sample(0, full_mix);
@@ -4257,7 +4285,7 @@ mod tests {
             1,
             44_100,
             20,
-            [0.1, 0.2, 0.05, 0.0, 0.15],
+            [0.1, 0.2, 0.05, 0.0],
         );
         assert!(mixer.publish_prepared_stems(0, stems));
 
@@ -4283,7 +4311,7 @@ mod tests {
             1,
             44_100,
             20,
-            [0.9, 0.0, 0.0, 0.0, 0.0],
+            [0.9, 0.0, 0.0, 0.0],
         );
         stems.available_mask = 0;
         mixer.prepared_stems[0] = Some(stems);
@@ -4307,7 +4335,7 @@ mod tests {
             1,
             44_100,
             20,
-            [0.9, 0.0, 0.0, 0.0, 0.0],
+            [0.9, 0.0, 0.0, 0.0],
         );
         mixer.load_sample(0, create_test_sample(1, 20, 0.4));
         // Exercise render's independent validation even if a stale set bypassed admission.
@@ -4334,7 +4362,6 @@ mod tests {
         let stem_values: [[f32; 6]; STEM_BUFFER_COUNT] = [
             [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
             [10.0, 20.0, 30.0, 40.0, 50.0, 60.0],
-            [0.0; 6],
             [0.0; 6],
             [0.0; 6],
         ];
@@ -4386,7 +4413,7 @@ mod tests {
             1,
             44_100,
             100,
-            [0.1, 0.05, 0.0, 0.0, 0.05],
+            [0.1, 0.05, 0.0, 0.0],
         );
         assert!(mixer.publish_prepared_stems(0, stems,));
         assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 42));

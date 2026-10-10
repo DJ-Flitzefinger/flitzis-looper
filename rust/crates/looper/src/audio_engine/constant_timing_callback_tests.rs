@@ -810,7 +810,7 @@ fn prepared_stems_actual_callback_backpressure_and_stale_revision_preserve_exist
             sample_rate_hz: RATE,
             channels: 1,
             frame_count: RATE as usize,
-            available_mask: 31,
+            available_mask: ((1_u16 << crate::messages::STEM_BUFFER_COUNT) - 1) as u8,
             stems: std::array::from_fn(|_| pcm.clone()),
         }
     };

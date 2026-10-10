@@ -101,6 +101,14 @@ mod source_grid;
 mod source_playback;
 mod source_reader;
 mod stem_cache;
+mod stem_pair;
+mod stem_pair_preparation;
+pub use stem_pair_preparation::{InstrumentalStemReader, PreparedStemPair};
+mod stem_pair_descriptor;
+#[cfg(test)]
+mod stem_pair_fault_tests;
+#[cfg(all(test, windows))]
+mod stem_pair_tests;
 pub(crate) mod stretch_processor;
 mod timing;
 mod transport;
@@ -595,6 +603,11 @@ fn parse_constant_timing_pcm_limit(value: &Bound<'_, PyAny>) -> PyResult<usize> 
 #[pyclass]
 pub struct AudioEngine {
     stream_handle: Option<AudioStreamHandle>,
+    #[cfg(test)]
+    test_control_channels: Option<(
+        Arc<Mutex<Producer<ControlMessage>>>,
+        Arc<Mutex<rtrb::Consumer<AudioMessage>>>,
+    )>,
     is_playing: bool,
     loader_tx: Sender<LoaderEvent>,
     loader_rx: Mutex<Receiver<LoaderEvent>>,
@@ -629,6 +642,28 @@ pub struct AudioEngine {
 }
 
 impl AudioEngine {
+    fn control_producer(&self) -> PyResult<&Arc<Mutex<Producer<ControlMessage>>>> {
+        if let Some(handle) = &self.stream_handle {
+            return Ok(&handle.producer);
+        }
+        #[cfg(test)]
+        if let Some((producer, _)) = &self.test_control_channels {
+            return Ok(producer);
+        }
+        Err(PyRuntimeError::new_err("Audio engine not initialized"))
+    }
+
+    fn audio_message_consumer(&self) -> PyResult<&Arc<Mutex<rtrb::Consumer<AudioMessage>>>> {
+        if let Some(handle) = &self.stream_handle {
+            return Ok(&handle.consumer);
+        }
+        #[cfg(test)]
+        if let Some((_, consumer)) = &self.test_control_channels {
+            return Ok(consumer);
+        }
+        Err(PyRuntimeError::new_err("Audio engine not initialized"))
+    }
+
     /// Prepare, lease and enqueue a current stem set through the actual control producer.
     /// Stream startup supplies the producer; hardware-free probes use the same kernel.
     pub(super) fn publish_prepared_stems_with_producer(
@@ -671,6 +706,29 @@ impl AudioEngine {
         )
         .map_err(PyValueError::new_err)?;
         drop(requests);
+
+        // Ordinary cold-loaded sources use the persistent complete pair kernel.
+        // The legacy in-memory probe path below has no immutable cold source lease.
+        if self
+            .cold_leases
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("cold lease lock poisoned"))?[id]
+            .is_some()
+        {
+            let pair = py
+                .detach(|| {
+                    self.prepare_stem_pair_current(
+                        id,
+                        &source_version,
+                        &cache_dir,
+                        source_ticket,
+                        true,
+                        None,
+                    )
+                })
+                .map_err(PyValueError::new_err)?;
+            return self.publish_stem_pair_with_producer(&pair, source_ticket, producer);
+        }
 
         // Preparation owns the exact generation while disk reads run detached.
         // Successful registration below transfers protection to PCM readers.
@@ -823,6 +881,8 @@ impl AudioEngine {
 
         Ok(AudioEngine {
             stream_handle: None,
+            #[cfg(test)]
+            test_control_channels: None,
             is_playing: false,
             loader_tx,
             loader_rx: Mutex::new(loader_rx),
@@ -1784,6 +1844,61 @@ impl AudioEngine {
         prepared_source::capture_prepared_source(self, id, source_version)
     }
 
+    /// Background complete-pair preparation; only four components are optionally resident.
+    #[pyo3(signature=(id,source_version,cache_dir,source_ticket,components,descriptor_reference=None))]
+    pub fn prepare_stem_pair(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
+        id: usize,
+        source_version: String,
+        cache_dir: String,
+        source_ticket: &PreparedSourceTicket,
+        components: bool,
+        descriptor_reference: Option<String>,
+    ) -> PyResult<PreparedStemPair> {
+        let work = {
+            let engine = slf.try_borrow()?;
+            let root = engine.project_assets_root()?;
+            engine
+                .capture_stem_pair_work(&root, id, &source_version, source_ticket)
+                .map_err(PyValueError::new_err)?
+        };
+        // Python UI receivers may borrow this engine while immutable worker I/O runs.
+        py.detach(move || work.prepare(&cache_dir, components, descriptor_reference.as_deref()))
+            .map_err(PyValueError::new_err)
+    }
+
+    /// Publish already prepared buffers with this subscriber's own current ticket.
+    pub fn publish_stem_pair(
+        &self,
+        prepared: &PreparedStemPair,
+        source_ticket: &PreparedSourceTicket,
+    ) -> PyResult<()> {
+        self.publish_stem_pair_api(prepared, source_ticket)
+    }
+
+    /// Explicit source-bound Instrumental access for offline workers.
+    pub fn open_instrumental_stem_reader(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
+        id: usize,
+        source_version: String,
+        descriptor_reference: String,
+    ) -> PyResult<InstrumentalStemReader> {
+        let work = {
+            let engine = slf.try_borrow()?;
+            let ticket = engine.capture_prepared_source(id, source_version.clone())?;
+            let root = engine.project_assets_root()?;
+            engine
+                .capture_stem_pair_work(&root, id, &source_version, &ticket)
+                .map_err(PyValueError::new_err)?
+        };
+        let prepared = py
+            .detach(move || work.prepare("", false, Some(&descriptor_reference)))
+            .map_err(PyValueError::new_err)?;
+        prepared.instrumental_reader(py)
+    }
+
     /// Recheck the admission snapshot before and after off-thread artifact preparation.
     pub fn publish_prepared_stems(
         &self,
@@ -1868,6 +1983,18 @@ impl AudioEngine {
             .map_err(|_| {
                 PyRuntimeError::new_err("Failed to send SetStemMixMode - buffer may be full")
             })
+    }
+
+    /// Release paired component residency after full-mix transition, preserving disk selection.
+    pub fn set_stem_pair_full_mix(&mut self, sample_id: usize) -> PyResult<()> {
+        if sample_id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+        let handle = self
+            .stream_handle
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Audio stream is not initialized"))?;
+        resident_relocation::set_stem_pair_full_mix_with_producer(self, sample_id, &handle.producer)
     }
 
     /// Select which prepared component stems are enabled for all-stems playback.
@@ -2952,13 +3079,8 @@ impl AudioEngine {
 
     /// Send a ping message to the audio thread.
     pub fn ping(&mut self) -> PyResult<()> {
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
-        let mut producer_guard = handle
-            .producer
+        let mut producer_guard = self
+            .control_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
@@ -2969,13 +3091,8 @@ impl AudioEngine {
 
     /// Receive a message from the audio thread.
     pub fn receive_msg(&mut self) -> PyResult<Option<AudioMessage>> {
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
-        let mut consumer_guard = handle
-            .consumer
+        let mut consumer_guard = self
+            .audio_message_consumer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire consumer lock"))?;
 

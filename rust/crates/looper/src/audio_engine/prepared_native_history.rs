@@ -311,7 +311,7 @@ pub(super) mod tests {
             channels,
             frame_count: SOURCE_FRAMES,
             available_mask: full_stem_available_mask(),
-            stems: [0.1, 0.2, 0.3, 0.4, 0.7].map(|gain| SampleBuffer {
+            stems: [0.1, 0.2, 0.3, 0.4].map(|gain| SampleBuffer {
                 residency: None,
                 channels,
                 samples: sample

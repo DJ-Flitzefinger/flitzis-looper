@@ -66,7 +66,9 @@ class MigrationArtifactEvidence(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     schema_version: int = Field(default=1, strict=True, ge=1, le=1)
-    kind: Literal["original", "stem_directory", "pcm_directory"]
+    kind: Literal[
+        "original", "stem_directory", "pcm_directory", "stem_pcm_directory", "stem_pair_descriptor"
+    ]
     reference: str = Field(strict=True, min_length=1)
     identity: ArtifactIdentity
     samples_identity: ArtifactIdentity
@@ -77,6 +79,14 @@ class MigrationArtifactEvidence(BaseModel):
         names = {item.name for item in self.files}
         expected = {
             "pcm_directory": {"decoder.f32le", "playback.f32le", "manifest.json"},
+            "stem_pcm_directory": {
+                "vocals.f32le",
+                "melody.f32le",
+                "bass.f32le",
+                "drums.f32le",
+                "instrumental.f32le",
+                "manifest.json",
+            },
             "stem_directory": {
                 "vocals.wav",
                 "melody.wav",
@@ -86,11 +96,9 @@ class MigrationArtifactEvidence(BaseModel):
                 ".complete.json",
             },
         }.get(self.kind)
-        if (
-            len(names) != len(self.files)
-            or (expected is not None and names != expected)
-            or (self.kind == "original" and len(self.files) != 1)
-        ):
+        if self.kind in {"original", "stem_pair_descriptor"}:
+            expected = {self.reference.rsplit("/", 1)[-1]}
+        if len(names) != len(self.files) or (expected is not None and names != expected):
             message = "migration artifact receipt must describe exactly its recognized complete set"
             raise ValueError(message)
         return self

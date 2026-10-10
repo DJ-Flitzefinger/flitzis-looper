@@ -19,6 +19,14 @@ pub(super) enum AssetKind {
     StemArtifact,
     PcmDirectory,
     PcmArtifact,
+    StemPcmDirectory {
+        material: String,
+        generation: bool,
+    },
+    StemPcmArtifact,
+    StemPairDescriptor {
+        material: String,
+    },
     SlotMembership,
     MigrationJournal,
 }
@@ -228,6 +236,43 @@ pub(super) fn classify(path: &Path) -> io::Result<AssetKind> {
         {
             Ok(AssetKind::PcmArtifact)
         }
+        ["materials", owner, ".pcm-cache", "stems", "v1", generation]
+            if owner.strip_prefix('M').is_some_and(valid_id) && stem_generation(generation) =>
+        {
+            Ok(AssetKind::StemPcmDirectory {
+                material: owner[1..].to_owned(),
+                generation: true,
+            })
+        }
+        [
+            "materials",
+            owner,
+            ".pcm-cache",
+            "stems",
+            "v1",
+            generation,
+            name,
+        ] if owner.strip_prefix('M').is_some_and(valid_id)
+            && stem_generation(generation)
+            && stem_pcm_file(name) =>
+        {
+            Ok(AssetKind::StemPcmArtifact)
+        }
+        [
+            "materials",
+            owner,
+            ".pcm-cache",
+            "stems",
+            "v1",
+            ".pairs",
+            name,
+        ] if owner.strip_prefix('M').is_some_and(valid_id)
+            && name.strip_suffix(".json").is_some_and(valid_id) =>
+        {
+            Ok(AssetKind::StemPairDescriptor {
+                material: owner[1..].to_owned(),
+            })
+        }
         _ => Err(invalid(
             "asset path does not name a declared project artifact",
         )),
@@ -244,6 +289,13 @@ fn legacy_stem_container(name: &str) -> bool {
 
 fn pcm_file(name: &str) -> bool {
     ["decoder.f32le", "playback.f32le", "manifest.json"].contains(&name)
+}
+
+fn stem_pcm_file(name: &str) -> bool {
+    name == "manifest.json"
+        || name
+            .strip_suffix(".f32le")
+            .is_some_and(|stem| super::stem_cache::STEM_FILE_NAMES.contains(&stem))
 }
 
 /// Resolve an exact typed reference. The shared ownership resolver rejects
@@ -299,6 +351,9 @@ pub fn resolve_project_asset(
         AssetKind::StemArtifact => ("stem_artifact", None),
         AssetKind::PcmDirectory => ("pcm_directory", None),
         AssetKind::PcmArtifact => ("pcm_artifact", None),
+        AssetKind::StemPcmDirectory { material, .. } => ("stem_pcm_directory", Some(material)),
+        AssetKind::StemPcmArtifact => ("stem_pcm_artifact", None),
+        AssetKind::StemPairDescriptor { material } => ("stem_pair_descriptor", Some(material)),
         AssetKind::SlotMembership => ("slot_membership", None),
         AssetKind::MigrationJournal => ("migration_journal", None),
     };

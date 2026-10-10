@@ -320,7 +320,7 @@ fn prepared_native_mixer_stem_selection_ramp_defers_then_adopts_actual_stem_hist
         sample_rate_hz: RATE,
         channels: 1,
         frame_count: sample.samples.len(),
-        available_mask: 31,
+        available_mask: ((1_u16 << crate::messages::STEM_BUFFER_COUNT) - 1) as u8,
         stems: std::array::from_fn(|index| SampleBuffer {
             residency: None,
             channels: 1,
@@ -680,7 +680,7 @@ fn musical_full_stem_transition_and_continuous_filter_output_share_one_fractiona
                     sample_rate_hz: rate,
                     channels: 1,
                     frame_count: sample.samples.len(),
-                    available_mask: 31,
+                    available_mask: ((1_u16 << crate::messages::STEM_BUFFER_COUNT) - 1) as u8,
                     stems: std::array::from_fn(|index| SampleBuffer {
                         residency: None,
                         channels: 1,

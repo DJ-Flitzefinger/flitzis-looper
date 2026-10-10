@@ -9,7 +9,9 @@ K-META neutral key policy, persistence and source/request guards are independent
 accepted; audible pitch, UI/MIDI and later storage slices remain pending.
 P2a is independently accepted for one verified material and all related current
 references. P2b recognized remaining-material recovery and exact final-owner
-cleanup are independently accepted; later storage/audio/UI/Human gates stay open.
+cleanup are independently accepted. P3 complete paired stem storage and current
+ordinary preparation/publication are independently accepted; later
+storage/audio/UI/Human gates stay open.
 
 The [extended program](../../../docs/pad-owned-pcm-program.md) and
 [complete coverage map](../../../docs/pre-rust-program-coverage.json) own the
@@ -123,8 +125,21 @@ storage/audio/UI/Human gate remain protected/open.
 
 ### P3
 
-- [ ] Fuenf aligned persistent Stem-f32+fuenf WAVs, joint immutable pair/descriptor in canonical material container
-- [ ] Source/rate/layout/offset/digests/EOF, cross-area fault/retry, retained readers; vier Live-Komponenten, instrumental disk/offline, keine wiederholte complete alignment
+The independently accepted pair stores five WAV artifacts and their aligned f32
+derivatives, exposing four live components with independent source/timing/window
+ACKs. Current
+57 pair tests, three ordinary publication regressions, the genuine public-engine
+worker/UI concurrency child and 46 affected Python cases passed; the corrected
+optimized Release is installed and its launch-only check passes without App start.
+FullPython 3287/35 device skips, unchanged broad positive DSP/window/retirement
+inputs and 168 Analysis tests are impact-bound evidence. The broad native 923/4
+batch remains FAILED; current three publication and 14 Reader regressions close
+its four stale test expectations. Five fresh long musical tests and the explicit
+strict 75/1000 gate passed. Static/format/official strict are current. No P4,
+hearing, Human or whole-program acceptance follows.
+
+- [x] Fuenf aligned persistent Stem-f32+fuenf WAVs, joint immutable pair/descriptor in canonical material container
+- [x] Source/rate/layout/offset/digests/EOF, cross-area fault/retry, retained readers; vier Live-Komponenten, instrumental disk/offline, keine wiederholte complete alignment
 
 ### P4a
 

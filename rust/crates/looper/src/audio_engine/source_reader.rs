@@ -754,7 +754,7 @@ mod tests {
             channels: 2,
             frame_count: 6,
             available_mask: full_stem_available_mask(),
-            stems: [1.0, 10.0, 0.0, 0.0, 1000.0].map(stereo_sample),
+            stems: [1.0, 10.0, 0.0, 0.0].map(stereo_sample),
         }
     }
 
@@ -1253,12 +1253,15 @@ mod tests {
                 &stems, &sample, channels, rate, frames
             ));
         }
-        let mut incomplete = stems.clone();
-        incomplete.available_mask = STEM_COMPONENT_MASK;
-        assert!(
-            prepared_stem_set_for_render(Some(&incomplete), &sample, 2, 48_000.0, 6, None)
-                .is_none()
-        );
+        for missing_component in 0..STEM_BUFFER_COUNT {
+            let mut incomplete = stems.clone();
+            incomplete.available_mask = STEM_COMPONENT_MASK & !(1 << missing_component);
+            assert!(
+                prepared_stem_set_for_render(Some(&incomplete), &sample, 2, 48_000.0, 6, None)
+                    .is_none(),
+                "missing live component {missing_component} must reject render eligibility"
+            );
+        }
         let mut stale = stems.clone();
         stale.source_version_hash = 0;
         assert!(

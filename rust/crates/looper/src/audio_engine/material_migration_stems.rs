@@ -95,11 +95,11 @@ fn verify_source(
     Ok((guards, reader))
 }
 
-struct SealedSet {
-    _guards: Vec<File>,
-    _files: Vec<File>,
+pub(super) struct SealedSet {
+    pub(super) _guards: Vec<File>,
+    pub(super) _files: Vec<File>,
     identities: Vec<FileIdentity>,
-    marker: Value,
+    pub(super) marker: Value,
 }
 
 fn read_marker(directory: &Path) -> Result<(File, Value), String> {
@@ -165,6 +165,17 @@ fn verify_set(
         identities,
         marker,
     })
+}
+
+/// Reuse the same complete five-SHA/marker verifier for aligned pair preparation.
+pub(super) fn verify_complete_wav_set(
+    directory: &Path,
+    source_version: &str,
+    maximum_wav_bytes: u64,
+    cancelled: &impl Fn() -> bool,
+) -> Result<SealedSet, String> {
+    exact_ready_files(directory)?;
+    verify_set(directory, source_version, maximum_wav_bytes, cancelled)
 }
 
 struct OwnedGeneration {

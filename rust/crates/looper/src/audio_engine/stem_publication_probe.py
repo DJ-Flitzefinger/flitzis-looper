@@ -2,8 +2,11 @@
 # Compiled into an isolated Rust test, never imported as a Python package.
 # ruff: noqa: INP001
 
-import struct
+import hashlib
+import json
 import shutil
+import struct
+import time
 import wave
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
@@ -13,12 +16,17 @@ from imgui_bundle import imgui
 from flitzis_looper.controller import AppController
 from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.controller.persistence import ProjectPersistence
-from flitzis_looper.controller.stem_cache import expected_stem_files, verified_stem_cache_available
+from flitzis_looper.controller.stem_cache import (
+    cache_dir_for_sample_id,
+    expected_stem_files,
+    verified_stem_cache_available,
+)
 from flitzis_looper.controller.stem_generation import StemGenerationResult
 from flitzis_looper.controller.stems import StemController
 from flitzis_looper.controller.transport import TransportController
 from flitzis_looper.input_mapping import InputMappingController
 from flitzis_looper.models import PadContentIdentity, ProjectState, SessionState
+from flitzis_looper.stem_pair_selection import StemPairSelection
 from flitzis_looper.ui.context import UiContext
 from flitzis_looper.ui.render import performance_view
 
@@ -27,11 +35,40 @@ if TYPE_CHECKING:
         StemGenerationRequest,
         StemProgressCallback,
     )
-    from flitzis_looper_audio import AudioEngine, PreparedSourceTicket, ResidentWindowTicket
+    from flitzis_looper_audio import (
+        AudioEngine,
+        PreparedSourceTicket,
+        PreparedStemPair,
+        ResidentWindowTicket,
+    )
 
 
 class NativeProducerBridge(Protocol):
     engine: AudioEngine
+
+    def prepare_stem_pair(
+        self,
+        sample_id: int,
+        source_version: str,
+        cache_dir: str,
+        source_ticket: PreparedSourceTicket,
+        components: bool,
+        descriptor_reference: str | None = None,
+    ) -> PreparedStemPair: ...
+
+    def publish_stem_pair(
+        self, prepared: PreparedStemPair, source_ticket: PreparedSourceTicket
+    ) -> None: ...
+
+    def set_stem_mix_mode(
+        self, sample_id: int, mode: str, source_version: str | None = None
+    ) -> None: ...
+
+    def set_stem_enabled_mask(
+        self, sample_id: int, enabled_stem_mask: int, source_version: str
+    ) -> None: ...
+
+    def set_stem_pair_full_mix(self, sample_id: int) -> None: ...
 
     def publish_prepared_stems(
         self, sample_id: int, version: str, cache_dir: str, ticket: PreparedSourceTicket
@@ -69,6 +106,37 @@ class Audio:
 
     def __getattr__(self, name: str) -> object:
         return getattr(self.bridge.engine, name)
+
+    def prepare_stem_pair(
+        self,
+        sample_id: int,
+        source_version: str,
+        cache_dir: str,
+        source_ticket: PreparedSourceTicket,
+        components: bool,
+        descriptor_reference: str | None = None,
+    ) -> PreparedStemPair:
+        return self.bridge.prepare_stem_pair(
+            sample_id, source_version, cache_dir, source_ticket, components, descriptor_reference
+        )
+
+    def publish_stem_pair(
+        self, prepared: PreparedStemPair, source_ticket: PreparedSourceTicket
+    ) -> None:
+        self.bridge.publish_stem_pair(prepared, source_ticket)
+
+    def set_stem_mix_mode(
+        self, sample_id: int, mode: str, source_version: str | None = None
+    ) -> None:
+        self.bridge.set_stem_mix_mode(sample_id, mode, source_version)
+
+    def set_stem_enabled_mask(
+        self, sample_id: int, enabled_stem_mask: int, source_version: str
+    ) -> None:
+        self.bridge.set_stem_enabled_mask(sample_id, enabled_stem_mask, source_version)
+
+    def set_stem_pair_full_mix(self, sample_id: int) -> None:
+        self.bridge.set_stem_pair_full_mix(sample_id)
 
     def publish_prepared_stems(
         self, sample_id: int, version: str, cache_dir: str, ticket: PreparedSourceTicket
@@ -159,6 +227,78 @@ class OfflineFixtureBackend:
         )
 
 
+def wait_for_pending(controller: StemController, sample_id: int) -> PreparedSourceTicket:
+    """Collect the real Pair worker result before checking its native queued ticket."""
+    deadline = time.monotonic() + 10
+    while sample_id not in controller._pending_stem_publications:
+        controller.on_frame_render()
+        assert not controller._session.stem_generation_errors, (
+            controller._session.stem_generation_errors
+        )
+        assert time.monotonic() < deadline, "actual Pair worker did not publish a pending ticket"
+        if sample_id not in controller._pending_stem_publications:
+            time.sleep(0.001)
+    ticket = controller._pending_stem_publications[sample_id].source_ticket
+    assert ticket.publication_status() == "pending"
+    return ticket
+
+
+def assert_selected_pair(project: ProjectState, sample_id: int) -> None:
+    """Check durable canonical selection and actual five-artifact disk lineage.
+
+    Full native integrity/geometry was established by the real preparation kernel.
+    The subscriber may still name the verified legacy original; the pair's WAV
+    marker and descriptor name the canonical original with the same complete SHA.
+    """
+    entry = project.stem_cache[sample_id]
+    assert entry is not None and entry.pair is not None
+    selection = StemPairSelection.model_validate_json(entry.pair.model_dump_json())
+    assert selection == entry.pair
+    assert entry.cache_dir == selection.wav_generation
+    assert entry.stems == expected_stem_files(selection.wav_generation)
+    common_bytes = Path(selection.descriptor_reference).read_bytes()
+    common = json.loads(common_bytes)
+    pcm_bytes = (Path(selection.pcm_generation) / "manifest.json").read_bytes()
+    pcm_manifest = json.loads(pcm_bytes)
+    marker_bytes = (Path(selection.wav_generation) / ".complete.json").read_bytes()
+    marker = json.loads(marker_bytes)
+    assert common["schema_version"] == pcm_manifest["schema_version"] == 1
+    assert common["encoding"] == "aligned-stem-pair-v1"
+    assert pcm_manifest["encoding"] == "aligned-stem-pcm-v1"
+    assert (
+        common["stem_set_identity"]
+        == pcm_manifest["stem_set_identity"]
+        == selection.stem_set_identity
+    )
+    assert (
+        common["wav_generation"]
+        == pcm_manifest["wav_generation"]
+        == selection.wav_generation
+    )
+    assert common["pcm_generation"] == selection.pcm_generation
+    assert common["content"] == pcm_manifest["content"]
+    assert common["pcm_manifest_sha256"] == hashlib.sha256(pcm_bytes).hexdigest()
+    assert common["wav_manifest_sha256"] == hashlib.sha256(marker_bytes).hexdigest()
+    assert common["content"]["source_version"] == marker["source_version"]
+    assert (
+        common["content"]["source"]["original_sha256"]
+        == entry.source_version.rsplit(":", 1)[1]
+    )
+    assert Path(selection.wav_generation).parts[2] == f"M{common['content']['material_id']}"
+    # Preserve the old complete-five-WAV SHA oracle with the actual canonical
+    # marker's source version, without changing the runtime subscriber ticket.
+    assert verified_stem_cache_available(
+        entry.model_copy(update={"source_version": marker["source_version"]})
+    )
+    assert [artifact["name"] for artifact in common["content"]["artifacts"]] == [
+        "vocals", "melody", "bass", "drums", "instrumental"
+    ]
+    for artifact in common["content"]["artifacts"]:
+        data = (Path(selection.pcm_generation) / f"{artifact['name']}.f32le").read_bytes()
+        assert len(data) == artifact["pcm_bytes"]
+        assert hashlib.sha256(data).hexdigest() == artifact["pcm_sha256"]
+
+
 class Probe:
     def __init__(
         self, bridge: NativeProducerBridge, source_path: str, frames: int, rate: int
@@ -168,7 +308,9 @@ class Probe:
         self.project.sample_paths[0] = source_path
         self.project.sample_durations[0] = frames / rate
         self.project.pad_timing_intent[0] = "legacy"
+        self.project.pad_stem_mix_mode[0] = "all_stems"
         self.session = SessionState()
+        self.session.pad_stem_enabled_mask[0] = 1
         self.backend = OfflineFixtureBackend()
         self.controller = StemController(
             self.project,
@@ -242,7 +384,7 @@ class Probe:
         assert self.controller.generate_stems_async(0)
         self.controller.on_frame_render()
         assert not self.session.stem_generation_errors, self.session.stem_generation_errors
-        self.original_ticket = self.controller._pending_stem_publications[0].source_ticket
+        self.original_ticket = wait_for_pending(self.controller, 0)
         assert self.original_ticket.publication_status() == "pending"
         entry = self.project.stem_cache[0]
         assert entry is not None
@@ -250,9 +392,8 @@ class Probe:
         assert not self.controller.stems_available(0)
         assert self.backend.private_path is not None
         assert not self.backend.private_path.exists()
-        assert Path(entry.cache_dir).parent == Path("samples/stems/#1")
         assert Path(entry.cache_dir).name.startswith(".ready-")
-        assert verified_stem_cache_available(entry)
+        assert_selected_pair(self.project, 0)
         self.saved_path = entry.cache_dir
         return entry.source_version
 
@@ -266,13 +407,14 @@ class Probe:
         assert entry is not None
         assert entry.available
         assert entry.cache_dir == self.saved_path
-        assert verified_stem_cache_available(entry)
+        assert_selected_pair(self.project, 0)
 
     def save_survivor(self) -> None:
         entry = self.project.stem_cache[0]
         assert entry is not None and entry.available
         self.project.sample_paths[215] = self.project.sample_paths[0]
         self.project.sample_durations[215] = self.project.sample_durations[0]
+        self.project.pad_stem_mix_mode[215] = self.project.pad_stem_mix_mode[0]
         self.project.pad_content[215] = PadContentIdentity(instance_id="2" * 32)
         self.project.stem_cache[215] = entry.model_copy(deep=True)
         self.controller._assets.sync_assignments()
@@ -287,11 +429,12 @@ class Probe:
     def restore(self) -> None:
         self.restored_project = ProjectState.model_validate_json(self.project.model_dump_json())
         self.restored_session = SessionState()
+        self.restored_session.pad_stem_enabled_mask[0] = 1
         self.restored = StemController(self.restored_project, self.restored_session, self.audio)
         self.restored.restore_stem_cache_from_project_state()
         assert not self.restored.stems_available(0)
         assert self.restored.publish_restored_stem_cache_if_available(0)
-        self.restored_ticket = self.restored._pending_stem_publications[0].source_ticket
+        self.restored_ticket = wait_for_pending(self.restored, 0)
         assert self.restored_ticket is not self.original_ticket
         assert self.restored_ticket.publication_status() == "pending"
         assert self.original_ticket.publication_status() == "accepted"
@@ -304,7 +447,7 @@ class Probe:
         assert entry is not None
         assert entry.cache_dir == self.saved_path
         assert entry.available
-        assert verified_stem_cache_available(entry)
+        assert_selected_pair(self.restored_project, 0)
 
     def reject_tampered_restore(self) -> None:
         artifact = Path(self.saved_path) / "vocals.wav"
@@ -317,12 +460,26 @@ class Probe:
             assert artifact.read_bytes() == original
         else:
             raise AssertionError("active immutable stem generation permitted a write")
-        # A cold, unregistered damaged generation still fails the SHA verifier.
-        inactive = Path(self.saved_path).parent / f".ready-{'e' * 32}"
+        # Preserve the cold legacy-WAV SHA-reader oracle in an unregistered
+        # candidate, independently of the active canonical complete pair.
+        inactive = (
+            Path(cache_dir_for_sample_id(0, self.project.sample_paths[0]))
+            / f".ready-{'e' * 32}"
+        )
         shutil.copytree(Path(self.saved_path), inactive)
         previous = self.restored_project.stem_cache[0]
         assert previous is not None
-        damaged = previous.model_copy(update={"cache_dir": str(inactive), "stems": expected_stem_files(str(inactive))})
+        marker_path = inactive / ".complete.json"
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        marker["source_version"] = previous.source_version
+        marker_path.write_text(json.dumps(marker), encoding="utf-8")
+        damaged = previous.model_copy(
+            update={
+                "cache_dir": inactive.as_posix(),
+                "stems": expected_stem_files(inactive.as_posix()),
+                "pair": None,
+            }
+        )
         assert verified_stem_cache_available(damaged)
         (inactive / "vocals.wav").write_bytes(corrupted)
         assert not verified_stem_cache_available(damaged)
@@ -338,12 +495,12 @@ class Probe:
             self.restored_project.stem_cache[0] = previous
         entry = self.restored_project.stem_cache[0]
         assert entry is not None
-        assert verified_stem_cache_available(entry)
+        assert_selected_pair(self.restored_project, 0)
 
     def begin_stale_restore(self) -> None:
         self.restored.restore_stem_cache_from_project_state()
         assert self.restored.publish_restored_stem_cache_if_available(0)
-        self.stale_ticket = self.restored._pending_stem_publications[0].source_ticket
+        self.stale_ticket = wait_for_pending(self.restored, 0)
         assert self.stale_ticket.publication_status() == "pending"
 
     def rejected(self) -> None:
@@ -375,11 +532,11 @@ class SavedMaterialProbe:
         self.controller.restore_stem_cache_from_project_state()
         assert not self.controller.stems_available(215)
         assert self.controller.publish_restored_stem_cache_if_available(215)
-        self.ticket = self.controller._pending_stem_publications[215].source_ticket
+        self.ticket = wait_for_pending(self.controller, 215)
         assert self.ticket.publication_status() == "pending"
 
     def accepted(self) -> None:
         assert self.ticket.publication_status() == "accepted"
         self.controller.on_frame_render()
         assert self.controller.stems_available(215)
-        assert verified_stem_cache_available(self.project.stem_cache[215])
+        assert_selected_pair(self.project, 215)

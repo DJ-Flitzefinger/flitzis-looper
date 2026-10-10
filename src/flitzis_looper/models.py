@@ -43,6 +43,7 @@ from flitzis_looper.constants import (
 )
 from flitzis_looper.key_intent import KeyCorrectionView, PadKeyIntent, SourceKeyVersion
 from flitzis_looper.material_migration_model import MaterialMigrationAlias, MigrationID
+from flitzis_looper.stem_pair_selection import StemPairSelection
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -198,6 +199,15 @@ class StemCacheEntry(BaseModel):
 
     available: bool = False
     """Whether all expected cache artifacts are present and eligible for playback."""
+
+    pair: StemPairSelection | None = None
+    """Complete immutable WAV/PCM selection; runtime publication remains independent."""
+
+    @field_validator("pair", mode="before")
+    @classmethod
+    def _validate_pair(cls, value: object) -> StemPairSelection | None:
+        """Recheck immutable selections, including unchecked model_copy updates."""
+        return None if value is None else StemPairSelection.model_validate(value)
 
 
 def _default_sample_analysis() -> list[SampleAnalysis | None]:

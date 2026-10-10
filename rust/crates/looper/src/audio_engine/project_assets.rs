@@ -35,6 +35,14 @@ const STEM_FILES: [&str; 6] = [
     "instrumental.wav",
     ".complete.json",
 ];
+const STEM_PCM_FILES: [&str; 6] = [
+    "vocals.f32le",
+    "melody.f32le",
+    "bass.f32le",
+    "drums.f32le",
+    "instrumental.f32le",
+    "manifest.json",
+];
 
 pub(super) type PcmHistory = Mutex<Vec<Vec<Weak<[f32]>>>>;
 
@@ -102,6 +110,11 @@ impl ProjectAssetLease {
             || !matches!(
                 typed.kind,
                 super::material_paths::AssetKind::StemDirectory { .. }
+                    | super::material_paths::AssetKind::StemPcmDirectory {
+                        generation: true,
+                        ..
+                    }
+                    | super::material_paths::AssetKind::StemPairDescriptor { .. }
             )
         {
             return Err(PyRuntimeError::new_err(
@@ -215,17 +228,32 @@ impl ProjectAssets {
             .identity
             .as_ref()
             .ok_or_else(|| io::Error::other("reserved stem generation never existed"))?;
-        let _guards = directory_guards(&owner.path)?;
+        let typed = super::material_paths::resolve(&owner.root, &owner.path)?;
+        let _guards = directory_guards(
+            if matches!(
+                typed.kind,
+                super::material_paths::AssetKind::StemPairDescriptor { .. }
+            ) {
+                owner
+                    .path
+                    .parent()
+                    .ok_or_else(|| io::Error::other("common descriptor parent missing"))?
+            } else {
+                &owner.path
+            },
+        )?;
         if capture_identity(&owner.path)?.as_ref() != Some(expected) {
             return Err(io::Error::other(
                 "reserved stem generation was replaced; preserved",
             ));
         }
         owner.saved_assignment.store(true, Ordering::Release);
+        let related = stem_readers::related_pair_paths(&state, &owner.path, Some(expected));
         let legacy = owner.path.parent() == Some(owner.root.join("stems").as_path())
             && owner.path.file_name().is_some_and(is_pad_name);
         state.retiring.retain(|target, retirement| {
             let keep = target != &owner.path
+                && !related.contains(target)
                 && !(legacy
                     && target.parent() == Some(owner.path.as_path())
                     && target
@@ -257,7 +285,7 @@ impl ProjectAssets {
             || state
                 .readers
                 .iter()
-                .any(|reader| intersects(&reader.path, root))
+                .any(|reader| reader.protects_path(root))
             || state.retiring.keys().any(|path| intersects(path, root))
         {
             return;
@@ -383,6 +411,7 @@ impl ProjectAssets {
             super::cold_store::admit_original_owner(&path)?;
         }
         if claim_pending {
+            let related = stem_readers::related_pair_paths(&state, &path, identity.as_ref());
             for reader in &mut state.readers {
                 if reader.path == path {
                     reader.pending_assignment = false;
@@ -399,6 +428,7 @@ impl ProjectAssets {
                 && path.file_name().is_some_and(is_pad_name);
             state.retiring.retain(|target, retirement| {
                 let keep = target != &path
+                    && !related.contains(target)
                     && !(legacy_pad
                         && target.parent() == Some(path.as_path())
                         && target.file_name().is_some_and(|name| {
@@ -550,12 +580,95 @@ impl ProjectAssets {
             .state
             .lock()
             .map_err(|_| io::Error::other("asset gate poisoned"))?;
+        let identity = capture_identity(&path)?;
+        if let Some(targets) = state
+            .readers
+            .iter()
+            .find_map(|reader| reader.paired_retirements(&path, identity.as_ref()))
+        {
+            if targets
+                .iter()
+                .find(|(target, _)| target == &path)
+                .is_none_or(|(_, target)| target.recursive != recursive)
+            {
+                return Err(io::Error::other("paired target retirement shape mismatch"));
+            }
+            for (target_path, target) in &targets {
+                if target.root != root || capture_identity(target_path)? != target.identity {
+                    return Err(io::Error::other(
+                        "paired retirement object changed; preserved",
+                    ));
+                }
+                if let Some(previous) = state.retiring.get(target_path)
+                    && (previous.identity != target.identity
+                        || previous
+                            .files
+                            .as_ref()
+                            .is_some_and(|files| Some(files) != target.files.as_ref()))
+                {
+                    return Err(io::Error::other(
+                        "paired retirement evidence changed; preserved",
+                    ));
+                }
+                let proof = target.files.as_ref().expect("complete pair proof");
+                if target.recursive {
+                    stem_readers::check_pair_children(target_path, proof)?;
+                }
+                for file in proof {
+                    // Admission is bounded metadata work. The already sealed
+                    // proof is hashed again by the physical cleanup worker.
+                    let leaf = if target.recursive {
+                        target_path.join(&file.name)
+                    } else {
+                        target_path.clone()
+                    };
+                    let opened = super::cold_store::sealed_reader(&leaf)?;
+                    if file_identity(&opened)? != file.identity
+                        || opened.metadata()?.len() != file.bytes
+                    {
+                        return Err(io::Error::other(
+                            "paired retirement leaf changed; preserved",
+                        ));
+                    }
+                }
+            }
+            let needed = targets
+                .iter()
+                .filter(|(target, _)| !state.retiring.contains_key(target))
+                .count();
+            if state.retiring.len() + needed > MAX_RETIREMENTS {
+                return Err(io::Error::other("project asset retirement queue full"));
+            }
+            state
+                .retiring
+                .try_reserve(needed)
+                .map_err(|_| io::Error::other("paired retirement queue reservation failed"))?;
+            for reader in &mut state.readers {
+                if reader.path == path {
+                    reader.pending_assignment = false;
+                    reader.saved_claim = false;
+                }
+            }
+            for (target_path, target) in targets {
+                state
+                    .retiring
+                    .entry(target_path)
+                    .and_modify(|previous| {
+                        // Upgrade ordinary same-object evidence while retaining an
+                        // existing inventory/outcome Arc and its exact identity.
+                        if previous.files.is_none() {
+                            previous.files = target.files.clone();
+                        }
+                    })
+                    .or_insert(target);
+            }
+            return Ok(());
+        }
         // Coalesce without replacing the originally captured object identity.
         // A repeated request after pathname ABA must not authorize the new leaf.
         if state.retiring.contains_key(&path) {
             return Ok(());
         }
-        let identity = capture_identity(&path)?;
         for owner in state.owners.iter().filter_map(Weak::upgrade) {
             if owner.path == path && owner.identity.is_some() && owner.identity != identity {
                 return Err(io::Error::other("assigned asset was replaced; preserved"));
@@ -571,7 +684,7 @@ impl ProjectAssets {
             && !state
                 .readers
                 .iter()
-                .any(|reader| reader.path == path || (!recursive && path.starts_with(&reader.path)))
+                .any(|reader| reader.protects_path(&path))
             && !state.retiring.contains_key(&path)
         {
             if identity.is_none() {
@@ -579,6 +692,15 @@ impl ProjectAssets {
             }
             return Err(io::Error::other(
                 "asset has no recognized assignment or reader ownership",
+            ));
+        }
+        if matches!(
+            super::material_paths::resolve(&root, &path)?.kind,
+            super::material_paths::AssetKind::StemPcmDirectory { .. }
+                | super::material_paths::AssetKind::StemPairDescriptor { .. }
+        ) {
+            return Err(io::Error::other(
+                "paired artifact retirement requires complete verified evidence",
             ));
         }
         if !state.retiring.contains_key(&path) && state.retiring.len() >= MAX_RETIREMENTS {
@@ -638,7 +760,11 @@ impl ProjectAssets {
         }
         let kind = super::material_paths::resolve(&owner.root, &owner.path)?.kind;
         let pcm = matches!(kind, super::material_paths::AssetKind::PcmDirectory);
-        let recursive = !matches!(kind, super::material_paths::AssetKind::Original { .. });
+        let recursive = !matches!(
+            kind,
+            super::material_paths::AssetKind::Original { .. }
+                | super::material_paths::AssetKind::StemPairDescriptor { .. }
+        );
         let names: Vec<&str> = match &kind {
             super::material_paths::AssetKind::Original { .. } => vec![
                 owner
@@ -650,6 +776,23 @@ impl ProjectAssets {
             super::material_paths::AssetKind::PcmDirectory => {
                 vec!["decoder.f32le", "playback.f32le", "manifest.json"]
             }
+            super::material_paths::AssetKind::StemPcmDirectory {
+                generation: true, ..
+            } if owner
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(super::material_paths::ready_generation) =>
+            {
+                STEM_PCM_FILES.to_vec()
+            }
+            super::material_paths::AssetKind::StemPairDescriptor { .. } => vec![
+                owner
+                    .path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or_else(|| io::Error::other("common descriptor leaf invalid"))?,
+            ],
             super::material_paths::AssetKind::StemDirectory {
                 material,
                 generation,
@@ -771,6 +914,7 @@ impl ProjectAssets {
         let retiring: Vec<_> = state.retiring.keys().cloned().collect();
         let mut retained = Vec::new();
         let mut assigned_files: HashMap<(PathBuf, PathBuf), usize> = HashMap::new();
+        let mut assigned_stems = HashMap::new();
         for mut reader in state.readers.drain(..) {
             // Weak<[f32]> keeps the allocation itself alive after final PCM Arc.
             // Durable file/pending metadata must retain no dead PCM allocation.
@@ -778,10 +922,8 @@ impl ProjectAssets {
             if let Some(lease) = reader.cold.as_ref() {
                 lease.prune_dead_pcm();
             }
-            let native_live = !reader.pcm.is_empty();
-            let assigned = owners
-                .iter()
-                .any(|owner| intersects(&owner.path, &reader.path));
+            let native_live = !reader.pcm.is_empty() || reader.shared_native_live();
+            let assigned = owners.iter().any(|owner| reader.assigned_by(&owner.path));
             let retiring_original = retiring.iter().any(|path| path == &reader.path);
             if !retiring_original
                 && reader
@@ -800,6 +942,15 @@ impl ProjectAssets {
             }
             if native_live || reader.pending_assignment {
                 retained.push(reader);
+            } else if assigned && reader.shared_stems.is_some() {
+                let key = reader
+                    .shared_file_key()
+                    .expect("shared file representative");
+                if let std::collections::hash_map::Entry::Vacant(entry) = assigned_stems.entry(key)
+                {
+                    entry.insert(retained.len());
+                    retained.push(reader);
+                }
             } else if (assigned || (reader.saved_claim && !retiring_original))
                 && reader.cold.is_some()
             {
@@ -864,7 +1015,7 @@ impl ProjectAssets {
                     && !state
                         .readers
                         .iter()
-                        .any(|reader| intersects(&reader.path, path))
+                        .any(|reader| reader.protects_path(path))
             })
             .collect();
         // Stable round-robin selection also rotates attempts that Windows keeps
@@ -909,7 +1060,7 @@ impl ProjectAssets {
                         && !state
                             .readers
                             .iter()
-                            .any(|reader| intersects(&reader.path, material))
+                            .any(|reader| reader.protects_path(material))
                         && !state.retiring.keys().any(|path| intersects(path, material))
                     {
                         super::material_paths::prune_empty_material(&path);
@@ -917,10 +1068,7 @@ impl ProjectAssets {
                     if remove_empty_pad {
                         let pad = path.parent().expect("validated generation has pad parent");
                         if !owners.iter().any(|owner| intersects(&owner.path, pad))
-                            && !state
-                                .readers
-                                .iter()
-                                .any(|reader| intersects(&reader.path, pad))
+                            && !state.readers.iter().any(|reader| reader.protects_path(pad))
                             && !state.retiring.keys().any(|target| intersects(target, pad))
                         {
                             // An empty container has no unique data. New generation
@@ -1073,6 +1221,27 @@ fn validate_target(root: &Path, path: &Path, recursive: bool) -> io::Result<()> 
     {
         return Ok(());
     }
+    if matches!(
+        typed.kind,
+        super::material_paths::AssetKind::StemPcmDirectory {
+            generation: true,
+            ..
+        }
+    ) && recursive
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(super::material_paths::ready_generation)
+    {
+        return Ok(());
+    }
+    if matches!(
+        typed.kind,
+        super::material_paths::AssetKind::StemPairDescriptor { .. }
+    ) && !recursive
+    {
+        return Ok(());
+    }
     if matches!(typed.kind, super::material_paths::AssetKind::StemArtifact) && !recursive {
         return Ok(());
     }
@@ -1125,6 +1294,11 @@ fn delete_owned(
         super::material_paths::resolve(root, &resolved)?.kind,
         super::material_paths::AssetKind::Original { .. }
             | super::material_paths::AssetKind::StemDirectory { .. }
+            | super::material_paths::AssetKind::StemPcmDirectory {
+                generation: true,
+                ..
+            }
+            | super::material_paths::AssetKind::StemPairDescriptor { .. }
     ) {
         return Err(io::Error::other("verified retirement target changed kind"));
     }
@@ -1154,6 +1328,14 @@ fn delete_owned(
             "retired generation was replaced; preserved",
         ));
     }
+    let pcm = matches!(
+        super::material_paths::resolve(root, &resolved)?.kind,
+        super::material_paths::AssetKind::StemPcmDirectory { .. }
+    );
+    if pcm && proof.is_none() {
+        return Err(io::Error::other("complete stem PCM proof required"));
+    }
+    let known = if pcm { &STEM_PCM_FILES } else { &STEM_FILES };
     let mut files = Vec::new();
     for entry in fs::read_dir(&resolved)?.take(13) {
         let entry = entry?;
@@ -1161,8 +1343,8 @@ fn delete_owned(
         let name = name.to_string_lossy();
         if !entry.file_type()?.is_file()
             || proof.is_some_and(|proof| !proof.iter().any(|file| file.name == name))
-            || !(STEM_FILES.contains(&name.as_ref())
-                || STEM_FILES.iter().any(|file| name == format!("{file}.tmp")))
+            || !(known.contains(&name.as_ref())
+                || (!pcm && STEM_FILES.iter().any(|file| name == format!("{file}.tmp"))))
         {
             return Err(io::Error::other(
                 "generation contains an unknown file; preserved",

@@ -27,6 +27,10 @@ from flitzis_looper.controller.stem_generation import (
     StemGenerationResult,
 )
 from flitzis_looper.controller.stem_job import StemGenerationJob, StemSubscriber
+from flitzis_looper.controller.stem_pair_preparation import (
+    PairPreparation,
+    StemPairPreparationQueue,
+)
 from flitzis_looper.controller.stem_separators import (
     SelectedStemGenerationBackend,
     separator_model_cache_dir,
@@ -45,7 +49,12 @@ from flitzis_looper.models import (
 
 if TYPE_CHECKING:
     from flitzis_looper.models import ProjectState, SessionState
-    from flitzis_looper_audio import AudioEngine, PreparedSourceTicket, ProjectAssetLease
+    from flitzis_looper_audio import (
+        AudioEngine,
+        PreparedSourceTicket,
+        PreparedStemPair,
+        ProjectAssetLease,
+    )
 
 type StemTaskRunner = Callable[[Callable[[], None]], None]
 type _StemBackendEventType = Literal["progress", "success", "error"]
@@ -67,11 +76,13 @@ class _StemBackendEvent:
 
 @dataclass(slots=True)
 class _PendingStemPublication:
+    sample_id: int
     source_ticket: PreparedSourceTicket
     entry: StemCacheEntry
     previous_entry: StemCacheEntry | None
     previous_lease: ProjectAssetLease | None
     retirement: AssetRetirementReservation
+    prepared_pair: PreparedStemPair | None = None
 
 
 class StemController(BaseController):  # noqa: PLR0904
@@ -105,8 +116,15 @@ class StemController(BaseController):  # noqa: PLR0904
         self._generation_source_tickets: dict[int, PreparedSourceTicket] = {}
         self._pending_stem_publications: dict[int, _PendingStemPublication] = {}
         self._restored_stem_candidates: dict[int, StemCacheEntry] = {}
+        self._pair_preparations = StemPairPreparationQueue(
+            audio, self._assets, self._stem_task_runner
+        )
+        self._resident_pairs: set[int] = set()
+        self._pair_release_ordered: set[int] = set()
+        self._fenced_pair_ids: set[int] = set()
         self._on_frame_render_callbacks.append(self._poll_generation_events)
         self._on_frame_render_callbacks.append(self._poll_stem_publications)
+        self._on_frame_render_callbacks.append(self._poll_pair_preparations)
 
     def shut_down(self) -> None:
         """Cancel separator publication while retaining every running file reader."""
@@ -128,6 +146,9 @@ class StemController(BaseController):  # noqa: PLR0904
             self._release_pending_stems(pending)
         self._pending_stem_publications.clear()
         self._restored_stem_candidates.clear()
+        for sample_id in self._pair_preparations.pending:
+            self._pair_preparations.cancel(sample_id)
+        self._poll_pair_preparations()
         self._session.stem_generating_sample_ids.clear()
         self._session.stem_generation_source_versions.clear()
         if self._stem_worker_pool is not None:
@@ -231,6 +252,8 @@ class StemController(BaseController):  # noqa: PLR0904
         self._restored_stem_candidates.clear()
         changed = False
         for sample_id, entry in enumerate(self._project.stem_cache):
+            if sample_id in self._fenced_pair_ids:
+                continue
             if entry is None:
                 continue
 
@@ -238,8 +261,11 @@ class StemController(BaseController):  # noqa: PLR0904
             if (
                 source_version is None
                 or source_version != entry.source_version
-                or not cache_dir_matches_sample_id(
-                    sample_id, entry.cache_dir, self._project.sample_paths[sample_id]
+                or (
+                    entry.pair is None
+                    and not cache_dir_matches_sample_id(
+                        sample_id, entry.cache_dir, self._project.sample_paths[sample_id]
+                    )
                 )
             ):
                 self._project.stem_cache[sample_id] = None
@@ -261,9 +287,24 @@ class StemController(BaseController):  # noqa: PLR0904
             self._mark_project_changed()
         self._assets.sync_assignments()
 
+    def fence_pair_metadata(self, sample_ids: set[int]) -> None:
+        """Preserve unsupported saved entries without inventing runtime eligibility."""
+        self._fenced_pair_ids = set(sample_ids)
+        for sample_id in sample_ids:
+            self._session.stem_generation_errors[sample_id] = (
+                "Unsupported stem pair metadata retained on disk"
+            )
+
     def publish_restored_stem_cache_if_available(self, sample_id: int) -> bool:
         """Publish restored prepared stems after the restored full mix has loaded."""
         validate_sample_id(sample_id)
+        if sample_id in self._fenced_pair_ids:
+            message = "Unsupported stem pair metadata requires explicit recovery"
+            self._session.stem_generation_errors[sample_id] = message
+            return False
+        return self._publish_restored_stem_cache(sample_id)
+
+    def _publish_restored_stem_cache(self, sample_id: int) -> bool:
         entry = self._project.stem_cache[sample_id]
         if entry is None or (
             not entry.available and self._restored_stem_candidates.get(sample_id) is not entry
@@ -306,6 +347,8 @@ class StemController(BaseController):  # noqa: PLR0904
     def _invalidate_stem_cache(self, sample_id: int) -> None:
         self._assets.sync_assignments()
         self._cancel_jobs(sample_id)
+        self._pair_preparations.cancel(sample_id)
+        self._resident_pairs.discard(sample_id)
         self._clear_stem_generation_state(sample_id)
         self._clear_stem_generation_messages(sample_id)
 
@@ -377,22 +420,15 @@ class StemController(BaseController):  # noqa: PLR0904
             raise ValueError(msg)
 
         if mode == "full_mix":
-            if mode == self._project.pad_stem_mix_mode[sample_id]:
-                return True
-
-            try:
-                self._audio.set_stem_mix_mode(sample_id, mode)
-            except (RuntimeError, ValueError) as err:
-                self._session.stem_generation_errors[sample_id] = f"Stem mix update failed: {err}"
-                return False
-
-            self._project.pad_stem_mix_mode[sample_id] = mode
-            self._mark_project_changed()
-            return True
+            return self._set_full_mix(sample_id)
 
         source_version = self._current_prepared_source_version(sample_id)
         if source_version is None:
             return False
+
+        entry = self._project.stem_cache[sample_id]
+        if entry is not None and entry.pair is not None and sample_id not in self._resident_pairs:
+            return self._request_pair_mode(sample_id, entry, source_version)
 
         if not self._publish_all_stems_state(sample_id, source_version):
             return False
@@ -401,6 +437,40 @@ class StemController(BaseController):  # noqa: PLR0904
             self._project.pad_stem_mix_mode[sample_id] = mode
             self._mark_project_changed()
 
+        return True
+
+    def _set_full_mix(self, sample_id: int) -> bool:
+        if (
+            self._project.pad_stem_mix_mode[sample_id] == "full_mix"
+            and sample_id not in self._resident_pairs
+        ):
+            return True
+        try:
+            entry = self._project.stem_cache[sample_id]
+            if entry is not None and entry.pair is not None:
+                self._audio.set_stem_pair_full_mix(sample_id)
+                self._pair_release_ordered.add(sample_id)
+            else:
+                self._audio.set_stem_mix_mode(sample_id, "full_mix")
+        except (RuntimeError, ValueError) as error:
+            self._session.stem_generation_errors[sample_id] = f"Stem mix update failed: {error}"
+            return False
+        self._project.pad_stem_mix_mode[sample_id] = "full_mix"
+        self._resident_pairs.discard(sample_id)
+        self._mark_project_changed()
+        return True
+
+    def _request_pair_mode(
+        self, sample_id: int, entry: StemCacheEntry, source_version: str
+    ) -> bool:
+        try:
+            ticket = self._capture_source_ticket(sample_id, source_version)
+            self._prepare_pair(sample_id, entry, ticket, components=True)
+        except (OSError, RuntimeError, ValueError) as error:
+            self._session.stem_generation_errors[sample_id] = str(error)
+            return False
+        self._project.pad_stem_mix_mode[sample_id] = "all_stems"
+        self._mark_project_changed()
         return True
 
     def delete_stems(self, sample_id: int) -> bool:
@@ -425,6 +495,8 @@ class StemController(BaseController):  # noqa: PLR0904
                 return False
 
         self._cancel_jobs(sample_id)
+        self._pair_preparations.cancel(sample_id)
+        self._resident_pairs.discard(sample_id)
         self._clear_stem_generation_state(sample_id)
         self._clear_stem_generation_messages(sample_id)
 
@@ -632,7 +704,8 @@ class StemController(BaseController):  # noqa: PLR0904
         self, event: _StemBackendEvent, current: tuple[StemSubscriber, ...]
     ) -> None:
         eligible = tuple(
-            subscriber for subscriber in current
+            subscriber
+            for subscriber in current
             if self._eligible_generation_entry(subscriber.sample_id, event.source_version)
             is not None
         )
@@ -802,8 +875,14 @@ class StemController(BaseController):  # noqa: PLR0904
             lease.release()
 
     def _queue_stem_publication(
-        self, sample_id: int, entry: StemCacheEntry, source_ticket: PreparedSourceTicket
+        self,
+        sample_id: int,
+        entry: StemCacheEntry,
+        source_ticket: PreparedSourceTicket,
+        prepared_pair: PreparedStemPair | None = None,
     ) -> bool:
+        if prepared_pair is None and callable(getattr(self._audio, "prepare_stem_pair", None)):
+            return self._prepare_pair(sample_id, entry, source_ticket)
         retirement = self._assets.reserve_pending(16)
         previous_entry = self._project.stem_cache[sample_id]
         previous_lease = None
@@ -812,9 +891,14 @@ class StemController(BaseController):  # noqa: PLR0904
             new_lease = self._assets.acquire(Path(entry.cache_dir))
             if previous_entry is not None:
                 previous_lease = self._assets.acquire(Path(previous_entry.cache_dir))
-            self._audio.publish_prepared_stems(
-                sample_id, entry.source_version, entry.cache_dir, source_ticket
-            )
+            if prepared_pair is None:
+                self._audio.publish_prepared_stems(
+                    sample_id, entry.source_version, entry.cache_dir, source_ticket
+                )
+            else:
+                self._audio.publish_stem_pair(prepared_pair, source_ticket)
+                # This publication follows any older ordered FULL MIX release.
+                self._pair_release_ordered.discard(sample_id)
         except OSError, RuntimeError, ValueError:
             if new_lease is not None:
                 new_lease.release()
@@ -831,14 +915,95 @@ class StemController(BaseController):  # noqa: PLR0904
         self._mark_project_changed()
         self._restored_stem_candidates.pop(sample_id, None)
         pending = _PendingStemPublication(
+            sample_id=sample_id,
             source_ticket=source_ticket,
             entry=queued_entry,
             previous_entry=previous_entry,
             previous_lease=previous_lease,
             retirement=retirement,
+            prepared_pair=prepared_pair,
         )
         self._pending_stem_publications[sample_id] = pending
         return self._poll_stem_publication(sample_id, pending)
+
+    def _prepare_pair(
+        self,
+        sample_id: int,
+        entry: StemCacheEntry,
+        ticket: PreparedSourceTicket,
+        *,
+        components: bool | None = None,
+    ) -> bool:
+        if sample_id in self._fenced_pair_ids:
+            message = "Unsupported stem pair metadata requires explicit recovery"
+            raise RuntimeError(message)
+        content = self._project.pad_content[sample_id]
+        self._pair_preparations.submit(
+            sample_id,
+            entry,
+            ticket,
+            content.instance_id if content else None,
+            self._project.stem_cache[sample_id],
+            components=self._project.pad_stem_mix_mode[sample_id] == "all_stems"
+            if components is None
+            else components,
+        )
+        return True
+
+    def _poll_pair_preparations(self) -> None:
+        for sample_id in tuple(self._resident_pairs)[:8]:
+            if self._project.pad_stem_mix_mode[sample_id] == "full_mix":
+                self._set_full_mix(sample_id)
+        for sample_id, error in self._pair_preparations.retry_discards():
+            self._session.stem_generation_errors[sample_id] = f"Stem pair cleanup deferred: {error}"
+        for request in self._pair_preparations.collect():
+            try:
+                self._finish_pair_preparation(request)
+            except (OSError, RuntimeError, TypeError, ValueError) as error:
+                self._session.stem_generation_errors[request.sample_id] = (
+                    f"Complete stem preparation failed: {error}"
+                )
+            finally:
+                try:
+                    if request.prepared is not None:
+                        pending = self._pending_stem_publications.get(request.sample_id)
+                        if pending is None or pending.prepared_pair is not request.prepared:
+                            self._discard_pair(request.sample_id, request.prepared)
+                finally:
+                    request.close()
+
+    def _finish_pair_preparation(self, request: PairPreparation) -> None:
+        sample_id = request.sample_id
+        content = self._project.pad_content[sample_id]
+        if (
+            self._shutting_down
+            or request.cancelled.is_set()
+            or (content.instance_id if content else None) != request.content_id
+            or self._project.stem_cache[sample_id] is not request.previous_entry
+        ):
+            return
+        if request.error is not None:
+            raise RuntimeError(request.error)
+        selected = self._pair_preparations.selected_entry(request)
+        prepared = request.prepared
+        if prepared is None:
+            return
+        # Recheck current native source/request/timing even for disk-only selection.
+        self._capture_source_ticket(sample_id, selected.source_version)
+        with request.retirement.activate():
+            if (
+                prepared.has_components()
+                and self._project.pad_stem_mix_mode[sample_id] == "all_stems"
+            ):
+                self._queue_stem_publication(sample_id, selected, request.ticket, prepared)
+                return
+            lease = self._assets.acquire(Path(selected.cache_dir))
+            self._project.stem_cache[sample_id] = selected.model_copy(update={"available": True})
+            self._assets.adopt_stems(sample_id, (Path(selected.cache_dir).absolute(), lease))
+            prepared.select()
+            self._resident_pairs.discard(sample_id)
+            self._restored_stem_candidates.pop(sample_id, None)
+            self._mark_project_changed()
 
     def _poll_stem_publications(self) -> None:
         for sample_id, pending in tuple(self._pending_stem_publications.items()):
@@ -872,6 +1037,12 @@ class StemController(BaseController):  # noqa: PLR0904
             return False
         self._pending_stem_publications.pop(sample_id, None)
         self._project.stem_cache[sample_id] = pending.entry.model_copy(update={"available": True})
+        if pending.prepared_pair is not None:
+            pending.prepared_pair.select()
+            if sample_id not in self._pair_release_ordered:
+                self._resident_pairs.add(sample_id)
+                if self._project.pad_stem_mix_mode[sample_id] == "full_mix":
+                    self._set_full_mix(sample_id)
         self._release_pending_stems(pending)
         self._mark_project_changed()
         return self._publish_all_stems_mode_if_preferred(sample_id, pending.entry.source_version)
@@ -897,11 +1068,21 @@ class StemController(BaseController):  # noqa: PLR0904
         self._project.stem_cache[sample_id] = pending.previous_entry
         self._mark_project_changed()
 
-    @staticmethod
-    def _release_pending_stems(pending: _PendingStemPublication) -> None:
-        if pending.previous_lease is not None:
-            pending.previous_lease.release()
-        pending.retirement.close()
+    def _discard_pair(self, sample_id: int, prepared: PreparedStemPair) -> None:
+        error = self._pair_preparations.discard(sample_id, prepared)
+        if error is not None:
+            self._session.stem_generation_errors[sample_id] = f"Stem pair cleanup deferred: {error}"
+
+    def _release_pending_stems(self, pending: _PendingStemPublication) -> None:
+        try:
+            if pending.prepared_pair is not None:
+                self._discard_pair(pending.sample_id, pending.prepared_pair)
+        finally:
+            try:
+                if pending.previous_lease is not None:
+                    pending.previous_lease.release()
+            finally:
+                pending.retirement.close()
 
     def _capture_source_ticket(self, sample_id: int, source_version: str) -> PreparedSourceTicket:
         ticket = self._audio.capture_prepared_source(sample_id, source_version)
@@ -948,7 +1129,8 @@ class StemController(BaseController):  # noqa: PLR0904
             ),
             (
                 sample_id in self._session.analyzing_sample_ids
-                or sample_id in self._pending_stem_publications,
+                or sample_id in self._pending_stem_publications
+                or sample_id in self._pair_preparations.pending,
                 "Cannot generate stems while another pad task is running",
             ),
             (
@@ -962,6 +1144,10 @@ class StemController(BaseController):  # noqa: PLR0904
         return None
 
     def _entry_files_available(self, entry: StemCacheEntry) -> bool:
+        if entry.pair is not None:
+            # Durable structure is not live authority: the background native opener
+            # verifies both complete areas before issuing any component publication.
+            return entry.cache_dir == entry.pair.wav_generation
         return verified_stem_cache_available(entry)
 
     def _clear_stem_generation_state(self, sample_id: int) -> None:
