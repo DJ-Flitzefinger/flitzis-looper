@@ -1443,3 +1443,6 @@ fn material_migration_new_process_child_reopens_journal_with_fresh_source_and_ti
     )
     .unwrap();
 }
+
+#[path = "material_migration_resume_tests.rs"]
+mod material_migration_resume_tests;

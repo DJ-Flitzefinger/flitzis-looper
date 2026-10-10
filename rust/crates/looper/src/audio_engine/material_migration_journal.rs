@@ -4,6 +4,7 @@ use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
     prelude::*,
 };
+use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
@@ -66,6 +67,11 @@ impl MaterialMigrationJournalStore {
     }
 
     fn read_latest(&self) -> PyResult<(usize, Option<String>)> {
+        let records = self.read_history()?;
+        Ok((records.len(), records.last().cloned()))
+    }
+
+    fn read_history(&self) -> PyResult<Vec<String>> {
         let mut records = Vec::new();
         for entry in fs::read_dir(&self.path).map_err(value_error)? {
             let entry = entry.map_err(value_error)?;
@@ -93,7 +99,7 @@ impl MaterialMigrationJournalStore {
         {
             return Err(value_error("journal has an incomplete phase sequence"));
         }
-        let mut latest = None;
+        let mut history = Vec::with_capacity(records.len());
         // Each recognized record is sealed and bounded; malformed partial writes remain visible.
         for (_, path) in &records {
             let reader = sealed_reader(path).map_err(value_error)?;
@@ -106,10 +112,10 @@ impl MaterialMigrationJournalStore {
                 .read_to_string(&mut text)
                 .map_err(value_error)?;
             let _: serde_json::Value = serde_json::from_str(&text).map_err(value_error)?;
-            latest = Some(text);
+            history.push(text);
         }
         self.check_identity()?;
-        Ok((records.len(), latest))
+        Ok(history)
     }
 
     fn check_identity(&self) -> PyResult<()> {
@@ -182,6 +188,11 @@ impl MaterialMigrationJournalStore {
             return Err(value_error("journal phase capacity exhausted"));
         }
         self.check_identity()?;
+        if self.read_history()?.len() != *sequence {
+            return Err(value_error(
+                "journal sequence changed before append; preserved",
+            ));
+        }
         let path = self.path.join(format!("{:02}.json", *sequence));
         let mut writer = OpenOptions::new()
             .write(true)
@@ -201,5 +212,52 @@ impl MaterialMigrationJournalStore {
         }
         *sequence += 1;
         Ok(path.to_string_lossy().into_owned())
+    }
+
+    pub fn history(&self) -> PyResult<Vec<String>> {
+        self.read_history()
+    }
+
+    /// Remove exact acknowledged metadata only after its caller transferred all
+    /// recognized intent/evidence to a durable successor or completed cleanup.
+    /// Unknown, partial, gapped and concurrently edited records are never removed.
+    pub fn compact(&mut self, expected_records: Vec<String>) -> PyResult<()> {
+        let sequence = self
+            .sequence
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("journal sequence lock poisoned"))?;
+        let current = self.read_history()?;
+        if current.is_empty() || current != expected_records || current.len() != *sequence {
+            return Err(value_error(
+                "journal compaction evidence changed; preserved",
+            ));
+        }
+        let mut leaves = Vec::with_capacity(current.len());
+        let mut readers = Vec::with_capacity(current.len());
+        for (index, text) in current.iter().enumerate() {
+            let path = self.path.join(format!("{index:02}.json"));
+            let mut reader = sealed_reader(&path).map_err(value_error)?;
+            let mut bytes = Vec::new();
+            reader.read_to_end(&mut bytes).map_err(value_error)?;
+            if bytes != text.as_bytes() {
+                return Err(value_error("journal changed before compaction; preserved"));
+            }
+            let proof = project_assets::VerifiedFile {
+                name: format!("{index:02}.json"),
+                identity: project_assets::file_identity(&reader).map_err(value_error)?,
+                bytes: bytes.len() as u64,
+                sha256: format!("{:x}", Sha256::digest(&bytes)),
+            };
+            readers.push(reader);
+            leaves.push((path, proof));
+        }
+        self.check_identity()?;
+        drop(readers);
+        for (path, proof) in leaves {
+            project_assets::remove_verified_file(&path, &proof).map_err(value_error)?;
+        }
+        self._guards.clear();
+        project_assets::remove_empty_directory(&self.path, &self.identity).map_err(value_error)?;
+        Ok(())
     }
 }

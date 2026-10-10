@@ -18,6 +18,7 @@ class MigrationRecovery:
     """Pending journal evidence requires a fresh process-local fence and authority."""
 
     pending: list[MaterialMigrationJournal] = field(default_factory=list)
+    settled: list[MaterialMigrationJournal] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     intent: ProjectState | None = None
 
@@ -69,9 +70,29 @@ def _record_for_config(raw: str, config_reference: str) -> dict[str, object] | N
 def _settled(
     journal: MaterialMigrationJournal, current: ProjectState | None, digest: str | None
 ) -> bool:
-    return journal.phase == "failed" or (
-        journal.phase == "config_committed"
-        and (digest == journal.committed_config_sha256 or _committed_current(journal, current))
+    restored = current.material_migrations.get(journal.transaction_id) if current else None
+    durable_alias = (
+        (
+            restored is not None
+            and all(
+                (content := current.pad_content[item.sample_id]) is None
+                or content.instance_id != item.instance_id
+                or current.sample_paths[item.sample_id] != item.old_reference
+                for item in journal.assignments
+            )
+            and journal.alias is not None
+            and restored == journal.alias
+        )
+        if current is not None
+        else False
+    )
+    return (
+        journal.phase == "failed"
+        or durable_alias
+        or (
+            journal.phase == "config_committed"
+            and (digest == journal.committed_config_sha256 or _committed_current(journal, current))
+        )
     )
 
 
@@ -101,6 +122,7 @@ def inspect_migration_recovery(samples: Path, config: Path) -> MigrationRecovery
                 continue
             journal = _validated_record(record)
             if _settled(journal, current, digest):
+                result.settled.append(journal)
                 continue
             result.pending.append(journal)
             # Only the exact captured disk image admits recovery of unsaved current intent.

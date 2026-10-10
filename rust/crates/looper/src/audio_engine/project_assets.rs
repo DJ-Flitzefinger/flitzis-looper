@@ -9,6 +9,8 @@ pub(super) mod stem_readers;
 use crate::messages::{PreparedStemSet, SampleBuffer};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::io;
@@ -131,10 +133,60 @@ struct Retirement {
     root: PathBuf,
     recursive: bool,
     identity: Option<FileIdentity>,
+    files: Option<Vec<VerifiedFile>>,
+    pcm: bool,
+    protection: Option<Arc<RetirementProtection>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct FileIdentity([u64; 3]);
+impl Retirement {
+    fn preserved(&self, reason: &str) {
+        if let Some(protection) = self.protection.as_ref() {
+            protection.outcome.finish(Err(reason.to_owned()));
+        }
+    }
+}
+
+/// Non-realtime queue ownership lasts through physical deletion, including PCM handoff.
+pub(super) struct RetirementProtection {
+    pub _inventory: Arc<super::material_migration_recovery::InventoryHandle>,
+    pub outcome: Arc<RetirementOutcome>,
+}
+
+#[derive(Default)]
+pub(super) struct RetirementOutcome(Mutex<Option<Result<(), String>>>);
+
+impl RetirementOutcome {
+    pub fn finish(&self, result: Result<(), String>) {
+        if let Ok(mut value) = self.0.lock() {
+            *value = Some(result.map_err(|error| error.chars().take(2048).collect()));
+        }
+    }
+    pub fn status(&self) -> io::Result<(&'static str, Option<String>)> {
+        let value = self
+            .0
+            .lock()
+            .map_err(|_| io::Error::other("retirement outcome poisoned"))?;
+        Ok(match &*value {
+            None => ("pending", None),
+            Some(Ok(())) => ("complete", None),
+            Some(Err(error)) => ("error", Some(error.clone())),
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(super) struct FileIdentity(pub(super) [u64; 3]);
+
+/// Complete immutable-leaf evidence, retained by the existing retirement queues.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct VerifiedFile {
+    pub name: String,
+    pub identity: FileIdentity,
+    pub bytes: u64,
+    pub sha256: String,
+}
 
 #[derive(Default)]
 struct State {
@@ -172,13 +224,17 @@ impl ProjectAssets {
         owner.saved_assignment.store(true, Ordering::Release);
         let legacy = owner.path.parent() == Some(owner.root.join("stems").as_path())
             && owner.path.file_name().is_some_and(is_pad_name);
-        state.retiring.retain(|target, _| {
-            target != &owner.path
+        state.retiring.retain(|target, retirement| {
+            let keep = target != &owner.path
                 && !(legacy
                     && target.parent() == Some(owner.path.as_path())
                     && target
                         .file_name()
-                        .is_some_and(|name| STEM_FILES.contains(&name.to_string_lossy().as_ref())))
+                        .is_some_and(|name| STEM_FILES.contains(&name.to_string_lossy().as_ref())));
+            if !keep {
+                retirement.preserved("new saved stem assignment cancels retirement; preserved");
+            }
+            keep
         });
         Ok(())
     }
@@ -228,7 +284,9 @@ impl ProjectAssets {
         }
         super::cold_store::admit_original_owner(&owner.path)?;
         owner.saved_assignment.store(true, Ordering::Release);
-        state.retiring.remove(&owner.path);
+        if let Some(retirement) = state.retiring.remove(&owner.path) {
+            retirement.preserved("new delivered original cancels retirement; preserved");
+        }
         for reader in &mut state.readers {
             if reader.path == owner.path
                 && reader
@@ -277,13 +335,22 @@ impl ProjectAssets {
     }
 
     pub(super) fn acquire(&self, root: &Path, path: &Path) -> io::Result<ProjectAssetLease> {
-        self.acquire_internal(root, path, true)
+        self.acquire_internal(root, path, true, None)
     }
 
     /// A transient native source job protects reads without acknowledging a
     /// delivered metadata assignment or cancelling its orphan rollback rights.
     pub(super) fn acquire_pin(&self, root: &Path, path: &Path) -> io::Result<ProjectAssetLease> {
-        self.acquire_internal(root, path, false)
+        self.acquire_internal(root, path, false, None)
+    }
+
+    pub(super) fn acquire_verified_pin(
+        &self,
+        root: &Path,
+        path: &Path,
+        identity: &FileIdentity,
+    ) -> io::Result<ProjectAssetLease> {
+        self.acquire_internal(root, path, false, Some(identity))
     }
 
     fn acquire_internal(
@@ -291,6 +358,7 @@ impl ProjectAssets {
         root: &Path,
         path: &Path,
         claim_pending: bool,
+        expected: Option<&FileIdentity>,
     ) -> io::Result<ProjectAssetLease> {
         let (root, path) = owned_path(root, path)?;
         let mut state = self
@@ -302,6 +370,11 @@ impl ProjectAssets {
             return Err(io::Error::other("project asset owner registry full"));
         }
         let identity = capture_identity(&path)?;
+        if expected.is_some_and(|expected| identity.as_ref() != Some(expected)) {
+            return Err(io::Error::other(
+                "verified asset was replaced before admission",
+            ));
+        }
         let original = matches!(
             super::material_paths::resolve(&root, &path)?.kind,
             super::material_paths::AssetKind::Original { .. }
@@ -324,13 +397,17 @@ impl ProjectAssets {
             }
             let legacy_pad = path.parent() == Some(root.join("stems").as_path())
                 && path.file_name().is_some_and(is_pad_name);
-            state.retiring.retain(|target, _| {
-                target != &path
+            state.retiring.retain(|target, retirement| {
+                let keep = target != &path
                     && !(legacy_pad
                         && target.parent() == Some(path.as_path())
                         && target.file_name().is_some_and(|name| {
                             STEM_FILES.contains(&name.to_string_lossy().as_ref())
-                        }))
+                        }));
+                if !keep {
+                    retirement.preserved("new saved assignment cancels retirement; preserved");
+                }
+                keep
             });
         }
         // Admission and deletion serialize. A new exact owner cancels its pending
@@ -519,9 +596,133 @@ impl ProjectAssets {
                 root,
                 recursive,
                 identity,
+                files: None,
+                pcm: false,
+                protection: None,
             },
         );
         Ok(())
+    }
+
+    /// Recovery may retire only the fully sealed objects owned by this exact pin.
+    #[cfg(test)]
+    pub(super) fn retire_verified(
+        &self,
+        lease: &ProjectAssetLease,
+        files: Vec<VerifiedFile>,
+    ) -> io::Result<()> {
+        self.retire_verified_guarded(lease, files, None).map(|_| ())
+    }
+
+    pub(super) fn retire_verified_guarded(
+        &self,
+        lease: &ProjectAssetLease,
+        files: Vec<VerifiedFile>,
+        protection: Option<Arc<RetirementProtection>>,
+    ) -> io::Result<Option<Arc<RetirementOutcome>>> {
+        let owner = lease
+            .owner
+            .as_ref()
+            .ok_or_else(|| io::Error::other("asset pin released"))?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("asset gate poisoned"))?;
+        if !state
+            .owners
+            .iter()
+            .any(|entry| entry.ptr_eq(&Arc::downgrade(owner)))
+            || capture_identity(&owner.path)? != owner.identity
+        {
+            return Err(io::Error::other("verified asset owner changed"));
+        }
+        let kind = super::material_paths::resolve(&owner.root, &owner.path)?.kind;
+        let pcm = matches!(kind, super::material_paths::AssetKind::PcmDirectory);
+        let recursive = !matches!(kind, super::material_paths::AssetKind::Original { .. });
+        let names: Vec<&str> = match &kind {
+            super::material_paths::AssetKind::Original { .. } => vec![
+                owner
+                    .path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or_else(|| io::Error::other("original leaf name invalid"))?,
+            ],
+            super::material_paths::AssetKind::PcmDirectory => {
+                vec!["decoder.f32le", "playback.f32le", "manifest.json"]
+            }
+            super::material_paths::AssetKind::StemDirectory {
+                material,
+                generation,
+            } => {
+                if (material.is_some() && !generation)
+                    || (*generation
+                        && owner.path.file_name().is_none_or(|name| {
+                            !super::material_paths::ready_generation(&name.to_string_lossy())
+                        }))
+                {
+                    return Err(io::Error::other("staging/container retirement denied"));
+                }
+                STEM_FILES.to_vec()
+            }
+            _ => {
+                return Err(io::Error::other(
+                    "verified retirement kind is not an owned asset",
+                ));
+            }
+        };
+        if files.len() != names.len()
+            || files.iter().zip(names).any(|(file, name)| {
+                let path = if recursive {
+                    owner.path.join(name)
+                } else {
+                    owner.path.clone()
+                };
+                file.name != name
+                    || file.sha256.len() != 64
+                    || !file
+                        .sha256
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    || capture_identity(&path).ok().flatten().as_ref() != Some(&file.identity)
+            })
+        {
+            return Err(io::Error::other(
+                "verified retirement leaf evidence changed",
+            ));
+        }
+        if let Some(previous) = state.retiring.get(&owner.path) {
+            if previous.identity != owner.identity
+                || previous
+                    .files
+                    .as_ref()
+                    .is_some_and(|previous| previous != &files)
+            {
+                return Err(io::Error::other("retirement evidence changed; preserved"));
+            }
+            if let Some(previous) = previous.protection.as_ref() {
+                return Ok(Some(previous.outcome.clone()));
+            }
+        } else if state.retiring.len() >= MAX_RETIREMENTS {
+            return Err(io::Error::other("project asset retirement queue full"));
+        }
+        for reader in &mut state.readers {
+            if reader.path == owner.path {
+                reader.pending_assignment = false;
+                reader.saved_claim = false;
+            }
+        }
+        state.retiring.insert(
+            owner.path.clone(),
+            Retirement {
+                root: owner.root.clone(),
+                recursive,
+                identity: owner.identity.clone(),
+                files: Some(files),
+                pcm,
+                protection: protection.clone(),
+            },
+        );
+        Ok(protection.map(|value| value.outcome.clone()))
     }
 
     pub(super) fn orphan_cold(&self, orphan: &CommittedColdLease) {
@@ -546,6 +747,11 @@ impl ProjectAssets {
             state.deleted,
             state.errors.clone(),
         ))
+    }
+
+    #[cfg(test)]
+    pub(super) fn collect_for_test(&self) {
+        self.collect();
     }
 
     fn collect(&self) {
@@ -677,13 +883,25 @@ impl ProjectAssets {
                 .get(&path)
                 .expect("retirement remains under gate");
             let remove_empty_pad = target.recursive;
-            match delete_owned(
-                &target.root,
-                &path,
-                target.recursive,
-                target.identity.as_ref(),
-            ) {
+            let result = if target.pcm {
+                CommittedColdLease::queue_verified_retirement(
+                    &path,
+                    target.identity.as_ref().expect("verified PCM identity"),
+                    target.files.as_ref().expect("verified PCM leaves"),
+                    target.protection.clone(),
+                )
+            } else {
+                delete_owned(
+                    &target.root,
+                    &path,
+                    target.recursive,
+                    target.identity.as_ref(),
+                    target.files.as_deref(),
+                )
+            };
+            match result {
                 Ok(()) => {
+                    let completion = (!target.pcm).then(|| target.protection.clone()).flatten();
                     state.retiring.remove(&path);
                     state.deleted += 1;
                     if let Some(material) = super::material_paths::material_root(&path)
@@ -711,9 +929,17 @@ impl ProjectAssets {
                             let _ = remove_empty_pad_container(pad);
                         }
                     }
+                    // Keep the inventory gate through physical deletion and the
+                    // bounded empty-container pass before exposing completion.
+                    if let Some(protection) = completion {
+                        protection.outcome.finish(Ok(()));
+                    }
                 }
                 Err(error) if retryable(&error) => {}
                 Err(error) => {
+                    if let Some(protection) = target.protection.as_ref() {
+                        protection.outcome.finish(Err(error.to_string()));
+                    }
                     state.retiring.remove(&path);
                     if state.errors.len() < MAX_REPORTED_ERRORS {
                         state.errors.push(format!("{}: {error}", path.display()));
@@ -890,9 +1116,18 @@ fn delete_owned(
     path: &Path,
     recursive: bool,
     identity: Option<&FileIdentity>,
+    proof: Option<&[VerifiedFile]>,
 ) -> io::Result<()> {
     let (_, resolved) = owned_path(root, path)?;
-    validate_target(root, &resolved, recursive)?;
+    if proof.is_none() {
+        validate_target(root, &resolved, recursive)?;
+    } else if !matches!(
+        super::material_paths::resolve(root, &resolved)?.kind,
+        super::material_paths::AssetKind::Original { .. }
+            | super::material_paths::AssetKind::StemDirectory { .. }
+    ) {
+        return Err(io::Error::other("verified retirement target changed kind"));
+    }
     // Guard all directories from the volume root down to the target's parent.
     // FILE_SHARE_DELETE is excluded: rename/junction replacement cannot redirect
     // a checked path after containment validation and before leaf removal.
@@ -905,7 +1140,11 @@ fn delete_owned(
         return Ok(());
     }
     if !recursive {
-        return remove_owned_file(&resolved, identity);
+        return if let Some(proof) = proof {
+            remove_verified_file(&resolved, &proof[0])
+        } else {
+            remove_owned_file(&resolved, identity)
+        };
     }
     let generation_guard = directory_guards(&resolved)?;
     if let Some(identity) = identity
@@ -916,11 +1155,12 @@ fn delete_owned(
         ));
     }
     let mut files = Vec::new();
-    for entry in fs::read_dir(&resolved)? {
+    for entry in fs::read_dir(&resolved)?.take(13) {
         let entry = entry?;
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if !entry.file_type()?.is_file()
+            || proof.is_some_and(|proof| !proof.iter().any(|file| file.name == name))
             || !(STEM_FILES.contains(&name.as_ref())
                 || STEM_FILES.iter().any(|file| name == format!("{file}.tmp")))
         {
@@ -929,27 +1169,86 @@ fn delete_owned(
             ));
         }
         reject_links(&entry.path())?;
+        if let Some(proof) = proof {
+            let file = proof
+                .iter()
+                .find(|file| file.name == name)
+                .expect("verified leaf name");
+            if capture_identity(&entry.path())?.as_ref() != Some(&file.identity) {
+                return Err(io::Error::other("generation leaf was replaced; preserved"));
+            }
+            verify_file_proof(&entry.path(), file)?;
+        }
         files.push(entry.path());
     }
     for file in files {
-        remove_owned_file(&file, None)?;
+        if let Some(proof) = proof {
+            let proof = proof
+                .iter()
+                .find(|proof| {
+                    file.file_name()
+                        .is_some_and(|name| name == proof.name.as_str())
+                })
+                .expect("verified leaf");
+            remove_verified_file(&file, proof)?;
+        } else {
+            remove_owned_file(&file, None)?;
+        }
     }
     drop(generation_guard);
     fs::remove_dir(&resolved)
 }
 
 pub(super) fn remove_owned_file(path: &Path, identity: Option<&FileIdentity>) -> io::Result<()> {
-    remove_exact_object(path, identity, false)
+    remove_exact_object(path, identity, false, None)
+}
+
+pub(super) fn remove_verified_file(path: &Path, proof: &VerifiedFile) -> io::Result<()> {
+    remove_exact_object(path, Some(&proof.identity), false, Some(proof))
+}
+
+/// Preflight every known leaf before a multi-leaf retirement mutates anything.
+pub(super) fn verify_file_proof(path: &Path, proof: &VerifiedFile) -> io::Result<()> {
+    use std::io::Read;
+    let mut file = super::cold_store::sealed_reader(path)?;
+    if file_identity(&file)? != proof.identity || file.metadata()?.len() != proof.bytes {
+        return Err(io::Error::other(
+            "verified leaf identity or extent changed; preserved",
+        ));
+    }
+    let mut digest = Sha256::new();
+    let mut bytes = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        bytes = bytes
+            .checked_add(count as u64)
+            .ok_or_else(|| io::Error::other("verified leaf extent overflow"))?;
+        if bytes > proof.bytes {
+            return Err(io::Error::other("verified leaf changed extent; preserved"));
+        }
+        digest.update(&buffer[..count]);
+    }
+    if bytes != proof.bytes || format!("{:x}", digest.finalize()) != proof.sha256 {
+        return Err(io::Error::other(
+            "verified leaf contents changed; preserved",
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn remove_empty_directory(path: &Path, identity: &FileIdentity) -> io::Result<()> {
-    remove_exact_object(path, Some(identity), true)
+    remove_exact_object(path, Some(identity), true, None)
 }
 
 fn remove_exact_object(
     path: &Path,
     identity: Option<&FileIdentity>,
     directory: bool,
+    proof: Option<&VerifiedFile>,
 ) -> io::Result<()> {
     #[cfg(windows)]
     {
@@ -957,8 +1256,8 @@ fn remove_exact_object(
         use std::os::windows::io::AsRawHandle;
         // DELETE + FILE_READ_ATTRIBUTES, no shared write/delete. Delete the
         // validated opened object by handle, never a later pathname replacement.
-        let file = fs::OpenOptions::new()
-            .access_mode(0x0001_0080)
+        let mut file = fs::OpenOptions::new()
+            .access_mode(0x0001_0080 | if proof.is_some() { 0x8000_0000 } else { 0 })
             .share_mode(1)
             .custom_flags(0x0020_0000 | if directory { 0x0200_0000 } else { 0 })
             .open(path)?;
@@ -974,6 +1273,28 @@ fn remove_exact_object(
         let opened_identity = file_identity(&file)?;
         if identity.is_some_and(|identity| &opened_identity != identity) {
             return Err(io::Error::other("retired original was replaced; preserved"));
+        }
+        if let Some(proof) = proof {
+            use std::io::Read;
+            let mut digest = Sha256::new();
+            let mut buffer = [0_u8; 64 * 1024];
+            let mut bytes = 0_u64;
+            loop {
+                let count = file.read(&mut buffer)?;
+                if count == 0 {
+                    break;
+                }
+                bytes = bytes
+                    .checked_add(count as u64)
+                    .ok_or_else(|| io::Error::other("leaf extent overflow"))?;
+                if bytes > proof.bytes {
+                    return Err(io::Error::other("retired leaf changed length; preserved"));
+                }
+                digest.update(&buffer[..count]);
+            }
+            if bytes != proof.bytes || format!("{:x}", digest.finalize()) != proof.sha256 {
+                return Err(io::Error::other("retired leaf changed contents; preserved"));
+            }
         }
         if directory && fs::read_dir(path)?.next().is_some() {
             return Err(io::Error::new(
@@ -1012,6 +1333,11 @@ fn remove_exact_object(
     }
     #[cfg(not(windows))]
     {
+        if proof.is_some() {
+            return Err(io::Error::other(
+                "verified retirement requires sealed Windows handles",
+            ));
+        }
         if identity.is_some_and(|identity| {
             capture_identity(path).ok().flatten().as_ref() != Some(identity)
         }) {

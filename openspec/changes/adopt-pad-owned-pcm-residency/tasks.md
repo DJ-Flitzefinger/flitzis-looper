@@ -8,7 +8,8 @@ current regression validation and final independent review are complete.
 K-META neutral key policy, persistence and source/request guards are independently
 accepted; audible pitch, UI/MIDI and later storage slices remain pending.
 P2a is independently accepted for one verified material and all related current
-references; remaining materials and full P2b recovery remain pending.
+references. P2b recognized remaining-material recovery and exact final-owner
+cleanup are independently accepted; later storage/audio/UI/Human gates stay open.
 
 The [extended program](../../../docs/pad-owned-pcm-program.md) and
 [complete coverage map](../../../docs/pre-rust-program-coverage.json) own the
@@ -99,15 +100,26 @@ in a new process with fresh native source/timing ACKs. Current 3069 Python tests
 with 35 device skips and affected static/strict checks passed. Native acceptance
 combines unchanged-input broad passes with separate fixture-failure closure and
 fresh control/analysis scopes; the original FAILED batch and excluded accidental
-device-test invocation remain documented. No full P2b or bulk-migration closure.
+device-test invocation remain documented. That P2a acceptance did not close
+remaining-material migration or P2b recovery.
 
 - [x] Migration journal/current reference transaction pro material; Autosave serialized
 - [x] Verifizierte copy/reopen/source/timing fresh ACK/alias lineage; settings/newer revisions prevail, alte rollback owners bleiben
 
 ### P2b
 
-- [ ] Crash/retry/recovery/rollback und erkannte staging/final-owner cleanup
-- [ ] Alle flush/rename/config/native boundaries, mehrere gleiche/verschiedene material users; keine historische ACK, kein Power-loss-/NonWindows-PASS aus injection
+Current independent acceptance covers recognized remaining materials, actual
+interrupted callback claim and fresh-process source/timing ACKs, exact saved/global
+inventory, 216-reference history capacity and physical last-reader cleanup.
+The broad native 857/1 and Python 3097/1 batches remain FAILED; fresh affected
+46 native cold/control, 168 analysis and 30 Python regressions plus static/strict
+passed. The full-run 216 capacity PASS is reused on unchanged relevant inputs;
+the Python failure was a stale exception oracle, while native timeout cause remains
+unproven. Unknown/foreign data, no power-loss/non-Windows inference and every later
+storage/audio/UI/Human gate remain protected/open.
+
+- [x] Crash/retry/recovery/rollback und erkannte staging/final-owner cleanup
+- [x] Alle flush/rename/config/native boundaries, mehrere gleiche/verschiedene material users; keine historische ACK, kein Power-loss-/NonWindows-PASS aus injection
 
 ### P3
 

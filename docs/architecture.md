@@ -1036,8 +1036,10 @@ native unload ACK determine real last use. Full HC/P6/V0 and human gates stay OP
 ### Existing material reference migration
 
 `MaterialMigrationController` coordinates one distinct current legacy original
-and its matching assignments across all216 slots. App startup schedules at most
-one such transaction after ordinary restores; the explicit `begin(sample_id)`
+and its matching assignments across all216 slots. App startup captures a bounded
+reference inventory after ordinary restores and admits one material at a time;
+after genuine settlement it rechecks each remaining recognized legacy reference.
+The explicit `begin(sample_id)`
 operation uses the same path. Native bounded workers verify/reuse or copy the
 immutable original, FullMix PCM and complete available five-WAV sets. Each pad
 receives a separate actual source request/ACK and fresh supported saved timing
@@ -1054,6 +1056,37 @@ journal records, preserving newer captured intent only against the selected actu
 config reference and its exact captured bytes. Other known configs do not inherit
 that journal's intent or fences. Complete WAV hashing and geometry verification
 run on the preparation workers; compatible verified sets from separate legacy
-directories share a canonical generation. The comprehensive crash/replay/retirement
-matrix remains a later
-program stage; startup admission does not mark remaining legacy materials done.
+directories share a canonical generation.
+
+Recovery serializes new child transactions under an uninterrupted writer fence.
+It rebases from current config/content intent, revalidates complete material and
+obtains fresh source/timing acknowledgements. Artifact receipts carry the samples
+root identity plus exact recognized leaf IDs, sizes and complete digests. They
+provide durable evidence rather than saved native permission. Unknown or partial
+records and unreceipted staging remain visible and protected.
+
+Each committed recovery child replaces only its matching parent alias, preserving
+the existing 216-alias limit. A bounded worker durably transfers the exact artifact
+lineage before compacting the fully checked obsolete parent journal; changed,
+gapped or unknown records remain protected. Previously published P2a journals
+without a ledger gain fresh complete old-source proofs. Their new or reused
+canonical targets receive no inferred rollback provenance.
+
+The background artifact reconciler inventories known saved configs and actual
+process records under the same Windows exclusive gate as registration. Saved
+unavailable stem references still count as users. Obsolete exact originals,
+PCM and WAV generations retire through existing native reader registries and
+off-thread queues. The inventory gate remains held while jobs, voices, queued
+history, sealed readers or retry owners delay actual deletion. Full digest and
+FileID checks at the delete handle protect replacement and in-place changes;
+only checked leaves and checked empty containers may be removed. Foreign live
+processes or unqueryable/unknown inventory preserve all candidates. Fault/reopen
+tests establish bounded Windows visibility and lifecycle behavior; they do not
+assert power-loss guarantees or audible acceptance.
+
+Physical queue entries retain the inventory gate after callers release or vanish.
+Their visible outcomes settle after exact deletion and the bounded empty-container
+pass, or report a preserved error. New saved ownership cancels queued obsolete
+retirement with a terminal preservation outcome. Config inventory binds opened
+handles and current file identities while allowing access-time changes caused by
+reading alone.

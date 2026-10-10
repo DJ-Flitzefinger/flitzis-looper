@@ -7,13 +7,12 @@ use super::material_paths::{self, AssetKind};
 use super::sample_loader::{SampleLoadProgress, decode_audio_snapshot, prepare_playback};
 use crate::messages::SampleBuffer;
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 pub(super) struct PreparedMigrationMaterial {
     pub sample: SampleBuffer,
     pub lease: CommittedColdLease,
-    pub old_original: PathBuf,
     old_reference: String,
     new_reference: String,
     cache_reference: String,
@@ -31,6 +30,9 @@ impl PreparedMigrationMaterial {
             "playback_identity": self.lease.manifest.identity,
             "descriptor": self.lease.manifest.descriptor,
             "cache_path": self.cache_reference,
+            "artifact_ledger_schema": 1,
+            "created_original": self.lease.created_original(),
+            "created_cache": self.lease.created_cache(),
         })
     }
 }
@@ -204,7 +206,6 @@ pub(super) fn prepare_material(
     Ok(PreparedMigrationMaterial {
         sample,
         lease,
-        old_original,
         old_reference,
         new_reference,
         cache_reference,

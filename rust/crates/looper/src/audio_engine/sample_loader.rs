@@ -13,6 +13,7 @@ use crate::audio_engine::errors::SampleLoadError;
 use crate::messages::SampleBuffer;
 
 mod cold;
+pub(crate) use cold::validate_decoder_cache_provenance;
 pub(crate) use cold::{decode_audio_snapshot, prepare_playback};
 pub(crate) use cold::{decoder_cache_selector, playback_cache_transform};
 

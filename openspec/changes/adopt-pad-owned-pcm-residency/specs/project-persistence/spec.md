@@ -165,10 +165,17 @@ genuinely fresh native source/timing ownership and ACK for changed path identiti
 #### Scenario: One legacy material is reachable after normal startup restoration
 - **GIVEN** startup captured an existing legacy original and its related current assignments
 - **WHEN** ordinary source restores and owned stem jobs have settled
-- **THEN** the application SHALL admit at most one distinct legacy material transaction for that startup, including all matching current assignments across all banks
+- **THEN** the application SHALL admit at most one distinct legacy material transaction at a time, including all matching current assignments across all banks
 - **AND** canonical originals SHALL not start another migration
 - **AND** changed current references, unknown journals, missing originals and unresolved claims SHALL remain visible and protected without repeated automatic retry
 - **AND** this bounded admission SHALL not assert that remaining legacy materials or program-wide reconciliation are complete
+
+#### Scenario: Remaining recognized legacy materials reconcile serially
+- **GIVEN** a bounded startup inventory of current assignments in all banks
+- **WHEN** one recognized material transaction and its bounded preparation worker have genuinely settled
+- **THEN** the system SHALL recheck the next captured current reference and reconcile each remaining recognized legacy material serially without admitting two active material transactions
+- **AND** newer paths and content identities SHALL win, canonical materials SHALL be skipped, and unknown or unresolved outcomes SHALL stop automatic progress visibly while preserving their assets
+- **AND** final legacy retirement SHALL require the complete known reference/process inventory and true last physical owner rather than completion of only the first material
 
 #### Scenario: Missing stems retain desire through original migration
 - **GIVEN** a current assignment desires ALL STEMS but its saved stem set is unavailable
@@ -188,6 +195,53 @@ genuinely fresh native source/timing ownership and ACK for changed path identiti
 - **WHEN** one config has a journalled unsaved migration intent
 - **THEN** recovery SHALL bind that intent to the selected actual config reference and SHALL NOT apply it or its fences to the other known config
 - **AND** missing or unrecognized project bindings SHALL remain visibly unresolved without restoring runtime permission
+
+#### Scenario: Interrupted transaction resumes from current intent
+- **GIVEN** a complete recognized journal bound to the selected actual config
+- **WHEN** a new process reconciles its related current assignments
+- **THEN** the system SHALL serialize a fresh child transaction under the same writer fence, reverify complete material bytes, and obtain its own source and Automatic timing acknowledgements
+- **AND** the current content IDs, complete key metadata and current edits SHALL win; a different config digest SHALL NOT admit an old unsaved snapshot
+- **AND** unknown, incomplete or exhausted journals SHALL stay visible and protected rather than creating runtime rights or being overwritten
+
+#### Scenario: Durable artifact provenance is reverified before retirement
+- **WHEN** rollback or target artifacts become candidates for recovery cleanup
+- **THEN** the system SHALL reopen a complete bounded receipt containing the guarded samples-root identity, exact object identity and every recognized leaf identity, byte length and full digest
+- **AND** target cleanup SHALL require actual created provenance; reused targets and unreceipted staging SHALL remain protected
+- **AND** changed roots, files, contents, unknown children and partial generations SHALL reject cleanup without recursive deletion
+
+#### Scenario: Global final use includes saved unavailable references
+- **WHEN** a settled material transaction requests obsolete legacy retirement
+- **THEN** the system SHALL inventory bounded known project configs and actual process owners under the same exclusive gate used by new process registration
+- **AND** all saved original and stem references, including unavailable stem metadata, SHALL protect their files
+- **AND** another live or unqueryable process, unknown inventory, a physical job, voice, queued or history reader, sealed reader or retry owner SHALL retain readable files until its actual last use ends
+- **AND** the inventory gate SHALL remain held while queued retirement still waits for physical readers; only exact checked leaves and then checked empty containers may disappear off-thread
+
+#### Scenario: Full recognized inventory resumes within existing metadata limits
+- **GIVEN** 216 recognized interrupted material aliases and journals bound to the selected current project
+- **WHEN** each material gains a genuinely committed current successor
+- **THEN** the system SHALL replace only its matching parent alias within the existing 216-alias bound
+- **AND** the successor SHALL durably retain all exact reverified artifact lineage before the recognized parent journal is compacted
+- **AND** compaction SHALL recheck every current record and exact file identity and digest, preserving unknown, gapped, changed or unresolved history
+- **AND** serial recovery SHALL stay within the existing bounded journal inventory without silently raising capacity or discarding pending material
+
+#### Scenario: Published P2a history gains fresh old-material proof
+- **GIVEN** an existing committed P2a journal has no artifact ledger
+- **WHEN** its current selected config and alias still bind the transaction
+- **THEN** the system SHALL freshly verify complete old Original, compatible PCM and old-source WAV artifacts before considering retirement
+- **AND** historical paths and phases SHALL supply no runtime ACK or deletion permission
+- **AND** new or reused target material SHALL remain protected even after its last current project reference is removed
+- **AND** current ALL STEMS desire, unavailable metadata and every saved setting SHALL be preserved
+
+#### Scenario: Physical queue completion outlives callers
+- **WHEN** a fully verified artifact enters existing physical retirement
+- **THEN** that actual queue entry SHALL retain its inventory gate independently of caller release or garbage collection until physical completion or terminal preservation failure
+- **AND** a new saved assignment, delivered owner or reclaim SHALL cancel obsolete retirement with a visible terminal preservation outcome
+- **AND** completion SHALL follow the exact leaf deletion and bounded empty-container pass; a pending reader or error SHALL NOT be reported as successful deletion
+
+#### Scenario: Config inventory distinguishes access from replacement
+- **WHEN** the known project reference inventory reads a config
+- **THEN** it SHALL bind the actual opened file and current path identity and reject detected writes, replacements or reparse changes during that read
+- **AND** an access-time update caused by reading alone SHALL NOT invalidate an unchanged config
 
 ### Requirement: Persist deliberate startup preload and residency budget
 The system SHALL persist global `preload_stem_loops_on_startup` and

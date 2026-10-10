@@ -25,6 +25,8 @@ mod warm;
 pub(super) use lifecycle::admit_original_owner;
 pub(super) use lifecycle::cleanup_admission_status;
 pub(super) use lifecycle::cleanup_status;
+#[cfg(test)]
+pub(super) use lifecycle::has_verified_retirement;
 
 /// Complete PCM in its own rate/layout domain, before any residency selection.
 pub(super) struct PcmArtifactInput<'a> {

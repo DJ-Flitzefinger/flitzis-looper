@@ -72,6 +72,8 @@ pub(super) struct DeleteTask {
     staging: bool,
     identity: Option<FileIdentity>,
     files: Vec<FileIdentity>,
+    proof: Option<Vec<crate::audio_engine::project_assets::VerifiedFile>>,
+    protection: Option<Arc<crate::audio_engine::project_assets::RetirementProtection>>,
     _slot: CleanupSlot,
 }
 
@@ -135,10 +137,11 @@ pub(super) fn store() -> &'static Arc<Store> {
                         match remove_owned(&task) {
                             Ok(()) => {
                                 state.deleted += 1;
-                                prunes.push(task.path.clone());
+                                prunes.push((task.path.clone(), task.protection.clone()));
                             }
                             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                                state.deleted += 1
+                                state.deleted += 1;
+                                prunes.push((task.path.clone(), task.protection.clone()));
                             }
                             Err(error)
                                 if error.kind() == io::ErrorKind::PermissionDenied
@@ -147,6 +150,9 @@ pub(super) fn store() -> &'static Arc<Store> {
                                 state.deleting.push_back(task)
                             }
                             Err(error) => {
+                                if let Some(protection) = task.protection.as_ref() {
+                                    protection.outcome.finish(Err(error.to_string()));
+                                }
                                 if state.errors.len() < MAX_REPORTED_ERRORS {
                                     state
                                         .errors
@@ -156,9 +162,12 @@ pub(super) fn store() -> &'static Arc<Store> {
                         }
                     }
                     drop(state);
-                    for path in prunes {
+                    for (path, protection) in prunes {
                         super::super::project_assets::ProjectAssets::shared()
                             .prune_material_if_unowned(&path);
+                        if let Some(protection) = protection {
+                            protection.outcome.finish(Ok(()));
+                        }
                     }
                     std::thread::sleep(Duration::from_millis(25));
                 }
@@ -176,6 +185,22 @@ pub(in crate::audio_engine) fn cleanup_status() -> io::Result<(usize, u64, Vec<S
     Ok((state.deleting.len(), state.deleted, state.errors.clone()))
 }
 
+#[cfg(test)]
+pub(in crate::audio_engine) fn has_verified_retirement(
+    path: &Path,
+    outcome: &Arc<crate::audio_engine::project_assets::RetirementOutcome>,
+) -> bool {
+    store().state.lock().is_ok_and(|state| {
+        state.deleting.iter().any(|task| {
+            task.path == path
+                && task
+                    .protection
+                    .as_ref()
+                    .is_some_and(|value| Arc::ptr_eq(&value.outcome, outcome))
+        })
+    })
+}
+
 /// A durable assignment/job admission cancels a pending unadopted-original
 /// rollback under the same gate used by deletion. Existing external files are
 /// never added to the rollback queue by this admission.
@@ -189,9 +214,15 @@ pub(in crate::audio_engine) fn admit_original_owner(path: &Path) -> io::Result<(
     if !path.is_file() {
         return Err(invalid("original assignment is not a file"));
     }
-    state
-        .deleting
-        .retain(|task| task.cache || task.path != path);
+    state.deleting.retain(|task| {
+        let keep = task.cache || task.path != path;
+        if !keep && let Some(protection) = task.protection.as_ref() {
+            protection.outcome.finish(Err(
+                "new original owner cancels retirement; preserved".into()
+            ));
+        }
+        keep
+    });
     let original = state.originals.get(&path).and_then(Weak::upgrade);
     if let Some(original) = original.as_ref() {
         original.rollback.store(false, Ordering::Release);
@@ -255,14 +286,34 @@ fn remove_owned(task: &DeleteTask) -> io::Result<()> {
         if task.identity.as_ref() != Some(&file_identity(&generation_guard)?) {
             return Err(invalid("owned cache generation was replaced"));
         }
+        if let Some(proof) = &task.proof {
+            for file in proof {
+                match crate::audio_engine::project_assets::verify_file_proof(
+                    &task.path.join(&file.name),
+                    file,
+                ) {
+                    Ok(()) => (),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+                    Err(error) => return Err(error),
+                }
+            }
+        }
         for (index, name) in ["decoder.f32le", "playback.f32le", "manifest.json"]
             .into_iter()
             .enumerate()
         {
-            match crate::audio_engine::project_assets::remove_owned_file(
-                &task.path.join(name),
-                task.files.get(index),
-            ) {
+            let result = if let Some(proof) = &task.proof {
+                crate::audio_engine::project_assets::remove_verified_file(
+                    &task.path.join(name),
+                    &proof[index],
+                )
+            } else {
+                crate::audio_engine::project_assets::remove_owned_file(
+                    &task.path.join(name),
+                    task.files.get(index),
+                )
+            };
+            match result {
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error),
@@ -293,6 +344,8 @@ fn queue_delete(
                 staging: false,
                 identity: Some(identity),
                 files,
+                proof: None,
+                protection: None,
                 _slot: slot,
             });
         }
@@ -316,6 +369,8 @@ pub(super) fn queue_generation(
                 staging: true,
                 identity: Some(identity),
                 files: Vec::new(),
+                proof: None,
+                protection: None,
                 _slot: slot,
             });
         }
@@ -338,6 +393,8 @@ pub(super) fn queue_generation_under_gate(
             staging: true,
             identity: Some(identity),
             files: Vec::new(),
+            proof: None,
+            protection: None,
             _slot: slot,
         });
     }
@@ -493,6 +550,15 @@ impl Drop for OriginalReader {
 }
 
 impl CommittedColdLease {
+    #[cfg(test)]
+    pub(in crate::audio_engine) fn reader_lifetime_probe_for_test(
+        &self,
+    ) -> impl Fn() -> bool + use<> {
+        let cache = Arc::downgrade(&self.cache);
+        let original = Arc::downgrade(&self._original);
+        move || cache.strong_count() == 0 && original.strong_count() == 0
+    }
+
     /// Serialize canonical stem preparation for this verified material/format,
     /// independently of the legacy slot and caller's private generation ID.
     pub(in crate::audio_engine) fn stem_preparation_gate(
@@ -717,6 +783,87 @@ impl CommittedColdLease {
     }
     pub(in crate::audio_engine) fn created_cache(&self) -> bool {
         self.created_cache
+    }
+    pub(in crate::audio_engine) fn created_original(&self) -> bool {
+        self.created_original
+    }
+
+    /// Fully evidenced recovery uses the existing reader-aware bounded queue.
+    /// The caller holds the ProjectAssets admission gate and sealed proof handles.
+    pub(in crate::audio_engine) fn queue_verified_retirement(
+        path: &Path,
+        identity: &FileIdentity,
+        proof: &[crate::audio_engine::project_assets::VerifiedFile],
+        protection: Option<Arc<crate::audio_engine::project_assets::RetirementProtection>>,
+    ) -> io::Result<()> {
+        let names = ["decoder.f32le", "playback.f32le", "manifest.json"];
+        if proof.len() != names.len()
+            || proof
+                .iter()
+                .zip(names)
+                .any(|(file, name)| file.name != name)
+        {
+            return Err(invalid(
+                "PCM retirement requires exact complete three-leaf evidence",
+            ));
+        }
+        let root = path
+            .parent()
+            .ok_or_else(|| invalid("PCM retirement root missing"))?;
+        let _guards = crate::audio_engine::project_assets::directory_guards(path)?;
+        let shared = store();
+        let mut state = shared
+            .state
+            .lock()
+            .map_err(|_| invalid("store retirement gate poisoned"))?;
+        if crate::audio_engine::project_assets::capture_identity(path)?.as_ref() != Some(identity)
+            || proof.iter().any(|file| {
+                crate::audio_engine::project_assets::capture_identity(&path.join(&file.name))
+                    .ok()
+                    .flatten()
+                    .as_ref()
+                    != Some(&file.identity)
+            })
+        {
+            return Err(invalid("verified PCM generation changed before retirement"));
+        }
+        if let Some(previous) = state.deleting.iter_mut().find(|task| task.path == path) {
+            if !previous.cache
+                || previous.identity.as_ref() != Some(identity)
+                || previous
+                    .proof
+                    .as_ref()
+                    .is_some_and(|previous| previous != proof)
+            {
+                return Err(invalid("PCM queued retirement evidence changed"));
+            }
+            previous.proof = Some(proof.to_vec());
+            if let Some(current) = previous.protection.as_ref() {
+                if protection
+                    .as_ref()
+                    .is_none_or(|next| !Arc::ptr_eq(&current.outcome, &next.outcome))
+                {
+                    return Err(invalid("PCM retirement has another held inventory outcome"));
+                }
+            } else {
+                previous.protection = protection;
+            }
+            return Ok(());
+        }
+        let [slot] = reserve_cleanup::<1>()?;
+        state.deleting.push_back(DeleteTask {
+            path: path.to_owned(),
+            root: root.to_owned(),
+            cache: true,
+            staging: false,
+            identity: Some(identity.clone()),
+            files: proof.iter().map(|file| file.identity.clone()).collect(),
+            proof: Some(proof.to_vec()),
+            protection,
+            _slot: slot,
+        });
+        shared.changed.notify_one();
+        Ok(())
     }
     pub(in crate::audio_engine) fn original_identity_matches(
         &self,

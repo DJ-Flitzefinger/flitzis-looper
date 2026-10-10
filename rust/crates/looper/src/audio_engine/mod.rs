@@ -77,6 +77,10 @@ pub use prepared_source::PreparedSourceTicket;
 mod material_migration;
 mod material_migration_control;
 mod material_migration_journal;
+mod material_migration_recovery;
+pub use material_migration_recovery::{
+    MigrationArtifactLease, MigrationInventoryLease, MigrationProjectGuard,
+};
 mod material_migration_stems;
 mod material_paths;
 pub use material_migration_control::{
@@ -1235,6 +1239,10 @@ impl AudioEngine {
 
     pub fn hold_material_migration(&self, ids: Vec<usize>) -> PyResult<MaterialMigrationHold> {
         material_migration_control::hold(self, ids)
+    }
+
+    pub fn migration_artifact_ledger_supported(&self) -> bool {
+        true
     }
 
     pub fn prepare_material_migration(

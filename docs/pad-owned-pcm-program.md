@@ -1,6 +1,6 @@
 # Shared-material PCM and extended pre-Rust delivery program
 
-Status: P1a, P1b, K-META and bounded P2a independently accepted, 2026-10-10; no whole-program or human
+Status: P1a, P1b, K-META, bounded P2a and P2b independently accepted, 2026-10-10; no whole-program or human
 completion. J0 and P1a are published. Typed native material/slot
 resolution, canonical import/restore storage, durable material/content IDs and
 guarded exact cleanup are implemented.
@@ -16,14 +16,27 @@ This metadata slice grants no audible pitch or native/Human acceptance.
 P2a implements one verified legacy-material migration with all related current
 pad references, a per-project journal, serialized config revisions and fresh
 independent source/timing ACKs. Current identity, settings and newer intent survive;
-unresolved native claims retain owners and fences. Startup admits one material;
-remaining legacy materials, P2b recovery, arrangement and pitch controls stay open.
+unresolved native claims retain owners and fences. That bounded startup slice
+admitted one material; P2b now continues the recognized remaining materials.
+Arrangement and pitch controls stay open.
 Current 3069 Python tests/35 device skips, lint/types, changed-file formatting and
 affected strict passed. Native evidence combines 828 actual broad-run passes on
 unchanged inputs, both separately repaired journal fixtures, a fresh parallel 12
 control batch and 168 fresh analysis tests. The initial broad batch remains FAILED;
 an unintended device-test invocation was stopped and excluded from hardware-free
 acceptance. Unchanged long DSP reuse and formatting-baseline limits remain explicit.
+P2b adds fresh interrupted-process recovery, current-intent reconciliation,
+216-reference alias/history capacity and exact obsolete-object cleanup after global
+inventory and the final actual reader/voice/job. Unknown, foreign, partial and
+exhausted data remain visible and preserved; reused targets receive no inferred
+cleanup rights. Genuine callback-claim interruption and fresh child source/timing
+ACKs, physical retirement queues and the full 216-capacity case passed.
+The broad native 857/1 and Python 3097/1 batches remain FAILED. Fresh affected
+checks passed: 46 native cold/control tests, 168 analysis tests, 30 Python
+recovery/cleanup regressions and current lint/types/format/official strict.
+The stale Python exception oracle was corrected without a production change;
+the broad native timeout cause remains unproven. No power-loss, non-Windows,
+audible or human acceptance follows from these bounded fault/Windows checks.
 The accepted bounded P0/C1/R0 prerequisites and historical FAIL/UNKNOWN evidence
 remain intact.
 

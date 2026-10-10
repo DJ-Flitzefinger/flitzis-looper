@@ -137,6 +137,25 @@ class ProjectPersistence:
                 raise PersistenceFenceError(message)
             self._migration_owner = None
 
+    def transfer_migration(
+        self, previous: str, transaction_id: str
+    ) -> tuple[int, ProjectState, str | None]:
+        """Transfer a fresh recovery fence without an ordinary-writer opening."""
+        _validate_transaction_id(previous)
+        _validate_transaction_id(transaction_id)
+        with self._writer:
+            if self._migration_owner != previous:
+                message = "material recovery does not own the config writer"
+                raise PersistenceFenceError(message)
+            revision = self._revision
+            snapshot = self.project.model_copy(deep=True)
+            try:
+                digest = hashlib.sha256(self.config_path.read_bytes()).hexdigest()
+            except FileNotFoundError:
+                digest = None
+            self._migration_owner = transaction_id
+            return revision, snapshot, digest
+
     def commit_migration(
         self, transaction_id: str, expected_revision: int, snapshot: ProjectState
     ) -> tuple[int, str]:

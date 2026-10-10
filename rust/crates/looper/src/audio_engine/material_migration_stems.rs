@@ -314,9 +314,17 @@ pub(super) fn copy_stem_generation(
     let original_bytes = original["bytes"]
         .as_u64()
         .ok_or("material original bytes missing")?;
+    // Interrupted configs can already contain a canonical subscriber alongside
+    // a legacy one. Each set binds its own actual typed source and full bytes.
+    let old_reference = old_source_version
+        .rsplit_once("|sha256-v1:")
+        .ok_or("old source version has no complete digest binding")?
+        .0;
+    let old_original = material_paths::resolve(&root, Path::new(old_reference))
+        .map_err(|error| error.to_string())?;
     let _old_source = verify_source(
         &root,
-        &material.old_original,
+        &old_original.path,
         original_digest,
         original_bytes,
         old_source_version,
@@ -1074,6 +1082,28 @@ mod tests {
             .is_err()
         );
         assert!(!fixture.stems_root().exists());
+    }
+
+    #[test]
+    fn interrupted_canonical_and_legacy_source_lineages_reuse_the_verified_same_set() {
+        let fixture = Fixture::new();
+        let copied = fixture.copy().unwrap();
+        let canonical =
+            material_paths::resolve(&fixture.root, Path::new(&copied.cache_reference)).unwrap();
+        let restored = copy_stem_generation(
+            &fixture.root,
+            &fixture.material,
+            &canonical.path,
+            &fixture.new_version,
+            &fixture.new_version,
+            "77777777777777777777777777777777",
+            &|| false,
+        )
+        .unwrap();
+        assert!(!restored.created);
+        assert_eq!(restored.cache_reference, copied.cache_reference);
+        assert_eq!(fs::read_dir(fixture.stems_root()).unwrap().count(), 1);
+        assert!(fixture.old.join(".complete.json").is_file());
     }
 
     #[test]

@@ -546,7 +546,19 @@ pub(super) fn prepared_for_test(
 ) -> PyResult<MaterialMigrationPreparation> {
     let pin = engine
         .project_assets
-        .acquire_pin(root, &material.old_original)
+        .acquire_pin(
+            root,
+            &super::material_paths::resolve(
+                root,
+                std::path::Path::new(
+                    material.metadata()["old_reference"]
+                        .as_str()
+                        .expect("verified old reference"),
+                ),
+            )
+            .map_err(|error| PyValueError::new_err(error.to_string()))?
+            .path,
+        )
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
     Ok(MaterialMigrationPreparation {
         result: Arc::new(Mutex::new(Some(Ok(Arc::new(material))))),

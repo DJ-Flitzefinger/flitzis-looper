@@ -75,6 +75,139 @@ impl DecoderDescriptor {
     }
 }
 
+/// Recognize the executing decoder's complete durable policy without granting
+/// a source permit. Warm source adoption additionally probes the real original.
+pub(crate) fn validate_decoder_cache_provenance(value: &Value) -> bool {
+    let optional_u64 = |key: &str| -> Option<Option<u64>> {
+        let field = value.get(key)?;
+        if field.is_null() {
+            Some(None)
+        } else {
+            field.as_u64().map(Some)
+        }
+    };
+    let descriptor = (|| -> Option<DecoderDescriptor> {
+        let codec = value["codec"].as_str()?;
+        if !supported_decoder_codec(codec) {
+            return None;
+        }
+        let container = value["container"].as_str()?;
+        if container.is_empty() || container.len() > 8192 {
+            return None;
+        }
+        let config = match value.get("codec_config_sha256")? {
+            Value::Null => None,
+            Value::String(digest)
+                if digest.len() == 64
+                    && digest
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) =>
+            {
+                Some(digest.clone())
+            }
+            _ => return None,
+        };
+        Some(DecoderDescriptor {
+            codec: codec.into(),
+            container: container.into(),
+            default_track_id: u32::try_from(value["default_track_id"].as_u64()?).ok()?,
+            declared_max_packet_frames: optional_u64("declared_max_packet_frames")?,
+            codec_config_sha256: config,
+            codec_block_frames: optional_u64("codec_block_frames")?
+                .map(usize::try_from)
+                .transpose()
+                .ok()?,
+            declared_frames: optional_u64("declared_frames")?,
+            delay_frames: optional_u64("declared_delay_frames")?
+                .map(u32::try_from)
+                .transpose()
+                .ok()?,
+            padding_frames: optional_u64("declared_padding_frames")?
+                .map(u32::try_from)
+                .transpose()
+                .ok()?,
+            silenced_frames: value["packet_error_silence_frames"].as_u64()?,
+            skipped_packets: value["skipped_unknown_duration_packets"].as_u64()?,
+        })
+    })();
+    descriptor.is_some_and(|descriptor| descriptor.to_json() == *value)
+}
+
+fn supported_decoder_codec(codec: &str) -> bool {
+    use symphonia::core::codecs as types;
+    // CodecType's constructor is private. Match public IDs and then the actual
+    // executing registry; an unknown or disabled codec cannot become recognized.
+    [
+        types::CODEC_TYPE_PCM_S32LE,
+        types::CODEC_TYPE_PCM_S32LE_PLANAR,
+        types::CODEC_TYPE_PCM_S32BE,
+        types::CODEC_TYPE_PCM_S32BE_PLANAR,
+        types::CODEC_TYPE_PCM_S24LE,
+        types::CODEC_TYPE_PCM_S24LE_PLANAR,
+        types::CODEC_TYPE_PCM_S24BE,
+        types::CODEC_TYPE_PCM_S24BE_PLANAR,
+        types::CODEC_TYPE_PCM_S16LE,
+        types::CODEC_TYPE_PCM_S16LE_PLANAR,
+        types::CODEC_TYPE_PCM_S16BE,
+        types::CODEC_TYPE_PCM_S16BE_PLANAR,
+        types::CODEC_TYPE_PCM_S8,
+        types::CODEC_TYPE_PCM_S8_PLANAR,
+        types::CODEC_TYPE_PCM_U32LE,
+        types::CODEC_TYPE_PCM_U32LE_PLANAR,
+        types::CODEC_TYPE_PCM_U32BE,
+        types::CODEC_TYPE_PCM_U32BE_PLANAR,
+        types::CODEC_TYPE_PCM_U24LE,
+        types::CODEC_TYPE_PCM_U24LE_PLANAR,
+        types::CODEC_TYPE_PCM_U24BE,
+        types::CODEC_TYPE_PCM_U24BE_PLANAR,
+        types::CODEC_TYPE_PCM_U16LE,
+        types::CODEC_TYPE_PCM_U16LE_PLANAR,
+        types::CODEC_TYPE_PCM_U16BE,
+        types::CODEC_TYPE_PCM_U16BE_PLANAR,
+        types::CODEC_TYPE_PCM_U8,
+        types::CODEC_TYPE_PCM_U8_PLANAR,
+        types::CODEC_TYPE_PCM_F32LE,
+        types::CODEC_TYPE_PCM_F32LE_PLANAR,
+        types::CODEC_TYPE_PCM_F32BE,
+        types::CODEC_TYPE_PCM_F32BE_PLANAR,
+        types::CODEC_TYPE_PCM_F64LE,
+        types::CODEC_TYPE_PCM_F64LE_PLANAR,
+        types::CODEC_TYPE_PCM_F64BE,
+        types::CODEC_TYPE_PCM_F64BE_PLANAR,
+        types::CODEC_TYPE_PCM_ALAW,
+        types::CODEC_TYPE_PCM_MULAW,
+        types::CODEC_TYPE_ADPCM_G722,
+        types::CODEC_TYPE_ADPCM_G726,
+        types::CODEC_TYPE_ADPCM_G726LE,
+        types::CODEC_TYPE_ADPCM_MS,
+        types::CODEC_TYPE_ADPCM_IMA_WAV,
+        types::CODEC_TYPE_ADPCM_IMA_QT,
+        types::CODEC_TYPE_VORBIS,
+        types::CODEC_TYPE_MP1,
+        types::CODEC_TYPE_MP2,
+        types::CODEC_TYPE_MP3,
+        types::CODEC_TYPE_AAC,
+        types::CODEC_TYPE_OPUS,
+        types::CODEC_TYPE_SPEEX,
+        types::CODEC_TYPE_MUSEPACK,
+        types::CODEC_TYPE_ATRAC1,
+        types::CODEC_TYPE_ATRAC3,
+        types::CODEC_TYPE_ATRAC3PLUS,
+        types::CODEC_TYPE_ATRAC9,
+        types::CODEC_TYPE_EAC3,
+        types::CODEC_TYPE_AC4,
+        types::CODEC_TYPE_DCA,
+        types::CODEC_TYPE_WMA,
+        types::CODEC_TYPE_FLAC,
+        types::CODEC_TYPE_WAVPACK,
+        types::CODEC_TYPE_MONKEYS_AUDIO,
+        types::CODEC_TYPE_ALAC,
+        types::CODEC_TYPE_TTA,
+    ]
+    .into_iter()
+    .any(|known| format!("{known:?}") == codec && get_codecs().get_codec(known).is_some())
+}
+
 pub(crate) struct DecodedAudio {
     pub(crate) samples: Vec<f32>,
     pub(crate) channels: usize,
