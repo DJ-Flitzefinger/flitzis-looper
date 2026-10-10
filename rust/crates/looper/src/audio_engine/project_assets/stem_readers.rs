@@ -413,6 +413,33 @@ mod tests {
 }
 
 impl SharedStemReaders {
+    pub(super) fn belongs_to_assignments(
+        &self,
+        sources: &[CommittedColdLease],
+    ) -> io::Result<bool> {
+        let Some(pair) = &self.pair else {
+            return Ok(false);
+        };
+        let Some(source) = sources
+            .iter()
+            .find(|source| source.assignment_id() == pair.source_lease.assignment_id())
+        else {
+            return Ok(false);
+        };
+        let expected =
+            super::super::cold_residency::identity(&source.manifest).map_err(io::Error::other)?;
+        if self
+            .source
+            .as_ref()
+            .is_none_or(|held| held.as_ref() != expected.as_ref())
+        {
+            return Err(io::Error::other(
+                "paired reader source identity differs from assignment",
+            ));
+        }
+        Ok(true)
+    }
+
     fn native_live(&self) -> bool {
         self.identity.strong_count() > 0
             || self
@@ -541,6 +568,7 @@ impl ProjectAssets {
         state.readers.push(Reader {
             path,
             pcm,
+            source_pcm: Some(Arc::downgrade(&reference.samples)),
             cold: None,
             pending_assignment: false,
             saved_claim: false,
@@ -790,6 +818,7 @@ impl ProjectAssets {
         let reader = Reader {
             path: typed.path,
             pcm,
+            source_pcm: Some(Arc::downgrade(&reference.samples)),
             cold: None,
             pending_assignment: false,
             saved_claim: false,
@@ -1001,6 +1030,16 @@ mod paired_owner_tests {
             resident: bool,
             runtime_version: &str,
         ) -> Registered {
+            self.register_reference(assets, resident, runtime_version, &self.material.sample)
+        }
+
+        fn register_reference(
+            &self,
+            assets: &ProjectAssets,
+            resident: bool,
+            runtime_version: &str,
+            reference: &SampleBuffer,
+        ) -> Registered {
             let pair = prepare_complete_pair(
                 &self.root,
                 &self.material,
@@ -1017,7 +1056,6 @@ mod paired_owner_tests {
                 .unwrap()
             });
             let identity = Arc::new(bytes);
-            let reference = &self.material.sample;
             let stems = resident.then(|| PreparedStemSet {
                 complete_set_identity: identity.clone(),
                 accepted_timing: None,
@@ -1066,6 +1104,185 @@ mod paired_owner_tests {
             assert!(registered.pcm_path.join(name).exists());
         }
         assert!(registered.descriptor_path.is_file());
+    }
+
+    #[test]
+    fn same_pad_replacement_snapshot_counts_old_pair_and_excludes_equal_content_other_pad() {
+        let mut old = Fixture::new();
+        let current = Fixture::new();
+        let unrelated = Fixture::new();
+        let assets = ProjectAssets::isolated();
+        let engine = Arc::new(());
+        for fixture in [&old, &current, &unrelated] {
+            assets
+                .retain_cold(
+                    fixture.material.lease.clone(),
+                    &fixture.material.sample,
+                    Arc::downgrade(&engine),
+                )
+                .unwrap();
+        }
+        let old_complete = Arc::downgrade(&old.material.sample.samples);
+        let finite = old
+            .material
+            .lease
+            .read_window_cancellable(
+                &old.material.sample,
+                8,
+                32,
+                2,
+                crate::messages::ResidentContext::KeyLockFiniteLoop,
+                super::super::super::cold_jobs::PCM_LIMIT_BYTES,
+                &|| false,
+            )
+            .unwrap();
+        assets
+            .retain_cold_reader(&old.material.lease, &finite)
+            .unwrap();
+        let old_pair = old.register_reference(&assets, true, &old.canonical_version, &finite);
+        // The ordinary generic row for the same real component set must not double-charge it.
+        assets
+            .retain_stems(old.wav_path.clone(), old_pair.stems.as_ref().unwrap())
+            .unwrap();
+        let current_pair = current.register(&assets, true, &current.canonical_version);
+        let unrelated_pair = unrelated.register(&assets, true, &unrelated.canonical_version);
+        // Drop the original complete allocation: the live finite reader must still resolve A's
+        // assignment and its actual paired components after the bank has become B.
+        old.material.sample = finite.clone();
+        assert!(old_complete.upgrade().is_none());
+        let history = Mutex::new(vec![
+            vec![
+                Arc::downgrade(&finite.samples),
+                Arc::downgrade(&finite.samples),
+                Arc::downgrade(&current.material.sample.samples),
+            ],
+            vec![Arc::downgrade(&unrelated.material.sample.samples)],
+        ]);
+        let held = assets
+            .held_same_pad_reader_backings(&history, 0, &current.material.lease)
+            .unwrap();
+        assert_eq!(held.len(), 10); // finite A/full B plus the four real components of each.
+        assert_eq!(
+            held.iter().map(|pcm| pcm.len() * 4).sum::<usize>(),
+            (24 + 64) * 5 * 4
+        );
+        for source in [&finite.samples, &current.material.sample.samples] {
+            assert!(held.iter().any(|pcm| Arc::ptr_eq(pcm, source)));
+        }
+        for set in [
+            old_pair.stems.as_ref().unwrap(),
+            current_pair.stems.as_ref().unwrap(),
+        ] {
+            for component in &set.stems {
+                assert!(held.iter().any(|pcm| Arc::ptr_eq(pcm, &component.samples)));
+            }
+        }
+        for component in &unrelated_pair.stems.as_ref().unwrap().stems {
+            assert!(!held.iter().any(|pcm| Arc::ptr_eq(pcm, &component.samples)));
+        }
+        assert!(
+            !held
+                .iter()
+                .any(|pcm| Arc::ptr_eq(pcm, &unrelated.material.sample.samples))
+        );
+        let old_component = Arc::downgrade(&old_pair.stems.as_ref().unwrap().stems[3].samples);
+        drop(old_pair);
+        drop(old);
+        drop(finite);
+        assert!(old_component.upgrade().is_some()); // admission snapshot is a real reader owner.
+        drop(held);
+        assets.collect();
+        assert!(old_component.upgrade().is_none());
+    }
+
+    #[test]
+    fn shared_source_snapshot_conservatively_counts_both_actual_pad_component_sets() {
+        let current = Fixture::new();
+        let mut other = Fixture::new();
+        assert_ne!(
+            current.material.lease.assignment_id(),
+            other.material.lease.assignment_id()
+        );
+        assert_eq!(
+            current.material.sample.residency.as_ref().unwrap().source,
+            other.material.sample.residency.as_ref().unwrap().source
+        );
+        assert!(!Arc::ptr_eq(
+            &current.material.sample.samples,
+            &other.material.sample.samples
+        ));
+        // Normal cold sharing may give independently admitted equal-content assignments the
+        // same complete PCM allocation while keeping their own descriptors and paired stems.
+        other.material.sample.samples = current.material.sample.samples.clone();
+        let assets = ProjectAssets::isolated();
+        let engine = Arc::new(());
+        for fixture in [&current, &other] {
+            assets
+                .retain_cold(
+                    fixture.material.lease.clone(),
+                    &fixture.material.sample,
+                    Arc::downgrade(&engine),
+                )
+                .unwrap();
+        }
+        let current_pair = current.register(&assets, true, &current.canonical_version);
+        let other_pair = other.register(&assets, true, &other.canonical_version);
+        for (current_component, other_component) in current_pair
+            .stems
+            .as_ref()
+            .unwrap()
+            .stems
+            .iter()
+            .zip(&other_pair.stems.as_ref().unwrap().stems)
+        {
+            assert!(!Arc::ptr_eq(
+                &current_component.samples,
+                &other_component.samples
+            ));
+        }
+        let history = Mutex::new(vec![
+            vec![Arc::downgrade(&current.material.sample.samples)],
+            vec![Arc::downgrade(&other.material.sample.samples)],
+        ]);
+        let held = assets
+            .held_same_pad_reader_backings(&history, 0, &current.material.lease)
+            .unwrap();
+        // A weak source Arc cannot distinguish these pad assignments. Conservatively retain
+        // both real four-component sets, but charge their actually shared source only once.
+        assert_eq!(held.len(), 9);
+        assert_eq!(
+            held.iter().map(|pcm| pcm.len() * 4).sum::<usize>(),
+            64 * 9 * 4
+        );
+        assert_eq!(
+            held.iter()
+                .filter(|pcm| Arc::ptr_eq(pcm, &current.material.sample.samples))
+                .count(),
+            1
+        );
+        for set in [
+            current_pair.stems.as_ref().unwrap(),
+            other_pair.stems.as_ref().unwrap(),
+        ] {
+            for component in &set.stems {
+                assert_eq!(
+                    held.iter()
+                        .filter(|pcm| Arc::ptr_eq(pcm, &component.samples))
+                        .count(),
+                    1
+                );
+            }
+        }
+        let current_last = Arc::downgrade(&current_pair.stems.as_ref().unwrap().stems[3].samples);
+        let other_last = Arc::downgrade(&other_pair.stems.as_ref().unwrap().stems[3].samples);
+        drop(current_pair);
+        drop(other_pair);
+        assert!(current_last.upgrade().is_some());
+        assert!(other_last.upgrade().is_some());
+        drop(held);
+        assets.collect();
+        assert!(current_last.upgrade().is_none());
+        assert!(other_last.upgrade().is_none());
     }
 
     #[test]

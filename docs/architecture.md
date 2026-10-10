@@ -329,8 +329,26 @@ held component ranges before mutation; executed feed checks both active sides
 through the existing 128-source-frame ramp. SourceReadPlan/SourcePlayback retain
 tap, fractional period and smoothed-rate authority. Active ramps defer new native
 preparation while the existing wet adapter continues; later preparation/adoption
-still requires its own exact permits and checkpoint. Finite seek/intro/tail, old
-voices and wider lifecycle oracles remain open. See [Key Lock coverage](key-lock-backend.md).
+still requires its own exact permits and checkpoint.
+
+The bounded P4b lifecycle implementation covers finite NormalLoop at production
+k=0/non-unity with fixed physical geometry. Pause/resume, settled or smoothing rates and storage-only ACKs
+must preserve position and adopted native/FIFO/filter chronology while fencing
+pending exact-window work. Same-source accepted-period refresh/clear uses only
+the existing chronological projection alias; source, marker, seek and position
+cuts cannot use it. An older active or paused source rejects new-bank refresh.
+Bank B cannot relabel voice A's source/timing/FrozenStemView/transition/history.
+New A preparation needs fresh actual Voice/Source/Timing/Selection/History capture
+and its own permits; a retained PCM pin cannot revive a pre-replacement candidate.
+Future B uses real WindowWork and its own ACK, then fresh public capture and
+independent Source/Timing/Stem/History permits for native preparation/adoption.
+Explicit retrigger cuts DSP/history into acknowledged B only after retirement/
+admission reservation; failure preserves old audio, parameters and owners.
+Headless lifecycle tests continue wet output beyond the first resumed callback through
+later real requests/adoptions and count each distinct reader/history final use
+and held peak. Existing source-reader/playback/tap authority and retirement lanes
+remain authoritative. Finite seek/intro/tail, physical-domain cuts and full P4b
+music/resource/history/causality oracles stay open. See [Key Lock coverage](key-lock-backend.md).
 
 [C3 measurements](pcm-cache-measurements.md) report current cold/warm readiness,
 resource costs, exceptions and lifecycle with paired finite/full results.
@@ -789,9 +807,14 @@ source-specific prepared history below; continuous binding adds no audible compe
 G3b2f2 extends the existing worker with bounded request/result/recycle lanes and
 retained `prepared_native_history::NativeAdapterState`. Productive requests pin
 actual PCM/stems and copy canonical SourcePlayback/SourceReadPlan. NativeHistoryPermit
-binds tracked loaded-request generation, actual source/shape/rate, shared
-preparation epoch, authority/runtime revisions and full CURRENT accepted projection
-with exact period/signed-origin bits. Automatic without current acknowledgement
+uses distinct Current and RetainedVoice authorities. Current binds tracked
+loaded-request generation, actual source/shape/rate, shared preparation epoch,
+authority/runtime revisions and full CURRENT accepted projection with exact
+period/signed-origin bits. RetainedVoice requires original CURRENT admission and
+a fresh actual live-voice lifetime/generation, own epoch, frozen timing and
+selection/history capture. Replacement fences Current candidates without
+converting them into retained permission. Both retain exact new-work window and
+checkpoint guards. Automatic without current acknowledgement
 cannot capture; Manual/Tap/Legacy remain nonaccepted. A local shared atomic voice
 epoch checks cancellation before/after worker catch-up; adoption additionally
 requires the exact outstanding request ID.

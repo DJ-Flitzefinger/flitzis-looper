@@ -706,6 +706,7 @@ struct WindowWork {
     cache: Arc<Mutex<Vec<Option<SampleBuffer>>>>,
     owners: Arc<Mutex<Vec<ResidentStemCache>>>,
     assets: Arc<super::project_assets::ProjectAssets>,
+    pcm_history: Arc<super::project_assets::PcmHistory>,
     producer: Arc<Mutex<Producer<ControlMessage>>>,
     publication: PreparedSourcePermit,
     state: Arc<WindowState>,
@@ -814,6 +815,24 @@ fn admitted_window_peak_with_readers(
     Ok(peak)
 }
 
+fn ensure_window_history_capacity(
+    history: &mut Vec<std::sync::Weak<[f32]>>,
+    old: &SampleBuffer,
+    start: usize,
+    end: usize,
+) -> Result<(), String> {
+    history.retain(|reader| reader.strong_count() > 0);
+    let reuses_registered_backing = start == old.resident_start()
+        && end == old.resident_end()
+        && history
+            .iter()
+            .any(|reader| reader.ptr_eq(&Arc::downgrade(&old.samples)));
+    if !reuses_registered_backing && history.len() >= 128 {
+        return Err("same-pad source reader history full (128 live assignments)".into());
+    }
+    Ok(())
+}
+
 impl WindowWork {
     fn current(&self) -> bool {
         !self.cancelled.load(Ordering::Acquire)
@@ -876,14 +895,20 @@ impl WindowWork {
         if !self.current() {
             return Err("resident source/window was superseded".into());
         }
+        // Public admission already holds this existing ownership gate. Hold the same gate from
+        // the worker's peak snapshot until every source/component allocation is registered, so
+        // another queued WindowWork cannot overlook partial or cancelled pair preparation.
+        // This serializes window preparation off-thread; the callback never enters this gate.
+        let preparation_owners = self
+            .owners
+            .lock()
+            .map_err(|_| "resident ownership lock poisoned")?;
+        if !self.current() {
+            return Err("resident source/window was superseded before allocation".into());
+        }
         let held_readers = self
             .assets
-            .held_reader_backings(
-                &self.source_lease,
-                self.stem_owner
-                    .as_ref()
-                    .map(|owner| owner.generation_path.as_path()),
-            )
+            .held_same_pad_reader_backings(&self.pcm_history, self.id, &self.source_lease)
             .map_err(|error| error.to_string())?;
         let peak = admitted_window_peak_with_readers(
             &self.old,
@@ -897,18 +922,35 @@ impl WindowWork {
             super::cold_store::reset_window_read_observation_for_test();
             super::stem_pair::reset_range_observation_for_test();
         }
-        let sample = self
-            .source_lease
-            .read_window_cancellable(
-                &self.old,
-                self.start,
-                self.end,
-                self.revision,
-                self.context,
-                super::cold_jobs::PCM_LIMIT_BYTES,
-                &|| !self.current(),
-            )
-            .map_err(|error| error.to_string())?;
+        let sample = {
+            // Reserve this existing history slot before source allocation, with no concurrent
+            // same-pad append. Range I/O is worker-only; release the lock before the asset gate.
+            let mut history = self
+                .pcm_history
+                .lock()
+                .map_err(|_| "PCM history lock poisoned")?;
+            let pad = history
+                .get_mut(self.id)
+                .ok_or("same-pad PCM history missing")?;
+            ensure_window_history_capacity(pad, &self.old, self.start, self.end)?;
+            let sample = self
+                .source_lease
+                .read_window_cancellable(
+                    &self.old,
+                    self.start,
+                    self.end,
+                    self.revision,
+                    self.context,
+                    super::cold_jobs::PCM_LIMIT_BYTES,
+                    &|| !self.current(),
+                )
+                .map_err(|error| error.to_string())?;
+            let reader = Arc::downgrade(&sample.samples);
+            if !pad.iter().any(|held| held.ptr_eq(&reader)) {
+                pad.push(reader);
+            }
+            sample
+        };
         if !self.current() {
             return Err("resident preparation cancelled after range read".into());
         }
@@ -963,6 +1005,7 @@ impl WindowWork {
         }
         #[cfg(not(test))]
         let _ = peak;
+        drop(preparation_owners);
         // Preparation owns the already-admitted payload while the realtime command
         // lane is briefly full. Retry is bounded, off-thread and cancellable.
         for attempt in 0..8 {
@@ -1275,15 +1318,20 @@ pub(super) fn prepare_window_with_producer(
             .reserve()
             .map_err(PyRuntimeError::new_err)?;
         if !seek_only {
+            {
+                let mut history = engine
+                    .cold_pcm_history
+                    .lock()
+                    .map_err(|_| PyRuntimeError::new_err("PCM history lock poisoned"))?;
+                let pad = history
+                    .get_mut(id)
+                    .ok_or_else(|| PyRuntimeError::new_err("same-pad PCM history missing"))?;
+                ensure_window_history_capacity(pad, &old, start, end)
+                    .map_err(PyRuntimeError::new_err)?;
+            }
             let held_readers = engine
                 .project_assets
-                .held_reader_backings(
-                    &source_lease,
-                    owners[id]
-                        .accepted
-                        .as_ref()
-                        .map(|owner| owner.generation_path.as_path()),
-                )
+                .held_same_pad_reader_backings(&engine.cold_pcm_history, id, &source_lease)
                 .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
             admitted_window_peak_with_readers(
                 &old,
@@ -1430,6 +1478,7 @@ pub(super) fn prepare_window_with_producer(
         cache: engine.sample_cache.clone(),
         owners: engine.resident_stem_cache.clone(),
         assets: engine.project_assets.clone(),
+        pcm_history: engine.cold_pcm_history.clone(),
         producer: producer.clone(),
         publication: publication.clone(),
         state: state.clone(),
@@ -1492,6 +1541,27 @@ mod terminal_order_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn same_pad_window_history_capacity_rejects_new_backing_and_reuses_registered_backing() {
+        let old = source();
+        let mut owners: Vec<Arc<[f32]>> = (0..127).map(|_| Arc::from([0.5_f32; 1])).collect();
+        let mut history = vec![Arc::downgrade(&old.samples)];
+        history.extend(owners.iter().map(Arc::downgrade));
+        let before = history.clone();
+        assert!(ensure_window_history_capacity(&mut history, &old, 200, 400).is_err());
+        assert_eq!(history.len(), before.len());
+        assert!(
+            history
+                .iter()
+                .zip(&before)
+                .all(|(now, prior)| now.ptr_eq(prior))
+        );
+        assert!(ensure_window_history_capacity(&mut history, &old, 0, 1000).is_ok());
+        drop(owners.pop());
+        assert!(ensure_window_history_capacity(&mut history, &old, 200, 400).is_ok());
+        assert_eq!(history.len(), 127);
+    }
+
     #[test]
     fn legacy_peak_charges_distinct_live_old_component_backing_before_conversion() {
         // This is an admission-only geometry fixture, not a source/ACK oracle.

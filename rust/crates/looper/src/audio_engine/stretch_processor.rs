@@ -126,6 +126,10 @@ impl StretchProcessor {
         self.preparation.invalidate_source(self.preparation_epoch);
     }
 
+    pub(crate) fn source_epoch_owner(&self) -> &std::sync::Arc<std::sync::atomic::AtomicU64> {
+        self.preparation.source_epoch_owner()
+    }
+
     pub(crate) fn retire_prepared(&mut self) {
         self.preparation.retire_prepared();
     }

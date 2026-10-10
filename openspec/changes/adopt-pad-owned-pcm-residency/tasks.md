@@ -163,6 +163,7 @@ P4b, later stages and final Human/hearing acceptance remain open.
 
 - [x] First vertical: stopped/current same-source NormalLoop finite FullMix/four-component WindowWork ACK, real production-k=0 non-unity native prepare/FIFO adoption and continued render against independent complete PCM/raw-native oracles
 - [x] Resident-transition vertical: finite current-source NormalLoop production-k=0 non-unity FullMix->Stems, Stems->FullMix and masks over the same already ACKed resident selected committed set; actual two-side taps/128-source-frame wet Native-FIFO/filter continuation, deferred then real preparation/adoption and outgoing/history/job final-reader retirement
+- [x] Lifecycle/source-custody vertical: finite NormalLoop production-k=0 non-unity at fixed physical geometry; actual pause/resume/rate/storage-ACK continuity, same-source accepted-period refresh/clear, active/paused old-voice fresh authority, independently ACKed future-bank preparation and guarded explicit retrigger, with later real native requests/adoptions and distinct owner final-use/held-peak proof
 - [ ] Wirkliche finite DSP/KEYLOCK-Versorgung+Continuation fuer heutigen production k=0
 - [ ] Executed feed/lookahead/history/FIFO/filter/seams/crossfade/oldvoices; causality1598/33.292ms erhalten, fallback-only laesst Gate offen. Nonzero k bleibt B5
 
@@ -196,12 +197,61 @@ whole-Rust batch is claimed; historical FAILED/UNKNOWN receipts remain intact.
 The resident-transition checkbox may close only after these measured inputs and
 the actual final source receive independent nonauthor acceptance.
 
-Seek/intro/tail, pause/resume/retrigger/timing refresh, current plus old voices and
-the remaining complete feed/filter/history/resource/musical oracles remain required
-by the two open parent tasks. Initial active None->Some, retention policy,
+The lifecycle/source-custody vertical extends the existing productive pause/rate,
+period-refresh/clear and replacement/retrigger oracles with genuine public/native
+commands and actual workers. Physical NormalLoop geometry stays fixed. Pending preparation stays
+exact-window/projection/checkpoint-bound; only already adopted history may use
+proved storage-only effective-source continuity with its original readers.
+Pause/resume output must remain wet beyond the first resumed callback through
+later actual preparation/adoption, at settled and smoothing rates. Same-source
+refresh/clear uses only the narrow chronological accepted-period alias across
+virtual P+/-H seams; source/marker/position cuts cannot borrow it, and old active/
+paused source voices reject a replacement-bank refresh before effects.
+
+Bank B must not relabel voice A's source/region/timing/FrozenStemView/transition/
+history. Pre-replacement current-bank candidates remain stale even if A later
+has an old-voice pin. Any new A preparation needs fresh actual Voice/Source/
+Timing/Selection/History capture and its own permits; prove continued A wet
+output after resume and through subsequent real requests/adoptions. Actual
+future-bank WindowWork admission/ACK grants no native-history permission: use
+fresh public capture and independent Source/Timing/Stem/History permits. Retrigger
+is an explicit DSP/history cut into acknowledged B. Failed retirement/admission
+reservation preserves old audio, parameters and owners before any effects.
+
+Independent complete PCM and algebraic raw-native/chronological-filter oracles
+must observe actual taps/feed/lookahead, native identity, FIFO occupancy, cursor,
+nontrivial output and distinct voice/source/stem/job/history/reader/outgoing final
+uses. Irregular partitions cross pause/resume, rate ramps, refresh/clear and ACK/
+adoption. Count actual old/new held backing/history overlap under replacement,
+late/cancelled work and saturation through existing retirement/recycle paths.
+No hidden complete backing, fifth instrumental component or new reader/queue.
+Accepted Some/Some evidence is reusable by actual unchanged source impact only;
+it supplies no lifecycle proof. The bounded lifecycle checkbox is accepted after
+actual final evidence and independent nonauthor source review.
+
+Validation at the final source passes 75 unique Debug and 183 unique Release looper
+test functions; repeated filters/profile runs, filtered Analysis 0 and an unconfigured
+helper child add no cases. Genuine range workers and the actual ordinary Python-worker
+parent are included. Full Python/FFI passes 3318 cases with 35 skipped against the
+fresh installed Release extension. Cargo check/fmt, Ruff/Mypy, official strict
+OpenSpec validation and Release build-only/preflight also pass without App/devices.
+The initial mixer readiness negatives remain negative; the fixture now synchronizes
+both real initial candidates before its unchanged selection cut. The resident
+scalar-marker regression is repaired by preserving its original finite wet guard;
+identical scalar reapplication stays a no-op, while accepted-period refresh/clear
+uses its separately validated same-physical projection. Audio/oracle horizons and
+the existing native FIFO/cursor/filter assertions are unchanged. Final independent
+nonauthor acceptance covers only this lifecycle/source-custody subtask; no
+full P4b parent closes.
+
+Seek/intro/tail, physical-domain cuts and the remaining complete feed/filter/
+history/resource/musical/causality oracles remain required by the two open parent
+tasks. Binary64 P/integer H, 119.999..123.45 BPM, <=1-loaded-source-frame 75/1000
+cycles and the 48-kHz/rate-2/H16384/C3678/U2080 unavailable-at-T1598-frame/33.292-ms
+gate remain intact. Initial active None->Some, retention policy,
 effective-mode ACK and ordinary StemController round-trip/warm return remain P5a;
-the controller's FullMix path retires components after the ramp. Neither bounded
-P4b vertical closes whole P4b, nonzero KEY/pitch, P5a or Human/device/hearing gates.
+the controller's FullMix path retires components after the ramp. No bounded P4b
+vertical closes whole P4b, nonzero KEY/pitch, P5a or Human/device/hearing gates.
 
 ### P5a
 

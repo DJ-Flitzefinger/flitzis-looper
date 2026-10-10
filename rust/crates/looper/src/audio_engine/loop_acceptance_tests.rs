@@ -218,6 +218,7 @@ fn effective_snapshot_reports_ambiguous_voice_and_stale_observation_explicitly()
         initial_tempo_ratio: 0.73,
         start_output_frame: Some(512),
         source_timing: active.source_timing,
+        source_admission: None,
     };
     mixer.voices[1].start_rt(config, &mut ImmediateAudioBufferRetirement);
     let request = observe(&engine, &mixer);

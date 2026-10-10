@@ -50,7 +50,7 @@ impl RawOracle {
     }
 }
 
-fn components(full: &SampleBuffer, rate: u32) -> PreparedStemSet {
+pub(super) fn components(full: &SampleBuffer, rate: u32) -> PreparedStemSet {
     PreparedStemSet {
         complete_set_identity: Arc::new([91; 32]),
         reference_samples: full.samples.clone(),
@@ -76,7 +76,7 @@ fn components(full: &SampleBuffer, rate: u32) -> PreparedStemSet {
     }
 }
 
-fn transition_mixer(
+pub(super) fn transition_mixer(
     sample: &SampleBuffer,
     stems: PreparedStemSet,
     rate: u32,
@@ -327,6 +327,10 @@ fn finite_stem_selection_fences_stale_candidate_and_adopts_while_rate_still_smoo
             render(&mut reference, Some(0), 13)
         );
         wait_ready(&mut actual);
+        // Both initial real candidates must exist before this selection-cut fixture. Otherwise
+        // the reference's fenced old request can finish after the final callback, and a pure
+        // readiness poll cannot clear request_pending or issue its replacement request.
+        wait_ready(&mut reference);
         let stale = voice_mut(&mut actual).stretch.prepared_native_address();
         let live = voice(&actual).stretch.native_state_address();
         for mixer in [&mut actual, &mut reference] {

@@ -27,7 +27,21 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_source_identity(false)
+    }
+
+    fn with_source_identity(complete: bool) -> Self {
         let engine = test_engine();
+        if complete {
+            let sample = engine.sample_cache.lock().unwrap()[0]
+                .clone()
+                .unwrap()
+                .with_complete_source(RATE);
+            engine
+                .input_runtime_ownership
+                .publish_source(0, &sample, RATE, 7);
+            engine.sample_cache.lock().unwrap()[0] = Some(sample);
+        }
         let mut mixer = acknowledged_mixer(&engine);
         mixer.set_input_runtime_ownership(engine.input_runtime_ownership.clone());
         let (producer, consumer) = queue(128);
@@ -144,6 +158,169 @@ impl Fixture {
             self.mixer.loop_region_frames(0),
             self.transport.master_period_seconds(),
         )
+    }
+}
+
+fn finite_refresh_fixture() -> Fixture {
+    let mut fixture = Fixture::with_source_identity(true);
+    fixture.mixer.set_bpm_lock(false);
+    fixture.mixer.set_pad_loop_region(0, 0.125, Some(1.75));
+    fixture.mixer.set_speed(0.73);
+    let full = fixture.engine.sample_cache.lock().unwrap()[0]
+        .clone()
+        .unwrap();
+    let finite = full
+        .window(
+            1_000,
+            14_000,
+            2,
+            crate::messages::ResidentContext::KeyLockFiniteLoop,
+        )
+        .unwrap();
+    let publication = PreparedSourcePermit::unrestricted();
+    publication.mark_pending().unwrap();
+    fixture.apply(
+        ControlMessage::RelocateResident(Box::new(crate::messages::ResidentTransaction {
+            id: 0,
+            sample: finite.clone(),
+            stems: None,
+            binding: fixture.binding().binding,
+            publication: publication.clone(),
+            expected_window_revision: 1,
+            intent: crate::messages::ResidentControlIntent {
+                key_lock: Some(true),
+                ..Default::default()
+            },
+            seek_pin: None,
+        })),
+        &mut ImmediateAudioBufferRetirement,
+    );
+    assert_eq!(publication.status(), "accepted");
+    fixture.engine.sample_cache.lock().unwrap()[0] = Some(finite);
+    assert!(fixture.binding().current() && fixture.binding().available());
+    assert!(fixture.mixer.play_sample_at_output_frame_rt(
+        0,
+        1.0,
+        0,
+        &mut ImmediateAudioBufferRetirement
+    ));
+    fixture.render(13);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !fixture.mixer.voices[0].stretch.source_preparation_ready()
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(fixture.mixer.voices[0].stretch.source_preparation_ready());
+    fixture.render(4083);
+    fixture.render(257);
+    assert!(
+        fixture.mixer.voices[0]
+            .stretch
+            .adopted_request_id()
+            .is_some()
+    );
+    fixture
+}
+
+#[test]
+fn finite_accepted_refresh_executor_acks_fixed_geometry_for_active_and_paused_native_history() {
+    for paused in [false, true] {
+        let mut fixture = finite_refresh_fixture();
+        if paused {
+            fixture
+                .mixer
+                .pause_sample_at_output_frame(0, fixture.transport.output_frame());
+        }
+        let position = fixture.mixer.voices[0].source_playback.position();
+        let native = fixture.mixer.voices[0].stretch.native_state_address();
+        let history = fixture.mixer.voices[0]
+            .stretch
+            .productive_history()
+            .unwrap();
+        let ticket = fixture.refresh(None);
+        fixture.process_next();
+        fixture.render(2);
+        assert_eq!(ticket.publication_status(), "accepted");
+        assert!(ticket.is_current());
+        assert_eq!(fixture.mixer.loop_region_frames(0), (1_000, Some(14_000)));
+        assert_eq!(
+            fixture.mixer.voices[0].stretch.native_state_address(),
+            native
+        );
+        assert_eq!(
+            fixture.mixer.voices[0]
+                .stretch
+                .productive_history()
+                .unwrap()
+                .binding,
+            history.binding
+        );
+        if paused {
+            assert_eq!(fixture.mixer.voices[0].source_playback.position(), position);
+        }
+        // The same public executor cannot turn a physical marker edit into a timing alias.
+        let cut = accepted_timing_refresh::enqueue(
+            &fixture.engine,
+            &fixture.producer,
+            &fixture.binding(),
+            0.126,
+            Some(1.75),
+            None,
+        )
+        .unwrap();
+        fixture.process_next();
+        fixture.render(2);
+        assert_eq!(cut.publication_status(), "rejected");
+        assert_eq!(fixture.mixer.loop_region_frames(0), (1_000, Some(14_000)));
+        assert_eq!(
+            fixture.mixer.voices[0].stretch.native_state_address(),
+            native
+        );
+    }
+}
+
+#[test]
+fn finite_accepted_refresh_executor_rejects_old_active_and_paused_native_source_before_effects() {
+    for paused in [false, true] {
+        let mut fixture = finite_refresh_fixture();
+        if paused {
+            fixture
+                .mixer
+                .pause_sample_at_output_frame(0, fixture.transport.output_frame());
+        }
+        let native = fixture.mixer.voices[0].stretch.native_state_address();
+        let position = fixture.mixer.voices[0].source_playback.position();
+        let old_source = fixture.mixer.voices[0].sample.as_ref().unwrap().clone();
+        let replacement = source().with_complete_source(RATE);
+        fixture.engine.sample_cache.lock().unwrap()[0] = Some(replacement.clone());
+        fixture
+            .engine
+            .input_runtime_ownership
+            .publish_source(0, &replacement, RATE, 7);
+        fixture.mixer.load_sample(0, replacement);
+        fixture.publish("finite-old-source-rejection");
+        fixture.process_next();
+        let before = fixture.state();
+        let ticket = fixture.refresh(None);
+        fixture.process_next();
+        fixture.render(2);
+        assert_eq!(ticket.publication_status(), "rejected");
+        assert_eq!(fixture.state(), before);
+        assert!(
+            fixture.mixer.voices[0]
+                .sample
+                .as_ref()
+                .unwrap()
+                .same_window(&old_source)
+        );
+        assert_eq!(
+            fixture.mixer.voices[0].stretch.native_state_address(),
+            native
+        );
+        if paused {
+            assert_eq!(fixture.mixer.voices[0].source_playback.position(), position);
+        }
     }
 }
 

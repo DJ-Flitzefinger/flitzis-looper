@@ -15,6 +15,9 @@ use std::time::{Duration, Instant};
 #[path = "finite_stem_transition_tests.rs"]
 mod finite_stem_transition_tests;
 
+#[path = "finite_lifecycle_tests.rs"]
+pub(crate) mod finite_lifecycle_tests;
+
 const RATE: u32 = 8_000;
 
 fn source() -> SampleBuffer {
@@ -90,6 +93,7 @@ fn render(mixer: &mut RtMixer, start: Option<u64>, frames: usize) -> Vec<f32> {
     output
 }
 
+#[track_caller]
 fn wait_ready(mixer: &mut RtMixer) {
     let deadline = Instant::now() + Duration::from_secs(3);
     while !voice_mut(mixer).stretch.source_preparation_ready() && Instant::now() < deadline {

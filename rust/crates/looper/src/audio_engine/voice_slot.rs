@@ -1,6 +1,7 @@
 use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 use crate::audio_engine::constant_timing::AcceptedTimingProjection;
 use crate::audio_engine::key_lock_preparation::KeyLockPreparationLane;
+use crate::audio_engine::native_history_permit::NativeSourceAdmission;
 use crate::audio_engine::source_grid::SourceGrid;
 use crate::audio_engine::source_playback::SourcePlayback;
 pub(crate) use crate::audio_engine::source_reader::ExplicitSeekMode;
@@ -9,6 +10,10 @@ use crate::audio_engine::source_reader::{
 };
 use crate::audio_engine::stretch_processor::StretchProcessor;
 use crate::messages::{PreparedStemSet, SampleBuffer};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 /// The effective source selection follows an old PCM pin across bank replacement.
 /// The set uses existing immutable Arcs; capture does not allocate on the callback.
@@ -27,6 +32,7 @@ pub(crate) struct VoiceStartConfig {
     pub(crate) initial_tempo_ratio: f64,
     pub(crate) start_output_frame: Option<u64>,
     pub(crate) source_timing: VoiceSourceTiming,
+    pub(crate) source_admission: Option<NativeSourceAdmission>,
 }
 
 /// Effective timing belongs to the voice's pinned source, even after a bank replacement.
@@ -86,6 +92,8 @@ pub struct VoiceSlot {
     pub(crate) source_loop_region: Option<FrameRange>,
     pub(crate) frozen_stems: Option<FrozenStemView>,
     pub(crate) generation: u64,
+    pub(crate) history_lifetime: Arc<AtomicU64>,
+    pub(crate) source_admission: Option<NativeSourceAdmission>,
     pub stretch: StretchProcessor,
     pub paused: bool,
     pub(crate) explicit_seek_mode: ExplicitSeekMode,
@@ -107,6 +115,8 @@ impl VoiceSlot {
             source_loop_region: None,
             frozen_stems: None,
             generation: 0,
+            history_lifetime: Arc::default(),
+            source_admission: None,
             stretch: StretchProcessor::with_preparation_lane(channels, preparation),
             paused: false,
             explicit_seek_mode: ExplicitSeekMode::Normal,
@@ -130,6 +140,8 @@ impl VoiceSlot {
 
     fn start_inner(&mut self, config: VoiceStartConfig) {
         self.generation = self.generation.saturating_add(1);
+        self.history_lifetime
+            .store(self.generation, Ordering::Release);
         let VoiceStartConfig {
             sample_id,
             sample,
@@ -138,11 +150,13 @@ impl VoiceSlot {
             initial_tempo_ratio,
             start_output_frame: _,
             source_timing,
+            source_admission,
         } = config;
         self.active = true;
         self.sample_id = sample_id;
         self.sample = Some(sample);
         self.source_timing = source_timing;
+        self.source_admission = source_admission;
         self.source_loop_region = None;
         self.frame_pos = initial_frame_pos;
         self.volume = volume;
@@ -175,6 +189,8 @@ impl VoiceSlot {
 
     fn stop_inner(&mut self) {
         self.generation = self.generation.saturating_add(1);
+        self.history_lifetime.store(0, Ordering::Release);
+        self.source_admission = None;
         self.active = false;
         self.frame_pos = 0;
         self.volume = 0.0;
@@ -204,6 +220,8 @@ impl VoiceSlot {
         self.retire_frozen_stems(retirement);
         self.source_loop_region = None;
         self.generation = self.generation.saturating_add(1);
+        self.history_lifetime
+            .store(self.generation, Ordering::Release);
         self.frame_pos = initial_frame_pos;
         self.volume = volume;
         self.source_playback = SourcePlayback::new(
@@ -223,6 +241,8 @@ impl VoiceSlot {
         _output_frame: Option<u64>,
     ) {
         self.generation = self.generation.saturating_add(1);
+        self.history_lifetime
+            .store(self.generation, Ordering::Release);
         self.frame_pos = frame_pos;
         self.explicit_seek_mode = mode;
         // Seek is an explicit discontinuity: retain rate, discard only the old source phase.

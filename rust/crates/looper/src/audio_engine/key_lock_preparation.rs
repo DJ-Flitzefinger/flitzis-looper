@@ -93,6 +93,10 @@ pub(crate) enum SourceExchange {
 }
 
 impl KeyLockPreparationLane {
+    pub(crate) fn source_epoch_owner(&self) -> &Arc<AtomicU64> {
+        &self.source_epoch
+    }
+
     pub(crate) fn invalidate_source(&mut self, epoch: u64) {
         self.source_epoch.store(epoch, Ordering::Release);
         self.retire_prepared();

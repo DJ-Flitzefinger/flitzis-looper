@@ -359,7 +359,7 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
                 binding,
                 resident_control.as_ref(),
                 launch_revision,
-            ) || !mixer.loop_intent_context_available(id, start_s, end_s)
+            ) || !mixer.trigger_loop_context_available(id, start_s, end_s)
                 || (exclusive && retirement.available_retirement_slots() < 2 * MAX_VOICES)
                 || (!exclusive
                     && !mixer

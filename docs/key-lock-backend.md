@@ -30,9 +30,9 @@ without resetting native/FIFO/filter chronology or dropping its original pins.
 
 `KeyLockFiniteLoop` has snapshot fence4 and the `key-lock-finite-loop` metadata
 label, but the tag does not grant coverage or source/window/history authority.
-Missing input fails preparation/render admission. Finite seek/intro/tail, old
-voices and broader pause/retrigger/timing-refresh
-contexts remain subsequent P4b gates. Current saved-load KEYLOCK retains its
+Missing input fails preparation/render admission. Finite seek/intro/tail,
+physical-domain cuts and unproved lifecycle contexts remain guarded P4b gates.
+Current saved-load KEYLOCK retains its
 labelled complete fallback; normal-loop control preparation can obtain finite
 supply. The full P4b gate and device/acoustic acceptance remain open.
 
@@ -58,6 +58,53 @@ The ordinary StemController FullMix path uses that retiring command. Its active
 initial None->Some, warm return, retention policy and effective-mode ACK remain
 P5a. No resident-transition result closes those workflows or the remaining P4b
 matrix.
+
+The bounded lifecycle/source-custody implementation keeps finite NormalLoop
+physical geometry fixed at
+production k=0/non-unity. Pause/resume before and after preparation capture,
+settled or smoothing rates and admitted storage-only ACKs must preserve actual
+position, adopted native handle/FIFOs and chronological filter. Pending work is
+still exact-window/projection/selection/checkpoint-bound and stale work cannot
+change current audio. Only already adopted history may retain the proved
+storage-only effective-source permit while its original real readers remain.
+Wet continuation must extend past the first resumed callback through subsequent
+real worker requests/preparation/adoption, not just retained state fields.
+
+Same-source accepted-period refresh/clear uses the existing narrow chronological
+projection alias across virtual P+/-H seams, with unchanged physical region.
+Source/marker/position cuts cannot borrow it; old active or paused voices reject
+replacement-bank refresh. Bank B cannot relabel voice A's source, timing,
+FrozenStemView/transition or history. A new A preparation requires fresh actual
+Voice/Source/Timing/Selection/History capture and matching own permits. A retained
+PCM pin cannot authorize native work or revive a pre-replacement bank candidate.
+Future B obtains real WindowWork admission/ACK; that ACK alone grants no native
+permission. Fresh public capture and independent Source/Timing/Stem/History
+permits still govern preparation and exact adoption. Explicit retrigger is a
+DSP/history cut into acknowledged B, reserved before effects; failed admission
+keeps old audio, parameters and owners.
+
+The launch executor uses `trigger_loop_context_available` for this cut. Its
+old-source exception requires the requested physical region to equal the current
+bank's already installed region and the real bank Source/Timing/KEYLOCK coverage
+to pass `can_play_sample`. Fresh trigger binding and retirement reservation still
+precede effects. Timing refresh, batch refresh and scalar marker edits retain
+their separate original old-source/physical-cut guard. The accepted-refresh executor
+still calls the scalar setter; that call is intentionally a no-op for the proved
+finite same-physical case. Its projection/period context changes through the
+separate accepted timing paths without rebasing the source cursor.
+
+Lifecycle proof uses independent complete PCM and algebraic raw-native/filter
+references, with irregular callbacks crossing pause/resume, rate ramps, refresh/
+clear and ACK/adoption. It observes real taps/feed/lookahead, native identity,
+FIFO occupancy, cursor and continued nontrivial wet output. Distinct voice,
+source, stem, job, history, reader-pin and outgoing-selection final uses and
+actual old/new held peaks use existing retirement/recycle paths. No hidden
+complete backing, fifth instrumental component or new reader/queue is admitted.
+Accepted Some/Some evidence may be reused by unchanged source impact only. The
+bounded lifecycle subtask is independently accepted. Full P4b remains open; P5a,
+seek/intro/tail, physical cuts,
+remaining resource/music/history/causality, nonzero KEY/pitch and Human acoustic
+acceptance remain separate.
 
 The active backend is implemented behind:
 
@@ -245,9 +292,16 @@ and its preparation worker. The worker's bounded request/result/recycle lanes
 retain an actual processed owner; a source tag or neutral warmed state does not
 substitute. A request pins actual PCM and optional admitted stems, copies
 canonical `SourcePlayback` and `SourceReadPlan`, and carries a `NativeHistoryPermit`.
-The permit checks tracked loaded-request generation, source address/shape/rate,
-shared preparation epoch, authority/runtime revisions and CURRENT acknowledged
-full accepted projection, including exact period and signed origin bits.
+The permit has two distinct authorities. `Current` checks tracked loaded-request
+generation, source address/shape/rate, shared preparation epoch, authority/runtime
+revisions and CURRENT acknowledged full accepted projection, including exact
+period and signed origin bits. `RetainedVoice` requires a source admission captured
+while that exact source was CURRENT, then a fresh capture of the live voice's
+lifetime/generation, own preparation epoch, source/rate, frozen timing and actual
+selection/history. Bank replacement invalidates pending Current work before
+freezing the voice; it never converts that work into RetainedVoice permission.
+Both authorities retain exact resident-window, playback/checkpoint and selection
+checks for new preparation; a source PCM pin supplies neither authority.
 Automatic without acknowledgement cannot capture. Manual/Tap/Legacy remain
 nonaccepted; equal-valued timing edits still retire pending work. A shared local
 atomic voice epoch is checked by the worker before/after catch-up; adoption checks

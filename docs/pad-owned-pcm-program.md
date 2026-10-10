@@ -95,9 +95,51 @@ optimized Release build-only/install/--check passed without App start. No new
 Analysis or whole-Rust batch is claimed; historical FAILED outcomes remain intact.
 The resident-transition checkbox records only bounded independent acceptance.
 Active initial None->Some, retention/effective-mode ACK and ordinary StemController
-warm return remain P5a. Seek/intro/tail, pause/resume/retrigger/timing refresh,
-current plus old voices and the remaining full resource/musical/causality matrix
-remain required. The original
+warm return remain P5a.
+
+A third bounded P4b lifecycle/source-custody vertical is independently accepted. Its finite
+NormalLoop physical geometry stays fixed at production k=0/non-unity. It covers
+pause/resume before/after preparation capture, settled/smoothing rates, storage-
+only ACKs and same-source accepted-period refresh/clear through the narrow
+chronological projection alias. Pending exact-window work stays fenced; adopted
+native/FIFO/filter chronology retains its actual original readers. Source/marker/
+position discontinuities cannot use that alias. Old active or paused source A
+rejects B's timing refresh and retains its own physical region, timing,
+FrozenStemView/transition and history after bank replacement. A new A preparation
+requires fresh actual Voice/Source/Timing/Selection/History capture and own permits;
+an old PCM pin cannot revive a pre-replacement current-bank candidate.
+Future B uses real WindowWork/own ACK and fresh public native capture with
+independent Source/Timing/Stem/History permits. Explicit retrigger cuts DSP/history
+into acknowledged B after reservation; failure preserves old playback, parameters
+and owners before effects. Actual wet output must continue beyond the first
+resumed callback through later real requests/preparation/adoption against
+independent complete PCM and algebraic raw-native/chronological-filter references.
+Irregular partitions cross pause/resume, rate ramps, refresh/clear and ACK/adoption;
+real tap/feed/lookahead/handle/FIFO/cursor and distinct voice/source/stem/job/history/
+reader/outgoing final use and old/new held peaks remain required. Existing lanes
+and readers are reused, with no hidden complete backing or fifth component.
+Accepted Some/Some proof is reusable by source impact only, not lifecycle evidence.
+
+Validation at the final source passes 75 unique Debug and 183 unique Release looper
+test functions; repeated filters/profile runs, filtered Analysis 0 and an unconfigured
+helper child add no cases. Genuine range workers and the actual ordinary Python-worker
+parent are included. Full Python/FFI passes 3318 cases with 35 skipped against the
+fresh installed Release extension. Cargo check/fmt, Ruff/Mypy, official strict
+OpenSpec validation and Release build-only/preflight also pass without App/devices.
+The initial mixer readiness negatives remain negative; the fixture now synchronizes
+both real initial candidates before its unchanged selection cut. The resident
+scalar-marker regression is repaired by preserving its original finite wet guard;
+identical scalar reapplication stays a no-op, while accepted-period refresh/clear
+uses its separately validated same-physical projection. Audio/oracle horizons and
+the existing native FIFO/cursor/filter assertions are unchanged. Final independent
+nonauthor acceptance covers only this lifecycle/source-custody subtask; no
+full P4b parent closes.
+
+The lifecycle/source-custody checkbox is accepted. Full P4b parents remain open. Seek/intro/tail,
+physical-domain cuts and the remaining complete resource/musical/history/causality
+matrix remain required, including binary64 P/integer H, 119.999..123.45 BPM,
+<=1-loaded-source-frame 75/1000 cycles and the 48-kHz/rate-2/H16384/C3678/U2080
+unavailable-at-T1598-frame/33.292-ms gate. Nonzero KEY/pitch remains B5. The original
 Human rejection reason remains UNKNOWN. Whole P4b, later stages and final Human/
 hearing gates remain open.
 The accepted bounded P0/C1/R0 prerequisites and historical FAIL/UNKNOWN evidence

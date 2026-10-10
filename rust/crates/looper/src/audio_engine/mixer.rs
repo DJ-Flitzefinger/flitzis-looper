@@ -21,7 +21,7 @@ use crate::audio_engine::dsp::{DspNodeSlot, DspParameterId, DspParameterSlot, Pe
 use crate::audio_engine::key_lock_preparation::{
     KeyLockPreparationError, KeyLockPreparationWorker, create_key_lock_preparation,
 };
-use crate::audio_engine::native_history_permit::NativeHistoryContext;
+use crate::audio_engine::native_history_permit::{NativeHistoryContext, NativeVoiceHistoryContext};
 use crate::audio_engine::native_source_coverage::normal_loop_feed_available;
 use crate::audio_engine::productive_source_history::ProductiveSourceBinding;
 use crate::audio_engine::source_grid::SourceGrid;
@@ -468,6 +468,14 @@ impl RtMixer {
         (self.pad_loop_start_frame[id], self.pad_loop_end_frame[id])
     }
 
+    #[cfg(test)]
+    pub(crate) fn dsp_source_history_for_test(
+        &self,
+        id: usize,
+    ) -> Option<super::productive_source_history::ProductiveSourceHistory> {
+        self.pad_dsp_chains[id].source_history()
+    }
+
     pub(crate) fn set_loop_region_frames(&mut self, id: usize, start: usize, end: Option<usize>) {
         if id < NUM_SAMPLES && self.loop_context_available(id, start, end) {
             self.pad_loop_start_frame[id] = start;
@@ -477,7 +485,28 @@ impl RtMixer {
 
     fn loop_context_available(&self, id: usize, start: usize, end: Option<usize>) -> bool {
         if self.finite_key_lock_voice_active(id) {
-            return false;
+            // An accepted-period projection may refresh/clear while the physical
+            // NormalLoop stays fixed. Neither old-source voices nor marker cuts
+            // can borrow this chronological alias.
+            let Some(bank) = self.sample_bank[id].as_ref() else {
+                return false;
+            };
+            let requested = effective_loop_region(start, end, bank.frame_count());
+            if requested != self.effective_loop_region(id, bank.frame_count())
+                || self
+                    .voices
+                    .iter()
+                    .filter(|voice| voice.is_playing_sample(id))
+                    .any(|voice| {
+                        voice.explicit_seek_mode != ExplicitSeekMode::Normal
+                            || !voice
+                                .sample
+                                .as_ref()
+                                .is_some_and(|sample| sample.same_source(bank))
+                    })
+            {
+                return false;
+            }
         }
         let bank = self.sample_bank[id].as_ref();
         let available = |sample: &SampleBuffer| {
@@ -519,18 +548,58 @@ impl RtMixer {
         start_s: f64,
         end_s: Option<f64>,
     ) -> bool {
+        self.loop_intent_frames(id, start_s, end_s)
+            .is_some_and(|(start, end)| self.loop_context_available(id, start, end))
+    }
+
+    /// A guarded explicit launch may replace an older voice with the already acknowledged bank
+    /// region. This cuts its DSP/history; it is not a refresh of the older physical domain.
+    pub(crate) fn trigger_loop_context_available(
+        &self,
+        id: usize,
+        start_s: f64,
+        end_s: Option<f64>,
+    ) -> bool {
+        let Some((start, end)) = self.loop_intent_frames(id, start_s, end_s) else {
+            return false;
+        };
+        if self.loop_context_available(id, start, end) {
+            return true;
+        }
+        let Some(bank) = self.sample_bank[id].as_ref() else {
+            return false;
+        };
+        self.finite_key_lock_voice_active(id)
+            && self.voices.iter().any(|voice| {
+                voice.is_playing_sample(id)
+                    && voice
+                        .sample
+                        .as_ref()
+                        .is_some_and(|sample| !sample.same_source(bank))
+            })
+            && effective_loop_region(start, end, bank.frame_count())
+                == self.effective_loop_region(id, bank.frame_count())
+            && self.can_play_sample(id, 1.0)
+    }
+
+    fn loop_intent_frames(
+        &self,
+        id: usize,
+        start_s: f64,
+        end_s: Option<f64>,
+    ) -> Option<(usize, Option<usize>)> {
         if id >= NUM_SAMPLES
             || !start_s.is_finite()
             || start_s < 0.0
             || end_s.is_some_and(|end| !end.is_finite() || end < 0.0)
         {
-            return false;
+            return None;
         }
         let start = (start_s * f64::from(self.sample_rate_hz)).round() as usize;
         let end = end_s.map(|end| {
             ((end * f64::from(self.sample_rate_hz)).round() as usize).max(start.saturating_add(1))
         });
-        self.loop_context_available(id, start, end)
+        Some((start, end))
     }
 
     fn key_lock_context_available(&self, id: usize) -> bool {
@@ -774,6 +843,9 @@ impl RtMixer {
                 {
                     voice.source_timing = previous_timing;
                     voice.source_loop_region = previous_region;
+                    // Pending Current-Bank history never becomes retained-voice work.
+                    // Fresh capture below uses the admitted voice's distinct authority.
+                    voice.stretch.invalidate_prepared();
                     voice.retire_frozen_stems(retirement);
                     voice.frozen_stems = Some(FrozenStemView {
                         set: self.prepared_stems[id].clone(),
@@ -1111,22 +1183,34 @@ impl RtMixer {
                             .iter()
                             .filter(|voice| voice.active && voice.sample_id == id)
                             .all(|voice| {
-                                // This first finite vertical admits stopped setup and storage-only
-                                // current-source refresh. Broader edits/old voices remain guarded.
+                                // Storage ACK changes only the bank's backing. Current paused
+                                // voices preserve their position; old voices keep their own
+                                // frozen source/selection, independently of future bank ranges.
                                 intent.seek_position_s.is_none()
-                                    && intent.loop_region.is_none()
                                     && key_lock == self.pad_key_lock_enabled[id]
-                                    && !voice.paused
-                                    && voice
-                                        .sample
-                                        .as_ref()
-                                        .is_some_and(|old| old.same_source(sample))
-                                    && self.normal_key_lock_voice_available(
-                                        id,
-                                        voice,
-                                        sample,
-                                        stems.as_ref(),
-                                    )
+                                    && voice.sample.as_ref().is_some_and(|old| {
+                                        if old.same_source(sample) {
+                                            intent.loop_region.is_none()
+                                                && self.normal_key_lock_voice_available(
+                                                    id,
+                                                    voice,
+                                                    sample,
+                                                    stems.as_ref(),
+                                                )
+                                        } else {
+                                            voice.frozen_stems.as_ref().is_some_and(|frozen| {
+                                                voice.source_loop_region.is_some()
+                                                    && self
+                                                        .normal_key_lock_voice_selection_available(
+                                                            id,
+                                                            voice,
+                                                            old,
+                                                            frozen.set.as_ref(),
+                                                            (frozen.selection, frozen.transition),
+                                                        )
+                                            })
+                                        }
+                                    })
                             })
                 }))
             && self.sample_bank[id].as_ref().is_some_and(|old| {
@@ -1770,16 +1854,30 @@ impl RtMixer {
 
         // This is the admission point. No callback bank/source can change until this transaction
         // commits; a later control revocation cannot partially reject an admitted exclusive start.
-        self.can_play_sample(id, velocity)
-            .then_some(VoiceStartConfig {
-                sample_id: id,
-                sample,
-                initial_frame_pos,
-                volume: velocity,
-                initial_tempo_ratio: tempo_ratio,
-                start_output_frame,
-                source_timing,
-            })
+        if !self.can_play_sample(id, velocity) {
+            return None;
+        }
+        let source_admission = NativeHistoryContext {
+            id,
+            ownership: &self.input_runtime_ownership,
+            acknowledgements: &self.current_timing_acknowledgements,
+            preparation_epoch: &self.prepared_source_epochs[id],
+        }
+        .capture_source_admission(
+            &sample,
+            self.sample_rate_hz as u32,
+            source_timing.accepted,
+        );
+        Some(VoiceStartConfig {
+            sample_id: id,
+            sample,
+            initial_frame_pos,
+            volume: velocity,
+            initial_tempo_ratio: tempo_ratio,
+            start_output_frame,
+            source_timing,
+            source_admission,
+        })
     }
 
     pub(crate) fn apply_prepared_loop_region(
@@ -1812,6 +1910,7 @@ impl RtMixer {
                     .is_some_and(|old| old.same_source(&config.sample))
                 {
                     voice_slot.source_timing = config.source_timing;
+                    voice_slot.source_admission = config.source_admission;
                     voice_slot.restart(
                         config.initial_frame_pos,
                         config.volume,
@@ -2156,7 +2255,11 @@ impl RtMixer {
             None
         };
 
-        if !self.loop_context_available(id, start_frame, end_frame) {
+        // Scalar marker commands clear explicit source positioning below. Keep their original
+        // finite wet guard; accepted-period refresh has its own chronological projection path.
+        if self.finite_key_lock_voice_active(id)
+            || !self.loop_context_available(id, start_frame, end_frame)
+        {
             return;
         }
 
@@ -2768,16 +2871,27 @@ impl RtMixer {
                         acknowledgements,
                         preparation_epoch: &prepared_source_epochs[voice.sample_id],
                     };
-                    let permit = bank_sources[voice.sample_id]
+                    let permit = if bank_sources[voice.sample_id]
                         .as_ref()
-                        .filter(|bank| bank.same_source(&sample))
-                        .and_then(|_| {
-                            context.capture(
-                                &sample,
-                                sample_rate_hz as u32,
-                                voice.source_timing.accepted,
-                            )
-                        });
+                        .is_some_and(|bank| bank.same_source(&sample))
+                    {
+                        context.capture(
+                            &sample,
+                            sample_rate_hz as u32,
+                            voice.source_timing.accepted,
+                        )
+                    } else {
+                        voice.source_admission.as_ref().and_then(|admission| {
+                            NativeVoiceHistoryContext {
+                                admission,
+                                lifetime: &voice.history_lifetime,
+                                generation: voice.generation,
+                                preparation_epoch: voice.stretch.source_epoch_owner(),
+                                accepted: voice.source_timing.accepted,
+                            }
+                            .capture(&sample, sample_rate_hz as u32)
+                        })
+                    };
                     voice.stretch.process_source(
                         ProductiveSourceFeed {
                             sample: &sample,
@@ -5424,7 +5538,7 @@ mod productive_history_tests;
 
 #[cfg(test)]
 #[path = "prepared_native_mixer_tests.rs"]
-mod prepared_native_mixer_tests;
+pub(crate) mod prepared_native_mixer_tests;
 
 #[cfg(test)]
 #[path = "resident_mixer_tests.rs"]

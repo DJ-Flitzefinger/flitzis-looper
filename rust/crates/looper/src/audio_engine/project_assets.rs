@@ -46,6 +46,16 @@ const STEM_PCM_FILES: [&str; 6] = [
 
 pub(super) type PcmHistory = Mutex<Vec<Vec<Weak<[f32]>>>>;
 
+fn backing_contains(backing: &[Arc<[f32]>], pcm: &Weak<[f32]>) -> bool {
+    backing.iter().any(|held| pcm.ptr_eq(&Arc::downgrade(held)))
+}
+
+fn push_unique_backing(backing: &mut Vec<Arc<[f32]>>, samples: Arc<[f32]>) {
+    if !backing.iter().any(|held| Arc::ptr_eq(held, &samples)) {
+        backing.push(samples);
+    }
+}
+
 #[derive(Debug)]
 struct PathOwner {
     root: PathBuf,
@@ -135,6 +145,8 @@ impl ProjectAssetLease {
 struct Reader {
     path: PathBuf,
     pcm: Vec<Weak<[f32]>>,
+    /// Actual FullMix backing of a component reader; accounting only, never native authority.
+    source_pcm: Option<Weak<[f32]>>,
     cold: Option<CommittedColdLease>,
     pending_assignment: bool,
     saved_claim: bool,
@@ -474,6 +486,7 @@ impl ProjectAssets {
         state.readers.push(Reader {
             path: lease.original_path.clone(),
             pcm: vec![Arc::downgrade(&sample.samples)],
+            source_pcm: None,
             cold: Some(lease),
             pending_assignment: true,
             saved_claim,
@@ -499,6 +512,7 @@ impl ProjectAssets {
         state.readers.push(Reader {
             path,
             pcm,
+            source_pcm: Some(Arc::downgrade(&stems.reference_samples)),
             cold: None,
             pending_assignment: false,
             saved_claim: false,
@@ -577,6 +591,7 @@ impl ProjectAssets {
     /// Native history, old voices and queued jobs keep these Weak entries live
     /// after their original window has left the control cache. The snapshot
     /// keeps each unique allocation pinned through this preparation's admission.
+    #[cfg(test)]
     pub(super) fn held_reader_backings(
         &self,
         lease: &CommittedColdLease,
@@ -598,6 +613,78 @@ impl ProjectAssets {
                     if !backing.iter().any(|held| Arc::ptr_eq(held, &samples)) {
                         backing.push(samples);
                     }
+                }
+            }
+        }
+        Ok(backing)
+    }
+
+    /// Snapshot only this pad's real source/voice/job/history allocations, then resolve their
+    /// existing assignment readers and corresponding components. Another pad with equal files
+    /// or content does not enter through path matching. These pins last through worker admission.
+    /// An actually shared source Arc can resolve several pad assignments; their component
+    /// backings are conservatively charged, without claiming exact pad-exclusive attribution.
+    pub(super) fn held_same_pad_reader_backings(
+        &self,
+        history: &PcmHistory,
+        id: usize,
+        lease: &CommittedColdLease,
+    ) -> io::Result<Vec<Arc<[f32]>>> {
+        // The collector takes the asset gate before a history lock. Copy and release this lock
+        // first; never reverse that order while waiting for the asset gate.
+        let mut backing = {
+            let pads = history
+                .lock()
+                .map_err(|_| io::Error::other("PCM history lock poisoned"))?;
+            let pad = pads
+                .get(id)
+                .ok_or_else(|| io::Error::other("same-pad PCM history missing"))?;
+            let mut backing = Vec::new();
+            for samples in pad.iter().filter_map(Weak::upgrade) {
+                push_unique_backing(&mut backing, samples);
+            }
+            backing
+        };
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("asset gate poisoned"))?;
+        let mut sources = vec![lease.clone()];
+        for reader in &state.readers {
+            if let Some(source) = &reader.cold
+                && reader.pcm.iter().any(|pcm| backing_contains(&backing, pcm))
+                && !sources
+                    .iter()
+                    .any(|held| held.assignment_id() == source.assignment_id())
+            {
+                sources.push(source.clone());
+            }
+        }
+        for reader in &state.readers {
+            if reader.cold.as_ref().is_some_and(|source| {
+                sources
+                    .iter()
+                    .any(|held| held.assignment_id() == source.assignment_id())
+            }) {
+                for samples in reader.pcm.iter().filter_map(Weak::upgrade) {
+                    push_unique_backing(&mut backing, samples);
+                }
+            }
+        }
+        for reader in &state.readers {
+            let source_backing = reader
+                .source_pcm
+                .as_ref()
+                .is_some_and(|pcm| backing_contains(&backing, pcm));
+            let paired_source = reader
+                .shared_stems
+                .as_ref()
+                .map(|shared| shared.belongs_to_assignments(&sources))
+                .transpose()?
+                .unwrap_or(false);
+            if source_backing || paired_source {
+                for samples in reader.pcm.iter().filter_map(Weak::upgrade) {
+                    push_unique_backing(&mut backing, samples);
                 }
             }
         }
@@ -950,6 +1037,13 @@ impl ProjectAssets {
             // Weak<[f32]> keeps the allocation itself alive after final PCM Arc.
             // Durable file/pending metadata must retain no dead PCM allocation.
             reader.pcm.retain(|pcm| pcm.strong_count() > 0);
+            if reader
+                .source_pcm
+                .as_ref()
+                .is_some_and(|pcm| pcm.strong_count() == 0)
+            {
+                reader.source_pcm = None;
+            }
             if let Some(lease) = reader.cold.as_ref() {
                 lease.prune_dead_pcm();
             }
@@ -1730,6 +1824,7 @@ mod tests {
         assets.state.lock().unwrap().readers.push(Reader {
             path: fs::canonicalize(&path).unwrap(),
             pcm: vec![Arc::downgrade(&pcm)],
+            source_pcm: None,
             cold: None,
             pending_assignment: false,
             saved_claim: false,
@@ -2011,6 +2106,7 @@ mod tests {
         assets.state.lock().unwrap().readers.push(Reader {
             path: PathBuf::from("pending-original"),
             pcm: vec![Arc::downgrade(&pcm)],
+            source_pcm: None,
             cold: None,
             pending_assignment: true,
             saved_claim: false,
@@ -2038,6 +2134,7 @@ mod tests {
         assets.state.lock().unwrap().readers.push(Reader {
             path: path.clone(),
             pcm: Vec::new(),
+            source_pcm: None,
             cold: None,
             pending_assignment: true,
             saved_claim: false,
@@ -2243,6 +2340,7 @@ mod tests {
                 state.readers.push(Reader {
                     path: lease.original_path.clone(),
                     pcm: vec![Arc::downgrade(&first_pcm.samples)],
+                    source_pcm: None,
                     cold: Some(lease),
                     pending_assignment: false,
                     saved_claim: false,
@@ -2330,6 +2428,7 @@ mod tests {
                 state.readers.push(Reader {
                     path: lease.original_path.clone(),
                     pcm: Vec::new(),
+                    source_pcm: None,
                     cold: Some(lease),
                     pending_assignment: false,
                     saved_claim: false,

@@ -284,10 +284,75 @@ initial active None->Some, retention/effective-mode ACK or ordinary StemControll
 warm return: the controller FullMix command retires component ownership and those
 remain P5a, not a permanent-retained-fixture claim.
 
-Finite seek/intro/tail, old voices and wider refresh/retrigger contexts remain
-guarded and are subsequent P4b work. The parent
-P4b tasks remain open until their complete musical/resource/causality matrix is
-proved. No new reader, scheduler, worker lane or callback I/O is introduced.
+The bounded lifecycle implementation uses genuine finite NormalLoop at
+production k=0/non-unity, with physical
+loop geometry fixed. Pause/resume before and after preparation capture, settled
+and smoothing rates, and admitted storage-only ACKs must retain actual position,
+adopted native handle/FIFOs and chronological filter. Pending work remains bound
+to its exact captured window/projection/selection/checkpoint; stale work cannot
+mutate current audio. Only already adopted history may use the proved
+storage-only effective-source permit while its original real readers remain.
+Resume proof extends past its first callback through further real requests,
+worker catch-up and adoption decisions, with independent complete PCM and
+algebraic raw-native/chronological-filter references.
+
+Same-source accepted-period refresh/clear admits only the existing chronological
+projection alias with unchanged physical region and equivalent wrapped fractional
+phase, including virtual P+/-H seams. Source, marker, seek and position cuts do
+not acquire that alias. Current source/timing acknowledgement remains required;
+old active and paused source voices reject a new-bank refresh before effects.
+SourceReadPlan/fractional_taps and SourcePlayback retain actual domain/address/
+rate authority rather than a second geometry or rate model.
+
+Replacement bank B never labels an active or paused voice A with B's source,
+physical region, accepted timing, FrozenStemView/transition or history. A's PCM
+pin is not native authorization. A current-bank candidate captured before B
+replacement stays invalid; retaining an old-voice pin cannot retrospectively
+authorize it. If A needs another preparation, capture the actual retained
+Voice/Source/Timing/Selection/History afresh and require its own matching permits
+through existing admitted mechanisms. Test A's continued wet output after resume
+and through subsequent real preparation/adoption, not merely frozen fields.
+
+Future-bank B ranges use actual existing WindowWork preparation/admission and B's
+own callback ACK. That ACK grants no native-history authority: fresh public
+capture and independent Source/Timing/Stem/History permits govern preparation
+and exact checkpoint adoption. Explicit retrigger remains a real DSP/history cut
+into acknowledged B. Reserve retirement/admission before effects; failed
+reservation leaves A's playback, parameters and owners unchanged.
+
+Existing registry/retirement/recycle paths retain each voice, source, stems, job,
+native history, reader pin and outgoing selection until its distinct actual final
+use. Checked peak admission includes real old/new held backing and history,
+replacement overlap, late/cancelled work and saturation. There is no hidden
+complete backing, fifth live instrumental component or new loader/reader/queue.
+Peak capture reuses same-pad weak PCM history and original assignment membership,
+deduplicating actual backing identity. The existing resident-stem ownership gate
+serializes WindowWork peak/read/component preparation/registration off realtime;
+partial cancelled allocations unwind before the next window admission. The
+history mutex spans source-range read/registration and ends before asset locking.
+No unchanged two-worker window-I/O concurrency or total native/FIFO process-RAM
+measurement is claimed.
+Actual complete PCM shared between pads may resolve more than one assignment;
+the existing weak history conservatively charges all associated live component
+backings once per allocation. This can reject earlier near the 1 GiB operation
+limit; exact pad-exclusive attribution is not claimed. Equal paths or content
+without actual shared backing do not confer membership or native permission.
+Irregular callbacks cross pause/resume, rate ramps, refresh/clear and ACK/adoption;
+observe taps/feed/lookahead, handle identity, FIFO occupancy, cursor and nontrivial
+output against independent full PCM/raw-native/filter references. Existing accepted
+Some/Some evidence may be reused by actual unchanged source impact and supplies
+no lifecycle acceptance by itself.
+
+Finite seek/intro/tail, physical-domain cuts and every unproved context remain
+guarded. P5a active None->Some, retention/effective-mode ACK and ordinary controller
+warm return stay separate. The bounded lifecycle subtask is independently
+accepted; P4b parents remain open and retain the complete
+musical/resource/history/causality matrix, binary64 P/integer H, 119.999..123.45
+BPM and <=1-loaded-source-frame 75/1000-cycle tolerance. The 48-kHz/rate-2/H16384/
+C3678/U2080 gate remains unavailable at T for 1598 frames/33.292 ms. Nonzero KEY/
+pitch remains B5. No new scheduler/worker lane or callback I/O, GIL, blocking,
+logging, heavy allocation or unbounded work is introduced; Human alone operates
+the App, devices, recording and listening. This step does not plan a full Rust port.
 
 ## First lazy live activation and effective-mode acknowledgement
 

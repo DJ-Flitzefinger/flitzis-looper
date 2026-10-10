@@ -54,9 +54,46 @@ context checks both actual FullMix/stem sides for current-source NormalLoop voic
 with an already ACKed identical resident committed set before native mode/mask
 mutation and on productive feed. New history preparation waits for the ramp to
 settle while the wet native/FIFO/filter owner continues; later actual catch-up and
-adoption retain their own permits. Finite seek, intro/tail and broader old-voice/
-lifecycle coverage remain guarded and the parent P4b gate remains open. The
-saved-load full-track fallback remains labelled.
+adoption retain their own permits. The bounded lifecycle/source-custody
+implementation covers fixed physical
+NormalLoop geometry with genuine production-k=0/non-unity pause/resume/rate and
+storage-ACK continuity, same-source accepted-period refresh/clear and old active/
+paused voice custody through bank replacement. Pending native work keeps exact
+captured-window/projection/checkpoint fences; only already adopted history may
+retain the proved storage-only effective-source permit with its original readers.
+Wet output must continue past the first resumed callback through further real
+preparation/adoption. New old-voice preparation needs fresh actual Voice/Source/
+Timing/Selection/History capture and matching own permits; a PCM pin cannot revive
+a stale current-bank candidate or substitute the replacement bank's authority.
+Future-bank ranges need actual WindowWork admission and own ACK, then fresh public
+capture and independent native preparation permits. Retrigger cuts DSP/history
+into that acknowledged source after reservation; failure preserves old playback,
+parameters and owners. Existing readers/retirement paths count actual old/new held
+backing/history peak and each distinct final use. Finite seek/intro/tail, physical
+cuts, remaining full P4b resource/music/history/causality and P5a remain guarded or
+open. The saved-load full-track fallback remains labelled.
+
+WindowWork peak admission now snapshots the existing same-pad 128-entry weak PCM
+history and resolves its actual original assignment readers and corresponding
+paired/shared component allocations in ProjectAssets. Equal file paths or content
+on another pad alone confer no membership. When pads share the identical complete
+PCM Arc, the existing Weak history cannot distinguish its assignments: admission
+conservatively includes every actual assignment reader and associated component
+backing linked through that allocation. It may therefore reject earlier near the
+1 GiB operation limit; it does not claim exact pad-exclusive accounting. Arc
+identity deduplicates allocations; the snapshot holds old source, voice, job and
+history readers through admission. A new
+range needs a free live history slot before superseding the previous intent and
+again before allocating. Reusing an already registered backing needs no new slot.
+The existing resident-stem ownership mutex serializes WindowWork peak capture,
+source/component preparation and reader registration across the two workers and
+pads. A cancelled partial component allocation is destroyed before that guard
+opens, so another WindowWork cannot admit against an incomplete snapshot. The
+existing history mutex spans source-range read and registration, then is released
+before the asset gate to preserve collector lock order. These worker locks add no
+callback lock or new registry. Per-operation
+admission and the existing two-worker transient bound remain distinct from a
+measurement of total concurrent process RAM.
 
 New imports preserve the exact filename and bytes under
 `samples/materials/M<32-lowercase-hex>/original/`. The material ID binds the full
