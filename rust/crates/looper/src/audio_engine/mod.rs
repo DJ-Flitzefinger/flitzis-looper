@@ -1381,6 +1381,9 @@ impl AudioEngine {
             "context",
             match sample.residency.as_ref().map(|view| view.context) {
                 Some(crate::messages::ResidentContext::FiniteLoop) => "finite-loop-exact-taps-v1",
+                Some(crate::messages::ResidentContext::KeyLockFiniteLoop) => {
+                    "finite-keylock-source-coverage-v1"
+                }
                 Some(crate::messages::ResidentContext::KeyLockFullTrack) => {
                     "full-track-key-lock-continuation-unproved-v1"
                 }

@@ -109,6 +109,58 @@ impl Fixture {
 }
 
 #[test]
+fn finite_key_lock_context_keeps_range_geometry_without_native_admission() {
+    use crate::audio_engine::source_reader::{
+        ExplicitSeekMode, FrameRange, resident_read_context_available,
+    };
+
+    let fixture = Fixture::new();
+    let dry = fixture.read(11, 27, PCM_LIMIT_BYTES).unwrap();
+    let tagged = fixture
+        .lease
+        .read_window_cancellable(
+            &fixture.reference,
+            11,
+            27,
+            10,
+            ResidentContext::KeyLockFiniteLoop,
+            PCM_LIMIT_BYTES,
+            &|| false,
+        )
+        .unwrap();
+    fixture.assert_bits(&dry, 11, 27);
+    assert!(Arc::ptr_eq(&dry.samples, &tagged.samples));
+    assert!(tagged.same_source(&dry));
+    assert!(tagged.valid_residency(48_000, 2));
+    assert_eq!(tagged.window_revision(), 10);
+    assert_eq!(
+        tagged.residency.as_ref().unwrap().context,
+        ResidentContext::KeyLockFiniteLoop
+    );
+    let narrowed = tagged
+        .window(12, 26, 11, ResidentContext::KeyLockFiniteLoop)
+        .unwrap();
+    assert!(narrowed.valid_residency(48_000, 2));
+    assert_eq!(narrowed.samples.len(), 14 * 2);
+    let region = FrameRange { start: 11, end: 27 };
+    assert!(resident_read_context_available(
+        &tagged,
+        region,
+        ExplicitSeekMode::Normal,
+        false,
+    ));
+    for mode in [
+        ExplicitSeekMode::Normal,
+        ExplicitSeekMode::BeforeLoop,
+        ExplicitSeekMode::AfterLoop,
+    ] {
+        assert!(!resident_read_context_available(
+            &tagged, region, mode, true
+        ));
+    }
+}
+
+#[test]
 fn direct_distant_range_reads_exact_bytes_into_final_pcm_without_complete_expansion() {
     let fixture = Fixture::new();
     let (start, end) = (31_111, 31_148);

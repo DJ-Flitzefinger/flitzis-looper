@@ -43,9 +43,17 @@ pub struct CompleteSourceIdentity {
 pub enum ResidentContext {
     /// Both interpolation taps, including virtual P seams, wrap within these bounds.
     FiniteLoop,
+    /// Native feed is additionally admitted against its actual source read coverage.
+    KeyLockFiniteLoop,
     FullTrack,
     /// Native/FIFO continuation is preserved by an explicitly admitted full-track view.
     KeyLockFullTrack,
+}
+
+impl ResidentContext {
+    pub(crate) fn permits_finite_range(self) -> bool {
+        matches!(self, Self::FiniteLoop | Self::KeyLockFiniteLoop)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -79,7 +87,7 @@ impl SampleBuffer {
                     && view.source.frame_count.checked_mul(channels).is_some()
                     && view.start_frame < self.resident_end()
                     && self.resident_end() <= view.source.frame_count
-                    && (view.context == ResidentContext::FiniteLoop
+                    && (view.context.permits_finite_range()
                         || (view.start_frame == 0
                             && self.resident_end() == view.source.frame_count))
             })
@@ -173,7 +181,7 @@ impl SampleBuffer {
             || start < self.resident_start()
             || end > self.resident_end()
             || revision == 0
-            || (context != ResidentContext::FiniteLoop && (start != 0 || end != self.frame_count()))
+            || (!context.permits_finite_range() && (start != 0 || end != self.frame_count()))
         {
             return Err("resident window is outside its admitted source/context".into());
         }

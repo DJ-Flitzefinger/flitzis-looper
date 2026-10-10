@@ -263,6 +263,10 @@ pub(crate) struct StemRenderSelection {
 }
 
 impl StemRenderSelection {
+    pub(crate) fn required_stem_hash(self) -> Option<u64> {
+        (self.mode == StemMixMode::AllStems).then_some(self.source_version_hash)
+    }
+
     pub(crate) fn full_mix() -> Self {
         Self {
             mode: StemMixMode::FullMix,
@@ -317,6 +321,14 @@ impl StemTransition {
 
     pub(crate) fn is_active(self) -> bool {
         self.total_frames > 0 && self.elapsed_frames < self.total_frames as f64
+    }
+
+    pub(crate) fn required_from_selection(self) -> Option<StemRenderSelection> {
+        self.is_active().then_some(self.from)
+    }
+
+    pub(crate) fn matches_source_contract(self, other: Self) -> bool {
+        self.from == other.from && self.total_frames == other.total_frames
     }
 
     /// Preserve complete source-selection ramp state at a prepared adoption boundary.

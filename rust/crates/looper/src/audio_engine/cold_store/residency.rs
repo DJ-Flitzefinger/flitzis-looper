@@ -43,8 +43,7 @@ impl CommittedColdLease {
             || start >= end
             || end > view.source.frame_count
             || revision == 0
-            || (context != ResidentContext::FiniteLoop
-                && (start != 0 || end != view.source.frame_count))
+            || (!context.permits_finite_range() && (start != 0 || end != view.source.frame_count))
         {
             return Err(invalid(
                 "resident range is outside its admitted source/context",

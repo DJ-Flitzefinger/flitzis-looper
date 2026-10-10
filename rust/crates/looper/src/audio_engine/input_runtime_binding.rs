@@ -282,6 +282,7 @@ impl InputRuntimeOwnership {
                     crate::messages::ResidentContext::FiniteLoop => 1,
                     crate::messages::ResidentContext::FullTrack => 2,
                     crate::messages::ResidentContext::KeyLockFullTrack => 3,
+                    crate::messages::ResidentContext::KeyLockFiniteLoop => 4,
                 }),
             Ordering::SeqCst,
         );
@@ -302,6 +303,7 @@ impl InputRuntimeOwnership {
             crate::messages::ResidentContext::FiniteLoop => 1,
             crate::messages::ResidentContext::FullTrack => 2,
             crate::messages::ResidentContext::KeyLockFullTrack => 3,
+            crate::messages::ResidentContext::KeyLockFiniteLoop => 4,
         };
         source.window_revision.load(Ordering::SeqCst) == resident.revision
             && source.resident_address.load(Ordering::SeqCst) == resident.address
@@ -600,6 +602,7 @@ impl InputRuntimePadBinding {
                     crate::messages::ResidentContext::FiniteLoop => "finite-loop",
                     crate::messages::ResidentContext::FullTrack => "full-track",
                     crate::messages::ResidentContext::KeyLockFullTrack => "key-lock-full-track",
+                    crate::messages::ResidentContext::KeyLockFiniteLoop => "key-lock-finite-loop",
                 }),
         )?;
         metadata.set_item("authority_revision", self.binding.authority_revision)?;

@@ -279,44 +279,47 @@ fn active_relocation_rejects_new_source_new_complete_stemset_stale_revision_canc
 
 #[test]
 fn keylock_enabled_after_window_capture_rejects_finite_relocation_for_active_and_idle_pad() {
-    for active in [false, true] {
-        let full = complete();
-        let mut mixer = fixture(&full, None, false);
-        if !active {
-            mixer.stop_sample(0);
-        }
-        let captured = binding(&mixer);
-        let next = full
-            .window(START, END, 2, ResidentContext::FiniteLoop)
-            .unwrap();
-        // Storage preparation was captured while the full source was dry. The
-        // native adoption guard must admit current context even with a live permit.
-        let publication = PreparedSourcePermit::unrestricted();
-        publication.mark_pending().unwrap();
-        mixer.set_pad_key_lock(0, true);
-        assert!(mixer.pad_key_lock_enabled[0]);
-        let playback = active.then(|| voice(&mixer).source_playback);
-        apply(
-            &mut mixer,
-            ControlMessage::RelocateResident(Box::new(crate::messages::ResidentTransaction {
-                id: 0,
-                sample: next,
-                stems: None,
-                binding: captured,
-                publication: publication.clone(),
-                expected_window_revision: 1,
-                intent: Default::default(),
-                seek_pin: None,
-            })),
-        );
-        assert_eq!(publication.status(), "rejected");
-        assert_eq!(binding(&mixer), captured);
-        assert_eq!(
-            mixer.sample_bank[0].as_ref().unwrap().resident_end(),
-            full.frame_count()
-        );
-        if let Some(playback) = playback {
-            assert!(voice(&mixer).source_playback.matches_exact(&playback));
+    for context in [
+        ResidentContext::FiniteLoop,
+        ResidentContext::KeyLockFiniteLoop,
+    ] {
+        for active in [false, true] {
+            let full = complete();
+            let mut mixer = fixture(&full, None, false);
+            if !active {
+                mixer.stop_sample(0);
+            }
+            let captured = binding(&mixer);
+            let next = full.window(START, END, 2, context).unwrap();
+            // Storage preparation was captured while the full source was dry. The
+            // native adoption guard must admit current context even with a live permit.
+            let publication = PreparedSourcePermit::unrestricted();
+            publication.mark_pending().unwrap();
+            mixer.set_pad_key_lock(0, true);
+            assert!(mixer.pad_key_lock_enabled[0]);
+            let playback = active.then(|| voice(&mixer).source_playback);
+            apply(
+                &mut mixer,
+                ControlMessage::RelocateResident(Box::new(crate::messages::ResidentTransaction {
+                    id: 0,
+                    sample: next,
+                    stems: None,
+                    binding: captured,
+                    publication: publication.clone(),
+                    expected_window_revision: 1,
+                    intent: Default::default(),
+                    seek_pin: None,
+                })),
+            );
+            assert_eq!(publication.status(), "rejected");
+            assert_eq!(binding(&mixer), captured);
+            assert_eq!(
+                mixer.sample_bank[0].as_ref().unwrap().resident_end(),
+                full.frame_count()
+            );
+            if let Some(playback) = playback {
+                assert!(voice(&mixer).source_playback.matches_exact(&playback));
+            }
         }
     }
 }

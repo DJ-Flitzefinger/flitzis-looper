@@ -9,6 +9,59 @@ use crate::audio_engine::timing::InputClock;
 use crate::audio_engine::transport::TransportTimeline;
 use crate::messages::{AudioMessage, TriggerQuantization};
 
+#[test]
+fn resident_context_metadata_and_window_fences_distinguish_every_context() {
+    use crate::messages::ResidentContext;
+
+    let engine = AudioEngine::new().unwrap();
+    let full = SampleBuffer {
+        channels: 1,
+        samples: Arc::from(vec![0.25; 32]),
+        residency: None,
+    }
+    .with_complete_source(48_000);
+    let contexts = [
+        (ResidentContext::FiniteLoop, "finite-loop"),
+        (ResidentContext::FullTrack, "full-track"),
+        (ResidentContext::KeyLockFullTrack, "key-lock-full-track"),
+        (ResidentContext::KeyLockFiniteLoop, "key-lock-finite-loop"),
+    ];
+    for (context, label) in contexts {
+        let mut sample = full.clone();
+        Arc::make_mut(sample.residency.as_mut().unwrap()).context = context;
+        engine.sample_cache.lock().unwrap()[0] = Some(sample.clone());
+        engine.loaded_source_generations.lock().unwrap()[0] = (1, 48_000);
+        engine.loaded_source_digests.lock().unwrap()[0] = Some("a".repeat(64));
+        engine
+            .input_runtime_ownership
+            .publish_source(0, &sample, 48_000, 1);
+        let binding = input_runtime_binding::capture(&engine, 0).unwrap().unwrap();
+        assert!(binding.current());
+        Python::attach(|py| {
+            let value = binding.metadata(py).unwrap();
+            let metadata = value.bind(py).cast::<PyDict>().unwrap();
+            assert_eq!(
+                metadata
+                    .get_item("resident_context")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                label
+            );
+        });
+        for (published_context, _) in contexts {
+            let mut published = sample.clone();
+            Arc::make_mut(published.residency.as_mut().unwrap()).context = published_context;
+            // Every address, extent and revision stays equal: only context can fence this.
+            assert!(Arc::ptr_eq(&sample.samples, &published.samples));
+            assert!(sample.same_source(&published));
+            engine.input_runtime_ownership.publish_window(0, &published);
+            assert_eq!(binding.current(), published_context == context);
+        }
+    }
+}
+
 struct RuntimeFixture {
     engine: AudioEngine,
     producer: Arc<Mutex<Producer<ControlMessage>>>,

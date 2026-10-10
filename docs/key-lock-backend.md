@@ -15,6 +15,11 @@ Keep the1598-frame/33.292-ms fixture, Rubber Band and existing rate/nonzero-k/un
 latency gates; neither range caching nor directory migration removes acoustic
 latency. No fallback-only intermediate state completes the requested finite supply.
 
+The preparatory `KeyLockFiniteLoop` resident tag has its own native snapshot fence
+and `key-lock-finite-loop` binding metadata label. It permits range geometry only;
+productive loading and Key Lock admission still require the full-track fallback
+until actual finite native coverage is implemented and proved in P4b.
+
 The active backend is implemented behind:
 
 ```text
