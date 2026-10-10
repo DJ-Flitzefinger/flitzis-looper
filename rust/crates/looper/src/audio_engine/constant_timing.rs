@@ -38,6 +38,8 @@ use pcm_budget::PcmBudget;
 pub use persistence::SavedConstantTimingTicket;
 #[cfg(test)]
 pub(super) use persistence::capture_saved_with_measurement_limit;
+#[cfg(test)]
+pub(super) use persistence::migration_test_fixture;
 pub(super) use persistence::{capture_saved, export_current, restore_saved};
 
 pub(super) fn validated_pcm_limit_bytes(limit_bytes: usize) -> Result<usize, String> {

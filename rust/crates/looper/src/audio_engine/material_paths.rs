@@ -20,6 +20,7 @@ pub(super) enum AssetKind {
     PcmDirectory,
     PcmArtifact,
     SlotMembership,
+    MigrationJournal,
 }
 
 #[derive(Clone, Debug)]
@@ -146,6 +147,19 @@ pub(super) fn classify(path: &Path) -> io::Result<AssetKind> {
                 && !name.starts_with('#') =>
         {
             Ok(AssetKind::Original { material: None })
+        }
+        [".material-migrations", transaction] if valid_id(transaction) => {
+            Ok(AssetKind::MigrationJournal)
+        }
+        [".material-migrations", transaction, name]
+            if valid_id(transaction)
+                && name.len() == 7
+                && name.ends_with(".json")
+                && name.as_bytes()[..2]
+                    .iter()
+                    .all(|byte| byte.is_ascii_digit()) =>
+        {
+            Ok(AssetKind::MigrationJournal)
         }
         [slot, "membership.json"] if slot_number(slot).is_some() => Ok(AssetKind::SlotMembership),
         ["materials", owner, "original", name]
@@ -286,6 +300,7 @@ pub fn resolve_project_asset(
         AssetKind::PcmDirectory => ("pcm_directory", None),
         AssetKind::PcmArtifact => ("pcm_artifact", None),
         AssetKind::SlotMembership => ("slot_membership", None),
+        AssetKind::MigrationJournal => ("migration_journal", None),
     };
     let path = resolved.path.to_string_lossy();
     // Python pathlib uses ordinary Win32 spelling for cwd and durable references.

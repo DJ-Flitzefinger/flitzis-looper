@@ -18,6 +18,7 @@ const CHUNK_BYTES: usize = 64 * 1024;
 const SCHEMA_VERSION: u64 = 1;
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 mod lifecycle;
+mod migration;
 mod residency;
 mod staging;
 mod warm;
@@ -694,6 +695,7 @@ impl ColdTransaction {
         Ok(reader)
     }
 
+    #[cfg(test)]
     pub(super) fn source_digest(&self) -> &str {
         &self.source_digest
     }
@@ -1230,6 +1232,8 @@ impl Drop for ColdTransaction {
     }
 }
 
+#[cfg(test)]
+mod migration_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

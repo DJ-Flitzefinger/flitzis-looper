@@ -6,7 +6,9 @@ historical FAIL/UNKNOWN are not rewritten. R0 is the retained docs/spec revision
 J0 and P1a are independently accepted and published. P1b implementation,
 current regression validation and final independent review are complete.
 K-META neutral key policy, persistence and source/request guards are independently
-accepted; audible pitch, UI/MIDI and subsequent storage slices remain pending.
+accepted; audible pitch, UI/MIDI and later storage slices remain pending.
+P2a is independently accepted for one verified material and all related current
+references; remaining materials and full P2b recovery remain pending.
 
 The [extended program](../../../docs/pad-owned-pcm-program.md) and
 [complete coverage map](../../../docs/pre-rust-program-coverage.json) own the
@@ -91,8 +93,16 @@ This acceptance grants no native pitch, hearing or whole-program completion.
 
 ### P2a
 
-- [ ] Migration journal/current reference transaction pro material; Autosave serialized
-- [ ] Verifizierte copy/reopen/source/timing fresh ACK/alias lineage; settings/newer revisions prevail, alte rollback owners bleiben
+The bounded operation preserves content UUIDs and current key/playback intent,
+uses the common revision-fenced writer, and reopens a genuine committed transaction
+in a new process with fresh native source/timing ACKs. Current 3069 Python tests
+with 35 device skips and affected static/strict checks passed. Native acceptance
+combines unchanged-input broad passes with separate fixture-failure closure and
+fresh control/analysis scopes; the original FAILED batch and excluded accidental
+device-test invocation remain documented. No full P2b or bulk-migration closure.
+
+- [x] Migration journal/current reference transaction pro material; Autosave serialized
+- [x] Verifizierte copy/reopen/source/timing fresh ACK/alias lineage; settings/newer revisions prevail, alte rollback owners bleiben
 
 ### P2b
 

@@ -1,6 +1,6 @@
 # Shared-material PCM and extended pre-Rust delivery program
 
-Status: P1a, P1b and K-META independently accepted, 2026-10-10; no whole-program or human
+Status: P1a, P1b, K-META and bounded P2a independently accepted, 2026-10-10; no whole-program or human
 completion. J0 and P1a are published. Typed native material/slot
 resolution, canonical import/restore storage, durable material/content IDs and
 guarded exact cleanup are implemented.
@@ -13,7 +13,17 @@ recovery. Current2978 Python tests/35 device skips, focused reset regression,
 lint/types/changed-file formatting and affected strict passed; unchanged native
 checks are reused and the unchanged whole-format baseline failure is preserved.
 This metadata slice grants no audible pitch or native/Human acceptance.
-Migration, arrangement and pitch controls remain pending.
+P2a implements one verified legacy-material migration with all related current
+pad references, a per-project journal, serialized config revisions and fresh
+independent source/timing ACKs. Current identity, settings and newer intent survive;
+unresolved native claims retain owners and fences. Startup admits one material;
+remaining legacy materials, P2b recovery, arrangement and pitch controls stay open.
+Current 3069 Python tests/35 device skips, lint/types, changed-file formatting and
+affected strict passed. Native evidence combines 828 actual broad-run passes on
+unchanged inputs, both separately repaired journal fixtures, a fresh parallel 12
+control batch and 168 fresh analysis tests. The initial broad batch remains FAILED;
+an unintended device-test invocation was stopped and excluded from hardware-free
+acceptance. Unchanged long DSP reuse and formatting-baseline limits remain explicit.
 The accepted bounded P0/C1/R0 prerequisites and historical FAIL/UNKNOWN evidence
 remain intact.
 

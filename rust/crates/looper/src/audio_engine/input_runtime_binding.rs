@@ -60,6 +60,7 @@ pub(crate) struct InputRuntimeOwnership {
     resident_controls: [AtomicU64; NUM_SAMPLES],
     launch_revisions: [AtomicU64; NUM_SAMPLES],
     admitted_launches: [AtomicBool; NUM_SAMPLES],
+    migration_holds: [AtomicU64; NUM_SAMPLES],
 }
 
 impl Default for InputRuntimeOwnership {
@@ -74,6 +75,7 @@ impl Default for InputRuntimeOwnership {
             resident_controls: std::array::from_fn(|_| AtomicU64::new(0)),
             launch_revisions: std::array::from_fn(|_| AtomicU64::new(0)),
             admitted_launches: std::array::from_fn(|_| AtomicBool::new(false)),
+            migration_holds: std::array::from_fn(|_| AtomicU64::new(0)),
         }
     }
 }
@@ -104,7 +106,31 @@ impl InputRuntimeOwnership {
     }
 
     pub(crate) fn launch_current(&self, id: usize, revision: u64) -> bool {
-        id < NUM_SAMPLES && revision != u64::MAX && self.launch_revision(id) == revision
+        id < NUM_SAMPLES
+            && revision != u64::MAX
+            && self.migration_holds[id].load(Ordering::Acquire) == 0
+            && self.launch_revision(id) == revision
+    }
+
+    pub(super) fn migration_hold(&self, id: usize) -> u64 {
+        self.migration_holds[id].load(Ordering::Acquire)
+    }
+
+    pub(super) fn hold_migration(&self, id: usize, owner: u64) {
+        self.cancel_launches(id);
+        self.migration_holds[id].store(owner, Ordering::Release);
+    }
+
+    pub(super) fn release_migration(&self, id: usize, owner: u64) -> Result<(), String> {
+        if self.migration_hold(id) != owner {
+            return Err("migration hold owner changed".into());
+        }
+        // Starts admitted while held cannot become eligible after the hold opens.
+        self.cancel_launches(id);
+        self.migration_holds[id]
+            .compare_exchange(owner, 0, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| "migration hold owner changed".into())
+            .map(|_| ())
     }
 
     /// A stop revokes earlier starts without changing adopted source/window/timing.

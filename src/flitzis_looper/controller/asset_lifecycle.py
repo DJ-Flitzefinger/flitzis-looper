@@ -124,6 +124,43 @@ class ProjectAssetLifecycle:
         """Acquire every current assignment before retiring removed assignments."""
         current = self._current_assignments()
         acquired = self._acquire_assignments(current)
+        self._publish_assignment_image(current, acquired)
+
+    def prepare_assignment_image(
+        self, project: ProjectState
+    ) -> tuple[dict[tuple[str, int], Path], dict[tuple[str, int], tuple[Path, ProjectAssetLease]]]:
+        """Reserve all new image owners before the atomic config commit."""
+        current = self._current_assignments(project)
+        return current, self._acquire_assignments(current)
+
+    def publish_assignment_image(
+        self,
+        image: tuple[
+            dict[tuple[str, int], Path], dict[tuple[str, int], tuple[Path, ProjectAssetLease]]
+        ],
+        *,
+        preserve_previous: bool = False,
+    ) -> None:
+        """Transfer owners; migrations retain old files until full reference reconciliation."""
+        self._publish_assignment_image(*image, preserve_previous=preserve_previous)
+
+    @staticmethod
+    def release_assignment_image(
+        image: tuple[
+            dict[tuple[str, int], Path], dict[tuple[str, int], tuple[Path, ProjectAssetLease]]
+        ],
+    ) -> None:
+        """Release only the not-yet-transferred owners on a precommit failure."""
+        for _, lease in image[1].values():
+            lease.release()
+
+    def _publish_assignment_image(
+        self,
+        current: dict[tuple[str, int], Path],
+        acquired: dict[tuple[str, int], tuple[Path, ProjectAssetLease]],
+        *,
+        preserve_previous: bool = False,
+    ) -> None:
         retired: list[tuple[str, Path, ProjectAssetLease]] = []
         for key, path in current.items():
             previous = self._assignments.get(key)
@@ -137,7 +174,7 @@ class ProjectAssetLifecycle:
             retired.append((key[0], path, lease))
         current_paths = set(current.values())
         for kind, path, lease in retired:
-            if path in current_paths:
+            if preserve_previous or path in current_paths:
                 lease.release()
             else:
                 self._retire_assignment(kind, path, lease)
@@ -152,7 +189,7 @@ class ProjectAssetLifecycle:
                 previous = self._assignments.get(key)
                 if previous is None or previous[0] != path:
                     acquired[key] = (path, self.acquire(path))
-        except (OSError, RuntimeError, ValueError):
+        except OSError, RuntimeError, ValueError:
             for _, lease in acquired.values():
                 lease.release()
             raise
@@ -172,9 +209,7 @@ class ProjectAssetLifecycle:
         """Install the reserved new owner before releasing the previous owner."""
         self._adopt_assignment("original", sample_id, prepared)
 
-    def adopt_stems(
-        self, sample_id: int, prepared: tuple[Path, ProjectAssetLease] | None
-    ) -> None:
+    def adopt_stems(self, sample_id: int, prepared: tuple[Path, ProjectAssetLease] | None) -> None:
         """Transfer a reserved stem owner after native enqueue, before old retirement."""
         self._adopt_assignment("stems", sample_id, prepared)
 
@@ -201,9 +236,7 @@ class ProjectAssetLifecycle:
         else:
             self._assignments[key] = prepared
         if previous is not None:
-            if any(
-                path == previous[0] for path, _ in self._assignments.values()
-            ):
+            if any(path == previous[0] for path, _ in self._assignments.values()):
                 previous[1].release()
             else:
                 self._retire_assignment(kind, *previous)
@@ -350,21 +383,26 @@ class ProjectAssetLifecycle:
             lease.release()
         self._assignments.clear()
 
-    def _current_assignments(self) -> dict[tuple[str, int], Path]:
+    def _current_assignments(
+        self, project: ProjectState | None = None
+    ) -> dict[tuple[str, int], Path]:
+        project = self._project if project is None else project
         result: dict[tuple[str, int], Path] = {}
-        for sample_id, source in enumerate(self._project.sample_paths):
+        for sample_id, source in enumerate(project.sample_paths):
             path = self._owned_original(source)
             if path is not None and path.is_file():
                 result["original", sample_id] = path
-        for sample_id, entry in enumerate(self._project.stem_cache):
+        for sample_id, entry in enumerate(project.stem_cache):
             if entry is None:
                 continue
-            path = self._stem_assignment_path(sample_id, entry)
+            path = self._stem_assignment_path(sample_id, entry, project)
             if path is not None:
                 result["stems", sample_id] = path
         return result
 
-    def _stem_assignment_path(self, sample_id: int, entry: StemCacheEntry) -> Path | None:
+    def _stem_assignment_path(
+        self, sample_id: int, entry: StemCacheEntry, project: ProjectState | None = None
+    ) -> Path | None:
         try:
             if not (self._root / "samples").is_dir():
                 return None
@@ -372,14 +410,17 @@ class ProjectAssetLifecycle:
             resolved = resolve_asset(path, project_root=self._root)
         except OSError, ValueError:
             return None
-        original = self._owned_original(self._project.sample_paths[sample_id])
+        project = self._project if project is None else project
+        original = self._owned_original(project.sample_paths[sample_id])
         material = (
             original_asset(original, project_root=self._root).material_id
-            if original is not None else None
+            if original is not None
+            else None
         )
         pad = (
             self._root / "samples" / "materials" / f"M{material}" / "stems"
-            if material is not None else self._root / "samples" / "stems" / f"#{sample_id + 1}"
+            if material is not None
+            else self._root / "samples" / "stems" / f"#{sample_id + 1}"
         )
         if resolved.kind != "stem_directory":
             return None

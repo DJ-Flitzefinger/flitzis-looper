@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 from flitzis_looper.controller.accepted_publication import AcceptedTimingController
 from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
 from flitzis_looper.controller.loader import LoaderController
+from flitzis_looper.controller.material_migration import MaterialMigrationController
 from flitzis_looper.controller.metering import MeteringController
 from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.controller.settings import SettingsController
@@ -89,6 +90,9 @@ class AppController:
         )
         self.loader.set_sample_unloaded_callback(self._on_sample_unloaded)
         self.loader.set_accepted_timing_refresh_callback(self._refresh_restored_accepted_timing)
+        self.material_migration = MaterialMigrationController(
+            self._persistence, self._session, self._audio, self._assets, self.loader
+        )
         self.metering = MeteringController(self._project, self._session, self._audio)
         self.input_mapping = InputMappingController(
             self,
@@ -106,11 +110,13 @@ class AppController:
 
         self.loader.restore_samples_from_project_state()
         self.stems.restore_stem_cache_from_project_state()
+        self.material_migration.schedule_after_restore()
         self.transport.apply_project_state_to_audio()
         self.input_mapping.apply_project_state_to_input_runtime()
 
     def shut_down(self) -> None:
         self._audio.set_input_mapping_enabled(False)
+        self.material_migration.shut_down()
         self.transport.residency.shut_down()
         self.accepted_timing.shut_down()
         self.loader.shut_down()
@@ -132,6 +138,7 @@ class AppController:
     def poll_runtime_events(self) -> None:
         """Poll runtime event sources and update controller-owned state projections."""
         self.loader.poll_loader_events()
+        self.material_migration.poll()
         self._poll_audio_messages()
         self.accepted_timing.poll()
         self.transport.residency.poll()

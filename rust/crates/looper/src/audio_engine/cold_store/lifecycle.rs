@@ -357,6 +357,42 @@ pub(in crate::audio_engine) struct PreparationGuard {
     key: PreparationKey,
 }
 
+fn acquire_preparation_gate(
+    key: PreparationKey,
+    cancelled: &impl Fn() -> bool,
+) -> io::Result<PreparationGuard> {
+    let shared = store();
+    loop {
+        // Cancellation can inspect native requests. Keep it outside the store
+        // lock, consistently with OpeningGuard's existing admission protocol.
+        check_cancelled(cancelled)?;
+        let mut state = shared
+            .state
+            .lock()
+            .map_err(|_| invalid("preparation gate poisoned"))?;
+        state.caches.retain(|_, cache| cache.strong_count() > 0);
+        state
+            .originals
+            .retain(|_, original| original.strong_count() > 0);
+        if state.deleting.len() >= CLEANUP_ADMISSION_LIMIT
+            || (state.preparing.len() >= CLEANUP_ADMISSION_LIMIT && !state.preparing.contains(&key))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "PCM preparation/retirement backlog admission limit",
+            ));
+        }
+        if state.preparing.insert(key.clone()) {
+            return Ok(PreparationGuard { key });
+        }
+        let (state, _) = shared
+            .changed
+            .wait_timeout(state, Duration::from_millis(10))
+            .map_err(|_| invalid("preparation gate poisoned"))?;
+        drop(state);
+    }
+}
+
 impl Drop for PreparationGuard {
     fn drop(&mut self) {
         let shared = store();
@@ -457,6 +493,207 @@ impl Drop for OriginalReader {
 }
 
 impl CommittedColdLease {
+    /// Serialize canonical stem preparation for this verified material/format,
+    /// independently of the legacy slot and caller's private generation ID.
+    pub(in crate::audio_engine) fn stem_preparation_gate(
+        &self,
+        cancelled: &impl Fn() -> bool,
+    ) -> io::Result<PreparationGuard> {
+        if self.assignment_retired() || self.material_id.is_none() {
+            return Err(invalid(
+                "stem preparation requires a current material assignment",
+            ));
+        }
+        let material_root = self
+            .original_path
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| invalid("stem material root missing"))?;
+        let stems = material_root.join("stems");
+        let _guards = super::super::project_assets::directory_guards(&stems)?;
+        let root = fs::canonicalize(stems)?;
+        reject_links(&root)?;
+        let pcm = &self.manifest.descriptor["playback"]["pcm"];
+        let rate = u32::try_from(
+            pcm["rate_hz"]
+                .as_u64()
+                .ok_or_else(|| invalid("stem playback rate missing"))?,
+        )
+        .map_err(|_| invalid("stem playback rate overflow"))?;
+        let channels = usize::try_from(
+            pcm["channels"]
+                .as_u64()
+                .ok_or_else(|| invalid("stem playback channels missing"))?,
+        )
+        .map_err(|_| invalid("stem playback channels overflow"))?;
+        if rate == 0 || channels == 0 {
+            return Err(invalid("stem preparation format is empty"));
+        }
+        acquire_preparation_gate(
+            PreparationKey {
+                root,
+                digest: self.manifest.identity.clone(),
+                rate,
+                channels,
+            },
+            cancelled,
+        )
+    }
+
+    /// Register an independent subscriber against still-sealed current backing.
+    /// Clone deliberately retains the old assignment; this method does not.
+    pub(in crate::audio_engine) fn subscribe_verified(&self) -> io::Result<Self> {
+        let state = store()
+            .state
+            .lock()
+            .map_err(|_| invalid("subscriber store ownership poisoned"))?;
+        let mut cache_owners = self
+            .cache
+            .durable_assignments
+            .lock()
+            .map_err(|_| invalid("subscriber cache ownership poisoned"))?;
+        let mut original_owners = self
+            ._original
+            .durable_assignments
+            .lock()
+            .map_err(|_| invalid("subscriber original ownership poisoned"))?;
+        if self.assignment_retired()
+            || self.cache.retired.load(Ordering::Acquire)
+            || !cache_owners.contains(&self.assignment.id)
+            || !original_owners.contains(&self.assignment.id)
+            || state
+                .deleting
+                .iter()
+                .any(|task| task.path == self.cache_path || task.path == self.original_path)
+        {
+            return Err(invalid("subscriber source assignment is retired"));
+        }
+        if cache_owners.len() >= CLEANUP_ADMISSION_LIMIT
+            || original_owners.len() >= CLEANUP_ADMISSION_LIMIT
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "subscriber ownership capacity full",
+            ));
+        }
+        let _cache_guards = super::super::project_assets::directory_guards(&self.cache.root)?;
+        let _original_guards =
+            super::super::project_assets::directory_guards(&self._original.root)?;
+        let samples_root = if self.material_id.is_some() {
+            self._original
+                .root
+                .ancestors()
+                .nth(3)
+                .ok_or_else(|| invalid("subscriber material ancestry missing"))?
+        } else {
+            self._original.root.as_path()
+        };
+        let original_kind =
+            super::super::material_paths::resolve(samples_root, &self.original_path)?.kind;
+        if original_kind
+            != (super::super::material_paths::AssetKind::Original {
+                material: self.material_id.clone(),
+            })
+            || super::super::material_paths::resolve(samples_root, &self.cache_path)?.kind
+                != super::super::material_paths::AssetKind::PcmDirectory
+        {
+            return Err(invalid("subscriber typed material binding changed"));
+        }
+        reject_links(&self.original_path)?;
+        reject_links(&self.cache_path)?;
+        let directory = directory_guard(&self.cache_path)?;
+        if file_identity(&directory)? != self.cache.identity
+            || fs::canonicalize(&self.cache_path)?.parent() != Some(self.cache.root.as_path())
+            || self.cache_path != self.cache.path
+            || self.original_path != self._original.path
+        {
+            return Err(invalid("subscriber cache/original binding changed"));
+        }
+        let original = sealed_reader(&self.original_path)?;
+        let held_original = self
+            ._original
+            .reader
+            .as_ref()
+            .ok_or_else(|| invalid("subscriber sealed original missing"))?;
+        if file_identity(&original)? != self._original.identity
+            || file_identity(held_original)? != self._original.identity
+            || original.metadata()?.len()
+                != self.manifest.descriptor["decoder"]["original"]["bytes"]
+                    .as_u64()
+                    .ok_or_else(|| invalid("subscriber original extent missing"))?
+        {
+            return Err(invalid("subscriber original FileID or extent changed"));
+        }
+        let expected_manifest =
+            serde_json::to_vec(&canonical(&self.manifest.encoded())).map_err(io::Error::other)?;
+        if expected_manifest.len() > 256 * 1024 || self.cache.readers.len() != 3 {
+            return Err(invalid(
+                "subscriber manifest/readers exceed complete contract",
+            ));
+        }
+        let mut readers = Vec::with_capacity(3);
+        for (index, name) in ["decoder.f32le", "playback.f32le", "manifest.json"]
+            .into_iter()
+            .enumerate()
+        {
+            let path = self.cache_path.join(name);
+            reject_links(&path)?;
+            let mut reader = sealed_reader(&path)?;
+            if self.cache.file_identities.get(index) != Some(&file_identity(&reader)?)
+                || self.cache.file_identities.get(index)
+                    != Some(&file_identity(&self.cache.readers[index])?)
+            {
+                return Err(invalid("subscriber backing FileID changed"));
+            }
+            let expected_bytes = match index {
+                0 => self.manifest.descriptor["decoder"]["pcm"]["full_bytes"].as_u64(),
+                1 => self.manifest.descriptor["playback"]["pcm"]["full_bytes"].as_u64(),
+                _ => Some(expected_manifest.len() as u64),
+            }
+            .ok_or_else(|| invalid("subscriber complete artifact extent missing"))?;
+            if reader.metadata()?.len() != expected_bytes {
+                return Err(invalid("subscriber complete artifact extent changed"));
+            }
+            if index == 2 {
+                let mut actual = vec![0; expected_manifest.len()];
+                reader.read_exact(&mut actual)?;
+                if actual != expected_manifest || reader.read(&mut [0])? != 0 {
+                    return Err(invalid("subscriber complete manifest binding changed"));
+                }
+            }
+            readers.push(reader);
+        }
+        // Both locks and both capacities are established before either set is
+        // mutated. Allocation/ID exhaustion therefore leaves all existing users intact.
+        cache_owners.try_reserve(1).map_err(io::Error::other)?;
+        original_owners.try_reserve(1).map_err(io::Error::other)?;
+        let id = NEXT_GENERATION
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
+                id.checked_add(1).filter(|_| id != 0)
+            })
+            .map_err(|_| invalid("subscriber assignment ID exhausted"))?;
+        if cache_owners.contains(&id) || original_owners.contains(&id) {
+            return Err(invalid("subscriber assignment ID already registered"));
+        }
+        let assignment = Arc::new(CacheAssignment {
+            id,
+            retired: AtomicBool::new(false),
+        });
+        cache_owners.insert(id);
+        original_owners.insert(id);
+        Ok(Self {
+            assignment,
+            created_original: false,
+            created_cache: false,
+            ..self.clone()
+        })
+    }
+
+    /// Release only the preparation parent's registration, without physical rollback.
+    pub(in crate::audio_engine) fn release_preparation_assignment(&self) {
+        self.retire_assignment(false);
+    }
+
     pub(in crate::audio_engine) fn prune_dead_pcm(&self) {
         if let Ok(mut pcm) = self.cache.pcm.lock()
             && pcm.as_ref().is_some_and(|pcm| pcm.strong_count() == 0)
@@ -602,38 +839,15 @@ impl ColdTransaction {
         channels: usize,
         cancelled: &impl Fn() -> bool,
     ) -> io::Result<PreparationGuard> {
-        let key = PreparationKey {
-            root: self.cache_root.clone(),
-            digest: self.source_digest.clone(),
-            rate,
-            channels,
-        };
-        let shared = store();
-        let mut state = shared
-            .state
-            .lock()
-            .map_err(|_| invalid("preparation gate poisoned"))?;
-        loop {
-            check_cancelled(cancelled)?;
-            state.caches.retain(|_, cache| cache.strong_count() > 0);
-            state
-                .originals
-                .retain(|_, original| original.strong_count() > 0);
-            if state.deleting.len() >= CLEANUP_ADMISSION_LIMIT {
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "PCM retirement backlog admission limit",
-                ));
-            }
-            if state.preparing.insert(key.clone()) {
-                return Ok(PreparationGuard { key });
-            }
-            state = shared
-                .changed
-                .wait_timeout(state, Duration::from_millis(10))
-                .map_err(|_| invalid("preparation gate poisoned"))?
-                .0;
-        }
+        acquire_preparation_gate(
+            PreparationKey {
+                root: self.cache_root.clone(),
+                digest: self.source_digest.clone(),
+                rate,
+                channels,
+            },
+            cancelled,
+        )
     }
 }
 

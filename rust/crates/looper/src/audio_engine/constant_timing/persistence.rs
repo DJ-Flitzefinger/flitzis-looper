@@ -731,3 +731,8 @@ pub(in crate::audio_engine) fn export_current(
 #[cfg(test)]
 #[path = "../constant_timing_persistence_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(in crate::audio_engine) fn migration_test_fixture() -> (String, String) {
+    tests::migration_fixture()
+}

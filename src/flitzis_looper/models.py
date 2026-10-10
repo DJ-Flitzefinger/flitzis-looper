@@ -9,6 +9,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    TypeAdapter,
     ValidationError,
     computed_field,
     field_serializer,
@@ -41,9 +42,12 @@ from flitzis_looper.constants import (
     VOLUME_MIN,
 )
 from flitzis_looper.key_intent import KeyCorrectionView, PadKeyIntent, SourceKeyVersion
+from flitzis_looper.material_migration_model import MaterialMigrationAlias, MigrationID
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+MIGRATION_ID_ADAPTER: TypeAdapter[str] = TypeAdapter(MigrationID)
 
 type TriggerQuantizationMode = Literal[
     "immediate",
@@ -361,6 +365,13 @@ def _migrate_legacy_key_intent(data: dict[str, object]) -> None:
 class ProjectState(BaseModel):
     """Persistent state. Saved to disk."""
 
+    config_revision: int = Field(default=0, strict=True, ge=0)
+    """Last atomically committed project revision; never a native ownership token."""
+    material_migrations: dict[MigrationID, MaterialMigrationAlias] = Field(
+        default_factory=dict, max_length=216
+    )
+    """Content-verified old/new lineage; fresh source/timing adoption is still required."""
+
     model_config = ConfigDict(validate_assignment=True)
 
     @model_validator(mode="before")
@@ -414,6 +425,18 @@ class ProjectState(BaseModel):
     """Durable per-content key metadata and neutral pitch intent; no native permits."""
 
     # Mypy cannot yet type Pydantic's computed-field decorator over a property.
+    @field_validator("material_migrations")
+    @classmethod
+    def _validate_migration_aliases(
+        cls, aliases: dict[str, MaterialMigrationAlias]
+    ) -> dict[str, MaterialMigrationAlias]:
+        for key, alias in aliases.items():
+            MIGRATION_ID_ADAPTER.validate_python(key)
+            if not isinstance(alias, MaterialMigrationAlias) or key != alias.transaction_id:
+                message = "material migration key must match its typed transaction alias"
+                raise ValueError(message)
+        return aliases
+
     @computed_field(return_type=list[str | None])  # type: ignore[prop-decorator]
     @property
     def manual_key(self) -> MutableSequence[str | None]:

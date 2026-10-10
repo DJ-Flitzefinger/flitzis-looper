@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from flitzis_looper.accepted_timing import PersistedAcceptedTiming
     from flitzis_looper.models import ProjectState, SessionState
     from flitzis_looper_audio import AudioEngine, ConstantTimingTicket
 
@@ -51,6 +52,26 @@ class AcceptedTimingRestore:
         self._on_adopted = on_adopted
         self._worker: ThreadPoolExecutor | None = None
         self._pending: dict[int, _Restore] = {}
+        self._migration_futures: set[Future[ConstantTimingTicket]] = set()
+
+    def prepare_for_migration(
+        self, sample_id: int, record: PersistedAcceptedTiming, new_path: str
+    ) -> Future[ConstantTimingTicket]:
+        """Use the same bounded worker and real capture without changing saved references."""
+        self._migration_futures = {
+            future for future in self._migration_futures if not future.done()
+        }
+        if len(self._migration_futures) + len(self._pending) >= 32:
+            message = "saved timing preparation queue full (32 jobs)"
+            raise RuntimeError(message)
+        captured = self._audio.capture_saved_constant_timing(
+            sample_id, record.model_dump_json(), new_path
+        )
+        if self._worker is None:
+            self._worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="timing-restore")
+        future = self._worker.submit(self._audio.restore_constant_timing, captured)
+        self._migration_futures.add(future)
+        return future
 
     def has_pending(self) -> bool:
         """Report owned restoration work before a new shared native preparation."""
@@ -125,6 +146,9 @@ class AcceptedTimingRestore:
         """Drain owned off-thread verification before native stream teardown."""
         for sample_id in list(self._pending):
             self.cancel(sample_id)
+        for future in self._migration_futures:
+            future.cancel()
+        self._migration_futures.clear()
         if self._worker is not None:
             self._worker.shutdown(wait=True, cancel_futures=True)
             self._worker = None

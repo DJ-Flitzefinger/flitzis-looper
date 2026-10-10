@@ -149,6 +149,46 @@ genuinely fresh native source/timing ownership and ACK for changed path identiti
 - **THEN** it SHALL report loss and preserve available old assets/config
 - **AND** it SHALL NOT silently run NEW analysis or restore historical settings to hide the loss
 
+#### Scenario: Serialized current-reference commit
+- **GIVEN** one journalled material transaction and its captured project revision
+- **WHEN** preparation and fresh source/timing acknowledgements finish
+- **THEN** the sole project writer SHALL build the related-reference snapshot from current performer intent and atomically commit it under the migration fence
+- **AND** ordinary, debounced and shutdown saves SHALL obey that same fence, and a later dirty revision SHALL NOT be cleared by an earlier write
+- **AND** content instance IDs and complete frozen key intent, including exhausted metadata epochs, SHALL remain unchanged without new analysis admission
+
+#### Scenario: Actual acknowledgement survives superseded feedback
+- **WHEN** native source work was claimed or acknowledged but metadata delivery is superseded or absent
+- **THEN** the held actual adoption phase and source owner SHALL determine settlement, independently of an Error event
+- **AND** target and rollback owners SHALL remain retained while outcome is unresolved, with dependent starts fenced
+- **AND** a new process SHALL reverify journalled bytes and acquire new source and timing acknowledgements before treating the transaction as current
+
+#### Scenario: One legacy material is reachable after normal startup restoration
+- **GIVEN** startup captured an existing legacy original and its related current assignments
+- **WHEN** ordinary source restores and owned stem jobs have settled
+- **THEN** the application SHALL admit at most one distinct legacy material transaction for that startup, including all matching current assignments across all banks
+- **AND** canonical originals SHALL not start another migration
+- **AND** changed current references, unknown journals, missing originals and unresolved claims SHALL remain visible and protected without repeated automatic retry
+- **AND** this bounded admission SHALL not assert that remaining legacy materials or program-wide reconciliation are complete
+
+#### Scenario: Missing stems retain desire through original migration
+- **GIVEN** a current assignment desires ALL STEMS but its saved stem set is unavailable
+- **WHEN** its verified original and FullMix PCM migrate
+- **THEN** the system SHALL preserve ALL STEMS desire and truthful unavailable stem metadata without separation or fabricated ready files
+- **AND** corrupt files advertised as available SHALL visibly reject migration while old references and bytes remain protected
+
+#### Scenario: Equivalent verified legacy stem sets share one target generation
+- **GIVEN** related assignments reference different old stem directories with the same completely verified five WAV digests and compatible source, rate and geometry
+- **WHEN** their material transaction prepares immutable target assets
+- **THEN** the system SHALL reuse one verified canonical set generation, including concurrent subscriber preparation, without copying that set again
+- **AND** different complete set contents or incompatible geometry SHALL remain separate
+- **AND** complete WAV hashing and decoding SHALL run on bounded preparation workers rather than the host polling thread
+
+#### Scenario: Journal intent belongs to the selected project config
+- **GIVEN** two project configs in the same samples root contain identical bytes
+- **WHEN** one config has a journalled unsaved migration intent
+- **THEN** recovery SHALL bind that intent to the selected actual config reference and SHALL NOT apply it or its fences to the other known config
+- **AND** missing or unrecognized project bindings SHALL remain visibly unresolved without restoring runtime permission
+
 ### Requirement: Persist deliberate startup preload and residency budget
 The system SHALL persist global `preload_stem_loops_on_startup` and
 `resident_pcm_budget_mib` in existing ProjectState/config with defaults false

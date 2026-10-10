@@ -19,6 +19,17 @@ mod flitzis_looper_audio {
     use super::audio_engine::ProjectAssetLease;
 
     #[pymodule_export]
+    use super::audio_engine::MaterialMigrationHold;
+    #[pymodule_export]
+    use super::audio_engine::MaterialMigrationJournalStore;
+    #[pymodule_export]
+    use super::audio_engine::MaterialMigrationPreparation;
+    #[pymodule_export]
+    use super::audio_engine::MaterialMigrationSourceTicket;
+    #[pymodule_export]
+    use super::audio_engine::MaterialMigrationStemPreparation;
+
+    #[pymodule_export]
     use super::audio_engine::OfflineAnalysisJob;
 
     #[pymodule_export]

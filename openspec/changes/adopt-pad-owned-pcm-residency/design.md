@@ -140,6 +140,27 @@ and rollback use validated bytes plus fresh native ownership, not historical ACK
 Migration must expose unexpected current data loss; autosave/GC are observations,
 not inferred causes. Private models/audio/evidence are never migration targets.
 
+The P2a application path schedules one distinct legacy material after its ordinary
+startup restores have settled; canonical originals do not schedule migration.
+The operation captures every related current assignment across all banks, uses
+one verified material preparation and gives each subscriber a separate native
+request/assignment and callback ACK. It preserves content UUID and the entire
+neutral key-intent DTO, including maximum epochs. Missing unavailable stem sets
+preserve ALL STEMS desire; corrupt advertised-ready sets fail visibly. No new
+analysis or separation is requested.
+
+ProjectPersistence is the sole config writer: a strict transaction ID owns the
+writer fence, the current revision is captured before timing verification, and
+changes arriving during an atomic write remain dirty. The coordinator reserves
+new saved owners before writing, transfers them after the coherent commit and
+retains old global files for the later full reference inventory. Journal phase
+files are exclusive immutable records in a typed guarded metadata directory.
+Incomplete/unknown records and interrupted transactions remain visible on reopen
+with newly acquired writer/start fences; saved records create no native ACK.
+A later current configuration carrying the exact committed alias/revision is not
+replaced by an older journal snapshot. The exhaustive crash, replay, retry and
+all-project final-owner cleanup matrix remains P2b.
+
 ## Persistent aligned stem PCM
 
 Keep five WAV outputs and complete-set integrity. Produce five complete aligned

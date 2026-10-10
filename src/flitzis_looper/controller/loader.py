@@ -93,6 +93,7 @@ class LoaderController(BaseController):
         self._on_sample_unloaded: Callable[[int], None] | None = None
         self._on_accepted_timing_refresh: Callable[[int], None] | None = None
         self._load_request_ids: dict[int, int] = {}
+        self._migration_event_handler: Callable[[dict[str, object]], bool] | None = None
         self._load_retirements: dict[tuple[int, int | None], AssetRetirementReservation] = {}
         self._new_load_sample_ids: set[int] = set()
         self._deferred_restores: dict[int, Path] = {}
@@ -301,6 +302,9 @@ class LoaderController(BaseController):
                 self._retry_deferred_restores()
                 return
 
+            if self._migration_event_handler is not None and self._migration_event_handler(event):
+                continue
+
             event_type = event.get("type")
             sample_id = event.get("id")
             if not isinstance(event_type, str) or not isinstance(sample_id, int):
@@ -311,6 +315,10 @@ class LoaderController(BaseController):
                 continue
 
             handler(sample_id, event)
+
+    def _set_migration_event_handler(self, handler: Callable[[dict[str, object]], bool]) -> None:
+        """Route only exact migration request events before ordinary assignment resets."""
+        self._migration_event_handler = handler
 
     def is_sample_loaded(self, sample_id: int) -> bool:
         """Return whether a sample slot has audio loaded."""

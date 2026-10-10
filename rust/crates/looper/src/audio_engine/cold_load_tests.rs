@@ -849,3 +849,7 @@ mod adoption;
 #[cfg(windows)]
 #[path = "cold_offline_tests.rs"]
 mod offline;
+
+#[cfg(windows)]
+#[path = "material_migration_control_tests.rs"]
+mod material_migration_control_tests;

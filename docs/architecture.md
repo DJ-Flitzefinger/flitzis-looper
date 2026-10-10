@@ -1031,3 +1031,29 @@ Persistence preserves durable content lineage and musical intent, while reopen
 allocates a fresh nonreused runtime lifetime and rejects saved action/hold authority.
 All-bank assignments, readers/old voices/history/jobs/subscribers/actions/versions/
 native unload ACK determine real last use. Full HC/P6/V0 and human gates stay OPEN.
+
+
+### Existing material reference migration
+
+`MaterialMigrationController` coordinates one distinct current legacy original
+and its matching assignments across all216 slots. App startup schedules at most
+one such transaction after ordinary restores; the explicit `begin(sample_id)`
+operation uses the same path. Native bounded workers verify/reuse or copy the
+immutable original, FullMix PCM and complete available five-WAV sets. Each pad
+receives a separate actual source request/ACK and fresh supported saved timing
+adoption; path aliases and journal records grant no runtime permission.
+
+The common `ProjectPersistence` writer fences autosave/explicit/shutdown saves,
+compares current intent revisions and keeps newer changes dirty. Related-reference
+commits preserve the content-instance UUID and complete current key/settings
+intent. Already reserved owners transfer only after durable config completion;
+old global files remain for full project/reference reconciliation. Pending native
+claims, changed current sources, unknown journal data and interrupted transactions
+stay visible and fenced. `material_migration_recovery` reads bounded sealed native
+journal records, preserving newer captured intent only against the selected actual
+config reference and its exact captured bytes. Other known configs do not inherit
+that journal's intent or fences. Complete WAV hashing and geometry verification
+run on the preparation workers; compatible verified sets from separate legacy
+directories share a canonical generation. The comprehensive crash/replay/retirement
+matrix remains a later
+program stage; startup admission does not mark remaining legacy materials done.

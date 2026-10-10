@@ -161,6 +161,11 @@ fn fixture() -> &'static Fixture {
     })
 }
 
+pub(super) fn migration_fixture() -> (String, String) {
+    let fixture = fixture();
+    (fixture.path.clone(), fixture.envelope.clone())
+}
+
 fn fresh_engine() -> AudioEngine {
     let f = fixture();
     let engine = test_engine();

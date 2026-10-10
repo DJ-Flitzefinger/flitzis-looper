@@ -387,15 +387,37 @@ def _populate_saved_automatic_sources(project: ProjectState, separator: str) -> 
     project.bpm_lock = True
 
 
-@pytest.mark.parametrize("separator", ["/", "\\"])
-def test_startup_restores_all_pads_through_bounded_deferred_admission(
-    controller: AppController, audio_engine_mock: Mock, tmp_path: Path, separator: str
+def _install_fixed_original_locator(
+    controller: AppController, original: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    original = tmp_path / "samples" / "old.wav"
     original.parent.mkdir(parents=True)
     original.write_bytes(b"existing original")
+    validated_original = controller._assets._owned_original(controller.project.sample_paths[0])
+    assert validated_original == original
+
+    def fixed_original_locator(source: str | None) -> Path | None:
+        if source is None:
+            return None
+        assert source in {"samples/old.wav", "samples\\old.wav"}
+        return validated_original
+
+    # All slots retain this one validated original for the entire admission test.
+    # Keep lifecycle/owner transfer real while avoiding repeated ancestor scans.
+    monkeypatch.setattr(controller._assets, "_owned_original", fixed_original_locator)
+
+
+@pytest.mark.parametrize("separator", ["/", "\\"])
+def test_startup_restores_all_pads_through_bounded_deferred_admission(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    tmp_path: Path,
+    separator: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = tmp_path / "samples" / "old.wav"
     project = controller.project
     _populate_saved_automatic_sources(project, separator)
+    _install_fixed_original_locator(controller, original, monkeypatch)
     previous_project = project.model_dump()
     inflight: dict[int, int] = {}
     admitted_ids: list[int] = []

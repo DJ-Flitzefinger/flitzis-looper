@@ -122,7 +122,7 @@ pub(crate) fn prepare_stem_buffers_from_cache(
     )
 }
 
-fn prepare_stem_buffers_from_cache_at_project_root(
+pub(super) fn prepare_stem_buffers_from_cache_at_project_root(
     source_version: &str,
     reference: &SampleBuffer,
     output_sample_rate: u32,

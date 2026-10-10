@@ -74,7 +74,15 @@ mod project_assets;
 pub(crate) mod resident_relocation;
 pub(crate) mod resident_seek;
 pub use prepared_source::PreparedSourceTicket;
+mod material_migration;
+mod material_migration_control;
+mod material_migration_journal;
+mod material_migration_stems;
 mod material_paths;
+pub use material_migration_control::{
+    MaterialMigrationHold, MaterialMigrationJournalStore, MaterialMigrationPreparation,
+    MaterialMigrationSourceTicket, MaterialMigrationStemPreparation,
+};
 pub use material_paths::resolve_project_asset;
 use prepared_source::{
     enqueue_current_prepared_stems_with_owner, next_epoch, validate_prepared_ticket,
@@ -1223,6 +1231,43 @@ impl AudioEngine {
             .map_err(PyValueError::new_err)?,
             source_intent,
         )
+    }
+
+    pub fn hold_material_migration(&self, ids: Vec<usize>) -> PyResult<MaterialMigrationHold> {
+        material_migration_control::hold(self, ids)
+    }
+
+    pub fn prepare_material_migration(
+        &self,
+        source: String,
+    ) -> PyResult<MaterialMigrationPreparation> {
+        material_migration_control::prepare(self, source)
+    }
+
+    pub fn prepare_material_migration_stems(
+        &self,
+        preparation: &MaterialMigrationPreparation,
+        old_cache: String,
+        old_source_version: String,
+        new_source_version: String,
+        generation_id: String,
+    ) -> PyResult<MaterialMigrationStemPreparation> {
+        material_migration_control::prepare_stems(
+            self,
+            preparation,
+            old_cache,
+            old_source_version,
+            new_source_version,
+            generation_id,
+        )
+    }
+
+    pub fn adopt_material_migration(
+        &self,
+        sample_id: usize,
+        preparation: &MaterialMigrationPreparation,
+    ) -> PyResult<MaterialMigrationSourceTicket> {
+        material_migration_control::adopt(self, sample_id, preparation)
     }
 
     /// Current resident allocation and full-source extent; pending relocation

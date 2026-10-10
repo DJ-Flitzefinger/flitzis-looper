@@ -2,12 +2,10 @@
 
 use super::cold_jobs::PCM_LIMIT_BYTES;
 use super::cold_residency::{self, ResidentLoadGuard, ResidentLoadHint};
-use super::cold_store::{ColdTransaction, CommittedColdLease, PcmArtifactInput};
+use super::cold_store::{ColdTransaction, CommittedColdLease};
 use super::input_runtime_binding::InputRuntimeOwnership;
 use super::progress::{LoadProgressStage, ProgressReporter};
-use super::sample_loader::{
-    SampleLoadProgress, SampleLoadSubtask, decode_audio_snapshot, prepare_playback,
-};
+use super::sample_loader::{SampleLoadProgress, SampleLoadSubtask};
 use super::{
     AudioEngine, LoadedSourcePublication, PadRequestAdvance, analyze_sample, pad_request_matches,
     publish_loaded_sample,
@@ -71,6 +69,7 @@ struct ColdLoad {
     id: usize,
     request_id: u64,
     adoption: Arc<AtomicU8>,
+    prepared_material: Option<Arc<super::material_migration::PreparedMigrationMaterial>>,
     path: PathBuf,
     restore: bool,
     samples_root: PathBuf,
@@ -184,6 +183,37 @@ fn admit_for_format_selected_intent(
     output: (usize, u32, PathBuf),
     source_intent: &str,
 ) -> PyResult<u64> {
+    admit_selected_material(
+        engine,
+        id,
+        path,
+        selection,
+        producer,
+        output,
+        source_intent,
+        None,
+    )
+    .map(|admitted| admitted.request_id)
+}
+
+pub(super) struct AdmittedMaterial {
+    pub request_id: u64,
+    pub adoption: Arc<AtomicU8>,
+    pub old_source: Option<SampleBuffer>,
+    pub old_lease: Option<CommittedColdLease>,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn admit_selected_material(
+    engine: &AudioEngine,
+    id: usize,
+    path: String,
+    selection: (bool, bool, bool, Option<ResidentLoadHint>),
+    producer: Arc<Mutex<Producer<ControlMessage>>>,
+    output: (usize, u32, PathBuf),
+    source_intent: &str,
+    prepared_material: Option<Arc<super::material_migration::PreparedMigrationMaterial>>,
+) -> PyResult<AdmittedMaterial> {
     let (output_channels, output_rate, samples_root) = output;
     let (run_analysis, restore_automatic, replace_assignment, resident_hint) = selection;
     if id >= super::constants::NUM_SAMPLES {
@@ -309,10 +339,21 @@ fn admit_for_format_selected_intent(
             cancelled: Arc::new(AtomicBool::new(false)),
         })
     });
+    let admitted = AdmittedMaterial {
+        request_id,
+        adoption: Arc::new(AtomicU8::new(0)),
+        old_source: initial_source.clone(),
+        old_lease: engine
+            .cold_leases
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("cold lease lock poisoned"))?[id]
+            .clone(),
+    };
     let work = ColdLoad {
         id,
         request_id,
-        adoption: Arc::new(AtomicU8::new(0)),
+        adoption: admitted.adoption.clone(),
+        prepared_material,
         path: source_path,
         restore,
         samples_root,
@@ -342,6 +383,7 @@ fn admit_for_format_selected_intent(
         cancelled: engine.cold_cancelled.clone(),
         events: engine.loader_tx.clone(),
     };
+    let panic_adoption = work.adoption.clone();
     let guard = LoadingGuard {
         id,
         request_id,
@@ -353,15 +395,9 @@ fn admit_for_format_selected_intent(
         .submit(reservation, move || {
             let _guard = guard;
             let events = work.events.clone();
-            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work.run(producer)))
-                .is_err()
-            {
-                let _ = events.send(LoaderEvent::Error {
-                    id,
-                    request_id,
-                    error: "cold worker failed".into(),
-                });
-            }
+            run_worker_catching_panic(panic_adoption, &events, id, request_id, || {
+                work.run(producer)
+            });
         })
         .map_err(PyRuntimeError::new_err)?;
     // A worker's first current-request check takes this mutex. It cannot observe
@@ -374,7 +410,24 @@ fn admit_for_format_selected_intent(
     drop(resident_guards);
     drop(requests);
     engine.offline_jobs.cancel(Some(id));
-    Ok(request_id)
+    Ok(admitted)
+}
+
+pub(super) fn run_worker_catching_panic(
+    adoption: Arc<AtomicU8>,
+    events: &std::sync::mpsc::Sender<LoaderEvent>,
+    id: usize,
+    request_id: u64,
+    run: impl FnOnce(),
+) {
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)).is_err() {
+        let _ = adoption.compare_exchange(0, 3, Ordering::AcqRel, Ordering::Acquire);
+        let _ = events.send(LoaderEvent::Error {
+            id,
+            request_id,
+            error: "cold worker failed".into(),
+        });
+    }
 }
 
 /// The production unload transaction, also usable by headless virtual consumers.
@@ -474,7 +527,7 @@ impl ColdLoad {
         &self,
     ) -> Result<
         (
-            ColdTransaction,
+            CommittedColdLease,
             SampleBuffer,
             Option<crate::messages::SampleAnalysis>,
             Option<f64>,
@@ -482,6 +535,44 @@ impl ColdLoad {
         String,
     > {
         let cancelled = || self.is_cancelled();
+        if let Some(prepared) = &self.prepared_material {
+            if cancelled() {
+                return Err("material subscriber became stale".into());
+            }
+            let mut sample = prepared.sample.clone();
+            let mut history = self
+                .pcm_history
+                .lock()
+                .map_err(|_| "PCM history lock poisoned")?;
+            history[self.id].retain(|reader| reader.strong_count() > 0);
+            if history[self.id].len() >= 128 {
+                return Err("same-pad source reader history full (128 live assignments)".into());
+            }
+            if same_source(self.initial_source.as_ref(), Some(&sample))
+                || history[self.id]
+                    .iter()
+                    .filter_map(std::sync::Weak::upgrade)
+                    .any(|reader| Arc::ptr_eq(&reader, &sample.samples))
+            {
+                let overlap = sample
+                    .samples
+                    .len()
+                    .checked_mul(8)
+                    .ok_or("migration PCM extent overflow")?;
+                if overlap > PCM_LIMIT_BYTES {
+                    return Err("migration subscriber exceeds transient PCM byte limit".into());
+                }
+                sample.samples = Arc::from(sample.samples.as_ref());
+            }
+            let lease = prepared
+                .lease
+                .subscribe_verified()
+                .map_err(|error| error.to_string())?;
+            history[self.id].push(Arc::downgrade(&sample.samples));
+            lease.bind_pcm(&sample.samples);
+            return Ok((lease, sample, None, None));
+        }
+
         let mut transaction =
             ColdTransaction::capture(&self.samples_root, &self.path, !self.restore, &cancelled)
                 .map_err(|error| error.to_string())?;
@@ -504,63 +595,20 @@ impl ColdLoad {
                 update.percent <= 0.0 || update.percent >= 1.0,
             );
         };
-        let mut sample = if let Some(sample) = transaction
-            .try_reuse_selected(
-                self.output_rate,
-                self.output_channels,
-                PCM_LIMIT_BYTES,
-                if self.run_analysis {
-                    None
-                } else {
-                    self.resident_hint
-                },
-                &cancelled,
-            )
-            .map_err(|error| error.to_string())?
-        {
-            sample
-        } else {
-            let decoded = decode_audio_snapshot(
-                transaction
-                    .snapshot_file()
-                    .map_err(|error| error.to_string())?,
-                &self.path,
-                self.output_rate,
-                PCM_LIMIT_BYTES,
-                &cancelled,
-                &mut report,
-            )
-            .map_err(|error| error.to_string())?;
-            let (sample, transform) = prepare_playback(
-                &decoded,
-                self.output_channels,
-                self.output_rate,
-                PCM_LIMIT_BYTES,
-                &cancelled,
-                &mut report,
-            )
-            .map_err(|error| error.to_string())?;
-            transaction
-                .write_pcm_artifacts(
-                    PcmArtifactInput {
-                        samples: &decoded.samples,
-                        rate_hz: decoded.rate_hz,
-                        channels: decoded.channels,
-                        provenance: decoded.decoder.to_json(),
-                    },
-                    PcmArtifactInput {
-                        samples: &sample.samples,
-                        rate_hz: self.output_rate,
-                        channels: sample.channels,
-                        provenance: serde_json::json!({"processing":"full-buffer-playback-v1"}),
-                    },
-                    transform.to_json(),
-                    &cancelled,
-                )
-                .map_err(|error| error.to_string())?;
-            drop(decoded);
-            sample
-        };
+        let mut sample = super::material_migration::prepare_pcm(
+            &mut transaction,
+            &self.path,
+            self.output_rate,
+            self.output_channels,
+            PCM_LIMIT_BYTES,
+            if self.run_analysis {
+                None
+            } else {
+                self.resident_hint
+            },
+            &cancelled,
+            &mut report,
+        )?;
         cold_residency::attach(
             &mut sample,
             transaction.manifest().map_err(|error| error.to_string())?,
@@ -655,7 +703,7 @@ impl ColdLoad {
             history[self.id].push(Arc::downgrade(&sample.samples));
         }
         transaction.bind_pcm(&sample.samples);
-        Ok((transaction, sample, analysis, detected))
+        Ok((transaction.into_lease(), sample, analysis, detected))
     }
 
     fn run(self, producer: Arc<Mutex<Producer<ControlMessage>>>) {
@@ -665,6 +713,9 @@ impl ColdLoad {
         });
         let result = self.publish(&producer);
         if let Err(error) = result {
+            let _ = self
+                .adoption
+                .compare_exchange(0, 3, Ordering::AcqRel, Ordering::Acquire);
             let _ = self.events.send(LoaderEvent::Error {
                 id: self.id,
                 request_id: self.request_id,
@@ -753,9 +804,11 @@ impl ColdLoad {
     }
 
     fn publish(&self, producer: &Arc<Mutex<Producer<ControlMessage>>>) -> Result<(), String> {
-        let (transaction, sample, analysis, detected_loop_start_s) = self.prepare()?;
-        let source_digest = transaction.source_digest().to_owned();
-        let lease = transaction.into_lease();
+        let (lease, sample, analysis, detected_loop_start_s) = self.prepare()?;
+        let source_digest = lease.manifest.descriptor["decoder"]["original"]["sha256"]
+            .as_str()
+            .ok_or("prepared original digest missing")?
+            .to_owned();
         lease.bind_pcm(&sample.samples);
         // Register before enqueue. Ordinary pre-ACK rejection still leaves a
         // queued PCM owner; file cleanup must follow that actual reader lifetime.
