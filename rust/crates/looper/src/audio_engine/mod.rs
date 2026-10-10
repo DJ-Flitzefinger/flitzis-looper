@@ -66,6 +66,7 @@ mod key_lock_source_preparation;
 mod loop_acceptance;
 mod mixer;
 mod native_history_permit;
+mod native_source_coverage;
 mod prepared_native_history;
 pub(crate) mod prepared_source;
 mod productive_source_history;

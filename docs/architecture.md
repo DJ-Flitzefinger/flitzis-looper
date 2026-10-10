@@ -314,6 +314,17 @@ retry count and deadline, replacing only the waiting launch with the latest
 gesture's original timestamp. STOP revokes that launch through the same native
 admission fence. See [prepared publication](prepared-stem-publication.md).
 
+Normal-loop KEYLOCK control preparation now obtains finite physical FullMix and
+four-component ranges through those same retained readers and WindowWork ACK.
+The copied source-read/playback coverage binds actual source/window, timing and
+selection before the existing worker prepares native history and adapter FIFOs;
+callback continuation checks its actual taps against held ranges. Stopped setup
+and current-source storage-only refresh are the first P4b vertical. Pending native
+work is exact-window-bound, while already adopted history preserves native/FIFO/
+filter chronology across a storage-only ACK and retains original reader pins.
+Finite seek/intro/tail, old voices, active selection transitions and wider lifecycle
+oracles remain open. See [Key Lock coverage](key-lock-backend.md).
+
 [C3 measurements](pcm-cache-measurements.md) report current cold/warm readiness,
 resource costs, exceptions and lifecycle with paired finite/full results.
 Two fixed workers and 32 queued reservations

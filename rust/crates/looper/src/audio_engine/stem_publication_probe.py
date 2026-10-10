@@ -505,12 +505,28 @@ class Probe:
 
     def rejected(self) -> None:
         assert self.stale_ticket.publication_status() == "rejected"
+        assert self.stale_ticket.rejection_reason() == "source-request-changed"
+        selected = self.restored_project.stem_cache[0]
+        assert selected is not None
+        assert not selected.available
         self.restored.on_frame_render()
         assert not self.restored.stems_available(0)
         assert (
-            "native source/request/timing validation"
-            in self.restored_session.stem_generation_errors[0]
+            self.restored_session.stem_generation_errors[0]
+            == "Stem publication cancelled because its source request changed"
         )
+        assert self.restored_project.stem_cache[0] is selected
+        assert_selected_pair(self.restored_project, 0)
+        assert not self.restored._pending_stem_publications
+        assert not self.restored._publication_retries.pending
+        assert not self.restored._pair_preparations.pending
+        self.restored.on_frame_render()
+        assert self.stale_ticket.publication_status() == "rejected"
+        assert self.stale_ticket.rejection_reason() == "source-request-changed"
+        assert self.restored_project.stem_cache[0] is selected
+        assert not self.restored._pending_stem_publications
+        assert not self.restored._publication_retries.pending
+        assert not self.restored._pair_preparations.pending
         assert Path(self.saved_path).is_dir()
         self.controller.shut_down()
         self.restored.shut_down()

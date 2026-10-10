@@ -11,6 +11,68 @@ use crate::messages::{
 
 pub(crate) const STEM_TRANSITION_RAMP_FRAMES: usize = 128;
 
+/// Actual physical reads and interpolation weight for one fractional source position.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct FractionalSourceTaps {
+    pub(crate) left: usize,
+    pub(crate) right: Option<usize>,
+    pub(crate) right_gain: f32,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TapReadObservation {
+    pub(crate) left_reads: usize,
+    pub(crate) right_reads: usize,
+    pub(crate) min_frame: Option<usize>,
+    pub(crate) max_frame: Option<usize>,
+    pub(crate) missing_reads: usize,
+    pub(crate) address_checksum: u64,
+}
+
+#[cfg(test)]
+thread_local! {
+    static TAP_READ_OBSERVATION: std::cell::Cell<TapReadObservation> =
+        std::cell::Cell::new(TapReadObservation {
+            left_reads: 0, right_reads: 0, min_frame: None, max_frame: None,
+            missing_reads: 0, address_checksum: 0,
+        });
+}
+
+#[cfg(test)]
+pub(crate) fn reset_tap_observation_for_test() {
+    TAP_READ_OBSERVATION.set(TapReadObservation::default());
+}
+
+#[cfg(test)]
+pub(crate) fn tap_observation_for_test() -> TapReadObservation {
+    TAP_READ_OBSERVATION.get()
+}
+
+#[cfg(test)]
+fn observe_tap(frame: usize, channel: usize, right: bool, available: bool) {
+    TAP_READ_OBSERVATION.with(|cell| {
+        let mut observation = cell.get();
+        if right {
+            observation.right_reads += 1;
+        } else {
+            observation.left_reads += 1;
+        }
+        observation.min_frame = Some(observation.min_frame.map_or(frame, |old| old.min(frame)));
+        observation.max_frame = Some(observation.max_frame.map_or(frame, |old| old.max(frame)));
+        observation.missing_reads += usize::from(!available);
+        observation.address_checksum = observation
+            .address_checksum
+            .wrapping_mul(1_099_511_628_211)
+            .wrapping_add(frame as u64)
+            .wrapping_mul(1_099_511_628_211)
+            .wrapping_add(channel as u64)
+            .wrapping_mul(1_099_511_628_211)
+            .wrapping_add(u64::from(right));
+        cell.set(observation);
+    });
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ExplicitSeekMode {
     Normal,
@@ -39,8 +101,12 @@ pub(crate) fn resident_read_context_available(
     key_lock: bool,
 ) -> bool {
     let full = sample.resident_start() == 0 && sample.resident_end() == sample.frame_count();
-    if key_lock || mode != ExplicitSeekMode::Normal {
+    if mode != ExplicitSeekMode::Normal {
         return full;
+    }
+    if key_lock {
+        return full
+            || super::native_source_coverage::normal_loop_context_available(sample, region, mode);
     }
     sample.resident_start() <= region.start && sample.resident_end() >= region.end
 }
@@ -589,6 +655,91 @@ impl SourceReadPlan {
         }
     }
 
+    /// Reject unavailable actual taps before feeding any native/FIFO state.
+    /// Validation borrows only already held PCM and fixed scalar addressing state.
+    pub(crate) fn fill_fractional_buffers_checked(
+        self,
+        sample: &SampleBuffer,
+        stems: Option<&PreparedStemSet>,
+        playback: &SourcePlayback,
+        buffers: &mut [Vec<f32>],
+        output_frames: usize,
+    ) -> Result<(), super::rubberband_backend::RubberBandError> {
+        if self.channels == 0
+            || sample.channels != self.channels
+            || sample.frame_count() != self.sample_frames
+            || !playback.matches_domain(self.domain())
+            || buffers.len() < self.channels
+            || buffers
+                .iter()
+                .take(self.channels)
+                .any(|buffer| buffer.len() < output_frames)
+        {
+            return Err(super::rubberband_backend::RubberBandError::InvalidBlockSize);
+        }
+        for offset in 0..output_frames {
+            let position = playback.position_at(offset);
+            let plan = Self {
+                frame_pos: position.frame,
+                seek_mode: position.seek_mode,
+                ..self
+            };
+            let taps = plan.fractional_taps(position.fraction);
+            for channel in 0..self.channels {
+                if !plan.tap_available(sample, stems, taps.left, channel) {
+                    #[cfg(test)]
+                    observe_tap(taps.left, channel, false, false);
+                    return Err(super::rubberband_backend::RubberBandError::InvalidBlockSize);
+                }
+                if let Some(right) = taps.right
+                    && !plan.tap_available(sample, stems, right, channel)
+                {
+                    #[cfg(test)]
+                    observe_tap(right, channel, true, false);
+                    return Err(super::rubberband_backend::RubberBandError::InvalidBlockSize);
+                }
+            }
+        }
+        self.fill_fractional_buffers(sample, stems, playback, buffers, output_frames);
+        Ok(())
+    }
+
+    fn tap_available(
+        self,
+        sample: &SampleBuffer,
+        stems: Option<&PreparedStemSet>,
+        frame: usize,
+        channel: usize,
+    ) -> bool {
+        let held = |buffer: &SampleBuffer| {
+            channel < buffer.channels
+                && frame
+                    .checked_sub(buffer.resident_start())
+                    .and_then(|local| local.checked_mul(buffer.channels))
+                    .and_then(|base| base.checked_add(channel))
+                    .is_some_and(|index| index < buffer.samples.len())
+        };
+        let selection_available = |selection: StemRenderSelection| {
+            let matching = stems.filter(|set| {
+                selection.mode == StemMixMode::AllStems
+                    && selection.source_version_hash != 0
+                    && selection.source_version_hash == set.source_version_hash
+            });
+            matching.map_or_else(
+                || held(sample),
+                |set| {
+                    set.stems
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| selection.enabled_mask & stem_index_mask(*index) != 0)
+                        .all(|(_, component)| held(component))
+                },
+            )
+        };
+        selection_available(self.selection)
+            && (!self.transition.is_active() || selection_available(self.transition.from))
+    }
+
     #[cfg(test)]
     pub(crate) fn sample_at_offset(
         self,
@@ -606,6 +757,7 @@ impl SourceReadPlan {
         )
     }
 
+    #[cfg(test)]
     fn sample_at_offset_with_progress(
         self,
         sample: &SampleBuffer,
@@ -621,6 +773,17 @@ impl SourceReadPlan {
             self.loop_region,
             self.seek_mode,
         );
+        self.sample_at_frame_with_progress(sample, stems, frame, transition_progress, channel)
+    }
+
+    fn sample_at_frame_with_progress(
+        self,
+        sample: &SampleBuffer,
+        stems: Option<&PreparedStemSet>,
+        frame: usize,
+        transition_progress: f64,
+        channel: usize,
+    ) -> f32 {
         if self.transition.is_active() {
             let from_sample = render_source_selection_sample(
                 sample,
@@ -662,6 +825,43 @@ impl SourceReadPlan {
         transition_progress: f64,
         channel: usize,
     ) -> f32 {
+        let taps = self.fractional_taps(fraction);
+        #[cfg(test)]
+        observe_tap(
+            taps.left,
+            channel,
+            false,
+            self.tap_available(sample, stems, taps.left, channel),
+        );
+        let left = self.sample_at_frame_with_progress(
+            sample,
+            stems,
+            taps.left,
+            transition_progress,
+            channel,
+        );
+        let Some(right_frame) = taps.right else {
+            return left;
+        };
+        #[cfg(test)]
+        observe_tap(
+            right_frame,
+            channel,
+            true,
+            self.tap_available(sample, stems, right_frame, channel),
+        );
+        let right = self.sample_at_frame_with_progress(
+            sample,
+            stems,
+            right_frame,
+            transition_progress,
+            channel,
+        );
+        left + (right - left) * taps.right_gain
+    }
+
+    /// The single authority for both executed interpolation addresses and coverage checks.
+    pub(crate) fn fractional_taps(self, fraction: f64) -> FractionalSourceTaps {
         if let Some(period) = self.loop_period
             && period != self.loop_region.len() as f64
             && self.seek_mode == ExplicitSeekMode::Normal
@@ -677,39 +877,27 @@ impl SourceReadPlan {
                 .min(self.loop_region.len() - 1);
             if phase >= last as f64 {
                 let alpha = (phase - last as f64) / (period - last as f64);
-                let last_plan = Self {
-                    frame_pos: self.loop_region.start + last,
-                    ..self
+                return FractionalSourceTaps {
+                    left: self.loop_region.start + last,
+                    right: Some(self.loop_region.start),
+                    right_gain: alpha as f32,
                 };
-                let first_plan = Self {
-                    frame_pos: self.loop_region.start,
-                    ..self
-                };
-                let left = last_plan.sample_at_offset_with_progress(
-                    sample,
-                    stems,
-                    0,
-                    transition_progress,
-                    channel,
-                );
-                let right = first_plan.sample_at_offset_with_progress(
-                    sample,
-                    stems,
-                    0,
-                    transition_progress,
-                    channel,
-                );
-                return left + (right - left) * alpha as f32;
             }
         }
-        let left =
-            self.sample_at_offset_with_progress(sample, stems, 0, transition_progress, channel);
-        if fraction == 0.0 {
-            return left;
+        let frame = |offset| {
+            source_frame_for_playback(
+                self.frame_pos,
+                offset,
+                self.sample_frames,
+                self.loop_region,
+                self.seek_mode,
+            )
+        };
+        FractionalSourceTaps {
+            left: frame(0),
+            right: (fraction != 0.0).then(|| frame(1)),
+            right_gain: fraction as f32,
         }
-        let right =
-            self.sample_at_offset_with_progress(sample, stems, 1, transition_progress, channel);
-        left + (right - left) * fraction as f32
     }
 
     /// Fills preallocated planar buffers with integer source-frame reads, before varispeed.

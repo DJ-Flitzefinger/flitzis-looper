@@ -109,7 +109,7 @@ impl Fixture {
 }
 
 #[test]
-fn finite_key_lock_context_keeps_range_geometry_without_native_admission() {
+fn finite_key_lock_context_proves_normal_tap_geometry_and_guards_intro_tail() {
     use crate::audio_engine::source_reader::{
         ExplicitSeekMode, FrameRange, resident_read_context_available,
     };
@@ -154,8 +154,12 @@ fn finite_key_lock_context_keeps_range_geometry_without_native_admission() {
         ExplicitSeekMode::BeforeLoop,
         ExplicitSeekMode::AfterLoop,
     ] {
+        assert_eq!(
+            resident_read_context_available(&tagged, region, mode, true),
+            mode == ExplicitSeekMode::Normal
+        );
         assert!(!resident_read_context_available(
-            &tagged, region, mode, true
+            &narrowed, region, mode, true
         ));
     }
 }

@@ -44,6 +44,15 @@ cache/manifests/readers are not edited in place. P1a now supplies typed canonica
 import/restore storage and durable material/content identity; equal subscribers,
 migration, arrangement and further residency remain pending.
 
+The first P4b vertical prepares stopped/current Normal-loop KEYLOCK ranges through
+the retained readers and existing WindowWork transaction. Actual tap coverage,
+complete source/window/timing/selection binding and native history permits guard
+real native/FIFO catch-up and continued callback input. A storage-only ACK keeps
+already adopted native/FIFO/filter chronology and old reader ownership intact;
+pending native work remains exact-window-bound. Active transitions, finite seek,
+intro/tail and broader old-voice/lifecycle coverage remain guarded and the parent
+P4b gate remains open. The saved-load full-track fallback remains labelled.
+
 New imports preserve the exact filename and bytes under
 `samples/materials/M<32-lowercase-hex>/original/`. The material ID binds the full
 original hash and filename; a conflicting existing container gets a fresh ID

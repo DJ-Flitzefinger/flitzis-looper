@@ -15,10 +15,26 @@ Keep the1598-frame/33.292-ms fixture, Rubber Band and existing rate/nonzero-k/un
 latency gates; neither range caching nor directory migration removes acoustic
 latency. No fallback-only intermediate state completes the requested finite supply.
 
-The preparatory `KeyLockFiniteLoop` resident tag has its own native snapshot fence
-and `key-lock-finite-loop` binding metadata label. It permits range geometry only;
-productive loading and Key Lock admission still require the full-track fallback
-until actual finite native coverage is implemented and proved in P4b.
+The first P4b vertical supplies a stopped/current Normal loop through the retained
+FullMix/four-component readers, its own WindowWork callback ACK and the real
+Key Lock preparation lane at production k=0. `native_source_coverage.rs` binds the
+complete source, actual resident window/revision, copied read plan/playback,
+timing projection and selected stem owners. Both actual fractional taps use the
+same mapping as rendering and must lie in held physical ranges. Normal-loop
+closure covers every phase and canonical binary64 rate-smoothing chunk; 4096
+output frames are the native adoption horizon, not a guessed source halo.
+Real native preparation transfers its actual handle and input/output FIFOs, then
+callback rendering continues with finite input. Pending history requires its
+exact window; already adopted same-source history survives a storage-only ACK
+without resetting native/FIFO/filter chronology or dropping its original pins.
+
+`KeyLockFiniteLoop` has snapshot fence4 and the `key-lock-finite-loop` metadata
+label, but the tag does not grant coverage or source/window/history authority.
+Missing input fails preparation/render admission. Active selection transitions,
+finite seek/intro/tail, old voices and broader pause/retrigger/timing-refresh
+contexts remain subsequent P4b gates. Current saved-load KEYLOCK retains its
+labelled complete fallback; normal-loop control preparation can obtain finite
+supply. The full P4b gate and device/acoustic acceptance remain open.
 
 The active backend is implemented behind:
 
@@ -28,6 +44,7 @@ rust/crates/looper/src/audio_engine/rubberband_backend.rs
 rust/crates/looper/src/audio_engine/key_lock_preparation.rs
 rust/crates/looper/src/audio_engine/prepared_native_history.rs
 rust/crates/looper/src/audio_engine/native_history_permit.rs
+rust/crates/looper/src/audio_engine/native_source_coverage.rs
 rust/crates/looper/src/audio_engine/source_playback.rs
 rust/crates/looper/src/audio_engine/source_reader.rs
 ```

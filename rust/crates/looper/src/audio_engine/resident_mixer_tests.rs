@@ -392,6 +392,140 @@ fn native_keylock_full_context_relocation_keeps_actual_handle_fifo_history_and_o
 }
 
 #[test]
+fn native_keylock_finite_context_relocation_keeps_actual_handle_fifo_history_filter_and_output() {
+    for with_stems in [false, true] {
+        let full = complete();
+        let finite = full
+            .window(START, END, 1, ResidentContext::KeyLockFiniteLoop)
+            .unwrap();
+        let full_stems = with_stems.then(|| stems(&full));
+        let finite_stems = full_stems
+            .as_ref()
+            .map(|set| set.clone().window_for(&finite).unwrap());
+        let mut actual = fixture(&finite, finite_stems, true);
+        let mut reference = fixture(&full, full_stems.clone(), true);
+        assert!(actual.pad_key_lock_enabled[0]);
+        assert_eq!(render(&mut actual, 0, 13), render(&mut reference, 0, 13));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while (!voice_mut(&mut actual).stretch.source_preparation_ready()
+            || !voice_mut(&mut reference).stretch.source_preparation_ready())
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(voice_mut(&mut actual).stretch.source_preparation_ready());
+        assert!(voice_mut(&mut reference).stretch.source_preparation_ready());
+        assert_eq!(
+            render(&mut actual, 13, 4090),
+            render(&mut reference, 13, 4090)
+        );
+        let address = voice(&actual).stretch.native_state_address();
+        assert_ne!(address, 0);
+        assert_eq!(voice(&actual).stretch.adopted_request_id(), Some(1));
+        let history = voice(&actual).stretch.productive_history().unwrap();
+        let fifos = voice(&actual).stretch.pending_fifo_frames();
+        let playback = voice(&actual).source_playback;
+        let before = binding(&actual);
+        let next = full
+            .window(START - 19, END + 29, 2, ResidentContext::KeyLockFiniteLoop)
+            .unwrap();
+        assert_eq!(next.samples.len(), END - START + 48);
+        assert!(!Arc::ptr_eq(&next.samples, &full.samples));
+        let next_stems = full_stems.map(|mut set| {
+            set.accepted_timing = Some(accepted());
+            set.window_for(&next).unwrap()
+        });
+        let publication = PreparedSourcePermit::new(
+            actual.prepared_source_epochs[0].clone(),
+            actual.prepared_source_epochs[0].load(Ordering::Acquire),
+        );
+        publication.mark_pending().unwrap();
+        apply(
+            &mut actual,
+            ControlMessage::RelocateResident(Box::new(crate::messages::ResidentTransaction {
+                id: 0,
+                sample: next.clone(),
+                stems: next_stems,
+                binding: before,
+                publication: publication.clone(),
+                expected_window_revision: 1,
+                intent: Default::default(),
+                seek_pin: None,
+            })),
+        );
+        assert_eq!(publication.status(), "accepted");
+        assert_eq!(voice(&actual).stretch.native_state_address(), address);
+        assert_eq!(voice(&actual).stretch.pending_fifo_frames(), fifos);
+        assert_eq!(
+            voice(&actual)
+                .stretch
+                .productive_history()
+                .unwrap()
+                .fed_output_frames,
+            history.fed_output_frames
+        );
+        assert!(voice(&actual).source_playback.matches_exact(&playback));
+        assert_eq!(
+            voice(&actual).sample.as_ref().unwrap().resident_binding(),
+            next.resident_binding()
+        );
+        // This slice admits storage-only continuation. Direct seek, active loop edits and
+        // active selection changes remain unavailable until their own finite proof exists.
+        let selection = actual.stem_demand_for_measurement(0);
+        assert!(!actual.seek_sample_at_output_frame(
+            0,
+            (START + 37) as f64 / f64::from(RATE),
+            4103
+        ));
+        actual.set_pad_loop_region(
+            0,
+            START as f64 / f64::from(RATE),
+            Some(END as f64 / f64::from(RATE)),
+        );
+        actual.set_pad_loop_region(
+            0,
+            (START + 1) as f64 / f64::from(RATE),
+            Some((END - 1) as f64 / f64::from(RATE)),
+        );
+        actual.set_stem_mix_mode(0, StemMixMode::FullMix, 0);
+        actual.set_stem_enabled_mask(0, 0b0101, 91);
+        assert_eq!(actual.loop_region_frames(0), (START, Some(END)));
+        assert_eq!(actual.stem_demand_for_measurement(0), selection);
+        assert!(voice(&actual).source_playback.matches_exact(&playback));
+        assert_eq!(voice(&actual).stretch.native_state_address(), address);
+        assert_eq!(voice(&actual).stretch.pending_fifo_frames(), fifos);
+        assert_eq!(
+            voice(&actual)
+                .stretch
+                .productive_history()
+                .unwrap()
+                .fed_output_frames,
+            history.fed_output_frames
+        );
+        let mut elapsed = 4103;
+        let mut audible = false;
+        for frames in [1, 17, 512, 127, 384, 777, 2048, 31] {
+            let output = render(&mut actual, elapsed, frames);
+            assert_eq!(output, render(&mut reference, elapsed, frames));
+            audible |= output.iter().any(|value| value.abs() > 0.001);
+            elapsed += frames as u64;
+            assert_eq!(voice(&actual).stretch.native_state_address(), address);
+            assert_eq!(voice(&actual).stretch.adopted_request_id(), Some(1));
+            assert_eq!(
+                voice(&actual).stretch.pending_fifo_frames(),
+                voice(&reference).stretch.pending_fifo_frames()
+            );
+            assert!(
+                voice(&actual)
+                    .source_playback
+                    .matches_exact(&voice(&reference).source_playback)
+            );
+        }
+        assert!(audible, "finite native/filter continuation was silent");
+    }
+}
+
+#[test]
 fn unavailable_callback_controls_preserve_finite_audio_and_full_metadata() {
     let full = complete();
     let finite = full

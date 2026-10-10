@@ -1,4 +1,6 @@
 //! Real bounded worker -> command drain -> ACK control proofs with raw WAV oracles.
+#[path = "resident_native_worker_tests.rs"]
+mod resident_native_worker_tests;
 #[path = "resident_ready_control_tests.rs"]
 mod resident_ready_control_tests;
 

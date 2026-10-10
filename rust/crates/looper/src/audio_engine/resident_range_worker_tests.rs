@@ -12,8 +12,352 @@ use crate::audio_engine::resident_relocation::{
     ResidentWindowTicket, WindowRequest, launch_with_producer, prepare_window_with_producer,
     reconcile,
 };
+use crate::audio_engine::source_reader::{
+    reset_tap_observation_for_test, tap_observation_for_test,
+};
 use crate::messages::StemMixMode;
 use std::mem::size_of;
+
+#[test]
+fn actual_finite_pair_keylock_window_ack_reads_four_components_then_preserves_native_continuation()
+{
+    let mut h = Harness::new();
+    let source_ticket = h.ticket(0);
+    let pair = h.prepare(0, &source_ticket, true, None);
+    let _saved = h.save(&pair);
+    h.engine
+        .publish_stem_pair_with_producer(&pair, &source_ticket, &h.producer)
+        .unwrap();
+    let full_stems = queued_stems(&mut h.consumer);
+    assert_eq!(h.callback.drain(&mut h.consumer), 1);
+    assert_eq!(source_ticket.publication_status(), "accepted");
+    reconcile(&h.engine).unwrap();
+    {
+        let mut producer = h.producer.lock().unwrap();
+        producer
+            .push(ControlMessage::SetStemMixMode {
+                id: 0,
+                mode: StemMixMode::AllStems,
+                source_version_hash: full_stems.source_version_hash,
+            })
+            .unwrap();
+        producer
+            .push(ControlMessage::SetStemEnabledMask {
+                id: 0,
+                enabled_stem_mask: 0b1111,
+                source_version_hash: full_stems.source_version_hash,
+            })
+            .unwrap();
+    }
+    assert_eq!(h.callback.drain(&mut h.consumer), 2);
+    h.callback.mixer.set_speed(0.73);
+    let ticket = prepare_window_with_producer(
+        &h.engine,
+        0,
+        WindowRequest {
+            loop_region: Some((1.0 / f64::from(RATE), Some(6.0 / f64::from(RATE)))),
+            key_lock: Some(true),
+            ..WindowRequest::default()
+        },
+        h.producer.clone(),
+    )
+    .unwrap();
+    wait_until(|| {
+        h.consumer.peek().is_ok() || matches!(ticket.publication_status(), "failed" | "cancelled")
+    });
+    assert_eq!(
+        ticket.publication_status(),
+        "pending",
+        "{:?}",
+        ticket.error().unwrap()
+    );
+    let observation = ticket.read_observation_for_test().unwrap();
+    let bytes = 5 * 2 * size_of::<f32>();
+    assert_eq!(observation.source.read_bytes, bytes as u64);
+    assert_eq!(observation.source.allocated_bytes, bytes);
+    assert_eq!(
+        (observation.source.start_frame, observation.source.end_frame),
+        (1, 6)
+    );
+    assert_eq!(
+        observation.stems.read_bytes,
+        [bytes as u64, bytes as u64, bytes as u64, bytes as u64, 0]
+    );
+    assert_eq!(observation.stems.allocated_bytes, bytes * 4);
+    assert_eq!(observation.stems.fresh_opens, 0);
+    assert_eq!(observation.stems.integrity_bytes, 0);
+    let offset = 2 * size_of::<f32>();
+    assert_eq!(
+        observation.stems.byte_ranges,
+        [
+            Some((offset, offset + bytes)),
+            Some((offset, offset + bytes)),
+            Some((offset, offset + bytes)),
+            Some((offset, offset + bytes)),
+            None
+        ]
+    );
+    assert!(observation.admitted_peak_bytes < crate::audio_engine::cold_jobs::PCM_LIMIT_BYTES);
+    assert_eq!(h.callback.drain(&mut h.consumer), 1);
+    assert_eq!(ticket.publication_status(), "accepted");
+    reconcile(&h.engine).unwrap();
+    let finite = h.callback.mixer.bank_for_measurement()[0].clone().unwrap();
+    let finite_stems = h.callback.mixer.stems_for_measurement()[0].clone().unwrap();
+    assert_eq!(
+        finite.residency.as_ref().unwrap().context,
+        ResidentContext::KeyLockFiniteLoop
+    );
+    assert_eq!(finite.samples.len(), 10);
+    assert!(
+        finite_stems
+            .stems
+            .iter()
+            .all(|stem| stem.samples.len() == 10 && stem.same_window(&finite))
+    );
+    assert!(h.callback.mixer.key_lock_for_measurement(0));
+    assert!(launch_with_producer(&h.engine, &ticket, false, 1, &h.producer).unwrap());
+    assert_eq!(h.callback.drain(&mut h.consumer), 1);
+
+    // The independently retained complete FullMix/four-PCM set supplies the control.
+    // The finite native worker receives only the ACKed crops above.
+    let full = h.material.sample.clone();
+    let mut reference = RtMixer::new(2, RATE as f32);
+    let ownership =
+        Arc::new(crate::audio_engine::input_runtime_binding::InputRuntimeOwnership::tracked());
+    ownership.publish_source(0, &full, RATE, 1);
+    reference.set_input_runtime_ownership(ownership);
+    reference.load_sample(0, full);
+    let mut control_stems = full_stems;
+    control_stems.publication =
+        crate::audio_engine::prepared_source::PreparedSourcePermit::unrestricted();
+    assert!(reference.publish_prepared_stems(0, control_stems.clone()));
+    reference.set_stem_mix_mode(0, StemMixMode::AllStems, control_stems.source_version_hash);
+    reference.set_stem_enabled_mask(0, 0b1111, control_stems.source_version_hash);
+    reference.set_pad_loop_region(0, 1.0 / f64::from(RATE), Some(6.0 / f64::from(RATE)));
+    reference.set_speed(0.73);
+    reference.set_pad_key_lock(0, true);
+    assert!(reference.play_sample_at_output_frame(0, 1.0, 0));
+    let render = |mixer: &mut RtMixer, frame: u64, frames: usize| {
+        let mut output = vec![0.0; frames * 2];
+        mixer.render_at_output_frame(frame, &mut output, &mut [0.0; NUM_SAMPLES]);
+        output
+    };
+    assert_eq!(
+        render(&mut h.callback.mixer, 0, 13),
+        render(&mut reference, 0, 13)
+    );
+    wait_until(|| {
+        h.callback
+            .mixer
+            .voices
+            .iter_mut()
+            .find(|voice| voice.is_playing_sample(0))
+            .unwrap()
+            .stretch
+            .source_preparation_ready()
+            && reference
+                .voices
+                .iter_mut()
+                .find(|voice| voice.is_playing_sample(0))
+                .unwrap()
+                .stretch
+                .source_preparation_ready()
+    });
+    let prepared = h
+        .callback
+        .mixer
+        .voices
+        .iter_mut()
+        .find(|voice| voice.is_playing_sample(0))
+        .unwrap()
+        .stretch
+        .prepared_native_address();
+    let prepared_reads = h
+        .callback
+        .mixer
+        .voices
+        .iter_mut()
+        .find(|voice| voice.is_playing_sample(0))
+        .unwrap()
+        .stretch
+        .prepared_tap_observation()
+        .unwrap();
+    assert_eq!(prepared_reads.left_reads, 4096 * 2);
+    assert!(prepared_reads.right_reads > 0);
+    assert_eq!(prepared_reads.missing_reads, 0);
+    assert!(prepared_reads.min_frame.is_some_and(|frame| frame >= 1));
+    assert!(prepared_reads.max_frame.is_some_and(|frame| frame < 6));
+    assert_ne!(prepared, 0);
+    let mut frame = 13;
+    let mut audible = false;
+    for frames in [
+        31, 777, 1024, 1, 2247, 37, 1, 127, 384, 96, 257, 512, 31, 2048, 8192,
+    ] {
+        reset_tap_observation_for_test();
+        let output = render(&mut h.callback.mixer, frame, frames);
+        let reads = tap_observation_for_test();
+        assert_eq!(reads.left_reads, frames * 2);
+        assert_eq!(reads.missing_reads, 0);
+        assert!(reads.min_frame.is_some_and(|frame| frame >= 1));
+        assert!(reads.max_frame.is_some_and(|frame| frame < 6));
+        assert_eq!(output, render(&mut reference, frame, frames));
+        frame += frames as u64;
+        let actual = h
+            .callback
+            .mixer
+            .voices
+            .iter()
+            .find(|voice| voice.is_playing_sample(0))
+            .unwrap();
+        let control = reference
+            .voices
+            .iter()
+            .find(|voice| voice.is_playing_sample(0))
+            .unwrap();
+        assert!(
+            actual
+                .source_playback
+                .matches_exact(&control.source_playback)
+        );
+        if frame > 4096 {
+            audible |= output.iter().any(|value| value.abs() > 0.001);
+            assert_eq!(actual.stretch.native_state_address(), prepared);
+            assert_eq!(actual.stretch.adopted_request_id(), Some(1));
+            assert_eq!(
+                actual.stretch.native_tap_observation(),
+                Some(prepared_reads)
+            );
+            assert_eq!(
+                actual.stretch.pending_fifo_frames(),
+                control.stretch.pending_fifo_frames()
+            );
+        }
+        assert_eq!(
+            actual.sample.as_ref().unwrap().resident_binding(),
+            finite.resident_binding()
+        );
+        assert!(
+            h.callback.mixer.stems_for_measurement()[0]
+                .as_ref()
+                .unwrap()
+                .stems
+                .iter()
+                .all(|stem| stem.samples.len() == 10)
+        );
+    }
+    assert!(
+        audible,
+        "actual finite four-component native continuation was silent"
+    );
+    assert!(ticket.is_current());
+    let a_source = Arc::downgrade(&finite.samples);
+    let a_stems = finite_stems
+        .stems
+        .each_ref()
+        .map(|stem| Arc::downgrade(&stem.samples));
+    drop(finite);
+    drop(finite_stems);
+    let generation_path = selected_path(&h.root, &selection(&pair), "wav_generation");
+    for (start, end) in [(0, 6), (1, 7)] {
+        let old = h.callback.mixer.bank_for_measurement()[0].as_ref().unwrap();
+        let lease = h.engine.project_assets.cold_lease_for_reader(old).unwrap();
+        let registered_before_refresh = h
+            .engine
+            .project_assets
+            .held_reader_backings(&lease, Some(&generation_path))
+            .unwrap();
+        assert!(
+            registered_before_refresh
+                .iter()
+                .any(|samples| a_source.ptr_eq(&Arc::downgrade(samples)))
+        );
+        assert!(
+            a_stems.iter().all(|stem| registered_before_refresh
+                .iter()
+                .any(|samples| stem.ptr_eq(&Arc::downgrade(samples)))),
+            "actual reader registry omitted one or more Native A components"
+        );
+        let registered_bytes: usize = registered_before_refresh
+            .iter()
+            .map(|samples| samples.len() * size_of::<f32>())
+            .sum();
+        let refresh = prepare_window_with_producer(
+            &h.engine,
+            0,
+            WindowRequest {
+                storage_range: Some((start as f64 / f64::from(RATE), end as f64 / f64::from(RATE))),
+                ..WindowRequest::default()
+            },
+            h.producer.clone(),
+        )
+        .unwrap();
+        wait_until(|| {
+            h.consumer.peek().is_ok()
+                || matches!(refresh.publication_status(), "failed" | "cancelled")
+        });
+        assert_eq!(
+            refresh.publication_status(),
+            "pending",
+            "{:?}",
+            refresh.error().unwrap()
+        );
+        let observation = refresh.read_observation_for_test().unwrap();
+        assert_eq!(
+            observation.source.read_bytes,
+            ((end - start) * 2 * size_of::<f32>()) as u64
+        );
+        assert_eq!(observation.stems.read_bytes, [48, 48, 48, 48, 0]);
+        assert_eq!(observation.stems.allocated_bytes, 48 * 4);
+        assert_eq!(
+            observation.admitted_peak_bytes,
+            registered_bytes + 48 * 5 + 64 * 1024,
+            "actual worker peak must charge every unique existing registered reader plus new FullMix/four component crops"
+        );
+        if start == 1 {
+            assert!(
+                observation.admitted_peak_bytes >= (40 + 48 + 48) * 5 + 64 * 1024,
+                "peak {} missed native A/current B/new C fullmix+four PCM overlap",
+                observation.admitted_peak_bytes
+            );
+        }
+        let before = h
+            .callback
+            .mixer
+            .voices
+            .iter()
+            .find(|voice| voice.is_playing_sample(0))
+            .unwrap()
+            .stretch
+            .pending_fifo_frames();
+        assert_eq!(h.callback.drain(&mut h.consumer), 1);
+        assert_eq!(refresh.publication_status(), "accepted");
+        reconcile(&h.engine).unwrap();
+        assert!(refresh.is_current());
+        assert!(a_source.upgrade().is_some());
+        assert!(
+            a_stems.iter().all(|stem| stem.upgrade().is_some()),
+            "storage ACK ended native A component owner"
+        );
+        let actual = h
+            .callback
+            .mixer
+            .voices
+            .iter()
+            .find(|voice| voice.is_playing_sample(0))
+            .unwrap();
+        assert_eq!(actual.stretch.native_state_address(), prepared);
+        assert_eq!(actual.stretch.pending_fifo_frames(), before);
+        assert_eq!(
+            actual.stretch.native_tap_observation(),
+            Some(prepared_reads)
+        );
+        assert_eq!(
+            render(&mut h.callback.mixer, frame, 137),
+            render(&mut reference, frame, 137)
+        );
+        frame += 137;
+    }
+}
 
 struct PadSnapshot {
     sample: SampleBuffer,

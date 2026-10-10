@@ -4,6 +4,9 @@
 //! adapter, while every source pin travels with the native/FIFO owner until worker retirement.
 
 use super::native_history_permit::NativeHistoryPermit;
+use super::native_source_coverage::{
+    NormalLoopCoverage, complete_view_available, normal_loop_feed_available,
+};
 use super::productive_source_history::ProductiveSourceBinding;
 use super::rubberband_backend::{
     RubberBandError, RubberBandLiveShifter, pitch_scale_for_tempo_ratio,
@@ -21,6 +24,7 @@ pub(crate) struct NativeHistoryRequest {
     pub(crate) sample: SampleBuffer,
     pub(crate) stems: Option<PreparedStemSet>,
     pub(crate) permit: NativeHistoryPermit,
+    pub(crate) coverage: Option<NormalLoopCoverage>,
     pub(crate) binding: ProductiveSourceBinding,
     pub(crate) playback: SourcePlayback,
     pub(crate) plan: SourceReadPlan,
@@ -30,6 +34,32 @@ pub(crate) struct NativeHistoryRequest {
 }
 
 impl NativeHistoryRequest {
+    fn coverage_matches(&self, feed: &ProductiveSourceFeed<'_>, exact_window: bool) -> bool {
+        if let Some(coverage) = &self.coverage {
+            coverage.matches(
+                feed.sample,
+                feed.stems,
+                feed.sample_rate_hz,
+                feed.accepted,
+                feed.plan,
+                feed.playback,
+                exact_window,
+            )
+        } else {
+            // A missing finite proof never becomes a successful native source request.
+            complete_view_available(&self.sample)
+                && (complete_view_available(feed.sample)
+                    || (!exact_window
+                        && normal_loop_feed_available(
+                            feed.sample,
+                            feed.stems,
+                            feed.sample_rate_hz,
+                            feed.accepted,
+                            feed.plan,
+                            feed.playback,
+                        )))
+        }
+    }
     pub(crate) fn matches_effective_contract(
         &self,
         feed: &ProductiveSourceFeed<'_>,
@@ -37,6 +67,7 @@ impl NativeHistoryRequest {
     ) -> bool {
         let binding = ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted);
         self.epoch == epoch
+            && self.coverage_matches(feed, false)
             && self.binding.same_source(binding)
             && self.binding.accepted == binding.accepted
             && self
@@ -56,6 +87,7 @@ impl NativeHistoryRequest {
     }
     pub(crate) fn matches_contract(&self, feed: &ProductiveSourceFeed<'_>, epoch: u64) -> bool {
         self.epoch == epoch
+            && self.coverage_matches(feed, true)
             && self.binding
                 == ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted)
             && self.permit.current(feed.sample, feed.sample_rate_hz)
@@ -152,6 +184,21 @@ impl NativeAdapterState {
         &mut self,
         mut request: NativeHistoryRequest,
     ) -> Result<(), RubberBandError> {
+        if !complete_view_available(&request.sample)
+            && !request.coverage.as_ref().is_some_and(|coverage| {
+                coverage.matches(
+                    &request.sample,
+                    request.stems.as_ref(),
+                    request.binding.sample_rate_hz,
+                    request.binding.accepted,
+                    request.plan,
+                    &request.playback,
+                    true,
+                )
+            })
+        {
+            return Err(RubberBandError::InvalidBlockSize);
+        }
         self.source = None;
         self.reset_adapter();
         let pitch = pitch_scale_for_tempo_ratio(request.playback.tempo_ratio());
@@ -170,15 +217,39 @@ impl NativeAdapterState {
             .map(|_| vec![0.0; DEFAULT_BLOCK_SAMPLES])
             .collect::<Vec<_>>();
         let mut remaining = PREPARED_HISTORY_FRAMES;
+        #[cfg(test)]
+        super::source_reader::reset_tap_observation_for_test();
         while remaining > 0 {
             let (frames, ratio) = request.playback.chunk(remaining.min(DEFAULT_BLOCK_SAMPLES));
-            request.plan.fill_fractional_buffers(
-                &request.sample,
-                request.stems.as_ref(),
-                &request.playback,
-                &mut feed,
-                frames,
-            );
+            if request.coverage.is_some() {
+                if !normal_loop_feed_available(
+                    &request.sample,
+                    request.stems.as_ref(),
+                    request.binding.sample_rate_hz,
+                    request.binding.accepted,
+                    request.plan,
+                    &request.playback,
+                ) {
+                    return Err(RubberBandError::InvalidBlockSize);
+                }
+                request.plan.fill_fractional_buffers_checked(
+                    &request.sample,
+                    request.stems.as_ref(),
+                    &request.playback,
+                    &mut feed,
+                    frames,
+                )?;
+            } else if complete_view_available(&request.sample) {
+                request.plan.fill_fractional_buffers(
+                    &request.sample,
+                    request.stems.as_ref(),
+                    &request.playback,
+                    &mut feed,
+                    frames,
+                );
+            } else {
+                return Err(RubberBandError::InvalidBlockSize);
+            }
             // A trajectory reaching unity still goes through native state during preparation;
             // adoption will reject a dry endpoint rather than changing dry playback semantics.
             self.render(
@@ -199,6 +270,10 @@ impl NativeAdapterState {
         }
         // Live rendering begins a smoothing chunk before passing its cursor to this adapter.
         request.playback.chunk(DEFAULT_BLOCK_SAMPLES);
+        #[cfg(test)]
+        if let Some(coverage) = &mut request.coverage {
+            coverage.prepared_taps = super::source_reader::tap_observation_for_test();
+        }
         self.source = Some(request);
         Ok(())
     }
@@ -362,6 +437,7 @@ pub(super) mod tests {
             sample,
             stems,
             permit,
+            coverage: None,
             playback,
             plan,
             target_output_frame: PREPARED_HISTORY_FRAMES as u64,

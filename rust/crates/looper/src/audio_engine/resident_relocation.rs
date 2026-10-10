@@ -713,11 +713,22 @@ struct WindowWork {
     cancelled: Arc<std::sync::atomic::AtomicBool>,
 }
 
+#[cfg(test)]
 fn admitted_window_peak(
     old: &SampleBuffer,
     start: usize,
     end: usize,
     stems: Option<&StemOwner>,
+) -> Result<usize, String> {
+    admitted_window_peak_with_readers(old, start, end, stems, &[])
+}
+
+fn admitted_window_peak_with_readers(
+    old: &SampleBuffer,
+    start: usize,
+    end: usize,
+    stems: Option<&StemOwner>,
+    readers: &[Arc<[f32]>],
 ) -> Result<usize, String> {
     let frames = old.frame_count();
     let window_bytes = end
@@ -731,6 +742,11 @@ fn admitted_window_peak(
         return Err("resident range exceeds complete source".into());
     }
     let mut backing = vec![old.samples.clone()];
+    for samples in readers {
+        if !backing.iter().any(|held| Arc::ptr_eq(held, samples)) {
+            backing.push(samples.clone());
+        }
+    }
     if let Some(owner) = stems {
         for samples in std::iter::once(&owner.set.reference_samples)
             .chain(owner.set.stems.iter().map(|stem| &stem.samples))
@@ -860,7 +876,22 @@ impl WindowWork {
         if !self.current() {
             return Err("resident source/window was superseded".into());
         }
-        let peak = admitted_window_peak(&self.old, self.start, self.end, self.stem_owner.as_ref())?;
+        let held_readers = self
+            .assets
+            .held_reader_backings(
+                &self.source_lease,
+                self.stem_owner
+                    .as_ref()
+                    .map(|owner| owner.generation_path.as_path()),
+            )
+            .map_err(|error| error.to_string())?;
+        let peak = admitted_window_peak_with_readers(
+            &self.old,
+            self.start,
+            self.end,
+            self.stem_owner.as_ref(),
+            &held_readers,
+        )?;
         #[cfg(test)]
         {
             super::cold_store::reset_window_read_observation_for_test();
@@ -1122,20 +1153,29 @@ pub(super) fn prepare_window_with_producer(
         seek_position_s: request.seek_position_s,
         key_lock: request.key_lock,
     };
-    let key_lock_full = request
-        .key_lock
-        .unwrap_or(view.context == ResidentContext::KeyLockFullTrack);
-    let (start, end, context) = if key_lock_full {
-        (0, old.frame_count(), ResidentContext::KeyLockFullTrack)
-    } else if request.seek_position_s.is_some() {
-        (0, old.frame_count(), ResidentContext::FullTrack)
+    let key_lock = request.key_lock.unwrap_or(matches!(
+        view.context,
+        ResidentContext::KeyLockFullTrack | ResidentContext::KeyLockFiniteLoop
+    ));
+    let (start, end, context) = if request.seek_position_s.is_some() {
+        (
+            0,
+            old.frame_count(),
+            if key_lock {
+                ResidentContext::KeyLockFullTrack
+            } else {
+                ResidentContext::FullTrack
+            },
+        )
     } else if let Some((start, end)) = intent.loop_region {
         let region = super::source_reader::effective_loop_region(start, end, old.frame_count())
             .ok_or_else(|| PyValueError::new_err("invalid complete source loop"))?;
         (
             region.start,
             region.end,
-            if region.start == 0 && region.end == old.frame_count() {
+            if key_lock {
+                ResidentContext::KeyLockFiniteLoop
+            } else if region.start == 0 && region.end == old.frame_count() {
                 ResidentContext::FullTrack
             } else {
                 ResidentContext::FiniteLoop
@@ -1147,12 +1187,16 @@ pub(super) fn prepare_window_with_producer(
         (
             start,
             end,
-            if start == 0 && end == old.frame_count() {
+            if key_lock {
+                ResidentContext::KeyLockFiniteLoop
+            } else if start == 0 && end == old.frame_count() {
                 ResidentContext::FullTrack
             } else {
                 ResidentContext::FiniteLoop
             },
         )
+    } else if key_lock && !view.context.permits_finite_range() {
+        (0, old.frame_count(), ResidentContext::KeyLockFullTrack)
     } else {
         (old.resident_start(), old.resident_end(), view.context)
     };
@@ -1231,8 +1275,24 @@ pub(super) fn prepare_window_with_producer(
             .reserve()
             .map_err(PyRuntimeError::new_err)?;
         if !seek_only {
-            admitted_window_peak(&old, start, end, owners[id].accepted.as_ref())
-                .map_err(PyRuntimeError::new_err)?;
+            let held_readers = engine
+                .project_assets
+                .held_reader_backings(
+                    &source_lease,
+                    owners[id]
+                        .accepted
+                        .as_ref()
+                        .map(|owner| owner.generation_path.as_path()),
+                )
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+            admitted_window_peak_with_readers(
+                &old,
+                start,
+                end,
+                owners[id].accepted.as_ref(),
+                &held_readers,
+            )
+            .map_err(PyRuntimeError::new_err)?;
         }
         Some(reservation)
     };

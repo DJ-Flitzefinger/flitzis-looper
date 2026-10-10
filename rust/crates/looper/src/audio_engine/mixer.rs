@@ -22,8 +22,10 @@ use crate::audio_engine::key_lock_preparation::{
     KeyLockPreparationError, KeyLockPreparationWorker, create_key_lock_preparation,
 };
 use crate::audio_engine::native_history_permit::NativeHistoryContext;
+use crate::audio_engine::native_source_coverage::normal_loop_feed_available;
 use crate::audio_engine::productive_source_history::ProductiveSourceBinding;
 use crate::audio_engine::source_grid::SourceGrid;
+use crate::audio_engine::source_playback::SourcePlayback;
 use crate::audio_engine::source_reader::{
     FrameRange, STEM_TRANSITION_RAMP_FRAMES, SourceReadPlan, StemRenderSelection, StemTransition,
     effective_loop_region, explicit_seek_mode_for_frame, prepared_stem_set_for_render,
@@ -469,6 +471,9 @@ impl RtMixer {
     }
 
     fn loop_context_available(&self, id: usize, start: usize, end: Option<usize>) -> bool {
+        if self.finite_key_lock_voice_active(id) {
+            return false;
+        }
         let bank = self.sample_bank[id].as_ref();
         let available = |sample: &SampleBuffer| {
             effective_loop_region(start, end, sample.frame_count()).is_some_and(|region| {
@@ -523,16 +528,109 @@ impl RtMixer {
         self.loop_context_available(id, start, end)
     }
 
-    fn full_context_available(&self, id: usize) -> bool {
+    fn key_lock_context_available(&self, id: usize) -> bool {
         let full = |sample: &SampleBuffer| {
             sample.resident_start() == 0 && sample.resident_end() == sample.frame_count()
         };
-        self.sample_bank[id].as_ref().is_none_or(full)
-            && self
-                .voices
-                .iter()
-                .filter(|voice| voice.active && voice.sample_id == id)
-                .all(|voice| voice.sample.as_ref().is_some_and(full))
+        self.sample_bank[id].as_ref().is_none_or(|sample| {
+            full(sample)
+                || self
+                    .effective_loop_region(id, sample.frame_count())
+                    .is_some_and(|region| {
+                        self.normal_key_lock_bank_available(
+                            id,
+                            sample,
+                            self.prepared_stems[id].as_ref(),
+                            region,
+                        )
+                    })
+        }) && self
+            .voices
+            .iter()
+            .filter(|voice| voice.active && voice.sample_id == id)
+            .all(|voice| {
+                voice.sample.as_ref().is_some_and(|sample| {
+                    full(sample)
+                        || (self.pad_key_lock_enabled[id]
+                            && self.sample_bank[id]
+                                .as_ref()
+                                .is_some_and(|bank| bank.same_source(sample))
+                            && !voice.paused
+                            && self.normal_key_lock_voice_available(
+                                id,
+                                voice,
+                                sample,
+                                self.prepared_stems[id].as_ref(),
+                            ))
+                })
+            })
+    }
+
+    fn normal_key_lock_bank_available(
+        &self,
+        id: usize,
+        sample: &SampleBuffer,
+        stems: Option<&PreparedStemSet>,
+        region: FrameRange,
+    ) -> bool {
+        let timing = self.timing_for_sample_id(id);
+        let mut playback = SourcePlayback::new(
+            region.start,
+            ExplicitSeekMode::Normal,
+            self.tempo_ratio_for_sample_id(id),
+        );
+        playback.configure_domain(timing.loop_domain(sample.frame_count(), region));
+        normal_loop_feed_available(
+            sample,
+            stems,
+            self.sample_rate_hz as u32,
+            timing.accepted,
+            SourceReadPlan {
+                channels: self.channels,
+                sample_frames: sample.frame_count(),
+                frame_pos: playback.position().frame,
+                loop_region: region,
+                loop_period: playback.loop_period(),
+                seek_mode: ExplicitSeekMode::Normal,
+                selection: self.stem_render_selection(id),
+                transition: self.stem_transitions[id],
+            },
+            &playback,
+        )
+    }
+
+    fn normal_key_lock_voice_available(
+        &self,
+        id: usize,
+        voice: &VoiceSlot,
+        sample: &SampleBuffer,
+        stems: Option<&PreparedStemSet>,
+    ) -> bool {
+        let playback = &voice.source_playback;
+        let Some(region) = voice
+            .source_loop_region
+            .or_else(|| self.effective_loop_region(id, sample.frame_count()))
+        else {
+            return false;
+        };
+        let position = playback.position();
+        normal_loop_feed_available(
+            sample,
+            stems,
+            self.sample_rate_hz as u32,
+            self.timing_for_voice(voice).accepted,
+            SourceReadPlan {
+                channels: self.channels,
+                sample_frames: sample.frame_count(),
+                frame_pos: position.frame,
+                loop_region: region,
+                loop_period: playback.loop_period(),
+                seek_mode: position.seek_mode,
+                selection: self.stem_render_selection(id),
+                transition: self.stem_transitions[id],
+            },
+            playback,
+        )
     }
 
     /// Validate every live/paused pin against the exact source and effective projection.
@@ -972,6 +1070,43 @@ impl RtMixer {
             && publication.current()
             && sample.valid_residency(self.sample_rate_hz as u32, self.channels)
             && self.source_binding_current(id, binding)
+            && (!key_lock
+                || (sample.resident_start() == 0 && sample.resident_end() == sample.frame_count())
+                || loop_region.is_some_and(|region| {
+                    (intent.key_lock == Some(true)
+                        || self.sample_bank[id].as_ref().is_some_and(|bank| {
+                            bank.residency.as_ref().is_some_and(|view| {
+                                matches!(
+                                    view.context,
+                                    crate::messages::ResidentContext::KeyLockFiniteLoop
+                                        | crate::messages::ResidentContext::KeyLockFullTrack
+                                )
+                            })
+                        }))
+                        && self.normal_key_lock_bank_available(id, sample, stems.as_ref(), region)
+                        && self
+                            .voices
+                            .iter()
+                            .filter(|voice| voice.active && voice.sample_id == id)
+                            .all(|voice| {
+                                // This first finite vertical admits stopped setup and storage-only
+                                // current-source refresh. Broader edits/old voices remain guarded.
+                                intent.seek_position_s.is_none()
+                                    && intent.loop_region.is_none()
+                                    && key_lock == self.pad_key_lock_enabled[id]
+                                    && !voice.paused
+                                    && voice
+                                        .sample
+                                        .as_ref()
+                                        .is_some_and(|old| old.same_source(sample))
+                                    && self.normal_key_lock_voice_available(
+                                        id,
+                                        voice,
+                                        sample,
+                                        stems.as_ref(),
+                                    )
+                            })
+                }))
             && self.sample_bank[id].as_ref().is_some_and(|old| {
                 old.same_source(sample)
                     && old.window_revision() == expected_window_revision
@@ -1203,6 +1338,11 @@ impl RtMixer {
         }
 
         let previous = self.stem_render_selection(id);
+        let next =
+            StemRenderSelection::from_state(mode, source_version_hash, self.stem_enabled_mask[id]);
+        if previous != next && self.finite_key_lock_voice_active(id) {
+            return false;
+        }
         match mode {
             StemMixMode::FullMix => {
                 self.stem_mix_mode[id] = StemMixMode::FullMix;
@@ -1273,6 +1413,10 @@ impl RtMixer {
             return false;
         };
         if source_version_hash == 0 || stems.source_version_hash != source_version_hash {
+            return false;
+        }
+        if self.stem_enabled_mask[id] != enabled_stem_mask && self.finite_key_lock_voice_active(id)
+        {
             return false;
         }
 
@@ -1355,6 +1499,18 @@ impl RtMixer {
             .any(|voice| voice.active && voice.sample_id == id)
     }
 
+    fn finite_key_lock_voice_active(&self, id: usize) -> bool {
+        self.pad_key_lock_enabled[id]
+            && self.voices.iter().any(|voice| {
+                voice.active
+                    && voice.sample_id == id
+                    && voice.sample.as_ref().is_some_and(|sample| {
+                        sample.resident_start() != 0
+                            || sample.resident_end() != sample.frame_count()
+                    })
+            })
+    }
+
     pub(crate) fn can_play_sample(&self, id: usize, velocity: f32) -> bool {
         if id >= NUM_SAMPLES
             || !velocity.is_finite()
@@ -1376,7 +1532,15 @@ impl RtMixer {
                         region,
                         ExplicitSeekMode::Normal,
                         self.pad_key_lock_enabled[id],
-                    )
+                    ) && (!self.pad_key_lock_enabled[id]
+                        || (sample.resident_start() == 0
+                            && sample.resident_end() == sample.frame_count())
+                        || self.normal_key_lock_bank_available(
+                            id,
+                            sample,
+                            self.prepared_stems[id].as_ref(),
+                            region,
+                        ))
                 })
             && self.input_runtime_ownership.source_timing_available(
                 id,
@@ -1649,7 +1813,7 @@ impl RtMixer {
     }
 
     pub fn set_key_lock(&mut self, enabled: bool) {
-        if enabled && (0..NUM_SAMPLES).any(|id| !self.full_context_available(id)) {
+        if enabled && (0..NUM_SAMPLES).any(|id| !self.key_lock_context_available(id)) {
             return;
         }
         self.invalidate_prepared_for_all();
@@ -1660,7 +1824,7 @@ impl RtMixer {
         if id >= NUM_SAMPLES {
             return;
         }
-        if enabled && !self.full_context_available(id) {
+        if enabled && !self.key_lock_context_available(id) {
             return;
         }
 
@@ -1980,6 +2144,14 @@ impl RtMixer {
         };
         let sample_frames = sample.frame_count();
         if sample_frames == 0 {
+            return false;
+        }
+
+        // Normal-loop finite native supply does not yet authorize a discontinuous
+        // seek, even when the requested coordinate lies inside the held range.
+        if self.pad_key_lock_enabled[id]
+            && (sample.resident_start() != 0 || sample.resident_end() != sample_frames)
+        {
             return false;
         }
 

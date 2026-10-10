@@ -161,8 +161,21 @@ P4b, later stages and final Human/hearing acceptance remain open.
 
 ### P4b
 
+- [x] First vertical: stopped/current same-source NormalLoop finite FullMix/four-component WindowWork ACK, real production-k=0 non-unity native prepare/FIFO adoption and continued render against independent complete PCM/raw-native oracles
 - [ ] Wirkliche finite DSP/KEYLOCK-Versorgung+Continuation fuer heutigen production k=0
 - [ ] Executed feed/lookahead/history/FIFO/filter/seams/crossfade/oldvoices; causality1598/33.292ms erhalten, fallback-only laesst Gate offen. Nonzero k bleibt B5
+
+The first vertical is bounded to NormalLoop and storage-only current-source ACK.
+Current validation passed51 focused native cases,168 Analysis,3318 Python/FFI
+with35 device skips and the unchanged strict75/1000 musical gate. The fresh broad
+Release958/2 and incomplete Debug attempts remain FAILED;3 publication tests in
+both profiles close the two obsolete terminal-error assertions. Remaining broad
+production/test inputs are unchanged; no final whole-suite rerun is claimed.
+Seek/intro/tail, pause/resume/retrigger/timing refresh, current plus old voices,
+both active FullMix/stem-transition sides and their complete feed/filter/history/
+resource/musical oracles remain required by the two open parent tasks. Active
+finite selection transitions remain guarded. No first-vertical result closes
+whole P4b, nonzero KEY/pitch, P5a or any Human/device/hearing gate.
 
 ### P5a
 

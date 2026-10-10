@@ -58,8 +58,26 @@ requires its own ACK. First-created Close/Retry preserves files after all owners
 end and supports exclusive reopen and fresh-engine adoption. FullPython 3299/1
 remains FAILED with scoped closure of its unchanged unloaded-pad oracle; current
 13 affected native cases and the corrected optimized Release/check passed.
-The original Human rejection reason remains UNKNOWN. P4b, later stages and final
-Human/hearing gates remain open.
+P4b now implements its first stopped/current same-source NormalLoop vertical:
+retained finite FullMix/four-component reads, own WindowWork ACK, real non-unity
+production-k=0 native/FIFO preparation and continued rendering. Copied tap/rate/
+timing/selection coverage and exact pending-window permits guard adoption; an
+adopted native history keeps its reader pins and FIFO/filter chronology through
+storage-only ACKs. Actual A/B/C peak admission includes unique still-held history
+backings from the existing registry. The focused 51 native tests passed, including
+finite output equality against independently built complete PCM/raw-native
+controls and actual range/tap observations. The fresh broad Release batch remains
+FAILED at958 pass/2 fail; its two obsolete terminal-error expectations have scoped
+closure in the strengthened publication module, with3 passes in both Release and
+Debug. All other production/test inputs remain unchanged from that broad run;
+there is no final whole-suite rerun claim. The incomplete Debug broad attempt
+also remains FAILED. Fresh168 Analysis,3318 Python/FFI with35 genuine device skips,
+the unchanged strict75/1000 musical gate, lint/types, Rust formatting, optimized
+Release/check and affected official strict passed. Seek/intro/tail, pause/resume/retrigger/
+timing refresh, current plus old voices, both active selection-transition sides
+and their full resource/musical/causality matrix remain required. The original
+Human rejection reason remains UNKNOWN. Whole P4b, later stages and final Human/
+hearing gates remain open.
 The accepted bounded P0/C1/R0 prerequisites and historical FAIL/UNKNOWN evidence
 remain intact.
 

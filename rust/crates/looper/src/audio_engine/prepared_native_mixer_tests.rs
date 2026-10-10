@@ -5,6 +5,10 @@ use crate::audio_engine::input_runtime_binding::InputRuntimeOwnership;
 use crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES;
 use crate::audio_engine::prepared_source::PreparedSourcePermit;
 use crate::audio_engine::rubberband_backend::{RubberBandLiveShifter, pitch_scale_for_tempo_ratio};
+use crate::audio_engine::source_reader::{
+    TapReadObservation, reset_tap_observation_for_test, tap_observation_for_test,
+};
+use crate::messages::ResidentContext;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -119,6 +123,189 @@ fn raw_native_suffix(sample: &SampleBuffer, suffix_frames: usize) -> Vec<f32> {
         stream.extend_from_slice(&output[0]);
     }
     stream[PREPARED_HISTORY_FRAMES..PREPARED_HISTORY_FRAMES + suffix_frames].to_vec()
+}
+
+/// Configure the finite range while stopped, then enable actual KEYLOCK. The independent
+/// complete PCM belongs only to the test oracle; this mixer and its worker receive the crop.
+fn finite_mixer(
+    sample: &SampleBuffer,
+    rate: u32,
+    timing: AcceptedTimingProjection,
+    start: usize,
+    end: usize,
+    ratio: f64,
+) -> RtMixer {
+    assert_eq!(sample.resident_start(), start);
+    assert_eq!(sample.resident_end(), end);
+    assert_eq!(sample.samples.len(), (end - start) * sample.channels);
+    let mut mixer = RtMixer::new(sample.channels, rate as f32);
+    let ownership = Arc::new(InputRuntimeOwnership::tracked());
+    ownership.publish_source(0, sample, rate, 3);
+    mixer.set_input_runtime_ownership(ownership);
+    mixer.load_sample(0, sample.clone());
+    let publication = PreparedSourcePermit::unrestricted();
+    publication.mark_pending().unwrap();
+    assert!(mixer.publish_constant_timing_rt(
+        0,
+        PreparedConstantTiming {
+            reference: sample.clone(),
+            publication,
+            projection: timing,
+        },
+        &mut ImmediateAudioBufferRetirement,
+    ));
+    mixer.set_speed(ratio);
+    mixer.set_pad_loop_region(
+        0,
+        start as f64 / f64::from(rate),
+        Some(end as f64 / f64::from(rate)),
+    );
+    mixer.set_pad_key_lock(0, true);
+    assert!(mixer.pad_key_lock_enabled[0]);
+    assert!(mixer.can_play_sample(0, 1.0));
+    assert!(mixer.play_sample_at_output_frame(0, 1.0, 0));
+    mixer
+}
+
+fn assert_finite_taps(reads: TapReadObservation, start: usize, end: usize, frames: usize) {
+    assert_eq!(reads.left_reads, frames);
+    assert!(reads.right_reads <= frames);
+    assert_eq!(reads.missing_reads, 0);
+    assert!(reads.min_frame.is_some_and(|frame| frame >= start));
+    assert!(reads.max_frame.is_some_and(|frame| frame < end));
+    assert_ne!(reads.address_checksum, 0);
+}
+
+fn render_finite(
+    mixer: &mut RtMixer,
+    frame: u64,
+    frames: usize,
+    start: usize,
+    end: usize,
+) -> Vec<f32> {
+    reset_tap_observation_for_test();
+    let output = render(mixer, Some(frame), frames);
+    let reads = tap_observation_for_test();
+    assert_finite_taps(reads, start, end, frames);
+    output
+}
+
+fn physical_oracle_tap_checksum(frames: usize, ratio: f64) -> u64 {
+    let mut checksum = 0_u64;
+    for frame in 0..frames {
+        let distance = frame as f64 * ratio;
+        let whole = distance.floor() as usize;
+        for (tap, right) in [
+            (Some(25 + whole % 2376), false),
+            (
+                (distance.fract() != 0.0).then_some(25 + (whole + 1) % 2376),
+                true,
+            ),
+        ] {
+            if let Some(tap) = tap {
+                checksum = checksum
+                    .wrapping_mul(1_099_511_628_211)
+                    .wrapping_add(tap as u64)
+                    .wrapping_mul(1_099_511_628_211)
+                    .wrapping_mul(1_099_511_628_211)
+                    .wrapping_add(u64::from(right));
+            }
+        }
+    }
+    checksum
+}
+
+#[test]
+fn finite_prepared_native_mixer_splits_irregular_callback_and_moves_actual_handle_and_fifos() {
+    let full = source().with_complete_source(RATE);
+    let finite = full
+        .window(25, 2401, 2, ResidentContext::KeyLockFiniteLoop)
+        .unwrap();
+    assert!(!Arc::ptr_eq(&finite.samples, &full.samples));
+    let expected = raw_native_suffix(&full, 12_853);
+    let mut actual = finite_mixer(&finite, RATE, projection(), 25, 2401, 1.371_234_567_890_123);
+    let mut reference = fixture(&full);
+    let old_native = voice(&actual).stretch.native_state_address();
+    assert_ne!(old_native, 0);
+    assert_eq!(
+        render(&mut actual, Some(0), 13),
+        render(&mut reference, Some(0), 13)
+    );
+    wait_ready(&mut actual);
+    wait_ready(&mut reference);
+    let prepared_reads = voice_mut(&mut actual)
+        .stretch
+        .prepared_tap_observation()
+        .unwrap();
+    assert_finite_taps(prepared_reads, 25, 2401, 4096);
+    assert_eq!(
+        prepared_reads.address_checksum,
+        physical_oracle_tap_checksum(4096, 1.371_234_567_890_123)
+    );
+    let prepared_native = voice_mut(&mut actual).stretch.prepared_native_address();
+    assert_ne!(prepared_native, old_native);
+    assert_eq!(
+        voice_mut(&mut actual).stretch.prepared_fifo_frames(),
+        Some((0, 511))
+    );
+    assert_eq!(
+        voice_mut(&mut actual)
+            .stretch
+            .prepared_target_output_frame(),
+        Some(4096)
+    );
+    let mut frame = 13;
+    for frames in [31, 777, 1024, 1, 2247] {
+        assert_eq!(
+            render(&mut actual, Some(frame), frames),
+            render(&mut reference, Some(frame), frames)
+        );
+        frame += frames as u64;
+    }
+    assert_eq!(frame, 4093);
+    let join = render(&mut actual, Some(frame), 37);
+    assert_eq!(join, render(&mut reference, Some(frame), 37));
+    assert_eq!(&join[3..], &expected[..34]);
+    assert_eq!(
+        voice(&actual).stretch.native_state_address(),
+        prepared_native
+    );
+    assert_eq!(voice(&actual).stretch.adopted_request_id(), Some(1));
+    let mut elapsed = 34;
+    for requested in [1, 127, 384, 96, 257, 512, 31].into_iter().cycle() {
+        if elapsed == expected.len() {
+            break;
+        }
+        let frames = requested.min(expected.len() - elapsed);
+        let output = render_finite(&mut actual, 4096 + elapsed as u64, frames, 25, 2401);
+        assert_eq!(output, expected[elapsed..elapsed + frames]);
+        assert_eq!(
+            output,
+            render(&mut reference, Some(4096 + elapsed as u64), frames)
+        );
+        elapsed += frames;
+        assert_eq!(
+            voice(&actual).stretch.native_state_address(),
+            prepared_native
+        );
+        assert_eq!(
+            voice(&actual).stretch.native_tap_observation(),
+            Some(prepared_reads)
+        );
+        let history = voice(&actual).stretch.productive_history().unwrap();
+        assert_eq!(history.fed_output_frames, (4096 + elapsed) as u64);
+        assert_eq!(
+            history.next_position,
+            voice(&actual).source_playback.position()
+        );
+        assert!(
+            voice(&actual)
+                .source_playback
+                .matches_exact(&voice(&reference).source_playback)
+        );
+        assert_eq!(voice(&actual).sample.as_ref().unwrap().samples.len(), 2376);
+    }
+    assert!(expected.iter().any(|value| value.abs() > 0.02));
 }
 
 #[test]
@@ -443,6 +630,60 @@ fn prepared_native_mixer_adopts_while_canonical_rate_smoothing_is_still_active()
 }
 
 #[test]
+fn finite_prepared_native_mixer_adopts_while_canonical_rate_smoothing_is_still_active() {
+    let full = source().with_complete_source(RATE);
+    let finite = full
+        .window(25, 2401, 2, ResidentContext::KeyLockFiniteLoop)
+        .unwrap();
+    let mut actual = finite_mixer(&finite, RATE, projection(), 25, 2401, 0.5);
+    let mut reference = fixture(&full);
+    reference.set_speed(0.5);
+    assert!(reference.play_sample_at_output_frame(0, 1.0, 0));
+    for mixer in [&mut actual, &mut reference] {
+        mixer.set_speed(2.0);
+    }
+    assert_eq!(
+        render(&mut actual, Some(0), 1),
+        render(&mut reference, Some(0), 1)
+    );
+    wait_ready(&mut actual);
+    wait_ready(&mut reference);
+    let prepared = voice_mut(&mut actual).stretch.prepared_native_address();
+    assert_ne!(prepared, voice(&actual).stretch.native_state_address());
+    assert_finite_taps(
+        voice_mut(&mut actual)
+            .stretch
+            .prepared_tap_observation()
+            .unwrap(),
+        25,
+        2401,
+        4096,
+    );
+    assert_eq!(
+        voice_mut(&mut actual).stretch.prepared_fifo_frames(),
+        Some((0, 511))
+    );
+    for (start, frames) in [(1, 31), (32, 1024), (1056, 3040), (4096, 137), (4233, 777)] {
+        let output = render_finite(&mut actual, start, frames, 25, 2401);
+        assert_eq!(output, render(&mut reference, Some(start), frames));
+        assert!(
+            voice(&actual)
+                .source_playback
+                .matches_exact(&voice(&reference).source_playback)
+        );
+        if start >= 4096 {
+            assert_eq!(voice(&actual).stretch.native_state_address(), prepared);
+            assert_eq!(voice(&actual).stretch.adopted_request_id(), Some(1));
+            assert!(output.iter().any(|value| value.abs() > 0.001));
+            if start == 4096 {
+                assert!(voice(&actual).source_playback.tempo_ratio() < 1.0);
+            }
+        }
+    }
+    assert_eq!(voice(&actual).sample.as_ref().unwrap().samples.len(), 2376);
+}
+
+#[test]
 fn prepared_native_mixer_unload_releases_preparing_ready_and_adopted_pins_on_worker() {
     for phase in 0..3 {
         let sample = source();
@@ -656,6 +897,110 @@ fn productive_musical_worker_adopts_actual_native_and_copied_fifo_domain() {
             }
             assert_eq!(mixer.pad_loop_start_frame[0], MUSICAL_START);
             assert_eq!(mixer.pad_loop_end_frame[0], Some(MUSICAL_END));
+        }
+    }
+}
+
+#[test]
+fn finite_productive_musical_worker_adopts_actual_native_and_copied_fifo_domain() {
+    let rate = 48_000;
+    let full = source().with_complete_source(rate);
+    let finite = full
+        .window(
+            MUSICAL_START,
+            MUSICAL_END,
+            2,
+            ResidentContext::KeyLockFiniteLoop,
+        )
+        .unwrap();
+    for period in [1499.75, 1500.25] {
+        for ratio in [0.73, 1.371_234_567_890_123] {
+            let expected = musical_raw_native_suffix(&full, rate, period, ratio, 12_853);
+            let mut actual = finite_mixer(
+                &finite,
+                rate,
+                musical_projection(rate, period),
+                MUSICAL_START,
+                MUSICAL_END,
+                ratio,
+            );
+            let mut reference = musical_mixer(&full, rate, period, ratio, true);
+            assert_eq!(
+                render(&mut actual, Some(0), 13),
+                render(&mut reference, Some(0), 13)
+            );
+            wait_ready(&mut actual);
+            wait_ready(&mut reference);
+            let prepared_reads = voice_mut(&mut actual)
+                .stretch
+                .prepared_tap_observation()
+                .unwrap();
+            assert_finite_taps(prepared_reads, MUSICAL_START, MUSICAL_END, 4096);
+            let prepared = voice_mut(&mut actual).stretch.prepared_native_address();
+            assert_ne!(prepared, voice(&actual).stretch.native_state_address());
+            assert_eq!(
+                voice_mut(&mut actual).stretch.prepared_fifo_frames(),
+                Some((0, 511))
+            );
+            assert_eq!(
+                voice_mut(&mut actual)
+                    .stretch
+                    .prepared_target_output_frame(),
+                Some(4096)
+            );
+            assert_eq!(
+                render(&mut actual, Some(13), 4080),
+                render(&mut reference, Some(13), 4080)
+            );
+            let join = render(&mut actual, Some(4093), 37);
+            assert_eq!(join, render(&mut reference, Some(4093), 37));
+            assert_eq!(&join[3..], &expected[..34]);
+            let mut elapsed = 34;
+            for requested in [1, 127, 384, 96, 257, 512, 31].into_iter().cycle() {
+                if elapsed == expected.len() {
+                    break;
+                }
+                let frames = requested.min(expected.len() - elapsed);
+                let output = render_finite(
+                    &mut actual,
+                    4096 + elapsed as u64,
+                    frames,
+                    MUSICAL_START,
+                    MUSICAL_END,
+                );
+                assert_eq!(output, expected[elapsed..elapsed + frames]);
+                assert_eq!(
+                    output,
+                    render(&mut reference, Some(4096 + elapsed as u64), frames)
+                );
+                elapsed += frames;
+                let history = voice(&actual).stretch.productive_history().unwrap();
+                assert_eq!(
+                    history.binding.accepted,
+                    Some(musical_projection(rate, period))
+                );
+                assert_eq!(history.fed_output_frames, (4096 + elapsed) as u64);
+                assert_eq!(
+                    history.next_position,
+                    voice(&actual).source_playback.position()
+                );
+                assert_eq!(voice(&actual).stretch.native_state_address(), prepared);
+                assert_eq!(voice(&actual).stretch.adopted_request_id(), Some(1));
+                assert_eq!(
+                    voice(&actual).stretch.native_tap_observation(),
+                    Some(prepared_reads)
+                );
+                assert!(
+                    voice(&actual)
+                        .source_playback
+                        .matches_exact(&voice(&reference).source_playback)
+                );
+            }
+            assert!(expected.iter().any(|value| value.abs() > 0.02));
+            assert_eq!(
+                voice(&actual).sample.as_ref().unwrap().samples.len(),
+                MUSICAL_END - MUSICAL_START
+            );
         }
     }
 }

@@ -49,6 +49,7 @@ rust/
     |           |-- dsp.rs
     |           |-- input_mapping.rs
     |           |-- key_lock_preparation.rs
+    |           |-- native_source_coverage.rs # actual finite Normal-loop taps and bound history
     |           |-- productive_source_history.rs
     |           |-- mixer.rs
     |           |-- scheduler.rs

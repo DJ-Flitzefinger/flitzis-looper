@@ -250,6 +250,21 @@ of requested finite loop provisioning. P4b remains open until the necessary
 bounded DSP implementation and regression evidence establish actual finite
 coverage; do not claim universal loop-only supply from P4a's dry proof.
 
+The first productive P4b vertical is stopped/current same-source NormalLoop at
+production k=0 and non-unity rate. Its immutable coverage binds actual complete
+source and resident window, copied read plan/playback, timing and selected stem
+owners. NormalLoop's shared tap mapping closes over the physical loop interval
+for every fractional phase and canonical rate chunk; the 4096 output-frame
+prepare horizon does not size a source halo. Existing retained range readers,
+WindowWork admission/transaction and the Key Lock worker perform finite read,
+own window ACK, actual native/FIFO preparation and continued callback rendering.
+Pending history stays exact-window-bound; already adopted same-source history
+may survive storage-only ACK without resetting native/FIFO/filter chronology.
+Active selection transitions and finite seek/intro/tail, old voices and wider
+refresh/retrigger contexts remain guarded and are subsequent P4b work. The parent
+P4b tasks remain open until their complete musical/resource/causality matrix is
+proved. No new reader, scheduler, worker lane or callback I/O is introduced.
+
 ## First lazy live activation and effective-mode acknowledgement
 
 Separate five states per source-bound pad: durable desired mode, selected verified

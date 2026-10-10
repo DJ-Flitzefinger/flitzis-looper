@@ -151,6 +151,33 @@ impl StretchProcessor {
         if frames == 0 {
             return;
         }
+        let finite = !super::native_source_coverage::complete_view_available(feed.sample);
+        if finite {
+            if (preserve_pitch
+                && !super::native_source_coverage::normal_loop_feed_available(
+                    feed.sample,
+                    feed.stems,
+                    feed.sample_rate_hz,
+                    feed.accepted,
+                    feed.plan,
+                    feed.playback,
+                ))
+                || feed
+                    .plan
+                    .fill_fractional_buffers_checked(
+                        feed.sample,
+                        feed.stems,
+                        feed.playback,
+                        self.resampled_buffers_mut(frames),
+                        frames,
+                    )
+                    .is_err()
+            {
+                // Never consume missing-tap zeros or touch productive native/FIFO/history state.
+                self.silence_output(frames);
+                return;
+            }
+        }
         let wet = preserve_pitch
             && (pitch_scale_for_tempo_ratio(feed.playback.tempo_ratio()) - 1.0).abs()
                 > PITCH_SCALE_EPSILON;
@@ -210,13 +237,15 @@ impl StretchProcessor {
         let prior_frames = self
             .productive_history
             .map_or(0, |history| history.fed_output_frames);
-        feed.plan.fill_fractional_buffers(
-            feed.sample,
-            feed.stems,
-            feed.playback,
-            self.resampled_buffers_mut(frames),
-            frames,
-        );
+        if !finite {
+            feed.plan.fill_fractional_buffers(
+                feed.sample,
+                feed.stems,
+                feed.playback,
+                self.resampled_buffers_mut(frames),
+                frames,
+            );
+        }
         self.process_resampled(frames, feed.playback.tempo_ratio(), preserve_pitch);
         if self.native.active {
             self.productive_history = Some(ProductiveSourceHistory {
@@ -414,6 +443,31 @@ impl StretchProcessor {
         self.preparation
             .prepared_state()
             .map(|state| (state.input_fifo[0].len(), state.output_fifo[0].len()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prepared_tap_observation(
+        &mut self,
+    ) -> Option<super::source_reader::TapReadObservation> {
+        self.preparation
+            .prepared_state()?
+            .source
+            .as_ref()?
+            .coverage
+            .as_ref()
+            .map(|coverage| coverage.prepared_taps)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn native_tap_observation(
+        &self,
+    ) -> Option<super::source_reader::TapReadObservation> {
+        self.native
+            .source
+            .as_ref()?
+            .coverage
+            .as_ref()
+            .map(|coverage| coverage.prepared_taps)
     }
 
     #[cfg(test)]

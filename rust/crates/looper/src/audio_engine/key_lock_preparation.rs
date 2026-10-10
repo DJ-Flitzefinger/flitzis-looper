@@ -163,10 +163,26 @@ impl KeyLockPreparationLane {
         {
             return false;
         }
+        let coverage = if super::native_source_coverage::complete_view_available(feed.sample) {
+            None
+        } else {
+            let Some(coverage) = super::native_source_coverage::NormalLoopCoverage::capture(
+                feed.sample,
+                feed.stems,
+                feed.sample_rate_hz,
+                feed.accepted,
+                feed.plan,
+                feed.playback,
+            ) else {
+                return false;
+            };
+            Some(coverage)
+        };
         let request = NativeHistoryRequest {
             sample: feed.sample.clone(),
             stems: feed.stems.cloned(),
             permit: permit.clone(),
+            coverage,
             binding: ProductiveSourceBinding::new(feed.sample, feed.sample_rate_hz, feed.accepted),
             playback: *feed.playback,
             plan: feed.plan,

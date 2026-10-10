@@ -573,6 +573,37 @@ impl ProjectAssets {
         Ok(lease)
     }
 
+    /// Snapshot actual live backing in the existing reader registry off-thread.
+    /// Native history, old voices and queued jobs keep these Weak entries live
+    /// after their original window has left the control cache. The snapshot
+    /// keeps each unique allocation pinned through this preparation's admission.
+    pub(super) fn held_reader_backings(
+        &self,
+        lease: &CommittedColdLease,
+        stem_generation: Option<&Path>,
+    ) -> io::Result<Vec<Arc<[f32]>>> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("asset gate poisoned"))?;
+        let mut backing = Vec::new();
+        for reader in &state.readers {
+            let source = reader.cold.as_ref().is_some_and(|owned| {
+                owned.assignment_id() == lease.assignment_id()
+                    || (owned.original_path == lease.original_path
+                        && owned.cache_path == lease.cache_path)
+            });
+            if source || stem_generation.is_some_and(|path| path == reader.path) {
+                for samples in reader.pcm.iter().filter_map(Weak::upgrade) {
+                    if !backing.iter().any(|held| Arc::ptr_eq(held, &samples)) {
+                        backing.push(samples);
+                    }
+                }
+            }
+        }
+        Ok(backing)
+    }
+
     pub(super) fn retire(&self, root: &Path, path: &Path, recursive: bool) -> io::Result<()> {
         let (root, path) = owned_path(root, path)?;
         validate_target(&root, &path, recursive)?;

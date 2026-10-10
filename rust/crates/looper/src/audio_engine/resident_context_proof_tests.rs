@@ -363,7 +363,7 @@ fn finite_stem_transition_uses_the_same_knots_and_releases_complete_backings() {
 }
 
 #[test]
-fn finite_context_fails_closed_for_key_lock_intro_tail_and_uncovered_geometry() {
+fn finite_normal_tap_context_covers_key_lock_geometry_and_guards_intro_tail() {
     let complete = complete_source(48_000, 0);
     let finite = complete
         .window(START, START + LENGTH, 2, ResidentContext::FiniteLoop)
@@ -386,9 +386,10 @@ fn finite_context_fails_closed_for_key_lock_intro_tail_and_uncovered_geometry() 
         assert!(resident_read_context_available(
             &complete, region, mode, true
         ));
-        assert!(!resident_read_context_available(
-            &finite, region, mode, true
-        ));
+        assert_eq!(
+            resident_read_context_available(&finite, region, mode, true),
+            mode == ExplicitSeekMode::Normal
+        );
         assert_eq!(
             resident_read_context_available(&finite, region, mode, false),
             mode == ExplicitSeekMode::Normal
@@ -409,6 +410,12 @@ fn finite_context_fails_closed_for_key_lock_intro_tail_and_uncovered_geometry() 
             outside,
             ExplicitSeekMode::Normal,
             false
+        ));
+        assert!(!resident_read_context_available(
+            &finite,
+            outside,
+            ExplicitSeekMode::Normal,
+            true
         ));
     }
 }

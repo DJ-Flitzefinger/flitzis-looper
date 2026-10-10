@@ -68,6 +68,20 @@ loop/DSP context before claiming completion of shared-material loop residency.
 - **AND** guessed halos or unavailable future input SHALL NOT authorize readiness
 - **AND** accepted P/integer H/one rate owner and acoustic/latency/1598-frame33.292-ms fixtures SHALL remain intact
 
+#### Scenario: Normal-loop native preparation and continued rendering share finite input
+- **WHEN** a stopped current source obtains a finite Normal-loop window with production k=0 KEYLOCK and a non-unity ratio
+- **THEN** retained verified readers SHALL prepare only the physical loop range and the existing window transaction SHALL obtain its own callback ACK
+- **AND** a copied SourceReadPlan and binary64 SourcePlayback trajectory SHALL prove both executed interpolation taps within held FullMix and selected component ranges, including virtual P/H seams and rate smoothing
+- **AND** the existing NativeHistoryRequest/Permit SHALL bind complete source identity, actual window/revision, timing projection, selection and stem-set ownership before real native/FIFO catch-up and exact adoption
+- **AND** callback rendering SHALL continue through that same actual native adapter with independently held complete PCM and raw-native output as regression oracles
+- **AND** a missing tap, stale source/window/rate/selection, cancellation or saturated admission/recycle lane SHALL preserve prior effective audio without treating missing input as successful silence
+
+#### Scenario: A finite storage refresh preserves already adopted native chronology
+- **WHEN** an acknowledged same-source Normal-loop finite window changes only resident storage while native history is already adopted
+- **THEN** pending native preparation SHALL remain bound to its exact captured window
+- **AND** adopted history MAY retain the same effective-source permit, actual native handle, FIFO and filter chronology while its original reader pins remain held until final use
+- **AND** active selection transitions, old-source replacement, seek/intro/tail and other unproved finite contexts SHALL retain their guards and keep the complete P4b gate open
+
 ### Requirement: Separate aggregate residency and preparation accounting
 The system SHALL reserve unique resident backing and simultaneous pending/old
 live resident allocations against the explicit aggregate ProjectState budget
