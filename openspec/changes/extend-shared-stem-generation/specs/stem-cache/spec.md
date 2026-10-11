@@ -192,6 +192,13 @@ immediate change SHALL NOT silently discard the command.
 - **THEN** timestamped paused callbacks SHALL consume no source, handover, Native FIFO or filter history and SHALL NOT report effective output
 - **AND** Resume SHALL retain that voice generation and exact source phase, Native, FIFO and filter state, complete the handover through actual resumed source consumption and confirm new-set wet output only through its own later preparation and effective receipt
 
+#### Scenario: First KEY LOCK OFF candidate is prepared after public Pause
+- **GIVEN** a productive proper NormalLoop FullMix voice with KEY LOCK OFF and nonneutral varispeed is publicly paused before new-set preparation, durable commit, registration and own Capture
+- **WHEN** the new complete-set candidate obtains its own residency acceptance while that same voice remains paused
+- **THEN** advancing callback timestamps SHALL consume no source distance, handover or filter history, preserve the exact voice and source phase and report no effective new-set output
+- **AND** public Resume SHALL retain that voice and phase, then complete the handover through actual resumed source consumption and confirm the candidate only through its own effective varispeed/filter output
+- **AND** KEY LOCK OFF acceptance SHALL NOT borrow Native wet preparation or the KEY LOCK ON receipt as evidence
+
 #### Scenario: Later candidate arrives during an owned handover
 - **GIVEN** V2 has been claimed and V1 remains the outgoing reader
 - **WHEN** disk candidate V3 or a new mode or mask intent arrives

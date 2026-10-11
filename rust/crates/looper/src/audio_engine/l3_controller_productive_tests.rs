@@ -13,6 +13,8 @@ const STOPPED_NEW_SET_CHILD: &str = "FLITZI_L3_CONTROLLER_STOPPED_NEW_SET_CHILD"
 const STOPPED_NEW_SET_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_stopped_replacement_play_then_fresh_all_uses_own_wet_receipt";
 const PAUSED_FIRST_CHILD: &str = "FLITZI_L3_CONTROLLER_PAUSED_FIRST_CHILD";
 const PAUSED_FIRST_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_wet_full_mix_paused_before_first_candidate_keeps_consumed_clock";
+const PAUSED_FIRST_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_PAUSED_FIRST_OFF_CHILD";
+const PAUSED_FIRST_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_varispeed_paused_before_first_candidate_keeps_consumed_clock";
 const REPEATED_SETS_CHILD: &str = "FLITZI_L3_CONTROLLER_REPEATED_SETS_CHILD";
 const REPEATED_SETS_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_empty_handover_defers_v3_and_uses_latest_mask_with_own_ack";
 const WITHDRAW_PRECLAIM_CHILD: &str = "FLITZI_L3_CONTROLLER_WITHDRAW_PRECLAIM_CHILD";
@@ -2261,17 +2263,31 @@ owner_v2.release()
             assert!(actual.iter().any(|sample| sample.abs() > 0.001));
         }
     } else {
-        render_varispeed(&mut playback, 13);
+        let (actual, _) = render_varispeed(&mut playback, 13);
+        if paused_first {
+            assert!(actual.iter().any(|sample| sample.abs() > 0.001));
+        }
     }
     controller_python(&locals, "session.active_sample_ids.update({0, 215})");
     if paused_first {
-        assert!(key_lock && !selected_v1 && delete_pause.is_none());
-        assert!(voice(&playback.callback.mixer).stretch.wet_render_ready());
-        assert!(
-            voice(&playback.callback.mixer)
-                .stretch
-                .wet_current_source_output_ready()
-        );
+        assert!(!selected_v1 && delete_pause.is_none());
+        if key_lock {
+            assert!(voice(&playback.callback.mixer).stretch.wet_render_ready());
+            assert!(
+                voice(&playback.callback.mixer)
+                    .stretch
+                    .wet_current_source_output_ready()
+            );
+        } else {
+            assert!(playback.raw.is_none() && playback.candidate.is_none());
+            assert!(!voice(&playback.callback.mixer).stretch.wet_render_ready());
+            assert!(
+                voice(&playback.callback.mixer)
+                    .stretch
+                    .productive_history()
+                    .is_none()
+            );
+        }
         controller_python(
             &locals,
             r#"
@@ -2941,6 +2957,31 @@ fn actual_python_controller_pending_capture_deadline_keeps_v1_then_fresh_own_ret
     assert!(
         output.status.success(),
         "L3 Capture deadline child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+}
+
+#[test]
+fn actual_python_controller_varispeed_paused_before_first_candidate_keeps_consumed_clock() {
+    if std::env::var_os(PAUSED_FIRST_OFF_CHILD).is_some() {
+        round_trip(false, None, false, None, true, CandidateTrace::Ordinary);
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            PAUSED_FIRST_OFF_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(PAUSED_FIRST_OFF_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 OFF paused-first child failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

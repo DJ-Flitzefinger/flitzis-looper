@@ -844,7 +844,7 @@ but obtains a different own receipt and actual Capture/worker/Adopt. The existin
 128-source-frame ramp, later ON own 4096-frame Native preparation and nontrivial
 V2 effect remain required. The old failed receipt remains rejected and cannot
 lend its ACK or overwrite the successful retry's observed effect/error clearing.
-The actual 30-second Capture/reconcile deadline is a distinct unclosed path;
+The actual 30-second Capture/reconcile deadline is a distinct path;
 this post-queue test does not accelerate or claim that deadline. Production,
 parent and build-only runtime inputs are unchanged, with no installation or
 App/device/hearing acceptance. All remaining full product gates stay open.
@@ -855,6 +855,36 @@ issue. Formatting, official strict validation and whitespace pass; Clippy tests
 exit0 with the existing63 warnings (one duplicate), none in the changed test.
 The preceding production Release/import/Python checks and unchanged verified
 relative-file links remain reusable.
+
+### Public KEY LOCK OFF first candidate after Pause
+
+The paused-first proper NormalLoop fixture also supports KEY LOCK OFF/rate1.25.
+Productive original FullMix varispeed and uninterrupted EQ precede actual public
+Pause commands for pad0 and independently tracked pad215. V2 preparation, fenced
+durable commit/reopen, registration and own Capture all occur after that Pause.
+The actual paused Capture/worker/Adopt accepts V2 with a transitioning receipt,
+without consuming the source-frame ramp or reporting effective output.
+
+Timestamped paused partitions retain source fraction, voice generation, Native
+address/FIFOs, empty productive Native history, DSP history and handover state.
+The independent PCM clock and EQ receive no paused samples. Public Resume keeps
+the exact same voice and phase; real varispeed rendering then completes the
+128-consumed-source-frame ramp and nontrivial V2 output against independent
+complete V1 PCM mask0011 and continuous EQ. V2's own effective receipt alone
+confirms the change. No Wet or later Native preparation is used as OFF evidence.
+
+The shared ON/rate0.75 paused-first case retains its genuine wet-readiness and
+later own preparation assertions. This additional OFF first-set case leaves the
+full paused/replacement/rate/mask matrix and other product/resource/Human gates
+open. Production, parent and build-only runtime inputs are unchanged, without
+Native installation or App/device/hearing action.
+
+The focused OFF paused-first Release case passes in1.58s and all10 affected
+public Native tests pass in57.80s. One independent nonauthor final review finds
+no concrete issue. Formatting, official strict validation and whitespace pass;
+Clippy tests exit0 with the existing63 warnings (one duplicate), none in the
+changed test. Prior unchanged production Release/import/Python checks and
+verified relative-file links remain reusable.
 
 ### Real worker Capture deadline and unchanged late Capture
 
