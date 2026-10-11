@@ -579,5 +579,35 @@ the other25 unchanged positives are reused, without claiming a fresh combined
 Formatting, official strict validation and one independent nonauthor review cover
 the bounded delta. Only tests, test-only module exposure and specs/docs changed;
 the previous Release build/import profile is reused without installing Native.
-Full task3.2, additional domains3.3, rate-smoothing new-set proof, remaining
-paused/stopped/mask/old-voice/controller cases and all following gates remain open.
+Full task3.2, additional domains3.3 and remaining paused/stopped/mask/old-voice/
+controller cases and all following gates remain open.
+
+### Bounded new-set rate-smoothing evidence
+
+Four further Native paths cover first and replacement adoption with KEY LOCK
+OFF/ON while a real queued speed target changes from0.5 to2.0. Own callback
+Capture occurs after13 active output frames and Adopt after500. The next
+512-frame smoothing step falls inside both the actual callback and the
+128 consumed-source-frame handover. An independent piecewise rate/distance
+calculation verifies source phase and completion: the ramp remains active after
+214 output frames (127.8 source frames) and finishes on the215th.
+
+Actual generation, full source clock, Native/FIFO state, wet status and source/DSP
+history survive Adopt. Irregular renders compare every output sample and adapter
+FIFO with the existing complete-PCM reference. Independently summed/interpolated
+complete V1 PCM also checks actual settled V2 varispeed feed and distinguishes it
+from both FullMix and the old V1 mask. ON retains its used Native/history through
+the ramp, then follows the regular unity dry bypass before a genuine later
+source-bound worker preparation/adoption with smoothing still active. OFF uses
+dry output without claiming wet readiness. This is Native complete-PCM evidence;
+it adds no separate raw-Native wet counterfactual or public controller smoothing
+proof and opens no additional playback domain.
+
+The new four-case Release test passes in3.52s (compile58.91s). Fresh existing
+same-set smoothing and changing-rate exact-reader regressions also pass. Package
+Clippy for tests exits0 with the same63 warnings as the preceding test block,
+including one duplicate and no warning in this new test. Tests/spec/docs only;
+unchanged Release build/import and Python checks are reused. Full task3.2 and all
+following product, resource and Human acceptance gates remain open.
+Official strict validation, formatting, Markdown link/whitespace checks and one
+independent nonauthor final review pass; that review found no concrete issue.

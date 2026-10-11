@@ -1220,3 +1220,375 @@ fn candidate_full_track_callback_bank_rejects_first_and_replacement_without_clai
         }
     }
 }
+
+// Independent transport expectation: the declared .5 -> 2.0 control trajectory
+// applies .05 per 512 consumed output frames. No copied SourcePlayback cursor,
+// chunk/advance call or transition helper supplies the expected distance.
+struct GlidingSourceOracle {
+    control_frame: u64,
+    phase: f64,
+    binding: crate::audio_engine::productive_source_history::ProductiveSourceBinding,
+    dsp_frames: u64,
+    wet_frames: Option<u64>,
+}
+
+impl GlidingSourceOracle {
+    fn new(p: &Productive) -> Self {
+        let actual = voice(&p.h.callback.mixer);
+        assert_eq!(actual.source_playback.tempo_ratio(), 0.5);
+        assert_eq!(actual.source_playback.rate_target(), 0.5);
+        let position = actual.source_playback.position();
+        let dsp = p.h.callback.mixer.dsp_source_history_for_test(0).unwrap();
+        assert_eq!(dsp.next_position, position);
+        let history = actual.stretch.productive_history();
+        assert_eq!(history.is_some(), p.key_lock);
+        Self {
+            control_frame: p.frame,
+            phase: (position.frame - LOOP_START) as f64 + position.fraction,
+            binding: dsp.binding,
+            dsp_frames: dsp.fed_output_frames,
+            wet_frames: history.map(|history| history.fed_output_frames),
+        }
+    }
+
+    fn rate_at(output_frame: usize) -> f64 {
+        (0.5 + 0.05 * (1 + output_frame / 512) as f64).min(2.0)
+    }
+
+    fn distance_at(output_frames: usize) -> f64 {
+        let whole_steps = output_frames / 512;
+        let whole_distance: f64 = (0..whole_steps)
+            .map(|step| 512.0 * Self::rate_at(step * 512))
+            .sum();
+        whole_distance + (output_frames % 512) as f64 * Self::rate_at(whole_steps * 512)
+    }
+
+    fn elapsed(&self, p: &Productive) -> usize {
+        (p.frame - self.control_frame) as usize
+    }
+
+    fn verify(&self, p: &Productive) {
+        let elapsed = self.elapsed(p);
+        assert!(elapsed > 0);
+        let actual = voice(&p.h.callback.mixer);
+        let playback = actual.source_playback;
+        // At exactly 512 consumed frames the old step remains observable until
+        // the next real frame starts. Target intent itself stays unchanged.
+        assert!((playback.tempo_ratio() - Self::rate_at(elapsed - 1)).abs() < 1e-12);
+        assert_eq!(playback.rate_target(), 2.0);
+        let position = playback.position();
+        assert_eq!(
+            position.seek_mode,
+            crate::audio_engine::source_reader::ExplicitSeekMode::Normal
+        );
+        let period = (LOOP_END - LOOP_START) as f64;
+        let expected = (self.phase + Self::distance_at(elapsed)).rem_euclid(period);
+        let observed = (position.frame - LOOP_START) as f64 + position.fraction;
+        let difference = (observed - expected).abs();
+        assert!(
+            difference.min((period - difference).abs()) < 1e-8,
+            "independent gliding phase at {elapsed}: actual={observed}, expected={expected}"
+        );
+        let dsp = p.h.callback.mixer.dsp_source_history_for_test(0).unwrap();
+        assert_eq!(dsp.binding, self.binding);
+        assert_eq!(dsp.next_position, position);
+        assert_eq!(dsp.fed_output_frames, self.dsp_frames + elapsed as u64);
+        if p.key_lock && elapsed <= 1536 {
+            // Before the deliberate later preparation/unity bypass, the real
+            // already-used Native/FIFOs must keep their chronological ledger.
+            let history = actual.stretch.productive_history().unwrap();
+            assert_eq!(history.binding, self.binding);
+            assert_eq!(history.next_position, position);
+            assert_eq!(
+                history.fed_output_frames,
+                self.wet_frames.unwrap() + elapsed as u64
+            );
+            assert!(actual.stretch.wet_render_ready());
+            assert!(actual.stretch.wet_output_ready());
+        } else if !p.key_lock {
+            assert!(actual.stretch.productive_history().is_none());
+            assert!(!actual.stretch.wet_render_ready());
+            assert!(!actual.stretch.wet_output_ready());
+        }
+    }
+
+    fn render(&self, p: &mut Productive, frames: usize, timestamp: bool) -> Vec<f32> {
+        // Productive compares every output sample, the exact complete source
+        // clock and real adapter FIFO lengths with its independent full PCM mixer.
+        let output = p.render(frames, timestamp);
+        self.verify(p);
+        output
+    }
+}
+
+fn complete_pcm_selection_at(
+    source: &SampleBuffer,
+    components: &PreparedStemSet,
+    mask: Option<u8>,
+    position: crate::audio_engine::source_playback::FractionalSourcePosition,
+    channel: usize,
+) -> f32 {
+    assert_eq!(source.resident_start(), 0);
+    let right = if position.frame + 1 == LOOP_END {
+        LOOP_START
+    } else {
+        position.frame + 1
+    };
+    let knot = |frame: usize| match mask {
+        None => source.samples[frame * 2 + channel],
+        Some(mask) => components
+            .stems
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| mask & (1 << index) != 0)
+            .map(|(_, component)| {
+                assert_eq!(component.resident_start(), 0);
+                component.samples[frame * 2 + channel]
+            })
+            .sum::<f32>(),
+    };
+    let left = knot(position.frame);
+    left + (knot(right) - left) * position.fraction as f32
+}
+
+#[test]
+fn gliding_first_and_replacement_candidates_keep_source_distance_native_fifo_and_eq() {
+    for key_lock in [false, true] {
+        for selected_v1 in [false, true] {
+            let mut p = Productive::new(key_lock, 0.5);
+            if selected_v1 {
+                make_v1_effective(&mut p);
+            }
+            let oracle = GlidingSourceOracle::new(&p);
+            let revision = p.h.engine.global_timing_revision.load(Ordering::Acquire);
+            let (mut parameters, mut parameter_consumer) = rtrb::RingBuffer::new(1);
+            crate::audio_engine::push_global_timing_message(
+                &p.h.engine.global_timing_revision,
+                &mut parameters,
+                ControlParameterMessage::SetSpeed(2.0),
+                "SetSpeed",
+            )
+            .unwrap();
+            assert_eq!(
+                p.h.engine.global_timing_revision.load(Ordering::Acquire),
+                revision + 1
+            );
+            let callback = p.h.callback.as_mut();
+            crate::audio_engine::audio_stream::drain_parameter_messages(
+                &mut parameter_consumer,
+                &mut callback.mixer,
+                &mut callback.transport,
+            );
+            assert!(parameter_consumer.is_empty());
+            p.reference.set_speed(2.0);
+
+            oracle.render(&mut p, 13, false);
+            assert_eq!(oracle.elapsed(&p), 13);
+            let (_pair, selected) = candidate(&mut p, 202);
+            let old_identity = p.h.callback.mixer.stems_for_measurement()[0]
+                .as_ref()
+                .map(|set| set.complete_set_identity.clone());
+            let receipt = request_candidate(&mut p, &selected, 0b1010);
+            p.capture_then_wait(&receipt);
+            assert!(p.selected.is_current());
+            for frames in [31, 257, 1, 198] {
+                oracle.render(&mut p, frames, false);
+            }
+            assert_eq!(oracle.elapsed(&p), 500);
+            let before = voice(&p.h.callback.mixer);
+            let clock = before.source_playback;
+            let generation = before.generation;
+            let native = before.stretch.native_state_address();
+            let fifo = before.stretch.pending_fifo_frames();
+            let history = before.stretch.productive_history();
+            let wet = before.stretch.wet_output_ready();
+            let dsp = p.h.callback.mixer.dsp_source_history_for_test(0).unwrap();
+            assert_eq!(history.is_some(), key_lock);
+            assert_eq!(wet, key_lock);
+            if key_lock {
+                assert_ne!(fifo, (0, 0), "productive adapter state before Adopt");
+            } else {
+                assert_eq!(fifo, (0, 0));
+                assert!(!before.stretch.wet_render_ready());
+            }
+            assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
+            assert_eq!(
+                receipt.residency_status(),
+                "accepted",
+                "{:?}",
+                receipt.error()
+            );
+            assert!(receipt.claimed() && !receipt.withdraw());
+            assert!(selected.is_current());
+            assert!(!p.selected.is_current());
+            let after = voice(&p.h.callback.mixer);
+            assert_eq!(after.generation, generation);
+            assert!(after.source_playback.matches_exact(&clock));
+            assert_eq!(after.stretch.native_state_address(), native);
+            assert_eq!(after.stretch.pending_fifo_frames(), fifo);
+            assert_eq!(after.stretch.wet_output_ready(), wet);
+            if let Some(history) = history {
+                let next = after.stretch.productive_history().unwrap();
+                assert_eq!(next.binding, history.binding);
+                assert_eq!(next.next_position, history.next_position);
+                assert_eq!(next.domain, history.domain);
+                assert_eq!(next.fed_output_frames, history.fed_output_frames);
+            } else {
+                assert!(after.stretch.productive_history().is_none());
+            }
+            let next_dsp = p.h.callback.mixer.dsp_source_history_for_test(0).unwrap();
+            assert_eq!(next_dsp.binding, dsp.binding);
+            assert_eq!(next_dsp.next_position, dsp.next_position);
+            assert_eq!(next_dsp.fed_output_frames, dsp.fed_output_frames);
+            if let Some(old_identity) = old_identity {
+                assert!(!Arc::ptr_eq(
+                    &old_identity,
+                    &p.h.callback.mixer.stems_for_measurement()[0]
+                        .as_ref()
+                        .unwrap()
+                        .complete_set_identity
+                ));
+            }
+            p.select_reference("all_stems", reordered_mask(0b1010));
+            p.selected = selected;
+            oracle.verify(&p);
+
+            let handover_distance = |frames| {
+                GlidingSourceOracle::distance_at(500 + frames)
+                    - GlidingSourceOracle::distance_at(500)
+            };
+            let completion = (1..=256)
+                .find(|frames| handover_distance(*frames) >= 128.0)
+                .unwrap();
+            assert_eq!(completion, 215);
+            assert!(handover_distance(completion - 1) < 128.0);
+            assert!(handover_distance(completion) >= 128.0);
+            let mut rendered = 0;
+            let mut crossed_step_inside_callback = false;
+            for frames in [1_usize, 7, 31, 17].into_iter().cycle() {
+                let frames = frames.min(completion - 1 - rendered);
+                let before_frame = oracle.elapsed(&p);
+                oracle.render(&mut p, frames, false);
+                crossed_step_inside_callback |= before_frame < 512 && oracle.elapsed(&p) > 512;
+                rendered += frames;
+                assert!(
+                    p.h.callback
+                        .mixer
+                        .stem_transition_for_measurement(0)
+                        .is_active()
+                );
+                assert_eq!(voice(&p.h.callback.mixer).generation, generation);
+                assert_eq!(
+                    voice(&p.h.callback.mixer).stretch.native_state_address(),
+                    native
+                );
+                if rendered == completion - 1 {
+                    break;
+                }
+            }
+            // The real 512 boundary fell inside this ramp, rather than at a
+            // callback endpoint. 214 output frames consumed only 127.8 source frames.
+            assert!(crossed_step_inside_callback);
+            assert_eq!(oracle.elapsed(&p), 714);
+            assert!((voice(&p.h.callback.mixer).source_playback.tempo_ratio() - 0.6).abs() < 1e-12);
+            oracle.render(&mut p, 1, false);
+            assert!(
+                !p.h.callback
+                    .mixer
+                    .stem_transition_for_measurement(0)
+                    .is_active()
+            );
+            assert_eq!(
+                voice(&p.h.callback.mixer).stretch.native_state_address(),
+                native
+            );
+            assert_eq!(oracle.elapsed(&p), 715);
+
+            // Observe actual selected feed after the ramp. Independently sum
+            // and interpolate immutable complete V1 PCM; neither a SourceReadPlan
+            // nor the candidate's own V2 buffers supplies these expectations.
+            // Single-frame callbacks make buffer[0] the executed current feed,
+            // avoiding inspection of stale prefixes from a multi-chunk callback.
+            let mut difference_from_full = 0.0_f32;
+            let mut difference_from_v1 = 0.0_f32;
+            let mut output = Vec::new();
+            for _ in 0..31 {
+                let position = voice(&p.h.callback.mixer).source_playback.position();
+                let full = &p.h.material.sample;
+                let components = p.reference.stems_for_measurement()[0].as_ref().unwrap();
+                let expected: [f32; 2] = std::array::from_fn(|channel| {
+                    complete_pcm_selection_at(
+                        full,
+                        components,
+                        Some(reordered_mask(0b1010)),
+                        position,
+                        channel,
+                    )
+                });
+                let full_mix: [f32; 2] = std::array::from_fn(|channel| {
+                    complete_pcm_selection_at(full, components, None, position, channel)
+                });
+                let v1: [f32; 2] = std::array::from_fn(|channel| {
+                    complete_pcm_selection_at(full, components, Some(0b1010), position, channel)
+                });
+                output.extend(oracle.render(&mut p, 1, false));
+                for channel in 0..2 {
+                    let actual = voice(&p.h.callback.mixer).stretch.varispeed_buffers()[channel][0];
+                    assert_eq!(actual, expected[channel]);
+                    difference_from_full =
+                        difference_from_full.max((actual - full_mix[channel]).abs());
+                    difference_from_v1 = difference_from_v1.max((actual - v1[channel]).abs());
+                }
+            }
+            assert!(difference_from_full > 0.001);
+            assert!(difference_from_v1 > 0.001);
+            output.extend(oracle.render(&mut p, 777, false));
+            assert!(output.iter().any(|value| value.abs() > 0.001));
+            assert_eq!(
+                voice(&p.h.callback.mixer).stretch.native_state_address(),
+                native
+            );
+
+            if key_lock {
+                // Crossing ratio 1.0 legitimately uses the existing dry bypass
+                // and cancels wet work. Start a genuine later source preparation
+                // after that interval, while smoothing toward 2.0 still continues.
+                let mut remaining = 5121 - oracle.elapsed(&p);
+                for frames in [31_usize, 257, 1, 127].into_iter().cycle() {
+                    let frames = frames.min(remaining);
+                    oracle.render(&mut p, frames, false);
+                    remaining -= frames;
+                    if remaining == 0 {
+                        break;
+                    }
+                }
+                assert!(
+                    (voice(&p.h.callback.mixer).source_playback.tempo_ratio() - 1.05).abs() < 1e-12
+                );
+                let before_preparation = voice(&p.h.callback.mixer).stretch.native_state_address();
+                oracle.render(&mut p, 13, true);
+                // This helper waits for both actual workers, checks their target
+                // and finite taps, adopts the new actual Native, then compares
+                // eight productive Native blocks with uninterrupted complete PCM.
+                p.adopt_native();
+                oracle.verify(&p);
+                let current = voice(&p.h.callback.mixer);
+                assert_ne!(current.stretch.native_state_address(), before_preparation);
+                assert!(current.source_playback.tempo_ratio() < 2.0);
+                assert_eq!(current.source_playback.rate_target(), 2.0);
+                assert!(current.stretch.wet_render_ready());
+                assert!(current.stretch.wet_current_source_output_ready());
+                let history = current.stretch.productive_history().unwrap();
+                assert_eq!(history.binding, oracle.binding);
+                assert_eq!(history.next_position, current.source_playback.position());
+            }
+            assert_eq!(voice(&p.h.callback.mixer).generation, generation);
+            assert_eq!(
+                receipt.effective_mode_status(),
+                "effective",
+                "{:?}",
+                receipt.error()
+            );
+        }
+    }
+}

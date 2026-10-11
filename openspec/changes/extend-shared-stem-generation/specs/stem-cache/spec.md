@@ -126,6 +126,13 @@ immediate change SHALL NOT silently discard the command.
 - **THEN** the exact accepted timing, musical source phase and current KEY LOCK mode SHALL remain authoritative through both actual readers and the source-frame handover
 - **AND** productive continuation SHALL preserve virtual-seam addressing, actual Native/FIFO/filter history and later source-bound preparation without a restart or position jump
 
+#### Scenario: Rate smoothing advances through an own new-set handover
+- **GIVEN** current finite NormalLoop playback with a pending rate target and a verified first or replacement complete set
+- **WHEN** its own Capture, worker preparation and Adopt complete while the same target's active-output-frame smoothing continues
+- **THEN** the current voice and exact source trajectory SHALL retain the applied rate, pending target and smoothing interval through adoption
+- **AND** the two-reader handover SHALL advance by actual consumed source distance across a smoothing step, without substituting a constant-rate output-frame count
+- **AND** KEY LOCK OFF/ON rendering SHALL preserve actual varispeed or Native/FIFO/filter continuation and any later own preparation without a restart
+
 #### Scenario: KEY LOCK OFF new-set continuation uses actual varispeed output
 - **GIVEN** current finite NormalLoop playback with KEY LOCK OFF and a verified first or replacement complete set
 - **WHEN** the own candidate adopts
