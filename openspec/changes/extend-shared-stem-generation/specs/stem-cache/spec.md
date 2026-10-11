@@ -167,6 +167,13 @@ immediate change SHALL NOT silently discard the command.
 - **AND** polling SHALL preserve the failed V2 attempt and visible error without retrying after the queue drains; the failed uncurrent receipt SHALL NOT report current effective output
 - **AND** a later explicit identical ALL request SHALL obtain a fresh own receipt through the still-current V2 registration and require its own Capture, worker preparation, Adopt and later effectiveness; the failed receipt SHALL NOT lend its ACK to the retry
 
+#### Scenario: Candidate Capture remains queued beyond its worker deadline
+- **GIVEN** productive V1 playback and a durably committed registered V2 whose public ALL request admitted an own waiting receipt but whose actual Capture remains queued behind insufficient callback retirement capacity
+- **WHEN** the worker's real bounded Capture deadline rejects that operation before later Native reconciliation
+- **THEN** V1 SHALL continue with its own effective authority, readers and processing while the failed V2 receipt reports its own deadline error and releases its job reservation
+- **AND** later runtime reconciliation and actual dispatch of that unchanged late Capture SHALL NOT replace V1's readers, trajectory, Native, FIFO or filter history, revive the failed receipt or enqueue V2 Adopt
+- **AND** controller polling SHALL retain the failed attempt and error without an implicit retry; a later explicit identical ALL request SHALL use fresh own residency/effectiveness through V2's still-current registration
+
 #### Scenario: Paused and stopped acceptance is not audible effectiveness
 - **WHEN** a current NormalLoop candidate is installed on a paused voice or stopped pad
 - **THEN** own residency acceptance SHALL remain distinct from effective output

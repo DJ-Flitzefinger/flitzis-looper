@@ -855,3 +855,47 @@ issue. Formatting, official strict validation and whitespace pass; Clippy tests
 exit0 with the existing63 warnings (one duplicate), none in the changed test.
 The preceding production Release/import/Python checks and unchanged verified
 relative-file links remain reusable.
+
+### Real worker Capture deadline and unchanged late Capture
+
+A first KEY LOCK ON/rate0.75 proper NormalLoop deadline trace admits public V2
+ALL with its own captured/current/waiting receipt. Actual callback retirement
+capacity is two slots, below the normal three-slot CommittedStemWork drain gate.
+The unchanged actual Capture stays queued while irregular V1 rendering continues
+against independent complete PCM, raw Native/FIFO and uninterrupted EQ. Public
+StemController polling retains V1's own effective receipt and V2's pending intent.
+
+The genuine worker's 30-second Capture deadline runs without a shortened product
+timeout, fabricated error or altered Instant. A 45-second test watchdog bounds
+synchronization. The fixture deliberately performs no Native loader reconciliation
+until the exact `Committed stem voice capture deadline expired` error wins; the
+separate admission-based reconcile deadline is not asserted by this case. These
+two product deadlines can otherwise race to reject the same unclaimed receipt.
+
+After the real worker and cold-job reservation return, the actual Native
+`poll_loader_events` path reconciles before the final post-deadline controller
+checks. Earlier receipt polls may already observe the worker's deadline failure.
+V2 remains durably committed with its same accepted current registration, while its own
+failed receipt/attempt is rejected/unclaimed/uncurrent and visibly blocked. V1
+retains control/effective identity and its own current receipt. Restoring normal
+retirement capacity then dispatches exactly the unchanged late Capture at current
+callback time. It cannot revive the failed operation, install V2 or enqueue Adopt;
+exact V1 source/component Arcs, source phase, generation, Native, FIFOs, Native/DSP
+history, demand and handover state survive that dispatch.
+
+Further productive rendering and polling cause no implicit retry. Explicit
+identical public ALL reuses the current V2 registration with a fresh own receipt,
+Capture, worker, Adopt, source-frame ramp and later own Native preparation/effect.
+The old deadline receipt stays independently failed and the error clears only on
+the retry's own observed effect. OFF and a separately won native-reconcile
+deadline remain open, alongside the other full product/resource/Human gates.
+Production, parent and build-only runtime inputs are unchanged; no installation
+or App/device/hearing acceptance is involved.
+
+The focused real-deadline Release case passes in31.73s and all9 affected public
+Native tests pass in56.19s. One independent nonauthor final review identified only
+an imprecise prose ordering claim; the corrected wording closes that finding,
+with no remaining issue. Formatting, official strict validation and whitespace
+pass; Clippy tests exit0 with the existing63 warnings (one duplicate), none in the
+changed test. Prior unchanged production Release/import/Python checks and verified
+relative-file links remain reusable.

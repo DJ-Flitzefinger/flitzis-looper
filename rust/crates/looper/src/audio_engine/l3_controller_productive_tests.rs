@@ -21,6 +21,8 @@ const ADMISSION_PRESSURE_CHILD: &str = "FLITZI_L3_CONTROLLER_ADMISSION_PRESSURE_
 const ADMISSION_PRESSURE_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_queue_full_keeps_v1_then_explicit_all_admits_own_v2";
 const WORKER_POST_PRESSURE_CHILD: &str = "FLITZI_L3_CONTROLLER_WORKER_POST_PRESSURE_CHILD";
 const WORKER_POST_PRESSURE_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_worker_adopt_queue_failure_keeps_v1_then_own_explicit_retry";
+const CAPTURE_DEADLINE_CHILD: &str = "FLITZI_L3_CONTROLLER_CAPTURE_DEADLINE_CHILD";
+const CAPTURE_DEADLINE_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_pending_capture_deadline_keeps_v1_then_fresh_own_retry";
 
 #[derive(Clone, Copy)]
 enum CandidateTrace {
@@ -29,6 +31,7 @@ enum CandidateTrace {
     WithdrawPreclaim,
     AdmissionPressure,
     WorkerPostPressure,
+    CaptureDeadline,
 }
 
 enum FixtureSet {
@@ -1078,6 +1081,217 @@ assert session.stem_generation_errors == {0: pressure_error}
     );
 }
 
+fn pending_capture_deadline_then_explicit_retry(
+    engine: &AudioEngine,
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    locals: &Py<PyDict>,
+) {
+    use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
+    assert!(consumer.is_empty());
+    assert_eq!(playback.ratio, 0.75);
+    assert!(playback.raw.is_some());
+    let set = playback.callback.mixer.stems_for_measurement()[0]
+        .clone()
+        .unwrap();
+    let source = playback.callback.mixer.bank_for_measurement()[0]
+        .clone()
+        .unwrap();
+    let generation = voice(&playback.callback.mixer).generation;
+    let native = voice(&playback.callback.mixer)
+        .stretch
+        .native_state_address();
+    let demand = playback.callback.mixer.stem_demand_for_measurement(0);
+    let start = playback.source_frame;
+    controller_python(
+        locals,
+        r#"
+deadline_selection = live.disk.selection
+deadline_registration = deadline_selection.ticket
+deadline_error = 'Committed stem voice capture deadline expired'
+assert controller.set_stem_mix_mode(0, 'all_stems')
+failed_capture = deadline_selection.receipt
+assert failed_capture is not first and failed_capture.is_current() and not failed_capture.claimed()
+assert failed_capture.residency_status() == 'captured' and failed_capture.effective_mode_status() == 'waiting'
+assert deadline_registration.is_current() and deadline_registration.publication_status() == 'accepted'
+assert live.attempt is deadline_selection and live.control is previous_control
+assert first.is_current() and first.effective_mode_status() == 'effective'
+assert not session.stem_generation_errors, session.stem_generation_errors
+"#,
+    );
+    playback.callback.retirement.slots = 2;
+    let mut partitions = [1, 31, 137, 257, 511].into_iter().cycle();
+    let mut nontrivial_output = false;
+    // StemController receipt polling does not reconcile the Native loader.
+    // Let the genuine worker Capture deadline win before the first loader poll;
+    // this watchdog does not replace or shorten either product deadline.
+    wait_until_for(Duration::from_secs(45), || {
+        let error = Python::attach(|py| {
+            locals
+                .bind(py)
+                .get_item("failed_capture")
+                .unwrap()
+                .unwrap()
+                .call_method0("error")
+                .unwrap()
+                .extract::<Option<String>>()
+                .unwrap()
+        });
+        if error.as_deref() == Some("Committed stem voice capture deadline expired") {
+            return true;
+        }
+        assert!(
+            matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+            if matches!(work.as_ref(), CommittedStemRtWork::Capture(capture)
+                if capture.id == 0 && capture.target == StemMixMode::AllStems))
+        );
+        assert_eq!(
+            playback.drain(consumer),
+            0,
+            "retirement capacity retains real Capture"
+        );
+        let output = playback.render(partitions.next().unwrap(), false).0;
+        nontrivial_output |= output.iter().any(|sample| sample.abs() > 0.001);
+        controller_python(
+            locals,
+            r#"
+controller.on_frame_render()
+assert live.disk.selection is deadline_selection and live.attempt is deadline_selection
+assert deadline_selection.receipt is failed_capture and live.control is previous_control
+assert deadline_registration.is_current() and previous_control.ticket.is_current()
+assert previous_control.receipt is first and first.is_current()
+assert first.effective_mode_status() == 'effective'
+assert live.desired == ('all_stems', 0b1010)
+assert controller.stem_residency_status(0).effective_stem_set_identity == disk_v1.stem_set_identity
+assert failed_capture.effective_failure_reason() is None
+"#,
+        );
+        assert_eq!(voice(&playback.callback.mixer).generation, generation);
+        assert_eq!(
+            voice(&playback.callback.mixer)
+                .stretch
+                .native_state_address(),
+            native
+        );
+        assert_eq!(
+            playback.callback.mixer.stem_demand_for_measurement(0),
+            demand
+        );
+        false
+    });
+    assert!(nontrivial_output && playback.source_frame > start);
+    wait_until(|| engine.cold_jobs.counts_for_test() == (0, 0, 0));
+    Python::attach(|py| {
+        engine.poll_loader_events(py).unwrap();
+    });
+    controller_python(
+        locals,
+        r#"
+for _ in range(16):
+    controller.on_frame_render()
+    assert live.blocked and live.attempt is deadline_selection
+    assert live.control is previous_control and previous_control.receipt is first
+    assert live.disk.selection is deadline_selection and deadline_selection.ticket is deadline_registration
+    assert deadline_registration.is_current() and deadline_registration.publication_status() == 'accepted'
+    assert first.is_current() and first.effective_mode_status() == 'effective'
+    assert failed_capture.residency_status() == 'rejected' and failed_capture.effective_mode_status() == 'rejected'
+    assert not failed_capture.is_current() and not failed_capture.claimed()
+    assert failed_capture.error() == deadline_error and failed_capture.effective_failure_reason() is None
+    status = controller.stem_residency_status(0)
+    assert status.disk_stem_set_identity == disk_v2.stem_set_identity
+    assert status.control_stem_set_identity == disk_v1.stem_set_identity
+    assert status.effective_stem_set_identity == disk_v1.stem_set_identity
+    assert status.attempt_stem_set_identity == disk_v2.stem_set_identity
+    assert status.residency == 'rejected' and status.effective is None
+    assert live.desired == ('all_stems', 0b1010)
+    assert session.stem_generation_errors == {0: deadline_error}
+"#,
+    );
+    let before = voice(&playback.callback.mixer);
+    let clock = before.source_playback;
+    let fifo = before.stretch.pending_fifo_frames();
+    let history = before.stretch.productive_history().unwrap();
+    let dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    let transition = playback.callback.mixer.stem_transition_for_measurement(0);
+    playback.callback.retirement.slots = usize::MAX;
+    assert_eq!(playback.drain(consumer), 1, "actual unchanged late Capture");
+    assert!(consumer.is_empty(), "expired Capture cannot enqueue Adopt");
+    let after = voice(&playback.callback.mixer);
+    assert!(after.source_playback.matches_exact(&clock));
+    assert_eq!(after.generation, generation);
+    assert_eq!(after.stretch.native_state_address(), native);
+    assert_eq!(after.stretch.pending_fifo_frames(), fifo);
+    let after_history = after.stretch.productive_history().unwrap();
+    assert_eq!(after_history.binding, history.binding);
+    assert_eq!(after_history.next_position, history.next_position);
+    assert_eq!(after_history.fed_output_frames, history.fed_output_frames);
+    let after_dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    assert_eq!(after_dsp.binding, dsp.binding);
+    assert_eq!(after_dsp.next_position, dsp.next_position);
+    assert_eq!(after_dsp.fed_output_frames, dsp.fed_output_frames);
+    assert!(
+        playback
+            .callback
+            .mixer
+            .stem_transition_for_measurement(0)
+            .matches_exact(transition)
+    );
+    assert_eq!(
+        playback.callback.mixer.stem_demand_for_measurement(0),
+        demand
+    );
+    assert!(Arc::ptr_eq(
+        &source.samples,
+        &playback.callback.mixer.bank_for_measurement()[0]
+            .as_ref()
+            .unwrap()
+            .samples
+    ));
+    let after_set = playback.callback.mixer.stems_for_measurement()[0]
+        .as_ref()
+        .unwrap();
+    assert!(Arc::ptr_eq(
+        &set.complete_set_identity,
+        &after_set.complete_set_identity
+    ));
+    for (before, after) in set.stems.iter().zip(&after_set.stems) {
+        assert!(Arc::ptr_eq(&before.samples, &after.samples));
+    }
+    for frames in [1, 31, 137, 257, 511] {
+        playback.render(frames, false);
+        controller_python(
+            locals,
+            "controller.on_frame_render()\nassert live.blocked and live.attempt is deadline_selection\nassert failed_capture.error() == deadline_error\nassert session.stem_generation_errors == {0: deadline_error}",
+        );
+        assert!(
+            consumer.is_empty(),
+            "polling after late Capture cannot retry"
+        );
+    }
+    controller_python(
+        locals,
+        r#"
+assert controller.set_stem_mix_mode(0, 'all_stems')
+candidate = live.attempt.receipt
+assert live.attempt is deadline_selection and live.disk.selection is deadline_selection
+assert deadline_selection.ticket is deadline_registration and deadline_registration.is_current()
+assert candidate is not failed_capture and candidate is not first
+assert candidate.is_current() and not candidate.claimed() and candidate.effective_mode_status() == 'waiting'
+assert live.control is previous_control and not live.blocked
+assert controller.stem_residency_status(0).effective_stem_set_identity == disk_v1.stem_set_identity
+assert session.stem_generation_errors == {0: deadline_error}
+"#,
+    );
+}
+
 fn repeated_sets_after_empty_claim(
     playback: &mut ControllerPlayback,
     consumer: &mut rtrb::Consumer<ControlMessage>,
@@ -1671,9 +1885,10 @@ fn round_trip(
     let admission_pressure = matches!(trace, CandidateTrace::AdmissionPressure);
     let worker_post_pressure = matches!(trace, CandidateTrace::WorkerPostPressure);
     let queue_pressure = admission_pressure || worker_post_pressure;
+    let capture_deadline = matches!(trace, CandidateTrace::CaptureDeadline);
     assert!(key_lock || delete_pause.is_none());
     assert!(
-        !(repeated_sets || withdraw_preclaim || queue_pressure)
+        !(repeated_sets || withdraw_preclaim || queue_pressure || capture_deadline)
             || (selected_v1
                 && delete_pause.is_none()
                 && stopped_before_poll.is_none()
@@ -1764,6 +1979,9 @@ fn round_trip(
         locals.set_item("selected_v1", selected_v1).unwrap();
         locals.set_item("repeated_sets", repeated_sets).unwrap();
         locals.set_item("queue_pressure", queue_pressure).unwrap();
+        locals
+            .set_item("capture_deadline", capture_deadline)
+            .unwrap();
         locals
             .set_item("worker_post_pressure", worker_post_pressure)
             .unwrap();
@@ -2170,7 +2388,14 @@ assert status.control_stem_set_identity == disk_v1.stem_set_identity
 assert status.effective_stem_set_identity == (disk_v1.stem_set_identity if selected_v1 else None)
 "#,
     );
-    if queue_pressure {
+    if capture_deadline {
+        pending_capture_deadline_then_explicit_retry(
+            &engine,
+            &mut playback,
+            &mut h.consumer,
+            &locals,
+        );
+    } else if queue_pressure {
         full_queue_then_explicit_retry(
             &engine,
             &h.producer,
@@ -2186,7 +2411,7 @@ assert status.effective_stem_set_identity == (disk_v1.stem_set_identity if selec
         r#"
 if repeated_sets:
     assert controller.set_stem_enabled_mask(0, 0)
-if not queue_pressure:
+if not queue_pressure and not capture_deadline:
     assert controller.set_stem_mix_mode(0, 'all_stems')
     assert controller._publish_all_stems_mode_if_preferred(0, fixture['source_version'])
 candidate = live.attempt.receipt
@@ -2197,7 +2422,7 @@ assert candidate.effective_mode_status() == 'waiting'
 assert previous_control.ticket.is_current()
 "#,
     );
-    if !queue_pressure {
+    if !(queue_pressure || capture_deadline) {
         let current = voice(&playback.callback.mixer);
         assert!(current.source_playback.matches_exact(&initial_clock));
         assert_eq!(current.generation, initial_generation);
@@ -2273,6 +2498,8 @@ assert candidate.claimed() and not candidate.withdraw()
 assert not previous_control.ticket.is_current()
 if queue_pressure:
     assert session.stem_generation_errors == {0: pressure_error}
+if capture_deadline:
+    assert session.stem_generation_errors == {0: deadline_error}
 "#,
     );
     if repeated_sets {
@@ -2391,6 +2618,12 @@ if withdraw_preclaim:
     assert not withdrawn.claimed() and not withdrawn.is_current()
     assert withdrawn.residency_status() == 'rejected' and withdrawn.effective_mode_status() == 'rejected'
     assert withdrawn.effective_failure_reason() is None
+if capture_deadline:
+    assert live.control is deadline_selection and live.disk.selection is deadline_selection
+    assert deadline_selection.ticket is deadline_registration and deadline_selection.receipt is candidate
+    assert not failed_capture.is_current() and not failed_capture.claimed()
+    assert failed_capture.residency_status() == 'rejected' and failed_capture.error() == deadline_error
+    assert not session.stem_generation_errors, session.stem_generation_errors
 "#,
         );
     }
@@ -2676,6 +2909,38 @@ fn actual_python_controller_worker_adopt_queue_failure_keeps_v1_then_own_explici
     assert!(
         output.status.success(),
         "L3 worker post pressure child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+}
+
+#[test]
+fn actual_python_controller_pending_capture_deadline_keeps_v1_then_fresh_own_retry() {
+    if std::env::var_os(CAPTURE_DEADLINE_CHILD).is_some() {
+        round_trip(
+            true,
+            None,
+            true,
+            None,
+            false,
+            CandidateTrace::CaptureDeadline,
+        );
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            CAPTURE_DEADLINE_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CAPTURE_DEADLINE_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 Capture deadline child failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
