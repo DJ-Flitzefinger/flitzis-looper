@@ -966,6 +966,54 @@ and whitespace pass. Clippy tests exit0 with63 existing warnings (one duplicate)
 none in the changed tests. Unchanged production Release/import/Python checks
 are reused; no Native installation or Human App/device/listening action occurs.
 
+### Public live BPM rejection and dry retry with KEY LOCK OFF
+
+The separate OFF trace retains the same actual Automatic timing, finite musical
+NormalLoop, public150→162 command path and genuinely queued V2 Adopt. The
+existing retirement-capacity gate preserves normal control-before-parameter
+ordering. The stale own V2 Adopt rejects after actual parameter application
+and one consumed V1 frame, without changing V1's readers, source/voice clock,
+Native/FIFO owners, DSP history, demand or transition. Productive Native history
+remains absent. Repeated polls retain the exact own failed attempt, current V2
+registration and V1 effective identity; only explicit identical ALL admits the
+fresh own Capture/worker/Adopt receipt.
+
+The dry renderer uses the actual scheduled wrapper and advances TransportTimeline
+from voice birth. Its independent declared epoch ledger retains the accepted
+musical period and all three150→162 smoothing steps across irregular callbacks.
+Complete original/components, virtual-tail interpolation and uninterrupted EQ
+verify every actual output sample, alongside the complete-PCM reference mixer.
+The internal Stretch scratch buffers contain only the callback's final internal
+chunk; its expected start is independently derived from the fixed outer capacity
+and the last declared rate epoch. That exact scratch prefix is checked against
+the corresponding complete-PCM feed, while the complete output remains checked.
+The other active pad follows its own physical rate/phase ledger.
+
+V1's own initial150-BPM source handover consumes103 output frames; the fresh V2
+handover at settled162 BPM consumes95. These boundaries come from independently
+consumed source distance reaching128, rather than a fixed1.25 assumption. Dry
+selected V2 output is nontrivial and differs from FullMix. Each rendered chunk
+retains Native/FIFOs, has no productive Native history, wet output, adopted
+Native request or ready source preparation. OFF effectiveness follows its own
+actual dry consumption; it uses no4096 Native preparation. The old failed receipt
+remains independently rejected, and observing the fresh own effect clears the
+displayed error. Accepted source timing and saved BPM intent/disk V2 reopen.
+
+The existing ON trace still verifies its own gliding Native/FIFO/pitch-epsilon
+and4096-frame warm histories. Both bounded live traces leave the full
+stopped/paused/mask/old-voice matrix, task3.2/3.3/L4 and resource/Human gates open.
+The actual Native admission facade remains explicit; stream-bound Engine wrappers,
+inference and Human device/listening acceptance remain outside these tests.
+
+The focused ON/OFF live pair passes in5.51s. With explicit error-retention
+assertions added, the final affected public-controller gate passes all13 Release
+tests in75.48s. The other36 shared-fixture cases retain unchanged inputs and
+reuse the preceding48-test gate; this is not a fresh49-test run. One independent
+nonauthor final review reports no findings. Formatting, official strict validation,
+five relative file links and whitespace pass. Clippy tests exit0 with63 existing
+warnings (one duplicate), none in the changed test. Production Release/import/
+Python checks remain reusable, without Native installation or Human App changes.
+
 ### Public KEY LOCK OFF first candidate after Pause
 
 The paused-first proper NormalLoop fixture also supports KEY LOCK OFF/rate1.25.

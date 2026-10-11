@@ -141,6 +141,15 @@ immediate change SHALL NOT silently discard the command.
 - **AND** receipt polling SHALL report the failed own attempt without an implicit retry or a native-preparation-failed acknowledgement
 - **AND** an explicit identical ALL gesture SHALL obtain a fresh own Capture/worker/Adopt receipt for the same accepted V2 registration and prove its source-frame handover and later own prepared wet effectiveness
 
+#### Scenario: Public live BPM rejection and retry with KEY LOCK OFF
+
+- **GIVEN** productive finite NormalLoop V1 with KEY LOCK OFF, accepted Automatic timing and V2's own already captured and queued Adopt
+- **WHEN** actual retirement pressure retains that Control message, the public transport controller's coupled BPM parameter applies at continuously advancing callback time, and a later callback dispatches the unchanged Adopt
+- **THEN** the stale unclaimed V2 attempt SHALL reject with its own error while V1's current readers, voice, fractional musical phase, Native/FIFO owners and uninterrupted dry filter output remain usable under the new rate trajectory
+- **AND** independent complete PCM SHALL verify actual Varispeed interpolation across active-output-frame smoothing and irregular callbacks; the other active pad SHALL retain its independent physical trajectory under the global speed change
+- **AND** repeated receipt polling SHALL retain the same accepted V2 registration and failed own attempt without implicitly retrying or reporting native-preparation-failed
+- **AND** an explicit identical ALL gesture SHALL obtain a fresh own Capture/worker/Adopt receipt, consume the actual 128-source-frame handover and acknowledge its own dry effective output without claiming Native wet processing or preparation
+
 #### Scenario: Rate smoothing advances through an own new-set handover
 - **GIVEN** current finite NormalLoop playback with a pending rate target and a verified first or replacement complete set
 - **WHEN** its own Capture, worker preparation and Adopt complete while the same target's active-output-frame smoothing continues

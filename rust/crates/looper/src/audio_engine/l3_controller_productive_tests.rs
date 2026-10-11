@@ -29,6 +29,8 @@ const PUBLIC_BPM_CHILD: &str = "FLITZI_L3_CONTROLLER_PUBLIC_BPM_CHILD";
 const PUBLIC_BPM_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_bpm_target_then_own_replacement_preserves_musical_wet_chronology";
 const LIVE_BPM_CHILD: &str = "FLITZI_L3_CONTROLLER_LIVE_BPM_CHILD";
 const LIVE_BPM_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_live_bpm_rejects_queued_v2_then_explicit_retry_keeps_wet_chronology";
+const LIVE_BPM_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_LIVE_BPM_OFF_CHILD";
+const LIVE_BPM_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_live_bpm_keylock_off_rejects_queued_v2_then_own_dry_retry";
 
 #[derive(Clone, Copy)]
 enum CandidateTrace {
@@ -49,6 +51,7 @@ fn live_bpm_then_explicit_retry(
     parameters: &mut rtrb::Consumer<ControlParameterMessage>,
     locals: &Py<PyDict>,
     accepted: crate::audio_engine::constant_timing::AcceptedTimingProjection,
+    key_lock: bool,
 ) -> ControllerRateLedger {
     use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
     assert_eq!(playback.drain(consumer), 1, "actual V2 Capture at old BPM");
@@ -76,7 +79,8 @@ fn live_bpm_then_explicit_retry(
     let native = before.stretch.native_state_address();
     let fifo = before.stretch.pending_fifo_frames();
     let epoch = before.stretch.source_epoch_owner().load(Ordering::Acquire);
-    let history = before.stretch.productive_history().unwrap();
+    let history = before.stretch.productive_history();
+    assert_eq!(history.is_some(), key_lock);
     let revision = engine.global_timing_revision.load(Ordering::Acquire);
     assert!(playback.frame > 0 && playback.frame == playback.callback.transport.output_frame());
     assert!(playback.callback.transport.bootstrap_reference().is_none());
@@ -151,10 +155,14 @@ assert live.attempt is bpm_selection and first.is_current()
     assert_eq!(changed.stretch.native_state_address(), native);
     assert_eq!(changed.stretch.pending_fifo_frames(), fifo);
     assert!(changed.stretch.source_epoch_owner().load(Ordering::Acquire) > epoch);
-    let changed_history = changed.stretch.productive_history().unwrap();
-    assert_eq!(changed_history.binding, history.binding);
-    assert_eq!(changed_history.next_position, history.next_position);
-    assert_eq!(changed_history.fed_output_frames, history.fed_output_frames);
+    if let Some(history) = history {
+        let changed_history = changed.stretch.productive_history().unwrap();
+        assert_eq!(changed_history.binding, history.binding);
+        assert_eq!(changed_history.next_position, history.next_position);
+        assert_eq!(changed_history.fed_output_frames, history.fed_output_frames);
+    } else {
+        assert!(changed.stretch.productive_history().is_none());
+    }
     let start = playback.source_frame;
     let mut other = ControllerRateLedger::new(
         accepted.period_seconds * (150.0 / 60.0),
@@ -167,7 +175,11 @@ assert live.attempt is bpm_selection and first.is_current()
         reference.set_speed(speed);
         reference.set_master_period(master);
     }
-    playback.render(1, true);
+    if key_lock {
+        playback.render(1, true);
+    } else {
+        render_varispeed(playback, 1);
+    }
     assert_eq!(
         voice(&playback.callback.mixer)
             .stretch
@@ -182,7 +194,8 @@ assert live.attempt is bpm_selection and first.is_current()
     let before = voice(&playback.callback.mixer);
     let clock = before.source_playback;
     let fifo = before.stretch.pending_fifo_frames();
-    let history = before.stretch.productive_history().unwrap();
+    let history = before.stretch.productive_history();
+    assert_eq!(history.is_some(), key_lock);
     let dsp = playback
         .callback
         .mixer
@@ -201,10 +214,14 @@ assert live.attempt is bpm_selection and first.is_current()
     assert_eq!(after.generation, generation);
     assert_eq!(after.stretch.native_state_address(), native);
     assert_eq!(after.stretch.pending_fifo_frames(), fifo);
-    let next_history = after.stretch.productive_history().unwrap();
-    assert_eq!(next_history.binding, history.binding);
-    assert_eq!(next_history.next_position, history.next_position);
-    assert_eq!(next_history.fed_output_frames, history.fed_output_frames);
+    if let Some(history) = history {
+        let next_history = after.stretch.productive_history().unwrap();
+        assert_eq!(next_history.binding, history.binding);
+        assert_eq!(next_history.next_position, history.next_position);
+        assert_eq!(next_history.fed_output_frames, history.fed_output_frames);
+    } else {
+        assert!(after.stretch.productive_history().is_none());
+    }
     let next_dsp = playback
         .callback
         .mixer
@@ -266,11 +283,13 @@ for _ in range(16):
     assert!(consumer.is_empty(), "polling cannot retry V2");
     let mut nontrivial = false;
     for frames in [31, 257, 1, 777, 137] {
-        nontrivial |= playback
-            .render(frames, true)
-            .0
-            .iter()
-            .any(|sample| sample.abs() > 0.001);
+        let output = if key_lock {
+            playback.render(frames, true)
+        } else {
+            render_varispeed(playback, frames)
+        }
+        .0;
+        nontrivial |= output.iter().any(|sample| sample.abs() > 0.001);
         assert_eq!(
             voice(&playback.callback.mixer)
                 .stretch
@@ -288,7 +307,13 @@ for _ in range(16):
     );
     // The live glide is finished before a fresh V2 attempt. Adopt V1's own new
     // source-bound Native first, with an independently warmed complete PCM oracle.
-    playback.adopt_native(false);
+    if key_lock {
+        playback.adopt_native(false);
+    } else {
+        for frames in [512, 257, 31] {
+            render_varispeed(playback, frames);
+        }
+    }
     controller_python(
         locals,
         r#"
@@ -782,7 +807,8 @@ fn own_adoption(
 fn render_varispeed(playback: &mut ControllerPlayback, frames: usize) -> (Vec<f32>, Vec<f32>) {
     assert!(!playback.callback.mixer.key_lock_for_measurement(0));
     assert!(playback.raw.is_none() && playback.candidate.is_none());
-    assert!(frames <= playback.callback.mixer.max_realtime_render_frames());
+    let capacity = playback.callback.mixer.max_realtime_render_frames();
+    assert!(frames <= capacity || playback.rate_ledger.is_some());
     // The clock, interpolation, selected sum and ramp gains come from complete
     // independent PCM, not from the actual SourcePlayback or SourceReadPlan.
     let feed = playback.feed(playback.source_frame, frames);
@@ -794,12 +820,29 @@ fn render_varispeed(playback: &mut ControllerPlayback, frames: usize) -> (Vec<f3
     let mut expected = vec![0.0; frames * 2];
     let mut full_mix = vec![0.0; frames * 2];
     reset_tap_observation_for_test();
-    playback.callback.mixer.render_rt_at_output_frame(
-        &mut output,
-        &mut [0.0; NUM_SAMPLES],
-        playback.frame,
-        &mut playback.callback.retirement,
-    );
+    if playback.scheduled {
+        assert_eq!(playback.callback.transport.output_frame(), playback.frame);
+        let callback = playback.callback.as_mut();
+        crate::audio_engine::audio_stream::render_scheduled_audio(
+            &mut callback.mixer,
+            &mut callback.scheduler,
+            &mut output,
+            &mut [0.0; NUM_SAMPLES],
+            playback.frame,
+            2,
+            &mut callback.transport,
+            &mut callback.feedback,
+            &mut callback.retirement,
+        );
+        callback.transport.advance_by_rendered_frames(frames);
+    } else {
+        playback.callback.mixer.render_rt_at_output_frame(
+            &mut output,
+            &mut [0.0; NUM_SAMPLES],
+            playback.frame,
+            &mut playback.callback.retirement,
+        );
+    }
     let taps = tap_observation_for_test();
     assert_eq!(taps.missing_reads, 0);
     assert!(taps.min_frame.is_some_and(|frame| frame >= LOOP_START));
@@ -816,14 +859,23 @@ fn render_varispeed(playback: &mut ControllerPlayback, frames: usize) -> (Vec<f3
         playback.frame
     );
     let current = voice(&playback.callback.mixer);
+    // Internal scratch retains only the final actual rate chunk. Derive its
+    // prefix independently from the outer capacity and declared epoch boundary;
+    // the complete rendered output below still verifies every callback sample.
+    let scratch_start = playback.rate_ledger.as_ref().map_or(0, |ledger| {
+        let outer = (frames - 1) / capacity * capacity;
+        let epoch = ledger.epoch(playback.source_frame + frames as u64 - 1);
+        outer.max(epoch.start.saturating_sub(playback.source_frame) as usize)
+    });
+    let scratch_frames = frames - scratch_start;
     for (channel, expected) in feed.iter().enumerate() {
         assert_eq!(
-            &current.stretch.varispeed_buffers()[channel][..frames],
-            expected.as_slice()
+            &current.stretch.varispeed_buffers()[channel][..scratch_frames],
+            &expected[scratch_start..]
         );
         assert_eq!(
-            &current.stretch.output_buffers()[channel][..frames],
-            expected.as_slice()
+            &current.stretch.output_buffers()[channel][..scratch_frames],
+            &expected[scratch_start..]
         );
     }
     assert_eq!(current.generation, generation);
@@ -831,6 +883,8 @@ fn render_varispeed(playback: &mut ControllerPlayback, frames: usize) -> (Vec<f3
     assert_eq!(current.stretch.pending_fifo_frames(), fifo);
     assert!(current.stretch.productive_history().is_none());
     assert!(!current.stretch.wet_render_ready());
+    assert!(!current.stretch.wet_output_ready());
+    assert!(!current.stretch.wet_current_source_output_ready());
     assert!(current.stretch.adopted_request_id().is_none());
     assert!(
         current
@@ -846,13 +900,33 @@ fn render_varispeed(playback: &mut ControllerPlayback, frames: usize) -> (Vec<f3
         current.stretch.pending_fifo_frames(),
         voice(&playback.reference).stretch.pending_fifo_frames()
     );
-    let phase = ((playback.source_frame + frames as u64) as f64 * playback.ratio)
-        .rem_euclid((LOOP_END - LOOP_START) as f64);
-    assert_eq!(
-        current.source_playback.position().frame,
-        LOOP_START + phase.floor() as usize
+    let end = playback.source_frame + frames as u64;
+    let (whole, fraction) = playback.rate_ledger.as_ref().map_or_else(
+        || {
+            let phase = (end as f64 * playback.ratio).rem_euclid(playback.loop_period);
+            (phase.floor() as usize, phase.fract())
+        },
+        |ledger| ledger.position(end),
     );
-    assert_eq!(current.source_playback.position().fraction, phase.fract());
+    assert_eq!(current.source_playback.position().frame, LOOP_START + whole);
+    assert_eq!(
+        current.source_playback.position().fraction.to_bits(),
+        fraction.to_bits()
+    );
+    let applied = playback
+        .rate_ledger
+        .as_ref()
+        .map_or(playback.ratio, |ledger| ledger.epoch(end - 1).rate);
+    assert_eq!(
+        current.source_playback.tempo_ratio().to_bits(),
+        applied.to_bits()
+    );
+    if playback.rate_ledger.is_some() {
+        assert_eq!(
+            current.source_playback.loop_period().unwrap().to_bits(),
+            playback.loop_period.to_bits()
+        );
+    }
     for (frame, actual) in output.chunks_exact(2).enumerate() {
         playback.filter.begin_frame();
         for channel in 0..2 {
@@ -866,14 +940,36 @@ fn render_varispeed(playback: &mut ControllerPlayback, frames: usize) -> (Vec<f3
             );
         }
     }
+    for mixer in [
+        &mut playback.callback.mixer,
+        &mut playback.reference,
+        &mut playback.full_mix,
+    ] {
+        assert!(!voice_mut(mixer).stretch.source_preparation_ready());
+    }
     playback.frame += frames as u64;
     playback.source_frame += frames as u64;
+    if playback.scheduled {
+        assert_eq!(playback.callback.transport.output_frame(), playback.frame);
+    }
     (output, full_mix)
 }
 
 fn ramp_varispeed(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name: &str) {
-    assert_eq!(playback.ratio, 1.25);
-    let mut remaining = (128.0 / playback.ratio).ceil() as usize;
+    if playback.rate_ledger.is_none() {
+        assert_eq!(playback.ratio, 1.25);
+    }
+    let start = playback.source_frame;
+    let mut remaining = playback.rate_ledger.as_ref().map_or_else(
+        || (128.0 / playback.ratio).ceil() as usize,
+        |ledger| {
+            (1..=256)
+                .find(|frames| {
+                    ledger.distance(start + *frames as u64) - ledger.distance(start) >= 128.0
+                })
+                .expect("minimum supported rate consumes128 source frames within256 outputs")
+        },
+    );
     for frames in [1_usize, 31, 17, 7].into_iter().cycle() {
         let count = frames.min(remaining);
         render_varispeed(playback, count);
@@ -944,6 +1040,12 @@ fn settle_varispeed(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name
         controller_ticket_status(locals, name, "effective_mode_status"),
         "effective"
     );
+    if playback.scheduled && name == "candidate" {
+        controller_python(
+            locals,
+            "assert session.stem_generation_errors == {0: bpm_error}",
+        );
+    }
     controller_python(
         locals,
         "controller.on_frame_render()\nassert not session.stem_generation_errors, session.stem_generation_errors",
@@ -2413,7 +2515,7 @@ fn round_trip(
     let mut live_other_ledger = None;
     assert!(
         !public_bpm
-            || (key_lock
+            || ((key_lock || live_bpm)
                 && selected_v1
                 && !paused_first
                 && delete_pause.is_none()
@@ -2518,6 +2620,7 @@ fn round_trip(
             .unwrap();
         locals.set_item("selected_v1", selected_v1).unwrap();
         locals.set_item("public_bpm", public_bpm).unwrap();
+        locals.set_item("live_bpm", live_bpm).unwrap();
         if public_bpm {
             locals
                 .set_item(
@@ -3080,6 +3183,7 @@ assert previous_control.ticket.is_current()
             &mut parameter_consumer,
             &locals,
             accepted.unwrap(),
+            key_lock,
         ));
     }
     own_adoption(
@@ -3142,6 +3246,8 @@ if queue_pressure:
     assert session.stem_generation_errors == {0: pressure_error}
 if capture_deadline:
     assert session.stem_generation_errors == {0: deadline_error}
+if live_bpm:
+    assert session.stem_generation_errors == {0: bpm_error}
 "#,
     );
     if repeated_sets {
@@ -3358,6 +3464,31 @@ assert bpm_selection.ticket is bpm_registration and bpm_selection.receipt is can
         "controller.shut_down()\ncontroller._assets.release_saved_assignments()\nowner_v1.release()\nowner_v2.release()",
     );
     std::env::set_current_dir(previous_cwd).unwrap();
+}
+
+#[test]
+fn actual_public_live_bpm_keylock_off_rejects_queued_v2_then_own_dry_retry() {
+    if std::env::var_os(LIVE_BPM_OFF_CHILD).is_some() {
+        round_trip(true, None, false, None, false, CandidateTrace::LiveBpm);
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            LIVE_BPM_OFF_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(LIVE_BPM_OFF_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 public live BPM OFF child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
 }
 
 #[test]
