@@ -38,6 +38,7 @@ from flitzis_looper.models import (
     StemFileSet,
     StemSeparator,
 )
+from flitzis_looper.stem_pair_selection import STEM_FINGERPRINT_SCHEMA
 
 
 class TestProjectStateValidation:
@@ -485,6 +486,146 @@ def test_separator_identity_validation_preserves_last_valid_selection(unknown: s
         project.stem_separator = cast("StemSeparator", unknown)
 
     assert project.stem_separator == "bs-roformer:musdb18hq"
+
+
+def test_stem_processing_revision_fences_direct_model_and_quality_aba() -> None:
+    project = ProjectState()
+    assert project.stem_processing_revision == 0
+
+    project.stem_separator = "bs-roformer:musdb18hq"
+    project.stem_separator = "demucs:htdemucs"
+    assert project.stem_processing_revision == 2
+
+    project.demucs_shifts = 4
+    project.demucs_shifts = DEFAULT_DEMUCS_SHIFTS
+    assert project.stem_processing_revision == 4
+
+    project.demucs_overlap = 0.25
+    project.demucs_overlap = DEFAULT_DEMUCS_OVERLAP
+    assert project.stem_processing_revision == 6
+
+
+def test_stem_processing_revision_ignores_inactive_demucs_quality() -> None:
+    project = ProjectState(stem_separator="bs-roformer:musdb18hq")
+
+    project.demucs_shifts = 4
+    project.demucs_overlap = 0.25
+
+    assert project.stem_processing_revision == 0
+    assert project.demucs_shifts == 4
+    assert project.demucs_overlap == 0.25
+    project.stem_separator = "demucs:htdemucs"
+    assert project.stem_processing_revision == 1
+
+
+def test_stem_processing_revision_ignores_unchanged_and_unrelated_assignments() -> None:
+    project = ProjectState()
+    project.stem_separator = project.stem_separator
+    project.demucs_shifts = project.demucs_shifts
+    project.demucs_overlap = project.demucs_overlap
+    project.volume = 0.4
+
+    assert project.stem_processing_revision == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("stem_separator", "unknown:model"),
+        ("demucs_shifts", MIN_DEMUCS_SHIFTS - 1),
+        ("demucs_overlap", float("nan")),
+    ],
+)
+def test_invalid_processing_assignment_preserves_private_revision(
+    field: str, value: object
+) -> None:
+    project = ProjectState()
+    project.demucs_shifts = 4
+    previous = project.model_dump()
+    revision = project.stem_processing_revision
+
+    with pytest.raises(ValidationError):
+        setattr(project, field, value)
+
+    assert project.model_dump() == previous
+    assert project.stem_processing_revision == revision
+
+
+def test_processing_revision_is_private_and_reopen_starts_a_fresh_runtime() -> None:
+    project = ProjectState()
+    project.stem_separator = "bs-roformer:musdb18hq"
+    project.stem_separator = "demucs:htdemucs"
+    encoded = project.model_dump_json()
+    payload = json.loads(encoded)
+
+    assert project.stem_processing_revision == 2
+    assert "stem_processing_revision" not in payload
+    assert "_stem_processing_revision" not in payload
+    reopened = ProjectState.model_validate_json(encoded)
+    assert reopened.model_dump() == project.model_dump()
+    assert reopened.stem_processing_revision == 0
+
+
+@pytest.mark.parametrize("schema", [None, STEM_FINGERPRINT_SCHEMA])
+def test_flat_processing_provenance_round_trips_without_promoting_legacy_schema(
+    schema: object,
+) -> None:
+    project = ProjectState(stem_separator="bs-roformer:musdb18hq")
+    entry = StemCacheEntry.model_validate({
+        "source_version": "saved-source",
+        "cache_dir": "saved-set",
+        "available": True,
+        "fingerprint_schema": schema,
+        "generation_fingerprint": "1" * 64,
+        "producer_identity": "2" * 64,
+    })
+    project.stem_cache[0] = entry
+
+    reopened = ProjectState.model_validate_json(project.model_dump_json())
+
+    assert reopened.stem_cache[0] == entry
+    assert reopened.stem_separator == "bs-roformer:musdb18hq"
+    assert reopened.stem_cache[0] is not None
+    assert reopened.stem_cache[0].fingerprint_schema == schema
+    assert reopened.stem_cache[0].available
+
+
+@pytest.mark.parametrize("missing", ["generation_fingerprint", "producer_identity"])
+def test_current_processing_schema_requires_both_flat_digests(missing: str) -> None:
+    payload: dict[str, object] = {
+        "source_version": "saved-source",
+        "cache_dir": "saved-set",
+        "fingerprint_schema": STEM_FINGERPRINT_SCHEMA,
+        "generation_fingerprint": "1" * 64,
+        "producer_identity": "2" * 64,
+    }
+    payload.pop(missing)
+
+    with pytest.raises(ValidationError, match="requires generation and producer digests"):
+        StemCacheEntry.model_validate(payload)
+
+
+def test_unsupported_processing_schema_cannot_label_legacy_digests_current() -> None:
+    with pytest.raises(ValidationError, match="fingerprint_schema"):
+        StemCacheEntry.model_validate({
+            "source_version": "saved-source",
+            "cache_dir": "saved-set",
+            "fingerprint_schema": "effective-stem-v2",
+            "generation_fingerprint": "1" * 64,
+            "producer_identity": "2" * 64,
+        })
+
+
+@pytest.mark.parametrize("digest", ["1" * 63, "1" * 64 + "\n", b"1" * 64])
+def test_current_processing_schema_requires_exact_string_sha256_digests(digest: object) -> None:
+    with pytest.raises(ValidationError, match="generation_fingerprint"):
+        StemCacheEntry.model_validate({
+            "source_version": "saved-source",
+            "cache_dir": "saved-set",
+            "fingerprint_schema": STEM_FINGERPRINT_SCHEMA,
+            "generation_fingerprint": digest,
+            "producer_identity": "2" * 64,
+        })
 
 
 def test_stem_mix_mode_validation(project_state: ProjectState) -> None:

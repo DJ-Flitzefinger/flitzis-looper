@@ -301,3 +301,95 @@ read end. All-bank assignments/old voices/actions/version/native unload ACK dete
 cleanup, not origin-to-copy hierarchy. Complete five-WAV/five-f32 joint integrity
 and four-live-component semantics are preserved. The current runtime above is
 unchanged; these are pending program/R2/R4/P6/V0 and HC-01..HC-26 obligations.
+
+## L1 effective generation identity — 2026-10-11
+
+The bounded L1 delivery adds `effective-stem-v3` provenance to the existing
+complete WAV marker, common pair descriptor, PCM binding and saved selection.
+It combines the verified complete original digest/byte extent, full output shape,
+transform policy, separator, relevant quality/execution policy and actual sealed
+producer lineage. Source and model paths locate bytes; they do not define equality.
+Equal WAVs from different known producers remain distinct pairs. Missing historical
+provenance retains the exact legacy pair identity and model-free UNKNOWN restore.
+Reopening a known pair also requires no model loading or producer recapture.
+
+The first bounded worker phase resolves and seals full actual producer inputs.
+It returns that identity to the sole control owner before inference admission.
+`loaded_source_digest(id)` supplies the existing actual Native loaded-original
+identity for control admission without file I/O. Pending load/adoption or absent
+current ownership returns no identity; a fresh source ticket still grants the
+separate publication authority. The worker verifies the full current original
+before identity resolution and again after inference, keeping initial Generate
+and result fanout free of full original hashing on control/render.
+Control joins equal resolved requests or prepares a compatible completed pair;
+different fingerprints serialize per complete original digest until the preceding
+physical inference returns. Each subscriber retains its own immutable request,
+content instance, source version/ticket, source lease and reserved publication
+capacity. Origin unload cannot borrow or cancel a survivor's native authority.
+Foreign-root reuse verifies the original and complete source pair, then uses the
+existing verified copy/rebind route to prepare an own-root pair. The foreign artifact
+version attests its marker only; preparation/publication require the subscriber's
+own loaded source ticket and callback acknowledgement.
+
+Validated effective Settings changes advance a runtime-only monotone epoch.
+Resolved material replacement advances a separate monotone intent revision.
+Settings and producer A-to-B-to-A cannot revive an obsolete event, pair preparation,
+retry or selection. Control checks captured intent at settlement and immediately
+before disk selection. Queue-admission failure settles all matching subscribers;
+unexpected worker exceptions settle physical reads and emit a terminal control
+event before propagating to the worker boundary.
+
+Current-model UI readiness and direct duplicate admission use a retained verified
+snapshot without source/model hashing or model loading during render. A snapshot
+holds its own actual producer files, including when an equal relocated producer
+joined another physical inference. Settings, source/content/shape, selection or
+model-locator changes withdraw readiness; cancellation releases the snapshot but
+an actual running reader keeps its separate job custody until return. Successful
+current matching selection reports `Stems for the current model are already present`.
+Historical UNKNOWN cannot supply that attestation or known-model duplicate proof.
+
+Controller scheduling and acknowledgement fixtures exercise actual Native processing
+file seals, five-WAV promotion and intent custody while explicitly substituting
+neural output and controller source/pair acknowledgement. Separate Rust tests prove
+real own-source cross-root preparation/publication, durable pair reopening,
+equal-WAV/different-producer rejection, legacy identity and exact copied-target
+rollback. The Demucs/BS readable suites use real owned FFmpeg/tool processes and
+artifact leases, with neural-output and controller-ACK substitutions declared.
+These are software proofs, without new neural quality, device or hearing acceptance.
+
+L2 still owns sealed offline source/process cancellation and joint disk/config
+commit during playback; L3 owns genuine new-generation active adoption. All existing
+playing/new-generation publication guards remain. L1 closes neither those stages
+nor LIVE-STEMS, Bulk, full P4b/P5a/P5b, resource/music or Human/program gates.
+
+Software validation retains the actual failed runs: Debug pair99PASS/1FAIL exposed
+copied-WAV rollback custody, fixed and rerun1PASS; Release pair98PASS/2FAIL occurred
+while the Python binding call was being reconciled, corrected retry suite8PASS
+closes both mapped failures. Thus100 affected pair cases are closed through
+98 unchanged positives plus the two corrected cases, without a whole-run PASS
+claim. Separate Release migration15PASS, recovery30PASS and loaded-digest5PASS
+cover the changed complete-marker, cleanup and metadata authority paths.
+
+The first broad controller/model/UI run was1778PASS/9FAIL/5SKIP427.02s. Eight
+lifecycle phase/reader-count assertions and one FullMix migration fixture needed
+the new two-phase/subscriber/optional-provenance contract; their corrected complete
+suites42PASS66.83s retain exact last-reader, assignment and reservation proofs.
+Fresh loaded-source/stem/shared suites91PASS50.94s, source/queue/persistence
+integration129PASS15.29s and selected-producer/readable suites40PASS313.62s also
+pass. The last group used the final getter logic with build SHA6efae19a7dd58699a8c474c6f0f668872e188ec2a4faf14978834356991a2f7b;
+its encoder/tool/producer code is unchanged in the frozen build.
+
+The frozen no-install Release wheel built in45.50s; Native SHA256 is
+`ca7806130ee5a9e22fef13067503570b75a468474fe034d4fd0d0b4287cf0694`.
+Release profile/current controller/UI import preflight passes without starting the
+App. The installed Human Release hash remains
+`4a32ccee33ef49a46aab1816a5ebd72005e7ca98d17316f0eff354eca974eec7`.
+
+Final frozen-Native integrated controller/model/sidebar suites1750PASS/3SKIP569.70s
+close the mapped failures. Readable40 positives and unchanged actual processing/
+encoder/streaming positives from the earlier broad run are reused with their
+stated source/runtime profiles. Ruff, Mypy262, Cargo workspace check/fmt, affected
+official strict,29 changed Python format checks,22 relative links/coverage JSON
+and diff whitespace pass. One independent final review found the shared queue
+failure and UI full-original hashing; both fixes and their regression/ownership
+proofs were reconciled in that same review. This closes only L1 tasks1.1/1.2.

@@ -39,6 +39,7 @@ from flitzis_looper.encoder_provenance import (
 )
 from flitzis_looper.models import STEM_KINDS, PadContentIdentity
 from flitzis_looper.pcm16_wav import PcmWavReader
+from flitzis_looper.stem_pair_selection import STEM_FINGERPRINT_SCHEMA, StemGenerationProvenance
 from flitzis_looper_audio import MigrationArtifactLease
 from tests.conftest import write_mono_pcm16_wav
 from tests.flitzis_looper.conftest import FakePreparedSourceTicket
@@ -372,8 +373,15 @@ class _RecordingBackend(DemucsStemGenerationBackend):
 class _ControlPair(_SelectedPair):
     """Independent subscriber ACK substitute, never a Native disk/callback proof."""
 
-    def __init__(self, root: str, cache: str, *, components: bool) -> None:
-        super().__init__(root, cache)
+    def __init__(
+        self,
+        root: str,
+        cache: str,
+        *,
+        components: bool,
+        provenance: StemGenerationProvenance | None,
+    ) -> None:
+        super().__init__(root, cache, provenance)
         self.components = components
 
     def has_components(self) -> bool:
@@ -393,6 +401,17 @@ class _RunnerRecords(Protocol):
     commands: list[list[str]]
     neural_commands: list[list[str]]
     records: list[dict[str, object]]
+
+
+def _marker_provenance(marker: dict[str, object]) -> StemGenerationProvenance | None:
+    if marker.get("fingerprint_schema") is None:
+        return None
+    assert marker["fingerprint_schema"] == STEM_FINGERPRINT_SCHEMA
+    return StemGenerationProvenance.model_validate({
+        "schema": marker["fingerprint_schema"],
+        "generation_fingerprint": marker["generation_fingerprint"],
+        "producer_identity": marker["producer_identity"],
+    })
 
 
 @dataclass(slots=True)
@@ -419,6 +438,7 @@ class _Rig[Backend: _BackendRecords, Runner: _RunnerRecords]:
         _ticket: FakePreparedSourceTicket,
         components: object,
         _descriptor: str | None,
+        _artifact_version: str | None = None,
     ) -> _ControlPair:
         assert sample_id in {0, 215}
         if sample_id == 215:
@@ -438,7 +458,9 @@ class _Rig[Backend: _BackendRecords, Runner: _RunnerRecords]:
                 assert proof["sha256"] == _digest(path)
                 assert proof["bytes"] == path.stat().st_size
             marker = Path(cache) / ".complete.json"
-            assert json.loads(marker.read_bytes())["source_version"] == version
+            payload = json.loads(marker.read_bytes())
+            assert payload["source_version"] == (_artifact_version or version)
+            provenance = _marker_provenance(payload)
             with pytest.raises(PermissionError):
                 marker.write_bytes(b"rewrite during actual complete-set held reader")
             _append_evidence(
@@ -459,19 +481,31 @@ class _Rig[Backend: _BackendRecords, Runner: _RunnerRecords]:
         finally:
             lease.release()
         assert isinstance(components, bool)
-        pair = _ControlPair("samples/Fixture take.wav", cache, components=components)
+        pair = _ControlPair(
+            "samples/Fixture take.wav", cache, components=components, provenance=provenance
+        )
         self.pairs.append(pair)
         return pair
 
-    def generate_origin(self, monkeypatch: pytest.MonkeyPatch) -> StemCacheEntry:
+    def _run_origin_backend(self) -> StemGenerationJob:
         assert self.controller.stems.generate_stems_async(0)
         job = next(iter(self.controller.stems._jobs.values()))
         assert len(self.tasks) == 1
         self.tasks.pop(0)()
-        if not self.backend.results:
-            self.controller.stems.on_frame_render()
+        assert str(job.phase) == "resolved"
+        assert job.resolved_request is not None
+        assert job.resolved_request.original_bytes == job.request.source_path.stat().st_size
+        assert not self.backend.results
+        self.assert_processing_writes_denied()
+        self.controller.stems.on_frame_render()
+        assert len(self.tasks) == 1
+        self.tasks.pop(0)()
         assert len(self.backend.results) == 1, self.controller.stems.stem_generation_error(0)
         assert len(self.runner.neural_commands) == 1
+        return job
+
+    def generate_origin(self, monkeypatch: pytest.MonkeyPatch) -> StemCacheEntry:
+        job = self._run_origin_backend()
         assert job.processing_files is not None
         self._assert_actual_processing_witnesses(job)
         self.assert_processing_writes_denied()
@@ -487,7 +521,7 @@ class _Rig[Backend: _BackendRecords, Runner: _RunnerRecords]:
         self.controller.stems.on_frame_render()
         assert job._disposed
         assert job.processing_files is None
-        self.runner.records[-1]["processing_guard_disposed_after_promotion"] = True
+        self.runner.records[-1]["job_processing_reference_cleared_after_promotion"] = True
         assert len(self.tasks) == 1
         self.tasks.pop(0)()
         self.controller.stems.on_frame_render()
@@ -495,7 +529,35 @@ class _Rig[Backend: _BackendRecords, Runner: _RunnerRecords]:
         assert entry is not None
         assert entry.available
         assert self.pairs[0].selected == 1
+        if entry.generation_fingerprint is not None:
+            self.assert_processing_writes_denied()
+            self.runner.records[-1]["processing_guard_held_by_selected_snapshot"] = True
         return entry
+
+    def resolve_reuse(self, *, prepare: bool) -> None:
+        """Resolve bytes before the independent pair worker, without new inference."""
+        backend_count = len(self.backend.requests)
+        command_count = len(self.runner.commands)
+        assert len(self.tasks) == 1
+        self.tasks.pop(0)()
+        self.controller.stems.on_frame_render()
+        if prepare:
+            assert len(self.tasks) == 1
+            self.tasks.pop(0)()
+            self.controller.stems.on_frame_render()
+        assert not self.tasks
+        assert len(self.backend.requests) == backend_count
+        assert len(self.runner.commands) == command_count
+
+    def withdraw_verified_snapshot(self) -> None:
+        """Withdraw runtime evidence via effective Settings ABA before owned file mutation."""
+        separator = self.controller.project.stem_separator
+        self.controller.project.stem_separator = (
+            "demucs:htdemucs" if separator == "bs-roformer:musdb18hq" else "bs-roformer:musdb18hq"
+        )
+        self.controller.project.stem_separator = separator
+        self.controller.stems.on_frame_render()
+        assert 0 not in self.controller.stems._verified_sets
 
     def _assert_actual_processing_witnesses(self, job: StemGenerationJob) -> None:
         guard = job.processing_files
@@ -553,6 +615,7 @@ def _source_assignments(controller: AppController, tmp: Path) -> Path:
         controller.project.pad_content[slot] = PadContentIdentity(
             instance_id=f"{slot + 1:032x}", material_id=digest[:32]
         )
+        controller._audio.load_sample_async(slot, source.relative_to(tmp).as_posix())
     controller.project.stem_separator = "demucs:htdemucs"
     controller.project.demucs_shifts = 2
     controller.project.demucs_overlap = 0.25
@@ -608,7 +671,10 @@ def demucs_rig(
     try:
         yield rig
     finally:
-        _retain_composed_evidence(rig, tmp_path, request.node.nodeid)
+        try:
+            _retain_composed_evidence(rig, tmp_path, request.node.nodeid)
+        finally:
+            controller.stems.shut_down()
 
 
 def _pad_evidence[Backend: _BackendRecords, Runner: _RunnerRecords](
@@ -784,17 +850,23 @@ def _assert_known_producer(rig: _DemucsRig, entry: StemCacheEntry) -> None:
     assert processing is not None
     assert processing[1] is not None
     assert entry.producer_identity == processing[1]
-    assert entry.generation_fingerprint == request_fingerprint(request)
+    assert request.original_bytes == request.source_path.stat().st_size
+    assert entry.fingerprint_schema == STEM_FINGERPRINT_SCHEMA
+    assert entry.generation_fingerprint == request_fingerprint(request, processing[1])
     processing[0].verify()
     marker = json.loads((Path(entry.cache_dir) / ".complete.json").read_bytes())
     assert marker["producer_identity"] == entry.producer_identity
     assert marker["generation_fingerprint"] == entry.generation_fingerprint
+    assert marker["fingerprint_schema"] == STEM_FINGERPRINT_SCHEMA
+    assert entry.pair is not None
+    assert entry.pair.provenance == _marker_provenance(marker)
     assert set(marker) == {
         "schema",
         "source_version",
         "stems",
         "producer_identity",
         "generation_fingerprint",
+        "fingerprint_schema",
     }
 
 
@@ -811,10 +883,14 @@ def test_demucs_actual_wrapper_encoder_publication_and_independent_completed_reu
         assert rig.controller.stems.reuse_compatible_stems_on_load(215)
     else:
         assert rig.controller.stems.generate_stems_async(215)
-    assert rig.controller.project.stem_cache[215] is None
-    assert len(rig.tasks) == 1
-    rig.tasks.pop(0)()
-    rig.controller.stems.on_frame_render()
+    if on_load:
+        assert rig.controller.project.stem_cache[215] is None
+    else:
+        admitted = rig.controller.project.stem_cache[215]
+        assert admitted is not None
+        assert not admitted.available
+        assert admitted.fingerprint_schema is None
+    rig.resolve_reuse(prepare=True)
     current = _accept_independent_publication(rig, origin)
     assert len(rig.runner.commands) == command_count
     assert len(rig.backend.requests) == 1
@@ -843,6 +919,7 @@ def test_demucs_passive_reuse_rejects_actual_changed_or_unknown_producer_without
         payload.pop("producer_identity")
         marker.write_text(json.dumps(payload), encoding="utf-8")
     else:
+        rig.withdraw_verified_snapshot()
         path = (
             rig.checkpoint if corruption == "model" else rig.encoder.with_name(SHARED_LIBRARIES[0])
         )
@@ -850,17 +927,19 @@ def test_demucs_passive_reuse_rejects_actual_changed_or_unknown_producer_without
             changed.write(b"owned fixture bytes changed after completed producer settlement")
     command_count = len(rig.runner.commands)
     assert rig.controller.stems.reuse_compatible_stems_on_load(215)
-    assert len(rig.tasks) == 1
-    rig.tasks.pop(0)()
-    rig.controller.stems.on_frame_render()
+    rig.resolve_reuse(prepare=corruption == "historical_marker")
     assert rig.controller.project.stem_cache[215] is None
     assert rig.controller.project.stem_cache[0] is origin
     assert len(rig.pairs) == 1
     assert len(rig.runner.commands) == command_count
     assert len(rig.backend.requests) == 1
-    error = rig.controller.stems.stem_generation_error(215)
-    assert error is not None
-    assert "producer" in error or "provenance" in error
+    if corruption == "historical_marker":
+        error = rig.controller.stems.stem_generation_error(215)
+        assert error is not None
+        assert "provenance" in error
+    else:
+        assert rig.controller.stems.stem_generation_error(215) is None
+        assert "current producer" in rig.controller.session.stem_generation_diagnostics[215]
     assert wav_hashes == {kind: _digest(directory / f"{kind}.wav") for kind in STEM_KINDS}
 
 
@@ -875,6 +954,9 @@ def test_demucs_preexisting_forged_receipt_cannot_stamp_completed_set_provenance
     assert not rig.runner.births
     assert entry.generation_fingerprint is None
     assert entry.producer_identity is None
+    assert entry.fingerprint_schema is None
+    assert entry.pair is not None
+    assert entry.pair.provenance is None
     marker = json.loads((Path(entry.cache_dir) / ".complete.json").read_bytes())
     assert set(marker) == {"schema", "source_version", "stems"}
     command_count = len(rig.runner.commands)

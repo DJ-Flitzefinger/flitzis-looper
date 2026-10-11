@@ -66,6 +66,7 @@ class NativeProducerBridge(Protocol):
         source_ticket: PreparedSourceTicket,
         components: bool,
         descriptor_reference: str | None = None,
+        artifact_source_version: str | None = None,
     ) -> PreparedStemPair: ...
 
     def publish_stem_pair(
@@ -140,9 +141,16 @@ class Audio:
         source_ticket: PreparedSourceTicket,
         components: bool,
         descriptor_reference: str | None = None,
+        artifact_source_version: str | None = None,
     ) -> PreparedStemPair:
         return self.bridge.prepare_stem_pair(
-            sample_id, source_version, cache_dir, source_ticket, components, descriptor_reference
+            sample_id,
+            source_version,
+            cache_dir,
+            source_ticket,
+            components,
+            descriptor_reference,
+            artifact_source_version,
         )
 
     def publish_stem_pair(

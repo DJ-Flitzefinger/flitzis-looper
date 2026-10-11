@@ -611,6 +611,156 @@ mod tests {
     }
 
     #[test]
+    fn loaded_source_digest_is_a_copy_of_actual_loaded_metadata_without_a_file_lookup() {
+        let empty = AudioEngine::new().unwrap();
+        assert_eq!(empty.loaded_source_digest(0).unwrap(), None);
+        assert_eq!(empty.loaded_source_digest(NUM_SAMPLES - 1).unwrap(), None);
+        assert!(empty.loaded_source_digest(NUM_SAMPLES).is_err());
+        let (engine, version, _) = prepared_test_engine();
+        // The fixture is an actual Native source owner, with no original file
+        // required by this metadata API. Worker verification remains separate.
+        let mut returned = engine.loaded_source_digest(0).unwrap().unwrap();
+        assert_eq!(returned, "a".repeat(64));
+        returned.clear();
+        assert_eq!(
+            engine.loaded_source_digest(0).unwrap(),
+            Some("a".repeat(64))
+        );
+        assert_eq!(engine.loaded_source_digest(1).unwrap(), None);
+        assert!(engine.capture_prepared_source(0, version).is_ok());
+        assert!(
+            engine
+                .capture_prepared_source(0, format!("samples/a.wav|sha256-v1:{}", "b".repeat(64)))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn loaded_source_digest_does_not_grant_foreign_or_revoked_cache_source_authority() {
+        let (engine, version, original) = prepared_test_engine();
+        let foreign = SampleBuffer {
+            residency: None,
+            channels: 1,
+            samples: Arc::from([0.25_f32; 16].as_slice()),
+        };
+        engine.sample_cache.lock().unwrap()[0] = Some(foreign);
+        assert_eq!(engine.loaded_source_digest(0).unwrap(), None);
+        assert!(engine.capture_prepared_source(0, version.clone()).is_err());
+        engine.sample_cache.lock().unwrap()[0] = Some(original);
+        assert_eq!(
+            engine.loaded_source_digest(0).unwrap(),
+            Some("a".repeat(64))
+        );
+        engine.input_runtime_ownership.revoke_source(0);
+        assert_eq!(engine.loaded_source_digest(0).unwrap(), None);
+        assert!(engine.capture_prepared_source(0, version).is_err());
+    }
+
+    #[test]
+    fn loaded_source_digest_is_withdrawn_by_actual_unload_even_with_old_generation_metadata() {
+        let (engine, version, _) = prepared_test_engine();
+        let (producer, mut consumer) = rtrb::RingBuffer::new(1);
+        let producer = Arc::new(Mutex::new(producer));
+        super::super::cold_load::unload_for_producer(&engine, 0, &producer).unwrap();
+        assert!(matches!(
+            consumer.pop().unwrap(),
+            ControlMessage::UnloadSample { id: 0 }
+        ));
+        assert_eq!(
+            engine.loaded_source_generations.lock().unwrap()[0],
+            (7, 44_100)
+        );
+        assert_eq!(engine.loaded_source_digest(0).unwrap(), None);
+        assert!(engine.capture_prepared_source(0, version).is_err());
+    }
+
+    #[test]
+    fn loaded_source_digest_survives_actual_analysis_request_advance_of_the_same_source() {
+        let (engine, _, sample) = prepared_test_engine();
+        let job = engine
+            .offline_jobs
+            .begin(
+                0,
+                sample,
+                44_100,
+                7,
+                super::super::analysis_jobs::OfflineRequestOwner {
+                    request_ids: engine.pad_request_ids.clone(),
+                    prepared_epoch: engine.prepared_source_epochs[0].clone(),
+                },
+                engine.loader_tx.clone(),
+            )
+            .unwrap();
+        assert_eq!(engine.pad_request_ids.lock().unwrap()[0], 8);
+        assert_eq!(
+            engine.loaded_source_generations.lock().unwrap()[0],
+            (7, 44_100)
+        );
+        assert_eq!(
+            engine.loaded_source_digest(0).unwrap(),
+            Some("a".repeat(64))
+        );
+        job.cancel();
+        assert_eq!(
+            engine.loaded_source_digest(0).unwrap(),
+            Some("a".repeat(64))
+        );
+    }
+
+    #[test]
+    fn loaded_source_digest_never_advertises_old_source_during_actual_pending_load() {
+        let (mut engine, _, old_source) = prepared_test_engine();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("owned-next.wav");
+        let mut wav = Vec::with_capacity(44 + 256);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36_u32 + 256).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16_u32.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&44_100_u32.to_le_bytes());
+        wav.extend_from_slice(&88_200_u32.to_le_bytes());
+        wav.extend_from_slice(&2_u16.to_le_bytes());
+        wav.extend_from_slice(&16_u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&256_u32.to_le_bytes());
+        for _ in 0..128 {
+            wav.extend_from_slice(&1024_i16.to_le_bytes());
+        }
+        std::fs::write(&path, wav).unwrap();
+        let (producer, _consumer) = rtrb::RingBuffer::new(1);
+        let request = super::super::cold_load::admit_for_format(
+            &engine,
+            0,
+            path.to_string_lossy().into_owned(),
+            false,
+            false,
+            false,
+            Arc::new(Mutex::new(producer)),
+            1,
+            44_100,
+            directory.path().join("samples"),
+        )
+        .unwrap();
+        assert_eq!(request, 8);
+        // No consumer adopts the new source. Its real loader transaction holds
+        // the pending-load fence while old metadata or prepared metadata exist.
+        assert_eq!(engine.loaded_source_digest(0).unwrap(), None);
+        engine.cold_cancelled.store(true, Ordering::Release);
+        engine.cold_jobs.shutdown();
+        assert!(
+            engine
+                .input_runtime_ownership
+                .source_current(0, &old_source, 44_100)
+        );
+        assert_eq!(
+            engine.loaded_source_digest(0).unwrap(),
+            Some("a".repeat(64))
+        );
+    }
+
+    #[test]
     fn productive_prepared_enqueue_and_callback_report_actual_adoption_once() {
         let (engine, version, sample) = prepared_test_engine();
         let ticket = engine.capture_prepared_source(0, version.clone()).unwrap();

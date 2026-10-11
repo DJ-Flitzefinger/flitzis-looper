@@ -587,6 +587,217 @@ fn legacy_subscriber_version_is_preserved_while_native_pair_binds_canonical_sour
 }
 
 #[test]
+fn equal_owned_roots_rebind_complete_provenance_with_only_own_ticket_and_fresh_ack() {
+    let mut h = Harness::new();
+    let marker_path = h.wav_path.join(".complete.json");
+    let mut marker: Value = serde_json::from_slice(&fs::read(&marker_path).unwrap()).unwrap();
+    marker["fingerprint_schema"] = json!("effective-stem-v3");
+    marker["generation_fingerprint"] = json!("a".repeat(64));
+    marker["producer_identity"] = json!("b".repeat(64));
+    fs::write(&marker_path, serde_json::to_vec(&marker).unwrap()).unwrap();
+    let origin_ticket = h.ticket(0);
+    let origin_pair = h.prepare(0, &origin_ticket, false, None);
+    let origin_selection = selection(&origin_pair);
+    let origin_reference = origin_selection["descriptor_reference"].as_str().unwrap();
+    let _origin_owner = h.save(&origin_pair);
+
+    // A restored independently owned readable root deliberately bypasses import
+    // deduplication, just as two preserved legacy assignments may already exist.
+    let target_root = h.root.join("independent.wav");
+    fs::create_dir(&target_root).unwrap();
+    let target_original = target_root.join("independent.wav");
+    let original_bytes = fs::read(&h.material.lease.original_path).unwrap();
+    fs::write(&target_original, &original_bytes).unwrap();
+    let original_sha256 = h.material.metadata()["original"]["sha256"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    fs::write(
+        target_root.join(".material.json"),
+        serde_json::to_vec(&json!({
+            "schema_version":1, "sha256":original_sha256, "bytes":original_bytes.len(),
+            "original_leaf":"independent.wav",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut transaction = crate::audio_engine::cold_store::ColdTransaction::capture(
+        &h.root,
+        &target_original,
+        false,
+        &|| false,
+    )
+    .unwrap();
+    let mut sample = crate::audio_engine::material_migration::prepare_pcm(
+        &mut transaction,
+        &target_original,
+        RATE,
+        2,
+        crate::audio_engine::cold_jobs::PCM_LIMIT_BYTES,
+        None,
+        &|| false,
+        &mut |_| {},
+    )
+    .unwrap();
+    crate::audio_engine::cold_residency::attach(&mut sample, transaction.manifest().unwrap())
+        .unwrap();
+    transaction.commit(&|| false).unwrap();
+    transaction.bind_pcm(&sample.samples);
+    let target =
+        PreparedMigrationMaterial::from_current(&h.root, sample, transaction.into_lease()).unwrap();
+    let target_version = canonical_version(&target);
+    assert_ne!(target_version, h.version);
+    let preparation = control::prepared_for_test(&h.engine, target, &h.root).unwrap();
+    let adopted = control::adopt_for_format(
+        &h.engine,
+        215,
+        &preparation,
+        h.producer.clone(),
+        (2, RATE, h.root.clone()),
+    )
+    .unwrap();
+    wait_until(|| h.consumer.slots() > 0);
+    assert_eq!(h.callback.drain(&mut h.consumer), 1);
+    source_successes(&h.engine, &[adopted.request_id()]);
+    let own_ticket = h
+        .engine
+        .capture_prepared_source(215, target_version.clone())
+        .unwrap();
+    assert!(
+        h.engine
+            .capture_stem_pair_work(&h.root, 215, &target_version, &origin_ticket)
+            .is_err()
+    );
+    assert!(
+        h.engine
+            .capture_stem_pair_work(&h.root, 215, &target_version, &own_ticket)
+            .unwrap()
+            .prepare(&h.wav_reference, false, Some(origin_reference), None)
+            .is_err()
+    );
+    assert!(
+        h.engine
+            .capture_stem_pair_work(&h.root, 215, &target_version, &own_ticket)
+            .unwrap()
+            .prepare(
+                &h.wav_reference,
+                false,
+                Some(origin_reference),
+                Some(&target_version)
+            )
+            .is_err()
+    );
+    let own_pair = h
+        .engine
+        .capture_stem_pair_work(&h.root, 215, &target_version, &own_ticket)
+        .unwrap()
+        .prepare(
+            &h.wav_reference,
+            true,
+            Some(origin_reference),
+            Some(&h.version),
+        )
+        .unwrap();
+    let selected = selection(&own_pair);
+    assert_ne!(
+        selected["descriptor_reference"],
+        origin_selection["descriptor_reference"]
+    );
+    assert_eq!(selected["provenance"], origin_selection["provenance"]);
+    assert!(
+        selected["wav_generation"]
+            .as_str()
+            .unwrap()
+            .starts_with("samples/independent.wav/stems/")
+    );
+    assert_eq!(own_pair.source_version, target_version);
+    let _target_owner = h.save(&own_pair);
+    let saved = selected.to_string();
+    let reopened_selection: Value = serde_json::from_str(&saved).unwrap();
+    let reopened = h
+        .engine
+        .prepare_stem_pair_at_root(
+            &h.root,
+            215,
+            &target_version,
+            reopened_selection["wav_generation"].as_str().unwrap(),
+            &own_ticket,
+            false,
+            Some(reopened_selection["descriptor_reference"].as_str().unwrap()),
+        )
+        .unwrap();
+    assert_eq!(selection(&reopened), reopened_selection);
+    assert_eq!(own_ticket.publication_status(), "captured");
+    h.engine
+        .publish_stem_pair_with_producer(&own_pair, &own_ticket, &h.producer)
+        .unwrap();
+    assert_eq!(own_ticket.publication_status(), "pending");
+    assert_eq!(h.callback.drain(&mut h.consumer), 1);
+    assert_eq!(own_ticket.publication_status(), "accepted");
+    assert_eq!(origin_ticket.publication_status(), "captured");
+    assert_complete_selection(&h.root, &selected);
+    assert_complete_selection(&h.root, &origin_selection);
+    preparation.release_preparation().unwrap();
+}
+
+#[test]
+fn copied_unknown_legacy_witness_reuse_discards_only_its_actual_new_wav_target() {
+    let h = Harness::new();
+    let marker_path = h.wav_path.join(".complete.json");
+    let mut marker: Value = serde_json::from_slice(&fs::read(&marker_path).unwrap()).unwrap();
+    marker["generation_fingerprint"] = json!("a".repeat(64));
+    marker["producer_identity"] = json!("b".repeat(64));
+    fs::write(&marker_path, serde_json::to_vec(&marker).unwrap()).unwrap();
+    let ticket = h.ticket(0);
+    let previous = h.prepare(0, &ticket, false, None);
+    let selected = selection(&previous);
+    let _owner = h.save(&previous);
+    let legacy = h
+        .root
+        .join("stems/#216/.ready-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    write_complete_wavs(
+        &legacy,
+        &fs::read(h.wav_path.join("vocals.wav")).unwrap(),
+        &h.version,
+    );
+    marker["producer_identity"] = json!("c".repeat(64));
+    fs::write(
+        legacy.join(".complete.json"),
+        serde_json::to_vec(&marker).unwrap(),
+    )
+    .unwrap();
+    let cache_reference = legacy.to_str().unwrap();
+    let own_generation = format!("{:x}", Sha256::digest(cache_reference.as_bytes()));
+    let copied = h
+        .wav_path
+        .parent()
+        .unwrap()
+        .join(format!(".ready-{}", &own_generation[..32]));
+    let prepared = h
+        .engine
+        .prepare_stem_pair_at_root(
+            &h.root,
+            0,
+            &h.version,
+            cache_reference,
+            &ticket,
+            false,
+            None,
+        )
+        .unwrap();
+    assert_eq!(selection(&prepared), selected);
+    assert!(copied.join("instrumental.wav").is_file());
+    prepared.discard().unwrap();
+    drop(prepared);
+    wait_until(|| {
+        h.engine.project_assets.collect_for_test();
+        !copied.exists()
+    });
+    assert_complete_selection(&h.root, &selected);
+    assert!(legacy.join("instrumental.wav").is_file());
+}
+
+#[test]
 fn explicit_instrumental_reader_holds_both_areas_without_creating_fifth_live_component() {
     pyo3::Python::initialize();
     let harness = Harness::new();
@@ -872,6 +1083,16 @@ fn ordinary_pair_new_process_reopens_durable_selection_with_fresh_source_timing_
             &original_bytes,
             &version,
         );
+        let marker_path = root
+            .parent()
+            .unwrap()
+            .join(&wav_reference)
+            .join(".complete.json");
+        let mut marker: Value = serde_json::from_slice(&fs::read(&marker_path).unwrap()).unwrap();
+        marker["fingerprint_schema"] = json!("effective-stem-v3");
+        marker["generation_fingerprint"] = json!("a".repeat(64));
+        marker["producer_identity"] = json!("b".repeat(64));
+        fs::write(marker_path, serde_json::to_vec(&marker).unwrap()).unwrap();
         let preparation = control::prepared_for_test(&engine, material, &root).unwrap();
         let (producer, mut consumer) = rtrb::RingBuffer::new(8);
         let producer = Arc::new(Mutex::new(producer));
@@ -910,6 +1131,11 @@ fn ordinary_pair_new_process_reopens_durable_selection_with_fresh_source_timing_
             .prepare_stem_pair_at_root(&root, 0, &version, &wav_reference, &ticket, true, None)
             .unwrap();
         let selected = selection(&pair);
+        assert_eq!(
+            selected["provenance"],
+            json!({"schema":"effective-stem-v3",
+            "generation_fingerprint":"a".repeat(64),"producer_identity":"b".repeat(64)})
+        );
         validate_actual_durable_selection(pair.selection_json());
         let _saved_wav = engine
             .project_assets
@@ -1335,7 +1561,7 @@ impl PairWorkerAudio {
         self.engine.capture_prepared_source(id, source_version)
     }
 
-    #[pyo3(signature=(id,source_version,cache_dir,source_ticket,components,descriptor_reference=None))]
+    #[pyo3(signature=(id,source_version,cache_dir,source_ticket,components,descriptor_reference=None,artifact_source_version=None))]
     fn prepare_stem_pair(
         &self,
         py: Python<'_>,
@@ -1345,6 +1571,7 @@ impl PairWorkerAudio {
         source_ticket: &PreparedSourceTicket,
         components: bool,
         descriptor_reference: Option<String>,
+        artifact_source_version: Option<String>,
     ) -> PyResult<PreparedStemPair> {
         let worker_name: String = py
             .import("threading")?
@@ -1357,15 +1584,14 @@ impl PairWorkerAudio {
         }
         self.worker_calls.fetch_add(1, Ordering::AcqRel);
         py.detach(|| {
-            self.engine.prepare_stem_pair_at_root(
-                &self.root,
-                id,
-                &source_version,
-                &cache_dir,
-                source_ticket,
-                components,
-                descriptor_reference.as_deref(),
-            )
+            self.engine
+                .capture_stem_pair_work(&self.root, id, &source_version, source_ticket)?
+                .prepare(
+                    &cache_dir,
+                    components,
+                    descriptor_reference.as_deref(),
+                    artifact_source_version.as_deref(),
+                )
         })
         .map_err(pyo3::exceptions::PyValueError::new_err)
     }

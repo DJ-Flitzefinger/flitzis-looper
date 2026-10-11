@@ -14,6 +14,26 @@ _READABLE = r'[^\x00-\x1f<>:"/\\|?*.#][^\x00-\x1f<>:"/\\|?*]*'
 _ROOT = rf"samples/(?:materials/{_MATERIAL}|{_READABLE})"
 
 
+type StemFingerprintSchema = Literal["effective-stem-v3"]
+
+STEM_FINGERPRINT_SCHEMA: StemFingerprintSchema = "effective-stem-v3"
+
+
+class StemGenerationProvenance(BaseModel):
+    """Frozen verified processing identity, without current runtime authority."""
+
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        revalidate_instances="always",
+        validate_by_name=True,
+        serialize_by_alias=True,
+    )
+    fingerprint_schema: StemFingerprintSchema = Field(alias="schema")
+    generation_fingerprint: str = Field(strict=True, pattern=r"\A[0-9a-f]{64}\z")
+    producer_identity: str = Field(strict=True, pattern=r"\A[0-9a-f]{64}\z")
+
+
 class StemPairSelection(BaseModel):
     """Immutable project references to a complete native-verifiable stem pair."""
 
@@ -34,6 +54,11 @@ class StemPairSelection(BaseModel):
         pattern=rf"\A{_ROOT}/\.pcm-cache/stems/v1/"
         rf"\.ready-{_GENERATION}\z",
     )
+
+    provenance: StemGenerationProvenance | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    """Unknown historical provenance remains absent and does not require model loading."""
 
     @field_validator("schema_version", mode="before")
     @classmethod

@@ -2,13 +2,14 @@ import math
 
 # Pydantic resolves the computed serializer annotation at runtime.
 from collections.abc import MutableSequence  # noqa: TC003
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal, Self
 
 from pydantic import (
     AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     TypeAdapter,
     ValidationError,
     computed_field,
@@ -47,7 +48,7 @@ from flitzis_looper.material_migration_model import (
     MaterialMigrationAlias,
     MigrationID,
 )
-from flitzis_looper.stem_pair_selection import StemPairSelection
+from flitzis_looper.stem_pair_selection import StemFingerprintSchema, StemPairSelection
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -207,10 +208,15 @@ class StemCacheEntry(BaseModel):
     pair: StemPairSelection | None = None
     """Complete immutable WAV/PCM selection; runtime publication remains independent."""
 
-    generation_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    fingerprint_schema: StemFingerprintSchema | None = None
+    """Versioned processing provenance; old flat digests alone remain unknown."""
+
+    generation_fingerprint: str | None = Field(
+        default=None, strict=True, pattern=r"\A[0-9a-f]{64}\z"
+    )
     """Captured source/config/transform request; absent historical provenance stays unknown."""
 
-    producer_identity: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    producer_identity: str | None = Field(default=None, strict=True, pattern=r"\A[0-9a-f]{64}\z")
     """Full verified model/config bytes held throughout actual successful production."""
 
     @field_validator("pair", mode="before")
@@ -218,6 +224,16 @@ class StemCacheEntry(BaseModel):
     def _validate_pair(cls, value: object) -> StemPairSelection | None:
         """Recheck immutable selections, including unchecked model_copy updates."""
         return None if value is None else StemPairSelection.model_validate(value)
+
+    @model_validator(mode="after")
+    def _validate_generation_provenance(self) -> Self:
+        """Current provenance requires both hashes; historical fields stay readable."""
+        if self.fingerprint_schema is not None and (
+            self.generation_fingerprint is None or self.producer_identity is None
+        ):
+            message = "current stem fingerprint schema requires generation and producer digests"
+            raise ValueError(message)
+        return self
 
 
 def _default_sample_analysis() -> list[SampleAnalysis | None]:
@@ -386,6 +402,8 @@ def _migrate_legacy_key_intent(data: dict[str, object]) -> None:
 class ProjectState(BaseModel):
     """Persistent state. Saved to disk."""
 
+    _stem_processing_revision: int = PrivateAttr(default=0)
+
     config_revision: int = Field(default=0, strict=True, ge=0)
     """Last atomically committed project revision; never a native ownership token."""
     material_migrations: dict[MigrationID, MaterialMigrationAlias] = Field(
@@ -394,6 +412,26 @@ class ProjectState(BaseModel):
     """Content-verified old/new lineage; fresh source/timing adoption is still required."""
 
     model_config = ConfigDict(validate_assignment=True)
+
+    @property
+    def stem_processing_revision(self) -> int:
+        """Monotone effective Settings epoch, private to this runtime model instance."""
+        return self._stem_processing_revision
+
+    def __setattr__(self, name: str, value: object) -> None:
+        """Fence effective processing changes after successful assignment validation."""
+        watched = name in {"stem_separator", "demucs_shifts", "demucs_overlap"}
+        previous = self._effective_stem_processing_settings() if watched else None
+        super().__setattr__(name, value)
+        if watched and self._effective_stem_processing_settings() != previous:
+            self._stem_processing_revision += 1
+
+    def _effective_stem_processing_settings(
+        self,
+    ) -> tuple[StemSeparator, int | None, float | None]:
+        if self.stem_separator == "demucs:htdemucs":
+            return self.stem_separator, self.demucs_shifts, self.demucs_overlap
+        return self.stem_separator, None, None
 
     @model_validator(mode="before")
     @classmethod

@@ -7,15 +7,24 @@
 
 ## 1. X11-LIVE-STEMS: captured job identity and duplicate prevention (L1)
 
-- [ ] 1.1 Extend existing immutable request/common descriptor/current selection
-  with versioned source/model/checkpoint/configuration/quality/shape/transform
-  fingerprint; verify save/reopen and safe unknown-fingerprint handling without
-  model-free restore regression.
-- [ ] 1.2 Make existing job matching authoritative for verified material and
-  effective fingerprint; join concurrent same jobs through independent interests
-  and serialize different-model replacement. Reject already-valid same-model
-  requests in controller/direct/batch paths and derive disabled UI from the same
-  rule. Prove UI/direct/batch dedup and model change/success disable behavior.
+- [x] 1.1 Extend existing immutable request/common descriptor/current selection
+  and PCM binding with optional `effective-stem-v3` provenance: full verified
+  original/shape/transform, separator/model, relevant output-affecting quality
+  and full actual sealed checkpoint/config/producer lineage. Capture producer
+  inputs in the first existing bounded nonRT worker phase; use paths only as
+  locators and keep captured inputs immutable through inference. Verify agreement,
+  save/reopen, equal WAV/different known producer incompatibility and unchanged
+  absent-provenance legacy identity/UNKNOWN model-free restore without attestation.
+- [x] 1.2 Make existing job matching authoritative for verified material and
+  captured effective fingerprint: control coalesces independent subscriber
+  source/ticket/version/content/request/intent interests or returns `Stems already
+  present` before inference/output writes, and serializes changed fingerprints
+  per material. Use one UI/controller/direct/future-batch decision without render
+  hashing/model loading. Prove physical inference/subscriber counts, cross-root
+  verified copy/rebind own authority, model change/success disable and monotone
+  validated Settings plus per-material A-to-B-to-A fences at worker events and
+  immediately before selection. Keep all playing/new-generation guards until
+  L2/L3 proofs; record no active-generation, Bulk or Human acceptance from L1.
 
 ## 2. X11-LIVE-STEMS: source-leased offline job and joint commit (L2)
 

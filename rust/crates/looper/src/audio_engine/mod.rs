@@ -1160,6 +1160,65 @@ impl AudioEngine {
         Ok((handle.output_sample_rate, sample.channels, frames))
     }
 
+    /// Bounded control snapshot of the actual loaded original, without file I/O.
+    /// Pending replacement/adoption cannot advertise the previous source digest.
+    /// This metadata does not replace a source ticket's publication authority.
+    pub fn loaded_source_digest(&self, id: usize) -> PyResult<Option<String>> {
+        if id >= NUM_SAMPLES {
+            return Err(PyValueError::new_err("id out of range"));
+        }
+        let requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        let loading = self
+            .loading_sample_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("loading lock poisoned"))?;
+        if loading.contains(&id) || self.cold_loading[id].load(Ordering::Acquire) != 0 {
+            return Ok(None);
+        }
+        let cache = self
+            .sample_cache
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?;
+        let Some(sample) = cache[id].as_ref() else {
+            return Ok(None);
+        };
+        let generations = self
+            .loaded_source_generations
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("source generation lock poisoned"))?;
+        let (generation, rate) = generations[id];
+        // Analysis can advance the request while retaining this loaded source.
+        // Its actual source owner, rather than equal request numbers, is decisive.
+        if requests[id] == 0
+            || generation == 0
+            || rate == 0
+            || sample.channels == 0
+            || sample.frame_count() == 0
+            || self
+                .input_runtime_ownership
+                .source_generation(id, sample, rate)
+                != Some(generation)
+        {
+            return Ok(None);
+        }
+        let digests = self
+            .loaded_source_digests
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("source digest lock poisoned"))?;
+        Ok(digests[id]
+            .as_ref()
+            .filter(|digest| {
+                digest.len() == 64
+                    && digest
+                        .bytes()
+                        .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            })
+            .cloned())
+    }
+
     /// Shut down the audio engine.
     pub fn shut_down(&mut self) -> PyResult<()> {
         if let Some(runtime) = self.input_runtime.as_ref() {
@@ -1917,7 +1976,7 @@ impl AudioEngine {
     }
 
     /// Background complete-pair preparation; only four components are optionally resident.
-    #[pyo3(signature=(id,source_version,cache_dir,source_ticket,components,descriptor_reference=None))]
+    #[pyo3(signature=(id,source_version,cache_dir,source_ticket,components,descriptor_reference=None,artifact_source_version=None))]
     pub fn prepare_stem_pair(
         slf: &Bound<'_, Self>,
         py: Python<'_>,
@@ -1927,6 +1986,7 @@ impl AudioEngine {
         source_ticket: &PreparedSourceTicket,
         components: bool,
         descriptor_reference: Option<String>,
+        artifact_source_version: Option<String>,
     ) -> PyResult<PreparedStemPair> {
         let work = {
             let engine = slf.try_borrow()?;
@@ -1936,8 +1996,15 @@ impl AudioEngine {
                 .map_err(PyValueError::new_err)?
         };
         // Python UI receivers may borrow this engine while immutable worker I/O runs.
-        py.detach(move || work.prepare(&cache_dir, components, descriptor_reference.as_deref()))
-            .map_err(PyValueError::new_err)
+        py.detach(move || {
+            work.prepare(
+                &cache_dir,
+                components,
+                descriptor_reference.as_deref(),
+                artifact_source_version.as_deref(),
+            )
+        })
+        .map_err(PyValueError::new_err)
     }
 
     /// Publish already prepared buffers with this subscriber's own current ticket.
@@ -1966,7 +2033,7 @@ impl AudioEngine {
                 .map_err(PyValueError::new_err)?
         };
         let prepared = py
-            .detach(move || work.prepare("", false, Some(&descriptor_reference)))
+            .detach(move || work.prepare("", false, Some(&descriptor_reference), None))
             .map_err(PyValueError::new_err)?;
         prepared.instrumental_reader(py)
     }

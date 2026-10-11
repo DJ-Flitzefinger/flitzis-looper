@@ -79,12 +79,24 @@ class _PreparedPair:
         self.discarded += 1
 
 
+def _write_migration_wavs(selection: StemPairSelection, source_version: str) -> None:
+    cache = Path(selection.wav_generation)
+    cache.mkdir(parents=True)
+    for kind in STEM_KINDS:
+        write_mono_pcm16_wav(cache / f"{kind}.wav", 44_100)
+    # Interrupted migration already completed this canonical pair. Its marker
+    # and entry both retain the actual target source binding.
+    write_test_stem_marker(cache, source_version)
+
+
 class _PairRig:
     def __init__(
         self, controller: AppController, audio: Mock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(migration_module, "ProjectAssetLease", _DeliveredLease)
         self.base = _Harness(controller, audio)
+        for sample_id in _IDS:
+            audio.load_sample_async(sample_id, _OLD)
         self.controller = controller
         self.audio = audio
         self.runner = _ManualRunner()
@@ -108,13 +120,7 @@ class _PairRig:
         digest = hashlib.sha256(Path(_OLD).read_bytes()).hexdigest()
         self.old_version = f"{_OLD}|sha256-v1:{digest}"
         self.canonical_version = f"{_NEW}|sha256-v1:{digest}"
-        cache = Path(self.selection.wav_generation)
-        cache.mkdir(parents=True)
-        for kind in STEM_KINDS:
-            write_mono_pcm16_wav(cache / f"{kind}.wav", 44_100)
-        # Interrupted migration already completed this canonical pair. Its marker
-        # and entry both retain the actual target source binding.
-        write_test_stem_marker(cache, self.canonical_version)
+        _write_migration_wavs(self.selection, self.canonical_version)
         entry = StemCacheEntry(
             source_version=self.canonical_version,
             cache_dir=self.selection.wav_generation,
@@ -143,10 +149,12 @@ class _PairRig:
             ticket: FakePreparedSourceTicket,
             components: object,
             descriptor_reference: str | None,
+            artifact_source_version: str | None = None,
         ) -> _PreparedPair:
             assert version == self.canonical_version
             assert cache_dir == self.selection.wav_generation
             assert descriptor_reference == self.selection.descriptor_reference
+            assert artifact_source_version in {None, self.canonical_version}
             assert any(owner == sample_id and current is ticket for owner, current in self.tickets)
             assert isinstance(components, bool)
             result = _PreparedPair(self.selection, components=components)
@@ -286,6 +294,9 @@ def test_full_mix_migration_keeps_frozen_disk_pair_without_preparing_four_live_c
     saved = ProjectPersistence.from_config_path(rig.controller.persistence.config_path).project
     assert saved.stem_cache[0] is not None
     assert saved.stem_cache[0].pair == rig.selection
+    assert saved.stem_cache[0].fingerprint_schema is None
+    assert saved.stem_cache[0].pair is not None
+    assert saved.stem_cache[0].pair.provenance is None
     assert saved.pad_stem_mix_mode[0] == "full_mix"
     # The real ordinary controller queue must do fresh work when ALL is requested.
     assert rig.controller.stems.set_stem_mix_mode(0, "all_stems")
@@ -298,6 +309,9 @@ def test_full_mix_migration_keeps_frozen_disk_pair_without_preparing_four_live_c
     assert rig.controller.stems.stems_available(0)
     assert rig.controller.project.stem_cache[0] is not None
     assert rig.controller.project.stem_cache[0].pair == rig.selection
+    assert rig.controller.project.stem_cache[0].fingerprint_schema is None
+    assert rig.controller.project.stem_cache[0].pair is not None
+    assert rig.controller.project.stem_cache[0].pair.provenance is None
 
 
 def test_full_mix_after_pending_pair_orders_release_and_later_all_requires_new_worker_ticket(

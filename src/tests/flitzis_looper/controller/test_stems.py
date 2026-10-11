@@ -41,6 +41,8 @@ def _load_project_sample(controller: AppController, tmp_path: Path, name: str = 
     project_path = f"samples/{name}"
     controller.project.sample_paths[0] = project_path
     controller.project.sample_durations[0] = 128 / 44_100
+    # Controller-only native admission captures the fixture's immutable digest.
+    controller._audio.load_sample_async(0, project_path)
     return project_path
 
 
@@ -132,17 +134,20 @@ def test_generate_stems_async_schedules_stopped_loaded_pad(
     version = controller.session.stem_generation_source_versions[0]
     cache_dir = cache_dir_for_sample_id(0)
     audio_engine_mock.generate_stems_async.assert_not_called()
-    assert len(stem_backend.requests) == 1
-    assert stem_backend.requests[0].sample_id == 0
-    assert stem_backend.requests[0].source_version == version
-    assert stem_backend.requests[0].cache_dir.parent == tmp_path / cache_dir
-    assert stem_backend.requests[0].cache_dir.name.startswith(".generation-")
+    assert stem_backend.requests == []  # Resolution returns to control before inference.
     assert 0 in controller.session.stem_generating_sample_ids
     entry = controller.project.stem_cache[0]
     assert entry is not None
     assert entry.source_version == version
     assert entry.cache_dir == cache_dir
     assert entry.available is False
+    controller.stems.on_frame_render()
+    assert len(stem_backend.requests) == 1
+    assert stem_backend.requests[0].sample_id == 0
+    assert stem_backend.requests[0].source_version == version
+    assert stem_backend.requests[0].cache_dir.parent == tmp_path / cache_dir
+    assert stem_backend.requests[0].cache_dir.name.startswith(".generation-")
+    assert controller.stems.stems_available(0)
     assert stem_backend.requests[0].demucs_shifts == DEFAULT_DEMUCS_SHIFTS
     assert stem_backend.requests[0].demucs_overlap == pytest.approx(DEFAULT_DEMUCS_OVERLAP)
 
@@ -156,7 +161,7 @@ def test_generate_stems_async_uses_configured_demucs_quality(
     controller.settings.set_demucs_quality(shifts=4, overlap=0.25)
 
     assert controller.stems.generate_stems_async(0) is True
-
+    controller.stems.on_frame_render()
     assert stem_backend.requests[0].demucs_shifts == 4
     assert stem_backend.requests[0].demucs_overlap == pytest.approx(0.25)
 
@@ -515,6 +520,9 @@ def test_same_source_reload_does_not_accept_old_job_completion(
     audio_engine_mock.publish_prepared_stems.assert_not_called()
     targets[1]()
     controller.stems.on_frame_render()
+    assert stem_backend.requests == []
+    targets[2]()  # Newly admitted inference, using only the current source ticket.
+    controller.stems.on_frame_render()
     audio_engine_mock.publish_prepared_stems.assert_called_once_with(
         0, original_version, _published_cache_dir(controller), current_ticket
     )
@@ -539,6 +547,8 @@ def test_obsolete_worker_cannot_overwrite_current_canonical_stems(
     _load_project_sample(controller, tmp_path)
     assert controller.stems.generate_stems_async(0) is True
     targets[1]()
+    controller.stems.on_frame_render()
+    targets[2]()
     controller.stems.on_frame_render()
     current_files = {
         kind: (tmp_path / _published_cache_dir(controller) / f"{kind}.wav").read_bytes()
@@ -580,6 +590,9 @@ def test_legacy_native_events_cannot_complete_or_abort_current_python_job(
     assert controller.session.stem_generation_progress == {}
     audio_engine_mock.publish_prepared_stems.assert_not_called()
     targets[0]()
+    controller.stems.on_frame_render()
+    audio_engine_mock.publish_prepared_stems.assert_not_called()
+    targets[1]()
     controller.stems.on_frame_render()
     assert audio_engine_mock.publish_prepared_stems.call_count == 1
 

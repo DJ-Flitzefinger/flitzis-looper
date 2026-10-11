@@ -21,6 +21,7 @@ def test_separator_switch_and_rollback_preserve_stems_and_running_intent() -> No
 
     settings.set_stem_separator("bs-roformer:musdb18hq")
 
+    assert project.stem_processing_revision == 1
     assert project.stem_separator == "bs-roformer:musdb18hq"
     assert project.stem_cache[0] is entry
     assert project.pad_stem_mix_mode[0] == "all_stems"
@@ -30,6 +31,7 @@ def test_separator_switch_and_rollback_preserve_stems_and_running_intent() -> No
 
     settings.set_stem_separator("demucs:htdemucs")
 
+    assert project.stem_processing_revision == 2
     assert project.model_dump()["stem_separator"] == "demucs:htdemucs"
     assert project.demucs_shifts == 4
     assert project.demucs_overlap == 0.25
@@ -45,6 +47,7 @@ def test_unchanged_separator_does_not_mark_project_dirty() -> None:
 
     settings.set_stem_separator("demucs:htdemucs")
 
+    assert project.stem_processing_revision == 0
     changed.assert_not_called()
 
 
@@ -58,4 +61,40 @@ def test_unknown_separator_rejects_without_mutating_project() -> None:
         settings.set_stem_separator(cast("StemSeparator", "unknown:model"))
 
     assert project.model_dump() == previous
+    assert project.stem_processing_revision == 0
     changed.assert_not_called()
+
+
+def test_settings_quality_aba_advances_only_the_models_effective_revision() -> None:
+    project = ProjectState(demucs_shifts=4, demucs_overlap=0.25)
+    changed = Mock()
+    settings = SettingsController(project, SessionState(), Mock(), on_project_changed=changed)
+
+    settings.set_demucs_quality(shifts=6, overlap=0.25)
+    settings.set_demucs_quality(shifts=4, overlap=0.25)
+    assert project.stem_processing_revision == 2
+    assert changed.call_count == 2
+
+    settings.set_demucs_quality(shifts=4, overlap=0.25)
+    assert project.stem_processing_revision == 2
+    assert changed.call_count == 2
+
+    with pytest.raises(ValueError, match="demucs shifts"):
+        settings.set_demucs_quality(shifts=0, overlap=0.25)
+    assert project.stem_processing_revision == 2
+    assert changed.call_count == 2
+
+
+def test_settings_stores_roformer_inactive_quality_without_invalidating_effective_intent() -> None:
+    project = ProjectState(stem_separator="bs-roformer:musdb18hq")
+    changed = Mock()
+    settings = SettingsController(project, SessionState(), Mock(), on_project_changed=changed)
+
+    settings.set_demucs_quality(shifts=4, overlap=0.25)
+
+    assert project.demucs_shifts == 4
+    assert project.demucs_overlap == 0.25
+    assert project.stem_processing_revision == 0
+    changed.assert_called_once_with()
+    settings.set_stem_separator("demucs:htdemucs")
+    assert project.stem_processing_revision == 1

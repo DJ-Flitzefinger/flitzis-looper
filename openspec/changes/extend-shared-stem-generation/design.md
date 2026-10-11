@@ -39,32 +39,72 @@ actual separator quality/memory or Human hearing acceptance.
 
 ## L1: captured offline job and durable fingerprint
 
-An admitted job retains a verified immutable source lease, content digest,
-output rate/layout/full extent, transform/alignment revision, separator ID,
-verified model checkpoint/config digests and all output-affecting quality
-options. Persist the versioned effective fingerprint in the common pair
-descriptor and current material selection. Execution/device diagnostics are
-recorded separately; device choices that change defined output belong in the
-effective fingerprint. No path/mtime/filename/size alone proves equal material.
+One `effective-stem-v3` identity binds verified full original SHA-256/byte length,
+full output rate/channel layout/frame extent, transform/alignment revision, separator/model,
+only the selected separator's output-affecting quality options and actual full
+sealed producer lineage. The lineage captures complete checkpoint/configuration
+digests and the implementation/runtime inputs that determine output, rather than
+requested labels or filename/mtime/size hints. Full file verification streams
+off realtime; paths only locate inputs and do not contribute to equality.
+Execution/device diagnostics remain separate unless they change defined output.
+Unverifiable actual producer inputs cannot be attested by a synthetic fallback.
 
-UI readiness uses validated current metadata and state snapshots; it does not
-hash long originals or load model weights each render. Controller/direct/batch
-admission verifies authoritative identity outside realtime processing. Legacy
-unknown fingerprint is not silently stamped as the selected model: retain its
-usable verified artifacts and offer a bounded verified upgrade/regeneration.
-Model selection changes future intent, never a running job's captured model.
+Admission retains the immutable verified original source lease and independent
+subscriber authority. The first existing bounded nonRT worker phase resolves and
+seals actual producer inputs, then emits captured identity to the control owner.
+Control admission uses Native's existing loaded-original digest snapshot without
+file I/O; pending load/adoption or absent current source ownership cannot provide
+one. The first worker verifies full original bytes against that identity and
+rechecks them after inference. Digest metadata never replaces a fresh own native
+source ticket or later full pair verification/publication authority.
+Control revalidates current Settings/material intent and decides one physical
+job, joining equal subscribers or reporting `Stems already present` before any
+inference. Workers do not own a second job/selection registry. Each admitted
+inference uses its captured sealed inputs; mutable model paths cannot change its
+producer midway. Different fingerprints serialize replacement per material.
 
-Job deduplication uses the verified material/fingerprint/shape/transform tuple.
-Concurrent identical requests join one physical job with independent interests;
-a complete current valid selected fingerprint produces an explicit already
-present no-op. Different fingerprints serialize replacement for that material;
-newer selection wins before commit rather than allowing old late completions
-to restore retired intent. This preserves existing global model choices without
-creating a user-facing multi-model set library.
+The common descriptor, PCM binding and current selection carry the same optional
+versioned provenance record. Present provenance participates in effective pair
+compatibility, so equal WAV hashes with different known producer lineage are not
+the same generation. Absent provenance preserves the exact legacy artifact
+identity and model-free verified availability as UNKNOWN. Reopen does not load
+or download a model, manufacture producer attestation or relabel UNKNOWN as the
+currently selected model. The field is optional for legacy compatibility, not
+permission to omit provenance from newly attested generations.
 
-Gate L1 measures physical job count, subscriber count, complete fingerprint
-save/reopen, same/different model and quality cases, stale/equal-byte reload,
-duplicate direct/UI/batch requests and failed admission with old owners intact.
+Verified equal original bytes under different contained roots may coalesce or
+reuse compatible artifacts. Copy/rebind obtains each subscriber's own current
+native source ticket/version; a sealed artifact marker attests that artifact
+generation only. It does not become another subscriber's assignment, source,
+timing/history or publication authority. Each interest retains its own content
+instance, request, source ticket/version and Settings/material revisions.
+
+Validated stem-generation Settings changes advance a monotone generation-intent
+revision; changed material request intent advances a separate per-material revision.
+Control checks both fences on every worker event and immediately before current
+selection mutation. A-to-B-to-A retains the new revision even when fingerprints
+compare equal, so old results never regain authority, consume newer jobs or
+alter newer content. Model selection changes future intent without rewriting a
+running job's captured producer. Old usable owners remain intact on rejection.
+
+UI readiness uses validated metadata/current state snapshots from the same
+authoritative decision as controller/direct and future batch admission. It does
+not hash long originals/model files or load a model each render. A complete
+current matching set yields the diagnostic `Stems already present`, with no
+inference or output artifact writes. Changed selected fingerprint enables
+generation; a valid completed current replacement disables it again. This keeps
+one current discoverable model without a user-facing parallel-model library.
+
+Gate L1 proves physical inference job/subscriber counts; full producer sealing
+and fingerprint save/reopen; relevant versus irrelevant quality; same/different
+actual model/config/producer with equal output bytes; cross-root copy/rebind own
+authority; UNKNOWN model-free legacy restore; duplicate direct/UI/future-batch
+admission; Settings and material A-to-B-to-A at events and immediately before
+selection; stale/equal-byte content reload; and rejection with old owners intact.
+These contracts alone report no measured result. L1 retains all playing/offline
+generation and native active new-set guards: L2 proves playback-independent
+generation and L3 independently proves new-generation adoption before opening
+their respective guards. L1 is not active-generation or full LIVE acceptance.
 
 ## L2: offline generation and joint disk commit during playback
 

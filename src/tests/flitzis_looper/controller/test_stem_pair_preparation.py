@@ -8,9 +8,15 @@ import pytest
 
 from flitzis_looper.controller.persistence import PersistenceFenceError, ProjectPersistence
 from flitzis_looper.controller.stem_cache import expected_stem_files
+from flitzis_looper.controller.stem_generation import AudioShape, StemGenerationRequest
+from flitzis_looper.controller.stem_identity import request_fingerprint
+from flitzis_looper.controller.stem_pair_preparation import (
+    StemPairIntentBinding,
+    StemPairPreparationQueue,
+)
 from flitzis_looper.key_intent import MAX_KEY_EPOCH, PadKeyIntent
 from flitzis_looper.models import PadContentIdentity, ProjectState, StemCacheEntry
-from flitzis_looper.stem_pair_selection import StemPairSelection
+from flitzis_looper.stem_pair_selection import STEM_FINGERPRINT_SCHEMA, StemPairSelection
 from tests.flitzis_looper.conftest import FakePreparedSourceTicket
 
 if TYPE_CHECKING:
@@ -18,7 +24,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from flitzis_looper.controller import AppController
-    from flitzis_looper_audio import PreparedSourceTicket, PreparedStemPair
+    from flitzis_looper.controller.stem_intent import StemGenerationIntent
+    from flitzis_looper_audio import AudioEngine, PreparedSourceTicket, PreparedStemPair
 
 
 def _selection() -> dict[str, object]:
@@ -35,14 +42,17 @@ def _selection() -> dict[str, object]:
 class _PreparedPair:
     """Only the worker/control contract is replaced; no fake native ACK claim."""
 
-    def __init__(self, *, components: bool = True) -> None:
+    def __init__(
+        self, *, components: bool = True, selection: dict[str, object] | None = None
+    ) -> None:
         self.components = components
         self.selected = False
         self.discarded = False
         self.fail_discard = False
+        self.selection = _selection() if selection is None else selection
 
     def selection_json(self) -> str:
-        return json.dumps(_selection())
+        return json.dumps(self.selection)
 
     def has_components(self) -> bool:
         return self.components
@@ -195,6 +205,289 @@ def test_selected_disk_pair_uses_separate_registration_residency_and_effective_r
     assert status is not None
     assert status.effective == "effective"
     assert entry.available
+
+
+def _known_pair_entry() -> StemCacheEntry:
+    selected = _selection()
+    selected["provenance"] = {
+        "schema": STEM_FINGERPRINT_SCHEMA,
+        "generation_fingerprint": "4" * 64,
+        "producer_identity": "5" * 64,
+    }
+    return StemCacheEntry(
+        source_version="samples/origin.wav|sha256-v1:" + "1" * 64,
+        cache_dir=str(selected["wav_generation"]),
+        stems=expected_stem_files(str(selected["wav_generation"])),
+        pair=StemPairSelection.model_validate(selected),
+        fingerprint_schema=STEM_FINGERPRINT_SCHEMA,
+        generation_fingerprint="4" * 64,
+        producer_identity="5" * 64,
+    )
+
+
+def _metadata_queue(
+    controller: AppController,
+    audio: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    entry: StemCacheEntry,
+    selected: dict[str, object],
+    *,
+    binding: StemPairIntentBinding | None = None,
+    processing_request: StemGenerationRequest | None = None,
+) -> tuple[StemPairPreparationQueue, list[Callable[[], None]], FakePreparedSourceTicket]:
+    (tmp_path / entry.cache_dir).mkdir(parents=True, exist_ok=True)
+    jobs: list[Callable[[], None]] = []
+    queue = StemPairPreparationQueue(cast("AudioEngine", audio), controller._assets, jobs.append)
+    prepared = _PreparedPair(components=False, selection=selected)
+    monkeypatch.setattr(audio, "prepare_stem_pair", Mock(return_value=prepared), raising=False)
+    ticket = FakePreparedSourceTicket("pending")
+    queue.submit(
+        0,
+        entry,
+        cast("PreparedSourceTicket", ticket),
+        "f" * 32,
+        None,
+        components=False,
+        binding=binding,
+        processing_request=processing_request,
+    )
+    return queue, jobs, ticket
+
+
+def test_cross_root_preparation_retains_own_ticket_and_native_verified_new_identity(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    entry = _known_pair_entry()
+    assert entry.pair is not None
+    selected = entry.pair.model_dump(mode="json")
+    for field_name in ("descriptor_reference", "wav_generation", "pcm_generation"):
+        selected[field_name] = selected[field_name].replace("M" + "a" * 32, "M" + "2" * 32)
+    selected["stem_set_identity"] = "3" * 64
+    own_version = "samples/copy.wav|sha256-v1:" + "1" * 64
+    intent = cast("StemGenerationIntent", Mock())
+    capture = Mock(side_effect=AssertionError("Pair preparation must not recapture a sealed job"))
+    monkeypatch.setattr(
+        "flitzis_looper.controller.stem_pair_preparation.capture_processing_files", capture
+    )
+    queue, jobs, ticket = _metadata_queue(
+        controller,
+        audio_engine_mock,
+        monkeypatch,
+        tmp_path,
+        entry,
+        selected,
+        binding=StemPairIntentBinding(
+            generation_intent=intent,
+            own_source_version=own_version,
+            artifact_source_version=entry.source_version,
+            source_path="samples/copy.wav",
+        ),
+    )
+    jobs[0]()
+    (request,) = queue.collect()
+    assert request.error is None
+    assert request.generation_intent is intent
+    assert request.source_path == "samples/copy.wav"
+    assert audio_engine_mock.prepare_stem_pair.call_args.args == (
+        0,
+        own_version,
+        entry.cache_dir,
+        ticket,
+        False,
+        entry.pair.descriptor_reference,
+        entry.source_version,
+    )
+    result = queue.selected_entry(request)
+    assert result.source_version == own_version
+    assert result.fingerprint_schema == STEM_FINGERPRINT_SCHEMA
+    assert result.pair is not None
+    assert result.pair.provenance == entry.pair.provenance
+    assert result.pair.stem_set_identity != entry.pair.stem_set_identity
+    capture.assert_not_called()
+    request.close()
+
+
+def test_cross_root_without_explicit_artifact_version_fails_before_reservation(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    queue = StemPairPreparationQueue(
+        cast("AudioEngine", audio_engine_mock), controller._assets, Mock()
+    )
+    with pytest.raises(ValueError, match="explicit artifact source version"):
+        queue.submit(
+            0,
+            _known_pair_entry(),
+            cast("PreparedSourceTicket", FakePreparedSourceTicket("pending")),
+            "f" * 32,
+            None,
+            components=False,
+            binding=StemPairIntentBinding(
+                own_source_version="samples/copy.wav|sha256-v1:" + "1" * 64
+            ),
+        )
+    assert not queue.pending
+    assert controller._assets._reserved == 0
+
+
+@pytest.mark.parametrize("known", [False, True])
+def test_new_pair_or_legacy_restore_uses_saved_metadata_without_model_io(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    known: bool,
+) -> None:
+    if known:
+        entry = _known_pair_entry().model_copy(update={"pair": None})
+        selected = _known_pair_entry().pair
+        assert selected is not None
+        data = selected.model_dump(mode="json")
+    else:
+        data = _selection()
+        entry = StemCacheEntry(
+            source_version="saved-version",
+            cache_dir=str(data["wav_generation"]),
+            stems=expected_stem_files(str(data["wav_generation"])),
+            pair=StemPairSelection.model_validate(data),
+        )
+    capture = Mock(side_effect=AssertionError("Restore/new generation must not recapture producer"))
+    monkeypatch.setattr(
+        "flitzis_looper.controller.stem_pair_preparation.capture_processing_files", capture
+    )
+    queue, jobs, ticket = _metadata_queue(
+        controller, audio_engine_mock, monkeypatch, tmp_path, entry, data
+    )
+    jobs[0]()
+    (request,) = queue.collect()
+    assert request.error is None
+    assert request.own_source_version == entry.source_version
+    assert request.artifact_source_version == entry.source_version
+    assert audio_engine_mock.prepare_stem_pair.call_args.args[3] is ticket
+    assert audio_engine_mock.prepare_stem_pair.call_args.args[-1] is None
+    result = queue.selected_entry(request)
+    assert result.fingerprint_schema == entry.fingerprint_schema
+    assert result.generation_fingerprint == entry.generation_fingerprint
+    assert result.producer_identity == entry.producer_identity
+    assert result.pair is not None
+    assert ("provenance" in result.pair.model_dump(mode="json")) is known
+    capture.assert_not_called()
+    request.close()
+
+
+@pytest.mark.parametrize(
+    "fault", ["fingerprint", "producer", "missing", "legacy_attestation", "same_root_rebind"]
+)
+def test_preparation_rejects_native_provenance_or_same_root_selection_change(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fault: str,
+) -> None:
+    entry = _known_pair_entry()
+    assert entry.pair is not None
+    selected = entry.pair.model_dump(mode="json")
+    if fault == "missing":
+        selected.pop("provenance")
+    elif fault == "legacy_attestation":
+        entry = entry.model_copy(update={"fingerprint_schema": None, "pair": None})
+    elif fault == "same_root_rebind":
+        selected["stem_set_identity"] = "6" * 64
+    else:
+        selected["provenance"][
+            "generation_fingerprint" if fault == "fingerprint" else "producer_identity"
+        ] = "6" * 64
+    queue, jobs, _ = _metadata_queue(
+        controller, audio_engine_mock, monkeypatch, tmp_path, entry, selected
+    )
+    jobs[0]()
+    (request,) = queue.collect()
+    message = "selection changed" if fault == "same_root_rebind" else "provenance differs"
+    with pytest.raises(RuntimeError, match=message):
+        queue.selected_entry(request)
+    request.close()
+
+
+@pytest.mark.parametrize(
+    "fault", ["fingerprint", "marker_schema", "producer", "legacy_schema", "none"]
+)
+def test_explicit_compatible_reuse_checks_full_request_and_marker_schema(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fault: str,
+) -> None:
+    entry = _known_pair_entry()
+    processing_request = StemGenerationRequest(
+        sample_id=0,
+        source_path=tmp_path / "source.wav",
+        source_version=entry.source_version,
+        cache_dir=tmp_path / entry.cache_dir,
+        target_shape=AudioShape(44100, 2, 64),
+        model_cache_dir=tmp_path / "models",
+        original_bytes=256,
+    )
+    fingerprint = request_fingerprint(processing_request, "5" * 64)
+    assert fingerprint is not None
+    entry = entry.model_copy(update={"generation_fingerprint": fingerprint, "pair": None})
+    selected = _selection()
+    selected["provenance"] = {
+        "schema": STEM_FINGERPRINT_SCHEMA,
+        "generation_fingerprint": fingerprint,
+        "producer_identity": "5" * 64,
+    }
+    if fault == "fingerprint":
+        entry = entry.model_copy(update={"generation_fingerprint": "7" * 64})
+    elif fault == "legacy_schema":
+        entry = entry.model_copy(update={"fingerprint_schema": None})
+    guard = Mock()
+    capture = Mock(return_value=(guard, "6" * 64 if fault == "producer" else "5" * 64))
+    monkeypatch.setattr(
+        "flitzis_looper.controller.stem_pair_preparation.capture_processing_files", capture
+    )
+    artifact_lease = Mock()
+    artifact = Mock()
+    artifact.capture.return_value = artifact_lease
+    monkeypatch.setattr(
+        "flitzis_looper.controller.stem_pair_preparation.MigrationArtifactLease", artifact
+    )
+    queue, jobs, _ = _metadata_queue(
+        controller,
+        audio_engine_mock,
+        monkeypatch,
+        tmp_path,
+        entry,
+        selected,
+        processing_request=processing_request,
+    )
+    marker = {
+        "fingerprint_schema": STEM_FINGERPRINT_SCHEMA,
+        "generation_fingerprint": fingerprint,
+        "producer_identity": "5" * 64,
+    }
+    if fault == "marker_schema":
+        marker.pop("fingerprint_schema")
+    (tmp_path / entry.cache_dir / ".complete.json").write_text(json.dumps(marker), encoding="utf-8")
+    jobs[0]()
+    (request,) = queue.collect()
+    if fault == "none":
+        assert request.error is None
+        assert queue.selected_entry(request).generation_fingerprint == fingerprint
+        guard.verify.assert_called_once()
+    else:
+        assert request.error is not None
+        assert request.compatibility_rejected
+        audio_engine_mock.prepare_stem_pair.assert_not_called()
+    capture.assert_called_once_with(processing_request)
+    if fault in {"marker_schema", "none"}:
+        artifact_lease.release.assert_called_once()
+    request.close()
 
 
 def test_failed_committed_registration_never_falls_back_to_unbound_mode_command(

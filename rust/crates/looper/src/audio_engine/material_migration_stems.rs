@@ -5,6 +5,7 @@ use super::material_migration::PreparedMigrationMaterial;
 use super::material_paths::{self, AssetKind};
 use super::project_assets::{self, FileIdentity, file_identity};
 use super::stem_cache::{STEM_FILE_NAMES, verify_pcm16_wav_geometry_cancellable};
+use super::stem_pair_descriptor::StemPairProvenance;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
@@ -129,11 +130,16 @@ fn read_marker(directory: &Path) -> Result<(File, Value), String> {
 }
 
 pub(super) fn validate_generation_provenance(marker: &Value) -> Result<(), String> {
+    generation_provenance(marker).map(|_| ())
+}
+
+/// Legacy witnesses remain readable without becoming current model attestation.
+pub(super) fn generation_provenance(marker: &Value) -> Result<Option<StemPairProvenance>, String> {
     match (
         marker.get("generation_fingerprint"),
         marker.get("producer_identity"),
     ) {
-        (None, None) => Ok(()),
+        (None, None) if marker.get("fingerprint_schema").is_none() => Ok(None),
         (Some(fingerprint), Some(producer))
             if [fingerprint, producer].into_iter().all(|value| {
                 value.as_str().is_some_and(|value| {
@@ -144,7 +150,21 @@ pub(super) fn validate_generation_provenance(marker: &Value) -> Result<(), Strin
                 })
             }) =>
         {
-            Ok(())
+            match marker.get("fingerprint_schema") {
+                None => Ok(None),
+                Some(schema) => {
+                    let provenance = StemPairProvenance {
+                        schema: schema
+                            .as_str()
+                            .ok_or("effective stem fingerprint schema must be a string")?
+                            .into(),
+                        generation_fingerprint: fingerprint.as_str().unwrap().into(),
+                        producer_identity: producer.as_str().unwrap().into(),
+                    };
+                    provenance.validate()?;
+                    Ok(Some(provenance))
+                }
+            }
         }
         _ => Err(
             "stem generation provenance requires two complete lowercase SHA-256 witnesses".into(),
@@ -179,7 +199,11 @@ fn verify_set(
     let mut expected =
         json!({"schema":"stem-set-sha256-v1", "source_version":source_version, "stems":hashes});
     validate_generation_provenance(&marker)?;
-    for field in ["generation_fingerprint", "producer_identity"] {
+    for field in [
+        "fingerprint_schema",
+        "generation_fingerprint",
+        "producer_identity",
+    ] {
         if let Some(value) = marker.get(field) {
             expected[field] = value.clone();
         }
@@ -405,7 +429,11 @@ pub(super) fn copy_stem_generation(
     )?;
     check_cancelled(cancelled)?;
     let mut marker = json!({"schema":"stem-set-sha256-v1", "source_version":new_source_version, "stems":old_set.marker["stems"]});
-    for field in ["generation_fingerprint", "producer_identity"] {
+    for field in [
+        "fingerprint_schema",
+        "generation_fingerprint",
+        "producer_identity",
+    ] {
         if let Some(value) = old_set.marker.get(field) {
             marker[field] = value.clone();
         }
@@ -835,6 +863,42 @@ mod tests {
             fs::read(fixture.old.join(MARKER)).unwrap(),
             serde_json::to_vec(&marker).unwrap()
         );
+    }
+
+    #[test]
+    fn current_versioned_provenance_survives_verified_copy_and_legacy_stays_unknown() {
+        let fixture = Fixture::new();
+        let mut marker: Value =
+            serde_json::from_slice(&fs::read(fixture.old.join(MARKER)).unwrap()).unwrap();
+        marker["generation_fingerprint"] = json!("a".repeat(64));
+        marker["producer_identity"] = json!("b".repeat(64));
+        assert_eq!(generation_provenance(&marker).unwrap(), None);
+        marker["fingerprint_schema"] = json!("effective-stem-v3");
+        fs::write(
+            fixture.old.join(MARKER),
+            serde_json::to_vec(&marker).unwrap(),
+        )
+        .unwrap();
+        let copied = fixture.copy().unwrap();
+        let target =
+            material_paths::resolve(&fixture.root, Path::new(&copied.cache_reference)).unwrap();
+        let reopened: Value =
+            serde_json::from_slice(&fs::read(target.path.join(MARKER)).unwrap()).unwrap();
+        assert_eq!(reopened["source_version"], fixture.new_version);
+        assert_eq!(
+            generation_provenance(&reopened).unwrap(),
+            generation_provenance(&marker).unwrap()
+        );
+        for field in ["generation_fingerprint", "producer_identity"] {
+            let mut partial = marker.clone();
+            partial.as_object_mut().unwrap().remove(field);
+            assert!(generation_provenance(&partial).is_err());
+        }
+        for schema in [json!("effective-stem-v4"), Value::Null, json!(3)] {
+            let mut unsupported = marker.clone();
+            unsupported["fingerprint_schema"] = schema;
+            assert!(generation_provenance(&unsupported).is_err());
+        }
     }
 
     #[test]

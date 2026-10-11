@@ -7,6 +7,7 @@ Native complete pair/callback custody is covered separately by the Native suite.
 import hashlib
 import json
 import shutil
+from dataclasses import replace
 from importlib.util import find_spec
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,11 +19,16 @@ import pytest
 from flitzis_looper.controller import stem_generation, stem_provenance
 from flitzis_looper.controller import stems as stems_module
 from flitzis_looper.controller.bs_roformer_assets import CHECKPOINT_FILENAME, CONFIG_FILENAME
+from flitzis_looper.controller.bs_roformer_assets import MODEL_NAME as BS_ROFORMER_MODEL_NAME
 from flitzis_looper.controller.stem_cache import expected_stem_files, promote_generation_artifacts
 from flitzis_looper.controller.stem_generation import AudioShape, StemGenerationRequest
 from flitzis_looper.controller.stem_identity import request_fingerprint
 from flitzis_looper.models import STEM_KINDS, PadContentIdentity, StemCacheEntry
-from flitzis_looper.stem_pair_selection import StemPairSelection
+from flitzis_looper.stem_pair_selection import (
+    STEM_FINGERPRINT_SCHEMA,
+    StemGenerationProvenance,
+    StemPairSelection,
+)
 from tests.conftest import write_mono_pcm16_wav
 from tests.flitzis_looper.conftest import FakePreparedSourceTicket, write_test_stem_marker
 
@@ -30,7 +36,19 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from flitzis_looper.controller import AppController
+    from flitzis_looper.controller.stem_job import StemGenerationJob
     from tests.flitzis_looper.conftest import FakeStemGenerationBackend
+
+
+@pytest.fixture(autouse=True)
+def _declared_bs_backend_receipt(stem_backend: FakeStemGenerationBackend) -> None:
+    """Controller fixtures declare the executed separator and verified decoder receipt."""
+    stem_backend.result = replace(
+        stem_backend.result,
+        backend_name="bs-roformer",
+        model_name=BS_ROFORMER_MODEL_NAME,
+        decoder_verified=True,
+    )
 
 
 def _actual_bs_processing_request(
@@ -64,6 +82,7 @@ def _actual_bs_processing_request(
         model_cache_dir=model,
         separator="bs-roformer:musdb18hq",
         encoder_executable=encoder,
+        original_bytes=source.stat().st_size,
     )
     # Only the package location changes. Actual library policy and Native full
     # file witnesses remain production code, with no inference or fake identity.
@@ -114,8 +133,7 @@ def test_actual_bs_implementation_changes_are_sealed_but_unproved_tools_keep_pro
 ) -> None:
     request, package = _actual_bs_processing_request(tmp_path, monkeypatch)
     assert stem_provenance.processing_library_versions(request) is None
-    fingerprint = request_fingerprint(request)
-    assert fingerprint is not None
+    assert request_fingerprint(request) is None
     before = _bs_implementation_witnesses(request, package)
     changed = package / changed_file
     assert str(changed) in before
@@ -125,17 +143,20 @@ def test_actual_bs_implementation_changes_are_sealed_but_unproved_tools_keep_pro
         output.write(b"\n# owned implementation changed after reader settlement\n")
     after = _bs_implementation_witnesses(request, package)
     assert after[str(changed)] != before[str(changed)]
-    assert request_fingerprint(request) == fingerprint
+    assert request_fingerprint(request) is None
     assert stem_provenance.processing_library_versions(request) is None
 
 
 class _SelectedPair:
-    def __init__(self, root: str, cache: str) -> None:
+    def __init__(
+        self, root: str, cache: str, provenance: StemGenerationProvenance | None = None
+    ) -> None:
         self.selection = StemPairSelection(
             descriptor_reference=f"{root}/.pcm-cache/stems/v1/.pairs/{'b' * 32}.json",
             stem_set_identity="c" * 64,
             wav_generation=cache,
             pcm_generation=f"{root}/.pcm-cache/stems/v1/.ready-{'d' * 32}",
+            provenance=provenance,
         )
         self.selected = 0
         self.discarded = 0
@@ -196,10 +217,12 @@ def _known_set(
         target_shape=AudioShape(44_100, 1, 128),
         model_cache_dir=model,
         separator=controller.project.stem_separator,
+        original_bytes=source.stat().st_size,
     )
     processing = stem_provenance.capture_processing_files(request)
     assert processing is not None
     producer = processing[1]
+    assert producer is not None
     processing[0].verify()
     processing = None
     cache = f"{root}/stems/.ready-{'a' * 32}"
@@ -208,15 +231,21 @@ def _known_set(
     for kind in STEM_KINDS:
         write_mono_pcm16_wav(directory / f"{kind}.wav", 44_100)
     write_test_stem_marker(directory, version)
-    fingerprint = request_fingerprint(request)
+    fingerprint = request_fingerprint(request, producer)
+    assert fingerprint is not None
     marker = json.loads((directory / ".complete.json").read_bytes())
-    marker |= {"generation_fingerprint": fingerprint, "producer_identity": producer}
+    marker |= {
+        "fingerprint_schema": STEM_FINGERPRINT_SCHEMA,
+        "generation_fingerprint": fingerprint,
+        "producer_identity": producer,
+    }
     (directory / ".complete.json").write_text(json.dumps(marker), encoding="utf-8")
     entry = StemCacheEntry(
         source_version=version,
         cache_dir=cache,
         stems=expected_stem_files(cache),
         available=True,
+        fingerprint_schema=STEM_FINGERPRINT_SCHEMA,
         generation_fingerprint=fingerprint,
         producer_identity=producer,
     )
@@ -227,7 +256,16 @@ def _known_set(
             instance_id=f"{slot + 1:032x}", material_id=digest[:32]
         )
         controller.project.sample_durations[slot] = 128 / 44_100
-    selected = _SelectedPair(root, cache)
+        audio.load_sample_async(slot, source.relative_to(tmp).as_posix())
+    selected = _SelectedPair(
+        root,
+        cache,
+        StemGenerationProvenance(
+            fingerprint_schema=STEM_FINGERPRINT_SCHEMA,
+            generation_fingerprint=fingerprint,
+            producer_identity=producer,
+        ),
+    )
     audio.prepare_stem_pair = Mock(return_value=selected)
     audio.capture_prepared_source.side_effect = lambda *_args: FakePreparedSourceTicket()
     controller._assets.sync_assignments()
@@ -259,15 +297,25 @@ def test_compatible_completed_set_uses_real_witness_worker_and_no_backend_infere
     else:
         assert controller.stems.generate_stems_async(215)
     assert not stem_backend.requests
-    assert controller.project.stem_cache[215] is None
+    if on_load:
+        assert controller.project.stem_cache[215] is None
+    else:
+        admitted = controller.project.stem_cache[215]
+        assert admitted is not None
+        assert not admitted.available
+        assert admitted.fingerprint_schema is None
+        assert admitted.generation_fingerprint is None
     controller.stems.on_frame_render()
     current = controller.project.stem_cache[215]
     assert current is not None
     assert current.available
     assert current is not entry
     assert current.cache_dir == entry.cache_dir
+    assert current.fingerprint_schema == entry.fingerprint_schema == STEM_FINGERPRINT_SCHEMA
     assert current.generation_fingerprint == entry.generation_fingerprint
     assert current.producer_identity == entry.producer_identity
+    assert current.pair is not None
+    assert current.pair.provenance == selected.selection.provenance
     assert selected.selected == 1
     assert not stem_backend.requests
     audio_engine_mock.prepare_stem_pair.assert_called_once()
@@ -299,22 +347,33 @@ def test_unknown_or_changed_actual_producer_never_becomes_compatible_by_saved_me
     controller.stems.on_frame_render()
     assert controller.project.stem_cache[215] is None
     assert controller.project.stem_cache[0] is entry
-    error = controller.stems.stem_generation_error(215)
-    assert error is not None
-    assert "producer" in error or "provenance" in error
+    if corruption == "model":
+        assert controller.stems.stem_generation_error(215) is None
+        assert "current producer" in controller.session.stem_generation_diagnostics[215]
+    else:
+        error = controller.stems.stem_generation_error(215)
+        assert error is not None
+        assert "provenance" in error
     assert not stem_backend.requests
     audio_engine_mock.prepare_stem_pair.assert_not_called()
 
 
+@pytest.mark.parametrize("legacy_hashes", [False, True])
 def test_unknown_historical_set_is_not_stamped_with_current_model_config(
     controller: AppController,
     audio_engine_mock: Mock,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    legacy_hashes: bool,
 ) -> None:
     entry, _selected, _files = _known_set(controller, audio_engine_mock, tmp_path, monkeypatch)
     historical = entry.model_copy(
-        update={"generation_fingerprint": None, "producer_identity": None}
+        update={
+            "fingerprint_schema": None,
+            "generation_fingerprint": entry.generation_fingerprint if legacy_hashes else None,
+            "producer_identity": entry.producer_identity if legacy_hashes else None,
+        }
     )
     controller.project.stem_cache[0] = historical
     assert not controller.stems.reuse_compatible_stems_on_load(215)
@@ -346,14 +405,23 @@ def test_explicit_generate_incompatible_set_runs_one_fresh_backend_and_retains_o
     controller.stems._stem_task_runner = tasks.append
     assert controller.stems.generate_stems_async(215)
     assert len(tasks) == 1
-    tasks.pop(0)()  # actual Native model + marker verification, without inference
+    tasks.pop(0)()  # full source/model identity resolution, without inference
     assert not stem_backend.requests
     controller.stems.on_frame_render()
-    assert len(tasks) == 1  # exactly one newly admitted ordinary generation
+    assert len(tasks) == 1
     assert controller.project.stem_cache[0] is entry
     assert (tmp_path / entry.cache_dir).is_dir()
     audio_engine_mock.prepare_stem_pair.assert_not_called()
-    tasks.pop(0)()
+    if corruption == "marker":
+        tasks.pop(0)()  # saved marker rejection must precede a fresh admission
+        assert not stem_backend.requests
+        controller.stems.on_frame_render()
+        assert len(tasks) == 1
+        tasks.pop(0)()  # resolve the fresh producer before scheduling inference
+        assert not stem_backend.requests
+        controller.stems.on_frame_render()
+        assert len(tasks) == 1
+    tasks.pop(0)()  # exactly one newly admitted ordinary inference
     assert len(stem_backend.requests) == 1
     request = stem_backend.requests[0]
     assert request.source_version == entry.source_version
@@ -385,6 +453,43 @@ def test_explicit_generate_compatibility_rejection_does_not_follow_replaced_cont
     assert controller.project.stem_cache[0] is entry
 
 
+def _run_guarded_backend(
+    controller: AppController,
+    stem_backend: FakeStemGenerationBackend,
+    files: list[Path],
+    tasks: list[Callable[[], None]],
+) -> StemGenerationJob:
+    job = next(iter(controller.stems._jobs.values()))
+    tasks.pop(0)()
+    assert str(job.phase) == "resolved"
+    assert not stem_backend.requests
+    assert job.processing_files is not None
+    with pytest.raises(PermissionError):
+        files[0].write_bytes(b"model rewrite between identity capture and inference")
+    controller.stems.on_frame_render()
+    assert len(tasks) == 1
+    tasks.pop(0)()
+    assert not job.running
+    assert str(job.phase) == "settled"
+    assert job.processing_files is not None
+    with pytest.raises(PermissionError):
+        files[0].write_bytes(b"model rewrite before queued result publication")
+    return job
+
+
+def _assert_selected_guard_until_settings_change(
+    controller: AppController, files: list[Path]
+) -> None:
+    current = controller.project.stem_cache[215]
+    assert current is not None
+    assert current.available
+    assert current.fingerprint_schema == STEM_FINGERPRINT_SCHEMA
+    with pytest.raises(PermissionError):
+        files[0].write_bytes(b"model rewrite while current verified selection is retained")
+    controller.project.stem_separator = "demucs:htdemucs"
+    controller.stems.on_frame_render()
+
+
 @pytest.mark.parametrize("settlement", ["promote", "error", "cancel"])
 def test_processing_file_guard_outlives_backend_return_through_cache_publication_or_cancel(
     controller: AppController,
@@ -403,12 +508,7 @@ def test_processing_file_guard_outlives_backend_return_through_cache_publication
     assert controller.stems.generate_stems_async(215)
     admitted_entry = controller.project.stem_cache[215]
     assert admitted_entry is not None
-    job = next(iter(controller.stems._jobs.values()))
-    tasks.pop(0)()
-    assert not job._running
-    assert job.processing_files is not None
-    with pytest.raises(PermissionError):
-        files[0].write_bytes(b"model rewrite before queued result publication")
+    job = _run_guarded_backend(controller, stem_backend, files, tasks)
     if settlement == "cancel":
         controller.loader.unload_sample(215)
     else:
@@ -423,6 +523,8 @@ def test_processing_file_guard_outlives_backend_return_through_cache_publication
         controller.stems.on_frame_render()
     assert job._disposed
     assert job.processing_files is None
+    if settlement == "promote":
+        _assert_selected_guard_until_settings_change(controller, files)
     files[0].write_bytes(b"new model after physical producer settlement")
     assert len(stem_backend.requests) == 1
     if settlement == "cancel":

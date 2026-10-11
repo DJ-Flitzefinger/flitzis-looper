@@ -6,7 +6,11 @@ from typing import TYPE_CHECKING
 import pytest
 from pydantic import ValidationError
 
-from flitzis_looper.stem_pair_selection import StemPairSelection
+from flitzis_looper.stem_pair_selection import (
+    STEM_FINGERPRINT_SCHEMA,
+    StemGenerationProvenance,
+    StemPairSelection,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -42,6 +46,77 @@ def test_actual_json_reopen_preserves_frozen_selection_without_artifact_io(tmp_p
         "wav_generation",
         "pcm_generation",
     }
+    assert reopened.provenance is None
+
+
+def test_current_provenance_survives_pair_json_reopen_without_artifact_io(tmp_path: Path) -> None:
+    provenance = StemGenerationProvenance(
+        fingerprint_schema=STEM_FINGERPRINT_SCHEMA,
+        generation_fingerprint="1" * 64,
+        producer_identity="2" * 64,
+    )
+    original = StemPairSelection.model_validate(_payload() | {"provenance": provenance})
+    encoded = original.model_dump_json()
+
+    reopened = StemPairSelection.model_validate_json(encoded)
+
+    assert reopened == original
+    assert reopened.provenance is not None
+    assert reopened.provenance.fingerprint_schema == STEM_FINGERPRINT_SCHEMA
+    assert json.loads(encoded)["provenance"] == {
+        "schema": STEM_FINGERPRINT_SCHEMA,
+        "generation_fingerprint": "1" * 64,
+        "producer_identity": "2" * 64,
+    }
+    assert not (tmp_path / "samples").exists()
+
+
+@pytest.mark.parametrize(
+    "field", ["fingerprint_schema", "generation_fingerprint", "producer_identity"]
+)
+def test_provenance_fields_are_frozen(field: str) -> None:
+    provenance = StemGenerationProvenance(
+        fingerprint_schema=STEM_FINGERPRINT_SCHEMA,
+        generation_fingerprint="1" * 64,
+        producer_identity="2" * 64,
+    )
+    with pytest.raises(ValidationError, match="frozen"):
+        setattr(provenance, field, "3" * 64)
+
+
+@pytest.mark.parametrize(
+    ("field", "fault"),
+    [
+        ("schema", "effective-stem-v2"),
+        ("generation_fingerprint", "1" * 63),
+        ("producer_identity", "2" * 64 + "\n"),
+        ("producer_identity", b"2" * 64),
+    ],
+)
+def test_invalid_nested_provenance_cannot_grant_current_processing_identity(
+    field: str, fault: object
+) -> None:
+    provenance: dict[str, object] = {
+        "schema": STEM_FINGERPRINT_SCHEMA,
+        "generation_fingerprint": "1" * 64,
+        "producer_identity": "2" * 64,
+    }
+    provenance[field] = fault
+
+    with pytest.raises(ValidationError):
+        StemPairSelection.model_validate(_payload() | {"provenance": provenance})
+
+
+def test_unvalidated_nested_provenance_copy_is_rechecked_at_selection_boundary() -> None:
+    provenance = StemGenerationProvenance(
+        fingerprint_schema=STEM_FINGERPRINT_SCHEMA,
+        generation_fingerprint="1" * 64,
+        producer_identity="2" * 64,
+    )
+    invalid = provenance.model_copy(update={"producer_identity": "invalid"})
+
+    with pytest.raises(ValidationError, match="producer_identity"):
+        StemPairSelection.model_validate(_payload() | {"provenance": invalid})
 
 
 @pytest.mark.parametrize("material", ["0" * 32, "f" * 32, "0123456789abcdef" * 2])

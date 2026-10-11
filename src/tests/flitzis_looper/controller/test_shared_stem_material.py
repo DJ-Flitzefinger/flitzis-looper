@@ -1,10 +1,13 @@
 """Real controller admission/fanout, with only native devices/separation substituted."""
 
 import threading
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
 
+from flitzis_looper.controller import stem_provenance
+from flitzis_looper.controller import stems as stems_module
 from flitzis_looper.models import PadContentIdentity
 from tests.conftest import write_mono_pcm16_wav
 from tests.flitzis_looper.conftest import FakePreparedSourceTicket, FakeProjectAssetLease
@@ -23,6 +26,36 @@ if TYPE_CHECKING:
     from tests.flitzis_looper.conftest import FakeStemGenerationBackend
 
 
+@pytest.fixture(autouse=True)
+def _declared_shared_producer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stem_backend: FakeStemGenerationBackend,
+) -> None:
+    """Attest this controller fixture with actual owned Native file custody."""
+    model = tmp_path / "owned-shared-producer"
+    model.mkdir()
+    files = [model / name for name in ("checkpoint.bin", "definition.py", "ffmpeg.exe")]
+    for index, path in enumerate(files):
+        path.write_bytes(f"declared shared producer input {index}".encode())
+    monkeypatch.setattr(stems_module, "separator_model_cache_dir", lambda _separator: model)
+    monkeypatch.setattr(stems_module, "resolved_demucs_encoder", lambda _model: files[-1])
+    monkeypatch.setattr(stems_module, "encoder_contract", lambda _encoder: "owned-fixture")
+    monkeypatch.setattr(stem_provenance, "processing_paths", lambda _request: tuple(files))
+    monkeypatch.setattr(
+        stem_provenance, "processing_library_versions", lambda _request: (("owned-fixture", "1"),)
+    )
+    monkeypatch.setattr(
+        stem_provenance, "loaded_code_identity", lambda _paths: "declared-shared-controller-fixture"
+    )
+    monkeypatch.setattr(
+        stem_provenance, "processing_source_roots", lambda _request, _guard: (tmp_path,)
+    )
+    stem_backend.result = replace(
+        stem_backend.result, backend_name="demucs", model_name="htdemucs", encoder_verified=True
+    )
+
+
 def _shared(
     controller: AppController, audio: Mock, tmp: Path
 ) -> tuple[list[Callable[[], None]], list[FakePreparedSourceTicket]]:
@@ -35,9 +68,24 @@ def _shared(
         controller.project.sample_paths[slot] = "samples/shared.wav"
         controller.project.sample_durations[slot] = 128 / 44_100
         controller.project.pad_content[slot] = PadContentIdentity(instance_id=identity)
+        audio.load_sample_async(slot, "samples/shared.wav")
     tasks: list[Callable[[], None]] = []
     controller.stems._stem_task_runner = tasks.append
     return tasks, tickets
+
+
+def _resolve_candidates(
+    controller: AppController, tasks: list[Callable[[], None]], count: int = 1
+) -> None:
+    """Return full-byte resolutions to control before inference may be scheduled."""
+    assert len(tasks) == count
+    for _ in range(count):
+        tasks.pop(0)()
+    controller.stems.on_frame_render()
+    assert len(tasks) == len(controller.stems._jobs) == 1
+    job = next(iter(controller.stems._jobs.values()))
+    assert job.resolved_request is not None
+    assert job.generation_fingerprint is not None
 
 
 def test_one_generation_has_independent_out_of_order_ack_and_saved_owners(
@@ -49,9 +97,11 @@ def test_one_generation_has_independent_out_of_order_ack_and_saved_owners(
     tasks, tickets = _shared(controller, audio_engine_mock, tmp_path)
     assert controller.stems.generate_stems_async(0)
     assert controller.stems.generate_stems_async(215)
-    assert len(tasks) == len(controller.stems._jobs) == 1
-    tasks[0]()
-    tasks[0]()  # queued execution is single-run, even if a runner repeats delivery
+    assert len(tasks) == len(controller.stems._jobs) == 2
+    _resolve_candidates(controller, tasks, 2)
+    inference = tasks.pop(0)
+    inference()
+    inference()  # inference is single-run, even if a runner repeats delivery
     controller.stems.on_frame_render()
     assert len(stem_backend.requests) == 1
     entries = [controller.project.stem_cache[slot] for slot in (0, 215)]
@@ -62,6 +112,9 @@ def test_one_generation_has_independent_out_of_order_ack_and_saved_owners(
     assert not last.available
     assert entries[0] is not entries[1]
     assert first.cache_dir == last.cache_dir
+    assert first.fingerprint_schema == last.fingerprint_schema == "effective-stem-v3"
+    assert first.generation_fingerprint == last.generation_fingerprint
+    assert first.generation_fingerprint is not None
     calls = audio_engine_mock.publish_prepared_stems.call_args_list
     assert [(call.args[0], call.args[3]) for call in calls] == [(0, tickets[0]), (215, tickets[1])]
     tickets[1].status = "accepted"
@@ -94,6 +147,7 @@ def test_one_subscriber_failure_does_not_revoke_the_other(
     tasks, tickets = _shared(controller, audio_engine_mock, tmp_path)
     assert controller.stems.generate_stems_async(0)
     assert controller.stems.generate_stems_async(215)
+    _resolve_candidates(controller, tasks, 2)
     if failure == "origin_cancel":
         controller.loader.unload_sample(0)
     elif failure == "playing":
@@ -109,7 +163,7 @@ def test_one_subscriber_failure_does_not_revoke_the_other(
 
         audio_engine_mock.publish_prepared_stems.side_effect = publish
     tickets[1].status = "accepted"
-    tasks[0]()
+    tasks.pop(0)()
     controller.stems.on_frame_render()
     assert len(stem_backend.requests) == 1
     assert controller.stems.stems_available(215)
@@ -132,7 +186,8 @@ def test_second_interest_capacity_failure_preserves_first_job(
     assert controller.stems.is_stem_generation_running(0)
     assert controller.project.stem_cache[215] is None
     tickets[0].status = "accepted"
-    tasks[0]()
+    _resolve_candidates(controller, tasks)
+    tasks.pop(0)()
     controller.stems.on_frame_render()
     assert len(stem_backend.requests) == 1
     assert controller.stems.stems_available(0)
@@ -150,13 +205,18 @@ def test_rejection_uses_reserved_previous_owner_when_new_acquisition_is_full(
     tasks, tickets = _shared(controller, audio_engine_mock, tmp_path)
     tickets[0].status = "accepted"
     assert controller.stems.generate_stems_async(0)
+    _resolve_candidates(controller, tasks)
     tasks.pop()()
     controller.stems.on_frame_render()
     previous = controller.project.stem_cache[0]
+    assert previous is not None
+    assert previous.available
     pending_ticket = FakePreparedSourceTicket("pending")
     audio_engine_mock.capture_prepared_source.side_effect = None
     audio_engine_mock.capture_prepared_source.return_value = pending_ticket
+    controller.project.demucs_shifts += 1
     assert controller.stems.generate_stems_async(0)
+    _resolve_candidates(controller, tasks)
     # The entire remaining backlog is reserved; publication must use transferred capacity.
     assets = controller._assets
     remaining = assets._MAX_PENDING_RETIREMENTS - assets._reserved
@@ -209,6 +269,7 @@ def test_shared_running_read_survives_origin_and_releases_only_after_return(
     tasks, tickets = _shared(controller, audio_engine_mock, tmp_path)
     assert controller.stems.generate_stems_async(0)
     assert controller.stems.generate_stems_async(215)
+    _resolve_candidates(controller, tasks, 2)
     job = next(iter(controller.stems._jobs.values()))
     entered, finish = threading.Event(), threading.Event()
     generate = stem_backend.generate
@@ -219,10 +280,14 @@ def test_shared_running_read_survives_origin_and_releases_only_after_return(
         entered.set()
         assert finish.wait(5)
         assert request.source_path.is_file()
+        with pytest.raises(PermissionError):
+            (request.model_cache_dir / "checkpoint.bin").write_bytes(
+                b"producer rewrite before the actual shared backend read returns"
+            )
         return generate(request, progress)
 
     monkeypatch.setattr(stem_backend, "generate", blocked)
-    thread = threading.Thread(target=tasks[0])
+    thread = threading.Thread(target=tasks.pop(0))
     thread.start()
     assert entered.wait(5)
     try:
@@ -253,6 +318,7 @@ def test_new_version_keeps_other_banks_saved_old_version_through_shutdown(
         ticket.status = "accepted"
     assert controller.stems.generate_stems_async(0)
     assert controller.stems.generate_stems_async(215)
+    _resolve_candidates(controller, tasks, 2)
     tasks.pop()()
     controller.stems.on_frame_render()
     old = controller.project.stem_cache[215]
@@ -260,7 +326,9 @@ def test_new_version_keeps_other_banks_saved_old_version_through_shutdown(
     audio_engine_mock.retire_project_asset.reset_mock()
     audio_engine_mock.capture_prepared_source.side_effect = None
     audio_engine_mock.capture_prepared_source.return_value = FakePreparedSourceTicket("accepted")
+    controller.project.demucs_shifts += 1
     assert controller.stems.generate_stems_async(0)
+    _resolve_candidates(controller, tasks)
     tasks.pop()()
     controller.stems.on_frame_render()
     assert controller.project.stem_cache[215] is old

@@ -65,7 +65,7 @@ impl NativeBridge {
             )
     }
 
-    #[pyo3(signature = (id, source_version, cache_dir, source_ticket, components, descriptor_reference=None))]
+    #[pyo3(signature = (id, source_version, cache_dir, source_ticket, components, descriptor_reference=None, artifact_source_version=None))]
     fn prepare_stem_pair(
         &self,
         py: Python<'_>,
@@ -75,19 +75,19 @@ impl NativeBridge {
         source_ticket: &PreparedSourceTicket,
         components: bool,
         descriptor_reference: Option<String>,
+        artifact_source_version: Option<String>,
     ) -> PyResult<PreparedStemPair> {
         let held = self.engine.borrow(py);
         let engine: &AudioEngine = &held;
         py.detach(|| {
-            engine.prepare_stem_pair_at_root(
-                &self.root,
-                id,
-                &source_version,
-                &cache_dir,
-                source_ticket,
-                components,
-                descriptor_reference.as_deref(),
-            )
+            engine
+                .capture_stem_pair_work(&self.root, id, &source_version, source_ticket)?
+                .prepare(
+                    &cache_dir,
+                    components,
+                    descriptor_reference.as_deref(),
+                    artifact_source_version.as_deref(),
+                )
         })
         .map_err(pyo3::exceptions::PyValueError::new_err)
     }

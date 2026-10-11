@@ -334,7 +334,19 @@ fn verify_pcm_metadata(path: &Path, files: &mut [File], proof: &[VerifiedFile]) 
 fn verify_stem_metadata(files: &mut [File], proof: &[VerifiedFile]) -> io::Result<()> {
     let marker = json_file(&mut files[5])?;
     super::material_migration_stems::validate_generation_provenance(&marker).map_err(invalid)?;
-    if marker.get("generation_fingerprint").is_some() {
+    if marker.get("fingerprint_schema").is_some() {
+        exact_keys(
+            &marker,
+            &[
+                "schema",
+                "source_version",
+                "stems",
+                "fingerprint_schema",
+                "generation_fingerprint",
+                "producer_identity",
+            ],
+        )?;
+    } else if marker.get("generation_fingerprint").is_some() {
         exact_keys(
             &marker,
             &[

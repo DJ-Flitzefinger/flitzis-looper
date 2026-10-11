@@ -192,9 +192,10 @@ def _load_pad(controller: AppController, tmp_path: Path, sample_id: int) -> None
     write_mono_pcm16_wav(samples / name, 44_100)
     controller.project.sample_paths[sample_id] = f"samples/{name}"
     controller.project.sample_durations[sample_id] = 128 / 44_100
+    controller._audio.load_sample_async(sample_id, f"samples/{name}")
 
 
-def test_queued_selection_is_captured_and_next_job_returns_to_demucs(
+def test_queued_model_intent_is_fenced_and_next_job_uses_demucs(
     audio_engine_mock: Mock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -212,22 +213,24 @@ def test_queued_selection_is_captured_and_next_job_returns_to_demucs(
     _load_pad(controller, tmp_path, 1)
     controller.settings.set_stem_separator("bs-roformer:musdb18hq")
     assert controller.stems.generate_stems_async(0) is True
+    captured = next(iter(controller.stems._jobs.values())).request
+    assert captured.separator == "bs-roformer:musdb18hq"
+    assert captured.model_cache_dir.name == "bs-roformer-musdb18hq"
     controller.settings.set_stem_separator("demucs:htdemucs")
     assert controller.stems.generate_stems_async(1) is True
 
     assert not roformer.requests
     assert not demucs.requests
-    for task in tasks:
-        task()
-    controller.stems.on_frame_render()
+    while tasks:
+        tasks.pop(0)()
+        controller.stems.on_frame_render()
 
-    assert [request.separator for request in roformer.requests] == ["bs-roformer:musdb18hq"]
+    assert roformer.requests == []  # Obsolete queued intent never enters inference.
     assert [request.separator for request in demucs.requests] == ["demucs:htdemucs"]
-    assert roformer.requests[0].model_cache_dir.name == "bs-roformer-musdb18hq"
-    assert demucs.requests[0].model_cache_dir != roformer.requests[0].model_cache_dir
-    assert controller.stems.stems_available(0) is True
+    assert demucs.requests[0].model_cache_dir != captured.model_cache_dir
+    assert controller.stems.stems_available(0) is False
     assert controller.stems.stems_available(1) is True
-    assert audio_engine_mock.publish_prepared_stems.call_count == 2
+    assert audio_engine_mock.publish_prepared_stems.call_count == 1
 
 
 def test_restore_complete_demucs_cache_needs_no_selected_roformer_model(

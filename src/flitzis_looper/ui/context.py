@@ -218,6 +218,9 @@ class StemSelectors:
     def stem_generation_block_reason(self, pad_id: int) -> str | None:
         return self._controller.stems.stem_generation_block_reason(pad_id)
 
+    def stem_generation_diagnostic(self, pad_id: int) -> str | None:
+        return self._controller.stems.stem_generation_diagnostic(pad_id)
+
     def stem_generation_status(self, pad_id: int) -> tuple[str | None, float | None]:
         return (
             self._controller.stems.stem_generation_stage(pad_id),

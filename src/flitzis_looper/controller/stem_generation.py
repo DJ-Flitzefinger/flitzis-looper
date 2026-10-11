@@ -88,6 +88,7 @@ class StemGenerationRequest:
     encoder_executable: Path | None = None
     encoder_contract: str | None = None
     python_source_roots: tuple[Path, ...] = ()
+    original_bytes: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

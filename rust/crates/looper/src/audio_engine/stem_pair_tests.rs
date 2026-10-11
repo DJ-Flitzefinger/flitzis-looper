@@ -562,6 +562,154 @@ fn prepare_open_and_retry_select_one_generation_with_truthful_creation_flags() {
     );
 }
 
+fn copied_versioned_wavs(fixture: &Fixture, id: &str, fingerprint: &str, producer: &str) -> String {
+    let path = fixture
+        .wav_path
+        .parent()
+        .unwrap()
+        .join(format!(".ready-{id}"));
+    fs::create_dir(&path).unwrap();
+    for name in STEM_FILE_NAMES {
+        fs::copy(
+            fixture.wav_path.join(format!("{name}.wav")),
+            path.join(format!("{name}.wav")),
+        )
+        .unwrap();
+    }
+    let mut marker: serde_json::Value =
+        serde_json::from_slice(&fs::read(fixture.wav_path.join(".complete.json")).unwrap())
+            .unwrap();
+    marker["fingerprint_schema"] = json!("effective-stem-v3");
+    marker["generation_fingerprint"] = json!(fingerprint);
+    marker["producer_identity"] = json!(producer);
+    fs::write(
+        path.join(".complete.json"),
+        serde_json::to_vec(&marker).unwrap(),
+    )
+    .unwrap();
+    path.strip_prefix(fixture.root.parent().unwrap())
+        .unwrap()
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+#[test]
+fn equal_output_different_effective_provenance_keeps_distinct_complete_pairs() {
+    let fixture = Fixture::new(0);
+    let legacy = fixture.prepare().unwrap();
+    let mut pairs = Vec::new();
+    for (id, fingerprint, producer) in [("a", "a", "b"), ("b", "c", "b"), ("c", "a", "c")] {
+        let reference = copied_versioned_wavs(
+            &fixture,
+            &id.repeat(32),
+            &fingerprint.repeat(64),
+            &producer.repeat(64),
+        );
+        let pair = prepare_complete_pair(
+            &fixture.root,
+            &fixture.material,
+            &fixture.version,
+            &reference,
+            &|| false,
+        )
+        .unwrap();
+        assert!(pair.created_pcm && pair.created_descriptor);
+        assert_eq!(
+            pair.descriptor.content.artifacts,
+            legacy.descriptor.content.artifacts
+        );
+        assert_ne!(
+            pair.descriptor.stem_set_identity,
+            legacy.descriptor.stem_set_identity
+        );
+        assert!(pairs.iter().all(
+            |previous: &VerifiedStemPair| previous.descriptor.stem_set_identity
+                != pair.descriptor.stem_set_identity
+        ));
+        let warm = prepare_complete_pair(
+            &fixture.root,
+            &fixture.material,
+            &fixture.version,
+            &reference,
+            &|| false,
+        )
+        .unwrap();
+        assert!(!warm.created_pcm && !warm.created_descriptor);
+        assert_eq!(warm.descriptor, pair.descriptor);
+        pairs.push(pair);
+    }
+    assert_eq!(
+        fixture
+            .open(&legacy.descriptor_reference)
+            .unwrap()
+            .descriptor,
+        legacy.descriptor
+    );
+}
+
+#[test]
+fn provenance_tamper_rejects_common_reopen_and_recovery_even_with_new_logical_hash() {
+    let fixture = Fixture::new(0);
+    let reference =
+        copied_versioned_wavs(&fixture, &"a".repeat(32), &"a".repeat(64), &"b".repeat(64));
+    let pair = prepare_complete_pair(
+        &fixture.root,
+        &fixture.material,
+        &fixture.version,
+        &reference,
+        &|| false,
+    )
+    .unwrap();
+    let pair_reference = pair.descriptor_reference.clone();
+    let mut descriptor = pair.descriptor.clone();
+    drop(pair);
+    descriptor
+        .content
+        .provenance
+        .as_mut()
+        .unwrap()
+        .generation_fingerprint = "c".repeat(64);
+    descriptor.stem_set_identity = descriptor.content.logical_identity().unwrap();
+    fs::write(
+        fixture.root.parent().unwrap().join(&pair_reference),
+        descriptor.canonical_bytes().unwrap(),
+    )
+    .unwrap();
+    assert!(
+        fixture
+            .open(&pair_reference)
+            .err()
+            .unwrap()
+            .contains("provenance mismatch")
+    );
+    assert!(
+        super::stem_pair::verify_recovery_area(&fixture.root, Path::new(&pair_reference))
+            .unwrap_err()
+            .contains("provenance mismatch")
+    );
+}
+
+#[test]
+fn unversioned_legacy_witnesses_reopen_without_current_attestation() {
+    let fixture = Fixture::new(0);
+    let path = fixture.wav_path.join(".complete.json");
+    let mut marker: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    marker["generation_fingerprint"] = json!("a".repeat(64));
+    marker["producer_identity"] = json!("b".repeat(64));
+    fs::write(path, serde_json::to_vec(&marker).unwrap()).unwrap();
+    let pair = fixture.prepare().unwrap();
+    assert_eq!(pair.descriptor.content.provenance, None);
+    let reopened = fixture.open(&pair.descriptor_reference).unwrap();
+    assert_eq!(reopened.descriptor, pair.descriptor);
+    assert!(
+        super::stem_pair::verify_recovery_area(
+            &fixture.root,
+            Path::new(&pair.descriptor_reference)
+        )
+        .is_ok()
+    );
+}
+
 #[test]
 fn every_pcm_leaf_including_instrumental_rejects_damage_truncation_missing_and_extra_eof() {
     for name in STEM_FILE_NAMES {

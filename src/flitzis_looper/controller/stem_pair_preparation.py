@@ -1,16 +1,21 @@
 """Bounded ordinary stem workers; control polling never decodes or aligns PCM."""
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from queue import Empty, SimpleQueue
 from threading import Event
 from typing import TYPE_CHECKING
 
 from flitzis_looper.controller.stem_cache import expected_stem_files
+from flitzis_looper.controller.stem_identity import request_fingerprint
 from flitzis_looper.controller.stem_provenance import capture_processing_files
 from flitzis_looper.models import StemCacheEntry
-from flitzis_looper.stem_pair_selection import StemPairSelection
+from flitzis_looper.stem_pair_selection import (
+    STEM_FINGERPRINT_SCHEMA,
+    StemGenerationProvenance,
+    StemPairSelection,
+)
 from flitzis_looper_audio import MigrationArtifactLease
 
 if TYPE_CHECKING:
@@ -21,6 +26,7 @@ if TYPE_CHECKING:
         ProjectAssetLifecycle,
     )
     from flitzis_looper.controller.stem_generation import StemGenerationRequest
+    from flitzis_looper.controller.stem_intent import StemGenerationIntent
     from flitzis_looper_audio import (
         AudioEngine,
         PreparedSourceTicket,
@@ -28,6 +34,16 @@ if TYPE_CHECKING:
         ProjectAssetLease,
         SealedProcessingFiles,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class StemPairIntentBinding:
+    """Captured controller intent and independent source/artifact authority."""
+
+    generation_intent: StemGenerationIntent | None = None
+    own_source_version: str | None = None
+    artifact_source_version: str | None = None
+    source_path: str | None = None
 
 
 @dataclass(slots=True)
@@ -48,6 +64,19 @@ class PairPreparation:
     prepared: PreparedStemPair | None = None
     error: str | None = None
     residency_only: bool = False
+    generation_intent: StemGenerationIntent | None = None
+    own_source_version: str | None = None
+    artifact_source_version: str | None = None
+    source_path: str | None = None
+    _artifact_version_explicit: bool = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Capture own authority separately from an explicitly named artifact origin."""
+        self._artifact_version_explicit = self.artifact_source_version is not None
+        if self.own_source_version is None:
+            self.own_source_version = self.entry.source_version
+        if self.artifact_source_version is None:
+            self.artifact_source_version = self.entry.source_version
 
     def close(self) -> None:
         """Release this job after actual worker return, preserving any saved assignment."""
@@ -83,8 +112,17 @@ class StemPairPreparationQueue:
         processing_request: StemGenerationRequest | None = None,
         regenerate_on_incompatible: bool = False,
         residency_only: bool = False,
+        binding: StemPairIntentBinding | None = None,
     ) -> None:
         """Reserve capacity and exact generation before the performer model changes."""
+        captured = StemPairIntentBinding() if binding is None else binding
+        if (
+            captured.own_source_version is not None
+            and captured.own_source_version != entry.source_version
+            and captured.artifact_source_version is None
+        ):
+            message = "Cross-root stem reuse requires an explicit artifact source version"
+            raise ValueError(message)
         if sample_id in self.pending:
             message = "Stem pair preparation already pending"
             raise RuntimeError(message)
@@ -109,6 +147,10 @@ class StemPairPreparationQueue:
             processing_request,
             regenerate_on_incompatible,
             residency_only=residency_only,
+            generation_intent=captured.generation_intent,
+            own_source_version=captured.own_source_version,
+            artifact_source_version=captured.artifact_source_version,
+            source_path=captured.source_path,
         )
         self.pending[sample_id] = request
         try:
@@ -135,11 +177,14 @@ class StemPairPreparationQueue:
                 pair = request.entry.pair
                 request.prepared = self._audio.prepare_stem_pair(
                     request.sample_id,
-                    request.entry.source_version,
+                    request.own_source_version
+                    if request.own_source_version is not None
+                    else request.entry.source_version,
                     request.entry.cache_dir,
                     request.ticket,
                     components,
                     pair.descriptor_reference if pair else None,
+                    request.artifact_source_version if request._artifact_version_explicit else None,
                 )
                 if processing is not None:
                     processing[0].verify()
@@ -162,8 +207,15 @@ class StemPairPreparationQueue:
     def _validate_saved_producer(
         request: PairPreparation, processing: tuple[SealedProcessingFiles, str | None] | None
     ) -> None:
-        if processing is None or processing[1] != request.entry.producer_identity:
-            message = "saved stem producer differs from actual current model/config bytes"
+        message = "saved stem producer differs from actual current model/config bytes"
+        if processing is None or processing[1] is None or request.processing_request is None:
+            raise ValueError(message)
+        if (
+            request.entry.fingerprint_schema != STEM_FINGERPRINT_SCHEMA
+            or processing[1] != request.entry.producer_identity
+            or request_fingerprint(request.processing_request, processing[1])
+            != request.entry.generation_fingerprint
+        ):
             raise ValueError(message)
 
     @staticmethod
@@ -176,6 +228,8 @@ class StemPairPreparationQueue:
         provenance = json.loads(encoded)
         if (
             not isinstance(provenance, dict)
+            or provenance.get("fingerprint_schema") != STEM_FINGERPRINT_SCHEMA
+            or provenance.get("fingerprint_schema") != entry.fingerprint_schema
             or provenance.get("generation_fingerprint") != entry.generation_fingerprint
             or provenance.get("producer_identity") != entry.producer_identity
         ):
@@ -227,15 +281,46 @@ class StemPairPreparationQueue:
             message = "Complete stem pair worker returned no result"
             raise RuntimeError(message)
         selection = StemPairSelection.model_validate_json(request.prepared.selection_json())
-        if request.entry.pair is not None and selection != request.entry.pair:
+        expected_provenance = None
+        if request.entry.fingerprint_schema is not None:
+            fingerprint = request.entry.generation_fingerprint
+            producer = request.entry.producer_identity
+            if fingerprint is None or producer is None:
+                message = "Captured stem provenance lacks complete generation metadata"
+                raise RuntimeError(message)
+            expected_provenance = StemGenerationProvenance(
+                fingerprint_schema=request.entry.fingerprint_schema,
+                generation_fingerprint=fingerprint,
+                producer_identity=producer,
+            )
+        if selection.provenance != expected_provenance:
+            message = "Prepared pair provenance differs from captured generation metadata"
+            raise RuntimeError(message)
+        if (
+            request.entry.pair is not None
+            and selection != request.entry.pair
+            and (
+                not request._artifact_version_explicit
+                or request.own_source_version == request.artifact_source_version
+                or selection.provenance != request.entry.pair.provenance
+            )
+        ):
             message = "Prepared pair selection changed during reuse"
             raise RuntimeError(message)
+        # Native verifies the complete origin pair/source and the copied
+        # target before issuing a new root-bound descriptor/identity. Its
+        # provenance remains equal; its marker is never the own source ticket.
         return StemCacheEntry(
-            source_version=request.entry.source_version,
+            source_version=(
+                request.own_source_version
+                if request.own_source_version is not None
+                else request.entry.source_version
+            ),
             cache_dir=selection.wav_generation,
             stems=expected_stem_files(selection.wav_generation),
             available=False,
             pair=selection,
+            fingerprint_schema=request.entry.fingerprint_schema,
             generation_fingerprint=request.entry.generation_fingerprint,
             producer_identity=request.entry.producer_identity,
         )

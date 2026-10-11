@@ -1035,6 +1035,9 @@ def _render_generate_stems(ctx: UiContext, pad_id: int) -> None:
 
     if blocker is not None and not is_running:
         imgui.text_colored(TEXT_MUTED_RGBA, blocker)
+    diagnostic = ctx.state.stems.stem_generation_diagnostic(pad_id)
+    if diagnostic is not None and diagnostic != blocker:
+        imgui.text_colored(TEXT_MUTED_RGBA, diagnostic)
 
 
 def _render_stem_controls(ctx: UiContext, info: _SidebarPadInfo) -> None:

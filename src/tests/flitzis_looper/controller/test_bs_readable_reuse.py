@@ -33,10 +33,12 @@ from flitzis_looper.controller.stem_generation import run_command
 from flitzis_looper.controller.stem_identity import request_fingerprint
 from flitzis_looper.models import STEM_KINDS
 from flitzis_looper.pcm16_wav import PcmWavReader
+from flitzis_looper.stem_pair_selection import STEM_FINGERPRINT_SCHEMA
 from tests.flitzis_looper.conftest import FakePreparedSourceTicket
 from tests.flitzis_looper.controller.test_demucs_readable_reuse import (
     _assert_complete_generation,
     _digest,
+    _marker_provenance,
     _owned_encoder,
     _Rig,
     _source_assignments,
@@ -460,6 +462,7 @@ def bs_rig(
         }
         receipt_path = tmp_path.parent / (tmp_path.name + "-bs-software-receipt.json")
         receipt_path.write_text(json.dumps(retained, indent=2), encoding="utf-8")
+        controller.stems.shut_down()
 
 
 def _current_files(directory: Path) -> list[dict[str, object]]:
@@ -501,11 +504,16 @@ def _assert_known_bs(rig: _BsRig, entry: StemCacheEntry) -> None:
     assert processing is not None
     assert processing[1] is not None
     assert entry.producer_identity == processing[1]
-    assert entry.generation_fingerprint == request_fingerprint(request)
+    assert request.original_bytes == request.source_path.stat().st_size
+    assert entry.fingerprint_schema == STEM_FINGERPRINT_SCHEMA
+    assert entry.generation_fingerprint == request_fingerprint(request, processing[1])
     processing[0].verify()
     marker = json.loads((Path(entry.cache_dir) / ".complete.json").read_bytes())
     assert marker["producer_identity"] == entry.producer_identity
     assert marker["generation_fingerprint"] == entry.generation_fingerprint
+    assert marker["fingerprint_schema"] == STEM_FINGERPRINT_SCHEMA
+    assert entry.pair is not None
+    assert entry.pair.provenance == _marker_provenance(marker)
 
 
 @pytest.mark.parametrize("on_load", [False, True])
@@ -521,10 +529,14 @@ def test_bs_actual_decode_worker_publication_and_own_subscriber_completed_reuse(
         assert rig.controller.stems.reuse_compatible_stems_on_load(215)
     else:
         assert rig.controller.stems.generate_stems_async(215)
-    assert rig.controller.project.stem_cache[215] is None
-    assert len(rig.tasks) == 1
-    rig.tasks.pop(0)()
-    rig.controller.stems.on_frame_render()
+    if on_load:
+        assert rig.controller.project.stem_cache[215] is None
+    else:
+        admitted = rig.controller.project.stem_cache[215]
+        assert admitted is not None
+        assert not admitted.available
+        assert admitted.fingerprint_schema is None
+    rig.resolve_reuse(prepare=True)
     current = rig.controller.project.stem_cache[215]
     assert current is not None
     assert not current.available
@@ -570,6 +582,7 @@ def test_bs_passive_reuse_rejects_changed_or_unknown_lineage_without_new_command
         payload.pop("producer_identity")
         marker.write_text(json.dumps(payload), encoding="utf-8")
     else:
+        rig.withdraw_verified_snapshot()
         path = {
             "model": rig.checkpoint,
             "implementation": rig.runner.package / "audio.py",
@@ -579,17 +592,19 @@ def test_bs_passive_reuse_rejects_changed_or_unknown_lineage_without_new_command
             changed.write(b"owned post-settlement changed implementation/input/model bytes")
     command_count = len(rig.runner.commands)
     assert rig.controller.stems.reuse_compatible_stems_on_load(215)
-    assert len(rig.tasks) == 1
-    rig.tasks.pop(0)()
-    rig.controller.stems.on_frame_render()
+    rig.resolve_reuse(prepare=corruption == "historical_marker")
     assert rig.controller.project.stem_cache[215] is None
     assert rig.controller.project.stem_cache[0] is origin
     assert len(rig.pairs) == 1
     assert len(rig.runner.commands) == command_count
     assert len(rig.backend.requests) == 1
-    error = rig.controller.stems.stem_generation_error(215)
-    assert error is not None
-    assert "producer" in error or "provenance" in error
+    if corruption == "historical_marker":
+        error = rig.controller.stems.stem_generation_error(215)
+        assert error is not None
+        assert "provenance" in error
+    else:
+        assert rig.controller.stems.stem_generation_error(215) is None
+        assert "current producer" in rig.controller.session.stem_generation_diagnostics[215]
     assert wav_hashes == {kind: _digest(directory / f"{kind}.wav") for kind in STEM_KINDS}
 
 
@@ -603,6 +618,9 @@ def test_bs_preexisting_forged_tool_record_cannot_stamp_producer(
     assert not rig.backend.results[0].decoder_verified
     assert entry.generation_fingerprint is None
     assert entry.producer_identity is None
+    assert entry.fingerprint_schema is None
+    assert entry.pair is not None
+    assert entry.pair.provenance is None
     marker = json.loads((Path(entry.cache_dir) / ".complete.json").read_bytes())
     assert set(marker) == {"schema", "source_version", "stems"}
     commands = len(rig.runner.commands)
@@ -629,6 +647,9 @@ def test_bs_actual_child_receipt_rejects_late_body_change_or_equal_byte_new_file
     assert not rig.backend.results[0].decoder_verified
     assert entry.generation_fingerprint is None
     assert entry.producer_identity is None
+    assert entry.fingerprint_schema is None
+    assert entry.pair is not None
+    assert entry.pair.provenance is None
     commands = len(rig.runner.commands)
     assert not rig.controller.stems.reuse_compatible_stems_on_load(215)
     assert not rig.tasks

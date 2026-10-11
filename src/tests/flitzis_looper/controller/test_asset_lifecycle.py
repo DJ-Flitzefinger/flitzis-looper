@@ -20,6 +20,7 @@ if TYPE_CHECKING:
         StemGenerationResult,
         StemProgressCallback,
     )
+    from flitzis_looper.controller.stem_job import StemGenerationJob
     from flitzis_looper_audio import ProjectAssetLease
     from tests.flitzis_looper.conftest import FakeStemGenerationBackend
 
@@ -30,6 +31,7 @@ def _source(controller: AppController, tmp_path: Path) -> Path:
     write_mono_pcm16_wav(source, 44_100)
     controller.project.sample_paths[0] = "samples/shared.wav"
     controller.project.sample_durations[0] = 128 / 44_100
+    controller._audio.load_sample_async(0, "samples/shared.wav")
     return source
 
 
@@ -43,6 +45,20 @@ def _track_leases(audio_engine_mock: Mock) -> list[FakeProjectAssetLease]:
 
     audio_engine_mock.acquire_project_asset_lease.side_effect = capture
     return leases
+
+
+def _start_resolved_inference_threads(
+    controller: AppController, worker_threads: list[threading.Thread]
+) -> StemGenerationJob:
+    assert controller.stems.generate_stems_async(0)
+    job = next(iter(controller.stems._jobs.values()))
+    assert len(worker_threads) == 1
+    worker_threads[0].join(5)
+    assert not worker_threads[0].is_alive()
+    assert str(job.phase) == "resolved"
+    controller.stems.on_frame_render()
+    assert len(worker_threads) == 2
+    return job
 
 
 class _EagerLease(FakeProjectAssetLease):
@@ -368,21 +384,27 @@ def test_cancelled_running_separator_retains_source_until_backend_returns(
         thread.start()
 
     controller.stems._stem_task_runner = schedule
-    assert controller.stems.generate_stems_async(0) is True
-    assert entered.wait(5)
+    job = _start_resolved_inference_threads(controller, worker_threads)
+    subscriber = job.subscribers()[0]
     try:
+        assert entered.wait(5)
         controller.loader.unload_sample(0)
         if shutdown:
             controller.shut_down()
         source_owners = [lease for lease in leases if lease.path == str(source)]
-        assert len(source_owners) == 2
+        assert len(source_owners) == 3
+        assert cast("object", job._source_lease) is source_owners[1]
+        assert cast("object", subscriber.source_lease) is source_owners[2]
         assert source_owners[0].released is True
         assert source_owners[1].released is False
+        assert source_owners[2].released is True
     finally:
         finish.set()
-        worker_threads[0].join(5)
-    assert not worker_threads[0].is_alive()
+        worker_threads[1].join(5)
+    assert not worker_threads[1].is_alive()
     assert all(lease.released for lease in source_owners)
+    assert job._generation_lease.released
+    assert controller._assets._reserved == 0
     controller.stems.on_frame_render()
     audio_engine_mock.publish_prepared_stems.assert_not_called()
     assert any(
@@ -587,9 +609,12 @@ def test_separator_thread_admission_failure_releases_job_owners(
     assert controller.stems.generate_stems_async(0) is False
 
     source_owners = [lease for lease in leases if lease.path == str(source)]
-    assert len(source_owners) == 2
+    assert len(source_owners) == 3
     assert source_owners[0].released is False
-    assert source_owners[1].released is True
+    assert all(lease.released for lease in source_owners[1:])
+    assert cast("object", controller._assets._assignments["original", 0][1]) is source_owners[0]
+    assert not controller.stems._jobs
+    assert controller._assets._reserved == 0
     assert 0 not in controller.session.stem_generating_sample_ids
     assert "worker thread" in controller.session.stem_generation_errors[0]
 
@@ -670,6 +695,7 @@ def test_retirement_capacity_failure_preserves_intent_before_native_admission(
     controller._assets._MAX_PENDING_RETIREMENTS = 32
     reservation = controller._assets.reserve(32)
     try:
+        audio_engine_mock.load_sample_async.reset_mock()
         controller.loader.load_sample_async(0, "new.wav")
         audio_engine_mock.load_sample_async.assert_not_called()
         assert "backlog full" in controller.session.sample_load_errors[0]
@@ -799,9 +825,10 @@ def test_backend_invalid_output_releases_readers_and_cleanup_reservation(
     controller.stems.on_frame_render()
 
     source_owners = [lease for lease in leases if lease.path == str(source)]
-    assert len(source_owners) == 3
+    assert len(source_owners) == 5
     assert not source_owners[0].released
     assert all(lease.released for lease in source_owners[1:])
+    assert cast("object", controller._assets._assignments["original", 0][1]) is source_owners[0]
     assert controller.project.stem_cache[0] is previous
     assert controller.stems.stems_available(0)
     assert 0 not in controller.session.stem_generating_sample_ids
@@ -812,7 +839,7 @@ def test_backend_invalid_output_releases_readers_and_cleanup_reservation(
     audio_engine_mock.publish_prepared_stems.assert_not_called()
 
 
-def test_unexpected_backend_exception_propagates_after_reader_and_reservation_cleanup(
+def test_unexpected_backend_exception_settles_actual_read_before_control_cleanup(
     controller: AppController,
     audio_engine_mock: Mock,
     stem_backend: FakeStemGenerationBackend,
@@ -829,12 +856,31 @@ def test_unexpected_backend_exception_propagates_after_reader_and_reservation_cl
         raise ArithmeticError(message)
 
     monkeypatch.setattr(stem_backend, "generate", unexpected)
+    queued: list[Callable[[], None]] = []
+    controller.stems._stem_task_runner = queued.append
+    assert controller.stems.generate_stems_async(0)
+    job = next(iter(controller.stems._jobs.values()))
+    queued.pop(0)()  # resolution returns to control before inference is admitted
+    controller.stems.on_frame_render()
+    assert len(queued) == 1
     with pytest.raises(ArithmeticError, match="unexpected backend bug"):
-        controller.stems.generate_stems_async(0)
+        queued.pop(0)()
     source_owners = [lease for lease in leases if lease.path == str(source)]
-    assert len(source_owners) == 2
+    assert len(source_owners) == 3
     assert not source_owners[0].released
     assert source_owners[1].released
+    assert not source_owners[2].released
+    assert not job.running
+    assert str(job.phase) == "settled"
+    assert controller._assets._reserved == 34
+    controller.stems.on_frame_render()  # terminal control settlement releases the subscriber
+    assert all(lease.released for lease in source_owners[1:])
+    assert cast("object", controller._assets._assignments["original", 0][1]) is source_owners[0]
     assert controller._assets._reserved == 0
-    assert all(job._disposed and not job._running for job in controller.stems._jobs.values())
+    assert job._disposed
+    assert job._generation_lease.released
+    assert not controller.stems._jobs
+    audio_engine_mock.retire_project_asset.assert_any_call(
+        str(job.request.cache_dir), recursive=True
+    )
     audio_engine_mock.publish_prepared_stems.assert_not_called()

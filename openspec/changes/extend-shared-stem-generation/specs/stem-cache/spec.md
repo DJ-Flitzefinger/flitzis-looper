@@ -61,10 +61,27 @@ atomically replace its complete five-WAV/five-PCM/common-descriptor selection
 for a changed effective model/configuration without physically overwriting any
 leased generation.
 
-The selected descriptor SHALL bind full source identity, model/checkpoint/config
-digests, output-affecting quality, rate/layout/extent and transform/alignment
-revision. Verification and both artifact areas SHALL complete before selection
-commit. Failure or Cancel before commit SHALL retain the old usable selection;
+The system SHALL use one versioned `effective-stem-v3` identity for verified
+full original SHA-256/byte length, full output rate/channel-layout/frame extent,
+transform/alignment revision, separator/model identity, only that separator's
+output-affecting quality options and the actual full sealed producer lineage.
+Producer lineage SHALL bind the complete verified checkpoint/configuration and
+implementation/runtime inputs that determine the produced output; requested
+model labels or paths alone SHALL NOT attest the actual producer. Paths SHALL
+remain locators and SHALL NOT enter this effective identity. Diagnostic execution
+metadata SHALL remain separate unless it changes the defined output.
+
+Provenance SHALL be an optional versioned field in the common descriptor, PCM
+binding and current selection. Every new attested generation SHALL persist that
+record in all three and SHALL verify their agreement before eligibility. Equal
+WAV hashes from different known producer lineages SHALL NOT establish effective-set
+compatibility. Absent provenance in
+legacy records SHALL preserve their existing artifact identity and model-free
+verified usability as UNKNOWN; restoration SHALL NOT load a model, synthesize
+selected-model attestation or silently promote UNKNOWN to a known producer.
+
+Verification and both artifact areas SHALL complete before selection commit.
+Failure or Cancel before commit SHALL retain the old usable selection;
 a postcommit Cancel SHALL report the committed result truthfully and detach only
 pending interests. Current-model selection SHALL NOT expose a parallel model
 library. Retained immutable predecessors SHALL protect independently assigned copies as well as old runtime/rollback readers until actual final retirement. Publishing one current material-model selection SHALL NOT force a non-requesting copy C off its separately selected V1 when requesting A adopts V2; C keeps V1 until explicit replacement/deletion or final release, without exposing a selectable parallel-model library.
@@ -85,17 +102,50 @@ library. Retained immutable predecessors SHALL protect independently assigned co
 - **THEN** the job keeps its captured effective fingerprint
 - **AND** its late completion cannot overwrite a newer current material/model intent
 
+#### Scenario: Producer lineage distinguishes otherwise equal artifacts
+- **GIVEN** two complete sets have equal WAV hashes but different verified producer lineage
+- **WHEN** current selection or reuse checks their effective identity
+- **THEN** the sets are not compatible as the same selected-model generation
+- **AND** changing only a verified locator leaves the effective identity unchanged
+
+#### Scenario: Quality identity uses only effective separator options
+- **GIVEN** the actual selected separator consumes only its defined quality options
+- **WHEN** an option used only by another separator changes
+- **THEN** the effective fingerprint remains equal
+- **AND** changing the selected separator's output-affecting quality changes the fingerprint
+
+#### Scenario: Legacy provenance is absent on model-free reopen
+- **GIVEN** a complete verified legacy WAV/PCM pair without a provenance record
+- **WHEN** the project reopens without model installation or loading
+- **THEN** the old artifact identity and usable stems remain intact with UNKNOWN producer provenance
+- **AND** no selected-model fingerprint is inferred from filenames, WAV hashes or current Settings
+
 ### Requirement: E11-20 Selected Model Fingerprint Prevents Duplicate Generation
 The system SHALL disable Generate when a current valid source-bound set matches
 the selected effective model/configuration fingerprint and SHALL enforce the
 same duplicate decision in UI, controller, direct and batch request paths.
 
-Duplicate complete requests SHALL return an explicit already-present no-op;
-concurrent equal in-flight requests SHALL share one physical job with independent
-interests. Selecting a different effective fingerprint SHALL enable generation,
-and successful complete replacement SHALL disable it again. Legacy unknown
-fingerprints SHALL NOT be silently promoted. Model-free validated restoration
-SHALL remain usable without loading/downloading a selected model.
+Duplicate complete requests SHALL return the diagnostic `Stems already present`
+and perform no inference or artifact writes. Concurrent equal in-flight requests
+SHALL share one physical job with independent interests. Selecting a different
+effective fingerprint SHALL enable generation, and successful complete
+replacement SHALL disable it again. Changed fingerprints SHALL serialize per
+verified material. UI state SHALL derive from the same control-owned authoritative
+decision used by direct requests and future batch admission, without render-time
+source/model hashing or model loading. Legacy unknown fingerprints SHALL NOT be
+silently promoted. Model-free validated restoration SHALL remain usable without
+loading/downloading a selected model.
+
+Validated stem-generation Settings changes SHALL advance a monotone
+generation-intent revision.
+Each material's changed request intent SHALL advance its own monotone revision.
+Each subscriber SHALL bind its captured Settings/material revisions as well as
+its own source ticket, source version, content instance and request identity.
+The authoritative control path SHALL revalidate these fences at worker events
+and immediately before current-selection mutation. An A-to-B-to-A change SHALL
+NOT restore an earlier job's authority merely because the final fingerprint is
+equal. Stale results SHALL preserve the previous usable selection and SHALL NOT
+consume a newer job or mutate newer subscriber intent.
 
 #### Scenario: Complete selected model already exists
 - **WHEN** UI, a direct controller call or an all-loaded batch requests generation of the current valid selected fingerprint
@@ -107,6 +157,24 @@ SHALL remain usable without loading/downloading a selected model.
 - **WHEN** model B is selected, then B generation successfully commits
 - **THEN** Generate is enabled before B completion and disabled after current B verification
 - **AND** selecting A again permits a new replacement without retaining a selectable A/B library
+
+#### Scenario: Settings returns to A before the old A result arrives
+- **GIVEN** an A job captures current Settings and material intent revisions
+- **WHEN** validated Settings changes A to B to A before an old worker event or selection mutation
+- **THEN** the old A result remains stale despite matching the final A fingerprint
+- **AND** only current independently fenced interests can authorize selection without losing the old usable set
+
+#### Scenario: Material intent returns to an earlier fingerprint
+- **GIVEN** Settings remains unchanged while a material requests fingerprint A
+- **WHEN** that material's replacement intent changes to B and then A
+- **THEN** its monotone material revision rejects the earlier A completion at event handling and immediately before selection
+- **AND** equal source bytes or final fingerprint do not revive the earlier content instance, ticket or request
+
+#### Scenario: Valid metadata is checked during UI rendering
+- **GIVEN** verified current provenance and a validated selected-model state snapshot
+- **WHEN** UI renders Generate readiness repeatedly
+- **THEN** it uses the shared authoritative decision state without hashing source/model files or loading a separator
+- **AND** a direct request revalidates the same decision before inference regardless of rendered button state
 
 ### Requirement: E11-19 Stem Retirement Waits For Actual Last Readers
 The system SHALL retire replaced or deleted stem files off-thread only after

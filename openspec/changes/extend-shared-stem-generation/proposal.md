@@ -23,6 +23,10 @@ it does not prove adopting newly generated content.
   while retaining immutable predecessor files for their actual readers.
 - Disable Generate for a valid current selected-model set and enforce the same
   duplicate rule in direct, controller and batch requests.
+- Refine L1 around one `effective-stem-v3` identity with actual sealed producer
+  lineage, optional legacy-safe provenance and control-owned deduplication before
+  inference. Fence Settings/material A-to-B-to-A and preserve each subscriber's
+  own authority across verified cross-root copying/rebinding.
 - Add warning-confirmed all-loaded Generate/Delete actions over the complete
   216-slot, all-bank inventory, bounded fair job admission, progress, partial
   results, visible errors and batch-interest cancellation.

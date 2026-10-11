@@ -5,12 +5,30 @@ The system SHALL use one physical offline job for concurrent verified equal
 material/model/configuration/shape/transform requests while retaining each
 pad/direct/batch interest's independent identity and publication authority.
 
-Content SHA and verified canonical material SHALL determine source equality;
-filename, size and mtime alone SHALL NOT deduplicate. A captured fingerprint
-SHALL remain immutable through inference. Different fingerprint replacements
-SHALL serialize per material and obsolete completions SHALL NOT replace newer
-intent. Removing an origin pad SHALL NOT revoke surviving subscriber interests
-or copy another pad's source/timing/history ACK.
+Verified full original content, full output shape/transform and the common
+`effective-stem-v3` identity SHALL determine equality; filename, path, size and
+mtime alone SHALL NOT deduplicate. Actual full sealed producer lineage SHALL be
+captured during the first existing bounded non-realtime worker phase and handed
+to the authoritative control owner. Before inference that owner SHALL resolve
+coalescing or `Stems already present` against current verified selection and jobs,
+using the captured effective identity and current Settings/material intent
+fences. Workers SHALL NOT create a second authoritative job/selection registry.
+Model/source hashing and producer preparation SHALL NOT run in UI rendering or
+the realtime callback.
+
+A captured fingerprint and actual producer inputs SHALL remain immutable through
+inference. Different fingerprint replacements SHALL serialize per verified
+material and obsolete completions SHALL NOT replace newer intent. Each joined
+interest SHALL retain its own source ticket/version, content-instance identity,
+request identity and monotone Settings/material revisions. Removing an origin pad
+SHALL NOT revoke surviving subscriber interests or copy another pad's
+source/timing/history ACK.
+
+Verified cross-root copying or rebinding SHALL preserve effective producer
+identity while acquiring each subscriber's own current native ticket/source
+version. Artifact marker authority SHALL bind the sealed artifact generation
+and SHALL NOT substitute for subscriber source or publication authority. Equal
+WAV content SHALL NOT coalesce different known producer fingerprints.
 
 #### Scenario: Same material occupies multiple banks
 - **GIVEN** equal verified source bytes assigned independently to slot labels 1 and 216
@@ -21,6 +39,24 @@ or copy another pad's source/timing/history ACK.
 #### Scenario: Equal name or shape has different bytes
 - **WHEN** two loaded sources have equal filenames/size/shape but different full content digests
 - **THEN** their jobs remain distinct and neither completion authorizes the other source
+
+#### Scenario: Worker capture discovers an equal producer job
+- **GIVEN** equal verified material requests reach the bounded worker producer-capture phase
+- **WHEN** their sealed actual producer identities are handed to the control owner before inference
+- **THEN** the authoritative decision joins their independent interests to one physical inference job
+- **AND** a current complete matching selection instead returns Stems already present without inference or artifact writes
+
+#### Scenario: Verified cross-root subscriber joins
+- **GIVEN** equal original content is verified under different contained locators with the same sealed producer fingerprint
+- **WHEN** the copied or rebound assignment joins shared generation or reuses its complete artifacts
+- **THEN** effective identity remains locator-independent and its own current native ticket/source version governs publication
+- **AND** another subscriber's ticket or the artifacts' sealed marker never grants authority for the copied assignment
+
+#### Scenario: Actual producer differs from a requested label
+- **GIVEN** requests use the same model label but resolve different complete checkpoint, configuration or producer implementation inputs
+- **WHEN** the worker captures actual sealed producer lineage
+- **THEN** the effective fingerprints differ and replacement serializes per verified material
+- **AND** neither equal labels nor equal WAV hashes allow selected-model compatibility or duplicate coalescing
 
 ### Requirement: E11-06 All Loaded Pads Generate Through A Bounded Fair Batch
 The system SHALL generate stems for warning-confirmed loaded pads across all
@@ -92,9 +128,11 @@ an offline-job conflict or authorize active new-set adoption.
 - **THEN** playback and offline inference coexist with independent ownership and no callback generation
 
 ### Requirement: Stem Task Completion Is Revalidated Before Publication
-The system SHALL revalidate material/model/subscriber identity before disk
-commit and each pad's fresh native source/request/timing/window/voice/history
-authority before effective publication of completed stem work.
+The system SHALL revalidate material/model/subscriber identity and monotone
+validated Settings/material intent revisions at each worker event and
+immediately before current disk-selection mutation, and each pad's fresh native
+source/request/timing/window/voice/history authority before effective publication
+of completed stem work.
 
 An unloaded, replaced, cancelled or otherwise stale subscriber SHALL NOT mutate
 newer pad intent. Playing completion SHALL NOT bypass new-set adoption proof;

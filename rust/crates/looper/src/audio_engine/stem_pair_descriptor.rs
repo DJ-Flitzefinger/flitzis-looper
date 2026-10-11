@@ -52,6 +52,24 @@ pub(super) struct StemPairAlignment {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(super) struct StemPairProvenance {
+    pub(super) schema: String,
+    pub(super) generation_fingerprint: String,
+    pub(super) producer_identity: String,
+}
+
+impl StemPairProvenance {
+    pub(super) fn validate(&self) -> Result<(), String> {
+        if self.schema != "effective-stem-v3" {
+            return Err("unsupported effective stem fingerprint schema".into());
+        }
+        validate_hash(&self.generation_fingerprint, "generation_fingerprint")?;
+        validate_hash(&self.producer_identity, "producer_identity")
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct StemPairContent {
     pub(super) material_id: String,
     pub(super) source_version: String,
@@ -59,6 +77,9 @@ pub(super) struct StemPairContent {
     pub(super) conversion: StemPairConversion,
     pub(super) alignment: StemPairAlignment,
     pub(super) artifacts: [StemPairArtifact; 5],
+    // Omitting unknown legacy provenance preserves its exact canonical identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) provenance: Option<StemPairProvenance>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -139,6 +160,9 @@ fn validate_generation(
 
 impl StemPairContent {
     pub(super) fn validate(&self) -> Result<(), String> {
+        if let Some(provenance) = &self.provenance {
+            provenance.validate()?;
+        }
         if !material_paths::valid_id(&self.material_id) {
             return Err("stem pair material_id must be 32 lowercase hex characters".into());
         }
@@ -324,6 +348,7 @@ mod tests {
                 pcm_sha256: format!("{:x}", index + 5).repeat(64),
                 pcm_bytes: 1024,
             }),
+            provenance: None,
         }
     }
 
@@ -422,6 +447,43 @@ mod tests {
         let reopened: StemPcmManifest = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(reopened, manifest);
         assert_eq!(reopened.canonical_bytes().unwrap(), bytes);
+    }
+
+    #[test]
+    fn legacy_content_omits_unknown_provenance_and_current_witnesses_bind_identity() {
+        let legacy = content();
+        let bytes = encode(&legacy).unwrap();
+        // Frozen v1 content encoding predates optional generation provenance.
+        let legacy_bytes = r#"{"material_id":"11111111111111111111111111111111","source_version":"samples/materials/M11111111111111111111111111111111/original/Mélodie 音.wav|sha256-v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source":{"frame_count":128,"channels":2,"sample_rate_hz":48000,"original_bytes":556,"original_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","playback_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","mono_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","transform_sha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","source_zero_frame":0},"conversion":{"schema_version":1,"policy":"pcm16-exact-geometry-v1"},"alignment":{"schema_version":1,"policy":"shared-onset-v1","frame_domain":"complete-playback-frames","offset_frames":0},"artifacts":[{"name":"vocals","wav_sha256":"0000000000000000000000000000000000000000000000000000000000000000","wav_bytes":556,"pcm_sha256":"5555555555555555555555555555555555555555555555555555555555555555","pcm_bytes":1024},{"name":"melody","wav_sha256":"1111111111111111111111111111111111111111111111111111111111111111","wav_bytes":556,"pcm_sha256":"6666666666666666666666666666666666666666666666666666666666666666","pcm_bytes":1024},{"name":"bass","wav_sha256":"2222222222222222222222222222222222222222222222222222222222222222","wav_bytes":556,"pcm_sha256":"7777777777777777777777777777777777777777777777777777777777777777","pcm_bytes":1024},{"name":"drums","wav_sha256":"3333333333333333333333333333333333333333333333333333333333333333","wav_bytes":556,"pcm_sha256":"8888888888888888888888888888888888888888888888888888888888888888","pcm_bytes":1024},{"name":"instrumental","wav_sha256":"4444444444444444444444444444444444444444444444444444444444444444","wav_bytes":556,"pcm_sha256":"9999999999999999999999999999999999999999999999999999999999999999","pcm_bytes":1024}]}"#.as_bytes();
+        assert_eq!(bytes, legacy_bytes);
+        assert!(
+            !serde_json::to_value(&legacy)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .contains_key("provenance")
+        );
+        let reopened: StemPairContent = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(reopened.provenance, None);
+        assert_eq!(
+            reopened.logical_identity().unwrap(),
+            format!("{:x}", Sha256::digest(legacy_bytes))
+        );
+        let mut current = legacy.clone();
+        current.provenance = Some(StemPairProvenance {
+            schema: "effective-stem-v3".into(),
+            generation_fingerprint: "a".repeat(64),
+            producer_identity: "b".repeat(64),
+        });
+        let first = current.logical_identity().unwrap();
+        assert_ne!(first, legacy.logical_identity().unwrap());
+        current.provenance.as_mut().unwrap().generation_fingerprint = "c".repeat(64);
+        assert_ne!(current.logical_identity().unwrap(), first);
+        current.provenance.as_mut().unwrap().generation_fingerprint = "a".repeat(64);
+        current.provenance.as_mut().unwrap().producer_identity = "c".repeat(64);
+        assert_ne!(current.logical_identity().unwrap(), first);
+        current.provenance.as_mut().unwrap().schema = "effective-stem-v4".into();
+        assert!(current.logical_identity().is_err());
     }
 
     #[test]

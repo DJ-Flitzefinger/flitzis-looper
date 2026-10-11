@@ -3,7 +3,7 @@
 use super::cold_store::sealed_reader;
 use super::complete_context::CompleteSourceReader;
 use super::material_migration::PreparedMigrationMaterial;
-use super::material_migration_stems::verify_complete_wav_set;
+use super::material_migration_stems::{generation_provenance, verify_complete_wav_set};
 use super::material_paths::{self, AssetKind};
 use super::project_assets::{self, FileIdentity};
 use super::stem_cache::streamed::AlignedStemStream;
@@ -451,10 +451,16 @@ pub(super) fn open_verified_pair(
     let Some(material_id) = material.lease.material_id.as_ref() else {
         return Err("pair material identity missing".into());
     };
+    let material_root =
+        material_paths::material_root_for_original(root, &material.lease.original_path)
+            .map_err(error)?;
     if typed.kind
         != (AssetKind::StemPairDescriptor {
             material: material_id.clone(),
         })
+        || !typed
+            .path
+            .starts_with(material_root.join(".pcm-cache/stems/v1/.pairs"))
     {
         return Err("pair descriptor typed material mismatch".into());
     }
@@ -467,8 +473,15 @@ pub(super) fn open_verified_pair(
     let descriptor: StemPairDescriptor =
         serde_json::from_slice(&bytes(&mut descriptor_file, JSON_LIMIT)?).map_err(error)?;
     descriptor.validate()?;
-    if descriptor.content.source != source(material)?
+    let current_source = source(material)?;
+    let current_version = format!(
+        "{}|sha256-v1:{}",
+        reference(root, &material.lease.original_path)?,
+        current_source.original_sha256,
+    );
+    if descriptor.content.source != current_source
         || descriptor.content.material_id != *material_id
+        || descriptor.content.source_version != current_version
     {
         return Err("pair/source content mismatch".into());
     }
@@ -537,6 +550,9 @@ fn verified_wavs(
         .and_then(|n| n.checked_add(1024 * 1024))
         .ok_or("stem WAV bound overflow")?;
     let mut set = verify_complete_wav_set(&path.path, &content.source_version, maximum, cancelled)?;
+    if generation_provenance(&set.marker)? != content.provenance {
+        return Err("WAV marker/common effective stem provenance mismatch".into());
+    }
     for (index, artifact) in content.artifacts.iter().enumerate() {
         if set.marker["stems"][&artifact.name].as_str() != Some(artifact.wav_sha256.as_str())
             || set._files[index].metadata().map_err(error)?.len() != artifact.wav_bytes
@@ -635,6 +651,15 @@ fn verify_pcm(
 
 /// Fresh complete disk proof for migration/history; no pad or callback authority.
 pub(super) fn verify_recovery_area(root: &Path, reference: &Path) -> Result<Vec<File>, String> {
+    verify_recovery_area_cancellable(root, reference, &|| false)
+}
+
+fn verify_recovery_area_cancellable(
+    root: &Path,
+    reference: &Path,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Vec<File>, String> {
+    check_cancelled(cancelled)?;
     let typed = material_paths::resolve(root, reference).map_err(error)?;
     let expected_material = match &typed.kind {
         AssetKind::StemPcmDirectory { material, .. }
@@ -709,12 +734,12 @@ pub(super) fn verify_recovery_area(root: &Path, reference: &Path) -> Result<Vec<
         .map_err(error)?,
     );
     let mut original_file = sealed_reader(&original.path).map_err(error)?;
-    let (digest, extent) = full_hash(&mut original_file, &|| false)?;
+    let (digest, extent) = full_hash(&mut original_file, cancelled)?;
     if digest != content.source.original_sha256 || extent != content.source.original_bytes {
         return Err("pair recovery original changed".into());
     }
-    let wavs = verified_wavs(root, &content, &wav_reference, &|| false)?;
-    let pcm = verified_pcm_directory(&pcm_path, &content, &|| false)?;
+    let wavs = verified_wavs(root, &content, &wav_reference, cancelled)?;
+    let pcm = verified_pcm_directory(&pcm_path, &content, cancelled)?;
     if pcm.manifest.wav_generation != wav_reference {
         return Err("pair recovery direct WAV manifest binding mismatch".into());
     }
@@ -724,7 +749,7 @@ pub(super) fn verify_recovery_area(root: &Path, reference: &Path) -> Result<Vec<
         .ok_or("WAV marker missing")?
         .try_clone()
         .map_err(error)?;
-    let (wav_manifest_sha256, _) = full_hash(&mut marker, &|| false)?;
+    let (wav_manifest_sha256, _) = full_hash(&mut marker, cancelled)?;
     if let Some(descriptor) = descriptor {
         if descriptor.pcm_manifest_sha256 != pcm.manifest_sha256
             || descriptor.wav_manifest_sha256 != wav_manifest_sha256
@@ -746,6 +771,41 @@ pub(super) fn verify_recovery_area(root: &Path, reference: &Path) -> Result<Vec<
     guards.extend(wavs._files);
     guards.extend(pcm.files);
     guards.extend(pcm.pcm);
+    check_cancelled(cancelled)?;
+    Ok(guards)
+}
+
+/// Verify a foreign complete pair before copying its WAVs into an equal owned source.
+/// The returned sealed readers grant artifact custody, never subscriber publication.
+pub(super) fn verify_pair_rebind(
+    root: &Path,
+    descriptor_reference: &str,
+    wav_reference: &str,
+    artifact_source_version: &str,
+    material: &PreparedMigrationMaterial,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Vec<File>, String> {
+    let mut guards =
+        verify_recovery_area_cancellable(root, Path::new(descriptor_reference), cancelled)?;
+    let typed = material_paths::resolve(root, Path::new(descriptor_reference)).map_err(error)?;
+    if !matches!(typed.kind, AssetKind::StemPairDescriptor { .. }) {
+        return Err("pair rebind requires a typed common descriptor".into());
+    }
+    let mut file = sealed_reader(&typed.path).map_err(error)?;
+    let descriptor: StemPairDescriptor =
+        serde_json::from_slice(&bytes(&mut file, JSON_LIMIT)?).map_err(error)?;
+    descriptor.validate()?;
+    let wav = material_paths::resolve(root, Path::new(wav_reference)).map_err(error)?;
+    let actual_wav =
+        material_paths::resolve(root, Path::new(&descriptor.wav_generation)).map_err(error)?;
+    if descriptor.content.source_version != artifact_source_version
+        || descriptor.content.source != source(material)?
+        || wav.path != actual_wav.path
+    {
+        return Err("pair rebind requires equal complete source and exact origin artifacts".into());
+    }
+    guards.push(file);
+    check_cancelled(cancelled)?;
     Ok(guards)
 }
 
@@ -960,6 +1020,7 @@ pub(super) fn prepare_complete_pair_with_reader(
         .and_then(|n| n.checked_add(1024 * 1024))
         .ok_or("stem WAV bound overflow")?;
     let wav_set = verify_complete_wav_set(&wav.path, source_version, maximum, cancelled)?;
+    let provenance = generation_provenance(&wav_set.marker)?;
     let material_root =
         material_paths::material_root_for_original(root, &material.lease.original_path)
             .map_err(error)?;
@@ -988,6 +1049,7 @@ pub(super) fn prepare_complete_pair_with_reader(
             continue;
         };
         if pair.descriptor.content.source_version == source_version
+            && pair.descriptor.content.provenance == provenance
             && pair.descriptor.content.artifacts.iter().all(|artifact| {
                 wav_set.marker["stems"][&artifact.name].as_str()
                     == Some(artifact.wav_sha256.as_str())
@@ -1040,6 +1102,7 @@ pub(super) fn prepare_complete_pair_with_reader(
             offset_frames: i64::try_from(complete.offset_frames).map_err(error)?,
         },
         artifacts,
+        provenance,
     };
     let identity = content.logical_identity()?;
     let generation = identity[..32].to_owned();

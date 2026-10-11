@@ -137,6 +137,9 @@ def promote_generation_artifacts(entry: StemCacheEntry, generation_dir: Path) ->
     marker_temp = private / STEM_SET_MARKER_NAME
     provenance = (
         {
+            **(
+                {"fingerprint_schema": entry.fingerprint_schema} if entry.fingerprint_schema else {}
+            ),
             "generation_fingerprint": entry.generation_fingerprint,
             "producer_identity": entry.producer_identity,
         }
@@ -177,6 +180,11 @@ def verified_stem_cache_available(entry: StemCacheEntry) -> bool:
         }
         if entry.generation_fingerprint is not None and entry.producer_identity is not None:
             expected |= {
+                **(
+                    {"fingerprint_schema": entry.fingerprint_schema}
+                    if entry.fingerprint_schema
+                    else {}
+                ),
                 "generation_fingerprint": entry.generation_fingerprint,
                 "producer_identity": entry.producer_identity,
             }

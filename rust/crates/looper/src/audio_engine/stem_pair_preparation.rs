@@ -11,7 +11,9 @@ use super::prepared_source::{
     validate_prepared_ticket,
 };
 use super::stem_cache::source_version_hash;
-use super::stem_pair::{VerifiedStemPair, open_verified_pair, prepare_complete_pair_with_reader};
+use super::stem_pair::{
+    VerifiedStemPair, open_verified_pair, prepare_complete_pair_with_reader, verify_pair_rebind,
+};
 use crate::messages::{ControlMessage, PreparedStemSet, SampleBuffer};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -34,6 +36,9 @@ pub struct PreparedStemPair {
     assets: Arc<super::project_assets::ProjectAssets>,
     pub(super) root: PathBuf,
     rollback: Vec<(PathBuf, bool)>,
+    // A copied half-pair may warm-reuse a different complete pair. Keep its own
+    // producer pin until discard/drop, independently of the selected pair readers.
+    _rollback_owners: Vec<super::project_assets::ProjectAssetLease>,
     selected: AtomicBool,
     pub(super) discarded: AtomicBool,
     pub(super) source_lease: super::cold_store::CommittedColdLease,
@@ -247,7 +252,7 @@ impl AudioEngine {
         descriptor_reference: Option<&str>,
     ) -> Result<PreparedStemPair, String> {
         self.capture_stem_pair_work(root, id, source_version, ticket)?
-            .prepare(cache_dir, components, descriptor_reference)
+            .prepare(cache_dir, components, descriptor_reference, None)
     }
 
     /// Current subscriber binds its own publication and accepted timing, never another ACK.
@@ -301,6 +306,7 @@ impl StemPairPreparationWork {
         cache_dir: &str,
         components: bool,
         descriptor_reference: Option<&str>,
+        artifact_source_version: Option<&str>,
     ) -> Result<PreparedStemPair, String> {
         let Self {
             root,
@@ -342,7 +348,32 @@ impl StemPairPreparationWork {
             prepared
         };
         let canonical_source = canonical_version(&material)?;
+        let artifact_version = artifact_source_version.unwrap_or(source_version);
+        let mut origin_readers = Vec::new();
+        let descriptor_reference = if let Some(reference) = descriptor_reference {
+            let typed = material_paths::resolve(&root, Path::new(reference))
+                .map_err(|error| error.to_string())?;
+            let own_root =
+                material_paths::material_root_for_original(&root, &material.lease.original_path)
+                    .map_err(|error| error.to_string())?;
+            if !typed.path.starts_with(&own_root) && artifact_source_version.is_some() {
+                origin_readers = verify_pair_rebind(
+                    root,
+                    reference,
+                    cache_dir,
+                    artifact_version,
+                    &material,
+                    &cancelled,
+                )?;
+                None
+            } else {
+                Some(reference)
+            }
+        } else {
+            None
+        };
         let mut created_wav = false;
+        let mut rollback_owners = Vec::new();
         let wav_reference = if descriptor_reference.is_some() {
             String::new() // Existing selection is checked by the complete verifier below.
         } else {
@@ -350,7 +381,7 @@ impl StemPairPreparationWork {
                 .map_err(|error| error.to_string())?;
             if matches!(typed.kind,AssetKind::StemDirectory {material:Some(ref value),generation:true}
                 if Some(value)==material.lease.material_id.as_ref())
-                && source_version == canonical_source
+                && artifact_version == canonical_source
             {
                 cache_dir.to_owned()
             } else {
@@ -360,12 +391,23 @@ impl StemPairPreparationWork {
                     &root,
                     &material,
                     Path::new(cache_dir),
-                    source_version,
+                    artifact_version,
                     &canonical_source,
                     &generation[..32],
                     &cancelled,
                 )?;
                 created_wav = copied.created;
+                if copied.created {
+                    let created_path =
+                        material_paths::resolve(root, Path::new(&copied.cache_reference))
+                            .map_err(|error| error.to_string())?
+                            .path;
+                    rollback_owners.push(
+                        assets
+                            .acquire_pin(root, &created_path)
+                            .map_err(|error| error.to_string())?,
+                    );
+                }
                 // A fully verified copied half-pair is a recognized retry target
                 // if later preparation fails. It gains no common eligibility.
                 copied.cache_reference
@@ -385,12 +427,18 @@ impl StemPairPreparationWork {
         };
         let identity_bytes: [u8; 32] = hex_identity(&pair.descriptor.stem_set_identity)?;
         let mut identity = Arc::new(identity_bytes);
-        let selection = json!({"schema_version":1,
+        let mut selection = json!({"schema_version":1,
             "descriptor_reference":pair.descriptor_reference,
             "stem_set_identity":pair.descriptor.stem_set_identity,
             "wav_generation":pair.descriptor.wav_generation,
-            "pcm_generation":pair.descriptor.pcm_generation})
-        .to_string();
+            "pcm_generation":pair.descriptor.pcm_generation});
+        if let Some(provenance) = &pair.descriptor.content.provenance {
+            selection["provenance"] =
+                serde_json::to_value(provenance).map_err(|error| error.to_string())?;
+        }
+        let selection = selection.to_string();
+        // Hold the foreign common/WAV/PCM proof through completed target preparation.
+        drop(origin_readers);
         let descriptor_reference = pair.descriptor_reference.clone();
         let wav_path = material_paths::resolve(&root, Path::new(&pair.descriptor.wav_generation))
             .map_err(|error| error.to_string())?
@@ -427,7 +475,10 @@ impl StemPairPreparationWork {
             // This producer created the exact WAV target. Coupled registry
             // retirement preflights all three areas atomically; reused WAVs
             // never acquire this producer's rollback right.
-            rollback.push((wav_path.clone(), true));
+            let created_path = material_paths::resolve(root, Path::new(&wav_reference))
+                .map_err(|error| error.to_string())?
+                .path;
+            rollback.push((created_path, true));
         }
         if pair.created_pcm {
             rollback.push((project_root.join(&pair.descriptor.pcm_generation), true));
@@ -456,6 +507,7 @@ impl StemPairPreparationWork {
             assets: assets.clone(),
             root: root.to_owned(),
             rollback,
+            _rollback_owners: rollback_owners,
             selected: AtomicBool::new(false),
             discarded: AtomicBool::new(false),
             source_lease: material.lease.clone(),

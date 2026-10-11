@@ -2,8 +2,9 @@ import hashlib
 import json
 import struct
 import wave
+from pathlib import Path
 from typing import TYPE_CHECKING
-from unittest.mock import Mock, patch
+from unittest.mock import DEFAULT, Mock, patch
 
 import pytest
 
@@ -16,7 +17,6 @@ from flitzis_looper.models import STEM_KINDS
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
-    from pathlib import Path
 
     from flitzis_looper.models import ProjectState, SessionState
 
@@ -50,6 +50,33 @@ class FakeProjectAssetLease:
     def reclaim_stems(self, expected_path: str) -> None:
         assert expected_path == self.path
         assert not self.released
+
+
+class FakeLoadedSourceDigests:
+    """Fixture admission substitute, without claiming actual Native source custody."""
+
+    def __init__(self) -> None:
+        self._digests: dict[int, str] = {}
+
+    def load(self, sample_id: int, path: str, *_args: object, **_kwargs: object) -> object:
+        """Capture once at explicit fake admission, preserving the mock's return value."""
+        self._digests.pop(sample_id, None)
+        try:
+            with Path(path).open("rb") as source:
+                digest = hashlib.file_digest(source, "sha256").hexdigest()
+        except OSError:
+            return DEFAULT
+        self._digests[sample_id] = digest
+        return DEFAULT
+
+    def unload(self, sample_id: int) -> object:
+        """Forget this fixture source only on the default successful fake unload."""
+        self._digests.pop(sample_id, None)
+        return DEFAULT
+
+    def get(self, sample_id: int) -> str | None:
+        """Read immutable admitted metadata without touching source files."""
+        return self._digests.get(sample_id)
 
 
 class FakeGlobalPlaybackBatchTicket:
@@ -192,6 +219,12 @@ def stem_backend() -> FakeStemGenerationBackend:
 @pytest.fixture
 def audio_engine_mock() -> Iterator[Mock]:
     with patch("flitzis_looper.controller.app.AudioEngine", autospec=True) as audio_engine:
+        loaded_sources = FakeLoadedSourceDigests()
+        audio_engine.return_value.load_sample_async.side_effect = loaded_sources.load
+        audio_engine.return_value.unload_sample.side_effect = loaded_sources.unload
+        # Install explicitly even when the currently loaded extension predates
+        # the metadata getter. Tests may still replace native admission behavior.
+        audio_engine.return_value.loaded_source_digest = Mock(side_effect=loaded_sources.get)
         audio_engine.return_value.output_sample_rate.return_value = 44_100
         audio_engine.return_value.poll_input_events.return_value = None
         audio_engine.return_value.receive_msg.return_value = None
