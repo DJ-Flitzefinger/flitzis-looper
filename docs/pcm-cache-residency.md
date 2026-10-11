@@ -147,14 +147,20 @@ callback lock or new registry. Per-operation
 admission and the existing two-worker transient bound remain distinct from a
 measurement of total concurrent process RAM.
 
-New imports preserve the exact filename and bytes under
-`samples/materials/M<32-lowercase-hex>/original/`. The material ID binds the full
-original hash and filename; a conflicting existing container gets a fresh ID
-without overwriting unknown data. Complete PCM generations live in that material's
+New imports preserve the first verified exact filename and bytes under
+`samples/<Originalfilename>/<Originalfilename>`. Hidden `.material.json` binds
+the complete SHA-256, byte length and canonical original leaf; the durable
+32-hex material ID is a compact identifier, not the full content witness.
+Equal bytes under other names reuse that root and leaf. Windows namespace,
+case, occupied-name and path-length collisions use a readable directory prefix
+and an extended full-content SHA suffix without overwriting unknown data.
+Complete PCM generations live in that material's
 `.pcm-cache/v1/.ready-<32-lowercase-hex>/`; stem generation uses its `stems/` root.
 Explicit import and restore intent prevents an absolute canonical restore from
 being recopied as an external import. Safe legacy flat originals, global PCM
-generations and slot stem sets remain readable without mass migration.
+generations, M-ID originals/caches and slot stem sets remain readable during
+verified serial journal/config/reference migration. See
+[readable material validation](readable-material-validation.md).
 
 The native typed resolver rejects traversal before normalization, reparse ancestors,
 Windows leaf aliases, invalid IDs and wrong artifact kinds. Directory ancestors are
@@ -163,7 +169,29 @@ enqueue; Python validates and acknowledges the delivered exact original lease
 before publishing its project path and durable content ID. Registry saturation,
 stale/no-receiver events and rejected adoption retain prior assignments and retire
 only the attempt's creations. Cleanup still waits for actual readers and removes
-only exact known files and empty recognized material containers.
+only exact known files and empty recognized material containers. Readable binding
+metadata/root cleanup requires the typed receipt of the actual native directory
+and marker birth, including exact root/marker FileIDs, marker extent and full SHA.
+Durable receipt recovery additionally verifies current config/journal, current
+inventory and fresh Native adoption before restoring existing ownership. Native
+inventory remains retained through physical terminal cleanup after the last
+reader; Python caller/GC release is insufficient. Unreceipted or changed markers
+and unknown roots remain protected. A freshly recognized schema or replacement
+marker never creates deletion authority. Final restart/partial-retirement and
+physical terminal evidence is tracked in the MATERIAL report.
+
+A recovery-only typed retired-original route resumes an own root after verified
+binding retirement. Exact native birth root FileID, absent original and genuinely
+empty root are checked under custody against the unchanged latest created-target
+journal's actual original-terminal record, current config/content intent and
+registered inventory. A present marker still requires its complete birth
+FileID/extent/SHA. Ordinary lookup never adopts an absent binding. Unknown
+children, replacements/reparse roots, reappeared original/marker or missing
+terminal/birth evidence remain protected; inventory/capacity and real root-reader
+protections extend through physical root terminal after caller release. The
+six-mode process-exit/fresh-child exercise and current complete Debug/Release
+suites pass at this bounded software scope. Full predecessor/integration,
+resource/music and Human gates remain open in the MATERIAL report.
 
 `cold_jobs.rs` admits at most two active workers and 32 queued/reserved jobs.
 The queue bound includes reservations made before request mutation. Each active
@@ -189,9 +217,11 @@ input before a subsequent cancellation check. Other stages check cancellation
 between packets/chunks and before commit/publication.
 
 `cold_store.rs` opens actual files with Windows FILE_SHARE_READ exclusion of
-writes/deletion, verifies opened leaf/ancestor reparse attributes, copies/hashes
-64-KiB chunks into an exclusive snapshot, verifies exact digest/EOF, and retains
-the same sealed reader throughout `sample_loader/cold.rs` decode. External
+writes/deletion, verifies opened leaf/ancestor reparse attributes and hashes
+the complete incoming reader in bounded chunks. It retains that same sealed
+reader through lookup and `sample_loader/cold.rs` decode. Compatible hits also
+retain and fully verify the canonical original, without a temporary snapshot or
+source copy; only a genuine miss publishes one exact durable original. External
 replacement or A-to-B-to-A after capture cannot change decoder input. Inputs with
 an existing incompatible writer fail safely. This tested stable-capture protocol
 is Windows-only; other platforms fail Unsupported until an equivalent protocol
@@ -792,16 +822,18 @@ survives. Manual/Tap/Legacy intent and source-relative labels remain independent
 1. Admit a job within fixed queue/worker and PCM-byte budgets before allocating.
    Capture pad request/source intent/device configuration. Use bounded chunks,
    cancellation points and checked byte/frame arithmetic throughout.
-2. Obtain a source read protocol that excludes mutation for the copy interval
+2. Obtain a source read protocol that excludes mutation through lookup and copy
    (on Windows, a retained handle with tested write/delete-sharing exclusion).
    A mutable source that cannot be captured stably fails safely. Before/after
    stat or path hashes do not prove stability. Hash the bytes successfully
-   written while copying; handle short reads/writes, errors and cancellation.
-3. Flush the owned staging snapshot, verify its digest/extent and retain an
-   immutable reader that excludes mutation for all dependent reads. Decode that
-   same snapshot/handle. A read-only filename flag alone does not enforce this.
-   Import commits the byte-exact original at a non-colliding name. Restore may
-   take a transient sealed snapshot but creates no second durable original.
+   read completely; handle short reads/writes, errors and cancellation. A hidden
+   full-SHA claim serializes canonical selection before the derivative gate.
+3. Retain the sealed incoming handle as the preparation snapshot. A compatible
+   hit independently verifies and retains the sealed canonical original and
+   creates no `snapshot.original` or additional original leaf. A genuine miss
+   copies the exact original once, flushes/reopens/verifies it and publishes its
+   binding after durability. Restore creates neither a snapshot copy nor another
+   durable original. A read-only filename flag does not enforce this custody.
 4. Decode complete PCM once, retaining actual selected codec/options/library/
    processing versions, stable decoded rate/channels and exact frame count.
    Version packet-error-silence and codec delay/padding/gapless policy. No
@@ -836,8 +868,9 @@ interleaved digest. Pad/runtime/window revisions are not disk content identities
 
 A pre-decode lookup index may map original digest + decoder/transform selector
 to a candidate full identity. It is only a locator: the committed manifest and
-full validation decide reuse. Different paths with identical bytes can share PCM
-but retain distinct project-original assignments. Conflicting candidate content,
+full validation decide reuse. Different names with identical bytes share the
+first canonical original/PCM while retaining independent pad assignments.
+Conflicting candidate content,
 partial entries, old versions, format/device differences and corrupt manifests
 regenerate off-thread; they never overwrite an entry held by a reader.
 
@@ -1032,8 +1065,8 @@ or implementing the full application Rust port.
 
 ## R0 shared material and content boundary
 
-The pending target reuses cold_store/project_assets/asset_lifecycle/stem_cache;
-canonical `samples/materials/M<id>/original`, `.pcm-cache` and `stems` replace
+The shared-material boundary reuses cold_store/project_assets/asset_lifecycle/stem_cache;
+canonical `samples/<Originalfilename>/` originals, `.pcm-cache` and `stems` replace
 physical per-pad duplicates. No second cache/hardlink/reparse/phantom origin.
 P1a supplies canonical typed material roots and durable per-content IDs. P1b extends
 the existing central ownership registry: each normal cold/warm admission creates its
@@ -1049,6 +1082,15 @@ leases survive until actual read completion, and cancellation occurs after the f
 interest. One ready generation is promoted before individual native publications.
 Source/content/timing/queue rejection affects that subscriber alone.
 
+Current MATERIAL compatible completed-set lookup additionally verifies the
+supported actual producer: Demucs32 or BS28 complete guarded files, bounded
+comparison of loaded host code/bindings with held source, exact captured child
+package roots and a fresh empty bytecode namespace. Actual tools retain their
+image/FileID and exclusive child-returned birth/body witness requirements.
+Unknown historical or unsupported execution stays UNKNOWN. The dependency-version
+and narrow OS runtime policy does not certify neural execution, a hostile/global
+runtime or resource/music acceptance; the MATERIAL report owns the scoped proof.
+
 ProjectAssets retains weak references to the five aligned PCM allocations and sealed
 artifact handles under its existing bounded reader gate. A compatible subscriber
 reuses actual retained PCM, then binds its own current source/window, publication
@@ -1061,8 +1103,9 @@ exact existing stem lease under the same gate and captured directory identity,
 without another capacity-dependent owner allocation. Missing, replaced or reparse
 directories fail closed. No callback file handles or I/O are introduced.
 
-These bounded storage/control changes do not implement CopySnapshot/GUI operations,
-mass migration, persistent aligned stem-f32 caches or the later resource/preload gates.
+The earlier R0 storage/control foundation does not itself prove CopySnapshot/GUI
+operations, mass migration, persistent aligned stem-f32 caches or later resource/preload gates;
+current MATERIAL/storage evidence is tracked separately at its actual bounded scope.
 Copy adds equal immutable refs and fresh stopped content/native ACK, not analysis/
 decode/separation/files. New versions keep old users; current/old voices, jobs,
 subscribers, actions/holds/history/native unload ACK participate in true last use.

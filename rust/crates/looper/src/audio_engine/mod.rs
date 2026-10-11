@@ -89,10 +89,12 @@ pub use material_migration_control::{
     MaterialMigrationHold, MaterialMigrationJournalStore, MaterialMigrationPreparation,
     MaterialMigrationSourceTicket, MaterialMigrationStemPreparation,
 };
-pub use material_paths::resolve_project_asset;
+pub use material_paths::{resolve_project_asset, resolve_project_asset_details};
+mod processing_files;
 use prepared_source::{
     enqueue_current_prepared_stems_with_owner, next_epoch, validate_prepared_ticket,
 };
+pub use processing_files::SealedProcessingFiles;
 pub use project_assets::ProjectAssetLease;
 pub(crate) mod rubberband_backend;
 mod sample_loader;
@@ -1322,6 +1324,31 @@ impl AudioEngine {
         true
     }
 
+    #[pyo3(signature = (sample_id, material_creation_json, config_reference, instance_id, inventory, journal_json=None))]
+    pub fn restore_material_creation(
+        &self,
+        py: Python<'_>,
+        sample_id: usize,
+        material_creation_json: String,
+        config_reference: String,
+        instance_id: String,
+        inventory: &MigrationInventoryLease,
+        journal_json: Option<String>,
+    ) -> PyResult<()> {
+        py.detach(|| {
+            material_migration_recovery::restore_current_material_creation(
+                self,
+                sample_id,
+                &material_creation_json,
+                &config_reference,
+                &instance_id,
+                inventory,
+                journal_json.as_deref(),
+            )
+        })
+        .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
     pub fn prepare_material_migration(
         &self,
         source: String,
@@ -1492,9 +1519,10 @@ impl AudioEngine {
             .cold_leases
             .lock()
             .map_err(|_| PyRuntimeError::new_err("cold lease lock poisoned"))?;
-        leases[id].as_ref().map(|lease| serde_json::to_string(&serde_json::json!({"identity":lease.manifest.identity,"decoder_identity":lease.manifest.decoder_identity,"descriptor":lease.manifest.descriptor,"cache_path":lease.cache_path,"original_path":lease.original_path,"material_id":lease.material_id,"integrity":{
+        leases[id].as_ref().map(|lease| serde_json::to_string(&serde_json::json!({"identity":lease.manifest.identity,"decoder_identity":lease.manifest.decoder_identity,"descriptor":lease.manifest.descriptor,"cache_path":lease.cache_path,"original_path":lease.original_path,"material_id":lease.material_id,"material_creation":lease.material_creation_receipt(),"integrity":{
             "warm":lease.integrity.warm,
             "source_copied_bytes":lease.integrity.source_copied_bytes,
+            "incoming_verify_bytes":lease.integrity.incoming_verify_bytes,
             "snapshot_verify_bytes":lease.integrity.snapshot_verify_bytes,
             "original_copied_bytes":lease.integrity.original_copied_bytes,
             "original_verify_bytes":lease.integrity.original_verify_bytes,
@@ -1503,6 +1531,7 @@ impl AudioEngine {
             "manifest_verify_bytes":lease.integrity.manifest_verify_bytes,
             "playback_read_bytes":lease.integrity.playback_read_bytes,
             "assignment_copy_bytes":lease.integrity.assignment_copy_bytes,
+            "stream_scratch_reserved_bytes":lease.integrity.stream_scratch_reserved_bytes,
             "warm_validation_wall_nanos":lease.integrity.wall_nanos,
             "warm_validation_cpu_nanos":lease.integrity.cpu_nanos,
         }})).map_err(|error| PyRuntimeError::new_err(error.to_string()))).transpose()

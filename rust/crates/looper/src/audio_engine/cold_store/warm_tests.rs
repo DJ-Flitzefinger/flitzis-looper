@@ -279,13 +279,11 @@ fn fresh_warm_leases_verify_full_content_and_share_pcm_at_all_device_rates() {
                 );
                 assert!(second.integrity.manifest_verify_bytes > 0);
                 assert_eq!(second.integrity.playback_read_bytes, 0);
+                assert_eq!(second.integrity.source_copied_bytes, 0);
+                assert_eq!(second.integrity.snapshot_verify_bytes, 0);
                 assert_eq!(
-                    second.integrity.source_copied_bytes,
+                    second.integrity.incoming_verify_bytes,
                     fs::metadata(&fixture.source).unwrap().len()
-                );
-                assert_eq!(
-                    second.integrity.snapshot_verify_bytes,
-                    second.integrity.source_copied_bytes
                 );
                 assert_eq!(
                     second.integrity.original_copied_bytes, 0,
@@ -293,7 +291,7 @@ fn fresh_warm_leases_verify_full_content_and_share_pcm_at_all_device_rates() {
                 );
                 assert_eq!(
                     second.integrity.original_verify_bytes,
-                    second.integrity.source_copied_bytes
+                    fs::metadata(&fixture.source).unwrap().len()
                 );
                 assert!(second.integrity.wall_nanos > 0);
                 assert!(second.integrity.cpu_nanos.is_some());
@@ -306,6 +304,113 @@ fn fresh_warm_leases_verify_full_content_and_share_pcm_at_all_device_rates() {
             }
         }
     }
+}
+
+#[test]
+fn different_name_and_extension_hit_keeps_first_leaf_and_copies_or_decodes_nothing() {
+    let fixture = Fixture::new(44_100, 2);
+    let (cold, first) = fixture.cold(48_000, 2);
+    let incoming = fixture.source.with_file_name("Renamed 東京.flac");
+    fs::copy(&fixture.source, &incoming).unwrap();
+    let before: Vec<_> = fs::read_dir(first.original_path.parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    let (warm, second) = fixture.warm(&incoming, true, 48_000, 2);
+    assert_eq!(first.original_path, second.original_path);
+    assert_eq!(first.cache_path, second.cache_path);
+    assert!(Arc::ptr_eq(&cold.samples, &warm.samples));
+    assert_eq!(second.integrity.source_copied_bytes, 0);
+    assert_eq!(second.integrity.snapshot_verify_bytes, 0);
+    assert_eq!(second.integrity.original_copied_bytes, 0);
+    assert_eq!(
+        second.integrity.incoming_verify_bytes,
+        fs::metadata(&incoming).unwrap().len()
+    );
+    assert_eq!(
+        second.integrity.original_verify_bytes,
+        fs::metadata(&incoming).unwrap().len()
+    );
+    assert!(
+        second.integrity.decoder_verify_bytes > 0 && second.integrity.playback_verify_bytes > 0
+    );
+    assert!(
+        !first
+            .original_path
+            .parent()
+            .unwrap()
+            .join("Renamed 東京.flac")
+            .exists()
+    );
+    let after: Vec<_> = fs::read_dir(first.original_path.parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(before, after);
+    // The productive warm branch above has no decoder/inference fallback and returns actual shared PCM.
+    drop((cold, warm, first, second));
+    let (_, reopened) = fixture.warm(&incoming, true, 48_000, 2);
+    assert_eq!(reopened.original_path.file_name().unwrap(), "external.wav");
+    assert_eq!(reopened.integrity.original_copied_bytes, 0);
+}
+
+#[test]
+fn concurrent_different_names_claim_one_verified_root_before_preparation() {
+    let fixture = Fixture::new(48_000, 1);
+    let peer = fixture.source.with_file_name("Peer.wav");
+    fs::copy(&fixture.source, &peer).unwrap();
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let results = std::thread::scope(|scope| {
+        let jobs: Vec<_> = [&fixture.source, &peer]
+            .into_iter()
+            .map(|source| {
+                let barrier = barrier.clone();
+                let fixture = &fixture;
+                scope.spawn(move || {
+                    barrier.wait();
+                    let mut transaction =
+                        ColdTransaction::capture(&fixture.samples, source, true, &|| false)
+                            .unwrap();
+                    let _gate = transaction.preparation_gate(48_000, 2, &|| false).unwrap();
+                    if let Some(sample) = transaction
+                        .try_reuse(48_000, 2, PCM_LIMIT_BYTES, &|| false)
+                        .unwrap()
+                    {
+                        transaction.commit(&|| false).unwrap();
+                        transaction.bind_pcm(&sample.samples);
+                        (sample, transaction.into_lease())
+                    } else {
+                        fixture.finish_cold(transaction, 48_000, 2)
+                    }
+                })
+            })
+            .collect();
+        jobs.into_iter()
+            .map(|job| job.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(results[0].1.original_path, results[1].1.original_path);
+    assert_eq!(results[0].1.cache_path, results[1].1.cache_path);
+    assert!(Arc::ptr_eq(&results[0].0.samples, &results[1].0.samples));
+    assert_eq!(
+        results
+            .iter()
+            .filter(|(_, lease)| lease.integrity.warm)
+            .count(),
+        1
+    );
+    assert_eq!(
+        results
+            .iter()
+            .map(|(_, lease)| lease.integrity.original_copied_bytes)
+            .sum::<u64>(),
+        fs::metadata(&peer).unwrap().len()
+    );
+    assert!(
+        results
+            .iter()
+            .all(|(_, lease)| lease.integrity.source_copied_bytes == 0)
+    );
 }
 
 #[test]
@@ -417,17 +522,16 @@ fn device_change_and_changed_actual_original_cannot_reuse_old_pcm() {
 }
 
 #[test]
-fn warm_external_aba_after_capture_keeps_snapshot_and_project_original_identity() {
+fn warm_external_aba_is_excluded_by_held_source_and_canonical_readers() {
     let fixture = Fixture::new(44_100, 2);
     let (sample, lease) = fixture.cold(48_000, 2);
     let original = fs::read(&fixture.source).unwrap();
     let mut transaction =
         ColdTransaction::capture(&fixture.samples, &fixture.source, true, &|| false).unwrap();
     let backup = fixture.source.with_extension("aba");
-    fs::rename(&fixture.source, &backup).unwrap();
-    fs::write(&fixture.source, b"different source").unwrap();
-    fs::remove_file(&fixture.source).unwrap();
-    fs::rename(&backup, &fixture.source).unwrap();
+    assert!(fs::rename(&fixture.source, &backup).is_err());
+    assert!(fs::write(&fixture.source, b"different source").is_err());
+    assert!(fs::remove_file(&fixture.source).is_err());
     let _gate = transaction.preparation_gate(48_000, 2, &|| false).unwrap();
     let warm = transaction
         .try_reuse(48_000, 2, PCM_LIMIT_BYTES, &|| false)
@@ -435,6 +539,8 @@ fn warm_external_aba_after_capture_keeps_snapshot_and_project_original_identity(
         .unwrap();
     assert!(Arc::ptr_eq(&sample.samples, &warm.samples));
     transaction.commit(&|| false).unwrap();
+    fs::rename(&fixture.source, &backup).unwrap();
+    fs::rename(&backup, &fixture.source).unwrap();
     let new_lease = transaction.into_lease();
     assert_eq!(fs::read(&new_lease.original_path).unwrap(), original);
     assert_eq!(lease.manifest.identity, new_lease.manifest.identity);
@@ -446,17 +552,19 @@ fn canceled_subscriber_does_not_cancel_digest_producer_or_shared_cache() {
     let first =
         ColdTransaction::capture(&fixture.samples, &fixture.source, true, &|| false).unwrap();
     let gate = first.preparation_gate(48_000, 2, &|| false).unwrap();
-    let second =
-        ColdTransaction::capture(&fixture.samples, &fixture.source, true, &|| false).unwrap();
     let canceled = Arc::new(AtomicBool::new(false));
     let flag = canceled.clone();
+    let samples = fixture.samples.clone();
+    let source = fixture.source.clone();
+    let (waiting_tx, waiting_rx) = std::sync::mpsc::channel();
     let follower = std::thread::spawn(move || {
-        second
-            .preparation_gate(48_000, 2, &|| flag.load(Ordering::Acquire))
+        material::observe_contention_for_test(move || waiting_tx.send(()).unwrap());
+        ColdTransaction::capture(&samples, &source, true, &|| flag.load(Ordering::Acquire))
             .err()
             .unwrap()
             .kind()
     });
+    waiting_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     canceled.store(true, Ordering::Release);
     assert_eq!(follower.join().unwrap(), io::ErrorKind::Interrupted);
     let (sample, lease) = fixture.finish_cold(first, 48_000, 2);
@@ -585,15 +693,44 @@ fn original_owner_admission_cancels_rollback_before_last_immutable_reader_closes
 }
 
 #[test]
-fn exclusive_rollback_retries_until_external_snapshot_reader_retires() {
+fn rejected_created_material_retires_only_after_last_native_and_actual_marker_reader_return() {
+    let fixture = Fixture::new(44_100, 1);
+    let (sample, lease) = fixture.cold(48_000, 2);
+    let original = lease.original_path.clone();
+    let cache = lease.cache_path.clone();
+    let root = original.parent().unwrap().to_owned();
+    let held_native = lease.clone();
+    let held_marker = sealed_reader(&root.join(".material.json")).unwrap();
+    lease.rollback_unadopted_original();
+    lease.retire_cache();
+    drop((sample, lease));
+    std::thread::sleep(Duration::from_millis(75));
+    assert!(original.exists());
+    assert!(cache.join("playback.f32le").exists());
+    assert!(root.join(".material.json").exists());
+    drop(held_native);
+    wait_absent(&original);
+    wait_absent(&cache);
+    assert!(
+        root.join(".material.json").exists(),
+        "physical marker reader still excludes cleanup"
+    );
+    drop(held_marker);
+    wait_absent(&root);
+    assert!(fixture.source.exists());
+}
+
+#[test]
+fn exclusive_rollback_retries_until_actual_staging_reader_retires_without_snapshot_copy() {
     let fixture = Fixture::new(44_100, 1);
     let transaction =
         ColdTransaction::capture(&fixture.samples, &fixture.source, true, &|| false).unwrap();
     let stage = transaction.staging.as_ref().unwrap().clone();
-    let reader = transaction.snapshot_file().unwrap();
+    let reader = sealed_reader(&stage.join("owner.json")).unwrap();
+    assert!(!stage.join("snapshot.original").exists());
     drop(transaction);
     std::thread::sleep(Duration::from_millis(75));
-    assert!(stage.join("snapshot.original").exists());
+    assert!(stage.join("owner.json").exists());
     drop(reader);
     wait_absent(&stage);
     assert!(fixture.source.exists());
@@ -639,7 +776,8 @@ fn recognized_dead_crash_staging_recovers_while_live_unknown_and_private_files_s
     let current_path = live.staging.as_ref().unwrap().clone();
     staging::recover(&root).unwrap();
     assert!(!dead.exists());
-    assert!(current_path.join("snapshot.original").exists());
+    assert!(current_path.join("owner.json").exists());
+    assert!(!current_path.join("snapshot.original").exists());
     assert_eq!(
         fs::read(unknown.join("private.reference")).unwrap(),
         b"keep"

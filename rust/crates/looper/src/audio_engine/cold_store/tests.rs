@@ -71,7 +71,7 @@ mod windows {
 
         fn entries(&self) -> Vec<PathBuf> {
             let mut roots = vec![self.samples.join(".pcm-cache/v1")];
-            if let Ok(materials) = fs::read_dir(self.samples.join("materials")) {
+            if let Ok(materials) = fs::read_dir(&self.samples) {
                 roots.extend(materials.map(|entry| entry.unwrap().path().join(".pcm-cache/v1")));
             }
             roots
@@ -94,11 +94,7 @@ mod windows {
         let cache = transaction.commit(&|| false).unwrap();
         let lease = transaction.into_lease();
         let digest = format!("{:x}", Sha256::digest(&fixture.bytes));
-        let id = format!(
-            "{:x}",
-            Sha256::digest(format!("{digest}|Mélodie 東京.flac").as_bytes())
-        )[..32]
-            .to_owned();
+        let id = digest[..32].to_owned();
         assert_eq!(lease.material_id.as_deref(), Some(id.as_str()));
         assert_eq!(
             lease.original_path.file_name().unwrap(),
@@ -114,13 +110,7 @@ mod windows {
         );
         assert_eq!(
             cache.parent().unwrap(),
-            lease
-                .original_path
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .join(".pcm-cache/v1")
+            lease.original_path.parent().unwrap().join(".pcm-cache/v1")
         );
         let restored =
             ColdTransaction::capture(&fixture.samples, &lease.original_path, false, &|| false)
@@ -159,20 +149,65 @@ mod windows {
     }
 
     #[test]
-    fn occupied_unbound_material_id_never_adopts_or_overwrites_unknown_binding() {
+    fn actual_windows_long_paths_keep_exact_unicode_source_leaf_with_bounded_readable_directory() {
+        let fixture = Fixture::new();
+        let leaf = format!("{}.flac", "Mélodie東京".repeat(20));
+        let source = fs::canonicalize(fixture.source.parent().unwrap())
+            .unwrap()
+            .join(&leaf);
+        fs::rename(&fixture.source, &source).unwrap();
+        let mut deep = fs::canonicalize(fixture._temp.path()).unwrap();
+        for index in 0..3 {
+            deep = deep.join(format!("project_{index}_{}", "x".repeat(80)));
+            fs::create_dir(&deep).unwrap();
+        }
+        let samples = deep.join("samples");
+        let mut transaction = ColdTransaction::capture(&samples, &source, true, &|| false).unwrap();
+        artifacts(&mut transaction);
+        transaction.commit(&|| false).unwrap();
+        let lease = transaction.into_lease();
+        assert_eq!(
+            lease.original_path.file_name().unwrap().to_str().unwrap(),
+            leaf
+        );
+        assert!(lease.original_path.to_string_lossy().len() > 260);
+        assert!(
+            lease
+                .original_path
+                .parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .encode_utf16()
+                .count()
+                <= 96
+        );
+        assert_eq!(fs::read(&lease.original_path).unwrap(), fixture.bytes);
+        assert!(lease.original_path.parent().unwrap().join("stems").is_dir());
+        assert!(
+            OpenOptions::new()
+                .write(true)
+                .open(lease.original_path.parent().unwrap().join(".material.json"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn occupied_unbound_readable_root_never_adopts_or_overwrites_unknown_binding() {
         let fixture = Fixture::new();
         let digest = format!("{:x}", Sha256::digest(&fixture.bytes));
-        let id = format!(
-            "{:x}",
-            Sha256::digest(format!("{digest}|loop.wav").as_bytes())
-        )[..32]
-            .to_owned();
-        let occupied = fixture.samples.join("materials").join(format!("M{id}"));
+        let occupied = fixture.samples.join("loop.wav");
         fs::create_dir_all(occupied.join("original")).unwrap();
         fs::write(occupied.join("original/Other.wav"), b"unknown material").unwrap();
         fs::write(occupied.join("private.keep"), b"preserved").unwrap();
         let transaction = fixture.capture(true);
-        assert_ne!(transaction.material_id.as_deref(), Some(id.as_str()));
+        assert_eq!(transaction.material_id.as_deref(), Some(&digest[..32]));
+        assert_ne!(
+            transaction.original_root,
+            fs::canonicalize(&occupied).unwrap()
+        );
         assert_eq!(
             fs::read(occupied.join("original/Other.wav")).unwrap(),
             b"unknown material"
@@ -182,6 +217,415 @@ mod windows {
             b"preserved"
         );
         assert!(!occupied.join("original/loop.wav").exists());
+    }
+
+    #[test]
+    fn windows_case_collision_and_full_sha_prefix_extension_preserve_unknown_roots() {
+        let fixture = Fixture::new();
+        let digest = format!("{:x}", Sha256::digest(&fixture.bytes));
+        fs::create_dir_all(fixture.samples.join("LOOP.WAV")).unwrap();
+        fs::write(
+            fixture.samples.join("LOOP.WAV/private.keep"),
+            b"case neighbor",
+        )
+        .unwrap();
+        let short = fixture.samples.join(format!("loop.wav~{}", &digest[..12]));
+        fs::create_dir(&short).unwrap();
+        fs::write(short.join("private.keep"), b"prefix neighbor").unwrap();
+        let mut transaction = fixture.capture(true);
+        assert_eq!(
+            transaction
+                .original_root
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            format!("loop.wav~{}", &digest[..16])
+        );
+        artifacts(&mut transaction);
+        transaction.commit(&|| false).unwrap();
+        let lease = transaction.into_lease();
+        assert_eq!(lease.original_path.file_name().unwrap(), "loop.wav");
+        assert_eq!(
+            fs::read(fixture.samples.join("LOOP.WAV/private.keep")).unwrap(),
+            b"case neighbor"
+        );
+        assert_eq!(
+            fs::read(short.join("private.keep")).unwrap(),
+            b"prefix neighbor"
+        );
+    }
+
+    #[test]
+    fn same_name_same_size_different_full_content_receives_distinct_safe_root() {
+        let fixture = Fixture::new();
+        let mut first = fixture.capture(true);
+        artifacts(&mut first);
+        first.commit(&|| false).unwrap();
+        let first = first.into_lease();
+        let mut changed = fixture.bytes.clone();
+        *changed.last_mut().unwrap() ^= 1;
+        fs::write(&fixture.source, &changed).unwrap();
+        let mut second = fixture.capture(true);
+        assert_ne!(second.material_id, first.material_id);
+        artifacts(&mut second);
+        second.commit(&|| false).unwrap();
+        let second = second.into_lease();
+        assert_ne!(first.original_path.parent(), second.original_path.parent());
+        assert_eq!(fs::read(&first.original_path).unwrap(), fixture.bytes);
+        assert_eq!(fs::read(&second.original_path).unwrap(), changed);
+    }
+
+    #[test]
+    fn readable_canonical_source_late_corruption_or_extra_eof_is_never_reused() {
+        for extra in [false, true] {
+            let fixture = Fixture::new();
+            let mut first = fixture.capture(true);
+            artifacts(&mut first);
+            first.commit(&|| false).unwrap();
+            let first = first.into_lease();
+            let old_path = first.original_path.clone();
+            drop(first);
+            let mut damaged = fixture.bytes.clone();
+            if extra {
+                damaged.push(0);
+            } else {
+                *damaged.last_mut().unwrap() ^= 1;
+            }
+            fs::write(&old_path, &damaged).unwrap();
+            let second = fixture.capture(true);
+            assert_ne!(second.original_path, old_path);
+            assert_eq!(fs::read(&old_path).unwrap(), damaged);
+            assert_eq!(second.integrity.original_copied_bytes, 0);
+            drop(second);
+        }
+    }
+
+    #[test]
+    fn final_unowned_readable_root_prunes_scaffolding_but_preserves_unreceipted_binding() {
+        let fixture = Fixture::new();
+        let mut transaction = fixture.capture(true);
+        artifacts(&mut transaction);
+        transaction.commit(&|| false).unwrap();
+        let lease = transaction.into_lease();
+        let original = lease.original_path.clone();
+        let cache = lease.cache_path.clone();
+        let root = original.parent().unwrap().to_owned();
+        fs::create_dir_all(root.join(".pcm-cache/stems/v1/.pairs")).unwrap();
+        let private = root.join("private.keep");
+        fs::write(&private, b"unknown root neighbor").unwrap();
+        drop(lease);
+        for leaf in ["decoder.f32le", "playback.f32le", "manifest.json"] {
+            fs::remove_file(cache.join(leaf)).unwrap();
+        }
+        fs::remove_dir(&cache).unwrap();
+        fs::remove_file(&original).unwrap();
+        let assets = super::super::super::project_assets::ProjectAssets::shared();
+        assets.prune_material_if_unowned(&original);
+        assert_eq!(fs::read(&private).unwrap(), b"unknown root neighbor");
+        assert!(root.join(".material.json").exists());
+        assert!(!root.join(".pcm-cache").exists());
+        fs::remove_file(&private).unwrap();
+        let binding = root.join(".material.json");
+        let mut changed: serde_json::Value =
+            serde_json::from_slice(&fs::read(&binding).unwrap()).unwrap();
+        changed["sha256"] = serde_json::Value::String("f".repeat(64));
+        let changed = serde_json::to_vec(&changed).unwrap();
+        fs::write(&binding, &changed).unwrap();
+        assets.prune_material_if_unowned(&original);
+        assert_eq!(fs::read(&binding).unwrap(), changed);
+        assert!(root.exists());
+        assert_eq!(fs::read(&fixture.source).unwrap(), fixture.bytes);
+    }
+
+    fn deny_material_replacement(root: &Path) {
+        use std::os::windows::fs::OpenOptionsExt;
+        let error = fs::rename(root, root.with_file_name("replaced-root")).unwrap_err();
+        assert!(matches!(error.raw_os_error(), Some(5 | 32 | 33)), "{error}");
+        // Reparse mutation needs a writable directory handle; the retained
+        // root excludes it even at birth when the directory is still empty.
+        let error = OpenOptions::new()
+            .write(true)
+            .share_mode(3)
+            .custom_flags(0x0200_0000 | 0x0020_0000)
+            .open(root)
+            .unwrap_err();
+        assert!(matches!(error.raw_os_error(), Some(5 | 32 | 33)), "{error}");
+    }
+
+    fn writable_directory_control(root: &Path) {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Same real open flags, successful without guards: an invalid request or
+        // ACL failure must not masquerade as canonical reparse-write exclusion.
+        drop(
+            OpenOptions::new()
+                .write(true)
+                .share_mode(3)
+                .custom_flags(0x0200_0000 | 0x0020_0000)
+                .open(root)
+                .unwrap(),
+        );
+    }
+
+    #[test]
+    fn actual_birth_handle_denies_empty_root_replacement_before_setup() {
+        let fixture = Fixture::new();
+        let unheld = fixture._temp.path().join("unheld-root");
+        fs::create_dir(&unheld).unwrap();
+        writable_directory_control(&unheld);
+        let observed = Arc::new(AtomicBool::new(false));
+        let notified = observed.clone();
+        material::observe_birth_for_test(move |root| {
+            assert_eq!(fs::read_dir(root).unwrap().count(), 0);
+            deny_material_replacement(root);
+            let identity = super::super::super::project_assets::capture_identity(root)
+                .unwrap()
+                .unwrap();
+            assert!(
+                super::super::super::project_assets::remove_empty_directory(root, &identity)
+                    .is_err()
+            );
+            notified.store(true, Ordering::Release);
+        });
+        let transaction = fixture.capture(true);
+        assert!(observed.load(Ordering::Acquire));
+        let root = transaction.original_root.clone();
+        drop(transaction);
+        assert!(
+            !root.exists(),
+            "our unchanged empty creation must roll back"
+        );
+        assert_eq!(fs::read(&fixture.source).unwrap(), fixture.bytes);
+    }
+
+    #[test]
+    fn selected_canonical_root_keeps_guards_before_transaction_handover() {
+        let fixture = Fixture::new();
+        let mut transaction = fixture.capture(true);
+        artifacts(&mut transaction);
+        transaction.commit(&|| false).unwrap();
+        let lease = transaction.into_lease();
+        let original = lease.original_path.clone();
+        drop(lease); // No old canonical directory handles mask the selection seam.
+        let observed = Arc::new(AtomicBool::new(false));
+        let notified = observed.clone();
+        material::observe_selection_for_test(move |root| {
+            deny_material_replacement(root);
+            let parent = root.parent().unwrap();
+            assert!(fs::rename(parent, parent.with_file_name("samples-replaced")).is_err());
+            notified.store(true, Ordering::Release);
+        });
+        let follower = fixture.capture(true);
+        assert!(observed.load(Ordering::Acquire));
+        assert_eq!(follower.original_path, original);
+        assert_eq!(
+            follower.integrity.original_verify_bytes,
+            fixture.bytes.len() as u64
+        );
+        assert_eq!(follower.integrity.source_copied_bytes, 0);
+        drop(follower);
+        writable_directory_control(original.parent().unwrap());
+        assert_eq!(fs::read(&original).unwrap(), fixture.bytes);
+    }
+
+    #[test]
+    fn content_claim_namespace_stays_guarded_until_canonical_commit() {
+        let fixture = Fixture::new();
+        let mut transaction = fixture.capture(true);
+        let claims = fixture.samples.join(".material-claims");
+        let renamed = fixture.samples.join("claims-renamed");
+        assert!(fs::rename(&claims, &renamed).is_err());
+        artifacts(&mut transaction);
+        transaction.commit(&|| false).unwrap();
+        fs::rename(&claims, &renamed).unwrap();
+        fs::rename(&renamed, &claims).unwrap();
+        drop(transaction.into_lease());
+    }
+
+    #[test]
+    fn cancelled_distinct_inputs_cannot_grow_durable_claim_namespace_beyond_fixed_shards() {
+        let fixture = Fixture::new();
+        for value in 0_u64..300 {
+            fs::write(&fixture.source, value.to_le_bytes()).unwrap();
+            let mut transaction = fixture.capture(true);
+            assert_eq!(
+                transaction.commit(&|| true).unwrap_err().kind(),
+                io::ErrorKind::Interrupted
+            );
+            drop(transaction);
+        }
+        let entries = fs::read_dir(fixture.samples.join(".material-claims"))
+            .unwrap()
+            .collect::<io::Result<Vec<_>>>()
+            .unwrap();
+        assert!(
+            entries.len() <= 256,
+            "cancelled digests must not leave unbounded claim files"
+        );
+        for entry in entries {
+            assert!(entry.metadata().unwrap().is_file());
+            assert_eq!(entry.metadata().unwrap().len(), 0);
+        }
+        assert!(
+            fs::read_dir(&fixture.samples)
+                .unwrap()
+                .all(|entry| entry.unwrap().file_name() == ".material-claims")
+        );
+    }
+
+    #[test]
+    fn foreign_original_appearing_after_actual_root_birth_is_never_adopted() {
+        let fixture = Fixture::new();
+        let bytes = fixture.bytes.clone();
+        material::observe_birth_for_test(move |root| {
+            fs::write(root.join("loop.wav"), bytes).unwrap();
+        });
+        let mut transaction = fixture.capture(true);
+        let original = transaction.original_path.clone();
+        let root = transaction.original_root.clone();
+        artifacts(&mut transaction);
+        assert_eq!(
+            transaction.commit(&|| false).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        drop(transaction);
+        assert_eq!(fs::read(original).unwrap(), fixture.bytes);
+        assert!(!root.join(".material.json").exists());
+        assert!(root.exists());
+    }
+
+    fn remove_test_artifacts(original: &Path, cache: &Path) {
+        for leaf in ["decoder.f32le", "playback.f32le", "manifest.json"] {
+            fs::remove_file(cache.join(leaf)).unwrap();
+        }
+        fs::remove_dir(cache).unwrap();
+        fs::remove_file(original).unwrap();
+    }
+
+    #[test]
+    fn unchanged_created_binding_root_cleanup_preserves_unknown_neighbor_until_removed() {
+        let fixture = Fixture::new();
+        let mut transaction = fixture.capture(true);
+        artifacts(&mut transaction);
+        transaction.commit(&|| false).unwrap();
+        let lease = transaction.into_lease();
+        let original = lease.original_path.clone();
+        let cache = lease.cache_path.clone();
+        let root = original.parent().unwrap().to_owned();
+        let receipt = lease.material_creation_receipt().unwrap();
+        assert_eq!(
+            receipt.root_identity,
+            super::super::super::project_assets::capture_identity(&root)
+                .unwrap()
+                .unwrap()
+        );
+        let private = root.join("private.keep");
+        fs::write(&private, b"unknown root neighbor").unwrap();
+        drop(lease);
+        remove_test_artifacts(&original, &cache);
+        let assets = super::super::super::project_assets::ProjectAssets::shared();
+        assets.prune_material_if_unowned(&original);
+        assert_eq!(fs::read(&private).unwrap(), b"unknown root neighbor");
+        assert!(root.join(".material.json").exists());
+        fs::remove_file(private).unwrap();
+        assets.prune_material_if_unowned(&original);
+        assert!(!root.exists());
+        assert_eq!(fs::read(&fixture.source).unwrap(), fixture.bytes);
+    }
+
+    #[test]
+    fn own_marker_or_root_replacement_with_identical_valid_bytes_never_inherits_receipt() {
+        for replace_root in [false, true] {
+            let fixture = Fixture::new();
+            let mut transaction = fixture.capture(true);
+            artifacts(&mut transaction);
+            transaction.commit(&|| false).unwrap();
+            let lease = transaction.into_lease();
+            let original = lease.original_path.clone();
+            let cache = lease.cache_path.clone();
+            let root = original.parent().unwrap().to_owned();
+            let marker = root.join(".material.json");
+            let bytes = fs::read(&marker).unwrap();
+            drop(lease);
+            remove_test_artifacts(&original, &cache);
+            if replace_root {
+                fs::rename(&root, root.with_file_name("old-root")).unwrap();
+                fs::create_dir(&root).unwrap();
+                fs::create_dir(root.join("stems")).unwrap();
+            } else {
+                fs::rename(&marker, fixture._temp.path().join("old-marker.json")).unwrap();
+            }
+            fs::write(&marker, &bytes).unwrap();
+            super::super::super::project_assets::ProjectAssets::shared()
+                .prune_material_if_unowned(&original);
+            assert_eq!(fs::read(marker).unwrap(), bytes);
+            assert!(root.exists());
+            if replace_root {
+                assert!(root.join("stems").exists());
+            }
+        }
+    }
+
+    #[test]
+    fn parsed_valid_restored_binding_has_no_creation_cleanup_rights() {
+        let fixture = Fixture::new();
+        let root = fixture.samples.join("restored-readable");
+        fs::create_dir_all(&root).unwrap();
+        let binding = super::super::super::material_paths::MaterialBinding {
+            schema_version: 1,
+            sha256: format!("{:x}", Sha256::digest(&fixture.bytes)),
+            bytes: fixture.bytes.len() as u64,
+            original_leaf: "loop.wav".to_owned(),
+        };
+        let marker = serde_json::to_vec(&binding).unwrap();
+        fs::write(root.join(".material.json"), &marker).unwrap();
+        let original = root.join("loop.wav");
+        fs::write(&original, &fixture.bytes).unwrap();
+        let mut transaction =
+            ColdTransaction::capture(&fixture.samples, &original, false, &|| false).unwrap();
+        artifacts(&mut transaction);
+        transaction.commit(&|| false).unwrap();
+        let lease = transaction.into_lease();
+        assert!(
+            material_creation_receipt(&fixture.samples, &original)
+                .unwrap()
+                .is_none()
+        );
+        let cache = lease.cache_path.clone();
+        drop(lease);
+        remove_test_artifacts(&original, &cache);
+        super::super::super::project_assets::ProjectAssets::shared()
+            .prune_material_if_unowned(&original);
+        assert_eq!(fs::read(root.join(".material.json")).unwrap(), marker);
+        assert!(root.exists());
+    }
+
+    #[test]
+    fn cancel_after_real_binding_publication_waits_for_held_marker_before_exact_root_cleanup() {
+        let fixture = Fixture::new();
+        let mut transaction = fixture.capture(true);
+        artifacts(&mut transaction);
+        transaction.create_original(&|| false).unwrap();
+        let original = transaction.original_path.clone();
+        let root = transaction.original_root.clone();
+        let held = sealed_reader(&root.join(".material.json")).unwrap();
+        assert_eq!(
+            transaction.commit(&|| true).unwrap_err().kind(),
+            io::ErrorKind::Interrupted
+        );
+        drop(transaction);
+        assert!(!original.exists());
+        assert!(root.join(".material.json").exists());
+        drop(held);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while root.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !root.exists(),
+            "actual marker reader return must drain own cleanup"
+        );
+        assert_eq!(fs::read(&fixture.source).unwrap(), fixture.bytes);
     }
 
     fn artifacts(transaction: &mut ColdTransaction) -> ColdManifest {
@@ -214,7 +658,7 @@ mod windows {
     }
 
     #[test]
-    fn copy_first_survives_external_replacement_and_aba_byte_exactly() {
+    fn held_source_excludes_external_replacement_and_aba_until_durable_original() {
         let fixture = Fixture::new();
         let mut transaction = fixture.capture(true);
         assert_eq!(transaction.source_bytes(), fixture.bytes.len() as u64);
@@ -222,12 +666,16 @@ mod windows {
             transaction.source_digest(),
             format!("{:x}", Sha256::digest(&fixture.bytes))
         );
-        // Import no longer reads or locks the external path after sealed capture.
+        // No snapshot copy is needed: the original held handle excludes actual ABA.
         let renamed = fixture.source.with_extension("old");
-        fs::rename(&fixture.source, &renamed).unwrap();
-        fs::write(&fixture.source, vec![99_u8; fixture.bytes.len()]).unwrap();
-        fs::remove_file(&fixture.source).unwrap();
-        fs::rename(&renamed, &fixture.source).unwrap();
+        let external = fixture.source.parent().unwrap();
+        let renamed_external = external.with_file_name("external-renamed");
+        assert!(fs::rename(external, &renamed_external).is_err());
+        assert!(fs::rename(&fixture.source, &renamed).is_err());
+        assert!(fs::write(&fixture.source, vec![99_u8; fixture.bytes.len()]).is_err());
+        assert!(fs::remove_file(&fixture.source).is_err());
+        assert_eq!(transaction.integrity.source_copied_bytes, 0);
+        assert!(!transaction.snapshot_path.exists());
         let mut decoded_input = Vec::new();
         transaction
             .snapshot_file()
@@ -237,6 +685,10 @@ mod windows {
         assert_eq!(decoded_input, fixture.bytes);
         artifacts(&mut transaction);
         transaction.commit(&|| false).unwrap();
+        fs::rename(external, &renamed_external).unwrap();
+        fs::rename(&renamed_external, external).unwrap();
+        fs::rename(&fixture.source, &renamed).unwrap();
+        fs::rename(&renamed, &fixture.source).unwrap();
         let original = transaction.original_path().to_owned();
         assert_eq!(fs::read(&original).unwrap(), fixture.bytes);
         let lease = transaction.into_lease();
@@ -300,13 +752,14 @@ mod windows {
     fn sealed_snapshot_and_restored_original_exclude_mutation_replacement_delete() {
         let fixture = Fixture::new();
         let transaction = fixture.capture(false);
-        for path in [&transaction.snapshot_path, &transaction.original_path] {
+        assert!(!transaction.snapshot_path.exists());
+        for path in [&transaction.original_path] {
             assert!(OpenOptions::new().write(true).open(path).is_err());
             assert!(fs::remove_file(path).is_err());
             assert!(fs::rename(path, path.with_extension("replacement")).is_err());
         }
         let mut clone = transaction.snapshot_file().unwrap();
-        assert!(fs::remove_file(&transaction.snapshot_path).is_err());
+        assert!(fs::remove_file(&transaction.original_path).is_err());
         let mut bytes = Vec::new();
         clone.read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, fixture.bytes);
@@ -514,7 +967,11 @@ mod windows {
             assert_eq!(error.kind(), io::ErrorKind::Interrupted);
             drop(transaction);
             assert!(fixture.entries().is_empty());
-            assert_eq!(fs::read_dir(&fixture.samples).unwrap().count(), 1);
+            assert!(
+                fs::read_dir(&fixture.samples)
+                    .unwrap()
+                    .all(|entry| entry.unwrap().file_name() == ".material-claims")
+            );
             assert_eq!(fs::read(&fixture.source).unwrap(), fixture.bytes);
         }
     }
@@ -582,9 +1039,9 @@ mod windows {
                 let barrier = barrier.clone();
                 let fixture = &fixture;
                 jobs.push(scope.spawn(move || {
+                    barrier.wait();
                     let mut transaction = fixture.capture(true);
                     artifacts(&mut transaction);
-                    barrier.wait();
                     transaction.commit(&|| false).unwrap();
                     transaction.into_lease()
                 }));
@@ -593,7 +1050,7 @@ mod windows {
                 .map(|job| job.join().unwrap())
                 .collect::<Vec<_>>()
         });
-        assert_ne!(leases[0].original_path, leases[1].original_path);
+        assert_eq!(leases[0].original_path, leases[1].original_path);
         assert_ne!(leases[0].cache_path, leases[1].cache_path);
         for lease in &leases {
             assert_eq!(fs::read(&lease.original_path).unwrap(), fixture.bytes);
@@ -662,7 +1119,7 @@ mod windows {
                 fixture.samples.clone()
             } else {
                 fs::create_dir(&fixture.samples).unwrap();
-                fixture.samples.join("materials")
+                fixture.samples.join(".material-claims")
             };
             let output = std::process::Command::new("cmd")
                 .args(["/C", "mklink", "/J"])

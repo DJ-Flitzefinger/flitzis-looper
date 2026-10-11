@@ -110,6 +110,11 @@ class _Hold:
     def release(self) -> None:
         self.release_count += 1
 
+    def take(self, ids: list[int]) -> _Hold:
+        assert ids
+        assert len(ids) == len(set(ids))
+        return _Hold()
+
 
 class _SourceTicket:
     def __init__(self, sample_id: int) -> None:
@@ -261,6 +266,10 @@ class _Harness:
 
     def begin(self) -> None:
         self.transaction = self.migration.begin(0)
+        # Real Native sealed IO groups sources off-thread even for control-ticket fakes.
+        assert self.migration._artifact_future is not None
+        self.migration._artifact_future.result(timeout=10)
+        assert self.migration._poll_artifact_capture()
 
     def records(self) -> list[MaterialMigrationJournal]:
         assert self.transaction is not None
@@ -387,6 +396,7 @@ def test_real_json_and_journal_commit_preserves_content_and_current_performer_in
     _assert_saved_preservation(migration, expected, before_ids)
     records = migration.records()
     assert [record.phase for record in records] == [
+        "captured",
         "captured",
         "material_verified",
         "references_prepared",
@@ -870,6 +880,9 @@ def test_startup_reaches_one_legacy_material_after_restore_without_bulk_migratio
     service.poll()
     migration.audio.prepare_material_migration.assert_not_called()
     migration.controller.session.loading_sample_ids.clear()
+    service.poll()
+    assert service._artifact_future is not None
+    service._artifact_future.result(timeout=10)
     service.poll()
     migration.audio.prepare_material_migration.assert_called_once_with(_OLD)
     migration.acknowledge()

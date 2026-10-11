@@ -66,6 +66,8 @@ struct Receipt {
     reference: String,
     identity: FileIdentity,
     files: Vec<VerifiedFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    material_creation: Option<super::cold_store::MaterialCreationReceipt>,
 }
 
 struct SealedArtifact {
@@ -331,7 +333,21 @@ fn verify_pcm_metadata(path: &Path, files: &mut [File], proof: &[VerifiedFile]) 
 
 fn verify_stem_metadata(files: &mut [File], proof: &[VerifiedFile]) -> io::Result<()> {
     let marker = json_file(&mut files[5])?;
-    exact_keys(&marker, &["schema", "source_version", "stems"])?;
+    super::material_migration_stems::validate_generation_provenance(&marker).map_err(invalid)?;
+    if marker.get("generation_fingerprint").is_some() {
+        exact_keys(
+            &marker,
+            &[
+                "schema",
+                "source_version",
+                "stems",
+                "generation_fingerprint",
+                "producer_identity",
+            ],
+        )?;
+    } else {
+        exact_keys(&marker, &["schema", "source_version", "stems"])?;
+    }
     let source = marker["source_version"]
         .as_str()
         .ok_or_else(|| invalid("stem source version missing"))?;
@@ -462,6 +478,7 @@ fn seal_artifact(root: &Path, reference: &Path) -> io::Result<SealedArtifact> {
         reference: persisted_reference(&root, &path)?,
         identity,
         files: proof,
+        material_creation: None,
     };
     Ok(SealedArtifact {
         receipt,
@@ -492,7 +509,83 @@ fn parse_receipt(encoded: &str) -> io::Result<Receipt> {
     {
         return Err(invalid("invalid bounded artifact receipt"));
     }
+    if receipt.material_creation.is_some() && receipt.kind != ArtifactKind::Original {
+        return Err(invalid(
+            "material birth evidence belongs only to its original",
+        ));
+    }
     Ok(receipt)
+}
+
+fn attach_material_creation(
+    sealed: &mut SealedArtifact,
+    creation: Option<super::cold_store::MaterialCreationReceipt>,
+) -> io::Result<()> {
+    if let Some(creation) = creation {
+        if sealed.receipt.kind != ArtifactKind::Original || sealed.receipt.files.len() != 1 {
+            return Err(invalid(
+                "material birth evidence has no exact original witness",
+            ));
+        }
+        sealed
+            ._guards
+            .extend(super::cold_store::verify_material_creation(
+                &sealed.root,
+                &sealed.path,
+                &creation,
+                &sealed.receipt.files[0],
+            )?);
+        sealed.receipt.material_creation = Some(creation);
+    }
+    Ok(())
+}
+
+fn historical_created_target(root: &Path, config: &Path, receipt: &Receipt) -> io::Result<bool> {
+    let expected = serde_json::to_value(receipt).map_err(io::Error::other)?;
+    for encoded in super::material_migration_journal::MaterialMigrationJournalStore::scan(
+        root.to_string_lossy().into(),
+    )
+    .map_err(|error| invalid(error.to_string()))?
+    {
+        let status: Value = serde_json::from_str(&encoded).map_err(io::Error::other)?;
+        if !status["error"].is_null() {
+            return Err(invalid("unknown migration birth inventory; preserved"));
+        }
+        let Some(record) = status["record"].as_str() else {
+            continue;
+        };
+        let latest: Value = serde_json::from_str(record).map_err(io::Error::other)?;
+        if !latest["config_reference"]
+            .as_str()
+            .is_some_and(|raw| same_config_reference(config, raw))
+        {
+            continue;
+        }
+        let transaction = status["transaction_id"]
+            .as_str()
+            .ok_or_else(|| invalid("historical creation transaction missing"))?;
+        let store = super::material_migration_journal::MaterialMigrationJournalStore::open(
+            root.to_string_lossy().into(),
+            transaction.into(),
+        )
+        .map_err(|error| invalid(error.to_string()))?;
+        for encoded in store
+            .history()
+            .map_err(|error| invalid(error.to_string()))?
+        {
+            let image: Value = serde_json::from_str(&encoded).map_err(io::Error::other)?;
+            if image["artifacts"].as_array().is_some_and(|records| {
+                records.iter().any(|record| {
+                    record["role"] == "target"
+                        && record["created"] == true
+                        && record["evidence"] == expected
+                })
+            }) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 #[pyclass]
@@ -500,11 +593,234 @@ pub struct MigrationArtifactLease {
     sealed: Option<SealedArtifact>,
     pin: Option<ProjectAssetLease>,
     outcome: Option<Arc<project_assets::RetirementOutcome>>,
+    material_outcome: Option<Arc<project_assets::RetirementOutcome>>,
 }
 
 impl MigrationArtifactLease {
+    fn resume_root_native(
+        root: &Path,
+        encoded: &str,
+        journal_json: &str,
+        config_reference: &str,
+        current_json: &str,
+        inventory: &MigrationInventoryLease,
+    ) -> io::Result<Self> {
+        let receipt = parse_receipt(encoded)?;
+        let creation = receipt
+            .material_creation
+            .as_ref()
+            .ok_or_else(|| invalid("retired original has no exact birth receipt"))?;
+        if receipt.kind != ArtifactKind::Original || receipt.files.len() != 1 {
+            return Err(invalid(
+                "root recovery requires one retired original receipt",
+            ));
+        }
+        let (root, _guards) = samples_root(root)?;
+        let handle = inventory
+            .handle
+            .as_ref()
+            .ok_or_else(|| invalid("inventory lease released"))?;
+        if handle.root != root
+            || project_assets::capture_identity(&root)?.as_ref() != Some(&receipt.samples_identity)
+        {
+            return Err(invalid("root recovery inventory/samples FileID changed"));
+        }
+        handle.validate()?;
+        let config = ordinary_config(&root, Path::new(config_reference))?;
+        if journal_json.len() > 16 * 1024 * 1024 || current_json.len() > 16 * 1024 * 1024 {
+            return Err(invalid("root recovery image exceeds bound"));
+        }
+        let journal: Value = serde_json::from_str(journal_json).map_err(io::Error::other)?;
+        let current: Value = serde_json::from_str(current_json).map_err(io::Error::other)?;
+        let transaction = journal["transaction_id"]
+            .as_str()
+            .filter(|id| material_paths::valid_id(id))
+            .ok_or_else(|| invalid("root recovery transaction missing"))?;
+        let store = super::material_migration_journal::MaterialMigrationJournalStore::open(
+            root.to_string_lossy().into(),
+            transaction.into(),
+        )
+        .map_err(|error| invalid(error.to_string()))?;
+        let history = store
+            .history()
+            .map_err(|error| invalid(error.to_string()))?;
+        if history.last().map(String::as_str) != Some(journal_json)
+            || journal["cleanup_complete"] != false
+            || !journal["config_reference"]
+                .as_str()
+                .is_some_and(|raw| same_config_reference(&config, raw))
+        {
+            return Err(invalid(
+                "root recovery journal/current config binding changed",
+            ));
+        }
+        let evidence = serde_json::to_value(&receipt).map_err(io::Error::other)?;
+        let eligible = journal["artifacts"]
+            .as_array()
+            .ok_or_else(|| invalid("root recovery ledger missing"))?
+            .iter()
+            .any(|record| {
+                record["evidence"] == evidence
+                    && record["original_retired"] == true
+                    && (record["role"] == "rollback"
+                        || (journal["phase"] == "failed"
+                            && record["role"] == "target"
+                            && record["created"] == true))
+            });
+        let born = history
+            .iter()
+            .map(|raw| serde_json::from_str::<Value>(raw).map_err(io::Error::other))
+            .collect::<io::Result<Vec<_>>>()?
+            .iter()
+            .any(|record| {
+                record["artifacts"].as_array().is_some_and(|records| {
+                    records.iter().any(|item| {
+                        item["role"] == "target"
+                            && item["created"] == true
+                            && item["evidence"] == evidence
+                    })
+                })
+            });
+        if !eligible || (!born && !historical_created_target(&root, &config, &receipt)?) {
+            return Err(invalid(
+                "root recovery lacks durable created-target and actual original-terminal receipts",
+            ));
+        }
+        let mut config_guards = project_assets::directory_guards(
+            config
+                .parent()
+                .ok_or_else(|| invalid("config parent missing"))?,
+        )?;
+        let mut reader = sealed_reader(&config)?;
+        if reader.metadata()?.len() > 16 * 1024 * 1024 {
+            return Err(invalid("root recovery saved config exceeds bound"));
+        }
+        let mut bytes = Vec::new();
+        Read::by_ref(&mut reader)
+            .take(16 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)?;
+        let saved: Value = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+        if bytes.len() > 16 * 1024 * 1024 || saved != current {
+            return Err(invalid(
+                "newer saved/current intent wins over root recovery",
+            ));
+        }
+        if journal["phase"] == "config_committed"
+            && (saved["material_migrations"][transaction] != journal["alias"]
+                || saved["config_revision"].as_u64() < journal["committed_revision"].as_u64())
+        {
+            return Err(invalid("root recovery committed alias/revision changed"));
+        }
+        let path = super::cold_store::retired_material_original_path(
+            &root,
+            Path::new(&receipt.reference),
+            creation,
+            &receipt.files[0],
+        )?;
+        let material_root = path
+            .parent()
+            .ok_or_else(|| invalid("retired original parent missing"))?;
+        let mut registered = false;
+        for encoded in handle.records_native()? {
+            let record: Value = serde_json::from_str(&encoded).map_err(io::Error::other)?;
+            if !record["error"].is_null()
+                || (record["live"] == true
+                    && !record["config_reference"]
+                        .as_str()
+                        .is_some_and(|raw| same_config_reference(&config, raw)))
+            {
+                return Err(invalid(
+                    "unknown or other live owner protects retired material root",
+                ));
+            }
+            registered |= record["live"] == true
+                && record["config_reference"]
+                    .as_str()
+                    .is_some_and(|raw| same_config_reference(&config, raw));
+            let known = record["config_reference"]
+                .as_str()
+                .ok_or_else(|| invalid("known config binding missing"))?;
+            let known = ordinary_config(&root, Path::new(known))?;
+            config_guards.extend(project_assets::directory_guards(
+                known
+                    .parent()
+                    .ok_or_else(|| invalid("known config parent missing"))?,
+            )?);
+            let mut known_reader = sealed_reader(&known)?;
+            if known_reader.metadata()?.len() > 16 * 1024 * 1024 {
+                return Err(invalid("known config exceeds root recovery bound"));
+            }
+            let mut known_bytes = Vec::new();
+            Read::by_ref(&mut known_reader)
+                .take(16 * 1024 * 1024 + 1)
+                .read_to_end(&mut known_bytes)?;
+            let image: Value = serde_json::from_slice(&known_bytes).map_err(io::Error::other)?;
+            for reference in image["sample_paths"]
+                .as_array()
+                .ok_or_else(|| invalid("known source intent missing"))?
+                .iter()
+                .filter_map(Value::as_str)
+            {
+                if material_paths::resolve(&root, Path::new(reference))?
+                    .path
+                    .starts_with(material_root)
+                {
+                    return Err(invalid("saved source still protects retired material root"));
+                }
+            }
+            for entry in image["stem_cache"]
+                .as_array()
+                .ok_or_else(|| invalid("known stem intent missing"))?
+                .iter()
+                .filter(|entry| !entry.is_null())
+            {
+                for reference in [
+                    entry["cache_dir"].as_str(),
+                    entry["pair"]["wav_generation"].as_str(),
+                    entry["pair"]["pcm_generation"].as_str(),
+                    entry["pair"]["descriptor_reference"].as_str(),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    if material_paths::resolve(&root, Path::new(reference))?
+                        .path
+                        .starts_with(material_root)
+                    {
+                        return Err(invalid("saved stems still protect retired material root"));
+                    }
+                }
+            }
+            config_guards.push(known_reader);
+        }
+        if !registered {
+            return Err(invalid("root recovery has no actual current config owner"));
+        }
+        let protection = Arc::new(project_assets::RetirementProtection {
+            _inventory: handle.clone(),
+            outcome: Arc::new(project_assets::RetirementOutcome::default()),
+        });
+        let outcome = super::cold_store::restore_material_creation_after_original_retired(
+            &root,
+            &path,
+            creation,
+            &receipt.files[0],
+            protection,
+        )?;
+        Ok(Self {
+            sealed: None,
+            pin: None,
+            outcome: None,
+            material_outcome: Some(outcome),
+        })
+    }
     fn capture_native(root: &Path, reference: &Path) -> io::Result<Self> {
-        let sealed = seal_artifact(root, reference)?;
+        let mut sealed = seal_artifact(root, reference)?;
+        if sealed.receipt.kind == ArtifactKind::Original {
+            let creation =
+                super::cold_store::material_creation_receipt(&sealed.root, &sealed.path)?;
+            attach_material_creation(&mut sealed, creation)?;
+        }
         let pin = ProjectAssets::shared().acquire_verified_pin(
             &sealed.root,
             &sealed.path,
@@ -514,11 +830,13 @@ impl MigrationArtifactLease {
             sealed: Some(sealed),
             pin: Some(pin),
             outcome: None,
+            material_outcome: None,
         })
     }
     fn reopen_native(root: &Path, encoded: &str) -> io::Result<Self> {
         let receipt = parse_receipt(encoded)?;
-        let sealed = seal_artifact(root, Path::new(&receipt.reference))?;
+        let mut sealed = seal_artifact(root, Path::new(&receipt.reference))?;
+        attach_material_creation(&mut sealed, receipt.material_creation.clone())?;
         if sealed.receipt != receipt {
             return Err(invalid(
                 "artifact/root identity, complete bytes or type changed; preserved",
@@ -533,6 +851,7 @@ impl MigrationArtifactLease {
             sealed: Some(sealed),
             pin: Some(pin),
             outcome: None,
+            material_outcome: None,
         })
     }
     fn retire_native(&mut self, inventory: &MigrationInventoryLease) -> io::Result<()> {
@@ -553,7 +872,8 @@ impl MigrationArtifactLease {
             ));
         }
         handle.validate()?;
-        let current = seal_artifact(&sealed.root, &sealed.path)?;
+        let mut current = seal_artifact(&sealed.root, &sealed.path)?;
+        attach_material_creation(&mut current, sealed.receipt.material_creation.clone())?;
         if current.receipt != sealed.receipt {
             return Err(invalid("retirement evidence changed; preserved"));
         }
@@ -561,13 +881,41 @@ impl MigrationArtifactLease {
             _inventory: handle.clone(),
             outcome: Arc::new(project_assets::RetirementOutcome::default()),
         });
+        if let Some(creation) = &sealed.receipt.material_creation {
+            if super::cold_store::material_creation_receipt(&sealed.root, &sealed.path)?.as_ref()
+                != Some(creation)
+            {
+                return Err(invalid(
+                    "material birth ownership needs actual fresh source ACK restoration",
+                ));
+            }
+        }
+        let material_admission = sealed
+            .receipt
+            .material_creation
+            .as_ref()
+            .map(|creation| {
+                super::cold_store::prepare_retained_material_retirement(
+                    &sealed.root,
+                    &sealed.path,
+                    creation,
+                    &sealed.receipt.files[0],
+                    protection.clone(),
+                )
+            })
+            .transpose()?;
         self.outcome = ProjectAssets::shared().retire_verified_guarded(
             self.pin
                 .as_ref()
                 .ok_or_else(|| invalid("artifact pin released"))?,
             sealed.receipt.files.clone(),
-            Some(protection),
+            Some(protection.clone()),
         )?;
+        if self.outcome.is_some()
+            && let Some(admission) = material_admission
+        {
+            self.material_outcome = Some(admission.commit()?);
+        }
         Ok(())
     }
 }
@@ -584,6 +932,36 @@ impl MigrationArtifactLease {
         py.detach(|| Self::reopen_native(Path::new(&samples_root), &receipt_json))
             .map_err(py_error)
     }
+    #[staticmethod]
+    pub fn resume_material_retirement(
+        py: Python<'_>,
+        samples_root: String,
+        receipt_json: String,
+        journal_json: String,
+        config_reference: String,
+        current_json: String,
+        inventory: &MigrationInventoryLease,
+    ) -> PyResult<Self> {
+        py.detach(|| {
+            Self::resume_root_native(
+                Path::new(&samples_root),
+                &receipt_json,
+                &journal_json,
+                &config_reference,
+                &current_json,
+                inventory,
+            )
+        })
+        .map_err(py_error)
+    }
+    pub fn original_retirement_status(&self) -> PyResult<&'static str> {
+        self.outcome
+            .as_ref()
+            .map(|outcome| outcome.status().map(|status| status.0))
+            .transpose()
+            .map_err(py_error)
+            .map(|status| status.unwrap_or("idle"))
+    }
     pub fn receipt_json(&self) -> PyResult<String> {
         serde_json::to_string(
             &self
@@ -599,14 +977,50 @@ impl MigrationArtifactLease {
             .map_err(py_error)
     }
     pub fn retirement_status(&self) -> PyResult<&'static str> {
-        self.outcome.as_ref().map_or(Ok("idle"), |outcome| {
-            outcome.status().map(|value| value.0).map_err(py_error)
+        let original = self
+            .outcome
+            .as_ref()
+            .map(|outcome| outcome.status())
+            .transpose()
+            .map_err(py_error)?;
+        let material = self
+            .material_outcome
+            .as_ref()
+            .map(|outcome| outcome.status())
+            .transpose()
+            .map_err(py_error)?;
+        if original.as_ref().is_some_and(|value| value.0 == "error")
+            || material.as_ref().is_some_and(|value| value.0 == "error")
+        {
+            return Ok("error");
+        }
+        if original.as_ref().is_some_and(|value| value.0 == "pending")
+            || material.as_ref().is_some_and(|value| value.0 == "pending")
+        {
+            return Ok("pending");
+        }
+        Ok(if original.is_some() || material.is_some() {
+            "complete"
+        } else {
+            "idle"
         })
     }
     pub fn retirement_error(&self) -> PyResult<Option<String>> {
-        self.outcome.as_ref().map_or(Ok(None), |outcome| {
-            outcome.status().map(|value| value.1).map_err(py_error)
-        })
+        let original = self
+            .outcome
+            .as_ref()
+            .map(|outcome| outcome.status())
+            .transpose()
+            .map_err(py_error)?;
+        let material = self
+            .material_outcome
+            .as_ref()
+            .map(|outcome| outcome.status())
+            .transpose()
+            .map_err(py_error)?;
+        Ok(original
+            .and_then(|value| value.1)
+            .or_else(|| material.and_then(|value| value.1)))
     }
     pub fn release(&mut self) {
         self.sealed = None;
@@ -656,6 +1070,18 @@ fn plain_path(path: &Path) -> String {
         format!("\\\\{unc}")
     } else {
         path.strip_prefix("\\\\?\\").unwrap_or(&path).to_owned()
+    }
+}
+
+fn same_config_reference(path: &Path, reference: &str) -> bool {
+    #[cfg(windows)]
+    {
+        plain_path(path).replace('/', "\\").to_lowercase()
+            == reference.replace('/', "\\").to_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        plain_path(path) == reference
     }
 }
 
@@ -836,6 +1262,193 @@ impl MigrationInventoryLease {
             .ok_or_else(|| invalid("inventory lease released"))?
             .records_native()
     }
+}
+
+/// Recreate dormant birth ownership only from this process's actual acknowledged
+/// source and the exact current saved content. The JSON remains evidence.
+pub(super) fn restore_current_material_creation(
+    engine: &super::AudioEngine,
+    id: usize,
+    encoded_creation: &str,
+    config_reference: &str,
+    instance_id: &str,
+    inventory: &MigrationInventoryLease,
+    journal_json: Option<&str>,
+) -> io::Result<()> {
+    if id >= super::constants::NUM_SAMPLES
+        || !material_paths::valid_id(instance_id)
+        || encoded_creation.len() > JSON_LIMIT
+    {
+        return Err(invalid("invalid bounded current material restoration"));
+    }
+    let creation: super::cold_store::MaterialCreationReceipt =
+        serde_json::from_str(encoded_creation).map_err(io::Error::other)?;
+    let _requests = engine
+        .pad_request_ids
+        .lock()
+        .map_err(|_| invalid("request lock poisoned"))?;
+    let sample = engine
+        .sample_cache
+        .lock()
+        .map_err(|_| invalid("source cache lock poisoned"))?[id]
+        .clone()
+        .ok_or_else(|| invalid("fresh current source missing"))?;
+    let (generation, rate) = engine
+        .loaded_source_generations
+        .lock()
+        .map_err(|_| invalid("source generation lock poisoned"))?[id];
+    if generation == 0
+        || engine.cold_loading[id].load(std::sync::atomic::Ordering::Acquire) != 0
+        || engine.cold_lease_generations[id].load(std::sync::atomic::Ordering::Acquire)
+            != generation
+        || engine
+            .input_runtime_ownership
+            .source_generation(id, &sample, rate)
+            != Some(generation)
+    {
+        return Err(invalid(
+            "material restoration requires this process's actual current source ACK",
+        ));
+    }
+    let lease = engine
+        .cold_leases
+        .lock()
+        .map_err(|_| invalid("cold lease lock poisoned"))?[id]
+        .clone()
+        .ok_or_else(|| invalid("fresh canonical lease missing"))?;
+    let root = lease.samples_root();
+    let handle = inventory
+        .handle
+        .as_ref()
+        .ok_or_else(|| invalid("inventory lease released"))?;
+    if handle.root != root {
+        return Err(invalid(
+            "current material inventory belongs to another root",
+        ));
+    }
+    handle.validate()?;
+    let config = ordinary_config(root, Path::new(config_reference))?;
+    let records = handle.records_native()?;
+    let mut current_registration = false;
+    for encoded in records {
+        let record: Value = serde_json::from_str(&encoded).map_err(io::Error::other)?;
+        if !record["error"].is_null() {
+            return Err(invalid("unknown current project inventory; preserved"));
+        }
+        current_registration |= record["config_reference"]
+            .as_str()
+            .is_some_and(|raw| same_config_reference(&config, raw))
+            && record["live"] == true;
+    }
+    if !current_registration {
+        return Err(invalid(
+            "saved material has no actual current config registration",
+        ));
+    }
+    let _config_guards = project_assets::directory_guards(
+        config
+            .parent()
+            .ok_or_else(|| invalid("config parent missing"))?,
+    )?;
+    let mut config_reader = sealed_reader(&config)?;
+    if config_reader.metadata()?.len() > 16 * 1024 * 1024 {
+        return Err(invalid("current config exceeds restoration bound"));
+    }
+    let mut config_bytes = Vec::new();
+    Read::by_ref(&mut config_reader)
+        .take(16 * 1024 * 1024 + 1)
+        .read_to_end(&mut config_bytes)?;
+    if config_bytes.len() > 16 * 1024 * 1024 {
+        return Err(invalid("current config exceeds restoration bound"));
+    }
+    let saved: Value = serde_json::from_slice(&config_bytes).map_err(io::Error::other)?;
+    let content = &saved["pad_content"][id];
+    let persisted: super::cold_store::MaterialCreationReceipt =
+        serde_json::from_value(content["material_creation"].clone()).map_err(io::Error::other)?;
+    let reference = saved["sample_paths"][id]
+        .as_str()
+        .ok_or_else(|| invalid("saved source reference missing"))?;
+    if content["instance_id"].as_str() != Some(instance_id)
+        || persisted != creation
+        || content["material_id"].as_str() != lease.material_id.as_deref()
+        || material_paths::resolve(root, Path::new(reference))?.path != lease.original_path
+    {
+        return Err(invalid(
+            "newer saved source/content wins over material birth evidence",
+        ));
+    }
+    if let Some(encoded) = journal_json {
+        if encoded.len() > 16 * 1024 * 1024 {
+            return Err(invalid("migration record exceeds restoration bound"));
+        }
+        let journal: Value = serde_json::from_str(encoded).map_err(io::Error::other)?;
+        let transaction = journal["transaction_id"]
+            .as_str()
+            .filter(|id| material_paths::valid_id(id))
+            .ok_or_else(|| invalid("migration transaction missing"))?;
+        let store = super::material_migration_journal::MaterialMigrationJournalStore::open(
+            root.to_string_lossy().into(),
+            transaction.into(),
+        )
+        .map_err(|error| invalid(error.to_string()))?;
+        if store
+            .history()
+            .map_err(|error| invalid(error.to_string()))?
+            .last()
+            .map(String::as_str)
+            != Some(encoded)
+            || journal["phase"] != "config_committed"
+            || !journal["config_reference"]
+                .as_str()
+                .is_some_and(|raw| same_config_reference(&config, raw))
+            || saved["material_migrations"][transaction] != journal["alias"]
+            || journal["alias"]["new_reference"].as_str() != Some(reference)
+            || saved["config_revision"].as_u64() < journal["committed_revision"].as_u64()
+            || !journal["assignments"].as_array().is_some_and(|items| {
+                items.iter().any(|item| {
+                    item["sample_id"].as_u64() == Some(id as u64)
+                        && item["instance_id"].as_str() == Some(instance_id)
+                })
+            })
+            || serde_json::from_value::<super::cold_store::MaterialCreationReceipt>(
+                journal["alias"]["material_creation"].clone(),
+            )
+            .map_err(io::Error::other)?
+                != creation
+        {
+            return Err(invalid(
+                "current config/journal no longer binds the created material",
+            ));
+        }
+        let artifacts = journal["artifacts"]
+            .as_array()
+            .ok_or_else(|| invalid("created material ledger missing"))?;
+        let mut linked = false;
+        for record in artifacts {
+            if record["role"] != "target" {
+                continue;
+            }
+            let evidence: Receipt =
+                serde_json::from_value(record["evidence"].clone()).map_err(io::Error::other)?;
+            if evidence.kind == ArtifactKind::Original
+                && evidence.reference == reference
+                && evidence.material_creation.as_ref() == Some(&creation)
+            {
+                let mut actual = seal_artifact(root, Path::new(reference))?;
+                attach_material_creation(&mut actual, Some(creation.clone()))?;
+                linked |= actual.receipt == evidence
+                    && (record["created"] == true
+                        || historical_created_target(root, &config, &evidence)?);
+            }
+        }
+        if !linked {
+            return Err(invalid(
+                "migration has no exact created target-original receipt",
+            ));
+        }
+    }
+    lease.verify_reference(&sample)?;
+    lease.restore_material_creation(&creation)
 }
 
 #[pymethods]

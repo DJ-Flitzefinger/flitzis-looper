@@ -15,6 +15,7 @@ from flitzis_looper.controller.material_migration_history import (
     rollback_artifacts,
 )
 from flitzis_looper.material_migration_model import (
+    MaterialCreationReceipt,
     MaterialMigrationJournal,
     MigrationArtifactEvidence,
     MigrationArtifactRecord,
@@ -30,7 +31,7 @@ from flitzis_looper_audio import (
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from flitzis_looper_audio import MigrationInventoryLease
+    from flitzis_looper_audio import AudioEngine, MigrationInventoryLease
 
 
 def _config_identity(metadata: os.stat_result) -> tuple[int, ...]:
@@ -55,6 +56,7 @@ class ArtifactRequest:
     role: Literal["rollback", "target"]
     created: bool = False
     required: bool = True
+    material_creation: MaterialCreationReceipt | None = None
 
 
 @dataclass
@@ -63,6 +65,7 @@ class ArtifactCapture:
 
     records: tuple[MigrationArtifactRecord, ...]
     leases: list[MigrationArtifactLease]
+    errors: tuple[str, ...] = ()
 
     def release(self) -> None:
         """Drop only this capture's runtime pins, never infer a deletion permission."""
@@ -82,6 +85,7 @@ class CleanupResult:
     inventory: MigrationInventoryLease | None = None
     leases: tuple[MigrationArtifactLease, ...] = ()
     journal: MaterialMigrationJournal | None = None
+    original_leases: tuple[tuple[str, MigrationArtifactLease], ...] = ()
 
 
 class MigrationCleanupQueue:
@@ -127,7 +131,11 @@ class MigrationCleanupQueue:
     ) -> None:
         """Advance outcomes; a queued physical deletion is never a completion receipt."""
         if self._pending is not None:
-            if not reconciler.settled(self._pending):
+            try:
+                if not reconciler.settled(self._pending):
+                    return
+            except (OSError, RuntimeError, ValueError) as error:
+                self.error = str(error)
                 return
             self._finish(self._pending)
             self._pending = None
@@ -184,26 +192,75 @@ class MigrationCleanupQueue:
 class MigrationArtifactReconciler:
     """Use existing native leases/retirement after complete known-project inventory."""
 
-    def __init__(self, samples: Path, config: Path) -> None:
+    def __init__(self, samples: Path, config: Path, audio: AudioEngine | None = None) -> None:
         self._samples = samples
         self._config = os.path.normcase(str(config.resolve()))
+        self._audio = audio
         self._guard = MigrationProjectGuard(str(samples), self._config)
         self._worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="material-recovery")
         self._pending: (
             Future[ArtifactCapture]
             | Future[CleanupResult]
             | Future[MaterialMigrationJournal]
+            | Future[None]
             | None
         ) = None
 
-    def capture(self, requests: Iterable[ArtifactRequest]) -> Future[ArtifactCapture]:
+    @property
+    def available(self) -> bool:
+        return self._pending is None or self._pending.done()
+
+    def restore_material_creation(
+        self,
+        sample_id: int,
+        instance_id: str,
+        creation: MaterialCreationReceipt,
+        journal: MaterialMigrationJournal | None = None,
+    ) -> Future[None]:
+        """Fresh source ownership is checked natively in this same bounded worker."""
+        self._check_available()
+        result = self._worker.submit(
+            self._restore_material_creation, sample_id, instance_id, creation, journal
+        )
+        self._pending = result
+        return result
+
+    def _restore_material_creation(
+        self,
+        sample_id: int,
+        instance_id: str,
+        creation: MaterialCreationReceipt,
+        journal: MaterialMigrationJournal | None,
+    ) -> None:
+        if self._audio is None:
+            message = "saved material restoration has no actual native source owner"
+            raise ValueError(message)
+        inventory = self._guard.lock_inventory()
+        try:
+            _, errors = self._known_configs(inventory.records())
+            if errors:
+                raise ValueError("; ".join(errors))
+            self._audio.restore_material_creation(
+                sample_id,
+                creation.model_dump_json(),
+                self._config,
+                instance_id,
+                inventory,
+                None if journal is None else journal.model_dump_json(),
+            )
+        finally:
+            inventory.release()
+
+    def capture(
+        self, requests: Iterable[ArtifactRequest], *, include_legacy_pcm: bool = True
+    ) -> Future[ArtifactCapture]:
         """Hash complete sealed objects in one bounded worker rather than UI polling."""
         self._check_available()
         captured = tuple(requests)
         if not captured or len(captured) > 1024:
             message = "migration artifact capture exceeds its bounded request set"
             raise ValueError(message)
-        result = self._worker.submit(self._capture, captured)
+        result = self._worker.submit(self._capture, captured, include_legacy_pcm=include_legacy_pcm)
         self._pending = result
         return result
 
@@ -268,7 +325,13 @@ class MigrationArtifactReconciler:
         # The exact current config binds the successor before any old metadata is
         # removed. The full artifact lineage is now durable even while readers live.
         self._check_current_alias(updated, current)
-        parent_store.compact(encoded)
+        if not any(
+            item.created
+            and item.evidence.material_creation is not None
+            and (self._samples.parent / item.evidence.material_creation.root_reference).exists()
+            for item in parent.artifacts
+        ):
+            parent_store.compact(encoded)
         return updated
 
     def _check_current_alias(
@@ -297,7 +360,9 @@ class MigrationArtifactReconciler:
         if journal.alias is not None:
             references.add(journal.alias.old_reference)
         if journal.alias is not None:
-            references.update(self._legacy_pcm({journal.alias.original_sha256}))
+            asset = original_asset(journal.alias.old_reference, project_root=self._samples.parent)
+            roots = (asset.material_root,) if asset.material_root is not None else ()
+            references.update(self._legacy_pcm({journal.alias.original_sha256}, roots))
         requests = tuple(
             ArtifactRequest(reference, "rollback")
             for reference in references
@@ -377,20 +442,24 @@ class MigrationArtifactReconciler:
             message = "material reconciliation worker already owns a bounded request"
             raise RuntimeError(message)
 
-    def _capture(self, requests: tuple[ArtifactRequest, ...]) -> ArtifactCapture:
+    def _capture(
+        self, requests: tuple[ArtifactRequest, ...], *, include_legacy_pcm: bool = True
+    ) -> ArtifactCapture:
         result = ArtifactCapture((), [])
         records: list[MigrationArtifactRecord] = []
         seen: set[tuple[str, str]] = set()
+        errors: list[str] = []
         try:
             for request in requests:
                 try:
                     lease = MigrationArtifactLease.capture(str(self._samples), request.reference)
-                except OSError, RuntimeError, ValueError:
+                except (OSError, RuntimeError, ValueError) as error:
                     if request.required:
                         raise
+                    errors.append(f"Protected {request.reference}: {error}")
                     continue
                 result.leases.append(lease)
-                evidence = MigrationArtifactEvidence.model_validate_json(lease.receipt_json())
+                lease, evidence = self._capture_material_evidence(request, lease, result)
                 key = request.role, evidence.reference
                 if key in seen:
                     lease.release()
@@ -407,7 +476,21 @@ class MigrationArtifactReconciler:
                 for item in records
                 if item.role == "rollback" and item.evidence.kind == "original"
             }
-            for reference in self._legacy_pcm(original_digests):
+            material_roots = tuple({
+                material_root
+                for item in records
+                if item.role == "rollback"
+                and item.evidence.kind == "original"
+                and (
+                    material_root := original_asset(
+                        item.evidence.reference, project_root=self._samples.parent
+                    ).material_root
+                )
+                is not None
+            })
+            for reference in (
+                self._legacy_pcm(original_digests, material_roots) if include_legacy_pcm else ()
+            ):
                 if ("rollback", reference) in seen:
                     continue
                 seen.add(("rollback", reference))
@@ -426,13 +509,53 @@ class MigrationArtifactReconciler:
             result.release()
             raise
         result.records = tuple(records)
+        result.errors = tuple(errors)
         return result
 
-    def _legacy_pcm(self, digests: set[str]) -> list[str]:
-        """Discover bounded complete legacy candidates; native capture verifies every byte."""
-        root = self._samples / ".pcm-cache" / "v1"
+    def _capture_material_evidence(
+        self, request: ArtifactRequest, lease: MigrationArtifactLease, result: ArtifactCapture
+    ) -> tuple[MigrationArtifactLease, MigrationArtifactEvidence]:
+        """Reopen saved birth evidence before replacing the capture's held reader."""
+        evidence = MigrationArtifactEvidence.model_validate_json(lease.receipt_json())
+        if request.material_creation is not None and evidence.material_creation is None:
+            candidate = evidence.model_copy(update={"material_creation": request.material_creation})
+            verified = MigrationArtifactLease.reopen(
+                str(self._samples), candidate.model_dump_json()
+            )
+            lease.release()
+            result.leases[-1] = verified
+            lease = verified
+            evidence = MigrationArtifactEvidence.model_validate_json(verified.receipt_json())
+        elif (
+            request.material_creation is not None
+            and evidence.material_creation != request.material_creation
+        ):
+            message = "captured original differs from saved material birth evidence"
+            raise ValueError(message)
+        return lease, evidence
+
+    def _legacy_pcm(self, digests: set[str], material_roots: tuple[Path, ...] = ()) -> list[str]:
+        """Inventory both obsolete layouts using contained Native-derived material roots."""
+        roots = {self._samples / ".pcm-cache" / "v1"}
+        roots.update(root / ".pcm-cache" / "v1" for root in material_roots)
+        if len(roots) > 217:
+            message = "old PCM root inventory capacity exceeded"
+            raise ValueError(message)
+        result = []
+        for root in roots:
+            result.extend(self._pcm_candidates(root, digests))
+            if len(result) > 256:
+                message = "old PCM inventory capacity exceeded"
+                raise ValueError(message)
+        return result
+
+    def _pcm_candidates(self, root: Path, digests: set[str]) -> list[str]:
+        """Find bounded metadata candidates; each subsequent Native lease verifies custody."""
         if not digests or not root.exists():
             return []
+        # Query a valid typed leaf solely to reject every existing reparse ancestor;
+        # this creates no file and supplies no ownership for discovered generations.
+        resolve_asset(root / f".ready-{'0' * 32}", project_root=self._samples.parent)
         metadata = root.stat(follow_symlinks=False)
         if (
             root.is_symlink()
@@ -450,6 +573,7 @@ class MigrationArtifactReconciler:
             if not entry.name.startswith(".ready-"):
                 continue
             try:
+                resolve_asset(entry, project_root=self._samples.parent)
                 metadata = entry.stat(follow_symlinks=False)
                 if (
                     entry.is_symlink()
@@ -570,7 +694,9 @@ class MigrationArtifactReconciler:
             try:
                 asset = original_asset(reference, project_root=self._samples.parent)
                 paths.add(asset.path)
-                if asset.material_id is None:
+                if asset.material_root is not None:
+                    paths.add(asset.material_root)
+                if asset.layout == "legacy":
                     lease = MigrationArtifactLease.capture(str(self._samples), reference)
                     try:
                         evidence = MigrationArtifactEvidence.model_validate_json(
@@ -601,13 +727,20 @@ class MigrationArtifactReconciler:
                 except (OSError, RuntimeError, ValueError) as error:
                     errors.append(str(error))
 
-    def _retire(self, journal: MaterialMigrationJournal, current: ProjectState) -> CleanupResult:
+    def _retirement_journal(
+        self, journal: MaterialMigrationJournal, current: ProjectState
+    ) -> MaterialMigrationJournal:
+        """Durably upgrade a recognized old ledger before locking retirement inventory."""
         if not journal.artifacts and journal.alias is not None:
             self._check_current_alias(journal, current)
             store = MaterialMigrationJournalStore.open(str(self._samples), journal.transaction_id)
             _, history = journal_history(store, journal)
             journal = self._upgrade_ledger(journal, history)
             store.append(journal.model_dump_json())
+        return journal
+
+    def _retire(self, journal: MaterialMigrationJournal, current: ProjectState) -> CleanupResult:
+        journal = self._retirement_journal(journal, current)
         inventory: MigrationInventoryLease | None = None
         try:
             inventory = self._guard.lock_inventory()
@@ -622,10 +755,11 @@ class MigrationArtifactReconciler:
         queued: list[str] = []
         protected: list[str] = []
         leases: list[MigrationArtifactLease] = []
+        original_leases: list[tuple[str, MigrationArtifactLease]] = []
         for record in journal.artifacts:
             try:
                 status, lease = self._retire_record(
-                    record, journal, paths, legacy_digests, inventory
+                    record, journal, current, paths, legacy_digests, inventory
                 )
                 if status == "protected":
                     protected.append(record.evidence.reference)
@@ -633,6 +767,12 @@ class MigrationArtifactReconciler:
                     queued.append(record.evidence.reference)
                     if lease is not None:
                         leases.append(lease)
+                        if (
+                            record.evidence.kind == "original"
+                            and record.evidence.material_creation is not None
+                            and not record.original_retired
+                        ):
+                            original_leases.append((record.evidence.reference, lease))
             except (OSError, RuntimeError, ValueError) as error:
                 errors.append(str(error))
         # Every actual queue entry owns the native lock until its physical terminal.
@@ -645,12 +785,14 @@ class MigrationArtifactReconciler:
             tuple(queued),
             leases=tuple(leases),
             journal=journal,
+            original_leases=tuple(original_leases),
         )
 
     def _retire_record(
         self,
         record: MigrationArtifactRecord,
         journal: MaterialMigrationJournal,
+        current: ProjectState,
         paths: set[Path],
         legacy_digests: set[str],
         inventory: MigrationInventoryLease,
@@ -658,10 +800,34 @@ class MigrationArtifactReconciler:
         evidence = record.evidence
         if record.role != "rollback" and not (journal.phase == "failed" and record.created):
             return "skip", None
-        path = resolve_asset(Path(evidence.reference), project_root=self._samples.parent).path
-        if path in paths or any(reference.is_relative_to(path) for reference in paths):
+        # The strict evidence schema preserves the normalized relative spelling
+        # even when an already retired root has no binding left to resolve.
+        path = self._samples.parent / evidence.reference
+        if path.exists():
+            path = resolve_asset(Path(evidence.reference), project_root=self._samples.parent).path
+        if path in paths or any(
+            reference.is_relative_to(path) or path.is_relative_to(reference) for reference in paths
+        ):
             return "protected", None
         if not path.exists():
+            if evidence.material_creation is not None:
+                root = path.parent
+                if root.exists():
+                    if not record.original_retired:
+                        message = (
+                            "absent original has no durable native terminal receipt; "
+                            "material root preserved"
+                        )
+                        raise ValueError(message)
+                    lease = MigrationArtifactLease.resume_material_retirement(
+                        str(self._samples),
+                        evidence.model_dump_json(),
+                        journal.model_dump_json(),
+                        self._config,
+                        current.model_dump_json(),
+                        inventory,
+                    )
+                    return "queued", lease
             return "skip", None
         if evidence.kind == "pcm_directory" and legacy_digests:
             return "protected", None
@@ -674,6 +840,32 @@ class MigrationArtifactReconciler:
 
     def settled(self, result: CleanupResult) -> bool:
         """Observe actual queue outcomes; changed objects settle as preserved errors."""
+        if result.original_leases and result.journal is not None:
+            completed = {
+                reference
+                for reference, lease in result.original_leases
+                if lease.original_retirement_status() == "complete"
+            }
+            if completed:
+                journal = result.journal
+                store = MaterialMigrationJournalStore.open(
+                    str(self._samples), journal.transaction_id
+                )
+                journal_history(store, journal)
+                updated = journal.changed(
+                    artifacts=tuple(
+                        item.model_copy(update={"original_retired": True})
+                        if item.evidence.reference in completed
+                        and item.evidence.material_creation is not None
+                        else item
+                        for item in journal.artifacts
+                    )
+                )
+                store.append(updated.model_dump_json())
+                result.journal = updated
+                result.original_leases = tuple(
+                    item for item in result.original_leases if item[0] not in completed
+                )
         statuses = tuple(lease.retirement_status() for lease in result.leases)
         if any(status == "pending" for status in statuses):
             return False

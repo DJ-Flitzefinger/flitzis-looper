@@ -4,7 +4,7 @@
 //! creates source, timing, window, publication or retirement authority. Store readers
 //! must verify the actual sealed WAV/PCM artifacts before using these descriptions.
 
-use super::material_paths::{self, AssetKind};
+use super::material_paths;
 use super::stem_cache::STEM_FILE_NAMES;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -107,8 +107,24 @@ fn encode(value: &impl Serialize) -> Result<Vec<u8>, String> {
     serde_json::to_vec(value).map_err(|error| format!("cannot encode stem pair metadata: {error}"))
 }
 
-fn validate_generation(reference: &str, material_id: &str, area: &str) -> Result<(), String> {
-    let prefix = format!("samples/materials/M{material_id}/{area}/.ready-");
+fn validate_generation(
+    reference: &str,
+    content: &StemPairContent,
+    area: &str,
+) -> Result<(), String> {
+    let (original, _) = content
+        .source_version
+        .rsplit_once("|sha256-v1:")
+        .ok_or("stem pair source version missing")?;
+    let root = material_paths::canonical_original_root_reference(
+        Path::new(original),
+        &content.material_id,
+    )
+    .map_err(|error| error.to_string())?;
+    let prefix = format!(
+        "{}/{area}/.ready-",
+        root.to_string_lossy().replace('\\', "/")
+    );
     if reference
         .strip_prefix(&prefix)
         .is_some_and(material_paths::valid_id)
@@ -157,14 +173,14 @@ impl StemPairContent {
                     .into(),
             );
         }
-        let prefix = format!("samples/materials/M{}/original/", self.material_id);
-        if !reference
-            .strip_prefix(&prefix)
-            .is_some_and(material_paths::filename)
-            || !matches!(
-                material_paths::classify(Path::new(reference)),
-                Ok(AssetKind::Original { material: Some(material) }) if material == self.material_id
-            )
+        // Readable references carry no identity in their directory name.
+        // Actual readers resolve the hidden binding and compare its ID;
+        // this pure DTO check grants no path or source authority.
+        if material_paths::canonical_original_root_reference(
+            Path::new(reference),
+            &self.material_id,
+        )
+        .is_err()
         {
             return Err(
                 "stem pair source_version must name this material's canonical original".into(),
@@ -235,7 +251,7 @@ impl StemPcmManifest {
         if self.content.logical_identity()? != self.stem_set_identity {
             return Err("stem PCM manifest complete content identity mismatch".into());
         }
-        validate_generation(&self.wav_generation, &self.content.material_id, "stems")?;
+        validate_generation(&self.wav_generation, &self.content, "stems")?;
         Ok(())
     }
 
@@ -254,12 +270,8 @@ impl StemPairDescriptor {
         if self.content.logical_identity()? != self.stem_set_identity {
             return Err("stem pair descriptor complete content identity mismatch".into());
         }
-        validate_generation(&self.wav_generation, &self.content.material_id, "stems")?;
-        validate_generation(
-            &self.pcm_generation,
-            &self.content.material_id,
-            ".pcm-cache/stems/v1",
-        )?;
+        validate_generation(&self.wav_generation, &self.content, "stems")?;
+        validate_generation(&self.pcm_generation, &self.content, ".pcm-cache/stems/v1")?;
         validate_hash(&self.wav_manifest_sha256, "wav_manifest_sha256")?;
         validate_hash(&self.pcm_manifest_sha256, "pcm_manifest_sha256")?;
         Ok(())
@@ -348,6 +360,53 @@ mod tests {
             wav_manifest_sha256: "e".repeat(64),
             pcm_manifest_sha256: "f".repeat(64),
             content,
+        }
+    }
+
+    #[test]
+    fn readable_descriptors_bind_both_generations_to_exact_source_root() {
+        let mut original = descriptor();
+        original.content.source_version = format!(
+            "samples/Mélodie 音.wav/Mélodie 音.wav|sha256-v1:{}",
+            original.content.source.original_sha256
+        );
+        original.stem_set_identity = original.content.logical_identity().unwrap();
+        original.wav_generation = format!("samples/Mélodie 音.wav/stems/.ready-{}", "2".repeat(32));
+        original.pcm_generation = format!(
+            "samples/Mélodie 音.wav/.pcm-cache/stems/v1/.ready-{}",
+            "3".repeat(32)
+        );
+        original.validate().unwrap();
+        let encoded = original.canonical_bytes().unwrap();
+        let reopened: StemPairDescriptor = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(reopened.canonical_bytes().unwrap(), encoded);
+        for field in ["wav_generation", "pcm_generation"] {
+            for root in [
+                "samples/other.wav",
+                "samples/materials/M11111111111111111111111111111111",
+                "samples/Mélodie 音.wav/../other.wav",
+            ] {
+                let mut invalid = serde_json::to_value(&original).unwrap();
+                let reference =
+                    invalid[field]
+                        .as_str()
+                        .unwrap()
+                        .replacen("samples/Mélodie 音.wav", root, 1);
+                invalid[field] = json!(reference);
+                let invalid: StemPairDescriptor = serde_json::from_value(invalid).unwrap();
+                assert!(invalid.validate().is_err());
+            }
+        }
+        for reference in [
+            "samples/Mélodie 音.wav//Mélodie 音.wav",
+            "samples/Mélodie 音.wav/Mélodie 音.wav/",
+            "samples/Mélodie 音.wav/./Mélodie 音.wav",
+            "samples/legacy.wav",
+        ] {
+            let mut invalid = original.content.clone();
+            invalid.source_version =
+                format!("{reference}|sha256-v1:{}", invalid.source.original_sha256);
+            assert!(invalid.validate().is_err(), "{reference}");
         }
     }
 

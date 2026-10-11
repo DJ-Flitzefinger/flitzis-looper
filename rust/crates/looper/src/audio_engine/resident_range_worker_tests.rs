@@ -1382,13 +1382,7 @@ fn all_216_actual_pair_windows_preserve_other_215_on_both_endpoint_edits() {
         (7, 11)
     );
     let frames = [primary.sample.frame_count(), secondary.sample.frame_count()];
-    let references = [
-        h.wav_reference.clone(),
-        format!(
-            "samples/materials/M{}/stems/.ready-{GENERATION}",
-            secondary.metadata()["material_id"].as_str().unwrap(),
-        ),
-    ];
+    let references = [h.wav_reference.clone(), canonical_wav_reference(&secondary)];
     write_complete_wavs(
         &h.root.parent().unwrap().join(&references[1]),
         &stereo_wav(frames[1]),

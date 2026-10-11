@@ -1030,7 +1030,7 @@ impl Harness {
         use super::super::stem_cache::{STEM_FILE_NAMES, source_version_hash};
         use crate::messages::StemMixMode;
         let root = self.directory.path().join("samples");
-        let (material_id, version) = Python::attach(|py| {
+        let (material_reference, version) = Python::attach(|py| {
             let engine = self.engine.borrow(py);
             let leases = engine.cold_leases.lock().unwrap();
             let lease = leases[0].as_ref().unwrap();
@@ -1041,13 +1041,18 @@ impl Harness {
                 .to_string_lossy()
                 .replace('\\', "/");
             (
-                lease.material_id.clone().unwrap(),
+                crate::audio_engine::material_paths::canonical_original_root_reference(
+                    std::path::Path::new(&reference),
+                    lease.material_id.as_deref().unwrap(),
+                )
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/"),
                 format!("{reference}|sha256-v1:{}", full_hash(&lease.original_path)),
             )
         });
-        let reference = format!(
-            "samples/materials/M{material_id}/stems/.ready-00112233445566778899aabbccddeeff"
-        );
+        let reference =
+            format!("{material_reference}/stems/.ready-00112233445566778899aabbccddeeff");
         let path = self.directory.path().join(&reference);
         fs::create_dir_all(&path).unwrap();
         let source_words: Vec<i16> = self

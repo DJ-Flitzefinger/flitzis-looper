@@ -7,11 +7,13 @@ from queue import Empty, SimpleQueue
 from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
+from flitzis_looper.bs_input_provenance import bs_input_contract
 from flitzis_looper.controller.asset_lifecycle import (
     AssetRetirementReservation,
     ProjectAssetLifecycle,
 )
 from flitzis_looper.controller.base import BaseController
+from flitzis_looper.controller.bs_roformer_assets import MODEL_NAME as BS_ROFORMER_MODEL_NAME
 from flitzis_looper.controller.stem_cache import (
     cache_dir_for_sample_id,
     cache_dir_matches_sample_id,
@@ -25,11 +27,17 @@ from flitzis_looper.controller.stem_generation import (
     StemGenerationBackend,
     StemGenerationRequest,
     StemGenerationResult,
+    resolved_demucs_encoder,
 )
+from flitzis_looper.controller.stem_identity import request_fingerprint
 from flitzis_looper.controller.stem_job import StemGenerationJob, StemSubscriber
 from flitzis_looper.controller.stem_pair_preparation import (
     PairPreparation,
     StemPairPreparationQueue,
+)
+from flitzis_looper.controller.stem_provenance import (
+    capture_processing_files,
+    processing_source_roots,
 )
 from flitzis_looper.controller.stem_publication_retry import (
     StemPublicationRetries,
@@ -40,6 +48,7 @@ from flitzis_looper.controller.stem_separators import (
     separator_model_cache_dir,
 )
 from flitzis_looper.controller.stem_workers import StemWorkerPool
+from flitzis_looper.encoder_provenance import encoder_contract
 from flitzis_looper.models import (
     STEM_COMPONENT_MASK,
     STEM_MASK_DISPLAY_MODES,
@@ -50,6 +59,7 @@ from flitzis_looper.models import (
     StemMixMode,
     validate_sample_id,
 )
+from flitzis_looper.project_materials import original_asset
 
 if TYPE_CHECKING:
     from flitzis_looper.models import ProjectState, SessionState
@@ -58,6 +68,7 @@ if TYPE_CHECKING:
         PreparedSourceTicket,
         PreparedStemPair,
         ProjectAssetLease,
+        SealedProcessingFiles,
     )
 
 type StemTaskRunner = Callable[[Callable[[], None]], None]
@@ -185,14 +196,39 @@ class StemController(BaseController):  # noqa: PLR0904
 
         self._session.stem_generating_sample_ids.add(sample_id)
         self._session.stem_generation_source_versions[sample_id] = source_version
-        cache_dir = cache_dir_for_sample_id(sample_id, self._project.sample_paths[sample_id])
+        request = self._generation_request(sample_id, source_version)
+        if request is None:
+            return False
+
+        try:
+            source_ticket = self._capture_source_ticket(sample_id, source_version)
+            compatible = self._compatible_completed_entry(request)
+            if compatible is not None:
+                self._clear_stem_generation_state(sample_id)
+                return self._prepare_pair(
+                    sample_id,
+                    compatible,
+                    source_ticket,
+                    processing_request=request,
+                    regenerate_on_incompatible=True,
+                )
+            return self._admit_stem_generation(request, source_ticket)
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as err:
+            self._clear_stem_generation_state(sample_id)
+            self._session.stem_generation_errors[sample_id] = f"Stem admission failed: {err}"
+            return False
+
+    def _generation_request(
+        self, sample_id: int, source_version: str
+    ) -> StemGenerationRequest | None:
+        """Capture current transform settings and output shape for the ordinary worker."""
         target_shape = self._target_shape_for_pad(sample_id)
         if target_shape is None:
             self._clear_stem_generation_state(sample_id)
             self._session.stem_generation_errors[sample_id] = (
                 "Cannot generate stems because the loaded sample shape is unavailable"
             )
-            return False
+            return None
 
         sample_path = self._project.sample_paths[sample_id]
         if sample_path is None:
@@ -200,13 +236,14 @@ class StemController(BaseController):  # noqa: PLR0904
             self._session.stem_generation_errors[sample_id] = (
                 "Cannot generate stems without a loaded sample"
             )
-            return False
+            return None
 
         source_path = Path(sample_path)
         if not source_path.is_absolute():
             source_path = Path.cwd() / source_path
 
-        request = StemGenerationRequest(
+        cache_dir = cache_dir_for_sample_id(sample_id, sample_path)
+        return StemGenerationRequest(
             sample_id=sample_id,
             source_path=source_path,
             source_version=source_version,
@@ -219,32 +256,96 @@ class StemController(BaseController):  # noqa: PLR0904
             demucs_overlap=self._project.demucs_overlap,
         )
 
-        try:
-            source_ticket = self._capture_source_ticket(sample_id, source_version)
-            content = self._project.pad_content[sample_id]
-            content_id = content.instance_id if content is not None else None
-            job = next((job for job in self._jobs.values() if job.matches(request)), None)
-            shared = job is not None
-            if job is None:
-                job = StemGenerationJob(request, source_ticket, self._assets, content_id)
-            else:
-                job.add_subscriber(sample_id, source_ticket, content_id)
-        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as err:
-            self._clear_stem_generation_state(sample_id)
-            self._session.stem_generation_errors[sample_id] = f"Stem admission failed: {err}"
-            return False
+    def _admit_stem_generation(
+        self, request: StemGenerationRequest, source_ticket: PreparedSourceTicket
+    ) -> bool:
+        """Use the ordinary source/job/ownership lane for initial or incompatible work."""
+        sample_id = request.sample_id
+        content = self._project.pad_content[sample_id]
+        content_id = content.instance_id if content is not None else None
+        job = next((job for job in self._jobs.values() if job.matches(request)), None)
+        shared = job is not None
+        if job is None:
+            job = StemGenerationJob(request, source_ticket, self._assets, content_id)
+        else:
+            job.add_subscriber(sample_id, source_ticket, content_id)
+        self._session.stem_generating_sample_ids.add(sample_id)
+        self._session.stem_generation_source_versions[sample_id] = request.source_version
         self._generation_source_tickets[sample_id] = source_ticket
         self._jobs[job.request.cache_dir] = job
 
         if self._project.stem_cache[sample_id] is None:
+            cache_dir = request.cache_dir.parent.relative_to(Path.cwd()).as_posix()
             self._project.stem_cache[sample_id] = StemCacheEntry(
-                source_version=source_version,
+                source_version=request.source_version,
                 cache_dir=cache_dir,
                 stems=expected_stem_files(cache_dir),
                 available=False,
             )
             self._mark_project_changed()
         return True if shared else self._schedule_stem_job(job)
+
+    def _compatible_completed_entry(self, request: StemGenerationRequest) -> StemCacheEntry | None:
+        fingerprint = request_fingerprint(request)
+        if fingerprint is None:
+            return None
+        return next(
+            (
+                entry.model_copy(deep=True)
+                for entry in self._project.stem_cache
+                if entry is not None
+                and entry.generation_fingerprint == fingerprint
+                and entry.producer_identity is not None
+                and entry.source_version == request.source_version
+                and (entry.available or entry.pair is not None)
+            ),
+            None,
+        )
+
+    def reuse_compatible_stems_on_load(self, sample_id: int) -> bool:
+        """Discover saved canonical users without hashing sources or models on the UI thread."""
+        sample_path = self._project.sample_paths[sample_id]
+        shape = self._target_shape_for_pad(sample_id)
+        if sample_path is None or shape is None:
+            return False
+        source = original_asset(sample_path)
+        if source.layout != "readable":
+            return False
+        for entry in self._project.stem_cache:
+            if (
+                entry is None
+                or entry.generation_fingerprint is None
+                or entry.producer_identity is None
+            ):
+                continue
+            reference, separator, _digest = entry.source_version.rpartition("|sha256-v1:")
+            if not separator:
+                continue
+            try:
+                if original_asset(reference).path != source.path:
+                    continue
+                request = StemGenerationRequest(
+                    sample_id=sample_id,
+                    source_path=source.path,
+                    source_version=entry.source_version,
+                    cache_dir=Path.cwd() / cache_dir_for_sample_id(sample_id, sample_path),
+                    target_shape=shape,
+                    model_cache_dir=separator_model_cache_dir(self._project.stem_separator),
+                    separator=self._project.stem_separator,
+                    demucs_shifts=self._project.demucs_shifts,
+                    demucs_overlap=self._project.demucs_overlap,
+                )
+                compatible = self._compatible_completed_entry(request)
+                if compatible is None:
+                    continue
+                ticket = self._capture_source_ticket(sample_id, entry.source_version)
+                return self._prepare_pair(sample_id, compatible, ticket, processing_request=request)
+            except (OSError, RuntimeError, TypeError, ValueError) as error:
+                self._session.stem_generation_errors[sample_id] = (
+                    f"Compatible stem reuse failed: {error}"
+                )
+                return False
+        return False
 
     def _schedule_stem_job(self, job: StemGenerationJob) -> bool:
         try:
@@ -844,6 +945,14 @@ class StemController(BaseController):  # noqa: PLR0904
         )
         lease = None
         try:
+            job = self._jobs.get(generation_cache_dir)
+            if job is not None:
+                entry = entry.model_copy(
+                    update={
+                        "generation_fingerprint": job.generation_fingerprint,
+                        "producer_identity": job.producer_identity,
+                    }
+                )
             # Admission can fail while the private directory is still intact.
             # The future immutable path is pinned before the atomic rename.
             lease = self._assets.acquire(published_path)
@@ -953,6 +1062,8 @@ class StemController(BaseController):  # noqa: PLR0904
         ticket: PreparedSourceTicket,
         *,
         components: bool | None = None,
+        processing_request: StemGenerationRequest | None = None,
+        regenerate_on_incompatible: bool = False,
     ) -> bool:
         if sample_id in self._fenced_pair_ids:
             message = "Unsupported stem pair metadata requires explicit recovery"
@@ -967,6 +1078,8 @@ class StemController(BaseController):  # noqa: PLR0904
             components=self._project.pad_stem_mix_mode[sample_id] == "all_stems"
             if components is None
             else components,
+            processing_request=processing_request,
+            regenerate_on_incompatible=regenerate_on_incompatible,
         )
         return True
 
@@ -994,15 +1107,12 @@ class StemController(BaseController):  # noqa: PLR0904
 
     def _finish_pair_preparation(self, request: PairPreparation) -> None:
         sample_id = request.sample_id
-        content = self._project.pad_content[sample_id]
-        if (
-            self._shutting_down
-            or request.cancelled.is_set()
-            or (content.instance_id if content else None) != request.content_id
-            or self._project.stem_cache[sample_id] is not request.previous_entry
-        ):
+        if not self._pair_preparation_current(request):
             return
         if request.error is not None:
+            if request.regenerate_on_incompatible and request.compatibility_rejected:
+                self._regenerate_incompatible_pair(request)
+                return
             raise RuntimeError(request.error)
         selected = self._pair_preparations.selected_entry(request)
         prepared = request.prepared
@@ -1032,6 +1142,48 @@ class StemController(BaseController):  # noqa: PLR0904
             self._resident_pairs.discard(sample_id)
             self._restored_stem_candidates.pop(sample_id, None)
             self._mark_project_changed()
+
+    def _pair_preparation_current(self, request: PairPreparation) -> bool:
+        sample_id = request.sample_id
+        if self._shutting_down or request.cancelled.is_set():
+            return False
+        content = self._project.pad_content[sample_id]
+        if (
+            content.instance_id if content else None
+        ) != request.content_id or self._project.stem_cache[
+            sample_id
+        ] is not request.previous_entry:
+            return False
+        processing = request.processing_request
+        return processing is None or (
+            processing.separator == self._project.stem_separator
+            and processing.demucs_shifts == self._project.demucs_shifts
+            and processing.demucs_overlap == self._project.demucs_overlap
+            and processing.target_shape == self._target_shape_for_pad(sample_id)
+        )
+
+    def _regenerate_incompatible_pair(self, request: PairPreparation) -> None:
+        """One explicit Generate may replace incompatible derivatives via its own admission."""
+        processing = request.processing_request
+        if processing is None:
+            message = "Incompatible reuse lost its captured generation request"
+            raise RuntimeError(message)
+        blocker = self.stem_generation_block_reason(request.sample_id)
+        if blocker is not None:
+            raise RuntimeError(blocker)
+        source = self._project.sample_paths[request.sample_id]
+        if source is None or original_asset(source).path != processing.source_path:
+            message = "Stem source assignment changed during compatible reuse"
+            raise RuntimeError(message)
+        if separator_model_cache_dir(self._project.stem_separator) != processing.model_cache_dir:
+            message = "Stem model location changed during compatible reuse"
+            raise RuntimeError(message)
+        ticket = self._capture_source_ticket(request.sample_id, processing.source_version)
+        if not request.ticket.same_source_request(ticket):
+            message = "Stem source request changed during compatible reuse"
+            raise RuntimeError(message)
+        self._clear_stem_generation_messages(request.sample_id)
+        self._admit_stem_generation(processing, ticket)
 
     def _poll_stem_publications(self) -> None:
         for sample_id, pending in tuple(self._pending_stem_publications.items()):
@@ -1370,8 +1522,23 @@ class StemController(BaseController):  # noqa: PLR0904
             )
 
         event = None
+        processing = None
         try:
+            request = self._resolved_processing_request(request)
+            processing = capture_processing_files(request)
+            job.processing_files = processing[0] if processing is not None else None
+            if processing is not None:
+                request = replace(
+                    request,
+                    encoder_contract=self._processing_contract(request, processing[1]),
+                    python_source_roots=(
+                        processing_source_roots(request, processing[0])
+                        if processing[1] is not None
+                        else ()
+                    ),
+                )
             result = self._stem_backend.generate(request, report_progress)
+            self._verify_generation_provenance(job, request, processing, result)
             event = _StemBackendEvent(
                 sample_id=request.sample_id,
                 source_version=request.source_version,
@@ -1390,6 +1557,7 @@ class StemController(BaseController):  # noqa: PLR0904
                 error=str(err) or type(err).__name__,
             )
         finally:
+            processing = None
             current = job.finish_read()
             if event is None:
                 # An unexpected exception still settles actual reads and private
@@ -1397,6 +1565,45 @@ class StemController(BaseController):  # noqa: PLR0904
                 job.cancel()
         if current and event is not None:
             self._put_generation_event(event)
+
+    @staticmethod
+    def _resolved_processing_request(request: StemGenerationRequest) -> StemGenerationRequest:
+        return replace(request, encoder_executable=resolved_demucs_encoder(request.model_cache_dir))
+
+    @staticmethod
+    def _processing_contract(request: StemGenerationRequest, producer: str | None) -> str | None:
+        if request.encoder_executable is None or producer is None:
+            return None
+        if request.separator == "bs-roformer:musdb18hq":
+            return bs_input_contract(request.encoder_executable)
+        return encoder_contract(request.encoder_executable)
+
+    @staticmethod
+    def _verify_generation_provenance(
+        job: StemGenerationJob,
+        request: StemGenerationRequest,
+        processing: tuple[SealedProcessingFiles, str | None] | None,
+        result: StemGenerationResult,
+    ) -> None:
+        if processing is None:
+            return
+        processing[0].verify()
+        expected_producer = (
+            ("bs-roformer", BS_ROFORMER_MODEL_NAME)
+            if request.separator == "bs-roformer:musdb18hq"
+            else ("demucs", "htdemucs")
+        )
+        if (
+            processing[1] is not None
+            and (result.backend_name, result.model_name) == expected_producer
+            and (
+                result.decoder_verified
+                if request.separator == "bs-roformer:musdb18hq"
+                else result.encoder_verified
+            )
+        ):
+            job.generation_fingerprint = request_fingerprint(request)
+            job.producer_identity = processing[1] if job.generation_fingerprint else None
 
     def _put_generation_event(self, event: _StemBackendEvent) -> None:
         with self._generation_event_lock:

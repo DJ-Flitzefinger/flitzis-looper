@@ -105,10 +105,7 @@ fn public_pair_worker_child_allows_receive_mutable_ping_and_pad1_render() {
     wav(&original, RATE);
     let material = prepare_material(&root, &original, RATE, 2, &|| false).unwrap();
     let version = canonical_version(&material);
-    let wav_reference = format!(
-        "samples/materials/M{}/stems/.ready-{GENERATION}",
-        material.metadata()["material_id"].as_str().unwrap()
-    );
+    let wav_reference = canonical_wav_reference(&material);
     write_complete_wavs(
         &directory.join(&wav_reference),
         &stereo_wav(material.sample.frame_count()),

@@ -162,19 +162,19 @@ genuinely fresh native source/timing ownership and ACK for changed path identiti
 - **AND** target and rollback owners SHALL remain retained while outcome is unresolved, with dependent starts fenced
 - **AND** a new process SHALL reverify journalled bytes and acquire new source and timing acknowledgements before treating the transaction as current
 
-#### Scenario: One legacy material is reachable after normal startup restoration
-- **GIVEN** startup captured an existing legacy original and its related current assignments
+#### Scenario: One old-layout material is reachable after normal startup restoration
+- **GIVEN** startup captured an existing M-ID or legacy original and its related current assignments
 - **WHEN** ordinary source restores and owned stem jobs have settled
-- **THEN** the application SHALL admit at most one distinct legacy material transaction at a time, including all matching current assignments across all banks
-- **AND** canonical originals SHALL not start another migration
+- **THEN** the application SHALL admit at most one distinct old-layout material transaction at a time, including all matching current assignments across all banks
+- **AND** verified readable canonical originals SHALL not start another migration
 - **AND** changed current references, unknown journals, missing originals and unresolved claims SHALL remain visible and protected without repeated automatic retry
 - **AND** this bounded admission SHALL not assert that remaining legacy materials or program-wide reconciliation are complete
 
-#### Scenario: Remaining recognized legacy materials reconcile serially
+#### Scenario: Remaining recognized old-layout materials reconcile serially
 - **GIVEN** a bounded startup inventory of current assignments in all banks
 - **WHEN** one recognized material transaction and its bounded preparation worker have genuinely settled
-- **THEN** the system SHALL recheck the next captured current reference and reconcile each remaining recognized legacy material serially without admitting two active material transactions
-- **AND** newer paths and content identities SHALL win, canonical materials SHALL be skipped, and unknown or unresolved outcomes SHALL stop automatic progress visibly while preserving their assets
+- **THEN** the system SHALL recheck the next captured current reference and reconcile each remaining recognized M-ID or legacy material serially without admitting two active material transactions
+- **AND** newer paths and content identities SHALL win, verified readable canonical materials SHALL be skipped, and unknown or unresolved outcomes SHALL stop automatic progress visibly while preserving their assets
 - **AND** final legacy retirement SHALL require the complete known reference/process inventory and true last physical owner rather than completion of only the first material
 
 #### Scenario: Missing stems retain desire through original migration
@@ -283,3 +283,36 @@ The system SHALL migrate existing M-ID and legacy source/WAV/PCM references to t
 - **WHEN** equal sources occur in different banks with active/paused old voices and unknown adjacent files
 - **THEN** one verified canonical content root SHALL serve equal users while their state remains independent
 - **AND** only declared retired old artifacts SHALL be cleaned after genuine final use, preserving unknown and private data
+
+#### Scenario: M-ID and separately named legacy users share a verified successor
+- **GIVEN** old M-ID and legacy assignments contain byte-identical supported originals under different names
+- **WHEN** startup captures their current content instances and verifies their complete source receipts off-thread
+- **THEN** one serial material transaction SHALL group equal full SHA and byte length while retaining each pad's captured path, request and settings guards
+- **AND** each surviving subscriber SHALL read its own selection and obtain independent source, window, timing and selected-pair ACKs before current-reference commit
+- **AND** readable originals SHALL be skipped by subsequent startup migration without skipping old M-ID sources
+
+#### Scenario: Verification does not freeze performer intent
+- **WHEN** source, loop, key, stem mask or config intent changes during receipt verification or atomic config writing
+- **THEN** current intent SHALL win under the existing writer and launch fences
+- **AND** both needed assignment images SHALL remain retained until actual resolution; saved journal phases SHALL grant neither runtime adoption nor physical deletion authority
+
+#### Scenario: Readable binding cleanup requires its actual birth receipt
+- **WHEN** an owned readable material becomes genuinely obsolete
+- **THEN** cleanup SHALL require the exact native-created root FileID and binding FileID, full digest and extent rather than adoption of a valid-looking schema or path
+- **AND** the existing bounded retirement path SHALL retain current inventory and actual reader protections until both the original and exact binding/root reach a visible physical terminal outcome
+- **AND** replaced, unknown, unreceipted and adjacent files SHALL remain protected
+
+#### Scenario: Restart between original and binding retirement
+- **GIVEN** an exact created-target ledger durably records actual original retirement while its own binding/root remain pending
+- **WHEN** a fresh process resumes the selected current journal and project inventory
+- **THEN** the system SHALL freshly verify the exact remaining root and binding against their native birth receipt and current intent before resuming their independent retirement outcome
+- **AND** an absent original SHALL NOT by itself imply binding/root completion or grant authority over an unknown replacement
+- **AND** cleanup capacity SHALL be reserved before exposing original deletion so admission failure cannot strand root authority or lose the visible outcome
+
+#### Scenario: Restart after verified binding retirement before empty-root retirement
+- **GIVEN** the latest exact created-target journal records actual original retirement and the native-born binding was verified and physically retired before process exit
+- **WHEN** a fresh process resumes with the matching current config, content intent and registered inventory
+- **THEN** recovery SHALL require the exact native birth root FileID, contained typed original reference, absent original and a genuinely empty root before restoring independent root-terminal custody
+- **AND** present bindings SHALL still require their exact birth FileID, complete SHA and extent; ordinary resolution SHALL NOT adopt missing bindings
+- **AND** replaced or reparse roots, reappeared originals or bindings, unknown children, absent birth receipts and missing or false original-terminal records SHALL remain protected
+- **AND** inventory and cleanup capacity SHALL remain retained through physical root deletion, including a real external root-reader wait after caller release

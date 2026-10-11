@@ -86,6 +86,19 @@ fn canonical_version(material: &PreparedMigrationMaterial) -> String {
     )
 }
 
+fn canonical_wav_reference(material: &PreparedMigrationMaterial) -> String {
+    let metadata = material.metadata();
+    let root = material_paths::canonical_original_root_reference(
+        Path::new(metadata["new_reference"].as_str().unwrap()),
+        metadata["material_id"].as_str().unwrap(),
+    )
+    .unwrap();
+    format!(
+        "{}/stems/.ready-{GENERATION}",
+        root.to_string_lossy().replace('\\', "/")
+    )
+}
+
 fn source_successes(engine: &AudioEngine, requests: &[u64]) {
     let mut seen = Vec::new();
     wait_until(|| {
@@ -143,11 +156,7 @@ impl Harness {
         wav(&original, RATE);
         let material = prepare_material(&root, &original, RATE, 2, &|| false).unwrap();
         let version = canonical_version(&material);
-        let metadata = material.metadata();
-        let wav_reference = format!(
-            "samples/materials/M{}/stems/.ready-{GENERATION}",
-            metadata["material_id"].as_str().unwrap()
-        );
+        let wav_reference = canonical_wav_reference(&material);
         let wav_path = root.parent().unwrap().join(&wav_reference);
         write_complete_wavs(
             &wav_path,
@@ -641,13 +650,9 @@ fn cancellation_during_common_marker_reopen_rolls_back_only_owned_new_eligibilit
             .unwrap(),
     )
     .unwrap();
-    let material_root = material
-        .lease
-        .original_path
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap();
+    let material_root =
+        material_paths::material_root_for_original(&harness.root, &material.lease.original_path)
+            .unwrap();
     let pair_base = material_root.join(".pcm-cache/stems/v1/.pairs");
     let common_seen = AtomicBool::new(false);
     let cancelled = || {
@@ -858,10 +863,7 @@ fn ordinary_pair_new_process_reopens_durable_selection_with_fresh_source_timing_
         parent_leases = Arc::downgrade(&engine.cold_leases);
         parent_readers = material.lease.reader_lifetime_probe_for_test();
         let version = canonical_version(&material);
-        let wav_reference = format!(
-            "samples/materials/M{}/stems/.ready-{GENERATION}",
-            metadata["material_id"].as_str().unwrap()
-        );
+        let wav_reference = canonical_wav_reference(&material);
         write_complete_wavs(
             &root.parent().unwrap().join(&wav_reference),
             &original_bytes,
@@ -1454,10 +1456,7 @@ fn ordinary_python_worker_runs_native_pair_preparation_and_persists_current_sele
         let material = prepare_material(&root, &legacy, RATE, 2, &|| false).unwrap();
         let metadata = material.metadata();
         let version = canonical_version(&material);
-        let reference = format!(
-            "samples/materials/M{}/stems/.ready-{GENERATION}",
-            metadata["material_id"].as_str().unwrap()
-        );
+        let reference = canonical_wav_reference(&material);
         write_complete_wavs(
             &directory.path().join(&reference),
             &stereo_wav(material.sample.frame_count()),

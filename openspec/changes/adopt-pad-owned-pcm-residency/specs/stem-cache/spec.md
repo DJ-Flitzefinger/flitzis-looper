@@ -115,6 +115,39 @@ musical meanings and complete five-artifact integrity SHALL remain mandatory.
 - **AND** no repeated full WAV conversion/alignment is needed
 - **AND** other occupied pad windows retain their identities and usability
 
+#### Scenario: Compatible completed set avoids another producer execution
+- **WHEN** an equal-byte source assignment requests an existing completed set
+- **THEN** reuse SHALL require full verified source/WAV/PCM/descriptor binding and the actual executed model/config/producer transform identity
+- **AND** held complete model/config witnesses SHALL protect the producer inputs through execution and successful publication
+- **AND** a verified compatible hit SHALL use the existing preparation/own-source-window-pair-ACK lane without new inference or complete conversion
+- **AND** missing historical producer provenance SHALL remain unknown and SHALL NOT be invented from current settings or grant model-specific reuse
+
+#### Scenario: New Demucs producer binds actual tools and publication custody
+- **WHEN** the supported Demucs branch claims a newly generated compatible producer identity
+- **THEN** the system SHALL hold full captured checkpoint, model/config and transform code witnesses through successful complete artifact verification and promotion
+- **AND** the captured checkpoint SHALL match the actual Torch Hub load path and input probe/decoder launches SHALL use captured absolute executables rather than bare-name PATH assumptions
+- **AND** each actual output encoder child SHALL match the held shared executable/DLL images at its observed loading seam under the explicit platform/system-runtime policy
+- **AND** completed execution evidence SHALL carry actual exclusive record birth identity and complete body digest through the child result; planted sidecars, unqueryable images and missing actual inputs SHALL leave compatibility UNKNOWN
+- **AND** this bounded software policy SHALL NOT imply real neural, music or aggregate resource acceptance from an owned neural-output fixture
+
+#### Scenario: Supported BS producer verifies its actual input tools
+- **WHEN** the supported BS worker creates a new complete set with known producer provenance
+- **THEN** the system SHALL hold and completely hash its checkpoint, config, actual vendor and host implementation inputs, and captured shared decoder/probe files through result promotion
+- **AND** its two actual probe/decode launches SHALL use the captured absolute executable paths with unchanged supported audio arguments and observed matching executable/DLL FileIDs
+- **AND** a current child result SHALL bind its exclusively created diagnostic by exact FileID and complete body digest before compatibility is stamped
+- **AND** planted, changed, replaced, missing or unqueryable diagnostics SHALL leave provenance UNKNOWN
+- **AND** owned neural-output fixtures SHALL NOT imply release-model neural, music or aggregate resource acceptance
+
+#### Scenario: Current local source bytes bind actual execution
+- **WHEN** a supported newly generated StemSet receives known local implementation provenance
+- **THEN** the system SHALL verify that already loaded relevant local transform code and bindings correspond to their held current sources
+- **AND** that bounded verification SHALL include supported actual functions, class/method/property bindings, defaults, constants, required imported aliases and decorator wrappers, including the contextmanager wrapper's code and captured function
+- **AND** exact guarded host/separator source roots SHALL travel in the immutable request and precede inherited Python paths for each child under safe-path import policy
+- **AND** the supported guarded host package initializer SHALL be empty; missing or unsupported source-root/entry policy SHALL leave producer compatibility UNKNOWN
+- **AND** each offline child SHALL use a fresh owned empty bytecode-cache namespace so a timestamp-valid preexisting cache cannot replace the held source implementation
+- **AND** stale loaded code, unsupported required bindings or an unverified child cache namespace SHALL leave producer compatibility UNKNOWN
+- **AND** this bounded local implementation policy SHALL retain standard Python import behavior and the declared dependency-version/system-runtime policy without implying hostile-interpreter or complete global runtime attestation
+
 #### Scenario: Partial derivative or incompatible transform is rejected
 - **WHEN** a PCM set lacks one derivative or mismatches source/rate/layout/alignment/schema
 - **THEN** it cannot be reused or reported ready

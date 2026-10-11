@@ -2,6 +2,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from flitzis_looper.bs_input_provenance import BS_INPUT_CONTRACT_ENV, verified_input_output
 from flitzis_looper.controller.bs_roformer_assets import (
     CHECKPOINT_FILENAME,
     CONFIG_FILENAME,
@@ -9,6 +10,7 @@ from flitzis_looper.controller.bs_roformer_assets import (
     MODEL_NAME,
     verify_model_assets,
 )
+from flitzis_looper.controller.processing_code import fresh_python_source_environment
 from flitzis_looper.controller.stem_generation import (
     CommandRunner,
     CudaDetector,
@@ -25,6 +27,8 @@ from flitzis_looper.controller.stem_generation import (
     detect_torch_cuda_available,
     run_command,
 )
+
+__all__ = ["BsRoformerStemGenerationBackend", "verify_model_assets"]
 
 
 class BsRoformerStemGenerationBackend:
@@ -49,6 +53,9 @@ class BsRoformerStemGenerationBackend:
         except RuntimeError as error:
             raise StemGenerationError(str(error)) from error
         env = demucs_cache_environment(request.model_cache_dir)
+        env.pop(BS_INPUT_CONTRACT_ENV, None)
+        if request.encoder_contract is not None:
+            env[BS_INPUT_CONTRACT_ENV] = request.encoder_contract
         _require_demucs_audio_tools(env, self._command_runner)
         devices = self._devices(request, env)
         cuda_error = None
@@ -72,7 +79,10 @@ class BsRoformerStemGenerationBackend:
                     "--device",
                     device,
                 ]
-                result = self._command_runner(args, cwd=Path.cwd(), env=env)
+                with fresh_python_source_environment(
+                    env, output, source_roots=request.python_source_roots
+                ) as child_env:
+                    result = self._command_runner(args, cwd=Path.cwd(), env=child_env)
                 if result.returncode != 0:
                     diagnostic = _command_diagnostic(result)
                     if device == "cuda" and "cpu" in devices:
@@ -86,6 +96,9 @@ class BsRoformerStemGenerationBackend:
                     target_shape=request.target_shape,
                     progress=progress,
                 )
+                decoder_verified = verified_input_output(
+                    output, request.encoder_contract, result.stdout
+                )
             diagnostic = MODEL_IDENTITY
             if cuda_error is not None:
                 diagnostic += f"; CUDA failed; same model generated on CPU: {cuda_error}"
@@ -96,6 +109,7 @@ class BsRoformerStemGenerationBackend:
                 cpu_fallback=cuda_error is not None,
                 artifact_count=5,
                 diagnostic=diagnostic[:1000],
+                decoder_verified=decoder_verified,
             )
         msg = "BS-RoFormer did not run"
         raise StemGenerationError(msg)

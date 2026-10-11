@@ -60,6 +60,7 @@ impl PreparedMigrationMaterial {
             "artifact_ledger_schema": 1,
             "created_original": self.lease.created_original(),
             "created_cache": self.lease.created_cache(),
+            "material_creation": self.lease.material_creation_receipt(),
         })
     }
 }

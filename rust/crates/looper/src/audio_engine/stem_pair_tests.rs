@@ -282,13 +282,20 @@ impl Fixture {
             .read_complete(&material.sample, 1024 * 1024)
             .unwrap();
         let metadata = material.metadata();
-        let material_id = metadata["material_id"].as_str().unwrap();
         let version = format!(
             "{}|sha256-v1:{}",
             metadata["new_reference"].as_str().unwrap(),
             metadata["original"]["sha256"].as_str().unwrap()
         );
-        let wav_reference = format!("samples/materials/M{material_id}/stems/.ready-{GENERATION}");
+        let material_reference = material_paths::canonical_original_root_reference(
+            Path::new(metadata["new_reference"].as_str().unwrap()),
+            metadata["material_id"].as_str().unwrap(),
+        )
+        .unwrap();
+        let wav_reference = format!(
+            "{}/stems/.ready-{GENERATION}",
+            material_reference.to_string_lossy().replace('\\', "/")
+        );
         let wav_path = root.parent().unwrap().join(&wav_reference);
         fs::create_dir_all(&wav_path).unwrap();
         for name in STEM_FILE_NAMES {
@@ -345,12 +352,7 @@ impl Fixture {
     }
 
     pub fn stem_pcm_base(&self) -> PathBuf {
-        self.material
-            .lease
-            .original_path
-            .parent()
-            .unwrap()
-            .parent()
+        material_paths::material_root_for_original(&self.root, &self.material.lease.original_path)
             .unwrap()
             .join(".pcm-cache/stems/v1")
     }
@@ -908,8 +910,8 @@ fn typed_root_material_original_digest_and_ready_reference_cannot_be_substituted
     let other = Fixture::new(5);
     assert!(open_verified_pair(&other.root, &reference, &other.material, &|| false).is_err());
     for invalid in [
-        reference.replace("/materials/", "/materials/../materials/"),
-        reference.replace("/materials/", "/materials/./"),
+        reference.replacen("samples/", "samples/../samples/", 1),
+        reference.replacen("samples/", "samples/./", 1),
         fixture.wav_reference.clone(),
         format!("{reference}/manifest.json"),
     ] {

@@ -12,6 +12,11 @@ from flitzis_looper.controller.material_migration_cleanup import (
     MigrationArtifactReconciler,
     MigrationCleanupQueue,
 )
+from flitzis_looper.controller.material_migration_grouping import (
+    current_candidates,
+    original_requests,
+    retain_content_group,
+)
 from flitzis_looper.controller.material_migration_history import (
     check_alias_capacity,
     merge_artifacts,
@@ -22,6 +27,7 @@ from flitzis_looper.controller.material_migration_pair import prepare_migrated_p
 from flitzis_looper.controller.material_migration_recovery import inspect_migration_recovery
 from flitzis_looper.controller.stem_cache import expected_stem_files
 from flitzis_looper.material_migration_model import (
+    MaterialCreationReceipt,
     MaterialMigrationAlias,
     MaterialMigrationJournal,
     MigrationAssignment,
@@ -32,7 +38,7 @@ from flitzis_looper.models import (
     StemCacheEntry,
     validate_sample_id,
 )
-from flitzis_looper.project_materials import original_asset
+from flitzis_looper.project_materials import original_asset, resolve_asset
 from flitzis_looper.stem_pair_selection import StemPairSelection
 from flitzis_looper_audio import MaterialMigrationJournalStore, ProjectAssetLease
 
@@ -122,17 +128,11 @@ class MaterialMigrationController:
         self._recovery_hold: MaterialMigrationHold | None = None
         self._recovery_pins: list[ProjectAssetLease] = []
         self._recovery_fence_id: str | None = None
-        self._artifact_reconciler: MigrationArtifactReconciler | None = None
-        self._artifact_future: Future[ArtifactCapture] | None = None
-        self._history_future: Future[MaterialMigrationJournal] | None = None
-        self._artifact_captures: list[ArtifactCapture] = []
-        self._cleanup = MigrationCleanupQueue(Path.cwd() / "samples")
-        self._preparation_source: str | None = None
-        self._stem_targets_captured = False
         self.cleanup_error: str | None = None
-        self._ledger_enabled = (
-            getattr(audio, "migration_artifact_ledger_supported", lambda: False)() is True
+        self._ledger_enabled: bool = (
+            getattr(self._audio, "migration_artifact_ledger_supported", lambda: False)() is True
         )
+        self._init_material_custody()
         self._loader._set_migration_event_handler(self.handle_loader_event)
         self._recover_interrupted()
         if self._ledger_enabled:
@@ -140,6 +140,23 @@ class MaterialMigrationController:
                 self._ensure_artifacts()
             except (OSError, RuntimeError, ValueError) as error:
                 self.cleanup_error = str(error)
+
+    def _init_material_custody(self) -> None:
+        self._artifact_reconciler: MigrationArtifactReconciler | None = None
+        self._artifact_future: Future[ArtifactCapture] | None = None
+        self._history_future: Future[MaterialMigrationJournal] | None = None
+        self._artifact_captures: list[ArtifactCapture] = []
+        self._cleanup = MigrationCleanupQueue(Path.cwd() / "samples")
+        self._preparation_source: str | None = None
+        self._stem_targets_captured = False
+        self._group_candidates: tuple[MigrationAssignment, ...] = ()
+        self._grouping_originals = False
+        self._group_witness: tuple[str, int] | None = None
+        self._creation_restores: dict[int, PadContentIdentity] = {}
+        self._creation_restore_future: Future[None] | None = None
+        binder = getattr(self._loader, "bind_material_creation_restore", None)
+        if callable(binder):
+            binder(self._queue_material_creation_restore)
 
     def schedule_after_restore(self) -> None:
         """Capture a bounded related-reference inventory for serial reconciliation."""
@@ -166,7 +183,7 @@ class MaterialMigrationController:
                 continue
             try:
                 asset = original_asset(reference)
-                if asset.material_id is None:
+                if asset.layout in {"legacy", "material_id"}:
                     self.begin(sample_id)
                     return
             except (OSError, RuntimeError, ValueError) as error:
@@ -284,7 +301,13 @@ class MaterialMigrationController:
     ) -> str:
         self._reset_transaction()
         transaction_id = uuid4().hex
-        retirement = self._assets.reserve(len(assignments) * 8 + 16)
+        candidates = tuple(
+            {
+                item.sample_id: item
+                for item in (*current_candidates(self._project, self._session), *assignments)
+            }.values()
+        )
+        retirement = self._assets.reserve(max(len(candidates), len(assignments)) * 8 + 16)
         self._retirement = retirement
         try:
             revision, snapshot, config_sha = (
@@ -294,6 +317,7 @@ class MaterialMigrationController:
             )
             self._fence_owner = transaction_id
             self._preparation_source = source
+            self._group_candidates = candidates
             parent = self._recovery_active
             check_alias_capacity(snapshot, parent)
             self._journal = MaterialMigrationJournal(
@@ -317,14 +341,11 @@ class MaterialMigrationController:
             self._new_stems = {}
             self.error = None
             self._preclaim_abort = None
-            if previous_owner is None:
-                self._hold = self._audio.hold_material_migration([
-                    item.sample_id for item in assignments
-                ])
-            if self._ledger_enabled:
-                self._start_old_artifact_capture(source, assignments)
-            else:
-                self._preparation = self._audio.prepare_material_migration(source)
+            self._grouping_originals = True
+            if not self._creation_restores and self._creation_restore_future is None:
+                self._artifact_future = self._ensure_artifacts().capture(
+                    original_requests(source, candidates), include_legacy_pcm=False
+                )
         except (OSError, RuntimeError, ValueError) as error:
             if self._fence_owner == transaction_id:
                 self._fail_before_admission(str(error))
@@ -339,22 +360,91 @@ class MaterialMigrationController:
             samples = Path.cwd() / "samples"
             samples.mkdir(exist_ok=True)
             self._artifact_reconciler = MigrationArtifactReconciler(
-                samples, self._persistence.config_path
+                samples, self._persistence.config_path, self._audio
             )
         return self._artifact_reconciler
+
+    def _queue_material_creation_restore(self, sample_id: int, content: PadContentIdentity) -> None:
+        self._creation_restores[sample_id] = content
+
+    def _poll_material_creation_restore(self) -> None:
+        future = self._creation_restore_future
+        if future is not None:
+            if not future.done():
+                return
+            try:
+                future.result()
+            except (OSError, RuntimeError, ValueError) as error:
+                self.cleanup_error = f"Material birth ownership preserved: {error}"
+            self._creation_restore_future = None
+        if not self._creation_restores or not self._ledger_enabled:
+            return
+        try:
+            reconciler = self._ensure_artifacts()
+            if not reconciler.available:
+                return
+            sample_id = next(iter(self._creation_restores))
+            content = self._creation_restores.pop(sample_id)
+            if self._project.pad_content[sample_id] != content or content.material_creation is None:
+                return
+            journal = self._saved_creation_journal(sample_id, content)
+            self._creation_restore_future = reconciler.restore_material_creation(
+                sample_id, content.instance_id, content.material_creation, journal
+            )
+        except (OSError, RuntimeError, ValueError) as error:
+            self.cleanup_error = f"Material birth ownership preserved: {error}"
+
+    def _saved_creation_journal(
+        self, sample_id: int, content: PadContentIdentity
+    ) -> MaterialMigrationJournal | None:
+        for alias in self._project.material_migrations.values():
+            if (
+                alias.material_creation != content.material_creation
+                or alias.new_reference != self._project.sample_paths[sample_id]
+            ):
+                continue
+            store = MaterialMigrationJournalStore.open(
+                str(Path.cwd() / "samples"), alias.transaction_id
+            )
+            records = store.history()
+            if not records:
+                message = "saved migration birth has no current durable journal"
+                raise ValueError(message)
+            candidate = MaterialMigrationJournal.model_validate_json(records[-1])
+            if not any(
+                item.sample_id == sample_id and item.instance_id == content.instance_id
+                for item in candidate.assignments
+            ):
+                # A later ordinary importer carries the birth fact, but cannot
+                # borrow the creating migration's captured assignment authority.
+                continue
+            if candidate.alias != alias or candidate.phase != "config_committed":
+                message = "saved migration alias differs from its current durable journal"
+                raise ValueError(message)
+            return candidate
+        return None
 
     def _start_old_artifact_capture(
         self, source: str, assignments: list[MigrationAssignment]
     ) -> None:
-        requests = [ArtifactRequest(source, "rollback")]
-        seen = {source}
+        references = dict.fromkeys([source, *(item.old_reference for item in assignments)])
+        creations = {
+            item.old_reference: content.material_creation
+            for item in assignments
+            if (content := self._project.pad_content[item.sample_id]) is not None
+        }
+        requests = [
+            ArtifactRequest(reference, "rollback", material_creation=creations.get(reference))
+            for reference in references
+        ]
+        seen = set(references)
         for item in assignments:
             entry = self._project.stem_cache[item.sample_id]
             if entry is not None and entry.cache_dir not in seen:
                 requests.append(
                     ArtifactRequest(
                         entry.cache_dir,
-                        "target" if entry.pair else "rollback",
+                        "rollback",
                         required=entry.available,
                     )
                 )
@@ -362,9 +452,11 @@ class MaterialMigrationController:
             if entry is not None and entry.pair is not None:
                 for reference in (entry.pair.pcm_generation, entry.pair.descriptor_reference):
                     if reference not in seen:
-                        # Existing canonical pair targets are reused, never producer-owned
-                        # rollback artifacts of the legacy Original migration.
-                        requests.append(ArtifactRequest(reference, "target"))
+                        # Capture exact old receipts first. Only the authoritative
+                        # prepared material root can establish same-root reuse.
+                        requests.append(
+                            ArtifactRequest(reference, "rollback", required=entry.available)
+                        )
                         seen.add(reference)
         self._artifact_future = self._ensure_artifacts().capture(requests)
 
@@ -380,9 +472,53 @@ class MaterialMigrationController:
         if self._journal is None:
             message = "artifact proof has no migration journal"
             raise RuntimeError(message)
+        if self._grouping_originals:
+            return self._finish_content_group(capture)
         self._record(
             self._journal.phase, artifacts=merge_artifacts(self._journal.artifacts, capture.records)
         )
+        return True
+
+    def _finish_content_group(self, capture: ArtifactCapture) -> bool:
+        source = self._preparation_source
+        if source is None or self._journal is None:
+            message = "material grouping lost its captured source"
+            raise RuntimeError(message)
+        assignments, self._group_witness = retain_content_group(
+            source, capture, self._group_candidates
+        )
+        # Receipt verification can outlive source replacement, ABA or restoration.
+        # Each retained pad keeps its own captured path and content-instance guard.
+        subscribers = {item.sample_id: _Subscriber(item) for item in assignments}
+        subscribers = {index: item for index, item in subscribers.items() if self._matches(item)}
+        if not subscribers:
+            message = "newer source assignments superseded material verification"
+            raise ValueError(message)
+        self._subscribers = subscribers
+        self._grouping_originals = False
+        self._group_candidates = ()
+        if capture.errors:
+            self.cleanup_error = "; ".join(capture.errors)
+        self._record(
+            "captured",
+            assignments=tuple(item.capture for item in subscribers.values()),
+            artifacts=merge_artifacts(self._journal.artifacts, capture.records),
+        )
+        self._owners.extend(
+            self._assets.acquire(original_asset(reference).path)
+            for reference in {item.capture.old_reference for item in subscribers.values()}
+            if original_asset(reference).path != original_asset(source).path
+        )
+        self._hold = (
+            self._recovery_hold.take(list(subscribers))
+            if self._recovery_active is not None and self._recovery_hold is not None
+            else self._audio.hold_material_migration(list(subscribers))
+        )
+        if self._ledger_enabled:
+            self._start_old_artifact_capture(
+                source, [item.capture for item in subscribers.values()]
+            )
+            return False
         return True
 
     def _poll_recovery(self) -> None:
@@ -469,6 +605,9 @@ class MaterialMigrationController:
         self._artifact_captures = []
         self._preparation_source = None
         self._stem_targets_captured = False
+        self._group_candidates = ()
+        self._grouping_originals = False
+        self._group_witness = None
 
     def _record(self, phase: str, *, error: str | None = None, **updates: object) -> None:
         if self._journal is None or self._store is None:
@@ -563,6 +702,7 @@ class MaterialMigrationController:
 
     def poll(self) -> None:
         """Advance bounded control work; never synthesize source/timing acceptance."""
+        self._poll_material_creation_restore()
         self._poll_cleanup()
         self._poll_history_transfer()
         self._poll_recovery()
@@ -627,8 +767,23 @@ class MaterialMigrationController:
         except (OSError, RuntimeError, ValueError) as error:
             self._unresolved(str(error))
 
+    def _start_material_grouping(self) -> bool:
+        if self._grouping_originals and self._artifact_future is None:
+            if self._creation_restores or self._creation_restore_future is not None:
+                return False
+            if self._preparation_source is None:
+                message = "deferred material grouping has no captured source"
+                raise RuntimeError(message)
+            self._artifact_future = self._ensure_artifacts().capture(
+                original_requests(self._preparation_source, self._group_candidates),
+                include_legacy_pcm=False,
+            )
+        return True
+
     def _poll_material(self) -> None:
-        if self._ledger_enabled and not self._poll_artifact_capture():
+        if not self._start_material_grouping():
+            return
+        if not self._poll_artifact_capture():
             return
         if self._preparation is None and self._preparation_source is not None:
             self._preparation = self._audio.prepare_material_migration(self._preparation_source)
@@ -643,6 +798,22 @@ class MaterialMigrationController:
         data = json.loads(self._preparation.metadata_json())
         original = data["original"]
         old, new, digest = data["old_reference"], data["new_reference"], original["sha256"]
+        if self._group_witness != (digest, original["bytes"]):
+            message = "prepared material differs from its held complete grouping proof"
+            raise ValueError(message)
+        creation = data.get("material_creation")
+        if (
+            creation is None
+            and self._recovery_active is not None
+            and self._recovery_active.alias is not None
+        ):
+            previous = self._recovery_active.alias
+            if (
+                previous.new_reference == new
+                and previous.original_sha256 == digest
+                and previous.original_bytes == original["bytes"]
+            ):
+                creation = previous.material_creation
         alias = MaterialMigrationAlias(
             transaction_id=self._journal.transaction_id,
             material_id=data["material_id"],
@@ -656,7 +827,14 @@ class MaterialMigrationController:
             old_source_version=f"{old}|sha256-v1:{digest}",
             new_source_version=f"{new}|sha256-v1:{digest}",
             resume_of=self._journal.resume_of,
+            material_creation=(
+                MaterialCreationReceipt.model_validate(creation) if creation is not None else None
+            ),
         )
+        self._verify_recovery_alias(alias)
+        self._record_verified_material(alias, data)
+
+    def _verify_recovery_alias(self, alias: MaterialMigrationAlias) -> None:
         if self._recovery_active is not None and self._recovery_active.alias is not None:
             previous = self._recovery_active.alias
             if (alias.original_sha256, alias.original_bytes) != (
@@ -665,18 +843,44 @@ class MaterialMigrationController:
             ):
                 message = "recovery original differs from the verified interrupted transaction"
                 raise ValueError(message)
-        self._record("material_verified", alias=alias)
+
+    def _record_verified_material(
+        self, alias: MaterialMigrationAlias, data: dict[str, object]
+    ) -> None:
+        if self._journal is None:
+            message = "verified material has no retained journal"
+            raise RuntimeError(message)
+        target_root = original_asset(alias.new_reference).material_root
+        artifacts = self._journal.artifacts
+        if target_root is not None:
+            artifacts = merge_artifacts(
+                (),
+                (
+                    item.model_copy(update={"role": "target", "created": False})
+                    if resolve_asset(item.evidence.reference).material_root == target_root
+                    else item
+                    for item in artifacts
+                ),
+            )
+        self._record("material_verified", alias=alias, artifacts=artifacts)
         if self._ledger_enabled:
+            created_original = data.get("created_original")
+            created_cache = data.get("created_cache")
             if (
                 data.get("artifact_ledger_schema") != 1
-                or type(data.get("created_original")) is not bool
-                or type(data.get("created_cache")) is not bool
+                or not isinstance(created_original, bool)
+                or not isinstance(created_cache, bool)
             ):
                 message = "material preparation has no checked artifact provenance"
                 raise ValueError(message)
             self._artifact_future = self._ensure_artifacts().capture([
-                ArtifactRequest(alias.new_reference, "target", data["created_original"]),
-                ArtifactRequest(alias.cache_path, "target", data["created_cache"]),
+                ArtifactRequest(
+                    alias.new_reference,
+                    "target",
+                    created_original,
+                    material_creation=alias.material_creation,
+                ),
+                ArtifactRequest(alias.cache_path, "target", created_cache),
             ])
 
     def _poll_stem_copy(self) -> None:
@@ -701,7 +905,7 @@ class MaterialMigrationController:
             self._stem_work[entry.cache_dir] = self._audio.prepare_material_migration_stems(
                 preparation,
                 entry.cache_dir,
-                alias.new_source_version if entry.pair else entry.source_version,
+                entry.source_version,
                 alias.new_source_version,
                 uuid4().hex,
             )
@@ -823,7 +1027,7 @@ class MaterialMigrationController:
 
     def _poll_stem_ack(self, sample_id: int, subscriber: _Subscriber) -> bool:
         entry = self._old_stems.get(sample_id)
-        if entry is None or not entry.available:
+        if entry is None or (not entry.available and entry.cache_dir not in self._new_stems):
             return True
         if entry.pair is not None or getattr(self._audio, "prepare_stem_pair", None) is not None:
             return self._poll_pair_ack(sample_id, subscriber, entry)
@@ -902,6 +1106,11 @@ class MaterialMigrationController:
                 "source_version": alias.new_source_version,
                 "cache_dir": target,
                 "stems": expected_stem_files(target),
+                "pair": entry.pair
+                if entry.pair is not None
+                and entry.pair.wav_generation == target
+                and entry.source_version == alias.new_source_version
+                else None,
             }
         )
         ticket = self._audio.capture_prepared_source(sample_id, alias.new_source_version)
@@ -939,8 +1148,14 @@ class MaterialMigrationController:
     def _settle_pair_full_mix(
         self, sample_id: int, subscriber: _Subscriber, entry: StemCacheEntry
     ) -> bool:
-        # A legacy WAV selection still needs a complete background-created disk pair.
-        if subscriber.pair_future is None and entry.pair is None:
+        # Every changed WAV target needs a source-bound disk pair, including FULL
+        # MIX. An unchanged complete pair remains reusable without live components.
+        target = self._new_stems[entry.cache_dir]
+        if subscriber.pair_future is None and (
+            entry.pair is None
+            or entry.pair.wav_generation != target
+            or entry.source_version != self._alias().new_source_version
+        ):
             self._start_pair_work(sample_id, subscriber, entry, components=False)
         if subscriber.pair_future is None:
             return True
@@ -1040,7 +1255,9 @@ class MaterialMigrationController:
                 message = "migration content identity disappeared"
                 raise ValueError(message)
             candidate.pad_content[sample_id] = PadContentIdentity(
-                instance_id=content.instance_id, material_id=alias.material_id
+                instance_id=content.instance_id,
+                material_id=alias.material_id,
+                material_creation=alias.material_creation,
             )
             self._candidate_stems(candidate, sample_id, subscriber)
         candidate.material_migrations = successor_aliases(candidate, alias, self._recovery_active)
@@ -1065,6 +1282,7 @@ class MaterialMigrationController:
                 updates |= {"cache_dir": target, "stems": expected_stem_files(target)}
             if subscriber.pair_selection is not None:
                 updates["pair"] = subscriber.pair_selection
+                updates["available"] = True
             candidate.stem_cache[sample_id] = StemCacheEntry.model_validate(
                 old.model_dump() | updates
             )
@@ -1100,6 +1318,10 @@ class MaterialMigrationController:
             committed_revision=committed_revision,
             committed_config_sha256=digest,
         )
+        for sample_id in self._subscribers:
+            content = self._project.pad_content[sample_id]
+            if content is not None and content.material_creation is not None:
+                self._queue_material_creation_restore(sample_id, content)
         self._release_settled_resources()
 
     def _unresolved(self, message: str) -> None:

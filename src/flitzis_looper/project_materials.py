@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from flitzis_looper_audio import resolve_project_asset
+from flitzis_looper_audio import resolve_project_asset_details
 
 
 @dataclass(frozen=True)
@@ -11,13 +11,19 @@ class ProjectAssetPath:
     kind: str
     path: Path
     material_id: str | None
+    layout: str
+    material_root: Path | None
 
 
 def resolve_asset(value: str | Path, *, project_root: Path | None = None) -> ProjectAssetPath:
     """Validate lexical containment and artifact kind before any normalization."""
     root = Path.cwd() if project_root is None else project_root
-    kind, path, material_id = resolve_project_asset(str(root / "samples"), str(value))
-    return ProjectAssetPath(kind, Path(path), material_id)
+    kind, path, material_id, layout, material_root = resolve_project_asset_details(
+        str(root / "samples"), str(value)
+    )
+    return ProjectAssetPath(
+        kind, Path(path), material_id, layout, Path(material_root) if material_root else None
+    )
 
 
 def original_asset(value: str | Path, *, project_root: Path | None = None) -> ProjectAssetPath:

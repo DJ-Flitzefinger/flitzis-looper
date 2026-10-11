@@ -424,6 +424,25 @@ aggregate resources, model inference or Human/device gates.
 
 - [ ] X11-MATERIAL M1: readable contained roots, full-SHA cross-name dedup/unsafe-case collisions, exact original preservation and independent content settings/DSP/owners through copy/move/origin-delete.
 - [ ] X11-MATERIAL M2: existing M-ID/legacy journal/config/current-reference migration with fresh native ACK and fault/reopen/latest-intent/unknown/true-last-reader proof; no rename beneath owners or reset.
+
+Bounded M1/M2 software execution and independent source/evidence review pass; the
+[MATERIAL report](../../../docs/readable-material-validation.md) retains actual
+failed attempts and separates required software checks from full E11 outcomes.
+The following checked gates record that bounded software scope. Delivery still
+requires independent acceptance of the exact final staged tree, authorized
+coherent publication and clean-main/fresh-remote verification in local receipts:
+
+- [x] MATERIAL M1 software: typed contained readable resolver, full incoming/canonical SHA/extent/EOF, first root AND exact leaf, compatible source/snapshot-copy zero/full-decode zero, Windows custody/names/collisions/concurrency and actual fresh-process compatible PCM hit.
+- [x] MATERIAL completed-set software: known actual model/config/code/converter guards through successful promotion, supported loaded-code/default/constant/import-alias/wrapper binding, immutable exact child source roots and fresh bytecode namespace, real caller-owned tool children, own pair ACK and inference-free compatible reuse; labelled composed neural-output fixture plus unchanged actual neural-seam review, old UNKNOWN never retroattested.
+- [x] MATERIAL M2 software: both old layouts through actual config/journal/controller and fresh source/window/timing/pair ACK, current intent and exact before/after negative inventories, real old Native owners and restart/partial-retirement/last-reader birth-receipt terminal.
+- [x] MATERIAL software validation: current LONG/RF64 regression, broad Debug/Release, installed Python/static/scoped-format, Cargo check, Release build-only/preflight, official strict and independent whole-source/evidence review with all prior FAIL/UNKNOWN scopes retained. The LONG children prove source callback ACK and pair preparation/reopening; separate Native tests prove pair callback/adoption and physical retirement.
+
+X11-MATERIAL keeps its X11-LONG/P1b/P2b dependencies. Ordinary UI NoHint/default
+eight-bar admission and finite KEYLOCK-load/DSP remain REQUIRED OPEN in P4b/P5b.
+Bounded software acceptance cannot complete the two full MATERIAL checkboxes
+above, copy/move/Re-Arrange, E11-19/20/current-model controls, active new-generation
+adoption, all216 resource/music/Human or full Goal gates.
+
 - [ ] X11-UI, X11-LIVE-STEMS, X11-BULK and RECORD-CAPTURE/FORMAT/CONTROL: implement through their focused companion tasks, keeping separate new-generation proof and final Human gates.
 - [ ] P6/V0: repeat aggregate resources, all216/bank/dedup/cleanup/negative cases under new generation and capture workload, including later R2/B7 atomic-content/scheduler integration.
 - [ ] H-LIVE/H-FINAL/C-FINAL: actual final Human device/visual/recording/hearing testing and bounded corrections; preserve all original parent gates; STOP before full Rust-port planning/implementation/Slice8.

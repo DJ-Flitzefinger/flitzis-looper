@@ -21,7 +21,11 @@ fn native_build_profile() -> &'static str {
 #[pymodule]
 mod flitzis_looper_audio {
     #[pymodule_export]
+    use super::audio_engine::SealedProcessingFiles;
+    #[pymodule_export]
     use super::audio_engine::resolve_project_asset;
+    #[pymodule_export]
+    use super::audio_engine::resolve_project_asset_details;
     #[pymodule_export]
     use super::native_build_profile;
     #[pymodule_export]

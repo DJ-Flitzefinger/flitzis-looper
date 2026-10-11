@@ -2,13 +2,15 @@ import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from flitzis_looper.controller.stem_identity import request_signature
+
 if TYPE_CHECKING:
     from flitzis_looper.controller.asset_lifecycle import (
         AssetRetirementReservation,
         ProjectAssetLifecycle,
     )
     from flitzis_looper.controller.stem_generation import StemGenerationRequest
-    from flitzis_looper_audio import PreparedSourceTicket
+    from flitzis_looper_audio import PreparedSourceTicket, SealedProcessingFiles
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,10 +56,13 @@ class StemGenerationJob:
         self._running = False
         self._disposed = False
         self._begun = False
+        self.generation_fingerprint: str | None = None
+        self.producer_identity: str | None = None
+        self.processing_files: SealedProcessingFiles | None = None
         self._subscribers: dict[int, StemSubscriber] = {}
         try:
             self.add_subscriber(request.sample_id, ticket, content_id)
-        except (OSError, RuntimeError, ValueError):
+        except OSError, RuntimeError, ValueError:
             self.cancel()
             raise
 
@@ -67,12 +72,7 @@ class StemGenerationJob:
         return (
             own.source_path == request.source_path
             and own.source_version == request.source_version
-            and own.target_shape == request.target_shape
-            and own.model_cache_dir == request.model_cache_dir
-            and own.separator == request.separator
-            and own.device_policy == request.device_policy
-            and own.demucs_shifts == request.demucs_shifts
-            and own.demucs_overlap == request.demucs_overlap
+            and request_signature(own) == request_signature(request)
         )
 
     def add_subscriber(
@@ -142,6 +142,9 @@ class StemGenerationJob:
         if self._disposed:
             return
         self._disposed = True
+        # The guard outlives backend return and the queued event. Successful
+        # settlement promotes the immutable WAVs/marker before disposing this job.
+        self.processing_files = None
         for subscriber in self._subscribers.values():
             subscriber.retirement.close()
         self._subscribers.clear()

@@ -813,6 +813,7 @@ fn x11_long_productive_child() {
     };
     let integrity = json!({
         "source_copied_bytes":lease.integrity.source_copied_bytes,
+        "incoming_verify_bytes":lease.integrity.incoming_verify_bytes,
         "snapshot_verify_bytes":lease.integrity.snapshot_verify_bytes,
         "original_verify_bytes":lease.integrity.original_verify_bytes,
         "original_copied_bytes":lease.integrity.original_copied_bytes,
@@ -841,9 +842,15 @@ fn x11_long_productive_child() {
             state["source_oracle"]["original"].as_str().unwrap()
         );
         let wav_reference = if phase == "prepare" {
+            let material_reference =
+                crate::audio_engine::material_paths::canonical_original_root_reference(
+                    Path::new(&cached_path),
+                    lease.material_id.as_ref().unwrap(),
+                )
+                .unwrap();
             format!(
-                "samples/materials/M{}/stems/.ready-0123456789abcdef0123456789abcdef",
-                lease.material_id.as_ref().unwrap()
+                "{}/stems/.ready-0123456789abcdef0123456789abcdef",
+                material_reference.to_string_lossy().replace('\\', "/")
             )
         } else {
             state["wav_reference"].as_str().unwrap().into()

@@ -951,6 +951,22 @@ impl ProjectAssets {
                 "verified retirement leaf evidence changed",
             ));
         }
+        // A fresh receipt/job pin may queue an unassigned original behind real
+        // readers. It must not revoke a different current saved assignment or
+        // retain its retirement Inventory while that assignment still owns it.
+        if matches!(kind, super::material_paths::AssetKind::Original { .. })
+            && state
+                .owners
+                .iter()
+                .filter_map(Weak::upgrade)
+                .any(|current| {
+                    current.path == owner.path
+                        && current.identity == owner.identity
+                        && current.saved_assignment.load(Ordering::Acquire)
+                })
+        {
+            return Ok(None);
+        }
         if let Some(previous) = state.retiring.get(&owner.path) {
             if previous.identity != owner.identity
                 || previous

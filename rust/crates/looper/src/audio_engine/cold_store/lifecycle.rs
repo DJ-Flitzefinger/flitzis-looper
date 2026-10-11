@@ -77,6 +77,19 @@ pub(super) struct DeleteTask {
     _slot: CleanupSlot,
 }
 
+/// Only exclusive native creation produces this receipt. Parsed metadata and
+/// restored paths cannot manufacture ownership; restart recovery without the
+/// original creation receipt deliberately preserves the marker and root.
+pub(super) struct MaterialCreation {
+    pub(super) root: PathBuf,
+    pub(super) original_leaf: String,
+    pub(super) identity: FileIdentity,
+    pub(super) binding: Option<crate::audio_engine::project_assets::VerifiedFile>,
+    pub(super) pending: bool,
+    pub(super) protection: Option<Arc<crate::audio_engine::project_assets::RetirementProtection>>,
+    pub(super) _slot: CleanupSlot,
+}
+
 #[derive(Default)]
 pub(super) struct StoreState {
     preparing: HashSet<PreparationKey>,
@@ -84,6 +97,7 @@ pub(super) struct StoreState {
     pub(super) caches: HashMap<PathBuf, Weak<CacheReaders>>,
     pub(super) originals: HashMap<PathBuf, Weak<OriginalReader>>,
     pub(super) deleting: VecDeque<DeleteTask>,
+    materials: HashMap<PathBuf, MaterialCreation>,
     deleted: u64,
     errors: Vec<String>,
 }
@@ -108,7 +122,9 @@ pub(super) fn store() -> &'static Arc<Store> {
                     let Ok(mut state) = worker.state.lock() else {
                         return;
                     };
-                    if state.deleting.is_empty() {
+                    if state.deleting.is_empty()
+                        && !state.materials.values().any(|value| value.pending)
+                    {
                         let Ok(next) = worker.changed.wait(state) else {
                             return;
                         };
@@ -161,6 +177,17 @@ pub(super) fn store() -> &'static Arc<Store> {
                             }
                         }
                     }
+                    // A failed handle deletion retries through this same bounded
+                    // worker; an actual external sealed marker can outlive all
+                    // registered PCM/original readers.
+                    prunes.extend(
+                        state
+                            .materials
+                            .values()
+                            .filter(|value| value.pending)
+                            .take(CLEANUP_PER_POLL)
+                            .map(|value| (value.root.join(&value.original_leaf), None)),
+                    );
                     drop(state);
                     for (path, protection) in prunes {
                         super::super::project_assets::ProjectAssets::shared()
@@ -177,12 +204,355 @@ pub(super) fn store() -> &'static Arc<Store> {
     })
 }
 
+pub(super) fn retain_material_creation_under_gate(
+    state: &mut StoreState,
+    creation: MaterialCreation,
+) {
+    if let Some(previous) = state.materials.insert(creation.root.clone(), creation)
+        && let Some(protection) = previous.protection
+    {
+        protection.outcome.finish(Err(
+            "another exclusive root creation superseded the old receipt; preserved".into(),
+        ));
+    }
+}
+
+pub(super) fn known_material_creation(
+    root: &Path,
+) -> io::Result<
+    Option<(
+        FileIdentity,
+        Option<crate::audio_engine::project_assets::VerifiedFile>,
+        String,
+    )>,
+> {
+    let state = store()
+        .state
+        .lock()
+        .map_err(|_| invalid("material creation gate poisoned"))?;
+    Ok(state.materials.get(root).map(|creation| {
+        (
+            creation.identity.clone(),
+            creation.binding.clone(),
+            creation.original_leaf.clone(),
+        )
+    }))
+}
+
+pub(super) fn restore_verified_material_creation(
+    mut creation: MaterialCreation,
+) -> io::Result<Option<Arc<crate::audio_engine::project_assets::RetirementOutcome>>> {
+    let mut state = store()
+        .state
+        .lock()
+        .map_err(|_| invalid("material creation gate poisoned"))?;
+    if let Some(previous) = state.materials.get_mut(&creation.root) {
+        if previous.identity != creation.identity
+            || previous.binding != creation.binding
+            || previous.original_leaf != creation.original_leaf
+        {
+            return Err(invalid(
+                "historical material creation conflicts with retained receipt; preserved",
+            ));
+        }
+        if let Some(protection) = previous.protection.as_ref() {
+            return Ok(Some(protection.outcome.clone()));
+        }
+        previous.protection = creation.protection.take();
+        previous.pending = previous.protection.is_some();
+        if previous.pending {
+            store().changed.notify_one();
+        }
+        return Ok(previous
+            .protection
+            .as_ref()
+            .map(|protection| protection.outcome.clone()));
+    }
+    let outcome = creation
+        .protection
+        .as_ref()
+        .map(|protection| protection.outcome.clone());
+    creation.pending = creation.protection.is_some();
+    retain_material_creation_under_gate(&mut state, creation);
+    if outcome.is_some() {
+        store().changed.notify_one();
+    }
+    Ok(outcome)
+}
+
+/// Reuse the retained birth's own bounded cleanup slot before exposing a leaf
+/// queue. The caller holds exact canonical guards until commit or rollback.
+pub(super) fn prepare_retained_material_retirement(
+    root: &Path,
+    identity: &FileIdentity,
+    binding: &crate::audio_engine::project_assets::VerifiedFile,
+    original: &str,
+    protection: Arc<crate::audio_engine::project_assets::RetirementProtection>,
+) -> io::Result<(
+    Arc<crate::audio_engine::project_assets::RetirementOutcome>,
+    bool,
+)> {
+    let mut state = store()
+        .state
+        .lock()
+        .map_err(|_| invalid("material creation gate poisoned"))?;
+    let previous = state
+        .materials
+        .get_mut(root)
+        .ok_or_else(|| invalid("material birth is not restored under current native authority"))?;
+    if &previous.identity != identity
+        || previous.binding.as_ref() != Some(binding)
+        || previous.original_leaf != original
+    {
+        return Err(invalid(
+            "retained material birth differs from retirement receipt; preserved",
+        ));
+    }
+    if let Some(existing) = previous.protection.as_ref() {
+        return Ok((existing.outcome.clone(), false));
+    }
+    let outcome = protection.outcome.clone();
+    previous.protection = Some(protection);
+    previous.pending = false;
+    Ok((outcome, true))
+}
+
+pub(super) fn finish_retained_material_retirement(
+    root: &Path,
+    outcome: &Arc<crate::audio_engine::project_assets::RetirementOutcome>,
+    commit: bool,
+) -> io::Result<()> {
+    let mut state = store()
+        .state
+        .lock()
+        .map_err(|_| invalid("material creation gate poisoned"))?;
+    let previous = state
+        .materials
+        .get_mut(root)
+        .ok_or_else(|| invalid("prepared material birth disappeared"))?;
+    if !previous
+        .protection
+        .as_ref()
+        .is_some_and(|protection| Arc::ptr_eq(&protection.outcome, outcome))
+    {
+        return Err(invalid(
+            "prepared material retirement was cancelled by a new owner; preserved",
+        ));
+    }
+    previous.pending = commit;
+    if commit {
+        store().changed.notify_one();
+    } else {
+        previous.protection.take();
+        outcome.finish(Err(
+            "original retirement was not admitted; material root preserved".into(),
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn retain_material_creation(creation: MaterialCreation) {
+    let shared = store();
+    if let Ok(mut state) = shared.state.lock() {
+        retain_material_creation_under_gate(&mut state, creation);
+    }
+}
+
+/// Called only under ProjectAssets' current unowned/inventory/reader gate.
+/// Return true whenever a creation receipt exists, even when preservation is
+/// necessary, so generic scaffolding pruning cannot bypass its root identity.
+pub(in crate::audio_engine) fn prune_created_material(root: &Path) -> bool {
+    prune_created_material_at(root, &|_| Ok(()))
+}
+
+#[cfg(test)]
+type MarkerRetiredObserver = Box<dyn FnOnce(&File) -> io::Result<()> + Send>;
+#[cfg(test)]
+static MARKER_RETIRED_OBSERVER: Mutex<Option<(PathBuf, MarkerRetiredObserver)>> = Mutex::new(None);
+
+/// Exact-process test checkpoint after real verified marker deletion. The normal
+/// worker still owns admission, guards, independent Inventory and cleanup slot.
+#[cfg(test)]
+pub(in crate::audio_engine) fn observe_material_marker_retired_for_test(
+    root: &Path,
+    observer: impl FnOnce(&File) -> io::Result<()> + Send + 'static,
+) {
+    assert!(
+        MARKER_RETIRED_OBSERVER
+            .lock()
+            .unwrap()
+            .replace((root.to_owned(), Box::new(observer)))
+            .is_none()
+    );
+}
+
+fn prune_created_material_at(root: &Path, checkpoint: &impl Fn(&File) -> io::Result<()>) -> bool {
+    let shared = store();
+    let Ok(mut state) = shared.state.lock() else {
+        return true;
+    };
+    let Some(creation) = state.materials.get(root) else {
+        return false;
+    };
+    let identity = creation.identity.clone();
+    let binding = creation.binding.clone();
+    let intersects = |path: &Path| path.starts_with(root) || root.starts_with(path);
+    let occupied = state
+        .originals
+        .iter()
+        .any(|(path, reader)| intersects(path) && reader.strong_count() > 0)
+        || state
+            .caches
+            .iter()
+            .any(|(path, reader)| intersects(path) && reader.strong_count() > 0)
+        || state.opening.iter().any(|path| intersects(path))
+        || state.preparing.iter().any(|key| intersects(&key.root))
+        || state.deleting.iter().any(|task| intersects(&task.path));
+    state
+        .materials
+        .get_mut(root)
+        .expect("captured creation")
+        .pending = false;
+    if occupied {
+        return true;
+    }
+    let result = (|| -> io::Result<()> {
+        let parent = root
+            .parent()
+            .ok_or_else(|| invalid("material parent missing"))?;
+        let _parent = crate::audio_engine::project_assets::directory_guards(parent)?;
+        if !root.try_exists()? {
+            return Ok(());
+        }
+        let guard = material::immutable_root_guard(root)?;
+        if file_identity(&guard)? != identity {
+            return Err(invalid("created material root was replaced; preserved"));
+        }
+        checkpoint(&guard)?;
+        // Exact root identity precedes every child operation. Empty scaffolding
+        // has no recursive deletion authority and unknown children block it.
+        for path in [
+            root.join("stems"),
+            root.join(".pcm-cache/stems/v1/.pairs"),
+            root.join(".pcm-cache/stems/v1"),
+            root.join(".pcm-cache/stems"),
+            root.join(".pcm-cache/v1"),
+            root.join(".pcm-cache"),
+        ] {
+            let parent = path
+                .parent()
+                .ok_or_else(|| invalid("scaffolding parent missing"))?;
+            let Ok(_guards) = crate::audio_engine::project_assets::directory_guards(parent) else {
+                continue;
+            };
+            let Some(child_identity) =
+                crate::audio_engine::project_assets::capture_identity(&path)?
+            else {
+                continue;
+            };
+            match crate::audio_engine::project_assets::remove_empty_directory(
+                &path,
+                &child_identity,
+            ) {
+                Ok(()) => (),
+                Err(error)
+                    if error.kind() == io::ErrorKind::DirectoryNotEmpty
+                        || error.kind() == io::ErrorKind::NotFound =>
+                {
+                    ()
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        let entries = fs::read_dir(root)?
+            .take(2)
+            .collect::<io::Result<Vec<_>>>()?;
+        if !entries.is_empty() {
+            if entries.len() != 1 || entries[0].file_name() != ".material.json" {
+                return Err(invalid("unknown material children preserve creation"));
+            }
+            let proof = binding
+                .as_ref()
+                .ok_or_else(|| invalid("material marker has no creation receipt; preserved"))?;
+            // This existing helper opens DELETE + read access, checks FileID and
+            // complete bytes/hash, and deletes that same handle atomically.
+            crate::audio_engine::project_assets::remove_verified_file(
+                &root.join(".material.json"),
+                proof,
+            )?;
+            #[cfg(test)]
+            {
+                let observer = {
+                    let mut pending = MARKER_RETIRED_OBSERVER
+                        .lock()
+                        .map_err(|_| invalid("marker retirement test observer poisoned"))?;
+                    if pending
+                        .as_ref()
+                        .is_some_and(|(expected, _)| expected == root)
+                    {
+                        pending.take().map(|(_, observer)| observer)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(observer) = observer {
+                    observer(&guard)?;
+                }
+            }
+        }
+        drop(guard);
+        crate::audio_engine::project_assets::remove_empty_directory(root, &identity)
+    })();
+    match result {
+        Ok(()) => {
+            state.deleted += 1;
+            if let Some(creation) = state.materials.remove(root)
+                && let Some(protection) = creation.protection
+            {
+                protection.outcome.finish(Ok(()));
+            }
+        }
+        Err(error)
+            if error.kind() == io::ErrorKind::PermissionDenied
+                || matches!(error.raw_os_error(), Some(32 | 33)) =>
+        {
+            state
+                .materials
+                .get_mut(root)
+                .expect("retained creation")
+                .pending = true;
+            shared.changed.notify_one();
+        }
+        Err(error) => {
+            if let Some(protection) = state
+                .materials
+                .get_mut(root)
+                .expect("preserved creation")
+                .protection
+                .take()
+            {
+                protection.outcome.finish(Err(error.to_string()));
+            }
+        } // Replaced, unknown, or unreceipted data always survives.
+    }
+    true
+}
+
 pub(in crate::audio_engine) fn cleanup_status() -> io::Result<(usize, u64, Vec<String>)> {
     let state = store()
         .state
         .lock()
         .map_err(|_| invalid("store cleanup status poisoned"))?;
-    Ok((state.deleting.len(), state.deleted, state.errors.clone()))
+    Ok((
+        state.deleting.len()
+            + state
+                .materials
+                .values()
+                .filter(|value| value.pending)
+                .count(),
+        state.deleted,
+        state.errors.clone(),
+    ))
 }
 
 #[cfg(test)]
@@ -224,6 +594,15 @@ pub(in crate::audio_engine) fn admit_original_owner(path: &Path) -> io::Result<(
         keep
     });
     let original = state.originals.get(&path).and_then(Weak::upgrade);
+    if let Some(root) = super::super::material_paths::material_root(&path)
+        && let Some(creation) = state.materials.get_mut(root)
+        && let Some(protection) = creation.protection.take()
+    {
+        creation.pending = false;
+        protection.outcome.finish(Err(
+            "new original owner cancels material retirement; preserved".into(),
+        ));
+    }
     if let Some(original) = original.as_ref() {
         original.rollback.store(false, Ordering::Release);
     }
@@ -528,6 +907,8 @@ impl Drop for CacheReaders {
 impl Drop for OriginalReader {
     fn drop(&mut self) {
         self.reader.take();
+        self._binding_reader.take();
+        self.directories.clear();
         if self.owned_creation
             && self.rollback.load(Ordering::Acquire)
             && self
@@ -550,6 +931,70 @@ impl Drop for OriginalReader {
 }
 
 impl CommittedColdLease {
+    pub(in crate::audio_engine) fn material_creation_receipt(
+        &self,
+    ) -> Option<MaterialCreationReceipt> {
+        // Every current canonical owner carries the same actual birth fact.
+        // This does not transfer this lease's artifact creation/rollback rights.
+        if self.assignment_retired() || self.material_id.is_none() {
+            return None;
+        }
+        material::material_creation_receipt(&self.samples_root, &self.original_path)
+            .ok()
+            .flatten()
+    }
+    /// Current native ACK/config/journal validation is required at the recovery
+    /// caller. This registers dormant historical ownership only: it retains no
+    /// inventory lock and grants no original or descendant retirement rights.
+    pub(in crate::audio_engine) fn restore_material_creation(
+        &self,
+        receipt: &MaterialCreationReceipt,
+    ) -> io::Result<()> {
+        if self.assignment_retired() || self.material_id.is_none() {
+            return Err(invalid(
+                "creation ownership restore requires current canonical lease",
+            ));
+        }
+        let original = &self.manifest.descriptor["decoder"]["original"];
+        let proof = crate::audio_engine::project_assets::VerifiedFile {
+            name: self
+                .original_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| invalid("restored original leaf"))?
+                .to_owned(),
+            identity: self._original.identity.clone(),
+            bytes: original["bytes"]
+                .as_u64()
+                .ok_or_else(|| invalid("restored complete original extent"))?,
+            sha256: original["sha256"]
+                .as_str()
+                .ok_or_else(|| invalid("restored complete original digest"))?
+                .to_owned(),
+        };
+        let [slot] = reserve_cleanup::<1>()?;
+        let _guards = material::verify_material_creation(
+            &self.samples_root,
+            &self.original_path,
+            receipt,
+            &proof,
+        )?;
+        let root = super::super::material_paths::material_root(&self.original_path)
+            .ok_or_else(|| invalid("restored readable root missing"))?;
+        restore_verified_material_creation(MaterialCreation {
+            root: root.to_owned(),
+            original_leaf: proof.name,
+            identity: receipt.root_identity.clone(),
+            binding: Some(receipt.binding.clone()),
+            pending: false,
+            protection: None,
+            _slot: slot,
+        })?;
+        Ok(())
+    }
+    pub(in crate::audio_engine) fn samples_root(&self) -> &Path {
+        &self.samples_root
+    }
     #[cfg(test)]
     pub(in crate::audio_engine) fn reader_lifetime_probe_for_test(
         &self,
@@ -570,11 +1015,10 @@ impl CommittedColdLease {
                 "stem preparation requires a current material assignment",
             ));
         }
-        let material_root = self
-            .original_path
-            .parent()
-            .and_then(Path::parent)
-            .ok_or_else(|| invalid("stem material root missing"))?;
+        let material_root = super::super::material_paths::material_root_for_original(
+            self.samples_root(),
+            &self.original_path,
+        )?;
         let stems = material_root.join("stems");
         let _guards = super::super::project_assets::directory_guards(&stems)?;
         let root = fs::canonicalize(stems)?;
@@ -645,15 +1089,7 @@ impl CommittedColdLease {
         let _cache_guards = super::super::project_assets::directory_guards(&self.cache.root)?;
         let _original_guards =
             super::super::project_assets::directory_guards(&self._original.root)?;
-        let samples_root = if self.material_id.is_some() {
-            self._original
-                .root
-                .ancestors()
-                .nth(3)
-                .ok_or_else(|| invalid("subscriber material ancestry missing"))?
-        } else {
-            self._original.root.as_path()
-        };
+        let samples_root = self.samples_root();
         let original_kind =
             super::super::material_paths::resolve(samples_root, &self.original_path)?.kind;
         if original_kind
@@ -1002,6 +1438,53 @@ impl ColdTransaction {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[test]
+    fn material_prune_keeps_exact_root_write_custody_until_child_operations_return() {
+        use std::cell::Cell;
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("owned root");
+        fs::create_dir(&root).unwrap();
+        let unknown = root.join("unknown-private.txt");
+        fs::write(&unknown, b"preserved unknown bytes").unwrap();
+        let identity = file_identity(&directory_guard(&root).unwrap()).unwrap();
+        let [slot] = reserve_cleanup::<1>().unwrap();
+        retain_material_creation(MaterialCreation {
+            root: root.clone(),
+            original_leaf: "source.wav".into(),
+            identity: identity.clone(),
+            binding: None,
+            pending: false,
+            protection: None,
+            _slot: slot,
+        });
+        let write_root = || {
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(7)
+                .custom_flags(0x0200_0000 | 0x0020_0000)
+                .open(&root)
+        };
+        let entered = Cell::new(false);
+        assert!(prune_created_material_at(&root, &|guard| {
+            entered.set(true);
+            assert_eq!(file_identity(guard)?, identity);
+            let denied = write_root().unwrap_err();
+            assert!(matches!(denied.raw_os_error(), Some(32 | 33)));
+            assert!(fs::rename(&root, temp.path().join("replacement")).is_err());
+            Ok(())
+        }));
+        assert!(entered.get());
+        // Positive control: the same actual root permits a write-capable open
+        // after the pruning guard is released. Unknown bytes blocked deletion.
+        assert_eq!(file_identity(&write_root().unwrap()).unwrap(), identity);
+        assert_eq!(fs::read(&unknown).unwrap(), b"preserved unknown bytes");
+        store().state.lock().unwrap().materials.remove(&root);
+    }
+
     #[test]
     fn cleanup_reservations_bound_live_and_pending_owners_before_capture_writes() {
         let pool = Arc::new(CleanupPool {
@@ -1013,7 +1496,7 @@ mod tests {
         let source = temp.path().join("source.wav");
         fs::write(&source, b"external unchanged").unwrap();
         let held = pool.reserve::<6>().unwrap();
-        let result = pool.reserve::<3>().and_then(|slots| {
+        let result = pool.reserve::<4>().and_then(|slots| {
             ColdTransaction::capture_reserved(&samples, &source, true, &|| false, slots)
         });
         assert_eq!(result.err().unwrap().kind(), io::ErrorKind::WouldBlock);

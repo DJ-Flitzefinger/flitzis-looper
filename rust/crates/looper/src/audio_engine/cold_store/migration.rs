@@ -26,7 +26,9 @@ impl ColdTransaction {
         cancelled: &impl Fn() -> bool,
     ) -> io::Result<Option<SampleBuffer>> {
         let old = material_paths::resolve(samples_root, old_original)?;
-        if !matches!(old.kind, AssetKind::Original { material: None }) {
+        if !matches!(old.kind, AssetKind::Original { .. })
+            || material_paths::readable_original(samples_root, &old.path)?
+        {
             return Ok(None);
         }
         if self.material_id.is_none() || self.manifest.is_some() || self.verified {

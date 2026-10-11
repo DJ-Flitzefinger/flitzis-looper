@@ -163,9 +163,22 @@ The system SHALL reuse one verified compatible canonical source/PCM/stem materia
 #### Scenario: Equal content under different filenames
 - **WHEN** identical bytes are imported again under another name or a pad is copied/moved
 - **THEN** the first verified canonical readable root SHALL be reused without another source-file copy, complete decode or separation when compatible data exist
+- **AND** the first canonical original leaf SHALL remain the sole original; no incoming-name leaf or temporary full-source snapshot copy SHALL be created on a compatible hit
 - **AND** each pad SHALL retain independent loop/range, rate, KEYLOCK/key, masks, Gain/EQ, DSP/voice and content lifetime
 - **AND** deleting the origin slot/bank SHALL preserve every other actual user
 
 #### Scenario: Equal name and size but different bytes
 - **WHEN** another input has the same filename and size but a different complete SHA
 - **THEN** it SHALL receive distinct verified material identity and a collision-safe readable root
+
+#### Scenario: Compatible lookup retains complete verification and custody
+- **WHEN** an equal-byte import searches an existing material
+- **THEN** the incoming held file and canonical original SHALL be verified through complete SHA, length and exact EOF before reuse
+- **AND** sealed incoming and canonical readers SHALL retain their actual file identities through the decision rather than reopening unprotected paths
+- **AND** decoder/resampler, rate, channel and stem/model transform compatibility SHALL remain independent of source identity
+
+#### Scenario: Concurrent names and fresh-process lookup converge
+- **WHEN** differently named equal-byte imports overlap or a fresh process reopens verified material
+- **THEN** one guarded full-content claim SHALL select the first verified readable root and original leaf before derivative preparation
+- **AND** durable hidden binding SHALL recover that selection without adopting occupied unbound folders or overwriting unknown content
+- **AND** cancellation, a conflicting full SHA or corrupt canonical bytes SHALL fail visibly while prior usable material survives

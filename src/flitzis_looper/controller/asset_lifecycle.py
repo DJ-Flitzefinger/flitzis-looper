@@ -412,21 +412,21 @@ class ProjectAssetLifecycle:
             return None
         project = self._project if project is None else project
         original = self._owned_original(project.sample_paths[sample_id])
-        material = (
-            original_asset(original, project_root=self._root).material_id
+        material_root = (
+            original_asset(original, project_root=self._root).material_root
             if original is not None
             else None
         )
         pad = (
-            self._root / "samples" / "materials" / f"M{material}" / "stems"
-            if material is not None
+            material_root / "stems"
+            if material_root is not None
             else self._root / "samples" / "stems" / f"#{sample_id + 1}"
         )
         if resolved.kind != "stem_directory":
             return None
         # A verified legacy set can have equal subscribers in other slots.
         # Slot names locate old material; they confer no origin ownership.
-        if material is None:
+        if material_root is None:
             legacy = path.parent if path.name.startswith(".ready-") else path
             if legacy.parent == self._root / "samples" / "stems":
                 pad = legacy

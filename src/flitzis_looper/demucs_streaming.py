@@ -9,6 +9,7 @@ The entry point imports no controller or Native extension.
 import ctypes
 import os
 import subprocess
+import sys
 import tempfile
 from importlib import import_module
 from pathlib import Path
@@ -17,6 +18,12 @@ from uuid import uuid4
 
 import torch
 
+from flitzis_looper.encoder_provenance import (
+    ENCODER_CONTRACT_ENV,
+    encoder_completion_line,
+    inspect_encoder,
+    record_encoder,
+)
 from flitzis_looper.pcm16_wav import PcmWavReader, discard_owned_file
 
 if TYPE_CHECKING:
@@ -46,6 +53,32 @@ class _DemucsCLI(Protocol):
     save_audio: _SaveAudio
 
     def main(self) -> None: ...
+
+
+def _input_command(args: list[str]) -> list[str]:
+    executable = os.environ.get("FLITZIS_DEMUCS_ENCODER")
+    if executable is not None and args[0] in {"ffmpeg", "ffprobe"}:
+        tool = (
+            Path(executable) if args[0] == "ffmpeg" else Path(executable).with_name("ffprobe.exe")
+        )
+        return [str(tool), *args[1:]]
+    return args
+
+
+class _InputTools:
+    """Pin only stock Demucs AudioFile launches, retaining decode arguments and behavior."""
+
+    @staticmethod
+    def check_output(args: list[str]) -> bytes:
+        return subprocess.check_output(_input_command(args))
+
+    @staticmethod
+    def run(args: list[str], *, check: bool) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(_input_command(args), check=check)
+
+
+class _DemucsAudio(Protocol):
+    sp: _InputTools
 
 
 _separate = cast("_DemucsCLI", import_module("demucs.separate"))
@@ -92,7 +125,7 @@ def _write_input(process: subprocess.Popen[bytes], wav: Tensor, clip: str, frame
 
 def _encoder_command(path: Path, rate: int, channels: int, *, force_rf64: bool) -> list[str]:
     return [
-        "ffmpeg",
+        os.environ.get("FLITZIS_DEMUCS_ENCODER", "ffmpeg"),
         "-nostdin",
         "-hide_banner",
         "-loglevel",
@@ -179,6 +212,7 @@ def write_demucs_pcm16(
                 stdout=subprocess.DEVNULL,
                 stderr=diagnostics,
             ) as process:
+                encoder_proof = inspect_encoder(process)
                 _write_input(process, wav, clip, block_frames)
             if process.returncode:
                 diagnostics.seek(0)
@@ -191,6 +225,7 @@ def write_demucs_pcm16(
             msg = "Demucs attempt output file identity changed"
             raise RuntimeError(msg)
         temporary.replace(path)
+        record_encoder(path, encoder_proof)
     finally:
         if identity is not None:
             discard_owned_file(temporary, identity)
@@ -227,7 +262,10 @@ def save_audio(
 def main() -> None:
     """Execute Demucs' original CLI/model after installing the scoped output adapter."""
     _separate.save_audio = save_audio
+    if os.environ.get(ENCODER_CONTRACT_ENV) is not None:
+        cast("_DemucsAudio", import_module("demucs.audio")).sp = _InputTools()
     _separate.main()
+    sys.stdout.write(encoder_completion_line() + "\n")
 
 
 if __name__ == "__main__":

@@ -15,6 +15,13 @@ use std::time::{Duration, Instant};
 
 fn cache_entries(samples: &Path) -> Vec<PathBuf> {
     let mut roots = vec![samples.join(".pcm-cache/v1")];
+    if let Ok(readable) = fs::read_dir(samples) {
+        roots.extend(
+            readable
+                .filter_map(Result::ok)
+                .map(|entry| entry.path().join(".pcm-cache/v1")),
+        );
+    }
     if let Ok(materials) = fs::read_dir(samples.join("materials")) {
         roots.extend(materials.map(|entry| entry.unwrap().path().join(".pcm-cache/v1")));
     }
@@ -40,21 +47,32 @@ fn original_files(samples: &Path) -> Vec<PathBuf> {
             }
         }
     }
+    if let Ok(readable) = fs::read_dir(samples) {
+        for entry in readable.filter_map(Result::ok) {
+            if let Ok(binding) = crate::audio_engine::material_paths::read_binding(&entry.path()) {
+                let original = entry.path().join(binding.original_leaf);
+                if original.is_file() {
+                    files.push(original);
+                }
+            }
+        }
+    }
     files
 }
 
 fn expected_imported_original(samples: &Path, filename: &str, bytes: &[u8]) -> PathBuf {
     let digest = format!("{:x}", Sha256::digest(bytes));
-    let id = format!(
-        "{:x}",
-        Sha256::digest(format!("{digest}|{filename}").as_bytes())
-    )[..32]
-        .to_owned();
-    samples
-        .join("materials")
-        .join(format!("M{id}"))
-        .join("original")
-        .join(filename)
+    if let Ok(entries) = fs::read_dir(samples) {
+        for entry in entries.filter_map(Result::ok) {
+            if let Ok(binding) = crate::audio_engine::material_paths::read_binding(&entry.path())
+                && binding.sha256 == digest
+            {
+                return entry.path().join(binding.original_leaf);
+            }
+        }
+    }
+    // These fixtures use a safe first filename with no preexisting root.
+    samples.join(filename).join(filename)
 }
 
 fn wait_until(mut condition: impl FnMut() -> bool) {
@@ -307,12 +325,10 @@ fn c1b_productive_long_warm_integrity_cost() {
     );
     let metrics = &warm_manifest["integrity"];
     assert_eq!(metrics["warm"], true);
+    assert_eq!(metrics["source_copied_bytes"], 0);
+    assert_eq!(metrics["snapshot_verify_bytes"], 0);
     assert_eq!(
-        metrics["source_copied_bytes"],
-        fs::metadata(&source).unwrap().len()
-    );
-    assert_eq!(
-        metrics["snapshot_verify_bytes"],
+        metrics["incoming_verify_bytes"],
         fs::metadata(&source).unwrap().len()
     );
     assert_eq!(metrics["decoder_verify_bytes"], 115_200_000_u64);

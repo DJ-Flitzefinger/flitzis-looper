@@ -128,6 +128,30 @@ fn read_marker(directory: &Path) -> Result<(File, Value), String> {
     Ok((marker_reader, marker))
 }
 
+pub(super) fn validate_generation_provenance(marker: &Value) -> Result<(), String> {
+    match (
+        marker.get("generation_fingerprint"),
+        marker.get("producer_identity"),
+    ) {
+        (None, None) => Ok(()),
+        (Some(fingerprint), Some(producer))
+            if [fingerprint, producer].into_iter().all(|value| {
+                value.as_str().is_some_and(|value| {
+                    value.len() == 64
+                        && value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                })
+            }) =>
+        {
+            Ok(())
+        }
+        _ => Err(
+            "stem generation provenance requires two complete lowercase SHA-256 witnesses".into(),
+        ),
+    }
+}
+
 fn verify_set(
     directory: &Path,
     source_version: &str,
@@ -152,8 +176,14 @@ fn verify_set(
         identities.push(file_identity(&reader).map_err(|error| error.to_string())?);
         files.push(reader);
     }
-    let expected =
+    let mut expected =
         json!({"schema":"stem-set-sha256-v1", "source_version":source_version, "stems":hashes});
+    validate_generation_provenance(&marker)?;
+    for field in ["generation_fingerprint", "producer_identity"] {
+        if let Some(value) = marker.get(field) {
+            expected[field] = value.clone();
+        }
+    }
     if marker != expected {
         return Err("stem marker/source/five complete digests mismatch".into());
     }
@@ -374,14 +404,16 @@ pub(super) fn copy_stem_generation(
         cancelled,
     )?;
     check_cancelled(cancelled)?;
-    let marker = json!({"schema":"stem-set-sha256-v1", "source_version":new_source_version, "stems":old_set.marker["stems"]});
-    let material_root = new_original
-        .path
-        .parent()
-        .and_then(Path::parent)
-        .ok_or("material root missing")?;
+    let mut marker = json!({"schema":"stem-set-sha256-v1", "source_version":new_source_version, "stems":old_set.marker["stems"]});
+    for field in ["generation_fingerprint", "producer_identity"] {
+        if let Some(value) = old_set.marker.get(field) {
+            marker[field] = value.clone();
+        }
+    }
+    let material_root = material_paths::material_root_for_original(&root, &new_original.path)
+        .map_err(|error| error.to_string())?;
     let _material_guards =
-        project_assets::directory_guards(material_root).map_err(|error| error.to_string())?;
+        project_assets::directory_guards(&material_root).map_err(|error| error.to_string())?;
     let stems = material_root.join("stems");
     match fs::create_dir(&stems) {
         Ok(()) => {}
@@ -682,6 +714,42 @@ mod tests {
     }
 
     impl Fixture {
+        fn protected_state(
+            &self,
+        ) -> (
+            std::collections::BTreeMap<PathBuf, (Option<FileIdentity>, Option<Vec<u8>>)>,
+            Value,
+            bool,
+        ) {
+            fn capture(
+                path: &Path,
+                output: &mut std::collections::BTreeMap<
+                    PathBuf,
+                    (Option<FileIdentity>, Option<Vec<u8>>),
+                >,
+            ) {
+                output.insert(
+                    path.to_owned(),
+                    (
+                        project_assets::capture_identity(path).unwrap(),
+                        path.is_file().then(|| fs::read(path).unwrap()),
+                    ),
+                );
+                if path.is_dir() {
+                    for entry in fs::read_dir(path).unwrap() {
+                        capture(&entry.unwrap().path(), output);
+                    }
+                }
+            }
+            let mut inventory = std::collections::BTreeMap::new();
+            capture(self.stems_root().parent().unwrap(), &mut inventory);
+            capture(&self.old, &mut inventory);
+            (
+                inventory,
+                self.material.metadata(),
+                self.material.lease.assignment_retired(),
+            )
+        }
         fn new() -> Self {
             let temp = tempfile::tempdir().unwrap();
             let root = temp.path().join("samples");
@@ -716,14 +784,12 @@ mod tests {
         }
 
         fn stems_root(&self) -> PathBuf {
-            self.material
-                .lease
-                .original_path
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .join("stems")
+            material_paths::material_root_for_original(
+                &self.root,
+                &self.material.lease.original_path,
+            )
+            .unwrap()
+            .join("stems")
         }
 
         fn copy(&self) -> Result<CopiedStemGeneration, String> {
@@ -740,6 +806,80 @@ mod tests {
     }
 
     #[test]
+    fn readable_stem_migration_preserves_verified_generation_fingerprint() {
+        let fixture = Fixture::new();
+        let mut marker: Value =
+            serde_json::from_slice(&fs::read(fixture.old.join(MARKER)).unwrap()).unwrap();
+        marker["generation_fingerprint"] = json!("a".repeat(64));
+        marker["producer_identity"] = json!("b".repeat(64));
+        fs::write(
+            fixture.old.join(MARKER),
+            serde_json::to_vec(&marker).unwrap(),
+        )
+        .unwrap();
+        let copied = fixture.copy().unwrap();
+        let ready = material_paths::resolve(&fixture.root, Path::new(&copied.cache_reference))
+            .unwrap()
+            .path;
+        let migrated: Value =
+            serde_json::from_slice(&fs::read(ready.join(MARKER)).unwrap()).unwrap();
+        assert_eq!(
+            migrated["generation_fingerprint"],
+            marker["generation_fingerprint"]
+        );
+        assert_eq!(migrated["producer_identity"], marker["producer_identity"]);
+        assert_eq!(migrated["source_version"], fixture.new_version);
+        assert_eq!(migrated["stems"], marker["stems"]);
+        assert!(!fixture.copy().unwrap().created);
+        assert_eq!(
+            fs::read(fixture.old.join(MARKER)).unwrap(),
+            serde_json::to_vec(&marker).unwrap()
+        );
+    }
+
+    #[test]
+    fn invalid_generation_fingerprint_never_grants_migration_or_overwrites_old_set() {
+        for fingerprint in [
+            Value::Null,
+            json!("A".repeat(64)),
+            json!("a".repeat(63)),
+            json!(true),
+        ] {
+            let fixture = Fixture::new();
+            let mut marker: Value =
+                serde_json::from_slice(&fs::read(fixture.old.join(MARKER)).unwrap()).unwrap();
+            marker["generation_fingerprint"] = fingerprint;
+            marker["producer_identity"] = json!("b".repeat(64));
+            let encoded = serde_json::to_vec(&marker).unwrap();
+            fs::write(fixture.old.join(MARKER), &encoded).unwrap();
+            assert!(fixture.copy().is_err());
+            assert_eq!(fs::read(fixture.old.join(MARKER)).unwrap(), encoded);
+            assert!(
+                !fixture
+                    .stems_root()
+                    .join(format!(".ready-{GENERATION}"))
+                    .exists()
+            );
+        }
+    }
+
+    #[test]
+    fn partial_generation_provenance_never_grants_migration() {
+        for field in ["generation_fingerprint", "producer_identity"] {
+            let fixture = Fixture::new();
+            let mut marker: Value =
+                serde_json::from_slice(&fs::read(fixture.old.join(MARKER)).unwrap()).unwrap();
+            marker[field] = json!("a".repeat(64));
+            fs::write(
+                fixture.old.join(MARKER),
+                serde_json::to_vec(&marker).unwrap(),
+            )
+            .unwrap();
+            assert!(fixture.copy().is_err());
+        }
+    }
+
+    #[test]
     fn complete_wav_migration_binds_new_marker_preserves_old_and_reuses_same_generation() {
         let fixture = Fixture::new();
         let old_marker = fs::read(fixture.old.join(MARKER)).unwrap();
@@ -751,7 +891,10 @@ mod tests {
         let ready = material_paths::resolve(&fixture.root, Path::new(&reference))
             .unwrap()
             .path;
-        assert!(reference.starts_with("samples/materials/M"));
+        assert!(
+            material_paths::readable_original(&fixture.root, &fixture.material.lease.original_path)
+                .unwrap()
+        );
         assert!(reference.ends_with(&format!("stems/.ready-{GENERATION}")));
         assert_eq!(fs::read_dir(&ready).unwrap().count(), 6);
         let marker: Value = serde_json::from_slice(&fs::read(ready.join(MARKER)).unwrap()).unwrap();
@@ -952,7 +1095,8 @@ mod tests {
             assert_eq!(fs::read_dir(fixture.stems_root()).unwrap().count(), 2);
         }
         let fixture = Fixture::new();
-        fs::create_dir(fixture.stems_root()).unwrap();
+        assert!(fixture.stems_root().is_dir());
+        assert_eq!(fs::read_dir(fixture.stems_root()).unwrap().count(), 0);
         for ordinal in 0..MAX_CANONICAL_STEM_ENTRIES {
             fs::write(
                 fixture.stems_root().join(format!("unknown-{ordinal}")),
@@ -1021,14 +1165,16 @@ mod tests {
                 _ => unreachable!(),
             }
             let preserved = fs::read(&vocals).unwrap();
+            let protected = fixture.protected_state();
             assert!(
                 fixture.copy().is_err(),
                 "{damage} must fail complete verification"
             );
             assert_eq!(fs::read(&vocals).unwrap(), preserved);
-            assert!(
-                !fixture.stems_root().exists(),
-                "{damage} wrote target before verification"
+            assert_eq!(
+                fixture.protected_state(),
+                protected,
+                "{damage} changed payload, descriptor, exact inventory or retirement before verification"
             );
         }
     }
@@ -1036,6 +1182,7 @@ mod tests {
     #[test]
     fn source_hash_path_generation_and_unpublished_old_set_cannot_authorize_copy() {
         let fixture = Fixture::new();
+        let protected = fixture.protected_state();
         let wrong_hash = format!("samples/old.wav|sha256-v1:{}", "0".repeat(64));
         let wrong_path = fixture
             .old_version
@@ -1095,7 +1242,9 @@ mod tests {
             .is_err()
         );
         let private = fixture.old.join(format!(".generation-{GENERATION}"));
+        assert_eq!(fixture.protected_state(), protected);
         fs::create_dir(&private).unwrap();
+        let protected = fixture.protected_state();
         assert!(
             copy_stem_generation(
                 &fixture.root,
@@ -1108,7 +1257,7 @@ mod tests {
             )
             .is_err()
         );
-        assert!(!fixture.stems_root().exists());
+        assert_eq!(fixture.protected_state(), protected);
     }
 
     #[test]

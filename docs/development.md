@@ -651,17 +651,46 @@ The app may create local runtime files:
 
 - `samples/`: project-local copied samples, stem cache, and project config.
 
-Current global original/PCM/stem containers remain readable during the planned
-transition. The E11 pending readable canonical material target is `samples/<Originalfilename>/<Originalfilename>`,
+Current global and M-ID original/PCM/stem containers remain readable during the
+verified serial transition. New canonical material uses `samples/<Originalfilename>/<Originalfilename>`,
 `.pcm-cache` and `stems`; #N is stable slot membership. Final acceptance requires
 material-wise verified migration and no obsolete legacy-container dependence; the
 canonical shared material store is intentional, without Copy-induced duplicates. Do not move/delete current runtime assets as a documentation
 cleanup or confuse old root preservation snapshots with current session state.
+Hidden `.material.json` and `.material-claims/` carry guarded full-content lookup;
+they do not supply native runtime ACK or physical cleanup permission. Automated
+validation uses isolated fixtures, never private project migration. See
+[readable material validation](readable-material-validation.md).
+Optional durable native birth receipts restore exact root/marker ownership only
+after current config/journal, inventory and fresh Native adoption checks. Existing
+schema/path recognition alone never authorizes cleanup; the inventory gate stays
+held through actual last-reader physical terminal. Recovery after verified marker
+deletion uses a separate typed retired-original path: exact birth root identity,
+absent original, genuinely empty root and unchanged latest created-target
+journal's actual original-terminal/current config/intent/inventory evidence.
+Present markers still require their birth FileID/full SHA; ordinary resolution
+does not accept missing markers or create adoption authority. Unknown/replaced
+data stays protected. The six-mode process-exit/fresh-child terminal exercise
+and current complete Debug/Release suites pass. That report records the bounded
+evidence separately from full predecessor, copy/move/new-generation and Human
+acceptance, whose gates remain open.
 - `config/input/`: local input mapping JSON files.
 - `.pytest-tmp*`, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `.venv`, and
   `rust/target/`: tool/build artifacts.
 
 Do not confuse generated runtime data with source documentation or OpenSpec.
+
+Supported stem producer reuse also requires execution to match the guarded local
+sources. The current Demucs32/BS28 file sets include the bounded loaded-code
+policy and empty host package initializer. Parent verification compares actual
+relevant code, supported wrappers/defaults/constants/import aliases with compiled
+held source. Captured package roots enter the immutable worker request, come
+first in child `PYTHONPATH` with `PYTHONSAFEPATH=1`, and each attempt owns a fresh
+empty bytecode namespace with writes disabled. Required unsupported bindings or
+stale code leave compatibility UNKNOWN. Keep normal dependency-version/OS policy
+limits explicit; these checks are not global interpreter attestation. See the
+MATERIAL report for independently reviewed current fixture/child evidence and
+the separate full integration/Human gates.
 
 ## Documentation Policy
 

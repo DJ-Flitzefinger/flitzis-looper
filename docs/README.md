@@ -31,9 +31,10 @@ For focused areas:
 | File | Purpose |
 | --- | --- |
 | `architecture.md` | Current Rust/Python runtime architecture and ownership boundaries. |
-| `pcm-cache-residency.md` | Productive copy-first originals/full PCM cache, validated reuse and reader lifecycle; separate C2 residency and C3 measurement contracts. |
+| `pcm-cache-residency.md` | Productive sealed originals/full PCM cache, validated reuse and reader lifecycle; separate C2 residency and C3 measurement contracts. |
+| `readable-material-validation.md` | Readable full-content roots, compatible no-copy/no-inference reuse, M-ID/legacy migration and bounded software evidence with retained final gates. |
 | `pad-owned-pcm-program.md` | Pending R0 shared-material/pitch/rearrangement/full pre-Rust serial program and genuine acceptance boundaries. |
-| `pre-rust-program-coverage.json` | Required seven-group detail rows, original56/nine obligation trace map, aliases and unchanged38-ID/48-edge dependencies; plan-only, no completion evidence. |
+| `pre-rust-program-coverage.json` | Required seven-group detail rows, original56/nine obligations and HC26; retained38-ID/48-edge dependencies plus20 E11 rows/ten deliveries (48 IDs/78 edges/189 rows). Scoped software status stays separate from required final gates. |
 | `development.md` | Setup, validation, OpenSpec workflow, package layout, and generated-file notes. |
 | `ui-toolkit.md` | Project-specific Dear ImGui design and state-flow rules. |
 | `stem-generation-setup.md` | Pinned Demucs/BS-RoFormer assets, offline worker, CUDA setup and separator rollback. |
@@ -86,4 +87,4 @@ Use docs for explanatory context:
 
 ## Required pre-Rust direct extension
 
-[Direct extension2026-10-11](pre-rust-extension-20261011.md) maps all20 E11 requirements to normative OpenSpec contracts, bounded implementation slices, actual source seams and real acceptance gates. The maintained program/coverage retains old38/48 and169/56/9/HC26 while adding10 IDs (48 total) and30 edges (78 total). This is planning only; runtime, final Human testing and correction gates remain OPEN.
+[Direct extension2026-10-11](pre-rust-extension-20261011.md) maps all20 E11 requirements to normative OpenSpec contracts, bounded implementation slices, actual source seams and real acceptance gates. The maintained program/coverage retains old38/48 and169/56/9/HC26 while adding10 IDs (48 total) and30 edges (78 total). Bounded software reports record only their actual evidence and pending checks; whole E11, integration, final Human testing and correction gates remain OPEN.

@@ -940,13 +940,10 @@ pub(super) fn prepare_complete_pair_with_reader(
         .and_then(|n| n.checked_add(1024 * 1024))
         .ok_or("stem WAV bound overflow")?;
     let wav_set = verify_complete_wav_set(&wav.path, source_version, maximum, cancelled)?;
-    let material_root = material
-        .lease
-        .original_path
-        .parent()
-        .and_then(Path::parent)
-        .ok_or("material root missing")?;
-    let (base, _base_guards) = guarded_base(material_root)?;
+    let material_root =
+        material_paths::material_root_for_original(root, &material.lease.original_path)
+            .map_err(error)?;
+    let (base, _base_guards) = guarded_base(&material_root)?;
     let mut candidates = 0;
     for entry in fs::read_dir(base.join(".pairs"))
         .map_err(error)?

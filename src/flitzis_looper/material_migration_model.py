@@ -23,6 +23,16 @@ type MigrationPhase = Literal[
 ]
 
 
+def _ordinary_readable_root(parts: list[str]) -> bool:
+    """Accept exactly the normalized two-part samples root spelling."""
+    return (
+        len(parts) == 2
+        and parts[0] == "samples"
+        and parts[1] not in {"", ".", ".."}
+        and not any(character in parts[1] for character in "\\:")
+    )
+
+
 class MaterialMigrationAlias(BaseModel):
     """Verified byte/descriptor lineage, never reconstructed source authority."""
 
@@ -40,6 +50,17 @@ class MaterialMigrationAlias(BaseModel):
     old_source_version: str = Field(strict=True, min_length=1)
     new_source_version: str = Field(strict=True, min_length=1)
     resume_of: MigrationID | None = None
+    material_creation: MaterialCreationReceipt | None = None
+
+    @model_validator(mode="after")
+    def validate_material_root(self) -> Self:
+        if (
+            self.material_creation is not None
+            and self.new_reference.rsplit("/", 1)[0] != self.material_creation.root_reference
+        ):
+            message = "migration birth receipt belongs to another target root"
+            raise ValueError(message)
+        return self
 
 
 class MigrationAssignment(BaseModel):
@@ -60,6 +81,35 @@ class MigrationFileEvidence(BaseModel):
     bytes: int = Field(strict=True, ge=0)
     sha256: MigrationDigest
 
+    @model_validator(mode="after")
+    def validate_leaf(self) -> Self:
+        if self.name in {".", ".."}:
+            message = "artifact evidence must name one ordinary leaf"
+            raise ValueError(message)
+        return self
+
+
+class MaterialCreationReceipt(BaseModel):
+    """Exact native birth evidence; fresh source ACK and inventory restore ownership."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    schema_version: int = Field(default=1, strict=True, ge=1, le=1)
+    root_reference: str = Field(strict=True, min_length=1, max_length=8192)
+    root_identity: ArtifactIdentity
+    binding: MigrationFileEvidence
+
+    @model_validator(mode="after")
+    def validate_binding(self) -> Self:
+        parts = self.root_reference.split("/")
+        if (
+            not _ordinary_readable_root(parts)
+            or self.binding.name != ".material.json"
+            or self.binding.bytes == 0
+        ):
+            message = "material birth receipt must bind exactly one readable root and marker"
+            raise ValueError(message)
+        return self
+
 
 class MigrationArtifactEvidence(BaseModel):
     """A bounded complete native receipt that must be freshly reverified after restart."""
@@ -69,13 +119,21 @@ class MigrationArtifactEvidence(BaseModel):
     kind: Literal[
         "original", "stem_directory", "pcm_directory", "stem_pcm_directory", "stem_pair_descriptor"
     ]
-    reference: str = Field(strict=True, min_length=1)
+    reference: str = Field(strict=True, min_length=1, max_length=8192)
     identity: ArtifactIdentity
     samples_identity: ArtifactIdentity
     files: tuple[MigrationFileEvidence, ...] = Field(min_length=1, max_length=6)
+    material_creation: MaterialCreationReceipt | None = None
 
     @model_validator(mode="after")
     def validate_files(self) -> Self:
+        if (
+            not self.reference.startswith("samples/")
+            or any(character in self.reference for character in "\\:")
+            or any(part in {"", ".", ".."} for part in self.reference.split("/"))
+        ):
+            message = "artifact evidence requires a normalized contained samples reference"
+            raise ValueError(message)
         names = {item.name for item in self.files}
         expected = {
             "pcm_directory": {"decoder.f32le", "playback.f32le", "manifest.json"},
@@ -101,6 +159,12 @@ class MigrationArtifactEvidence(BaseModel):
         if len(names) != len(self.files) or (expected is not None and names != expected):
             message = "migration artifact receipt must describe exactly its recognized complete set"
             raise ValueError(message)
+        if self.material_creation is not None and (
+            self.kind != "original"
+            or self.reference.rsplit("/", 1)[0] != self.material_creation.root_reference
+        ):
+            message = "material birth evidence must belong to its exact readable original"
+            raise ValueError(message)
         return self
 
 
@@ -111,6 +175,16 @@ class MigrationArtifactRecord(BaseModel):
     role: Literal["rollback", "target"]
     created: bool = Field(strict=True)
     evidence: MigrationArtifactEvidence
+    original_retired: bool = Field(default=False, strict=True)
+
+    @model_validator(mode="after")
+    def validate_terminal(self) -> Self:
+        if self.original_retired and (
+            self.evidence.kind != "original" or self.evidence.material_creation is None
+        ):
+            message = "original terminal receipt requires exact material birth evidence"
+            raise ValueError(message)
+        return self
 
 
 class MaterialMigrationJournal(BaseModel):

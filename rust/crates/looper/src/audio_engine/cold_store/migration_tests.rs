@@ -175,10 +175,11 @@ fn migration_copies_complete_verified_legacy_pcm_without_decoder_and_keeps_old_r
     let metadata = prepared.metadata();
     assert_eq!(metadata["old_reference"], "samples/old.wav");
     assert!(
-        metadata["new_reference"]
-            .as_str()
-            .unwrap()
-            .starts_with("samples/materials/M")
+        crate::audio_engine::material_paths::readable_original(
+            &fixture.samples,
+            &prepared.lease.original_path
+        )
+        .unwrap()
     );
     assert_eq!(
         metadata["material_id"],

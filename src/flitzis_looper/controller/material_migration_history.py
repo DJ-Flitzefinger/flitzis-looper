@@ -48,12 +48,20 @@ def merge_artifacts(
     """Duplicate references must retain exactly the same full immutable proof."""
     result = {(item.role, item.evidence.reference): item for item in existing}
     for item in incoming:
+        merged = item
         key = item.role, item.evidence.reference
         previous = result.get(key)
-        if previous is not None and previous != item:
+        if (
+            previous is not None
+            and previous.model_copy(update={"original_retired": item.original_retired}) == item
+        ):
+            merged = item.model_copy(
+                update={"original_retired": previous.original_retired or item.original_retired}
+            )
+        elif previous is not None and previous != item:
             message = "artifact lineage changed for the same saved reference"
             raise ValueError(message)
-        result[key] = item
+        result[key] = merged
     if len(result) > 1024:
         message = "migration artifact ledger capacity exceeded"
         raise ValueError(message)
@@ -65,7 +73,7 @@ def rollback_artifacts(journal: MaterialMigrationJournal) -> tuple[MigrationArti
     return merge_artifacts(
         (),
         (
-            MigrationArtifactRecord(role="rollback", created=False, evidence=item.evidence)
+            item.model_copy(update={"role": "rollback", "created": False})
             for item in journal.artifacts
         ),
     )

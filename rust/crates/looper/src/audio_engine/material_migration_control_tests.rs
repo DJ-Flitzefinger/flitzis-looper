@@ -347,6 +347,53 @@ fn material_migration_real_panic_handler_rejects_only_unclaimed_phase_and_report
 }
 
 #[test]
+fn material_migration_hold_transfer_retains_each_real_owner_without_reopening_launch() {
+    let engine = AudioEngine::new().unwrap();
+    let (producer, _consumer) = rtrb::RingBuffer::new(8);
+    let producer = Arc::new(Mutex::new(producer));
+    let mut parent = control::hold_for_producer(&engine, vec![0, 215], &producer).unwrap();
+    let first_revision = engine.input_runtime_ownership.launch_revision(0);
+    let last_revision = engine.input_runtime_ownership.launch_revision(215);
+    assert!(parent.take(vec![0, 0]).is_err());
+    assert!(parent.take(vec![1]).is_err());
+    let child = parent.take(vec![0]).unwrap();
+    assert!(parent.take(vec![0]).is_err());
+    assert_eq!(
+        engine.input_runtime_ownership.launch_revision(0),
+        first_revision
+    );
+    assert_eq!(
+        engine.input_runtime_ownership.launch_revision(215),
+        last_revision
+    );
+    assert!(control::hold_for_producer(&engine, vec![0], &producer).is_err());
+    assert!(control::hold_for_producer(&engine, vec![215], &producer).is_err());
+    parent.release().unwrap();
+    assert!(
+        !engine
+            .input_runtime_ownership
+            .launch_current(0, first_revision)
+    );
+    assert!(
+        engine
+            .input_runtime_ownership
+            .launch_current(215, engine.input_runtime_ownership.launch_revision(215))
+    );
+    assert!(control::hold_for_producer(&engine, vec![0], &producer).is_err());
+    child.release().unwrap();
+    assert!(
+        !engine
+            .input_runtime_ownership
+            .launch_current(0, first_revision)
+    );
+    assert!(
+        engine
+            .input_runtime_ownership
+            .launch_current(0, engine.input_runtime_ownership.launch_revision(0))
+    );
+}
+
+#[test]
 fn material_migration_hold_rejects_queued_starts_and_release_never_revalidates_old_revision() {
     let engine = AudioEngine::new().unwrap();
     let previous = old(&engine);
@@ -885,6 +932,27 @@ fn commit_actual_migration_project(
             .set_item("material_json", material.to_string())
             .unwrap();
         locals.set_item("transaction_id", transaction).unwrap();
+        let mut artifacts = Vec::new();
+        for (field, created) in [
+            (
+                "new_reference",
+                material["created_original"].as_bool().unwrap(),
+            ),
+            ("cache_path", material["created_cache"].as_bool().unwrap()),
+        ] {
+            let mut lease =
+                crate::audio_engine::material_migration_recovery::MigrationArtifactLease::capture(
+                    py,
+                    root.to_string_lossy().into(),
+                    material[field].as_str().unwrap().into(),
+                )
+                .unwrap();
+            artifacts.push(serde_json::json!({"role":"target", "created":created, "evidence":serde_json::from_str::<serde_json::Value>(&lease.receipt_json().unwrap()).unwrap()}));
+            lease.release();
+        }
+        locals
+            .set_item("artifact_json", serde_json::to_string(&artifacts).unwrap())
+            .unwrap();
         locals
             .set_item(
                 "native_owner",
@@ -918,6 +986,7 @@ alias = MaterialMigrationAlias(
     cache_path=material['cache_path'],
     old_source_version=f"{material['old_reference']}|sha256-v1:{digest}",
     new_source_version=f"{material['new_reference']}|sha256-v1:{digest}",
+    material_creation=material['material_creation'],
 )
 project = ProjectState(config_revision=17)
 for sample_id, uuid, raw, correction, base, extra, retrigger in (
@@ -925,7 +994,8 @@ for sample_id, uuid, raw, correction, base, extra, retrigger in (
     (215, 'f'*32, 'Bb', 'unknown retained correction', 6, -18, False),
 ):
     project.sample_paths[sample_id] = alias.old_reference
-    project.pad_content[sample_id] = PadContentIdentity(instance_id=uuid)
+    old_material = alias.old_reference.split('/')[2][1:] if alias.old_reference.startswith('samples/materials/M') else None
+    project.pad_content[sample_id] = PadContentIdentity(instance_id=uuid, material_id=old_material)
     project.pad_key_intent[sample_id] = PadKeyIntent(
         source=SourceKeyVersion(version=MAX_KEY_EPOCH, raw_key=raw),
         correction=correction, analysis_epoch=MAX_KEY_EPOCH, correction_epoch=MAX_KEY_EPOCH,
@@ -945,6 +1015,7 @@ for sample_id in (0,215):
     candidate.sample_paths[sample_id] = alias.new_reference
     candidate.pad_content[sample_id] = PadContentIdentity(
         instance_id=project.pad_content[sample_id].instance_id, material_id=alias.material_id,
+        material_creation=alias.material_creation,
     )
 candidate.material_migrations[transaction_id] = alias
 revision, config_digest = persistence.commit_migration(transaction_id, persistence.revision, candidate)
@@ -967,6 +1038,7 @@ journal = MaterialMigrationJournal(
     assignments=tuple(MigrationAssignment(sample_id=i, instance_id=snapshot.pad_content[i].instance_id,
         old_reference=alias.old_reference) for i in (0,215)), alias=alias,
     committed_revision=revision, committed_config_sha256=config_digest,
+    artifacts=json.loads(artifact_json),
 )
 assert ProjectState.model_validate_json(journal.snapshot_json) == snapshot
 journal_json = journal.model_dump_json()
@@ -1030,7 +1102,8 @@ for sample_id, uuid, raw, correction, base, extra, retrigger in (
     )
     assert state.pad_content[sample_id].instance_id == snapshot.pad_content[sample_id].instance_id == uuid
     assert state.pad_content[sample_id].material_id == alias.material_id
-    assert snapshot.pad_content[sample_id].material_id is None
+    old_material = alias.old_reference.split('/')[2][1:] if alias.old_reference.startswith('samples/materials/M') else None
+    assert snapshot.pad_content[sample_id].material_id == old_material
     assert state.pad_key_intent[sample_id] == snapshot.pad_key_intent[sample_id] == expected_key
     assert previous.pad_key_intent[sample_id] == expected_key
     assert previous.pad_content[sample_id] == snapshot.pad_content[sample_id]
@@ -1045,7 +1118,7 @@ assert state.sample_analysis[0].accepted_timing.model_dump() == json.loads(
 # Only validated durable primitives cross back to this new native engine. Full
 # saved evidence remains historical provenance, never a source/permit/ACK owner.
 validated_json = json.dumps({
-    'new_reference': alias.new_reference, 'cache_path': alias.cache_path,
+    'old_reference': alias.old_reference, 'new_reference': alias.new_reference, 'cache_path': alias.cache_path,
     'material_id': alias.material_id, 'original_sha256': alias.original_sha256,
     'original_bytes': alias.original_bytes,
     'accepted_timing': state.sample_analysis[0].accepted_timing.model_dump(),
@@ -1064,36 +1137,173 @@ validated_json = json.dumps({
 
 #[test]
 fn material_migration_new_process_reopens_journal_with_fresh_source_and_timing_ack() {
+    readable_migration_new_process(false);
+}
+
+#[test]
+fn material_migration_mid_new_process_reopens_readable_journal_with_fresh_source_window_timing_pair_ack()
+ {
+    readable_migration_new_process(true);
+}
+
+fn migration_execution_bindings() -> serde_json::Value {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .unwrap();
+    let inputs = [
+        "rust/crates/looper/src/audio_engine/material_paths.rs",
+        "rust/crates/looper/src/audio_engine/cold_store.rs",
+        "rust/crates/looper/src/audio_engine/material_migration.rs",
+        "rust/crates/looper/src/audio_engine/material_migration_control_tests.rs",
+        "rust/crates/looper/src/audio_engine/material_migration_reuse_process_tests.rs",
+        "rust/crates/looper/src/audio_engine/stem_pair.rs",
+        "src/flitzis_looper/controller/persistence.py",
+        "src/flitzis_looper/material_migration_model.py",
+    ];
+    let hashes = inputs
+        .into_iter()
+        .map(|relative| {
+            (
+                relative.to_owned(),
+                serde_json::json!(format!(
+                    "{:x}",
+                    Sha256::digest(fs::read(repo.join(relative)).unwrap())
+                )),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let image = std::env::current_exe().unwrap();
+    serde_json::json!({"source_sha256":hashes, "test_executable":image,
+        "test_executable_sha256":format!("{:x}", Sha256::digest(fs::read(&image).unwrap()))})
+}
+
+fn readable_migration_new_process(mid_layout: bool) {
     pyo3::Python::initialize();
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(4)
         .unwrap();
-    let scratch = workspace.join("scratch/goal-p2a-material-migration-20261010");
+    let scratch = workspace.join("scratch/goal-readable-material-layout-20261011");
     fs::create_dir_all(&scratch).unwrap();
     let directory = tempfile::tempdir_in(&scratch).unwrap();
     let root = directory.path().join("samples");
     fs::create_dir(&root).unwrap();
     let transaction = "77777777777777777777777777777777";
     let (fixture_original, envelope) = constant_timing::migration_test_fixture();
-    let legacy = root.join("old.wav");
+    let legacy = if mid_layout {
+        root.join("materials/M0123456789abcdef0123456789abcdef/original/old.wav")
+    } else {
+        root.join("old.wav")
+    };
+    fs::create_dir_all(legacy.parent().unwrap()).unwrap();
     let original_bytes = fs::read(&fixture_original).unwrap();
     fs::write(&legacy, &original_bytes).unwrap();
     let metadata;
     let encoded_record;
+    let pair_selection;
     // All source tickets, registrations, permits and PCM Arcs die before the child
     // process starts. Only verified original/cache files, journal and evidence remain.
     {
         let engine = Arc::new(AudioEngine::new().unwrap());
-        let material = material_migration::prepare_material_complete_for_test(
+        let mut old_transaction = crate::audio_engine::cold_store::ColdTransaction::capture(
+            &root,
+            &legacy,
+            false,
+            &|| false,
+        )
+        .unwrap();
+        let old_sample = material_migration::prepare_pcm(
+            &mut old_transaction,
+            &legacy,
+            8_000,
+            1,
+            crate::audio_engine::cold_jobs::PCM_LIMIT_BYTES,
+            Some(crate::audio_engine::cold_residency::ResidentLoadHint {
+                start_s: 2.25,
+                end_s: 3.25,
+                key_lock: false,
+            }),
+            &|| false,
+            &mut |_| {},
+        )
+        .unwrap();
+        old_transaction.commit(&|| false).unwrap();
+        old_transaction.bind_pcm(&old_sample.samples);
+        let old_lease = old_transaction.into_lease();
+        let old_cache = old_lease.cache_path.clone();
+        let material = material_migration::prepare_material_for_reference(
             &root,
             &legacy,
             8_000,
             1,
             &|| false,
+            &old_sample,
         )
         .unwrap();
+        assert!(
+            material.lease.integrity.warm,
+            "compatible old PCM must migrate without decoding"
+        );
+        assert_eq!(material.sample.resident_start(), 18_000);
+        assert_eq!(material.sample.resident_end(), 26_000);
+        assert_eq!(material.sample.samples.len(), 8_000);
+        assert_ne!(material.lease.original_path, legacy);
+        assert!(
+            crate::audio_engine::material_paths::readable_original(
+                &root,
+                &material.lease.original_path
+            )
+            .unwrap()
+        );
         metadata = material.metadata();
+        let old_reference = metadata["old_reference"].as_str().unwrap();
+        let digest = metadata["original"]["sha256"].as_str().unwrap();
+        let old_version = format!("{old_reference}|sha256-v1:{digest}");
+        let new_version = format!(
+            "{}|sha256-v1:{digest}",
+            metadata["new_reference"].as_str().unwrap()
+        );
+        let old_stems = if mid_layout {
+            legacy
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("stems/.ready-0123456789abcdef0123456789abcdef")
+        } else {
+            root.join("stems/#1")
+        };
+        fs::create_dir_all(&old_stems).unwrap();
+        let mut wav_hashes = serde_json::Map::new();
+        for name in crate::audio_engine::stem_cache::STEM_FILE_NAMES {
+            fs::write(old_stems.join(format!("{name}.wav")), &original_bytes).unwrap();
+            wav_hashes.insert(
+                name.into(),
+                serde_json::json!(format!("{:x}", Sha256::digest(&original_bytes))),
+            );
+        }
+        fs::write(old_stems.join(".complete.json"), serde_json::to_vec(&serde_json::json!({"schema":"stem-set-sha256-v1", "source_version":old_version, "stems":wav_hashes})).unwrap()).unwrap();
+        let copied = crate::audio_engine::material_migration_stems::copy_stem_generation(
+            &root,
+            &material,
+            &old_stems,
+            &old_version,
+            &new_version,
+            "abcdef0123456789abcdef0123456789",
+            &|| false,
+        )
+        .unwrap();
+        assert!(copied.created);
+        // The old source and complete cache stay held while the new paths are
+        // prepared. Each adopting subscriber derives its own current window.
+        for id in [0, 215] {
+            engine.sample_cache.lock().unwrap()[id] = Some(old_sample.clone());
+            engine.cold_leases.lock().unwrap()[id] = Some(old_lease.clone());
+            engine
+                .input_runtime_ownership
+                .publish_source(id, &old_sample, 8_000, 7);
+        }
         let preparation = control::prepared_for_test(&engine, material, &root).unwrap();
         let (producer, mut consumer) = rtrb::RingBuffer::new(8);
         let producer = Arc::new(Mutex::new(producer));
@@ -1147,6 +1357,30 @@ fn material_migration_new_process_reopens_journal_with_fresh_source_and_timing_a
         assert_eq!(last_source.phase().unwrap(), "acknowledged");
         assert!(source.is_current().unwrap());
         assert!(last_source.is_current().unwrap());
+        let ticket = engine
+            .capture_prepared_source(0, new_version.clone())
+            .unwrap();
+        let pair = engine
+            .prepare_stem_pair_at_root(
+                &root,
+                0,
+                &new_version,
+                &copied.cache_reference,
+                &ticket,
+                true,
+                None,
+            )
+            .unwrap();
+        pair_selection = serde_json::from_str::<serde_json::Value>(pair.selection_json()).unwrap();
+        pair.select();
+        engine
+            .publish_stem_pair_with_producer(&pair, &ticket, &producer)
+            .unwrap();
+        assert_eq!(ticket.publication_status(), "pending");
+        assert_eq!(callback.drain(&mut consumer), 1);
+        assert_eq!(ticket.publication_status(), "accepted");
+        assert!(old_cache.join("playback.f32le").is_file());
+        assert_eq!(fs::read(&legacy).unwrap(), original_bytes);
         let original = crate::audio_engine::material_paths::resolve(
             &root,
             Path::new(metadata["new_reference"].as_str().unwrap()),
@@ -1169,6 +1403,11 @@ fn material_migration_new_process_reopens_journal_with_fresh_source_and_timing_a
             commit_actual_migration_project(engine.clone(), &root, transaction, &metadata);
         preparation.release_preparation().unwrap();
     }
+    fs::write(
+        directory.path().join("pair-selection.json"),
+        serde_json::to_vec(&pair_selection).unwrap(),
+    )
+    .unwrap();
     let evidence_path = directory.path().join("accepted-timing.json");
     fs::write(&evidence_path, &envelope).unwrap();
     let config_path = root.join("flitzis_looper.config.json");
@@ -1243,6 +1482,24 @@ fn material_migration_new_process_reopens_journal_with_fresh_source_and_timing_a
     );
     assert_eq!(receipt["source_callback_verified"], true);
     assert_eq!(receipt["timing_callback_verified"], true);
+    assert_eq!(receipt["window_callback_verified"], true);
+    assert_eq!(receipt["pair_callback_verified"], true);
+    let pair_subscribers = receipt["pair_callback_subscribers"].as_array().unwrap();
+    assert_eq!(pair_subscribers.len(), 2);
+    for (subscriber, id, window) in [
+        (&pair_subscribers[0], 0, serde_json::json!([18_000, 26_000])),
+        (
+            &pair_subscribers[1],
+            215,
+            serde_json::json!([20_000, 28_000]),
+        ),
+    ] {
+        assert_eq!(subscriber["sample_id"], id);
+        assert_eq!(subscriber["window"], window);
+        assert_eq!(subscriber["publication_status"], "accepted");
+        assert_eq!(subscriber["selected_pair"], pair_selection);
+        assert_eq!(subscriber["actual_callback_components"], 4);
+    }
     assert_eq!(receipt["config_and_journal_verified"], true);
     assert_eq!(fs::read(&evidence_path).unwrap(), envelope.as_bytes());
     assert_eq!(fs::read(&config_path).unwrap(), config_bytes);
@@ -1259,6 +1516,24 @@ fn material_migration_new_process_reopens_journal_with_fresh_source_and_timing_a
         cache_generations
     );
     assert_eq!(fs::read(&legacy).unwrap(), original_bytes);
+    let kept = directory.keep();
+    let evidence = serde_json::json!({
+        "schema":"readable-material-migration-native-reopen-v1",
+        "layout":if mid_layout {"material_id"} else {"legacy"},
+        "parent_process_id":std::process::id(), "child":receipt,
+        "fixture_directory":kept, "old_original":legacy,
+        "new_reference":metadata["new_reference"], "cache_reference":metadata["cache_path"],
+        "pair_selection":pair_selection, "runtime_bindings":migration_execution_bindings(),
+        "config_sha256":format!("{:x}",Sha256::digest(&config_bytes)),
+        "journal_sha256":format!("{:x}",Sha256::digest(encoded_record.as_bytes())),
+        "original_sha256":format!("{:x}",Sha256::digest(&original_bytes)),
+        "scope":"productive owned migration source/PCM/five-WAV/current-config/journal/fresh Native source-window-timing-pair ACK; no GUI/device/music/whole Goal acceptance"
+    });
+    fs::write(
+        kept.join("material-migration-evidence.json"),
+        serde_json::to_vec_pretty(&evidence).unwrap(),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -1319,15 +1594,7 @@ fn material_migration_new_process_child_reopens_journal_with_fresh_source_and_ti
         material["original_sha256"],
         format!("{:x}", Sha256::digest(&original_bytes))
     );
-    assert!(
-        material["new_reference"]
-            .as_str()
-            .unwrap()
-            .starts_with(&format!(
-                "samples/materials/M{}/original/",
-                material["material_id"].as_str().unwrap()
-            ),)
-    );
+    assert!(crate::audio_engine::material_paths::readable_original(&root, &original).unwrap());
     let engine = AudioEngine::new().unwrap();
     assert!(engine.sample_cache.lock().unwrap()[0].is_none());
     assert!(engine.cold_leases.lock().unwrap()[0].is_none());
@@ -1349,7 +1616,16 @@ fn material_migration_new_process_child_reopens_journal_with_fresh_source_and_ti
         &engine,
         0,
         original.to_string_lossy().into(),
-        (false, false, false, None),
+        (
+            false,
+            false,
+            false,
+            Some(crate::audio_engine::cold_residency::ResidentLoadHint {
+                start_s: 2.25,
+                end_s: 3.25,
+                key_lock: false,
+            }),
+        ),
         producer.clone(),
         (1, 8_000, root.clone()),
         "restore",
@@ -1360,7 +1636,16 @@ fn material_migration_new_process_child_reopens_journal_with_fresh_source_and_ti
         &engine,
         215,
         original.to_string_lossy().into(),
-        (false, false, false, None),
+        (
+            false,
+            false,
+            false,
+            Some(crate::audio_engine::cold_residency::ResidentLoadHint {
+                start_s: 2.5,
+                end_s: 3.5,
+                key_lock: false,
+            }),
+        ),
         producer.clone(),
         (1, 8_000, root.clone()),
         "restore",
@@ -1371,6 +1656,17 @@ fn material_migration_new_process_child_reopens_journal_with_fresh_source_and_ti
     assert_eq!(admitted.adoption.load(Ordering::Acquire), 0);
     assert_eq!(last_admitted.adoption.load(Ordering::Acquire), 0);
     assert_eq!(engine.current_timing_acknowledgements.current_epoch(0), 0);
+    let pending = engine.sample_cache.lock().unwrap()[0].clone().unwrap();
+    let last_pending = engine.sample_cache.lock().unwrap()[215].clone().unwrap();
+    assert_eq!(
+        (pending.resident_start(), pending.resident_end()),
+        (18_000, 26_000)
+    );
+    assert_eq!(
+        (last_pending.resident_start(), last_pending.resident_end()),
+        (20_000, 28_000)
+    );
+    assert!(!Arc::ptr_eq(&pending.samples, &last_pending.samples));
     assert_eq!(callback.drain(&mut consumer), 2);
     let events = terminals(&engine, &[admitted.request_id, last_admitted.request_id]);
     assert!(
@@ -1433,9 +1729,153 @@ fn material_migration_new_process_child_reopens_journal_with_fresh_source_and_ti
         &envelope,
         admitted.request_id,
     );
+    let selected: serde_json::Value =
+        serde_json::from_slice(&fs::read(directory.join("pair-selection.json")).unwrap()).unwrap();
+    let source_version = format!(
+        "{}|sha256-v1:{}",
+        material["new_reference"].as_str().unwrap(),
+        material["original_sha256"].as_str().unwrap()
+    );
+    let mut pair_acknowledgements = Vec::new();
+    for (id, source_request, expected_window) in [
+        (0, admitted.request_id, (18_000, 26_000)),
+        (215, last_admitted.request_id, (20_000, 28_000)),
+    ] {
+        assert!(callback.mixer.stems_for_measurement()[id].is_none());
+        let ticket = engine
+            .capture_prepared_source(id, source_version.clone())
+            .unwrap();
+        assert_eq!(ticket.id, id);
+        assert_eq!(
+            ticket.request_id,
+            engine.pad_request_ids.lock().unwrap()[id]
+        );
+        assert_eq!(ticket.publication_status(), "captured");
+        let pair = engine
+            .prepare_stem_pair_at_root(
+                &root,
+                id,
+                &source_version,
+                selected["wav_generation"].as_str().unwrap(),
+                &ticket,
+                true,
+                Some(selected["descriptor_reference"].as_str().unwrap()),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(pair.selection_json()).unwrap(),
+            selected
+        );
+        pair.select();
+        engine
+            .publish_stem_pair_with_producer(&pair, &ticket, &producer)
+            .unwrap();
+        assert_eq!(ticket.publication_status(), "pending");
+        let ControlMessage::PublishPreparedStems {
+            id: queued_id,
+            stems,
+        } = consumer.peek().unwrap()
+        else {
+            panic!("fresh subscriber did not queue its actual prepared stem set");
+        };
+        assert_eq!(*queued_id, id);
+        let queued = stems.clone();
+        assert!(callback.mixer.stems_for_measurement()[id].is_none());
+        assert_eq!(callback.drain(&mut consumer), 1);
+        assert_eq!(ticket.publication_status(), "accepted");
+        let actual = callback.mixer.stems_for_measurement()[id].as_ref().unwrap();
+        for (prepared, acknowledged) in queued.stems.iter().zip(&actual.stems) {
+            assert!(Arc::ptr_eq(&prepared.samples, &acknowledged.samples));
+            assert_eq!(
+                (acknowledged.resident_start(), acknowledged.resident_end()),
+                expected_window
+            );
+        }
+        let source = engine.sample_cache.lock().unwrap()[id].clone().unwrap();
+        assert_eq!(
+            engine
+                .input_runtime_ownership
+                .source_generation(id, &source, 8_000),
+            Some(source_request)
+        );
+        pair_acknowledgements.push(serde_json::json!({
+            "sample_id":id, "publication_status":ticket.publication_status(),
+            "window":[expected_window.0,expected_window.1],
+            "selected_pair":selected, "actual_callback_components":actual.stems.len(),
+        }));
+    }
+    assert!(!Arc::ptr_eq(
+        &callback.mixer.stems_for_measurement()[0]
+            .as_ref()
+            .unwrap()
+            .stems[0]
+            .samples,
+        &callback.mixer.stems_for_measurement()[215]
+            .as_ref()
+            .unwrap()
+            .stems[0]
+            .samples,
+    ));
+    let artifact_receipts = pyo3::Python::attach(|py| {
+        ["wav_generation", "pcm_generation", "descriptor_reference"]
+            .into_iter()
+            .map(|field| {
+                let mut lease =
+                    crate::audio_engine::material_migration_recovery::MigrationArtifactLease::capture(
+                        py,
+                        root.to_string_lossy().into(),
+                        selected[field].as_str().unwrap().into(),
+                    )
+                    .unwrap();
+                let receipt = lease.receipt_json().unwrap();
+                let mut reopened =
+                    crate::audio_engine::material_migration_recovery::MigrationArtifactLease::reopen(
+                        py,
+                        root.to_string_lossy().into(),
+                        receipt.clone(),
+                    )
+                    .unwrap();
+                assert_eq!(reopened.receipt_json().unwrap(), receipt);
+                reopened.release();
+                lease.release();
+                serde_json::from_str::<serde_json::Value>(&receipt).unwrap()
+            })
+            .collect::<Vec<_>>()
+    });
+    pyo3::Python::attach(|py| {
+        let config = root.join("flitzis_looper.config.json");
+        let mut guard =
+            crate::audio_engine::material_migration_recovery::MigrationProjectGuard::new(
+                py,
+                root.to_string_lossy().into(),
+                config.to_string_lossy().into(),
+            )
+            .unwrap();
+        let mut inventory = guard.lock_inventory(py).unwrap();
+        for (id, instance) in [(0, "1".repeat(32)), (215, "f".repeat(32))] {
+            crate::audio_engine::material_migration_recovery::restore_current_material_creation(
+                &engine,
+                id,
+                &record["alias"]["material_creation"].to_string(),
+                &config.to_string_lossy(),
+                &instance,
+                &inventory,
+                Some(journal_json),
+            )
+            .unwrap();
+        }
+        inventory.release();
+        guard.release();
+    });
+    let old_original = crate::audio_engine::material_paths::resolve(
+        &root,
+        Path::new(material["old_reference"].as_str().unwrap()),
+    )
+    .unwrap()
+    .path;
     assert_eq!(
         fs::read(&original).unwrap(),
-        fs::read(root.join("old.wav")).unwrap()
+        fs::read(&old_original).unwrap()
     );
     drop(reopened);
     // This test receipt records assertions only; it carries no replayable ticket,
@@ -1447,6 +1887,13 @@ fn material_migration_new_process_child_reopens_journal_with_fresh_source_and_ti
             "config_and_journal_verified": true,
             "source_callback_verified": true,
             "timing_callback_verified": true,
+            "window_callback_verified": true,
+            "pair_callback_verified": true,
+            "pair_callback_subscribers":pair_acknowledgements,
+            "source_windows":[[18_000,26_000],[20_000,28_000]],
+            "old_original":old_original, "new_original":original,
+            "pair_artifact_receipts":artifact_receipts,
+            "runtime_bindings":migration_execution_bindings(),
         }))
         .unwrap(),
     )
@@ -1455,6 +1902,9 @@ fn material_migration_new_process_child_reopens_journal_with_fresh_source_and_ti
 
 #[path = "material_migration_resume_tests.rs"]
 mod material_migration_resume_tests;
+
+#[path = "material_migration_reuse_process_tests.rs"]
+mod material_migration_reuse_process_tests;
 
 #[test]
 fn material_migration_seed_subscriber_reads_actual_finite_range_before_own_callback_ack() {

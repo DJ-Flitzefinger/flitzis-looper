@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
+from flitzis_looper.bs_input_provenance import BS_INPUT_RESULT
 from flitzis_looper.constants import (
     DEFAULT_DEMUCS_OVERLAP,
     DEFAULT_DEMUCS_SHIFTS,
@@ -17,6 +18,7 @@ from flitzis_looper.constants import (
     MIN_DEMUCS_OVERLAP,
     MIN_DEMUCS_SHIFTS,
 )
+from flitzis_looper.controller.processing_code import fresh_python_source_environment
 from flitzis_looper.controller.stem_artifacts import (
     AudioData,
     read_pcm16_wav,
@@ -27,6 +29,11 @@ from flitzis_looper.controller.stem_artifacts import (
 )
 from flitzis_looper.controller.stem_artifacts import (
     write_project_cache_artifacts as _write_project_cache_artifacts,
+)
+from flitzis_looper.encoder_provenance import (
+    ENCODER_CONTRACT_ENV,
+    ENCODER_RESULT,
+    verified_encoder_output,
 )
 from flitzis_looper.models import STEM_KINDS, StemSeparator
 
@@ -43,6 +50,7 @@ NO_MODEL_INSTALLED_MESSAGE = "no Model installed"
 FFMPEG_UNAVAILABLE_MESSAGE = "FFmpeg/ffprobe unavailable"
 TORCHCODEC_UNAVAILABLE_MESSAGE = "TorchCodec unavailable"
 FFMPEG_DIR_ENV_VAR = "FLITZIS_FFMPEG_DIR"
+DEMUCS_ENCODER_ENV_VAR = "FLITZIS_DEMUCS_ENCODER"
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +85,9 @@ class StemGenerationRequest:
     demucs_shifts: int = DEFAULT_DEMUCS_SHIFTS
     demucs_overlap: float = DEFAULT_DEMUCS_OVERLAP
     separator: StemSeparator = "demucs:htdemucs"
+    encoder_executable: Path | None = None
+    encoder_contract: str | None = None
+    python_source_roots: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +100,8 @@ class StemGenerationResult:
     cpu_fallback: bool
     artifact_count: int
     diagnostic: str | None = None
+    encoder_verified: bool = False
+    decoder_verified: bool = False
 
 
 class CommandRunner(Protocol):
@@ -136,7 +149,7 @@ def run_command(
     )
     return CommandResult(
         returncode=completed.returncode,
-        stdout=_bounded_text(completed.stdout),
+        stdout=_command_stdout(completed.stdout),
         stderr=_bounded_text(completed.stderr),
     )
 
@@ -184,6 +197,13 @@ def demucs_cache_environment(
     return env
 
 
+def resolved_demucs_encoder(model_cache_dir: Path) -> Path | None:
+    """Resolve the same encoder PATH used by the actual Demucs subprocess."""
+    env = demucs_cache_environment(model_cache_dir)
+    executable = shutil.which("ffmpeg", path=env.get("PATH"))
+    return Path(executable).resolve(strict=True) if executable is not None else None
+
+
 class DemucsStemGenerationBackend:
     """Demucs-based stem-generation backend that writes the project cache contract."""
 
@@ -207,6 +227,12 @@ class DemucsStemGenerationBackend:
         _validate_request(request)
         request.model_cache_dir.mkdir(parents=True, exist_ok=True)
         env = demucs_cache_environment(request.model_cache_dir)
+        env.pop(ENCODER_CONTRACT_ENV, None)
+        if request.encoder_executable is not None:
+            env[DEMUCS_ENCODER_ENV_VAR] = str(request.encoder_executable)
+            env["PATH"] = str(request.encoder_executable.parent) + os.pathsep + env.get("PATH", "")
+        if request.encoder_contract is not None:
+            env[ENCODER_CONTRACT_ENV] = request.encoder_contract
         if not _has_required_demucs_model(request.model_cache_dir, self._model_name):
             raise StemGenerationError(NO_MODEL_INSTALLED_MESSAGE)
         _require_demucs_audio_tools(env, self._command_runner)
@@ -219,7 +245,10 @@ class DemucsStemGenerationBackend:
             progress(0.05, _stage_for_device(device, fallback=cuda_error is not None))
             with tempfile.TemporaryDirectory(prefix="flitzis-demucs-") as temp_dir_name:
                 temp_dir = Path(temp_dir_name)
-                result = self._run_demucs(request, temp_dir, env, device)
+                with fresh_python_source_environment(
+                    env, temp_dir, source_roots=request.python_source_roots
+                ) as child_env:
+                    result = self._run_demucs(request, temp_dir, child_env, device)
                 if result.returncode != 0:
                     failure_diagnostic = _command_diagnostic(result)
                     if device == "cuda" and "cpu" in devices:
@@ -234,6 +263,11 @@ class DemucsStemGenerationBackend:
                     target_shape=request.target_shape,
                     progress=progress,
                 )
+                encoder_verified = verified_encoder_output(
+                    temp_dir,
+                    request.encoder_contract,
+                    result.stdout,
+                )
 
             diagnostic: str | None = None
             if cuda_error is not None:
@@ -246,6 +280,7 @@ class DemucsStemGenerationBackend:
                 cpu_fallback=cuda_error is not None and device == "cpu",
                 artifact_count=len(STEM_KINDS),
                 diagnostic=_bounded_text(diagnostic) if diagnostic is not None else None,
+                encoder_verified=encoder_verified,
             )
 
         msg = "Demucs did not run"
@@ -504,6 +539,19 @@ def _bounded_text(text: str | None, *, limit: int = 1000) -> str:
     if len(compact) <= limit:
         return compact
     return f"{compact[: limit - 3]}..."
+
+
+def _command_stdout(text: str | None) -> str:
+    if text is None:
+        return ""
+    prefixes = (ENCODER_RESULT, BS_INPUT_RESULT)
+    diagnostic = _bounded_text(
+        "\n".join(line for line in text.splitlines() if not line.startswith(prefixes))
+    )
+    receipts = [line for line in text.splitlines() if line.startswith(prefixes)]
+    if len(receipts) == 1 and len(receipts[0]) <= 1000:
+        return diagnostic + "\n" + receipts[0]
+    return diagnostic
 
 
 def _read_pcm16_wav(path: Path) -> AudioData:

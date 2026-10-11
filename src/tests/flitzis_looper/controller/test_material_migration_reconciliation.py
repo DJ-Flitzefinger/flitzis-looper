@@ -8,6 +8,7 @@ not native callbacks, PCM recognition, realtime behavior or audible output.
 import hashlib
 import json
 from concurrent.futures import Future
+from dataclasses import dataclass
 from pathlib import Path
 from threading import Event, get_ident
 from typing import TYPE_CHECKING
@@ -86,7 +87,11 @@ class _LedgerPreparation(_Preparation):
             },
             "decoder_identity": "b" * 64,
             "playback_identity": "c" * 64,
-            "cache_path": f"samples/materials/M{self.material}/.pcm-cache/v1/.ready-{'d' * 32}",
+            "cache_path": (
+                f"samples/materials/M{self.material}/.pcm-cache/v1/.ready-{'d' * 32}"
+                if "/materials/M" in self.target
+                else (Path(self.target).parent / ".pcm-cache/v1" / f".ready-{'d' * 32}").as_posix()
+            ),
             "artifact_ledger_schema": 1,
             "created_original": False,
             "created_cache": False,
@@ -101,18 +106,24 @@ class _ControlProofWorker(MigrationArtifactReconciler):
     separately with the unmodified production worker and native inventory.
     """
 
-    def __init__(self, samples: Path, config: Path) -> None:
+    def __init__(self, samples: Path, config: Path, audio: object = None) -> None:
         super().__init__(samples, config)
         self.requests: list[tuple[ArtifactRequest, ...]] = []
         self.captures: list[ArtifactCapture] = []
         self.retirements: list[MaterialMigrationJournal] = []
         self.finished = False
 
-    def capture(self, requests: Iterable[ArtifactRequest]) -> Future[ArtifactCapture]:
+    def capture(
+        self, requests: Iterable[ArtifactRequest], *, include_legacy_pcm: bool = True
+    ) -> Future[ArtifactCapture]:
         requested = tuple(requests)
         self.requests.append(requested)
         actual = tuple(item for item in requested if ".pcm-cache" not in item.reference)
-        capture = self._capture(actual) if actual else ArtifactCapture((), [])
+        capture = (
+            self._capture(actual, include_legacy_pcm=include_legacy_pcm)
+            if actual
+            else ArtifactCapture((), [])
+        )
         self.captures.append(capture)
         return _complete(capture)
 
@@ -143,8 +154,11 @@ class _RecoveryRig:
         self.preparations = {_OLD: _LedgerPreparation(_OLD, _NEW, _MATERIAL)}
         self.next_request = 20_000
 
-        def proof_worker(samples: Path, config: Path) -> _ControlProofWorker:
-            worker = _ControlProofWorker(samples, config)
+        def proof_worker(
+            samples: Path, config: Path, delivered_audio: object
+        ) -> _ControlProofWorker:
+            assert delivered_audio is audio
+            worker = _ControlProofWorker(samples, config, delivered_audio)
             self.workers.append(worker)
             return worker
 
@@ -448,7 +462,9 @@ def test_newer_regular_import_wins_before_child_subscriber_admission(
 def _second_material(recovery: _RecoveryRig) -> str:
     source = "samples/second.wav"
     target = f"samples/materials/M{'9' * 32}/original/second.wav"
-    Path(source).write_bytes(Path(_OLD).read_bytes())
+    distinct_bytes = bytearray(Path(_OLD).read_bytes())
+    distinct_bytes[-1] ^= 1
+    Path(source).write_bytes(distinct_bytes)
     Path(target).parent.mkdir(parents=True)
     Path(target).write_bytes(Path(source).read_bytes())
     recovery.preparations[source] = _LedgerPreparation(source, target, "9" * 32)
@@ -559,7 +575,74 @@ def test_pending_physical_cleanup_does_not_block_next_distinct_material_adoption
     ]
 
 
-def test_mixed_canonical_and_legacy_project_keeps_canonical_content_and_key_intent(
+@dataclass(frozen=True)
+class _MixedMaterialSet:
+    reference: str
+    digest: str
+    work: _StemWork
+    old_caches: dict[str, Path]
+    old_bytes: dict[Path, dict[str, bytes]]
+
+    def version(self, source: str) -> str:
+        return f"{source}|sha256-v1:{self.digest}"
+
+
+def _mixed_material_set(recovery: _RecoveryRig) -> _MixedMaterialSet:
+    digest = hashlib.sha256(Path(_OLD).read_bytes()).hexdigest()
+    # The incoming legacy original already occupies this name; the Native resolver
+    # would select a collision suffix rather than replace its exact bytes.
+    readable_root = Path(f"samples/old.wav--{digest[:12]}")
+    readable_root.mkdir()
+    readable_original = readable_root / "old.wav"
+    readable_original.write_bytes(Path(_OLD).read_bytes())
+    (readable_root / ".material.json").write_text(
+        json.dumps({
+            "schema_version": 1,
+            "sha256": digest,
+            "bytes": readable_original.stat().st_size,
+            "original_leaf": readable_original.name,
+        }),
+        encoding="utf-8",
+    )
+    readable = readable_original.as_posix()
+    for source in (_NEW, _OLD):
+        recovery.preparations[source] = _LedgerPreparation(source, readable, digest[:32])
+
+    class ReadableStemWork(_StemWork):
+        def cache_reference(self) -> str:
+            return (readable_root / "stems" / f".ready-{'e' * 32}").as_posix()
+
+    work = ReadableStemWork(state="ready", created=False)
+    old_caches = {
+        _OLD: Path("samples/stems/#216"),
+        _NEW: Path(f"samples/materials/M{_MATERIAL}/stems/.ready-{'e' * 32}"),
+    }
+    for source, cache in (old_caches | {readable: Path(work.cache_reference())}).items():
+        cache.mkdir(parents=True)
+        for kind in STEM_KINDS:
+            write_mono_pcm16_wav(cache / f"{kind}.wav", 44_100)
+        write_test_stem_marker(cache, f"{source}|sha256-v1:{digest}")
+    for sample_id, source in ((0, _NEW), (215, _OLD)):
+        cache_reference = old_caches[source].as_posix()
+        recovery.controller.project.stem_cache[sample_id] = StemCacheEntry(
+            source_version=f"{source}|sha256-v1:{digest}",
+            cache_dir=cache_reference,
+            stems=expected_stem_files(cache_reference),
+            available=True,
+        )
+    return _MixedMaterialSet(
+        readable,
+        digest,
+        work,
+        old_caches,
+        {
+            cache: {path.name: path.read_bytes() for path in cache.iterdir()}
+            for cache in old_caches.values()
+        },
+    )
+
+
+def test_mixed_old_material_and_legacy_project_preserves_each_content_and_key_intent(
     recovery: _RecoveryRig,
 ) -> None:
     project = recovery.controller.project
@@ -569,32 +652,9 @@ def test_mixed_canonical_and_legacy_project_keeps_canonical_content_and_key_inte
     project.pad_content[0] = PadContentIdentity(
         instance_id=old_content.instance_id, material_id=_MATERIAL
     )
-    work = _StemWork(state="ready", created=False)
-    target = work.cache_reference()
-    old_cache = Path("samples/stems/#216")
-    new_cache = Path(target)
-    old_cache.mkdir(parents=True)
-    new_cache.mkdir(parents=True)
-    digest = hashlib.sha256(Path(_OLD).read_bytes()).hexdigest()
-    old_version, new_version = f"{_OLD}|sha256-v1:{digest}", f"{_NEW}|sha256-v1:{digest}"
-    for cache, version in ((old_cache, old_version), (new_cache, new_version)):
-        for kind in STEM_KINDS:
-            write_mono_pcm16_wav(cache / f"{kind}.wav", 44_100)
-        write_test_stem_marker(cache, version)
-    project.stem_cache[0] = StemCacheEntry(
-        source_version=new_version,
-        cache_dir=target,
-        stems=expected_stem_files(target),
-        available=True,
-    )
-    project.stem_cache[215] = StemCacheEntry(
-        source_version=old_version,
-        cache_dir=old_cache.as_posix(),
-        stems=expected_stem_files(old_cache.as_posix()),
-        available=True,
-    )
-    old_wav_bytes = {path.name: path.read_bytes() for path in old_cache.iterdir()}
-    recovery.audio.prepare_material_migration_stems.return_value = work
+    fixtures = _mixed_material_set(recovery)
+    target = fixtures.work.cache_reference()
+    recovery.audio.prepare_material_migration_stems.return_value = fixtures.work
     # Publication acceptance is a controller double; the native WAV receipts are real.
     publication = Mock()
     publication.publication_status.return_value = "accepted"
@@ -606,31 +666,40 @@ def test_mixed_canonical_and_legacy_project_keeps_canonical_content_and_key_inte
     recovery.service.poll()
     recovery.service.poll()
     recovery.service.poll()  # Complete target WAV receipt before source admission.
-    assert set(recovery.sources) == {215}
-    assert recovery.audio.prepare_material_migration.call_args.args == (_OLD,)
+    assert set(recovery.sources) == set(_IDS)
+    assert recovery.audio.prepare_material_migration.call_args.args == (_NEW,)
     recovery.acknowledge()
     saved = ProjectPersistence.from_config_path(recovery.persistence.config_path).project
-    assert saved.sample_paths[0] == expected.sample_paths[0] == _NEW
-    assert saved.pad_content[0] == expected.pad_content[0]
+    assert saved.sample_paths[0] == saved.sample_paths[215] == fixtures.reference
+    assert [value.instance_id if value else None for value in saved.pad_content] == [
+        value.instance_id if value else None for value in expected.pad_content
+    ]
     assert saved.pad_key_intent == expected.pad_key_intent
-    assert saved.sample_paths[215] == _NEW
-    assert saved.stem_cache[0] == expected.stem_cache[0]
-    assert saved.stem_cache[215] is not None
-    assert saved.stem_cache[215].source_version == new_version
-    assert saved.stem_cache[215].cache_dir == target
-    assert {path.name: path.read_bytes() for path in old_cache.iterdir()} == old_wav_bytes
-    assert recovery.audio.prepare_material_migration_stems.call_args.args[1:4] == (
-        old_cache.as_posix(),
-        old_version,
-        new_version,
-    )
+    for sample_id in _IDS:
+        content, entry = saved.pad_content[sample_id], saved.stem_cache[sample_id]
+        assert content is not None
+        assert content.material_id == fixtures.digest[:32]
+        assert entry is not None
+        assert entry.source_version == fixtures.version(fixtures.reference)
+        assert entry.cache_dir == target
+    for cache, before in fixtures.old_bytes.items():
+        assert {path.name: path.read_bytes() for path in cache.iterdir()} == before
+    assert {
+        call.args[1:4] for call in recovery.audio.prepare_material_migration_stems.call_args_list
+    } == {
+        (cache.as_posix(), fixtures.version(source), fixtures.version(fixtures.reference))
+        for source, cache in fixtures.old_caches.items()
+    }
     assert recovery.service._journal is not None
     stem_records = [
         item
         for item in recovery.service._journal.artifacts
         if item.evidence.kind == "stem_directory"
     ]
-    assert {item.evidence.reference for item in stem_records} == {old_cache.as_posix(), target}
+    assert {item.evidence.reference for item in stem_records} == {
+        *[cache.as_posix() for cache in fixtures.old_caches.values()],
+        target,
+    }
     assert all(len(item.evidence.files) == 6 for item in stem_records)
 
 

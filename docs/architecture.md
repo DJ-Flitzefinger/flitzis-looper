@@ -1118,15 +1118,41 @@ native unload ACK determine real last use. Full HC/P6/V0 and human gates stay OP
 
 ### Existing material reference migration
 
-`MaterialMigrationController` coordinates one distinct current legacy original
+`MaterialMigrationController` coordinates one distinct verified current M-ID or legacy material
 and its matching assignments across all216 slots. App startup captures a bounded
 reference inventory after ordinary restores and admits one material at a time;
-after genuine settlement it rechecks each remaining recognized legacy reference.
+after genuine settlement it rechecks each remaining recognized old-layout reference.
+The single Native resolver returns typed artifact kind, layout and material root
+to Python. New originals live directly in readable filename directories; complete
+SHA/length and the first canonical leaf are held in a hidden binding, independently
+of compact material IDs. A full-SHA claim serializes differently named equal-byte
+imports before the existing derivative preparation gate. Compatible lookup retains
+the incoming and canonical sealed readers, scans complete integrity and creates no
+extra source/snapshot copy. Decoder/rate/channel and stem producer/transform
+compatibility remain separate from source equality.
 The explicit `begin(sample_id)`
 operation uses the same path. Native bounded workers verify/reuse or copy the
 immutable original, FullMix PCM and complete available five-WAV sets. Each pad
 receives a separate actual source request/ACK and fresh supported saved timing
 adoption; path aliases and journal records grant no runtime permission.
+Complete held Native original receipts group equal source SHA/length off-thread;
+each pad retains its captured path, content instance, current request and intent.
+Model/config/producer provenance is recorded only for successful generation with
+known actual inputs. `SealedProcessingFiles` holds complete model/config/code and
+supported converter witnesses through producer execution and verified promotion;
+actual caller-owned Demucs encoder children must match those held images under
+the explicit bounded OS runtime policy. Unknown historical provenance stays
+unknown. Supported Demucs32/BS28 file sets also bind the relevant actual loaded
+host code/defaults/constants/import aliases and supported decorator wrappers to
+compiled held source. Exact guarded package roots enter the immutable request
+and precede inherited child import paths under safe-path policy; each child owns
+a fresh empty bytecode namespace with writes disabled. Required stale/unsupported
+bindings stay UNKNOWN. These bounded local checks retain standard Python imports
+and the declared dependency-version/OS policy; they do not attest a hostile or
+complete global runtime. Compatible
+completed sets use the existing pair preparation and each subscriber's own ACK,
+without invoking inference again. This does not implement future current-model
+replacement controls or new-generation active adoption.
 
 The common `ProjectPersistence` writer fences autosave/explicit/shutdown saves,
 compares current intent revisions and keeps newer changes dirty. Related-reference
@@ -1166,6 +1192,26 @@ only checked leaves and checked empty containers may be removed. Foreign live
 processes or unqueryable/unknown inventory preserve all candidates. Fault/reopen
 tests establish bounded Windows visibility and lifecycle behavior; they do not
 assert power-loss guarantees or audible acceptance.
+
+New readable roots carry optional typed native birth evidence for their exact
+directory and `.material.json` identities, marker size and full digest. Current
+config/journal, actual inventory and fresh source adoption are checked before
+restoring that receipt into the existing lease/retirement path after restart.
+Unknown roots, replaced markers and valid JSON without actual birth evidence stay
+protected. A recovery-only retired-original path also covers exit after verified
+binding deletion while its native-born empty root remains. It requires the exact
+birth root FileID, contained typed original reference, unchanged latest
+created-target journal with actual original-terminal evidence, matching current
+config/content intent and registered inventory. The original must be absent and
+the root genuinely empty under custody; present markers still require full
+birth FileID/SHA/extent verification. Ordinary resolution still rejects missing
+bindings. This root-terminal route grants no material adoption or missing-source
+ACK, and retains inventory/capacity/real root-reader protection through physical
+deletion. Unknown children, replacement/reparse roots, reappeared source/marker
+or absent terminal/birth evidence are preserved. Its six-mode fresh-process
+execution and complete current-source Debug/Release suites pass. The
+[MATERIAL report](readable-material-validation.md) records actual physical
+last-reader terminal evidence and the separate remaining integration gates.
 
 Physical queue entries retain the inventory gate after callers release or vanish.
 Their visible outcomes settle after exact deletion and the bounded empty-container

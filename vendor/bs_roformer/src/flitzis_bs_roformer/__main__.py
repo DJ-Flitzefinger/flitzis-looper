@@ -12,6 +12,7 @@ import torch
 from flitzis_bs_roformer.audio import decode_source
 from flitzis_bs_roformer.inference import ChunkPlan, separate_pcm
 from flitzis_bs_roformer.model import load_model
+from flitzis_looper.bs_input_provenance import begin_input_attempt, input_completion_line
 
 
 def main() -> None:
@@ -28,6 +29,7 @@ def main() -> None:
     args.output.mkdir(parents=True, exist_ok=True)
     model = load_model(args.checkpoint, args.config, args.device)
     _emit({"stage": "model_ready", "device": args.device, "torch": torch.__version__})
+    begin_input_attempt(args.output)
     with TemporaryDirectory(prefix=".decode-", dir=args.output) as temporary:
         decoded = Path(temporary) / "source.f32"
         frames = decode_source(args.source, decoded)
@@ -45,6 +47,8 @@ def main() -> None:
         "normalize": False,
         "transient_pcm_bytes_bound": plan.transient_pcm_bytes,
     })
+    sys.stdout.write(input_completion_line() + "\n")
+    sys.stdout.flush()
 
 
 def _emit(status: dict[str, str | int | bool]) -> None:

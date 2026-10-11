@@ -1,3 +1,4 @@
+import json
 from itertools import islice
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict, TypeVar
@@ -15,6 +16,7 @@ from flitzis_looper.controller.key_metadata import KeyMetadataAnalysis
 from flitzis_looper.controller.saved_residency import saved_resident_loop
 from flitzis_looper.controller.validation import normalize_bpm
 from flitzis_looper.key_intent import PadKeyIntent
+from flitzis_looper.material_migration_model import MaterialCreationReceipt
 from flitzis_looper.models import (
     PadContentIdentity,
     ProjectState,
@@ -61,7 +63,94 @@ def _reset_pad_value(values: list[_PadValue], sample_id: int, default: _PadValue
     return True
 
 
-class LoaderController(BaseController):
+class _MaterialCreationOwnership(BaseController):
+    """Poll exact material birth metadata without changing ordinary loader intent."""
+
+    def __init__(
+        self,
+        project: ProjectState,
+        session: SessionState,
+        audio: AudioEngine,
+        on_project_changed: Callable[[], None] | None = None,
+    ) -> None:
+        super().__init__(project, session, audio, on_project_changed)
+        self._material_creation_pending: dict[int, tuple[str, str]] = {}
+        self._material_creation_restore: Callable[[int, PadContentIdentity], None] | None = None
+
+    def bind_material_creation_restore(
+        self, restore: Callable[[int, PadContentIdentity], None]
+    ) -> None:
+        """Route saved birth evidence to the existing guarded background owner."""
+        self._material_creation_restore = restore
+
+    def _poll_material_creation(self) -> None:
+        getter = getattr(self._audio, "cold_source_manifest", None)
+        if not callable(getter):
+            self._material_creation_pending.clear()
+            return
+        for sample_id, (instance_id, reference) in list(self._material_creation_pending.items())[
+            :8
+        ]:
+            content = self._project.pad_content[sample_id]
+            if (
+                content is None
+                or content.instance_id != instance_id
+                or self._project.sample_paths[sample_id] != reference
+            ):
+                self._material_creation_pending.pop(sample_id)
+                continue
+            try:
+                encoded = getter(sample_id)
+                if not isinstance(encoded, str):
+                    continue
+                self._apply_material_creation_manifest(sample_id, content, reference, encoded)
+                self._material_creation_pending.pop(sample_id)
+            except (OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
+                self._material_creation_pending.pop(sample_id)
+                self._session.sample_load_errors[sample_id] = (
+                    f"Material birth ownership preserved: {error}"
+                )
+
+    def _apply_material_creation_manifest(
+        self, sample_id: int, content: PadContentIdentity, reference: str, encoded: str
+    ) -> None:
+        manifest = json.loads(encoded)
+        if (
+            original_asset(manifest["original_path"]).path != original_asset(reference).path
+            or manifest["material_id"] != content.material_id
+        ):
+            message = "newer native source wins over material birth metadata"
+            raise ValueError(message)
+        birth = manifest.get("material_creation")
+        if birth is not None:
+            creation = MaterialCreationReceipt.model_validate(birth)
+            self._check_material_creation(content, reference, creation)
+            if content.material_creation != creation:
+                self._project.pad_content[sample_id] = content.model_copy(
+                    update={"material_creation": creation}
+                )
+                self._mark_project_changed()
+        elif content.material_creation is not None and self._material_creation_restore is not None:
+            self._material_creation_restore(sample_id, content)
+
+    @staticmethod
+    def _check_material_creation(
+        content: PadContentIdentity, reference: str, creation: MaterialCreationReceipt
+    ) -> None:
+        asset = original_asset(reference)
+        if (
+            asset.layout != "readable"
+            or asset.material_root is None
+            or asset.material_root.relative_to(Path.cwd()).as_posix() != creation.root_reference
+        ):
+            message = "material birth metadata belongs to another canonical source root"
+            raise ValueError(message)
+        if content.material_creation is not None and content.material_creation != creation:
+            message = "material birth metadata changed for the same content instance"
+            raise ValueError(message)
+
+
+class LoaderController(_MaterialCreationOwnership):
     _COLD_QUEUE_FULL = "cold source queue full (2 workers, 32 queued jobs)"
     _RESTORE_ADMISSIONS_PER_POLL = 8
 
@@ -284,6 +373,7 @@ class LoaderController(BaseController):
     def poll_loader_events(self) -> None:
         """Drain pending loader events from the Rust audio engine."""
         self._accepted_restore.poll()
+        self._poll_material_creation()
         self._assets.retry_retirements()
         handlers = {
             "started": self._handle_loader_started,
@@ -299,6 +389,7 @@ class LoaderController(BaseController):
         while True:
             event = self._audio.poll_loader_events()
             if event is None:
+                self._poll_material_creation()
                 self._retry_deferred_restores()
                 return
 
@@ -594,6 +685,9 @@ class LoaderController(BaseController):
     ) -> None:
         changed = changed or self._project.pad_content[sample_id] != content
         self._project.pad_content[sample_id] = content
+        reference = self._project.sample_paths[sample_id]
+        if reference is not None:
+            self._material_creation_pending[sample_id] = (content.instance_id, reference)
         self._assets.adopt_original(sample_id, prepared)
         if changed:
             self._mark_project_changed()

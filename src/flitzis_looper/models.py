@@ -42,7 +42,11 @@ from flitzis_looper.constants import (
     VOLUME_MIN,
 )
 from flitzis_looper.key_intent import KeyCorrectionView, PadKeyIntent, SourceKeyVersion
-from flitzis_looper.material_migration_model import MaterialMigrationAlias, MigrationID
+from flitzis_looper.material_migration_model import (
+    MaterialCreationReceipt,
+    MaterialMigrationAlias,
+    MigrationID,
+)
 from flitzis_looper.stem_pair_selection import StemPairSelection
 
 if TYPE_CHECKING:
@@ -203,6 +207,12 @@ class StemCacheEntry(BaseModel):
     pair: StemPairSelection | None = None
     """Complete immutable WAV/PCM selection; runtime publication remains independent."""
 
+    generation_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    """Captured source/config/transform request; absent historical provenance stays unknown."""
+
+    producer_identity: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    """Full verified model/config bytes held throughout actual successful production."""
+
     @field_validator("pair", mode="before")
     @classmethod
     def _validate_pair(cls, value: object) -> StemPairSelection | None:
@@ -338,6 +348,7 @@ class PadContentIdentity(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     instance_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     material_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+    material_creation: MaterialCreationReceipt | None = None
 
 
 def _default_pad_content() -> list[PadContentIdentity | None]:

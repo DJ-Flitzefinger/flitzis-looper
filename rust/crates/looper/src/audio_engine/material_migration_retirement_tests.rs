@@ -4,7 +4,7 @@
 use super::*;
 use crate::audio_engine::cold_store;
 
-fn assert_registration_blocked(root: &Path) {
+pub(super) fn assert_registration_blocked(root: &Path) {
     let config = root.parent().unwrap().join("project.config.json");
     let error = MigrationProjectGuard::create_native(root, &config)
         .err()
@@ -12,13 +12,13 @@ fn assert_registration_blocked(root: &Path) {
     assert!(matches!(error.raw_os_error(), Some(32 | 33)));
 }
 
-fn assert_registration_available(root: &Path) {
+pub(super) fn assert_registration_available(root: &Path) {
     let config = root.parent().unwrap().join("project.config.json");
     let mut guard = MigrationProjectGuard::create_native(root, &config).unwrap();
     guard.release();
 }
 
-fn assert_blocked_in_new_process(root: &Path) {
+pub(super) fn assert_blocked_in_new_process(root: &Path) {
     let ready = root.parent().unwrap().join("child-ready.json");
     if ready.exists() {
         fs::remove_file(&ready).unwrap();
@@ -35,9 +35,36 @@ fn assert_blocked_in_new_process(root: &Path) {
 
 #[test]
 fn original_queue_keeps_inventory_after_caller_release_and_artifact_gc_until_last_job() {
+    original_queue_keeps_actual_custody(false);
+}
+
+#[test]
+fn mid_original_queue_keeps_inventory_after_artifact_gc_until_actual_last_reader() {
+    original_queue_keeps_actual_custody(true);
+}
+
+fn original_queue_keeps_actual_custody(mid_layout: bool) {
     let (temp, root) = root();
-    let path = root.join("old.wav");
+    let path = if mid_layout {
+        root.join("materials/M0123456789abcdef0123456789abcdef/original/old.wav")
+    } else {
+        root.join("old.wav")
+    };
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
     wav(&path);
+    let neighbor = path.parent().unwrap().join("unknown.keep");
+    fs::write(&neighbor, b"outside the exact original receipt").unwrap();
+    let reader = cold_store::sealed_reader(&path).unwrap();
+    assert!(matches!(
+        fs::remove_file(&path).unwrap_err().raw_os_error(),
+        Some(32 | 33)
+    ));
+    assert!(matches!(
+        fs::rename(&path, path.with_extension("renamed.wav"))
+            .unwrap_err()
+            .raw_os_error(),
+        Some(32 | 33)
+    ));
     let assets = ProjectAssets::shared();
     let mut job = assets.acquire_pin(&root, &path).unwrap();
     let mut inventory = inventory_gate(&root).unwrap();
@@ -62,9 +89,19 @@ fn original_queue_keeps_inventory_after_caller_release_and_artifact_gc_until_las
     job.release();
     drop(job);
     assets.collect_for_test();
+    assert!(path.exists());
+    assert_eq!(outcome.status().unwrap(), ("pending", None));
+    assert!(inventory_weak.upgrade().is_some());
+    assert_registration_blocked(&root);
+    assert_blocked_in_new_process(&root);
+    drop(reader);
     wait_until(|| !path.exists() && outcome.status().unwrap().0 == "complete");
     wait_until(|| inventory_weak.upgrade().is_none());
     assert_eq!(outcome.status().unwrap(), ("complete", None));
+    assert_eq!(
+        fs::read(&neighbor).unwrap(),
+        b"outside the exact original receipt"
+    );
     assert_registration_available(&root);
 
     // The same actual child which was denied can now register its fresh owner.

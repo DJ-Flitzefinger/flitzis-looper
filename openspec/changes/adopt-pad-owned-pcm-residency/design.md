@@ -537,7 +537,23 @@ and process working-set/commit/peaks are separate evidence. New active-generatio
 adoption, aggregate P6 resources, Human device/hearing and full Rust-port work are
 outside this delivery.
 
-E11-08..10 separate hidden full-content identity from `samples/<Originalfilename>/` visible roots. First canonical verified name wins for equal bytes under different names; unsafe/case-colliding directories use a readable prefix plus sufficiently extended content SHA suffix. Exact supported original leaf names/bytes stay intact. Native material_paths/cold_store/project_assets plus Python material migration/persistence share one resolver and existing journal. Copy-to-new-root and atomic current-reference/config commit precede eventual old-root retirement; no rename beneath readers, no unknown deletion, no saved ACK replay or data reset. Cross-name dedup currently includes filename in cold_store identity and requires an actual bounded correction, not a documentation assertion.
+E11-08..10 separate hidden full-content identity from `samples/<Originalfilename>/` visible roots. First canonical verified root and original leaf win for equal bytes under different names; unsafe/case-colliding directories use a readable prefix plus sufficiently extended content SHA suffix. Exact supported original leaf names/bytes stay intact. A guarded full-SHA claim precedes the existing derivative gate. Hidden `.material.json` is a locator, while held incoming/canonical readers and complete SHA/length/EOF verification decide reuse. Compatible hits create no temporary full-source snapshot, additional original leaf, complete decode or inference. Decoder/rate/channel and actual executed model/config/producer transform compatibility remain separate; missing historical producer provenance stays unknown. Native material_paths/cold_store/project_assets plus Python material migration/persistence share one resolver and existing journal. Copy-to-new-root and atomic current-reference/config commit precede eventual old-root retirement; no rename beneath readers, no unknown deletion, no saved ACK replay or data reset. Source/window/timing/pair ACKs remain separate, current-bound rights. Full X11-MATERIAL integration still depends on open LONG/P4b/P5b and applicable original/final gates.
+
+The supported producer sets contain 32 Demucs or 28 BS exact files within Native's
+32-file guard, including the bounded execution-policy source and empty host package
+initializer. Held-source compilation checks the relevant actual loaded host
+functions/classes/properties/defaults/constants/import aliases and supported
+decorator wrappers before known compatibility is stamped. Required unsupported
+bindings remain UNKNOWN. Exact held package roots enter the immutable request,
+precede inherited child paths under `PYTHONSAFEPATH=1`, and each child owns a fresh
+empty bytecode namespace with writes disabled. Actual tools still require their
+matching image/FileID witnesses and exclusive child-returned receipt. Normal
+Python imports, dependency versions and narrow OS runtime policy remain explicit
+limits; this is no global or hostile-interpreter attestation. Composed fixtures
+substitute declared neural output and, for BS, an owned source-verified asset
+verifier; there is no production-global exemption or neural/resource/music PASS.
+Current evidence and pending final gates are maintained in
+`docs/readable-material-validation.md`.
 
 Concrete implementation slices, dependencies, source seams and full acceptance gates are in [the extension](../../../docs/pre-rust-extension-20261011.md). This is engineering planning only; original accepted/negative evidence remains scoped and immutable.
 

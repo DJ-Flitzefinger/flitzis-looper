@@ -271,6 +271,16 @@ X11-KEYLOCK is prioritized after X11-PLAN and the accepted NormalLoop/lifecycle 
 
 The E11 targets replace opaque browsing roots with `samples/<Originalfilename>/`, total-complete-PCM rejection with streamed complete conversion/full warm integrity, activity-only offline generation restrictions with source leases and independent active new-set gates, and icon-only X with labeled CLOSE LOOP EDITOR. Shared hidden SHA identity, immutable generations/readers, original-source preservation, fresh own ACKs, RT constraints, actual resource/music/Human gates and final stop boundary remain. Completed historical subtasks are not reopened; whole E11 outcomes retain their final gates. No full Rust-port plan/implementation/Slice8 is authorized here.
 
+X11-MATERIAL's [bounded M1/M2 report](readable-material-validation.md) tracks the
+readable full-SHA/first-root-and-leaf contract, compatible complete PCM/stem reuse,
+both old-layout current-config/fresh-ACK migration and exact native birth-receipt
+cleanup. Bounded software execution and independent source/evidence review pass;
+delivery requires the final frozen-tree/publication receipts. This software
+result does not close full LONG/P1b/P2b, copy/move/Re-Arrange,
+E11-19/20 current-model controls, active new-generation adoption, all216 aggregate
+resources or music/Human/program gates. In particular, ordinary UI default-loop
+admission and finite KEYLOCK-load/DSP remain required P4b/P5b work.
+
 X11-UI's [bounded tasks](../openspec/changes/refine-loop-editor-performance-actions/tasks.md)
 track E11-04/16/17/18 software evidence independently of H-FINAL. The executed
 pre-fix full-editor wheel negative found late readiness text moving plot/upper

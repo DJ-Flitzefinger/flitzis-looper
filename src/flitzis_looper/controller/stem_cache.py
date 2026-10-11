@@ -58,15 +58,15 @@ def cache_dir_for_sample_id(sample_id: int, sample_path: str | None = None) -> s
     validate_sample_id(sample_id)
     if sample_path is not None:
         asset = original_asset(sample_path)
-        if asset.material_id is not None:
-            return (asset.path.parent.parent / "stems").relative_to(Path.cwd()).as_posix()
+        if asset.material_root is not None:
+            return (asset.material_root / "stems").relative_to(Path.cwd()).as_posix()
     return (STEM_CACHE_ROOT / f"#{sample_id + 1}").as_posix()
 
 
 def _safe_stem_cache_dir_path(cache_dir: str) -> Path | None:
     try:
         asset = resolve_asset(cache_dir)
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     return asset.path if asset.kind in {"stem_directory", "stem_artifact"} else None
 
@@ -81,11 +81,11 @@ def cache_dir_matches_sample_id(
         if resolved.kind != "stem_directory":
             return False
         candidate = resolved.path.relative_to(Path.cwd())
-        if sample_path is not None and original_asset(sample_path).material_id is None:
+        if sample_path is not None and original_asset(sample_path).layout == "legacy":
             legacy = candidate.parent if candidate.name.startswith(".ready-") else candidate
             if legacy.parent == STEM_CACHE_ROOT:
                 root = legacy
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return False
     return candidate == root or (
         candidate.parent == root
@@ -135,12 +135,21 @@ def promote_generation_artifacts(entry: StemCacheEntry, generation_dir: Path) ->
         message = "Stem generation already has a published owner"
         raise FileExistsError(message)
     marker_temp = private / STEM_SET_MARKER_NAME
+    provenance = (
+        {
+            "generation_fingerprint": entry.generation_fingerprint,
+            "producer_identity": entry.producer_identity,
+        }
+        if entry.generation_fingerprint is not None and entry.producer_identity is not None
+        else {}
+    )
     with marker_temp.open("x", encoding="utf-8") as marker:
         json.dump(
             {
                 "schema": STEM_SET_MARKER_SCHEMA,
                 "source_version": entry.source_version,
                 "stems": digests,
+                **provenance,
             },
             marker,
         )
@@ -166,6 +175,11 @@ def verified_stem_cache_available(entry: StemCacheEntry) -> bool:
             "source_version": entry.source_version,
             "stems": {kind: _file_digest(target / f"{kind}.wav") for kind in STEM_KINDS},
         }
+        if entry.generation_fingerprint is not None and entry.producer_identity is not None:
+            expected |= {
+                "generation_fingerprint": entry.generation_fingerprint,
+                "producer_identity": entry.producer_identity,
+            }
     except OSError, ValueError, UnicodeDecodeError:
         return False
     return marker == expected

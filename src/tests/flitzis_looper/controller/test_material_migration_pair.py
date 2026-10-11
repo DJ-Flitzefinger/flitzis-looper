@@ -17,7 +17,6 @@ from flitzis_looper.controller.material_migration import MaterialMigrationContro
 from flitzis_looper.controller.material_migration_cleanup import (
     ArtifactCapture,
     ArtifactRequest,
-    MigrationArtifactReconciler,
 )
 from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.controller.stem_cache import expected_stem_files
@@ -41,6 +40,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from flitzis_looper.controller import AppController
+    from flitzis_looper.controller.material_migration_cleanup import MigrationArtifactReconciler
     from flitzis_looper.models import ProjectState
 
 
@@ -112,11 +112,11 @@ class _PairRig:
         cache.mkdir(parents=True)
         for kind in STEM_KINDS:
             write_mono_pcm16_wav(cache / f"{kind}.wav", 44_100)
-        # Actual WAV marker lineage differs from the current legacy subscriber.
-        # Native full pair/PCM recognition is deliberately outside this fake.
+        # Interrupted migration already completed this canonical pair. Its marker
+        # and entry both retain the actual target source binding.
         write_test_stem_marker(cache, self.canonical_version)
         entry = StemCacheEntry(
-            source_version=self.old_version,
+            source_version=self.canonical_version,
             cache_dir=self.selection.wav_generation,
             stems=expected_stem_files(self.selection.wav_generation),
             available=True,
@@ -372,11 +372,14 @@ def test_full_mix_demand_cannot_settle_an_unreturned_pair_worker_via_future_gc(
     assert rig.base.hold.release_count == 1
 
 
-def test_existing_pair_artifact_requests_are_target_noncreations_for_all_three_areas(
+def test_old_pair_capture_has_exact_rollback_receipts_until_prepared_root_establishes_reuse(
     pair_migration: _PairRig,
 ) -> None:
     rig = pair_migration
-    worker = Mock(spec=MigrationArtifactReconciler)
+    # This capture-only seam does not instantiate or introspect the production
+    # constructor. Python 3.14 evaluates its deferred typing-only annotations
+    # when a class spec is inspected; the request/returned-Future oracle is below.
+    worker = Mock(spec_set=["capture"])
     returned: Future[ArtifactCapture] = Future()
     returned.set_result(ArtifactCapture((), []))
     worker.capture.return_value = returned
@@ -391,9 +394,9 @@ def test_existing_pair_artifact_requests_are_target_noncreations_for_all_three_a
     requests = cast("list[ArtifactRequest]", worker.capture.call_args.args[0])
     assert requests == [
         ArtifactRequest(_OLD, "rollback"),
-        ArtifactRequest(rig.selection.wav_generation, "target", created=False),
-        ArtifactRequest(rig.selection.pcm_generation, "target", created=False),
-        ArtifactRequest(rig.selection.descriptor_reference, "target", created=False),
+        ArtifactRequest(rig.selection.wav_generation, "rollback", created=False),
+        ArtifactRequest(rig.selection.pcm_generation, "rollback", created=False),
+        ArtifactRequest(rig.selection.descriptor_reference, "rollback", created=False),
     ]
     assert rig.service._artifact_future is returned
     assert not returned.result().records  # This mock manufactures no native proof.

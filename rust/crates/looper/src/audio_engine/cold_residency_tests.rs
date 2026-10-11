@@ -1266,11 +1266,10 @@ fn c2a_productive_saved_finite_warm_restore_identity_bytes() {
     let metrics = &warm_manifest["integrity"];
     assert_eq!(metrics["warm"], true);
     let original_bytes = fs::metadata(&source).unwrap().len();
-    assert_eq!(metrics["source_copied_bytes"], original_bytes);
-    assert_eq!(metrics["snapshot_verify_bytes"], original_bytes);
-    // As in cold_store/warm_tests.rs, restore hashes the sealed saved original
-    // while copying, then verifies the entire snapshot. This separate counter
-    // covers import-original copies; the complete original hashes below remain.
+    assert_eq!(metrics["source_copied_bytes"], 0);
+    assert_eq!(metrics["snapshot_verify_bytes"], 0);
+    // Restore verifies the held original completely without making a snapshot.
+    assert_eq!(metrics["incoming_verify_bytes"], original_bytes);
     assert_eq!(metrics["original_verify_bytes"], 0);
     assert_eq!(metrics["decoder_verify_bytes"], 115_200_000_u64);
     assert_eq!(metrics["playback_verify_bytes"], 230_400_000_u64);

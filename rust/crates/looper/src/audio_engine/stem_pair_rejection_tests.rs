@@ -43,10 +43,7 @@ impl PlayingFirstPad {
             harness.material.metadata()["material_id"]
         );
         let second_version = canonical_version(&material);
-        let second_wav_reference = format!(
-            "samples/materials/M{}/stems/.ready-{GENERATION}",
-            material.metadata()["material_id"].as_str().unwrap()
-        );
+        let second_wav_reference = canonical_wav_reference(&material);
         let second_wav_path = harness.root.parent().unwrap().join(&second_wav_reference);
         let second_frames = material.sample.frame_count();
         write_complete_wavs(
@@ -987,7 +984,10 @@ fn ordinary_python_retry_child_keeps_fresh_pending_until_own_ack() {
     }
     let second_original_reference = rig.second_version.rsplit_once("|sha256-v1:").unwrap().0;
     let second_material =
-        match material_paths::classify(Path::new(second_original_reference)).unwrap() {
+        match material_paths::resolve(&rig.harness.root, Path::new(second_original_reference))
+            .unwrap()
+            .kind
+        {
             material_paths::AssetKind::Original {
                 material: Some(material),
             } => material,
@@ -999,10 +999,7 @@ fn ordinary_python_retry_child_keeps_fresh_pending_until_own_ack() {
                 .unwrap()
                 .path;
         assert!(
-            !source
-                .parent()
-                .unwrap()
-                .parent()
+            !material_paths::material_root_for_original(&rig.harness.root, &source)
                 .unwrap()
                 .join(".pcm-cache/stems")
                 .exists()

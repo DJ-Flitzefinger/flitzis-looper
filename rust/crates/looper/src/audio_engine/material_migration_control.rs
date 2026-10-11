@@ -351,6 +351,25 @@ pub struct MaterialMigrationHold {
 
 #[pymethods]
 impl MaterialMigrationHold {
+    /// Transfer existing native holds without reopening a launch revision.
+    pub fn take(&mut self, ids: Vec<usize>) -> PyResult<Self> {
+        if ids.is_empty()
+            || ids.iter().collect::<std::collections::HashSet<_>>().len() != ids.len()
+            || ids.iter().any(|id| {
+                !self.ids.contains(id) || self.ownership.migration_hold(*id) != self.owner
+            })
+        {
+            return Err(PyValueError::new_err(
+                "migration hold transfer is outside its actual owner set",
+            ));
+        }
+        self.ids.retain(|id| !ids.contains(id));
+        Ok(Self {
+            owner: self.owner,
+            ids,
+            ownership: self.ownership.clone(),
+        })
+    }
     pub fn release(&self) -> PyResult<()> {
         if self
             .ids

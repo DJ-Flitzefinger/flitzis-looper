@@ -1,12 +1,12 @@
 {
   "schema": "official-pre-rust-r0-obligation-map-v1",
-  "status": "PLAN_ONLY_ALL_IMPLEMENTATION_AND_HUMAN_GATES_OPEN",
+  "status": "REQUIRED_PROGRAM_SCOPED_SOFTWARE_STATUS_FINAL_GATES_OPEN",
   "lineage": {
     "acceptedC1PlanSHA256": "d9d23d48182b95b48a47c4e3bfaf37d9a4bb06b705797b6bcb5af3394ad63dd1",
     "literalHumanSHA256": "f6cc51bb474f53c05f1491901c0b301d4721bba6849cf30eec0e7ed6bc00dd22",
     "extensionHumanSHA256": "63fe3ea59965fe091a82da5cfd79149c6e33a7ad0dc4d08a3ddb5da54a1fc6f3"
   },
-  "scope": "All seven literal groups plus unchanged original56/nine feature obligations. Historical topology wording is preserved as history with explicit R0 supersession; no evidence acceptance from catalog labels. Direct Human extension2026-10-11 adds20 E11 requirements and10 bounded delivery IDs; retained original38/48 remain an exact subset. No implementation/acceptance inferred.",
+  "scope": "All seven literal groups plus unchanged original56/nine feature obligations. Historical topology wording is preserved as history with explicit R0 supersession; no evidence acceptance from catalog labels. Direct Human extension2026-10-11 adds20 E11 requirements and10 bounded delivery IDs; retained original38/48 remain an exact subset. Explicit bounded software substatus is separate from complete row/predecessor/integration/Human acceptance; pending execution grants no PASS.",
   "counts": {
     "primary_group_detail_rows": 164,
     "groups": 7,
@@ -11278,8 +11278,15 @@
       "work": "Readable roots/hidden full-SHA resolver, cross-name canonical reuse and verified M-ID/legacy migration with current reference/config/fresh ACK.",
       "gates": [
         "M1 resolver/content dedup then M2 journal/migration; both bounded internal checkpoints require focused native/control/persistence tests and independent whole result review.",
-        "All216 users, duplicate names/bytes, active old reader/unknown files, fault boundaries and fresh-process current intent/ACK proof."
-      ]
+        "All216 users, duplicate names/bytes, active old reader/unknown files, fault boundaries and fresh-process current intent/ACK proof.",
+        "REQUIRED OPEN: full X11-LONG/P1b/P2b predecessor outcomes; ordinary UI NoHint/default-eight-bar admission and finite KEYLOCK-load/DSP in P4b/P5b; copy/move/Re-Arrange/current-model/new-generation, aggregate resources/music/Human and whole Goal gates."
+      ],
+      "bounded_software_substatus": {
+        "status": "M1_M2_SOFTWARE_VALIDATED_FULL_GATES_OPEN",
+        "report": "docs/readable-material-validation.md",
+        "scope": "Readable full-SHA first-root-and-exact-leaf mapping, compatible zero-copy/full-decode-free PCM and known-producer completed-stem reuse, both old-layout current-config/fresh-ACK migration and exact native birth-receipt last-reader cleanup. No full predecessor or E11 closure.",
+        "retained_negative": "Packet17 remains1035PASS/10FAIL/19ignored/1devicefiltered exit101; packet79 remains3635PASS/5FAIL/36SKIP/16ERROR exit1. Separate current87/88 each1230primaryPASS and92Python3656PASS/36SKIP pass; no historical failure cause/acceptance is rewritten."
+      }
     },
     {
       "id": "X11-RECORD-CAPTURE",
@@ -11583,7 +11590,12 @@
       "delivery_owner": "X11-MATERIAL",
       "normative_spec": "openspec/changes/adopt-pad-owned-pcm-residency/specs/load-audio-files/spec.md",
       "acceptance_gate": "samples/<Originalfilename>/exact source leaf plus stems/.pcm-cache; Windows case/reserved/unsafe/trailing/path-length/hash suffix collision tests, contained resolver native+Python consistency, original bytes/encoding preserved; hidden stable identity separate; no #nnn folders required.",
-      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "status": "REQUIRED_FINAL_GATES_OPEN",
+      "bounded_software_substatus": {
+        "status": "M1_SOFTWARE_VALIDATED_FULL_GATES_OPEN",
+        "report": "docs/readable-material-validation.md",
+        "scope": "Validated bounded contained readable-root/exact-original-leaf contract with full-SHA binding, safe Windows collisions and actual directory/file custody. Full predecessor/integration/Human acceptance remains required; exact frozen-tree/publication receipts remain separate delivery gates."
+      },
       "final_coverage_receipts_required": [
         "V0",
         "H-LIVE",
@@ -11611,7 +11623,12 @@
       "delivery_owner": "X11-MATERIAL",
       "normative_spec": "openspec/changes/adopt-pad-owned-pcm-residency/specs/load-audio-files/spec.md",
       "acceptance_gate": "Equalbytes/differentnames canonical root reuse and no new source/PCM/stem/decode/inference; samename+size/differentbytes separate; independent loop/rate/key/masks/GainEQ/DSP/voices, copy/move origin-deletion/reopen and all-bank ownership.",
-      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "status": "REQUIRED_FINAL_GATES_OPEN",
+      "bounded_software_substatus": {
+        "status": "M1_SOFTWARE_VALIDATED_FULL_GATES_OPEN",
+        "report": "docs/readable-material-validation.md",
+        "scope": "Full incoming/canonical integrity with first root AND exact leaf, compatible zero source/snapshot copy/full decode/inference and own pad/Native ACK authority. Composed real encoding/publication/reuse fixture substitutes neural output; real NN/model/music/resources remain open. Copy/move/Re-Arrange and full all216 acceptance remain required."
+      },
       "final_coverage_receipts_required": [
         "V0",
         "H-LIVE",
@@ -11639,7 +11656,12 @@
       "delivery_owner": "X11-MATERIAL",
       "normative_spec": "openspec/changes/adopt-pad-owned-pcm-residency/specs/project-persistence/spec.md",
       "acceptance_gate": "Existing M-ID and legacy fixtures current config preserved; copy/flush/rename/config/native claim interruption/retry/fresh-process reopen; new intent wins, no saved ACK replay; atomic journal/current-reference commit, new refs first; unknown/reparse/private preserved, no rename under active/paused/history/job readers, last-reader cleanup.",
-      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "status": "REQUIRED_FINAL_GATES_OPEN",
+      "bounded_software_substatus": {
+        "status": "M2_SOFTWARE_VALIDATED_FULL_GATES_OPEN",
+        "report": "docs/readable-material-validation.md",
+        "scope": "Validated bounded M-ID/legacy content grouping through actual current config/journal and fresh own source/window/timing/pair ACK; exact native root/marker birth receipt, restart/current-inventory and physical last-reader terminal including marker-absent empty-root restart. Full predecessor/integration/Human acceptance remains required; exact frozen-tree/publication receipts remain separate delivery gates."
+      },
       "final_coverage_receipts_required": [
         "V0",
         "H-LIVE",
@@ -11948,7 +11970,7 @@
     }
   ],
   "extension_authoritative_document": "docs/pre-rust-extension-20261011.md",
-  "historical_observation_limit": "unresolved_technical_limits and actual_R0_prerequisite_disposition retain R0 planning observations, not current implementation-status claims; current scoped acceptance is documented in pad-owned-pcm-program.md. All E11 outcomes are unimplemented planning obligations.",
+  "historical_observation_limit": "unresolved_technical_limits and actual_R0_prerequisite_disposition retain R0 planning observations, not current implementation-status claims; current scoped acceptance is documented in pad-owned-pcm-program.md and bounded reports. All20 complete E11 outcomes retain required final gates; explicit MATERIAL bounded software substatus is no full-row/predecessor/integration/Human acceptance.",
   "extension_checkpoint_prerequisites": {
     "status": "SCOPED_HISTORICAL_ACCEPTANCE_ONLY",
     "baseline": "694cd61e50a3fc81bc6a41d88269f6458c4ae269",

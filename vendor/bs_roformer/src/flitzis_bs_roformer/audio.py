@@ -2,13 +2,13 @@
 
 import json
 import math
-import subprocess
 from typing import TYPE_CHECKING, BinaryIO
 
 import torch
 from torch import Tensor
 
 from flitzis_bs_roformer.model import SAMPLE_RATE
+from flitzis_looper.bs_input_provenance import run_input_tool
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -23,7 +23,7 @@ def decode_source(source: Path, destination: Path) -> int:
     buffers directly to a private temporary file; the inference reader reads
     at most one model chunk at a time. All conversion and resampling is offline.
     """
-    probe = subprocess.run(
+    probe = run_input_tool(
         [
             "ffprobe",
             "-v",
@@ -36,9 +36,6 @@ def decode_source(source: Path, destination: Path) -> int:
             "json",
             str(source),
         ],
-        check=True,
-        capture_output=True,
-        text=True,
     )
     metadata = json.loads(probe.stdout)
     streams = metadata.get("streams", [])
@@ -53,7 +50,7 @@ def decode_source(source: Path, destination: Path) -> int:
         msg = "Source has invalid audio metadata"
         raise ValueError(msg)
     channel_conversion = ["-af", "pan=stereo|c0=c0|c1=c0"] if channels == 1 else []
-    subprocess.run(
+    run_input_tool(
         [
             "ffmpeg",
             "-nostdin",
@@ -78,9 +75,6 @@ def decode_source(source: Path, destination: Path) -> int:
             "f32le",
             str(destination),
         ],
-        check=True,
-        capture_output=True,
-        text=True,
     )
     decoded_bytes = destination.stat().st_size
     if decoded_bytes == 0 or decoded_bytes % FRAME_BYTES:

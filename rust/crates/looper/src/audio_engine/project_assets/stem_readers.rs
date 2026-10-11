@@ -630,13 +630,7 @@ impl ProjectAssets {
             .material_id
             .as_ref()
             .ok_or_else(|| io::Error::other("paired material identity missing"))?;
-        let root = source_lease
-            .original_path
-            .parent()
-            .and_then(Path::parent)
-            .and_then(Path::parent)
-            .and_then(Path::parent)
-            .ok_or_else(|| io::Error::other("paired samples root missing"))?;
+        let root = source_lease.samples_root();
         let mut guards = directory_guards(root)?;
         let typed = super::super::material_paths::resolve(root, &path)?;
         let pcm = super::super::material_paths::resolve(root, &pins.pcm_path)?;
@@ -1004,15 +998,22 @@ mod paired_owner_tests {
             fs::write(&old, &encoded).unwrap();
             let material = prepare_material(&root, &old, RATE, 1, &|| false).unwrap();
             let metadata = material.metadata();
-            let material_id = metadata["material_id"].as_str().unwrap();
             let digest = metadata["original"]["sha256"].as_str().unwrap();
             let canonical_version = format!(
                 "{}|sha256-v1:{digest}",
                 metadata["new_reference"].as_str().unwrap()
             );
             let legacy_version = format!("samples/old.wav|sha256-v1:{digest}");
-            let wav_reference =
-                format!("samples/materials/M{material_id}/stems/.ready-{GENERATION}");
+            let material_reference =
+                super::super::super::material_paths::canonical_original_root_reference(
+                    Path::new(metadata["new_reference"].as_str().unwrap()),
+                    metadata["material_id"].as_str().unwrap(),
+                )
+                .unwrap();
+            let wav_reference = format!(
+                "{}/stems/.ready-{GENERATION}",
+                material_reference.to_string_lossy().replace('\\', "/")
+            );
             let wav_path = root.parent().unwrap().join(&wav_reference);
             fs::create_dir_all(&wav_path).unwrap();
             let mut hashes = serde_json::Map::new();

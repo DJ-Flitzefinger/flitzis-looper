@@ -26,6 +26,7 @@ from flitzis_looper.controller.stems import StemController
 from flitzis_looper.controller.transport import TransportController
 from flitzis_looper.input_mapping import InputMappingController
 from flitzis_looper.models import PadContentIdentity, ProjectState, SessionState
+from flitzis_looper.project_materials import original_asset, resolve_asset
 from flitzis_looper.stem_pair_selection import StemPairSelection
 from flitzis_looper.ui.context import UiContext
 from flitzis_looper.ui.render import performance_view
@@ -270,28 +271,35 @@ def assert_selected_pair(project: ProjectState, sample_id: int) -> None:
         == pcm_manifest["stem_set_identity"]
         == selection.stem_set_identity
     )
-    assert (
-        common["wav_generation"]
-        == pcm_manifest["wav_generation"]
-        == selection.wav_generation
-    )
+    assert common["wav_generation"] == pcm_manifest["wav_generation"] == selection.wav_generation
     assert common["pcm_generation"] == selection.pcm_generation
     assert common["content"] == pcm_manifest["content"]
     assert common["pcm_manifest_sha256"] == hashlib.sha256(pcm_bytes).hexdigest()
     assert common["wav_manifest_sha256"] == hashlib.sha256(marker_bytes).hexdigest()
     assert common["content"]["source_version"] == marker["source_version"]
-    assert (
-        common["content"]["source"]["original_sha256"]
-        == entry.source_version.rsplit(":", 1)[1]
-    )
-    assert Path(selection.wav_generation).parts[2] == f"M{common['content']['material_id']}"
+    assert common["content"]["source"]["original_sha256"] == entry.source_version.rsplit(":", 1)[1]
+    canonical = original_asset(common["content"]["source_version"].rsplit("|sha256-v1:", 1)[0])
+    assert canonical.layout == "readable"
+    assert canonical.material_id == common["content"]["material_id"]
+    assert canonical.material_root is not None
+    for reference in (
+        selection.wav_generation,
+        selection.pcm_generation,
+        selection.descriptor_reference,
+    ):
+        assert resolve_asset(reference).material_root == canonical.material_root
+        assert resolve_asset(reference).path.is_relative_to(canonical.material_root)
     # Preserve the old complete-five-WAV SHA oracle with the actual canonical
     # marker's source version, without changing the runtime subscriber ticket.
     assert verified_stem_cache_available(
         entry.model_copy(update={"source_version": marker["source_version"]})
     )
     assert [artifact["name"] for artifact in common["content"]["artifacts"]] == [
-        "vocals", "melody", "bass", "drums", "instrumental"
+        "vocals",
+        "melody",
+        "bass",
+        "drums",
+        "instrumental",
     ]
     for artifact in common["content"]["artifacts"]:
         data = (Path(selection.pcm_generation) / f"{artifact['name']}.f32le").read_bytes()
@@ -463,8 +471,7 @@ class Probe:
         # Preserve the cold legacy-WAV SHA-reader oracle in an unregistered
         # candidate, independently of the active canonical complete pair.
         inactive = (
-            Path(cache_dir_for_sample_id(0, self.project.sample_paths[0]))
-            / f".ready-{'e' * 32}"
+            Path(cache_dir_for_sample_id(0, self.project.sample_paths[0])) / f".ready-{'e' * 32}"
         )
         shutil.copytree(Path(self.saved_path), inactive)
         previous = self.restored_project.stem_cache[0]
@@ -538,11 +545,15 @@ class SavedMaterialProbe:
     """Fresh interpreter/project/engine restores the surviving far-bank assignment."""
 
     def __init__(self, bridge: NativeProducerBridge) -> None:
-        self.project = ProjectState.model_validate_json(Path("p1b-survivor.json").read_text(encoding="utf-8"))
+        self.project = ProjectState.model_validate_json(
+            Path("p1b-survivor.json").read_text(encoding="utf-8")
+        )
         assert self.project.sample_paths[0] is None
         assert self.project.stem_cache[0] is None
         assert self.project.pad_content[215].instance_id == "2" * 32
-        self.controller = StemController(self.project, SessionState(), cast("AudioEngine", Audio(bridge)))
+        self.controller = StemController(
+            self.project, SessionState(), cast("AudioEngine", Audio(bridge))
+        )
 
     def begin(self) -> None:
         self.controller.restore_stem_cache_from_project_state()

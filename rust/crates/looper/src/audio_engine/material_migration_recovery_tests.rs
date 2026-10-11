@@ -1,5 +1,7 @@
 //! Actual handle, reader and second-process oracles; no audio device is opened.
 #![cfg(windows)]
+#[path = "material_migration_creation_process_tests.rs"]
+mod material_migration_creation_process_tests;
 use super::*;
 use crate::audio_engine::{
     material_migration::prepare_material_complete_for_test as prepare_material, mixer::RtMixer,
@@ -349,6 +351,15 @@ fn complete_pcm_receipt_uses_store_queue_and_actual_last_voice_and_job_reader() 
                 .as_ref()
                 .is_some_and(|sample| Arc::ptr_eq(&sample.samples, &material.sample.samples))
     }));
+    let original_bytes = fs::read(&original).unwrap();
+    assets
+        .retire_verified(&original_pin, original_proof.receipt.files.clone())
+        .unwrap();
+    assert_eq!(fs::read(&original).unwrap(), original_bytes);
+    // A saved current assignment cancels original retirement. Clear that
+    // durable owner first, then queue the exact proof while voice/job readers
+    // continue to protect the original and complete PCM generation.
+    durable.release();
     assets
         .retire_verified(&original_pin, original_proof.receipt.files.clone())
         .unwrap();
@@ -359,7 +370,6 @@ fn complete_pcm_receipt_uses_store_queue_and_actual_last_voice_and_job_reader() 
     drop(pcm_proof);
     original_pin.release();
     pcm_pin.release();
-    durable.release();
     drop(material);
     assets.collect_for_test();
     assert!(
