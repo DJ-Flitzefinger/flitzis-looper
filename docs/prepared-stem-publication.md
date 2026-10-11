@@ -546,3 +546,38 @@ source/timing/window changes and isolated stopped FullTrack rejection. Declared
 receipt doubles only prove controller state. These are software proofs without
 neural-output, device or listening acceptance. Detailed actual run profiles and
 failure corrections remain in the local test log.
+
+### Bounded BPM and KEY LOCK OFF continuation evidence
+
+The next task3.2 proof adds four genuine Native new-set paths: first adoption and
+V1 replacement, each with KEY LOCK OFF/ON. Complete loaded PCM and explicitly
+synthetic timing evidence pass the existing source-bound capture, verification,
+acceptance and publication path. Before the actual callback ACK, Automatic timing
+is unavailable and prepared-source capture fails. After ACK, the accepted
+119.999-BPM projection remains authoritative under a real queued 150-BPM master
+change. Each path crosses the musical virtual seam, whose period differs from
+the physical loop extent, before and after its own Capture/worker/Adopt. Actual
+voice, source phase, Native/FIFO/history and complete-PCM reference output remain
+continuous; later ordinary FullMix-to-ALL preparation takes its own authority.
+The evidence declares synthetic labels and makes no BeatThis inference claim.
+
+Two additional public controller paths prove first and replacement adoption with
+KEY LOCK OFF at rate1.25. Real V2 files, durable selection and reopen feed the own
+candidate transaction. An independent algebraic complete-PCM clock/interpolation
+and uninterrupted per-frame EQ oracle verify actual varispeed output through the
+128 consumed-source-frame ramp and irregular partitions. OFF effectiveness follows
+actual dry source consumption; it claims neither wet processing nor a 4096-frame
+Native preparation. Existing ON paths retain their raw Native/FIFO oracle. The
+BPM paths use complete-PCM mixer/FIFO/cursor/history comparison; they do not add a
+separate algebraic raw-Native and per-frame EQ oracle under BPM control.
+
+The initial Release l3_ run was25PASS/1FAIL35.51s. Its sole failure was a test
+expectation conflating a consistent source binding with available Automatic
+timing before ACK. The corrected focused BPM test passes all four paths in3.80s;
+the other25 unchanged positives are reused, without claiming a fresh combined
+26PASS run. Both affected existing controller round trips also pass freshly.
+Formatting, official strict validation and one independent nonauthor review cover
+the bounded delta. Only tests, test-only module exposure and specs/docs changed;
+the previous Release build/import profile is reused without installing Native.
+Full task3.2, additional domains3.3, rate-smoothing new-set proof, remaining
+paused/stopped/mask/old-voice/controller cases and all following gates remain open.

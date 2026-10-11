@@ -120,6 +120,18 @@ immediate change SHALL NOT silently discard the command.
 - **THEN** rendering SHALL resolve V1 and V2 by their actual complete-set owners and mix both through 128 consumed source frames
 - **AND** fractional rates, smoothing and irregular callbacks SHALL preserve the same interpolation, Native/FIFO/filter and source trajectory
 
+#### Scenario: Accepted musical timing remains authoritative through new-set adoption
+- **GIVEN** current callback-acknowledged constant timing whose musical loop period differs from the physical loop extent, and a verified new complete set
+- **WHEN** that pad's own candidate adopts under BPM-controlled playback
+- **THEN** the exact accepted timing, musical source phase and current KEY LOCK mode SHALL remain authoritative through both actual readers and the source-frame handover
+- **AND** productive continuation SHALL preserve virtual-seam addressing, actual Native/FIFO/filter history and later source-bound preparation without a restart or position jump
+
+#### Scenario: KEY LOCK OFF new-set continuation uses actual varispeed output
+- **GIVEN** current finite NormalLoop playback with KEY LOCK OFF and a verified first or replacement complete set
+- **WHEN** the own candidate adopts
+- **THEN** the actual selected varispeed feed and uninterrupted filter output SHALL preserve the existing source trajectory through the source-frame handover
+- **AND** component acceptance SHALL NOT be presented as proof of KEY LOCK wet processing or later Native preparation
+
 #### Scenario: Candidate preparation fails or is cancelled
 - **GIVEN** V1 remains effective while V2 is registered or preparing
 - **WHEN** V2 fails admission, preparation or a currentness check, or is cancelled before claim

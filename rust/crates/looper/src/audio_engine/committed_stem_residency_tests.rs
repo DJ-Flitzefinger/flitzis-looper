@@ -2061,7 +2061,7 @@ struct ControllerPlayback {
     selection: Option<u8>,
     previous: Option<u8>,
     ramp_start: u64,
-    raw: ControllerRawNative,
+    raw: Option<ControllerRawNative>,
     candidate: Option<(u64, ControllerRawNative)>,
     filter: PerPadDspChain,
 }
@@ -2181,7 +2181,7 @@ impl ControllerPlayback {
     }
 
     fn feed(&self, start: u64, frames: usize) -> [Vec<f32>; 2] {
-        // Binary-exact 3/4 source rate permits an algebraic clock independent
+        // Binary-exact fixture rates permit an algebraic clock independent
         // of SourcePlayback, SourceReadPlan and either mixer. Physical knots
         // come from the independently retained complete original/components.
         std::array::from_fn(|channel| {
@@ -2236,10 +2236,14 @@ impl ControllerPlayback {
         {
             let (target, raw) = self.candidate.take().unwrap();
             assert_eq!(self.frame, target);
-            self.raw = raw;
+            self.raw = Some(raw);
         }
         let feed = self.feed(self.frame, frames);
-        let raw = self.raw.render_chosen(&feed);
+        let raw = self
+            .raw
+            .as_mut()
+            .expect("KEYLOCK ON raw Native oracle")
+            .render_chosen(&feed);
         let mut output = vec![0.0; frames * 2];
         let mut expected = vec![0.0; frames * 2];
         let mut full_mix = vec![0.0; frames * 2];
@@ -2951,7 +2955,7 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
         selection: stopped_start.then_some(0b1010),
         previous: stopped_start.then_some(0b1010),
         ramp_start: 0,
-        raw: ControllerRawNative::new(ratio, false),
+        raw: Some(ControllerRawNative::new(ratio, false)),
         candidate: None,
         filter: controller_filter(),
     };

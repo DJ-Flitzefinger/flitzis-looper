@@ -1,11 +1,13 @@
-//! Genuine StemController -> Native candidate Capture/Adopt -> audible wet history.
+//! Genuine StemController -> Native candidate Capture/Adopt -> continuous output.
 //! V2 swaps real vocals/drums files; independent complete V1 PCM supplies the
-//! algebraic feed, raw Native/FIFO and uninterrupted EQ oracle through a mapped mask.
+//! algebraic feed, raw Native/FIFO or dry Varispeed, and uninterrupted EQ oracle.
 
 use super::*;
 
 const CHILD: &str = "FLITZI_L3_CONTROLLER_CANDIDATE_CHILD";
 const TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_first_and_replacement_candidates_keep_own_wet_chronology";
+const VARISPEED_CHILD: &str = "FLITZI_L3_CONTROLLER_VARISPEED_CHILD";
+const VARISPEED_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_keylock_off_first_and_replacement_keep_varispeed_feed_and_eq";
 
 fn v2_files(
     engine: &AudioEngine,
@@ -60,7 +62,12 @@ fn v2_files(
     (pair, source)
 }
 
-fn complete_reference(full: &SampleBuffer, stems: &PreparedStemSet, ratio: f64) -> Box<RtMixer> {
+fn complete_reference(
+    full: &SampleBuffer,
+    stems: &PreparedStemSet,
+    ratio: f64,
+    key_lock_enabled: bool,
+) -> Box<RtMixer> {
     let mut mixer = Box::new(RtMixer::new(2, RATE as f32));
     let ownership = Arc::new(InputRuntimeOwnership::tracked());
     ownership.publish_source(0, full, RATE, 1);
@@ -72,7 +79,7 @@ fn complete_reference(full: &SampleBuffer, stems: &PreparedStemSet, ratio: f64) 
     let key_lock = ownership.next_key_lock_request(0).unwrap();
     mixer.set_pad_key_lock_request(
         0,
-        true,
+        key_lock_enabled,
         key_lock,
         InputPadBinding {
             resident: full.resident_binding(),
@@ -96,6 +103,7 @@ fn own_adoption(
     consumer: &mut rtrb::Consumer<ControlMessage>,
     locals: &Py<PyDict>,
     name: &str,
+    key_lock: bool,
 ) {
     assert_eq!(playback.callback.drain(consumer), 1, "own callback Capture");
     wait_until(|| {
@@ -106,13 +114,18 @@ fn own_adoption(
         controller_ticket_status(locals, name, "residency_status"),
         "pending"
     );
-    playback.render(31, false);
+    if key_lock {
+        playback.render(31, false);
+    } else {
+        render_varispeed(playback, 31);
+    }
     let before = voice(&playback.callback.mixer);
     let clock = before.source_playback;
     let generation = before.generation;
     let native = before.stretch.native_state_address();
     let fifo = before.stretch.pending_fifo_frames();
-    let history = before.stretch.productive_history().unwrap();
+    let history = before.stretch.productive_history();
+    assert_eq!(history.is_some(), key_lock);
     assert_eq!(playback.callback.drain(consumer), 1, "own callback Adopt");
     assert_eq!(
         controller_ticket_status(locals, name, "residency_status"),
@@ -127,10 +140,180 @@ fn own_adoption(
     assert_eq!(after.generation, generation);
     assert_eq!(after.stretch.native_state_address(), native);
     assert_eq!(after.stretch.pending_fifo_frames(), fifo);
-    let next_history = after.stretch.productive_history().unwrap();
-    assert_eq!(next_history.binding, history.binding);
-    assert_eq!(next_history.next_position, history.next_position);
-    assert_eq!(next_history.fed_output_frames, history.fed_output_frames);
+    if let Some(history) = history {
+        let next_history = after.stretch.productive_history().unwrap();
+        assert_eq!(next_history.binding, history.binding);
+        assert_eq!(next_history.next_position, history.next_position);
+        assert_eq!(next_history.fed_output_frames, history.fed_output_frames);
+    } else {
+        assert!(after.stretch.productive_history().is_none());
+    }
+}
+
+fn render_varispeed(playback: &mut ControllerPlayback, frames: usize) -> (Vec<f32>, Vec<f32>) {
+    assert!(!playback.callback.mixer.key_lock_for_measurement(0));
+    assert!(playback.raw.is_none() && playback.candidate.is_none());
+    assert!(frames <= playback.callback.mixer.max_realtime_render_frames());
+    // The clock, interpolation, selected sum and ramp gains come from complete
+    // independent PCM, not from the actual SourcePlayback or SourceReadPlan.
+    let feed = playback.feed(playback.frame, frames);
+    let before = voice(&playback.callback.mixer);
+    let generation = before.generation;
+    let native = before.stretch.native_state_address();
+    let fifo = before.stretch.pending_fifo_frames();
+    let mut output = vec![0.0; frames * 2];
+    let mut expected = vec![0.0; frames * 2];
+    let mut full_mix = vec![0.0; frames * 2];
+    reset_tap_observation_for_test();
+    playback.callback.mixer.render_rt_at_output_frame(
+        &mut output,
+        &mut [0.0; NUM_SAMPLES],
+        playback.frame,
+        &mut playback.callback.retirement,
+    );
+    let taps = tap_observation_for_test();
+    assert_eq!(taps.missing_reads, 0);
+    assert!(taps.min_frame.is_some_and(|frame| frame >= LOOP_START));
+    assert!(taps.max_frame.is_some_and(|frame| frame < LOOP_END));
+    for (mixer, target) in [
+        (playback.reference.as_mut(), &mut expected),
+        (playback.full_mix.as_mut(), &mut full_mix),
+    ] {
+        mixer.render_at_output_frame(playback.frame, target, &mut [0.0; NUM_SAMPLES]);
+    }
+    assert_eq!(
+        output, expected,
+        "controller Varispeed chronology at {}",
+        playback.frame
+    );
+    let current = voice(&playback.callback.mixer);
+    for (channel, expected) in feed.iter().enumerate() {
+        assert_eq!(
+            &current.stretch.varispeed_buffers()[channel][..frames],
+            expected.as_slice()
+        );
+        assert_eq!(
+            &current.stretch.output_buffers()[channel][..frames],
+            expected.as_slice()
+        );
+    }
+    assert_eq!(current.generation, generation);
+    assert_eq!(current.stretch.native_state_address(), native);
+    assert_eq!(current.stretch.pending_fifo_frames(), fifo);
+    assert!(current.stretch.productive_history().is_none());
+    assert!(!current.stretch.wet_render_ready());
+    assert!(current.stretch.adopted_request_id().is_none());
+    assert!(
+        current
+            .source_playback
+            .matches_exact(&voice(&playback.reference).source_playback)
+    );
+    assert!(
+        current
+            .source_playback
+            .matches_exact(&voice(&playback.full_mix).source_playback)
+    );
+    assert_eq!(
+        current.stretch.pending_fifo_frames(),
+        voice(&playback.reference).stretch.pending_fifo_frames()
+    );
+    let phase = ((playback.frame + frames as u64) as f64 * playback.ratio)
+        .rem_euclid((LOOP_END - LOOP_START) as f64);
+    assert_eq!(
+        current.source_playback.position().frame,
+        LOOP_START + phase.floor() as usize
+    );
+    assert_eq!(current.source_playback.position().fraction, phase.fract());
+    for (frame, actual) in output.chunks_exact(2).enumerate() {
+        playback.filter.begin_frame();
+        for channel in 0..2 {
+            assert_eq!(
+                actual[channel],
+                playback
+                    .filter
+                    .process_sample(channel, feed[channel][frame]),
+                "complete PCM Varispeed + uninterrupted EQ at {}",
+                playback.frame
+            );
+        }
+    }
+    playback.frame += frames as u64;
+    (output, full_mix)
+}
+
+fn settle_varispeed(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name: &str) {
+    assert_eq!(playback.ratio, 1.25);
+    let generation = voice(&playback.callback.mixer).generation;
+    let native = voice(&playback.callback.mixer)
+        .stretch
+        .native_state_address();
+    let fifo = voice(&playback.callback.mixer)
+        .stretch
+        .pending_fifo_frames();
+    let mut remaining = (128.0 / playback.ratio).ceil() as usize;
+    for frames in [1_usize, 31, 17, 7].into_iter().cycle() {
+        let count = frames.min(remaining);
+        render_varispeed(playback, count);
+        remaining -= count;
+        if remaining == 0 {
+            break;
+        }
+        assert_eq!(
+            controller_ticket_status(locals, name, "effective_mode_status"),
+            "transitioning"
+        );
+        assert!(
+            playback
+                .callback
+                .mixer
+                .stem_transition_for_measurement(0)
+                .is_active()
+        );
+    }
+    assert!(
+        !playback
+            .callback
+            .mixer
+            .stem_transition_for_measurement(0)
+            .is_active()
+    );
+    // OFF effectiveness follows actual dry source consumption. No Wet or 4096
+    // Native preparation is invoked or used as evidence for this branch.
+    let mut output = Vec::new();
+    let mut counterfactual = Vec::new();
+    for frames in [1, 127, 257, 511, 31, 137] {
+        let (actual, full_mix) = render_varispeed(playback, frames);
+        output.extend(actual);
+        counterfactual.extend(full_mix);
+    }
+    assert!(output.iter().any(|sample| sample.abs() > 0.001));
+    assert!(
+        output
+            .iter()
+            .zip(counterfactual)
+            .any(|(actual, full_mix)| (actual - full_mix).abs() > 0.005)
+    );
+    assert_eq!(voice(&playback.callback.mixer).generation, generation);
+    assert_eq!(
+        voice(&playback.callback.mixer)
+            .stretch
+            .native_state_address(),
+        native
+    );
+    assert_eq!(
+        voice(&playback.callback.mixer)
+            .stretch
+            .pending_fifo_frames(),
+        fifo
+    );
+    assert_eq!(
+        controller_ticket_status(locals, name, "effective_mode_status"),
+        "effective"
+    );
+    controller_python(
+        locals,
+        "controller.on_frame_render()\nassert not session.stem_generation_errors, session.stem_generation_errors",
+    );
 }
 
 fn settle_wet(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name: &str) {
@@ -394,7 +577,8 @@ assert not session.stem_generation_errors, session.stem_generation_errors
     assert!(new_owner.strong_count() < held_counts.1);
 }
 
-fn round_trip(selected_v1: bool, delete_pause: Option<bool>) {
+fn round_trip(selected_v1: bool, delete_pause: Option<bool>, key_lock: bool) {
+    assert!(key_lock || delete_pause.is_none());
     let previous_cwd = std::env::current_dir().unwrap();
     let mut h = long_harness();
     // Only the exact child owns this cwd and its project config/artifact paths.
@@ -435,7 +619,7 @@ fn round_trip(selected_v1: bool, delete_pause: Option<bool>) {
         &h.engine,
         0,
         WindowRequest {
-            key_lock: Some(true),
+            key_lock: Some(key_lock),
             loop_region: Some((
                 LOOP_START as f64 / f64::from(RATE),
                 Some(LOOP_END as f64 / f64::from(RATE)),
@@ -563,8 +747,9 @@ persistence.mark_dirty()
 persistence.flush()
 "#,
     );
-    let ratio = 0.75;
+    let ratio = if key_lock { 0.75 } else { 1.25 };
     h.callback.mixer.set_speed(ratio);
+    assert_eq!(h.callback.mixer.key_lock_for_measurement(0), key_lock);
     h.callback.mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
     assert!(h.callback.mixer.play_sample_at_output_frame(0, 1.0, 0));
     // A genuinely active other pad contributes zero gain, so the independent pad-0
@@ -581,8 +766,8 @@ persistence.flush()
     let other_demand = h.callback.mixer.stem_demand_for_measurement(215);
     let mut playback = ControllerPlayback {
         callback: h.callback,
-        reference: complete_reference(&full, &full_stems, ratio),
-        full_mix: complete_reference(&full, &full_stems, ratio),
+        reference: complete_reference(&full, &full_stems, ratio, key_lock),
+        full_mix: complete_reference(&full, &full_stems, ratio, key_lock),
         frame: 0,
         source: full.clone(),
         components: full_stems.stems.clone(),
@@ -590,19 +775,23 @@ persistence.flush()
         selection: None,
         previous: None,
         ramp_start: 0,
-        raw: ControllerRawNative::new(ratio, false),
+        raw: key_lock.then(|| ControllerRawNative::new(ratio, false)),
         candidate: None,
         filter: controller_filter(),
     };
-    playback.render(13, true);
-    playback.adopt_native(true);
+    if key_lock {
+        playback.render(13, true);
+        playback.adopt_native(true);
+    } else {
+        render_varispeed(&mut playback, 13);
+    }
     controller_python(&locals, "session.active_sample_ids.update({0, 215})");
     if selected_v1 {
         controller_python(
             &locals,
             "assert controller.set_stem_mix_mode(0, 'all_stems')\nfirst = controller._committed_residency._selections[0].receipt",
         );
-        own_adoption(&mut playback, &mut h.consumer, &locals, "first");
+        own_adoption(&mut playback, &mut h.consumer, &locals, "first", key_lock);
         assert!(playback.reference.set_stem_enabled_mask(
             0,
             0b1010,
@@ -614,14 +803,19 @@ persistence.flush()
             full_stems.source_version_hash
         ));
         playback.select(Some(0b1010));
-        settle_wet(&mut playback, &locals, "first");
+        if key_lock {
+            settle_wet(&mut playback, &locals, "first");
+        } else {
+            settle_varispeed(&mut playback, &locals, "first");
+        }
     }
     let before = voice(&playback.callback.mixer);
     let initial_clock = before.source_playback;
     let initial_generation = before.generation;
     let initial_native = before.stretch.native_state_address();
     let initial_fifo = before.stretch.pending_fifo_frames();
-    let initial_history = before.stretch.productive_history().unwrap();
+    let initial_history = before.stretch.productive_history();
+    assert_eq!(initial_history.is_some(), key_lock);
     let predecessor = playback.callback.mixer.stems_for_measurement()[0]
         .as_ref()
         .map(|stems| stems.complete_set_identity.clone());
@@ -693,11 +887,29 @@ assert previous_control.ticket.is_current()
     assert_eq!(current.generation, initial_generation);
     assert_eq!(current.stretch.native_state_address(), initial_native);
     assert_eq!(current.stretch.pending_fifo_frames(), initial_fifo);
-    let history = current.stretch.productive_history().unwrap();
-    assert_eq!(history.binding, initial_history.binding);
-    assert_eq!(history.next_position, initial_history.next_position);
-    assert_eq!(history.fed_output_frames, initial_history.fed_output_frames);
-    own_adoption(&mut playback, &mut h.consumer, &locals, "candidate");
+    if let Some(initial_history) = initial_history {
+        let history = current.stretch.productive_history().unwrap();
+        assert_eq!(history.binding, initial_history.binding);
+        assert_eq!(history.next_position, initial_history.next_position);
+        assert_eq!(history.fed_output_frames, initial_history.fed_output_frames);
+    } else {
+        assert!(current.stretch.productive_history().is_none());
+    }
+    own_adoption(
+        &mut playback,
+        &mut h.consumer,
+        &locals,
+        "candidate",
+        key_lock,
+    );
+    assert_eq!(
+        playback.callback.mixer.key_lock_for_measurement(0),
+        key_lock
+    );
+    assert_eq!(
+        playback.callback.mixer.stem_demand_for_measurement(0).1,
+        0b1010
+    );
     let current_source = playback.callback.mixer.bank_for_measurement()[0]
         .as_ref()
         .unwrap();
@@ -750,7 +962,11 @@ assert not previous_control.ticket.is_current()
             paused,
         );
     } else {
-        settle_wet(&mut playback, &locals, "candidate");
+        if key_lock {
+            settle_wet(&mut playback, &locals, "candidate");
+        } else {
+            settle_varispeed(&mut playback, &locals, "candidate");
+        }
         controller_python(
             &locals,
             r#"
@@ -794,10 +1010,10 @@ assert controller._stem_worker_pool._executor._max_workers == 2
 fn actual_python_controller_first_and_replacement_candidates_keep_own_wet_chronology() {
     if std::env::var_os(CHILD).is_some() {
         for selected_v1 in [false, true] {
-            round_trip(selected_v1, None);
+            round_trip(selected_v1, None, true);
         }
         for paused in [false, true] {
-            round_trip(true, Some(paused));
+            round_trip(true, Some(paused), true);
         }
         return;
     }
@@ -809,6 +1025,28 @@ fn actual_python_controller_first_and_replacement_candidates_keep_own_wet_chrono
     assert!(
         output.status.success(),
         "L3 productive controller child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+}
+
+#[test]
+fn actual_python_controller_keylock_off_first_and_replacement_keep_varispeed_feed_and_eq() {
+    if std::env::var_os(VARISPEED_CHILD).is_some() {
+        for selected_v1 in [false, true] {
+            round_trip(selected_v1, None, false);
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", VARISPEED_TEST, "--nocapture", "--test-threads=1"])
+        .env(VARISPEED_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 Varispeed controller child failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

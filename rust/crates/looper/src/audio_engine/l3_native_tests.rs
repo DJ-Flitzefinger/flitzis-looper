@@ -41,6 +41,14 @@ fn candidate(p: &mut Productive, serial: usize) -> (PreparedStemPair, CommittedS
     )
     .unwrap();
     let source = p.h.ticket(0);
+    let binding = crate::audio_engine::input_runtime_binding::capture(&p.h.engine, 0)
+        .unwrap()
+        .unwrap();
+    assert!(binding.current());
+    assert_eq!(
+        source.publication.accepted_projection(),
+        binding.binding.accepted
+    );
     let pair =
         p.h.engine
             .prepare_stem_pair_at_root(&p.h.root, 0, &p.h.version, &reference, &source, false, None)
@@ -113,6 +121,404 @@ fn make_v1_effective(p: &mut Productive) {
     assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
     p.select_reference("all_stems", 0b1010);
     settle(p, &receipt);
+}
+
+// The usual 4096-frame fixture cannot contain the 24 whole-source positions
+// required for supported 120-BPM evidence, even with explicit 1/64-quarter
+// labels. This larger source changes only this test's immutable PCM geometry;
+// its admitted callback bank still owns the same proper finite NormalLoop.
+fn bpm_harness() -> Harness {
+    let mut h = Harness::new();
+    let original = h.root.join("l3-bpm-residency.wav");
+    fs::write(&original, signal_sum_wav(16_384, &[0, 1, 2, 3])).unwrap();
+    let material = prepare_material(&h.root, &original, RATE, 2, &|| false).unwrap();
+    let version = canonical_version(&material);
+    let wav_reference = canonical_wav_reference(&material);
+    let wav_path = h.root.parent().unwrap().join(&wav_reference);
+    write_signal_set(&wav_path, material.sample.frame_count(), &version, 0);
+    let preparation = control::prepared_for_test(
+        &h.engine,
+        PreparedMigrationMaterial::from_current(
+            &h.root,
+            material.sample.clone(),
+            material.lease.clone(),
+        )
+        .unwrap(),
+        &h.root,
+    )
+    .unwrap();
+    let requests: [_; 2] = [0, 215].map(|id| {
+        control::adopt_for_format(
+            &h.engine,
+            id,
+            &preparation,
+            h.producer.clone(),
+            (2, RATE, h.root.clone()),
+        )
+        .unwrap()
+    });
+    wait_until(|| h.consumer.slots() >= 2);
+    assert_eq!(h.callback.drain(&mut h.consumer), 2);
+    source_successes(
+        &h.engine,
+        &[requests[0].request_id(), requests[1].request_id()],
+    );
+    preparation.release_preparation().unwrap();
+    h._original_owner = h
+        .engine
+        .project_assets
+        .acquire(&h.root, &material.lease.original_path)
+        .unwrap();
+    h.material = material;
+    h.version = version;
+    h.wav_reference = wav_reference;
+    h.wav_path = wav_path;
+    h
+}
+
+fn master_bpm_through_callback(h: &mut Harness, bpm: f64) {
+    let (mut producer, mut consumer) = rtrb::RingBuffer::new(1);
+    crate::audio_engine::push_global_timing_message(
+        &h.engine.global_timing_revision,
+        &mut producer,
+        ControlParameterMessage::SetMasterBpm(bpm),
+        "SetMasterBpm",
+    )
+    .unwrap();
+    let callback = h.callback.as_mut();
+    crate::audio_engine::audio_stream::drain_parameter_messages(
+        &mut consumer,
+        &mut callback.mixer,
+        &mut callback.transport,
+    );
+    assert!(consumer.is_empty());
+}
+
+fn bpm_productive(
+    key_lock: bool,
+) -> (
+    Productive,
+    crate::audio_engine::constant_timing::AcceptedTimingProjection,
+) {
+    use crate::audio_engine::constant_timing;
+    use crate::audio_engine::input_runtime_binding;
+    use flitzis_looper_analysis::tempo_acceptance::TimingIntent;
+
+    let mut h = bpm_harness();
+    constant_timing::set_intent(&h.engine, &h.producer, 0, TimingIntent::Automatic).unwrap();
+    assert_eq!(h.callback.drain(&mut h.consumer), 1);
+    let timing = constant_timing::l3_constant_timing_fixture::publish_synthetic_loaded_timing(
+        &h.engine,
+        &h.producer,
+        0,
+        60.0 / 119.999,
+    );
+    assert_eq!(timing.publication_status().unwrap(), "pending");
+    let before_ack = input_runtime_binding::capture(&h.engine, 0)
+        .unwrap()
+        .unwrap();
+    assert_eq!(before_ack.binding.accepted, None);
+    assert!(before_ack.current());
+    assert!(!before_ack.available());
+    assert!(
+        h.engine
+            .capture_prepared_source(0, h.version.clone())
+            .is_err()
+    );
+    Python::attach(|py| {
+        assert!(
+            constant_timing::current_metadata(&h.engine, py, 0)
+                .unwrap()
+                .is_none()
+        );
+    });
+    assert_eq!(h.callback.drain(&mut h.consumer), 1);
+    assert_eq!(timing.publication_status().unwrap(), "accepted");
+    let current = input_runtime_binding::capture(&h.engine, 0)
+        .unwrap()
+        .unwrap();
+    assert!(current.current());
+    let projection = current.binding.accepted.unwrap();
+    assert!((60.0 / projection.period_seconds - 119.999).abs() < 1e-9);
+    assert_eq!(projection.sample_rate_hz, RATE);
+    assert_eq!(
+        h.engine.current_timing_acknowledgements.current_epoch(0),
+        projection.publication_epoch
+    );
+    Python::attach(|py| {
+        let metadata = constant_timing::current_metadata(&h.engine, py, 0)
+            .unwrap()
+            .unwrap();
+        let metadata = metadata.bind(py).cast::<pyo3::types::PyDict>().unwrap();
+        assert_eq!(
+            metadata
+                .get_item("period_seconds_per_quarter")
+                .unwrap()
+                .unwrap()
+                .extract::<f64>()
+                .unwrap()
+                .to_bits(),
+            projection.period_seconds.to_bits()
+        );
+        assert_eq!(
+            metadata
+                .get_item("source_sha256")
+                .unwrap()
+                .unwrap()
+                .extract::<String>()
+                .unwrap(),
+            h.engine.loaded_source_digests.lock().unwrap()[0]
+                .clone()
+                .unwrap()
+        );
+    });
+
+    let source = h.ticket(0);
+    assert_eq!(source.publication.accepted_projection(), Some(projection));
+    let oracle_pair = h.prepare(0, &source, true, None);
+    assert_eq!(
+        oracle_pair
+            .pair_reader
+            .descriptor
+            .content
+            .alignment
+            .offset_frames,
+        0
+    );
+    let selection = selection(&oracle_pair);
+    let saved = h.save(&oracle_pair);
+    let full = h.material.sample.clone();
+    let full_stems = PreparedStemSet {
+        complete_set_identity: Arc::new([71; 32]),
+        reference_samples: full.samples.clone(),
+        publication: PreparedSourcePermit::unrestricted(),
+        accepted_timing: None,
+        source_version_hash: crate::audio_engine::stem_cache::source_version_hash(&h.version),
+        sample_rate_hz: RATE,
+        channels: 2,
+        frame_count: full.frame_count(),
+        available_mask: 0b1111,
+        stems: oracle_pair.component_views_for_test().unwrap().clone(),
+    };
+    drop(oracle_pair);
+    let window = prepare_window_with_producer(
+        &h.engine,
+        0,
+        WindowRequest {
+            key_lock: Some(key_lock),
+            loop_region: Some((
+                LOOP_START as f64 / f64::from(RATE),
+                Some(LOOP_END as f64 / f64::from(RATE)),
+            )),
+            ..WindowRequest::default()
+        },
+        h.producer.clone(),
+    )
+    .unwrap();
+    wait_until(|| h.consumer.peek().is_ok() || window.error().unwrap().is_some());
+    assert_eq!(h.callback.drain(&mut h.consumer), 1);
+    assert_eq!(
+        window.publication_status(),
+        "accepted",
+        "{:?}",
+        window.error()
+    );
+    reconcile(&h.engine).unwrap();
+    let bank = h.callback.mixer.bank_for_measurement()[0].as_ref().unwrap();
+    assert_eq!(
+        (bank.resident_start(), bank.resident_end()),
+        (LOOP_START, LOOP_END)
+    );
+    assert_eq!(bank.samples.len(), (LOOP_END - LOOP_START) * 2);
+    assert_eq!(h.callback.mixer.key_lock_for_measurement(0), key_lock);
+    let source = h.ticket(0);
+    assert_eq!(source.publication.accepted_projection(), Some(projection));
+    let pair = h.prepare(0, &source, false, Some(&selection));
+    let selected = register(&mut h, &pair);
+
+    let mut reference = Box::new(RtMixer::new(2, RATE as f32));
+    let ownership = Arc::new(InputRuntimeOwnership::tracked());
+    ownership.publish_source(0, &full, RATE, 1);
+    reference.set_input_runtime_ownership(ownership.clone());
+    reference.load_sample(0, full.clone());
+    assert!(reference.publish_prepared_stems(0, full_stems));
+    let publication = PreparedSourcePermit::unrestricted();
+    publication.mark_pending().unwrap();
+    assert!(reference.publish_constant_timing_rt(
+        0,
+        constant_timing::PreparedConstantTiming {
+            reference: full,
+            publication,
+            // Only the complete PCM oracle receives this copied actual ACK.
+            // Engine/source authority above came from productive publication.
+            projection,
+        },
+        &mut crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement,
+    ));
+    reference.set_loop_region_frames(0, LOOP_START, Some(LOOP_END));
+    {
+        let mut producer = h.producer.lock().unwrap();
+        crate::audio_engine::push_global_timing_message(
+            &h.engine.global_timing_revision,
+            &mut producer,
+            ControlMessage::SetBpmLock(true),
+            "SetBpmLock",
+        )
+        .unwrap();
+    }
+    assert_eq!(h.callback.drain(&mut h.consumer), 1);
+    master_bpm_through_callback(&mut h, 150.0);
+    reference.set_bpm_lock(true);
+    reference.set_master_bpm(150.0);
+    for mixer in [&mut h.callback.mixer, reference.as_mut()] {
+        mixer.set_pad_key_lock(0, key_lock);
+        mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
+        assert!(mixer.play_sample_at_output_frame(0, 1.0, 0));
+        assert!((mixer.output_bpm_for_sample_id(0).unwrap() - 150.0).abs() < 1e-10);
+    }
+    let mut p = Productive {
+        h,
+        _saved: saved,
+        pair,
+        selected,
+        reference,
+        reference_ownership: ownership,
+        frame: 0,
+        key_lock,
+    };
+    if key_lock {
+        p.render(13, true);
+        p.adopt_native();
+    } else {
+        p.render(137, false);
+    }
+    (p, projection)
+}
+
+fn cross_bpm_virtual_seam(
+    p: &mut Productive,
+    projection: crate::audio_engine::constant_timing::AcceptedTimingProjection,
+) {
+    let period = projection.period_seconds * f64::from(RATE) / 16.0;
+    assert_ne!(period.to_bits(), ((LOOP_END - LOOP_START) as f64).to_bits());
+    let playback = voice(&p.h.callback.mixer).source_playback;
+    assert_eq!(playback.loop_period(), Some(period));
+    let position = playback.position();
+    let phase = (position.frame - LOOP_START) as f64 + position.fraction;
+    let mut remaining = ((period - phase) / playback.tempo_ratio()).ceil() as usize + 1;
+    let mut wrapped = false;
+    for frames in [1_usize, 31, 17, 127].into_iter().cycle() {
+        let frames = frames.min(remaining);
+        let before = voice(&p.h.callback.mixer).source_playback.position();
+        let before_phase = (before.frame - LOOP_START) as f64 + before.fraction;
+        p.render(frames, false);
+        let after = voice(&p.h.callback.mixer).source_playback;
+        let after_position = after.position();
+        let after_phase = (after_position.frame - LOOP_START) as f64 + after_position.fraction;
+        assert_eq!(after.loop_period(), Some(period));
+        let expected = (before_phase + frames as f64 * playback.tempo_ratio()).rem_euclid(period);
+        assert!((after_phase - expected).abs() < 1e-8);
+        wrapped |= after_phase < before_phase;
+        remaining -= frames;
+        if remaining == 0 {
+            break;
+        }
+    }
+    assert!(
+        wrapped,
+        "normal render must actually cross the accepted virtual seam"
+    );
+    if p.key_lock {
+        let history = voice(&p.h.callback.mixer)
+            .stretch
+            .productive_history()
+            .unwrap();
+        assert_eq!(history.binding.accepted, Some(projection));
+        assert_eq!(
+            history.next_position,
+            voice(&p.h.callback.mixer).source_playback.position()
+        );
+    }
+}
+
+#[test]
+fn accepted_bpm_first_and_replacement_candidates_keep_real_period_native_fifo_and_eq() {
+    use crate::audio_engine::input_runtime_binding;
+
+    for key_lock in [false, true] {
+        for selected_v1 in [false, true] {
+            let (mut p, projection) = bpm_productive(key_lock);
+            assert_eq!(
+                voice(&p.h.callback.mixer).source_playback.tempo_ratio(),
+                projection.period_seconds / (60.0 / 150.0)
+            );
+            if selected_v1 {
+                make_v1_effective(&mut p);
+            }
+            cross_bpm_virtual_seam(&mut p, projection);
+            let before = voice(&p.h.callback.mixer);
+            let generation = before.generation;
+            let native = before.stretch.native_state_address();
+            let (_pair, selected) = candidate(&mut p, 201);
+            let current = input_runtime_binding::capture(&p.h.engine, 0)
+                .unwrap()
+                .unwrap();
+            assert!(current.current());
+            assert_eq!(current.binding.accepted, Some(projection));
+            assert!(p.selected.is_current());
+            let receipt = request_candidate(&mut p, &selected, 0b1010);
+            p.capture_then_wait(&receipt);
+            p.render(31, false);
+            let at_adopt = voice(&p.h.callback.mixer).source_playback;
+            let fifos = voice(&p.h.callback.mixer).stretch.pending_fifo_frames();
+            let history = voice(&p.h.callback.mixer).stretch.productive_history();
+            assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
+            assert_eq!(
+                receipt.residency_status(),
+                "accepted",
+                "{:?}",
+                receipt.error()
+            );
+            assert!(receipt.claimed() && !receipt.withdraw());
+            let actual = voice(&p.h.callback.mixer);
+            assert_eq!(actual.generation, generation);
+            assert!(actual.source_playback.matches_exact(&at_adopt));
+            assert_eq!(actual.stretch.native_state_address(), native);
+            assert_eq!(actual.stretch.pending_fifo_frames(), fifos);
+            if let Some(before) = history {
+                let after = actual.stretch.productive_history().unwrap();
+                assert_eq!(after.binding, before.binding);
+                assert_eq!(after.binding.accepted, Some(projection));
+                assert_eq!(after.next_position, before.next_position);
+                assert_eq!(after.fed_output_frames, before.fed_output_frames);
+            }
+            assert_eq!(
+                p.h.callback.mixer.stems_for_measurement()[0]
+                    .as_ref()
+                    .unwrap()
+                    .accepted_timing,
+                Some(projection)
+            );
+            p.select_reference("all_stems", reordered_mask(0b1010));
+            p.selected = selected;
+            settle(&mut p, &receipt);
+            cross_bpm_virtual_seam(&mut p, projection);
+
+            // The accepted V2 selection also needs a fresh own callback/worker
+            // preparation when it is later released and requested again.
+            let full = p.request("full_mix", 0b1010);
+            p.capture_then_wait(&full);
+            assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
+            p.select_reference("full_mix", 0b1010);
+            settle(&mut p, &full);
+            let again = p.request("all_stems", 0b1010);
+            p.capture_then_wait(&again);
+            assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
+            p.select_reference("all_stems", reordered_mask(0b1010));
+            settle(&mut p, &again);
+            cross_bpm_virtual_seam(&mut p, projection);
+        }
+    }
 }
 
 #[test]

@@ -1181,6 +1181,10 @@ pub(super) fn publish_legacy_origin(
 mod tests;
 
 #[cfg(test)]
+#[path = "l3_constant_timing_fixture.rs"]
+pub(crate) mod l3_constant_timing_fixture;
+
+#[cfg(test)]
 #[path = "constant_timing_pcm_budget_tests.rs"]
 mod pcm_budget_tests;
 
