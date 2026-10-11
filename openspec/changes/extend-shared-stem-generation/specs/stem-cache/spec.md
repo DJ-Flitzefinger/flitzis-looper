@@ -152,6 +152,13 @@ immediate change SHALL NOT silently discard the command.
 - **AND** FullMix SHALL obtain its own residency and effective-output authority; V2's withdrawn operation SHALL NOT report V2 effective or override that intent
 - **AND** polling SHALL NOT retry V2 implicitly; later explicit ALL SHALL obtain fresh V2 registration and its own Capture, worker preparation, Adopt and subsequent effectiveness
 
+#### Scenario: Public candidate admission encounters a full control queue
+- **GIVEN** productive V1 playback and a distinct durably committed V2 with current accepted registration but no residency receipt
+- **WHEN** an explicit public ALL request encounters a full Native control queue before Capture admission
+- **THEN** the request SHALL report its own bounded admission failure without creating a V2 residency receipt or changing V1's own effective authority, readers, source trajectory, voice, Native, FIFO or filter history
+- **AND** controller polling SHALL retain the desired V2 intent and visible failure without implicitly retrying admission, including after the queue drains
+- **AND** a later explicit identical ALL request SHALL be able to reuse the current V2 registration and obtain its own new Capture, worker preparation, Adopt and subsequent effectiveness; V1's ACK SHALL NOT substitute for that operation
+
 #### Scenario: Paused and stopped acceptance is not audible effectiveness
 - **WHEN** a current NormalLoop candidate is installed on a paused voice or stopped pad
 - **THEN** own residency acceptance SHALL remain distinct from effective output

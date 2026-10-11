@@ -17,12 +17,15 @@ const REPEATED_SETS_CHILD: &str = "FLITZI_L3_CONTROLLER_REPEATED_SETS_CHILD";
 const REPEATED_SETS_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_empty_handover_defers_v3_and_uses_latest_mask_with_own_ack";
 const WITHDRAW_PRECLAIM_CHILD: &str = "FLITZI_L3_CONTROLLER_WITHDRAW_PRECLAIM_CHILD";
 const WITHDRAW_PRECLAIM_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_full_mix_withdraws_queued_v2_adopt_then_all_uses_fresh_authority";
+const ADMISSION_PRESSURE_CHILD: &str = "FLITZI_L3_CONTROLLER_ADMISSION_PRESSURE_CHILD";
+const ADMISSION_PRESSURE_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_queue_full_keeps_v1_then_explicit_all_admits_own_v2";
 
 #[derive(Clone, Copy)]
 enum CandidateTrace {
     Ordinary,
     RepeatedSets,
     WithdrawPreclaim,
+    AdmissionPressure,
 }
 
 enum FixtureSet {
@@ -815,6 +818,192 @@ assert reopened.project.pad_stem_mix_mode[0] == 'all_stems'
     );
 }
 
+fn full_queue_then_explicit_retry(
+    engine: &AudioEngine,
+    producer: &Arc<Mutex<rtrb::Producer<ControlMessage>>>,
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    locals: &Py<PyDict>,
+    key_lock: bool,
+) {
+    assert!(consumer.is_empty());
+    let set = playback.callback.mixer.stems_for_measurement()[0]
+        .clone()
+        .unwrap();
+    let source = playback.callback.mixer.bank_for_measurement()[0]
+        .clone()
+        .unwrap();
+    let before = voice(&playback.callback.mixer);
+    let clock = before.source_playback;
+    let generation = before.generation;
+    let native = before.stretch.native_state_address();
+    let fifo = before.stretch.pending_fifo_frames();
+    let history = before.stretch.productive_history();
+    let transition = playback.callback.mixer.stem_transition_for_measurement(0);
+    let dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    let demand = playback.callback.mixer.stem_demand_for_measurement(0);
+    assert_eq!(demand.0, StemMixMode::AllStems);
+    assert_eq!(demand.1, 0b1010);
+    let intent = engine.resident_stem_cache.lock().unwrap()[0]
+        .intent_epoch
+        .load(Ordering::Acquire);
+    {
+        let mut queue = producer.lock().unwrap();
+        // Ping uses this actual control queue; Volume uses a different queue.
+        for _ in 0..8 {
+            queue.push(ControlMessage::Ping()).unwrap();
+        }
+        assert!(queue.is_full());
+    }
+    controller_python(
+        locals,
+        r#"
+pressure_selection = live.disk.selection
+pressure_registration = pressure_selection.ticket
+admission_error = 'Stem residency admission failed: committed residency queue is full'
+assert first.is_current() and first.effective_mode_status() == 'effective'
+assert pressure_registration.is_current() and pressure_registration.publication_status() == 'accepted'
+assert pressure_selection.receipt is None and pressure_selection.receipt_intent is None
+assert not controller.set_stem_mix_mode(0, 'all_stems')
+for _ in range(16):
+    controller.on_frame_render()
+    assert live.blocked and live.desired == ('all_stems', 0b1010)
+    assert live.disk.selection is pressure_selection and live.attempt is None
+    assert pressure_selection.receipt is None and pressure_selection.receipt_intent is None
+    assert pressure_registration.is_current() and pressure_registration.publication_status() == 'accepted'
+    assert live.control is previous_control and previous_control.receipt is first
+    assert previous_control.ticket.is_current() and first.is_current()
+    assert first.residency_status() == 'accepted' and first.effective_mode_status() == 'effective'
+    status = controller.stem_residency_status(0)
+    assert status.disk_stem_set_identity == disk_v2.stem_set_identity
+    assert status.control_stem_set_identity == disk_v1.stem_set_identity
+    assert status.effective_stem_set_identity == disk_v1.stem_set_identity
+    assert status.attempt_stem_set_identity == disk_v1.stem_set_identity
+    assert status.effective == 'effective' and status.desired_mode == 'all_stems'
+    assert session.stem_generation_errors == {0: admission_error}
+assert project.stem_cache[0].pair == disk_v2 and project.pad_stem_mix_mode[0] == 'all_stems'
+"#,
+    );
+    assert!(matches!(consumer.peek(), Ok(ControlMessage::Ping())));
+    assert_eq!(playback.drain(consumer), 8, "only the eight actual Pings");
+    assert!(consumer.is_empty(), "failed admission queued no Capture");
+    assert_eq!(
+        engine.resident_stem_cache.lock().unwrap()[0]
+            .intent_epoch
+            .load(Ordering::Acquire),
+        intent
+    );
+    assert!(!engine.input_runtime_ownership.resident_control_pending(0));
+    let current = voice(&playback.callback.mixer);
+    assert!(current.source_playback.matches_exact(&clock));
+    assert_eq!(current.generation, generation);
+    assert_eq!(current.stretch.native_state_address(), native);
+    assert_eq!(current.stretch.pending_fifo_frames(), fifo);
+    if let Some(history) = history {
+        let after = current.stretch.productive_history().unwrap();
+        assert_eq!(after.binding, history.binding);
+        assert_eq!(after.next_position, history.next_position);
+        assert_eq!(after.fed_output_frames, history.fed_output_frames);
+    } else {
+        assert!(current.stretch.productive_history().is_none());
+    }
+    let after_dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    assert_eq!(after_dsp.binding, dsp.binding);
+    assert_eq!(after_dsp.next_position, dsp.next_position);
+    assert_eq!(after_dsp.fed_output_frames, dsp.fed_output_frames);
+    assert!(
+        playback
+            .callback
+            .mixer
+            .stem_transition_for_measurement(0)
+            .matches_exact(transition)
+    );
+    assert_eq!(
+        playback.callback.mixer.stem_demand_for_measurement(0),
+        demand
+    );
+    assert!(Arc::ptr_eq(
+        &source.samples,
+        &playback.callback.mixer.bank_for_measurement()[0]
+            .as_ref()
+            .unwrap()
+            .samples
+    ));
+    let after = playback.callback.mixer.stems_for_measurement()[0]
+        .as_ref()
+        .unwrap();
+    assert!(Arc::ptr_eq(
+        &set.complete_set_identity,
+        &after.complete_set_identity
+    ));
+    for (before, after) in set.stems.iter().zip(&after.stems) {
+        assert!(Arc::ptr_eq(&before.samples, &after.samples));
+    }
+    let mut output = Vec::new();
+    for frames in [1, 31, 137, 257, 511] {
+        output.extend(if key_lock {
+            playback.render(frames, false).0
+        } else {
+            render_varispeed(playback, frames).0
+        });
+        controller_python(
+            locals,
+            r#"
+for _ in range(16):
+    controller.on_frame_render()
+    assert live.blocked and live.attempt is None and live.disk.selection is pressure_selection
+    assert pressure_selection.receipt is None and pressure_selection.receipt_intent is None
+    assert first.is_current() and first.effective_mode_status() == 'effective'
+    assert controller.stem_residency_status(0).effective_stem_set_identity == disk_v1.stem_set_identity
+    assert session.stem_generation_errors == {0: admission_error}
+"#,
+        );
+        assert!(
+            consumer.is_empty(),
+            "drained queue does not authorize polling retry"
+        );
+        assert_eq!(voice(&playback.callback.mixer).generation, generation);
+        assert_eq!(
+            voice(&playback.callback.mixer)
+                .stretch
+                .native_state_address(),
+            native
+        );
+    }
+    assert!(output.iter().any(|sample| sample.abs() > 0.001));
+    controller_python(
+        locals,
+        r#"
+assert controller.set_stem_mix_mode(0, 'all_stems')
+assert not live.blocked and live.attempt is pressure_selection
+assert live.disk.selection is pressure_selection and pressure_selection.ticket is pressure_registration
+candidate = pressure_selection.receipt
+assert candidate is not first and candidate.is_current() and not candidate.claimed()
+assert candidate.residency_status() in {'captured', 'pending'} and candidate.effective_mode_status() == 'waiting'
+assert pressure_selection.receipt_intent == ('all_stems', 0b1010)
+assert live.control is previous_control and first.is_current()
+status = controller.stem_residency_status(0)
+assert status.effective == 'waiting' and status.attempt_stem_set_identity == disk_v2.stem_set_identity
+assert status.control_stem_set_identity == disk_v1.stem_set_identity
+assert status.effective_stem_set_identity == disk_v1.stem_set_identity
+assert session.stem_generation_errors == {0: admission_error}
+"#,
+    );
+    assert!(
+        matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+        if matches!(work.as_ref(), crate::audio_engine::committed_stem_residency::CommittedStemRtWork::Capture(capture)
+            if capture.id == 0 && capture.target == StemMixMode::AllStems))
+    );
+}
+
 fn repeated_sets_after_empty_claim(
     playback: &mut ControllerPlayback,
     consumer: &mut rtrb::Consumer<ControlMessage>,
@@ -1405,9 +1594,10 @@ fn round_trip(
 ) {
     let repeated_sets = matches!(trace, CandidateTrace::RepeatedSets);
     let withdraw_preclaim = matches!(trace, CandidateTrace::WithdrawPreclaim);
+    let admission_pressure = matches!(trace, CandidateTrace::AdmissionPressure);
     assert!(key_lock || delete_pause.is_none());
     assert!(
-        !(repeated_sets || withdraw_preclaim)
+        !(repeated_sets || withdraw_preclaim || admission_pressure)
             || (selected_v1
                 && delete_pause.is_none()
                 && stopped_before_poll.is_none()
@@ -1497,6 +1687,9 @@ fn round_trip(
             .unwrap();
         locals.set_item("selected_v1", selected_v1).unwrap();
         locals.set_item("repeated_sets", repeated_sets).unwrap();
+        locals
+            .set_item("admission_pressure", admission_pressure)
+            .unwrap();
         locals
             .set_item("withdraw_preclaim", withdraw_preclaim)
             .unwrap();
@@ -1898,10 +2091,26 @@ status = controller.stem_residency_status(0)
 assert status.disk_stem_set_identity == disk_v2.stem_set_identity
 assert status.control_stem_set_identity == disk_v1.stem_set_identity
 assert status.effective_stem_set_identity == (disk_v1.stem_set_identity if selected_v1 else None)
+"#,
+    );
+    if admission_pressure {
+        full_queue_then_explicit_retry(
+            &engine,
+            &h.producer,
+            &mut playback,
+            &mut h.consumer,
+            &locals,
+            key_lock,
+        );
+    }
+    controller_python(
+        &locals,
+        r#"
 if repeated_sets:
     assert controller.set_stem_enabled_mask(0, 0)
-assert controller.set_stem_mix_mode(0, 'all_stems')
-assert controller._publish_all_stems_mode_if_preferred(0, fixture['source_version'])
+if not admission_pressure:
+    assert controller.set_stem_mix_mode(0, 'all_stems')
+    assert controller._publish_all_stems_mode_if_preferred(0, fixture['source_version'])
 candidate = live.attempt.receipt
 assert candidate is not None and candidate.effective_mode_status() == 'waiting'
 for _ in range(16):
@@ -1910,18 +2119,20 @@ assert candidate.effective_mode_status() == 'waiting'
 assert previous_control.ticket.is_current()
 "#,
     );
-    let current = voice(&playback.callback.mixer);
-    assert!(current.source_playback.matches_exact(&initial_clock));
-    assert_eq!(current.generation, initial_generation);
-    assert_eq!(current.stretch.native_state_address(), initial_native);
-    assert_eq!(current.stretch.pending_fifo_frames(), initial_fifo);
-    if let Some(initial_history) = initial_history {
-        let history = current.stretch.productive_history().unwrap();
-        assert_eq!(history.binding, initial_history.binding);
-        assert_eq!(history.next_position, initial_history.next_position);
-        assert_eq!(history.fed_output_frames, initial_history.fed_output_frames);
-    } else {
-        assert!(current.stretch.productive_history().is_none());
+    if !admission_pressure {
+        let current = voice(&playback.callback.mixer);
+        assert!(current.source_playback.matches_exact(&initial_clock));
+        assert_eq!(current.generation, initial_generation);
+        assert_eq!(current.stretch.native_state_address(), initial_native);
+        assert_eq!(current.stretch.pending_fifo_frames(), initial_fifo);
+        if let Some(initial_history) = initial_history {
+            let history = current.stretch.productive_history().unwrap();
+            assert_eq!(history.binding, initial_history.binding);
+            assert_eq!(history.next_position, initial_history.next_position);
+            assert_eq!(history.fed_output_frames, initial_history.fed_output_frames);
+        } else {
+            assert!(current.stretch.productive_history().is_none());
+        }
     }
     if withdraw_preclaim {
         withdraw_queued_candidate_for_full_mix(&mut playback, &mut h.consumer, &locals, key_lock);
@@ -1982,6 +2193,8 @@ assert status.effective_stem_set_identity == (disk_v1.stem_set_identity if selec
 assert status.effective == 'transitioning'
 assert candidate.claimed() and not candidate.withdraw()
 assert not previous_control.ticket.is_current()
+if admission_pressure:
+    assert session.stem_generation_errors == {0: admission_error}
 "#,
     );
     if repeated_sets {
@@ -2088,6 +2301,10 @@ assert status.control_stem_set_identity == disk_v2.stem_set_identity
 assert status.effective_stem_set_identity == disk_v2.stem_set_identity
 assert project.stem_cache[0].pair == disk_v2
 assert controller._stem_worker_pool._executor._max_workers == 2
+if admission_pressure:
+    assert live.control is pressure_selection and live.disk.selection is pressure_selection
+    assert pressure_selection.ticket is pressure_registration and pressure_selection.receipt is candidate
+    assert not session.stem_generation_errors, session.stem_generation_errors
 if withdraw_preclaim:
     assert not withdrawn.claimed() and not withdrawn.is_current()
     assert withdrawn.residency_status() == 'rejected' and withdrawn.effective_mode_status() == 'rejected'
@@ -2309,6 +2526,40 @@ fn actual_python_controller_full_mix_withdraws_queued_v2_adopt_then_all_uses_fre
     assert!(
         output.status.success(),
         "L3 preclaim withdrawal child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+}
+
+#[test]
+fn actual_python_controller_queue_full_keeps_v1_then_explicit_all_admits_own_v2() {
+    if std::env::var_os(ADMISSION_PRESSURE_CHILD).is_some() {
+        for key_lock in [true, false] {
+            round_trip(
+                true,
+                None,
+                key_lock,
+                None,
+                false,
+                CandidateTrace::AdmissionPressure,
+            );
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            ADMISSION_PRESSURE_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(ADMISSION_PRESSURE_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 admission pressure child failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

@@ -775,3 +775,43 @@ Clippy tests exit0 with the existing63 warnings (one duplicate), none in the
 changed test; formatting, official strict validation, five relative-file links
 and whitespace pass. The earlier successful five-test empty/V3 boundary remains
 published independently as3123a38.
+
+### Public queue-full admission retains V1 and requires explicit ALL retry
+
+The public proper NormalLoop trace now fills the actual eight-slot Native control
+queue with Ping commands before requesting the durably committed distinct V2.
+The ALL setter reports `Stem residency admission failed: committed residency
+queue is full`. It creates no V2 receipt or Capture. V2's accepted/current
+registration remains reusable, while disk V2 and control/effective V1 remain
+separately observable. V1 retains its own effective receipt and current control
+intent, exact component/source Arcs, consumed source position, voice generation,
+Native, FIFO, productive Native/DSP histories and stem transition.
+
+Actual callback dispatch consumes all eight Pings at current callback time.
+Repeated public polling before and after that drain retains the blocked desired
+V2 intent and visible error, without enqueuing an implicit retry. Irregular render
+partitions continue against complete independent V1 PCM and uninterrupted actual
+raw-Native/FIFO/EQ or varispeed/EQ oracles with nontrivial output. KEY LOCK ON uses
+rate0.75 and OFF uses rate1.25; an independently tracked zero-gain other pad keeps
+its own source, demand, voice, Native and FIFOs.
+
+An explicit identical public ALL gesture then reuses the same accepted V2
+registration and obtains a distinct own waiting receipt and actual Capture,
+worker preparation and Adopt. The existing source-frame ramp and later ON own
+4096-frame Native preparation verify nontrivial V2 effectiveness. The admission
+error stays visible through waiting/transitioning and clears on V2's own observed
+effectiveness. Pair-generation worker counts are not Native admission counts.
+
+This bounded admission proof does not cover a later worker Adopt-post queue
+failure or deadline, and leaves the remaining task3.2, domain3.3, L4 and original/
+additive resource/Human gates open. Production code and prior build-only Release,
+import and Python inputs are unchanged; no Native installation or App/device/
+hearing action is involved.
+
+The focused two-mode Release test passes in4.43s and the affected public Native
+suite passes7 tests in36.76s. One independent nonauthor final review finds no
+concrete issue. An initial compile-only test assertion used the wrong demand
+tuple shape; the corrected assertion retains the actual revision as well as mode
+and mask. Formatting, official strict validation and whitespace pass; Clippy tests
+exit0 with the existing63 warnings (one duplicate), none in the changed test.
+The existing relative-file links are unchanged from the preceding verified block.
