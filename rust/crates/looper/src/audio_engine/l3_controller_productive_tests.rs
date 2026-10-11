@@ -3,6 +3,7 @@
 //! algebraic feed, raw Native/FIFO or dry Varispeed, and uninterrupted EQ oracle.
 
 use super::*;
+use crate::audio_engine::buffer_retirement::AudioBufferRetirement;
 
 const CHILD: &str = "FLITZI_L3_CONTROLLER_CANDIDATE_CHILD";
 const TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_first_and_replacement_candidates_keep_own_wet_chronology";
@@ -14,6 +15,15 @@ const PAUSED_FIRST_CHILD: &str = "FLITZI_L3_CONTROLLER_PAUSED_FIRST_CHILD";
 const PAUSED_FIRST_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_wet_full_mix_paused_before_first_candidate_keeps_consumed_clock";
 const REPEATED_SETS_CHILD: &str = "FLITZI_L3_CONTROLLER_REPEATED_SETS_CHILD";
 const REPEATED_SETS_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_empty_handover_defers_v3_and_uses_latest_mask_with_own_ack";
+const WITHDRAW_PRECLAIM_CHILD: &str = "FLITZI_L3_CONTROLLER_WITHDRAW_PRECLAIM_CHILD";
+const WITHDRAW_PRECLAIM_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_full_mix_withdraws_queued_v2_adopt_then_all_uses_fresh_authority";
+
+#[derive(Clone, Copy)]
+enum CandidateTrace {
+    Ordinary,
+    RepeatedSets,
+    WithdrawPreclaim,
+}
 
 enum FixtureSet {
     Second,
@@ -333,15 +343,8 @@ fn render_varispeed(playback: &mut ControllerPlayback, frames: usize) -> (Vec<f3
     (output, full_mix)
 }
 
-fn settle_varispeed(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name: &str) {
+fn ramp_varispeed(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name: &str) {
     assert_eq!(playback.ratio, 1.25);
-    let generation = voice(&playback.callback.mixer).generation;
-    let native = voice(&playback.callback.mixer)
-        .stretch
-        .native_state_address();
-    let fifo = voice(&playback.callback.mixer)
-        .stretch
-        .pending_fifo_frames();
     let mut remaining = (128.0 / playback.ratio).ceil() as usize;
     for frames in [1_usize, 31, 17, 7].into_iter().cycle() {
         let count = frames.min(remaining);
@@ -369,6 +372,17 @@ fn settle_varispeed(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name
             .stem_transition_for_measurement(0)
             .is_active()
     );
+}
+
+fn settle_varispeed(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name: &str) {
+    let generation = voice(&playback.callback.mixer).generation;
+    let native = voice(&playback.callback.mixer)
+        .stretch
+        .native_state_address();
+    let fifo = voice(&playback.callback.mixer)
+        .stretch
+        .pending_fifo_frames();
+    ramp_varispeed(playback, locals, name);
     // OFF effectiveness follows actual dry source consumption. No Wet or 4096
     // Native preparation is invoked or used as evidence for this branch.
     let mut output = Vec::new();
@@ -515,26 +529,7 @@ assert not session.stem_generation_errors, session.stem_generation_errors
         );
         playback.render(127, true);
     } else {
-        let mut remaining = (128.0 / playback.ratio).ceil() as usize;
-        for frames in [1_usize, 31, 17, 7].into_iter().cycle() {
-            let frames = frames.min(remaining);
-            render_varispeed(playback, frames);
-            remaining -= frames;
-            if remaining == 0 {
-                break;
-            }
-            assert_eq!(
-                controller_ticket_status(locals, "candidate", "effective_mode_status"),
-                "transitioning"
-            );
-            assert!(
-                playback
-                    .callback
-                    .mixer
-                    .stem_transition_for_measurement(0)
-                    .is_active()
-            );
-        }
+        ramp_varispeed(playback, locals, "candidate");
         render_varispeed(playback, 127);
         assert_eq!(
             voice(&playback.callback.mixer)
@@ -578,6 +573,246 @@ assert not session.stem_generation_errors, session.stem_generation_errors
     );
     // Do not poll the effective receipt yet: V2's own effectiveness precedes
     // any V3 registration, independently of the earlier pre-Native poll.
+}
+
+fn settle_full_mix(playback: &mut ControllerPlayback, locals: &Py<PyDict>, key_lock: bool) {
+    assert_eq!(playback.selection, None);
+    let generation = voice(&playback.callback.mixer).generation;
+    let mut output = Vec::new();
+    if key_lock {
+        playback.ramp(locals, "full", playback.ratio);
+        playback.render(13, true);
+        output.extend(playback.adopt_native(false).0);
+        assert!(
+            voice(&playback.callback.mixer)
+                .stretch
+                .wet_current_source_output_ready()
+        );
+    } else {
+        ramp_varispeed(playback, locals, "full");
+        for frames in [1, 127, 257, 511, 31, 137] {
+            output.extend(render_varispeed(playback, frames).0);
+        }
+    }
+    assert!(output.iter().any(|sample| sample.abs() > 0.001));
+    assert_eq!(voice(&playback.callback.mixer).generation, generation);
+    assert!(
+        !playback
+            .callback
+            .mixer
+            .stem_transition_for_measurement(0)
+            .is_active()
+    );
+    assert!(playback.callback.mixer.stems_for_measurement()[0].is_none());
+    assert_eq!(
+        controller_ticket_status(locals, "full", "effective_mode_status"),
+        "effective"
+    );
+    controller_python(
+        locals,
+        "controller.on_frame_render()\nassert not session.stem_generation_errors, session.stem_generation_errors",
+    );
+}
+
+fn withdraw_queued_candidate_for_full_mix(
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    locals: &Py<PyDict>,
+    key_lock: bool,
+) {
+    use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
+    assert_eq!(
+        playback.drain(consumer),
+        1,
+        "actual V2 Capture before withdrawal"
+    );
+    wait_until(|| {
+        consumer.peek().is_ok()
+            || controller_ticket_status(locals, "candidate", "residency_status") == "rejected"
+    });
+    assert!(
+        matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+        if matches!(work.as_ref(), CommittedStemRtWork::Adopt(transaction)
+            if transaction.id == 0 && transaction.target == StemMixMode::AllStems
+            && transaction.mask == 0b1010 && transaction.candidate.is_some()))
+    );
+    controller_python(
+        locals,
+        r#"
+withdrawn = candidate
+withdrawn_registration = live.disk.selection.ticket
+assert withdrawn.residency_status() == 'pending' and withdrawn.effective_mode_status() == 'waiting'
+assert withdrawn.is_current() and not withdrawn.claimed()
+assert controller.set_stem_mix_mode(0, 'full_mix')
+full = live.control.receipt
+assert full is not withdrawn and full.is_current()
+assert full.residency_status() in {'captured', 'pending'} and full.effective_mode_status() == 'waiting'
+assert live.control is previous_control and live.attempt is previous_control
+assert live.control.receipt_intent == ('full_mix', 0b1010)
+assert live.disk.selection is None and live.disk.registration == 'withdrawn'
+assert live.desired == ('full_mix', 0b1010)
+assert withdrawn.residency_status() == 'rejected' and withdrawn.effective_mode_status() == 'rejected'
+assert not withdrawn.claimed() and not withdrawn.is_current()
+assert withdrawn.effective_failure_reason() is None
+assert withdrawn_registration.publication_status() == 'accepted' and not withdrawn_registration.is_current()
+status = controller.stem_residency_status(0)
+assert status.disk_stem_set_identity == disk_v2.stem_set_identity
+assert status.control_stem_set_identity == disk_v1.stem_set_identity
+assert status.effective_stem_set_identity == disk_v1.stem_set_identity
+assert project.pad_stem_mix_mode[0] == 'full_mix' and project.stem_cache[0].pair == disk_v2
+persistence.flush()
+reopened = ProjectPersistence.from_config_path(persistence.config_path)
+assert reopened.load_error is None and reopened.project.stem_cache[0].pair == disk_v2
+assert reopened.project.pad_stem_mix_mode[0] == 'full_mix'
+assert not session.stem_generation_errors, session.stem_generation_errors
+"#,
+    );
+    let set = playback.callback.mixer.stems_for_measurement()[0]
+        .clone()
+        .unwrap();
+    let before = voice(&playback.callback.mixer);
+    let clock = before.source_playback;
+    let generation = before.generation;
+    let native = before.stretch.native_state_address();
+    let fifo = before.stretch.pending_fifo_frames();
+    let history = before.stretch.productive_history();
+    let transition = playback.callback.mixer.stem_transition_for_measurement(0);
+    let dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    let message = consumer.pop().unwrap();
+    assert!(matches!(&message, ControlMessage::CommittedStemWork(work)
+        if matches!(work.as_ref(), CommittedStemRtWork::Adopt(transaction)
+            if !transaction.selection.current() && transaction.stems.is_some())));
+    let callback = playback.callback.as_mut();
+    assert!(callback.retirement.available_retirement_slots() >= 3);
+    // The unchanged actual queued V2 message reaches the same Native handler
+    // as drain_control_messages, without also draining the later FullMix Capture.
+    crate::audio_engine::audio_stream::process_control_message(
+        message,
+        &mut callback.scheduler,
+        playback.frame,
+        &mut callback.quantization,
+        &mut callback.transport,
+        &mut callback.mixer,
+        &mut callback.feedback,
+        &mut callback.retirement,
+    );
+    let current = voice(&callback.mixer);
+    assert!(current.source_playback.matches_exact(&clock));
+    assert_eq!(current.generation, generation);
+    assert_eq!(current.stretch.native_state_address(), native);
+    assert_eq!(current.stretch.pending_fifo_frames(), fifo);
+    if let Some(history) = history {
+        let after = current.stretch.productive_history().unwrap();
+        assert_eq!(after.binding, history.binding);
+        assert_eq!(after.next_position, history.next_position);
+        assert_eq!(after.fed_output_frames, history.fed_output_frames);
+    } else {
+        assert!(current.stretch.productive_history().is_none());
+    }
+    let after_dsp = callback.mixer.dsp_source_history_for_test(0).unwrap();
+    assert_eq!(after_dsp.binding, dsp.binding);
+    assert_eq!(after_dsp.next_position, dsp.next_position);
+    assert_eq!(after_dsp.fed_output_frames, dsp.fed_output_frames);
+    assert!(
+        callback
+            .mixer
+            .stem_transition_for_measurement(0)
+            .matches_exact(transition)
+    );
+    assert_eq!(
+        callback.mixer.stem_demand_for_measurement(0).0,
+        StemMixMode::AllStems
+    );
+    assert_eq!(callback.mixer.stem_demand_for_measurement(0).1, 0b1010);
+    let current_set = callback.mixer.stems_for_measurement()[0].as_ref().unwrap();
+    assert!(Arc::ptr_eq(
+        &set.complete_set_identity,
+        &current_set.complete_set_identity
+    ));
+    for (before, after) in set.stems.iter().zip(&current_set.stems) {
+        assert!(Arc::ptr_eq(&before.samples, &after.samples));
+    }
+    assert!(
+        matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+        if matches!(work.as_ref(), CommittedStemRtWork::Capture(capture)
+            if capture.id == 0 && capture.target == StemMixMode::FullMix))
+    );
+    controller_python(
+        locals,
+        r#"
+controller.on_frame_render()
+assert not withdrawn.claimed() and withdrawn.residency_status() == 'rejected'
+assert live.control is previous_control and live.attempt is previous_control
+assert full.effective_mode_status() == 'waiting'
+assert not session.stem_generation_errors, session.stem_generation_errors
+"#,
+    );
+    if key_lock {
+        playback.render(31, false);
+    } else {
+        render_varispeed(playback, 31);
+    }
+    own_adoption(playback, consumer, locals, "full", key_lock);
+    assert!(
+        playback
+            .reference
+            .set_stem_mix_mode(0, StemMixMode::FullMix, 0)
+    );
+    playback.select(None);
+    controller_python(
+        locals,
+        r#"
+controller.on_frame_render()
+assert live.control is previous_control and live.control.receipt is full
+assert full.claimed() and full.effective_mode_status() == 'transitioning'
+assert controller.stem_residency_status(0).effective_stem_set_identity == disk_v1.stem_set_identity
+"#,
+    );
+    settle_full_mix(playback, locals, key_lock);
+    controller_python(
+        locals,
+        r#"
+for _ in range(16):
+    controller.on_frame_render()
+    assert live.control is previous_control and live.attempt is None
+    assert live.disk.selection is None and live.disk.registration == 'withdrawn'
+    status = controller.stem_residency_status(0)
+    assert status.disk_stem_set_identity == disk_v2.stem_set_identity
+    assert status.control_stem_set_identity == disk_v1.stem_set_identity
+    assert status.effective_stem_set_identity is None
+    assert status.requested_mode == 'full_mix' and status.effective == 'effective'
+assert full.is_current() and full.residency_status() == 'accepted'
+assert not session.stem_generation_errors, session.stem_generation_errors
+"#,
+    );
+    assert!(consumer.is_empty(), "poll cannot retry withdrawn V2 ALL");
+    controller_python(
+        locals,
+        r#"
+assert controller.set_stem_mix_mode(0, 'all_stems')
+fresh_registration = live.disk.selection.ticket
+candidate = live.attempt.receipt
+assert fresh_registration is not withdrawn_registration and fresh_registration.is_current()
+assert fresh_registration.publication_status() == 'accepted'
+assert candidate is not withdrawn and candidate is not full
+assert candidate.is_current() and not candidate.claimed()
+assert candidate.residency_status() in {'captured', 'pending'} and candidate.effective_mode_status() == 'waiting'
+assert live.control is previous_control
+status = controller.stem_residency_status(0)
+assert status.disk_stem_set_identity == disk_v2.stem_set_identity
+assert status.control_stem_set_identity == disk_v1.stem_set_identity
+assert status.effective_stem_set_identity is None
+assert project.pad_stem_mix_mode[0] == 'all_stems'
+persistence.flush()
+reopened = ProjectPersistence.from_config_path(persistence.config_path)
+assert reopened.load_error is None and reopened.project.stem_cache[0].pair == disk_v2
+assert reopened.project.pad_stem_mix_mode[0] == 'all_stems'
+"#,
+    );
 }
 
 fn repeated_sets_after_empty_claim(
@@ -1166,11 +1401,13 @@ fn round_trip(
     key_lock: bool,
     stopped_before_poll: Option<bool>,
     paused_first: bool,
-    repeated_sets: bool,
+    trace: CandidateTrace,
 ) {
+    let repeated_sets = matches!(trace, CandidateTrace::RepeatedSets);
+    let withdraw_preclaim = matches!(trace, CandidateTrace::WithdrawPreclaim);
     assert!(key_lock || delete_pause.is_none());
     assert!(
-        !repeated_sets
+        !(repeated_sets || withdraw_preclaim)
             || (selected_v1
                 && delete_pause.is_none()
                 && stopped_before_poll.is_none()
@@ -1260,6 +1497,9 @@ fn round_trip(
             .unwrap();
         locals.set_item("selected_v1", selected_v1).unwrap();
         locals.set_item("repeated_sets", repeated_sets).unwrap();
+        locals
+            .set_item("withdraw_preclaim", withdraw_preclaim)
+            .unwrap();
         locals
             .set_item(
                 "playback_audio",
@@ -1683,6 +1923,9 @@ assert previous_control.ticket.is_current()
     } else {
         assert!(current.stretch.productive_history().is_none());
     }
+    if withdraw_preclaim {
+        withdraw_queued_candidate_for_full_mix(&mut playback, &mut h.consumer, &locals, key_lock);
+    }
     own_adoption(
         &mut playback,
         &mut h.consumer,
@@ -1735,7 +1978,7 @@ assert previous_control.ticket.is_current()
 controller.on_frame_render()
 status = controller.stem_residency_status(0)
 assert status.control_stem_set_identity == disk_v2.stem_set_identity
-assert status.effective_stem_set_identity == (disk_v1.stem_set_identity if selected_v1 else None)
+assert status.effective_stem_set_identity == (disk_v1.stem_set_identity if selected_v1 and not withdraw_preclaim else None)
 assert status.effective == 'transitioning'
 assert candidate.claimed() and not candidate.withdraw()
 assert not previous_control.ticket.is_current()
@@ -1845,6 +2088,10 @@ assert status.control_stem_set_identity == disk_v2.stem_set_identity
 assert status.effective_stem_set_identity == disk_v2.stem_set_identity
 assert project.stem_cache[0].pair == disk_v2
 assert controller._stem_worker_pool._executor._max_workers == 2
+if withdraw_preclaim:
+    assert not withdrawn.claimed() and not withdrawn.is_current()
+    assert withdrawn.residency_status() == 'rejected' and withdrawn.effective_mode_status() == 'rejected'
+    assert withdrawn.effective_failure_reason() is None
 "#,
         );
     }
@@ -1877,10 +2124,24 @@ assert controller._stem_worker_pool._executor._max_workers == 2
 fn actual_python_controller_first_and_replacement_candidates_keep_own_wet_chronology() {
     if std::env::var_os(CHILD).is_some() {
         for selected_v1 in [false, true] {
-            round_trip(selected_v1, None, true, None, false, false);
+            round_trip(
+                selected_v1,
+                None,
+                true,
+                None,
+                false,
+                CandidateTrace::Ordinary,
+            );
         }
         for paused in [false, true] {
-            round_trip(true, Some(paused), true, None, false, false);
+            round_trip(
+                true,
+                Some(paused),
+                true,
+                None,
+                false,
+                CandidateTrace::Ordinary,
+            );
         }
         return;
     }
@@ -1902,7 +2163,14 @@ fn actual_python_controller_first_and_replacement_candidates_keep_own_wet_chrono
 fn actual_python_controller_keylock_off_first_and_replacement_keep_varispeed_feed_and_eq() {
     if std::env::var_os(VARISPEED_CHILD).is_some() {
         for selected_v1 in [false, true] {
-            round_trip(selected_v1, None, false, None, false, false);
+            round_trip(
+                selected_v1,
+                None,
+                false,
+                None,
+                false,
+                CandidateTrace::Ordinary,
+            );
         }
         return;
     }
@@ -1924,7 +2192,14 @@ fn actual_python_controller_keylock_off_first_and_replacement_keep_varispeed_fee
 fn actual_python_controller_stopped_replacement_play_then_fresh_all_uses_own_wet_receipt() {
     if std::env::var_os(STOPPED_NEW_SET_CHILD).is_some() {
         for before_poll in [false, true] {
-            round_trip(false, None, true, Some(before_poll), false, false);
+            round_trip(
+                false,
+                None,
+                true,
+                Some(before_poll),
+                false,
+                CandidateTrace::Ordinary,
+            );
         }
         return;
     }
@@ -1950,7 +2225,7 @@ fn actual_python_controller_stopped_replacement_play_then_fresh_all_uses_own_wet
 #[test]
 fn actual_python_controller_wet_full_mix_paused_before_first_candidate_keeps_consumed_clock() {
     if std::env::var_os(PAUSED_FIRST_CHILD).is_some() {
-        round_trip(false, None, true, None, true, false);
+        round_trip(false, None, true, None, true, CandidateTrace::Ordinary);
         return;
     }
     let output = std::process::Command::new(std::env::current_exe().unwrap())
@@ -1976,7 +2251,14 @@ fn actual_python_controller_wet_full_mix_paused_before_first_candidate_keeps_con
 fn actual_python_controller_empty_handover_defers_v3_and_uses_latest_mask_with_own_ack() {
     if std::env::var_os(REPEATED_SETS_CHILD).is_some() {
         for key_lock in [true, false] {
-            round_trip(true, None, key_lock, None, false, true);
+            round_trip(
+                true,
+                None,
+                key_lock,
+                None,
+                false,
+                CandidateTrace::RepeatedSets,
+            );
         }
         return;
     }
@@ -1993,6 +2275,40 @@ fn actual_python_controller_empty_handover_defers_v3_and_uses_latest_mask_with_o
     assert!(
         output.status.success(),
         "L3 repeated sets child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+}
+
+#[test]
+fn actual_python_controller_full_mix_withdraws_queued_v2_adopt_then_all_uses_fresh_authority() {
+    if std::env::var_os(WITHDRAW_PRECLAIM_CHILD).is_some() {
+        for key_lock in [true, false] {
+            round_trip(
+                true,
+                None,
+                key_lock,
+                None,
+                false,
+                CandidateTrace::WithdrawPreclaim,
+            );
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            WITHDRAW_PRECLAIM_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(WITHDRAW_PRECLAIM_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 preclaim withdrawal child failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

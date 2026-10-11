@@ -145,6 +145,13 @@ immediate change SHALL NOT silently discard the command.
 - **THEN** V1's own control and audio authority SHALL remain usable and V2 SHALL report its own failure or withdrawal
 - **AND** retry SHALL require fresh explicit intent rather than an unbounded polling retry loop
 
+#### Scenario: Public FullMix withdraws a prepared candidate before callback claim
+- **GIVEN** productive V1 playback and a distinct V2 whose own Capture and worker preparation have queued Adopt without callback claim
+- **WHEN** the pad receives a newer public FullMix intent
+- **THEN** V2's future ALL authority SHALL be withdrawn and its actually queued late Adopt SHALL reject without replacing V1's readers, source trajectory, voice, Native, FIFO or filter state
+- **AND** FullMix SHALL obtain its own residency and effective-output authority; V2's withdrawn operation SHALL NOT report V2 effective or override that intent
+- **AND** polling SHALL NOT retry V2 implicitly; later explicit ALL SHALL obtain fresh V2 registration and its own Capture, worker preparation, Adopt and subsequent effectiveness
+
 #### Scenario: Paused and stopped acceptance is not audible effectiveness
 - **WHEN** a current NormalLoop candidate is installed on a paused voice or stopped pad
 - **THEN** own residency acceptance SHALL remain distinct from effective output

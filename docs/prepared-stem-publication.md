@@ -736,3 +736,42 @@ exit0 with the existing63 warnings (one duplicate), none in the changed test.
 One independent nonauthor final review identified the missing active poll at
 the post-ramp/pre-Native boundary; that test fence is now covered and the finding
 is closed, with no further findings or production change.
+
+### Public FullMix withdraws an actually queued V2 adoption before claim
+
+A further proper NormalLoop trace begins with effective V1/ALL1010. Genuine V2
+completes durable commit/reopen and its real Capture/worker queues Adopt, while
+the receipt remains unclaimed. A public FullMix gesture withdraws that receipt
+and its future candidate registration, retaining disk V2 and control/effective
+V1. The withdrawn registration may still report historical publication acceptance;
+its currentness is false, and the residency receipt is rejected/unclaimed.
+
+The unchanged actual queued V2-Adopt payload is then popped and dispatched alone
+through the normal Native control-message handler at current callback time with
+the required retirement capacity. The subsequent own FullMix-Capture remains in
+the real queue. V1's exact component Arcs, selection, source fraction, generation,
+Native, FIFO and Native/DSP history survive the rejected late command, and
+productive rendering continues against complete independent PCM and processing
+oracles. This test sink does not provide new productive retirement-worker proof;
+the existing final-owner/resource gates remain required.
+
+FullMix obtains its own Capture/worker/Adopt and actual effective output. ON/rate
+0.75 uses the original source feed with continued raw-Native/FIFO/EQ and a later
+own 4096-frame preparation; OFF/rate1.25 uses the real varispeed/source-frame ramp
+and continuous EQ. No difference from FullMix or immediate equality with its
+unrelated earlier processing history is required. Sixteen subsequent polls
+produce no implicit V2 retry. Only a later explicit ALL request creates fresh
+V2 registration and receipt, followed by own Capture/worker/Adopt and nontrivial
+V2 effect. Actual FullMix/ALL durable mode flush/reopen retains disk V2.
+
+The focused two-mode case passes in2.95s and the affected public Native suite
+passes6 tests in18.59s. An initial invalid test-retirement ledger assertion failed;
+it was corrected after reading the actual test sink, without changing production
+or weakening reader/audio/authority checks. One independent nonauthor source/spec
+review found no further issue. All remaining task3.2, domain3.3, L4, full original/
+additive and Human gates stay open; production and prior Release/import/Python
+inputs are unchanged, without Native installation or App/device/hearing action.
+Clippy tests exit0 with the existing63 warnings (one duplicate), none in the
+changed test; formatting, official strict validation, five relative-file links
+and whitespace pass. The earlier successful five-test empty/V3 boundary remains
+published independently as3123a38.
