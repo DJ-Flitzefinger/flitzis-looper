@@ -6,7 +6,8 @@ import pytest
 
 from flitzis_looper.models import SampleAnalysis
 from tests.conftest import write_mono_pcm16_wav
-from tests.flitzis_looper.conftest import current_timing_metadata
+from tests.flitzis_looper.conftest import FakeInputRuntimePadBinding, current_timing_metadata
+from tests.flitzis_looper.controller.transport.test_key_lock_transactions import _mode_source
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -21,6 +22,48 @@ def _legacy_analysis() -> dict[str, object]:
         "key": "C#m",
         "beat_grid": {"beats": [0.0, 0.5], "downbeats": [0.0], "bars": [0.0]},
     }
+
+
+def test_timing_stale_replacement_retires_old_pending_geometry_before_new_mode_failure(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    old_ticket, feedback = _mode_source(controller, audio_engine_mock)
+    controller.transport.pad.set_pad_key_lock(0, enabled=True)
+    controller.project.key_lock = True
+    controller.project.pad_loop_end_s[0] = 7.0
+    audio_engine_mock.load_sample_async.return_value = 9
+    controller.loader.load_sample_async(0, "samples/new.wav")
+    audio_engine_mock.current_input_runtime_pad_binding.return_value = FakeInputRuntimePadBinding(
+        accepted_timing={"source_id": "new-source", "source_generation": 2}
+    )
+    audio_engine_mock.loaded_residency.return_value = {"source_identity": 456}
+    feedback.update(source_id="new-source", source_generation=2, source_identity=456)
+    audio_engine_mock.prepare_resident_control.side_effect = RuntimeError("new mode unavailable")
+    audio_engine_mock.poll_loader_events.side_effect = [
+        {
+            "type": "success",
+            "id": 0,
+            "request_id": 9,
+            "duration_s": 12.0,
+            "cached_path": "samples/new.wav",
+            "timing_stale": True,
+        },
+        None,
+    ]
+
+    controller.loader.poll_loader_events()
+
+    assert old_ticket.status == "cancelled"
+    assert controller.project.sample_paths[0] == "samples/new.wav"
+    assert (controller.project.pad_loop_start_s[0], controller.project.pad_loop_end_s[0]) == (
+        3.0,
+        7.0,
+    )
+    assert controller.project.pad_key_lock[0] is None
+    state = controller.transport.residency.key_lock_status(0)
+    assert state.requested is True
+    assert state.effective is False
+    assert state.error == "new mode unavailable"
 
 
 def test_failed_cold_load_settles_superseded_analysis_without_changing_effective_source(
@@ -69,6 +112,7 @@ def test_failed_cold_load_settles_superseded_analysis_without_changing_effective
 
 @pytest.mark.parametrize("restored", [False, True])
 @pytest.mark.parametrize("include_analysis", [False, True])
+@pytest.mark.parametrize("global_default", [False, True])
 def test_source_completion_preserves_timing_and_allows_analysis_only_after_loading(
     controller: AppController,
     audio_engine_mock: Mock,
@@ -76,10 +120,13 @@ def test_source_completion_preserves_timing_and_allows_analysis_only_after_loadi
     *,
     restored: bool,
     include_analysis: bool,
+    global_default: bool,
 ) -> None:
     project, session = controller.project, controller.session
     cached_path = "samples/current.wav"
     project.sample_paths[0] = cached_path if restored else "samples/predecessor.wav"
+    project.key_lock = global_default
+    project.pad_key_lock[0] = not global_default
     old_analysis = SampleAnalysis.model_validate(_legacy_analysis())
     project.sample_analysis[0] = old_analysis
     project.manual_bpm[0] = 123.456
@@ -128,9 +175,19 @@ def test_source_completion_preserves_timing_and_allows_analysis_only_after_loadi
         controller.loader._load_request_ids,
     ) == (set(), {}, {})
     if restored:
-        assert project.sample_analysis[0] is old_analysis
+        assert (
+            project.sample_analysis[0] is old_analysis,
+            project.pad_key_lock[0],
+            project.resolve_pad_key_lock(0),
+        ) == (True, not global_default, not global_default)
     else:
-        assert project.sample_analysis[0] is None
+        assert (
+            project.sample_analysis[0],
+            project.pad_key_lock[0],
+            project.resolve_pad_key_lock(0),
+        ) == (None, None, global_default)
+    requested_key_lock = not global_default if restored else global_default
+    audio_engine_mock.set_pad_key_lock.assert_called_with(0, requested_key_lock)
     assert (
         project.manual_bpm[0],
         project.pad_grid_anchor_s[0],
@@ -138,20 +195,27 @@ def test_source_completion_preserves_timing_and_allows_analysis_only_after_loadi
         project.pad_loop_start_s[0],
         project.pad_loop_end_s[0],
     ) == (123.456, -0.125, False, 3.25, 5.75)
-    assert 0 not in controller.loader._analysis_request_ids
-    assert 0 not in session.analyzing_sample_ids
+    assert (0 in controller.loader._analysis_request_ids, 0 in session.analyzing_sample_ids) == (
+        False,
+        False,
+    )
     controller.loader.analyze_sample_async(0)
     audio_engine_mock.analyze_sample_async.assert_called_once_with(0)
     session.sample_analysis_progress[0] = 0.5
     # Delayed feedback for the completed load cannot retire the later public admission.
     audio_engine_mock.poll_loader_events.side_effect = [completed_load, None]
     controller.loader.poll_loader_events()
-    assert controller.loader._analysis_request_ids[0] == 9
-    assert 0 in session.analyzing_sample_ids
-    assert session.sample_analysis_progress[0] == 0.5
-    audio_engine_mock.set_pad_bpm.assert_not_called()
-    audio_engine_mock.set_pad_timing_metadata.assert_not_called()
-    audio_engine_mock.set_pad_loop_region.assert_not_called()
+    assert (
+        controller.loader._analysis_request_ids[0],
+        0 in session.analyzing_sample_ids,
+        session.sample_analysis_progress[0],
+    ) == (9, True, 0.5)
+    for publisher in (
+        audio_engine_mock.set_pad_bpm,
+        audio_engine_mock.set_pad_timing_metadata,
+        audio_engine_mock.set_pad_loop_region,
+    ):
+        publisher.assert_not_called()
 
 
 def test_retired_analysis_completion_settles_its_task_without_legacy_publication(

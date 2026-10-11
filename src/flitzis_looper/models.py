@@ -232,8 +232,8 @@ def _default_pad_stem_mix_mode() -> list[StemMixMode]:
     return ["full_mix"] * NUM_SAMPLES
 
 
-def _default_pad_key_lock() -> list[bool]:
-    return [False] * NUM_SAMPLES
+def _default_pad_key_lock() -> list[bool | None]:
+    return [None] * NUM_SAMPLES
 
 
 def _default_manual_bpm() -> list[float | None]:
@@ -325,7 +325,7 @@ def _normalize_unloaded_pad_key_lock_fields(data: dict[str, object]) -> None:
     for sample_id in range(len(normalized)):
         sample_path = sample_paths[sample_id] if sample_id < len(sample_paths) else None
         if sample_path is None:
-            normalized[sample_id] = False
+            normalized[sample_id] = None
 
     data["pad_key_lock"] = normalized
 
@@ -431,8 +431,21 @@ class ProjectState(BaseModel):
     pad_stem_mix_mode: list[StemMixMode] = Field(default_factory=_default_pad_stem_mix_mode)
     """Per-pad durable stem mix preference."""
 
-    pad_key_lock: list[bool] = Field(default_factory=_default_pad_key_lock)
-    """Per-pad durable Key Lock intent."""
+    key_lock_intent_version: int = Field(default=2, strict=True, ge=2, le=2)
+    """Nullable override format; legacy loaded booleans retain explicit intent."""
+
+    pad_key_lock: list[Annotated[bool, Field(strict=True)] | None] = Field(
+        default_factory=_default_pad_key_lock
+    )
+    """Per-pad explicit ON/OFF, or None to inherit the global Key Lock default."""
+
+    def resolve_pad_key_lock(self, sample_id: int) -> bool:
+        """Resolve requested processing without claiming native audio confirmation."""
+        validate_sample_id(sample_id)
+        if self.sample_paths[sample_id] is None:
+            return False
+        override = self.pad_key_lock[sample_id]
+        return self.key_lock if override is None else override
 
     manual_bpm: list[float | None] = Field(default_factory=_default_manual_bpm)
     """Optional per-pad BPM override. When set, used for effective BPM display."""
@@ -647,7 +660,7 @@ class ProjectState(BaseModel):
 
     @field_validator("pad_key_lock", mode="after")
     @classmethod
-    def _validate_pad_key_lock(cls, value: list[bool]) -> list[bool]:
+    def _validate_pad_key_lock(cls, value: list[bool | None]) -> list[bool | None]:
         if len(value) != NUM_SAMPLES:
             msg = f"pad_key_lock must have length {NUM_SAMPLES}, got {len(value)}"
             raise ValueError(msg)

@@ -6,6 +6,13 @@ The published starting point is 694cd61e50a3fc81bc6a41d88269f6458c4ae269. Its ac
 
 ## Required behavior, normative owners and actual exit gates
 
+The latest Human KEY LOCK clarification replaces broadcast overwrite with a global
+default and nullable independent PAD overrides. New tracks inherit; explicit ON/OFF
+survives global changes. The sidebar PAD gestures and adjacent GLOBAL return preserve
+origin separately from Native confirmation; loaded legacy booleans migrate explicitly.
+The [inheritance change](../openspec/changes/inherit-pad-key-lock/proposal.md) and
+amended E11-02 contract retain the full existing Native and final acceptance gates.
+
 Every row must pass its concrete software gates below plus V0 integration and actual H-LIVE/H-FINAL/C-FINAL acceptance as applicable. Hashes, mocked ACKs, existing unrelated tests and headless audio do not prove Human hearing or visual acceptance. The strict validator proves contract structure only.
 
 | ID | Required result / official normative owner | Bounded delivery and real acceptance |

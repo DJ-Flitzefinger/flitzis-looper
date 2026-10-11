@@ -48,14 +48,12 @@ class ApplyProjectState:
             self._audio.set_trigger_quantization(mode)
 
     def _apply_key_lock_settings(self, defaults: ProjectState) -> None:
-        if self._project.pad_key_lock == defaults.pad_key_lock:
-            return
-
-        for sample_id, enabled in enumerate(self._project.pad_key_lock):
+        for sample_id in range(len(self._project.pad_key_lock)):
             if self._project.sample_paths[sample_id] is None:
                 continue
 
-            if enabled != defaults.pad_key_lock[sample_id]:
+            enabled = self._project.resolve_pad_key_lock(sample_id)
+            if enabled:
                 self._audio.set_pad_key_lock(sample_id, enabled)
 
     def _apply_per_pad_mixing(self, defaults: ProjectState) -> None:

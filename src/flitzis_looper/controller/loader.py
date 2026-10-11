@@ -179,6 +179,7 @@ class LoaderController(_MaterialCreationOwnership):
         self._on_stems_invalidated: Callable[[int], None] | None = None
         self._on_restored_sample_loaded: Callable[[int], bool] | None = None
         self._on_new_sample_loaded: Callable[[int, float | None], None] | None = None
+        self._on_loaded_key_lock: Callable[[int], None] | None = None
         self._on_sample_unloaded: Callable[[int], None] | None = None
         self._on_accepted_timing_refresh: Callable[[int], None] | None = None
         self._load_request_ids: dict[int, int] = {}
@@ -218,9 +219,15 @@ class LoaderController(_MaterialCreationOwnership):
             reservation.close()
         self._load_retirements.clear()
 
-    def set_new_sample_loaded_callback(self, callback: Callable[[int, float | None], None]) -> None:
+    def set_new_sample_loaded_callback(
+        self,
+        callback: Callable[[int, float | None], None],
+        *,
+        key_lock_callback: Callable[[int], None] | None = None,
+    ) -> None:
         """Register behavior that runs after a newly assigned sample finishes loading."""
         self._on_new_sample_loaded = callback
+        self._on_loaded_key_lock = key_lock_callback
 
     def bind_asset_lifecycle(self, lifecycle: ProjectAssetLifecycle) -> None:
         """Share assignment and separator owners with the application controller."""
@@ -570,7 +577,8 @@ class LoaderController(_MaterialCreationOwnership):
             defaults.pad_loop_start_s[sample_id],
             defaults.pad_loop_end_s[sample_id],
         )
-        self._audio.set_pad_key_lock(sample_id, defaults.pad_key_lock[sample_id])
+        disabled = False
+        self._audio.set_pad_key_lock(sample_id, disabled)
 
     def _handle_loader_started(self, sample_id: int, _event: dict[str, object]) -> None:
         if not self._matches_load_request(sample_id, _event):
@@ -635,6 +643,7 @@ class LoaderController(_MaterialCreationOwnership):
         timing_stale = event.get("timing_stale") is True
         if new_assignment:
             # Source adoption is complete even if a newer timing edit owns timing now.
+            self._project.pad_key_lock[sample_id] = None
             self._project.pad_key_intent[sample_id] = PadKeyIntent()
             self._key_analysis.cancel(sample_id)
             self._reset_completed_assignment(sample_id, timing_stale=timing_stale)
@@ -726,6 +735,8 @@ class LoaderController(_MaterialCreationOwnership):
         timing_stale: bool,
     ) -> None:
         """Refresh derived intent after the complete matching assignment is recorded."""
+        if self._on_loaded_key_lock is not None:
+            self._on_loaded_key_lock(sample_id)
         if self._begin_accepted_restore(
             sample_id, restored_assignment=restored_assignment, timing_stale=timing_stale
         ):

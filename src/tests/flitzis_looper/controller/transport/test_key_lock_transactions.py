@@ -149,7 +149,8 @@ def test_terminal_own_mode_error_reconciles_actual_audio_even_when_ready_was_not
     assert residency.key_lock_status(0).effective is actual_mode
     residency.poll()
     state = residency.key_lock_status(0)
-    assert state.requested is actual_mode
+    assert state.requested is True
+    assert controller.project.pad_key_lock[0] is True
     assert state.effective is actual_mode
     assert state.error == "native worker failed"
     assert not state.pending
@@ -181,7 +182,7 @@ def test_accepted_coupled_geometry_survives_own_mode_failure(
     )
     controller.transport.residency.poll()
     assert controller.project.pad_loop_end_s[0] == 7.0
-    assert not controller.project.pad_key_lock[0]
+    assert controller.project.pad_key_lock[0] is True
     assert controller.transport.residency.key_lock_status(0).error == "native worker failed"
 
 
@@ -222,7 +223,7 @@ def test_identical_pending_mode_preserves_ticket_retry_budget_and_deadline(
             assert pending.attempts == attempt
         residency.poll()
     assert audio_engine_mock.prepare_resident_control.call_count == 8
-    assert not controller.project.pad_key_lock[0]
+    assert controller.project.pad_key_lock[0] is True
     assert residency.key_lock_status(0).error == "resident admission retry limit reached"
 
 
@@ -350,7 +351,7 @@ def test_new_source_and_selection_never_inherit_old_mode_feedback(
     assert UiContext(controller).state.pads.key_lock_status(37).effective is False
     controller.transport.residency.cancel(0)
     controller.project.sample_paths[0] = "samples/reloaded.wav"
-    controller.project.pad_key_lock[0] = False
+    controller.project.pad_key_lock[0] = None
     audio_engine_mock.current_input_runtime_pad_binding.return_value = FakeInputRuntimePadBinding(
         accepted_timing={"source_id": "loaded-0-2", "source_generation": 2}
     )
@@ -439,10 +440,11 @@ def test_global_continues_after_target_reject_and_reports_actual_mixed_outcome(
     assert state.effective is None
     assert not state.pending
     assert state.error == "1 pad(s): unsupported finite processing"
-    assert [controller.project.pad_key_lock[pad] for pad in (0, 37, 215)] == [False, True, True]
+    assert [controller.project.pad_key_lock[pad] for pad in (0, 37, 215)] == [None, None, None]
+    assert all(controller.project.resolve_pad_key_lock(pad) for pad in (0, 37, 215))
 
 
-def test_local_override_and_same_global_rebroadcast_keep_other_targets_and_pending_work(
+def test_local_override_survives_same_global_rebroadcast_and_keeps_peer_pending_work(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     tickets, feedback = _all_bank_sources(controller, audio_engine_mock)
@@ -464,7 +466,11 @@ def test_local_override_and_same_global_rebroadcast_keep_other_targets_and_pendi
     controller.transport.residency.poll()
     assert controller.transport.residency._pending[37].requested.key_lock is False
     global_params.set_key_lock(enabled=True)
-    assert all(controller.project.pad_key_lock[pad] for pad in (0, 37, 215))
+    assert controller.project.pad_key_lock[37] is False
+    assert not controller.project.resolve_pad_key_lock(37)
+    assert id(controller.transport.residency._pending[37].ticket) == id(local)
+    assert controller.project.pad_key_lock[0] is None
+    assert controller.project.pad_key_lock[215] is None
     assert controller.transport.residency._pending[215] is unchanged
 
 
@@ -483,5 +489,175 @@ def test_synchronous_target_failure_does_not_abort_global_broadcast(
     assert (
         controller.transport.residency.key_lock_status(0).error == "source descriptor unavailable"
     )
-    assert controller.project.pad_key_lock[37]
-    assert controller.project.pad_key_lock[215]
+    assert controller.project.pad_key_lock[37] is None
+    assert controller.project.pad_key_lock[215] is None
+    assert controller.project.resolve_pad_key_lock(37)
+    assert controller.project.resolve_pad_key_lock(215)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_origin_changes_with_same_pending_mode_preserve_native_work_and_budget(
+    controller: AppController, audio_engine_mock: Mock, *, enabled: bool
+) -> None:
+    ticket, feedback = _mode_source(controller, audio_engine_mock)
+    feedback.update(effective=not enabled)
+    controller.project.key_lock = enabled
+    controller.transport.global_params.set_key_lock(enabled=enabled)
+    residency = controller.transport.residency
+    pending = residency._pending[0]
+    before = (pending.ticket, pending.attempts, pending.deadline)
+
+    controller.transport.pad.set_pad_key_lock(0, enabled=enabled)
+    assert controller.project.pad_key_lock[0] is enabled
+    assert residency._pending[0] is pending
+    assert pending.requested.key_lock_override is enabled
+    assert (pending.ticket, pending.attempts, pending.deadline) == before
+
+    controller.transport.pad.clear_pad_key_lock_override(0)
+    assert controller.project.pad_key_lock[0] is None
+    assert residency._pending[0] is pending
+    assert pending.requested.key_lock_override is None
+    assert (pending.ticket, pending.attempts, pending.deadline) == before
+    audio_engine_mock.prepare_resident_control.assert_called_once_with(
+        0, start_s=None, end_s=None, position_s=None, key_lock=enabled
+    )
+
+    ticket.status = "accepted"
+    feedback.update(effective=enabled, request_id=2, window_revision=2)
+    residency.poll()
+    assert residency.key_lock_status(0).effective is enabled
+    assert not residency.key_lock_status(0).pending
+    assert controller.project.pad_key_lock[0] is None
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_clear_override_with_different_mode_requires_its_own_native_confirmation(
+    controller: AppController, audio_engine_mock: Mock, *, enabled: bool
+) -> None:
+    old, feedback = _mode_source(controller, audio_engine_mock)
+    controller.project.key_lock = enabled
+    feedback.update(effective=enabled)
+    latest = Ticket()
+    latest.window_revision = 3
+    latest.key_lock_request_id = 3
+    audio_engine_mock.prepare_resident_control.side_effect = [old, latest]
+    controller.transport.pad.set_pad_key_lock(0, enabled=not enabled)
+
+    controller.transport.pad.clear_pad_key_lock_override(0)
+
+    residency = controller.transport.residency
+    assert controller.project.pad_key_lock[0] is None
+    assert residency._pending[0].requested.key_lock is enabled
+    assert id(residency._pending[0].ticket) == id(latest)
+    old.status = "accepted"
+    feedback.update(effective=not enabled, request_id=2, window_revision=2)
+    residency.poll()
+    assert residency.key_lock_status(0).pending
+    latest.status = "accepted"
+    feedback.update(effective=enabled, request_id=3, window_revision=3)
+    residency.poll()
+    assert residency.key_lock_status(0).effective is enabled
+    assert not residency.key_lock_status(0).pending
+    assert controller.project.pad_key_lock[0] is None
+
+
+def test_rejected_inherited_mode_keeps_global_origin_and_previous_native_audio(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    ticket, feedback = _mode_source(controller, audio_engine_mock)
+    controller.transport.global_params.set_key_lock(enabled=True)
+    ticket.status = "accepted"
+    feedback.update(
+        effective=False,
+        ready=False,
+        request_id=2,
+        window_revision=2,
+        state="error",
+        error="native reserve rejected",
+    )
+
+    controller.transport.residency.poll()
+
+    state = controller.transport.residency.key_lock_status(0)
+    assert controller.project.key_lock is True
+    assert controller.project.pad_key_lock[0] is None
+    assert state.requested is True
+    assert state.effective is False
+    assert not state.pending
+    assert state.error == "native reserve rejected"
+
+
+def test_synchronous_local_admission_failure_preserves_explicit_origin_and_old_mode(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    _mode_source(controller, audio_engine_mock)
+    audio_engine_mock.loaded_residency.side_effect = RuntimeError("source descriptor unavailable")
+
+    controller.transport.pad.set_pad_key_lock(0, enabled=True)
+
+    state = controller.transport.residency.key_lock_status(0)
+    assert controller.project.pad_key_lock[0] is True
+    assert state.requested is True
+    assert state.effective is False
+    assert not state.pending
+    assert state.error == "source descriptor unavailable"
+    audio_engine_mock.prepare_resident_control.assert_not_called()
+
+
+@pytest.mark.parametrize("scalar", [False, True])
+@pytest.mark.parametrize("global_action", [False, True])
+@pytest.mark.parametrize("native_state", ["waiting", "error"])
+def test_off_retires_native_only_on_work_despite_current_dry_output(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    *,
+    scalar: bool,
+    global_action: bool,
+    native_state: str,
+) -> None:
+    _ticket, feedback = _mode_source(controller, audio_engine_mock)
+    controller.project.key_lock = True
+    feedback.update(
+        effective=False,
+        ready=False,
+        state=native_state,
+        error="native worker failed" if native_state == "error" else None,
+    )
+    if scalar:
+        audio_engine_mock.loaded_residency.return_value = {"cache_backed": False}
+    assert not controller.transport.residency._pending
+
+    if global_action:
+        controller.transport.global_params.set_key_lock(enabled=False)
+    else:
+        controller.transport.pad.set_pad_key_lock(0, enabled=False)
+
+    assert controller.project.pad_key_lock[0] is (None if global_action else False)
+    assert controller.transport.residency.key_lock_status(0).requested is False
+    assert controller.transport.residency.key_lock_status(0).pending
+    if scalar:
+        disabled = False
+        audio_engine_mock.set_pad_key_lock.assert_called_once_with(0, disabled)
+    else:
+        audio_engine_mock.prepare_resident_control.assert_called_once_with(
+            0, start_s=None, end_s=None, position_s=None, key_lock=False
+        )
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_source_refresh_supersedes_queued_defaults_even_with_matching_mode_snapshot(
+    controller: AppController, audio_engine_mock: Mock, *, enabled: bool
+) -> None:
+    _ticket, feedback = _mode_source(controller, audio_engine_mock)
+    controller.project.key_lock = enabled
+    feedback.update(effective=enabled, ready=True)
+    # Load/startup scalar defaults can still be queued behind a matching source snapshot.
+    audio_engine_mock.set_pad_key_lock(0, not enabled)
+
+    controller._refresh_loaded_key_lock(0)
+
+    audio_engine_mock.prepare_resident_control.assert_called_once_with(
+        0, start_s=None, end_s=None, position_s=None, key_lock=enabled
+    )
+    assert controller.project.pad_key_lock[0] is None
+    assert controller.transport.residency.key_lock_status(0).pending

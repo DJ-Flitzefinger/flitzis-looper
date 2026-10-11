@@ -538,7 +538,8 @@ class TestAudioActions:  # noqa: PLR0904
         audio_actions.global_.toggle_key_lock()
 
         assert controller.project.key_lock is not initial_state
-        assert controller.project.pad_key_lock[3] is True
+        assert controller.project.pad_key_lock[3] is None
+        assert controller.project.resolve_pad_key_lock(3) is True
         assert not any(
             enabled
             for sample_id, enabled in enumerate(controller.project.pad_key_lock)

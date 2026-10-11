@@ -289,10 +289,13 @@ def test_selected_same_project_path_is_new_assignment_after_native_success(
     controller.project.sample_paths[0] = "samples/same.wav"
     controller.project.manual_bpm[0] = 90.0
     controller.project.manual_key[0] = "Gm"
+    controller.project.key_lock = True
+    controller.project.pad_key_lock[0] = False
     controller.project.pad_loop_start_s[0] = 20.0
     audio_engine_mock.load_sample_async.return_value = 7
     controller.loader.load_sample_async(0, "samples/same.wav")
     assert controller.project.manual_bpm[0] == 90.0
+    assert controller.project.pad_key_lock[0] is False
     audio_engine_mock.poll_loader_events.side_effect = [
         {
             "type": "success",
@@ -311,7 +314,78 @@ def test_selected_same_project_path_is_new_assignment_after_native_success(
     assert controller.project.manual_key[0] is None
     assert controller.project.pad_loop_start_s[0] == 0.0
     assert controller.project.pad_loop_auto[0] is True
+    assert controller.project.pad_key_lock[0] is None
+    assert controller.project.resolve_pad_key_lock(0) is True
     audio_engine_mock.unload_sample.assert_not_called()
+
+
+@pytest.mark.parametrize("final_default", [False, True])
+def test_new_load_inherits_global_default_at_success(
+    controller: AppController, audio_engine_mock: Mock, *, final_default: bool
+) -> None:
+    project = controller.project
+    project.key_lock = not final_default
+    project.sample_paths[0] = "samples/old.wav"
+    project.pad_key_lock[0] = not final_default
+    audio_engine_mock.load_sample_async.return_value = 7
+
+    controller.loader.load_sample_async(0, "new.wav")
+    assert project.pad_key_lock[0] is not final_default
+    controller.transport.global_params.set_key_lock(enabled=final_default)
+    assert project.pad_key_lock[0] is not final_default
+    audio_engine_mock.reset_mock()
+    audio_engine_mock.poll_loader_events.side_effect = [
+        {
+            "type": "success",
+            "id": 0,
+            "request_id": 7,
+            "cached_path": "samples/new.wav",
+            "duration_s": 32.0,
+        },
+        None,
+    ]
+
+    controller.loader.poll_loader_events()
+
+    assert project.sample_paths[0] == "samples/new.wav"
+    assert project.pad_key_lock[0] is None
+    assert project.key_lock is final_default
+    assert project.resolve_pad_key_lock(0) is final_default
+    audio_engine_mock.set_pad_key_lock.assert_called_with(0, final_default)
+
+
+@pytest.mark.parametrize("failure_stage", ["admission", "worker"])
+@pytest.mark.parametrize("override", [None, False, True])
+def test_failed_replacement_preserves_key_lock_origin(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    *,
+    failure_stage: str,
+    override: bool | None,
+) -> None:
+    project = controller.project
+    project.key_lock = True
+    project.sample_paths[0] = "samples/old.wav"
+    project.pad_key_lock[0] = override
+    before = project.model_dump()
+    audio_engine_mock.reset_mock()
+    if failure_stage == "admission":
+        audio_engine_mock.load_sample_async.side_effect = RuntimeError("cold queue full")
+    else:
+        audio_engine_mock.load_sample_async.return_value = 7
+
+    controller.loader.load_sample_async(0, "new.wav")
+    if failure_stage == "worker":
+        audio_engine_mock.poll_loader_events.side_effect = [
+            {"type": "error", "id": 0, "request_id": 7, "msg": "decode failed"},
+            None,
+        ]
+        controller.loader.poll_loader_events()
+
+    assert project.model_dump() == before
+    assert project.pad_key_lock[0] is override
+    assert project.resolve_pad_key_lock(0) is (True if override is None else override)
+    audio_engine_mock.set_pad_key_lock.assert_not_called()
 
 
 def test_restored_admission_failure_retains_assignment_and_timing_authority(
@@ -1445,6 +1519,7 @@ def test_unload_sample_resets_track_bound_pad_settings(
     """Unloading clears the persisted settings that belong to the previous track."""
     sample_id = 0
     defaults = ProjectState()
+    controller.project.key_lock = True
     controller.project.sample_paths[sample_id] = "/path/to/sample.wav"
     controller.project.sample_durations[sample_id] = 42.0
     controller.project.sample_analysis[sample_id] = SampleAnalysis(
@@ -1478,7 +1553,11 @@ def test_unload_sample_resets_track_bound_pad_settings(
     assert controller.project.sample_analysis[sample_id] == defaults.sample_analysis[sample_id]
     assert controller.project.stem_cache[sample_id] == defaults.stem_cache[sample_id]
     assert controller.project.pad_stem_mix_mode[sample_id] == defaults.pad_stem_mix_mode[sample_id]
-    assert controller.project.pad_key_lock[sample_id] == defaults.pad_key_lock[sample_id]
+    assert (
+        controller.project.pad_key_lock[sample_id],
+        controller.project.key_lock,
+        controller.project.resolve_pad_key_lock(sample_id),
+    ) == (None, True, False)
     assert controller.project.manual_bpm[sample_id] == defaults.manual_bpm[sample_id]
     assert controller.project.manual_key[sample_id] == defaults.manual_key[sample_id]
     assert controller.project.pad_gain_db[sample_id] == defaults.pad_gain_db[sample_id]

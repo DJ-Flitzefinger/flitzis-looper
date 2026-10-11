@@ -156,6 +156,14 @@ impl Harness {
         Python::attach(|py| self.probe.call_method1(py, method, (id,)).unwrap());
     }
 
+    fn assert_origin(&self, id: usize, override_mode: Option<bool>) {
+        Python::attach(|py| {
+            self.probe
+                .call_method1(py, "assert_origin", (id, override_mode))
+                .unwrap();
+        });
+    }
+
     fn ticket(&self, id: usize) -> Py<ResidentWindowTicket> {
         Python::attach(|py| {
             self.probe
@@ -422,7 +430,11 @@ fn actual_python_controller_native_failure_and_exhausted_reserve_keep_previous_d
                 voice.stretch.exhaust_warmed_reserve();
             }
         }
-        harness.local(0, true);
+        if failure == 0 {
+            harness.global(true);
+        } else {
+            harness.local(0, true);
+        }
         let ticket = harness.ticket(0);
         let request = harness.mode_request(&ticket);
         if failure == 1 {
@@ -449,6 +461,7 @@ fn actual_python_controller_native_failure_and_exhausted_reserve_keep_previous_d
             harness.failure_settled(false)
         });
         harness.assert_failure(request, false);
+        harness.assert_origin(0, if failure == 0 { None } else { Some(true) });
         for frames in [31, 1024, 1, 777] {
             let before = harness.active_frames;
             let output = harness.render(frames, true);
@@ -459,7 +472,45 @@ fn actual_python_controller_native_failure_and_exhausted_reserve_keep_previous_d
 }
 
 #[test]
-fn actual_python_controller_stopped_armed_on_start_requires_first_wet_and_rolls_back_failure() {
+fn actual_python_controller_off_during_native_only_waiting_cannot_later_become_wet() {
+    for global_action in [false, true] {
+        let mut harness = Harness::new(true, &[0]);
+        let generation = harness.start();
+        let started_identity = harness.feedback_identity();
+        let first = harness.render(128, true);
+        harness.assert_dry(&first, 0);
+        Python::attach(|py| {
+            harness
+                .probe
+                .call_method1(py, "assert_live_waiting", (0, started_identity[3]))
+                .unwrap();
+        });
+        if global_action {
+            harness.global(false);
+        } else {
+            harness.local(0, false);
+        }
+        // Dry output is not confirmation that the native ON preparation retired.
+        Python::attach(|py| {
+            harness
+                .probe
+                .call_method1(py, "assert_pending", (0, false))
+                .unwrap();
+        });
+        harness.settle(&[0], false, true);
+        harness.assert_origin(0, if global_action { None } else { Some(false) });
+        for frames in [31, 1024, 1, 777, 4096] {
+            let before = harness.active_frames;
+            let output = harness.render(frames, true);
+            harness.assert_dry(&output, before);
+            harness.assert_phase(generation);
+            assert!(!harness.callback.mixer.key_lock_for_measurement(0));
+        }
+    }
+}
+
+#[test]
+fn actual_python_controller_stopped_armed_on_start_preserves_inherited_intent_on_failure() {
     for failure in [Some(false), Some(true), None] {
         let mut harness = Harness::new(true, &[0]);
         harness.target("assert_stopped_armed", 0);
@@ -571,6 +622,7 @@ fn actual_python_controller_stopped_armed_on_start_requires_first_wet_and_rolls_
                 .unwrap()
                 .samples
         ));
+        harness.assert_origin(0, None);
     }
 }
 
@@ -745,6 +797,7 @@ fn productive_both_directions(initial: bool) {
             .call_method1(py, "assert_identical_pending", (0, !initial))
             .unwrap();
     });
+    harness.target("assert_same_pending_origin_changes", 0);
     wait_until(Duration::from_secs(10), || {
         harness.drain();
         Python::attach(|py| ticket.borrow(py).publication_status() == "accepted")
@@ -932,9 +985,21 @@ fn actual_python_global_all_banks_local_override_supersession_and_one_target_fai
             .unwrap()
     });
     harness.global(true);
-    harness.settle(&ids, true, false);
+    harness.settle(&[0, 215], true, false);
+    harness.settle(&[36], false, false);
+    harness.assert_origin(0, Some(true));
+    harness.assert_origin(36, Some(false));
+    harness.assert_origin(215, None);
     harness.global(false);
+    harness.settle(&[0], true, false);
+    harness.settle(&[36, 215], false, false);
+    harness.assert_origin(0, Some(true));
+    harness.assert_origin(36, Some(false));
+    harness.target("clear_mode", 0);
+    harness.target("clear_mode", 36);
     harness.settle(&ids, false, false);
+    harness.assert_origin(0, None);
+    harness.assert_origin(36, None);
     harness.target("unavailable_timing", 36);
     harness.drain();
     harness.global(true);
@@ -954,7 +1019,7 @@ fn actual_python_global_all_banks_local_override_supersession_and_one_target_fai
 }
 
 #[test]
-fn actual_python_pending_unload_reload_rejects_previous_source_feedback() {
+fn actual_python_pending_unload_reload_inherits_default_and_rejects_previous_source_feedback() {
     let mut harness = Harness::new(false, &[0]);
     let generation = Python::attach(|py| {
         harness
@@ -967,6 +1032,7 @@ fn actual_python_pending_unload_reload_rejects_previous_source_feedback() {
     });
     harness.local(0, true);
     let old = harness.ticket(0);
+    harness.global(true);
     harness.target("unload", 0);
     harness.drain();
     Python::attach(|py| {
@@ -993,7 +1059,7 @@ fn actual_python_pending_unload_reload_rejects_previous_source_feedback() {
                 Some(ResidentLoadHint {
                     start_s: START as f64 / f64::from(RATE),
                     end_s: END as f64 / f64::from(RATE),
-                    key_lock: false,
+                    key_lock: true,
                 }),
             ),
             harness.producer.clone(),
@@ -1023,6 +1089,25 @@ fn actual_python_pending_unload_reload_rejects_previous_source_feedback() {
             .unwrap();
         assert!(!old.borrow(py).is_current());
     });
+    harness.call0("initialize");
+    harness.settle(&[0], true, false);
+    harness.assert_origin(0, None);
+    let generation = harness.start();
+    wait_until(Duration::from_secs(10), || {
+        harness.render(257, true);
+        harness.assert_phase(generation);
+        harness.native_ready(true)
+    });
+    let before = harness.active_frames;
+    let wet = harness.render(4096, true);
+    let difference: f32 = wet
+        .iter()
+        .zip(harness.dry_oracle(before, 4096))
+        .map(|(actual, dry)| (actual - dry).abs())
+        .sum();
+    assert!(difference > 10.0 && wet.iter().map(|value| value.abs()).sum::<f32>() > 1.0);
+    harness.assert_phase(generation);
+    harness.assert_origin(0, None);
 }
 
 impl Harness {

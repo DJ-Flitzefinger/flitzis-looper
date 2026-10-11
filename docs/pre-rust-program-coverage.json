@@ -11397,10 +11397,10 @@
     },
     {
       "id": "E11-02",
-      "requirement": "Global broadcast and later pad override",
+      "requirement": "Global default inheritance and independent explicit pad override",
       "delivery_owner": "X11-KEYLOCK",
       "normative_spec": "openspec/changes/adopt-pad-owned-pcm-residency/specs/pcm-cache-residency/spec.md",
-      "acceptance_gate": "Global ON/pad OFF and global OFF/pad ON across multiple all-bank loaded pads; later explicit same global value rebroadcasts; only targeted pad changes locally; per-pad effective/pending/error follows fresh engine ACK, repeated/out-of-order results fenced. Existing pending/retry/unconfirmed/claimed-tail state reused, every target attempted despite partial failure; global mixed/error truthful.",
+      "acceptance_gate": "Global ON/pad OFF and global OFF/pad ON across multiple all-bank loaded pads; explicit ON/OFF survives later global changes, which update only inherited pads. New loads inherit current global; PAD left ON/right OFF and adjacent GLOBAL clears only override, with origin colors separate from actual audio. Nullable versioned intent and legacy loaded boolean migration round-trip. Per-pad effective/pending/error follows fresh engine ACK, repeated/out-of-order results fenced; rejection retains requested origin and old usable audio. Existing pending/retry/unconfirmed/claimed-tail state reused, every inherited target attempted despite partial failure; global mixed/error truthful.",
       "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
       "final_coverage_receipts_required": [
         "V0",

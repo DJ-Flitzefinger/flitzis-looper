@@ -44,23 +44,35 @@ class PadController:
         self._transport._mark_project_changed()
 
     def set_pad_key_lock(self, sample_id: int, *, enabled: bool) -> None:
-        """Enable or disable Key Lock for one pad."""
+        """Set explicit ON/OFF for one loaded pad, independently of global changes."""
+        self._set_key_lock_override(sample_id, override=enabled)
+
+    def clear_pad_key_lock_override(self, sample_id: int) -> None:
+        """Return one loaded pad to the current global default."""
+        self._set_key_lock_override(sample_id, override=None)
+
+    def _set_key_lock_override(self, sample_id: int, *, override: bool | None) -> None:
         validate_sample_id(sample_id)
         if self._project.sample_paths[sample_id] is None:
-            if self._project.pad_key_lock[sample_id]:
+            if self._project.pad_key_lock[sample_id] is not None:
                 disabled = False
                 self._audio.set_pad_key_lock(sample_id, disabled)
-                self._project.pad_key_lock[sample_id] = False
+                self._project.pad_key_lock[sample_id] = None
                 self._transport._mark_project_changed()
             return
 
-        self._transport.residency.set_key_lock(sample_id, enabled=enabled)
+        self._transport.residency.remember(sample_id)
+        self._project.pad_key_lock[sample_id] = override
         self._transport._mark_project_changed()
+        try:
+            self._transport.residency.apply_key_lock(sample_id)
+        except (RuntimeError, ValueError) as error:
+            self._transport.residency.report_key_lock_error(sample_id, str(error))
 
     def toggle_pad_key_lock(self, sample_id: int) -> None:
         """Toggle Key Lock for one pad."""
         validate_sample_id(sample_id)
-        self.set_pad_key_lock(sample_id, enabled=not self._project.pad_key_lock[sample_id])
+        self.set_pad_key_lock(sample_id, enabled=not self._project.resolve_pad_key_lock(sample_id))
 
     def set_manual_key(self, sample_id: int, key: str) -> None:
         """Set a pad's manual key override."""

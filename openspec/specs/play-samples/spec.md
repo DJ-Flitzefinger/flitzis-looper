@@ -129,11 +129,14 @@ The system SHALL apply the stored global speed multiplier to playback such that 
 - **THEN** the pad’s playback tempo slows down audibly
 
 ### Requirement: Lock Mode Changes Affect Playback
-The system SHALL propagate BPM lock and Key lock state changes from Python to the audio engine so that these modes affect playback.
+The system SHALL propagate BPM lock and resolved per-pad Key Lock requests from Python to the
+audio engine so accepted modes affect playback. A global Key Lock change SHALL alter only
+inheriting loaded pads' requests; explicit overrides SHALL retain their requested modes.
 
 #### Scenario: Enabling key lock affects audio processing mode
 - **GIVEN** a pad is playing
-- **WHEN** the performer enables Key lock
+- **AND** the pad inherits the disabled global Key Lock default
+- **WHEN** the performer enables the global default and Native accepts the resolved request
 - **THEN** the audio engine updates its processing mode without stopping playback
 
 ### Requirement: Per-pad BPM Metadata Is Available To The Audio Engine

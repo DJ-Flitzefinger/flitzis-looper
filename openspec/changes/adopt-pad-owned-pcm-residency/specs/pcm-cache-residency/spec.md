@@ -253,15 +253,16 @@ The system SHALL acquire all new assignment/action/version references before ret
 - **AND** native source/timing/window captures and callback ACKs SHALL be freshly acquired, never restored from durable pair metadata
 
 ### Requirement: E11-01 Live KEYLOCK mode changes preserve finite playback
-The system SHALL apply global and per-pad KEYLOCK OFF-to-ON and ON-to-OFF commands during stopped, playing and paused states through current preparation, each voice's own callback mode/window ACK and actual Native processing, preserving source position, loop geometry and continuing audio without stop or retrigger.
+The system SHALL apply resolved global-default KEYLOCK changes only to inheriting loaded pads and explicit per-pad OFF-to-ON and ON-to-OFF requests only to their addressed loaded pad during stopped, playing and paused states through current preparation, each voice's own callback mode/window ACK and actual Native processing, preserving source position, loop geometry and continuing audio without stop or retrigger.
 
 #### Scenario: Remaining contract constraints hold for every operation
 - **WHEN** the system exercises this requirement
-- **THEN** An already warmed unique Native handle MAY initially render wet from the actual current feed before a later source-specific candidate is adopted. Window/mode ACK, actual wet processing and later exact source-candidate adoption SHALL remain distinct; every later candidate SHALL still satisfy the exact output-frame/SourcePlayback/read-plan match and own permits. Actual nonneutral-rate Native wet output SHALL establish successful ON; queued intent, button color, a dry fallback or another pad's ACK SHALL NOT establish success. Effective, pending and failed UI states SHALL follow current engine feedback and reject stale completion.
+- **THEN** An already warmed unique Native handle MAY initially render wet from the actual current feed before a later source-specific candidate is adopted. Window/mode ACK, actual wet processing and later exact source-candidate adoption SHALL remain distinct; every later candidate SHALL still satisfy the exact output-frame/SourcePlayback/read-plan match and own permits. Actual nonneutral-rate Native wet output SHALL establish successful ON; queued intent, button color, a dry fallback or another pad's ACK SHALL NOT establish success. Confirmed Native/effective, pending and failed status SHALL follow current engine feedback and reject stale completion separately from requested-origin colors; rejection or observed audio SHALL NOT rewrite explicit ON/OFF/inherit intent.
 
 #### Scenario: OFF-started finite NormalLoop enables live processing
 - **GIVEN** a production k=0 finite NormalLoop started with KEYLOCK OFF at a nonunity SPEED or BPM-lock rate
-- **WHEN** global or pad ON is requested
+- **AND** the pad inherits the disabled global default or receives an addressed explicit ON request
+- **WHEN** a resolved global or pad ON request is published for that pad
 - **THEN** matching current-window preparation and native ACK SHALL precede effective ON
 - **AND** actual subsequent Native/FIFO/filter output SHALL match independent complete-PCM and raw-Native chronology beyond the first callback without a source-position jump
 
@@ -289,21 +290,40 @@ The system SHALL apply global and per-pad KEYLOCK OFF-to-ON and ON-to-OFF comman
 - **AND** the actual smoothed Native/FIFO/EQ trajectory SHALL retain the first-wet dry guard and own prewet failure baseline
 
 ### Requirement: E11-02 Explicit global broadcast and pad override
-The system SHALL broadcast every explicit global KEYLOCK action to all loaded pads, allow a later pad action to override only that pad, and broadcast a later global action again without an additional inheritance flag.
+The system SHALL retain a global boolean KEYLOCK default and nullable track-bound pad overrides.
+Global actions SHALL publish only to inherited loaded pads, retaining explicit ON/OFF overrides.
+Local actions SHALL affect only the addressed pad. Clearing its override SHALL resolve the current
+default through the existing per-pad transaction. `null` SHALL mean inheritance without another
+mutable flag. Native feedback SHALL NOT rewrite requested origin.
+
+#### Scenario: New source inherits only after matching successful completion
+- **WHEN** a matching new-source load completes successfully
+- **THEN** its prior track override SHALL clear and the latest global default SHALL resolve
+- **AND** admission failure or stale completion SHALL retain prior origin and confirmed Native state
 
 #### Scenario: Remaining contract constraints hold for every operation
 - **WHEN** the system exercises this requirement
-- **THEN** Each target SHALL settle through the same existing per-pad pending/retry/unconfirmed transaction. A target failure SHALL NOT abort remaining loaded targets or roll back successful targets; partial/mixed/unconfirmed/error global status SHALL remain visible separately from requested intent. Stale predecessor feedback SHALL NOT rewind superseding intent or new content.
+- **THEN** Each targeted inherited or addressed pad SHALL settle through the same existing per-pad pending/retry/unconfirmed transaction. A target failure SHALL NOT abort remaining targets or roll back successful targets; partial/mixed/unconfirmed/error Native status SHALL remain visible separately from requested intent. Stale predecessor feedback SHALL NOT rewind superseding intent or new content. Explicit overrides and requested-origin colors SHALL NOT be replaced by observed audio or failure baselines.
 
 #### Scenario: Global ON then one pad OFF then global ON
-- **WHEN** global ON is followed by pad4 OFF and another explicit global ON
-- **THEN** only pad4 SHALL change on its local action and the final global action SHALL address all loaded pads including pad4
+- **GIVEN** loaded pads inherit the initial disabled global default
+- **WHEN** global ON is followed by explicit pad4 OFF and another global ON action
+- **THEN** only pad4 SHALL change on its local action and it SHALL remain explicitly OFF after the final global action
+- **AND** inherited pads SHALL continue to follow the global default without acquiring explicit overrides
 - **AND** stopped, playing and paused pads SHALL expose their independently ACKed effective/pending/error status
 
 #### Scenario: Global OFF then one pad ON with out-of-order results
-- **WHEN** global OFF, pad ON and repeated toggles have queued or stale results
-- **THEN** current command ownership SHALL determine each effective result and unrelated pads SHALL retain their actual state
+- **WHEN** global OFF, explicit pad ON and later global changes have queued or stale results
+- **THEN** that pad SHALL retain explicit ON while inherited pads follow the latest default
+- **AND** current command ownership SHALL determine each confirmed Native result and unrelated pads SHALL retain their actual state
 - **AND** neither a green global intent nor a brief local blink SHALL substitute for actual successful Native output
+
+#### Scenario: Clearing a pad override restores inheritance without changing the default
+- **GIVEN** selected loaded pad4 has explicit OFF and the global default is ON
+- **WHEN** the performer activates its adjacent GLOBAL inherit action
+- **THEN** pad4 SHALL retain `null` override and request ON through its own existing transaction
+- **AND** the global default and every other pad's override SHALL remain unchanged
+- **AND** failure SHALL retain inherited origin and the previous confirmed Native state with visible error
 
 ### Requirement: E11-03 Complete source extent is independent of scratch admission
 The system SHALL prepare and verify complete FullMix, all five aligned stem WAV/PCM derivatives and mono integrity through bounded streaming blocks and disk-backed immutable generations without an artificial duration or total-PCM 1-GiB limit.

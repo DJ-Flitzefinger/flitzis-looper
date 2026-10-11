@@ -400,5 +400,5 @@ class ProjectPersistence:
             if sample_id >= len(normalized):
                 break
             if sample_path is None:
-                normalized[sample_id] = False
+                normalized[sample_id] = None
         return normalized

@@ -87,7 +87,9 @@ class AppController:
         self.loader.set_restored_sample_loaded_callback(
             self.stems.publish_restored_stem_cache_if_available
         )
-        self.loader.set_new_sample_loaded_callback(self._on_new_sample_loaded)
+        self.loader.set_new_sample_loaded_callback(
+            self._on_new_sample_loaded, key_lock_callback=self._refresh_loaded_key_lock
+        )
         self.loader.set_sample_unloaded_callback(self._on_sample_unloaded)
         self.loader.set_accepted_timing_refresh_callback(self._refresh_restored_accepted_timing)
         self.material_migration = MaterialMigrationController(
@@ -164,6 +166,12 @@ class AppController:
     def _on_new_sample_loaded(self, sample_id: int, detected_start: float | None) -> None:
         self.transport.loop.initialize_loaded_pad_defaults(sample_id, detected_start)
         self.stems.reuse_compatible_stems_on_load(sample_id)
+
+    def _refresh_loaded_key_lock(self, sample_id: int) -> None:
+        """Retire prior-source control baselines before resolving the adopted source."""
+        self.transport.residency.cancel(sample_id)
+        # A settled snapshot cannot retire scalar defaults already queued by load/startup.
+        self.transport.residency.apply_key_lock(sample_id, force=True)
 
     def _poll_audio_messages(self) -> None:
         while True:

@@ -57,7 +57,7 @@ def test_set_pad_key_lock_updates_only_one_pad(
     audio_engine_mock.set_pad_key_lock.assert_called_once_with(3, enabled)
     assert controller.project.pad_key_lock[3] is True
     assert controller.project.pad_key_lock[4] is True
-    assert controller.project.pad_key_lock[2] is False
+    assert controller.project.pad_key_lock[2] is None
 
 
 def test_toggle_pad_key_lock(controller: AppController, audio_engine_mock: Mock) -> None:
@@ -81,6 +81,7 @@ def test_set_pad_key_lock_no_op(controller: AppController, audio_engine_mock: Mo
     controller.transport.pad.set_pad_key_lock(3, enabled=False)
 
     audio_engine_mock.set_pad_key_lock.assert_not_called()
+    assert controller.project.pad_key_lock[3] is False
 
 
 def test_set_pad_key_lock_ignores_unloaded_pad(
@@ -89,7 +90,7 @@ def test_set_pad_key_lock_ignores_unloaded_pad(
     controller.transport.pad.set_pad_key_lock(3, enabled=True)
 
     audio_engine_mock.set_pad_key_lock.assert_not_called()
-    assert controller.project.pad_key_lock[3] is False
+    assert controller.project.pad_key_lock[3] is None
 
 
 def test_set_pad_key_lock_resets_stale_unloaded_pad(
@@ -101,7 +102,56 @@ def test_set_pad_key_lock_resets_stale_unloaded_pad(
     controller.transport.pad.set_pad_key_lock(3, enabled=True)
 
     audio_engine_mock.set_pad_key_lock.assert_called_once_with(3, disabled)
+    assert controller.project.pad_key_lock[3] is None
+
+
+def test_toggle_pad_key_lock_uses_inherited_requested_mode(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
+    controller.project.key_lock = True
+    controller.project.sample_paths[3] = "samples/foo.wav"
+
+    controller.transport.pad.toggle_pad_key_lock(3)
+
     assert controller.project.pad_key_lock[3] is False
+    disabled = False
+    audio_engine_mock.set_pad_key_lock.assert_called_once_with(3, disabled)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_clear_pad_key_lock_override_keeps_matching_native_mode(
+    controller: AppController, audio_engine_mock: Mock, *, enabled: bool
+) -> None:
+    controller.project.key_lock = enabled
+    controller.project.sample_paths[3] = "samples/foo.wav"
+    controller.project.pad_key_lock[3] = enabled
+    audio_engine_mock.pad_key_lock_status.return_value = {
+        "source_id": "loaded-3-1",
+        "source_generation": 1,
+        "effective": enabled,
+        "ready": True,
+    }
+
+    controller.transport.pad.clear_pad_key_lock_override(3)
+
+    assert controller.project.pad_key_lock[3] is None
+    assert controller.project.resolve_pad_key_lock(3) is enabled
+    audio_engine_mock.set_pad_key_lock.assert_not_called()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_clear_pad_key_lock_override_requests_current_global_mode(
+    controller: AppController, audio_engine_mock: Mock, *, enabled: bool
+) -> None:
+    controller.project.key_lock = enabled
+    controller.project.sample_paths[3] = "samples/foo.wav"
+    controller.project.pad_key_lock[3] = not enabled
+
+    controller.transport.pad.clear_pad_key_lock_override(3)
+
+    assert controller.project.pad_key_lock[3] is None
+    assert controller.project.resolve_pad_key_lock(3) is enabled
+    audio_engine_mock.set_pad_key_lock.assert_called_once_with(3, enabled)
 
 
 def test_poll_audio_messages_updates_session_peak(

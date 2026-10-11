@@ -286,7 +286,8 @@ def test_project_state_defaults(project_state: ProjectState) -> None:
     assert len(project_state.pad_stem_mix_mode) == NUM_SAMPLES
     assert all(mode == "full_mix" for mode in project_state.pad_stem_mix_mode)
     assert len(project_state.pad_key_lock) == NUM_SAMPLES
-    assert not any(project_state.pad_key_lock)
+    assert all(value is None for value in project_state.pad_key_lock)
+    assert project_state.key_lock_intent_version == 2
     assert len(project_state.manual_bpm) == NUM_SAMPLES
     assert all(bpm is None for bpm in project_state.manual_bpm)
     assert len(project_state.manual_key) == NUM_SAMPLES
@@ -507,23 +508,59 @@ def test_pad_key_lock_validation(project_state: ProjectState) -> None:
 
 
 def test_unloaded_pad_key_lock_normalized_on_load() -> None:
-    pad_key_lock = [False] * NUM_SAMPLES
+    pad_key_lock: list[bool | None] = [False] * NUM_SAMPLES
     pad_key_lock[3] = True
 
     project = ProjectState(pad_key_lock=pad_key_lock)
 
-    assert project.pad_key_lock[3] is False
+    assert project.pad_key_lock[3] is None
 
 
-def test_loaded_pad_key_lock_preserved_on_load() -> None:
+@pytest.mark.parametrize("override", [False, True])
+def test_loaded_legacy_pad_key_lock_preserved_as_explicit_override(*, override: bool) -> None:
     sample_paths: list[str | None] = [None] * NUM_SAMPLES
     sample_paths[3] = "samples/foo.wav"
     pad_key_lock = [False] * NUM_SAMPLES
-    pad_key_lock[3] = True
+    pad_key_lock[3] = override
 
-    project = ProjectState(sample_paths=sample_paths, pad_key_lock=pad_key_lock)
+    project = ProjectState.model_validate({
+        "sample_paths": sample_paths,
+        "pad_key_lock": pad_key_lock,
+        "key_lock": not override,
+    })
 
-    assert project.pad_key_lock[3] is True
+    assert project.key_lock_intent_version == 2
+    assert project.pad_key_lock[3] is override
+    assert project.resolve_pad_key_lock(3) is override
+    assert project.pad_key_lock[4] is None
+    project.key_lock = override
+    project.key_lock = not override
+    assert project.pad_key_lock[3] is override
+    assert project.resolve_pad_key_lock(3) is override
+
+
+@pytest.mark.parametrize("global_default", [False, True])
+def test_inherited_pad_key_lock_resolves_latest_global_default(*, global_default: bool) -> None:
+    project = ProjectState(key_lock=global_default)
+    project.sample_paths[3] = "samples/foo.wav"
+
+    assert project.pad_key_lock[3] is None
+    assert project.resolve_pad_key_lock(3) is global_default
+    project.key_lock = not global_default
+    assert project.resolve_pad_key_lock(3) is not global_default
+    assert project.pad_key_lock[3] is None
+    assert project.resolve_pad_key_lock(4) is False
+
+
+@pytest.mark.parametrize("value", [0, 1, "true", "false"])
+def test_pad_key_lock_override_rejects_coerced_booleans(value: object) -> None:
+    sample_paths: list[str | None] = [None] * NUM_SAMPLES
+    sample_paths[3] = "samples/foo.wav"
+    overrides: list[object] = [None] * NUM_SAMPLES
+    overrides[3] = value
+
+    with pytest.raises(ValidationError, match="pad_key_lock"):
+        ProjectState.model_validate({"sample_paths": sample_paths, "pad_key_lock": overrides})
 
 
 def test_stem_cache_entry_represents_expected_kinds() -> None:

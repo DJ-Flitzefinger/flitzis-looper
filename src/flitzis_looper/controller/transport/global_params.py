@@ -44,19 +44,24 @@ class GlobalParametersController:
         self._transport._mark_project_changed()
 
     def set_key_lock(self, *, enabled: bool) -> None:
-        """Broadcast this explicit intent to every loaded pad, retaining individual outcomes."""
+        """Change the default and publish only pads that inherit it."""
+        for sample_id, path in enumerate(self._project.sample_paths):
+            if path is not None and self._project.pad_key_lock[sample_id] is None:
+                self._transport.residency.remember(sample_id)
         changed = enabled != self._project.key_lock
         self._project.key_lock = enabled
 
         for sample_id in range(len(self._project.pad_key_lock)):
             if self._project.sample_paths[sample_id] is None:
-                if self._project.pad_key_lock[sample_id]:
-                    self._project.pad_key_lock[sample_id] = False
+                if self._project.pad_key_lock[sample_id] is not None:
+                    self._project.pad_key_lock[sample_id] = None
                     changed = True
+                continue
+            if self._project.pad_key_lock[sample_id] is not None:
                 continue
 
             try:
-                self._transport.pad.set_pad_key_lock(sample_id, enabled=enabled)
+                self._transport.residency.apply_key_lock(sample_id)
             except (RuntimeError, ValueError) as error:
                 self._transport.residency.report_key_lock_error(sample_id, str(error))
             changed = True

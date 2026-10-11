@@ -133,9 +133,15 @@ def test_unavailable_device_rate_cannot_authorize_finite_residency(rate: int) ->
     assert saved_resident_loop(project, 0, sample_rate_hz=rate) is None
 
 
-@pytest.mark.parametrize("key_lock", [False, True])
+@pytest.mark.parametrize("global_default", [False, True])
+@pytest.mark.parametrize("override", [None, False, True])
 def test_productive_restore_admits_saved_finite_loop_before_native_ack(
-    controller: AppController, audio_engine_mock: Mock, tmp_path: Path, *, key_lock: bool
+    controller: AppController,
+    audio_engine_mock: Mock,
+    tmp_path: Path,
+    *,
+    global_default: bool,
+    override: bool | None,
 ) -> None:
     original = tmp_path / "samples" / "long.wav"
     original.parent.mkdir()
@@ -145,7 +151,9 @@ def test_productive_restore_admits_saved_finite_loop_before_native_ack(
     project.sample_durations[0] = 600.0
     project.pad_loop_start_s[0] = 321.25
     project.pad_loop_end_s[0] = 325.25
-    project.pad_key_lock[0] = key_lock
+    project.key_lock = global_default
+    project.pad_key_lock[0] = override
+    requested = global_default if override is None else override
     before = project.model_dump()
     audio_engine_mock.reset_mock()
     audio_engine_mock.load_sample_async.return_value = 7
@@ -159,7 +167,7 @@ def test_productive_restore_admits_saved_finite_loop_before_native_ack(
         replace_assignment=True,
         resident_loop_start_s=321.25,
         resident_loop_end_s=325.25,
-        resident_key_lock=key_lock,
+        resident_key_lock=requested,
         source_intent="restore",
     )
     assert project.model_dump() == before
@@ -179,6 +187,7 @@ def test_productive_restore_admits_saved_finite_loop_before_native_ack(
     assert project.sample_durations[0] == 600.0
     assert project.pad_loop_start_s[0] == 321.25
     assert project.pad_loop_end_s[0] == 325.25
+    assert project.pad_key_lock[0] is override
     assert 0 not in controller.session.loading_sample_ids
 
 
@@ -195,8 +204,10 @@ def test_deferred_finite_restore_recaptures_latest_loop_intent(
         controller.loader._COLD_QUEUE_FULL
     )
     controller.loader.restore_samples_from_project_state()
+    assert controller.project.pad_key_lock[0] is None
     controller.project.pad_loop_start_s[0] = 321.25
     controller.project.pad_loop_end_s[0] = 325.25
+    controller.project.key_lock = True
     audio_engine_mock.load_sample_async.side_effect = None
     audio_engine_mock.load_sample_async.return_value = 9
     audio_engine_mock.poll_loader_events.return_value = None
@@ -205,6 +216,8 @@ def test_deferred_finite_restore_recaptures_latest_loop_intent(
 
     assert audio_engine_mock.load_sample_async.call_args.kwargs["resident_loop_start_s"] == 321.25
     assert audio_engine_mock.load_sample_async.call_args.kwargs["resident_loop_end_s"] == 325.25
+    assert audio_engine_mock.load_sample_async.call_args.kwargs["resident_key_lock"] is True
+    assert controller.project.pad_key_lock[0] is None
     assert controller.loader._load_request_ids[0] == 9
 
 

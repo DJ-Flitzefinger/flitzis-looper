@@ -130,6 +130,32 @@ def test_apply_key_lock_settings_skips_unloaded_pad_state(
     audio_engine_mock.set_pad_key_lock.assert_not_called()
 
 
+@pytest.mark.parametrize("global_default", [False, True])
+def test_apply_key_lock_settings_resolves_inherited_and_explicit_pad_state(
+    transport_controller: TransportController,
+    apply_project_state: ApplyProjectState,
+    audio_engine_mock: Mock,
+    *,
+    global_default: bool,
+) -> None:
+    project = transport_controller._project
+    project.key_lock = global_default
+    for sample_id, override in zip((0, 37, 215), (None, False, True), strict=True):
+        project.sample_paths[sample_id] = f"samples/{sample_id}.wav"
+        project.pad_key_lock[sample_id] = override
+    before = project.model_dump()
+
+    apply_project_state._apply_key_lock_settings(ProjectState())
+
+    enabled_pads = (0, 215) if global_default else (215,)
+    enabled = True
+    assert audio_engine_mock.set_pad_key_lock.call_args_list == [
+        call(sample_id, enabled) for sample_id in enabled_pads
+    ]
+    audio_engine_mock.set_key_lock.assert_not_called()
+    assert project.model_dump() == before
+
+
 def test_apply_per_pad_mixing_calls_gain_for_each_pad(
     transport_controller: TransportController,
     apply_project_state: ApplyProjectState,

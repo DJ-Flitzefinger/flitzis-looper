@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from flitzis_looper.constants import DEFAULT_DEMUCS_OVERLAP, DEFAULT_DEMUCS_SHIFTS
+from flitzis_looper.constants import DEFAULT_DEMUCS_OVERLAP, DEFAULT_DEMUCS_SHIFTS, NUM_SAMPLES
 from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.controller.persistence import PROJECT_CONFIG_PATH, ProjectPersistence
 from flitzis_looper.models import (
@@ -433,7 +433,7 @@ def test_missing_pad_stem_mix_mode_loads_as_full_mix(
     assert all(mode == "full_mix" for mode in loaded.pad_stem_mix_mode)
 
 
-def test_missing_pad_key_lock_loads_as_disabled(
+def test_missing_pad_key_lock_loads_as_inherited(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -448,8 +448,8 @@ def test_missing_pad_key_lock_loads_as_disabled(
 
     loaded = ProjectPersistence.from_config_path().project
     assert loaded.volume == pytest.approx(0.5)
-    assert loaded.pad_key_lock[0] is False
-    assert not any(loaded.pad_key_lock)
+    assert loaded.pad_key_lock[0] is None
+    assert all(value is None for value in loaded.pad_key_lock)
 
 
 def test_missing_demucs_quality_settings_load_defaults(
@@ -579,10 +579,10 @@ def test_pad_key_lock_persisted_per_pad(tmp_path: Path, monkeypatch: pytest.Monk
 
     loaded = ProjectPersistence.from_config_path().project
     assert loaded.pad_key_lock[3] is True
-    assert loaded.pad_key_lock[4] is False
+    assert loaded.pad_key_lock[4] is None
 
 
-def test_unloaded_pad_key_lock_saved_disabled(
+def test_unloaded_pad_key_lock_saved_as_inherited(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -595,10 +595,72 @@ def test_unloaded_pad_key_lock_saved_disabled(
     persistence.flush(now=0.0)
 
     data = json.loads((tmp_path / PROJECT_CONFIG_PATH).read_text(encoding="utf-8"))
-    assert data["pad_key_lock"][3] is False
+    assert data["pad_key_lock"][3] is None
 
     loaded = ProjectPersistence.from_config_path().project
-    assert loaded.pad_key_lock[3] is False
+    assert loaded.pad_key_lock[3] is None
+
+
+@pytest.mark.parametrize("global_default", [False, True])
+def test_key_lock_roundtrip_preserves_inheritance_and_explicit_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, global_default: bool
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = ProjectState(key_lock=global_default)
+    for sample_id, override in enumerate((None, False, True)):
+        project.sample_paths[sample_id] = f"samples/{sample_id}.wav"
+        project.pad_key_lock[sample_id] = override
+    persistence = ProjectPersistence(project)
+    persistence.mark_dirty()
+    persistence.flush(now=0.0)
+
+    data = json.loads((tmp_path / PROJECT_CONFIG_PATH).read_text(encoding="utf-8"))
+    assert data["key_lock_intent_version"] == 2
+    assert data["pad_key_lock"][:3] == [None, False, True]
+    loaded = ProjectPersistence.from_config_path().project
+    assert loaded.pad_key_lock[:3] == [None, False, True]
+    assert [loaded.resolve_pad_key_lock(pad) for pad in range(3)] == [
+        global_default,
+        False,
+        True,
+    ]
+    loaded.key_lock = not global_default
+    assert loaded.pad_key_lock[:3] == [None, False, True]
+    assert [loaded.resolve_pad_key_lock(pad) for pad in range(3)] == [
+        not global_default,
+        False,
+        True,
+    ]
+
+
+@pytest.mark.parametrize("legacy_mode", [False, True])
+def test_legacy_loaded_key_lock_preserves_audible_intent_after_save(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, legacy_mode: bool
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    data = ProjectState(key_lock=not legacy_mode).model_dump(mode="json")
+    data.pop("key_lock_intent_version")
+    data["sample_paths"][3] = "samples/foo.wav"
+    data["pad_key_lock"] = [False] * NUM_SAMPLES
+    data["pad_key_lock"][3] = legacy_mode
+    config_path = tmp_path / PROJECT_CONFIG_PATH
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+
+    persistence = ProjectPersistence.from_config_path()
+    assert persistence.project.pad_key_lock[3] is legacy_mode
+    assert persistence.project.resolve_pad_key_lock(3) is legacy_mode
+    persistence.mark_dirty()
+    persistence.flush(now=0.0)
+
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["key_lock_intent_version"] == 2
+    assert saved["pad_key_lock"][3] is legacy_mode
+    assert saved["pad_key_lock"][4] is None
+    restored = ProjectPersistence.from_config_path().project
+    restored.key_lock = legacy_mode
+    restored.key_lock = not legacy_mode
+    assert restored.resolve_pad_key_lock(3) is legacy_mode
 
 
 def test_transient_stem_generation_state_is_not_persisted(

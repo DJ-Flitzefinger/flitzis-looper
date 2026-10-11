@@ -59,7 +59,7 @@ def _frame(ctx: UiContext, scope: str, *, pad: int = 0) -> tuple[int, ...]:
 
 @pytest.mark.parametrize("scope", ["global", "pad"])
 @pytest.mark.parametrize("effective", [False, True, None])
-def test_actual_buttons_use_confirmed_colors_and_draw_pending_description(
+def test_actual_buttons_use_intent_colors_and_draw_separate_confirmed_description(
     controller: AppController,
     audio_engine_mock: Mock,
     monkeypatch: pytest.MonkeyPatch,
@@ -86,10 +86,10 @@ def test_actual_buttons_use_confirmed_colors_and_draw_pending_description(
         _frame(UiContext(controller), scope)
         descriptions.clear()
         colors = _frame(UiContext(controller), scope)
-        expected = (
-            CONTROL_RGBA if effective is None else MODE_ON_RGBA if effective else MODE_OFF_RGBA
-        )
+        expected = MODE_OFF_RGBA if effective else MODE_ON_RGBA
         assert imgui.color_convert_float4_to_u32(expected) in colors
+        actual = "unconfirmed" if effective is None else "ON" if effective else "OFF"
+        assert f"Audio {actual}" in descriptions
         assert f"Preparing {'OFF' if effective else 'ON'}…" in descriptions
         assert not controller.transport.residency._pending[0].unconfirmed
 
@@ -124,7 +124,9 @@ def test_actual_draw_exposes_error_and_claimed_unconfirmed_state(
     with _imgui_context():
         _frame(UiContext(controller), scope)
         colors = _frame(UiContext(controller), scope)
-        assert imgui.color_convert_float4_to_u32(MODE_OFF_RGBA) in colors
+        expected = MODE_OFF_RGBA if scope == "global" else MODE_ON_RGBA
+        assert imgui.color_convert_float4_to_u32(expected) in colors
+        assert "Audio OFF" in descriptions
         assert "Change unconfirmed" in descriptions
         assert any("resident native adoption is unconfirmed" in text for text in descriptions)
 
@@ -155,13 +157,14 @@ def test_actual_armed_start_draws_native_dry_readiness_without_controller_pendin
     with _imgui_context():
         _frame(UiContext(controller), scope)
         colors = _frame(UiContext(controller), scope)
-        assert imgui.color_convert_float4_to_u32(MODE_OFF_RGBA) in colors
+        assert imgui.color_convert_float4_to_u32(MODE_ON_RGBA) in colors
+        assert "Audio OFF" in descriptions
         assert "Preparing ON…" in descriptions
     assert not controller.transport.residency._pending
     assert controller.project.pad_key_lock[0]
 
 
-def test_actual_global_button_draws_mixed_pads_in_neutral_color(
+def test_actual_global_button_draws_default_and_separate_mixed_feedback(
     controller: AppController, audio_engine_mock: Mock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     resident(controller, audio_engine_mock)
@@ -181,18 +184,17 @@ def test_actual_global_button_draws_mixed_pads_in_neutral_color(
     with _imgui_context():
         _frame(UiContext(controller), "global")
         colors = _frame(UiContext(controller), "global")
-        assert imgui.color_convert_float4_to_u32(CONTROL_RGBA) in colors
+        assert imgui.color_convert_float4_to_u32(MODE_OFF_RGBA) in colors
         assert "Mixed pads" in descriptions
 
 
-@pytest.mark.parametrize("scope", ["global", "pad"])
-def test_real_mouse_click_toggles_requested_mode_during_pending(
-    controller: AppController, audio_engine_mock: Mock, scope: str
+@pytest.mark.parametrize(("scope", "mouse_button"), [("global", 0), ("pad", 0), ("pad", 1)])
+def test_real_mouse_gestures_change_requested_mode_during_pending(
+    controller: AppController, audio_engine_mock: Mock, scope: str, mouse_button: int
 ) -> None:
     resident(controller, audio_engine_mock)
     audio_engine_mock.pad_key_lock_status.return_value = _feedback()
-    controller.transport.pad.set_pad_key_lock(0, enabled=True)
-    controller.project.key_lock = True
+    controller.transport.global_params.set_key_lock(enabled=True)
     audio_engine_mock.prepare_resident_control.return_value = Ticket()
     ctx = UiContext(controller)
     with _imgui_context():
@@ -201,16 +203,15 @@ def test_real_mouse_click_toggles_requested_mode_during_pending(
         io = imgui.get_io()
         pressed, released = True, False
         io.add_mouse_pos_event(100, 35)
-        io.add_mouse_button_event(0, pressed)
+        io.add_mouse_button_event(mouse_button, pressed)
         _frame(ctx, scope)
-        io.add_mouse_button_event(0, released)
+        io.add_mouse_button_event(mouse_button, released)
         _frame(ctx, scope)
-        assert controller.project.pad_key_lock[0] is False
-        assert (
-            controller.transport.residency._pending[0].ticket
-            is audio_engine_mock.prepare_resident_control.return_value
+        override = controller.project.pad_key_lock[0]
+        assert override is (None if scope == "global" else mouse_button == 0)
+        assert audio_engine_mock.prepare_resident_control.call_count == (
+            1 if scope == "pad" and mouse_button == 0 else 2
         )
-        assert audio_engine_mock.prepare_resident_control.call_count == 2
         assert controller.transport.residency.key_lock_status(0).effective is False
         assert controller.project.key_lock is (scope != "global")
 
@@ -244,3 +245,84 @@ def test_actual_global_button_learn_capture_saves_mapping_without_toggling(
     audio_engine_mock.set_input_mapping_snapshot.assert_called_with([
         ("midi:note:1:60", "global.key_lock.toggle")
     ])
+
+
+@pytest.mark.parametrize("override", [None, False, True])
+@pytest.mark.parametrize("global_enabled", [False, True])
+def test_actual_adjacent_buttons_show_override_origin_and_global_default(
+    controller: AppController,
+    audio_engine_mock: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    override: bool | None,
+    global_enabled: bool,
+) -> None:
+    resident(controller, audio_engine_mock)
+    controller.project.key_lock = global_enabled
+    controller.project.pad_key_lock[0] = override
+    # Deliberately different audio cannot recolor control intent.
+    audio_engine_mock.pad_key_lock_status.return_value = _feedback(effective=not global_enabled)
+    native_button = imgui.button
+    button_colors: dict[str, tuple[int, ...]] = {}
+
+    def button(label: str, size: imgui.ImVec2Like) -> bool:
+        draw_list = imgui.internal.get_current_window().draw_list
+        before = len(draw_list.vtx_buffer)
+        result = native_button(label, size)
+        button_colors[label] = tuple(
+            draw_list.vtx_buffer[index].col for index in range(before, len(draw_list.vtx_buffer))
+        )
+        return result
+
+    monkeypatch.setattr(imgui, "button", button)
+    with _imgui_context():
+        _frame(UiContext(controller), "pad")
+        _frame(UiContext(controller), "pad")
+        pad_color = (
+            CONTROL_RGBA if override is None else MODE_ON_RGBA if override else MODE_OFF_RGBA
+        )
+        global_color = (
+            CONTROL_RGBA
+            if override is not None
+            else MODE_ON_RGBA
+            if global_enabled
+            else MODE_OFF_RGBA
+        )
+        assert (
+            imgui.color_convert_float4_to_u32(pad_color)
+            in button_colors["KEY LOCK PAD##pad_key_lock"]
+        )
+        assert (
+            imgui.color_convert_float4_to_u32(global_color)
+            in button_colors["GLOBAL##pad_key_lock_global"]
+        )
+
+
+@pytest.mark.parametrize("global_enabled", [False, True])
+def test_real_neighbor_global_click_clears_only_local_override(
+    controller: AppController, audio_engine_mock: Mock, *, global_enabled: bool
+) -> None:
+    resident(controller, audio_engine_mock)
+    controller.project.key_lock = global_enabled
+    controller.project.pad_key_lock[0] = not global_enabled
+    controller.project.sample_paths[37] = "samples/other.wav"
+    controller.project.pad_key_lock[37] = True
+    audio_engine_mock.pad_key_lock_status.return_value = _feedback(effective=not global_enabled)
+    ctx = UiContext(controller)
+    with _imgui_context():
+        _frame(ctx, "pad")
+        _frame(ctx, "pad")
+        io = imgui.get_io()
+        io.add_mouse_pos_event(250, 35)
+        pressed, released = True, False
+        io.add_mouse_button_event(0, pressed)
+        _frame(ctx, "pad")
+        io.add_mouse_button_event(0, released)
+        _frame(ctx, "pad")
+    assert controller.project.pad_key_lock[0] is None
+    assert controller.project.key_lock is global_enabled
+    assert controller.project.pad_key_lock[37] is True
+    assert controller.project.resolve_pad_key_lock(0) is global_enabled
+    status = controller.transport.residency.key_lock_status(0)
+    assert status.effective is not global_enabled
+    assert status.pending

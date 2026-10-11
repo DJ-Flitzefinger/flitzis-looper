@@ -450,7 +450,7 @@ def test_shutdown_invalidates_pending_launch_without_reopening_admission(
     assert audio_engine_mock.prepare_resident_control.call_count == 1
 
 
-def test_key_lock_context_shares_loop_transaction_and_rolls_back_failure(
+def test_key_lock_context_shares_loop_transaction_and_retains_rejected_intent(
     controller: AppController, audio_engine_mock: Mock
 ) -> None:
     ticket = resident(controller, audio_engine_mock)
@@ -461,7 +461,7 @@ def test_key_lock_context_shares_loop_transaction_and_rolls_back_failure(
     assert controller.project.pad_key_lock[0]
     ticket.status = "failed"
     controller.transport.residency.poll()
-    assert not controller.project.pad_key_lock[0]
+    assert controller.project.pad_key_lock[0] is True
     audio_engine_mock.set_pad_key_lock.assert_not_called()
 
 

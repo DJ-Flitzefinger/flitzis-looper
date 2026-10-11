@@ -44,7 +44,7 @@ from flitzis_looper.ui.render.bpm_entry import (
     sanitize_bpm_entry_text,
 )
 from flitzis_looper.ui.render.control_gestures import hovered_wheel_steps, item_middle_clicked
-from flitzis_looper.ui.render.key_lock import render_key_lock_button
+from flitzis_looper.ui.render.key_lock import render_pad_key_lock_buttons
 
 if TYPE_CHECKING:
     from flitzis_looper.input_mapping import PadEqBand
@@ -1028,10 +1028,12 @@ def _render_stem_controls(ctx: UiContext, info: _SidebarPadInfo) -> None:
 
 
 def _render_pad_key_lock(ctx: UiContext, pad_id: int) -> None:
-    render_key_lock_button(
+    render_pad_key_lock_buttons(
         ctx.state.pads.key_lock_status(pad_id),
-        "pad_key_lock",
-        lambda: ctx.audio.pads.toggle_pad_key_lock(pad_id),
+        override=ctx.state.pads.key_lock_override(pad_id),
+        global_enabled=ctx.state.global_.key_lock(),
+        set_override=lambda enabled: ctx.audio.pads.set_pad_key_lock(pad_id, enabled=enabled),
+        clear_override=lambda: ctx.audio.pads.clear_pad_key_lock_override(pad_id),
     )
 
 

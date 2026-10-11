@@ -192,13 +192,18 @@ source-specific candidate adoption still requires the exact output frame,
 SourcePlayback, read plan and native permits; the mode snapshot does not certify
 that adoption. Reloaded source generations cannot inherit old feedback.
 
-Explicit global actions visit all currently loaded pads across banks, including
-targets whose requested value already equals the global value. A local action
-changes only its pad; a later global action broadcasts again. Individual failures
-remain visible while other targets settle. Buttons use confirmed red/green mode
-and separately show preparation, unconfirmed, error or mixed status. Toggles use
-requested intent during preparation. The existing global keyboard/MIDI/Learn
-routes share this controller; capturing Learn does not execute a toggle.
+Global actions update the default and visit loaded inheriting pads across banks,
+including targets whose resolved value already equals that default. Explicit pad
+ON/OFF survives later global actions. `ProjectState.resolve_pad_key_lock` resolves
+the nullable override for all control/admission paths; Rust still receives a bool.
+Native feedback never rewrites that durable origin after a rejection. Individual
+failures remain visible while other targets settle. The main global button colors
+the default; the sidebar PAD button is neutral for inheritance, green for explicit
+ON and red for explicit OFF. PAD left-click sets ON and right-click sets OFF.
+Adjacent GLOBAL clears only the override; it colors the default only while inherited.
+Confirmed audio, preparation, unconfirmed, errors and mixed outcomes are shown
+separately. Existing global keyboard/MIDI/Learn routes share this controller;
+capturing Learn does not execute a toggle.
 
 These boundaries do not open finite seek/intro/tail, nonzero KEY, new Stem-set
 adoption, whole P4b/P5a, resource/music or Human hearing/visual gates.
@@ -215,9 +220,10 @@ actual device startup or hearing.
 - Per-pad Key Lock on: source-frame tempo progression remains active, and the
   varispeed block is processed through a per-voice Rubber Band LiveShifter with
   pitch scale derived from `1.0 / tempo_ratio`.
-- The global Key Lock control overwrites currently loaded pads' per-pad Key
-  Lock values. A later per-pad toggle changes only that loaded pad, and unloaded
-  pads remain disabled.
+- The global Key Lock control updates inheriting loaded pads only. Successful new
+  track assignment clears its predecessor's override and inherits the current
+  default; a failed load preserves the predecessor's intent and usable audio.
+  Unloaded native slots remain disabled, with no durable override.
 - BPM Lock off: the active tempo ratio is the global speed multiplier.
 - BPM Lock on with valid master/source timing: the active tempo ratio is
   `source_period / master_output_period`. Acknowledged accepted source timing
@@ -804,9 +810,12 @@ anchor, target delay, live scheduler policy or backend option is selected by thi
 
 ## Settings Contract
 
-Project persistence stores the global `key_lock` boolean as global-control
-intent and `pad_key_lock` as bounded loaded-pad intent. Unloaded pads are saved
-and restored with disabled per-pad Key Lock values. It does not store Rubber
+Project persistence stores the global `key_lock` boolean as default intent and
+`key_lock_intent_version: 2` with the fixed-length `pad_key_lock` override list.
+Its strict boolean entries mean explicit ON/OFF; `null` means inherit. Loaded
+legacy booleans retain their explicit values because their original provenance
+cannot be recovered. Missing legacy values inherit; unloaded entries clear to null.
+Requested intent is distinct from actual Native acceptance. It does not store Rubber
 Band handles, DLL/shared-library paths, runtime buffers, measured latency,
 algorithmic delay, or callback-internal backend state.
 
@@ -897,6 +906,44 @@ test-only nonzero k; K-META grants no native pitch, device or hearing acceptance
 
 ## Direct live KEYLOCK correction2026-10-11
 
-[E11-01/02](pre-rust-extension-20261011.md) now have the bounded X11-KEYLOCK software correction for fixed NormalLoop k=0 through actual global/pad command, current-window/native ACK and wet Native/FIFO/filter output at nonunity SPEED/BPM-lock. Global actions broadcast to loaded pads, later pad actions affect only that pad, and a later explicit same-value global action broadcasts again. Pending/error UI follows actual feedback. Hardware-free production-path, controller and draw tests cover this correction; accepted lifecycle proof remains a narrow prerequisite. Remaining whole P4b/P5a/nonzero B5 and Human app/device/visual/hearing gates remain OPEN.
+[E11-01/02](pre-rust-extension-20261011.md) have the bounded X11-KEYLOCK software
+correction for fixed NormalLoop k=0 through actual global/pad command, current-window/native ACK
+and wet Native/FIFO/filter output at nonunity SPEED/BPM-lock. The latest inheritance contract
+supersedes broadcast overwrite: explicit ON/OFF survives later globals, new tracks inherit and
+the adjacent GLOBAL action clears only the local override. Pending/error/confirmed audio remain
+separate from origin colors. Hardware-free production-path, controller and draw tests cover this
+correction; accepted lifecycle proof remains a narrow prerequisite. Remaining whole
+P4b/P5a/nonzero B5 and Human app/device/visual/hearing gates remain OPEN.
 
 The correction keeps mode/window ACK, initial wet processing through an already warmed unique handle, and later exact source-candidate adoption separate. Initial wet output need not await that later4096-frame candidate; WindowACK alone does not prove source-specific adoption. Actual current SourcePlayback/feed and matching history permits remain authoritative through pause/resume and old voices.
+
+## Inheritance validation2026-10-11
+
+The completed inheritance block uses version-2 nullable overrides and one resolver
+for global/pad intent, persistence, load completion and residency. Successful loads
+retire previous-source residency state and force a source-bound publication, including
+timing-stale loads. OFF during Native-only waiting/error cannot be mistaken for a
+settled dry mode. Failed replacement preserves current loop geometry and requested
+override origin. The sidebar draws requested origin separately from confirmed audio.
+
+Validation on local main, with no Rust production or ABI change:
+
+- Integrated controller/UI/model suites: 1,907 passed, 20 skipped. After the final
+  review fixes, the affected transport/load/timing-retirement/UI suites were rerun:
+  1,025 passed, 2 skipped. Unaffected persistence/model results were reused.
+- Actual Python-controller/Native worker tests: 10 Debug tests passed before the
+  final waiting-OFF regression; all 11 tests passed in Release afterward. These
+  exercise real nonunity wet/dry output, phase, pending failure, reload and all banks.
+- Ruff, Mypy (255 files), Cargo format/check and Release startup preflight passed.
+  The final preflight imported the existing Release extension without starting the
+  Human App. No installed `.pyd` or private settings/samples were replaced.
+- Official strict validation passed for `inherit-pad-key-lock` and the affected
+  `adopt-pad-owned-pcm-residency` change. Git whitespace checks passed.
+- One independent final review found two concrete lifecycle issues; both were fixed,
+  regression-tested and closed by the same reviewer. No findings remain in that scope.
+
+Initial regressions against old broadcast/reset expectations failed and were updated
+to the new specified behavior; an intermediate UI fixture range was corrected.
+Existing torchaudio and analysis compiler warnings remain. The skips and these
+software checks grant no App/device/hearing acceptance and close no full P4b/P5a,
+nonzero-pitch or whole-program gate.

@@ -16,6 +16,7 @@ class _ControllerFixture:
         # This uses the same variant handling as AppController._handle_message.
         self._messages = message_type
         self.project = ProjectState()
+        self.project.key_lock = initial
         self.session = SessionState()
         self.project.multi_loop = True
         self.transport = TransportController(self.project, self.session, audio)
@@ -26,13 +27,13 @@ class _ControllerFixture:
         for sample_id, path in paths:
             self.assign(sample_id, path, initial)
 
-    def assign(self, sample_id, path, initial):
+    def assign(self, sample_id, path, _initial):
         self.project.sample_paths[sample_id] = path
         self.project.sample_durations[sample_id] = self.duration
         self.project.pad_loop_auto[sample_id] = False
         self.project.pad_loop_start_s[sample_id] = self.start_s
         self.project.pad_loop_end_s[sample_id] = self.end_s
-        self.project.pad_key_lock[sample_id] = initial
+        self.project.pad_key_lock[sample_id] = None
         self.project.pad_timing_intent[sample_id] = "legacy"
 
     def initialize(self):
@@ -45,6 +46,9 @@ class _ControllerFixture:
 
     def local_mode(self, sample_id, enabled):
         self.transport.pad.set_pad_key_lock(sample_id, enabled=enabled)
+
+    def clear_mode(self, sample_id):
+        self.transport.pad.clear_pad_key_lock_override(sample_id)
 
     def start(self, sample_id):
         self.transport.playback.trigger_pad_keep_others(sample_id)
@@ -77,7 +81,7 @@ class _ControllerFixture:
 
     def failure_settled(self, sample_id, enabled, requested=None):
         if requested is None:
-            requested = enabled
+            requested = self.project.resolve_pad_key_lock(sample_id)
         state = self.transport.residency.key_lock_status(sample_id)
         return (
             state.effective is enabled
@@ -90,6 +94,7 @@ class _ControllerFixture:
         self.transport.residency.cancel(sample_id)
         self.audio.unload_sample(sample_id)
         self.project.sample_paths[sample_id] = None
+        self.project.pad_key_lock[sample_id] = None
 
     def scalar_request(self, sample_id):
         pending = self.transport.residency._pending[sample_id]
@@ -122,6 +127,29 @@ class Probe(_ControllerFixture):
         for sample_id, enabled in expected:
             assert self.settled(sample_id, enabled), (sample_id, enabled)
 
+    def assert_origin(self, sample_id, override):
+        assert self.project.pad_key_lock[sample_id] is override
+        state = self.transport.residency.key_lock_status(sample_id)
+        assert state.requested is self.project.resolve_pad_key_lock(sample_id)
+
+    def assert_same_pending_origin_changes(self, sample_id):
+        pending = self.transport.residency._pending[sample_id]
+        enabled = pending.requested.key_lock
+        before = (pending.ticket, pending.deadline, pending.attempts)
+        self.assert_origin(sample_id, enabled)
+        self.global_mode(not enabled)
+        assert self.transport.residency._pending[sample_id] is pending
+        self.assert_origin(sample_id, enabled)
+        self.global_mode(enabled)
+        self.clear_mode(sample_id)
+        self.assert_origin(sample_id, None)
+        self.local_mode(sample_id, enabled)
+        self.assert_origin(sample_id, enabled)
+        self.clear_mode(sample_id)
+        self.assert_origin(sample_id, None)
+        assert self.transport.residency._pending[sample_id] is pending
+        assert (pending.ticket, pending.deadline, pending.attempts) == before
+
     def assert_mixed(self):
         assert self.transport.global_params.key_lock_status().mixed
 
@@ -129,6 +157,8 @@ class Probe(_ControllerFixture):
         state = self.transport.residency.key_lock_status(sample_id)
         assert state.error, state
         assert state.effective is False, state
+        assert state.requested is True, state
+        self.assert_origin(sample_id, None)
         assert self.transport.global_params.key_lock_status().error
 
     def assert_native_failure(self, sample_id, request_id, enabled, requested=None):
@@ -190,6 +220,7 @@ class Probe(_ControllerFixture):
         assert feedback["effective"] is False
         assert feedback["request_id"] == 0
         assert self.transport.residency.key_lock_status(sample_id).effective is False
+        self.assert_origin(sample_id, None)
 
     def assert_scalar_enqueue_is_pending(self, sample_id):
         request = self.scalar_request(sample_id)

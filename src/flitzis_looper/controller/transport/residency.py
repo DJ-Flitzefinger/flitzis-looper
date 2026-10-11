@@ -22,6 +22,7 @@ class _Intent:
     auto: bool
     bars: float
     key_lock: bool
+    key_lock_override: bool | None
 
 
 @dataclass(slots=True)
@@ -76,6 +77,7 @@ class ResidencyController:
             self._project.pad_loop_end_s[sample_id],
             self._project.pad_loop_auto[sample_id],
             self._project.pad_loop_bars[sample_id],
+            self._project.resolve_pad_key_lock(sample_id),
             self._project.pad_key_lock[sample_id],
         )
 
@@ -165,7 +167,7 @@ class ResidencyController:
             if isinstance(feedback_error, str) and feedback_error:
                 error = error or feedback_error
         return KeyLockStatus(
-            self._project.pad_key_lock[sample_id],
+            self._project.resolve_pad_key_lock(sample_id),
             effective,
             pending=pending is not None or native_waiting,
             unconfirmed=pending is not None and pending.unconfirmed,
@@ -281,10 +283,19 @@ class ResidencyController:
             return
         self._request(sample_id, start, end)
 
-    def set_key_lock(self, sample_id: int, *, enabled: bool) -> None:
-        """Admit complete processing context before Key Lock becomes effective."""
+    def apply_key_lock(self, sample_id: int, *, force: bool = False) -> None:
+        """Admit resolved intent without changing its inherited or explicit origin."""
+        enabled = self._project.resolve_pad_key_lock(sample_id)
         self.remember(sample_id)
         previous = self._pending.get(sample_id)
+        if previous is not None:
+            # Changing origin alone retains the same native work and bounded deadline.
+            requested = self._intent(sample_id)
+            if (
+                replace(previous.requested, key_lock_override=requested.key_lock_override)
+                == requested
+            ):
+                previous.requested = requested
         if (
             self._reusable_mode_request(sample_id, previous)
             and previous is not None
@@ -292,13 +303,12 @@ class ResidencyController:
         ):
             return
         if (
-            previous is None
-            and self._project.pad_key_lock[sample_id] is enabled
-            and self._observe_mode(sample_id) is enabled
+            not force
+            and previous is None
+            and self._settled_mode(sample_id) is enabled
             and self._current_error(sample_id) is None
         ):
             return
-        self._project.pad_key_lock[sample_id] = enabled
         if (
             previous is not None
             and not previous.key_lock_only
@@ -321,6 +331,18 @@ class ResidencyController:
                 key_lock_only=True,
                 scalar=not self._cache_backed(sample_id),
             )
+
+    def _settled_mode(self, sample_id: int) -> bool | None:
+        feedback = self._mode_feedback(sample_id)
+        if (
+            feedback is None
+            or feedback["ready"] is not True
+            or feedback.get("state") == "waiting"
+            or feedback.get("error")
+        ):
+            return None
+        mode = feedback["effective"]
+        return mode if isinstance(mode, bool) else None
 
     def _reusable_mode_request(self, sample_id: int, pending: _Pending | None) -> bool:
         if (
@@ -547,7 +569,7 @@ class ResidencyController:
         self._project.pad_loop_end_s[sample_id] = intent.end
         self._project.pad_loop_auto[sample_id] = intent.auto
         self._project.pad_loop_bars[sample_id] = intent.bars
-        self._project.pad_key_lock[sample_id] = intent.key_lock
+        # Native rollback describes audio, never the performer's override origin.
         self._transport._mark_project_changed()
 
     def _fail(self, sample_id: int, pending: _Pending, error: str) -> None:

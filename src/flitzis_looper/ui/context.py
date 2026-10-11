@@ -121,9 +121,11 @@ class PadSelectors:  # noqa: PLR0904 - selector facade intentionally mirrors pad
 
     def key_lock(self, pad_id: int) -> bool:
         """Return requested intent; confirmed presentation uses key_lock_status."""
-        if self._project.sample_paths[pad_id] is None:
-            return False
-        return bool(self._project.pad_key_lock[pad_id])
+        return self._project.resolve_pad_key_lock(pad_id)
+
+    def key_lock_override(self, pad_id: int) -> bool | None:
+        """Return explicit pad intent, or None for global inheritance."""
+        return self._project.pad_key_lock[pad_id]
 
     def key_lock_status(self, pad_id: int) -> KeyLockStatus:
         """Return this pad's source-bound confirmed/pending/error processing state."""
@@ -232,6 +234,10 @@ class GlobalSelectors:
         self._controller = controller
         self._project = project
         self._session = session
+
+    def key_lock(self) -> bool:
+        """Return the global default, independently of each pad's audio confirmation."""
+        return self._project.key_lock
 
     def key_lock_status(self) -> KeyLockStatus:
         """Return the aggregate confirmed/pending/mixed state of loaded targets."""
@@ -411,6 +417,14 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
 
     def toggle_pad_key_lock(self, pad_id: int) -> None:
         self._controller.transport.pad.toggle_pad_key_lock(pad_id)
+
+    def set_pad_key_lock(self, pad_id: int, *, enabled: bool) -> None:
+        """Set one explicit pad processing choice."""
+        self._controller.transport.pad.set_pad_key_lock(pad_id, enabled=enabled)
+
+    def clear_pad_key_lock_override(self, pad_id: int) -> None:
+        """Apply the global default without changing it."""
+        self._controller.transport.pad.clear_pad_key_lock_override(pad_id)
 
 
 class StemAudioActions:

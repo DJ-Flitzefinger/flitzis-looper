@@ -58,7 +58,7 @@ def saved_resident_loop(
         end = start + 1.0 / sample_rate_hz
     if not math.isfinite(end) or end <= start:
         return None
-    return SavedResidentLoop(start, end, project.pad_key_lock[sample_id])
+    return SavedResidentLoop(start, end, project.resolve_pad_key_lock(sample_id))
 
 
 def _saved_period_origin(
