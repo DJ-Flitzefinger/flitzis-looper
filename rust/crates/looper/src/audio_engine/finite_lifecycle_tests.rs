@@ -16,9 +16,13 @@ pub(crate) struct AlgebraicClock {
     target: f64,
     until_step: usize,
     transition: Option<(SampleBuffer, f64)>,
+    physical_region: Option<(usize, usize)>,
 }
 
 impl AlgebraicClock {
+    pub(crate) fn ratio_for_test(&self) -> f64 {
+        self.ratio
+    }
     pub(crate) fn new(period: f64, ratio: f64) -> Self {
         Self {
             whole: 0,
@@ -29,6 +33,14 @@ impl AlgebraicClock {
             target: ratio,
             until_step: 0,
             transition: None,
+            physical_region: None,
+        }
+    }
+
+    pub(crate) fn physical(start: usize, end: usize, ratio: f64) -> Self {
+        Self {
+            physical_region: Some((start, end)),
+            ..Self::new((end - start) as f64, ratio)
         }
     }
 
@@ -44,7 +56,7 @@ impl AlgebraicClock {
         self.elapsed = 0;
     }
 
-    fn set_target(&mut self, target: f64) {
+    pub(crate) fn set_target(&mut self, target: f64) {
         self.target = target;
         self.until_step = 0;
     }
@@ -54,7 +66,7 @@ impl AlgebraicClock {
         self.period = period;
     }
 
-    fn begin_chunk(&mut self, maximum: usize) -> usize {
+    pub(crate) fn begin_chunk(&mut self, maximum: usize) -> usize {
         if self.until_step == 0 && self.ratio != self.target {
             self.rebase();
             self.ratio = if (self.target - self.ratio).abs() <= 0.05 {
@@ -71,7 +83,7 @@ impl AlgebraicClock {
         }
     }
 
-    fn advance(&mut self, frames: usize) {
+    pub(crate) fn advance(&mut self, frames: usize) {
         self.elapsed += frames;
         self.until_step = self.until_step.saturating_sub(frames);
         if let Some((_, consumed)) = &mut self.transition {
@@ -83,6 +95,14 @@ impl AlgebraicClock {
     }
 
     fn sample(&self, target: &SampleBuffer, offset: usize) -> f32 {
+        if let Some((start, end)) = self.physical_region {
+            let phase = self.phase(offset);
+            let left = start + phase.floor() as usize;
+            let right = if left + 1 == end { start } else { left + 1 };
+            let fraction = phase.fract() as f32;
+            return target.samples[left]
+                + (target.samples[right] - target.samples[left]) * fraction;
+        }
         musical_sample_from_knots(self.period, self.phase(offset), |frame| {
             self.transition
                 .as_ref()
@@ -92,6 +112,16 @@ impl AlgebraicClock {
                 })
         })
     }
+
+    pub(crate) fn dry(&mut self, source: &SampleBuffer, frames: usize) -> Vec<f32> {
+        let mut result = Vec::with_capacity(frames);
+        while result.len() < frames {
+            let count = self.begin_chunk(frames - result.len());
+            result.extend((0..count).map(|offset| self.sample(source, offset)));
+            self.advance(count);
+        }
+        result
+    }
 }
 
 pub(crate) struct RawChronology {
@@ -99,9 +129,13 @@ pub(crate) struct RawChronology {
     input: VecDeque<f32>,
     output: VecDeque<f32>,
     pitch: f64,
+    pub(crate) used: bool,
 }
 
 impl RawChronology {
+    pub(crate) fn block_size(&self) -> usize {
+        self.native.block_size()
+    }
     pub(crate) fn new(ratio: f64, prepared: bool) -> Self {
         let mut native = RubberBandLiveShifter::new(LIFECYCLE_RATE, 1).unwrap();
         let pitch = pitch_scale_for_tempo_ratio(ratio);
@@ -117,6 +151,7 @@ impl RawChronology {
             input: VecDeque::new(),
             output,
             pitch,
+            used: false,
         }
     }
 
@@ -141,6 +176,7 @@ impl RawChronology {
                 let input = vec![self.input.drain(..block).collect::<Vec<_>>()];
                 let mut output = vec![vec![0.0; block]];
                 self.native.shift(&input, &mut output).unwrap();
+                self.used = true;
                 self.output.extend(output[0].iter().copied());
             }
             assert!(self.output.len() >= count);
@@ -201,6 +237,8 @@ struct LifecycleOracle {
     output_frame: u64,
     adoptions: usize,
     audible: bool,
+    wet: bool,
+    dry_warm_remaining: usize,
 }
 
 impl LifecycleOracle {
@@ -225,6 +263,8 @@ impl LifecycleOracle {
             output_frame: 0,
             adoptions: 0,
             audible: false,
+            wet: true,
+            dry_warm_remaining: 0,
         }
     }
 
@@ -289,15 +329,18 @@ impl LifecycleOracle {
             output_frame: 0,
             adoptions: 0,
             audible: false,
+            wet: true,
+            dry_warm_remaining: 0,
         }
     }
 
     fn render(&mut self, frames: usize) {
         reset_tap_observation_for_test();
         let actual = render(&mut self.actual, Some(self.output_frame), frames);
-        assert!(self.actual.pad_key_lock_enabled[0]);
-        assert!(
+        assert_eq!(self.actual.pad_key_lock_enabled[0], self.wet);
+        assert_eq!(
             voice(&self.actual).stretch.productive_history().is_some(),
+            self.wet,
             "finite lifecycle took a dry path at {}",
             self.output_frame
         );
@@ -313,13 +356,19 @@ impl LifecycleOracle {
             "complete PCM at {}",
             self.output_frame
         );
+        let mut dry_clock = self.clock.clone();
+        let dry = dry_clock.dry(&self.source, frames);
         let prefix = self.checkpoint.as_ref().map_or(frames, |checkpoint| {
             checkpoint
                 .target
                 .saturating_sub(self.output_frame)
                 .min(frames as u64) as usize
         });
-        let mut expected = self.raw.render(&self.source, &mut self.clock, prefix);
+        let mut expected = if self.wet {
+            self.raw.render(&self.source, &mut self.clock, prefix)
+        } else {
+            self.clock.dry(&self.source, prefix)
+        };
         if prefix < frames {
             let checkpoint = self.checkpoint.take().unwrap();
             self.raw = checkpoint.raw;
@@ -333,6 +382,9 @@ impl LifecycleOracle {
             );
             self.adoptions += 1;
         }
+        let warm = frames.min(self.dry_warm_remaining);
+        expected[..warm].copy_from_slice(&dry[..warm]);
+        self.dry_warm_remaining -= warm;
         for (offset, (actual, upstream)) in actual.iter().zip(expected).enumerate() {
             self.filter.begin_frame();
             let expected = self.filter.process_sample(0, upstream);
@@ -363,6 +415,7 @@ impl LifecycleOracle {
     }
 
     fn request(&mut self) -> usize {
+        assert!(self.wet);
         assert!(self.checkpoint.is_none());
         self.clock.begin_chunk(1);
         let mut prepared_clock = self.clock.clone();
@@ -396,6 +449,27 @@ impl LifecycleOracle {
             raw,
         });
         address
+    }
+
+    fn mode(&mut self, enabled: bool) {
+        let position = voice(&self.actual).source_playback.clone();
+        let generation = voice(&self.actual).generation;
+        let region = voice(&self.actual).source_loop_region;
+        for mixer in [&mut self.actual, &mut self.complete] {
+            mixer.set_pad_key_lock(0, enabled);
+            assert_eq!(mixer.pad_key_lock_enabled[0], enabled);
+        }
+        assert!(voice(&self.actual).source_playback.matches_exact(&position));
+        assert_eq!(voice(&self.actual).generation, generation);
+        assert_eq!(voice(&self.actual).source_loop_region, region);
+        self.checkpoint = None;
+        if enabled && !self.wet {
+            self.raw = RawChronology::new(self.clock.ratio, false);
+            self.dry_warm_remaining = self.raw.block_size();
+        } else if !enabled {
+            self.dry_warm_remaining = 0;
+        }
+        self.wet = enabled;
     }
 
     fn through_checkpoint(&mut self) {
@@ -485,6 +559,136 @@ fn finite_pause_before_and_after_preparation_keeps_wet_chronology_through_new_ra
         assert_eq!(voice(&oracle.actual).source_playback.tempo_ratio(), 1.97);
         assert_eq!(oracle.adoptions, 4);
         assert!(oracle.audible);
+    }
+}
+
+#[test]
+fn finite_live_modes_selected_stems_bpm_smoothing_and_retained_ramps_keep_raw_eq_chronology() {
+    for period in [1499.75, 1500.25] {
+        for selected in [false, true] {
+            for retained in [false, true] {
+                let mut oracle = LifecycleOracle::resident_stems(period, 0.73, selected);
+                oracle.mode(false);
+                oracle.render(77);
+                let source_period = musical_projection(LIFECYCLE_RATE, period).period_seconds;
+                let master_period = source_period / 0.73;
+                for mixer in [&mut oracle.actual, &mut oracle.complete] {
+                    mixer.set_bpm_lock(true);
+                    mixer.set_master_period(master_period);
+                }
+                oracle.clock.set_target(source_period / master_period);
+                // Reverse the selected committed four-component mode. Both current ramp
+                // sides remain real inputs when KEYLOCK is enabled partway through it.
+                let outgoing = oracle.source.clone();
+                let target = if selected {
+                    oracle.complete.sample_bank[0].as_ref().unwrap().clone()
+                } else {
+                    let stems = oracle.complete.prepared_stems[0].as_ref().unwrap();
+                    SampleBuffer {
+                        residency: None,
+                        channels: 1,
+                        samples: (0..stems.frame_count)
+                            .map(|frame| {
+                                stems.stems[1].samples[frame] + stems.stems[3].samples[frame]
+                            })
+                            .collect::<Vec<_>>()
+                            .into(),
+                    }
+                };
+                for mixer in [&mut oracle.actual, &mut oracle.complete] {
+                    if selected {
+                        assert!(mixer.set_stem_mix_mode(0, StemMixMode::FullMix, 0));
+                    } else {
+                        assert!(mixer.set_stem_enabled_mask(0, 10, 37));
+                        assert!(mixer.set_stem_mix_mode(0, StemMixMode::AllStems, 37));
+                    }
+                }
+                oracle.source = target;
+                oracle.clock.transition = Some((outgoing, 0.0));
+                oracle.render(56);
+                if retained {
+                    let replacement = SampleBuffer {
+                        residency: None,
+                        channels: 1,
+                        samples: vec![-0.23; 16_000].into(),
+                    }
+                    .with_complete_source(LIFECYCLE_RATE);
+                    for mixer in [&mut oracle.actual, &mut oracle.complete] {
+                        mixer.input_runtime_ownership.publish_source(
+                            0,
+                            &replacement,
+                            LIFECYCLE_RATE,
+                            4,
+                        );
+                        assert!(mixer.load_sample_rt(
+                            0,
+                            replacement.clone(),
+                            &mut ImmediateAudioBufferRetirement
+                        ));
+                        assert!(
+                            voice(mixer)
+                                .frozen_stems
+                                .as_ref()
+                                .unwrap()
+                                .transition
+                                .is_active()
+                        );
+                    }
+                }
+                let generation = voice(&oracle.actual).generation;
+                let original_source = voice(&oracle.actual)
+                    .sample
+                    .as_ref()
+                    .unwrap()
+                    .source_address();
+                oracle.mode(true);
+                for frames in [31, 40, 96] {
+                    oracle.render(frames);
+                }
+                assert!(oracle.clock.transition.is_none());
+                oracle.request();
+                oracle.through_checkpoint();
+                oracle.mode(false);
+                oracle.render(257);
+                let faster_master = master_period / 1.6;
+                for mixer in [&mut oracle.actual, &mut oracle.complete] {
+                    mixer.set_master_period(faster_master);
+                    mixer.pause_sample_at_output_frame(0, oracle.output_frame);
+                }
+                oracle.clock.set_target(source_period / faster_master);
+                oracle.mode(true);
+                let frozen = voice(&oracle.actual).source_playback;
+                for mixer in [&mut oracle.actual, &mut oracle.complete] {
+                    assert!(
+                        render(mixer, Some(oracle.output_frame), 389)
+                            .iter()
+                            .all(|sample| *sample == 0.0)
+                    );
+                }
+                assert!(voice(&oracle.actual).source_playback.matches_exact(&frozen));
+                oracle.output_frame += 389;
+                for mixer in [&mut oracle.actual, &mut oracle.complete] {
+                    mixer.resume_sample_at_output_frame(0, oracle.output_frame);
+                }
+                oracle.request();
+                oracle.through_checkpoint();
+                assert_eq!(voice(&oracle.actual).generation, generation);
+                assert_eq!(
+                    voice(&oracle.actual)
+                        .sample
+                        .as_ref()
+                        .unwrap()
+                        .source_address(),
+                    original_source
+                );
+                assert_eq!(
+                    voice(&oracle.actual).source_timing.accepted,
+                    Some(musical_projection(LIFECYCLE_RATE, period))
+                );
+                assert_eq!(oracle.adoptions, 2);
+                assert!(oracle.audible);
+            }
+        }
     }
 }
 

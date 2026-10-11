@@ -13,6 +13,7 @@ from flitzis_looper.controller.current_timing import (
     CurrentPadTiming,
     UnresolvedTiming,
 )
+from flitzis_looper.controller.transport.key_lock_status import KeyLockStatus
 from flitzis_looper.controller.validation import ensure_finite, normalize_bpm
 from flitzis_looper.models import (
     LEGACY_TRIGGER_QUANTIZATION_TO_STEP,
@@ -43,7 +44,7 @@ class GlobalParametersController:
         self._transport._mark_project_changed()
 
     def set_key_lock(self, *, enabled: bool) -> None:
-        """Enable or disable Key Lock mode."""
+        """Broadcast this explicit intent to every loaded pad, retaining individual outcomes."""
         changed = enabled != self._project.key_lock
         self._project.key_lock = enabled
 
@@ -54,16 +55,35 @@ class GlobalParametersController:
                     changed = True
                 continue
 
-            if self._project.pad_key_lock[sample_id] is enabled:
-                continue
-
-            self._transport.pad.set_pad_key_lock(sample_id, enabled=enabled)
+            try:
+                self._transport.pad.set_pad_key_lock(sample_id, enabled=enabled)
+            except (RuntimeError, ValueError) as error:
+                self._transport.residency.report_key_lock_error(sample_id, str(error))
             changed = True
 
         if not changed:
             return
 
         self._transport._mark_project_changed()
+
+    def key_lock_status(self) -> KeyLockStatus:
+        """Summarize current per-target confirmations across all banks without rolling them back."""
+        states = [
+            self._transport.residency.key_lock_status(sample_id)
+            for sample_id, path in enumerate(self._project.sample_paths)
+            if path is not None
+        ]
+        modes = {state.effective for state in states}
+        effective = next(iter(modes)) if len(modes) == 1 else None
+        errors = [state.error for state in states if state.error]
+        return KeyLockStatus(
+            self._project.key_lock,
+            effective,
+            pending=any(state.pending for state in states),
+            unconfirmed=any(state.unconfirmed for state in states),
+            error=f"{len(errors)} pad(s): {errors[0]}" if errors else None,
+            mixed=len(modes) > 1,
+        )
 
     def set_bpm_lock(self, *, enabled: bool) -> None:
         """Enable or disable BPM Lock mode."""

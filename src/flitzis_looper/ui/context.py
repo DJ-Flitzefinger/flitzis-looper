@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
     from flitzis_looper.controller import AppController
     from flitzis_looper.controller.current_timing import CurrentPadTiming
+    from flitzis_looper.controller.transport.key_lock_status import KeyLockStatus
     from flitzis_looper.models import (
         ProjectState,
         SampleAnalysis,
@@ -118,9 +119,14 @@ class PadSelectors:  # noqa: PLR0904 - selector facade intentionally mirrors pad
         return self._controller.transport.pad.effective_key(pad_id)
 
     def key_lock(self, pad_id: int) -> bool:
+        """Return requested intent; confirmed presentation uses key_lock_status."""
         if self._project.sample_paths[pad_id] is None:
             return False
         return bool(self._project.pad_key_lock[pad_id])
+
+    def key_lock_status(self, pad_id: int) -> KeyLockStatus:
+        """Return this pad's source-bound confirmed/pending/error processing state."""
+        return self._controller.transport.residency.key_lock_status(pad_id)
 
     def effective_loop_region(
         self,
@@ -225,6 +231,10 @@ class GlobalSelectors:
         self._controller = controller
         self._project = project
         self._session = session
+
+    def key_lock_status(self) -> KeyLockStatus:
+        """Return the aggregate confirmed/pending/mixed state of loaded targets."""
+        return self._controller.transport.global_params.key_lock_status()
 
     def effective_bpm(self) -> float | None:
         """Return the current effective global BPM."""

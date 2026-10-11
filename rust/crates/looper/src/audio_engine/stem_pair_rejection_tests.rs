@@ -95,10 +95,11 @@ impl PlayingFirstPad {
             .unwrap()
             .push(ControlParameterMessage::SetMasterPeriod(0.5))
             .unwrap();
+        let callback = harness.callback.as_mut();
         crate::audio_engine::audio_stream::drain_parameter_messages(
             &mut parameter_consumer,
-            &mut harness.callback.mixer,
-            &mut harness.callback.transport,
+            &mut callback.mixer,
+            &mut callback.transport,
         );
         assert!(parameter_consumer.is_empty());
 
@@ -322,11 +323,12 @@ impl PlayingFirstPad {
         assert!(self.harness.callback.mixer.key_lock_for_measurement(0));
         let mut output = [0.0; 4];
         let mut peaks = [0.0; NUM_SAMPLES];
-        self.harness.callback.mixer.render_rt_at_output_frame(
+        let callback = self.harness.callback.as_mut();
+        callback.mixer.render_rt_at_output_frame(
             &mut output,
             &mut peaks,
             0,
-            &mut self.harness.callback.retirement,
+            &mut callback.retirement,
         );
         assert!(output.iter().all(|value| value.is_finite()));
         assert!(
@@ -472,10 +474,11 @@ fn actual_legacy_bpm_or_origin_edit_before_own_ack_rejects_stopped_pad2_pair() {
             let parameters = Arc::new(Mutex::new(parameters));
             constant_timing::publish_legacy_bpm(&rig.harness.engine, &parameters, 1, Some(121.0))
                 .unwrap();
+            let callback = rig.harness.callback.as_mut();
             crate::audio_engine::audio_stream::drain_parameter_messages(
                 &mut parameter_consumer,
-                &mut rig.harness.callback.mixer,
-                &mut rig.harness.callback.transport,
+                &mut callback.mixer,
+                &mut callback.transport,
             );
             assert!(parameter_consumer.is_empty());
         }
@@ -720,7 +723,7 @@ fn reopen_first_created_selection(root: &Path, fixture: &Value, config: &Path) {
     let engine = Arc::new(AudioEngine::new().unwrap());
     assert!(engine.sample_cache.lock().unwrap()[1].is_none());
     let previous = old(&engine);
-    let mut callback = Callback::new(&engine, &previous);
+    let mut callback = Box::new(Callback::new(&engine, &previous));
     callback.mixer.stop_sample(0);
     let (producer, mut consumer) = rtrb::RingBuffer::new(8);
     let producer = Arc::new(Mutex::new(producer));
@@ -1392,9 +1395,15 @@ assert reopened.project.pad_content[1] == second_content_before
     );
     let mut output = [0.0; 4];
     let mut peaks = [0.0; NUM_SAMPLES];
-    callback
-        .mixer
-        .render_rt_at_output_frame(&mut output, &mut peaks, 0, &mut callback.retirement);
+    {
+        let callback = callback.as_mut();
+        callback.mixer.render_rt_at_output_frame(
+            &mut output,
+            &mut peaks,
+            0,
+            &mut callback.retirement,
+        );
+    }
     assert!(output.iter().all(|value| value.is_finite()));
     assert!(peaks[0] > 0.0);
     assert_complete_selection(&root, &fixture["first"]["selection"]);

@@ -101,6 +101,40 @@ def test_learn_saves_tap_bpm_mapping(controller: AppController) -> None:
     assert controller.session.input_learn_active is False
 
 
+@pytest.mark.parametrize("source", ["keyboard", "midi"])
+def test_mapped_global_key_lock_uses_existing_broadcast_and_learn_suppresses_it(
+    controller: AppController, audio_engine_mock: Mock, source: str
+) -> None:
+    controller.project.sample_paths[0] = "samples/current.wav"
+    controller.project.sample_paths[37] = "samples/another-bank.wav"
+    controller.input_mapping.set_enabled(enabled=True)
+    binding = KeyboardBinding(key_name="A").key if source == "keyboard" else "midi:note:1:60"
+    controller.input_mapping.save_mapping(source, binding, LooperAction.toggle_key_lock())
+
+    def deliver() -> None:
+        if source == "keyboard":
+            controller.input_mapping.capture_keyboard_input(
+                KeyboardBinding.from_key(binding), text_input_focused=False
+            )
+        else:
+            controller.input_mapping._handle_rust_input_event({
+                "source": "midi",
+                "binding_key": binding,
+                "action_key": "global.key_lock.toggle",
+            })
+
+    deliver()
+    assert controller.project.key_lock
+    assert controller.project.pad_key_lock[0]
+    assert controller.project.pad_key_lock[37]
+    assert audio_engine_mock.set_pad_key_lock.call_count == 2
+    controller.input_mapping.toggle_learn()
+    deliver()
+    assert controller.project.key_lock
+    assert audio_engine_mock.set_pad_key_lock.call_count == 2
+    assert controller.session.input_learn_pending_binding_key == binding
+
+
 def test_learn_saves_master_volume_mapping(controller: AppController) -> None:
     ctx = UiContext(controller)
     controller.input_mapping.set_enabled(enabled=True)

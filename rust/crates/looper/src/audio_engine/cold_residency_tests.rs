@@ -4,6 +4,9 @@
 #[path = "resident_control_worker_tests.rs"]
 mod resident_control_worker_tests;
 
+#[path = "keylock_controller_worker_tests.rs"]
+mod keylock_controller_worker_tests;
+
 #[path = "stem_publication_tests.rs"]
 mod stem_publication_tests;
 

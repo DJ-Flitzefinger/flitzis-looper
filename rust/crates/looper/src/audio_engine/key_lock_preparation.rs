@@ -84,6 +84,8 @@ pub(crate) struct KeyLockPreparationLane {
     source_epoch: Arc<AtomicU64>,
     completed_request: Arc<AtomicU64>,
     worker_failed: Arc<AtomicBool>,
+    #[cfg(test)]
+    reserve_withheld: bool,
 }
 
 pub(crate) enum SourceExchange {
@@ -93,6 +95,21 @@ pub(crate) enum SourceExchange {
 }
 
 impl KeyLockPreparationLane {
+    pub(crate) fn worker_failed(&self) -> bool {
+        self.worker_failed.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn warmed_reserve_available(&self) -> bool {
+        #[cfg(test)]
+        if self.reserve_withheld {
+            return false;
+        }
+        !self.worker_failed.load(Ordering::Acquire)
+            && self.state.pending_return.is_none()
+            && !self.state.ready.is_empty()
+            && self.state.recycle.slots() != 0
+    }
+
     pub(crate) fn source_epoch_owner(&self) -> &Arc<AtomicU64> {
         &self.source_epoch
     }
@@ -287,12 +304,24 @@ impl KeyLockPreparationLane {
         self.worker_failed.store(true, Ordering::Release);
     }
 
+    #[cfg(test)]
+    pub(crate) fn withhold_warmed_reserve(&mut self) {
+        // Hold the actual ready owner instead of recycling it, so the worker cannot replenish
+        // the lane. Test setup and final destruction run outside callback rendering.
+        self.state.pending_return = self.state.ready.pop().ok();
+        self.reserve_withheld = true;
+    }
+
     pub(crate) fn take_initial(&mut self) -> Option<RubberBandLiveShifter> {
         self.state.take_initial()
     }
 
     /// Exchange a used handle only when a warmed reserve and recycle capacity are both available.
     pub(crate) fn exchange(&mut self, current: &mut Option<RubberBandLiveShifter>) -> bool {
+        #[cfg(test)]
+        if self.reserve_withheld {
+            return false;
+        }
         if self.worker_failed.load(Ordering::Acquire) {
             return false;
         }
@@ -546,6 +575,8 @@ pub(crate) fn create_key_lock_preparation(
             source_epoch: source_epoch.clone(),
             completed_request: completed_request.clone(),
             worker_failed: worker_failed.clone(),
+            #[cfg(test)]
+            reserve_withheld: false,
         });
         worker_lanes.push(WorkerLane {
             ready: ready_producer,

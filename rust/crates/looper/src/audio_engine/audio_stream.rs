@@ -1449,6 +1449,15 @@ pub(super) fn process_control_message<
         ControlMessage::SetPadKeyLock { id, enabled } => {
             mixer.set_pad_key_lock(id, enabled);
         }
+        ControlMessage::SetPadKeyLockRequest {
+            id,
+            enabled,
+            request_id,
+            binding,
+            source_generation,
+        } => {
+            mixer.set_pad_key_lock_request(id, enabled, request_id, binding, source_generation);
+        }
         #[cfg(test)]
         ControlMessage::SetPadTimingMetadata { id, metadata } => {
             mixer.set_pad_timing_metadata(id, metadata);
@@ -1485,6 +1494,23 @@ pub(super) fn process_control_message<
             mixer.seek_sample_at_output_frame(id, position_s, callback_start_frame);
         }
     }
+}
+
+/// Construct the callback's unique mixer owner on the control thread. Keeping the owner
+/// boxed prevents CPAL's generic callback setup from moving copies of its fixed pad/voice
+/// storage through the startup stack; rendering only borrows this preallocated owner.
+fn create_stream_mixer(
+    channels: usize,
+    sample_rate_hz: u32,
+    current_timing_acknowledgements: Arc<CurrentTimingAcknowledgements>,
+    input_runtime_ownership: Arc<super::input_runtime_binding::InputRuntimeOwnership>,
+    prepared_source_epochs: Vec<Arc<std::sync::atomic::AtomicU64>>,
+) -> Result<Box<RtMixer>, super::key_lock_preparation::KeyLockPreparationError> {
+    let mut mixer = Box::new(RtMixer::try_new(channels, sample_rate_hz as f32)?);
+    mixer.set_current_timing_acknowledgements(current_timing_acknowledgements);
+    mixer.set_input_runtime_ownership(input_runtime_ownership);
+    mixer.set_prepared_source_epochs(prepared_source_epochs);
+    Ok(mixer)
 }
 
 /// Create and configure the audio stream
@@ -1539,10 +1565,13 @@ pub fn create_audio_stream(
     // Create ring buffer for outgoing messages (Rust->Python)
     let (mut producer_out, consumer_out) = RingBuffer::new(1024);
 
-    let mut mixer = RtMixer::try_new(channels as usize, sample_rate_hz as f32)?;
-    mixer.set_current_timing_acknowledgements(current_timing_acknowledgements);
-    mixer.set_input_runtime_ownership(input_runtime_ownership);
-    mixer.set_prepared_source_epochs(prepared_source_epochs);
+    let mut mixer = create_stream_mixer(
+        channels as usize,
+        sample_rate_hz,
+        current_timing_acknowledgements,
+        input_runtime_ownership,
+        prepared_source_epochs,
+    )?;
     let mut transport = TransportTimeline::new(sample_rate_hz);
     let mut scheduler = TransportScheduler::new();
     let mut trigger_quantization = TriggerQuantization::Immediate;
@@ -2378,6 +2407,80 @@ mod tests {
         // Multiple calls should be safe (though only the first takes effect)
         setup_logger();
         setup_logger(); // Should not panic
+    }
+
+    #[test]
+    fn production_stream_mixer_constructor_and_callback_capture_fit_two_mib_without_device() {
+        use crate::audio_engine::input_runtime_binding::{
+            InputPadBinding, InputRuntimeOwnership, KeyLockStatus,
+        };
+        use crate::audio_engine::stretch_processor::StretchProcessor;
+        use crate::audio_engine::voice_slot::VoiceSlot;
+        use crate::messages::PreparedStemSet;
+        use std::mem::{size_of, size_of_val};
+
+        let mode_arrays_bytes = size_of::<[u64; NUM_SAMPLES]>()
+            + 2 * size_of::<[bool; NUM_SAMPLES]>()
+            + size_of::<[Option<(u64, usize)>; NUM_SAMPLES]>()
+            + size_of::<[Option<KeyLockStatus>; NUM_SAMPLES]>();
+        eprintln!(
+            "stream startup layout: mixer={} voice={} stretch={} input_ownership={} key_lock_status={} added_mixer_mode_arrays={} control_message={} mode_request_payload={} two_stem_payload={} scheduler={}",
+            size_of::<RtMixer>(),
+            size_of::<VoiceSlot>(),
+            size_of::<StretchProcessor>(),
+            size_of::<InputRuntimeOwnership>(),
+            size_of::<KeyLockStatus>(),
+            mode_arrays_bytes,
+            size_of::<ControlMessage>(),
+            size_of::<(usize, bool, u64, InputPadBinding, u64)>(),
+            size_of::<(usize, [Option<PreparedStemSet>; 2])>(),
+            size_of::<TransportScheduler>(),
+        );
+
+        // This is the same constructor and ownership binding used by create_audio_stream.
+        // A fixed thread stack keeps the test independent of the runner's RUST_MIN_STACK.
+        // The fixture never asks CPAL for a host, device, configuration, or stream.
+        std::thread::Builder::new()
+            .name("stream-mixer-startup-without-device".into())
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                for (channels, sample_rate_hz) in [(1, 44_100), (2, 48_000)] {
+                    let mut mixer = create_stream_mixer(
+                        channels,
+                        sample_rate_hz,
+                        Arc::default(),
+                        Arc::default(),
+                        (0..NUM_SAMPLES).map(|_| Arc::default()).collect(),
+                    )
+                    .unwrap();
+                    let storage = mixer.as_ref() as *const RtMixer as usize;
+
+                    // Move the actual production owner through a generic callback capture,
+                    // as CPAL startup does. Only its heap pointer enters the closure.
+                    fn capture<F: FnMut(&mut [f32]) -> usize>(callback: F) -> F {
+                        callback
+                    }
+                    let mut callback = capture(move |data: &mut [f32]| {
+                        mixer.render_rt_at_output_frame(
+                            data,
+                            &mut [0.0; NUM_SAMPLES],
+                            0,
+                            &mut ImmediateAudioBufferRetirement,
+                        );
+                        mixer.as_ref() as *const RtMixer as usize
+                    });
+                    assert_eq!(size_of_val(&callback), size_of::<Box<RtMixer>>());
+                    let mut output = [1.0_f32; 64];
+                    for _ in 0..3 {
+                        assert_eq!(callback(&mut output), storage);
+                        assert!(output.iter().all(|value| *value == 0.0));
+                    }
+                    drop(callback);
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[test]

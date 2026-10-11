@@ -329,9 +329,16 @@ pub struct ResidentWindowTicket {
     ownership: Arc<InputRuntimeOwnership>,
     acknowledgements: Arc<CurrentTimingAcknowledgements>,
     loop_region: Option<(f64, Option<f64>)>,
+    #[pyo3(get)]
+    key_lock_request_id: Option<u64>,
 }
 
 impl ResidentWindowTicket {
+    #[cfg(test)]
+    pub(super) fn key_lock_request_id_for_test(&self) -> Option<u64> {
+        self.key_lock_request_id
+    }
+
     #[cfg(test)]
     pub(super) fn read_observation_for_test(&self) -> Option<WindowReadObservation> {
         self.state.range_observation.lock().unwrap().clone()
@@ -1127,11 +1134,7 @@ pub(super) fn prepare_control(
     id: usize,
     request: WindowRequest,
 ) -> PyResult<ResidentWindowTicket> {
-    let handle = engine
-        .stream_handle
-        .as_ref()
-        .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-    prepare_window_with_producer(engine, id, request, handle.producer.clone())
+    prepare_window_with_producer(engine, id, request, engine.control_producer()?.clone())
 }
 
 pub(super) fn prepare_window_with_producer(
@@ -1186,7 +1189,7 @@ pub(super) fn prepare_window_with_producer(
         .as_ref()
         .ok_or_else(|| PyValueError::new_err("complete cache residency is unavailable"))?;
     let rate = binding.binding.sample_rate_hz;
-    let intent = ResidentControlIntent {
+    let mut intent = ResidentControlIntent {
         loop_region: request.loop_region.map(|(start, end)| {
             let start = (start * f64::from(rate)).round() as usize;
             let end = end
@@ -1195,6 +1198,7 @@ pub(super) fn prepare_window_with_producer(
         }),
         seek_position_s: request.seek_position_s,
         key_lock: request.key_lock,
+        key_lock_request_id: None,
     };
     let key_lock = request.key_lock.unwrap_or(matches!(
         view.context,
@@ -1238,6 +1242,21 @@ pub(super) fn prepare_window_with_producer(
                 ResidentContext::FiniteLoop
             },
         )
+    } else if request.key_lock.is_some() {
+        // A mode change prepares the actual installed physical extent. It is
+        // neither an implicit loop edit nor permission to widen finite readers.
+        let context = if view.context.permits_finite_range() {
+            if key_lock {
+                ResidentContext::KeyLockFiniteLoop
+            } else {
+                ResidentContext::FiniteLoop
+            }
+        } else if key_lock {
+            ResidentContext::KeyLockFullTrack
+        } else {
+            ResidentContext::FullTrack
+        };
+        (old.resident_start(), old.resident_end(), context)
     } else if key_lock && !view.context.permits_finite_range() {
         (0, old.frame_count(), ResidentContext::KeyLockFullTrack)
     } else {
@@ -1362,6 +1381,13 @@ pub(super) fn prepare_window_with_producer(
     }
     let next_intent = super::prepared_source::next_epoch(&owners[id].intent_epoch)
         .map_err(PyRuntimeError::new_err)?;
+    // All scalar exhaustion checks precede cancellation/publication effects.
+    // Producer capacity is still exclusively held, and an unclaimed predecessor
+    // must actually cancel before this reservation becomes current.
+    let key_lock_request_id = request
+        .key_lock
+        .map(|_| engine.input_runtime_ownership.reserve_key_lock_request(id))
+        .transpose()?;
     if let Some(previous) = owners[id].relocation.as_ref() {
         if !previous.publication.cancel_unclaimed() {
             return Err(PyRuntimeError::new_err(
@@ -1382,12 +1408,18 @@ pub(super) fn prepare_window_with_producer(
     engine
         .input_runtime_ownership
         .begin_resident_control(id, next_intent);
+    if let Some(request) = key_lock_request_id {
+        engine
+            .input_runtime_ownership
+            .publish_key_lock_request(id, request);
+    }
     let publication = PreparedSourcePermit::new(owners[id].intent_epoch.clone(), next_intent)
         .with_source_epoch(
             engine.prepared_source_epochs[id].clone(),
             engine.prepared_source_epochs[id].load(Ordering::Acquire),
         );
     let state = Arc::new(WindowState::default());
+    intent.key_lock_request_id = key_lock_request_id;
     let token = Arc::new(());
     let ticket = ResidentWindowTicket {
         publication: publication.clone(),
@@ -1403,6 +1435,7 @@ pub(super) fn prepare_window_with_producer(
         ownership: binding.ownership.clone(),
         acknowledgements: binding.acknowledgements.clone(),
         loop_region: request.loop_region,
+        key_lock_request_id: intent.key_lock_request_id,
     };
     let stem_owner = owners[id].accepted.clone();
     owners[id].relocation = Some(PendingWindow {

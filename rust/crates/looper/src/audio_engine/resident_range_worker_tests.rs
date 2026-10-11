@@ -280,9 +280,10 @@ fn actual_finite_selection_commands_keep_native_ramps_then_retire_from_job_and_h
     assert!(reference.publish_prepared_stems(0, control_stems));
     reference.set_pad_loop_region(0, 1.0 / f64::from(RATE), Some(6.0 / f64::from(RATE)));
     reference.set_speed(0.73);
-    reference.set_pad_key_lock(0, true);
     reference.set_pad_eq(0, -12.0, -3.0, 4.0);
     assert!(reference.play_sample_at_output_frame(0, 1.0, 0));
+    // The requested stopped ON first emits one warm block from the dry baseline.
+    reference.set_pad_key_lock(0, true);
     let mut frame = 0;
     paired_range_render(&mut h, &mut reference, &mut frame, 13);
     let full_native = adopt_range_native(&mut h, &mut reference, &mut frame, 1);
@@ -699,8 +700,8 @@ fn actual_finite_pair_keylock_window_ack_reads_four_components_then_preserves_na
     reference.set_stem_enabled_mask(0, 0b1111, control_stems.source_version_hash);
     reference.set_pad_loop_region(0, 1.0 / f64::from(RATE), Some(6.0 / f64::from(RATE)));
     reference.set_speed(0.73);
-    reference.set_pad_key_lock(0, true);
     assert!(reference.play_sample_at_output_frame(0, 1.0, 0));
+    reference.set_pad_key_lock(0, true);
     let render = |mixer: &mut RtMixer, frame: u64, frames: usize| {
         let mut output = vec![0.0; frames * 2];
         mixer.render_at_output_frame(frame, &mut output, &mut [0.0; NUM_SAMPLES]);
@@ -921,6 +922,121 @@ fn actual_finite_pair_keylock_window_ack_reads_four_components_then_preserves_na
         );
         frame += 137;
     }
+    // Productive mode-only transactions while a selected committed four-component
+    // mask ramp is still supplying both sides. The bank physical range remains1..7;
+    // the actual loop/taps stay1..6 and no implicit loop edit may cut its phase.
+    let hash = control_stems.source_version_hash;
+    h.producer
+        .lock()
+        .unwrap()
+        .push(ControlMessage::SetStemEnabledMask {
+            id: 0,
+            enabled_stem_mask: 0b1010,
+            source_version_hash: hash,
+        })
+        .unwrap();
+    assert_eq!(h.callback.drain(&mut h.consumer), 1);
+    assert!(reference.set_stem_enabled_mask(0, 0b1010, hash));
+    paired_range_render(&mut h, &mut reference, &mut frame, 31);
+    for (enabled, frames) in [(false, 31), (true, 1)] {
+        let position = range_voice(&h.callback.mixer).source_playback;
+        let voice_generation = range_voice(&h.callback.mixer).generation;
+        let before_source = h.callback.mixer.bank_for_measurement()[0].clone().unwrap();
+        let before_stems = h.callback.mixer.stems_for_measurement()[0].clone().unwrap();
+        let toggle = prepare_window_with_producer(
+            &h.engine,
+            0,
+            WindowRequest {
+                key_lock: Some(enabled),
+                ..Default::default()
+            },
+            h.producer.clone(),
+        )
+        .unwrap();
+        wait_until(|| {
+            h.consumer.peek().is_ok()
+                || matches!(toggle.publication_status(), "failed" | "cancelled")
+        });
+        let observation = toggle.read_observation_for_test().unwrap();
+        assert_eq!(
+            (observation.source.start_frame, observation.source.end_frame),
+            (1, 7)
+        );
+        // Both mode directions preserve the already registered 1..7 extent. Reuse must
+        // retain each actual PCM owner, without reading or allocating four fresh crops.
+        assert_eq!(observation.source.read_bytes, 0);
+        assert_eq!(observation.source.allocated_bytes, 0);
+        assert_eq!(observation.stems.read_bytes, [0; 5]);
+        assert_eq!(observation.stems.allocated_bytes, 0);
+        assert_eq!(observation.stems.fresh_opens, 0);
+        assert_eq!(observation.stems.integrity_bytes, 0);
+        match h.consumer.peek().unwrap() {
+            ControlMessage::RelocateResident(transaction) => {
+                assert!(Arc::ptr_eq(
+                    &transaction.sample.samples,
+                    &before_source.samples
+                ));
+                let queued_stems = transaction.stems.as_ref().unwrap();
+                for (queued, previous) in queued_stems.stems.iter().zip(&before_stems.stems) {
+                    assert!(Arc::ptr_eq(&queued.samples, &previous.samples));
+                    assert_eq!((queued.resident_start(), queued.resident_end()), (1, 7));
+                }
+            }
+            _ => panic!("expected actual mode-only resident transaction"),
+        }
+        assert_eq!(h.callback.drain(&mut h.consumer), 1);
+        assert_eq!(toggle.publication_status(), "accepted");
+        reconcile(&h.engine).unwrap();
+        let after_source = h.callback.mixer.bank_for_measurement()[0].as_ref().unwrap();
+        assert!(Arc::ptr_eq(&after_source.samples, &before_source.samples));
+        assert_eq!(
+            (after_source.resident_start(), after_source.resident_end()),
+            (1, 7)
+        );
+        let after_stems = h.callback.mixer.stems_for_measurement()[0]
+            .as_ref()
+            .unwrap();
+        for (adopted, previous) in after_stems.stems.iter().zip(&before_stems.stems) {
+            assert!(Arc::ptr_eq(&adopted.samples, &previous.samples));
+            assert_eq!((adopted.resident_start(), adopted.resident_end()), (1, 7));
+        }
+        let status = h.engine.input_runtime_ownership.key_lock_status(0).unwrap();
+        assert_eq!(
+            Some(status.request_id),
+            toggle.key_lock_request_id_for_test()
+        );
+        assert_eq!(status.window_revision, after_source.window_revision());
+        assert!(toggle.is_current());
+        assert!(
+            range_voice(&h.callback.mixer)
+                .source_playback
+                .matches_exact(&position)
+        );
+        assert_eq!(range_voice(&h.callback.mixer).generation, voice_generation);
+        assert!(
+            h.callback
+                .mixer
+                .stem_transition_for_measurement(0)
+                .is_active()
+        );
+        assert_eq!(h.callback.mixer.key_lock_for_measurement(0), enabled);
+        reference.set_pad_key_lock(0, enabled);
+        paired_range_render(&mut h, &mut reference, &mut frame, frames);
+    }
+    for frames in [31, 127, 1] {
+        paired_range_render(&mut h, &mut reference, &mut frame, frames);
+    }
+    assert!(
+        !h.callback
+            .mixer
+            .stem_transition_for_measurement(0)
+            .is_active()
+    );
+    let resumed_native = adopt_range_native(&mut h, &mut reference, &mut frame, 2);
+    assert_ne!(resumed_native, prepared);
+    let status = h.engine.input_runtime_ownership.key_lock_status(0).unwrap();
+    assert!(status.effective && status.ready);
+    assert_eq!(status.state, "wet");
 }
 
 struct PadSnapshot {

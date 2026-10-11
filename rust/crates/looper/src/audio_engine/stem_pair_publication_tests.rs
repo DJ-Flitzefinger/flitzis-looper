@@ -119,7 +119,9 @@ struct Harness {
     _temp: tempfile::TempDir,
     root: PathBuf,
     engine: AudioEngine,
-    callback: Callback,
+    // Keep the fixed mixer arrays out of nested Windows debug fixture returns.
+    // The genuine callback and retirement worker retain their exact ownership.
+    callback: Box<Callback>,
     producer: Arc<Mutex<rtrb::Producer<ControlMessage>>>,
     consumer: rtrb::Consumer<ControlMessage>,
     material: PreparedMigrationMaterial,
@@ -152,7 +154,7 @@ impl Harness {
         );
         let engine = AudioEngine::new().unwrap();
         let previous = old(&engine);
-        let mut callback = Callback::new(&engine, &previous);
+        let mut callback = Box::new(Callback::new(&engine, &previous));
         let (producer, mut consumer) = rtrb::RingBuffer::new(8);
         let producer = Arc::new(Mutex::new(producer));
         let preparation = control::prepared_for_test(
@@ -1161,23 +1163,17 @@ fn full_mix_releases_actual_component_owners_after_sink_job_and_voice_then_fresh
         let mut peaks = [0.0_f32; crate::audio_engine::constants::NUM_SAMPLES];
         // Render the real transition and retire voices through the existing sink.
         // No sleep or artificial permit acceptance stands in for callback work.
+        let callback = harness.callback.as_mut();
         for _ in 0..64 {
-            harness.callback.mixer.render_rt(
-                &mut output,
-                &mut peaks,
-                &mut harness.callback.retirement,
-            );
+            callback
+                .mixer
+                .render_rt(&mut output, &mut peaks, &mut callback.retirement);
         }
-        harness
-            .callback
-            .mixer
-            .stop_sample_rt(0, &mut harness.callback.retirement);
+        callback.mixer.stop_sample_rt(0, &mut callback.retirement);
         for _ in 0..64 {
-            harness.callback.mixer.render_rt(
-                &mut output,
-                &mut peaks,
-                &mut harness.callback.retirement,
-            );
+            callback
+                .mixer
+                .render_rt(&mut output, &mut peaks, &mut callback.retirement);
         }
         let retired_handles = harness
             .callback

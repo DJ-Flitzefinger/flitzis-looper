@@ -90,8 +90,10 @@ fn complete_mixer(mono: &[f32], start: usize, end: usize) -> RtMixer {
     mixer.load_sample(0, source);
     mixer.set_pad_loop_region(0, start as f64 / 48_000.0, Some(end as f64 / 48_000.0));
     mixer.set_speed(0.73);
-    mixer.set_pad_key_lock(0, true);
     assert!(mixer.play_sample_at_output_frame(0, 1.0, 0));
+    // The complete source stages its live ON after the same explicit clock cut.
+    // Every new owned voice must first warm Native while keeping the dry baseline.
+    mixer.set_pad_key_lock(0, true);
     mixer
 }
 
@@ -152,6 +154,8 @@ struct ConstantBankOracle {
     source: SampleBuffer,
     clock: AlgebraicClock,
     raw: RawChronology,
+    dry_warm_remaining: usize,
+    dry_mode: bool,
     filter: crate::audio_engine::dsp::PerPadDspChain,
     checkpoint: Option<(u64, RawChronology)>,
     checkpoint_target: u64,
@@ -175,10 +179,14 @@ impl ConstantBankOracle {
         let mut prepared_clock = clock.clone();
         let mut prepared = RawChronology::new(1.97, true);
         prepared.render(&source, &mut prepared_clock, 4096);
+        let raw = RawChronology::new(1.97, false);
+        let dry_warm_remaining = raw.block_size();
         Self {
             source,
             clock,
-            raw: RawChronology::new(1.97, false),
+            raw,
+            dry_warm_remaining,
+            dry_mode: false,
             filter: lifecycle_filter_after_cut(),
             checkpoint: Some((capture_frame + 4096, prepared)),
             checkpoint_target: capture_frame + 4096,
@@ -197,6 +205,14 @@ impl ConstantBankOracle {
         self.live_address = Some(live_address);
     }
 
+    fn keep_previous_dry_after_failure(&mut self) {
+        self.dry_mode = true;
+        self.dry_warm_remaining = 0;
+        self.checkpoint = None;
+        self.prepared_address = None;
+        self.live_address = None;
+    }
+
     fn render(
         &mut self,
         loaded: &mut Loaded,
@@ -207,10 +223,16 @@ impl ConstantBankOracle {
         let start = *frame;
         // Retain the exact complete PCM, source trajectory and FIFO checks on every callback.
         let actual = render(loaded, reference, frame, frames);
+        let mut dry_clock = self.clock.clone();
+        let dry = dry_clock.dry(&self.source, frames);
         let prefix = self.checkpoint.as_ref().map_or(frames, |(target, _)| {
             target.saturating_sub(start).min(frames as u64) as usize
         });
-        let mut upstream = self.raw.render(&self.source, &mut self.clock, prefix);
+        let mut upstream = if self.dry_mode {
+            self.clock.dry(&self.source, prefix)
+        } else {
+            self.raw.render(&self.source, &mut self.clock, prefix)
+        };
         if prefix < frames {
             let (_, prepared) = self.checkpoint.take().unwrap();
             self.raw = prepared;
@@ -220,6 +242,11 @@ impl ConstantBankOracle {
             );
             self.adopted = true;
         }
+        // Independent Native's own block size defines the first dry handover prefix.
+        // FIFO chronology and the 4096-frame adoption remain checked without alteration.
+        let warm = frames.min(self.dry_warm_remaining);
+        upstream[..warm].copy_from_slice(&dry[..warm]);
+        self.dry_warm_remaining -= warm;
         if self.adopted {
             assert_eq!(
                 voice(&loaded.callback.mixer).stretch.native_state_address(),
@@ -253,12 +280,21 @@ impl ConstantBankOracle {
             (position.frame as f64 - 100.0 + position.fraction - self.clock.phase(0)).abs()
                 < 1.0e-8
         );
-        assert!(
-            voice(&loaded.callback.mixer)
-                .stretch
-                .productive_history()
-                .is_some()
-        );
+        if self.dry_mode {
+            assert!(
+                voice(&loaded.callback.mixer)
+                    .stretch
+                    .productive_history()
+                    .is_none()
+            );
+        } else {
+            assert!(
+                voice(&loaded.callback.mixer)
+                    .stretch
+                    .productive_history()
+                    .is_some()
+            );
+        }
     }
 }
 
@@ -436,309 +472,422 @@ fn replace_with_actual_full_bank(loaded: &mut Loaded) -> SampleBuffer {
 fn actual_future_bank_window_ack_keeps_old_voice_then_reserved_retrigger_cuts_and_releases_history()
 {
     for paused in [false, true] {
-        let mut loaded = Loaded::new();
-        start_finite(&mut loaded);
-        let mut reference = complete_mixer(&loaded.mono, 24, 96);
-        let mut frame = 0;
-        render(&mut loaded, &mut reference, &mut frame, 13);
-        let (target, prepared) = wait_prepared(&mut loaded.callback.mixer, &mut reference);
-        through_adoption(&mut loaded, &mut reference, &mut frame, target, prepared);
-        let old = loaded.sample();
-        let old_reader = Arc::downgrade(&old.samples);
-        let old_position = voice(&loaded.callback.mixer).source_playback.position();
-        let old_region = loaded.callback.mixer.loop_region_frames(0);
-        if paused {
-            loaded.callback.mixer.pause_sample_at_output_frame(0, frame);
-            reference.pause_sample_at_output_frame(0, frame);
-        }
-        let before = capture(&loaded.engine, 0).unwrap().unwrap();
-        let new_full = replace_with_actual_full_bank(&mut loaded);
-        assert!(!before.current());
-        assert!(!new_full.same_source(&old));
-        assert_eq!(
-            (new_full.resident_start(), new_full.resident_end()),
-            (0, 1000)
-        );
-        assert!(
-            voice(&loaded.callback.mixer)
-                .sample
-                .as_ref()
-                .unwrap()
-                .same_window(&old)
-        );
-        assert_eq!(
-            voice(&loaded.callback.mixer).source_playback.position(),
-            old_position
-        );
-        assert_eq!(
-            voice(&loaded.callback.mixer)
-                .source_loop_region
-                .unwrap()
-                .start,
-            old_region.0
-        );
-        let future = loaded.prepare(WindowRequest {
-            loop_region: Some((100.0 / 48_000.0, Some(300.0 / 48_000.0))),
-            key_lock: Some(true),
-            ..WindowRequest::default()
-        });
-        loaded.pending(&future);
-        let reads = future.read_observation_for_test().unwrap();
-        assert_eq!(reads.source.read_bytes, (300 - 100) * 2 * 4);
-        assert_eq!(reads.source.allocated_bytes, (300 - 100) * 2 * 4);
-        assert_eq!(reads.stems.read_bytes, [0; 5]);
-        assert!(
-            reads.admitted_peak_bytes
-                >= (96 - 24) * 2 * 4 + 1000 * 2 * 4 + (300 - 100) * 2 * 4 + 64 * 1024
-        );
-        loaded.adopt(&future);
-        let after = capture(&loaded.engine, 0).unwrap().unwrap();
-        assert!(after.current() && after.available());
-        assert_eq!(after.binding.resident, loaded.sample().resident_binding());
-        assert!(
-            voice(&loaded.callback.mixer)
-                .sample
-                .as_ref()
-                .unwrap()
-                .same_window(&old)
-        );
-        assert_eq!(
-            voice(&loaded.callback.mixer).source_playback.position(),
-            old_position
-        );
-        if paused {
-            assert!(
-                render(&mut loaded, &mut reference, &mut frame, 257)
-                    .iter()
-                    .all(|sample| *sample == 0.0)
+        for fault in [
+            None,
+            Some((false, false)),
+            Some((false, true)),
+            Some((true, false)),
+            Some((true, true)),
+        ] {
+            let mut loaded = Loaded::new();
+            start_finite(&mut loaded);
+            let mut reference = complete_mixer(&loaded.mono, 24, 96);
+            let mut frame = 0;
+            render(&mut loaded, &mut reference, &mut frame, 13);
+            let (target, prepared) = wait_prepared(&mut loaded.callback.mixer, &mut reference);
+            through_adoption(&mut loaded, &mut reference, &mut frame, target, prepared);
+            let old_generation = voice(&loaded.callback.mixer).generation;
+            let old = loaded.sample();
+            let old_reader = Arc::downgrade(&old.samples);
+            let old_position = voice(&loaded.callback.mixer).source_playback.position();
+            let old_region = loaded.callback.mixer.loop_region_frames(0);
+            if paused {
+                loaded.callback.mixer.pause_sample_at_output_frame(0, frame);
+                reference.pause_sample_at_output_frame(0, frame);
+            }
+            let before = capture(&loaded.engine, 0).unwrap().unwrap();
+            let new_full = replace_with_actual_full_bank(&mut loaded);
+            assert!(!before.current());
+            assert!(!new_full.same_source(&old));
+            assert_eq!(
+                (new_full.resident_start(), new_full.resident_end()),
+                (0, 1000)
             );
-            loaded
+            assert!(
+                voice(&loaded.callback.mixer)
+                    .sample
+                    .as_ref()
+                    .unwrap()
+                    .same_window(&old)
+            );
+            assert_eq!(
+                voice(&loaded.callback.mixer).source_playback.position(),
+                old_position
+            );
+            assert_eq!(
+                voice(&loaded.callback.mixer)
+                    .source_loop_region
+                    .unwrap()
+                    .start,
+                old_region.0
+            );
+            let future = loaded.prepare(WindowRequest {
+                loop_region: Some((100.0 / 48_000.0, Some(300.0 / 48_000.0))),
+                key_lock: Some(true),
+                ..WindowRequest::default()
+            });
+            loaded.pending(&future);
+            let reads = future.read_observation_for_test().unwrap();
+            assert_eq!(reads.source.read_bytes, (300 - 100) * 2 * 4);
+            assert_eq!(reads.source.allocated_bytes, (300 - 100) * 2 * 4);
+            assert_eq!(reads.stems.read_bytes, [0; 5]);
+            assert!(
+                reads.admitted_peak_bytes
+                    >= (96 - 24) * 2 * 4 + 1000 * 2 * 4 + (300 - 100) * 2 * 4 + 64 * 1024
+            );
+            loaded.adopt(&future);
+            let after = capture(&loaded.engine, 0).unwrap().unwrap();
+            assert!(after.current() && after.available());
+            assert_eq!(after.binding.resident, loaded.sample().resident_binding());
+            assert!(
+                voice(&loaded.callback.mixer)
+                    .sample
+                    .as_ref()
+                    .unwrap()
+                    .same_window(&old)
+            );
+            assert_eq!(
+                voice(&loaded.callback.mixer).source_playback.position(),
+                old_position
+            );
+            if paused {
+                assert!(
+                    render(&mut loaded, &mut reference, &mut frame, 257)
+                        .iter()
+                        .all(|sample| *sample == 0.0)
+                );
+                loaded
+                    .callback
+                    .mixer
+                    .resume_sample_at_output_frame(0, frame);
+                reference.resume_sample_at_output_frame(0, frame);
+            }
+            // An actual rate intent forces fresh old-A work; B's own ACK is not A history authority.
+            loaded.callback.mixer.set_speed(1.97);
+            reference.set_speed(1.97);
+            render(&mut loaded, &mut reference, &mut frame, 1);
+            let (old_target, old_prepared) =
+                wait_prepared(&mut loaded.callback.mixer, &mut reference);
+            through_adoption(
+                &mut loaded,
+                &mut reference,
+                &mut frame,
+                old_target,
+                old_prepared,
+            );
+            assert_eq!(
+                voice(&loaded.callback.mixer)
+                    .stretch
+                    .productive_history()
+                    .unwrap()
+                    .binding
+                    .source_address,
+                old.source_address()
+            );
+            let history = voice(&loaded.callback.mixer)
+                .stretch
+                .productive_history()
+                .unwrap();
+            let native = voice(&loaded.callback.mixer).stretch.native_state_address();
+            let fifo = voice(&loaded.callback.mixer).stretch.pending_fifo_frames();
+            let position = voice(&loaded.callback.mixer).source_playback.position();
+            let parameters = loaded.callback.mixer.loop_region_frames(0);
+            while loaded.callback.feedback_rx.pop().is_ok() {}
+            // Use the actual monotonic callback clock and leave a genuine future scheduled event.
+            loaded.callback.transport.advance_by_rendered_frames(
+                (frame - loaded.callback.transport.output_frame()) as usize,
+            );
+            loaded.callback.quantization = TriggerQuantization::Grid { step_64ths: 16 };
+            assert!(
+                launch_with_producer(&loaded.engine, &future, false, 2, &loaded.producer).unwrap()
+            );
+            loaded.callback.retirement.capacity = 0;
+            assert_eq!(drain_at_output_frame(&mut loaded, frame), 0);
+            assert_eq!(
+                voice(&loaded.callback.mixer).source_playback.position(),
+                position
+            );
+            assert_eq!(
+                voice(&loaded.callback.mixer).stretch.native_state_address(),
+                native
+            );
+            assert_eq!(
+                voice(&loaded.callback.mixer).stretch.pending_fifo_frames(),
+                fifo
+            );
+            assert_eq!(
+                voice(&loaded.callback.mixer)
+                    .stretch
+                    .productive_history()
+                    .unwrap()
+                    .binding,
+                history.binding
+            );
+            assert_eq!(loaded.callback.mixer.loop_region_frames(0), parameters);
+            assert!(old_reader.upgrade().is_some());
+            loaded.callback.retirement.capacity = usize::MAX;
+            assert_eq!(drain_at_output_frame(&mut loaded, frame), 1);
+            assert!(
+                voice(&loaded.callback.mixer)
+                    .sample
+                    .as_ref()
+                    .unwrap()
+                    .same_window(&old)
+            );
+            let target = loaded.callback.scheduler.peek_next_target_frame().unwrap();
+            assert!(target >= frame);
+            while frame < target {
+                let frames = 127.min((target - frame) as usize);
+                render(&mut loaded, &mut reference, &mut frame, frames);
+            }
+            loaded.callback.transport.advance_by_rendered_frames(
+                (frame - loaded.callback.transport.output_frame()) as usize,
+            );
+            let event = loaded
                 .callback
-                .mixer
-                .resume_sample_at_output_frame(0, frame);
-            reference.resume_sample_at_output_frame(0, frame);
+                .scheduler
+                .pop_due_at_callback_start(frame)
+                .unwrap();
+            assert_eq!(event.execution_frame, frame);
+            assert!(!event.was_late);
+            let execution_position = voice(&loaded.callback.mixer).source_playback.position();
+            let execution_native = voice(&loaded.callback.mixer).stretch.native_state_address();
+            let execution_fifo = voice(&loaded.callback.mixer).stretch.pending_fifo_frames();
+            let execution_history = voice(&loaded.callback.mixer)
+                .stretch
+                .productive_history()
+                .unwrap();
+            loaded.callback.retirement.capacity = 0;
+            crate::audio_engine::audio_stream::execute_scheduled_command(
+                &mut loaded.callback.mixer,
+                &mut loaded.callback.transport,
+                event.execution_frame,
+                event.command.clone(),
+                &mut loaded.callback.feedback,
+                &mut loaded.callback.retirement,
+            );
+            assert!(
+                voice(&loaded.callback.mixer)
+                    .sample
+                    .as_ref()
+                    .unwrap()
+                    .same_window(&old)
+            );
+            assert_eq!(
+                voice(&loaded.callback.mixer).source_playback.position(),
+                execution_position
+            );
+            assert_eq!(
+                voice(&loaded.callback.mixer).stretch.native_state_address(),
+                execution_native
+            );
+            assert_eq!(
+                voice(&loaded.callback.mixer).stretch.pending_fifo_frames(),
+                execution_fifo
+            );
+            assert_eq!(
+                voice(&loaded.callback.mixer)
+                    .stretch
+                    .productive_history()
+                    .unwrap()
+                    .binding,
+                execution_history.binding
+            );
+            assert_eq!(
+                voice(&loaded.callback.mixer)
+                    .stretch
+                    .productive_history()
+                    .unwrap()
+                    .fed_output_frames,
+                execution_history.fed_output_frames
+            );
+            assert_eq!(loaded.callback.mixer.loop_region_frames(0), parameters);
+            assert!(old_reader.upgrade().is_some());
+            loaded.callback.retirement.capacity = usize::MAX;
+            crate::audio_engine::audio_stream::execute_scheduled_command(
+                &mut loaded.callback.mixer,
+                &mut loaded.callback.transport,
+                event.execution_frame,
+                event.command,
+                &mut loaded.callback.feedback,
+                &mut loaded.callback.retirement,
+            );
+            assert!(
+                voice(&loaded.callback.mixer)
+                    .sample
+                    .as_ref()
+                    .unwrap()
+                    .same_window(&loaded.sample())
+            );
+            assert!(
+                voice(&loaded.callback.mixer)
+                    .stretch
+                    .productive_history()
+                    .is_none()
+            );
+            assert!(
+                loaded
+                    .callback
+                    .mixer
+                    .dsp_source_history_for_test(0)
+                    .is_none()
+            );
+            assert_eq!(
+                voice(&loaded.callback.mixer).stretch.pending_fifo_frames(),
+                (0, 0)
+            );
+            let own = future.key_lock_request_id_for_test().unwrap();
+            let new_source = loaded.sample();
+            let waiting = loaded
+                .engine
+                .input_runtime_ownership
+                .key_lock_status(0)
+                .unwrap();
+            assert_eq!(waiting.request_id, own);
+            assert_eq!(waiting.source_address, new_source.source_address());
+            assert_eq!(waiting.window_revision, new_source.window_revision());
+            assert_eq!(
+                Some(waiting.source_generation),
+                loaded
+                    .engine
+                    .input_runtime_ownership
+                    .binding_source_generation(0, after.binding)
+            );
+            assert!(!waiting.effective && !waiting.ready && waiting.state == "waiting");
+            assert_eq!(voice(&loaded.callback.mixer).generation, old_generation + 1);
+            assert_eq!(
+                voice(&loaded.callback.mixer)
+                    .source_playback
+                    .position()
+                    .frame,
+                100
+            );
+            assert_eq!(
+                voice(&loaded.callback.mixer)
+                    .source_playback
+                    .position()
+                    .fraction,
+                0.0
+            );
+            let mut new_reference = complete_mixer(&vec![8192.0 / 32768.0; 1000], 100, 300);
+            new_reference.set_speed(1.97);
+            assert!(new_reference.play_sample_at_output_frame(0, 1.0, frame));
+            loaded.callback.mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
+            new_reference.set_pad_eq(0, -12.0, -3.0, 4.0);
+            // Retrigger cuts source/DSP history while the absolute output clock remains monotonic.
+            let capture_frame = frame;
+            let mut b_oracle = ConstantBankOracle::new(capture_frame);
+            if let Some((exhausted, after_warming)) = fault {
+                if after_warming {
+                    let block = b_oracle.raw.block_size();
+                    b_oracle.render(&mut loaded, &mut new_reference, &mut frame, block);
+                    assert!(b_oracle.raw.used);
+                    let status = loaded
+                        .engine
+                        .input_runtime_ownership
+                        .key_lock_status(0)
+                        .unwrap();
+                    assert_eq!(status.request_id, own);
+                    assert!(!status.effective && !status.ready && status.state == "waiting");
+                }
+                let before_failure = voice(&loaded.callback.mixer).source_playback;
+                if exhausted {
+                    voice_mut(&mut loaded.callback.mixer)
+                        .stretch
+                        .exhaust_warmed_reserve();
+                } else {
+                    voice(&loaded.callback.mixer)
+                        .stretch
+                        .fail_preparation_worker();
+                }
+                assert!(
+                    voice(&loaded.callback.mixer)
+                        .source_playback
+                        .matches_exact(&before_failure)
+                );
+                new_reference.set_pad_key_lock(0, false);
+                b_oracle.keep_previous_dry_after_failure();
+                for frames in [1, 127, 384, 512, 777] {
+                    b_oracle.render(&mut loaded, &mut new_reference, &mut frame, frames);
+                }
+                let failed = loaded
+                    .engine
+                    .input_runtime_ownership
+                    .key_lock_status(0)
+                    .unwrap();
+                assert_eq!(failed.request_id, own);
+                assert_eq!(failed.source_generation, waiting.source_generation);
+                assert_eq!(failed.source_address, waiting.source_address);
+                assert_eq!(failed.window_revision, waiting.window_revision);
+                assert!(!failed.effective && !failed.ready && failed.state == "error");
+                assert!(failed.error.is_some());
+                assert_eq!(voice(&loaded.callback.mixer).generation, old_generation + 1);
+                assert!(
+                    voice(&loaded.callback.mixer)
+                        .sample
+                        .as_ref()
+                        .unwrap()
+                        .same_window(&new_source)
+                );
+                assert!(future.is_current());
+                drop(old);
+                wait_until(Duration::from_secs(5), || old_reader.upgrade().is_none());
+                continue;
+            }
+            b_oracle.render(&mut loaded, &mut new_reference, &mut frame, 1);
+            let (new_target, new_prepared) =
+                wait_prepared(&mut loaded.callback.mixer, &mut new_reference);
+            assert_eq!(new_target, capture_frame + 4096);
+            b_oracle.accept_checkpoint(
+                new_target,
+                new_prepared,
+                voice(&loaded.callback.mixer).stretch.native_state_address(),
+            );
+            // The callback crossing 4096 is split at the actual target in the Raw oracle only;
+            // one filter instance consumes both sides and every later irregular callback.
+            let mut step = 0;
+            while frame < new_target + 1777 {
+                let frames = [1, 127, 384, 96, 257, 512, 31][step % 7]
+                    .min((new_target + 1777 - frame) as usize);
+                b_oracle.render(&mut loaded, &mut new_reference, &mut frame, frames);
+                step += 1;
+            }
+            for frames in [31, 257, 1, 384, 96, 512, 127] {
+                b_oracle.render(&mut loaded, &mut new_reference, &mut frame, frames);
+            }
+            assert!(b_oracle.adopted);
+            let wet = loaded
+                .engine
+                .input_runtime_ownership
+                .key_lock_status(0)
+                .unwrap();
+            assert_eq!(wet.request_id, own);
+            assert_eq!(wet.source_generation, waiting.source_generation);
+            assert_eq!(wet.source_address, waiting.source_address);
+            assert_eq!(wet.window_revision, waiting.window_revision);
+            assert!(wet.effective && wet.ready && wet.state == "wet");
+            assert_eq!(voice(&loaded.callback.mixer).generation, old_generation + 1);
+            assert!(
+                b_oracle.warm_audible,
+                "genuine B warm Raw/EQ prefix is silent"
+            );
+            assert!(
+                b_oracle.adopted_audible,
+                "genuine B adopted Raw/EQ continuation is silent"
+            );
+            assert_ne!(
+                voice(&loaded.callback.mixer)
+                    .stretch
+                    .productive_history()
+                    .unwrap()
+                    .binding
+                    .source_address,
+                old.source_address()
+            );
+            drop(old);
+            drop(new_full);
+            wait_until(Duration::from_secs(5), || old_reader.upgrade().is_none());
         }
-        // An actual rate intent forces fresh old-A work; B's own ACK is not A history authority.
-        loaded.callback.mixer.set_speed(1.97);
-        reference.set_speed(1.97);
-        render(&mut loaded, &mut reference, &mut frame, 1);
-        let (old_target, old_prepared) = wait_prepared(&mut loaded.callback.mixer, &mut reference);
-        through_adoption(
-            &mut loaded,
-            &mut reference,
-            &mut frame,
-            old_target,
-            old_prepared,
-        );
-        assert_eq!(
-            voice(&loaded.callback.mixer)
-                .stretch
-                .productive_history()
-                .unwrap()
-                .binding
-                .source_address,
-            old.source_address()
-        );
-        let history = voice(&loaded.callback.mixer)
-            .stretch
-            .productive_history()
-            .unwrap();
-        let native = voice(&loaded.callback.mixer).stretch.native_state_address();
-        let fifo = voice(&loaded.callback.mixer).stretch.pending_fifo_frames();
-        let position = voice(&loaded.callback.mixer).source_playback.position();
-        let parameters = loaded.callback.mixer.loop_region_frames(0);
-        while loaded.callback.feedback_rx.pop().is_ok() {}
-        // Use the actual monotonic callback clock and leave a genuine future scheduled event.
-        loaded.callback.transport.advance_by_rendered_frames(
-            (frame - loaded.callback.transport.output_frame()) as usize,
-        );
-        loaded.callback.quantization = TriggerQuantization::Grid { step_64ths: 16 };
-        assert!(launch_with_producer(&loaded.engine, &future, false, 2, &loaded.producer).unwrap());
-        loaded.callback.retirement.capacity = 0;
-        assert_eq!(drain_at_output_frame(&mut loaded, frame), 0);
-        assert_eq!(
-            voice(&loaded.callback.mixer).source_playback.position(),
-            position
-        );
-        assert_eq!(
-            voice(&loaded.callback.mixer).stretch.native_state_address(),
-            native
-        );
-        assert_eq!(
-            voice(&loaded.callback.mixer).stretch.pending_fifo_frames(),
-            fifo
-        );
-        assert_eq!(
-            voice(&loaded.callback.mixer)
-                .stretch
-                .productive_history()
-                .unwrap()
-                .binding,
-            history.binding
-        );
-        assert_eq!(loaded.callback.mixer.loop_region_frames(0), parameters);
-        assert!(old_reader.upgrade().is_some());
-        loaded.callback.retirement.capacity = usize::MAX;
-        assert_eq!(drain_at_output_frame(&mut loaded, frame), 1);
-        assert!(
-            voice(&loaded.callback.mixer)
-                .sample
-                .as_ref()
-                .unwrap()
-                .same_window(&old)
-        );
-        let target = loaded.callback.scheduler.peek_next_target_frame().unwrap();
-        assert!(target >= frame);
-        while frame < target {
-            let frames = 127.min((target - frame) as usize);
-            render(&mut loaded, &mut reference, &mut frame, frames);
-        }
-        loaded.callback.transport.advance_by_rendered_frames(
-            (frame - loaded.callback.transport.output_frame()) as usize,
-        );
-        let event = loaded
-            .callback
-            .scheduler
-            .pop_due_at_callback_start(frame)
-            .unwrap();
-        assert_eq!(event.execution_frame, frame);
-        assert!(!event.was_late);
-        let execution_position = voice(&loaded.callback.mixer).source_playback.position();
-        let execution_native = voice(&loaded.callback.mixer).stretch.native_state_address();
-        let execution_fifo = voice(&loaded.callback.mixer).stretch.pending_fifo_frames();
-        let execution_history = voice(&loaded.callback.mixer)
-            .stretch
-            .productive_history()
-            .unwrap();
-        loaded.callback.retirement.capacity = 0;
-        crate::audio_engine::audio_stream::execute_scheduled_command(
-            &mut loaded.callback.mixer,
-            &mut loaded.callback.transport,
-            event.execution_frame,
-            event.command.clone(),
-            &mut loaded.callback.feedback,
-            &mut loaded.callback.retirement,
-        );
-        assert!(
-            voice(&loaded.callback.mixer)
-                .sample
-                .as_ref()
-                .unwrap()
-                .same_window(&old)
-        );
-        assert_eq!(
-            voice(&loaded.callback.mixer).source_playback.position(),
-            execution_position
-        );
-        assert_eq!(
-            voice(&loaded.callback.mixer).stretch.native_state_address(),
-            execution_native
-        );
-        assert_eq!(
-            voice(&loaded.callback.mixer).stretch.pending_fifo_frames(),
-            execution_fifo
-        );
-        assert_eq!(
-            voice(&loaded.callback.mixer)
-                .stretch
-                .productive_history()
-                .unwrap()
-                .binding,
-            execution_history.binding
-        );
-        assert_eq!(
-            voice(&loaded.callback.mixer)
-                .stretch
-                .productive_history()
-                .unwrap()
-                .fed_output_frames,
-            execution_history.fed_output_frames
-        );
-        assert_eq!(loaded.callback.mixer.loop_region_frames(0), parameters);
-        assert!(old_reader.upgrade().is_some());
-        loaded.callback.retirement.capacity = usize::MAX;
-        crate::audio_engine::audio_stream::execute_scheduled_command(
-            &mut loaded.callback.mixer,
-            &mut loaded.callback.transport,
-            event.execution_frame,
-            event.command,
-            &mut loaded.callback.feedback,
-            &mut loaded.callback.retirement,
-        );
-        assert!(
-            voice(&loaded.callback.mixer)
-                .sample
-                .as_ref()
-                .unwrap()
-                .same_window(&loaded.sample())
-        );
-        assert!(
-            voice(&loaded.callback.mixer)
-                .stretch
-                .productive_history()
-                .is_none()
-        );
-        assert!(
-            loaded
-                .callback
-                .mixer
-                .dsp_source_history_for_test(0)
-                .is_none()
-        );
-        assert_eq!(
-            voice(&loaded.callback.mixer).stretch.pending_fifo_frames(),
-            (0, 0)
-        );
-        let mut new_reference = complete_mixer(&vec![8192.0 / 32768.0; 1000], 100, 300);
-        new_reference.set_speed(1.97);
-        assert!(new_reference.play_sample_at_output_frame(0, 1.0, frame));
-        loaded.callback.mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
-        new_reference.set_pad_eq(0, -12.0, -3.0, 4.0);
-        // Retrigger cuts source/DSP history while the absolute output clock remains monotonic.
-        let capture_frame = frame;
-        let mut b_oracle = ConstantBankOracle::new(capture_frame);
-        b_oracle.render(&mut loaded, &mut new_reference, &mut frame, 1);
-        let (new_target, new_prepared) =
-            wait_prepared(&mut loaded.callback.mixer, &mut new_reference);
-        assert_eq!(new_target, capture_frame + 4096);
-        b_oracle.accept_checkpoint(
-            new_target,
-            new_prepared,
-            voice(&loaded.callback.mixer).stretch.native_state_address(),
-        );
-        // The callback crossing 4096 is split at the actual target in the Raw oracle only;
-        // one filter instance consumes both sides and every later irregular callback.
-        let mut step = 0;
-        while frame < new_target + 1777 {
-            let frames =
-                [1, 127, 384, 96, 257, 512, 31][step % 7].min((new_target + 1777 - frame) as usize);
-            b_oracle.render(&mut loaded, &mut new_reference, &mut frame, frames);
-            step += 1;
-        }
-        for frames in [31, 257, 1, 384, 96, 512, 127] {
-            b_oracle.render(&mut loaded, &mut new_reference, &mut frame, frames);
-        }
-        assert!(b_oracle.adopted);
-        assert!(
-            b_oracle.warm_audible,
-            "genuine B warm Raw/EQ prefix is silent"
-        );
-        assert!(
-            b_oracle.adopted_audible,
-            "genuine B adopted Raw/EQ continuation is silent"
-        );
-        assert_ne!(
-            voice(&loaded.callback.mixer)
-                .stretch
-                .productive_history()
-                .unwrap()
-                .binding
-                .source_address,
-            old.source_address()
-        );
-        drop(old);
-        drop(new_full);
-        wait_until(Duration::from_secs(5), || old_reader.upgrade().is_none());
     }
 }
 

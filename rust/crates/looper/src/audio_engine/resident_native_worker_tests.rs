@@ -55,8 +55,9 @@ fn full_oracle(loaded: &Loaded, start: usize, end: usize) -> RtMixer {
     mixer.load_sample(0, sample);
     mixer.set_pad_loop_region(0, start as f64 / 48_000.0, Some(end as f64 / 48_000.0));
     mixer.set_speed(0.73);
-    mixer.set_pad_key_lock(0, true);
     assert!(mixer.play_sample_at_output_frame(0, 1.0, 0));
+    // Stage the complete reader's first wet handover just like the owned stopped ON.
+    mixer.set_pad_key_lock(0, true);
     mixer
 }
 

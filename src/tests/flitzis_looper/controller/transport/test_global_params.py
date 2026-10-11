@@ -301,7 +301,11 @@ def test_set_key_lock_overwrites_mixed_pad_values(
     controller.transport.global_params.set_key_lock(enabled=enabled)
 
     audio_engine_mock.set_key_lock.assert_not_called()
-    audio_engine_mock.set_pad_key_lock.assert_called_once_with(3, enabled)
+    assert audio_engine_mock.set_pad_key_lock.call_args_list == [
+        call(2, enabled),
+        call(3, enabled),
+        call(4, enabled),
+    ]
     assert controller.project.pad_key_lock[2] is True
     assert controller.project.pad_key_lock[3] is True
     assert controller.project.pad_key_lock[4] is True
@@ -419,7 +423,9 @@ def test_non_finite_speed_inf(controller: AppController) -> None:
         controller.transport.global_params.set_speed(math.inf)
 
 
-def test_set_key_lock_no_op(controller: AppController, audio_engine_mock: Mock) -> None:
+def test_same_global_intent_without_native_confirmation_is_rebroadcast(
+    controller: AppController, audio_engine_mock: Mock
+) -> None:
     controller.project.key_lock = True
     controller.project.selected_pad = 1
     controller.project.sample_paths[1] = "samples/foo.wav"
@@ -432,7 +438,8 @@ def test_set_key_lock_no_op(controller: AppController, audio_engine_mock: Mock) 
 
     assert controller.project.key_lock is True
     audio_engine_mock.set_key_lock.assert_not_called()
-    audio_engine_mock.set_pad_key_lock.assert_not_called()
+    enabled = True
+    audio_engine_mock.set_pad_key_lock.assert_called_once_with(1, enabled)
 
 
 def test_set_bpm_lock_no_op(controller: AppController, audio_engine_mock: Mock) -> None:

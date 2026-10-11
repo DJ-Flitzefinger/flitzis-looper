@@ -16,6 +16,11 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
 
+#[path = "key_lock_status.rs"]
+mod key_lock_status;
+pub(crate) use key_lock_status::KeyLockStatus;
+use key_lock_status::KeyLockStatusSlot;
+
 /// One control-owned current PCM publication. Zero generation fences all new starts.
 /// Readers perform one bounded check and recheck; they never spin or dereference its address.
 struct CurrentSourceFence {
@@ -61,6 +66,7 @@ pub(crate) struct InputRuntimeOwnership {
     launch_revisions: [AtomicU64; NUM_SAMPLES],
     admitted_launches: [AtomicBool; NUM_SAMPLES],
     migration_holds: [AtomicU64; NUM_SAMPLES],
+    key_lock: [KeyLockStatusSlot; NUM_SAMPLES],
 }
 
 impl Default for InputRuntimeOwnership {
@@ -76,11 +82,55 @@ impl Default for InputRuntimeOwnership {
             launch_revisions: std::array::from_fn(|_| AtomicU64::new(0)),
             admitted_launches: std::array::from_fn(|_| AtomicBool::new(false)),
             migration_holds: std::array::from_fn(|_| AtomicU64::new(0)),
+            key_lock: std::array::from_fn(|_| KeyLockStatusSlot::default()),
         }
     }
 }
 
 impl InputRuntimeOwnership {
+    pub(crate) fn next_key_lock_request(&self, id: usize) -> PyResult<u64> {
+        let request = self.reserve_key_lock_request(id)?;
+        self.publish_key_lock_request(id, request);
+        Ok(request)
+    }
+
+    pub(crate) fn reserve_key_lock_request(&self, id: usize) -> PyResult<u64> {
+        if id >= NUM_SAMPLES {
+            return Err(PyRuntimeError::new_err("invalid Key Lock pad"));
+        }
+        next_epoch(&self.key_lock[id].request).map_err(PyRuntimeError::new_err)
+    }
+
+    pub(crate) fn publish_key_lock_request(&self, id: usize, request: u64) {
+        self.key_lock[id].request.store(request, Ordering::Release);
+    }
+
+    pub(crate) fn key_lock_request_current(&self, id: usize, request: u64) -> bool {
+        id < NUM_SAMPLES && self.key_lock[id].request.load(Ordering::Acquire) == request
+    }
+
+    pub(crate) fn publish_key_lock_status(&self, id: usize, status: KeyLockStatus) {
+        if status.request_id == 0 || self.key_lock_request_current(id, status.request_id) {
+            self.key_lock[id].publish(status);
+        }
+    }
+
+    pub(crate) fn key_lock_status(&self, id: usize) -> Option<KeyLockStatus> {
+        let source = self.sources.get(id)?;
+        let current = || {
+            let status = self.key_lock[id].read()?;
+            (source.generation.load(Ordering::SeqCst) == status.source_generation
+                && source.address.load(Ordering::SeqCst) == status.source_address
+                && source.window_revision.load(Ordering::SeqCst) == status.window_revision)
+                .then_some(status)
+        };
+        let status = current()?;
+        let again = current()?;
+        (again.request_id == status.request_id
+            && again.source_generation == status.source_generation
+            && again.window_revision == status.window_revision)
+            .then_some(again)
+    }
     pub(crate) fn mark_launch_admitted(&self, id: usize) {
         self.admitted_launches[id].store(true, Ordering::Release);
     }
@@ -230,6 +280,7 @@ impl InputRuntimeOwnership {
     pub(super) fn revoke_source(&self, id: usize) {
         self.sources[id].generation.store(0, Ordering::SeqCst);
         self.resident_controls[id].store(0, Ordering::Release);
+        self.key_lock[id].clear();
     }
 
     pub(super) fn revoke_all_sources(&self) {
@@ -248,6 +299,7 @@ impl InputRuntimeOwnership {
     ) {
         let source = &self.sources[id];
         source.generation.store(0, Ordering::SeqCst);
+        self.key_lock[id].clear();
         source
             .address
             .store(sample.source_address(), Ordering::SeqCst);

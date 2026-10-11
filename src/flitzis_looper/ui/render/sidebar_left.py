@@ -44,6 +44,7 @@ from flitzis_looper.ui.render.bpm_entry import (
     sanitize_bpm_entry_text,
 )
 from flitzis_looper.ui.render.control_gestures import hovered_wheel_steps, item_middle_clicked
+from flitzis_looper.ui.render.key_lock import render_key_lock_button
 
 if TYPE_CHECKING:
     from flitzis_looper.input_mapping import PadEqBand
@@ -1027,10 +1028,11 @@ def _render_stem_controls(ctx: UiContext, info: _SidebarPadInfo) -> None:
 
 
 def _render_pad_key_lock(ctx: UiContext, pad_id: int) -> None:
-    style_name: ButtonStyleName = "mode-on" if ctx.state.pads.key_lock(pad_id) else "mode-off"
-    with button_style(style_name):
-        if imgui.button("KEY LOCK##pad_key_lock", (-1, 0)):
-            ctx.audio.pads.toggle_pad_key_lock(pad_id)
+    render_key_lock_button(
+        ctx.state.pads.key_lock_status(pad_id),
+        "pad_key_lock",
+        lambda: ctx.audio.pads.toggle_pad_key_lock(pad_id),
+    )
 
 
 def _render_loaded_actions(ctx: UiContext, pad_id: int) -> None:

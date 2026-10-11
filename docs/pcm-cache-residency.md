@@ -485,6 +485,18 @@ handles, loop and processing state remain valid until actual native ACK. The
 callback reserves retirement/feedback capacity before claiming and changing
 state. Preparation, large owners and file readers retire off-thread.
 
+Pure KEYLOCK changes keep that transaction and the current physical extent,
+without manufacturing a loop edit. The supported k=0 finite NormalLoop path
+admits actual current/paused/retained voices against their own source, timing,
+fractional feed and selected-set ramp coverage. Source cursor, loop, voice
+generation and EQ remain continuous; mode-specific Native/FIFO retirement stays
+on the existing ownership path. Own WindowWork ACK and source-bound mode
+application/readiness feedback are separate. Active ON waits for usable current
+wet processing, while later exact source-candidate adoption remains independently
+guarded. Full-source scalar commands also carry their own source/generation and
+mode-request ACK rather than settling from a successful enqueue. See
+[live mode feedback](key-lock-backend.md#live-mode-transactions-and-feedback).
+
 When a start requests the same immutable source, exact resident range and DSP
 context, the transaction reuses the existing full-mix PCM and matching accepted
 StemSet handles at the same window revision. It consumes no cold-worker slot and

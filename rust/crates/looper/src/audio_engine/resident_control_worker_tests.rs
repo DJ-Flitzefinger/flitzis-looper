@@ -1,4 +1,6 @@
 //! Real bounded worker -> command drain -> ACK control proofs with raw WAV oracles.
+#[path = "resident_key_lock_worker_tests.rs"]
+mod resident_key_lock_worker_tests;
 #[path = "resident_lifecycle_worker_tests.rs"]
 mod resident_lifecycle_worker_tests;
 #[path = "resident_native_worker_tests.rs"]

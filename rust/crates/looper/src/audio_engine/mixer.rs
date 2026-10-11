@@ -204,6 +204,11 @@ pub struct RtMixer {
 
     /// Per-pad Key Lock state (preserve pitch when tempo changes).
     pad_key_lock_enabled: [bool; NUM_SAMPLES],
+    pad_key_lock_request_id: [u64; NUM_SAMPLES],
+    pad_key_lock_rejected: [bool; NUM_SAMPLES],
+    pad_key_lock_pending_on: [bool; NUM_SAMPLES],
+    pad_key_lock_ack_source: [Option<(u64, usize)>; NUM_SAMPLES],
+    pad_key_lock_status: [Option<super::input_runtime_binding::KeyLockStatus>; NUM_SAMPLES],
 
     /// Authoritative output seconds per quarter when BPM lock is enabled.
     master_period_seconds: Option<f64>,
@@ -333,6 +338,11 @@ impl RtMixer {
             bpm_lock_enabled: false,
             global_parameters_drained: true,
             pad_key_lock_enabled: std::array::from_fn(|_| false),
+            pad_key_lock_request_id: [0; NUM_SAMPLES],
+            pad_key_lock_rejected: [false; NUM_SAMPLES],
+            pad_key_lock_pending_on: [false; NUM_SAMPLES],
+            pad_key_lock_ack_source: [None; NUM_SAMPLES],
+            pad_key_lock_status: [None; NUM_SAMPLES],
             master_period_seconds: None,
             pad_period_seconds: std::array::from_fn(|_| None),
             pad_phase_anchor_frame: std::array::from_fn(|_| 0.0),
@@ -624,20 +634,49 @@ impl RtMixer {
             .filter(|voice| voice.active && voice.sample_id == id)
             .all(|voice| {
                 voice.sample.as_ref().is_some_and(|sample| {
-                    full(sample)
-                        || (self.pad_key_lock_enabled[id]
-                            && self.sample_bank[id]
-                                .as_ref()
-                                .is_some_and(|bank| bank.same_source(sample))
-                            && !voice.paused
-                            && self.normal_key_lock_voice_available(
-                                id,
-                                voice,
-                                sample,
-                                self.prepared_stems[id].as_ref(),
-                            ))
+                    full(sample) || self.normal_key_lock_pinned_voice_available(id, voice)
                 })
             })
+    }
+
+    /// A bank replacement never authorizes the retained voice's source or ramp.
+    /// Paused voices use their frozen actual source clock without advancing it.
+    fn normal_key_lock_pinned_voice_available(&self, id: usize, voice: &VoiceSlot) -> bool {
+        let Some(sample) = voice.sample.as_ref() else {
+            return false;
+        };
+        if self.sample_bank[id]
+            .as_ref()
+            .is_some_and(|bank| bank.same_source(sample))
+        {
+            self.normal_key_lock_voice_available(
+                id,
+                voice,
+                sample,
+                self.prepared_stems[id].as_ref(),
+            )
+        } else {
+            voice.source_admission.as_ref().is_some_and(|admission| {
+                NativeVoiceHistoryContext {
+                    admission,
+                    lifetime: &voice.history_lifetime,
+                    generation: voice.generation,
+                    preparation_epoch: voice.stretch.source_epoch_owner(),
+                    accepted: voice.source_timing.accepted,
+                }
+                .capture(sample, self.sample_rate_hz as u32)
+                .is_some()
+            }) && voice.source_loop_region.is_some()
+                && voice.frozen_stems.as_ref().is_some_and(|frozen| {
+                    self.normal_key_lock_voice_selection_available(
+                        id,
+                        voice,
+                        sample,
+                        frozen.set.as_ref(),
+                        (frozen.selection, frozen.transition),
+                    )
+                })
+        }
     }
 
     fn normal_key_lock_bank_available(
@@ -881,6 +920,23 @@ impl RtMixer {
         self.current_timing_acknowledgements.clear(id);
         self.stem_enabled_mask[id] = STEM_COMPONENT_MASK;
         self.stem_transitions[id].clear();
+        if let Some(sample) = &self.sample_bank[id] {
+            self.pad_key_lock_ack_source[id] = self
+                .input_runtime_ownership
+                .source_generation(id, sample, self.sample_rate_hz as u32)
+                .map(|generation| (generation, sample.source_address()));
+        }
+        self.pad_key_lock_request_id[id] = 0;
+        self.pad_key_lock_rejected[id] = false;
+        if !self
+            .voices
+            .iter()
+            .any(|voice| voice.active && voice.sample_id == id)
+        {
+            self.pad_key_lock_pending_on[id] = false;
+        }
+        self.pad_key_lock_status[id] = None;
+        self.publish_key_lock_status(id);
         true
     }
 
@@ -1150,6 +1206,9 @@ impl RtMixer {
         let key_lock = intent
             .key_lock
             .unwrap_or_else(|| self.pad_key_lock_enabled.get(id).copied().unwrap_or(false));
+        let mode_only = intent.key_lock.is_some()
+            && intent.loop_region.is_none()
+            && intent.seek_position_s.is_none();
         let loop_region = self
             .sample_bank
             .get(id)
@@ -1162,6 +1221,10 @@ impl RtMixer {
             });
         let valid = id < NUM_SAMPLES
             && publication.current()
+            && intent.key_lock_request_id.is_none_or(|request| {
+                self.input_runtime_ownership
+                    .key_lock_request_current(id, request)
+            })
             && sample.valid_residency(self.sample_rate_hz as u32, self.channels)
             && self.source_binding_current(id, binding)
             && (!key_lock
@@ -1187,7 +1250,7 @@ impl RtMixer {
                                 // voices preserve their position; old voices keep their own
                                 // frozen source/selection, independently of future bank ranges.
                                 intent.seek_position_s.is_none()
-                                    && key_lock == self.pad_key_lock_enabled[id]
+                                    && (mode_only || key_lock == self.pad_key_lock_enabled[id])
                                     && voice.sample.as_ref().is_some_and(|old| {
                                         if old.same_source(sample) {
                                             intent.loop_region.is_none()
@@ -1267,7 +1330,12 @@ impl RtMixer {
                             // adopt that bank into an older effective source.
                             // A later explicit native start retires its old pin.
                             return intent.seek_position_s.is_none()
-                                && key_lock == self.pad_key_lock_enabled[id]
+                                && (if mode_only {
+                                    super::native_source_coverage::complete_view_available(old)
+                                        || self.normal_key_lock_pinned_voice_available(id, voice)
+                                } else {
+                                    key_lock == self.pad_key_lock_enabled[id]
+                                })
                                 && voice.source_loop_region.is_some()
                                 && voice.frozen_stems.is_some();
                         }
@@ -1285,13 +1353,32 @@ impl RtMixer {
                         })
                     })
                 });
-        if !valid
+        let native_admitted =
+            valid && (!key_lock || self.pad_key_lock_enabled[id] || self.reserve_key_lock_mode(id));
+        if !native_admitted
             || !publication.claim_resident()
             || !publication.current()
             || !self.source_binding_current(id, binding)
         {
+            let own_mode_current = id < NUM_SAMPLES
+                && publication.current()
+                && self.source_binding_current(id, binding);
             publication.mark_rejected();
             if id < NUM_SAMPLES {
+                if let Some(request) = intent.key_lock_request_id
+                    && own_mode_current
+                    && self
+                        .input_runtime_ownership
+                        .key_lock_request_current(id, request)
+                {
+                    self.pad_key_lock_request_id[id] = request;
+                    self.pad_key_lock_ack_source[id] = self
+                        .input_runtime_ownership
+                        .binding_source_generation(id, binding)
+                        .map(|generation| (generation, binding.source_address));
+                    self.pad_key_lock_rejected[id] = true;
+                    self.publish_key_lock_status(id);
+                }
                 self.input_runtime_ownership
                     .finish_resident_control(id, publication.expected);
             }
@@ -1334,11 +1421,17 @@ impl RtMixer {
                 }
             }
         }
-        if let Some(enabled) = intent.key_lock
-            && self.pad_key_lock_enabled[id] != enabled
-        {
-            self.pad_key_lock_enabled[id] = enabled;
-            self.invalidate_prepared_for_pad(id);
+        if let Some(enabled) = intent.key_lock {
+            self.apply_pad_key_lock_mode(id, enabled);
+        }
+        if let Some(request) = intent.key_lock_request_id {
+            self.pad_key_lock_request_id[id] = request;
+            self.pad_key_lock_rejected[id] = false;
+            self.pad_key_lock_ack_source[id] = self
+                .input_runtime_ownership
+                .source_generation(id, sample, self.sample_rate_hz as u32)
+                .map(|generation| (generation, sample.source_address()));
+            self.publish_key_lock_status(id);
         }
         if let Some(position) = intent.seek_position_s {
             let did_seek = self.seek_sample_with_output_frame(id, position, output_frame);
@@ -1899,7 +1992,7 @@ impl RtMixer {
         let id = config.sample_id;
 
         // Sample is already playing? -> reset play position
-        for voice_slot in &mut self.voices {
+        for (voice_index, voice_slot) in self.voices.iter_mut().enumerate() {
             if voice_slot.active && voice_slot.sample_id == id {
                 self.stem_transitions[id].clear();
                 // Retrigger is explicit even when its integer phase happens to match a loop edge.
@@ -1921,22 +2014,58 @@ impl RtMixer {
                 } else {
                     voice_slot.start_rt(config, retirement);
                 }
+                self.rearm_key_lock_after_voice_start(id, voice_index);
                 return true;
             }
         }
 
         // Start new voice slot
-        for voice_slot in &mut self.voices {
+        for (voice_index, voice_slot) in self.voices.iter_mut().enumerate() {
             if !voice_slot.active {
                 self.stem_transitions[id].clear();
                 self.pad_dsp_chains[id].reset();
                 voice_slot.start_rt(config, retirement);
+                self.rearm_key_lock_after_voice_start(id, voice_index);
                 return true;
             }
         }
 
         // No free voice slot: drop deterministically.
         false
+    }
+
+    fn rearm_key_lock_after_voice_start(&mut self, id: usize, voice_index: usize) {
+        if self.pad_key_lock_enabled[id] && self.pad_key_lock_request_id[id] != 0 {
+            // Start/restart explicitly creates a new clock. Admit that exact source domain
+            // now, before first-render preflight; a domain-less fresh finite clock cannot
+            // prove Native coverage. This is the same configuration the render path applies.
+            let voice = &self.voices[voice_index];
+            if let Some(sample) = &voice.sample
+                && let Some(region) = voice
+                    .source_loop_region
+                    .or_else(|| self.effective_loop_region(id, sample.frame_count()))
+            {
+                let domain = self
+                    .timing_for_voice(voice)
+                    .loop_domain(sample.frame_count(), region);
+                self.voices[voice_index]
+                    .source_playback
+                    .configure_domain(domain);
+            }
+            // Neither a stopped reserve nor retained A's earlier wet output certifies this
+            // new B/retriggered voice. Keep its own receipt guarded through actual first wet,
+            // including parameter targets drained after this start in the same callback.
+            self.pad_key_lock_pending_on[id] = true;
+            // Reset leaves the predecessor's used handle dirty until worker-owned recycling.
+            // Claim the already warmed clean owner now: first-chunk readiness must never read
+            // predecessor used=true before process_source exchanges that handle. Failure keeps
+            // the newly started source/EQ clock on its dry baseline under this exact receipt.
+            if !self.voices[voice_index].stretch.reserve_wet_mode() {
+                self.cancel_pending_key_lock(id);
+                return;
+            }
+        }
+        self.publish_key_lock_status(id);
     }
 
     /// Sets the global volume multiplier.
@@ -1982,20 +2111,271 @@ impl RtMixer {
         if enabled && (0..NUM_SAMPLES).any(|id| !self.key_lock_context_available(id)) {
             return;
         }
-        self.invalidate_prepared_for_all();
-        self.pad_key_lock_enabled.fill(enabled);
+        for id in 0..NUM_SAMPLES {
+            self.set_pad_key_lock(id, enabled);
+        }
+    }
+
+    fn key_lock_needs_live_readiness(&self, id: usize) -> bool {
+        self.voices.iter().any(|voice| {
+            voice.active
+                && voice.sample_id == id
+                && [
+                    voice.source_playback.tempo_ratio(),
+                    self.tempo_ratio_for_source_period(
+                        self.timing_for_voice(voice).period_seconds(),
+                    ),
+                ]
+                .into_iter()
+                .any(|ratio| {
+                    (super::rubberband_backend::pitch_scale_for_tempo_ratio(ratio) - 1.0).abs()
+                        > super::prepared_native_history::PITCH_SCALE_EPSILON
+                })
+        })
+    }
+
+    fn reserve_key_lock_mode(&mut self, id: usize) -> bool {
+        let mut saw_voice = false;
+        for voice in self
+            .voices
+            .iter_mut()
+            .filter(|voice| voice.active && voice.sample_id == id)
+        {
+            saw_voice = true;
+            if !voice.stretch.reserve_wet_mode() {
+                return false;
+            }
+        }
+        saw_voice
+            || self
+                .voices
+                .iter_mut()
+                .filter(|voice| !voice.active)
+                .any(|voice| voice.stretch.reserve_wet_mode())
+    }
+
+    fn cancel_pending_key_lock(&mut self, id: usize) {
+        self.pad_key_lock_pending_on[id] = false;
+        self.pad_key_lock_enabled[id] = false;
+        self.pad_key_lock_rejected[id] = true;
+        self.invalidate_prepared_for_pad(id);
+        for voice in self
+            .voices
+            .iter_mut()
+            .filter(|voice| voice.active && voice.sample_id == id)
+        {
+            voice.stretch.mode_changed(false);
+        }
+        self.publish_key_lock_status(id);
+    }
+
+    /// Recheck pending voices at the render boundary. A failed new ON never replaces the dry
+    /// feed, source position, or EQ history; confirmed wet modes retain their own baseline.
+    fn preflight_pending_key_lock(&mut self) {
+        let mut pending = RtRenderPadActivity::default();
+        for voice in &self.voices {
+            if voice.active && self.pad_key_lock_pending_on[voice.sample_id] {
+                pending.record(voice.sample_id);
+            }
+        }
+        for id in pending.iter() {
+            if !self.key_lock_context_available(id)
+                || self
+                    .voices
+                    .iter()
+                    .filter(|voice| voice.active && voice.sample_id == id)
+                    .any(|voice| voice.stretch.wet_mode_failed() || !voice.stretch.wet_mode_armed())
+            {
+                self.cancel_pending_key_lock(id);
+            }
+        }
+    }
+
+    fn finish_pending_key_lock(&mut self, id: usize) {
+        if !self.pad_key_lock_pending_on[id] {
+            return;
+        }
+        let mut ready = true;
+        let mut failed = false;
+        for voice in self
+            .voices
+            .iter()
+            .filter(|voice| voice.active && voice.sample_id == id)
+        {
+            if voice.stretch.wet_mode_failed() || !voice.stretch.wet_mode_armed() {
+                failed = true;
+            }
+            if [
+                voice.source_playback.tempo_ratio(),
+                self.tempo_ratio_for_source_period(self.timing_for_voice(voice).period_seconds()),
+            ]
+            .into_iter()
+            .any(|ratio| {
+                (super::rubberband_backend::pitch_scale_for_tempo_ratio(ratio) - 1.0).abs()
+                    > super::prepared_native_history::PITCH_SCALE_EPSILON
+            }) {
+                ready &= !voice.paused && voice.stretch.wet_output_ready();
+            }
+        }
+        if ready {
+            self.pad_key_lock_pending_on[id] = false;
+        } else if failed {
+            self.cancel_pending_key_lock(id);
+            return;
+        }
     }
 
     pub fn set_pad_key_lock(&mut self, id: usize, enabled: bool) {
         if id >= NUM_SAMPLES {
             return;
         }
-        if enabled && !self.key_lock_context_available(id) {
+        if enabled
+            && (!self.key_lock_context_available(id)
+                || (!self.pad_key_lock_enabled[id] && !self.reserve_key_lock_mode(id)))
+        {
             return;
         }
 
-        self.pad_key_lock_enabled[id] = enabled;
-        self.invalidate_prepared_for_pad(id);
+        // Legacy restoration/control has no own-operation acknowledgement. Never reuse a prior
+        // tracked request's receipt to certify this independently accepted command.
+        self.pad_key_lock_request_id[id] = 0;
+        self.pad_key_lock_rejected[id] = false;
+        self.apply_pad_key_lock_mode(id, enabled);
+        self.publish_key_lock_status(id);
+    }
+
+    fn apply_pad_key_lock_mode(&mut self, id: usize, enabled: bool) {
+        if self.pad_key_lock_enabled[id] != enabled {
+            self.pad_key_lock_enabled[id] = enabled;
+            self.pad_key_lock_pending_on[id] = enabled
+                && (self.key_lock_needs_live_readiness(id)
+                    || (self.pad_key_lock_request_id[id] != 0
+                        && !self
+                            .voices
+                            .iter()
+                            .any(|voice| voice.active && voice.sample_id == id)));
+            self.invalidate_prepared_for_pad(id);
+            for voice in &mut self.voices {
+                if voice.active && voice.sample_id == id {
+                    voice.stretch.mode_changed(enabled);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn set_pad_key_lock_request(
+        &mut self,
+        id: usize,
+        enabled: bool,
+        request_id: u64,
+        binding: super::input_runtime_binding::InputPadBinding,
+        source_generation: u64,
+    ) {
+        if id >= NUM_SAMPLES
+            || !self
+                .input_runtime_ownership
+                .key_lock_request_current(id, request_id)
+            || !self.source_binding_current(id, binding)
+            || self
+                .input_runtime_ownership
+                .binding_source_generation(id, binding)
+                != Some(source_generation)
+        {
+            return;
+        }
+        self.pad_key_lock_request_id[id] = request_id;
+        self.pad_key_lock_ack_source[id] = self
+            .input_runtime_ownership
+            .binding_source_generation(id, binding)
+            .map(|generation| (generation, binding.source_address));
+        self.pad_key_lock_rejected[id] = enabled
+            && (!self.key_lock_context_available(id)
+                || (!self.pad_key_lock_enabled[id] && !self.reserve_key_lock_mode(id)));
+        if !self.pad_key_lock_rejected[id] {
+            self.apply_pad_key_lock_mode(id, enabled);
+        }
+        self.publish_key_lock_status(id);
+    }
+
+    fn publish_key_lock_status(&mut self, id: usize) {
+        if self.pad_key_lock_ack_source[id].is_none() {
+            return;
+        }
+        let Some(sample) = self.sample_bank[id].as_ref() else {
+            return;
+        };
+        let Some(source_generation) =
+            self.input_runtime_ownership
+                .source_generation(id, sample, self.sample_rate_hz as u32)
+        else {
+            return;
+        };
+        if self.pad_key_lock_ack_source[id] != Some((source_generation, sample.source_address())) {
+            return;
+        }
+        let enabled = self.pad_key_lock_enabled[id];
+        let mut state = if enabled { "armed" } else { "dry" };
+        let mut ready = true;
+        let mut saw_voice = false;
+        let mut all_paused = true;
+        let mut native_failed = false;
+        if self.pad_key_lock_rejected[id] {
+            state = "error";
+            ready = false;
+        } else if enabled {
+            for voice in self
+                .voices
+                .iter()
+                .filter(|voice| voice.active && voice.sample_id == id)
+            {
+                saw_voice = true;
+                all_paused &= voice.paused;
+                native_failed |= voice.stretch.wet_mode_failed();
+                if voice.paused {
+                    ready &= voice.stretch.wet_mode_armed();
+                } else if (super::rubberband_backend::pitch_scale_for_tempo_ratio(
+                    voice.source_playback.tempo_ratio(),
+                ) - 1.0)
+                    .abs()
+                    > super::prepared_native_history::PITCH_SCALE_EPSILON
+                {
+                    state = "wet";
+                    ready &= voice.stretch.wet_render_ready();
+                }
+            }
+            if !saw_voice {
+                native_failed = self
+                    .voices
+                    .iter()
+                    .all(|voice| voice.stretch.wet_mode_failed());
+                ready = self
+                    .voices
+                    .iter()
+                    .any(|voice| !voice.active && voice.stretch.wet_mode_armed());
+            }
+            if native_failed {
+                state = "error";
+                ready = false;
+            } else if !ready || (self.pad_key_lock_pending_on[id] && !all_paused) {
+                state = "waiting";
+                ready = false;
+            }
+        }
+        let status = super::input_runtime_binding::KeyLockStatus {
+            source_generation,
+            source_address: sample.source_address(),
+            window_revision: sample.window_revision(),
+            request_id: self.pad_key_lock_request_id[id],
+            effective: enabled && (!self.pad_key_lock_pending_on[id] || !saw_voice || all_paused),
+            ready,
+            state,
+            error: (state == "error").then_some("Key Lock native processing is unavailable"),
+        };
+        if self.pad_key_lock_status[id] != Some(status) {
+            self.input_runtime_ownership
+                .publish_key_lock_status(id, status);
+            self.pad_key_lock_status[id] = Some(status);
+        }
     }
 
     #[cfg(test)]
@@ -2498,6 +2878,10 @@ impl RtMixer {
                 voice_slot.stop_rt(retirement);
             }
         }
+        if self.pad_key_lock_pending_on[id] && !self.reserve_key_lock_mode(id) {
+            self.cancel_pending_key_lock(id);
+        }
+        self.publish_key_lock_status(id);
     }
 
     /// Pause playback of a specific sample without resetting position.
@@ -2523,6 +2907,7 @@ impl RtMixer {
                 voice_slot.pause();
             }
         }
+        self.publish_key_lock_status(id);
     }
 
     /// Resume playback of a paused sample from its saved position.
@@ -2548,6 +2933,7 @@ impl RtMixer {
                 voice_slot.resume();
             }
         }
+        self.publish_key_lock_status(id);
     }
 
     /// Unloads a sample from the sample bank.
@@ -2744,7 +3130,9 @@ impl RtMixer {
         let channels = self.channels;
         let sample_rate_hz = self.sample_rate_hz;
         let volume = self.volume;
+        self.preflight_pending_key_lock();
         let pad_key_lock_enabled = &self.pad_key_lock_enabled;
+        let pad_key_lock_pending_on = &self.pad_key_lock_pending_on;
         // Derive each target once before borrowing voices; start and render use
         // the same authoritative period/rate path.
         let voice_timings: [VoiceSourceTiming; MAX_VOICES] =
@@ -2852,6 +3240,13 @@ impl RtMixer {
                             .stretch
                             .chunk_until_prepared_adoption(frame, frames - rendered)
                     });
+                    let remaining = if pad_key_lock_pending_on[voice.sample_id] {
+                        voice.stretch.chunk_until_mode_readiness(remaining)
+                    } else {
+                        remaining
+                    };
+                    let pending_dry = pad_key_lock_pending_on[voice.sample_id]
+                        && voice.stretch.pending_mode_needs_dry();
                     let (chunk_frames, tempo_ratio) = voice.source_playback.chunk(remaining);
                     let position = voice.source_playback.position();
                     let source_plan = SourceReadPlan {
@@ -2906,6 +3301,15 @@ impl RtMixer {
                         chunk_frames,
                         pad_key_lock_enabled[voice.sample_id],
                     );
+                    if pad_key_lock_pending_on[voice.sample_id]
+                        && (pending_dry
+                            || voice.stretch.wet_mode_failed()
+                            || !voice.stretch.wet_render_ready())
+                    {
+                        voice.stretch.retain_dry_output(chunk_frames);
+                    } else {
+                        voice.stretch.record_wet_output();
+                    }
                     source_transition.advance_fractional(chunk_frames as f64 * tempo_ratio);
                     let pad_dsp_chain = &mut pad_dsp_chains[voice.sample_id];
                     pad_dsp_chain.bind_source(
@@ -2968,6 +3372,10 @@ impl RtMixer {
             pad_playhead_frame[voice.sample_id] = Some(voice.frame_pos);
         }
         self.retire_unused_pair_components(retirement);
+        for id in pad_activity.iter() {
+            self.finish_pending_key_lock(id);
+            self.publish_key_lock_status(id);
+        }
     }
 }
 

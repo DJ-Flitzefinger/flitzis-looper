@@ -512,3 +512,24 @@ Concrete implementation slices, dependencies, source seams and full acceptance g
 ### KEYLOCK feedback/preparation phases
 
 An existing warmed unique Native handle can render initial wet audio from the actual current feed after a supported mode/window change; a later source-specific preparation candidate adopts only at its exact output-frame/SourcePlayback/read-plan match (existing4096 output-frame horizon). Mode/window callback ACK, actual wet processing and source-candidate adoption are distinct. Do not add an unconditional candidate wait or treat WindowACK as source Native adoption. Pause/resume follows actual SourcePlayback, not elapsed global clock. Existing Residency requested/previous/owner, effective/error/unconfirmed, eight-attempt/30-second retry and claimed-tail semantics remain the authoritative status pipeline. Global broadcasts collect bounded per-pad outcomes across all targets and expose partial/mixed failures; unchanged requested values are not proof of convergence. Current controller/UI source seams must be reread against the implemented result.
+
+Pure KEYLOCK intent has no implicit physical loop or seek edit. If an existing
+pending transaction contains a real geometry/seek change, a superseding mode
+request retains that coupled intent. Repeated identical pending intent retains
+the same work and deadline. Each callback mode application carries its own
+monotonic request identity, current source fence and window revision. A bounded
+scalar snapshot reports the applied mode and whether stopped/paused playback is
+armed, playing output is dry/wet, or preparation is waiting/failed. Control reads
+recheck current source identity; accepted window publication alone cannot settle
+an active ON request without usable wet processing. No source-candidate adoption
+is implied by this snapshot.
+
+The same Residency authority supplies pad and global display selectors. Green/red
+reflect confirmed mode; visible pending, unconfirmed, error and mixed status
+remains separate from requested intent. Explicit global broadcasts visit every
+loaded target across banks even when one target fails. A later local request
+supersedes only that target; another explicit global action broadcasts again.
+This adds no persistent inheritance flag, parallel playback queue or source owner.
+The controller-test-coverage delta replaces the historical same-global-value
+KEYLOCK no-op scenario with explicit rebroadcast and per-target pending reuse;
+the existing BPM-lock no-op and guarded anchor scenarios remain required.

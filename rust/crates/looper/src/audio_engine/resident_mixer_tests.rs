@@ -524,13 +524,13 @@ fn native_keylock_finite_context_relocation_keeps_actual_handle_fifo_history_fil
 }
 
 #[test]
-fn unavailable_callback_controls_preserve_finite_audio_and_full_metadata() {
+fn unsupported_physical_controls_and_supported_mode_controls_preserve_finite_metadata_and_audio() {
     let full = complete();
     let finite = full
         .window(START, END, 1, ResidentContext::FiniteLoop)
         .unwrap();
     let mut actual = fixture(&finite, None, false);
-    let mut reference = fixture(&finite, None, false);
+    let mut reference = fixture(&full, None, false);
     assert_eq!(finite.frame_count(), 9000);
     assert_eq!(finite.samples.len(), END - START);
     assert_eq!(render(&mut actual, 0, 81), render(&mut reference, 0, 81));
@@ -538,14 +538,42 @@ fn unavailable_callback_controls_preserve_finite_audio_and_full_metadata() {
     actual.set_pad_loop_region(0, 0.0, None);
     assert!(!actual.seek_sample(0, 0.01));
     assert!(!actual.seek_sample(0, 0.17));
-    actual.set_pad_key_lock(0, true);
-    actual.set_key_lock(true);
-    assert!(!actual.pad_key_lock_enabled[0]);
+    assert_eq!(actual.loop_region_frames(0), (START, Some(END)));
     assert!(voice(&actual).source_playback.matches_exact(&before));
     assert_eq!(
         render(&mut actual, 81, 1999),
         render(&mut reference, 81, 1999)
     );
+    let before_mode = voice(&actual).source_playback;
+    let generation = voice(&actual).generation;
+    // Actual same-region NormalLoop feed is supported for mode-only scalar/global ON.
+    // The complete original PCM retains the same accepted timing and independent storage.
+    for mixer in [&mut actual, &mut reference] {
+        mixer.set_pad_key_lock(0, true);
+        mixer.set_key_lock(true);
+        assert!(mixer.pad_key_lock_enabled[0]);
+    }
+    assert!(voice(&actual).source_playback.matches_exact(&before_mode));
+    assert_eq!(voice(&actual).generation, generation);
+    let mut frame = 2080;
+    for frames in [1, 127, 384, 512, 777, 1024] {
+        assert_eq!(
+            render(&mut actual, frame, frames),
+            render(&mut reference, frame, frames)
+        );
+        assert!(
+            voice(&actual)
+                .source_playback
+                .matches_exact(&voice(&reference).source_playback)
+        );
+        assert_eq!(
+            voice(&actual).stretch.pending_fifo_frames(),
+            voice(&reference).stretch.pending_fifo_frames()
+        );
+        frame += frames as u64;
+    }
+    assert_eq!(actual.loop_region_frames(0), (START, Some(END)));
+    assert_eq!(voice(&actual).generation, generation);
 }
 
 #[test]

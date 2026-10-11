@@ -200,6 +200,9 @@ def audio_engine_mock() -> Iterator[Mock]:
         audio_engine.return_value.cancel_pad_launches = Mock(return_value=False)
         audio_engine.return_value.cancel_all_launches = Mock(return_value=[])
         audio_engine.return_value.admitted_launch_ids = Mock(return_value=[])
+        # Missing callback feedback deliberately remains unknown. Scalar enqueue
+        # and project booleans do not prove an actual mode acknowledgement.
+        audio_engine.return_value.pad_key_lock_status = Mock(return_value=None)
 
         def runtime_binding(sample_id: int) -> FakeInputRuntimePadBinding:
             metadata = audio_engine.return_value.current_constant_timing.return_value

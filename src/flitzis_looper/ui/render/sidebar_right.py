@@ -24,6 +24,7 @@ from flitzis_looper.ui.render.control_gestures import (
     hovered_wheel_steps,
     item_middle_clicked,
 )
+from flitzis_looper.ui.render.key_lock import render_key_lock_button
 
 if TYPE_CHECKING:
     from flitzis_looper.ui.context import UiContext
@@ -316,7 +317,6 @@ def _pitch_step_button(label: str, width: float, *, learn_pending: bool) -> tupl
 
 def sidebar_right(ctx: UiContext) -> None:
     with style_var(imgui.StyleVar_.item_spacing, (0.0, SPACING)):
-        key_lock = ctx.state.project.key_lock
         bpm_lock = ctx.state.project.bpm_lock
 
         _speed_controls(ctx)
@@ -324,12 +324,15 @@ def sidebar_right(ctx: UiContext) -> None:
         imgui.dummy(size=(-1, SPACING))
 
         with style_var(imgui.StyleVar_.item_spacing, (0.0, SPACING / 4)):
-            key_lock_style: ButtonStyleName = "mode-on" if key_lock else "mode-off"
-            with button_style(key_lock_style):
-                if imgui.button("KEY LOCK##key_lock", (-1, 0)):
-                    ctx.audio.global_.toggle_key_lock()
+            _render_global_key_lock(ctx)
 
             bpm_lock_style: ButtonStyleName = "mode-on" if bpm_lock else "mode-off"
             with button_style(bpm_lock_style):
                 if imgui.button("BPM LOCK##bpm_lock", (-1, 0)):
                     ctx.audio.global_.toggle_bpm_lock()
+
+
+def _render_global_key_lock(ctx: UiContext) -> None:
+    render_key_lock_button(
+        ctx.state.global_.key_lock_status(), "key_lock", ctx.audio.global_.toggle_key_lock
+    )

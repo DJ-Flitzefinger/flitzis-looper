@@ -72,6 +72,12 @@ def test_toggle_pad_key_lock(controller: AppController, audio_engine_mock: Mock)
 
 def test_set_pad_key_lock_no_op(controller: AppController, audio_engine_mock: Mock) -> None:
     controller.project.sample_paths[3] = "samples/foo.wav"
+    audio_engine_mock.pad_key_lock_status.return_value = {
+        "source_id": "loaded-3-1",
+        "source_generation": 1,
+        "effective": False,
+        "ready": True,
+    }
     controller.transport.pad.set_pad_key_lock(3, enabled=False)
 
     audio_engine_mock.set_pad_key_lock.assert_not_called()

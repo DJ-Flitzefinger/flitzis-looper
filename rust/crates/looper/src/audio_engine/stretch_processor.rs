@@ -49,6 +49,9 @@ pub struct StretchProcessor {
     adopted_request_id: Option<u64>,
     preparation: KeyLockPreparationLane,
     productive_history: Option<ProductiveSourceHistory>,
+    wet_rendered: bool,
+    wet_render_failed: bool,
+    wet_output_emitted: bool,
     // Standalone processors retain their worker. Mixer processors share an engine worker.
     _preparation_worker: Option<KeyLockPreparationWorker>,
 }
@@ -56,6 +59,78 @@ pub struct StretchProcessor {
 unsafe impl Send for StretchProcessor {}
 
 impl StretchProcessor {
+    pub(crate) fn wet_mode_failed(&self) -> bool {
+        self.wet_render_failed || self.preparation.worker_failed()
+    }
+
+    pub(crate) fn wet_render_ready(&self) -> bool {
+        self.wet_rendered && self.native.active && self.native.used
+    }
+
+    pub(crate) fn wet_output_ready(&self) -> bool {
+        self.wet_output_emitted
+    }
+
+    pub(crate) fn pending_mode_needs_dry(&self) -> bool {
+        !self.native.used
+    }
+
+    pub(crate) fn chunk_until_mode_readiness(&self, max_frames: usize) -> usize {
+        if self.native.used {
+            max_frames
+        } else {
+            max_frames.min(
+                self.native
+                    .block_size
+                    .saturating_sub(self.native.input_fifo.first().map_or(0, FixedFifo::len))
+                    .max(1),
+            )
+        }
+    }
+
+    pub(crate) fn wet_mode_armed(&self) -> bool {
+        (self.native.rubberband.is_some() && !self.native.dirty)
+            || self.preparation.warmed_reserve_available()
+    }
+
+    /// Claim the lane's already warmed handle before admitting a new mode. The exchange only
+    /// moves unique owners through fixed queues; Native preparation remains worker-owned.
+    pub(crate) fn reserve_wet_mode(&mut self) -> bool {
+        if self.wet_mode_failed() {
+            return false;
+        }
+        if self.native.rubberband.is_some() && !self.native.dirty {
+            return true;
+        }
+        if !self.preparation.exchange(&mut self.native.rubberband) {
+            return false;
+        }
+        self.native.dirty = false;
+        self.native.used = false;
+        self.native.pitch_scale = 1.0;
+        true
+    }
+
+    /// A pending ON warms Native while the previously effective dry feed reaches the EQ.
+    pub(crate) fn retain_dry_output(&mut self, frames: usize) {
+        self.copy_varispeed_output(frames.min(DEFAULT_BLOCK_SAMPLES));
+    }
+
+    pub(crate) fn record_wet_output(&mut self) {
+        // Called only after the render owner chose successful wet output. A worker failure
+        // observed later cannot relabel audio that already reached this callback as dry.
+        self.wet_output_emitted |= self.wet_render_ready();
+    }
+
+    /// Retire mode-specific Native/FIFO ownership without touching the source clock or EQ.
+    pub(crate) fn mode_changed(&mut self, enabled: bool) {
+        self.wet_rendered = false;
+        self.wet_render_failed = false;
+        self.wet_output_emitted = false;
+        if !enabled {
+            self.reset_rubberband_state();
+        }
+    }
     /// Scalar state already owned by the render path; no native processing or query.
     pub(crate) fn loop_acceptance_state(&self) -> (bool, f64, usize, usize, usize) {
         (
@@ -104,11 +179,17 @@ impl StretchProcessor {
             adopted_request_id: None,
             preparation,
             productive_history: None,
+            wet_rendered: false,
+            wet_render_failed: false,
+            wet_output_emitted: false,
             _preparation_worker: None,
         }
     }
 
     pub fn reset(&mut self) {
+        self.wet_rendered = false;
+        self.wet_render_failed = false;
+        self.wet_output_emitted = false;
         self.invalidate_prepared();
         self.productive_history = None;
         for channel in &mut self.varispeed {
@@ -151,6 +232,7 @@ impl StretchProcessor {
         output_frames: usize,
         preserve_pitch: bool,
     ) {
+        self.wet_rendered = false;
         let frames = output_frames.min(DEFAULT_BLOCK_SAMPLES);
         if frames == 0 {
             return;
@@ -179,6 +261,7 @@ impl StretchProcessor {
             {
                 // Never consume missing-tap zeros or touch productive native/FIFO/history state.
                 self.silence_output(frames);
+                self.wet_render_failed = preserve_pitch;
                 return;
             }
         }
@@ -321,6 +404,10 @@ impl StretchProcessor {
         {
             self.reset_rubberband_state();
             self.silence_output(output_samples);
+            self.wet_render_failed = true;
+        } else {
+            self.wet_rendered = true;
+            self.wet_render_failed = false;
         }
     }
 
@@ -418,6 +505,12 @@ impl StretchProcessor {
     #[cfg(test)]
     pub(crate) fn fail_preparation_worker(&self) {
         self.preparation.fail_worker();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn exhaust_warmed_reserve(&mut self) {
+        self.native.dirty = true;
+        self.preparation.withhold_warmed_reserve();
     }
 
     #[cfg(test)]

@@ -246,6 +246,23 @@ An already warmed unique Native handle MAY initially render wet from the actual 
 - **AND** stale, failed or superseded work SHALL leave effective audio intact with truthful pending/error state
 - **AND** supported fixed NormalLoop correction SHALL NOT open unproved seek/intro/tail, nonzero-pitch, P5a or whole-P4b guards
 
+#### Scenario: First wet readiness and failures retain truthful audio ownership
+- **WHEN** an ON request has its own callback ACK but has not emitted successful wet output
+- **THEN** playing nonneutral-rate audio SHALL retain its previous dry feed and continuous source/EQ chronology while the actual Native handle warms
+- **AND** the first wet handover SHALL follow the same bounded Native block boundary across callback partitions
+- **AND** worker, reserve or processing failure before that handover SHALL preserve dry output and report its own effective OFF and error
+- **AND** stopped or paused ON MAY report armed readiness after reserving an actual usable handle, while retaining the first-live-wet failure guard for subsequent playback
+- **AND** an explicit owned-ON launch or retrigger SHALL establish first wet readiness for its new voice; a previous voice's wet receipt SHALL NOT certify that voice
+- **AND** actual waiting feedback SHALL remain visible on global and pad controls after armed readiness even when no controller transaction remains
+- **AND** a failure after actual wet confirmation SHALL report the actual effective ON with error even if the UI missed the ready snapshot
+- **AND** terminal own-request feedback SHALL reconcile the actual audio baseline without treating the error as success or undoing already adopted geometry through project fields alone
+
+#### Scenario: A nonneutral rate target precedes ON in the same callback batch
+- **GIVEN** a dry voice has an applied unity ratio and a nonneutral SPEED or BPM target is drained before ON
+- **WHEN** its own ON transaction is admitted before the next render updates SourcePlayback
+- **THEN** both the authoritative rate target and applied ratio SHALL determine first-live-wet readiness without mutating source position during admission
+- **AND** the actual smoothed Native/FIFO/EQ trajectory SHALL retain the first-wet dry guard and own prewet failure baseline
+
 ### Requirement: E11-02 Explicit global broadcast and pad override
 The system SHALL broadcast every explicit global KEYLOCK action to all loaded pads, allow a later pad action to override only that pad, and broadcast a later global action again without an additional inheritance flag.
 Each target SHALL settle through the same existing per-pad pending/retry/unconfirmed transaction. A target failure SHALL NOT abort remaining loaded targets or roll back successful targets; partial/mixed/unconfirmed/error global status SHALL remain visible separately from requested intent. Stale predecessor feedback SHALL NOT rewind superseding intent or new content.

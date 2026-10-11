@@ -276,6 +276,7 @@ pub(crate) struct ResidentControlIntent {
     pub(crate) loop_region: Option<(usize, Option<usize>)>,
     pub(crate) seek_position_s: Option<f64>,
     pub(crate) key_lock: Option<bool>,
+    pub(crate) key_lock_request_id: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -478,6 +479,15 @@ pub enum ControlMessage {
     SetPadKeyLock {
         id: usize,
         enabled: bool,
+    },
+
+    /// Identity-bound mode command with its own actual callback acknowledgement.
+    SetPadKeyLockRequest {
+        id: usize,
+        enabled: bool,
+        request_id: u64,
+        binding: InputPadBinding,
+        source_generation: u64,
     },
 
     /// Set bounded per-pad beatgrid/downbeat timing metadata.
@@ -702,6 +712,7 @@ impl ControlMessage {
             ControlMessage::SetBpmLock(_)
             | ControlMessage::SetKeyLock(_)
             | ControlMessage::SetPadKeyLock { .. }
+            | ControlMessage::SetPadKeyLockRequest { .. }
             | ControlMessage::SetPadTimingMetadata { .. }
             | ControlMessage::SetLegacyPadTimingMetadata { .. }
             | ControlMessage::ClearPadConstantTiming { .. }

@@ -60,6 +60,7 @@ mod initial_loop_start;
 mod input_mapping;
 pub(crate) mod input_runtime_binding;
 pub use input_runtime_binding::InputRuntimePadBinding;
+mod key_lock_feedback;
 pub(crate) mod key_lock_preparation;
 #[cfg(test)]
 mod key_lock_source_preparation;
@@ -609,6 +610,8 @@ pub struct AudioEngine {
         Arc<Mutex<Producer<ControlMessage>>>,
         Arc<Mutex<rtrb::Consumer<AudioMessage>>>,
     )>,
+    #[cfg(test)]
+    test_parameter_producer: Option<Arc<Mutex<Producer<ControlParameterMessage>>>>,
     is_playing: bool,
     loader_tx: Sender<LoaderEvent>,
     loader_rx: Mutex<Receiver<LoaderEvent>>,
@@ -643,6 +646,17 @@ pub struct AudioEngine {
 }
 
 impl AudioEngine {
+    fn parameter_producer(&self) -> PyResult<&Arc<Mutex<Producer<ControlParameterMessage>>>> {
+        if let Some(handle) = &self.stream_handle {
+            return Ok(&handle.parameter_producer);
+        }
+        #[cfg(test)]
+        if let Some(producer) = &self.test_parameter_producer {
+            return Ok(producer);
+        }
+        Err(PyRuntimeError::new_err("Audio engine not initialized"))
+    }
+
     fn control_producer(&self) -> PyResult<&Arc<Mutex<Producer<ControlMessage>>>> {
         if let Some(handle) = &self.stream_handle {
             return Ok(&handle.producer);
@@ -884,6 +898,8 @@ impl AudioEngine {
             stream_handle: None,
             #[cfg(test)]
             test_control_channels: None,
+            #[cfg(test)]
+            test_parameter_producer: None,
             is_playing: false,
             loader_tx,
             loader_rx: Mutex::new(loader_rx),
@@ -1371,6 +1387,7 @@ impl AudioEngine {
         )?;
         dict.set_item("window_revision", sample.window_revision())?;
         dict.set_item("source_identity", sample.source_address())?;
+        dict.set_item("cache_backed", sample.residency.is_some())?;
         dict.set_item(
             "source_zero_frame",
             sample
@@ -1442,16 +1459,12 @@ impl AudioEngine {
         let now = self.input_clock.capture_ns();
         let received_at_ns =
             validated_input_timestamp(parse_input_timestamp(received_at_ns)?, now).unwrap_or(now);
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
         resident_relocation::launch_with_producer(
             self,
             ticket,
             exclusive,
             received_at_ns,
-            &handle.producer,
+            self.control_producer()?,
         )
     }
 
@@ -1594,11 +1607,7 @@ impl AudioEngine {
             return Err(PyValueError::new_err("id out of range"));
         }
         let intent = constant_timing::parse_intent(intent)?;
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-        constant_timing::set_intent(self, &handle.producer, sample_id, intent)
+        constant_timing::set_intent(self, self.control_producer()?, sample_id, intent)
     }
 
     /// Read declared native authority without claiming callback adoption or changing it.
@@ -2499,13 +2508,8 @@ impl AudioEngine {
             .pad_request_ids
             .lock()
             .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
-        let mut producer_guard = handle
-            .parameter_producer
+        let mut producer_guard = self
+            .parameter_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
@@ -2570,34 +2574,21 @@ impl AudioEngine {
         )
     }
 
-    pub fn set_pad_key_lock(&mut self, id: usize, enabled: bool) -> PyResult<()> {
+    /// Enqueue source-bound mode intent; only matching callback feedback confirms it.
+    /// Zero denotes saved intent admitted before a current loaded source exists.
+    pub fn set_pad_key_lock(&mut self, id: usize, enabled: bool) -> PyResult<u64> {
         if id >= NUM_SAMPLES {
             return Err(PyValueError::new_err("id out of range"));
         }
         resident_relocation::reconcile(self)?;
         self.admit_resident_key_lock(id, enabled)?;
 
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
+        key_lock_feedback::enqueue(self, id, enabled)
+    }
 
-        let mut producer_guard = handle
-            .producer
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
-
-        if producer_guard.is_full() {
-            return Err(PyRuntimeError::new_err(
-                "Failed to send SetPadKeyLock - buffer may be full",
-            ));
-        }
-        self.note_resident_key_lock_intent(id, enabled)?;
-        push_control_message(
-            &mut producer_guard,
-            ControlMessage::SetPadKeyLock { id, enabled },
-            "SetPadKeyLock",
-        )
+    /// Observe actual current-source mode/processing feedback, independently of enqueue.
+    pub fn pad_key_lock_status(&self, py: Python<'_>, id: usize) -> PyResult<Option<Py<PyDict>>> {
+        key_lock_feedback::status(self, py, id)
     }
 
     pub fn set_master_bpm(&mut self, bpm: f64) -> PyResult<()> {
@@ -3028,13 +3019,8 @@ impl AudioEngine {
             )));
         }
 
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
-        let mut producer_guard = handle
-            .producer
+        let mut producer_guard = self
+            .control_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
@@ -3055,13 +3041,8 @@ impl AudioEngine {
             )));
         }
 
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-
-        let mut producer_guard = handle
-            .producer
+        let mut producer_guard = self
+            .control_producer()?
             .lock()
             .map_err(|_| PyRuntimeError::new_err("Failed to acquire producer lock"))?;
 
@@ -3074,11 +3055,7 @@ impl AudioEngine {
 
     /// Unload a sample slot.
     pub fn unload_sample(&mut self, id: usize) -> PyResult<()> {
-        let handle = self
-            .stream_handle
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Audio engine not initialized"))?;
-        cold_load::unload_for_producer(self, id, &handle.producer)
+        cold_load::unload_for_producer(self, id, self.control_producer()?)
     }
 
     /// Send a ping message to the audio thread.

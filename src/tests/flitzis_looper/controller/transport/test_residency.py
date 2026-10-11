@@ -20,6 +20,7 @@ class Ticket:
         self.effective_seek_seconds: float | None = None
         self.previous_window_revision = 1
         self.window_revision = 2
+        self.key_lock_request_id: int | None = None
         self.launch_cancelled = False
 
     def cancel_launch(self) -> bool:
@@ -412,7 +413,24 @@ def test_changed_trigger_context_still_admits_new_preparation(
     controller.transport.residency.poll()
     audio_engine_mock.play_resident_control.assert_not_called()
     new.status = "accepted"
+    if change == "key-lock":
+        new.key_lock_request_id = 2
     controller.transport.residency.poll()
+    if change == "key-lock":
+        # This own Window ACK establishes geometry. An ON launch also needs the
+        # actual current source's prepared Native mode acknowledgement.
+        audio_engine_mock.play_resident_control.assert_not_called()
+        assert controller.transport.residency.key_lock_status(0).pending
+        audio_engine_mock.pad_key_lock_status.return_value = {
+            "source_id": "loaded-0-1",
+            "source_generation": 1,
+            "source_identity": 123,
+            "window_revision": new.window_revision,
+            "request_id": new.key_lock_request_id,
+            "effective": True,
+            "ready": True,
+        }
+        controller.transport.residency.poll()
     audio_engine_mock.play_resident_control.assert_called_once_with(
         new, exclusive=True, received_at_ns=456
     )
@@ -438,7 +456,7 @@ def test_key_lock_context_shares_loop_transaction_and_rolls_back_failure(
     ticket = resident(controller, audio_engine_mock)
     controller.transport.pad.set_pad_key_lock(0, enabled=True)
     audio_engine_mock.prepare_resident_control.assert_called_once_with(
-        0, start_s=3.0, end_s=4.0, position_s=None, key_lock=True
+        0, start_s=None, end_s=None, position_s=None, key_lock=True
     )
     assert controller.project.pad_key_lock[0]
     ticket.status = "failed"

@@ -145,6 +145,55 @@ fresh loader adoption; its completion requires genuine ownership/output/failure
 proof. Neutral reserves and the test-only preparation fixture stay separate.
 Later B5 audible crop/delay/transition compensation is a separate gate.
 
+## Live mode transactions and feedback
+
+Global and pad KEYLOCK actions use the same Residency transaction. A pure mode
+change prepares the current physical range without adding a loop edit or seek.
+Genuine pending geometry/seek edits remain coupled. Active finite admission is
+limited to the proved production k=0 NormalLoop feed, including both sides of an
+existing selected-set ramp and each retained old voice's own source/timing/domain.
+It preserves SourcePlayback, voice generation, loop region and chronological EQ.
+OFF retires mode-specific Native/FIFO/candidate state through existing worker
+ownership; ON can use a warmed unique handle on the actual current feed.
+
+`pad_key_lock_status` reads a bounded callback-owned, source-fenced mode snapshot.
+Its request identity and window revision identify actual application separately
+from enqueue and WindowWork publication. Stopped/paused processing can be armed;
+active nonneutral processing must have usable Native wet output before an ON
+transaction settles. Until the first usable Native block, the existing dry feed
+continues through the same EQ history; the handover uses that Native block
+boundary independently of callback partitions. A worker, reserve or processing
+failure before wet output preserves dry audio and reports effective OFF/error.
+Admission checks both the applied rate and authoritative rate target, including
+a SPEED or BPM command preceding ON in the same callback batch.
+Stopped/paused arming retains that first-live-wet guard for start/resume. An
+explicit owned-ON start or retrigger configures its fresh source domain before
+the first coverage check and re-arms readiness for that voice; a previous voice's
+wet receipt cannot certify the new voice. Waiting remains visible on the buttons
+even after the armed controller transaction has settled. After actual wet
+confirmation, an error reports the actual ON baseline even if UI polling missed
+the ready snapshot. Terminal feedback reconciles mode without undoing already
+adopted geometry through project fields. Later
+source-specific candidate adoption still requires the exact output frame,
+SourcePlayback, read plan and native permits; the mode snapshot does not certify
+that adoption. Reloaded source generations cannot inherit old feedback.
+
+Explicit global actions visit all currently loaded pads across banks, including
+targets whose requested value already equals the global value. A local action
+changes only its pad; a later global action broadcasts again. Individual failures
+remain visible while other targets settle. Buttons use confirmed red/green mode
+and separately show preparation, unconfirmed, error or mixed status. Toggles use
+requested intent during preparation. The existing global keyboard/MIDI/Learn
+routes share this controller; capturing Learn does not execute a toggle.
+
+These boundaries do not open finite seek/intro/tail, nonzero KEY, new Stem-set
+adoption, whole P4b/P5a, resource/music or Human hearing/visual gates.
+
+Stream setup creates the unique mixer owner on the heap before capturing it in
+the CPAL callback. Rendering only borrows that preallocated owner. The shared
+constructor has a hardware-free fixed 2-MiB stack regression; it does not certify
+actual device startup or hearing.
+
 ## Playback Semantics
 
 - Per-pad Key Lock off: playback is varispeed, so tempo and pitch move
@@ -832,8 +881,8 @@ R2 layout/hold and B7 captured pitch+retrigger use prepared guarded ownership;
 K1 remains engineering/guarded until real B6/B8 H-LIVE device acceptance. B5 remains
 test-only nonzero k; K-META grants no native pitch, device or hearing acceptance.
 
-## Pending direct extension2026-10-11
+## Direct live KEYLOCK correction2026-10-11
 
-[E11-01/02](pre-rust-extension-20261011.md) require the prioritized fixed NormalLoop k=0 correction through actual global/pad command, current-window/native ACK and wet Native/FIFO/filter output at nonunity SPEED/BPM-lock. Global actions broadcast to loaded pads, later pad actions affect only that pad, and a later explicit same-value global action broadcasts again. Pending/error UI follows actual feedback. Accepted lifecycle proof is a narrow prerequisite; remaining whole P4b/P5a/nonzero B5 and Human hearing gates remain OPEN.
+[E11-01/02](pre-rust-extension-20261011.md) now have the bounded X11-KEYLOCK software correction for fixed NormalLoop k=0 through actual global/pad command, current-window/native ACK and wet Native/FIFO/filter output at nonunity SPEED/BPM-lock. Global actions broadcast to loaded pads, later pad actions affect only that pad, and a later explicit same-value global action broadcasts again. Pending/error UI follows actual feedback. Hardware-free production-path, controller and draw tests cover this correction; accepted lifecycle proof remains a narrow prerequisite. Remaining whole P4b/P5a/nonzero B5 and Human app/device/visual/hearing gates remain OPEN.
 
-The pending correction keeps mode/window ACK, initial wet processing through an already warmed unique handle, and later exact source-candidate adoption separate. Initial wet output need not await that later4096-frame candidate; WindowACK alone does not prove source-specific adoption. Actual current SourcePlayback/feed and matching history permits remain authoritative through pause/resume and old voices.
+The correction keeps mode/window ACK, initial wet processing through an already warmed unique handle, and later exact source-candidate adoption separate. Initial wet output need not await that later4096-frame candidate; WindowACK alone does not prove source-specific adoption. Actual current SourcePlayback/feed and matching history permits remain authoritative through pause/resume and old voices.

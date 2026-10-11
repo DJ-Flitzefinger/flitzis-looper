@@ -54,9 +54,6 @@ class PadController:
                 self._transport._mark_project_changed()
             return
 
-        if self._project.pad_key_lock[sample_id] is enabled:
-            return
-
         self._transport.residency.set_key_lock(sample_id, enabled=enabled)
         self._transport._mark_project_changed()
 
