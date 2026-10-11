@@ -157,6 +157,12 @@ immediate change SHALL NOT silently discard the command.
 - **AND** polling SHALL NOT submit an implicit replacement operation; a later explicit ALL gesture SHALL request fresh own residency and effective-output authority even for the same mode and mask
 - **AND** genuine Native preparation failure or unaccepted candidate rejection SHALL remain observable and require explicit retry
 
+#### Scenario: First candidate is prepared after a productive FullMix voice was paused
+- **GIVEN** a current proper NormalLoop FullMix voice has produced genuine wet output and is paused before new-set registration and own Capture
+- **WHEN** its new complete-set candidate obtains own residency acceptance while the same voice remains paused
+- **THEN** timestamped paused callbacks SHALL consume no source, handover, Native FIFO or filter history and SHALL NOT report effective output
+- **AND** Resume SHALL retain that voice generation and exact source phase, Native, FIFO and filter state, complete the handover through actual resumed source consumption and confirm new-set wet output only through its own later preparation and effective receipt
+
 #### Scenario: Later candidate arrives during an owned handover
 - **GIVEN** V2 has been claimed and V1 remains the outgoing reader
 - **WHEN** disk candidate V3 or a new mode or mask intent arrives

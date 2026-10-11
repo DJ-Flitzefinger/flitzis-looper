@@ -655,3 +655,41 @@ unchanged; the existing build-only Release runtime is reused with current Python
 without installing an extension or changing the Human App.
 Paused-first adoption, the rest of task3.2, additional domains3.3, L4 and all later
 product/resource/Human acceptance gates remain open.
+
+### First new set after an already productive FullMix voice was paused
+
+A further public controller proof starts with genuine nonneutral FullMix wet
+output and current-source wet readiness at KEY LOCK ON/rate0.75. Ordinary
+`TransportController.playback.pause_pad()` sends real queued Pause commands before
+V2 file preparation, durable selection/reopen, registration or own Capture.
+The active pad and an independently tracked zero-gain other pad retain their
+voices. Actual candidate Capture/worker/Adopt accepts V2 while still paused and
+reports transitioning rather than effectiveness.
+
+The existing controller oracle now separates absolute callback time from consumed
+output frames. Timestamped paused partitions advance only absolute time. They
+produce silence/no source taps and retain source fraction, generation, Native,
+FIFOs, productive Native/DSP histories and handover progress. The independent raw
+Native and per-frame EQ are not fed during the gap. Ordinary queued Resume keeps
+the same voice and source phase; sample-exact complete-PCM/raw-Native/FIFO/EQ
+comparison then verifies the actual 128 consumed-source-frame ramp and later
+nonneutral V2 output.
+
+The later own 4096-frame Native preparation explicitly starts after the last
+Resume, and the pause offset remains constant through its adoption/output. Its
+independent warm PCM uses that bounded mapping; absolute callback timestamps are
+never rewound. Current callback time also accompanies Capture/Adopt and public
+Pause/Resume dispatch. Prepared work may be invalidated by Pause, Adopt or Resume
+without replacing the live Native, its actual FIFOs or consumed source history.
+
+The strengthened focused Release case passes in1.60s (compile57.56s). This is a
+test/spec/docs continuation with unchanged production code; it covers this first
+ON/rate0.75/mask1010 case and does not close the whole paused/rate/mask matrix,
+task3.2, domain3.3 or any subsequent product/resource/Human acceptance gate.
+The preceding Release runtime/import and Python checks remain reusable; no
+Native installation, App/device or hearing acceptance is involved.
+The affected public Native file passes4 tests in12.75s, and both shared-parent
+legacy controller paths pass freshly in1.68s/1.49s. Formatting, official strict
+validation, five relative-file links and whitespace pass. Package Clippy tests
+exit0 with the existing63 warnings (one duplicate), none in either changed test
+file. One independent nonauthor final review finds no concrete issue.

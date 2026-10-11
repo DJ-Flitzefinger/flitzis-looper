@@ -1968,6 +1968,22 @@ struct ReadyPlaybackAudio {
 
 #[pymethods]
 impl ReadyPlaybackAudio {
+    fn pause_sample(&self, id: usize) -> PyResult<()> {
+        self.producer
+            .lock()
+            .unwrap()
+            .push(ControlMessage::PauseSample { id })
+            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("test Pause queue full"))
+    }
+
+    fn resume_sample(&self, id: usize) -> PyResult<()> {
+        self.producer
+            .lock()
+            .unwrap()
+            .push(ControlMessage::ResumeSample { id })
+            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("test Resume queue full"))
+    }
+
     fn output_sample_rate(&self) -> u32 {
         RATE
     }
@@ -2055,6 +2071,10 @@ struct ControllerPlayback {
     reference: Box<RtMixer>,
     full_mix: Box<RtMixer>,
     frame: u64,
+    // Absolute callback time keeps advancing during a pause; independent PCM
+    // interpolation and ramp gains use only actually consumed output frames.
+    source_frame: u64,
+    resumed_at: Option<u64>,
     source: SampleBuffer,
     components: [SampleBuffer; 4],
     ratio: f64,
@@ -2174,10 +2194,24 @@ fn controller_filter() -> PerPadDspChain {
 }
 
 impl ControllerPlayback {
+    fn drain(&mut self, consumer: &mut rtrb::Consumer<ControlMessage>) -> usize {
+        let callback = self.callback.as_mut();
+        drain_control_messages(
+            consumer,
+            &mut callback.scheduler,
+            self.frame,
+            &mut callback.quantization,
+            &mut callback.transport,
+            &mut callback.mixer,
+            &mut callback.feedback,
+            &mut callback.retirement,
+        )
+    }
+
     fn select(&mut self, mask: Option<u8>) {
         self.previous = self.selection;
         self.selection = mask;
-        self.ramp_start = self.frame;
+        self.ramp_start = self.source_frame;
     }
 
     fn feed(&self, start: u64, frames: usize) -> [Vec<f32>; 2] {
@@ -2238,7 +2272,7 @@ impl ControllerPlayback {
             assert_eq!(self.frame, target);
             self.raw = Some(raw);
         }
-        let feed = self.feed(self.frame, frames);
+        let feed = self.feed(self.source_frame, frames);
         let raw = self
             .raw
             .as_mut()
@@ -2307,7 +2341,65 @@ impl ControllerPlayback {
             voice(&self.reference).stretch.pending_fifo_frames(),
         );
         self.frame += frames as u64;
+        self.source_frame += frames as u64;
         (output, full_mix)
+    }
+
+    fn render_paused(&mut self, frames: usize) {
+        let before = voice(&self.callback.mixer);
+        assert!(before.paused);
+        let clock = before.source_playback;
+        let generation = before.generation;
+        let native = before.stretch.native_state_address();
+        let fifo = before.stretch.pending_fifo_frames();
+        let history = before.stretch.productive_history();
+        let dsp = self.callback.mixer.dsp_source_history_for_test(0).unwrap();
+        let transition = self.callback.mixer.stem_transition_for_measurement(0);
+        let mut output = vec![0.0; frames * 2];
+        reset_tap_observation_for_test();
+        self.callback.mixer.render_rt_at_output_frame(
+            &mut output,
+            &mut [0.0; NUM_SAMPLES],
+            self.frame,
+            &mut self.callback.retirement,
+        );
+        let taps = tap_observation_for_test();
+        assert_eq!(taps.missing_reads, 0);
+        assert_eq!(taps.min_frame, None);
+        assert_eq!(taps.max_frame, None);
+        assert!(output.iter().all(|sample| *sample == 0.0));
+        for reference in [&mut self.reference, &mut self.full_mix] {
+            let mut expected = vec![0.0; frames * 2];
+            reference.render_at_output_frame(self.frame, &mut expected, &mut [0.0; NUM_SAMPLES]);
+            assert_eq!(output, expected);
+            assert!(voice(reference).source_playback.matches_exact(&clock));
+        }
+        let current = voice(&self.callback.mixer);
+        assert!(current.paused);
+        assert!(current.source_playback.matches_exact(&clock));
+        assert_eq!(current.generation, generation);
+        assert_eq!(current.stretch.native_state_address(), native);
+        assert_eq!(current.stretch.pending_fifo_frames(), fifo);
+        if let Some(before) = history {
+            let after = current.stretch.productive_history().unwrap();
+            assert_eq!(after.binding, before.binding);
+            assert_eq!(after.next_position, before.next_position);
+            assert_eq!(after.fed_output_frames, before.fed_output_frames);
+        } else {
+            assert!(current.stretch.productive_history().is_none());
+        }
+        let after_dsp = self.callback.mixer.dsp_source_history_for_test(0).unwrap();
+        assert_eq!(after_dsp.binding, dsp.binding);
+        assert_eq!(after_dsp.next_position, dsp.next_position);
+        assert_eq!(after_dsp.fed_output_frames, dsp.fed_output_frames);
+        assert!(
+            self.callback
+                .mixer
+                .stem_transition_for_measurement(0)
+                .matches_exact(transition)
+        );
+        // Do not feed the raw Native/FIFOs or independent EQ oracle with silence.
+        self.frame += frames as u64;
     }
 
     fn adopt_native(&mut self, initial: bool) -> (Vec<f32>, Vec<f32>) {
@@ -2359,7 +2451,17 @@ impl ControllerPlayback {
         let mut raw = ControllerRawNative::new(self.ratio, true);
         let warm_start =
             target - crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES as u64;
-        raw.render(&self.feed(warm_start, (target - warm_start) as usize));
+        if let Some(resumed_at) = self.resumed_at {
+            assert!(
+                warm_start >= resumed_at,
+                "the complete warm interval starts after Resume"
+            );
+        }
+        let pause_offset = self.frame - self.source_frame;
+        let warm_source_start = warm_start
+            .checked_sub(pause_offset)
+            .expect("later Native preparation must start after the retained pause gap");
+        raw.render(&self.feed(warm_source_start, (target - warm_start) as usize));
         self.candidate = Some((target, raw));
         let mut partitions = [1_usize, 127, 777, 96, 257, 512, 31].into_iter().cycle();
         while self.frame < target {
@@ -2393,6 +2495,11 @@ impl ControllerPlayback {
                 break;
             }
         }
+        assert_eq!(
+            self.frame - self.source_frame,
+            pause_offset,
+            "no pause interrupts this preparation"
+        );
         (output, full_mix)
     }
 
@@ -2949,6 +3056,8 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
         reference: make_reference(stopped_start),
         full_mix: make_reference(false),
         frame: 0,
+        source_frame: 0,
+        resumed_at: None,
         source: full.clone(),
         components: full_stems.stems.clone(),
         ratio,
