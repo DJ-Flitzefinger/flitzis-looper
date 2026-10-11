@@ -856,12 +856,35 @@ persistence.flush()
 reopened = ProjectPersistence.from_config_path(Path(config_path))
 assert reopened.load_error is None and reopened.project.stem_cache[1].pair == selection
 assert reopened.project.stem_cache[1].available
-controller.shut_down()
-assets.release_saved_assignments()
 "#,
         )
     });
-    assert_eq!(callback.drain(&mut consumer), 2);
+    {
+        let controller = Python::attach(|py| {
+            locals
+                .bind(py)
+                .get_item("controller")
+                .unwrap()
+                .unwrap()
+                .unbind()
+        });
+        committed_controller_ack(
+            &engine,
+            &mut callback,
+            &mut consumer,
+            &controller,
+            1,
+            "all_stems",
+        );
+        Python::attach(|py| {
+            worker_python(
+                py,
+                locals.bind(py),
+                "controller.shut_down()\nassets.release_saved_assignments()",
+            );
+        });
+    }
+    assert!(consumer.is_empty());
     assert!(source.is_current().unwrap());
     assert_complete_selection(root, &fixture["second"]["selection"]);
     Python::attach(|py| {
@@ -1351,7 +1374,23 @@ assert reopened.project.pad_content[1] == second_content_before
 "#,
             )
         });
-        assert_eq!(callback.drain(&mut consumer), 2); // Own accepted mode/mask commands.
+        let controller = Python::attach(|py| {
+            locals
+                .bind(py)
+                .get_item("controller")
+                .unwrap()
+                .unwrap()
+                .unbind()
+        });
+        committed_controller_ack(
+            &engine,
+            &mut callback,
+            &mut consumer,
+            &controller,
+            1,
+            "all_stems",
+        );
+        assert!(consumer.is_empty());
     } else {
         assert!(consumer.is_empty());
         Python::attach(|py| {

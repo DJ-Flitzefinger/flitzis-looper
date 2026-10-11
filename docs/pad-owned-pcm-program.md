@@ -95,7 +95,7 @@ optimized Release build-only/install/--check passed without App start. No new
 Analysis or whole-Rust batch is claimed; historical FAILED outcomes remain intact.
 The resident-transition checkbox records only bounded independent acceptance.
 Active initial None->Some, retention/effective-mode ACK and ordinary StemController
-warm return remain P5a.
+warm return require separate [P5a evidence](pcm-cache-residency.md#active-same-set-residency-p5a-2026-10-11).
 
 A third bounded P4b lifecycle/source-custody vertical is independently accepted. Its finite
 NormalLoop physical geometry stays fixed at production k=0/non-unity. It covers

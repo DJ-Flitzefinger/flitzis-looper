@@ -57,7 +57,8 @@ ACKs do not restart chronology or release still-used pins. The retiring
 and job readers retire separately through the existing registry/recycle paths.
 The ordinary StemController FullMix path uses that retiring command. Its active
 initial None->Some, warm return, retention policy and effective-mode ACK remain
-P5a. No resident-transition result closes those workflows or the remaining P4b
+separate [P5a work](pcm-cache-residency.md#active-same-set-residency-p5a-2026-10-11).
+No resident-transition result alone closes those workflows or the remaining P4b
 matrix.
 
 The bounded lifecycle/source-custody implementation keeps finite NormalLoop

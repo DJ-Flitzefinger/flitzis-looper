@@ -394,11 +394,17 @@ generation/content replacement. First residency can attach the **same selected
 committed set** while FullMix is already playing; it cannot select a different
 set, adopt a late generation, or evade inactive replacement. P5a adds a typed
 residency-only transaction for None->Some, separate from general publication.
-Its payload/permits prove complete source/cache/set identity, source ticket,
-request/STOP/window/geometry/accepted timing, every relevant active voice and
-shared DSP/history/FIFO/read-plan context, leases and reserved retirement/feedback.
-Old-source pinned voices retain their own audio; they cannot inherit the new bank.
-Proof must cover active current voices rather than reusing inactive readiness.
+Its selected-disk authority is pad/source-bound and proves complete content/cache/set
+identity and a current source ticket. Fresh payload/permits capture the actual current
+voice/source/request/STOP epoch, window/revision/geometry/accepted timing, selection/mask,
+Native history/checkpoint and real SourcePlayback/SourceReadPlan. Before attachment,
+recheck both fractional taps, smoothed-rate feed and actual FullMix/outgoing and stem
+target sides against held ranges, with leases and retirement/feedback already reserved.
+Disk eligibility, saved intent, another pad's set or a historical ACK cannot replace
+that authority. Old-source pinned active/paused voices retain their own audio, frozen
+selection and readers; any operation on them needs fresh own voice/source permits and
+cannot borrow the new bank's ACK. Proof covers active current voices rather than
+reusing inactive readiness. New-generation publication remains separately guarded L3.
 
 Prepare cache windows off-thread while FullMix continues. At a bounded callback
 boundary, recheck native guards and atomically attach the matching handles/owned
@@ -410,15 +416,31 @@ Mode adoption has a source-bound revision/feedback record: pending command enque
 does not mean effective ALL STEMS. Report transition/adopted selection precisely,
 including queue failure, rejection, superseding FULL MIX and STOP; reconcile control
 without advancing or correcting the audio timeline from UI polling.
+The residency ACK and own effective-mode receipt remain distinct and both bind the
+matching source/request. Pause freezes actual source/ramp progress and Native/FIFO/
+filter chronology; resume continues that same voice. Stopped/paused readiness does
+not certify active continuing output. Cancellation, stale history/checkpoints and
+capacity failure preserve prior audio and owners before mutation. Existing lanes,
+retained-reader registry and off-thread retirement remain authoritative; no callback
+allocation/deallocation, I/O, blocking, GIL, logging or unbounded warm-up is allowed.
 
-Ordinary FULL MIX/ALL STEMS toggles retain valid prepared windows warm within the
-budget. FullMix selection can cancel obsolete pending demand; it does not delete
-the disk set or forcibly evict live readers. Budget pressure retires only idle
-unneeded views through exact ownership, exposing loss of ready state; active/
-queued/history readers remain pinned. Explicit Delete/Unload intentionally revoke
-their track-bound intent; passive validation/load failure does not erase saved
-ALL STEMS. Preserve the completed ready-trigger reuse/pending coalescing/click-edge
-fix for UI/MIDI/controller input paths and original input timestamps.
+Ordinary FULL MIX/ALL STEMS toggles preserve selected committed disk eligibility
+independently of live residency. FullMix can cancel obsolete pending demand; the
+ordinary controller retires resident components only after actual final outgoing
+ramp use. A subsequent ALL request must reacquire absent ranges through the existing
+worker/controller path and new own residency/effective-mode receipts, even when saved
+intent already says ALL. Do not prove warm return with permanently retained fixture
+components or general inactive-set publication. Other Native history/job/reader pins
+retire only at their distinct actual final uses, including retained old-source voices.
+Eligible idle views may stay warm within existing ownership/budget policy; loss of
+resident readiness remains visible without deleting the disk set or evicting live
+readers. Explicit Delete/Unload revoke track-bound intent; passive validation/load
+failure does not erase saved ALL. Preserve ready-trigger reuse, pending coalescing,
+click-edge behavior and original input timestamps across UI/MIDI/controller routes.
+This bounded production k=0 NormalLoop P5a implementation requires real public-route
+and Native continuation, paused/retained-voice, stale/failure/capacity and true-reader
+retirement proof. Whole P4b/P5b, new-generation L3, nonzero KEY/B5, aggregate resource/
+music and Human/device/hearing gates remain open.
 
 ## Startup policy, all 216 slots and resource accounting
 
@@ -527,7 +549,13 @@ remain required alongside these new contracts.
 
 ## X11 bounded extension to this design
 
-E11-01/02 preserve explicit global broadcast then local override, with actual current-window ACK/effective Native output and no unsolicited inheritance flag. The accepted NormalLoop/lifecycle checkpoint is the narrow prerequisite; seek/intro/tail/new pitch/full P4b and P5a guards do not open wholesale.
+E11-01/02 use the published global boolean default plus nullable track-bound pad
+override. Global changes target inheriting loaded pads only; explicit ON/OFF survives
+later global actions and clearing the override restores the current default. Requested
+origin colors remain distinct from actual current-window ACK/confirmed Native output
+and pending/error feedback. There is no separate mutable inheritance flag. The accepted
+NormalLoop/lifecycle checkpoint is the narrow prerequisite; seek/intro/tail/new pitch,
+full P4b and P5a guards do not open wholesale.
 
 E11-03 replaces complete arrays in stem_cache.rs::prepare_complete_stems_at_project_root and the full-extent warm gate in stem_pair.rs with retained-reader streaming passes. Full reference/mono scans first determine the exact global peak and then the first threshold crossing (including all-silent behavior). Retained positioned reads extract the existing pre-onset 0.5-second and four-second bounded region for the exact +/-0.25-second alignment oracle. A subsequent streaming output pass applies one signed loaded-frame offset, exact PCM16 normalization and edge zero padding while writing five immutable f32 derivatives and full digests. The old complete-array conversion is the independent small-fixture oracle. Warm verification streams all leaves through EOF before reuse. Use existing sealed/source/range readers and job lanes; no callback file access or new pool. Memory peaks include scratch, worker overlap, resident old/new users and process RSS separately; actual Demucs inference remains a separate measured limitation. No total-duration cap, cap raise or complete multi-GB allocation substitutes for the streaming implementation. User loop/ALL demand and aggregate budget remain authoritative.
 
@@ -585,7 +613,7 @@ Concrete implementation slices, dependencies, source seams and full acceptance g
 
 ### KEYLOCK feedback/preparation phases
 
-An existing warmed unique Native handle can render initial wet audio from the actual current feed after a supported mode/window change; a later source-specific preparation candidate adopts only at its exact output-frame/SourcePlayback/read-plan match (existing4096 output-frame horizon). Mode/window callback ACK, actual wet processing and source-candidate adoption are distinct. Do not add an unconditional candidate wait or treat WindowACK as source Native adoption. Pause/resume follows actual SourcePlayback, not elapsed global clock. Existing Residency requested/previous/owner, effective/error/unconfirmed, eight-attempt/30-second retry and claimed-tail semantics remain the authoritative status pipeline. Global broadcasts collect bounded per-pad outcomes across all targets and expose partial/mixed failures; unchanged requested values are not proof of convergence. Current controller/UI source seams must be reread against the implemented result.
+An existing warmed unique Native handle can render initial wet audio from the actual current feed after a supported mode/window change; a later source-specific preparation candidate adopts only at its exact output-frame/SourcePlayback/read-plan match (existing4096 output-frame horizon). Mode/window callback ACK, actual wet processing and source-candidate adoption are distinct. Do not add an unconditional candidate wait or treat WindowACK as source Native adoption. Pause/resume follows actual SourcePlayback, not elapsed global clock. Existing Residency requested/previous/owner, effective/error/unconfirmed, eight-attempt/30-second retry and claimed-tail semantics remain the authoritative status pipeline. Global default changes collect bounded per-pad outcomes only for targeted inherited requests and expose partial/mixed failures separately from the default and explicit overrides; unchanged requested values are not proof of convergence. Current controller/UI source seams must be reread against the implemented result.
 
 Pure KEYLOCK intent has no implicit physical loop or seek edit. If an existing
 pending transaction contains a real geometry/seek change, a superseding mode
@@ -598,12 +626,13 @@ recheck current source identity; accepted window publication alone cannot settle
 an active ON request without usable wet processing. No source-candidate adoption
 is implied by this snapshot.
 
-The same Residency authority supplies pad and global display selectors. Green/red
-reflect confirmed mode; visible pending, unconfirmed, error and mixed status
-remains separate from requested intent. Explicit global broadcasts visit every
-loaded target across banks even when one target fails. A later local request
-supersedes only that target; another explicit global action broadcasts again.
-This adds no persistent inheritance flag, parallel playback queue or source owner.
-The controller-test-coverage delta replaces the historical same-global-value
-KEYLOCK no-op scenario with explicit rebroadcast and per-target pending reuse;
-the existing BPM-lock no-op and guarded anchor scenarios remain required.
+The same Residency authority supplies separate confirmed Native/pending/error display
+selectors. The main global color reflects the default; PAD green/red reflects explicit
+requested ON/OFF and is neutral for inheritance. Adjacent GLOBAL is default green/red
+only when inherited, otherwise neutral; its action clears only that override. Native
+confirmation or failure cannot rewrite origin. Global changes visit affected inherited
+loaded targets across banks even when one fails; a local action changes only that
+target and later globals preserve it. Nullable `pad_key_lock` with strict integer
+`key_lock_intent_version: 2` represents origin without another inheritance flag,
+playback queue or source owner. Same-default actions preserve explicit overrides;
+per-target pending reuse and the existing BPM-lock no-op/anchor guards remain required.

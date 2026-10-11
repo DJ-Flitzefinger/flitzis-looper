@@ -46,7 +46,9 @@ mod cold_residency;
 #[cfg(all(test, windows))]
 mod cold_residency_tests;
 mod cold_store;
+pub(crate) mod committed_stem_residency;
 mod complete_context;
+pub use committed_stem_residency::{CommittedStemSetTicket, ResidentStemTicket};
 pub(crate) mod constant_timing;
 mod constants;
 pub use constant_timing::CapturedConstantTiming;
@@ -886,6 +888,34 @@ impl AudioEngine {
 
 #[pymethods]
 impl AudioEngine {
+    /// Seal an already committed immutable disk selection independently of component residency.
+    pub fn register_committed_stem_pair(
+        &self,
+        prepared: &PreparedStemPair,
+        source_ticket: &PreparedSourceTicket,
+    ) -> PyResult<CommittedStemSetTicket> {
+        self.register_committed_stem_pair_with_producer(
+            prepared,
+            source_ticket,
+            self.control_producer()?,
+        )
+    }
+
+    #[pyo3(signature = (selection_ticket, *, mode="all_stems", enabled_mask=15))]
+    pub fn request_committed_stem_residency(
+        &self,
+        selection_ticket: &CommittedStemSetTicket,
+        mode: &str,
+        enabled_mask: u8,
+    ) -> PyResult<ResidentStemTicket> {
+        self.request_committed_stem_residency_with_producer(
+            selection_ticket,
+            mode,
+            enabled_mask,
+            self.control_producer()?,
+        )
+    }
+
     /// Create a new AudioEngine instance with default audio device.
     #[new]
     pub fn new() -> PyResult<Self> {

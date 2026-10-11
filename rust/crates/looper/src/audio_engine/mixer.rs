@@ -251,6 +251,10 @@ pub struct RtMixer {
 
     /// Prepared stem storage with NUM_SAMPLES slots.
     prepared_stems: Box<[Option<PreparedStemSet>; NUM_SAMPLES]>,
+    committed_stem_selection:
+        Box<[Option<super::committed_stem_residency::SelectedStemIdentity>; NUM_SAMPLES]>,
+    committed_stem_receipts:
+        Box<[Option<super::committed_stem_residency::StemModeReceipt>; NUM_SAMPLES]>,
 
     /// Per-pad stem render source selection.
     stem_mix_mode: [StemMixMode; NUM_SAMPLES],
@@ -361,6 +365,8 @@ impl RtMixer {
             pad_playhead_frame: std::array::from_fn(|_| None),
             sample_bank: std::array::from_fn(|_| None),
             prepared_stems: Box::new(std::array::from_fn(|_| None)),
+            committed_stem_selection: Box::new(std::array::from_fn(|_| None)),
+            committed_stem_receipts: Box::new(std::array::from_fn(|_| None)),
             stem_mix_mode: std::array::from_fn(|_| StemMixMode::FullMix),
             stem_mix_source_version_hash: std::array::from_fn(|_| 0),
             stem_enabled_mask: std::array::from_fn(|_| STEM_COMPONENT_MASK),
@@ -3702,9 +3708,13 @@ impl RtMixer {
         for id in pad_activity.iter() {
             self.finish_pending_key_lock(id);
             self.publish_key_lock_status(id);
+            self.finish_committed_stem_mode(id);
         }
     }
 }
+
+#[path = "committed_stem_mixer.rs"]
+mod committed_stem_mixer;
 
 #[cfg(test)]
 mod tests {

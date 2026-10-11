@@ -47,6 +47,7 @@ class PairPreparation:
     compatibility_rejected: bool = False
     prepared: PreparedStemPair | None = None
     error: str | None = None
+    residency_only: bool = False
 
     def close(self) -> None:
         """Release this job after actual worker return, preserving any saved assignment."""
@@ -81,6 +82,7 @@ class StemPairPreparationQueue:
         components: bool,
         processing_request: StemGenerationRequest | None = None,
         regenerate_on_incompatible: bool = False,
+        residency_only: bool = False,
     ) -> None:
         """Reserve capacity and exact generation before the performer model changes."""
         if sample_id in self.pending:
@@ -106,6 +108,7 @@ class StemPairPreparationQueue:
             Event(),
             processing_request,
             regenerate_on_incompatible,
+            residency_only=residency_only,
         )
         self.pending[sample_id] = request
         try:

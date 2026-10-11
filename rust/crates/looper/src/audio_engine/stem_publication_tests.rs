@@ -5,7 +5,9 @@
 
 use super::*;
 use crate::audio_engine::resident_relocation::{ResidentWindowTicket, WindowRequest};
-use crate::audio_engine::{PreparedSourceTicket, PreparedStemPair};
+use crate::audio_engine::{
+    CommittedStemSetTicket, PreparedSourceTicket, PreparedStemPair, ResidentStemTicket,
+};
 use crate::messages::StemMixMode;
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyModule};
@@ -34,6 +36,35 @@ struct NativeBridge {
 
 #[pymethods]
 impl NativeBridge {
+    fn register_committed_stem_pair(
+        &self,
+        py: Python<'_>,
+        prepared: &PreparedStemPair,
+        source_ticket: &PreparedSourceTicket,
+    ) -> PyResult<CommittedStemSetTicket> {
+        self.engine
+            .borrow(py)
+            .register_committed_stem_pair_with_producer(prepared, source_ticket, &self.producer)
+    }
+
+    #[pyo3(signature = (selection_ticket, *, mode="all_stems", enabled_mask=15))]
+    fn request_committed_stem_residency(
+        &self,
+        py: Python<'_>,
+        selection_ticket: &CommittedStemSetTicket,
+        mode: &str,
+        enabled_mask: u8,
+    ) -> PyResult<ResidentStemTicket> {
+        self.engine
+            .borrow(py)
+            .request_committed_stem_residency_with_producer(
+                selection_ticket,
+                mode,
+                enabled_mask,
+                &self.producer,
+            )
+    }
+
     #[pyo3(signature = (id, source_version, cache_dir, source_ticket, components, descriptor_reference=None))]
     fn prepare_stem_pair(
         &self,
@@ -222,6 +253,124 @@ fn call(probe: &Py<PyAny>, method: &str) {
     });
 }
 
+fn committed_probe_ack(
+    engine: &Py<AudioEngine>,
+    callback: &mut Callback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    probe: &Py<PyAny>,
+    controller_name: &str,
+    id: usize,
+) {
+    use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
+    let controller = Python::attach(|py| probe.getattr(py, controller_name).unwrap());
+    let registration = Python::attach(|py| {
+        controller
+            .bind(py)
+            .getattr("_committed_residency")
+            .unwrap()
+            .getattr("_selections")
+            .unwrap()
+            .get_item(id)
+            .unwrap()
+            .getattr("ticket")
+            .unwrap()
+            .extract::<Py<CommittedStemSetTicket>>()
+            .unwrap()
+    });
+    if Python::attach(|py| registration.borrow(py).publication_status()) == "pending" {
+        assert!(
+            matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+            if matches!(work.as_ref(), CommittedStemRtWork::Register { .. }))
+        );
+        assert_eq!(
+            callback.drain(consumer),
+            1,
+            "own committed registration ACK"
+        );
+    }
+    Python::attach(|py| {
+        assert_eq!(registration.borrow(py).publication_status(), "accepted");
+        assert!(registration.borrow(py).is_current());
+        assert!(registration.borrow(py).error().is_none());
+        controller.call_method0(py, "on_frame_render").unwrap();
+    });
+    let receipt = Python::attach(|py| {
+        let selection = controller
+            .bind(py)
+            .getattr("_committed_residency")
+            .unwrap()
+            .getattr("_selections")
+            .unwrap()
+            .get_item(id)
+            .unwrap();
+        assert_eq!(
+            selection
+                .getattr("receipt_intent")
+                .unwrap()
+                .get_item(0)
+                .unwrap()
+                .extract::<String>()
+                .unwrap(),
+            "all_stems"
+        );
+        selection
+            .getattr("receipt")
+            .unwrap()
+            .extract::<Py<ResidentStemTicket>>()
+            .unwrap()
+    });
+    Python::attach(|py| {
+        assert_eq!(receipt.borrow(py).residency_status(), "captured");
+        assert_eq!(receipt.borrow(py).effective_mode_status(), "waiting");
+    });
+    assert!(
+        matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+        if matches!(work.as_ref(), CommittedStemRtWork::Capture(_)))
+    );
+    assert_eq!(callback.drain(consumer), 1, "own current-window capture");
+    wait_until(Duration::from_secs(10), || {
+        Python::attach(|py| {
+            assert_ne!(
+                receipt.borrow(py).residency_status(),
+                "rejected",
+                "{:?}",
+                receipt.borrow(py).error()
+            );
+        });
+        consumer.peek().is_ok()
+    });
+    assert!(
+        matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+        if matches!(work.as_ref(), CommittedStemRtWork::Adopt(_)))
+    );
+    Python::attach(|py| {
+        assert_eq!(receipt.borrow(py).residency_status(), "pending");
+    });
+    assert_eq!(callback.drain(consumer), 1, "own committed residency ACK");
+    assert!(
+        callback
+            .mixer
+            .voices
+            .iter()
+            .all(|voice| !voice.is_playing_sample(id))
+    );
+    Python::attach(|py| {
+        assert_eq!(receipt.borrow(py).residency_status(), "accepted");
+        assert!(receipt.borrow(py).is_current());
+        assert!(receipt.borrow(py).error().is_none());
+        assert_eq!(
+            receipt.borrow(py).effective_mode_status(),
+            "waiting",
+            "stopped adoption certifies no actual output"
+        );
+        controller.call_method0(py, "on_frame_render").unwrap();
+        super::super::resident_relocation::reconcile(&engine.borrow(py)).unwrap();
+        probe
+            .call_method1(py, "committed_ack", (controller_name, id))
+            .unwrap();
+    });
+}
+
 fn render(callback: &mut Callback, expected: f32) {
     assert!(
         callback
@@ -397,9 +546,14 @@ fn run_publication_and_mouse_proof(test_name: &str, accepted_only: bool, shared:
     });
     assert_eq!(callback.drain(&mut consumer), 1);
     call(&probe, "accepted");
-    // The current ALL preference publishes its real mode and component mask only
-    // after the independently accepted Pair ticket; keep later queue oracles exact.
-    assert_eq!(callback.drain(&mut consumer), 2);
+    committed_probe_ack(
+        &engine,
+        &mut callback,
+        &mut consumer,
+        &probe,
+        "controller",
+        0,
+    );
     if shared {
         prove_shared_material(
             &engine,
@@ -472,7 +626,7 @@ fn run_publication_and_mouse_proof(test_name: &str, accepted_only: bool, shared:
     call(&probe, "restore");
     assert_eq!(callback.drain(&mut consumer), 1);
     call(&probe, "restored_accepted");
-    assert_eq!(callback.drain(&mut consumer), 2);
+    committed_probe_ack(&engine, &mut callback, &mut consumer, &probe, "restored", 0);
     render(&mut callback, VOCALS_AMPLITUDE);
     call(&probe, "reject_tampered_restore");
     assert_eq!(callback.drain(&mut consumer), 0);
@@ -562,7 +716,14 @@ fn restore_saved_material(directory: &Path) {
     call(&probe, "begin");
     assert_eq!(callback.drain(&mut consumer), 1);
     call(&probe, "accepted");
-    assert_eq!(callback.drain(&mut consumer), 2);
+    committed_probe_ack(
+        &engine,
+        &mut callback,
+        &mut consumer,
+        &probe,
+        "controller",
+        215,
+    );
     Python::attach(|py| {
         probe
             .getattr(py, "controller")

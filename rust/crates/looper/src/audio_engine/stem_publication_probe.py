@@ -38,14 +38,25 @@ if TYPE_CHECKING:
     )
     from flitzis_looper_audio import (
         AudioEngine,
+        CommittedStemSetTicket,
         PreparedSourceTicket,
         PreparedStemPair,
         ResidentWindowTicket,
+        ResidentStemTicket,
     )
 
 
 class NativeProducerBridge(Protocol):
     engine: AudioEngine
+
+    def register_committed_stem_pair(
+        self, prepared: PreparedStemPair, source_ticket: PreparedSourceTicket
+    ) -> CommittedStemSetTicket: ...
+
+    def request_committed_stem_residency(
+        self, selection_ticket: CommittedStemSetTicket, *,
+        mode: str = "all_stems", enabled_mask: int = 15
+    ) -> ResidentStemTicket: ...
 
     def prepare_stem_pair(
         self,
@@ -107,6 +118,19 @@ class Audio:
 
     def __getattr__(self, name: str) -> object:
         return getattr(self.bridge.engine, name)
+
+    def register_committed_stem_pair(
+        self, prepared: PreparedStemPair, source_ticket: PreparedSourceTicket
+    ) -> CommittedStemSetTicket:
+        return self.bridge.register_committed_stem_pair(prepared, source_ticket)
+
+    def request_committed_stem_residency(
+        self, selection_ticket: CommittedStemSetTicket, *,
+        mode: str = "all_stems", enabled_mask: int = 15
+    ) -> ResidentStemTicket:
+        return self.bridge.request_committed_stem_residency(
+            selection_ticket, mode=mode, enabled_mask=enabled_mask
+        )
 
     def prepare_stem_pair(
         self,
@@ -242,6 +266,25 @@ def wait_for_pending(controller: StemController, sample_id: int) -> PreparedSour
     ticket = controller._pending_stem_publications[sample_id].source_ticket
     assert ticket.publication_status() == "pending"
     return ticket
+
+
+def assert_committed_ack(controller: StemController, sample_id: int) -> None:
+    """A stopped component ACK preserves disk truth without claiming rendered output."""
+    selection = controller._committed_residency._selections[sample_id]
+    assert selection.ticket.publication_status() == "accepted"
+    assert selection.ticket.is_current() and selection.ticket.error() is None
+    receipt = selection.receipt
+    assert receipt is not None
+    assert receipt.residency_status() == "accepted"
+    assert receipt.is_current() and receipt.error() is None
+    assert receipt.effective_mode_status() == "waiting"
+    status = controller.stem_residency_status(sample_id)
+    assert status is not None
+    assert status.registration == status.residency == "accepted"
+    assert status.effective == "waiting" and status.requested_mode == "all_stems"
+    assert not controller._pending_stem_publications
+    assert not controller._session.stem_generation_errors
+    assert_selected_pair(controller._project, sample_id)
 
 
 def assert_selected_pair(project: ProjectState, sample_id: int) -> None:
@@ -417,6 +460,9 @@ class Probe:
         assert entry.cache_dir == self.saved_path
         assert_selected_pair(self.project, 0)
 
+    def committed_ack(self, controller_name: str, sample_id: int) -> None:
+        assert_committed_ack(getattr(self, controller_name), sample_id)
+
     def save_survivor(self) -> None:
         entry = self.project.stem_cache[0]
         assert entry is not None and entry.available
@@ -567,3 +613,6 @@ class SavedMaterialProbe:
         self.controller.on_frame_render()
         assert self.controller.stems_available(215)
         assert_selected_pair(self.project, 215)
+
+    def committed_ack(self, controller_name: str, sample_id: int) -> None:
+        assert_committed_ack(getattr(self, controller_name), sample_id)

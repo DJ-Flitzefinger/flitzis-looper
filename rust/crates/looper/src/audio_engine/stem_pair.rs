@@ -245,9 +245,17 @@ pub(super) struct VerifiedStemPair {
     pub created_descriptor: bool,
     pcm: [File; 5],
     pub files: Vec<File>,
+    #[cfg(test)]
+    fail_next_component_read: std::sync::atomic::AtomicBool,
 }
 
 impl VerifiedStemPair {
+    /// Exercise actual worker error handling with immutable Windows file pins intact.
+    #[cfg(test)]
+    pub(super) fn fail_next_component_read_for_test(&self) {
+        self.fail_next_component_read
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
     /// Equivalent sealed pins for the registry while the worker/history keeps this reader.
     pub(super) fn clone_pins(
         &self,
@@ -313,6 +321,16 @@ impl VerifiedStemPair {
             .ok_or("stem window extent overflow")?;
         if length > super::cold_jobs::PCM_LIMIT_BYTES {
             return Err("stem window exceeds admission".into());
+        }
+        #[cfg(test)]
+        if index < 4
+            && self
+                .fail_next_component_read
+                .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            return Err(error(std::io::Error::other(
+                "injected positioned component read failure",
+            )));
         }
         let start = current
             .resident_start()
@@ -484,6 +502,8 @@ pub(super) fn open_verified_pair(
         created_descriptor: false,
         pcm: complete.pcm,
         files,
+        #[cfg(test)]
+        fail_next_component_read: std::sync::atomic::AtomicBool::new(false),
     })
 }
 

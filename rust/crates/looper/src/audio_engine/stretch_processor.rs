@@ -52,6 +52,8 @@ pub struct StretchProcessor {
     wet_rendered: bool,
     wet_render_failed: bool,
     wet_output_emitted: bool,
+    wet_source_rendered: bool,
+    wet_source_output_emitted: bool,
     // Standalone processors retain their worker. Mixer processors share an engine worker.
     _preparation_worker: Option<KeyLockPreparationWorker>,
 }
@@ -69,6 +71,12 @@ impl StretchProcessor {
 
     pub(crate) fn wet_output_ready(&self) -> bool {
         self.wet_output_emitted
+    }
+
+    /// The chosen output belongs to the current source-specific Native/FIFO owner.
+    /// A predecessor's generic wet-ready flag cannot acknowledge a new stem selection.
+    pub(crate) fn wet_current_source_output_ready(&self) -> bool {
+        self.wet_source_output_emitted
     }
 
     pub(crate) fn pending_mode_needs_dry(&self) -> bool {
@@ -140,6 +148,7 @@ impl StretchProcessor {
         // Called only after the render owner chose successful wet output. A worker failure
         // observed later cannot relabel audio that already reached this callback as dry.
         self.wet_output_emitted |= self.wet_render_ready();
+        self.wet_source_output_emitted = self.wet_source_rendered && self.wet_render_ready();
     }
 
     /// Retire mode-specific Native/FIFO ownership without touching the source clock or EQ.
@@ -147,6 +156,8 @@ impl StretchProcessor {
         self.wet_rendered = false;
         self.wet_render_failed = false;
         self.wet_output_emitted = false;
+        self.wet_source_rendered = false;
+        self.wet_source_output_emitted = false;
         if !enabled {
             self.reset_rubberband_state();
         }
@@ -202,6 +213,8 @@ impl StretchProcessor {
             wet_rendered: false,
             wet_render_failed: false,
             wet_output_emitted: false,
+            wet_source_rendered: false,
+            wet_source_output_emitted: false,
             _preparation_worker: None,
         }
     }
@@ -210,6 +223,8 @@ impl StretchProcessor {
         self.wet_rendered = false;
         self.wet_render_failed = false;
         self.wet_output_emitted = false;
+        self.wet_source_rendered = false;
+        self.wet_source_output_emitted = false;
         self.invalidate_prepared();
         self.productive_history = None;
         for channel in &mut self.varispeed {
@@ -248,11 +263,14 @@ impl StretchProcessor {
     /// Projection refreshes retain chronological history only across exact source continuity.
     pub(crate) fn process_source(
         &mut self,
-        feed: ProductiveSourceFeed<'_>,
+        mut feed: ProductiveSourceFeed<'_>,
         output_frames: usize,
         preserve_pitch: bool,
     ) {
+        feed.stems = feed.plan.required_stems(feed.stems);
         self.wet_rendered = false;
+        self.wet_source_rendered = false;
+        self.wet_source_output_emitted = false;
         let frames = output_frames.min(DEFAULT_BLOCK_SAMPLES);
         if frames == 0 {
             return;
@@ -354,6 +372,10 @@ impl StretchProcessor {
             );
         }
         self.process_resampled(frames, feed.playback.tempo_ratio(), preserve_pitch);
+        self.wet_source_rendered = self.wet_render_ready()
+            && self.native.source.as_ref().is_some_and(|source| {
+                source.matches_effective_contract(&feed, self.preparation_epoch)
+            });
         if self.native.active {
             self.productive_history = Some(ProductiveSourceHistory {
                 binding,

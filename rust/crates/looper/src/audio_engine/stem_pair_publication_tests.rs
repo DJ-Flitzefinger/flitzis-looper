@@ -5,6 +5,9 @@
 #![cfg(windows)]
 
 use super::*;
+
+#[path = "committed_stem_residency_tests.rs"]
+mod committed_stem_residency_tests;
 use crate::audio_engine::material_migration::{
     PreparedMigrationMaterial, prepare_material_complete_for_test as prepare_material,
 };
@@ -1299,6 +1302,31 @@ struct PairWorkerAudio {
 
 #[pymethods]
 impl PairWorkerAudio {
+    fn register_committed_stem_pair(
+        &self,
+        prepared: &PreparedStemPair,
+        source_ticket: &PreparedSourceTicket,
+    ) -> PyResult<crate::audio_engine::CommittedStemSetTicket> {
+        self.engine.register_committed_stem_pair_with_producer(
+            prepared,
+            source_ticket,
+            &self.producer,
+        )
+    }
+    #[pyo3(signature=(selection_ticket, *, mode="all_stems", enabled_mask=15))]
+    fn request_committed_stem_residency(
+        &self,
+        selection_ticket: &crate::audio_engine::CommittedStemSetTicket,
+        mode: &str,
+        enabled_mask: u8,
+    ) -> PyResult<crate::audio_engine::ResidentStemTicket> {
+        self.engine.request_committed_stem_residency_with_producer(
+            selection_ticket,
+            mode,
+            enabled_mask,
+            &self.producer,
+        )
+    }
     fn capture_prepared_source(
         &self,
         id: usize,
@@ -1444,6 +1472,121 @@ fn worker_python(py: Python<'_>, locals: &Bound<'_, PyDict>, code: &str) {
         .unwrap_or_else(|error| panic!("ordinary worker script failed: {error:?}\n{code}"));
 }
 
+// Ordinary publication retains its own new-generation rejection/retry protocol.
+// Successful promotion then requires these additional Native selection stages.
+fn committed_controller_ack(
+    engine: &AudioEngine,
+    callback: &mut Callback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    controller: &Py<PyAny>,
+    id: usize,
+    mode: &str,
+) {
+    use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
+    use crate::audio_engine::{CommittedStemSetTicket, ResidentStemTicket};
+    let selection_ticket = Python::attach(|py| {
+        controller
+            .bind(py)
+            .getattr("_committed_residency")
+            .unwrap()
+            .getattr("_selections")
+            .unwrap()
+            .get_item(id)
+            .unwrap()
+            .getattr("ticket")
+            .unwrap()
+            .extract::<Py<CommittedStemSetTicket>>()
+            .unwrap()
+    });
+    if Python::attach(|py| selection_ticket.borrow(py).publication_status()) == "pending" {
+        assert!(
+            matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+            if matches!(work.as_ref(), CommittedStemRtWork::Register { .. }))
+        );
+        assert_eq!(callback.drain(consumer), 1, "own registration ACK");
+    }
+    Python::attach(|py| {
+        let ticket = selection_ticket.borrow(py);
+        assert_eq!(ticket.publication_status(), "accepted");
+        assert!(ticket.is_current());
+        assert!(ticket.error().is_none());
+        controller.call_method0(py, "on_frame_render").unwrap();
+    });
+    let receipt = Python::attach(|py| {
+        let selection = controller
+            .bind(py)
+            .getattr("_committed_residency")
+            .unwrap()
+            .getattr("_selections")
+            .unwrap()
+            .get_item(id)
+            .unwrap();
+        assert_eq!(
+            selection
+                .getattr("receipt_intent")
+                .unwrap()
+                .get_item(0)
+                .unwrap()
+                .extract::<String>()
+                .unwrap(),
+            mode
+        );
+        selection
+            .getattr("receipt")
+            .unwrap()
+            .extract::<Py<ResidentStemTicket>>()
+            .unwrap()
+    });
+    Python::attach(|py| {
+        assert_eq!(receipt.borrow(py).residency_status(), "captured");
+        assert_eq!(receipt.borrow(py).effective_mode_status(), "waiting");
+    });
+    assert!(
+        matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+        if matches!(work.as_ref(), CommittedStemRtWork::Capture(_)))
+    );
+    assert_eq!(callback.drain(consumer), 1, "own voice/window capture");
+    wait_until(|| {
+        Python::attach(|py| {
+            assert_ne!(
+                receipt.borrow(py).residency_status(),
+                "rejected",
+                "{:?}",
+                receipt.borrow(py).error()
+            );
+        });
+        consumer.peek().is_ok()
+    });
+    assert!(
+        matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+        if matches!(work.as_ref(), CommittedStemRtWork::Adopt(_)))
+    );
+    Python::attach(|py| {
+        assert_eq!(receipt.borrow(py).residency_status(), "pending");
+    });
+    assert_eq!(callback.drain(consumer), 1, "own residency adoption ACK");
+    assert!(
+        callback
+            .mixer
+            .voices
+            .iter()
+            .all(|voice| !voice.is_playing_sample(id))
+    );
+    Python::attach(|py| {
+        let receipt = receipt.borrow(py);
+        assert_eq!(receipt.residency_status(), "accepted");
+        assert!(receipt.is_current());
+        assert_eq!(
+            receipt.effective_mode_status(),
+            "waiting",
+            "stopped ACK certifies no actual output"
+        );
+        assert!(receipt.error().is_none());
+        controller.call_method0(py, "on_frame_render").unwrap();
+    });
+    crate::audio_engine::resident_relocation::reconcile(engine).unwrap();
+}
+
 #[test]
 fn ordinary_python_worker_runs_native_pair_preparation_and_persists_current_selection() {
     pyo3::Python::initialize();
@@ -1508,7 +1651,7 @@ fn ordinary_python_worker_runs_native_pair_preparation_and_persists_current_sele
     )
     .unwrap();
     assert_eq!(receipt["process_id"], child.id());
-    assert_eq!(receipt["worker_calls"], 2);
+    assert_eq!(receipt["worker_calls"], 1);
     for field in [
         "only_pool_threads",
         "pending_before_callback",
@@ -1689,21 +1832,49 @@ assert reopened.project.pad_stem_mix_mode[0] == 'all_stems'
 "#,
         )
     });
-    assert_eq!(callback.drain(&mut consumer), 2); // Real mode and component-mask messages.
+    let controller = Python::attach(|py| {
+        locals
+            .bind(py)
+            .get_item("controller")
+            .unwrap()
+            .unwrap()
+            .unbind()
+    });
+    committed_controller_ack(
+        &engine,
+        &mut callback,
+        &mut consumer,
+        &controller,
+        0,
+        "all_stems",
+    );
     crate::audio_engine::resident_relocation::reconcile(&engine).unwrap();
     Python::attach(|py| {
         worker_python(
             py,
             locals.bind(py),
             r#"
+first_residency = controller._committed_residency._selections[0].receipt
+assert first_residency.residency_status() == 'accepted'
+assert first_residency.effective_mode_status() == 'waiting'
 assert controller.set_stem_mix_mode(0, 'full_mix')
+full_mix_receipt = controller._committed_residency._selections[0].receipt
+assert full_mix_receipt is not first_residency
+assert full_mix_receipt.residency_status() == 'captured'
 assert 0 not in controller._resident_pairs
 assert project.stem_cache[0].pair == selection
 assert project.pad_stem_mix_mode[0] == 'full_mix'
 "#,
         )
     });
-    assert_eq!(callback.drain(&mut consumer), 1);
+    committed_controller_ack(
+        &engine,
+        &mut callback,
+        &mut consumer,
+        &controller,
+        0,
+        "full_mix",
+    );
     let mut output = [0.0_f32; 512];
     let mut peaks = [0.0_f32; crate::audio_engine::constants::NUM_SAMPLES];
     callback
@@ -1727,52 +1898,45 @@ assert controller.set_stem_mix_mode(0, 'all_stems')
 "#,
         )
     });
-    wait_until(|| {
-        Python::attach(|py| {
-            worker_python(
-                py,
-                locals.bind(py),
-                "controller.on_frame_render()\nassert not controller._session.stem_generation_errors, controller._session.stem_generation_errors",
-            );
-            locals
-                .bind(py)
-                .get_item("controller")
-                .unwrap()
-                .unwrap()
-                .getattr("_pending_stem_publications")
-                .unwrap()
-                .contains(0)
-                .unwrap()
-        })
-    });
-    let second_set = queued_stems(&mut consumer);
-    for index in 0..4 {
-        assert!(!first_weak[index].ptr_eq(&Arc::downgrade(&second_set.stems[index].samples)));
-    }
-    drop(second_set);
     Python::attach(|py| {
         worker_python(
             py,
             locals.bind(py),
             r#"
-second_ticket = controller._pending_stem_publications[0].source_ticket
-assert second_ticket is not first_ticket
-assert second_ticket.publication_status() == 'pending'
-assert not controller.stems_available(0)
+selected = controller._committed_residency._selections[0]
+second_ticket = selected.receipt
+assert second_ticket is not first_residency and second_ticket is not full_mix_receipt
+assert selected.ticket.publication_status() == 'accepted'
+assert second_ticket.residency_status() == 'captured'
+assert second_ticket.effective_mode_status() == 'waiting'
+assert controller.stems_available(0)  # verified disk availability precedes residency
+assert not controller._pending_stem_publications
 assert project.stem_cache[0].pair == selection
-assert audio.worker_call_count() == 2 and audio.prepared_only_on_pool_threads()
+assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
 "#,
         )
     });
-    assert_eq!(callback.drain(&mut consumer), 1);
+    committed_controller_ack(
+        &engine,
+        &mut callback,
+        &mut consumer,
+        &controller,
+        0,
+        "all_stems",
+    );
+    let second_set = callback.mixer.stems_for_measurement()[0].as_ref().unwrap();
+    for index in 0..4 {
+        assert!(!first_weak[index].ptr_eq(&Arc::downgrade(&second_set.stems[index].samples)));
+    }
     Python::attach(|py| {
         worker_python(
             py,
             locals.bind(py),
             r#"
-assert second_ticket.publication_status() == 'accepted'
+assert second_ticket.residency_status() == 'accepted'
+assert second_ticket.effective_mode_status() == 'waiting'
 controller.on_frame_render()
-assert controller.stems_available(0) and 0 in controller._resident_pairs
+assert controller.stems_available(0)
 persistence.flush()
 final_reopen = ProjectPersistence.from_config_path(persistence.config_path)
 assert final_reopen.load_error is None
@@ -1787,7 +1951,7 @@ assets.release_saved_assignments()
 "#,
         )
     });
-    assert_eq!(callback.drain(&mut consumer), 2);
+    assert!(consumer.is_empty());
 }
 
 #[test]

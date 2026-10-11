@@ -594,6 +594,7 @@ pub enum ControlMessage {
 
     RelocateResident(Box<ResidentTransaction>),
     CaptureResidentSeek(Arc<crate::audio_engine::resident_seek::ResidentSeekCapture>),
+    CommittedStemWork(Box<crate::audio_engine::committed_stem_residency::CommittedStemRtWork>),
 
     /// Select which prepared component stems are enabled for an all-stems pad.
     ///
@@ -706,6 +707,7 @@ impl ControlMessage {
             | ControlMessage::LoadColdSample { .. }
             | ControlMessage::RelocateResident(_)
             | ControlMessage::CaptureResidentSeek(_)
+            | ControlMessage::CommittedStemWork(_)
             | ControlMessage::PublishPreparedStems { .. }
             | ControlMessage::PublishConstantTiming { .. }
             | ControlMessage::RefreshAcceptedTiming(_) => ControlMessageClass::Publication,

@@ -66,6 +66,11 @@ mod flitzis_looper_audio {
     use super::audio_engine::PreparedStemPair;
 
     #[pymodule_export]
+    use super::audio_engine::CommittedStemSetTicket;
+    #[pymodule_export]
+    use super::audio_engine::ResidentStemTicket;
+
+    #[pymodule_export]
     use super::audio_engine::ConstantTimingTicket;
 
     #[pymodule_export]

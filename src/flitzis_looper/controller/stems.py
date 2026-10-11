@@ -14,6 +14,10 @@ from flitzis_looper.controller.asset_lifecycle import (
 )
 from flitzis_looper.controller.base import BaseController
 from flitzis_looper.controller.bs_roformer_assets import MODEL_NAME as BS_ROFORMER_MODEL_NAME
+from flitzis_looper.controller.committed_stem_residency import (
+    CommittedStemResidency,
+    StemResidencyStatus,
+)
 from flitzis_looper.controller.stem_cache import (
     cache_dir_for_sample_id,
     cache_dir_matches_sample_id,
@@ -140,10 +144,16 @@ class StemController(BaseController):  # noqa: PLR0904
         self._publication_retries = StemPublicationRetries()
         self._pair_release_ordered: set[int] = set()
         self._fenced_pair_ids: set[int] = set()
+        self._residency_errors: dict[int, str] = {}
+        self._pending_full_mix_releases: set[int] = set()
+        self._committed_residency = CommittedStemResidency(
+            audio, self._committed_selection_current, self._report_residency_error
+        )
         self._on_frame_render_callbacks.append(self._poll_generation_events)
         self._on_frame_render_callbacks.append(self._poll_stem_publications)
         self._on_frame_render_callbacks.append(self._poll_pair_preparations)
         self._on_frame_render_callbacks.append(self._poll_publication_retries)
+        self._on_frame_render_callbacks.append(self._committed_residency.poll)
 
     def shut_down(self) -> None:
         """Cancel separator publication while retaining every running file reader."""
@@ -158,6 +168,7 @@ class StemController(BaseController):  # noqa: PLR0904
                 except Empty:
                     break
         self._generation_source_tickets.clear()
+        self._committed_residency.shut_down()
         for sample_id, pending in tuple(self._pending_stem_publications.items()):
             retry = self._publication_retries.pending.get(sample_id)
             if self._project.stem_cache[sample_id] is pending.entry and (
@@ -458,6 +469,7 @@ class StemController(BaseController):  # noqa: PLR0904
 
     def _invalidate_stem_cache(self, sample_id: int) -> None:
         self._assets.sync_assignments()
+        self._committed_residency.cancel(sample_id)
         self._cancel_jobs(sample_id)
         self._pair_preparations.cancel(sample_id)
         self._resident_pairs.discard(sample_id)
@@ -480,6 +492,15 @@ class StemController(BaseController):  # noqa: PLR0904
         """Return the durable stem mix preference for a pad."""
         validate_sample_id(sample_id)
         return self._project.pad_stem_mix_mode[sample_id]
+
+    def stem_residency_status(self, sample_id: int) -> StemResidencyStatus | None:
+        """Return own disk/residency/effective receipts independently from saved mode."""
+        validate_sample_id(sample_id)
+        try:
+            return self._committed_residency.status(sample_id)
+        except (RuntimeError, TypeError, ValueError) as error:
+            self._report_residency_error(sample_id, f"Stem residency status failed: {error}")
+            return None
 
     def stems_available(self, sample_id: int) -> bool:
         """Return whether current stem cache metadata is available for UI controls."""
@@ -543,7 +564,11 @@ class StemController(BaseController):  # noqa: PLR0904
             return False
 
         entry = self._project.stem_cache[sample_id]
-        if entry is not None and entry.pair is not None and sample_id not in self._resident_pairs:
+        if (
+            entry is not None
+            and entry.pair is not None
+            and (self._committed_residency.supported or sample_id not in self._resident_pairs)
+        ):
             return self._request_pair_mode(sample_id, entry, source_version)
 
         if not self._publish_all_stems_state(sample_id, source_version):
@@ -556,8 +581,24 @@ class StemController(BaseController):  # noqa: PLR0904
         return True
 
     def _set_full_mix(self, sample_id: int) -> bool:
+        had_committed_selection = self._committed_residency.contains(sample_id)
+        if had_committed_selection:
+            if self._committed_residency.request(
+                sample_id, "full_mix", self._session.pad_stem_enabled_mask[sample_id]
+            ):
+                self._pending_full_mix_releases.add(sample_id)
+                self._project.pad_stem_mix_mode[sample_id] = "full_mix"
+                self._resident_pairs.discard(sample_id)
+                self._mark_project_changed()
+                return True
+            # A rejected registration grants no activation rights. The existing
+            # ordered FullMix release still withdraws components without new reads.
+            self._committed_residency.cancel(sample_id)
+            self._pending_full_mix_releases.add(sample_id)
         if (
-            self._project.pad_stem_mix_mode[sample_id] == "full_mix"
+            not had_committed_selection
+            and sample_id not in self._pending_full_mix_releases
+            and self._project.pad_stem_mix_mode[sample_id] == "full_mix"
             and sample_id not in self._resident_pairs
         ):
             return True
@@ -572,6 +613,7 @@ class StemController(BaseController):  # noqa: PLR0904
             self._session.stem_generation_errors[sample_id] = f"Stem mix update failed: {error}"
             return False
         self._project.pad_stem_mix_mode[sample_id] = "full_mix"
+        self._pending_full_mix_releases.discard(sample_id)
         self._resident_pairs.discard(sample_id)
         self._mark_project_changed()
         return True
@@ -579,9 +621,27 @@ class StemController(BaseController):  # noqa: PLR0904
     def _request_pair_mode(
         self, sample_id: int, entry: StemCacheEntry, source_version: str
     ) -> bool:
+        if self._committed_residency.contains(sample_id):
+            if self._committed_residency.request(
+                sample_id, "all_stems", self._session.pad_stem_enabled_mask[sample_id]
+            ):
+                self._project.pad_stem_mix_mode[sample_id] = "all_stems"
+                self._mark_project_changed()
+                return True
+            if self._committed_residency.contains(sample_id):
+                return False
+            # A terminal registration was withdrawn by this explicit gesture.
+            # Retry through fresh source/pair preparation and its own callback ACK.
         try:
             ticket = self._capture_source_ticket(sample_id, source_version)
-            self._prepare_pair(sample_id, entry, ticket, components=True)
+            residency_only = self._committed_residency.supported
+            self._prepare_pair(
+                sample_id,
+                entry,
+                ticket,
+                components=not residency_only,
+                residency_only=residency_only,
+            )
         except (OSError, RuntimeError, ValueError) as error:
             self._session.stem_generation_errors[sample_id] = str(error)
             return False
@@ -603,13 +663,22 @@ class StemController(BaseController):  # noqa: PLR0904
         self._assets.sync_assignments()
 
         entry = self._project.stem_cache[sample_id]
-        if self._project.pad_stem_mix_mode[sample_id] != "full_mix":
+        if (
+            self._project.pad_stem_mix_mode[sample_id] != "full_mix"
+            or (entry is not None and entry.pair is not None)
+            or sample_id in self._pending_full_mix_releases
+        ):
             try:
-                self._audio.set_stem_mix_mode(sample_id, "full_mix")
-            except (RuntimeError, ValueError) as err:
-                self._session.stem_generation_errors[sample_id] = f"Stem mix update failed: {err}"
+                if entry is not None and entry.pair is not None:
+                    self._audio.set_stem_pair_full_mix(sample_id)
+                else:
+                    self._audio.set_stem_mix_mode(sample_id, "full_mix")
+            except (RuntimeError, ValueError) as error:
+                self._session.stem_generation_errors[sample_id] = f"Stem mix update failed: {error}"
                 return False
 
+        self._committed_residency.cancel(sample_id)
+        self._pending_full_mix_releases.discard(sample_id)
         self._cancel_jobs(sample_id)
         self._pair_preparations.cancel(sample_id)
         self._resident_pairs.discard(sample_id)
@@ -718,6 +787,12 @@ class StemController(BaseController):  # noqa: PLR0904
         return entry.source_version
 
     def _publish_stem_mix_mode(self, sample_id: int, source_version: str) -> bool:
+        if self._committed_residency.contains(sample_id):
+            return self._committed_residency.request(
+                sample_id, "all_stems", self._session.pad_stem_enabled_mask[sample_id]
+            )
+        if self._requires_committed_residency(sample_id):
+            return False
         try:
             self._audio.set_stem_mix_mode(sample_id, "all_stems", source_version)
         except (RuntimeError, ValueError) as err:
@@ -726,6 +801,12 @@ class StemController(BaseController):  # noqa: PLR0904
         return True
 
     def _publish_stem_enabled_mask(self, sample_id: int, source_version: str) -> bool:
+        if self._committed_residency.contains(sample_id):
+            return self._committed_residency.request(
+                sample_id, "all_stems", self._session.pad_stem_enabled_mask[sample_id]
+            )
+        if self._requires_committed_residency(sample_id):
+            return False
         try:
             self._audio.set_stem_enabled_mask(
                 sample_id,
@@ -1064,6 +1145,7 @@ class StemController(BaseController):  # noqa: PLR0904
         components: bool | None = None,
         processing_request: StemGenerationRequest | None = None,
         regenerate_on_incompatible: bool = False,
+        residency_only: bool = False,
     ) -> bool:
         if sample_id in self._fenced_pair_ids:
             message = "Unsupported stem pair metadata requires explicit recovery"
@@ -1080,6 +1162,7 @@ class StemController(BaseController):  # noqa: PLR0904
             else components,
             processing_request=processing_request,
             regenerate_on_incompatible=regenerate_on_incompatible,
+            residency_only=residency_only,
         )
         return True
 
@@ -1125,7 +1208,8 @@ class StemController(BaseController):  # noqa: PLR0904
             raise RuntimeError(message)
         with request.retirement.activate():
             if (
-                prepared.has_components()
+                not request.residency_only
+                and prepared.has_components()
                 and self._project.pad_stem_mix_mode[sample_id] == "all_stems"
             ):
                 self._queue_stem_publication(sample_id, selected, ticket, prepared)
@@ -1142,6 +1226,9 @@ class StemController(BaseController):  # noqa: PLR0904
             self._resident_pairs.discard(sample_id)
             self._restored_stem_candidates.pop(sample_id, None)
             self._mark_project_changed()
+            self._register_committed_pair(sample_id, prepared, ticket)
+            if request.residency_only and self._project.pad_stem_mix_mode[sample_id] == "all_stems":
+                self._publish_all_stems_mode_if_preferred(sample_id, selected.source_version)
 
     def _pair_preparation_current(self, request: PairPreparation) -> bool:
         sample_id = request.sample_id
@@ -1233,6 +1320,7 @@ class StemController(BaseController):  # noqa: PLR0904
             self._session.stem_generation_errors.pop(sample_id, None)
         if pending.prepared_pair is not None:
             pending.prepared_pair.select()
+            self._register_committed_pair(sample_id, pending.prepared_pair, pending.source_ticket)
             if sample_id not in self._pair_release_ordered:
                 self._resident_pairs.add(sample_id)
                 if self._project.pad_stem_mix_mode[sample_id] == "full_mix":
@@ -1654,6 +1742,13 @@ class StemController(BaseController):  # noqa: PLR0904
         if self._project.pad_stem_mix_mode[sample_id] != "all_stems":
             return True
 
+        if self._committed_residency.contains(sample_id):
+            return self._committed_residency.request(
+                sample_id, "all_stems", self._session.pad_stem_enabled_mask[sample_id]
+            )
+        if self._requires_committed_residency(sample_id):
+            return False
+
         try:
             self._audio.set_stem_mix_mode(sample_id, "all_stems", source_version)
             self._audio.set_stem_enabled_mask(
@@ -1667,3 +1762,63 @@ class StemController(BaseController):  # noqa: PLR0904
             )
             return False
         return True
+
+    def _register_committed_pair(
+        self, sample_id: int, prepared: PreparedStemPair, ticket: PreparedSourceTicket
+    ) -> None:
+        if not self._committed_residency.supported:
+            return
+        entry = self._project.stem_cache[sample_id]
+        if entry is None or entry.pair is None:
+            return
+        try:
+            self._committed_residency.register(
+                sample_id,
+                prepared,
+                ticket,
+                entry,
+                self._content_id(sample_id),
+                self._project.sample_paths[sample_id],
+            )
+        except (RuntimeError, TypeError, ValueError) as error:
+            self._report_residency_error(sample_id, f"Committed stem registration failed: {error}")
+
+    def _requires_committed_residency(self, sample_id: int) -> bool:
+        entry = self._project.stem_cache[sample_id]
+        return entry is not None and entry.pair is not None and self._committed_residency.supported
+
+    def _committed_selection_current(
+        self,
+        sample_id: int,
+        entry: StemCacheEntry,
+        content_id: str | None,
+        source_path: str | None,
+    ) -> bool:
+        current = self._project.stem_cache[sample_id]
+        return (
+            not self._shutting_down
+            and self._content_id(sample_id) == content_id
+            and self._project.sample_paths[sample_id] == source_path
+            and current is not None
+            and current.source_version == entry.source_version
+            and current.pair == entry.pair
+        )
+
+    def _report_residency_error(self, sample_id: int, message: str | None) -> None:
+        if message is None:
+            status = self._committed_residency.status(sample_id)
+            if (
+                status is not None
+                and status.requested_mode == "full_mix"
+                and status.effective == "effective"
+            ):
+                self._pending_full_mix_releases.discard(sample_id)
+            previous = self._residency_errors.pop(sample_id, None)
+            if (
+                previous is not None
+                and self._session.stem_generation_errors.get(sample_id) == previous
+            ):
+                self._session.stem_generation_errors.pop(sample_id, None)
+            return
+        self._residency_errors[sample_id] = message
+        self._session.stem_generation_errors[sample_id] = message

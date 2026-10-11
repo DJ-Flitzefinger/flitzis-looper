@@ -710,7 +710,8 @@ check. Strict complete-source/component-owner equality remains in force.
 native history and preparation owners keep their separate pins until existing
 worker/recycle retirement. The ordinary StemController round-trip uses this
 retiring command, so initial active None->Some, warm return, retention policy and
-effective-mode ACK remain P5a rather than following from the scalar Some/Some path.
+effective-mode ACK require the separate
+[typed P5a transaction](pcm-cache-residency.md#active-same-set-residency-p5a-2026-10-11).
 
 Unload Audio and Delete Stems revoke durable stem-cache eligibility, return
 durable stem mode to `full_mix`, reset session-only masks and publish neutral

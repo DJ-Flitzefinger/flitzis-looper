@@ -75,6 +75,11 @@ impl PreparedStemRejection {
 }
 
 impl PreparedSourcePermit {
+    pub(super) fn accepted_fixed() -> Self {
+        let permit = Self::new(Arc::new(AtomicU64::new(1)), 1);
+        permit.mark_accepted();
+        permit
+    }
     pub(crate) fn status(&self) -> &'static str {
         match self.status.load(Ordering::Acquire) {
             0 => "captured",

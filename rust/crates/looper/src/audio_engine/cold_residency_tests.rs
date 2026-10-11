@@ -48,6 +48,12 @@ struct RetirementGate {
 }
 
 impl AudioBufferRetirement for RetirementGate {
+    fn retire_committed_stem_work(
+        &mut self,
+        work: Box<super::committed_stem_residency::CommittedStemRtWork>,
+    ) {
+        self.actual.retire_committed_stem_work(work);
+    }
     fn retire_resident_capture(&mut self, value: Arc<super::resident_seek::ResidentSeekCapture>) {
         self.actual.retire_resident_capture(value);
     }

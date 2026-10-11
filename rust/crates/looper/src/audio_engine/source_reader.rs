@@ -572,6 +572,20 @@ pub(crate) struct SourceReadPlan {
 }
 
 impl SourceReadPlan {
+    /// Pin only components which either actual side of this source-frame ramp reads.
+    /// Installing unused resident components cannot change FullMix history ownership.
+    pub(crate) fn required_stems<'a>(
+        self,
+        stems: Option<&'a PreparedStemSet>,
+    ) -> Option<&'a PreparedStemSet> {
+        (self.selection.required_stem_hash().is_some()
+            || self
+                .transition
+                .required_from_selection()
+                .is_some_and(|selection| selection.required_stem_hash().is_some()))
+        .then_some(stems)
+        .flatten()
+    }
     pub(crate) fn domain(self) -> SourceLoopDomain {
         SourceLoopDomain {
             sample_frames: self.sample_frames,

@@ -268,8 +268,14 @@ vertical closes whole P4b, nonzero KEY/pitch, P5a or Human/device/hearing gates.
 
 ### P5a
 
-- [ ] Guarded erster aktiver None->Some fuer schon selected same committed Set plus resident/effective-mode ACK
-- [ ] FullMix laeuft weiter, continuous128 sourceframes, voice/cursor/loop/timing/history; active generation/content replacement bleibt gesperrt
+- [x] Typed residency-only erster aktiver None->Some fuer pad/source-bound schon selected unveraenderten committed disk Set, production k=0 NormalLoop; fresh Voice/Source/Request/STOP/Timing/Window/Selection/History guards, eigener residency ACK und separater effective-mode receipt
+- [x] FullMix bleibt waehrend pending unveraendert; nach eigenem ACK continuous128 sourceframes ueber actual two-side taps/smoothed feed, Native/FIFO/filter/voice/cursor/loop/timing; pause/resume und retained old-source voices behalten eigene Authority
+- [x] Cancellation/stale/history/worker/queue/byte/owner/recycle/feedback capacity before effects; old/new peak reservation und distinct actual-final-reader retirement ueber vorhandene Registry/Lanes, keine Callback-I/O/Allocation/Blocking/GIL
+- [x] Ordinary StemController ALL->FullMix->ALL nach wirklicher component retirement mit neuem eigenen residency/effective receipt und real public-route/Native continuation/negative regressions; saved intent oder permanent retained fixtures sind kein warm-return Beleg
+- [x] Affected official strict, impacted integrated/Release/import/preflight checks und eine unabhaengige Schlussreview; new-generation L3, whole P4b/P5b, nonzero KEY/B5 und Resource/Music/Human/Device/Hearing bleiben offen
+
+Bounded software delivery and retained negative evidence:
+[P5a validation](../../../docs/pcm-cache-residency.md#active-same-set-residency-p5a-2026-10-11).
 
 ### P5b
 

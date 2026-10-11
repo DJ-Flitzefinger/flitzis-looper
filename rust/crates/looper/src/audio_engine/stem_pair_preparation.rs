@@ -26,19 +26,19 @@ use std::sync::{Arc, Mutex};
 #[pyclass(frozen)]
 pub struct PreparedStemPair {
     selection: String,
-    wav_path: PathBuf,
-    source_version: String,
-    reference: SampleBuffer,
-    _identity: Arc<[u8; 32]>,
+    pub(super) wav_path: PathBuf,
+    pub(super) source_version: String,
+    pub(super) reference: SampleBuffer,
+    pub(super) _identity: Arc<[u8; 32]>,
     stems: Option<PreparedStemSet>,
     assets: Arc<super::project_assets::ProjectAssets>,
-    root: PathBuf,
+    pub(super) root: PathBuf,
     rollback: Vec<(PathBuf, bool)>,
     selected: AtomicBool,
-    discarded: AtomicBool,
-    source_lease: super::cold_store::CommittedColdLease,
-    descriptor_reference: String,
-    pair_reader: Arc<VerifiedStemPair>,
+    pub(super) discarded: AtomicBool,
+    pub(super) source_lease: super::cold_store::CommittedColdLease,
+    pub(super) descriptor_reference: String,
+    pub(super) pair_reader: Arc<VerifiedStemPair>,
 }
 
 #[cfg(test)]

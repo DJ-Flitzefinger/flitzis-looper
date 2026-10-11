@@ -224,6 +224,10 @@ def audio_engine_mock() -> Iterator[Mock]:
         # Historical WAV controller oracles exercise the explicit compatibility
         # route. New ordinary pair-worker tests install their own typed result.
         audio_engine.return_value.prepare_stem_pair = None
+        # Sealed selection/residency tests install their own receipt contract;
+        # these historical mocks provide no callback-owned selection receipts.
+        audio_engine.return_value.register_committed_stem_pair = None
+        audio_engine.return_value.request_committed_stem_residency = None
         audio_engine.return_value.acquire_project_asset_lease = Mock(
             side_effect=FakeProjectAssetLease
         )

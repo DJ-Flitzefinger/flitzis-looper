@@ -428,8 +428,8 @@ fn actual_finite_selection_commands_keep_native_ramps_then_retire_from_job_and_h
     assert!(
         old_components
             .iter()
-            .all(|component| component.strong_count() > 0),
-        "Native A must retain all four outgoing History crops across the actual B ACK"
+            .all(|component| component.strong_count() == 0),
+        "FullMix Native A retains its source history, without unused component crops"
     );
     for frames in [1, 127, 37] {
         paired_range_render(&mut h, &mut reference, &mut frame, frames);
@@ -462,9 +462,12 @@ fn actual_finite_selection_commands_keep_native_ramps_then_retire_from_job_and_h
     paired_range_render(&mut h, &mut reference, &mut frame, 1);
     let stem_native = adopt_range_native(&mut h, &mut reference, &mut frame, 2);
     wait_until(|| {
-        old_components
-            .iter()
-            .all(|component| component.strong_count() == 0)
+        // Native A's actual FullMix source pin retires through its asynchronous
+        // recycle lane; its unused component crops have already retired at B ACK.
+        old_source.strong_count() == 0
+            && old_components
+                .iter()
+                .all(|component| component.strong_count() == 0)
     });
     assert_eq!(old_source.strong_count(), 0);
 

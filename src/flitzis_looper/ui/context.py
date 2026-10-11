@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from imgui_bundle import imgui
 
     from flitzis_looper.controller import AppController
+    from flitzis_looper.controller.committed_stem_residency import StemResidencyStatus
     from flitzis_looper.controller.current_timing import CurrentPadTiming
     from flitzis_looper.controller.performance_confirmation import PerformanceConfirmation
     from flitzis_looper.controller.transport.key_lock_status import KeyLockStatus
@@ -189,6 +190,9 @@ class StemSelectors:
 
     def stem_mix_mode(self, pad_id: int) -> StemMixMode:
         return self._controller.stems.stem_mix_mode(pad_id)
+
+    def stem_residency_status(self, pad_id: int) -> StemResidencyStatus | None:
+        return self._controller.stems.stem_residency_status(pad_id)
 
     def stem_enabled_mask(self, pad_id: int) -> int:
         return self._controller.stems.stem_enabled_mask(pad_id)

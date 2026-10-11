@@ -165,6 +165,70 @@ loop/DSP context before claiming completion of shared-material loop residency.
 - **AND** peak admission and true final-reader retirement SHALL use the existing workers, registry and recycle lanes without hidden complete backing, callback IO or a fifth live component
 - **AND** this bounded result SHALL NOT close whole P4b, P5a/P5b, nonzero KEY/B5, resource/music or Human/device/hearing gates
 
+### Requirement: First residency of the selected committed stem set preserves live audio
+The system SHALL admit typed residency-only `None`-to-`Some` adoption of an already selected,
+unchanged committed disk StemSet for production k=0 NormalLoop without stopping or retriggering
+current playback, while retaining independent residency and effective-mode acknowledgements.
+
+#### Scenario: Selected disk authority admits only the unchanged current set
+- **GIVEN** the current source has its own selected verified committed disk StemSet but no resident components
+- **WHEN** its pad requests first live ALL STEMS residency
+- **THEN** a typed residency-only transaction SHALL bind that pad/source's complete content/cache/set identity, current source ticket and selected committed disk authority
+- **AND** `None`-to-`Some` SHALL attach only that same selected set, not select another set or publish a new generation
+- **AND** saved project intent, another pad's eligible set, old callback ACK or disk metadata alone SHALL NOT grant current live authority
+- **AND** general prepared-set replacement and new-generation adoption SHALL retain their separate L3 guards
+
+#### Scenario: Fresh current context precedes callback attachment
+- **WHEN** first-residency work captures, prepares and reaches the existing callback adoption boundary
+- **THEN** fresh guards SHALL match the actual current voice/source/request and STOP epoch, window/revision/geometry, accepted timing, selected set/mask and Native history/checkpoint
+- **AND** copied SourcePlayback and SourceReadPlan SHALL prove both executed fractional taps, actual smoothed-rate feed and both FullMix/outgoing and target stem sides against held ranges
+- **AND** the existing Source/Timing/Window/Stem/History permits, retained readers and reserved retirement/feedback capacity SHALL precede mutation
+- **AND** stale source, voice, request, timing, window, selection or history SHALL reject without changing prior effective audio or treating unavailable input as successful silence
+- **AND** native history, FIFO/filter chronology and independent complete-PCM/raw-Native continuation SHALL remain real proof obligations, not inactive-ready or private-fixture substitutes
+
+#### Scenario: FullMix continues until own residency ACK and continuous mode adoption
+- **WHEN** a playing current NormalLoop voice requests first residency while FullMix is effective
+- **THEN** preparation and queued adoption SHALL leave its FullMix output, source position, loop, timing, Native/FIFO/filter history and effective selection unchanged
+- **AND** only that matching request's own callback residency ACK SHALL authorize the existing 128-source-frame FullMix-to-stems ramp
+- **AND** the ramp SHALL use the same canonical source addresses and active source-frame progress under rate smoothing and irregular callback partitions without stop, retrigger, cursor jump or Native reset
+- **AND** a separate own source/request-bound effective-mode receipt SHALL distinguish pending, transitioning and actually adopted selection; enqueue or resident readiness SHALL NOT report effective ALL STEMS
+- **AND** empty/nonempty masks and interrupted ramps SHALL use their actual captured selection and existing interruption policy
+
+#### Scenario: Pause and retained old voices keep their own authority
+- **WHEN** first residency crosses pause/resume or a bank/source replacement retains an old active or paused voice
+- **THEN** paused source position, Native history/FIFOs/filter and ramp progress SHALL freeze and resume under the actual voice's source clock
+- **AND** a current-source residency or mode receipt SHALL NOT relabel or authorize the retained old voice's source, frozen selection, readers or history
+- **AND** any admitted operation affecting a retained voice SHALL obtain fresh authority for that actual voice/source through existing permits rather than borrowing the replacement bank's ACK
+- **AND** stopped/paused readiness SHALL remain distinct from actual successful continuing playback and the own effective-mode result
+
+#### Scenario: Stopped readiness and later superseding context remain truthful
+- **WHEN** component residency is accepted for a stopped pad without actual voice output
+- **THEN** the effective-mode receipt SHALL remain waiting rather than infer audible adoption from configured bank state
+- **AND** an accepted no-ramp FULL MIX release SHALL retire its actual component control owners independently of continuing-output proof
+- **WHEN** a later authorized ready Play, window change or STOP makes an already accepted operation receipt stale while the selected source/set remains current
+- **THEN** the controller SHALL withdraw that historical receipt to unconfirmed without claiming a new live acknowledgement or reporting the successful past admission as a new failure
+- **AND** it SHALL clear the withdrawn receipt's queued desired intent so periodic polling cannot automatically submit a replacement; an explicit mode gesture SHALL obtain fresh current authority and its own receipt
+- **AND** pending or rejected transactions SHALL retain their strict source/window/voice/history/request/STOP guards and visible errors
+- **AND** a known required source-specific Native preparation failure SHALL remain visible as rejected with its actual reason even after later context invalidation until a fresh own effective receipt succeeds
+- **AND** an ordinary ready Play SHALL retain its existing ready launch and usable output without requiring new cold admission merely to refresh mode feedback
+
+#### Scenario: Cancellation and bounded failure preserve owners and audio
+- **WHEN** FullMix/STOP supersedes pending demand, work is cancelled, history changes, results arrive late or a worker/queue/coverage/byte/owner/recycle/feedback capacity check fails
+- **THEN** stale first-residency work SHALL not attach components or begin a mode ramp
+- **AND** prior usable audio and requested intent SHALL retain truthful pending/error state, subject only to an explicit superseding FullMix or STOP action
+- **AND** actual distinct old/new backing and history overlap SHALL be reserved before allocation or mutation
+- **AND** old voice, source, stem, job, history, outgoing-ramp and reader-pin owners SHALL remain held until each actual final use and retire through existing off-thread registry/recycle paths
+- **AND** the callback SHALL perform no file/JSON I/O, Python/GIL/UI calls, blocking, logging, inference, heavy allocation/deallocation or unbounded preparation
+
+#### Scenario: Ordinary ALL to FullMix to ALL returns after real retirement
+- **WHEN** ordinary StemController ALL STEMS reaches effective selection, FullMix completes its outgoing ramp and resident components actually retire, then ALL STEMS is requested again
+- **THEN** verified selection of the unchanged committed disk set SHALL remain available independently of retired resident handles
+- **AND** the existing worker/controller path SHALL reacquire its required ranges with a new own residency ACK and separate effective-mode receipt without stop/retrigger or general inactive-set publication
+- **AND** saved ALL intent or prior readiness SHALL NOT cause an early success return while components are absent
+- **AND** outgoing components, Native history and job readers SHALL retire only at their distinct actual final uses; pinned old-source readers SHALL remain protected
+- **AND** productive public-route/native continuation and failure tests SHALL prove both first activation and actual retired warm return
+- **AND** this bounded P5a proof SHALL NOT close active new-generation L3, whole P4b/P5b, nonzero KEY/B5, aggregate resource/music or Human/device/hearing gates
+
 ### Requirement: Separate aggregate residency and preparation accounting
 The system SHALL reserve unique resident backing and simultaneous pending/old
 live resident allocations against the explicit aggregate ProjectState budget

@@ -609,8 +609,8 @@ later settled-selection prepare/adoption remains independently guarded.
 `SetStemPairFullMix` retires the resident components after their final ramp use,
 with history/jobs retaining their own readers until existing off-thread retirement.
 Ordinary controller FullMix/AllStems warm return and active initial None->Some
-require P5a retention/effective-mode ACK work; permanent retained scalar fixtures
-cannot close that workflow.
+are covered separately by the [typed P5a transaction](#active-same-set-residency-p5a-2026-10-11);
+permanent retained scalar fixtures cannot close that workflow.
 
 Normal finite loop edits use the exact proved physical tap interval. ALL admits
 complete playback. Nonresident seeks admit complete context so physical intro
@@ -963,7 +963,7 @@ Coalesce rapid edits to the latest intent without resetting audio progression.
 | Seek before/after resident loop | Non-KEY or complete-backed Seek retains the admitted complete exception. A held finite KEYLOCK source prepares prefix plus loop for Intro or loop plus actual source end for Tail through effective-voice capture and its own ACK. Preserve the old effective playhead until ACK; no target-only halo or continuous callback streaming. |
 | ALL | Requested manual [0,full duration), auto disabled; prepare full-track exception unless already resident. Failure retains prior effective audio. |
 | Return to finite loop | Explicit finite replacement prepared against actual current cursor/history and both selection sides; continuous next taps preserve adopted Native/FIFO/filter history, while clamps or changed interpolation seams reserve clean Native state before cutting it. Release full exception after final voice/job/history reader retires. Never evict an active trajectory's required samples. |
-| Stems/masks | Full mix plus the four component windows use matching source/window revisions, range coverage and current accepted projection. Current-source NormalLoop scalar commands admit already ACKed same-set transitions only when both actual active sides are covered, including the outgoing stem side and empty masks. A finite window relocation may adopt while active only for the identical complete source and already accepted complete StemSet, with proved history and ACK; it cannot introduce generated audio or new timing evidence. Preserve shared cursor/taps/ramp/filter/native-FIFO history. Initial active None->Some, ordinary controller warm return and effective-mode ACK remain P5a. Instrumental is not a fifth live component. |
+| Stems/masks | Full mix plus the four component windows use matching source/window revisions, range coverage and current accepted projection. Current-source NormalLoop scalar commands admit already ACKed same-set transitions only when both actual active sides are covered, including the outgoing stem side and empty masks. A finite window relocation may adopt while active only for the identical complete source and already accepted complete StemSet, with proved history and ACK; it cannot introduce generated audio or new timing evidence. Preserve shared cursor/taps/ramp/filter/native-FIFO history. Initial active None->Some and ordinary controller warm return require separate [typed P5a residency/effective receipts](#active-same-set-residency-p5a-2026-10-11). Instrumental is not a fifth live component. |
 
 Initially reuse a bounded complete PCM reader/lease for editor and analyzer
 integration rather than invent a paged editor framework. Share concurrent readers
@@ -1062,6 +1062,86 @@ verification/save and cancellation/cleanup outcomes include signed regressions.
 Numerical/native parity does not prove human hearing or real devices; those
 gates remain open for final pre-port acceptance. No part of C0-C3 starts planning
 or implementing the full application Rust port.
+
+## Active same-set residency (P5a, 2026-10-11)
+
+The typed [committed-set APIs](prepared-stem-publication.md#native-api-and-ownership)
+separate verified selected disk eligibility, current four-component residency and
+effective audio mode. Registration alone cannot activate components. A fresh
+callback capture binds each request to actual source/window/timing/STOP/voice/history
+and rate target; bounded workers read the held immutable pair off realtime.
+Callback adoption rechecks those owners and retirement capacity before effects.
+The current production-k=0 NormalLoop voice, cursor, FullMix backing, Native/FIFOs
+and EQ remain continuous through first None->Some and the real 128-source-frame ramp.
+
+Own residency ACK does not grant effective-mode ACK: KEY LOCK requires actual
+output from its source-specific Native owner. Pause freezes progress until resume.
+Known Native preparation failure rejects only the unproved effective receipt while
+accepted components and existing audio owners remain intact. Selection cancellation
+revokes future ALL without releasing actual readers; source-bound FULL MIX still
+withdraws outgoing components. New descriptor registration has its own revocation
+owner even for equal verified logical content.
+
+Stopped residency remains waiting for effective audio. A later ordinary ready
+Play or other superseding context can make an accepted receipt historical: the
+helper withdraws it to unconfirmed while retaining registration and saved intent.
+It clears the withdrawn queued intent and never obtains a new live ACK by polling;
+an explicit mode gesture captures fresh authority. Known actual Native preparation
+failure remains rejected with its reason even after later context changes. Pending
+and rejected transactions retain strict errors and all adoption guards. A stopped
+FULL MIX callback release clears actual component control owners separately from
+continuing-output proof, and ready Play keeps its existing admission path.
+
+The genuine Python StemController test executes ALL->FULL MIX->ALL after actual
+outgoing/history reader retirement, plus rejected-helper recovery through ordered
+legacy release and a second disk-only preparation. Both warm returns need fresh
+residency/effective receipts; helper-removal recovery additionally needs a fresh
+callback registration receipt. Saved mode colors remain intent;
+the sidebar reports pending/rejected/effective audio separately. Queue failure
+preserves explicit retry, including repeated FULL MIX release admission failure.
+
+Before the stopped-status correction, 19 focused Debug cases pass in 24.95s;
+the final affected Release run includes all 21 P5a cases. Independent
+complete-PCM and algebraic raw-Native/EQ comparisons retain exact output, cursor,
+FIFOs, bounded taps and nonzero signal checks under irregular partitions, actual
+rate smoothing, masks including zero, interruption and pause/resume. Negative
+cases cover fresh generation/old voices, stale source/window/history/voice,
+cancellation, queues, retirement backpressure, positioned-read failure and a
+genuinely full existing reader registry. The per-reader failure seam and lower
+per-pad PCM cap are test-only: the latter exercises the same held+new+scratch
+calculation and owner-preserving error path, not real 1-GiB allocation, RSS or P6/V0.
+
+Initial Native failures are retained in the local test log. The real aligner exposed
+an unrelated-original/component-sum fixture; the corrected PCM16 original is the
+actual four-component sum, with verified zero alignment and nonzero aligned loop
+PCM. Signal thresholds, exact references and the bounded continuation are retained.
+The retrigger race uses a legitimately pre-admitted launch; empty masks still
+observe addressed physical taps while their selected feed is zero.
+
+Broader Release integration reports 1083 passes, 7 failures and 19 ignored cases
+in 912.21s, with one actual-device test filtered. Six failures are old scalar
+message-count expectations in public worker/retry/publication bridges; the seventh
+incorrectly requires unused FullMix Native history to pin four component crops.
+Their actual typed receipts and downstream ownership/audio proofs are corrected,
+with no capability hiding or guard waiver. The affected Release pair run reports
+93 passes and one later source-retirement wait failure in 90.46s. That fixture now
+waits independently for the actual old source owner and components; its Release
+rerun passes in 0.68s. Three publication cases also pass in Release in 8.23s.
+These 97 affected cases close the original seven failure maps; unchanged positive
+results from the broader run are reused without relabelling that historical FAIL.
+Helper phase and stopped-test cleanup failures are retained in the local test log.
+
+The final Release wheel build passes in 20.77s; fresh scratch Native import, both
+typed APIs/ticket classes/failure reason and release start-check pass without
+installation or App start. All 688 impacted Python controller/UI cases pass in
+59.05s against this corrected Native runtime and current Python source. The
+installed Human Release extension remains unchanged. Cargo workspace check,
+Rust/Python formatting, Ruff/Mypy, official affected strict, relative links and
+whitespace checks pass. The one independent source/evidence review found and
+verified the stopped-status correction and actual final-reader wait.
+Full P4b/P5b, new-generation LIVE-STEMS, nonzero KEY/B5,
+aggregate resources, musical/device/listening/Human and whole-program gates remain
+open, including the actual H16384 negative of 1598 frames / 33.292ms.
 
 ## R0 shared material and content boundary
 

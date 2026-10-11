@@ -12,14 +12,56 @@ requires a separator model, even when the selected model is absent.
 
 ## Native API and ownership
 
-The pending [pad-owned PCM program](pad-owned-pcm-program.md) retains these guards
-and adds an explicit residency-only first None->Some adoption while FullMix plays.
-Current generic publication rejects active pads; current relocation requires an
-already accepted identical StemSet. Those APIs do not yet implement lazy first
-activation. Future active residency must preserve source/ticket/voice/geometry/
-history/DSP/lease guards and effective-mode feedback, without permitting active
-generation/different-content replacement or restarting playback. Complete durable
-five-artifact integrity remains separate from four live component-window readiness.
+The [pad-owned PCM program](pad-owned-pcm-program.md) retains generic publication's
+active-pad rejection and relocation's already accepted identical-set requirement.
+P5a adds a separate typed first residency of an already selected unchanged committed
+disk set while FullMix plays. Complete durable five-artifact integrity, selected disk
+eligibility, four live component-window residency and effective audio mode remain
+separate. This transaction does not authorize active generation/content replacement.
+
+`register_committed_stem_pair(prepared, source_ticket)` seals the verified pair to
+the actual loaded source generation and returns its own `CommittedStemSetTicket`.
+Registration needs an inactive pad, or the exact logical set already accepted by
+Native for that source. It grants no component residency or effective-mode ACK.
+The selected disk authority survives same-source window/timing changes and FullMix
+release; each later request must capture their current authority again.
+
+`request_committed_stem_residency(selection_ticket, mode=..., enabled_mask=...)`
+returns a `ResidentStemTicket`. The callback captures the actual current NormalLoop
+voice/source/window/timing/STOP/history and rate target into a preallocated handoff.
+Existing bounded workers prepare the four matching component windows and retain
+their real readers. Admission counts unique held source/component PCM plus new
+components and scratch against the existing 1-GiB transient limit. A later callback
+rechecks all captured ownership and capacity before attachment. Retained old-source,
+frozen or multiple current voices cannot borrow a new bank's eligibility.
+
+After its own residency ACK, the existing 128-source-frame ramp changes mode using
+the same source cursor, loop, voice, Native/FIFOs and EQ. A paused voice freezes that
+progress until actual resume output. `residency_status()` and
+`effective_mode_status()` are distinct; the latter remains waiting/transitioning
+until actual mode output, including the exact source-specific Native owner where
+KEY LOCK needs it. Neither saved ALL nor polling grants an ACK. Internal claim state
+projects as pending, never an extra acceptance state.
+
+Stopped component readiness projects as accepted residency with waiting effective
+mode; it grants no continuing-output proof. A later ordinary ready Play or other
+authorized context may make that completed operation receipt historical. The
+controller withdraws it to unconfirmed, retaining selection and saved intent;
+polling does not request a replacement. An explicit mode gesture obtains fresh
+live authority and its own effective receipt. Pending/rejected work keeps all
+strict guards and errors. `effective_failure_reason()` preserves a known required
+Native preparation failure as rejected even after a later context changes.
+Stopped FULL MIX releases actual component control owners after its own callback
+release ACK independently of audible/effective confirmation.
+
+FULL MIX supersedes pending ALL through the shared resident intent epoch and releases
+components after the actual outgoing ramp. Native history/jobs retain separate
+readers until their own last use and off-thread retirement. The selected disk set
+remains eligible; subsequent ALL reacquires missing windows and needs fresh own
+residency/effective receipts. Explicit retry of rejected registration uses fresh
+source/pair preparation. Cancellation revokes future admission without releasing
+current audio readers. Full P4b/P5b, new-generation LIVE-STEMS, nonzero KEY and
+aggregate resource/music/Human gates remain separate.
 
 `capture_prepared_source(id, source_version)` returns an opaque
 `PreparedSourceTicket`. The version contains normalized original path and

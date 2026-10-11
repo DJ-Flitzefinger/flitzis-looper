@@ -32,12 +32,12 @@ pub(super) struct StemPairOwner {
 }
 
 #[derive(Clone)]
-struct StemOwner {
-    set: PreparedStemSet,
-    source_version: String,
-    cache_dir: PathBuf,
-    generation_path: PathBuf,
-    pair: Option<StemPairOwner>,
+pub(super) struct StemOwner {
+    pub(super) set: PreparedStemSet,
+    pub(super) source_version: String,
+    pub(super) cache_dir: PathBuf,
+    pub(super) generation_path: PathBuf,
+    pub(super) pair: Option<StemPairOwner>,
 }
 
 struct StemDescriptor {
@@ -152,14 +152,39 @@ struct PendingWindow {
 
 #[derive(Default)]
 pub(super) struct ResidentStemCache {
-    accepted: Option<StemOwner>,
+    pub(super) accepted: Option<StemOwner>,
     pending: Option<StemOwner>,
     relocation: Option<PendingWindow>,
-    intent_epoch: Arc<AtomicU64>,
+    pub(super) intent_epoch: Arc<AtomicU64>,
     history: Vec<StemDescriptor>,
+    pub(super) committed: super::committed_stem_residency::CommittedStemState,
 }
 
 impl ResidentStemCache {
+    pub(super) fn cancel_window_predecessor(
+        &mut self,
+        engine: &AudioEngine,
+        id: usize,
+    ) -> PyResult<()> {
+        if let Some(previous) = self.relocation.as_ref() {
+            if !previous.publication.cancel_unclaimed() {
+                return Err(PyRuntimeError::new_err(
+                    "resident native adoption is in progress",
+                ));
+            }
+            previous.state.fail(
+                &engine.input_runtime_ownership,
+                id,
+                previous.publication.expected,
+                "resident preparation superseded by committed stem intent".into(),
+                true,
+            );
+        }
+        Ok(())
+    }
+    pub(super) fn ordinary_publication_pending(&self) -> bool {
+        self.pending.is_some()
+    }
     fn remember(&mut self, owner: &StemOwner) -> PyResult<()> {
         self.history
             .retain(|entry| entry.identity.strong_count() > 0);
@@ -552,6 +577,8 @@ pub(super) fn set_stem_pair_full_mix_with_producer(
         .lock()
         .map_err(|_| PyRuntimeError::new_err("resident stem ownership lock poisoned"))?;
     let owner = &mut owners[id];
+    let next_intent =
+        super::prepared_source::next_epoch(&owner.intent_epoch).map_err(PyRuntimeError::new_err)?;
     if let Some(previous) = owner.accepted.clone() {
         owner.remember(&previous)?;
     }
@@ -562,6 +589,7 @@ pub(super) fn set_stem_pair_full_mix_with_producer(
     producer
         .push(ControlMessage::SetStemPairFullMix { id, retired })
         .map_err(|_| PyRuntimeError::new_err("stem full-mix queue is full"))?;
+    owner.intent_epoch.store(next_intent, Ordering::Release);
     // The queued fixed handles, callback bank and actual jobs retain the PCM.
     // No potentially final large-buffer destruction occurs in this control path.
     owner.accepted = None;
@@ -588,6 +616,7 @@ pub(super) fn cancel_all(engine: &AudioEngine) -> PyResult<()> {
         .lock()
         .map_err(|_| PyRuntimeError::new_err("resident ownership lock poisoned"))?;
     for (id, owner) in owners.iter().enumerate() {
+        owner.committed.cancel_pending_shared();
         if let Some(pending) = &owner.relocation
             && pending.publication.cancel_unclaimed()
         {
@@ -614,6 +643,9 @@ pub(super) fn reconcile_under_request_lock(engine: &AudioEngine) -> PyResult<()>
         .map_err(|_| PyRuntimeError::new_err("resident stem ownership lock poisoned"))?;
     for id in 0..NUM_SAMPLES {
         let owner = &mut owners[id];
+        owner
+            .committed
+            .reconcile(&mut owner.accepted, cache[id].as_ref());
         // Historical file leases are justified only by a real logical set
         // still held by a voice, queued transaction or job.
         owner
@@ -1398,10 +1430,11 @@ pub(super) fn prepare_window_with_producer(
             .checked_add(1)
             .ok_or_else(|| PyValueError::new_err("window revision exhausted"))?
     };
-    if owners[id]
-        .relocation
-        .as_ref()
-        .is_some_and(|pending| pending.publication.status() == "adopting")
+    if owners[id].committed.claimed()
+        || owners[id]
+            .relocation
+            .as_ref()
+            .is_some_and(|pending| pending.publication.status() == "adopting")
     {
         return Err(PyRuntimeError::new_err(
             "resident native adoption is in progress",

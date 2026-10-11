@@ -807,6 +807,7 @@ fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
         ControlMessage::GlobalPlaybackBatch(_) => 2 * MAX_VOICES + 1,
         ControlMessage::RelocateResident(_) => 2 * MAX_VOICES + 3,
         ControlMessage::CaptureResidentSeek(_) => 3,
+        ControlMessage::CommittedStemWork(_) => 3,
         ControlMessage::LoadColdSample {
             replace_assignment: true,
             ..
@@ -1297,6 +1298,9 @@ pub(super) fn process_control_message<
         }
         ControlMessage::CaptureResidentSeek(capture) => {
             mixer.capture_resident_seek_rt(capture, retirement, callback_start_frame);
+        }
+        ControlMessage::CommittedStemWork(work) => {
+            mixer.apply_committed_stem_work(work, retirement);
         }
         ControlMessage::PublishConstantTiming { id, timing } => {
             mixer.publish_constant_timing_rt(id, timing, retirement);

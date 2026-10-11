@@ -995,6 +995,22 @@ def _render_stem_mix_mode(ctx: UiContext, info: _SidebarPadInfo) -> None:
 
     if current_mode == "all_stems" and not has_stems:
         imgui.text_colored(TEXT_MUTED_RGBA, "All stems pending current cache")
+    status = ctx.state.stems.stem_residency_status(info.pad_id)
+    if status is not None:
+        if status.registration == "rejected":
+            text = "Audio: stem selection rejected"
+        elif status.registration != "accepted":
+            text = "Audio: stem selection pending"
+        elif status.effective == "rejected" or status.residency == "rejected":
+            text = "Audio: stem switch rejected"
+        elif status.requested_mode is None:
+            text = "Stems saved; audio mode unconfirmed"
+        else:
+            label = "ALL STEMS" if status.requested_mode == "all_stems" else "FULL MIX"
+            text = (
+                f"Audio: {label}" if status.effective == "effective" else f"Audio: {label} pending"
+            )
+        imgui.text_colored(TEXT_MUTED_RGBA, text)
 
 
 def _render_generate_stems(ctx: UiContext, pad_id: int) -> None:

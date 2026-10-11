@@ -26,9 +26,24 @@ pub(crate) enum RetiredAudioBuffer {
     ResidentTransaction(Box<crate::messages::ResidentTransaction>),
     ResidentCancellation(Arc<AtomicBool>),
     ResidentSeekCapture(Arc<super::resident_seek::ResidentSeekCapture>),
+    CommittedStemWork(Box<super::committed_stem_residency::CommittedStemRtWork>),
 }
 
 pub(crate) trait AudioBufferRetirement {
+    #[cfg(test)]
+    fn retire_committed_stem_work(
+        &mut self,
+        work: Box<super::committed_stem_residency::CommittedStemRtWork>,
+    ) {
+        // Existing test-only sinks may destroy immediately; the production sink overrides
+        // this method and transfers the entire owner to its existing retirement worker.
+        drop(work);
+    }
+    #[cfg(not(test))]
+    fn retire_committed_stem_work(
+        &mut self,
+        work: Box<super::committed_stem_residency::CommittedStemRtWork>,
+    );
     fn retire_resident_capture(&mut self, capture: Arc<super::resident_seek::ResidentSeekCapture>);
     fn retire_resident_cancellation(&mut self, cancelled: Arc<AtomicBool>);
     fn retire_resident_transaction(
@@ -55,6 +70,11 @@ pub(crate) struct ImmediateAudioBufferRetirement;
 
 #[cfg(test)]
 impl AudioBufferRetirement for ImmediateAudioBufferRetirement {
+    fn retire_committed_stem_work(
+        &mut self,
+        _: Box<super::committed_stem_residency::CommittedStemRtWork>,
+    ) {
+    }
     fn retire_resident_capture(&mut self, _: Arc<super::resident_seek::ResidentSeekCapture>) {}
     fn retire_resident_cancellation(&mut self, _: Arc<AtomicBool>) {}
     fn retire_resident_transaction(&mut self, _: Box<crate::messages::ResidentTransaction>) {}
@@ -143,6 +163,12 @@ impl RtAudioBufferRetirement {
 }
 
 impl AudioBufferRetirement for RtAudioBufferRetirement {
+    fn retire_committed_stem_work(
+        &mut self,
+        work: Box<super::committed_stem_residency::CommittedStemRtWork>,
+    ) {
+        self.retire_buffer(RetiredAudioBuffer::CommittedStemWork(work));
+    }
     fn retire_resident_capture(&mut self, capture: Arc<super::resident_seek::ResidentSeekCapture>) {
         self.retire_buffer(RetiredAudioBuffer::ResidentSeekCapture(capture));
     }
