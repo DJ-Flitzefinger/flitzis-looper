@@ -12,7 +12,11 @@ if TYPE_CHECKING:
     )
     from flitzis_looper.controller.stem_generation import StemGenerationRequest
     from flitzis_looper.controller.stem_intent import StemGenerationIntent
-    from flitzis_looper_audio import PreparedSourceTicket, ProjectAssetLease, SealedProcessingFiles
+    from flitzis_looper_audio import (
+        OfflineStemSourceLease,
+        ProjectAssetLease,
+        SealedProcessingFiles,
+    )
 
 type StemJobPhase = Literal["queued", "resolving", "resolved", "running", "settled", "disposed"]
 
@@ -22,7 +26,7 @@ class StemSubscriber:
     """One independently admitted content, never a copied native permit."""
 
     sample_id: int
-    ticket: PreparedSourceTicket
+    source: OfflineStemSourceLease
     content_id: str | None
     retirement: AssetRetirementReservation
     request: StemGenerationRequest | None = None
@@ -46,14 +50,14 @@ class StemGenerationJob:
     def __init__(
         self,
         request: StemGenerationRequest,
-        ticket: PreparedSourceTicket,
+        source: OfflineStemSourceLease,
         assets: ProjectAssetLifecycle,
         content_id: str | None = None,
         *,
         intent: StemGenerationIntent | None = None,
     ) -> None:
         self.request = request
-        self.source_ticket = ticket
+        self.source: OfflineStemSourceLease | None = source
         self.intent = intent
         self.resolved_request: StemGenerationRequest | None = None
         self._assets = assets
@@ -70,6 +74,7 @@ class StemGenerationJob:
             self.retirement.close()
             raise
         self._lock = threading.Lock()
+        self.cancel_event = threading.Event()
         self._cancelled = False
         self._running = False
         self._disposed = False
@@ -81,7 +86,7 @@ class StemGenerationJob:
         self._subscribers: dict[int, StemSubscriber] = {}
         try:
             self.add_subscriber(
-                request.sample_id, ticket, content_id, request=request, intent=intent
+                request.sample_id, source, content_id, request=request, intent=intent
             )
         except OSError, RuntimeError, ValueError:
             self.cancel()
@@ -118,7 +123,7 @@ class StemGenerationJob:
     def add_subscriber(
         self,
         sample_id: int,
-        ticket: PreparedSourceTicket,
+        source: OfflineStemSourceLease,
         content_id: str | None,
         *,
         request: StemGenerationRequest | None = None,
@@ -142,7 +147,7 @@ class StemGenerationJob:
                 message = "Stem subscriber is cancelled or already registered"
                 raise RuntimeError(message)
             self._subscribers[sample_id] = StemSubscriber(
-                sample_id, ticket, content_id, retirement, own_request, intent, source_lease
+                sample_id, source, content_id, retirement, own_request, intent, source_lease
             )
 
     def update_intent(self, sample_id: int, intent: StemGenerationIntent) -> None:
@@ -189,6 +194,7 @@ class StemGenerationJob:
             target._subscribers.update(self._subscribers)
             self._subscribers.clear()
             self._cancelled = True
+            self.cancel_event.set()
             self._dispose_locked()
             return transferred
 
@@ -217,18 +223,19 @@ class StemGenerationJob:
                 subscriber.close()
             if not self._subscribers:
                 self._cancelled = True
+                self.cancel_event.set()
                 if not self._running:
                     self._dispose_locked()
             return bool(self._subscribers)
 
-    def begin_resolution(self) -> PreparedSourceTicket | None:
+    def begin_resolution(self) -> OfflineStemSourceLease | None:
         """Claim byte resolution once while preserving the job source through the phase gap."""
         with self._lock:
             if self._cancelled or self._disposed or self._phase != "queued":
                 return None
             self._running = True
             self._phase = "resolving"
-            return self.source_ticket
+            return self.source
 
     def finish_resolution(self) -> bool:
         """Settle resolution reads without releasing source/model custody before inference."""
@@ -240,7 +247,7 @@ class StemGenerationJob:
                 self._phase = "resolved"
             return not self._cancelled
 
-    def begin(self) -> PreparedSourceTicket | None:
+    def begin(self) -> OfflineStemSourceLease | None:
         """Claim inference once, or ignore a cancelled queued task."""
         with self._lock:
             if self._cancelled or self._disposed or self._begun or self._phase == "resolving":
@@ -248,13 +255,14 @@ class StemGenerationJob:
             self._begun = True
             self._running = True
             self._phase = "running"
-            return self.source_ticket
+            return self.source
 
     def finish_read(self) -> bool:
         """Release completed backend reads and report whether completion is current."""
         with self._lock:
             self._running = False
             self._phase = "settled"
+            self.source = None
             self._source_lease.release()
             if self._cancelled:
                 self._dispose_locked()
@@ -264,6 +272,7 @@ class StemGenerationJob:
         """Retire idle work now and running work after its last backend read."""
         with self._lock:
             self._cancelled = True
+            self.cancel_event.set()
             for subscriber in self._subscribers.values():
                 subscriber.close()
             self._subscribers.clear()
@@ -281,6 +290,7 @@ class StemGenerationJob:
             return
         self._disposed = True
         self._phase = "disposed"
+        self.source = None
         # The guard outlives backend return and the queued event. Successful
         # settlement promotes the immutable WAVs/marker before disposing this job.
         self.processing_files = None

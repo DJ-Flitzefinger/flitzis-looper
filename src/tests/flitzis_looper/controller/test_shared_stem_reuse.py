@@ -6,6 +6,7 @@ Native complete pair/callback custody is covered separately by the Native suite.
 
 import hashlib
 import json
+import os
 import shutil
 from dataclasses import replace
 from importlib.util import find_spec
@@ -29,6 +30,7 @@ from flitzis_looper.stem_pair_selection import (
     StemGenerationProvenance,
     StemPairSelection,
 )
+from flitzis_looper_audio import SealedProcessingFiles
 from tests.conftest import write_mono_pcm16_wav
 from tests.flitzis_looper.conftest import FakePreparedSourceTicket, write_test_stem_marker
 
@@ -37,6 +39,7 @@ if TYPE_CHECKING:
 
     from flitzis_looper.controller import AppController
     from flitzis_looper.controller.stem_job import StemGenerationJob
+    from flitzis_looper.models import StemSeparator
     from tests.flitzis_looper.conftest import FakeStemGenerationBackend
 
 
@@ -49,6 +52,97 @@ def _declared_bs_backend_receipt(stem_backend: FakeStemGenerationBackend) -> Non
         model_name=BS_ROFORMER_MODEL_NAME,
         decoder_verified=True,
     )
+
+
+def _declared_source_root_inventory(
+    tmp: Path, monkeypatch: pytest.MonkeyPatch, separator: StemSeparator
+) -> tuple[StemGenerationRequest, tuple[Path, ...], tuple[Path, ...]]:
+    """Declare tiny ordered roles; Native seals the actual files, without model execution."""
+    package = tmp / "owned-separator" / "fixture_separator"
+    host = tmp / "owned-host" / "fixture_host"
+    model = tmp / "owned-model"
+    separator_init = package / "__init__.py"
+    host_init = host / "__init__.py"
+    host_roles = host / "transform.py", host_init
+    leading = (
+        (model / "checkpoint.bin", model / "config.yaml")
+        if separator == "bs-roformer:musdb18hq"
+        else (model / "checkpoint.bin", package / "model.yaml", package / "files.txt")
+    )
+    inventory = (*leading, separator_init, *host_roles)
+    for index, path in enumerate(inventory):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"" if path == host_init else f"declared owned role {index}".encode())
+    request = StemGenerationRequest(
+        sample_id=0,
+        source_path=tmp / "unused-source.wav",
+        source_version="declared-source|sha256-v1:" + "1" * 64,
+        cache_dir=tmp / "unused-cache",
+        target_shape=AudioShape(44_100, 1, 128),
+        model_cache_dir=model,
+        separator=separator,
+    )
+    monkeypatch.setattr(stem_provenance, "processing_paths", lambda _request: inventory)
+    monkeypatch.setattr(stem_provenance, "_host_processing_paths", lambda _request: host_roles)
+    return request, inventory, (host.parent, package.parent)
+
+
+@pytest.mark.parametrize("separator", ["demucs:htdemucs", "bs-roformer:musdb18hq"])
+def test_ordered_actual_native_witness_aliases_return_expected_guarded_package_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, separator: StemSeparator
+) -> None:
+    request, inventory, expected_roots = _declared_source_root_inventory(
+        tmp_path, monkeypatch, separator
+    )
+    guard = SealedProcessingFiles([str(path) for path in inventory])
+    guard.verify()
+    witnesses = guard.witnesses()
+    assert len(witnesses) == len(inventory)
+    assert all(
+        Path(name).samefile(path)
+        for (name, _digest, _size), path in zip(witnesses, inventory, strict=True)
+    )
+    if os.name == "nt":
+        assert all(name.startswith("\\\\?\\") for name, _digest, _size in witnesses)
+        assert all(
+            Path(name) != path.absolute()
+            for (name, _digest, _size), path in zip(witnesses, inventory, strict=True)
+        )
+    roots = stem_provenance.processing_source_roots(request, guard)
+    assert roots == expected_roots
+    assert all(not str(root).startswith("\\\\?\\") for root in roots)
+    guard.verify()
+
+
+@pytest.mark.parametrize("separator", ["demucs:htdemucs", "bs-roformer:musdb18hq"])
+@pytest.mark.parametrize("mismatch", ["order", "equal_bytes", "missing_role"])
+def test_actual_native_source_root_witnesses_require_exact_order_file_identity_and_count(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    separator: StemSeparator,
+    mismatch: str,
+) -> None:
+    request, inventory, _roots = _declared_source_root_inventory(tmp_path, monkeypatch, separator)
+    captured = list(inventory)
+    if mismatch == "order":
+        captured[0], captured[1] = captured[1], captured[0]
+    elif mismatch == "equal_bytes":
+        substitute = tmp_path / "different-file-equal-bytes.bin"
+        substitute.write_bytes(inventory[0].read_bytes())
+        assert substitute.read_bytes() == inventory[0].read_bytes()
+        assert not substitute.samefile(inventory[0])
+        captured[0] = substitute
+    else:
+        captured.pop()
+    guard = SealedProcessingFiles([str(path) for path in captured])
+    guard.verify()
+    assert len(guard.witnesses()) == len(captured)
+    if mismatch == "equal_bytes":
+        _name, digest, size = guard.witnesses()[0]
+        assert digest == hashlib.sha256(inventory[0].read_bytes()).hexdigest()
+        assert size == inventory[0].stat().st_size
+    assert stem_provenance.processing_source_roots(request, guard) == ()
+    guard.verify()
 
 
 def _actual_bs_processing_request(
@@ -102,8 +196,15 @@ def _bs_implementation_witnesses(
     assert processing[1] is None
     witnesses = processing[0].witnesses()
     expected = stem_provenance.processing_paths(request)
-    assert len(witnesses) == 20
-    assert len(expected) == 20
+    assert len(witnesses) == 25
+    assert len(expected) == 25
+    assert {
+        "stem_process.py",
+        "process.py",
+        "windows_job.py",
+        "contracts.py",
+        "stem_cancellation.py",
+    } <= {path.name for path in expected}
     for (name, digest, size), path in zip(witnesses, expected, strict=True):
         assert Path(name).samefile(path)
         assert digest == hashlib.sha256(path.read_bytes()).hexdigest()
@@ -576,13 +677,13 @@ def test_owned_encoder_witness_covers_common_pcm_and_keeps_unproved_demucs_produ
         encoder_executable=resolved,
     )
     paths = stem_provenance.processing_paths(request)
-    assert len(paths) == 24
+    assert len(paths) == 29
     assert any(path.name == "pcm16_wav.py" for path in paths)
     assert paths[-1] == resolved
     assert stem_provenance.processing_library_versions(request) is None
     processing = stem_provenance.capture_processing_files(request)
     assert processing is not None
-    assert len(processing[0].witnesses()) == 24
+    assert len(processing[0].witnesses()) == 29
     assert processing[1] is None  # no shared encoder DLL execution identity is inferred
     with pytest.raises(PermissionError):
         encoder.write_bytes(b"encoder changed before publication")

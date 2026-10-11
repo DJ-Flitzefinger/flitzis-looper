@@ -57,6 +57,25 @@ impl OfflineJobs {
         })
     }
 
+    /// Read-only source capture shares analysis' slot-before-request lock order.
+    /// It neither admits a job nor changes the loaded source/publication epoch.
+    pub(super) fn with_pad_idle<T>(
+        &self,
+        id: usize,
+        capture: impl FnOnce(bool) -> PyResult<T>,
+    ) -> PyResult<T> {
+        let slot = self
+            .current
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("offline job lock poisoned"))?;
+        let running = slot
+            .upgrade()
+            .is_some_and(|job| job.identity.pad_id == id && !job.finished.load(Ordering::Acquire));
+        let result = capture(!running);
+        drop(slot);
+        result
+    }
+
     #[cfg(test)]
     pub fn begin(
         &self,

@@ -2,7 +2,8 @@
 
 ## Status and delivery ownership
 
-This is PLAN_ONLY for E11-05/06/07/19/20. `X11-LIVE-STEMS` and `X11-BULK` are
+L1 is delivered; L2 separates offline custody and durable disk selection from
+effective playback. L3/L4 and Bulk remain open. `X11-LIVE-STEMS` and `X11-BULK` are
 additive delivery IDs in the maintained pre-Rust program. The old IDs/edges,
 completed subtasks, failed results and final Human gates retain their meanings.
 The central program defines topological order; these local stages are bounded
@@ -12,23 +13,24 @@ implementation units, not additional independently accepted program IDs.
 
 - `controller/stem_job.py` holds immutable source/private-generation leases,
   independent `StemSubscriber` identities and final-interest cancellation.
-  `matches()` currently compares path, version, shape and separator options;
-  extend this to verified canonical content plus durable effective fingerprint.
+  Matching uses verified canonical content and the captured effective fingerprint;
+  independent source/intent authority remains with each subscriber.
 - `controller/stem_workers.py` enforces two workers and 32 queued jobs. Add fair
   incremental batch feeding at this admission seam, not 216 submitted workers
   or a second executor. A bounded 216-entry inventory contains intent metadata,
   not retained complete PCM or a second 216-job executor queue.
-- `controller/stems.py` rejects active pads at admission and completion;
-  `mixer.rs::prepared_stem_rejection` rejects `PadPlaying`. Those delivered
-  guards remain until the new independent admission/adoption proof exists.
+- L2 permits offline generation and complete disk-only preparation while active.
+  `mixer.rs::prepared_stem_rejection` still rejects new active component sets as
+  `PadPlaying`; that adoption guard remains until the independent L3 proof exists.
 - `ProjectAssetLifecycle` reserves retirement before intent mutation and
   acquires new assignment owners before releasing previous owners. Native
   shared readers, paired complete descriptors and off-thread retirement already
   cover queued/bank/voice/history readers. Extend these owners without copying
   historical source/timing/native ACKs between subscribers.
 - P3 complete WAV/PCM pairs, P4b's accepted NormalLoop vertical/lifecycle and the
-  current selected Some/Some transitions are foundations. P5a's selected same
-  set None-to-Some/effective-mode/warm-return work remains separately open.
+  current selected Some/Some transitions are foundations. P5a's bounded selected
+  same-set None-to-Some/effective-mode/warm-return proof is delivered; whole P5a
+  and its final musical/resource/Human gates remain separately open.
 
 Source-backed regressions include `test_shared_stem_material.py`,
 `test_asset_lifecycle.py`, `test_stem_workers.py`, `test_stems.py`,
@@ -118,14 +120,47 @@ Unload, replacement or Cancel detach only that obsolete interest; surviving
 subscribers can finish. No surviving subscriber means cooperative own-process
 abort followed by actual read-end retirement, never deleting under inference.
 
+`OfflineStemSourceLease` clones the own pad's existing `CommittedColdLease` under
+loaded source/request ownership checks, including fully resident PCM. Its exact
+own managed-original reference and Native source generation are checked from
+held metadata; digest/PCM equality cannot select another root. The opaque lease
+exposes immutable source/shape metadata and a worker-only full verification
+operation. It carries no accepted timing, window or publication permission.
+Physical job custody survives interest detachment until actual backend/process
+read end. Subscriber completion captures a fresh ordinary `PreparedSourceTicket`
+after checking current source/content/material intent; restoration remains its
+existing model-free independent path.
+
 The commit linearization point selects exactly one verified current material
-set after both areas and their common marker are durable and verified. Faults
+set through the existing fenced config writer's actual atomic replacement,
+after both areas and their common marker are durable and verified. Fresh own
+source/request and current material/model intent are checked after the real
+temporary-file fsync immediately before replacement. Independent new/predecessor
+assignment pins and a bounded settlement record/reservation are already held.
+Faults
 or Cancel before this point leave the previous selected set usable. If Cancel
 races after commit, report the already committed result and cancel only pending
 batch interests; do not pretend the committed selection was rolled back.
 Private/incomplete/retained predecessor generations are not selectable parallel
 model libraries. Old files remain immutable and hidden from current-model
 selection until actual last readers permit their removal.
+
+After replacement, owner transfer, selection settlement and retirement retry
+through the retained record; failure cannot discard the committed candidate or
+pretend to roll back the config. If newer content or unload supersedes the pad in
+the replacement/settlement gap, it wins in memory. The same persistence writer
+must durably flush that newer snapshot before retiring the now-stale disk-selected
+pair. A failed newer flush retains both exact pins and reserved settlement capacity.
+
+The physical backend runs through the existing owned Windows job/tree and bounded
+stdout/stderr readers, without consuming analysis's single execution slot or adding
+an executor. Final-interest cancellation asks only the exact own separator module
+to stop via a fresh private marker. Named decode/model/recursive inference/output/
+hash checkpoints can exit cooperatively after cleanup; a blocking native model
+call uses finite owned-tree escalation. Custody ends only after actual process
+and output-reader end. Parent alignment/hash checkpoints use the same sticky event.
+All newly executed process/cancellation helpers participate in the full sealed
+producer inventory and fail-closed loaded-code identity, with a bounded 64-file cap.
 
 Gate L2 injects faults at WAV/PCM/descriptor/config commit boundaries, races
 Cancel/commit/unload/reload/model changes, verifies reopen and old-set usability,
@@ -243,7 +278,9 @@ then B1-B2. P6/R1 and final V0/H-LIVE/H-FINAL/C-FINAL integrate these behaviors
 in the central additive DAG; avoid an edge that makes LIVE depend on a whole
 parent that already depends on LIVE. No full Rust port or Slice8 follows.
 
-Future code changes require the normal impact-based Rust/Python/static/strict
+Further stages require the normal impact-based Rust/Python/static/strict
 validation, independent nonauthor source/test review and genuine output/resource
-receipts. X11-PLAN only checks specification structure, mapping and dependency
-coherence plus official strict validation; none of L1-L4/B1-B2 is passed here.
+receipts. X11-PLAN checks specification structure, mapping and dependency
+coherence plus official strict validation only; it supplies no implementation
+acceptance. Bounded L1/L2 delivery evidence is maintained in
+`docs/prepared-stem-publication.md`; L3/L4/B1/B2 and final parent/Human gates remain open.

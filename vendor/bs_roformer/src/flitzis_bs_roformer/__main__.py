@@ -12,7 +12,17 @@ import torch
 from flitzis_bs_roformer.audio import decode_source
 from flitzis_bs_roformer.inference import ChunkPlan, separate_pcm
 from flitzis_bs_roformer.model import load_model
-from flitzis_looper.bs_input_provenance import begin_input_attempt, input_completion_line
+from flitzis_looper.bs_input_provenance import (
+    begin_input_attempt,
+    finish_input_attempt,
+    input_completion_line,
+)
+from flitzis_looper.stem_cancellation import (
+    CANCEL_EXIT_CODE,
+    StemCancellation,
+    StemInferenceCancelledError,
+    emit_cancellation_ack,
+)
 
 
 def main() -> None:
@@ -24,16 +34,35 @@ def main() -> None:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--device", choices=("cpu", "cuda"), required=True)
     args = parser.parse_args()
+    cancellation = StemCancellation.from_environment()
+    cancellation.checkpoint("before_model_stage")
     plan = ChunkPlan()
     plan.validate()
     args.output.mkdir(parents=True, exist_ok=True)
-    model = load_model(args.checkpoint, args.config, args.device)
+    if cancellation.marker is None:
+        model = load_model(args.checkpoint, args.config, args.device)
+    else:
+        model = load_model(
+            args.checkpoint, args.config, args.device, cancellation=cancellation.checkpoint
+        )
     _emit({"stage": "model_ready", "device": args.device, "torch": torch.__version__})
     begin_input_attempt(args.output)
-    with TemporaryDirectory(prefix=".decode-", dir=args.output) as temporary:
-        decoded = Path(temporary) / "source.f32"
-        frames = decode_source(args.source, decoded)
-        separate_pcm(model, decoded, args.output, frames, args.device, plan)
+    try:
+        with TemporaryDirectory(prefix=".decode-", dir=args.output) as temporary:
+            decoded = Path(temporary) / "source.f32"
+            frames = decode_source(args.source, decoded, checkpoint=cancellation.checkpoint)
+            separate_pcm(
+                model,
+                decoded,
+                args.output,
+                frames,
+                args.device,
+                plan,
+                checkpoint=cancellation.checkpoint,
+            )
+    finally:
+        finish_input_attempt()
+    cancellation.checkpoint("before_completion_receipt")
     _emit({
         "stage": "complete",
         "device": args.device,
@@ -59,6 +88,9 @@ def _emit(status: dict[str, str | int | bool]) -> None:
 if __name__ == "__main__":
     try:
         main()
+    except StemInferenceCancelledError as error:
+        emit_cancellation_ack(error)
+        sys.exit(CANCEL_EXIT_CODE)
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
         sys.stderr.write(str(error) + "\n")
         sys.stderr.flush()

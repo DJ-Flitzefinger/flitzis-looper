@@ -28,15 +28,15 @@
 
 ## 2. X11-LIVE-STEMS: source-leased offline job and joint commit (L2)
 
-- [ ] 2.1 Separate offline immutable source/job leases from fresh later native
+- [x] 2.1 Separate offline immutable source/job leases from fresh later native
   publication permits; remove activity-only offline gates only after productive
   blocked-worker output tests preserve FullMix/stems/KEYLOCK/transport and
   unrelated users. Preserve loading/unloading/analysis/conflicting intent gates.
-- [ ] 2.2 Reuse complete five-WAV/five-PCM/common-descriptor verification and
+- [x] 2.2 Reuse complete five-WAV/five-PCM/common-descriptor verification and
   atomic material selection with reserved predecessor rollback/retirement owners.
   Fault-test every cross-area/config commit point and Cancel/commit/model/unload/
   replacement race; old usable selection survives all precommit failures.
-- [ ] 2.3 Recheck current subscriber identities after inference; stale or cancelled
+- [x] 2.3 Recheck current subscriber identities after inference; stale or cancelled
   interests cannot mutate newer content or consume newer jobs. Prove surviving
   equal-material subscribers finish after origin unload and true lease retention
   through actual backend/process read end.

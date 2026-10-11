@@ -1,7 +1,7 @@
+import locale
 import math
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 from collections.abc import Callable
@@ -30,6 +30,7 @@ from flitzis_looper.controller.stem_artifacts import (
 from flitzis_looper.controller.stem_artifacts import (
     write_project_cache_artifacts as _write_project_cache_artifacts,
 )
+from flitzis_looper.controller.stem_process import run_stem_command
 from flitzis_looper.encoder_provenance import (
     ENCODER_CONTRACT_ENV,
     ENCODER_RESULT,
@@ -139,19 +140,13 @@ def run_command(
     cwd: Path,
     env: dict[str, str],
 ) -> CommandResult:
-    """Run a subprocess and capture bounded text output for diagnostics."""
-    completed = subprocess.run(
-        args,
-        cwd=cwd,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    """Run an owned command with bounded diagnostics and actual read settlement."""
+    completed = run_stem_command(args, cwd=cwd, env=env)
+    encoding = locale.getencoding()
     return CommandResult(
         returncode=completed.returncode,
-        stdout=_command_stdout(completed.stdout),
-        stderr=_bounded_text(completed.stderr),
+        stdout=_command_stdout(completed.stdout.decode(encoding, errors="replace")),
+        stderr=_bounded_text(completed.stderr.decode(encoding, errors="replace")),
     )
 
 

@@ -36,6 +36,7 @@ from flitzis_looper.models import ProjectState
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from flitzis_looper.models import StemCacheEntry
     from flitzis_looper_audio import AudioEngine
 
 PROJECT_ASSETS_DIR = Path("samples")
@@ -185,6 +186,47 @@ class ProjectPersistence:
             text = self._write_snapshot(validated, expected_revision, monotonic())
             return expected_revision, hashlib.sha256(text.encode("utf-8")).hexdigest()
 
+    def commit_stem_selection(
+        self,
+        sample_id: int,
+        previous: StemCacheEntry | None,
+        selected: StemCacheEntry,
+        current: Callable[[], bool],
+    ) -> None:
+        """Durably select one complete pair before the controller transfers live owners.
+
+        The caller holds both complete assignment owners through this operation and
+        settles its live model only after return. A signal after the actual atomic
+        replacement cannot turn the durable selection into a precommit rejection.
+        """
+        if type(sample_id) is not int or not 0 <= sample_id < len(self.project.stem_cache):
+            message = "stem selection sample ID is out of range"
+            raise ValueError(message)
+        with self._writer:
+            expected_revision = self._revision
+
+            def check_current() -> None:
+                if self._migration_owner is not None:
+                    message = "material migration owns the config writer"
+                    raise PersistenceFenceError(message)
+                if self._revision != expected_revision:
+                    message = "project intent changed before stem selection commit"
+                    raise PersistenceFenceError(message)
+                if self.project.stem_cache[sample_id] is not previous or not current():
+                    message = "stem selection changed before config commit"
+                    raise PersistenceFenceError(message)
+
+            check_current()
+            candidate = self.project.model_copy(deep=True)
+            candidate.stem_cache[sample_id] = selected.model_copy(deep=True)
+            self._write_snapshot(
+                candidate,
+                expected_revision + 1,
+                monotonic(),
+                expected_revision=expected_revision,
+                before_replace=check_current,
+            )
+
     def maybe_flush(self, *, now: float | None = None) -> bool:
         """Write config if dirty and the debounce window has elapsed."""
         if not self._dirty or self._migration_owner is not None:
@@ -228,7 +270,15 @@ class ProjectPersistence:
             revision = self._revision
             self._write_snapshot(self.project, revision, now)
 
-    def _write_snapshot(self, project: ProjectState, revision: int, now: float) -> str:
+    def _write_snapshot(
+        self,
+        project: ProjectState,
+        revision: int,
+        now: float,
+        *,
+        expected_revision: int | None = None,
+        before_replace: Callable[[], None] | None = None,
+    ) -> str:
         """Verify and write while retaining changes newer than the captured revision."""
         if self.load_error is not None:
             raise PersistenceFenceError(self.load_error)
@@ -240,7 +290,8 @@ class ProjectPersistence:
             if self._on_timing_error is not None:
                 self._on_timing_error(error.sample_id, f"Timing save rejected: {error}")
             raise
-        if self._revision != revision:
+        captured_revision = revision if expected_revision is None else expected_revision
+        if self._revision != captured_revision:
             self._dirty = True
             message = "project intent changed during timing verification"
             raise PersistenceFenceError(message)
@@ -257,15 +308,24 @@ class ProjectPersistence:
                 )
 
         text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
-        self._atomic_write_text(text)
+        if before_replace is None:
+            self._atomic_write_text(text)
+        else:
+            self._atomic_write_text(text, before_replace=before_replace)
 
+        if expected_revision is not None:
+            # Count the committed selection as one new intent. A newer reentrant
+            # intent after replacement remains newer than the written revision.
+            self._revision += 1
         self.project.config_revision = revision
         self._dirty = self._revision != revision
         self._last_timing_rejection_monotonic = None
         self._last_write_monotonic = now
         return text
 
-    def _atomic_write_text(self, content: str) -> None:
+    def _atomic_write_text(
+        self, content: str, *, before_replace: Callable[[], None] | None = None
+    ) -> None:
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
 
         tmp_path: Path | None = None
@@ -285,6 +345,8 @@ class ProjectPersistence:
                 os.fsync(tmp.fileno())
 
             if tmp_path is not None:
+                if before_replace is not None:
+                    before_replace()
                 os.replace(tmp_path, self.config_path)
         finally:
             if tmp_path is not None:

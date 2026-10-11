@@ -357,9 +357,9 @@ rollback. The Demucs/BS readable suites use real owned FFmpeg/tool processes and
 artifact leases, with neural-output and controller-ACK substitutions declared.
 These are software proofs, without new neural quality, device or hearing acceptance.
 
-L2 still owns sealed offline source/process cancellation and joint disk/config
-commit during playback; L3 owns genuine new-generation active adoption. All existing
-playing/new-generation publication guards remain. L1 closes neither those stages
+At the L1 boundary, L2 still owned sealed offline source/process cancellation and
+joint disk/config commit during playback; L3 owned genuine new-generation active
+adoption. All playing/new-generation publication guards remained. L1 closed neither those stages
 nor LIVE-STEMS, Bulk, full P4b/P5a/P5b, resource/music or Human/program gates.
 
 Software validation retains the actual failed runs: Debug pair99PASS/1FAIL exposed
@@ -393,3 +393,104 @@ official strict,29 changed Python format checks,22 relative links/coverage JSON
 and diff whitespace pass. One independent final review found the shared queue
 failure and UI full-original hashing; both fixes and their regression/ownership
 proofs were reconciled in that same review. This closes only L1 tasks1.1/1.2.
+
+
+## L2 offline source custody and joint disk commit — 2026-10-11
+
+Offline Generate now depends on the loaded original's actual ownership rather
+than the pad's playback state. Metadata-only `OfflineStemSourceLease` capture
+clones that pad's existing sealed cold-original lease, even for resident PCM.
+It binds the exact own path/root, complete byte/shape extent and Native source
+generation. Workers fully verify the held original before identity resolution
+and after inference. Unload/replacement detaches one interest; a surviving equal
+subscriber keeps the physical read alive. Fresh subscriber-specific
+`PreparedSourceTicket` capture after inference atomically rejects same-path/SHA
+reload ABA and carries current timing/window authority separately.
+
+Complete five-WAV/five-PCM/common-descriptor preparation is disk-only for generated
+sets. The existing fenced project writer checks current source/content/model
+intent after the actual temporary-file fsync immediately before `os.replace`.
+That replacement is the durable selection point. Exact complete new assignment
+and independent predecessor pins plus reserved bounded settlement capacity are
+already held. Precommit failures retain the old usable live/disk selection.
+Postcommit selection/owner/retirement failure retains the committed candidate and
+both owners for bounded retry; cancellation cannot pretend the config rolled back.
+New content or unload after replacement wins in memory. Its snapshot must be
+persisted by the same writer before the stale disk-selected set can retire, and
+a failed superseding flush keeps its exact pins and reservation reachable.
+Non-requesting copies retain their own old assignment.
+
+Commands reuse the existing Windows owned job/tree and bounded output readers,
+without another executor or analysis's single-slot lane. Final-interest Cancel
+uses a fresh exact own separator marker and named decode/model/inference/output/
+full-hash checkpoints. Cooperative exit130 follows child cleanup; a blocked
+native model call has finite own-tree escalation and is not reported as cooperative
+cleanup. Source/model/private-generation custody remains through actual process
+and output-reader end. Parent alignment/hash conversion checks the same sticky
+Event at bounded blocks. Supported producer inventories now seal all these
+executed helpers: Demucs37 and BS33 within Native's 64-file bound. Ordered witness
+matching uses exact FileID equivalence for ordinary and Windows extended paths;
+wrong order, missing roles and equal bytes at another FileID cannot supply roots.
+
+The productive Native proof renders real FullMix and ALL-stem trajectories while
+an actual own source-verified offline worker is blocked and then writes a complete
+five-WAV set. Eight cases cover KEYLOCK OFF/ON, ratios .73/1.371234567890123,
+48kHz stereo, a finite17..1517 loop, irregular callback partitions and unrelated
+pad215. Actual Native/FIFO/filter/history/source position, masks and nonneutral wet
+output remain continuous. Actual components=True adoption of the new set still
+rejects PadPlaying; old selected V1 remains usable. The worker uses declared
+non-neural output. Separate public controller tests prove active Generate commits
+disk-only, leaves effective residents/masks/controls and independent owners
+unchanged, then takes ordinary fresh own-ACK preparation later while inactive.
+An explicit same-set residency retry remains permitted through the previously
+proved P5a path, independently of automatic new-generation adoption.
+
+Validation retains failed runs and source profiles. Own-source Native5PASS and
+processing-bound2PASS complement Release pair101:100PASS/1FAIL132.90s, followed
+by the corrected existing productive same-set controller case1PASS1.72s. The
+failure exposed an inactive-only condition suppressing explicit same-set retries;
+its fixture and real wet chronology were preserved. The productive eight-case
+proof is included in those101; no whole101 PASS rerun is claimed.
+
+Final build-only Release21.37s uses Native SHA256
+`de3e5c4194397ccaa02026b310c68b070cd3c5f7b59b55964628e6c8c067f1e3`.
+Release/API/controller/UI preflight passes without starting App/device. The Human
+installed Native remains
+`4a32ccee33ef49a46aab1816a5ebd72005e7ca98d17316f0eff354eca974eec7`.
+Earlier focused process/source tests used scratch Native
+`d03de4746e982ea6f1d39de19b73f8222468ef409dd2c647db434fffa73634c8`;
+only the bounded producer-file inventory changed in final Native. First broad
+controller178 was143PASS/35FAIL with that old32-file runtime; final64 Native
+corrected full178PASS114.80s. Final active intent/same-set/worker suites56PASS8.27s,
+producer/conversion/native-path witnesses141PASS/1SKIP46.29s and actual
+process/encoder integration72PASS37.46s. Actual config/owner/race plus test typing
+repair suites50PASS/2encoderSKIP13.00s include all13 disk fault/race cases; the
+configured encoder integration separately covers those encoder cases.
+
+The initial owned-command/scope23PASS, existing analysis47PASS, cooperative
+child/scope22PASS and parent conversion80PASS/1SKIP are focused evidence under
+the stated earlier runtime; fresh integrated positives above are authoritative
+where suites overlap. The child tests execute own modules, stock Demucs recursion,
+BS overlap/decode/encode/hash and actual blocked Windows tree/pipe teardown with
+declared tiny non-neural models. They make no real NN/music/resource guarantee.
+Final actual Demucs/BS readable/reuse15PASS194.87s use the configured owned shared
+FFmpeg processes, all37/33 exact guarded inputs and later independent subscriber216
+component ACK after complete disk selection. The initial integration was
+66PASS/15FAIL/6ERROR134.96s; a Windows extended-path lexical mismatch withheld
+known lineage despite actual same FileIDs. The exact ordered-file fix was followed
+by7PASS/8FAIL/6ERROR188.56s: the remaining fixture role list still had32 entries,
+and two cases conflated complete disk availability with component adoption.
+Corrected full-role and public later-preparation/own-ACK assertions retain those
+failures as history and preserve full byte/FileID/provenance and no-new-inference
+proof. Neural-output and controller-source/pair-ACK substitutions remain declared.
+
+Final Ruff/Mypy269,270 source format checks, four changed vendor Ruff/format checks,
+Cargo workspace check/fmt, both affected official strict changes,86 relative file
+links/coverage JSON and diff whitespace pass. One independent final review found
+the concrete post-replace newer-content overwrite/stale-retirement gap; its guarded
+install and same-writer superseding-flush fault proofs close that finding. The
+same review reconciled the additional exact path-identity and explicit same-set
+retry fixes without loosening new-set guards. This closes bounded L2 tasks2.1..2.3.
+Full rates/regions/NN resources, genuinely new-set active adoption (L3), integrated
+current/pending/effective UI and all last-reader classes (L4), Bulk, whole program
+and genuine Human GUI/device/hearing acceptance remain required and open.

@@ -20,6 +20,32 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+def test_full_hash_checkpoint_can_abort_after_real_reads_without_losing_reader_position(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "source.wav"
+    payload = struct.pack("<hhhh", -32768, 32767, -1, 1) * 32768
+    path.write_bytes(_independent_rf64(payload))
+    checkpoints = 0
+
+    def checkpoint() -> None:
+        nonlocal checkpoints
+        checkpoints += 1
+        if checkpoints == 4:
+            message = "cancel complete hash after two bounded reads"
+            raise InterruptedError(message)
+
+    with PcmWavReader(path) as reader:
+        identity = reader.file_identity
+        reader.setpos(17)
+        with pytest.raises(InterruptedError, match="two bounded reads"):
+            reader.verify(checkpoint=checkpoint)
+        assert checkpoints == 4
+        assert reader.file_identity == identity
+        assert reader.readframes(3) == payload[17 * 4 : 20 * 4]
+        assert reader.verify() == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def _independent_rf64(payload: bytes, *, channels: int = 2, rate: int = 48000) -> bytes:
     data_bytes = len(payload)
     frames = data_bytes // (channels * 2)

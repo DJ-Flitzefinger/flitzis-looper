@@ -70,6 +70,9 @@ class AppController:
             asset_lifecycle=self._assets,
         )
         self.stems.fence_pair_metadata(self._persistence.invalid_stem_pair_ids)
+        self.stems.bind_disk_selection_commit(
+            self._persistence.commit_stem_selection, self._persistence.flush
+        )
         self.loader = LoaderController(
             self._project,
             self._session,

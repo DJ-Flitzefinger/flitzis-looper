@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
     from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
-    from flitzis_looper_audio import PreparedSourceTicket, SealedProcessingFiles
+    from flitzis_looper_audio import OfflineStemSourceLease, SealedProcessingFiles
 
 
 @dataclass
@@ -72,11 +72,11 @@ def _job(assets: _Assets, sample_id: int = 0) -> StemGenerationJob:
         model_cache_dir=Path(f"model-{sample_id}"),
         original_bytes=2092,
     )
-    ticket = cast("PreparedSourceTicket", Mock(name=f"own-ticket-{sample_id}"))
+    source = cast("OfflineStemSourceLease", Mock(name=f"own-offline-source-{sample_id}"))
     intent = StemIntentRegistry().capture(request, 0)
     return StemGenerationJob(
         request,
-        ticket,
+        source,
         cast("ProjectAssetLifecycle", assets),
         f"own-content-{sample_id}",
         intent=intent,
@@ -84,7 +84,7 @@ def _job(assets: _Assets, sample_id: int = 0) -> StemGenerationJob:
 
 
 def _resolve(job: StemGenerationJob) -> None:
-    assert job.begin_resolution() is job.source_ticket
+    assert job.begin_resolution() is job.source
     job.resolved_request = job.request
     job.producer_identity = "2" * 64
     job.generation_fingerprint = request_fingerprint(job.request, job.producer_identity)
@@ -105,18 +105,21 @@ def test_phase_gap_keeps_source_and_guard_until_actual_cancelled_read_end() -> N
     assert not physical_source.released
     assert not subscriber_source.released
 
-    assert job.begin() is job.source_ticket
+    source = job.source
+    assert source is not None
+    assert job.begin() is source
     assert str(job.phase) == "running"
     job.cancel()
     assert job.running
     assert not physical_source.released
     assert subscriber_source.released
+    assert job.source is source
     assert job.processing_files is guard
     assert not job.finish_read()
     assert str(job.phase) == "disposed"
     assert physical_source.released
     assert job.processing_files is None
-    assert job.source_ticket is not None
+    assert job.source is None
     assert all(item.closed for item in assets.reservations)
 
 
@@ -124,7 +127,9 @@ def test_cancellation_during_resolution_waits_for_its_actual_read_end() -> None:
     assets = _Assets()
     job = _job(assets)
     physical_source = assets.leases[0]
-    assert job.begin_resolution() is job.source_ticket
+    source = job.source
+    assert source is not None
+    assert job.begin_resolution() is source
     guard = cast("SealedProcessingFiles", Mock(name="active-resolution-guard"))
     job.processing_files = guard
 
@@ -133,9 +138,11 @@ def test_cancellation_during_resolution_waits_for_its_actual_read_end() -> None:
     assert job.running
     assert not physical_source.released
     assert job.processing_files is guard
+    assert job.source is source
     assert not job.finish_resolution()
     assert physical_source.released
     assert job.processing_files is None
+    assert job.source is None
     assert job.begin() is None
 
 
@@ -153,7 +160,7 @@ def test_cancellation_in_the_resolved_waiting_gap_retires_without_starting_infer
     assert all(item.released for item in assets.leases)
 
 
-def test_resolved_candidate_transfer_keeps_each_own_request_ticket_and_custody() -> None:
+def test_resolved_candidate_transfer_keeps_each_own_request_source_and_custody() -> None:
     assets = _Assets()
     target = _job(assets)
     candidate = _job(assets, 215)
@@ -161,20 +168,21 @@ def test_resolved_candidate_transfer_keeps_each_own_request_ticket_and_custody()
     _resolve(candidate)
     original = candidate.subscribers()[0]
     candidate_physical_source = assets.leases[3]
-    assert target.begin() is target.source_ticket
+    assert target.begin() is target.source
 
     transferred = candidate.transfer_subscribers_to(target)
 
     assert transferred == (original,)
     adopted = next(item for item in target.subscribers() if item.sample_id == 215)
     assert adopted is original
-    assert adopted.ticket is candidate.source_ticket
+    assert adopted.source is original.source
     assert adopted.request is candidate.request
     assert adopted.source_lease is original.source_lease
     assert not cast("_Lease", adopted.source_lease).released
     assert not cast("_Reservation", adopted.retirement).closed
     assert candidate.phase == "disposed"
     assert candidate.processing_files is None
+    assert candidate.source is None
     assert candidate_physical_source.released
     assert target.remove_subscriber(0)
     assert target.running
@@ -218,7 +226,7 @@ def test_resolved_revision_update_keeps_captured_job_context_and_subscriber_read
     current = job.subscribers()[0]
     assert current.intent is updated
     assert job.intent is subscriber.intent
-    assert current.ticket is subscriber.ticket
+    assert current.source is subscriber.source
     assert current.request is subscriber.request
     assert current.source_lease is subscriber.source_lease
     assert current.retirement is subscriber.retirement

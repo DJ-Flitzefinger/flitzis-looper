@@ -593,8 +593,8 @@ outside this delivery.
 
 E11-08..10 separate hidden full-content identity from `samples/<Originalfilename>/` visible roots. First canonical verified root and original leaf win for equal bytes under different names; unsafe/case-colliding directories use a readable prefix plus sufficiently extended content SHA suffix. Exact supported original leaf names/bytes stay intact. A guarded full-SHA claim precedes the existing derivative gate. Hidden `.material.json` is a locator, while held incoming/canonical readers and complete SHA/length/EOF verification decide reuse. Compatible hits create no temporary full-source snapshot, additional original leaf, complete decode or inference. Decoder/rate/channel and actual executed model/config/producer transform compatibility remain separate; missing historical producer provenance stays unknown. Native material_paths/cold_store/project_assets plus Python material migration/persistence share one resolver and existing journal. Copy-to-new-root and atomic current-reference/config commit precede eventual old-root retirement; no rename beneath readers, no unknown deletion, no saved ACK replay or data reset. Source/window/timing/pair ACKs remain separate, current-bound rights. Full X11-MATERIAL integration still depends on open LONG/P4b/P5b and applicable original/final gates.
 
-The supported producer sets contain 32 Demucs or 28 BS exact files within Native's
-32-file guard, including the bounded execution-policy source and empty host package
+The supported producer sets contain 37 Demucs or 33 BS exact files within Native's
+64-file guard, including the bounded execution-policy source and empty host package
 initializer. Held-source compilation checks the relevant actual loaded host
 functions/classes/properties/defaults/constants/import aliases and supported
 decorator wrappers before known compatibility is stamped. Required unsupported

@@ -70,6 +70,8 @@ mod loop_acceptance;
 mod mixer;
 mod native_history_permit;
 mod native_source_coverage;
+mod offline_stem_source;
+pub use offline_stem_source::OfflineStemSourceLease;
 mod prepared_native_history;
 pub(crate) mod prepared_source;
 mod productive_source_history;
@@ -1217,6 +1219,34 @@ impl AudioEngine {
                         .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
             })
             .cloned())
+    }
+
+    /// Retain the actual immutable loaded original for an offline stem worker.
+    /// This does not capture or grant a live timing/window publication permit.
+    pub fn capture_offline_stem_source(
+        &self,
+        id: usize,
+        source_version: String,
+    ) -> PyResult<OfflineStemSourceLease> {
+        offline_stem_source::capture(self, id, source_version)
+    }
+
+    /// Check own loaded source admission without file work or timing/window epochs.
+    pub fn offline_stem_source_is_current(
+        &self,
+        id: usize,
+        source: &OfflineStemSourceLease,
+    ) -> PyResult<bool> {
+        offline_stem_source::is_current(self, id, source)
+    }
+
+    /// Atomically bind retained offline custody to a fresh ordinary source permit.
+    pub fn capture_prepared_stem_source(
+        &self,
+        id: usize,
+        source: &OfflineStemSourceLease,
+    ) -> PyResult<PreparedSourceTicket> {
+        offline_stem_source::capture_prepared(self, id, source)
     }
 
     /// Shut down the audio engine.

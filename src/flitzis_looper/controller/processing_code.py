@@ -7,24 +7,30 @@ External libraries and OS images retain their separate version/image policy.
 
 import ast
 import builtins
+import ctypes
 import hashlib
 import inspect
 import json
 import operator
 import os
+import subprocess
 import sys
 import tempfile
 from contextlib import contextmanager
+from contextvars import Context, ContextVar
+from ctypes import wintypes
 from dataclasses import MISSING, dataclass, fields, is_dataclass
 from pathlib import Path
+from threading import Semaphore
 from types import CodeType, FunctionType, ModuleType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
 
 _HOST_TARGETS = {
+    "contracts.py": ((), ("WorkerLimits",)),
     "encoder_provenance.py": (
         (
             "supported_encoder_images",
@@ -40,6 +46,7 @@ _HOST_TARGETS = {
         (),
     ),
 }
+_HOST_CONSTANT_TARGETS = {"contracts.py": ()}
 
 
 @contextmanager
@@ -171,13 +178,18 @@ def _check_namespace(
 
 
 def _check_constants(body: list[ast.stmt], namespace: dict[str, object]) -> dict[str, object]:
-    evidence = {}
+    evidence: dict[str, object] = {}
+    selected = _HOST_CONSTANT_TARGETS.get(Path(str(namespace["__file__"])).name)
     for statement in body:
         binding = _assignment(statement)
         if binding is None:
             continue
         name, expression = binding
-        if name.lstrip("_").isupper():
+        if name.lstrip("_").isupper() and (selected is None or name in selected):
+            runtime = _runtime_constant(name, expression, namespace)
+            if runtime is not None:
+                evidence[name] = runtime
+                continue
             expected = _expression(expression, namespace)
             actual = namespace[name]
             if _value(actual) != _value(expected):
@@ -185,6 +197,51 @@ def _check_constants(body: list[ast.stmt], namespace: dict[str, object]) -> dict
                 raise ValueError(msg)
             evidence[name] = _value(actual)
     return evidence
+
+
+def _runtime_constant(
+    name: str, expression: ast.expr, namespace: dict[str, object]
+) -> tuple[object, ...] | None:
+    """Check exact declared carriers without measuring mutable cancellation/admission state."""
+    role = Path(str(namespace["__file__"])).name, name
+    if role not in {("process.py", "_PROCESS_SLOT"), ("stem_process.py", "_COMMAND_SCOPE")}:
+        return None
+    if not isinstance(expression, ast.Call) or not isinstance(expression.func, ast.Name):
+        msg = "runtime carrier differs from its supported constructor declaration"
+        raise TypeError(msg)
+    actual = namespace[name]
+    arguments = tuple(_expression(item, namespace) for item in expression.args)
+    keywords = {item.arg: _expression(item.value, namespace) for item in expression.keywords}
+    if role == ("process.py", "_PROCESS_SLOT"):
+        if (
+            expression.func.id != "Semaphore"
+            or namespace.get("Semaphore") is not Semaphore
+            or arguments != (1,)
+            or keywords
+            or type(actual) is not Semaphore
+        ):
+            msg = "analysis admission slot differs from the supported stdlib binding"
+            raise ValueError(msg)
+        if (
+            getattr(actual.acquire, "__func__", None) is not Semaphore.acquire
+            or getattr(actual.release, "__func__", None) is not Semaphore.release
+        ):
+            msg = "analysis admission slot methods differ from the supported stdlib binding"
+            raise ValueError(msg)
+        return "runtime-carrier", "threading.Semaphore", 1
+    if (
+        expression.func.id != "ContextVar"
+        or namespace.get("ContextVar") is not ContextVar
+        or arguments != ("stem-command-scope",)
+        or keywords != {"default": None}
+        or type(actual) is not ContextVar
+    ):
+        msg = "stem cancellation context differs from the supported stdlib binding"
+        raise ValueError(msg)
+    if actual.name != arguments[0] or Context().run(actual.get) is not None:
+        msg = "stem cancellation context name/default differs from its declaration"
+        raise ValueError(msg)
+    return "runtime-carrier", "contextvars.ContextVar", arguments[0], None
 
 
 def _assignment(statement: ast.stmt) -> tuple[str, ast.expr] | None:
@@ -218,6 +275,8 @@ def _check_class(
     if is_dataclass(value):
         evidence.append(_dataclass_policy(value, declaration, namespace))
         evidence.extend(_dataclass_fields(value, declaration, namespace))
+    if issubclass(value, ctypes.Structure):
+        evidence.append(_ctypes_layout(value, declaration, namespace))
     return evidence
 
 
@@ -242,11 +301,151 @@ def _class_binding(value: object, declaration: ast.ClassDef, namespace: dict[str
     ):
         msg = "host class has unsupported decorator policy"
         raise ValueError(msg)
-    expected_bases = tuple(_expression(base, namespace) for base in declaration.bases) or (object,)
+    expected_bases = tuple(_class_base(base, namespace) for base in declaration.bases) or (object,)
     if value.__bases__ != expected_bases:
         msg = "loaded host class bases differ from held source"
         raise ValueError(msg)
     return value
+
+
+def _class_base(expression: ast.expr, namespace: dict[str, object]) -> object:
+    if isinstance(expression, ast.Subscript):
+        if not isinstance(expression.value, ast.Attribute) or not isinstance(
+            expression.value.value, ast.Name
+        ):
+            msg = "host generic base requires a supported stdlib attribute declaration"
+            raise TypeError(msg)
+        if (
+            expression.value.value.id != "subprocess"
+            or expression.value.attr != "Popen"
+            or namespace.get("subprocess") is not subprocess
+            or _expression(expression.slice, namespace) is not bytes
+        ):
+            msg = "host generic base differs from supported stdlib Popen[bytes]"
+            raise ValueError(msg)
+        return subprocess.Popen
+    return _expression(expression, namespace)
+
+
+def _ctypes_layout(
+    value: type, declaration: ast.ClassDef, namespace: dict[str, object]
+) -> list[object]:
+    declarations = [
+        binding[1]
+        for member in declaration.body
+        if (binding := _assignment(member)) is not None and binding[0] == "_fields_"
+    ]
+    if len(declarations) != 1 or any(
+        inspect.getattr_static(value, name, None) is not None
+        for name in ("_pack_", "_align_", "_anonymous_")
+    ):
+        msg = "host ctypes layout requires unsupported packing or declarations"
+        raise ValueError(msg)
+    expected = _ctypes_fields(declarations[0], namespace)
+    if tuple(inspect.getattr_static(value, "_fields_")) != expected:
+        msg = "loaded host ctypes fields differ from held source"
+        raise ValueError(msg)
+    held = type("_HeldWindowsLayout", (ctypes.Structure,), {"_fields_": expected})
+    evidence: list[object] = [ctypes.sizeof(value), ctypes.alignment(value)]
+    if evidence != [ctypes.sizeof(held), ctypes.alignment(held)]:
+        msg = "loaded host ctypes layout size differs from held declarations"
+        raise ValueError(msg)
+    for name, field_type in expected:
+        actual = inspect.getattr_static(value, name)
+        declared = inspect.getattr_static(held, name)
+        if (actual.offset, actual.size) != (declared.offset, declared.size):
+            msg = "loaded host ctypes descriptor differs from held declarations"
+            raise ValueError(msg)
+        evidence.append((name, _ctypes_type_identity(field_type), actual.offset, actual.size))
+    return evidence
+
+
+def _ctypes_fields(
+    expression: ast.expr, namespace: dict[str, object]
+) -> tuple[tuple[str, type], ...]:
+    if isinstance(expression, ast.Tuple):
+        entries = [(item, namespace) for item in expression.elts]
+    elif (
+        isinstance(expression, ast.Call)
+        and isinstance(expression.func, ast.Name)
+        and expression.func.id == "tuple"
+    ):
+        if (
+            namespace.get("tuple", tuple) is not tuple
+            or expression.keywords
+            or len(expression.args) != 1
+            or not isinstance(expression.args[0], ast.GeneratorExp)
+        ):
+            msg = "host ctypes fields require one supported stdlib literal comprehension"
+            raise ValueError(msg)
+        entries = _ctypes_field_generator(expression.args[0], namespace)
+    else:
+        msg = "host ctypes fields require supported direct tuple declarations"
+        raise ValueError(msg)
+    fields = []
+    for item, scope in entries:
+        if not isinstance(item, ast.Tuple) or len(item.elts) != 2:
+            msg = "host ctypes field requires one literal name and one measured type"
+            raise ValueError(msg)
+        name = _expression(item.elts[0], scope)
+        if not isinstance(name, str):
+            msg = "host ctypes field name must be a literal string"
+            raise TypeError(msg)
+        fields.append((name, _ctypes_field_type(item.elts[1], scope)))
+    if not 1 <= len(fields) <= 64 or len({name for name, _kind in fields}) != len(fields):
+        msg = "host ctypes fields exceed the supported distinct layout bound"
+        raise ValueError(msg)
+    return tuple(fields)
+
+
+def _ctypes_field_generator(
+    expression: ast.GeneratorExp, namespace: dict[str, object]
+) -> list[tuple[ast.expr, dict[str, object]]]:
+    if len(expression.generators) != 1:
+        msg = "host ctypes fields require one bounded literal comprehension"
+        raise ValueError(msg)
+    generator = expression.generators[0]
+    values = _expression(generator.iter, namespace)
+    if (
+        not isinstance(generator.target, ast.Name)
+        or generator.ifs
+        or generator.is_async
+        or not isinstance(values, tuple)
+    ):
+        msg = "host ctypes fields require bounded literal names"
+        raise ValueError(msg)
+    if not 1 <= len(values) <= 64 or any(not isinstance(value, str) for value in values):
+        msg = "host ctypes fields require bounded literal names"
+        raise ValueError(msg)
+    return [(expression.elt, namespace | {generator.target.id: value}) for value in values]
+
+
+def _ctypes_field_type(expression: ast.expr, namespace: dict[str, object]) -> type:
+    if isinstance(expression, ast.BinOp) and isinstance(expression.op, ast.Mult):
+        count = _expression(expression.right, namespace)
+        if type(count) is not int or not 1 <= count <= 64:
+            msg = "host ctypes array exceeds the supported process membership bound"
+            raise ValueError(msg)
+        kind = cast("type[ctypes.Structure]", _ctypes_field_type(expression.left, namespace))
+        return kind * count
+    value = _expression(expression, namespace)
+    if not isinstance(value, type) or not (
+        issubclass(value, ctypes.Structure) or isinstance(getattr(value, "_type_", None), str)
+    ):
+        msg = "host ctypes field requires a measured structure or stdlib scalar type"
+        raise TypeError(msg)
+    return value
+
+
+def _ctypes_type_identity(value: type) -> object:
+    if issubclass(value, ctypes.Array):
+        return (
+            "array",
+            _ctypes_type_identity(inspect.getattr_static(value, "_type_")),
+            inspect.getattr_static(value, "_length_"),
+        )
+    measured = cast("type[ctypes.Structure]", value)
+    return value.__qualname__, ctypes.sizeof(measured), ctypes.alignment(measured)
 
 
 def _class_method(
@@ -410,7 +609,11 @@ def _function_body(
     ):
         msg = "loaded host keyword defaults differ from held source"
         raise ValueError(msg)
-    if actual.__closure__:
+    if actual.__closure__ and not (
+        actual.__code__.co_freevars == ("__class__",)
+        and len(actual.__closure__) == 1
+        and actual.__closure__[0].cell_contents is namespace.get(qualname.split(".")[0])
+    ):
         msg = "guarded host function has unsupported captured runtime cells"
         raise ValueError(msg)
     constants = _check_constants(
@@ -504,13 +707,20 @@ def _imported_callables(
     function: FunctionType, manifests: dict[Path, tuple[ast.Module, dict[str, CodeType]]]
 ) -> list[object]:
     evidence: list[object] = []
+    guarded_imports = _guarded_import_names(function, manifests)
     for name in function.__code__.co_names:
         value = function.__globals__.get(name)
+        if name in guarded_imports and not isinstance(value, FunctionType | type):
+            msg = "invoked guarded host binding no longer names its measured callable"
+            raise ValueError(msg)
         if isinstance(value, FunctionType):
             actual = inspect.unwrap(value)
             origin = Path(actual.__code__.co_filename).resolve()
             if origin in manifests:
                 evidence.append((name, _guarded_function(value, manifests)))
+            elif value.__module__.split(".", 1)[0] not in sys.stdlib_module_names:
+                msg = "invoked host callable is outside the guarded producer roles"
+                raise ValueError(msg)
         elif isinstance(value, type):
             module = sys.modules.get(value.__module__)
             filename = module.__dict__.get("__file__") if isinstance(module, ModuleType) else None
@@ -529,7 +739,29 @@ def _imported_callables(
                         value, classes[0], manifests[origin][1], module.__dict__, manifests
                     ),
                 ))
+            elif name in guarded_imports or value.__module__.startswith("flitzis_looper."):
+                msg = "invoked host class is outside the guarded producer roles"
+                raise ValueError(msg)
     return evidence
+
+
+def _guarded_import_names(
+    function: FunctionType, manifests: dict[Path, tuple[ast.Module, dict[str, CodeType]]]
+) -> set[str]:
+    """Fence class/callable imports whose actual defining module is a held host role."""
+    tree = manifests[Path(function.__code__.co_filename).resolve()][0]
+    guarded = set()
+    for statement in tree.body:
+        if not isinstance(statement, ast.ImportFrom) or statement.module is None:
+            continue
+        module = sys.modules.get(statement.module)
+        filename = module.__dict__.get("__file__") if isinstance(module, ModuleType) else None
+        if not isinstance(filename, str) or Path(filename).resolve() not in manifests:
+            continue
+        for alias in statement.names:
+            if isinstance(module.__dict__.get(alias.name), FunctionType | type):
+                guarded.add(alias.asname or alias.name)
+    return guarded
 
 
 def _function_declaration(tree: ast.Module, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
@@ -590,7 +822,39 @@ def _expression(value: ast.expr, namespace: dict[str, object]) -> object:
         return namespace[value.id] if value.id in namespace else vars(builtins)[value.id]
     if isinstance(value, ast.Tuple | ast.List | ast.Set | ast.Dict):
         return _literal_collection(value, namespace)
+    if isinstance(value, ast.Attribute):
+        return _ctypes_attribute(value, namespace)
     return _literal_operation(value, namespace)
+
+
+def _ctypes_attribute(expression: ast.Attribute, namespace: dict[str, object]) -> object:
+    if isinstance(expression.value, ast.Name):
+        module = namespace.get(expression.value.id)
+        supported = (
+            {"Structure", "c_int64", "c_uint64", "c_size_t"}
+            if module is ctypes
+            else {"DWORD", "LONG"}
+            if module is wintypes
+            else set()
+        )
+        if expression.attr in supported:
+            return getattr(module, expression.attr)
+    if (
+        expression.attr == "value"
+        and isinstance(expression.value, ast.Call)
+        and isinstance(expression.value.func, ast.Attribute)
+        and isinstance(expression.value.func.value, ast.Name)
+    ):
+        valid_module = namespace.get(expression.value.func.value.id) is ctypes
+        valid_constructor = expression.value.func.attr == "c_void_p"
+        valid_arguments = len(expression.value.args) == 1 and not expression.value.keywords
+        if not (valid_module and valid_constructor and valid_arguments):
+            msg = "host ctypes invalid-handle constructor differs from held declarations"
+            raise ValueError(msg)
+        if _expression(expression.value.args[0], namespace) == -1:
+            return ctypes.c_void_p(-1).value
+    msg = "host attribute requires an unsupported runtime binding"
+    raise ValueError(msg)
 
 
 def _literal_collection(
@@ -661,6 +925,17 @@ def _literal_call(value: ast.Call, namespace: dict[str, object]) -> bytes:
     if not isinstance(value.func, ast.Attribute) or not isinstance(value.func.value, ast.Name):
         msg = "host literal call has unsupported origin"
         raise TypeError(msg)
+    if (
+        value.func.attr == "encode"
+        and len(value.args) == 1
+        and not value.keywords
+        and _expression(value.args[0], namespace) == "ascii"
+    ):
+        text = _expression(value.func.value, namespace)
+        if not isinstance(text, str):
+            msg = "host receipt prefix requires a literal string binding"
+            raise TypeError(msg)
+        return text.encode("ascii")
     if (
         value.func.value.id != "bytes"
         or value.func.attr != "fromhex"

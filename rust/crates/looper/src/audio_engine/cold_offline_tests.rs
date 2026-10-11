@@ -700,6 +700,360 @@ fn cold_ack_offline_reuses_full_loaded_pcm_after_external_source_removal() {
     finish_cancelled(&next);
 }
 
+fn stem_source_version(fixture: &ColdOffline) -> String {
+    let leases = fixture.engine.cold_leases.lock().unwrap();
+    let lease = leases[0].as_ref().unwrap();
+    let relative = lease
+        .original_path
+        .strip_prefix(lease.samples_root())
+        .unwrap();
+    format!(
+        "samples/{}|sha256-v1:{}",
+        relative.to_string_lossy().replace('\\', "/"),
+        lease.manifest.descriptor["decoder"]["original"]["sha256"]
+            .as_str()
+            .unwrap()
+    )
+}
+
+fn verify_stem_source(source: &crate::audio_engine::OfflineStemSourceLease) {
+    Python::attach(|py| source.verify(py).unwrap());
+}
+
+#[test]
+fn cold_ack_offline_stem_source_captures_complete_shape_without_new_assignment_or_permit() {
+    for hint in [
+        None,
+        Some(crate::audio_engine::cold_residency::ResidentLoadHint {
+            start_s: 32.0 / 48_000.0,
+            end_s: 64.0 / 48_000.0,
+            key_lock: false,
+        }),
+    ] {
+        let fixture = ColdOffline::new_selected(hint);
+        let version = stem_source_version(&fixture);
+        let request = fixture.engine.pad_request_ids.lock().unwrap()[0];
+        let epoch = fixture.engine.prepared_source_epochs[0].load(Ordering::Acquire);
+        let (assignments, original) = {
+            let leases = fixture.engine.cold_leases.lock().unwrap();
+            let lease = leases[0].as_ref().unwrap();
+            (lease.cache_assignment_count(), lease.original_path.clone())
+        };
+        let pcm_owners = Arc::strong_count(&fixture.loaded.samples);
+        let source = fixture
+            .engine
+            .capture_offline_stem_source(0, version.clone())
+            .unwrap();
+        assert_eq!(source.source_version(), version);
+        assert_eq!(source.source_request(), request);
+        assert_eq!(source.source_generation(), fixture.generation);
+        assert_eq!(source.target_shape(), (48_000, 2, 128));
+        assert_eq!(
+            source.original_bytes(),
+            fs::metadata(&original).unwrap().len()
+        );
+        assert_eq!(Arc::strong_count(&fixture.loaded.samples), pcm_owners);
+        assert_eq!(fixture.engine.pad_request_ids.lock().unwrap()[0], request);
+        assert_eq!(
+            fixture.engine.prepared_source_epochs[0].load(Ordering::Acquire),
+            epoch
+        );
+        assert_eq!(
+            fixture.engine.cold_leases.lock().unwrap()[0]
+                .as_ref()
+                .unwrap()
+                .cache_assignment_count(),
+            assignments
+        );
+        assert!(
+            fixture
+                .engine
+                .offline_stem_source_is_current(0, &source)
+                .unwrap()
+        );
+        assert!(fs::OpenOptions::new().write(true).open(&original).is_err());
+        assert!(fs::rename(&original, fixture.path("replaced.wav")).is_err());
+        assert!(fs::remove_file(&original).is_err());
+        fs::remove_file(&fixture.external).unwrap();
+        std::thread::spawn(move || verify_stem_source(&source))
+            .join()
+            .unwrap();
+        fixture.assert_playback_owner();
+    }
+}
+
+#[test]
+fn cold_ack_offline_stem_source_holds_actual_original_until_blocked_worker_read_returns() {
+    let mut fixture = ColdOffline::new();
+    let source = fixture
+        .engine
+        .capture_offline_stem_source(0, stem_source_version(&fixture))
+        .unwrap();
+    let original = PathBuf::from(source.source_path());
+    let expected = fs::read(&fixture.external).unwrap();
+    let probe = fixture.engine.cold_leases.lock().unwrap()[0]
+        .as_ref()
+        .unwrap()
+        .reader_lifetime_probe_for_test();
+    let assets = fixture.engine.project_assets.clone();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        verify_stem_source(&source);
+        started_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+        assert_eq!(fs::read(source.source_path()).unwrap(), expected);
+        verify_stem_source(&source);
+        // The actual source reader is released only after the last backend read.
+        drop(source);
+    });
+    started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    unload_for_producer(&fixture.engine, 0, &fixture.producer).unwrap();
+    constant_wav(&fixture.external, -16384);
+    fixture.load_and_ack(2);
+    assert!(fixture.loaded.samples.iter().all(|&sample| sample == -0.5));
+    // Remove every old PCM/control owner, while keeping the owned scratch root
+    // alive. The background source lease must be sufficient by itself.
+    let directory = fixture.directory;
+    drop(fixture.engine);
+    drop(fixture.callback);
+    drop(fixture.loaded);
+    drop(fixture.consumer);
+    drop(fixture.producer);
+    assets.collect_for_test();
+    assert!(!probe());
+    assert!(fs::OpenOptions::new().write(true).open(&original).is_err());
+    assert!(fs::remove_file(&original).is_err());
+    release_tx.send(()).unwrap();
+    worker.join().unwrap();
+    wait_until(|| {
+        assets.collect_for_test();
+        probe()
+    });
+    assert!(probe());
+    drop(directory);
+}
+
+#[test]
+fn cold_ack_offline_stem_source_rejects_foreign_equal_original_and_source_admission() {
+    let own = ColdOffline::new();
+    let foreign = ColdOffline::new();
+    let own_source = own
+        .engine
+        .capture_offline_stem_source(0, stem_source_version(&own))
+        .unwrap();
+    let foreign_source = foreign
+        .engine
+        .capture_offline_stem_source(0, stem_source_version(&foreign))
+        .unwrap();
+    assert_eq!(own_source.target_shape(), foreign_source.target_shape());
+    assert_eq!(own_source.original_bytes(), foreign_source.original_bytes());
+    assert_eq!(
+        fs::read(own_source.source_path()).unwrap(),
+        fs::read(foreign_source.source_path()).unwrap()
+    );
+    assert_ne!(own_source.source_path(), foreign_source.source_path());
+    let digest = own.engine.loaded_source_digest(0).unwrap().unwrap();
+    let foreign_version = format!("{}|sha256-v1:{digest}", foreign_source.source_path());
+    assert!(
+        own.engine
+            .capture_offline_stem_source(0, foreign_version)
+            .is_err()
+    );
+    assert!(
+        !own.engine
+            .offline_stem_source_is_current(0, &foreign_source)
+            .unwrap()
+    );
+    assert!(
+        own.engine
+            .capture_prepared_stem_source(0, &foreign_source)
+            .is_err()
+    );
+    assert!(
+        !own.engine
+            .offline_stem_source_is_current(1, &own_source)
+            .unwrap()
+    );
+    assert!(
+        own.engine
+            .capture_offline_stem_source(
+                crate::audio_engine::constants::NUM_SAMPLES,
+                stem_source_version(&own)
+            )
+            .is_err()
+    );
+    assert!(
+        own.engine
+            .offline_stem_source_is_current(
+                crate::audio_engine::constants::NUM_SAMPLES,
+                &own_source
+            )
+            .is_err()
+    );
+    let wrong_digest = format!("{}|sha256-v1:{}", own_source.source_path(), "0".repeat(64));
+    assert!(
+        own.engine
+            .capture_offline_stem_source(0, wrong_digest)
+            .is_err()
+    );
+    verify_stem_source(&own_source);
+    verify_stem_source(&foreign_source);
+    own.assert_playback_owner();
+    foreign.assert_playback_owner();
+}
+
+#[test]
+fn cold_ack_offline_stem_source_same_path_bytes_aba_cannot_capture_fresh_permit() {
+    let mut fixture = ColdOffline::new();
+    let version = stem_source_version(&fixture);
+    let source = fixture
+        .engine
+        .capture_offline_stem_source(0, version.clone())
+        .unwrap();
+    let original = source.source_path();
+    assert!(
+        fixture
+            .engine
+            .capture_prepared_stem_source(0, &source)
+            .is_ok()
+    );
+    unload_for_producer(&fixture.engine, 0, &fixture.producer).unwrap();
+    assert!(
+        !fixture
+            .engine
+            .offline_stem_source_is_current(0, &source)
+            .unwrap()
+    );
+    assert!(
+        fixture
+            .engine
+            .capture_prepared_stem_source(0, &source)
+            .is_err()
+    );
+    constant_wav(&fixture.external, -16384);
+    fixture.load_and_ack(2);
+    assert!(
+        !fixture
+            .engine
+            .offline_stem_source_is_current(0, &source)
+            .unwrap()
+    );
+    unload_for_producer(&fixture.engine, 0, &fixture.producer).unwrap();
+    constant_wav(&fixture.external, 8192);
+    fixture.load_and_ack(2);
+    let replacement = fixture
+        .engine
+        .capture_offline_stem_source(0, version)
+        .unwrap();
+    assert_eq!(replacement.source_path(), original);
+    assert_ne!(replacement.source_generation(), source.source_generation());
+    assert!(
+        !fixture
+            .engine
+            .offline_stem_source_is_current(0, &source)
+            .unwrap()
+    );
+    assert!(
+        fixture
+            .engine
+            .capture_prepared_stem_source(0, &source)
+            .is_err()
+    );
+    assert!(
+        fixture
+            .engine
+            .offline_stem_source_is_current(0, &replacement)
+            .unwrap()
+    );
+    assert!(
+        fixture
+            .engine
+            .capture_prepared_stem_source(0, &replacement)
+            .is_ok()
+    );
+    verify_stem_source(&source);
+    verify_stem_source(&replacement);
+    fixture.assert_playback_owner();
+}
+
+#[test]
+fn cold_ack_offline_stem_source_preserves_analysis_and_actual_pending_load_fences() {
+    let mut fixture = ColdOffline::new();
+    let version = stem_source_version(&fixture);
+    let source = fixture
+        .engine
+        .capture_offline_stem_source(0, version.clone())
+        .unwrap();
+    let analysis = fixture.begin().unwrap();
+    assert!(
+        fixture
+            .engine
+            .capture_offline_stem_source(0, version.clone())
+            .is_err()
+    );
+    assert!(
+        !fixture
+            .engine
+            .offline_stem_source_is_current(0, &source)
+            .unwrap()
+    );
+    assert!(
+        fixture
+            .engine
+            .capture_prepared_stem_source(0, &source)
+            .is_err()
+    );
+    finish_cancelled(&analysis);
+    // The actual analysis request/permit epoch advanced, but the source did not.
+    assert!(fixture.engine.pad_request_ids.lock().unwrap()[0] > source.source_request());
+    assert!(
+        fixture
+            .engine
+            .offline_stem_source_is_current(0, &source)
+            .unwrap()
+    );
+    assert!(
+        fixture
+            .engine
+            .capture_prepared_stem_source(0, &source)
+            .is_ok()
+    );
+    constant_wav(&fixture.external, -16384);
+    let pending = crate::audio_engine::cold_load::admit_for_format_selected(
+        &fixture.engine,
+        0,
+        fixture.external.to_string_lossy().into(),
+        (false, false, true, None),
+        fixture.producer.clone(),
+        (2, 48_000, fixture.directory.path().join("samples")),
+    )
+    .unwrap();
+    assert!(pending > source.source_request());
+    assert!(
+        fixture
+            .engine
+            .capture_offline_stem_source(0, version)
+            .is_err()
+    );
+    assert!(
+        !fixture
+            .engine
+            .offline_stem_source_is_current(0, &source)
+            .unwrap()
+    );
+    assert!(
+        fixture
+            .engine
+            .capture_prepared_stem_source(0, &source)
+            .is_err()
+    );
+    verify_stem_source(&source);
+    fixture.engine.cold_cancelled.store(true, Ordering::Release);
+    fixture.engine.cold_jobs.shutdown();
+    fixture.assert_playback_owner();
+}
+
 #[test]
 fn cold_ack_offline_actual_unload_and_new_ack_keep_stale_slot_busy_until_finish() {
     let mut fixture = ColdOffline::new();

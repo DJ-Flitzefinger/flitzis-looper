@@ -5,6 +5,7 @@ import struct
 import wave
 from dataclasses import dataclass
 from itertools import pairwise
+from threading import Event
 from typing import TYPE_CHECKING
 
 import pytest
@@ -17,6 +18,7 @@ from flitzis_looper.controller.stem_artifacts import (
     write_project_cache_artifacts,
 )
 from flitzis_looper.controller.stem_generation import AudioShape
+from flitzis_looper.controller.stem_process import StemCommandCancelledError, stem_command_scope
 from flitzis_looper.models import STEM_KINDS
 from flitzis_looper.pcm16_wav import Pcm16WavWriter, PcmWavReader
 
@@ -560,6 +562,40 @@ def test_mid_conversion_payload_allocation_failure_preserves_prior_generation(
             block_frames=7,
         )
     assert calls == 7
+    assert {path.name for path in cache.iterdir()} == {f"{name}.wav" for name in STEM_KINDS}
+    assert all(
+        (cache / f"{name}.wav").read_bytes() == b"previous-generation" for name in STEM_KINDS
+    )
+
+
+def test_cancel_between_real_alignment_blocks_retires_private_writers_and_preserves_prior_set(
+    tmp_path: Path,
+) -> None:
+    output, cache = tmp_path / "output", tmp_path / "cache"
+    _outputs(output, frames=501)
+    cache.mkdir()
+    for name in STEM_KINDS:
+        (cache / f"{name}.wav").write_bytes(b"previous-generation")
+    cancel = Event()
+    reports = []
+
+    def progress(percent: float, stage: str) -> None:
+        reports.append((percent, stage))
+        cancel.set()
+
+    with (
+        stem_command_scope(cancel, directory=cache),
+        pytest.raises(StemCommandCancelledError),
+    ):
+        write_project_cache_artifacts(
+            output_root=output,
+            cache_dir=cache,
+            target_shape=AudioShape(48000, 2, 501),
+            progress=progress,
+            block_frames=7,
+        )
+    assert len(reports) == 1
+    assert reports[0][1] == "Aligning stem cache"
     assert {path.name for path in cache.iterdir()} == {f"{name}.wav" for name in STEM_KINDS}
     assert all(
         (cache / f"{name}.wav").read_bytes() == b"previous-generation" for name in STEM_KINDS

@@ -7,6 +7,11 @@ use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 
+// Both real producer manifests include owned cancellation/process helpers and
+// verified tool images. Keep this off-thread inventory finite without omitting
+// executed inputs from the complete lineage (currently at least 37 files).
+const MAX_PROCESSING_FILES: usize = 64;
+
 struct ProcessingFile {
     path: PathBuf,
     reader: File,
@@ -28,9 +33,9 @@ fn invalid(message: &str) -> io::Error {
 
 impl SealedProcessingFiles {
     fn capture(paths: Vec<String>) -> io::Result<Self> {
-        if paths.is_empty() || paths.len() > 32 {
+        if paths.is_empty() || paths.len() > MAX_PROCESSING_FILES {
             return Err(invalid(
-                "processing provenance requires one to thirty-two exact files",
+                "processing provenance requires one to sixty-four exact files",
             ));
         }
         let mut files = Vec::with_capacity(paths.len());
@@ -178,14 +183,20 @@ mod tests {
         std::fs::write(&model, b"model").unwrap();
         let model = model.to_string_lossy().into_owned();
         assert!(SealedProcessingFiles::capture(vec![]).is_err());
-        assert!(SealedProcessingFiles::capture(vec![model.clone(); 33]).is_err());
+        assert!(
+            SealedProcessingFiles::capture(vec![model.clone(); MAX_PROCESSING_FILES + 1])
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("sixty-four")
+        );
         assert!(SealedProcessingFiles::capture(vec![model.clone(); 2]).is_err());
         assert!(SealedProcessingFiles::capture(vec![format!("{model}/../weights.bin")]).is_err());
         assert!(
             SealedProcessingFiles::capture(vec![directory.path().to_string_lossy().into_owned()])
                 .is_err()
         );
-        let paths = (0..32)
+        let paths = (0..MAX_PROCESSING_FILES)
             .map(|index| {
                 let path = directory.path().join(format!("producer-{index}.py"));
                 std::fs::write(&path, format!("producer = {index}\n")).unwrap();
@@ -194,7 +205,7 @@ mod tests {
             .collect();
         assert_eq!(
             SealedProcessingFiles::capture(paths).unwrap().files.len(),
-            32
+            MAX_PROCESSING_FILES
         );
     }
 }

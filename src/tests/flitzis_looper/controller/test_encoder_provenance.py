@@ -138,8 +138,9 @@ def test_stock_input_tools_launch_captured_absolute_images_with_poisoned_cwd(
         (tmp_path / name).write_bytes(b"unowned current-directory shadow, never executable")
     source = tmp_path / "source.wav"
     write_demucs_pcm16(torch.zeros((1, 128)), source, 44100)
+    tools = demucs_streaming._InputTools()
     info = json.loads(
-        demucs_streaming._InputTools.check_output([
+        tools.check_output([
             "ffprobe",
             "-loglevel",
             "panic",
@@ -151,7 +152,7 @@ def test_stock_input_tools_launch_captured_absolute_images_with_poisoned_cwd(
     )
     assert int(info["streams"][0]["sample_rate"]) == 44100
     output = tmp_path / "decoded.f32"
-    result = demucs_streaming._InputTools.run(
+    result = tools.run(
         [
             "ffmpeg",
             "-hide_banner",

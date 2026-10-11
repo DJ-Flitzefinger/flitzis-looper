@@ -52,6 +52,34 @@ DEMUCS_PRODUCER_FILES = (
 )
 
 
+def _host_processing_paths(request: StemGenerationRequest) -> tuple[Path, ...]:
+    """Name ordered executed host roles independently of optional encoder images."""
+    package = Path(__file__).parent.parent
+    separator = (
+        (
+            package / "controller" / "bs_roformer_generation.py",
+            Path(bs_roformer_generation.verify_model_assets.__code__.co_filename),
+            package / "bs_input_provenance.py",
+        )
+        if request.separator == "bs-roformer:musdb18hq"
+        else ()
+    )
+    return (
+        package / "controller" / "stem_artifacts.py",
+        package / "pcm16_wav.py",
+        package / "controller" / "stem_generation.py",
+        *separator,
+        package / "encoder_provenance.py",
+        package / "controller" / "processing_code.py",
+        package / "controller" / "stem_process.py",
+        package / "analysis" / "process.py",
+        package / "analysis" / "windows_job.py",
+        package / "analysis" / "contracts.py",
+        package / "stem_cancellation.py",
+        package / "__init__.py",
+    )
+
+
 def processing_paths(request: StemGenerationRequest) -> tuple[Path, ...]:
     """Name the exact supported checkpoint, model definition and executed transform files."""
     project_package = Path(__file__).parent.parent
@@ -67,15 +95,7 @@ def processing_paths(request: StemGenerationRequest) -> tuple[Path, ...]:
             request.model_cache_dir / CHECKPOINT_FILENAME,
             request.model_cache_dir / CONFIG_FILENAME,
             *(package / name for name in BS_PRODUCER_FILES),
-            project_package / "controller" / "stem_artifacts.py",
-            project_package / "pcm16_wav.py",
-            project_package / "controller" / "stem_generation.py",
-            project_package / "controller" / "bs_roformer_generation.py",
-            Path(bs_roformer_generation.verify_model_assets.__code__.co_filename),
-            project_package / "bs_input_provenance.py",
-            project_package / "encoder_provenance.py",
-            project_package / "controller" / "processing_code.py",
-            project_package / "__init__.py",
+            *_host_processing_paths(request),
             encoder,
             *supported_encoder_images(encoder)[1:],
             *(
@@ -95,12 +115,7 @@ def processing_paths(request: StemGenerationRequest) -> tuple[Path, ...]:
         *(request.model_cache_dir / name for name in DEMUCS_REQUIRED_CHECKPOINTS["htdemucs"]),
         *(package / name for name in DEMUCS_PRODUCER_FILES),
         project_package / "demucs_streaming.py",
-        project_package / "controller" / "stem_artifacts.py",
-        project_package / "pcm16_wav.py",
-        project_package / "controller" / "stem_generation.py",
-        project_package / "encoder_provenance.py",
-        project_package / "controller" / "processing_code.py",
-        project_package / "__init__.py",
+        *_host_processing_paths(request),
         encoder,
         *supported_encoder_images(encoder)[1:],
         *(
@@ -138,9 +153,9 @@ def _parent_processing_paths(
 ) -> tuple[Path, ...]:
     # These named host roles execute in the current parent. Separator/model
     # package modules execute in fresh child imports and keep their own guards.
-    if request.separator == "bs-roformer:musdb18hq":
-        return paths[10:19] if len(paths) == 28 else ()
-    return paths[17:23] if request.separator == "demucs:htdemucs" and len(paths) == 32 else ()
+    expected = _host_processing_paths(request)
+    parents = tuple(path for path in paths if path in expected)
+    return parents if parents == expected else ()
 
 
 def processing_source_roots(
@@ -149,10 +164,14 @@ def processing_source_roots(
     """Bind normal child imports to exact guarded host/separator package roots."""
     witnesses = guard.witnesses()
     bs = request.separator == "bs-roformer:musdb18hq"
-    if len(witnesses) != (28 if bs else 32):
+    expected = processing_paths(request)
+    if len(witnesses) != len(expected) or any(
+        not Path(name).samefile(path)
+        for (name, _digest, _size), path in zip(witnesses, expected, strict=True)
+    ):
         return ()
-    host_init = Path(witnesses[18 if bs else 22][0])
-    separator_init = Path(witnesses[2 if bs else 3][0])
+    host_init = _host_processing_paths(request)[-1]
+    separator_init = expected[2 if bs else 3]
     if host_init.name != "__init__.py" or host_init.read_bytes() != b"":
         return ()
     if separator_init.name != "__init__.py":

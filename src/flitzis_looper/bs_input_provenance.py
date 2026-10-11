@@ -11,7 +11,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, cast
+from typing import TYPE_CHECKING, BinaryIO, cast
 
 from flitzis_looper.encoder_provenance import (
     EncoderProof,
@@ -20,6 +20,15 @@ from flitzis_looper.encoder_provenance import (
     _module_images,
     supported_encoder_images,
 )
+from flitzis_looper.stem_cancellation import (
+    StemInferenceCancelledError,
+    check_cancelled,
+    communicate_cancellable,
+    tool_environment,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 BS_INPUT_CONTRACT_ENV = "FLITZIS_BS_INPUT_CONTRACT"
 BS_INPUT_RECEIPT = ".bs-input-execution.json"
@@ -66,6 +75,14 @@ def begin_input_attempt(output: Path) -> None:
     _state.record = _InputRecord(path, handle, encoded, [])
 
 
+def finish_input_attempt() -> None:
+    """Close this child's incomplete diagnostic during normal or cancelled unwind."""
+    record = _state.record
+    if record is not None:
+        record.handle.close()
+        _state.record = None
+
+
 def _tool_images(kind: str) -> list[list[str | int]] | None:
     encoded = os.environ.get(BS_INPUT_CONTRACT_ENV)
     if encoded is None or os.name != "nt":
@@ -99,10 +116,13 @@ def _valid_contract(value: object) -> bool:
 
 
 def _inspect_input(
-    process: subprocess.Popen[bytes], expected: list[list[str | int]]
+    process: subprocess.Popen[bytes],
+    expected: list[list[str | int]],
+    checkpoint: Callable[[str], None] | None = None,
 ) -> EncoderProof | None:
     deadline = time.monotonic() + 2
     while process.poll() is None and time.monotonic() < deadline:
+        check_cancelled(checkpoint, "input_tool_witness")
         try:
             if _matches_images(_module_images(process.pid), expected):
                 return {"pid": process.pid, "images": expected}
@@ -112,21 +132,37 @@ def _inspect_input(
     return None
 
 
-def run_input_tool(args: list[str]) -> subprocess.CompletedProcess[str]:
+def run_input_tool(
+    args: list[str], *, checkpoint: Callable[[str], None] | None = None
+) -> subprocess.CompletedProcess[str]:
     """Preserve probe/decode arguments and capture actual launched image witnesses."""
     kind = args[0]
     expected = _tool_images(kind)
-    if expected is None:
-        return subprocess.run(args, check=True, capture_output=True, text=True)
-    actual = [str(expected[0][0]), *args[1:]]
-    with subprocess.Popen(actual, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
-        proof = _inspect_input(process, expected)
-        stdout, stderr = process.communicate()
+    check_cancelled(checkpoint, "before_input_tool")
+    if expected is None and checkpoint is None:
+        return subprocess.run(
+            args, check=True, capture_output=True, text=True, env=tool_environment()
+        )
+    actual = args if expected is None else [str(expected[0][0]), *args[1:]]
+    with subprocess.Popen(
+        actual, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=tool_environment()
+    ) as process:
+        try:
+            proof = None if expected is None else _inspect_input(process, expected, checkpoint)
+            stdout, stderr = communicate_cancellable(process, checkpoint)
+        except StemInferenceCancelledError:
+            process.kill()
+            process.communicate()
+            raise
+        assert stdout is not None
+        assert stderr is not None
         result = subprocess.CompletedProcess(
             actual, process.returncode, stdout.decode(), stderr.decode(errors="replace")
         )
     result.check_returncode()
-    _record_input(kind, actual, proof)
+    check_cancelled(checkpoint, "after_input_tool")
+    if expected is not None:
+        _record_input(kind, actual, proof)
     return result
 
 

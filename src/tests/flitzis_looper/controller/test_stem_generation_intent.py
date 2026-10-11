@@ -1,12 +1,13 @@
-"""Queued L1 control proofs with real Native processing-file seals.
+"""Queued control proofs with real Native processing-file seals.
 
 Owned checkpoint/config/code bytes declare a non-neural producer. Only source
-tickets, complete-pair preparation and selection ACKs are controller substitutes;
+custody, publication tickets, pair preparation and selection ACKs are substitutes;
 actual cross-root Native source authority and PCM proof live in the Rust suite.
 """
 
 import hashlib
 import json
+import os
 import shutil
 from contextlib import contextmanager
 from dataclasses import replace
@@ -20,8 +21,14 @@ import pytest
 from flitzis_looper.controller import stem_provenance
 from flitzis_looper.controller import stems as stems_module
 from flitzis_looper.controller.bs_roformer_assets import MODEL_NAME
-from flitzis_looper.controller.stem_cache import source_version_for_sample_path
-from flitzis_looper.models import STEM_KINDS, PadContentIdentity
+from flitzis_looper.controller.persistence import ProjectPersistence
+from flitzis_looper.models import (
+    STEM_KINDS,
+    STEM_MASK_BASS,
+    STEM_MASK_DRUMS,
+    STEM_MASK_VOCALS,
+    PadContentIdentity,
+)
 from flitzis_looper.stem_pair_selection import (
     STEM_FINGERPRINT_SCHEMA,
     StemGenerationProvenance,
@@ -29,7 +36,11 @@ from flitzis_looper.stem_pair_selection import (
 )
 from flitzis_looper.ui.render import sidebar_left
 from tests.conftest import write_mono_pcm16_wav
-from tests.flitzis_looper.conftest import FakePreparedSourceTicket, FakeProjectAssetLease
+from tests.flitzis_looper.conftest import (
+    FakeOfflineStemSourceLease,
+    FakePreparedSourceTicket,
+    FakeProjectAssetLease,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -50,8 +61,9 @@ if TYPE_CHECKING:
 class _ControllerPairAck:
     """Explicit controller-only complete-pair/selection ACK substitution."""
 
-    def __init__(self, selection: StemPairSelection) -> None:
+    def __init__(self, selection: StemPairSelection, *, components: bool = False) -> None:
         self.selection = selection
+        self.components = components
         self.selected = 0
         self.discarded = 0
 
@@ -59,7 +71,7 @@ class _ControllerPairAck:
         return self.selection.model_dump_json()
 
     def has_components(self) -> bool:
-        return False
+        return self.components
 
     def select(self) -> None:
         self.selected += 1
@@ -76,6 +88,7 @@ class _OwnSourceTicket(FakePreparedSourceTicket):
         self.source_request = sample_id + 1
         self.sample_id = sample_id
         self.source_version = source_version
+        self.timing_revision = 0
 
     def same_source_request(self, other: FakePreparedSourceTicket) -> bool:
         return (
@@ -109,33 +122,8 @@ class _QueuedScenario:
         self.versions: dict[int, str] = {}
         self.models = (tmp / "owned-model-a", tmp / "owned-model-b")
         self.current_model = self.models[0]
-        for model in self.models:
-            model.mkdir()
-            for index, leaf in enumerate(("checkpoint.bin", "config.yaml", "definition.py")):
-                (model / leaf).write_bytes(
-                    f"non-neural {model.name} producer input {index}".encode()
-                )
-        for slot, leaf in ((0, "First.wav"), (215, "Equal renamed.wav")):
-            source = tmp / "samples" / leaf / leaf
-            source.parent.mkdir(parents=True)
-            write_mono_pcm16_wav(source, 44_100)
-            digest = hashlib.sha256(source.read_bytes()).hexdigest()
-            (source.parent / ".material.json").write_text(
-                json.dumps({
-                    "schema_version": 1,
-                    "sha256": digest,
-                    "bytes": source.stat().st_size,
-                    "original_leaf": leaf,
-                }),
-                encoding="utf-8",
-            )
-            reference = source.relative_to(tmp).as_posix()
-            controller.project.sample_paths[slot] = reference
-            controller.project.sample_durations[slot] = 128 / 44_100
-            controller.project.pad_content[slot] = PadContentIdentity(
-                instance_id=f"{slot + 1:032x}", material_id=digest[:32]
-            )
-            self.versions[slot] = f"{reference}|sha256-v1:{digest}"
+        self.allow_components = False
+        self._seed_owned_models_and_originals()
         # Capture still constructs actual Native SealedProcessingFiles. These
         # isolated inputs and declared lineage never execute a neural model.
         monkeypatch.setattr(
@@ -175,6 +163,36 @@ class _QueuedScenario:
         controller.stems._pair_preparations._runner = self.tasks.append
         controller._assets.sync_assignments()
 
+    def _seed_owned_models_and_originals(self) -> None:
+        for model in self.models:
+            model.mkdir()
+            for index, leaf in enumerate(("checkpoint.bin", "config.yaml", "definition.py")):
+                (model / leaf).write_bytes(
+                    f"non-neural {model.name} producer input {index}".encode()
+                )
+        for slot, leaf in ((0, "First.wav"), (215, "Equal renamed.wav")):
+            source = self.tmp / "samples" / leaf / leaf
+            source.parent.mkdir(parents=True)
+            write_mono_pcm16_wav(source, 44_100)
+            digest = hashlib.sha256(source.read_bytes()).hexdigest()
+            (source.parent / ".material.json").write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "sha256": digest,
+                    "bytes": source.stat().st_size,
+                    "original_leaf": leaf,
+                }),
+                encoding="utf-8",
+            )
+            reference = source.relative_to(self.tmp).as_posix()
+            self.controller.project.sample_paths[slot] = reference
+            self.controller.project.sample_durations[slot] = 128 / 44_100
+            self.controller.project.pad_content[slot] = PadContentIdentity(
+                instance_id=f"{slot + 1:032x}", material_id=digest[:32]
+            )
+            self.versions[slot] = f"{reference}|sha256-v1:{digest}"
+            self.audio.load_sample_async(slot, reference)
+
     @staticmethod
     def capture_ticket(sample_id: int, source_version: str) -> _OwnSourceTicket:
         # Rechecks get another object for the same own source request. No origin
@@ -209,7 +227,8 @@ class _QueuedScenario:
         _descriptor: str | None,
         artifact_version: str | None,
     ) -> _ControllerPairAck:
-        assert not components
+        if components:
+            assert self.allow_components
         assert own_version == self.versions[sample_id]
         assert ticket.sample_id == sample_id
         assert ticket.source_version == own_version
@@ -240,7 +259,8 @@ class _QueuedScenario:
                 wav_generation=target.relative_to(self.tmp).as_posix(),
                 pcm_generation=f"{root}/.pcm-cache/stems/v1/.ready-{identity[:32]}",
                 provenance=provenance,
-            )
+            ),
+            components=components,
         )
         self.pairs.append(pair)
         return pair
@@ -292,12 +312,204 @@ def queued(
         controller.stems.shut_down()
 
 
+class _ActiveGenerationBaseline:
+    """Snapshot declared controller activity/effective residency; no audio oracle."""
+
+    def __init__(self, queued: _QueuedScenario) -> None:
+        project, session = queued.controller.project, queued.controller.session
+        self.residents = frozenset(queued.controller.stems._resident_pairs)
+        self.activity = (
+            frozenset(session.active_sample_ids),
+            frozenset(session.loading_sample_ids),
+            frozenset(session.analyzing_sample_ids),
+        )
+        self.controls = (
+            tuple(project.pad_stem_mix_mode),
+            tuple(session.pad_stem_enabled_mask),
+            tuple(session.pad_stem_last_custom_mask),
+            tuple(session.pad_stem_mask_display_mode),
+        )
+        self.other_path = project.sample_paths[215]
+        self.other_content = project.pad_content[215]
+        self.other_entry = queued.selected(215)
+        self.other_owners = {
+            key: owner
+            for key, owner in queued.controller._assets._assignments.items()
+            if key[1] == 215
+        }
+
+    def assert_unchanged(self, queued: _QueuedScenario) -> None:
+        project, session = queued.controller.project, queued.controller.session
+        assert frozenset(queued.controller.stems._resident_pairs) == self.residents
+        assert (
+            frozenset(session.active_sample_ids),
+            frozenset(session.loading_sample_ids),
+            frozenset(session.analyzing_sample_ids),
+        ) == self.activity
+        assert (
+            tuple(project.pad_stem_mix_mode),
+            tuple(session.pad_stem_enabled_mask),
+            tuple(session.pad_stem_last_custom_mask),
+            tuple(session.pad_stem_mask_display_mode),
+        ) == self.controls
+        self.assert_unrelated_unchanged(queued)
+
+    def assert_unrelated_unchanged(self, queued: _QueuedScenario) -> None:
+        project, session = queued.controller.project, queued.controller.session
+        assert project.sample_paths[215] == self.other_path
+        assert project.pad_content[215] is self.other_content
+        assert queued.selected(215) is self.other_entry
+        assert project.pad_stem_mix_mode[215] == self.controls[0][215]
+        assert session.pad_stem_enabled_mask[215] == self.controls[1][215]
+        assert session.pad_stem_last_custom_mask[215] == self.controls[2][215]
+        assert session.pad_stem_mask_display_mode[215] == self.controls[3][215]
+        assert 215 in session.active_sample_ids
+        for key, owner in self.other_owners.items():
+            assert queued.controller._assets._assignments[key] is owner
+            assert not _released(owner[1])
+
+
+def _seed_controller_selected_pairs(queued: _QueuedScenario, mix_mode: str) -> None:
+    """Reach preexisting residency through public requests and declared pair ACKs."""
+    stems = queued.controller.stems
+    queued.allow_components = True
+    for slot in (0, 215):
+        assert stems.generate_stems_async(slot)
+        queued.pump()
+        assert stems.set_stem_mix_mode(slot, "all_stems")
+        queued.pump()
+        assert slot in stems._resident_pairs
+    assert stems.set_stem_enabled_mask(0, STEM_MASK_VOCALS | STEM_MASK_BASS)
+    assert stems.set_stem_enabled_mask(215, STEM_MASK_DRUMS)
+    if mix_mode == "full_mix":
+        assert stems.set_stem_mix_mode(0, "full_mix")
+        assert 0 not in stems._resident_pairs
+    queued.allow_components = False
+
+
+def _assert_active_generation_fresh_source(
+    queued: _QueuedScenario,
+    source: FakeOfflineStemSourceLease,
+    earlier: tuple[_OwnSourceTicket, ...],
+) -> None:
+    pending = queued.controller.stems._pair_preparations.pending[0]
+    assert isinstance(pending.ticket, _OwnSourceTicket)
+    assert pending.ticket.sample_id == 0
+    assert pending.ticket.source_version == queued.versions[0]
+    assert all(pending.ticket is not old for old in earlier)
+    assert pending.generation_intent is not None
+    assert pending.own_source_version == source.source_version
+    queued.audio.capture_prepared_stem_source.assert_called_once_with(0, source)
+    assert queued.audio.capture_prepared_stem_source.call_args.args[1] is source
+    assert len(source.verification_threads) == 2
+
+
+def _assert_active_generated_disk_selection(
+    queued: _QueuedScenario, previous: StemCacheEntry, initial_requests: int
+) -> None:
+    selected = queued.selected()
+    assert previous.pair is not None
+    assert selected.pair is not None
+    assert selected.pair.stem_set_identity != previous.pair.stem_set_identity
+    assert selected.producer_identity != previous.producer_identity
+    assert len(queued.backend.requests) == initial_requests + 1
+    assert queued.backend.requests[-1].model_cache_dir == queued.current_model
+    assert queued.audio.prepare_stem_pair.call_count == 1
+    assert queued.audio.prepare_stem_pair.call_args.args[4] is False
+    assert queued.pairs[-1].has_components() is False
+    assert queued.pairs[-1].selected == 1
+    for operation in (
+        queued.audio.publish_stem_pair,
+        queued.audio.publish_prepared_stems,
+        queued.audio.set_stem_mix_mode,
+        queued.audio.set_stem_enabled_mask,
+        queued.audio.set_stem_pair_full_mix,
+    ):
+        operation.assert_not_called()
+    reopened = ProjectPersistence.from_config_path(queued.controller._persistence.config_path)
+    assert reopened.load_error is None
+    assert not reopened.invalid_stem_pair_ids
+    assert reopened.project.stem_cache[0] == selected
+    assert reopened.project.stem_cache[215] == queued.selected(215)
+    assert reopened.project.pad_stem_mix_mode == queued.controller.project.pad_stem_mix_mode
+    assert not queued.tasks
+    assert not queued.controller.stems._jobs
+    assert not queued.controller.stems._pending_stem_publications
+    assert not queued.controller.stems._disk_selection_settlements
+
+
+@pytest.mark.parametrize("mix_mode", ["full_mix", "all_stems"])
+def test_public_generate_while_active_commits_disk_only_and_retains_effective_pair(
+    queued: _QueuedScenario,
+    mix_mode: str,
+) -> None:
+    """Prove controller scheduling/ownership only; actual active rendering is Native-tested."""
+    stems = queued.controller.stems
+    captured: list[_OwnSourceTicket] = []
+
+    def capture(sample_id: int, version: str) -> _OwnSourceTicket:
+        ticket = queued.capture_ticket(sample_id, version)
+        captured.append(ticket)
+        return ticket
+
+    queued.audio.capture_prepared_source.side_effect = capture
+    _seed_controller_selected_pairs(queued, mix_mode)
+    queued.controller.session.active_sample_ids.update((0, 215))
+    baseline = _ActiveGenerationBaseline(queued)
+    previous, earlier = queued.selected(), tuple(captured)
+    initial_requests = len(queued.backend.requests)
+    queued.current_model = queued.models[1]
+    for operation in (
+        queued.audio.capture_prepared_source,
+        queued.audio.capture_prepared_stem_source,
+        queued.audio.prepare_stem_pair,
+        queued.audio.publish_stem_pair,
+        queued.audio.publish_prepared_stems,
+        queued.audio.set_stem_mix_mode,
+        queued.audio.set_stem_enabled_mask,
+        queued.audio.set_stem_pair_full_mix,
+    ):
+        operation.reset_mock()
+
+    assert stems.stem_generation_block_reason(0) is None
+    assert stems.generate_stems_async(0)
+    source = stems._generation_sources[0]
+    assert isinstance(source, FakeOfflineStemSourceLease)
+    assert not source.verification_threads
+    queued.audio.capture_prepared_source.assert_not_called()
+    queued.step()  # actual existing identity resolution admits inference while active
+    assert len(queued.backend.requests) == initial_requests
+    baseline.assert_unchanged(queued)
+    queued.step()  # the declared backend writes/verifies the complete generation
+    baseline.assert_unchanged(queued)
+    _assert_active_generation_fresh_source(queued, source, earlier)
+    queued.step()  # components=False complete-pair preparation and actual config replacement
+    baseline.assert_unchanged(queued)
+    _assert_active_generated_disk_selection(queued, previous, initial_requests)
+    selected = queued.selected()
+
+    # An inactive later gesture follows ordinary fresh preparation and source ACK
+    # checks. Public FullMix first withdraws any old effective selected components.
+    queued.controller.session.active_sample_ids.discard(0)
+    assert stems.set_stem_mix_mode(0, "full_mix")
+    queued.allow_components = True
+    assert stems.set_stem_mix_mode(0, "all_stems")
+    queued.pump()
+    assert queued.audio.prepare_stem_pair.call_args.args[4] is True
+    assert queued.pairs[-1].has_components()
+    queued.audio.publish_stem_pair.assert_called_once()
+    assert 0 in stems._resident_pairs
+    assert queued.selected().pair == selected.pair
+    assert len(queued.backend.requests) == initial_requests + 1
+    baseline.assert_unrelated_unchanged(queued)
+
+
 def _assert_shared_own_subscribers(
     queued: _QueuedScenario, job: StemGenerationJob
 ) -> dict[int, StemSubscriber]:
     subscribers = {item.sample_id: item for item in job.subscribers()}
     assert set(subscribers) == {0, 215}
-    assert subscribers[0].ticket is not subscribers[215].ticket
+    assert subscribers[0].source is not subscribers[215].source
     assert subscribers[0].content_id != subscribers[215].content_id
     assert subscribers[0].intent is not None
     assert subscribers[215].intent is not None
@@ -306,9 +518,9 @@ def _assert_shared_own_subscribers(
     for slot, subscriber in subscribers.items():
         assert subscriber.request is not None
         assert subscriber.request.source_version == queued.versions[slot]
-        assert isinstance(subscriber.ticket, _OwnSourceTicket)
-        assert subscriber.ticket.sample_id == slot
-        assert subscriber.ticket.source_version == queued.versions[slot]
+        assert isinstance(subscriber.source, FakeOfflineStemSourceLease)
+        assert subscriber.source.sample_id == slot
+        assert subscriber.source.source_version == queued.versions[slot]
         assert subscriber.source_lease is not None
         assert not _released(subscriber.source_lease)
     return subscribers
@@ -324,7 +536,10 @@ def _assert_own_preparation_fanout(
     assert set(pending_by_slot) == expected
     for slot, pending in pending_by_slot.items():
         subscriber = subscribers[slot]
-        assert pending.ticket is subscriber.ticket
+        assert isinstance(pending.ticket, _OwnSourceTicket)
+        assert pending.ticket.sample_id == slot
+        assert pending.ticket.source_version == queued.versions[slot]
+        queued.audio.capture_prepared_stem_source.assert_any_call(slot, subscriber.source)
         assert pending.content_id == subscriber.content_id
         assert pending.generation_intent == subscriber.intent
         assert pending.own_source_version == queued.versions[slot]
@@ -395,6 +610,174 @@ def _blocked_backend(
         read.finish.set()
         read.worker.join(5)
         assert not read.worker.is_alive()
+
+
+def test_generation_admission_uses_cached_original_without_hashing_or_live_permit(
+    queued: _QueuedScenario,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden_read(*_args: object, **_kwargs: object) -> Never:
+        message = "Generate admission must only capture already loaded source metadata"
+        raise AssertionError(message)
+
+    with monkeypatch.context() as capture:
+        capture.setattr(hashlib, "file_digest", forbidden_read)
+        capture.setattr(stems_module, "source_version_for_sample_path", forbidden_read)
+        assert queued.controller.stems.generate_stems_async(0)
+        source = queued.controller.stems._generation_sources[0]
+        assert isinstance(source, FakeOfflineStemSourceLease)
+        assert not source.verification_threads
+        assert source.source_version == queued.versions[0]
+        assert source.original_bytes > 0
+        assert source.target_shape == (44_100, 1, 128)
+        queued.audio.capture_prepared_source.assert_not_called()
+        queued.audio.capture_prepared_stem_source.assert_not_called()
+    queued.pump()
+    queued.selected()
+    assert source.verification_threads
+
+
+@pytest.mark.parametrize("replacement", ["bytes", "path"])
+def test_worker_rejects_changed_original_before_inference_or_fresh_permit(
+    queued: _QueuedScenario,
+    replacement: str,
+) -> None:
+    stems = queued.controller.stems
+    assert stems.generate_stems_async(0)
+    source = stems._generation_sources[0]
+    assert isinstance(source, FakeOfflineStemSourceLease)
+    reference = queued.controller.project.sample_paths[0]
+    assert reference is not None
+    original = queued.tmp / reference
+    before = original.stat()
+    data = original.read_bytes()
+    if replacement == "bytes":
+        original.write_bytes(data[:-2] + b"\x01\x02")
+    else:
+        renamed = original.with_suffix(".replacement")
+        renamed.write_bytes(data)
+        os.replace(renamed, original)
+    os.utime(original, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert original.stat().st_size == source.original_bytes
+    assert original.stat().st_mtime_ns == before.st_mtime_ns
+
+    queued.step()
+
+    assert source.verification_threads
+    assert not queued.backend.requests
+    assert not queued.tasks
+    assert not stems._jobs
+    assert not stems._generation_sources
+    assert "original changed" in (stems.stem_generation_error(0) or "").lower()
+    assert not queued.pairs
+    queued.audio.capture_prepared_source.assert_not_called()
+    queued.audio.capture_prepared_stem_source.assert_not_called()
+
+
+def test_timing_change_during_inference_receives_only_fresh_current_publication_permit(
+    queued: _QueuedScenario,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timing_revision = [1]
+
+    def capture_current(sample_id: int, version: str) -> _OwnSourceTicket:
+        ticket = queued.capture_ticket(sample_id, version)
+        ticket.timing_revision = timing_revision[0]
+        return ticket
+
+    queued.audio.capture_prepared_source.side_effect = capture_current
+    stems = queued.controller.stems
+    assert stems.generate_stems_async(0)
+    queued.step()
+    source = stems._generation_sources[0]
+    with _blocked_backend(queued, monkeypatch) as read:
+        queued.audio.capture_prepared_source.assert_not_called()
+        queued.audio.capture_prepared_stem_source.assert_not_called()
+        timing_revision[0] = 2
+        queued.poll()
+        queued.audio.capture_prepared_source.assert_not_called()
+        read.settle()
+        pending = stems._pair_preparations.pending[0]
+        assert isinstance(pending.ticket, _OwnSourceTicket)
+        assert pending.ticket.timing_revision == 2
+        queued.audio.capture_prepared_stem_source.assert_called_once_with(0, source)
+        queued.pump()
+        queued.selected()
+        assert len(queued.backend.requests) == 1
+        assert sum(pair.selected for pair in queued.pairs) == 1
+
+
+def test_origin_unload_during_shared_read_preserves_offline_source_and_survivor_fresh_permit(
+    queued: _QueuedScenario,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stems = queued.controller.stems
+    assert stems.generate_stems_async(0)
+    assert stems.generate_stems_async(215)
+    queued.tasks.pop(0)()
+    queued.tasks.pop(0)()
+    queued.poll()
+    job = next(iter(stems._jobs.values()))
+    subscribers = _assert_shared_own_subscribers(queued, job)
+    source = job.source
+    assert isinstance(source, FakeOfflineStemSourceLease)
+    with _blocked_backend(queued, monkeypatch) as read:
+        queued.controller.loader.unload_sample(0)
+        queued.poll()
+        assert cast("object", job.source) is source
+        assert not _released(job._source_lease)
+        assert not queued.audio.offline_stem_source_is_current(0, source)
+        source.verify()  # Origin assignment is gone; captured physical bytes still verify.
+        queued.audio.capture_prepared_stem_source.assert_not_called()
+        read.settle()
+        assert job.source is None
+        _assert_own_preparation_fanout(queued, subscribers, {215}, job.request.source_version)
+        queued.audio.capture_prepared_stem_source.assert_called_once_with(
+            215, subscribers[215].source
+        )
+        queued.pump()
+        queued.selected(215)
+        assert len(queued.backend.requests) == 1
+        assert sum(pair.selected for pair in queued.pairs) == 1
+        assert queued.controller.project.sample_paths[0] is None
+
+
+def test_same_path_hash_reload_during_inference_cannot_launder_old_lease_into_fresh_permit(
+    queued: _QueuedScenario,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stems = queued.controller.stems
+    assert stems.generate_stems_async(0)
+    queued.step()
+    old_job = next(iter(stems._jobs.values()))
+    old_source = old_job.source
+    assert isinstance(old_source, FakeOfflineStemSourceLease)
+    with _blocked_backend(queued, monkeypatch) as read:
+        path = queued.controller.project.sample_paths[0]
+        content = queued.controller.project.pad_content[0]
+        assert path is not None
+        queued.controller.loader.unload_sample(0)
+        queued.controller.project.sample_paths[0] = path
+        queued.controller.project.sample_durations[0] = 128 / 44_100
+        queued.controller.project.pad_content[0] = content
+        queued.audio.load_sample_async(0, path)
+        assert stems.generate_stems_async(0)
+        queued.step()
+        current = stems._generation_sources[0]
+        assert current.source_version == old_source.source_version
+        assert current.source_generation != old_source.source_generation
+        assert not queued.audio.offline_stem_source_is_current(0, old_source)
+        assert stems._waiting_jobs
+        assert not queued.tasks
+        read.settle()
+        queued.audio.capture_prepared_stem_source.assert_not_called()
+        assert stems._generation_sources[0] is current
+        assert len(queued.tasks) == 1
+        monkeypatch.setattr(queued.backend, "generate", queued.generate_receipt)
+        queued.pump()
+        queued.selected()
+        queued.audio.capture_prepared_stem_source.assert_called_once_with(0, current)
+        assert sum(pair.selected for pair in queued.pairs) == 1
 
 
 @pytest.mark.parametrize("unload_origin", [False, True])
@@ -520,18 +903,24 @@ def test_settings_aba_rejects_blocked_resolution_before_any_inference(
 def test_initial_generation_and_control_fanout_never_hash_original_on_control(
     queued: _QueuedScenario, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    original_hash = source_version_for_sample_path
+    original_verify = FakeOfflineStemSourceLease.verify
     in_worker = False
-    hashes: list[str] = []
+    verifications: list[tuple[str, int]] = []
 
-    def verified_source(reference: str) -> str | None:
+    def verified_source(source: FakeOfflineStemSourceLease) -> None:
         assert in_worker, "full original hashing escaped the bounded worker"
-        hashes.append(reference)
-        return original_hash(reference)
+        original_verify(source)  # Actual fixture full-byte, extent and FileID verification.
+        verifications.append((source.source_path, len(queued.backend.requests)))
 
-    monkeypatch.setattr(stems_module, "source_version_for_sample_path", verified_source)
+    def legacy_source_hash(*_args: object, **_kwargs: object) -> Never:
+        assert in_worker, "legacy original hashing escaped the bounded worker"
+        message = "Offline source lease must own full original verification"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(FakeOfflineStemSourceLease, "verify", verified_source)
+    monkeypatch.setattr(stems_module, "source_version_for_sample_path", legacy_source_hash)
     assert queued.controller.stems.generate_stems_async(0)
-    assert not hashes
+    assert not verifications
     for _ in range(8):
         if not queued.tasks:
             break
@@ -543,7 +932,9 @@ def test_initial_generation_and_control_fanout_never_hash_original_on_control(
         queued.poll()
     assert not queued.tasks
     queued.selected()
-    assert len(hashes) == 2  # full source verification before and after actual inference
+    reference = queued.controller.project.sample_paths[0]
+    assert reference is not None
+    assert verifications == [(str((queued.tmp / reference).absolute()), phase) for phase in (0, 1)]
     assert len(queued.backend.requests) == 1
 
 
@@ -573,7 +964,7 @@ def test_unexpected_worker_failure_retires_admission_and_releases_serialization_
     assert not stems._jobs
     assert not stems._inference_jobs
     assert not stems._waiting_jobs
-    assert not stems._generation_source_tickets
+    assert not stems._generation_sources
     assert not stems._generation_intents
     assert not stems.is_stem_generation_running(0)
     assert queued.controller._assets._reserved == 0
@@ -602,6 +993,8 @@ def test_settings_aba_running_reader_keeps_custody_and_stale_events_cannot_selec
     assert stems.generate_stems_async(0)
     queued.step()  # identity resolution admits a still-unstarted inference
     old_job = next(iter(stems._jobs.values()))
+    old_source = old_job.source
+    assert old_source is not None
     with _blocked_backend(queued, monkeypatch, outcome=old_outcome, initial_progress=True) as read:
         queued.poll()
         assert stems.stem_generation_stage(0) == "old reader entered"
@@ -609,9 +1002,10 @@ def test_settings_aba_running_reader_keeps_custody_and_stale_events_cannot_selec
         queued.poll()
         assert not _released(old_job._source_lease)
         assert not _released(old_job._generation_lease)
+        assert old_job.source is old_source
         assert stems.generate_stems_async(0)
         queued.step()  # replacement resolves but must wait for actual backend return
-        current_ticket = stems._generation_source_tickets[0]
+        current_source = stems._generation_sources[0]
         current_intent = stems._generation_intents[0]
         assert stems._waiting_jobs
         assert not queued.tasks
@@ -622,11 +1016,12 @@ def test_settings_aba_running_reader_keeps_custody_and_stale_events_cannot_selec
             read.progress[0](0.77, "obsolete progress while blocked")
             queued.poll()
             assert stems.stem_generation_stage(0) != "obsolete progress while blocked"
-            assert stems._generation_source_tickets[0] is current_ticket
+            assert stems._generation_sources[0] is current_source
         read.settle()
         assert _released(old_job._source_lease)
         assert _released(old_job._generation_lease)
-        assert stems._generation_source_tickets[0] is current_ticket
+        assert old_job.source is None
+        assert stems._generation_sources[0] is current_source
         assert stems._generation_intents[0] == current_intent
         assert stems.stem_generation_error(0) is None
         assert stems.stem_generation_stage(0) != "obsolete progress after ABA"
@@ -768,7 +1163,7 @@ def test_worker_capacity_failure_releases_only_failed_admission_ownership(
     assert "worker admission failed" in error.lower()
     queued.poll()
     assert not stems._jobs
-    assert not stems._generation_source_tickets
+    assert not stems._generation_sources
     assert not stems._generation_intents
     assert not stems.is_stem_generation_running(215)
     assert queued.controller._assets._reserved == 0
@@ -798,7 +1193,7 @@ def _assert_failed_shared_job_settled(
     assert not stems._jobs
     assert not stems._inference_jobs
     assert not stems._waiting_jobs
-    assert not stems._generation_source_tickets
+    assert not stems._generation_sources
     assert not stems._generation_intents
     assert not stems._pair_preparations.pending
     assert not stems._pending_stem_publications

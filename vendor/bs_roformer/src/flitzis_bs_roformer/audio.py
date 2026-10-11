@@ -9,20 +9,25 @@ from torch import Tensor
 
 from flitzis_bs_roformer.model import SAMPLE_RATE
 from flitzis_looper.bs_input_provenance import run_input_tool
+from flitzis_looper.stem_cancellation import check_cancelled
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 FRAME_BYTES = 8
 
 
-def decode_source(source: Path, destination: Path) -> int:
+def decode_source(
+    source: Path, destination: Path, *, checkpoint: Callable[[str], None] | None = None
+) -> int:
     """Probe before decoding, then validate the complete stereo float32 file shape.
 
     No full-track PCM allocation occurs here. FFmpeg writes its bounded decode
     buffers directly to a private temporary file; the inference reader reads
     at most one model chunk at a time. All conversion and resampling is offline.
     """
+    check_cancelled(checkpoint, "before_source_decode")
     probe = run_input_tool(
         [
             "ffprobe",
@@ -36,6 +41,7 @@ def decode_source(source: Path, destination: Path) -> int:
             "json",
             str(source),
         ],
+        checkpoint=checkpoint,
     )
     metadata = json.loads(probe.stdout)
     streams = metadata.get("streams", [])
@@ -75,7 +81,9 @@ def decode_source(source: Path, destination: Path) -> int:
             "f32le",
             str(destination),
         ],
+        checkpoint=checkpoint,
     )
+    check_cancelled(checkpoint, "after_source_decode")
     decoded_bytes = destination.stat().st_size
     if decoded_bytes == 0 or decoded_bytes % FRAME_BYTES:
         msg = "Decoded source has incomplete stereo float32 PCM"

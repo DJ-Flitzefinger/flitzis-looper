@@ -1163,10 +1163,10 @@ interest. One ready generation is promoted before individual native publications
 Source/content/timing/queue rejection affects that subscriber alone.
 
 Current MATERIAL compatible completed-set lookup additionally verifies the
-supported actual producer: Demucs32 or BS28 complete guarded files, bounded
-comparison of loaded host code/bindings with held source, exact captured child
-package roots and a fresh empty bytecode namespace. Actual tools retain their
-image/FileID and exclusive child-returned birth/body witness requirements.
+supported actual producer: Demucs37 or BS33 complete files within Native's bounded
+64-file guard, comparison of loaded host code/bindings with held source, exact
+captured child package roots and a fresh empty bytecode namespace. Actual tools
+retain their image/FileID and exclusive child-returned birth/body witness requirements.
 Unknown historical or unsupported execution stays UNKNOWN. The dependency-version
 and narrow OS runtime policy does not certify neural execution, a hostile/global
 runtime or resource/music acceptance; the MATERIAL report owns the scoped proof.

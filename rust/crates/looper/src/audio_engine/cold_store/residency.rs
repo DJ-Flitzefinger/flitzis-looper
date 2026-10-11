@@ -12,6 +12,54 @@ impl ColdTransaction {
 }
 
 impl CommittedColdLease {
+    /// Worker-only full original verification under the already held immutable
+    /// assignment readers. Retirement of an origin pad does not revoke custody.
+    pub(in crate::audio_engine) fn verify_original_for_offline(&self) -> io::Result<()> {
+        if self.original_path != self._original.path {
+            return Err(invalid(
+                "offline original binding disagrees with held reader",
+            ));
+        }
+        let resolved =
+            super::super::material_paths::resolve(self.samples_root(), &self.original_path)?;
+        if resolved.kind
+            != (super::super::material_paths::AssetKind::Original {
+                material: self.material_id.clone(),
+            })
+        {
+            return Err(invalid("offline original typed material binding changed"));
+        }
+        reject_links(&self.original_path)?;
+        let held = self
+            ._original
+            .reader
+            .as_ref()
+            .ok_or_else(|| invalid("offline sealed original missing"))?;
+        let original = &self.manifest.descriptor["decoder"]["original"];
+        let digest = original["sha256"]
+            .as_str()
+            .ok_or_else(|| invalid("offline original digest missing"))?;
+        let bytes = original["bytes"]
+            .as_u64()
+            .ok_or_else(|| invalid("offline original extent missing"))?;
+        // Opening an independent cursor avoids races with other clones of this
+        // lease; File::try_clone would share the held handle's seek position.
+        let mut reader = sealed_reader(&self.original_path)?;
+        if file_identity(held)? != self._original.identity
+            || file_identity(&reader)? != self._original.identity
+            || held.metadata()?.len() != bytes
+        {
+            return Err(invalid("offline original FileID or extent changed"));
+        }
+        verify_file(&mut reader, digest, bytes, &|| false)?;
+        if file_identity(&reader)? != self._original.identity {
+            return Err(invalid(
+                "offline original identity changed during verification",
+            ));
+        }
+        Ok(())
+    }
+
     /// Read final absolute source coordinates under this verified immutable lease.
     /// The independent file cursor and all allocations stay on the calling worker.
     pub(in crate::audio_engine) fn read_window_cancellable(

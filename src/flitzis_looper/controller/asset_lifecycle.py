@@ -229,7 +229,8 @@ class ProjectAssetLifecycle:
         key = (kind, sample_id)
         previous = self._assignments.get(key)
         if prepared is not None and previous is not None and previous[0] == prepared[0]:
-            prepared[1].release()
+            if previous[1] is not prepared[1]:
+                prepared[1].release()
             return
         if prepared is None:
             self._assignments.pop(key, None)

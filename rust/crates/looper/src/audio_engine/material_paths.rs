@@ -451,7 +451,7 @@ pub fn resolve_project_asset(
     ))
 }
 
-fn ordinary_windows_path(path: &Path) -> String {
+pub(super) fn ordinary_windows_path(path: &Path) -> String {
     let path = path.to_string_lossy();
     // Python pathlib uses ordinary Win32 spelling for cwd and durable references.
     // The native ownership registry continues to use its canonical handle path.

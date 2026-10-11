@@ -2,8 +2,10 @@ import hashlib
 import json
 import struct
 import wave
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from threading import get_ident
+from typing import TYPE_CHECKING, cast
 from unittest.mock import DEFAULT, Mock, patch
 
 import pytest
@@ -52,31 +54,120 @@ class FakeProjectAssetLease:
         assert not self.released
 
 
+@dataclass(frozen=True)
+class FakeOfflineStemSourceLease:
+    """Immutable control fixture; it claims no actual Native cold/file custody."""
+
+    source_version: str
+    source_path: str
+    original_bytes: int
+    target_shape: tuple[int, int, int]
+    source_generation: int
+    source_request: int
+    sample_id: int
+    digest: str
+    file_identity: tuple[int, int]
+    verification_threads: list[int] = field(default_factory=list, compare=False)
+
+    def verify(self) -> None:
+        """Verify fixture path/full bytes on the worker; Native held-file proof is separate."""
+        self.verification_threads.append(get_ident())
+        path = Path(self.source_path)
+        before = path.stat()
+        with path.open("rb") as source:
+            digest = hashlib.file_digest(source, "sha256").hexdigest()
+        after = path.stat()
+        if (
+            (before.st_dev, before.st_ino) != self.file_identity
+            or (after.st_dev, after.st_ino) != self.file_identity
+            or (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns)
+            or after.st_size != self.original_bytes
+            or digest != self.digest
+        ):
+            message = "Fixture offline original changed after admission"
+            raise ValueError(message)
+
+
+@dataclass(frozen=True)
+class _LoadedSource:
+    path: Path
+    digest: str
+    original_bytes: int
+    shape: tuple[int, int, int]
+    generation: int
+    file_identity: tuple[int, int]
+
+
 class FakeLoadedSourceDigests:
     """Fixture admission substitute, without claiming actual Native source custody."""
 
     def __init__(self) -> None:
-        self._digests: dict[int, str] = {}
+        self._sources: dict[int, _LoadedSource] = {}
+        self._generation = 0
 
     def load(self, sample_id: int, path: str, *_args: object, **_kwargs: object) -> object:
         """Capture once at explicit fake admission, preserving the mock's return value."""
-        self._digests.pop(sample_id, None)
+        self._sources.pop(sample_id, None)
         try:
-            with Path(path).open("rb") as source:
+            admitted = Path(path).absolute()
+            with admitted.open("rb") as source:
                 digest = hashlib.file_digest(source, "sha256").hexdigest()
+            metadata = admitted.stat()
         except OSError:
             return DEFAULT
-        self._digests[sample_id] = digest
+        try:
+            with wave.open(str(admitted), "rb") as wav:
+                shape = (wav.getframerate(), wav.getnchannels(), wav.getnframes())
+        except OSError, EOFError, wave.Error:
+            shape = (44_100, 1, 128)
+        self._generation += 1
+        self._sources[sample_id] = _LoadedSource(
+            admitted,
+            digest,
+            metadata.st_size,
+            shape,
+            self._generation,
+            (metadata.st_dev, metadata.st_ino),
+        )
         return DEFAULT
 
     def unload(self, sample_id: int) -> object:
         """Forget this fixture source only on the default successful fake unload."""
-        self._digests.pop(sample_id, None)
+        self._sources.pop(sample_id, None)
         return DEFAULT
 
     def get(self, sample_id: int) -> str | None:
         """Read immutable admitted metadata without touching source files."""
-        return self._digests.get(sample_id)
+        source = self._sources.get(sample_id)
+        return source.digest if source is not None else None
+
+    def capture(self, sample_id: int, source_version: str) -> FakeOfflineStemSourceLease:
+        """Copy only cached admitted metadata, with no path reads or publication rights."""
+        source = self._sources.get(sample_id)
+        if source is None or not source_version.endswith(f"|sha256-v1:{source.digest}"):
+            message = "Fixture pad has no matching admitted original"
+            raise ValueError(message)
+        return FakeOfflineStemSourceLease(
+            source_version,
+            str(source.path),
+            source.original_bytes,
+            source.shape,
+            source.generation,
+            source.generation,
+            sample_id,
+            source.digest,
+            source.file_identity,
+        )
+
+    def is_current(self, sample_id: int, source: FakeOfflineStemSourceLease | None) -> bool:
+        current = self._sources.get(sample_id)
+        return (
+            source is not None
+            and current is not None
+            and source.sample_id == sample_id
+            and source.source_generation == current.generation
+            and source.source_request == current.generation
+        )
 
 
 class FakeGlobalPlaybackBatchTicket:
@@ -225,6 +316,27 @@ def audio_engine_mock() -> Iterator[Mock]:
         # Install explicitly even when the currently loaded extension predates
         # the metadata getter. Tests may still replace native admission behavior.
         audio_engine.return_value.loaded_source_digest = Mock(side_effect=loaded_sources.get)
+        audio_engine.return_value.capture_offline_stem_source = Mock(
+            side_effect=loaded_sources.capture
+        )
+        audio_engine.return_value.offline_stem_source_is_current = Mock(
+            side_effect=loaded_sources.is_current
+        )
+
+        def capture_stem_ticket(
+            sample_id: int, source: FakeOfflineStemSourceLease
+        ) -> FakePreparedSourceTicket:
+            if not loaded_sources.is_current(sample_id, source):
+                message = "Fixture offline source was replaced before fresh publication"
+                raise ValueError(message)
+            return cast(
+                "FakePreparedSourceTicket",
+                audio_engine.return_value.capture_prepared_source(sample_id, source.source_version),
+            )
+
+        audio_engine.return_value.capture_prepared_stem_source = Mock(
+            side_effect=capture_stem_ticket
+        )
         audio_engine.return_value.output_sample_rate.return_value = 44_100
         audio_engine.return_value.poll_input_events.return_value = None
         audio_engine.return_value.receive_msg.return_value = None

@@ -12,6 +12,34 @@ JSON, hashing, Python/GIL/UI access, blocking locks, logging, unbounded work and
 heavy allocation SHALL NOT occur in the realtime callback. The callback SHALL
 continue using its existing available FullMix/stem source until own adoption.
 
+An offline source lease SHALL retain the actual sealed managed-original readers
+of its own loaded pad, including fully resident sources. Capture SHALL validate
+current loaded source/request ownership and the exact own original reference
+using bounded metadata operations; equal digests or shared PCM SHALL NOT confer
+another root's file authority. Full source verification SHALL run on the worker.
+The captured lease SHALL remain readable after its origin unloads or is replaced,
+until the actual backend and every owned descendant/output reader have ended.
+It SHALL NOT be a live timing/window/publication permit. Each current subscriber
+SHALL obtain its own fresh publication permit only after completed work has been
+revalidated against its captured source, content and monotone material intent.
+
+#### Scenario: Resident source remains sealed after origin unload
+- **GIVEN** an offline job captured from a fully resident loaded managed original
+- **WHEN** the origin unloads while an independently current equal-material subscriber remains
+- **THEN** the original remains immutable and readable through actual backend read end
+- **AND** the survivor obtains fresh own publication authority without using the origin's old timing permit
+
+#### Scenario: Equal PCM cannot authorize a foreign original
+- **GIVEN** two loaded pads sharing equal PCM with distinct managed original references
+- **WHEN** capture names the other pad's reference or a stale source generation
+- **THEN** capture is rejected without opening or publishing the foreign original
+
+#### Scenario: Timing changes while offline inference reads
+- **GIVEN** a current source-leased job whose loaded content and material intent remain current
+- **WHEN** timing or the playback window changes before inference finishes
+- **THEN** offline source custody remains valid
+- **AND** any later native preparation captures the subscriber's current timing/window authority separately
+
 #### Scenario: Playing pad generates without disturbing its voice
 - **GIVEN** a current finite NormalLoop voice using FullMix or selected stems and a nonneutral KEYLOCK/rate context
 - **WHEN** an admitted immutable-source job runs offline
@@ -81,6 +109,16 @@ verified usability as UNKNOWN; restoration SHALL NOT load a model, synthesize
 selected-model attestation or silently promote UNKNOWN to a known producer.
 
 Verification and both artifact areas SHALL complete before selection commit.
+The project config's successful atomic replacement SHALL be the disk-selection
+linearization point. The same existing fenced writer SHALL verify current
+subscriber/source/model intent immediately before replacement, with independent
+predecessor and complete new assignment owners and bounded settlement capacity
+already held. A failure before replacement SHALL leave old disk references and
+live selection intact. A failure settling owners after replacement SHALL keep
+the committed complete selection and its exact owners reachable for bounded retry;
+it SHALL NOT report or perform a precommit rollback. Artifact descriptor completion,
+dirty marking or a later native adoption ACK SHALL NOT substitute for this commit.
+
 Failure or Cancel before commit SHALL retain the old usable selection;
 a postcommit Cancel SHALL report the committed result truthfully and detach only
 pending interests. Current-model selection SHALL NOT expose a parallel model
@@ -97,10 +135,22 @@ library. Retained immutable predecessors SHALL protect independently assigned co
 - **THEN** the previous complete selected set remains usable and no mixed or partial generation becomes current
 - **AND** only the failed job's contained private artifacts can retire after their actual readers end
 
+#### Scenario: Cancellation or owner settlement failure follows config replacement
+- **GIVEN** both complete artifact areas, their common descriptor and all required owners are held
+- **WHEN** the config replacement succeeds before cancellation or a later owner-transfer failure
+- **THEN** reopen names the complete committed new set and cancellation cannot restore the old selection as though commit had failed
+- **AND** failed settlement retains exact predecessor/new owners and reserved retry capacity without granting effective audio adoption
+
 #### Scenario: Model selection changes while work is running
 - **WHEN** Settings changes the selected model during an admitted job
 - **THEN** the job keeps its captured effective fingerprint
 - **AND** its late completion cannot overwrite a newer current material/model intent
+
+#### Scenario: New content or unload follows config replacement
+- **GIVEN** the complete new pair has committed through actual config replacement
+- **WHEN** newer content or unload supersedes that pad before owner settlement
+- **THEN** the newer memory state remains current and the same writer persists it before the stale disk-selected pair retires
+- **AND** a failed superseding write retains both exact new/predecessor owners and reserved retry capacity until that newer snapshot is durable
 
 #### Scenario: Producer lineage distinguishes otherwise equal artifacts
 - **GIVEN** two complete sets have equal WAV hashes but different verified producer lineage

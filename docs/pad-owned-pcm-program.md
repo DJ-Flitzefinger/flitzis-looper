@@ -288,7 +288,7 @@ E11-19/20 current-model controls, active new-generation adoption, all216 aggrega
 resources or music/Human/program gates. In particular, ordinary UI default-loop
 admission and finite KEYLOCK-load/DSP remain required P4b/P5b work.
 
-X11-LIVE-STEMS has a bounded [L1 identity/intent delivery](prepared-stem-publication.md#l1-effective-generation-identity--2026-10-11): portable full effective provenance, two-phase control-owned deduplication, independent cross-root subscriber authority and monotone Settings/material ABA fencing. L2 offline/source/process/joint commit, L3 genuine active new-generation adoption and L4 integrated current/effective/last-reader acceptance remain open. L1 alone closes no whole E11 or program parent, and all current activity/publication guards remain.
+X11-LIVE-STEMS has bounded [L1 identity/intent](prepared-stem-publication.md#l1-effective-generation-identity--2026-10-11) and [L2 offline custody/disk commit](prepared-stem-publication.md#l2-offline-source-custody-and-joint-disk-commit--2026-10-11) deliveries. L2 permits source-leased offline generation during playback after the productive blocked-worker proof and commits complete disk selection through the existing fenced writer. L3 genuine active new-generation adoption and L4 integrated current/effective/last-reader acceptance remain open. These bounded results close no whole E11 or program parent; active new-set publication guards remain.
 
 X11-UI's [bounded tasks](../openspec/changes/refine-loop-editor-performance-actions/tasks.md)
 track E11-04/16/17/18 software evidence independently of H-FINAL. The executed

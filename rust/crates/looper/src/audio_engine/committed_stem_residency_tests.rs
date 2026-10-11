@@ -18,6 +18,9 @@ use crate::audio_engine::source_reader::{
 use crate::messages::StemMixMode;
 use std::collections::VecDeque;
 
+#[path = "offline_stem_productive_tests.rs"]
+mod offline_stem_productive_tests;
+
 const LOOP_START: usize = 17;
 const LOOP_END: usize = 1517;
 
@@ -174,6 +177,7 @@ struct Productive {
     pair: PreparedStemPair,
     selected: CommittedStemSetTicket,
     reference: Box<RtMixer>,
+    reference_ownership: Arc<InputRuntimeOwnership>,
     frame: u64,
     key_lock: bool,
 }
@@ -254,7 +258,7 @@ impl Productive {
         let mut reference = Box::new(RtMixer::new(2, RATE as f32));
         let ownership = Arc::new(InputRuntimeOwnership::tracked());
         ownership.publish_source(0, &full, RATE, 1);
-        reference.set_input_runtime_ownership(ownership);
+        reference.set_input_runtime_ownership(ownership.clone());
         reference.load_sample(0, full);
         assert!(reference.publish_prepared_stems(0, full_stems));
         reference.set_loop_region_frames(0, LOOP_START, Some(LOOP_END));
@@ -270,6 +274,7 @@ impl Productive {
             pair,
             selected,
             reference,
+            reference_ownership: ownership,
             frame: 0,
             key_lock,
         };

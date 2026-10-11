@@ -36,6 +36,7 @@ from flitzis_looper.pcm16_wav import PcmWavReader
 from flitzis_looper.stem_pair_selection import STEM_FINGERPRINT_SCHEMA
 from tests.flitzis_looper.conftest import FakePreparedSourceTicket
 from tests.flitzis_looper.controller.test_demucs_readable_reuse import (
+    _accept_independent_publication,
     _assert_complete_generation,
     _digest,
     _marker_provenance,
@@ -310,8 +311,8 @@ class _BsRig(_Rig[_BsRecordingBackend, _BsFixtureRunner]):
         guard = job.processing_files
         assert guard is not None
         expected = stem_provenance.processing_paths(self.backend.requests[0])
-        assert len(expected) == 28
-        assert len(guard.witnesses()) == 28
+        assert len(expected) == 33
+        assert len(guard.witnesses()) == 33
         proofs = []
         for (name, digest, size), requested in zip(guard.witnesses(), expected, strict=True):
             path = Path(name)
@@ -537,22 +538,7 @@ def test_bs_actual_decode_worker_publication_and_own_subscriber_completed_reuse(
         assert not admitted.available
         assert admitted.fingerprint_schema is None
     rig.resolve_reuse(prepare=True)
-    current = rig.controller.project.stem_cache[215]
-    assert current is not None
-    assert not current.available
-    pending = rig.controller.stems._pending_stem_publications[215]
-    assert pending.source_ticket.publication_status() == "pending"
-    ticket = pending.source_ticket
-    assert isinstance(ticket, FakePreparedSourceTicket)
-    assert ticket.source_request == 216
-    assert rig.pairs[1].selected == 0
-    ticket.status = "accepted"
-    rig.controller.stems.on_frame_render()
-    current = rig.controller.project.stem_cache[215]
-    assert current is not None
-    assert current.available
-    assert current.cache_dir == origin.cache_dir
-    assert rig.pairs[1].selected == 1
+    current = _accept_independent_publication(rig, origin)
     assert len(rig.runner.commands) == command_count
     assert len(rig.backend.requests) == 1
     assert _assert_complete_generation(rig, current) == before

@@ -11348,7 +11348,7 @@
       ],
       "work": "Existing immutable job/subscriber source lease -> full disk commit -> own-current native new-generation transition; single-current-model/fingerprint replacement and duplicate gates.",
       "gates": [
-        "L1 bounded effective identity/control-owned dedup/independent subscriber/monotone intent evidence: docs/prepared-stem-publication.md#l1-effective-generation-identity--2026-10-11; L2 offline generation/joint disk-config commit, L3 own-ACK active transition and L4 integrated current/effective/reader retirement remain open; active adoption guard opens only after L3.",
+        "L1 bounded effective identity/control-owned dedup/independent subscriber/monotone intent evidence: docs/prepared-stem-publication.md#l1-effective-generation-identity--2026-10-11; L2 bounded offline source/process custody and fenced joint disk-config commit: docs/prepared-stem-publication.md#l2-offline-source-custody-and-joint-disk-commit--2026-10-11. L3 own-ACK active transition and L4 integrated current/effective/reader retirement remain open; active adoption guard opens only after L3.",
         "Full Native/FIFO/filter old/new continuity and true last readers; P5a selected same-set None/Some not generation proof."
       ]
     },

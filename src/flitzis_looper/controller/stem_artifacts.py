@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from flitzis_looper.controller.stem_process import stem_command_checkpoint
 from flitzis_looper.models import STEM_KINDS
 from flitzis_looper.pcm16_wav import Pcm16WavWriter, PcmWavReader
 
@@ -235,11 +236,14 @@ def _write_block(
     start: int,
     frames: int,
 ) -> None:
-    aligned = {
-        name: _align_block(source, target, start, frames) for name, source in sources.items()
-    }
+    aligned = {}
+    for name, source in sources.items():
+        stem_command_checkpoint()
+        aligned[name] = _align_block(source, target, start, frames)
     for name, samples in aligned.items():
+        stem_command_checkpoint()
         writers[name].writeframesraw(_payload(samples))
+    stem_command_checkpoint()
     writers["instrumental"].writeframesraw(_instrumental_payload(aligned))
 
 
@@ -254,6 +258,7 @@ def _write_blocks(
     start = 0
     reported_percent = 0
     while start < target.frame_count:
+        stem_command_checkpoint()
         frames = _block_size(
             sources, target, start, min(block_frames, target.frame_count - start), limit
         )
@@ -270,6 +275,7 @@ def _open_sources(
 ) -> dict[str, _Source]:
     sources: dict[str, _Source] = {}
     for name, output_name in _OUTPUT_MAP:
+        stem_command_checkpoint()
         path = _find_output_file(output_root, output_name)
         try:
             reader = stack.enter_context(PcmWavReader(path))
@@ -293,6 +299,7 @@ def _verify_outputs(
     max_transient_pcm_bytes: int,
 ) -> None:
     for name, path in temporary.items():
+        stem_command_checkpoint()
         with PcmWavReader(path) as reader:
             if reader.file_identity != writers[name].file_identity:
                 msg = f"{name}.wav output file identity changed"
@@ -302,7 +309,10 @@ def _verify_outputs(
                 or reader.getnchannels() != target_shape.channels
                 or reader.getframerate() != target_shape.sample_rate_hz
                 or reader.getsampwidth() != 2
-                or reader.verify(chunk_bytes=min(64 * 1024, max_transient_pcm_bytes))
+                or reader.verify(
+                    chunk_bytes=min(64 * 1024, max_transient_pcm_bytes),
+                    checkpoint=stem_command_checkpoint,
+                )
                 != expected_digests[name]
             ):
                 msg = f"{name}.wav failed complete output verification"
@@ -327,6 +337,7 @@ def write_project_cache_artifacts(
     """
     _validate_limit(max_transient_pcm_bytes)
     _validate_target(target_shape, block_frames)
+    stem_command_checkpoint()
     cache_dir.mkdir(parents=True, exist_ok=True)
     token = uuid4().hex
     temporary: dict[str, Path] = {
@@ -344,6 +355,7 @@ def write_project_cache_artifacts(
                 max_transient_pcm_bytes,
             )
             for name, path in temporary.items():
+                stem_command_checkpoint()
                 writers[name] = stack.enter_context(
                     Pcm16WavWriter(
                         path,
@@ -358,6 +370,7 @@ def write_project_cache_artifacts(
             expected_digests = {name: writer.file_digest for name, writer in writers.items()}
         _verify_outputs(temporary, target_shape, expected_digests, writers, max_transient_pcm_bytes)
         for name, path in temporary.items():
+            stem_command_checkpoint()
             path.replace(cache_dir / f"{name}.wav")
     finally:
         for writer in writers.values():

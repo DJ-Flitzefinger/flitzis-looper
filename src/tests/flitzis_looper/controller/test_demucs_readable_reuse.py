@@ -69,6 +69,11 @@ _PROCESSING_ROLES = (
     "host/controller/stem_generation.py",
     "host/encoder_provenance.py",
     "host/controller/processing_code.py",
+    "host/controller/stem_process.py",
+    "host/analysis/process.py",
+    "host/analysis/windows_job.py",
+    "host/analysis/contracts.py",
+    "host/stem_cancellation.py",
     "host/__init__.py",
     "encoder/ffmpeg.exe",
     *(f"encoder/{name}" for name in SHARED_LIBRARIES),
@@ -563,9 +568,9 @@ class _Rig[Backend: _BackendRecords, Runner: _RunnerRecords]:
         guard = job.processing_files
         assert guard is not None
         witnesses = guard.witnesses()
-        assert len(witnesses) == 32
+        assert len(witnesses) == 37
         expected = stem_provenance.processing_paths(self.backend.requests[0])
-        assert len(expected) == 32
+        assert len(expected) == 37
         for (name, digest, size), requested in zip(witnesses, expected, strict=True):
             path = Path(name)
             assert path.samefile(requested)
@@ -773,14 +778,54 @@ def _retain_composed_evidence(rig: _DemucsRig, tmp_path: Path, test_id: str) -> 
     target.write_bytes(encoded)
 
 
-def _accept_independent_publication(rig: _DemucsRig, origin: StemCacheEntry) -> StemCacheEntry:
+def _prepare_independent_components[Backend: _BackendRecords, Runner: _RunnerRecords](
+    rig: _Rig[Backend, Runner], origin: StemCacheEntry
+) -> _ControlPair:
     second = rig.controller.project.stem_cache[215]
     assert second is not None
     assert second is not origin
+    assert second.available
+    assert second.cache_dir == origin.cache_dir
+    assert len(rig.pairs) == 2
+    assert not rig.pairs[1].has_components()
+    assert rig.pairs[1].selected == 1
+    assert 215 not in rig.controller.stems._pending_stem_publications
+    assert 215 not in rig.controller.stems._resident_pairs
+    assert not rig.tasks
+    _append_evidence(
+        rig.runner.records[-1],
+        "subscriber_transitions",
+        {
+            "phase": "own_pad_215_disk_selected",
+            "control_state": _control_evidence(rig),
+        },
+    )
+    assert rig.controller.stems.set_stem_mix_mode(215, "all_stems")
+    assert rig.controller.project.stem_cache[215] is second
+    assert 215 not in rig.controller.stems._pending_stem_publications
+    assert len(rig.tasks) == 1
+    rig.tasks.pop(0)()
+    assert len(rig.pairs) == 3
+    prepared = rig.pairs[2]
+    assert prepared.has_components()
+    assert prepared.selected == 0
+    rig.controller.stems.on_frame_render()
+    assert not rig.tasks
+    return prepared
+
+
+def _accept_independent_publication[Backend: _BackendRecords, Runner: _RunnerRecords](
+    rig: _Rig[Backend, Runner], origin: StemCacheEntry
+) -> StemCacheEntry:
+    prepared = _prepare_independent_components(rig, origin)
+    second = rig.controller.project.stem_cache[215]
+    assert second is not None
     assert not second.available
     pending = rig.controller.stems._pending_stem_publications[215]
     assert pending.source_ticket.publication_status() == "pending"
-    assert rig.pairs[1].selected == 0
+    assert prepared.selected == 0
+    assert rig.pairs[1].selected == 1
+    assert 215 not in rig.controller.stems._resident_pairs
     ticket = pending.source_ticket
     assert isinstance(ticket, FakePreparedSourceTicket)
     assert ticket.source_request == 216
@@ -794,13 +839,20 @@ def _accept_independent_publication(rig: _DemucsRig, origin: StemCacheEntry) -> 
             "control_state": _control_evidence(rig),
         },
     )
+    rig.controller.stems.on_frame_render()
+    assert rig.controller.project.stem_cache[215] is second
+    assert ticket.publication_status() == "pending"
+    assert prepared.selected == 0
+    assert 215 not in rig.controller.stems._resident_pairs
     ticket.status = "accepted"
     rig.controller.stems.on_frame_render()
     current = rig.controller.project.stem_cache[215]
     assert current is not None
     assert current.available
     assert current.cache_dir == origin.cache_dir
+    assert prepared.selected == 1
     assert rig.pairs[1].selected == 1
+    assert 215 in rig.controller.stems._resident_pairs
     _append_evidence(
         rig.runner.records[-1],
         "subscriber_transitions",

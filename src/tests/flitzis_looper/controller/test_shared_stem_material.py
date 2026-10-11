@@ -63,7 +63,8 @@ def _shared(
     source.parent.mkdir()
     write_mono_pcm16_wav(source, 44_100)
     tickets = [FakePreparedSourceTicket("pending"), FakePreparedSourceTicket("pending")]
-    audio.capture_prepared_source.side_effect = tickets
+    own_tickets = dict(zip((0, 215), tickets, strict=True))
+    audio.capture_prepared_source.side_effect = lambda slot, _version: own_tickets[slot]
     for slot, identity in [(0, "1" * 32), (215, "2" * 32)]:
         controller.project.sample_paths[slot] = "samples/shared.wav"
         controller.project.sample_durations[slot] = 128 / 44_100

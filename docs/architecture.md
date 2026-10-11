@@ -1153,11 +1153,12 @@ known actual inputs. `SealedProcessingFiles` holds complete model/config/code an
 supported converter witnesses through producer execution and verified promotion;
 actual caller-owned Demucs encoder children must match those held images under
 the explicit bounded OS runtime policy. Unknown historical provenance stays
-unknown. Supported Demucs32/BS28 file sets also bind the relevant actual loaded
-host code/defaults/constants/import aliases and supported decorator wrappers to
-compiled held source. Exact guarded package roots enter the immutable request
-and precede inherited child import paths under safe-path policy; each child owns
-a fresh empty bytecode namespace with writes disabled. Required stale/unsupported
+unknown. Supported Demucs37/BS33 file sets fit Native's bounded 64-file guard and
+bind the relevant actual loaded host code/defaults/constants/import aliases and
+supported decorator wrappers to compiled held source. Exact guarded package roots
+enter the immutable request and precede inherited child import paths under
+safe-path policy; each child owns a fresh empty bytecode namespace with writes
+disabled. Required stale/unsupported
 bindings stay UNKNOWN. These bounded local checks retain standard Python imports
 and the declared dependency-version/OS policy; they do not attest a hostile or
 complete global runtime. Compatible

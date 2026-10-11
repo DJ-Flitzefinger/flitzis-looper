@@ -4,6 +4,7 @@ import ctypes
 import sys
 from contextlib import ExitStack
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, BinaryIO
 from uuid import uuid4
 
@@ -21,8 +22,10 @@ from flitzis_bs_roformer.model import (
     SOURCES,
 )
 from flitzis_looper.pcm16_wav import Pcm16WavWriter, PcmWavReader
+from flitzis_looper.stem_cancellation import check_cancelled
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 
@@ -87,10 +90,12 @@ def _read_batch(
     source_frames: int,
     border: int,
     plan: ChunkPlan,
+    checkpoint: Callable[[str], None] | None = None,
 ) -> tuple[Tensor, list[tuple[int, int]], int]:
     parts: list[Tensor] = []
     locations: list[tuple[int, int]] = []
     while position < total_frames and len(parts) < plan.batch_size:
+        check_cancelled(checkpoint, "before_source_chunk")
         length = min(plan.chunk_size, total_frames - position)
         part = read_virtual_chunk(handle, position, length, source_frames, border)
         if length < plan.chunk_size:
@@ -102,13 +107,17 @@ def _read_batch(
     return torch.stack(parts), locations, position
 
 
-def _write_pcm16(handle: Pcm16WavWriter, samples: Tensor) -> None:
+def _write_pcm16(
+    handle: Pcm16WavWriter, samples: Tensor, checkpoint: Callable[[str], None] | None = None
+) -> None:
+    check_cancelled(checkpoint, "before_output_pcm_block")
     if not bool(torch.isfinite(samples).all()):
         msg = "BS-RoFormer produced non-finite PCM"
         raise ValueError(msg)
     interleaved = samples.transpose(0, 1).contiguous().clamp(-1, 1)
     integers = (interleaved * 32767).round().to(torch.int16)
     integers[interleaved <= -1] = -32768
+    check_cancelled(checkpoint, "before_output_write")
     handle.writeframesraw(ctypes.string_at(integers.data_ptr(), integers.numel() * 2))
 
 
@@ -120,6 +129,7 @@ def _flush(
     frames: int,
     border: int,
     source_frames: int,
+    checkpoint: Callable[[str], None] | None = None,
 ) -> None:
     begin = max(0, border - base)
     end = min(frames, border + source_frames - base)
@@ -130,7 +140,7 @@ def _flush(
         msg = "BS-RoFormer overlap-add left uncovered PCM"
         raise ValueError(msg)
     for index, handle in enumerate(handles):
-        _write_pcm16(handle, result[index, :, begin:end] / denominator)
+        _write_pcm16(handle, result[index, :, begin:end] / denominator, checkpoint)
 
 
 class _OverlapAdd:
@@ -139,10 +149,12 @@ class _OverlapAdd:
         handles: list[Pcm16WavWriter],
         source_frames: int,
         plan: ChunkPlan,
+        checkpoint: Callable[[str], None] | None = None,
     ) -> None:
         self.handles = handles
         self.source_frames = source_frames
         self.plan = plan
+        self.checkpoint = checkpoint
         self.border = (
             plan.chunk_size - plan.step if source_frames > 2 * (plan.chunk_size - plan.step) else 0
         )
@@ -153,6 +165,7 @@ class _OverlapAdd:
         self.base = 0
 
     def add(self, prediction: Tensor, locations: list[tuple[int, int]]) -> None:
+        check_cancelled(self.checkpoint, "before_output_accumulation")
         expected_shape = (len(locations), len(SOURCES), 2, self.plan.chunk_size)
         if tuple(prediction.shape) != expected_shape:
             msg = "BS-RoFormer returned an incomplete four-source batch"
@@ -162,6 +175,7 @@ class _OverlapAdd:
             msg = "BS-RoFormer produced non-finite PCM"
             raise ValueError(msg)
         for index, (start, length) in enumerate(locations):
+            check_cancelled(self.checkpoint, "output_accumulation_block")
             offset = start - self.base
             window = _chunk_window(self.plan, start, self.total_frames)[:length]
             self.result[..., offset : offset + length] += (
@@ -179,6 +193,7 @@ class _OverlapAdd:
             flushed,
             self.border,
             self.source_frames,
+            self.checkpoint,
         )
         remaining = self.counter.numel() - flushed
         if remaining > 0:
@@ -193,6 +208,7 @@ def _infer_batches(model: nn.Module, source: BinaryIO, writer: _OverlapAdd, devi
     position = 0
     with torch.inference_mode(), torch.autocast("cuda", enabled=device == "cuda"):
         while position < writer.total_frames:
+            check_cancelled(writer.checkpoint, "before_model_batch")
             batch, locations, position = _read_batch(
                 source,
                 position,
@@ -200,8 +216,10 @@ def _infer_batches(model: nn.Module, source: BinaryIO, writer: _OverlapAdd, devi
                 writer.source_frames,
                 writer.border,
                 writer.plan,
+                writer.checkpoint,
             )
             prediction = model(batch.to(device))
+            check_cancelled(writer.checkpoint, "after_model_batch")
             writer.add(prediction, locations)
             del prediction, batch
             writer.flush_after(position)
@@ -212,8 +230,10 @@ def _publish_outputs(
     output: Path,
     source_frames: int,
     expected_outputs: list[tuple[str, tuple[int, int]]],
+    checkpoint: Callable[[str], None] | None = None,
 ) -> None:
     for path, (expected, identity) in zip(temporary, expected_outputs, strict=True):
+        check_cancelled(checkpoint, "before_output_verification")
         with PcmWavReader(path) as handle:
             if handle.file_identity != identity:
                 msg = "BS-RoFormer output file identity changed"
@@ -227,10 +247,12 @@ def _publish_outputs(
             if shape != (source_frames, SAMPLE_RATE, 2, 2):
                 msg = "BS-RoFormer output shape is incomplete"
                 raise ValueError(msg)
-            if handle.verify() != expected:
+            verify_checkpoint = partial(checkpoint, "output_verification") if checkpoint else None
+            if handle.verify(checkpoint=verify_checkpoint) != expected:
                 msg = "BS-RoFormer output failed full integrity verification"
                 raise ValueError(msg)
     for path, name in zip(temporary, SOURCES, strict=True):
+        check_cancelled(checkpoint, "before_output_replace")
         path.replace(output / f"{name}.wav")
 
 
@@ -241,6 +263,8 @@ def separate_pcm(
     source_frames: int,
     device: str,
     plan: ChunkPlan | None = None,
+    *,
+    checkpoint: Callable[[str], None] | None = None,
 ) -> None:
     """Write four complete PCM16 WAVs using a fixed-size CPU overlap-add ring.
 
@@ -248,6 +272,7 @@ def separate_pcm(
     ring immediately. Reflection padding, tail padding and linear fades follow
     the upstream algorithm, with independent first/last windows per chunk.
     """
+    check_cancelled(checkpoint, "before_inference_input")
     actual_plan = plan if plan is not None else ChunkPlan()
     actual_plan.validate()
     if source_frames <= 0 or device not in {"cpu", "cuda"} or sys.byteorder != "little":
@@ -260,6 +285,7 @@ def separate_pcm(
     try:
         with ExitStack() as stack:
             for path in temporary:
+                check_cancelled(checkpoint, "before_output_reservation")
                 handle = stack.enter_context(
                     Pcm16WavWriter(
                         path, sample_rate_hz=SAMPLE_RATE, channels=2, frames=source_frames
@@ -267,10 +293,10 @@ def separate_pcm(
                 )
                 handles.append(handle)
             source = stack.enter_context(decoded.open("rb"))
-            writer = _OverlapAdd(handles, source_frames, actual_plan)
+            writer = _OverlapAdd(handles, source_frames, actual_plan, checkpoint)
             _infer_batches(model, source, writer, device)
             expected_outputs = [(handle.file_digest, handle.file_identity) for handle in handles]
-        _publish_outputs(temporary, output, source_frames, expected_outputs)
+        _publish_outputs(temporary, output, source_frames, expected_outputs, checkpoint)
     finally:
         for handle in handles:
             handle.discard_owned_output()

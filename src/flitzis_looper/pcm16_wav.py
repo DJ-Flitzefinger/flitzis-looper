@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, BinaryIO, Self
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
     from types import TracebackType
 
@@ -236,11 +237,15 @@ class PcmWavReader:
         self._position += len(raw) // align
         return raw
 
-    def verify(self, *, chunk_bytes: int = _VERIFY_BYTES) -> str:
+    def verify(
+        self, *, chunk_bytes: int = _VERIFY_BYTES, checkpoint: Callable[[], None] | None = None
+    ) -> str:
         """Hash the entire retained file and check current complete geometry/EOF."""
         if not 0 < chunk_bytes <= _VERIFY_BYTES:
             msg = "WAV verification block must be between 1 and 65536 bytes"
             raise ValueError(msg)
+        if checkpoint is not None:
+            checkpoint()
         self._handle.seek(0)
         if _geometry(self._handle) != self._shape:
             msg = "WAV geometry changed during processing"
@@ -250,6 +255,8 @@ class PcmWavReader:
         remaining = self._shape.file_bytes
         view = memoryview(bytearray(min(chunk_bytes, remaining)))
         while remaining:
+            if checkpoint is not None:
+                checkpoint()
             count = min(len(view), remaining)
             offset = 0
             while offset < count:
@@ -260,6 +267,8 @@ class PcmWavReader:
                 offset += received
             digest.update(view[:count])
             remaining -= count
+        if checkpoint is not None:
+            checkpoint()
         if self._handle.read(1):
             msg = "WAV has extra data after the declared EOF"
             raise wave.Error(msg)

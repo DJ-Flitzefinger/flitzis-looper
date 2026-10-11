@@ -55,8 +55,8 @@ and each subscriber's fresh own ACK without another inference call. Explicit
 Generate may prepare an incompatible set through the existing worker admission;
 passive lookup cannot turn UNKNOWN into compatible provenance.
 
-The bounded supported Demucs path captures 32 exact files: its checkpoint,
-15 package model/config/load/runtime files, seven host transform/entry files, the
+The bounded supported Demucs path captures 37 exact files: its checkpoint,
+15 package model/config/load/runtime files, twelve host transform/entry files, the
 shared FFmpeg executable plus seven adjacent DLLs and adjacent ffprobe executable.
 The checkpoint must match the actual Torch Hub path. The stock AudioFile probe
 and decode arguments are retained, with captured absolute tool launches so a
@@ -74,10 +74,10 @@ producer compatibility UNKNOWN. An exclusively created execution record is bound
 by its actual file identity and body SHA; scanning a well-formed sidecar does not
 supply birth or execution authority.
 
-The supported BS path captures 28 exact files: checkpoint/config, eight vendor
-implementation files, nine host artifact/generation/provenance/entry files, the shared
+The supported BS path captures 33 exact files: checkpoint/config, eight vendor
+implementation files, fourteen host artifact/generation/provenance/entry files, the shared
 FFmpeg executable and seven DLLs, and adjacent ffprobe executable. Native holds
-and fully verifies these files within the existing bounded 32-file guard. The
+and fully verifies these files within the bounded 64-file guard. The
 actual probe and decode tools launch captured absolute paths with unchanged
 arguments; both actual child processes must supply matching loaded-module
 path/FileID/extent observations. The child exclusively creates its bounded input
@@ -88,8 +88,10 @@ racing observations remain UNKNOWN. Its package/Python/platform compatibility
 policy and narrow OS module policy have the same explicit limits as Demucs;
 capturing a source file is not proof of neural/model execution.
 
-Both file sets include `processing_code.py` and the guarded empty host package
-`flitzis_looper/__init__.py`; both fit Native's 32-file limit. Held local source
+Both file sets include `processing_code.py`, `controller/stem_process.py`,
+`analysis/process.py`, `analysis/windows_job.py`, `analysis/contracts.py`,
+`stem_cancellation.py` and the guarded empty host package
+`flitzis_looper/__init__.py`; both fit Native's 64-file limit. Held local source
 is compiled without executing/importing it and compared with the actual relevant
 loaded functions, classes, methods/properties, defaults, constants, imported
 aliases and supported decorators. This includes a contextmanager wrapper's real

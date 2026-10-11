@@ -512,6 +512,17 @@ pub(super) fn capture_prepared_source(
         .pad_request_ids
         .lock()
         .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+    capture_prepared_source_under_request_lock(engine, id, source_version, requests[id])
+}
+
+/// The caller retains the pad request mutex through its own admission check.
+/// Both ordinary capture and offline-stem handoff use this publication kernel.
+pub(super) fn capture_prepared_source_under_request_lock(
+    engine: &AudioEngine,
+    id: usize,
+    source_version: String,
+    request_id: u64,
+) -> PyResult<PreparedSourceTicket> {
     // Reconciliation may adopt an ACKed resident window into the control cache.
     // Capture that window after reconciliation, under the same request guard.
     let timing = input_runtime_binding::capture_under_request_lock(engine, id)?;
@@ -543,7 +554,7 @@ pub(super) fn capture_prepared_source(
             "source content does not match loaded source",
         ));
     }
-    if requests[id] == 0 || generations[id].0 == 0 || generations[id].1 == 0 {
+    if request_id == 0 || generations[id].0 == 0 || generations[id].1 == 0 {
         return Err(PyValueError::new_err("loaded source identity unavailable"));
     }
     if !timing.current() {
@@ -563,7 +574,7 @@ pub(super) fn capture_prepared_source(
     });
     Ok(PreparedSourceTicket {
         id,
-        request_id: requests[id],
+        request_id,
         sample,
         sample_rate_hz: generations[id].1,
         source_version,

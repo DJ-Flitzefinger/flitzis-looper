@@ -191,7 +191,6 @@ def test_set_demucs_quality_rejects_invalid_values(
 @pytest.mark.parametrize(
     ("field_name", "expected"),
     [
-        ("active_sample_ids", "playing"),
         ("loading_sample_ids", "loading"),
         ("analyzing_sample_ids", "another pad task"),
         ("stem_generating_sample_ids", "already running"),
@@ -240,11 +239,11 @@ def test_stem_generation_block_reason_reports_non_io_gate(
     controller: AppController, tmp_path: Path
 ) -> None:
     _load_project_sample(controller, tmp_path)
-    controller.session.active_sample_ids.add(0)
+    controller.session.loading_sample_ids.add(0)
 
     blocker = controller.stems.stem_generation_block_reason(0)
 
-    assert blocker == "Cannot generate stems while the pad is playing"
+    assert blocker == "Cannot generate stems while the pad is loading"
 
 
 def test_stem_grid_indicator_state_uses_session_and_project_snapshots(
@@ -254,7 +253,7 @@ def test_stem_grid_indicator_state_uses_session_and_project_snapshots(
 
     _load_project_sample(controller, tmp_path)
     controller.session.active_sample_ids.add(0)
-    assert controller.stems.stem_grid_indicator_state(0) == "blocked"
+    assert controller.stems.stem_grid_indicator_state(0) is None
 
     controller.session.stem_generation_errors[0] = "failed"
     assert controller.stems.stem_grid_indicator_state(0) == "error"
@@ -315,18 +314,22 @@ def test_stem_backend_success_publishes_prepared_stems(
     assert 0 not in controller.session.stem_generating_sample_ids
 
 
-def test_stem_publication_retains_admission_ticket_when_timing_changes(
+def test_stem_publication_uses_fresh_permit_and_fails_closed_on_timing_rejection(
     controller: AppController, audio_engine_mock: Mock, tmp_path: Path
 ) -> None:
     _load_project_sample(controller, tmp_path)
     ticket = FakePreparedSourceTicket()
     audio_engine_mock.capture_prepared_source.return_value = ticket
     assert controller.stems.generate_stems_async(0) is True
+    source = controller.stems._generation_sources[0]
+    audio_engine_mock.capture_prepared_stem_source.assert_not_called()
+    audio_engine_mock.capture_prepared_source.assert_not_called()
     audio_engine_mock.publish_prepared_stems.side_effect = ValueError("stale timing publication")
 
     controller.stems.on_frame_render()
 
     version = source_version_for_sample_path("samples/loop.wav")
+    audio_engine_mock.capture_prepared_stem_source.assert_called_once_with(0, source)
     audio_engine_mock.capture_prepared_source.assert_called_once_with(0, version)
     attempted_cache_dir = audio_engine_mock.publish_prepared_stems.call_args.args[2]
     assert Path(attempted_cache_dir).name.startswith(".ready-")
@@ -502,13 +505,16 @@ def test_same_source_reload_does_not_accept_old_job_completion(
     _load_project_sample(controller, tmp_path)
     targets: list[Callable[[], None]] = []
     controller.stems._stem_task_runner = targets.append
-    old_ticket, current_ticket = FakePreparedSourceTicket(), FakePreparedSourceTicket()
-    audio_engine_mock.capture_prepared_source.side_effect = [old_ticket, current_ticket]
+    current_ticket = FakePreparedSourceTicket()
+    audio_engine_mock.capture_prepared_source.return_value = current_ticket
     assert controller.stems.generate_stems_async(0) is True
+    old_source = controller.stems._generation_sources[0]
     original_version = controller.session.stem_generation_source_versions[0]
     controller.loader.unload_sample(0)
     _load_project_sample(controller, tmp_path)
     assert controller.stems.generate_stems_async(0) is True
+    current_source = controller.stems._generation_sources[0]
+    assert current_source.source_generation != old_source.source_generation
     assert controller.session.stem_generation_source_versions[0] == original_version
 
     targets[0]()
@@ -517,15 +523,17 @@ def test_same_source_reload_does_not_accept_old_job_completion(
     assert 0 in controller.session.stem_generating_sample_ids
     assert controller.session.stem_generation_source_versions[0] == original_version
     assert stem_backend.requests == []
+    audio_engine_mock.capture_prepared_stem_source.assert_not_called()
     audio_engine_mock.publish_prepared_stems.assert_not_called()
     targets[1]()
     controller.stems.on_frame_render()
     assert stem_backend.requests == []
-    targets[2]()  # Newly admitted inference, using only the current source ticket.
+    targets[2]()  # Newly admitted inference, followed by a fresh own publication permit.
     controller.stems.on_frame_render()
     audio_engine_mock.publish_prepared_stems.assert_called_once_with(
         0, original_version, _published_cache_dir(controller), current_ticket
     )
+    audio_engine_mock.capture_prepared_stem_source.assert_called_once_with(0, current_source)
     assert not stem_backend.requests[0].cache_dir.exists()
 
 
@@ -608,8 +616,8 @@ def test_stem_generation_fails_closed_when_admission_fails(
     failure: BaseException | None,
 ) -> None:
     _load_project_sample(controller, tmp_path)
-    audio_engine_mock.capture_prepared_source.side_effect = failure
-    audio_engine_mock.capture_prepared_source.return_value = None
+    audio_engine_mock.capture_offline_stem_source.side_effect = failure
+    audio_engine_mock.capture_offline_stem_source.return_value = None
 
     assert controller.stems.generate_stems_async(0) is False
 
@@ -627,7 +635,7 @@ def test_stem_generation_requires_native_admission_api(
     tmp_path: Path,
 ) -> None:
     _load_project_sample(controller, tmp_path)
-    del audio_engine_mock.capture_prepared_source
+    del audio_engine_mock.capture_offline_stem_source
 
     assert controller.stems.generate_stems_async(0) is False
 

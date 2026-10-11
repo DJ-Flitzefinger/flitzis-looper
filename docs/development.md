@@ -704,10 +704,11 @@ acceptance, whose gates remain open.
 Do not confuse generated runtime data with source documentation or OpenSpec.
 
 Supported stem producer reuse also requires execution to match the guarded local
-sources. The current Demucs32/BS28 file sets include the bounded loaded-code
-policy and empty host package initializer. Parent verification compares actual
-relevant code, supported wrappers/defaults/constants/import aliases with compiled
-held source. Captured package roots enter the immutable worker request, come
+sources. The current Demucs37/BS33 file sets fit Native's bounded 64-file guard and
+include the bounded loaded-code policy and empty host package initializer. Parent
+verification compares actual relevant code, supported wrappers/defaults/constants/
+import aliases with compiled held source. Captured package roots enter the
+immutable worker request, come
 first in child `PYTHONPATH` with `PYTHONSAFEPATH=1`, and each attempt owns a fresh
 empty bytecode namespace with writes disabled. Required unsupported bindings or
 stale code leave compatibility UNKNOWN. Keep normal dependency-version/OS policy
