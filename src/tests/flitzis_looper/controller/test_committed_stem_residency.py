@@ -63,7 +63,9 @@ class _ResidencyReceipt:
     def effective_mode_status(self) -> str:
         if self.status_error is not None:
             raise self.status_error
-        return self.effective
+        # Native launch-currentness invalidates observation independently from
+        # accepted component publication and retained reader ownership.
+        return self.effective if self.current else "rejected"
 
     def effective_failure_reason(self) -> str | None:
         return self.failure_reason
@@ -448,6 +450,9 @@ def test_obsolete_accepted_receipt_becomes_unconfirmed_without_automatic_retry(
     residency.audio.request_committed_stem_residency.side_effect = [obsolete, fresh]
     assert residency.helper.request(0, "all_stems", 15)
     obsolete.current = False
+    assert obsolete.residency_status() == "accepted"
+    assert obsolete.effective_mode_status() == "rejected"
+    assert obsolete.effective_failure_reason() is None
 
     for _ in range(3):
         residency.helper.poll()
@@ -457,10 +462,13 @@ def test_obsolete_accepted_receipt_becomes_unconfirmed_without_automatic_retry(
     assert status.residency is None
     assert status.effective is None
     assert status.requested_mode is None
+    assert status.desired_mode is None
+    assert status.effective_stem_set_identity is None
     assert not residency.errors
     assert residency.audio.request_committed_stem_residency.call_count == 1
     assert obsolete.reader_active
     assert registration.cancellations == obsolete.cancellations == 0
+    assert registration.current
 
     assert residency.helper.request(0, "all_stems", 15)
     status = residency.helper.status(0)

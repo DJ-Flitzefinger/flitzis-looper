@@ -12,6 +12,7 @@ from flitzis_looper.models import StemCacheEntry
 from flitzis_looper.stem_pair_selection import StemPairSelection
 
 if TYPE_CHECKING:
+    from flitzis_looper.models import StemMixMode
     from flitzis_looper_audio import AudioEngine, PreparedSourceTicket, PreparedStemPair
 
 
@@ -54,7 +55,9 @@ class _OwnReceipt:
         return self.residency
 
     def effective_mode_status(self) -> str:
-        return self.effective
+        # A later ordinary Play loses the old receipt's launch permit. Its own
+        # accepted component ACK and callback-held readers remain independent.
+        return self.effective if self.current else "rejected"
 
     def effective_failure_reason(self) -> str | None:
         return self.failure_reason
@@ -627,3 +630,173 @@ def test_another_pads_own_ack_never_promotes_this_pad(adoption: _Harness) -> Non
     assert first_status.effective_stem_set_identity == "c" * 64
     assert second_status.effective_stem_set_identity == "b" * 64
     assert second_status.effective == "waiting"
+
+
+@pytest.mark.parametrize("effective", ["waiting", "effective"])
+def test_accepted_v2_launch_loss_needs_explicit_same_all_receipt(
+    adoption: _Harness, effective: str
+) -> None:
+    predecessor = adoption.effective_v1()
+    obsolete = _OwnReceipt(residency="accepted", effective=effective, owned_claim=True)
+    fresh = _OwnReceipt()
+    adoption.audio.receipts.extend((obsolete, fresh))
+    adoption.bind("c", active=False)
+    installed = adoption.audio.candidates[-1]
+    assert adoption.helper.request(0, "all_stems", 15)
+    adoption.helper.poll()
+    status = adoption.helper.status(0)
+    assert status is not None
+    assert status.control_stem_set_identity == "c" * 64
+    adoption.errors.clear()
+
+    # Declared Native launch loss, rather than an actual transport/audio proof:
+    # accepted remains true, but a new Play cannot borrow the old output receipt.
+    obsolete.current = False
+    assert obsolete.claimed()
+    assert obsolete.residency_status() == "accepted"
+    assert obsolete.effective_mode_status() == "rejected"
+    assert obsolete.effective_failure_reason() is None
+    for _ in range(3):
+        adoption.helper.poll()
+
+    status = adoption.helper.status(0)
+    assert status is not None
+    assert status.registration == "accepted"
+    assert status.disk_stem_set_identity == status.control_stem_set_identity == "c" * 64
+    assert status.residency is status.effective is status.requested_mode is None
+    assert status.effective_stem_set_identity is status.attempt_stem_set_identity is None
+    assert status.desired_mode is None
+    assert not adoption.errors
+    assert len(adoption.audio.admissions) == 2
+    assert predecessor.cancellations == installed.cancellations == obsolete.cancellations == 0
+    assert obsolete.withdrawals == 0
+    assert obsolete.reader_active
+    assert installed.reader_active
+    assert installed.current
+
+    assert adoption.helper.request(0, "all_stems", 15)
+    assert adoption.audio.admissions[-1] == (installed, "all_stems", 15)
+    assert len(adoption.audio.admissions) == 3
+    assert not adoption.audio.receipts
+    status = adoption.helper.status(0)
+    assert status is not None
+    assert status.residency == "pending"
+    assert status.effective == "waiting"
+    assert status.effective_stem_set_identity is None
+    assert not fresh.claimed()
+    assert not adoption.errors
+    adoption.helper.poll()
+    assert len(adoption.audio.admissions) == 3
+
+
+def test_v2_launch_loss_before_first_poll_keeps_callback_installed_control(
+    adoption: _Harness,
+) -> None:
+    predecessor = adoption.effective_v1()
+    installed_receipt = _OwnReceipt()
+    adoption.audio.receipts.append(installed_receipt)
+    adoption.bind("c", active=False)
+    installed = adoption.audio.candidates[-1]
+    assert adoption.helper.request(0, "all_stems", 15)
+
+    # Callback ACK and then Play occur before controller observation, so the
+    # pending selection is still marked candidate in the controller.
+    installed_receipt.residency = "accepted"
+    installed_receipt.owned_claim = True
+    installed_receipt.current = False
+    adoption.helper.poll()
+    adoption.helper.poll()
+
+    status = adoption.helper.status(0)
+    assert status is not None
+    assert status.control_stem_set_identity == status.disk_stem_set_identity == "c" * 64
+    assert status.effective_stem_set_identity is None
+    assert status.residency is status.effective is status.requested_mode is None
+    assert status.desired_mode is None
+    assert len(adoption.audio.admissions) == 2
+    assert not adoption.errors
+    assert predecessor.cancellations == installed.cancellations == 0
+    assert installed_receipt.cancellations == installed_receipt.withdrawals == 0
+    assert installed.current
+    assert installed.reader_active
+    assert installed_receipt.reader_active
+
+    # Retained normal control authority routes a fresh explicit FullMix through
+    # V2, even though its earlier stopped output observation was withdrawn.
+    assert adoption.helper.request(0, "full_mix", 15)
+    assert adoption.audio.admissions[-1] == (installed, "full_mix", 15)
+    assert len(adoption.audio.admissions) == 3
+
+
+@pytest.mark.parametrize(("mode", "mask"), [("all_stems", 15), ("all_stems", 5), ("full_mix", 9)])
+def test_obsolete_installed_v2_preserves_newer_desired_intent_and_target(
+    adoption: _Harness, mode: str, mask: int
+) -> None:
+    predecessor = adoption.effective_v1()
+    second = _OwnReceipt(owned_claim=True)
+    latest = _OwnReceipt(owned_claim=True)
+    adoption.audio.receipts.extend((second, latest))
+    adoption.bind("c", active=True)
+    installed = adoption.audio.candidates[-1]
+    assert adoption.helper.request(0, "all_stems", 15)
+    adoption.bind("d", active=True)
+    assert adoption.helper.request(0, cast("StemMixMode", mode), mask)
+    assert len(adoption.audio.admissions) == 2
+
+    # V2's claim delayed V3 and the explicit new intent. A later callback ACK
+    # followed by Play revokes only V2's observation, not that queued gesture.
+    second.residency = "accepted"
+    second.current = False
+    adoption.helper.poll()
+    expected = adoption.audio.candidates[-1] if mode == "all_stems" else installed
+    assert adoption.audio.admissions[-1] == (expected, mode, mask)
+    assert len(adoption.audio.admissions) == 3
+    assert len(adoption.audio.candidates) == (2 if mode == "all_stems" else 1)
+    assert latest.claimed()
+    assert latest.current
+    for _ in range(3):
+        adoption.helper.poll()
+
+    status = adoption.helper.status(0)
+    assert status is not None
+    assert status.control_stem_set_identity == "c" * 64
+    assert status.disk_stem_set_identity == "d" * 64
+    assert status.attempt_stem_set_identity == ("d" if mode == "all_stems" else "c") * 64
+    assert status.requested_mode == status.desired_mode == mode
+    assert status.residency == "pending"
+    assert status.effective == "waiting"
+    assert status.effective_stem_set_identity is None
+    assert len(adoption.audio.admissions) == 3
+    assert not adoption.errors
+    assert predecessor.cancellations == installed.cancellations == 0
+    assert second.cancellations == latest.cancellations == 0
+    assert latest.withdrawals == 0
+
+
+def test_native_preparation_failure_is_not_soft_cleared_after_launch_loss(
+    adoption: _Harness,
+) -> None:
+    predecessor = adoption.effective_v1()
+    failed = _OwnReceipt(residency="accepted", effective="transitioning", owned_claim=True)
+    adoption.audio.receipts.append(failed)
+    adoption.bind("c", active=True)
+    installed = adoption.audio.candidates[-1]
+    assert adoption.helper.request(0, "all_stems", 15)
+    adoption.helper.poll()
+    failed.current = False
+    failed.failure_reason = "native-preparation-failed"
+    failed.message = "Committed stem effective mode Native preparation failed"
+    for _ in range(3):
+        adoption.helper.poll()
+
+    status = adoption.helper.status(0)
+    assert status is not None
+    assert status.control_stem_set_identity == "c" * 64
+    assert status.residency == "accepted"
+    assert status.effective == "rejected"
+    assert status.requested_mode == status.desired_mode == "all_stems"
+    assert adoption.errors[-1] == (0, failed.message)
+    assert len(adoption.audio.admissions) == 2
+    assert predecessor.cancellations == installed.cancellations == failed.cancellations == 0
+    assert failed.withdrawals == 0
+    assert failed.reader_active

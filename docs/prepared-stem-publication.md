@@ -611,3 +611,47 @@ unchanged Release build/import and Python checks are reused. Full task3.2 and al
 following product, resource and Human acceptance gates remain open.
 Official strict validation, formatting, Markdown link/whitespace checks and one
 independent nonauthor final review pass; that review found no concrete issue.
+
+### Stopped new-set replacement and ordinary Play
+
+The live controller now withdraws an accepted receipt whose launch authority
+became obsolete before classifying its rejected output observation as an adoption
+failure. This reuses the existing accepted-receipt withdrawal path. The installed
+V2 control and immutable readers remain available; cached effectiveness and the
+obsolete implicit intent are cleared. Polling starts no implicit retry. A new
+explicit ALL gesture requests its own receipt even for the same mode and mask.
+Newer explicit intent/target and genuine Native preparation failures remain
+observable under their existing claim and retry rules.
+
+The productive Release proof uses real distinguishable V1/V2 WAVs, a fenced
+durable V2 selection and reopen, and actual own Capture/worker/Adopt while stopped.
+V2 acceptance reports waiting without audible effectiveness. Two cases invoke
+the ordinary `TransportController.playback.trigger_pad_keep_others()` path either
+after controller observation or immediately after the callback ACK, before its
+first poll. Play takes its own resident-window ACK and actual queued launch. Both
+retain the exact V2 complete-set/component owners and reuse the resident window
+without another read. This ordinary Play starts a new voice and clock; the test
+claims no continuity across that start.
+
+From the new Play, every rendered sample, source phase and FIFO is compared with
+independently retained complete PCM. Separate algebraic component interpolation,
+raw Native input/output and uninterrupted per-frame EQ oracles verify nonneutral
+V2 output. That audio cannot confirm the old stopped receipt. A subsequent equal
+public ALL request performs fresh own Capture/worker/Adopt and confirms its own
+effective output while retaining those same V2 readers.
+
+Seven new controller cases cover accepted waiting/effective observations, ACK
+before the first poll, newer ALL/changed-mask/FullMix intent and genuine Native
+preparation failure. Their declared receipt doubles model Native launch loss;
+they do not claim transport or audio evidence. The genuine two-case Release test
+passes in5.06s (compile2m06s), and both final controller suites pass61 tests in0.27s.
+The affected public Native file passes3 tests in19.72s; impacted stem/intent/
+publication/transport integration passes180 tests in116.49s. Full source Ruff,
+format271 and Mypy270, strict validation, five relative-file links, whitespace and
+current-Python Release import preflight pass. Package Clippy for tests exits0 with
+the existing63 warnings (one duplicate), none in this changed Rust test. One
+independent nonauthor final review finds no concrete issue. Native production is
+unchanged; the existing build-only Release runtime is reused with current Python,
+without installing an extension or changing the Human App.
+Paused-first adoption, the rest of task3.2, additional domains3.3, L4 and all later
+product/resource/Human acceptance gates remain open.

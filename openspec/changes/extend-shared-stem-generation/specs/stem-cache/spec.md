@@ -150,6 +150,13 @@ immediate change SHALL NOT silently discard the command.
 - **THEN** own residency acceptance SHALL remain distinct from effective output
 - **AND** paused transition SHALL advance only on resumed source consumption and stopped readiness SHALL report no audible success
 
+#### Scenario: Ordinary Play supersedes a stopped candidate's accepted observation
+- **GIVEN** a new complete set was installed with its own stopped residency acceptance but no audible effectiveness
+- **WHEN** an ordinary authorized Play changes launch authority while retaining those installed readers
+- **THEN** the controller SHALL withdraw the obsolete accepted observation without reporting a candidate adoption failure or borrowing its effectiveness for the new voice
+- **AND** polling SHALL NOT submit an implicit replacement operation; a later explicit ALL gesture SHALL request fresh own residency and effective-output authority even for the same mode and mask
+- **AND** genuine Native preparation failure or unaccepted candidate rejection SHALL remain observable and require explicit retry
+
 #### Scenario: Later candidate arrives during an owned handover
 - **GIVEN** V2 has been claimed and V1 remains the outgoing reader
 - **WHEN** disk candidate V3 or a new mode or mask intent arrives

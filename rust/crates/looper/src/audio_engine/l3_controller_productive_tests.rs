@@ -8,6 +8,8 @@ const CHILD: &str = "FLITZI_L3_CONTROLLER_CANDIDATE_CHILD";
 const TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_first_and_replacement_candidates_keep_own_wet_chronology";
 const VARISPEED_CHILD: &str = "FLITZI_L3_CONTROLLER_VARISPEED_CHILD";
 const VARISPEED_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_keylock_off_first_and_replacement_keep_varispeed_feed_and_eq";
+const STOPPED_NEW_SET_CHILD: &str = "FLITZI_L3_CONTROLLER_STOPPED_NEW_SET_CHILD";
+const STOPPED_NEW_SET_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_stopped_replacement_play_then_fresh_all_uses_own_wet_receipt";
 
 fn v2_files(
     engine: &AudioEngine,
@@ -60,6 +62,60 @@ fn v2_files(
     );
     assert_complete_selection(root, &selection(&pair));
     (pair, source)
+}
+
+fn commit_candidate_v2(
+    engine: &AudioEngine,
+    root: &Path,
+    version: &str,
+    original_reference: &str,
+    frames: usize,
+    locals: &Py<PyDict>,
+) {
+    let (v2, source_ticket) = v2_files(engine, root, version, original_reference, frames);
+    Python::attach(|py| {
+        locals
+            .bind(py)
+            .set_item("candidate_json", v2.selection_json().to_owned())
+            .unwrap();
+        locals
+            .bind(py)
+            .set_item("prepared_v2", Py::new(py, v2).unwrap())
+            .unwrap();
+        locals
+            .bind(py)
+            .set_item("source_v2", Py::new(py, source_ticket).unwrap())
+            .unwrap();
+    });
+    controller_python(
+        locals,
+        r#"
+disk_v2 = StemPairSelection.model_validate_json(candidate_json)
+assert disk_v2 != disk_v1
+entry_v1 = project.stem_cache[0]
+entry_v2 = StemCacheEntry(source_version=fixture['source_version'], cache_dir=disk_v2.wav_generation,
+    stems=expected_stem_files(disk_v2.wav_generation), pair=disk_v2, available=True)
+# Both real complete assignment owners survive the actual fenced config replacement.
+owner_v1 = audio.acquire_project_asset_lease(str(Path(entry_v1.cache_dir).absolute()))
+owner_v2 = audio.acquire_project_asset_lease(str(Path(entry_v2.cache_dir).absolute()))
+persistence.commit_stem_selection(0, entry_v1, entry_v2,
+    lambda: project.stem_cache[0] is entry_v1 and source_v2.same_source_request(
+        audio.capture_prepared_source(0, fixture['source_version'])))
+reopened = ProjectPersistence.from_config_path(persistence.config_path)
+assert reopened.load_error is None
+assert reopened.project.stem_cache[0].pair == disk_v2
+project.stem_cache[0] = entry_v2
+prepared_v2.select()
+controller._register_committed_pair(0, prepared_v2, source_v2)
+live = controller._committed_residency._live_selections[0]
+assert live.control is previous_control and live.attempt is None
+assert live.disk.selection.ticket.publication_status() == 'accepted'
+assert previous_control.ticket.is_current()
+status = controller.stem_residency_status(0)
+assert status.disk_stem_set_identity == disk_v2.stem_set_identity
+assert status.control_stem_set_identity == disk_v1.stem_set_identity
+"#,
+    );
 }
 
 fn complete_reference(
@@ -577,7 +633,167 @@ assert not session.stem_generation_errors, session.stem_generation_errors
     assert!(new_owner.strong_count() < held_counts.1);
 }
 
-fn round_trip(selected_v1: bool, delete_pause: Option<bool>, key_lock: bool) {
+fn stopped_adopt(
+    engine: &AudioEngine,
+    locals: &Py<PyDict>,
+    callback: &mut Callback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    name: &str,
+) {
+    assert!(!callback.mixer.voices.iter().any(|voice| voice.active));
+    assert_eq!(callback.drain(consumer), 1, "stopped own Capture");
+    wait_until(|| {
+        consumer.peek().is_ok()
+            || controller_ticket_status(locals, name, "residency_status") == "rejected"
+    });
+    assert_eq!(callback.drain(consumer), 1, "stopped own Adopt");
+    callback.mixer.finish_committed_stem_mode(0);
+    reconcile(engine).unwrap();
+    assert_eq!(
+        controller_ticket_status(locals, name, "residency_status"),
+        "accepted"
+    );
+    assert_eq!(
+        controller_ticket_status(locals, name, "effective_mode_status"),
+        "waiting"
+    );
+    assert!(!callback.mixer.voices.iter().any(|voice| voice.active));
+}
+
+fn stopped_candidate_play(
+    locals: &Py<PyDict>,
+    callback: &mut Callback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    before_poll: bool,
+) {
+    let source = callback.mixer.bank_for_measurement()[0].clone().unwrap();
+    let set = callback.mixer.stems_for_measurement()[0].clone().unwrap();
+    Python::attach(|py| {
+        locals
+            .bind(py)
+            .set_item("before_poll", before_poll)
+            .unwrap()
+    });
+    controller_python(
+        locals,
+        r#"
+assert stopped.residency_status() == 'accepted' and stopped.is_current()
+assert stopped.effective_mode_status() == 'waiting' and stopped.claimed()
+assert stopped.effective_failure_reason() is None and stopped.error() is None
+if not before_poll:
+    controller.on_frame_render()
+    assert live.control is live.disk.selection and live.attempt is None
+else:
+    assert live.control is previous_control and live.attempt is live.disk.selection
+from flitzis_looper.controller.transport import TransportController
+class ReadyTransportAudio:
+    def __getattr__(self, name):
+        return getattr(playback_audio, name)
+    def play_sample(self, *args, **kwargs):
+        raise AssertionError('ordinary Play must use its own resident window ACK')
+    play_sample_exclusive = play_sample
+project.pad_loop_auto[0] = False
+project.pad_loop_start_s[0] = 17 / fixture['rate']
+project.pad_loop_end_s[0] = 1517 / fixture['rate']
+project.pad_key_lock[0] = True
+transport = TransportController(project, session, ReadyTransportAudio())
+transport.playback.trigger_pad_keep_others(0)
+ready_start = transport.residency._pending[0].ticket
+assert ready_start is not None and ready_start.publication_status() == 'pending'
+assert not stopped.is_current() and stopped.effective_mode_status() == 'rejected'
+controller.on_frame_render()
+assert live.control is live.disk.selection and live.attempt is None
+assert not live.control.candidate and live.control.ticket.is_current()
+assert live.control.receipt is None and live.control.receipt_intent is None
+assert live.control.desired is None and live.desired is None
+status = controller.stem_residency_status(0)
+assert status.control_stem_set_identity == disk_v2.stem_set_identity
+assert status.effective is None and status.effective_stem_set_identity is None
+assert project.pad_stem_mix_mode[0] == 'all_stems'
+assert not session.stem_generation_errors, session.stem_generation_errors
+"#,
+    );
+    assert!(matches!(
+        consumer.peek(),
+        Ok(ControlMessage::RelocateResident(_))
+    ));
+    assert_eq!(callback.drain(consumer), 1, "ordinary Play window ACK");
+    assert!(Arc::ptr_eq(
+        &source.samples,
+        &callback.mixer.bank_for_measurement()[0]
+            .as_ref()
+            .unwrap()
+            .samples
+    ));
+    let actual = callback.mixer.stems_for_measurement()[0].as_ref().unwrap();
+    assert!(Arc::ptr_eq(
+        &set.complete_set_identity,
+        &actual.complete_set_identity
+    ));
+    for (before, after) in set.stems.iter().zip(&actual.stems) {
+        assert!(Arc::ptr_eq(&before.samples, &after.samples));
+    }
+    Python::attach(|py| {
+        let ready = locals.bind(py).get_item("ready_start").unwrap().unwrap();
+        let ready = ready
+            .extract::<PyRef<crate::audio_engine::resident_relocation::ResidentWindowTicket>>()
+            .unwrap();
+        assert!(
+            ready.read_observation_for_test().is_none(),
+            "Play reused exact ready window"
+        );
+    });
+    controller_python(
+        locals,
+        "transport.on_frame_render()\nassert transport.residency.status(0)[1] is None",
+    );
+    assert!(matches!(
+        consumer.peek(),
+        Ok(ControlMessage::TriggerInputPad {
+            resident_control: Some(_),
+            ..
+        })
+    ));
+    assert_eq!(callback.drain(consumer), 1, "ordinary Play launch");
+    controller_python(
+        locals,
+        r#"
+session.active_sample_ids.add(0)
+for _ in range(16):
+    controller.on_frame_render()
+assert live.control.receipt is None
+assert controller.stem_residency_status(0).effective is None
+assert not session.stem_generation_errors, session.stem_generation_errors
+assert audio.worker_call_count() == 1
+"#,
+    );
+    assert!(
+        consumer.is_empty(),
+        "poll cannot implicitly retry obsolete ALL"
+    );
+    assert!(
+        callback
+            .mixer
+            .voices
+            .iter()
+            .any(|voice| voice.active && voice.sample_id == 0)
+    );
+    let actual = callback.mixer.stems_for_measurement()[0].as_ref().unwrap();
+    assert!(Arc::ptr_eq(
+        &set.complete_set_identity,
+        &actual.complete_set_identity
+    ));
+    for (before, after) in set.stems.iter().zip(&actual.stems) {
+        assert!(Arc::ptr_eq(&before.samples, &after.samples));
+    }
+}
+
+fn round_trip(
+    selected_v1: bool,
+    delete_pause: Option<bool>,
+    key_lock: bool,
+    stopped_before_poll: Option<bool>,
+) {
     assert!(key_lock || delete_pause.is_none());
     let previous_cwd = std::env::current_dir().unwrap();
     let mut h = long_harness();
@@ -662,6 +878,19 @@ fn round_trip(selected_v1: bool, delete_pause: Option<bool>, key_lock: bool) {
             .set_item("input_json", serde_json::to_string(&fixture).unwrap())
             .unwrap();
         locals.set_item("selected_v1", selected_v1).unwrap();
+        locals
+            .set_item(
+                "playback_audio",
+                Py::new(
+                    py,
+                    ReadyPlaybackAudio {
+                        engine: engine.clone(),
+                        producer: h.producer.clone(),
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
         locals
             .set_item(
                 "audio",
@@ -751,6 +980,137 @@ persistence.flush()
     h.callback.mixer.set_speed(ratio);
     assert_eq!(h.callback.mixer.key_lock_for_measurement(0), key_lock);
     h.callback.mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
+    if let Some(before_poll) = stopped_before_poll {
+        assert!(key_lock && !selected_v1 && delete_pause.is_none());
+        controller_python(
+            &locals,
+            "assert controller.set_stem_mix_mode(0, 'all_stems')\nv1_stopped = previous_control.receipt",
+        );
+        stopped_adopt(
+            &engine,
+            &locals,
+            &mut h.callback,
+            &mut h.consumer,
+            "v1_stopped",
+        );
+        controller_python(
+            &locals,
+            "controller.on_frame_render()\nassert controller.stem_residency_status(0).effective_stem_set_identity is None",
+        );
+        let v1 = h.callback.mixer.stems_for_measurement()[0].clone().unwrap();
+        commit_candidate_v2(
+            &engine,
+            &h.root,
+            &h.version,
+            &h.wav_reference,
+            full.frame_count(),
+            &locals,
+        );
+        controller_python(
+            &locals,
+            "assert controller.set_stem_mix_mode(0, 'all_stems')\nstopped = live.attempt.receipt\nassert stopped is not v1_stopped",
+        );
+        stopped_adopt(
+            &engine,
+            &locals,
+            &mut h.callback,
+            &mut h.consumer,
+            "stopped",
+        );
+        let v2 = h.callback.mixer.stems_for_measurement()[0].clone().unwrap();
+        assert!(!Arc::ptr_eq(
+            &v1.complete_set_identity,
+            &v2.complete_set_identity
+        ));
+        for (before, after) in v1.stems.iter().zip(&v2.stems) {
+            assert!(!Arc::ptr_eq(&before.samples, &after.samples));
+        }
+        stopped_candidate_play(&locals, &mut h.callback, &mut h.consumer, before_poll);
+        let mut reference = complete_reference(&full, &full_stems, ratio, true);
+        // Stopped V2 is already selected before this new ordinary voice starts.
+        // Physical V2 mask1010 equals complete independent V1 mask0011.
+        reference.stop_sample(0);
+        assert!(reference.set_stem_enabled_mask(0, 0b0011, full_stems.source_version_hash));
+        assert!(reference.set_stem_mix_mode(
+            0,
+            StemMixMode::AllStems,
+            full_stems.source_version_hash
+        ));
+        assert!(reference.play_sample_at_output_frame(0, 1.0, 0));
+        let mut playback = ControllerPlayback {
+            callback: h.callback,
+            reference,
+            full_mix: complete_reference(&full, &full_stems, ratio, true),
+            frame: 0,
+            source: full.clone(),
+            components: full_stems.stems.clone(),
+            ratio,
+            selection: Some(0b0011),
+            previous: Some(0b0011),
+            ramp_start: 0,
+            raw: Some(ControllerRawNative::new(ratio, false)),
+            candidate: None,
+            filter: controller_filter(),
+        };
+        playback.render(13, true);
+        let (actual, counterfactual) = playback.adopt_native(true);
+        assert!(actual.iter().any(|sample| sample.abs() > 0.001));
+        assert!(
+            actual
+                .iter()
+                .zip(counterfactual)
+                .any(|(actual, full)| (actual - full).abs() > 0.005)
+        );
+        controller_python(
+            &locals,
+            r#"
+controller.on_frame_render()
+assert controller.stem_residency_status(0).effective is None
+assert controller.set_stem_mix_mode(0, 'all_stems')
+fresh = live.control.receipt
+assert fresh is not stopped and fresh.is_current()
+assert fresh.residency_status() in {'captured', 'pending'}
+assert fresh.effective_mode_status() == 'waiting'
+"#,
+        );
+        own_adoption(&mut playback, &mut h.consumer, &locals, "fresh", true);
+        let after = playback.callback.mixer.stems_for_measurement()[0]
+            .as_ref()
+            .unwrap();
+        assert!(Arc::ptr_eq(
+            &v2.complete_set_identity,
+            &after.complete_set_identity
+        ));
+        for (before, after) in v2.stems.iter().zip(&after.stems) {
+            assert!(Arc::ptr_eq(&before.samples, &after.samples));
+        }
+        let mut output = Vec::new();
+        for frames in [1, 31, 137, 257, 777] {
+            output.extend(playback.render(frames, true).0);
+        }
+        assert!(output.iter().any(|sample| sample.abs() > 0.001));
+        controller_python(
+            &locals,
+            r#"
+controller.on_frame_render()
+assert fresh.is_current() and fresh.effective_mode_status() == 'effective'
+assert fresh.effective_failure_reason() is None and fresh.error() is None
+status = controller.stem_residency_status(0)
+assert status.disk_stem_set_identity == disk_v2.stem_set_identity
+assert status.control_stem_set_identity == disk_v2.stem_set_identity
+assert status.effective_stem_set_identity == disk_v2.stem_set_identity
+assert status.effective == 'effective' and not stopped.is_current()
+assert not session.stem_generation_errors, session.stem_generation_errors
+assert audio.worker_call_count() == 1
+controller.shut_down()
+controller._assets.release_saved_assignments()
+owner_v1.release()
+owner_v2.release()
+"#,
+        );
+        std::env::set_current_dir(previous_cwd).unwrap();
+        return;
+    }
     assert!(h.callback.mixer.play_sample_at_output_frame(0, 1.0, 0));
     // A genuinely active other pad contributes zero gain, so the independent pad-0
     // raw oracle can still assert every output sample without hiding other-pad state.
@@ -1010,10 +1370,10 @@ assert controller._stem_worker_pool._executor._max_workers == 2
 fn actual_python_controller_first_and_replacement_candidates_keep_own_wet_chronology() {
     if std::env::var_os(CHILD).is_some() {
         for selected_v1 in [false, true] {
-            round_trip(selected_v1, None, true);
+            round_trip(selected_v1, None, true, None);
         }
         for paused in [false, true] {
-            round_trip(true, Some(paused), true);
+            round_trip(true, Some(paused), true, None);
         }
         return;
     }
@@ -1035,7 +1395,7 @@ fn actual_python_controller_first_and_replacement_candidates_keep_own_wet_chrono
 fn actual_python_controller_keylock_off_first_and_replacement_keep_varispeed_feed_and_eq() {
     if std::env::var_os(VARISPEED_CHILD).is_some() {
         for selected_v1 in [false, true] {
-            round_trip(selected_v1, None, false);
+            round_trip(selected_v1, None, false, None);
         }
         return;
     }
@@ -1047,6 +1407,33 @@ fn actual_python_controller_keylock_off_first_and_replacement_keep_varispeed_fee
     assert!(
         output.status.success(),
         "L3 Varispeed controller child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+}
+
+#[test]
+fn actual_python_controller_stopped_replacement_play_then_fresh_all_uses_own_wet_receipt() {
+    if std::env::var_os(STOPPED_NEW_SET_CHILD).is_some() {
+        for before_poll in [false, true] {
+            round_trip(false, None, true, Some(before_poll));
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            STOPPED_NEW_SET_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(STOPPED_NEW_SET_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 stopped replacement child failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

@@ -409,6 +409,8 @@ class CommittedStemResidency:
         if selection is None or selection.receipt is None:
             return
         receipt = selection.receipt
+        if self._withdraw_accepted_live_receipt(live, selection):
+            return
         if self._failed(receipt):
             live.blocked = True
             self._report_error(sample_id, receipt.error() or "Stem mode adoption rejected")
@@ -421,23 +423,36 @@ class CommittedStemResidency:
                 selection.candidate = False
             return
         if not receipt.is_current():
-            if receipt.residency_status() == "accepted":
-                live.attempt = None
-                selection.receipt = None
-                selection.receipt_intent = None
-                live.desired = None
-            else:
-                live.blocked = True
-                self._report_error(sample_id, receipt.error() or "Stem mode adoption rejected")
+            live.blocked = True
+            self._report_error(sample_id, receipt.error() or "Stem mode adoption rejected")
             return
-        if receipt.residency_status() != "accepted":
-            return
+        if receipt.residency_status() == "accepted":
+            live.control = selection
+            selection.candidate = False
+            if receipt.effective_mode_status() == "effective":
+                live.effective_identity = self._effective_identity(selection)
+                self._report_error(sample_id, None)
+            live.attempt = None
+
+    @staticmethod
+    def _withdraw_accepted_live_receipt(
+        live: _LiveSelection, selection: _CommittedSelection
+    ) -> bool:
+        intent = selection.receipt_intent
+        target = live.disk.selection if intent and intent[0] == "all_stems" else live.control
+        implicit_intent = live.desired == intent and target is selection
+        if not CommittedStemResidency._withdraw_accepted_receipt(selection):
+            return False
+        # The callback installed this set; a later launch invalidates only its
+        # output observation. Retain control, without lending the new voice ACK.
         live.control = selection
         selection.candidate = False
-        if receipt.effective_mode_status() == "effective":
-            live.effective_identity = self._effective_identity(selection)
-            self._report_error(sample_id, None)
-        live.attempt = None
+        if live.attempt is selection:
+            live.attempt = None
+        live.effective_identity = None
+        if implicit_intent:
+            live.desired = None
+        return True
 
     @staticmethod
     def _effective_observed(
