@@ -653,29 +653,19 @@ class InputMappingController(BaseController):
     def _execute_unload_pad(self, key: str) -> bool:
         if (pad_id := _parse_prefixed_sample_id(key, "pad.unload:")) is None:
             return False
-        self._app.loader.unload_sample(pad_id)
+        self._app.performance_confirmation.request("unload", pad_id)
         return True
 
     def _execute_analyze_pad(self, key: str) -> bool:
         if (pad_id := _parse_prefixed_sample_id(key, "pad.analyze:")) is None:
             return False
-        self._app.loader.analyze_sample_async(pad_id)
+        self._app.performance_confirmation.request("analyze", pad_id)
         return True
 
     def _execute_adjust_loop(self, key: str) -> bool:
         if (pad_id := _parse_prefixed_sample_id(key, "pad.adjust_loop:")) is None:
             return False
-        if self._project.sample_paths[pad_id] is None:
-            return True
-
-        session = self._app.session
-        if session.waveform_editor_open and session.waveform_editor_pad_id == pad_id:
-            session.waveform_editor_open = False
-            session.waveform_editor_pad_id = None
-            return True
-
-        session.waveform_editor_open = True
-        session.waveform_editor_pad_id = pad_id
+        self._app.transport.waveform.toggle_editor(pad_id)
         return True
 
     def _execute_tap_bpm(self, key: str) -> bool:

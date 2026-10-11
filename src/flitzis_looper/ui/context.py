@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
     from flitzis_looper.controller import AppController
     from flitzis_looper.controller.current_timing import CurrentPadTiming
+    from flitzis_looper.controller.performance_confirmation import PerformanceConfirmation
     from flitzis_looper.controller.transport.key_lock_status import KeyLockStatus
     from flitzis_looper.models import (
         ProjectState,
@@ -333,13 +334,13 @@ class PadAudioActions:  # noqa: PLR0904 - pad action facade mirrors selected-pad
     def unload_sample(self, pad_id: int) -> None:
         self._controller.input_mapping.perform_learnable_action(
             LooperAction.unload_pad(pad_id),
-            lambda: self._controller.loader.unload_sample(pad_id),
+            lambda: self._controller.performance_confirmation.request("unload", pad_id),
         )
 
     def analyze_sample_async(self, pad_id: int) -> None:
         self._controller.input_mapping.perform_learnable_action(
             LooperAction.analyze_pad(pad_id),
-            lambda: self._controller.loader.analyze_sample_async(pad_id),
+            lambda: self._controller.performance_confirmation.request("analyze", pad_id),
         )
 
     def set_manual_bpm(self, pad_id: int, bpm: float) -> None:
@@ -594,6 +595,7 @@ class WaveformEditorActions:
         self._last_end_s: float | None = None
         self._last_source_identity: _WaveformSourceIdentity | None = None
         self._last_waveform_value: WaveFormRenderData | None = None
+        self._last_view_revision = controller.transport.waveform.view_revision
 
         # Per-pad view state for the waveform editor plot (seconds).
         self._pad_view_ranges: dict[int, tuple[float, float]] = {}
@@ -603,32 +605,15 @@ class WaveformEditorActions:
         return self._controller.session.waveform_editor_pad_id
 
     def open(self, pad_id: int) -> None:
-        session = self._controller.session
-        if session.waveform_editor_pad_id is not None and session.waveform_editor_pad_id != pad_id:
-            self._controller.transport.waveform.release_view(session.waveform_editor_pad_id)
-            self._last_waveform_value = None
-        session.waveform_editor_open = True
-        session.waveform_editor_pad_id = pad_id
+        self._controller.transport.waveform.open_editor(pad_id)
 
     def close(self) -> None:
-        session = self._controller.session
-        if session.waveform_editor_pad_id is not None:
-            self._controller.transport.waveform.release_view(session.waveform_editor_pad_id)
+        self._controller.transport.waveform.close_editor()
         self._last_waveform_value = None
-        session.waveform_editor_open = False
-        session.waveform_editor_pad_id = None
 
     def toggle_for_pad(self, pad_id: int) -> None:
         """Open, close, or retarget the waveform editor for a loaded pad."""
-        if self._controller.project.sample_paths[pad_id] is None:
-            return
-
-        session = self._controller.session
-        if session.waveform_editor_open and session.waveform_editor_pad_id == pad_id:
-            self.close()
-            return
-
-        self.open(pad_id)
+        self._controller.transport.waveform.toggle_editor(pad_id)
 
     def play_restart_selected_pad_on_press(self, *, received_at_ns: int | None = None) -> None:
         """Restart the selected pad, retaining its captured Rust input timestamp."""
@@ -861,6 +846,10 @@ class WaveformEditorActions:
         *,
         timing: CurrentPadTiming | UnresolvedTiming | None = UNRESOLVED_TIMING,
     ) -> WaveFormRenderData | None:
+        revision = self._controller.transport.waveform.view_revision
+        if revision != self._last_view_revision:
+            self._last_view_revision = revision
+            self._last_waveform_value = None
         if isinstance(timing, UnresolvedTiming):
             timing = self._controller.transport.bpm.current_timing(pad_id)
         source_identity = self._waveform_source_identity(pad_id, timing=timing)
@@ -927,6 +916,38 @@ class WaveformEditorActions:
         )
 
 
+class PerformanceConfirmationActions:
+    """Expose the one transient performer warning and its independent popup lifecycle."""
+
+    def __init__(self, controller: AppController) -> None:
+        self._controller = controller
+        self._presented: PerformanceConfirmation | None = None
+
+    @property
+    def pending(self) -> PerformanceConfirmation | None:
+        """Read the captured warning target without following current sidebar selection."""
+        return self._controller.performance_confirmation.pending
+
+    def take_open_request(self, intent: PerformanceConfirmation) -> bool:
+        """Open a newly captured popup once so dismissing it cannot reopen it."""
+        if self.pending is not intent or self._presented is intent:
+            return False
+        self._presented = intent
+        return True
+
+    def is_current(self, intent: PerformanceConfirmation) -> bool:
+        """Read current content-bound action eligibility for the warning controls."""
+        return self._controller.performance_confirmation.is_current(intent)
+
+    def accept(self, intent: PerformanceConfirmation) -> None:
+        """Pass an exact warning snapshot to the controller for one-time admission."""
+        self._controller.performance_confirmation.accept(intent)
+
+    def dismiss(self, intent: PerformanceConfirmation) -> None:
+        """Dismiss the warning alone, without touching background audio work."""
+        self._controller.performance_confirmation.dismiss(intent)
+
+
 class UiActions:
     """UI-related actions."""
 
@@ -937,6 +958,7 @@ class UiActions:
         self._controller = controller
         self.settings = SettingsActions(controller)
         self.waveform = WaveformEditorActions(controller)
+        self.confirmation = PerformanceConfirmationActions(controller)
 
     def toggle_left_sidebar(self) -> None:
         new_val = not self._controller.project.sidebar_left_expanded

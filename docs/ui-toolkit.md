@@ -73,7 +73,7 @@ render_ui(ctx)
 -> ctx.audio.poll.poll()
    -> loader events + audio telemetry messages
 -> draw main layout, settings/performance view, bottom bar
--> draw waveform editor and file dialog when applicable
+-> draw waveform editor and independent file/performer-confirmation dialogs when applicable
 -> ctx.persistence.maybe_flush()
 ```
 
@@ -190,6 +190,26 @@ Use explicit action groups:
 
 These actions route through controllers when behavior affects project intent,
 audio state, persistence, input mappings, or background work.
+
+Explicit performer Unload Audio and manual Analyze Audio use one transient
+`PerformanceConfirmationController` intent through sidebar and mapped keyboard/MIDI
+actions. `ctx.ui.confirmation` exposes it to an independent central modal renderer;
+changing selection, hiding a sidebar or showing Settings does not retarget or hide
+the captured warning. Learn captures the mapping without opening a warning.
+The dialog identifies pad/source and explains the action before its accept/Cancel
+controls. It is not persisted or an audio-engine transaction.
+
+The controller captures content-instance ID, path and validated native source
+generation/digest/frames/rate, rechecks the same assignment/current eligibility and
+consumes acceptance once before the existing LoaderController action. Equal-byte
+reload/rebind/rearrangement and absent/stale native identity cannot reuse old
+authority. Cancel/Escape/dismiss own only that warning, with no loader, project,
+playback or resource changes; they never cancel Residency/KEYLOCK. Mode/window
+readiness on unchanged content is separate from assignment identity. Loading and
+already analyzing content retain the manual-analysis eligibility policy. Automatic
+load analysis, saved-result restore and internal lifecycle unload remain direct.
+Native unload admission still precedes Python cleanup, so failed admission leaves
+the editor and mode transaction intact; admitted unload closes only its edited pad.
 
 ## Immediate-Mode Rules
 
@@ -331,8 +351,27 @@ needed. Its pattern is:
 - loop edits still go through transport loop actions,
 - playback controls in the editor go through playback actions.
 
-Readiness/error rows and their retry/cancel controls are laid out before ImPlot
-fills the remaining editor height. Appending rows below that full-height plot
+Adjust Loop occupies Pad, separator, Adjust Loop, separator, BPM in the left
+sidebar and remains available during eligible analysis. Sidebar and mapped Adjust
+use `WaveformController`'s shared open/retarget/close methods, which release the
+previous view and advance its view revision. The UI projection observes that
+revision before cache reuse. `CLOSE LOOP EDITOR` follows Grid Offset through the
+same close authority; its full text and toolbar hit target wrap as needed at
+narrow/scaled widths. Closing changes no playback, loop or grid state.
+
+Waveform and Residency readiness/error rows reserve two fixed status/control
+slots before ImPlot fills the remaining editor height. Idle/ready frames retain
+the same slot height as pending/error frames, including Retry/Cancel hit height.
+The pre-fix full-editor wheel regression demonstrated plot Y and upper glyph
+origins moving together when a late readiness change inserted/removed text above
+the plot. Keeping the rows above the plot and reserving their height stabilizes
+plot Y/height; existing source-coordinate labels and clipping remain authoritative.
+The initial-frame matrix separately found a four-pixel plot-bottom shrink from
+ImPlot's padded single-space playhead tag late tick-size override. This plot uses
+zero vertical annotation padding, retaining horizontal padding and the existing
+visible/invisible marker, to prevent the following frame's geometry from changing.
+No clipping defect was established by either measured layout negative.
+Appending rows below that full-height plot
 creates a scrollbar/width feedback cycle: pending and ready frames alternate
 between different resolutions and repeatedly supersede the asynchronous read.
 Waveform resolution uses the actual ImPlot interior width after axis setup,
@@ -422,13 +461,29 @@ Preferred tests:
 - targeted render-helper tests where a calculation is pure enough to exercise
   without a live UI backend.
 
-`test_waveform_render_stability.py` exercises the production renderer and real
-UI/controller cache in isolated ImGui/ImPlot draw contexts. A delayed worker
-boundary reproduces readiness without a graphics backend or audio device.
-It checks stable plot/axis geometry and plot draw vertices and indices at full-track, loop
-and individual-sample zoom, then pending/error/retry, playhead, residency, zoom,
-resize and source-cache invalidation. These numerical draw-data checks do not
-constitute human visual, listening or device acceptance.
+`test_waveform_render_stability.py` exercises the complete productive editor,
+center child, toolbar, actual runtime regular/bold fonts and UI/controller cache
+in both isolated ImGui/ImPlot context modes. A delayed worker projection is the
+controlled boundary; real IO wheel/button events drive plot hover and toolbar
+view changes before each native frame. Record every request/pending/ready/error/
+settling plot rectangle, limits, cache/source query, draw-command clips/indices/
+vertices and actual visible font-glyph geometry, including the first transition
+frames. Cover raw/envelope crossover, initial/loop/full/tail views, replacement,
+playback/Residency overlays, font/display scale 100/125/150/200 percent and ordinary/
+narrow layouts. Compare meaningful scaled geometry instead of complete frames
+while the waveform view changes.
+
+The shared KEYLOCK renderer preserves effective button color separately from
+pending/error/mixed text; its muted status rows wrap within narrow/scaled sidebar
+widths. Keep those actual rows and Residency feedback in complete layout tests.
+
+At most one waveform representation and one visible number band is permitted.
+Require exactly one only for matching valid data and visible major/Loop-1 label
+candidates respectively; pending/error data=None and empty candidate sets remain
+truthful. A raw vertex outside a valid draw-command clip is not itself a visible
+clipping defect. Actual warning/button/sidebar gestures and keyboard/MIDI/Learn
+routes complement controller identity/admission tests. These draw/action checks
+remain separate from final Human visual, listening and device acceptance.
 
 If a behavior can only be verified by exact pixel interaction, too much logic is
 probably in rendering code.
@@ -474,6 +529,12 @@ Current musical stem selections become independent durable CopySnapshot choices;
 physical presses/holds/voices/cursors/meters/progress/job tokens remain transient.
 All implementations/native effects/full216/quality/human evidence remain pending.
 
-## Pending direct extension2026-10-11
+## Direct extension2026-10-11 and remaining acceptance
 
-The [E11 UI/control plan](pre-rust-extension-20261011.md) requires full editor geometry/cache/Y/clip/font/DPI/toolbar draw checks and final Human visual confirmation; existing plot-only tests do not settle the reported duplicate. Unload/Analyze confirmations bind captured content, Adjust moves between Pad/BPM, and visible CLOSE LOOP EDITOR follows Grid Offset through the same close action. RECORD reuses the global button/group implementation with a deliberate gap, single-edge left/right behavior and truthful Preparing/Recording/Finalizing/error state. This is a pending contract, not delivered UI acceptance.
+The [E11 UI/control plan](pre-rust-extension-20261011.md) retains final Human
+visual repetition of zoom/layout/confirmation usability after the bounded X11-UI
+software gates. The measured readiness-layout fault does not establish the exact
+Human perceptual duplicate or reported binary. Whole P4b/P5a and later resource,
+music/history, device/hearing, V0/H-FINAL/Goal gates remain open. RECORD remains a
+separate pending delivery using the global button/group implementation, deliberate
+gap, single-edge left/right behavior and truthful capture states.

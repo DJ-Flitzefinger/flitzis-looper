@@ -10,6 +10,24 @@ if TYPE_CHECKING:
     from flitzis_looper_audio import AudioEngine
 
 
+def loaded_source_identity(audio: AudioEngine, sample_id: int) -> tuple[int, str, int, int] | None:
+    """Read the strict content generation/digest/frames/rate fence without mode authority."""
+    identity = audio.waveform_source_identity(sample_id)
+    if not isinstance(identity, tuple) or len(identity) != 4:
+        return None
+    generation, digest, frames, rate = identity
+    if isinstance(generation, bool) or not isinstance(generation, int) or generation < 0:
+        return None
+    if not isinstance(digest, str):
+        return None
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        for value in (frames, rate)
+    ):
+        return None
+    return generation, digest, frames, rate
+
+
 @dataclass(frozen=True)
 class KeyAnalysisAdmission:
     """Control-only source/epoch snapshot; never a copied native timing permit."""
@@ -141,18 +159,7 @@ class KeyMetadataAnalysis:
         )
 
     def _source_identity(self, sample_id: int) -> tuple[int, str, int, int] | None:
-        identity = self._audio.waveform_source_identity(sample_id)
-        if not isinstance(identity, tuple) or len(identity) != 4:
-            return None
-        generation, digest, frames, rate = identity
-        if not self._valid_request_id(generation) or not isinstance(digest, str):
-            return None
-        if any(
-            isinstance(value, bool) or not isinstance(value, int) or value <= 0
-            for value in (frames, rate)
-        ):
-            return None
-        return generation, digest, frames, rate
+        return loaded_source_identity(self._audio, sample_id)
 
     @staticmethod
     def _valid_request_id(request_id: object) -> TypeGuard[int]:

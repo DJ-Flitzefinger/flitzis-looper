@@ -16,8 +16,10 @@ Loop between the Pad and BPM sections with matching separators. E11-18 replaces
 the old icon-only far-right close contract with a visible `CLOSE LOOP EDITOR`
 button immediately right of Grid Offset, using the existing close action.
 
-The single bounded delivery is `X11-UI`. This change is PLAN_ONLY: its unchecked
-tasks and software/Human gates are not implementation or visual acceptance.
+The single bounded delivery is `X11-UI`, based on the published `e9da7e1` KEYLOCK
+source. Software completion requires the productive draw/action evidence and
+independent review recorded in the tasks. Final Human visual repetition remains
+open through H-FINAL; source inspection or headless frames cannot close it.
 
 ## Non-goals and realtime boundary
 

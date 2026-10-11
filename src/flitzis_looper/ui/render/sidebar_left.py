@@ -1062,9 +1062,6 @@ def _render_loaded_actions(ctx: UiContext, pad_id: int) -> None:
     if imgui.button("Analyze audio", (-1, 0)):
         ctx.audio.pads.analyze_sample_async(pad_id)
 
-    if imgui.button("Adjust Loop", (-1, 0)):
-        ctx.ui.open_waveform_editor(pad_id)
-
     imgui.separator()
     _render_stem_controls(
         ctx,
@@ -1075,6 +1072,11 @@ def _render_loaded_actions(ctx: UiContext, pad_id: int) -> None:
             is_loading=False,
         ),
     )
+
+
+def _render_adjust_loop(ctx: UiContext, pad_id: int) -> None:
+    if imgui.button("Adjust Loop", (-1, 0)):
+        ctx.ui.open_waveform_editor(pad_id)
 
 
 def _render_loading_status(ctx: UiContext, pad_id: int) -> None:
@@ -1104,6 +1106,8 @@ def sidebar_left(ctx: UiContext) -> None:
     _render_pad_header(ctx, info)
 
     if info.is_loaded:
+        imgui.separator()
+        _render_adjust_loop(ctx, info.pad_id)
         imgui.separator()
         _render_bpm(ctx, info)
         imgui.separator()

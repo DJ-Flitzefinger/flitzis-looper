@@ -614,7 +614,8 @@ def test_input_mapping_analyze_unloaded_pad_is_handled(
     assert handled is True
     audio_engine_mock.analyze_sample_async.assert_not_called()
     assert 0 not in controller.session.analyzing_sample_ids
-    assert controller.session.sample_analysis_errors[0] == "sample is not loaded"
+    assert controller.performance_confirmation.pending is None
+    assert 0 not in controller.session.sample_analysis_errors
 
 
 def test_keyboard_mapping_executes_master_volume(

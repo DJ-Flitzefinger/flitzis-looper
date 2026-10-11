@@ -26,6 +26,8 @@ from flitzis_looper.ui.waveform_grid import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from numpy.typing import NDArray
 
     from flitzis_looper.controller.current_timing import CurrentPadTiming
@@ -54,27 +56,38 @@ def toolbar_control_size(frame_height: float) -> float:
     return max(_TOOLBAR_MIN_HIT_TARGET_PX, float(frame_height) * _TOOLBAR_FRAME_HEIGHT_MULTIPLIER)
 
 
-def toolbar_close_spacing(remaining_width: float, button_size: float) -> float:
-    """Return spacing that pushes the close button to the toolbar's right edge when possible."""
-    return max(float(SPACING), float(remaining_width) - float(button_size))
-
-
 def _visible_label(label: str) -> str:
     return label.split("##", 1)[0]
 
 
-def _separator(ctx: UiContext, label: str, height: float, text_pos_y: float) -> None:
-    draw_list = imgui.get_window_draw_list()
+def _toolbar_next_item(width: float, *, spacing: float = SPACING) -> None:
+    """Keep the next control on this row only when its complete width fits."""
+    imgui.same_line(spacing=spacing)
+    if imgui.get_content_region_avail().x < width:
+        imgui.new_line()
+        imgui.dummy((0.0, SPACING / 2))
 
-    imgui.same_line(spacing=SPACING)
-    pos = imgui.get_cursor_screen_pos()
-    draw_list.add_line(pos, (pos[0], pos[1] + height), imgui.get_color_u32(imgui.Col_.separator))
-    imgui.dummy((0, 0))
 
+def _aligned_toolbar_text(label: str, height: float, color: imgui.ImVec4Like) -> None:
+    row_y = imgui.get_cursor_pos_y()
+    with imgui_ctx.begin_group():
+        imgui.set_cursor_pos_y(row_y + (height - imgui.get_text_line_height()) / 2)
+        imgui.text_colored(color, label)
+        imgui.set_cursor_pos_y(row_y + height)
+        imgui.dummy((0.0, 0.0))
+
+
+def _separator(ctx: UiContext, label: str, height: float) -> None:
     with imgui_ctx.push_font(ctx.bold_font):
-        imgui.same_line(spacing=SPACING)
-        imgui.set_cursor_pos_y(text_pos_y)
-        imgui.text_colored(TEXT_RGBA, label)
+        _toolbar_next_item(1.0 + SPACING + imgui.calc_text_size(label).x)
+        with imgui_ctx.begin_group():
+            pos = imgui.get_cursor_screen_pos()
+            imgui.get_window_draw_list().add_line(
+                pos, (pos.x, pos.y + height), imgui.get_color_u32(imgui.Col_.separator)
+            )
+            imgui.dummy((1.0, height))
+            imgui.same_line(spacing=SPACING)
+            _aligned_toolbar_text(label, height, TEXT_RGBA)
 
 
 def _render_icon_button(label: str, size: float) -> bool:
@@ -93,11 +106,16 @@ def _render_icon_button_mouse_down(label: str, size: float) -> tuple[bool, bool]
     return (left_clicked, right_clicked)
 
 
-def _render_text_button(label: str, height: float) -> bool:
+def _text_button_width(label: str, height: float) -> float:
     padding = imgui.get_style().frame_padding
     horizontal_padding = padding.x + SPACING
     label_width = imgui.calc_text_size(_visible_label(label)).x
-    width = max(height, label_width + horizontal_padding * 2)
+    return max(height, label_width + horizontal_padding * 2)
+
+
+def _render_text_button(label: str, height: float) -> bool:
+    padding = imgui.get_style().frame_padding
+    width = _text_button_width(label, height)
     with imgui_ctx.push_style_var(imgui.StyleVar_.frame_padding, (padding.x + SPACING, padding.y)):
         if imgui.button(label, (width, height)):
             return True
@@ -196,7 +214,7 @@ def _render_playback_controls(ctx: UiContext, height: float) -> None:
     elif play_right:
         ctx.ui.waveform.stop_selected_pad_on_press()
 
-    imgui.same_line(spacing=SPACING)
+    _toolbar_next_item(height)
     pause_left, pause_right = _render_icon_button_mouse_down(
         f"{icons_fontawesome_6.ICON_FA_PAUSE}##wf_pause", height
     )
@@ -207,13 +225,13 @@ def _render_playback_controls(ctx: UiContext, height: float) -> None:
 
 
 def _render_zoom_buttons(ctx: UiContext, pad_id: int, height: float) -> None:
-    imgui.same_line(spacing=SPACING)
+    _toolbar_next_item(_text_button_width("Reset Zoom", height))
     if _render_text_button("Reset Zoom", height):
         limits = ctx.ui.waveform.view_limits(pad_id)
         if limits is not None:
             implot.set_next_axis_limits(implot.ImAxis_.x1, *limits, imgui.Cond_.always)
 
-    imgui.same_line(spacing=SPACING)
+    _toolbar_next_item(_text_button_width("Zoom to Loop", height))
     if _render_text_button("Zoom to Loop", height):
         limits = ctx.ui.waveform.view_limits(pad_id, loop_only=True)
         if limits is not None:
@@ -221,7 +239,7 @@ def _render_zoom_buttons(ctx: UiContext, pad_id: int, height: float) -> None:
 
 
 def _render_view_jump_buttons(ctx: UiContext, height: float) -> None:
-    imgui.same_line(spacing=SPACING)
+    _toolbar_next_item(height)
     btn_jump_start_label = f"{icons_fontawesome_6.ICON_FA_BACKWARD_STEP}##wf_view_jump_start"
     if _render_icon_button(btn_jump_start_label, height):
         limits = ctx.ui.waveform.view_jump_start_selected_pad_on_press()
@@ -231,7 +249,7 @@ def _render_view_jump_buttons(ctx: UiContext, height: float) -> None:
         with imgui_ctx.begin_tooltip():
             imgui.text("Jump to start")
 
-    imgui.same_line(spacing=SPACING)
+    _toolbar_next_item(height)
     btn_jump_end_label = f"{icons_fontawesome_6.ICON_FA_FORWARD_STEP}##wf_view_jump_end"
     if _render_icon_button(btn_jump_end_label, height):
         limits = ctx.ui.waveform.view_jump_end_selected_pad_on_press()
@@ -242,35 +260,47 @@ def _render_view_jump_buttons(ctx: UiContext, height: float) -> None:
             imgui.text("Jump to end")
 
 
-def _render_loop_controls(ctx: UiContext, pad_id: int, height: float, text_pos_y: float) -> None:
+def _render_auto_loop(ctx: UiContext, pad_id: int, height: float) -> None:
     auto_enabled = ctx.state.project.pad_loop_auto[pad_id]
+    check_h = imgui.get_frame_height()
+    check_width = check_h + imgui.get_style().item_inner_spacing.x
+    _toolbar_next_item(check_width + imgui.calc_text_size("Auto-loop").x)
+    row_y = imgui.get_cursor_pos_y()
+    with imgui_ctx.begin_group():
+        imgui.set_cursor_pos_y(row_y + (height - check_h) / 2)
+        changed, new_auto = imgui.checkbox("Auto-loop", auto_enabled)
+        imgui.set_cursor_pos_y(row_y + height)
+        imgui.dummy((0.0, 0.0))
+    if changed:
+        ctx.audio.pads.set_pad_loop_auto(pad_id, enabled=new_auto)
 
-    imgui.same_line(spacing=SPACING)
+
+def _render_loop_controls(ctx: UiContext, pad_id: int, height: float) -> None:
+    _toolbar_next_item(_text_button_width("ALL", height))
     if _render_text_button("ALL##wf_loop_all", height):
         ctx.audio.pads.set_pad_full_track_loop_region(pad_id)
 
-    imgui.same_line(spacing=SPACING)
-    check_h = imgui.get_frame_height()
-    check_pos_y = imgui.get_cursor_pos_y() + (height - check_h) / 2
-    imgui.set_cursor_pos_y(check_pos_y)
-    changed, new_auto = imgui.checkbox("Auto-loop", auto_enabled)
-    if changed:
-        ctx.audio.pads.set_pad_loop_auto(pad_id, enabled=new_auto)
+    _render_auto_loop(ctx, pad_id, height)
 
     bars = ctx.state.project.pad_loop_bars[pad_id]
     bpm = ctx.state.pads.effective_bpm(pad_id)
     max_bars = ctx.state.pads.max_auto_loop_bars(pad_id)
 
-    imgui.same_line(spacing=SPACING)
     if bpm is None:
-        imgui.set_cursor_pos_y(text_pos_y)
-        imgui.text_colored(TEXT_MUTED_RGBA, f"Bars: {format_loop_bars(bars)} (BPM unavailable)")
+        label = f"Bars: {format_loop_bars(bars)} (BPM unavailable)"
+        _toolbar_next_item(imgui.calc_text_size(label).x)
+        _aligned_toolbar_text(label, height, TEXT_MUTED_RGBA)
     else:
-        imgui.set_cursor_pos_y(text_pos_y)
-        imgui.text_colored(TEXT_MUTED_RGBA, "Bars")
+        bars_text = format_loop_bars(bars)
+        _toolbar_next_item(
+            imgui.calc_text_size("Bars").x
+            + imgui.calc_text_size(bars_text).x
+            + 2 * height
+            + 3 * SPACING / 2
+        )
+        _aligned_toolbar_text("Bars", height, TEXT_MUTED_RGBA)
         imgui.same_line(spacing=SPACING / 2)
-        imgui.set_cursor_pos_y(text_pos_y)
-        imgui.text(format_loop_bars(bars))
+        _aligned_toolbar_text(bars_text, height, TEXT_RGBA)
 
         imgui.same_line(spacing=SPACING / 2)
         btn_minus_label = f"{icons_fontawesome_6.ICON_FA_CHEVRON_LEFT}##wf_loop_bars_minus"
@@ -316,30 +346,48 @@ def _render_loop_controls(ctx: UiContext, pad_id: int, height: float, text_pos_y
                 max_bars=max_bars,
             )
 
-    _render_grid_offset_control(ctx, pad_id, height, text_pos_y)
+    _toolbar_next_item(_grid_offset_close_width(ctx, pad_id, height))
+    _render_grid_offset_control(ctx, pad_id, height)
+
+
+def _grid_offset_close_width(ctx: UiContext, pad_id: int, height: float) -> float:
+    """Measure the adjacent source-offset and close controls before choosing their row."""
+    return (
+        imgui.calc_text_size("Grid Offset").x
+        + SPACING / 2
+        + _grid_offset_width(_grid_offset_text(ctx, pad_id))
+        + SPACING
+        + _text_button_width("CLOSE LOOP EDITOR", height)
+    )
 
 
 def _render_close_button(ctx: UiContext, height: float) -> None:
-    imgui.same_line(spacing=toolbar_close_spacing(imgui.get_content_region_avail().x, height))
-    if _render_icon_button(f"{icons_fontawesome_6.ICON_FA_XMARK}##wf_close", height):
+    _toolbar_next_item(_text_button_width("CLOSE LOOP EDITOR", height))
+    if _render_text_button("CLOSE LOOP EDITOR##wf_close", height):
         ctx.ui.waveform.close()
-    if imgui.is_item_hovered():
-        with imgui_ctx.begin_tooltip():
-            imgui.text("Close")
 
 
-def _render_grid_offset_control(
-    ctx: UiContext, pad_id: int, height: float, text_pos_y: float
-) -> None:
+def _grid_offset_text(ctx: UiContext, pad_id: int) -> str:
     offset = int(ctx.state.project.pad_grid_offset_samples[pad_id])
-    offset_text = "0" if offset == 0 else f"{offset:+d}"
+    return "0" if offset == 0 else f"{offset:+d}"
 
-    imgui.same_line(spacing=SPACING)
-    imgui.set_cursor_pos_y(text_pos_y)
-    imgui.text_colored(TEXT_MUTED_RGBA, "Grid Offset")
+
+def _grid_offset_width(offset_text: str) -> float:
+    return max(
+        90.0, imgui.calc_text_size(f"{offset_text} smp").x + 2 * imgui.get_style().frame_padding.x
+    )
+
+
+def _render_grid_offset_control(ctx: UiContext, pad_id: int, height: float) -> None:
+    offset = int(ctx.state.project.pad_grid_offset_samples[pad_id])
+    offset_text = _grid_offset_text(ctx, pad_id)
+
+    _aligned_toolbar_text("Grid Offset", height, TEXT_MUTED_RGBA)
     imgui.same_line(spacing=SPACING / 2)
 
-    imgui.button(f"{offset_text} smp##grid_offset_samples", (90, height))
+    imgui.button(
+        f"{offset_text} smp##grid_offset_samples", (_grid_offset_width(offset_text), height)
+    )
     hovered = imgui.is_item_hovered()
 
     if hovered and imgui.is_mouse_clicked(imgui.MouseButton_.left):
@@ -634,24 +682,84 @@ def _setup_plot_axes(ctx: UiContext, pad_id: int, *, timing: CurrentPadTiming | 
     implot.setup_finish()
 
 
+def _render_readiness_row(
+    row_id: str,
+    label: str | None,
+    *,
+    action_label: str | None = None,
+    action: Callable[[], None] | None = None,
+) -> None:
+    """Reserve one above-plot line, keeping its control visible beside long errors."""
+    height = imgui.get_frame_height()
+    imgui.begin_child(
+        row_id,
+        (-1, height),
+        window_flags=imgui.WindowFlags_.no_scrollbar | imgui.WindowFlags_.no_scroll_with_mouse,
+    )
+    if label is not None:
+        position = imgui.get_cursor_screen_pos()
+        available = imgui.get_content_region_avail().x
+        action_width = (
+            imgui.calc_text_size(_visible_label(action_label)).x
+            + imgui.get_style().frame_padding.x * 2
+            if action_label is not None
+            else 0.0
+        )
+        text_width = max(0.0, available - action_width - SPACING)
+        draw_list = imgui.get_window_draw_list()
+        draw_list.push_clip_rect(
+            position,
+            (position.x + text_width, position.y + height),
+            intersect_with_current_clip_rect=True,
+        )
+        draw_list.add_text(
+            (position.x, position.y + imgui.get_style().frame_padding.y),
+            imgui.get_color_u32(TEXT_MUTED_RGBA),
+            label,
+        )
+        draw_list.pop_clip_rect()
+        imgui.dummy((text_width, height))
+        if imgui.is_item_hovered() and imgui.calc_text_size(label).x > text_width:
+            with imgui_ctx.begin_tooltip():
+                imgui.text_wrapped(label)
+        if action_label is not None and action is not None:
+            imgui.same_line(spacing=SPACING)
+            if imgui.button(action_label, (action_width, height)):
+                action()
+    imgui.end_child()
+
+
 def _render_context_readiness(ctx: UiContext, pad_id: int) -> None:
+    # Readiness is updated by the view query below. Reserve both rows even on
+    # ready/idle frames so that that one-frame delay cannot resize the plot.
     status, error = ctx.ui.waveform.readiness(pad_id)
+    waveform_label = None
     if status == "pending":
-        imgui.text_colored(TEXT_MUTED_RGBA, "Preparing source waveform...")
+        waveform_label = "Preparing source waveform..."
     elif status == "error":
-        imgui.text_colored(TEXT_MUTED_RGBA, f"Waveform unavailable: {error}")
-        imgui.same_line()
-        if imgui.small_button(f"Retry##waveform-{pad_id}"):
-            ctx.ui.waveform.retry(pad_id)
+        waveform_label = f"Waveform unavailable: {error}"
+    _render_readiness_row(
+        f"waveform-readiness-{pad_id}",
+        waveform_label,
+        action_label=f"Retry##waveform-{pad_id}" if status == "error" else None,
+        action=lambda: ctx.ui.waveform.retry(pad_id),
+    )
     control_status, control_error = ctx.audio.pads.residency_status(pad_id)
+    control_label = None
     if control_status in {"preparing", "pending", "adopting"}:
-        imgui.text_colored(TEXT_MUTED_RGBA, "Preparing playback context...")
-        if control_status != "adopting":
-            imgui.same_line()
-            if imgui.small_button(f"Cancel##resident-context-{pad_id}"):
-                ctx.audio.pads.cancel_residency(pad_id)
+        control_label = "Preparing playback context..."
     elif control_error:
-        imgui.text_colored(TEXT_MUTED_RGBA, f"Playback context unavailable: {control_error}")
+        control_label = f"Playback context unavailable: {control_error}"
+    _render_readiness_row(
+        f"resident-readiness-{pad_id}",
+        control_label,
+        action_label=(
+            f"Cancel##resident-context-{pad_id}"
+            if control_status in {"preparing", "pending"}
+            else None
+        ),
+        action=lambda: ctx.audio.pads.cancel_residency(pad_id),
+    )
 
 
 def _render_plot(ctx: UiContext, pad_id: int) -> None:
@@ -666,6 +774,21 @@ def _render_plot(ctx: UiContext, pad_id: int) -> None:
     # Appending them afterwards toggles the child scrollbar and invalidates the
     # width-keyed asynchronous waveform request on otherwise stationary frames.
     _render_context_readiness(ctx, pad_id)
+
+    # This plot's tag is a single-space playhead marker. Vertical annotation
+    # padding otherwise overrides the tick height at EndPlot, shrinking the
+    # next frame's plot by four pixels even when its view did not change.
+    padding = implot.get_style().annotation_padding
+    with implot_style_var(implot.StyleVar_.annotation_padding, (padding.x, 0.0)):
+        _render_waveform_plot(ctx, pad_id, timing, sample_duration_s)
+
+
+def _render_waveform_plot(
+    ctx: UiContext,
+    pad_id: int,
+    timing: CurrentPadTiming | None,
+    sample_duration_s: float,
+) -> None:
 
     if not implot.begin_plot(
         f"##waveform-{pad_id}",
@@ -722,17 +845,16 @@ def _render_editor_body(ctx: UiContext, pad_id: int) -> None:
     with imgui_ctx.begin_group():
         toolbar_height = toolbar_control_size(imgui.get_frame_height())
 
-        text_h = imgui.get_text_line_height()
-        text_pos_y = imgui.get_cursor_pos_y() + (toolbar_height - text_h) / 2 - 3
-
         _render_playback_controls(ctx, toolbar_height)
-        _separator(ctx, "View", toolbar_height, text_pos_y)
+        _separator(ctx, "View", toolbar_height)
         _render_zoom_buttons(ctx, pad_id, toolbar_height)
         _render_view_jump_buttons(ctx, toolbar_height)
-        _separator(ctx, "Loop", toolbar_height, text_pos_y)
-        _render_loop_controls(ctx, pad_id, toolbar_height, text_pos_y)
+        _separator(ctx, "Loop", toolbar_height)
+        _render_loop_controls(ctx, pad_id, toolbar_height)
         _render_close_button(ctx, toolbar_height)
 
+    if not ctx.state.session.waveform_editor_open:
+        return
     _render_plot(ctx, pad_id)
 
 

@@ -199,6 +199,8 @@ def test_first_frame_zoom_to_loop_wins_over_initial_source_view(
     monkeypatch.setattr(imgui, "get_text_line_height", lambda: 14.0)
     monkeypatch.setattr(imgui, "get_cursor_pos_y", lambda: 0.0)
     monkeypatch.setattr(imgui, "same_line", Mock())
+    monkeypatch.setattr(waveform_editor, "_toolbar_next_item", Mock())
+    monkeypatch.setattr(waveform_editor, "_text_button_width", lambda *_args: 100.0)
     monkeypatch.setattr(
         waveform_editor, "_render_text_button", lambda label, _height: label == "Zoom to Loop"
     )
@@ -310,6 +312,14 @@ def test_waveform_plot_uses_one_current_snapshot_and_actual_extent_for_clipping(
     ctx = UiContext(controller)
     current = Mock(return_value=timing)
     monkeypatch.setattr(controller.transport.bpm, "current_timing", current)
+    # This snapshot/unit test has no native frame; full-frame regressions own
+    # readiness children and the ImPlot annotation style's actual geometry.
+    readiness = Mock()
+    monkeypatch.setattr(waveform_editor, "_render_context_readiness", readiness)
+    monkeypatch.setattr(
+        implot, "get_style", lambda: Mock(annotation_padding=imgui.ImVec2(4.0, 4.0))
+    )
+    monkeypatch.setattr(waveform_editor, "implot_style_var", lambda *_args: nullcontext())
     monkeypatch.setattr(implot, "begin_plot", lambda *_args: True)
     monkeypatch.setattr(implot, "end_plot", Mock())
     plot_limits = Mock()
@@ -334,6 +344,7 @@ def test_waveform_plot_uses_one_current_snapshot_and_actual_extent_for_clipping(
     waveform_editor._render_plot(ctx, 0)
 
     current.assert_called_once_with(0)
+    readiness.assert_called_once_with(ctx, 0)
     setup.assert_called_once_with(ctx, 0, timing=timing)
     render_data.assert_called_once_with(0, 320, 0.0, 800.0, timing=timing)
     overlay.assert_called_once_with(ctx, 0, 0.0, 800.0, draw_list, 600.0, timing=timing)

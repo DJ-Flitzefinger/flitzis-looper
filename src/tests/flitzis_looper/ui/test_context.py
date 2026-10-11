@@ -360,12 +360,17 @@ class TestAudioActions:  # noqa: PLR0904
         assert controller.project.sample_paths[0] is None
 
     def test_analyze_sample_async(self, controller: AppController, audio_engine_mock: Mock) -> None:
-        """Test analyze_sample_async delegates to controller."""
+        """Manual analysis reaches the existing loader only after bound confirmation."""
         audio_actions = AudioActions(controller)
         controller.project.sample_paths[0] = "/path/to/sample.wav"
+        audio_engine_mock.waveform_source_identity.return_value = (7, "a" * 64, 128, 44_100)
 
         audio_actions.pads.analyze_sample_async(0)
 
+        audio_engine_mock.analyze_sample_async.assert_not_called()
+        intent = controller.performance_confirmation.pending
+        assert intent is not None
+        controller.performance_confirmation.accept(intent)
         audio_engine_mock.analyze_sample_async.assert_called_once_with(0)
         assert 0 in controller.session.analyzing_sample_ids
 
@@ -426,12 +431,17 @@ class TestAudioActions:  # noqa: PLR0904
         assert audio_actions.pads.tap_bpm(0) == pytest.approx(120.0, abs=0.01)
 
     def test_unload_sample(self, controller: AppController, audio_engine_mock: Mock) -> None:
-        """Test unload_sample delegates to controller."""
+        """Manual unload reaches the existing loader only after bound confirmation."""
         audio_actions = AudioActions(controller)
         controller.project.sample_paths[0] = "/path/to/sample.wav"
+        audio_engine_mock.waveform_source_identity.return_value = (7, "a" * 64, 128, 44_100)
 
         audio_actions.pads.unload_sample(0)
 
+        audio_engine_mock.unload_sample.assert_not_called()
+        intent = controller.performance_confirmation.pending
+        assert intent is not None
+        controller.performance_confirmation.accept(intent)
         audio_engine_mock.unload_sample.assert_called_once_with(0)
         assert controller.project.sample_paths[0] is None
 

@@ -13,6 +13,7 @@ from flitzis_looper.ui.constants import (
 from flitzis_looper.ui.contextmanager import default_style, style_var
 from flitzis_looper.ui.render.bottom_bar import bottom_bar
 from flitzis_looper.ui.render.file_dialog import check_file_dialog, open_file_dialog
+from flitzis_looper.ui.render.performance_confirmation import performance_confirmation
 from flitzis_looper.ui.render.performance_view import performance_view
 from flitzis_looper.ui.render.settings import settings_overlay, settings_surface_child_id
 from flitzis_looper.ui.render.sidebar_left import sidebar_left
@@ -188,7 +189,7 @@ def _file_dialog(ctx: UiContext) -> None:
 
 
 def _poll_keyboard_input(ctx: UiContext) -> None:
-    if not ctx.state.project.input_mapping_enabled:
+    if not ctx.state.project.input_mapping_enabled or ctx.ui.confirmation.pending is not None:
         return
 
     io = imgui.get_io()
@@ -224,5 +225,6 @@ def render_ui(ctx: UiContext) -> None:
         _main(ctx)
         if not ctx.state.session.settings_open:
             _file_dialog(ctx)
+        performance_confirmation(ctx)
 
     ctx.persistence.maybe_flush()

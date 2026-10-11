@@ -232,6 +232,8 @@ class LoaderController(BaseController):
         self._audio.unload_sample(sample_id)
         self._cancel_deferred_restore(sample_id)
         self._accepted_restore.cancel(sample_id)
+        if self._on_sample_unloaded is not None:
+            self._on_sample_unloaded(sample_id)
         self._clear_source_session(sample_id)
         self._session.loading_sample_ids.discard(sample_id)
         self._session.pending_sample_paths.pop(sample_id, None)
@@ -245,8 +247,6 @@ class LoaderController(BaseController):
         else:
             self._clear_stem_cache(sample_id)
 
-        if self._on_sample_unloaded is not None:
-            self._on_sample_unloaded(sample_id)
         self._reset_unloaded_pad_defaults(sample_id)
         self._on_pad_bpm_changed(sample_id)
         self._mark_project_changed()

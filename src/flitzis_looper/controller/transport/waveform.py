@@ -19,6 +19,38 @@ class WaveformController:
         self._transport = transport
         self._audio = transport._audio
         self._readiness: dict[int, tuple[str, str | None]] = {}
+        self._view_revision = 0
+
+    @property
+    def view_revision(self) -> int:
+        """Invalidate UI projection caches when any shared editor path releases a view."""
+        return self._view_revision
+
+    def open_editor(self, pad_id: int) -> None:
+        """Open or retarget the single editor, releasing the previous source view."""
+        session = self._transport._session
+        if session.waveform_editor_pad_id is not None and session.waveform_editor_pad_id != pad_id:
+            self.release_view(session.waveform_editor_pad_id)
+        session.waveform_editor_open = True
+        session.waveform_editor_pad_id = pad_id
+
+    def close_editor(self) -> None:
+        """Close the single editor and release its view without transport mutations."""
+        session = self._transport._session
+        if session.waveform_editor_pad_id is not None:
+            self.release_view(session.waveform_editor_pad_id)
+        session.waveform_editor_open = False
+        session.waveform_editor_pad_id = None
+
+    def toggle_editor(self, pad_id: int) -> None:
+        """Use the same open/close authority for toolbar, sidebar, and mapped actions."""
+        if self._transport._project.sample_paths[pad_id] is None:
+            return
+        session = self._transport._session
+        if session.waveform_editor_open and session.waveform_editor_pad_id == pad_id:
+            self.close_editor()
+        else:
+            self.open_editor(pad_id)
 
     def readiness(self, pad_id: int) -> tuple[str, str | None]:
         """Return full-source projection readiness without changing playback."""
@@ -38,6 +70,7 @@ class WaveformController:
         """Invalidate editor work; its worker owns the reader until read return."""
         self._audio.retry_waveform(pad_id)
         self._readiness.pop(pad_id, None)
+        self._view_revision += 1
 
     def get_render_data(
         self,

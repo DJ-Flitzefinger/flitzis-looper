@@ -329,6 +329,10 @@ def test_sidebar_renders_pad_key_lock_only_for_loaded_pads(
         lambda _ctx, _info: None,
     )
     monkeypatch.setattr(
+        "flitzis_looper.ui.render.sidebar_left._render_adjust_loop",
+        lambda _ctx, _pad_id: None,
+    )
+    monkeypatch.setattr(
         "flitzis_looper.ui.render.sidebar_left._render_key",
         lambda _ctx, _info: None,
     )

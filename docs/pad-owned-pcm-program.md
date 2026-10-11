@@ -265,8 +265,42 @@ controls switching. STOP before full Rust-app port planning/implementation/Slice
 
 ## Required direct extension 2026-10-11
 
-The [complete E11 engineering plan](pre-rust-extension-20261011.md) integrates all20 new direct requirements and exact normative owners/acceptance gates. This is PLAN_ONLY; no implementation or Human acceptance follows. Existing38 IDs/48 edges,169 rows,56+9 and HC01..26 remain exact; ten additive bounded delivery IDs make48 IDs/78 forward DAG edges, with20 extension rows separately tracked (189 detail/crosslink plus extension rows).
+The [complete E11 engineering plan](pre-rust-extension-20261011.md) integrates all20 new direct requirements and exact normative owners/acceptance gates. Plan acceptance is separate from bounded software delivery and final Human acceptance. Existing38 IDs/48 edges,169 rows,56+9 and HC01..26 remain exact; ten additive bounded delivery IDs make48 IDs/78 forward DAG edges, with20 extension rows separately tracked (189 detail/crosslink plus extension rows).
 
 X11-KEYLOCK is prioritized after X11-PLAN and the accepted NormalLoop/lifecycle checkpoint, before remaining P4b. It does not depend on whole P4b/B5 and does not close those parents. X11-UI/LONG/MATERIAL and RECORD-CAPTURE→FORMAT→CONTROL are independently bounded results before their later integration; MATERIAL feeds R1. X11-LIVE-STEMS follows MATERIAL/KEYLOCK and genuine P5a, with separate offline/disk/new-generation ACK proof; X11-BULK then feeds P6 along with RECORD. All extension deliveries feed V0 before H-LIVE/SLICE7/H-FINAL/C-FINAL. R2/B7 reaccept recording's later content/scheduler integration, with no prerequisite cycle. The full ordered list and exact edges live in coverage JSON, while the original table remains the retained historical/program subsequence.
 
-The E11 targets replace opaque browsing roots with `samples/<Originalfilename>/`, total-complete-PCM rejection with streamed complete conversion/full warm integrity, activity-only offline generation restrictions with source leases and independent active new-set gates, and icon-only X with labeled CLOSE LOOP EDITOR. Shared hidden SHA identity, immutable generations/readers, original-source preservation, fresh own ACKs, RT constraints, actual resource/music/Human gates and final stop boundary remain. Completed historical subtasks are not reopened; new outcomes remain OPEN. No full Rust-port plan/implementation/Slice8 is authorized here.
+The E11 targets replace opaque browsing roots with `samples/<Originalfilename>/`, total-complete-PCM rejection with streamed complete conversion/full warm integrity, activity-only offline generation restrictions with source leases and independent active new-set gates, and icon-only X with labeled CLOSE LOOP EDITOR. Shared hidden SHA identity, immutable generations/readers, original-source preservation, fresh own ACKs, RT constraints, actual resource/music/Human gates and final stop boundary remain. Completed historical subtasks are not reopened; whole E11 outcomes retain their final gates. No full Rust-port plan/implementation/Slice8 is authorized here.
+
+X11-UI's [bounded tasks](../openspec/changes/refine-loop-editor-performance-actions/tasks.md)
+track E11-04/16/17/18 software evidence independently of H-FINAL. The executed
+pre-fix full-editor wheel negative found late readiness text moving plot/upper
+glyph geometry together, with at most one waveform representation and one visible
+number band; two reserved
+above-plot status/control slots address that layout cause. Content-instance/path/
+native-assignment warnings cover sidebar and mapped Unload/Analyze without owning
+KEYLOCK cancellation, and all editor toggles/close inputs share view release.
+No Human perceptual duplicate, whole P4b/P5a, later extension, resource/music/
+history, device/hearing or Goal completion follows from that bounded correction.
+
+The bounded implementation and productive draw/action gates are complete. The
+full-editor geometry matrix passed 28 cases, with 18 raw archives covering 1412
+frames; independent archive parsing checked visible candidate/valid-data
+cardinality, initial/top/bottom stability and actual clips. Real controls,
+confirmation and KEYLOCK rows passed their productive regressions. The first
+full Python batch remains FAILED: 3532 passed, one failed and 35 skipped; its old
+mocked snapshot fixture omitted the readiness/style frame boundary. The test-only
+repair passed 26 affected regressions without a production change. The final
+full Python repetition passed 3533 tests with 35 hardware/device skips, using the
+installed Release extension without a hardware run.
+Current Ruff, mypy and changed-file formatting passed; release build-only and
+start/check/import preflight passed without starting the App or devices.
+
+The fresh hardware-free Native broad batch remains FAILED: 997 passed, three
+failed, 17 ignored and one device test explicitly excluded. Each of those three
+tests passed its serial isolated repeat with unchanged assertions/timeouts; the
+broad failure cause remains UNKNOWN. Whole-src formatting also remains FAILED
+on two byte-identical baseline files, `controller/stem_cache.py` and `stem_job.py`.
+These negatives remain in the local receipts and are not broader Native/device
+acceptance. Bounded software validation is complete at this scope; mandatory final
+independent NONAUTHOR exact-source/tree/evidence review still precedes publication.
+H-FINAL and every broader parent remain open.

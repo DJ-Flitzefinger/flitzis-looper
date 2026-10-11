@@ -6,6 +6,7 @@ from flitzis_looper.controller.asset_lifecycle import ProjectAssetLifecycle
 from flitzis_looper.controller.loader import LoaderController
 from flitzis_looper.controller.material_migration import MaterialMigrationController
 from flitzis_looper.controller.metering import MeteringController
+from flitzis_looper.controller.performance_confirmation import PerformanceConfirmationController
 from flitzis_looper.controller.persistence import ProjectPersistence
 from flitzis_looper.controller.settings import SettingsController
 from flitzis_looper.controller.stems import StemController, StemTaskRunner
@@ -100,6 +101,7 @@ class AppController:
             stem_task_runner=self.stems._stem_task_runner,
         )
         self.metering = MeteringController(self._project, self._session, self._audio)
+        self.performance_confirmation = PerformanceConfirmationController(self)
         self.input_mapping = InputMappingController(
             self,
             on_project_changed=self._persistence.mark_dirty,
@@ -155,6 +157,8 @@ class AppController:
         )
 
     def _on_sample_unloaded(self, sample_id: int) -> None:
+        if self._session.waveform_editor_pad_id == sample_id:
+            self.transport.waveform.close_editor()
         self.transport.residency.cancel(sample_id)
         self.accepted_timing.cancel(sample_id)
         self.transport.playback.discard_global_restore_for_unloaded_pad(sample_id)

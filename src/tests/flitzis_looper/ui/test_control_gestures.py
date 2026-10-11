@@ -6,7 +6,6 @@ from flitzis_looper.ui.render.sidebar_left import eq_wheel_delta_db, gain_meter_
 from flitzis_looper.ui.render.waveform_editor import (
     bar_step_target,
     format_loop_bars,
-    toolbar_close_spacing,
     toolbar_control_size,
 )
 
@@ -113,16 +112,3 @@ def test_waveform_toolbar_control_size_meets_hit_target_bounds(
     frame_height: float, expected: float
 ) -> None:
     assert toolbar_control_size(frame_height) == pytest.approx(expected)
-
-
-@pytest.mark.parametrize(
-    ("remaining_width", "button_size", "expected"),
-    [
-        (220.0, 32.0, 188.0),
-        (28.0, 32.0, 12.0),
-    ],
-)
-def test_waveform_toolbar_close_spacing_pushes_close_button_right(
-    remaining_width: float, button_size: float, expected: float
-) -> None:
-    assert toolbar_close_spacing(remaining_width, button_size) == pytest.approx(expected)

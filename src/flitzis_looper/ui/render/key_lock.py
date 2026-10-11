@@ -26,11 +26,15 @@ def render_key_lock_button(status: KeyLockStatus, suffix: str, toggle: Callable[
     # descriptions make ongoing work, partial results and errors visible.
     if status.error:
         imgui.text_wrapped(f"Key Lock: {status.error}")
-    if status.unconfirmed:
-        imgui.text_colored(TEXT_MUTED_RGBA, "Change unconfirmed")
-    elif status.pending:
-        imgui.text_colored(TEXT_MUTED_RGBA, f"Preparing {'ON' if status.requested else 'OFF'}…")
-    if status.mixed:
-        imgui.text_colored(TEXT_MUTED_RGBA, "Mixed pads")
-    elif status.effective is None and not status.pending and not status.error:
-        imgui.text_colored(TEXT_MUTED_RGBA, "Mode unconfirmed")
+    imgui.push_text_wrap_pos(0.0)
+    try:
+        if status.unconfirmed:
+            imgui.text_colored(TEXT_MUTED_RGBA, "Change unconfirmed")
+        elif status.pending:
+            imgui.text_colored(TEXT_MUTED_RGBA, f"Preparing {'ON' if status.requested else 'OFF'}…")
+        if status.mixed:
+            imgui.text_colored(TEXT_MUTED_RGBA, "Mixed pads")
+        elif status.effective is None and not status.pending and not status.error:
+            imgui.text_colored(TEXT_MUTED_RGBA, "Mode unconfirmed")
+    finally:
+        imgui.pop_text_wrap_pos()
