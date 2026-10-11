@@ -1,5 +1,5 @@
 //! Genuine StemController -> Native candidate Capture/Adopt -> continuous output.
-//! V2 swaps real vocals/drums files; independent complete V1 PCM supplies the
+//! V2/V3 permute real files; independent complete V1 PCM supplies the
 //! algebraic feed, raw Native/FIFO or dry Varispeed, and uninterrupted EQ oracle.
 
 use super::*;
@@ -12,6 +12,13 @@ const STOPPED_NEW_SET_CHILD: &str = "FLITZI_L3_CONTROLLER_STOPPED_NEW_SET_CHILD"
 const STOPPED_NEW_SET_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_stopped_replacement_play_then_fresh_all_uses_own_wet_receipt";
 const PAUSED_FIRST_CHILD: &str = "FLITZI_L3_CONTROLLER_PAUSED_FIRST_CHILD";
 const PAUSED_FIRST_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_wet_full_mix_paused_before_first_candidate_keeps_consumed_clock";
+const REPEATED_SETS_CHILD: &str = "FLITZI_L3_CONTROLLER_REPEATED_SETS_CHILD";
+const REPEATED_SETS_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_empty_handover_defers_v3_and_uses_latest_mask_with_own_ack";
+
+enum FixtureSet {
+    Second,
+    Third,
+}
 
 fn v2_files(
     engine: &AudioEngine,
@@ -20,17 +27,41 @@ fn v2_files(
     original_reference: &str,
     frames: usize,
 ) -> (PreparedStemPair, PreparedSourceTicket) {
-    let generation = format!("{:032x}", 0x301_u32);
+    version_files(
+        engine,
+        root,
+        version,
+        original_reference,
+        frames,
+        FixtureSet::Second,
+    )
+}
+
+fn version_files(
+    engine: &AudioEngine,
+    root: &Path,
+    version: &str,
+    original_reference: &str,
+    frames: usize,
+    set: FixtureSet,
+) -> (PreparedStemPair, PreparedSourceTicket) {
+    let (generation, first, second, instrumental) = match set {
+        FixtureSet::Second => (0x301_u32, "vocals", "drums", [0, 1, 2]),
+        FixtureSet::Third => (0x302_u32, "melody", "bass", [2, 1, 3]),
+    };
+    let generation = format!("{generation:032x}");
     let reference = original_reference.replace(GENERATION, &generation);
     let path = root.parent().unwrap().join(&reference);
     write_signal_set(&path, frames, version, 0);
-    let vocals = fs::read(path.join("vocals.wav")).unwrap();
-    let drums = fs::read(path.join("drums.wav")).unwrap();
-    fs::write(path.join("vocals.wav"), drums).unwrap();
-    fs::write(path.join("drums.wav"), vocals).unwrap();
+    let first_path = path.join(format!("{first}.wav"));
+    let second_path = path.join(format!("{second}.wav"));
+    let first_contents = fs::read(&first_path).unwrap();
+    let second_contents = fs::read(&second_path).unwrap();
+    fs::write(first_path, second_contents).unwrap();
+    fs::write(second_path, first_contents).unwrap();
     fs::write(
         path.join("instrumental.wav"),
-        signal_sum_wav(frames, &[0, 1, 2]),
+        signal_sum_wav(frames, &instrumental),
     )
     .unwrap();
     let hashes: serde_json::Map<_, _> = STEM_FILE_NAMES
@@ -404,6 +435,342 @@ fn settle_wet(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name: &str
     controller_python(
         locals,
         "controller.on_frame_render()\nassert not session.stem_generation_errors, session.stem_generation_errors",
+    );
+}
+
+fn settle_empty(
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    locals: &Py<PyDict>,
+    key_lock: bool,
+) {
+    assert_eq!(playback.selection, Some(0));
+    let generation = voice(&playback.callback.mixer).generation;
+    let native = voice(&playback.callback.mixer)
+        .stretch
+        .native_state_address();
+    if key_lock {
+        playback.ramp(locals, "candidate", playback.ratio);
+        let empty_source_start = playback.source_frame;
+        // Old Wet/FIFO samples and filter tails need not be silent. All samples
+        // still match the uninterrupted independent raw-Native/EQ oracle.
+        playback.render(13, true);
+        wait_until(|| {
+            voice_mut(&mut playback.callback.mixer)
+                .stretch
+                .source_preparation_ready()
+        });
+        let target = voice_mut(&mut playback.callback.mixer)
+            .stretch
+            .prepared_target_output_frame()
+            .unwrap();
+        let history_frames = crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES;
+        assert_eq!(history_frames, 4096);
+        let warm_source_start =
+            target - history_frames as u64 - (playback.frame - playback.source_frame);
+        assert!(
+            warm_source_start >= empty_source_start,
+            "own complete preparation follows the empty ramp"
+        );
+        assert!(
+            playback
+                .feed(warm_source_start, history_frames)
+                .iter()
+                .flatten()
+                .all(|sample| *sample == 0.0)
+        );
+        controller_python(
+            locals,
+            r#"
+assert candidate.effective_mode_status() == 'transitioning'
+controller.on_frame_render()
+assert live.disk.selection is None and live.disk.registration == 'deferred'
+assert live.control is v2_control and live.attempt is v2_control
+assert v2_control.receipt is candidate and v2_control.receipt_intent == ('all_stems', 0)
+assert live.desired == ('all_stems', 0b1010)
+assert candidate.claimed() and candidate.is_current()
+status = controller.stem_residency_status(0)
+assert status.disk_stem_set_identity == disk_v3.stem_set_identity
+assert status.control_stem_set_identity == disk_v2.stem_set_identity
+assert status.effective_stem_set_identity == disk_v1.stem_set_identity
+assert status.registration == 'deferred' and status.effective == 'transitioning'
+assert not session.stem_generation_errors, session.stem_generation_errors
+"#,
+        );
+        assert!(
+            consumer.is_empty(),
+            "V3 stays deferred after the ramp while own Native is prepared"
+        );
+        playback.adopt_native(false);
+        assert_ne!(
+            voice(&playback.callback.mixer)
+                .stretch
+                .native_state_address(),
+            native
+        );
+        assert!(
+            voice(&playback.callback.mixer)
+                .stretch
+                .wet_current_source_output_ready()
+        );
+        playback.render(127, true);
+    } else {
+        let mut remaining = (128.0 / playback.ratio).ceil() as usize;
+        for frames in [1_usize, 31, 17, 7].into_iter().cycle() {
+            let frames = frames.min(remaining);
+            render_varispeed(playback, frames);
+            remaining -= frames;
+            if remaining == 0 {
+                break;
+            }
+            assert_eq!(
+                controller_ticket_status(locals, "candidate", "effective_mode_status"),
+                "transitioning"
+            );
+            assert!(
+                playback
+                    .callback
+                    .mixer
+                    .stem_transition_for_measurement(0)
+                    .is_active()
+            );
+        }
+        render_varispeed(playback, 127);
+        assert_eq!(
+            voice(&playback.callback.mixer)
+                .stretch
+                .native_state_address(),
+            native
+        );
+    }
+    assert!(
+        !playback
+            .callback
+            .mixer
+            .stem_transition_for_measurement(0)
+            .is_active()
+    );
+    assert_eq!(voice(&playback.callback.mixer).generation, generation);
+    assert!(
+        playback
+            .feed(playback.source_frame, 127)
+            .iter()
+            .flatten()
+            .all(|sample| *sample == 0.0)
+    );
+    let actual = voice(&playback.callback.mixer);
+    for channel in 0..2 {
+        // Only the freshly rendered prefix is output, not unused scratch space.
+        assert!(
+            actual.stretch.varispeed_buffers()[channel][..127]
+                .iter()
+                .all(|sample| *sample == 0.0)
+        );
+        assert!(
+            actual.stretch.output_buffers()[channel][..127]
+                .iter()
+                .all(|sample| *sample == 0.0)
+        );
+    }
+    assert_eq!(
+        controller_ticket_status(locals, "candidate", "effective_mode_status"),
+        "effective"
+    );
+    // Do not poll the effective receipt yet: V2's own effectiveness precedes
+    // any V3 registration, independently of the earlier pre-Native poll.
+}
+
+fn repeated_sets_after_empty_claim(
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    locals: &Py<PyDict>,
+    full_stems: &PreparedStemSet,
+    predecessor: &PreparedStemSet,
+    key_lock: bool,
+) {
+    let transition = playback.callback.mixer.stem_transition_for_measurement(0);
+    assert_eq!(
+        transition.required_from_selection(),
+        Some(
+            crate::audio_engine::source_reader::StemRenderSelection::for_stems(predecessor, 0b1010)
+        )
+    );
+    let v2 = playback.callback.mixer.stems_for_measurement()[0]
+        .clone()
+        .unwrap();
+    assert!(!Arc::ptr_eq(
+        &predecessor.complete_set_identity,
+        &v2.complete_set_identity
+    ));
+    let before = voice(&playback.callback.mixer);
+    let clock = before.source_playback;
+    let generation = before.generation;
+    let native = before.stretch.native_state_address();
+    let fifo = before.stretch.pending_fifo_frames();
+    controller_python(
+        locals,
+        r#"
+v2_control = live.control
+assert live.attempt is v2_control and v2_control.receipt is candidate
+assert v2_control.receipt_intent == ('all_stems', 0)
+for mask in (0b0101, 0, 0b1010):
+    assert controller.set_stem_enabled_mask(0, mask)
+    assert session.pad_stem_enabled_mask[0] == mask
+    assert live.desired == ('all_stems', mask)
+    assert live.control is v2_control and live.attempt is v2_control
+    assert v2_control.receipt is candidate and v2_control.receipt_intent == ('all_stems', 0)
+    assert candidate.claimed() and candidate.is_current()
+    assert candidate.effective_mode_status() == 'transitioning'
+
+disk_v3 = StemPairSelection.model_validate_json(third_json)
+assert len({disk_v1.stem_set_identity, disk_v2.stem_set_identity, disk_v3.stem_set_identity}) == 3
+assert len({disk_v1.wav_generation, disk_v2.wav_generation, disk_v3.wav_generation}) == 3
+entry_v3 = StemCacheEntry(source_version=fixture['source_version'], cache_dir=disk_v3.wav_generation,
+    stems=expected_stem_files(disk_v3.wav_generation), pair=disk_v3, available=True)
+owner_v3 = audio.acquire_project_asset_lease(str(Path(entry_v3.cache_dir).absolute()))
+persistence.commit_stem_selection(0, entry_v2, entry_v3,
+    lambda: project.stem_cache[0] is entry_v2 and source_v3.same_source_request(
+        audio.capture_prepared_source(0, fixture['source_version'])))
+reopened = ProjectPersistence.from_config_path(persistence.config_path)
+assert reopened.load_error is None and reopened.project.stem_cache[0].pair == disk_v3
+project.stem_cache[0] = entry_v3
+prepared_v3.select()
+controller._register_committed_pair(0, prepared_v3, source_v3)
+assert controller.set_stem_mix_mode(0, 'all_stems')
+for _ in range(16):
+    controller.on_frame_render()
+    assert live.disk.selection is None and live.disk.registration == 'deferred'
+    assert live.control is v2_control and live.attempt is v2_control
+    assert live.desired == ('all_stems', 0b1010)
+    assert candidate.claimed() and candidate.is_current() and not candidate.withdraw()
+    status = controller.stem_residency_status(0)
+    assert status.disk_stem_set_identity == disk_v3.stem_set_identity
+    assert status.control_stem_set_identity == disk_v2.stem_set_identity
+    assert status.attempt_stem_set_identity == disk_v2.stem_set_identity
+    assert status.effective_stem_set_identity == disk_v1.stem_set_identity
+    assert status.residency == 'accepted' and status.effective == 'transitioning'
+    assert status.registration == 'deferred'
+assert not session.stem_generation_errors, session.stem_generation_errors
+"#,
+    );
+    assert!(
+        consumer.is_empty(),
+        "no V3 callback command while V2 is claimed"
+    );
+    assert!(
+        playback
+            .callback
+            .mixer
+            .stem_transition_for_measurement(0)
+            .matches_exact(transition)
+    );
+    let current = voice(&playback.callback.mixer);
+    assert!(current.source_playback.matches_exact(&clock));
+    assert_eq!(current.generation, generation);
+    assert_eq!(current.stretch.native_state_address(), native);
+    assert_eq!(current.stretch.pending_fifo_frames(), fifo);
+    let held = playback.callback.mixer.stems_for_measurement()[0]
+        .as_ref()
+        .unwrap();
+    assert!(Arc::ptr_eq(
+        &held.complete_set_identity,
+        &v2.complete_set_identity
+    ));
+    for (before, after) in v2.stems.iter().zip(&held.stems) {
+        assert!(Arc::ptr_eq(&before.samples, &after.samples));
+    }
+    assert_eq!(playback.callback.mixer.stem_demand_for_measurement(0).1, 0);
+    settle_empty(playback, consumer, locals, key_lock);
+    assert!(consumer.is_empty());
+    controller_python(
+        locals,
+        r#"
+assert candidate.residency_status() == 'accepted' and candidate.effective_mode_status() == 'effective'
+assert live.disk.selection is None and live.control is v2_control
+controller.on_frame_render()
+third_control = live.disk.selection
+third = live.attempt.receipt
+assert third_control is not v2_control and third is not candidate
+assert third_control.receipt_intent == ('all_stems', 0b1010)
+assert third_control.ticket.publication_status() == 'accepted' and third.is_current()
+assert third.residency_status() in {'captured', 'pending'} and third.effective_mode_status() == 'waiting'
+status = controller.stem_residency_status(0)
+assert status.disk_stem_set_identity == disk_v3.stem_set_identity
+assert status.control_stem_set_identity == disk_v2.stem_set_identity
+assert status.attempt_stem_set_identity == disk_v3.stem_set_identity
+assert status.effective_stem_set_identity == disk_v2.stem_set_identity
+assert status.effective == 'waiting'
+assert not session.stem_generation_errors, session.stem_generation_errors
+"#,
+    );
+    assert!(
+        Arc::ptr_eq(
+            &playback.callback.mixer.stems_for_measurement()[0]
+                .as_ref()
+                .unwrap()
+                .complete_set_identity,
+            &v2.complete_set_identity
+        ),
+        "V2 ACK cannot install V3"
+    );
+    own_adoption(playback, consumer, locals, "third", key_lock);
+    let v3 = playback.callback.mixer.stems_for_measurement()[0]
+        .as_ref()
+        .unwrap();
+    assert!(!Arc::ptr_eq(
+        &v2.complete_set_identity,
+        &v3.complete_set_identity
+    ));
+    assert!(!Arc::ptr_eq(
+        &predecessor.complete_set_identity,
+        &v3.complete_set_identity
+    ));
+    for (before, after) in v2.stems.iter().zip(&v3.stems) {
+        assert!(!Arc::ptr_eq(&before.samples, &after.samples));
+    }
+    assert_eq!(
+        playback.callback.mixer.stem_demand_for_measurement(0).1,
+        0b1010
+    );
+    assert_eq!(voice(&playback.callback.mixer).generation, generation);
+    // Real V3 swaps melody/bass: actual1010 means independent V1 bass+drums.
+    assert!(
+        playback
+            .reference
+            .set_stem_enabled_mask(0, 0b1100, full_stems.source_version_hash)
+    );
+    playback.select(Some(0b1100));
+    controller_python(
+        locals,
+        r#"
+controller.on_frame_render()
+status = controller.stem_residency_status(0)
+assert live.control is third_control and live.attempt is third_control
+assert status.control_stem_set_identity == disk_v3.stem_set_identity
+assert status.effective_stem_set_identity == disk_v2.stem_set_identity
+assert status.effective == 'transitioning'
+assert third.claimed() and not third.withdraw()
+"#,
+    );
+    if key_lock {
+        settle_wet(playback, locals, "third");
+    } else {
+        settle_varispeed(playback, locals, "third");
+    }
+    controller_python(
+        locals,
+        r#"
+status = controller.stem_residency_status(0)
+assert status.registration == 'accepted' and status.residency == 'accepted'
+assert status.effective == 'effective' and live.attempt is None
+assert status.disk_stem_set_identity == disk_v3.stem_set_identity
+assert status.control_stem_set_identity == disk_v3.stem_set_identity
+assert status.effective_stem_set_identity == disk_v3.stem_set_identity
+assert project.stem_cache[0].pair == disk_v3
+assert session.pad_stem_enabled_mask[0] == 0b1010
+assert not session.stem_generation_errors, session.stem_generation_errors
+owner_v3.release()
+"#,
     );
 }
 
@@ -799,8 +1166,16 @@ fn round_trip(
     key_lock: bool,
     stopped_before_poll: Option<bool>,
     paused_first: bool,
+    repeated_sets: bool,
 ) {
     assert!(key_lock || delete_pause.is_none());
+    assert!(
+        !repeated_sets
+            || (selected_v1
+                && delete_pause.is_none()
+                && stopped_before_poll.is_none()
+                && !paused_first)
+    );
     let previous_cwd = std::env::current_dir().unwrap();
     let mut h = long_harness();
     // Only the exact child owns this cwd and its project config/artifact paths.
@@ -884,6 +1259,7 @@ fn round_trip(
             .set_item("input_json", serde_json::to_string(&fixture).unwrap())
             .unwrap();
         locals.set_item("selected_v1", selected_v1).unwrap();
+        locals.set_item("repeated_sets", repeated_sets).unwrap();
         locals
             .set_item(
                 "playback_audio",
@@ -1224,6 +1600,11 @@ assert session.paused_sample_ids == {0, 215}
     let predecessor = playback.callback.mixer.stems_for_measurement()[0]
         .as_ref()
         .map(|stems| stems.complete_set_identity.clone());
+    let predecessor_set = repeated_sets.then(|| {
+        playback.callback.mixer.stems_for_measurement()[0]
+            .clone()
+            .unwrap()
+    });
     let (v2, source_ticket) = v2_files(
         &engine,
         &h.root,
@@ -1277,6 +1658,8 @@ status = controller.stem_residency_status(0)
 assert status.disk_stem_set_identity == disk_v2.stem_set_identity
 assert status.control_stem_set_identity == disk_v1.stem_set_identity
 assert status.effective_stem_set_identity == (disk_v1.stem_set_identity if selected_v1 else None)
+if repeated_sets:
+    assert controller.set_stem_enabled_mask(0, 0)
 assert controller.set_stem_mix_mode(0, 'all_stems')
 assert controller._publish_all_stems_mode_if_preferred(0, fixture['source_version'])
 candidate = live.attempt.receipt
@@ -1313,7 +1696,7 @@ assert previous_control.ticket.is_current()
     );
     assert_eq!(
         playback.callback.mixer.stem_demand_for_measurement(0).1,
-        0b1010
+        if repeated_sets { 0 } else { 0b1010 }
     );
     let current_source = playback.callback.mixer.bank_for_measurement()[0]
         .as_ref()
@@ -1333,18 +1716,19 @@ assert previous_control.ticket.is_current()
         voice(&playback.callback.mixer).generation,
         initial_generation
     );
-    // Actual V2 mask 1010 means V1 melody+vocals after the physical file permutation.
-    assert!(
-        playback
-            .reference
-            .set_stem_enabled_mask(0, 0b0011, full_stems.source_version_hash)
-    );
+    // Actual V2 mask1010 maps to V1 vocals+melody; mask0 stays Some(0), not FullMix.
+    let oracle_mask = if repeated_sets { 0 } else { 0b0011 };
+    assert!(playback.reference.set_stem_enabled_mask(
+        0,
+        oracle_mask,
+        full_stems.source_version_hash
+    ));
     assert!(playback.reference.set_stem_mix_mode(
         0,
         StemMixMode::AllStems,
         full_stems.source_version_hash
     ));
-    playback.select(Some(0b0011));
+    playback.select(Some(oracle_mask));
     controller_python(
         &locals,
         r#"
@@ -1357,7 +1741,38 @@ assert candidate.claimed() and not candidate.withdraw()
 assert not previous_control.ticket.is_current()
 "#,
     );
-    if let Some(paused) = delete_pause {
+    if repeated_sets {
+        let (v3, source_ticket) = version_files(
+            &engine,
+            &h.root,
+            &h.version,
+            &h.wav_reference,
+            full.frame_count(),
+            FixtureSet::Third,
+        );
+        Python::attach(|py| {
+            locals
+                .bind(py)
+                .set_item("third_json", v3.selection_json().to_owned())
+                .unwrap();
+            locals
+                .bind(py)
+                .set_item("prepared_v3", Py::new(py, v3).unwrap())
+                .unwrap();
+            locals
+                .bind(py)
+                .set_item("source_v3", Py::new(py, source_ticket).unwrap())
+                .unwrap();
+        });
+        repeated_sets_after_empty_claim(
+            &mut playback,
+            &mut h.consumer,
+            &locals,
+            &full_stems,
+            &predecessor_set.unwrap(),
+            key_lock,
+        );
+    } else if let Some(paused) = delete_pause {
         delete_during_claimed_handover(
             &mut playback,
             &mut h.consumer,
@@ -1462,10 +1877,10 @@ assert controller._stem_worker_pool._executor._max_workers == 2
 fn actual_python_controller_first_and_replacement_candidates_keep_own_wet_chronology() {
     if std::env::var_os(CHILD).is_some() {
         for selected_v1 in [false, true] {
-            round_trip(selected_v1, None, true, None, false);
+            round_trip(selected_v1, None, true, None, false, false);
         }
         for paused in [false, true] {
-            round_trip(true, Some(paused), true, None, false);
+            round_trip(true, Some(paused), true, None, false, false);
         }
         return;
     }
@@ -1487,7 +1902,7 @@ fn actual_python_controller_first_and_replacement_candidates_keep_own_wet_chrono
 fn actual_python_controller_keylock_off_first_and_replacement_keep_varispeed_feed_and_eq() {
     if std::env::var_os(VARISPEED_CHILD).is_some() {
         for selected_v1 in [false, true] {
-            round_trip(selected_v1, None, false, None, false);
+            round_trip(selected_v1, None, false, None, false, false);
         }
         return;
     }
@@ -1509,7 +1924,7 @@ fn actual_python_controller_keylock_off_first_and_replacement_keep_varispeed_fee
 fn actual_python_controller_stopped_replacement_play_then_fresh_all_uses_own_wet_receipt() {
     if std::env::var_os(STOPPED_NEW_SET_CHILD).is_some() {
         for before_poll in [false, true] {
-            round_trip(false, None, true, Some(before_poll), false);
+            round_trip(false, None, true, Some(before_poll), false, false);
         }
         return;
     }
@@ -1535,7 +1950,7 @@ fn actual_python_controller_stopped_replacement_play_then_fresh_all_uses_own_wet
 #[test]
 fn actual_python_controller_wet_full_mix_paused_before_first_candidate_keeps_consumed_clock() {
     if std::env::var_os(PAUSED_FIRST_CHILD).is_some() {
-        round_trip(false, None, true, None, true);
+        round_trip(false, None, true, None, true, false);
         return;
     }
     let output = std::process::Command::new(std::env::current_exe().unwrap())
@@ -1551,6 +1966,33 @@ fn actual_python_controller_wet_full_mix_paused_before_first_candidate_keeps_con
     assert!(
         output.status.success(),
         "L3 paused-first child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+}
+
+#[test]
+fn actual_python_controller_empty_handover_defers_v3_and_uses_latest_mask_with_own_ack() {
+    if std::env::var_os(REPEATED_SETS_CHILD).is_some() {
+        for key_lock in [true, false] {
+            round_trip(true, None, key_lock, None, false, true);
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            REPEATED_SETS_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(REPEATED_SETS_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 repeated sets child failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

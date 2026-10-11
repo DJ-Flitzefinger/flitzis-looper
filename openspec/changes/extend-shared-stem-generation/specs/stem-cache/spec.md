@@ -169,6 +169,15 @@ immediate change SHALL NOT silently discard the command.
 - **THEN** the bounded controller SHALL retain truthful observation of V2 and defer or safely reject interruption of the occupied handover
 - **AND** V2's delayed ACK SHALL NOT label V3 effective or overwrite V1's reader before final use
 
+#### Scenario: Public mask intent and a later set survive an empty owned handover
+- **GIVEN** productive finite NormalLoop V1 playback and a distinct V2 whose own accepted and claimed handover targets ALL with no enabled components while V1 remains the outgoing reader
+- **WHEN** public mask changes coalesce to a latest ALL intent and a distinct verified V3 becomes the durable current disk selection
+- **THEN** the controller SHALL retain V2's own receipt and the latest desired mask and disk target separately, without interrupting the claimed handover or reporting V3 effective
+- **AND** rendering SHALL retain V1 through its final use and complete the handover through 128 consumed source frames; the resulting zero source feed SHALL preserve existing Native/FIFO/filter chronology rather than force instantaneous output silence
+- **AND** V3 registration and admission SHALL remain deferred while V2's own effective transition is unsettled, including its required source-specific Native preparation with KEY LOCK ON
+- **AND** after settlement V3 SHALL obtain fresh own Capture, worker preparation and Adopt authority for the latest requested mask, even when the ALL mode is unchanged
+- **AND** only V3's own subsequent effective output SHALL confirm V3; neither its disk commit nor V2's delayed ACK SHALL supply that confirmation
+
 #### Scenario: Retirement pressure retains the outgoing reader
 - **WHEN** a ramp, stop, unload or source replacement releases its use of V1 while retirement capacity is full
 - **THEN** the actual V1 owner SHALL remain held for bounded off-thread retry without callback destruction of its final backing

@@ -693,3 +693,46 @@ legacy controller paths pass freshly in1.68s/1.49s. Formatting, official strict
 validation, five relative-file links and whitespace pass. Package Clippy tests
 exit0 with the existing63 warnings (one duplicate), none in either changed test
 file. One independent nonauthor final review finds no concrete issue.
+
+### Public empty handover and a deferred third complete set
+
+The public controller fixture now includes effective V1/ALL1010 followed by a
+public zero-mask request for genuine V2. After V2's own Capture/worker/Adopt,
+V1 is still the exact outgoing reader and V2's receipt is claimed/transitioning.
+Public masks0101→0→1010 coalesce while genuine V3 completes fenced durable
+commit/reopen. An equal ALL gesture preserves that latest mask. V3 has no Native
+registration or callback command while V2's own effective transition is unsettled.
+Disk V3, control/attempt V2 and effective V1 remain separately observable.
+An active controller poll after the empty source ramp and while V2's own later
+Native is prepared still verifies deferred V3 registration, the exact V2 receipt
+and latest intent, the old effective identity and absence of V3 callback commands.
+
+The two cases use KEY LOCK ON/rate0.75 and OFF/rate1.25. Independent complete V1
+PCM supplies the actual 128 consumed-source-frame empty handover and the exact
+continuous raw-Native/FIFO/EQ or varispeed/EQ oracle. ON additionally reconstructs
+V2's own later 4096-frame zero-feed Native preparation and verifies current-source
+wet readiness. Both check freshly rendered pre-EQ source/output prefixes are zero;
+queued Wet and filter tails are compared continuously without a reset or an
+instantaneous post-EQ silence requirement. The zero mask is ALL with no enabled
+components, never FullMix.
+
+V3 uses a separate0x302 generation, real melody/bass permutation and freshly
+hashed complete manifest; it neither overwrites nor aliases V1 or V2. Only after
+V2's own effectiveness does a controller poll admit V3's fresh own Capture,
+worker and Adopt for mask1010. Its independent V1-PCM oracle is mask1100;
+subsequent nontrivial V3 output differs from FullMix and retains the same voice,
+source trajectory and continuous processing. A zero-gain independently tracked
+pad215 retains its own source, demand, generation, Native and FIFO state.
+
+This bounded proof leaves the rest of task3.2, the full paused/rate/mask matrix,
+additional domains3.3, L4 and later product/resource/Human acceptance gates open.
+Production inputs and the preceding build-only Release/import/Python checks are
+unchanged; no Native installation or App/device/hearing acceptance is involved.
+
+The final affected public Native suite passes5 tests in15.76s. Its strengthened
+empty/repeated-set case also passes separately in3.16s. Formatting, official
+strict validation, five relative-file links and whitespace pass; Clippy tests
+exit0 with the existing63 warnings (one duplicate), none in the changed test.
+One independent nonauthor final review identified the missing active poll at
+the post-ramp/pre-Native boundary; that test fence is now covered and the finding
+is closed, with no further findings or production change.
