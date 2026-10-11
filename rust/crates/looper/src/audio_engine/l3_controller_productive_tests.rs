@@ -25,6 +25,8 @@ const WORKER_POST_PRESSURE_CHILD: &str = "FLITZI_L3_CONTROLLER_WORKER_POST_PRESS
 const WORKER_POST_PRESSURE_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_worker_adopt_queue_failure_keeps_v1_then_own_explicit_retry";
 const CAPTURE_DEADLINE_CHILD: &str = "FLITZI_L3_CONTROLLER_CAPTURE_DEADLINE_CHILD";
 const CAPTURE_DEADLINE_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_pending_capture_deadline_keeps_v1_then_fresh_own_retry";
+const PUBLIC_BPM_CHILD: &str = "FLITZI_L3_CONTROLLER_PUBLIC_BPM_CHILD";
+const PUBLIC_BPM_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_bpm_target_then_own_replacement_preserves_musical_wet_chronology";
 
 #[derive(Clone, Copy)]
 enum CandidateTrace {
@@ -34,6 +36,220 @@ enum CandidateTrace {
     AdmissionPressure,
     WorkerPostPressure,
     CaptureDeadline,
+    PublicBpm(f64),
+}
+
+fn public_bpm_before_voice_birth(
+    locals: &Py<PyDict>,
+    callback: &mut Callback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    parameters: &mut rtrb::Consumer<ControlParameterMessage>,
+    projection: crate::audio_engine::constant_timing::AcceptedTimingProjection,
+    target_bpm: f64,
+) -> f64 {
+    Python::attach(|py| {
+        locals
+            .bind(py)
+            .set_item("accepted_period", projection.period_seconds)
+            .unwrap();
+        locals.bind(py).set_item("target_bpm", target_bpm).unwrap();
+    });
+    controller_python(
+        locals,
+        r#"
+from flitzis_looper.controller.transport import TransportController
+class BpmTransportAudio:
+    def __getattr__(self, name):
+        if name in {'current_constant_timing', 'set_bpm_lock', 'bootstrap_transport_from_pad',
+                    'set_master_period', 'set_speed_and_master_period'}:
+            return getattr(bpm_audio, name)
+        return getattr(playback_audio, name)
+project.selected_pad = 0
+project.speed = 1.0
+project.bpm_lock = False
+project.manual_bpm[0] = None
+project.pad_loop_auto[0] = False
+project.pad_loop_start_s[0] = 17 / fixture['rate']
+project.pad_loop_end_s[0] = 1517 / fixture['rate']
+transport = TransportController(project, session, BpmTransportAudio(), persistence.mark_dirty)
+timing_before_bpm = transport.bpm.current_timing(0)
+assert timing_before_bpm is not None and timing_before_bpm.accepted_revision is not None
+assert timing_before_bpm.period_seconds == accepted_period
+transport.global_params.set_bpm_lock(enabled=True)
+assert project.bpm_lock and session.bpm_lock_anchor_pad_id == 0
+assert session.master_period_seconds == accepted_period
+"#,
+    );
+    assert!(!callback.mixer.voices.iter().any(|voice| voice.active));
+    assert!(matches!(
+        consumer.peek(),
+        Ok(ControlMessage::SetBpmLock(true))
+    ));
+    assert!(
+        matches!(parameters.peek(), Ok(ControlParameterMessage::SetMasterPeriod(period))
+        if period.to_bits() == projection.period_seconds.to_bits())
+    );
+    assert_eq!(callback.drain(consumer), 2, "actual BPM Lock and Bootstrap");
+    crate::audio_engine::audio_stream::drain_parameter_messages(
+        parameters,
+        &mut callback.mixer,
+        &mut callback.transport,
+    );
+    assert!(consumer.is_empty() && parameters.is_empty());
+    controller_python(
+        locals,
+        r#"
+assert transport.global_params.set_effective_display_bpm(target_bpm)
+assert project.speed == accepted_period * (target_bpm / 60)
+assert session.master_period_seconds == accepted_period / project.speed
+assert abs(transport.global_params.effective_display_bpm() - target_bpm) < 1e-10
+assert transport.bpm.current_timing(0) == timing_before_bpm
+"#,
+    );
+    let admitted_speed = projection.period_seconds * (target_bpm / 60.0);
+    let admitted_master = projection.period_seconds / admitted_speed;
+    // Python display/model admission is not an audio ACK: the actual callback
+    // still uses its previously applied accepted source period at this point.
+    assert_eq!(
+        callback.mixer.output_bpm_for_sample_id(0).unwrap(),
+        60.0 / projection.period_seconds
+    );
+    assert!(
+        matches!(parameters.peek(), Ok(ControlParameterMessage::SetSpeedAndMasterPeriod {
+        speed, period_seconds
+    }) if speed.to_bits() == admitted_speed.to_bits()
+        && period_seconds.to_bits() == admitted_master.to_bits())
+    );
+    assert!(matches!(
+        consumer.peek(),
+        Ok(ControlMessage::BootstrapTransportFromPad { id: 0 })
+    ));
+    // Match the regular callback's control-before-parameter drain order.
+    assert_eq!(callback.drain(consumer), 1);
+    crate::audio_engine::audio_stream::drain_parameter_messages(
+        parameters,
+        &mut callback.mixer,
+        &mut callback.transport,
+    );
+    assert!(consumer.is_empty() && parameters.is_empty());
+    assert!(!callback.mixer.voices.iter().any(|voice| voice.active));
+    assert_eq!(
+        callback.mixer.output_bpm_for_sample_id(0).unwrap(),
+        60.0 / admitted_master
+    );
+    projection.period_seconds / admitted_master
+}
+
+fn render_public_bpm_tail_sample(playback: &mut ControllerPlayback) {
+    let last = (LOOP_END - LOOP_START - 1) as f64;
+    let target = (playback.source_frame..playback.source_frame + 4_096)
+        .find(|frame| {
+            let phase = (*frame as f64 * playback.ratio).rem_euclid(playback.loop_period);
+            phase > last + 0.1 && phase < playback.loop_period - 0.1
+        })
+        .expect("fractional displayed BPM must actually sample the virtual tail interior");
+    while playback.source_frame < target {
+        playback.render((target - playback.source_frame).min(777) as usize, true);
+    }
+    let phase = (target as f64 * playback.ratio).rem_euclid(playback.loop_period);
+    let alpha = (phase - last) / (playback.loop_period - last);
+    assert!(alpha > 0.0 && alpha < 1.0);
+    assert_ne!(alpha as f32, phase.fract() as f32);
+    playback.render(1, true);
+    let taps = tap_observation_for_test();
+    assert_eq!(taps.missing_reads, 0);
+    assert_eq!(taps.min_frame, Some(LOOP_START));
+    assert_eq!(taps.max_frame, Some(LOOP_END - 1));
+}
+
+/// The Python TransportController uses real source queries from ReadyPlaybackAudio
+/// and these actual Native queue-admission primitives. No stream/device or fabricated
+/// ACK is supplied; the stream-bound Engine setter wrappers are outside this proof.
+#[pyclass]
+struct PublicBpmAudio {
+    engine: Arc<AudioEngine>,
+    producer: Arc<Mutex<rtrb::Producer<ControlMessage>>>,
+    parameter_producer: Arc<Mutex<rtrb::Producer<ControlParameterMessage>>>,
+}
+
+#[pymethods]
+impl PublicBpmAudio {
+    fn current_constant_timing(&self, py: Python<'_>, id: usize) -> PyResult<Option<Py<PyAny>>> {
+        if id >= NUM_SAMPLES {
+            return Err(pyo3::exceptions::PyValueError::new_err("id out of range"));
+        }
+        // The public Engine query returns None without a stream. This fixture
+        // uses its exact current-source/intent/ACK resolver without a device.
+        crate::audio_engine::constant_timing::current_metadata(&self.engine, py, id)
+    }
+
+    fn set_bpm_lock(&self, enabled: bool) -> PyResult<()> {
+        let _requests = self.engine.pad_request_ids.lock().unwrap();
+        crate::audio_engine::push_global_timing_message(
+            &self.engine.global_timing_revision,
+            &mut self.producer.lock().unwrap(),
+            ControlMessage::SetBpmLock(enabled),
+            "SetBpmLock",
+        )
+    }
+
+    fn bootstrap_transport_from_pad(&self, id: usize) -> PyResult<()> {
+        if id >= NUM_SAMPLES {
+            return Err(pyo3::exceptions::PyValueError::new_err("id out of range"));
+        }
+        let _requests = self.engine.pad_request_ids.lock().unwrap();
+        crate::audio_engine::push_global_timing_message(
+            &self.engine.global_timing_revision,
+            &mut self.producer.lock().unwrap(),
+            ControlMessage::BootstrapTransportFromPad { id },
+            "BootstrapTransportFromPad",
+        )
+    }
+
+    fn set_master_period(&self, period_seconds: f64) -> PyResult<()> {
+        if !period_seconds.is_finite()
+            || period_seconds <= 0.0
+            || !(period_seconds * f64::from(RATE) * 4.0).is_finite()
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "master period out of range",
+            ));
+        }
+        let _requests = self.engine.pad_request_ids.lock().unwrap();
+        crate::audio_engine::push_global_timing_message(
+            &self.engine.global_timing_revision,
+            &mut self.parameter_producer.lock().unwrap(),
+            ControlParameterMessage::SetMasterPeriod(period_seconds),
+            "SetMasterPeriod",
+        )
+    }
+
+    fn set_speed_and_master_period(&self, speed: f64, period_seconds: f64) -> PyResult<()> {
+        use crate::audio_engine::constants::{SPEED_MAX, SPEED_MIN};
+        if !speed.is_finite() || !(SPEED_MIN..=SPEED_MAX).contains(&speed) {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "speed out of range",
+            ));
+        }
+        if !period_seconds.is_finite()
+            || period_seconds <= 0.0
+            || !(period_seconds * f64::from(RATE) * 4.0).is_finite()
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "master period out of range",
+            ));
+        }
+        let _requests = self.engine.pad_request_ids.lock().unwrap();
+        crate::audio_engine::push_global_timing_message(
+            &self.engine.global_timing_revision,
+            &mut self.parameter_producer.lock().unwrap(),
+            ControlParameterMessage::SetSpeedAndMasterPeriod {
+                speed,
+                period_seconds,
+            },
+            "SetSpeedAndMasterPeriod",
+        )
+    }
 }
 
 enum FixtureSet {
@@ -178,12 +394,43 @@ fn complete_reference(
     ratio: f64,
     key_lock_enabled: bool,
 ) -> Box<RtMixer> {
+    complete_reference_with_timing(full, stems, ratio, key_lock_enabled, None)
+}
+
+fn complete_reference_with_timing(
+    full: &SampleBuffer,
+    stems: &PreparedStemSet,
+    ratio: f64,
+    key_lock_enabled: bool,
+    timing: Option<(
+        crate::audio_engine::constant_timing::AcceptedTimingProjection,
+        f64,
+    )>,
+) -> Box<RtMixer> {
+    let accepted = timing.map(|(projection, _)| projection);
     let mut mixer = Box::new(RtMixer::new(2, RATE as f32));
     let ownership = Arc::new(InputRuntimeOwnership::tracked());
     ownership.publish_source(0, full, RATE, 1);
     mixer.set_input_runtime_ownership(ownership.clone());
     mixer.load_sample(0, full.clone());
     assert!(mixer.publish_prepared_stems(0, stems.clone()));
+    if let Some((projection, master_period)) = timing {
+        let publication = PreparedSourcePermit::unrestricted();
+        publication.mark_pending().unwrap();
+        // Only this independent complete-PCM reference copies the already actual
+        // ACK. Product source authority came from the queued publication above.
+        assert!(mixer.publish_constant_timing_rt(
+            0,
+            crate::audio_engine::constant_timing::PreparedConstantTiming {
+                reference: full.clone(),
+                publication,
+                projection,
+            },
+            &mut crate::audio_engine::buffer_retirement::ImmediateAudioBufferRetirement,
+        ));
+        mixer.set_bpm_lock(true);
+        mixer.set_master_period(master_period);
+    }
     mixer.set_loop_region_frames(0, LOOP_START, Some(LOOP_END));
     mixer.set_speed(ratio);
     let key_lock = ownership.next_key_lock_request(0).unwrap();
@@ -199,7 +446,7 @@ fn complete_reference(
             sample_rate_hz: RATE,
             authority_revision: ownership.authority[0].load(Ordering::Acquire),
             runtime_revision: 0,
-            accepted: None,
+            accepted,
         },
         1,
     );
@@ -1888,6 +2135,15 @@ fn round_trip(
     let worker_post_pressure = matches!(trace, CandidateTrace::WorkerPostPressure);
     let queue_pressure = admission_pressure || worker_post_pressure;
     let capture_deadline = matches!(trace, CandidateTrace::CaptureDeadline);
+    let public_bpm = matches!(trace, CandidateTrace::PublicBpm(_));
+    assert!(
+        !public_bpm
+            || (key_lock
+                && selected_v1
+                && !paused_first
+                && delete_pause.is_none()
+                && stopped_before_poll.is_none())
+    );
     assert!(key_lock || delete_pause.is_none());
     assert!(
         !(repeated_sets || withdraw_preclaim || queue_pressure || capture_deadline)
@@ -1897,7 +2153,12 @@ fn round_trip(
                 && !paused_first)
     );
     let previous_cwd = std::env::current_dir().unwrap();
-    let mut h = long_harness();
+    let mut h = if public_bpm {
+        l3_native_tests::bpm_harness()
+    } else {
+        long_harness()
+    };
+    let accepted = public_bpm.then(|| l3_native_tests::accepted_bpm_timing(&mut h));
     // Only the exact child owns this cwd and its project config/artifact paths.
     std::env::set_current_dir(h.root.parent().unwrap()).unwrap();
     let source = h.ticket(0);
@@ -1960,6 +2221,8 @@ fn round_trip(
         "source_version": h.version, "pair": saved_selection, "frames": full.frame_count(), "rate": RATE,
     });
     let engine = Arc::new(h.engine);
+    let (parameter_producer, mut parameter_consumer) = rtrb::RingBuffer::new(8);
+    let parameter_producer = Arc::new(Mutex::new(parameter_producer));
     let locals = Python::attach(|py| {
         let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
             .ancestors()
@@ -1979,6 +2242,23 @@ fn round_trip(
             .set_item("input_json", serde_json::to_string(&fixture).unwrap())
             .unwrap();
         locals.set_item("selected_v1", selected_v1).unwrap();
+        locals.set_item("public_bpm", public_bpm).unwrap();
+        if public_bpm {
+            locals
+                .set_item(
+                    "bpm_audio",
+                    Py::new(
+                        py,
+                        PublicBpmAudio {
+                            engine: engine.clone(),
+                            producer: h.producer.clone(),
+                            parameter_producer: parameter_producer.clone(),
+                        },
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+        }
         locals.set_item("repeated_sets", repeated_sets).unwrap();
         locals.set_item("queue_pressure", queue_pressure).unwrap();
         locals
@@ -2037,7 +2317,7 @@ project = ProjectState()
 project.sample_paths[0] = fixture['original_reference']
 project.sample_durations[0] = fixture['frames'] / fixture['rate']
 project.pad_content[0] = PadContentIdentity(instance_id='8' * 32, material_id=fixture['material_id'])
-project.pad_timing_intent[0] = 'legacy'
+project.pad_timing_intent[0] = 'automatic' if public_bpm else 'legacy'
 project.pad_stem_mix_mode[0] = 'full_mix'
 disk_v1 = StemPairSelection.model_validate(fixture['pair'])
 project.stem_cache[0] = StemCacheEntry(source_version=fixture['source_version'],
@@ -2088,8 +2368,24 @@ persistence.mark_dirty()
 persistence.flush()
 "#,
     );
-    let ratio = if key_lock { 0.75 } else { 1.25 };
-    h.callback.mixer.set_speed(ratio);
+    let ratio = if let Some(projection) = accepted {
+        public_bpm_before_voice_birth(
+            &locals,
+            &mut h.callback,
+            &mut h.consumer,
+            &mut parameter_consumer,
+            projection,
+            if let CandidateTrace::PublicBpm(bpm) = trace {
+                bpm
+            } else {
+                unreachable!()
+            },
+        )
+    } else {
+        let ratio = if key_lock { 0.75 } else { 1.25 };
+        h.callback.mixer.set_speed(ratio);
+        ratio
+    };
     assert_eq!(h.callback.mixer.key_lock_for_measurement(0), key_lock);
     h.callback.mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
     if let Some(before_poll) = stopped_before_poll {
@@ -2160,6 +2456,7 @@ persistence.flush()
             source: full.clone(),
             components: full_stems.stems.clone(),
             ratio,
+            loop_period: (LOOP_END - LOOP_START) as f64,
             selection: Some(0b0011),
             previous: Some(0b0011),
             ramp_start: 0,
@@ -2239,16 +2536,40 @@ owner_v2.release()
         .native_state_address();
     let other_fifo = other_voice(&h.callback.mixer).stretch.pending_fifo_frames();
     let other_demand = h.callback.mixer.stem_demand_for_measurement(215);
+    let oracle_timing = accepted.map(|projection| {
+        let CandidateTrace::PublicBpm(bpm) = trace else {
+            unreachable!()
+        };
+        (
+            projection,
+            projection.period_seconds / (projection.period_seconds * (bpm / 60.0)),
+        )
+    });
     let mut playback = ControllerPlayback {
         callback: h.callback,
-        reference: complete_reference(&full, &full_stems, ratio, key_lock),
-        full_mix: complete_reference(&full, &full_stems, ratio, key_lock),
+        reference: complete_reference_with_timing(
+            &full,
+            &full_stems,
+            ratio,
+            key_lock,
+            oracle_timing,
+        ),
+        full_mix: complete_reference_with_timing(
+            &full,
+            &full_stems,
+            ratio,
+            key_lock,
+            oracle_timing,
+        ),
         frame: 0,
         source_frame: 0,
         resumed_at: None,
         source: full.clone(),
         components: full_stems.stems.clone(),
         ratio,
+        loop_period: accepted.map_or((LOOP_END - LOOP_START) as f64, |projection| {
+            projection.period_seconds * f64::from(RATE) / 16.0
+        }),
         selection: None,
         previous: None,
         ramp_start: 0,
@@ -2259,6 +2580,14 @@ owner_v2.release()
     if key_lock {
         playback.render(13, true);
         let (actual, _) = playback.adopt_native(true);
+        if public_bpm {
+            assert!(actual.iter().any(|sample| sample.abs() > 0.001));
+            assert_ne!(
+                playback.loop_period.to_bits(),
+                ((LOOP_END - LOOP_START) as f64).to_bits()
+            );
+            assert!(playback.source_frame as f64 * playback.ratio > playback.loop_period);
+        }
         if paused_first {
             assert!(actual.iter().any(|sample| sample.abs() > 0.001));
         }
@@ -2643,15 +2972,60 @@ if capture_deadline:
 "#,
         );
     }
+    if matches!(trace, CandidateTrace::PublicBpm(bpm) if bpm == 149.9) {
+        render_public_bpm_tail_sample(&mut playback);
+    }
+    if public_bpm {
+        let current = engine
+            .current_input_runtime_pad_binding(0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(current.binding.accepted, accepted);
+        assert_eq!(
+            engine.current_timing_acknowledgements.current_epoch(0),
+            accepted.unwrap().publication_epoch
+        );
+        controller_python(
+            &locals,
+            r#"
+assert transport.bpm.current_timing(0) == timing_before_bpm
+assert session.bpm_lock_anchor_revision == timing_before_bpm.accepted_revision
+assert session.master_period_seconds == accepted_period / project.speed
+persistence.mark_dirty()
+persistence.flush()
+bpm_reopened = ProjectPersistence.from_config_path(persistence.config_path)
+assert bpm_reopened.load_error is None
+assert bpm_reopened.project.bpm_lock and bpm_reopened.project.speed == project.speed
+assert bpm_reopened.project.manual_bpm[0] is None
+assert bpm_reopened.project.pad_timing_intent[0] == 'automatic'
+assert bpm_reopened.project.stem_cache[0].pair == disk_v2
+"#,
+        );
+    }
     let other = other_voice(&playback.callback.mixer);
     assert_eq!(other.generation, other_generation);
     assert_eq!(other.stretch.native_state_address(), other_native);
     assert_eq!(other.stretch.pending_fifo_frames(), other_fifo);
-    assert!(
-        other
-            .source_playback
-            .matches_exact(&voice(&playback.callback.mixer).source_playback)
-    );
+    if let CandidateTrace::PublicBpm(target_bpm) = trace {
+        // The other pad has no accepted timing and keeps its own physical loop.
+        let other_ratio = accepted.unwrap().period_seconds * (target_bpm / 60.0);
+        let distance = playback.source_frame as f64 * other_ratio;
+        let phase = distance.rem_euclid((LOOP_END - LOOP_START) as f64);
+        let position = other.source_playback.position();
+        assert_eq!(
+            other.source_playback.tempo_ratio().to_bits(),
+            other_ratio.to_bits()
+        );
+        assert_eq!(other.source_playback.loop_period(), None);
+        assert_eq!(position.frame, LOOP_START + phase.floor() as usize);
+        assert_eq!(position.fraction.to_bits(), distance.fract().to_bits());
+    } else {
+        assert!(
+            other
+                .source_playback
+                .matches_exact(&voice(&playback.callback.mixer).source_playback)
+        );
+    }
     assert!(Arc::ptr_eq(
         &other.sample.as_ref().unwrap().samples,
         &other_source.samples
@@ -2666,6 +3040,40 @@ if capture_deadline:
         "controller.shut_down()\ncontroller._assets.release_saved_assignments()\nowner_v1.release()\nowner_v2.release()",
     );
     std::env::set_current_dir(previous_cwd).unwrap();
+}
+
+#[test]
+fn actual_public_bpm_target_then_own_replacement_preserves_musical_wet_chronology() {
+    if std::env::var_os(PUBLIC_BPM_CHILD).is_some() {
+        for bpm in [150.0, 149.9] {
+            round_trip(
+                true,
+                None,
+                true,
+                None,
+                false,
+                CandidateTrace::PublicBpm(bpm),
+            );
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            PUBLIC_BPM_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(PUBLIC_BPM_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 public BPM child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
 }
 
 #[test]

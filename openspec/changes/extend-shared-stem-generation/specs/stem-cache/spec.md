@@ -126,6 +126,12 @@ immediate change SHALL NOT silently discard the command.
 - **THEN** the exact accepted timing, musical source phase and current KEY LOCK mode SHALL remain authoritative through both actual readers and the source-frame handover
 - **AND** productive continuation SHALL preserve virtual-seam addressing, actual Native/FIFO/filter history and later source-bound preparation without a restart or position jump
 
+#### Scenario: Public BPM target precedes productive replacement adoption
+- **GIVEN** real finite NormalLoop PCM and callback-acknowledged Automatic timing whose musical loop period differs from its physical extent
+- **WHEN** the public transport controller admits BPM Lock and a displayed BPM target before voice birth, the callback applies its actual control and coupled speed/master-period parameter messages, and productive V1 is later replaced through V2's own candidate transaction
+- **THEN** display and saved intent SHALL remain distinct from callback acknowledgement, and the accepted source timing SHALL retain its exact authority through Capture, worker preparation and Adopt
+- **AND** independent complete-PCM phase, virtual-tail interpolation, raw Native/FIFO and uninterrupted filter output SHALL verify the consumed-source-frame handover and V2's later own prepared wet effectiveness without restart
+
 #### Scenario: Rate smoothing advances through an own new-set handover
 - **GIVEN** current finite NormalLoop playback with a pending rate target and a verified first or replacement complete set
 - **WHEN** its own Capture, worker preparation and Adopt complete while the same target's active-output-frame smoothing continues

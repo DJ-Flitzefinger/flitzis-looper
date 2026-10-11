@@ -568,8 +568,9 @@ and uninterrupted per-frame EQ oracle verify actual varispeed output through the
 128 consumed-source-frame ramp and irregular partitions. OFF effectiveness follows
 actual dry source consumption; it claims neither wet processing nor a 4096-frame
 Native preparation. Existing ON paths retain their raw Native/FIFO oracle. The
-BPM paths use complete-PCM mixer/FIFO/cursor/history comparison; they do not add a
-separate algebraic raw-Native and per-frame EQ oracle under BPM control.
+four direct Native BPM paths use complete-PCM mixer/FIFO/cursor/history comparison;
+they do not add a separate algebraic raw-Native and per-frame EQ oracle under BPM
+control.
 
 The initial Release l3_ run was25PASS/1FAIL35.51s. Its sole failure was a test
 expectation conflating a consistent source binding with available Automatic
@@ -855,6 +856,56 @@ issue. Formatting, official strict validation and whitespace pass; Clippy tests
 exit0 with the existing63 warnings (one duplicate), none in the changed test.
 The preceding production Release/import/Python checks and unchanged verified
 relative-file links remain reusable.
+
+### Public BPM target and productive replacement
+
+Two public Python TransportController traces use Automatic timing on genuine
+16384-frame PCM and the same finite loop `[17,1517)`. Explicit synthetic timing
+labels pass the real source-bound publication and callback ACK; before ACK,
+Automatic metadata and prepared-source authority are unavailable. BPM Lock and
+displayed targets150 and149.9 are admitted before voice birth. A test facade
+forwards the four required setters into the actual control/parameter queues via
+Native admission primitives, while timing queries use its actual current Native
+source/intent/ACK resolver. The Engine query wrapper itself returns unavailable
+without an initialized stream, so this fixture forwards that underlying resolver.
+It supplies no device stream or fabricated ACK and does not prove the
+stream-bound Engine setter wrappers themselves.
+
+The test inspects and drains actual BPM-Lock/Bootstrap commands, the initial
+MasterPeriod and the later single coupled SpeedAndMasterPeriod message. Python
+display/session/project intent changes before the latter callback drain while
+the actual mixer still retains its earlier BPM. The existing accepted source
+projection keeps the same publication epoch and revision throughout adoption.
+
+Productive V1 ALL1010 is replaced by genuine distinct V2 files through durable
+selection commit/reopen, public ALL and its own Capture, worker and Adopt. The
+independent complete-V1 mask0011 supplies V2's expectation. Its algebraic clock
+uses accepted-period/master-period and musical period `T*48000/16`, approximately
+1500.0125 source frames, rather than the physical1500. Integer PCM knots retain
+their source addresses; the final knot interpolates to the first across the
+virtual tail without reading the exclusive end. Exact complete-PCM output,
+raw Native/FIFOs, uninterrupted per-frame EQ, source trajectory and the later
+own4096-output-frame warmfeed cover the consumed-source handover and genuine wet
+effectiveness. The149.9 case additionally renders one actual tail-interior frame
+with an independently computed nontrivial interpolation weight and verifies both
+physical endpoint taps. The other active zero-gain pad keeps its own physical
+loop and unchanged readers/Native/demand; saved BPM intent and disk V2 reopen.
+
+These targets precede voice birth and remain constant. Live BPM changes after
+Capture, their stale rejection/retry and actual transport-time/smoothing paths
+remain separate open work, along with full task3.2 and later product/resource/
+Human gates. Production and build-only runtime inputs remain unchanged; timing
+labels do not claim BeatThis inference, device output or listening acceptance.
+
+The impacted shared-fixture regression gate passes all47 Release tests in191.01s,
+including the existing Native BPM and both parent controller paths. After aligning
+the new test's final drain order with the regular callback, its two BPM paths
+pass freshly in4.73s; the other46 cases have unchanged inputs and are reused.
+One independent nonauthor final review, including that small alignment, closes
+without findings. Formatting, official strict validation, five relative file links
+and whitespace pass; Clippy tests exit0 with the existing63 warnings (one
+duplicate), none in the changed tests. Prior unchanged production Release/import/
+Python checks remain reusable, without Native installation or Human App changes.
 
 ### Public KEY LOCK OFF first candidate after Pause
 

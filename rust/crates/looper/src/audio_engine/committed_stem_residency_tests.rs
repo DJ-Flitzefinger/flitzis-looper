@@ -2078,6 +2078,7 @@ struct ControllerPlayback {
     source: SampleBuffer,
     components: [SampleBuffer; 4],
     ratio: f64,
+    loop_period: f64,
     selection: Option<u8>,
     previous: Option<u8>,
     ramp_start: u64,
@@ -2215,19 +2216,25 @@ impl ControllerPlayback {
     }
 
     fn feed(&self, start: u64, frames: usize) -> [Vec<f32>; 2] {
-        // Binary-exact fixture rates permit an algebraic clock independent
-        // of SourcePlayback, SourceReadPlan and either mixer. Physical knots
-        // come from the independently retained complete original/components.
+        // This algebraic clock is independent of SourcePlayback, SourceReadPlan
+        // and either mixer. Physical knots come from the independently retained
+        // complete original/components; a musical period joins its last physical
+        // knot to the first across the virtual tail without reading LOOP_END.
         std::array::from_fn(|channel| {
             (start..start + frames as u64)
                 .map(|output_frame| {
-                    let phase = (output_frame as f64 * self.ratio)
-                        .rem_euclid((LOOP_END - LOOP_START) as f64);
-                    let left = LOOP_START + phase.floor() as usize;
-                    let right = if left + 1 == LOOP_END {
-                        LOOP_START
+                    let phase = (output_frame as f64 * self.ratio).rem_euclid(self.loop_period);
+                    let last =
+                        (self.loop_period.ceil() as usize - 1).min(LOOP_END - LOOP_START - 1);
+                    let (left, right, fraction) = if phase >= last as f64 {
+                        (
+                            LOOP_START + last,
+                            LOOP_START,
+                            (phase - last as f64) / (self.loop_period - last as f64),
+                        )
                     } else {
-                        left + 1
+                        let left = LOOP_START + phase.floor() as usize;
+                        (left, left + 1, phase.fract())
                     };
                     let knot = |frame: usize, mask: Option<u8>| {
                         mask.map_or(self.source.samples[frame * 2 + channel], |mask| {
@@ -2256,7 +2263,7 @@ impl ControllerPlayback {
                         }
                     };
                     let left_value = sample(left);
-                    left_value + (sample(right) - left_value) * phase.fract() as f32
+                    left_value + (sample(right) - left_value) * fraction as f32
                 })
                 .collect()
         })
@@ -2342,6 +2349,23 @@ impl ControllerPlayback {
         );
         self.frame += frames as u64;
         self.source_frame += frames as u64;
+        if self.loop_period != (LOOP_END - LOOP_START) as f64 {
+            let phase = (self.source_frame as f64 * self.ratio).rem_euclid(self.loop_period);
+            let current = voice(&self.callback.mixer).source_playback;
+            assert_eq!(current.tempo_ratio().to_bits(), self.ratio.to_bits());
+            assert_eq!(
+                current.loop_period().unwrap().to_bits(),
+                self.loop_period.to_bits()
+            );
+            assert_eq!(
+                current.position().frame,
+                LOOP_START + phase.floor() as usize
+            );
+            assert_eq!(
+                current.position().fraction.to_bits(),
+                phase.fract().to_bits()
+            );
+        }
         (output, full_mix)
     }
 
@@ -3061,6 +3085,7 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
         source: full.clone(),
         components: full_stems.stems.clone(),
         ratio,
+        loop_period: (LOOP_END - LOOP_START) as f64,
         selection: stopped_start.then_some(0b1010),
         previous: stopped_start.then_some(0b1010),
         ramp_start: 0,

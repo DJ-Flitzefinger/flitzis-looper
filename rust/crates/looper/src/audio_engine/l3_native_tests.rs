@@ -127,7 +127,7 @@ fn make_v1_effective(p: &mut Productive) {
 // required for supported 120-BPM evidence, even with explicit 1/64-quarter
 // labels. This larger source changes only this test's immutable PCM geometry;
 // its admitted callback bank still owns the same proper finite NormalLoop.
-fn bpm_harness() -> Harness {
+pub(super) fn bpm_harness() -> Harness {
     let mut h = Harness::new();
     let original = h.root.join("l3-bpm-residency.wav");
     fs::write(&original, signal_sum_wav(16_384, &[0, 1, 2, 3])).unwrap();
@@ -194,17 +194,13 @@ fn master_bpm_through_callback(h: &mut Harness, bpm: f64) {
     assert!(consumer.is_empty());
 }
 
-fn bpm_productive(
-    key_lock: bool,
-) -> (
-    Productive,
-    crate::audio_engine::constant_timing::AcceptedTimingProjection,
-) {
+pub(super) fn accepted_bpm_timing(
+    h: &mut Harness,
+) -> crate::audio_engine::constant_timing::AcceptedTimingProjection {
     use crate::audio_engine::constant_timing;
     use crate::audio_engine::input_runtime_binding;
     use flitzis_looper_analysis::tempo_acceptance::TimingIntent;
 
-    let mut h = bpm_harness();
     constant_timing::set_intent(&h.engine, &h.producer, 0, TimingIntent::Automatic).unwrap();
     assert_eq!(h.callback.drain(&mut h.consumer), 1);
     let timing = constant_timing::l3_constant_timing_fixture::publish_synthetic_loaded_timing(
@@ -273,6 +269,18 @@ fn bpm_productive(
         );
     });
 
+    projection
+}
+
+fn bpm_productive(
+    key_lock: bool,
+) -> (
+    Productive,
+    crate::audio_engine::constant_timing::AcceptedTimingProjection,
+) {
+    use crate::audio_engine::constant_timing;
+    let mut h = bpm_harness();
+    let projection = accepted_bpm_timing(&mut h);
     let source = h.ticket(0);
     assert_eq!(source.publication.accepted_projection(), Some(projection));
     let oracle_pair = h.prepare(0, &source, true, None);
