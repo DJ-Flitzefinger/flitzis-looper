@@ -1014,6 +1014,51 @@ five relative file links and whitespace pass. Clippy tests exit0 with63 existing
 warnings (one duplicate), none in the changed test. Production Release/import/
 Python checks remain reusable, without Native installation or Human App changes.
 
+### Public live BPM while an already effective V1 is paused
+
+The public ON/OFF traces now pause pad0 and the independently playing physical
+pad215 only after V1 ALL1010 has its own actual effective output. Both real Pause
+commands drain before V2 files, durable commit/reopen, registration and own
+Capture. V2's genuine worker then queues the unchanged Adopt under that paused
+voice. Public150→162 admission uses the same coupled parameter queue and actual
+two-slot retirement gate as the playing trace.
+
+The parameter dispatch raises the actual voice source epoch while its source
+fraction, applied rate and target still retain150. Actual scheduled paused
+callbacks advance transport time, emit exact silence and preserve source clocks,
+Native/FIFO, productive history, EQ history and handover. The independent PCM,
+raw Native/FIFOs and EQ oracle receive no paused frames. Restoring retirement
+capacity dispatches the unchanged stale Adopt before public Bootstrap and before
+Resume; V2 stays unclaimed/rejected with its own ownership error, current disk
+registration and V1 control/effective identity. Repeated Controller polling
+cannot admit another attempt or relabel that error as native-preparation-failed.
+
+Public Resume retains both voices and their exact source phases. The independent
+rate ledger starts all three smoothing epochs at the first resumed consumed
+frame, ignoring the silent output-time gap. Actual resumed V1 output remains
+sample-exact against complete-PCM interpolation and uninterrupted EQ across
+irregular callbacks. ON independently warms its later own source-bound Native
+with the complete4096 interval after Resume; OFF retains dry Varispeed, no wet
+history and no source preparation. Only after this productive continuation does
+an explicit identical ALL gesture obtain a fresh own V2 receipt and perform the
+actual128-source-frame handover and own wet or dry effect. Its error persists
+through acceptance, transition and Native effective status until the Controller
+observes that own effect; the failed receipt remains independently rejected.
+Saved BPM intent and accepted timing authority remain separately verified.
+
+This bounded paused-V1 replacement proof leaves the whole rate/mask/old-voice
+matrix, task3.2/3.3/L4 and the original/additive resource and Human gates open.
+The shared test helper advances actual TransportTimeline only for scheduled
+traces; older paused-first tests retain their existing path and assertions.
+Production code, installed Native and the running Human App are unchanged.
+
+The focused ON/OFF pair passes in5.29s after a1m39s Release compile. The final
+shared-fixture Release gate freshly passes all51 tests in208.77s. One independent
+nonauthor final review reports no findings. Clippy tests exit0 with63 existing
+warnings (one duplicate), none in either changed test file. Formatting, official
+strict validation, five relative document links and whitespace pass. Unchanged
+production Release/import/Python checks remain reusable; no installation occurs.
+
 ### Public KEY LOCK OFF first candidate after Pause
 
 The paused-first proper NormalLoop fixture also supports KEY LOCK OFF/rate1.25.

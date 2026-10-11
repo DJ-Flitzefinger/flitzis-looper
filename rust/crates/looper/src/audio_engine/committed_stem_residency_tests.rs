@@ -2531,12 +2531,29 @@ impl ControllerPlayback {
         let transition = self.callback.mixer.stem_transition_for_measurement(0);
         let mut output = vec![0.0; frames * 2];
         reset_tap_observation_for_test();
-        self.callback.mixer.render_rt_at_output_frame(
-            &mut output,
-            &mut [0.0; NUM_SAMPLES],
-            self.frame,
-            &mut self.callback.retirement,
-        );
+        if self.scheduled {
+            assert_eq!(self.callback.transport.output_frame(), self.frame);
+            let callback = self.callback.as_mut();
+            crate::audio_engine::audio_stream::render_scheduled_audio(
+                &mut callback.mixer,
+                &mut callback.scheduler,
+                &mut output,
+                &mut [0.0; NUM_SAMPLES],
+                self.frame,
+                2,
+                &mut callback.transport,
+                &mut callback.feedback,
+                &mut callback.retirement,
+            );
+            callback.transport.advance_by_rendered_frames(frames);
+        } else {
+            self.callback.mixer.render_rt_at_output_frame(
+                &mut output,
+                &mut [0.0; NUM_SAMPLES],
+                self.frame,
+                &mut self.callback.retirement,
+            );
+        }
         let taps = tap_observation_for_test();
         assert_eq!(taps.missing_reads, 0);
         assert_eq!(taps.min_frame, None);
@@ -2574,6 +2591,9 @@ impl ControllerPlayback {
         );
         // Do not feed the raw Native/FIFOs or independent EQ oracle with silence.
         self.frame += frames as u64;
+        if self.scheduled {
+            assert_eq!(self.callback.transport.output_frame(), self.frame);
+        }
     }
 
     fn adopt_native(&mut self, initial: bool) -> (Vec<f32>, Vec<f32>) {

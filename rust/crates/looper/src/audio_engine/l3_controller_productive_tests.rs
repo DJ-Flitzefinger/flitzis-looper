@@ -31,6 +31,10 @@ const LIVE_BPM_CHILD: &str = "FLITZI_L3_CONTROLLER_LIVE_BPM_CHILD";
 const LIVE_BPM_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_live_bpm_rejects_queued_v2_then_explicit_retry_keeps_wet_chronology";
 const LIVE_BPM_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_LIVE_BPM_OFF_CHILD";
 const LIVE_BPM_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_live_bpm_keylock_off_rejects_queued_v2_then_own_dry_retry";
+const PAUSED_LIVE_BPM_CHILD: &str = "FLITZI_L3_CONTROLLER_PAUSED_LIVE_BPM_CHILD";
+const PAUSED_LIVE_BPM_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_live_bpm_paused_v1_rejects_then_resumes_and_retries_with_keylock_on";
+const PAUSED_LIVE_BPM_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_PAUSED_LIVE_BPM_OFF_CHILD";
+const PAUSED_LIVE_BPM_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_live_bpm_paused_v1_rejects_then_resumes_and_retries_with_keylock_off";
 
 #[derive(Clone, Copy)]
 enum CandidateTrace {
@@ -42,6 +46,7 @@ enum CandidateTrace {
     CaptureDeadline,
     PublicBpm(f64),
     LiveBpm,
+    PausedLiveBpm,
 }
 
 fn live_bpm_then_explicit_retry(
@@ -81,6 +86,9 @@ fn live_bpm_then_explicit_retry(
     let epoch = before.stretch.source_epoch_owner().load(Ordering::Acquire);
     let history = before.stretch.productive_history();
     assert_eq!(history.is_some(), key_lock);
+    let paused = before.paused;
+    let other_clock = other_voice(&playback.callback.mixer).source_playback;
+    assert_eq!(other_voice(&playback.callback.mixer).paused, paused);
     let revision = engine.global_timing_revision.load(Ordering::Acquire);
     assert!(playback.frame > 0 && playback.frame == playback.callback.transport.output_frame());
     assert!(playback.callback.transport.bootstrap_reference().is_none());
@@ -175,7 +183,21 @@ assert live.attempt is bpm_selection and first.is_current()
         reference.set_speed(speed);
         reference.set_master_period(master);
     }
-    if key_lock {
+    if paused {
+        // Silent callback time advances; the old applied source clock and both
+        // independent PCM/Native/EQ oracles consume no frames before Resume.
+        for frames in [1, 127, 384, 512, 777] {
+            playback.render_paused(frames);
+            assert_eq!(playback.source_frame, start);
+            assert!(
+                voice(&playback.callback.mixer)
+                    .source_playback
+                    .matches_exact(&clock)
+            );
+            let other = other_voice(&playback.callback.mixer);
+            assert!(other.paused && other.source_playback.matches_exact(&other_clock));
+        }
+    } else if key_lock {
         playback.render(1, true);
     } else {
         render_varispeed(playback, 1);
@@ -281,6 +303,38 @@ for _ in range(16):
 "#,
     );
     assert!(consumer.is_empty(), "polling cannot retry V2");
+    if paused {
+        let frozen_frame = playback.source_frame;
+        controller_python(
+            locals,
+            r#"
+assert session.paused_sample_ids == {0, 215}
+assert live.blocked and first.effective_mode_status() == 'effective'
+transport.playback.resume_pad(0)
+transport.playback.resume_pad(215)
+assert not session.paused_sample_ids
+assert session.stem_generation_errors == {0: bpm_error}
+"#,
+        );
+        assert_eq!(
+            playback.drain(consumer),
+            2,
+            "actual public Resume after rejection"
+        );
+        for reference in [&mut playback.reference, &mut playback.full_mix] {
+            reference.resume_sample_at_output_frame(0, playback.frame);
+        }
+        playback.resumed_at = Some(playback.frame);
+        let resumed = voice(&playback.callback.mixer);
+        assert!(!resumed.paused && resumed.source_playback.matches_exact(&clock));
+        assert_eq!(resumed.generation, generation);
+        assert_eq!(resumed.stretch.native_state_address(), native);
+        assert_eq!(resumed.stretch.pending_fifo_frames(), fifo);
+        let other = other_voice(&playback.callback.mixer);
+        assert!(!other.paused && other.source_playback.matches_exact(&other_clock));
+        assert_eq!(playback.source_frame, frozen_frame);
+        assert!(playback.frame > playback.source_frame);
+    }
     let mut nontrivial = false;
     for frames in [31, 257, 1, 777, 137] {
         let output = if key_lock {
@@ -2507,10 +2561,14 @@ fn round_trip(
     let worker_post_pressure = matches!(trace, CandidateTrace::WorkerPostPressure);
     let queue_pressure = admission_pressure || worker_post_pressure;
     let capture_deadline = matches!(trace, CandidateTrace::CaptureDeadline);
-    let live_bpm = matches!(trace, CandidateTrace::LiveBpm);
+    let paused_live_bpm = matches!(trace, CandidateTrace::PausedLiveBpm);
+    let live_bpm = matches!(
+        trace,
+        CandidateTrace::LiveBpm | CandidateTrace::PausedLiveBpm
+    );
     let public_bpm = matches!(
         trace,
-        CandidateTrace::PublicBpm(_) | CandidateTrace::LiveBpm
+        CandidateTrace::PublicBpm(_) | CandidateTrace::LiveBpm | CandidateTrace::PausedLiveBpm
     );
     let mut live_other_ledger = None;
     assert!(
@@ -3053,6 +3111,40 @@ assert session.paused_sample_ids == {0, 215}
             settle_varispeed(&mut playback, &locals, "first");
         }
     }
+    if paused_live_bpm {
+        let before = voice(&playback.callback.mixer);
+        let clock = before.source_playback;
+        let generation = before.generation;
+        let native = before.stretch.native_state_address();
+        let fifo = before.stretch.pending_fifo_frames();
+        let other_clock = other_voice(&playback.callback.mixer).source_playback;
+        controller_python(
+            &locals,
+            r#"
+assert first.is_current() and first.effective_mode_status() == 'effective'
+transport.playback.pause_pad(0)
+transport.playback.pause_pad(215)
+assert session.paused_sample_ids == {0, 215}
+"#,
+        );
+        assert_eq!(
+            playback.drain(&mut h.consumer),
+            2,
+            "actual public V1 Pause before V2 Capture"
+        );
+        for reference in [&mut playback.reference, &mut playback.full_mix] {
+            reference.pause_sample_at_output_frame(0, playback.frame);
+        }
+        playback.render_paused(513);
+        let paused = voice(&playback.callback.mixer);
+        assert!(paused.paused && paused.source_playback.matches_exact(&clock));
+        assert_eq!(paused.generation, generation);
+        assert_eq!(paused.stretch.native_state_address(), native);
+        assert_eq!(paused.stretch.pending_fifo_frames(), fifo);
+        let other = other_voice(&playback.callback.mixer);
+        assert!(other.paused && other.source_playback.matches_exact(&other_clock));
+        assert!(h.consumer.is_empty());
+    }
     let before = voice(&playback.callback.mixer);
     let initial_clock = before.source_playback;
     let initial_generation = before.generation;
@@ -3464,6 +3556,63 @@ assert bpm_selection.ticket is bpm_registration and bpm_selection.receipt is can
         "controller.shut_down()\ncontroller._assets.release_saved_assignments()\nowner_v1.release()\nowner_v2.release()",
     );
     std::env::set_current_dir(previous_cwd).unwrap();
+}
+
+#[test]
+fn actual_public_live_bpm_paused_v1_rejects_then_resumes_and_retries_with_keylock_on() {
+    if std::env::var_os(PAUSED_LIVE_BPM_CHILD).is_some() {
+        round_trip(true, None, true, None, false, CandidateTrace::PausedLiveBpm);
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            PAUSED_LIVE_BPM_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(PAUSED_LIVE_BPM_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 public paused live BPM ON child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+}
+
+#[test]
+fn actual_public_live_bpm_paused_v1_rejects_then_resumes_and_retries_with_keylock_off() {
+    if std::env::var_os(PAUSED_LIVE_BPM_OFF_CHILD).is_some() {
+        round_trip(
+            true,
+            None,
+            false,
+            None,
+            false,
+            CandidateTrace::PausedLiveBpm,
+        );
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            PAUSED_LIVE_BPM_OFF_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(PAUSED_LIVE_BPM_OFF_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 public paused live BPM OFF child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
 }
 
 #[test]

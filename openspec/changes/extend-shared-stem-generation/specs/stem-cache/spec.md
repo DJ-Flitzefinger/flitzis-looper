@@ -150,6 +150,15 @@ immediate change SHALL NOT silently discard the command.
 - **AND** repeated receipt polling SHALL retain the same accepted V2 registration and failed own attempt without implicitly retrying or reporting native-preparation-failed
 - **AND** an explicit identical ALL gesture SHALL obtain a fresh own Capture/worker/Adopt receipt, consume the actual 128-source-frame handover and acknowledge its own dry effective output without claiming Native wet processing or preparation
 
+#### Scenario: Public live BPM changes while productive V1 is already paused
+
+- **GIVEN** productive finite NormalLoop V1 with accepted Automatic timing and KEY LOCK OFF or ON is publicly paused before V2's own Capture and queued Adopt
+- **WHEN** retirement pressure retains that unchanged Adopt, the public coupled BPM parameter applies, and actual paused callbacks advance transport time before the old Adopt is dispatched
+- **THEN** the stale unclaimed V2 attempt SHALL reject under its own receipt while the same V1 readers, source fraction, voice, Native/FIFO, filter history and handover remain frozen; paused callbacks SHALL consume no source or report new effective output
+- **AND** timing acknowledgement SHALL remain authoritative independently of display intent, and the new applied source-rate glide SHALL begin only on resumed source consumption rather than silent output time
+- **AND** public Resume SHALL retain the same V1 voice and independent other-pad physical trajectory; complete-PCM interpolation and uninterrupted dry or actual Native/FIFO/filter output SHALL verify all smoothing steps across irregular callbacks
+- **AND** polling SHALL preserve the failed own attempt without an implicit retry or native-preparation-failed acknowledgement; an explicit identical ALL gesture after Resume SHALL obtain a fresh own Capture/worker/Adopt receipt and prove the consumed-source handover and its own dry or later prepared wet effectiveness before its observed effect clears the error
+
 #### Scenario: Rate smoothing advances through an own new-set handover
 - **GIVEN** current finite NormalLoop playback with a pending rate target and a verified first or replacement complete set
 - **WHEN** its own Capture, worker preparation and Adopt complete while the same target's active-output-frame smoothing continues
