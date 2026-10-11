@@ -30,8 +30,9 @@ without resetting native/FIFO/filter chronology or dropping its original pins.
 
 `KeyLockFiniteLoop` has snapshot fence4 and the `key-lock-finite-loop` metadata
 label, but the tag does not grant coverage or source/window/history authority.
-Missing input fails preparation/render admission. Finite seek/intro/tail,
-physical-domain cuts and unproved lifecycle contexts remain guarded P4b gates.
+Missing input fails preparation/render admission. Finite seek/intro/tail and
+physical-domain controls now use the bounded context proof described below;
+unproved contexts retain their guards and the whole P4b gate remains open.
 Current saved-load KEYLOCK retains its
 labelled complete fallback; normal-loop control preparation can obtain finite
 supply. The full P4b gate and device/acoustic acceptance remain open.
@@ -87,11 +88,11 @@ The launch executor uses `trigger_loop_context_available` for this cut. Its
 old-source exception requires the requested physical region to equal the current
 bank's already installed region and the real bank Source/Timing/KEYLOCK coverage
 to pass `can_play_sample`. Fresh trigger binding and retirement reservation still
-precede effects. Timing refresh, batch refresh and scalar marker edits retain
-their separate original old-source/physical-cut guard. The accepted-refresh executor
-still calls the scalar setter; that call is intentionally a no-op for the proved
-finite same-physical case. Its projection/period context changes through the
-separate accepted timing paths without rebasing the source cursor.
+precede effects. Timing and batch refresh retain the unchanged-physical/current-source
+alias guard. Explicit physical marker controls instead prove the copied new
+trajectory and both selection sides before effects. Identical finite Normal
+marker reapplication remains a no-op; timing changes use their separate accepted
+paths without rebasing the source cursor.
 
 Lifecycle proof uses independent complete PCM and algebraic raw-native/filter
 references, with irregular callbacks crossing pause/resume, rate ramps, refresh/
@@ -101,8 +102,21 @@ source, stem, job, history, reader-pin and outgoing-selection final uses and
 actual old/new held peaks use existing retirement/recycle paths. No hidden
 complete backing, fifth instrumental component or new reader/queue is admitted.
 Accepted Some/Some evidence may be reused by unchanged source impact only. The
-bounded lifecycle subtask is independently accepted. Full P4b remains open; P5a,
-seek/intro/tail, physical cuts,
+bounded lifecycle subtask is independently accepted. The finite seek/domain
+implementation uses existing CaptureResidentSeek/WindowWork/control ACK and
+Native history lanes at production k=0. Intro admits prefix plus loop and Tail
+loop plus actual source end; these ranges cover all later smoothing/lookahead
+taps without a guessed horizon halo. Retained source A uses its original lease
+and fresh retained-voice Native permits independently of replacement bank B.
+Explicit seeks, including equal-phase requests, advance voice generation and cut
+Native/FIFO/filter history while retaining the actual rate target and smoothing.
+Physical edits compare both next interpolation addresses and their weight;
+real jumps reserve a clean warmed handle before resetting usable old audio.
+Storage-only full-to-finite return can retain adopted chronological state and
+original pins, while pending work stays exact-window/checkpoint bound.
+Complete-backed/non-KEY Seek and explicit ALL exceptions remain supported.
+The [finite seek/domain report](finite-seek-domain-validation.md) records bounded
+software evidence and failures. Full P4b, initial finite KEYLOCK-load/P5b, P5a,
 remaining resource/music/history/causality, nonzero KEY/pitch and Human acoustic
 acceptance remain separate.
 

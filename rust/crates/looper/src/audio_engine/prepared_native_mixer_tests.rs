@@ -425,7 +425,9 @@ fn prepared_native_mixer_rejects_actual_source_request_authority_and_control_cha
                     .input_runtime_ownership
                     .publish_source(0, &sample, RATE * 2, 3),
                 6 => mixer.set_speed(1.371_234_567_890_123), // equal edit still fences preparation
-                7 => mixer.set_pad_loop_region(0, 0.003125, Some(0.300125)),
+                // A real one-frame geometry edit fences the candidate; identical
+                // Normal markers preserve its canonical clock and are a no-op.
+                7 => mixer.set_pad_loop_region(0, 0.00325, Some(0.300125)),
                 8 => {
                     mixer.pause_sample(0);
                     mixer.resume_sample(0);

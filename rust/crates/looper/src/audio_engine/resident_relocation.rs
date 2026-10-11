@@ -891,13 +891,41 @@ impl WindowWork {
                     .checked_add(1)
                     .ok_or("voice window revision exhausted")?;
             }
-            self.start = 0;
-            self.end = self.old.frame_count();
-            self.context = if pin.key_lock {
-                ResidentContext::KeyLockFullTrack
+            // A finite KEY LOCK voice owns its actual physical loop, including after bank
+            // replacement. Admit its prefix/loop or loop/tail union, never a guessed halo.
+            // Complete-backed and non-KEY seeks retain the explicit complete-track exception.
+            if pin.key_lock
+                && pin
+                    .sample
+                    .residency
+                    .as_ref()
+                    .is_some_and(|view| view.context.permits_finite_range())
+            {
+                let target = (self.intent.seek_position_s.expect("captured seek")
+                    * f64::from(self.binding.binding.sample_rate_hz))
+                .round() as usize;
+                let mode = super::source_reader::explicit_seek_mode_for_frame(
+                    target.min(pin.sample.frame_count()),
+                    pin.loop_region,
+                    pin.sample.frame_count(),
+                );
+                let range = super::native_source_coverage::source_context_range(
+                    pin.sample.frame_count(),
+                    pin.loop_region,
+                    mode,
+                )
+                .ok_or("invalid captured seek context")?;
+                (self.start, self.end) = (range.start, range.end);
+                self.context = ResidentContext::KeyLockFiniteLoop;
             } else {
-                ResidentContext::FullTrack
-            };
+                self.start = 0;
+                self.end = self.old.frame_count();
+                self.context = if pin.key_lock {
+                    ResidentContext::KeyLockFullTrack
+                } else {
+                    ResidentContext::FullTrack
+                };
+            }
         }
         if !self.current() {
             return Err("resident source/window was superseded".into());

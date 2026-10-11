@@ -250,6 +250,32 @@ of requested finite loop provisioning. P4b remains open until the necessary
 bounded DSP implementation and regression evidence establish actual finite
 coverage; do not claim universal loop-only supply from P4a's dry proof.
 
+The finite Seek/domain vertical reuses effective-voice CaptureResidentSeek,
+WindowWork and its existing control/window ACK. The whole-context range closure
+is the physical loop for Normal, source prefix through loop end for Intro, and
+loop start through actual complete source end for Tail. It is derived from the
+actual SourceReadPlan fractional taps and SourcePlayback context; all later
+Native feed/lookahead and canonical smoothing remain inside those admitted
+physical unions. No guessed output-horizon halo grants readiness. Complete-backed
+and non-KEY nonresident Seek plus explicit ALL retain their admitted complete
+exceptions. Initial finite KEYLOCK-load/default-loop admission remains separate
+required P4b/P5b integration.
+
+Every explicit seek advances voice generation, cuts Native/FIFO/filter history
+and preserves canonical rate target/smoothing intent, including equal-phase
+seeks. Physical edits compare actual next left/right tap addresses and weight;
+coordinate equality alone is insufficient at an edited interpolation seam.
+Continuous actual next reads may retain chronology; a clamp/jump requires
+clean Native/recycle admission before any old usable state resets. The callback
+uses existing warmed-handle exchange and fixed adapter reset, with Native reset
+and large reader retirement off-thread. Already adopted storage-only full-to-
+finite continuation retains original reader pins; pending work stays exact-
+window/source/timing/selection/history/checkpoint bound. Retained old source A
+uses its actual original lease and fresh admitted-voice permits independently
+of current bank B. No pool, registry, scheduler, fifth component, callback IO,
+large allocation or total disk-duration limit is introduced. This bounded
+vertical does not close whole P4b/P5a/P5b/B5 or resource/music/Human gates.
+
 The first productive P4b vertical is stopped/current same-source NormalLoop at
 production k=0 and non-unity rate. Its immutable coverage binds actual complete
 source and resident window, copied read plan/playback, timing and selected stem

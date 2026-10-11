@@ -92,23 +92,16 @@ impl FrameRange {
     }
 }
 
-/// A finite Normal loop needs exactly its admitted physical knots. Unsupported
-/// native/FIFO context and explicit intro/tail access require a complete view.
+/// Both dry and native reads require the whole admitted physical source context.
+/// Normal needs its loop knots, Intro the prefix plus loop, and Tail the real source remainder
+/// plus loop return. Complete views remain eligible explicit exceptions under the same proof.
 pub(crate) fn resident_read_context_available(
     sample: &SampleBuffer,
     region: FrameRange,
     mode: ExplicitSeekMode,
-    key_lock: bool,
+    _key_lock: bool,
 ) -> bool {
-    let full = sample.resident_start() == 0 && sample.resident_end() == sample.frame_count();
-    if mode != ExplicitSeekMode::Normal {
-        return full;
-    }
-    if key_lock {
-        return full
-            || super::native_source_coverage::normal_loop_context_available(sample, region, mode);
-    }
-    sample.resident_start() <= region.start && sample.resident_end() >= region.end
+    super::native_source_coverage::normal_loop_context_available(sample, region, mode)
 }
 
 /// One copied source-addressing domain. Musical duration is in loaded source frames;

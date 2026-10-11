@@ -11986,5 +11986,21 @@
       "Human visual/device/hearing",
       "E11 implementation"
     ]
+  },
+  "p4b_finite_seek_domain_software": {
+    "parent_slice": "P4b",
+    "status": "VALIDATED_BOUNDED_SOFTWARE_ONLY",
+    "baseline": "b6048e488d965fd3103c6df723cd9ac265415cf1",
+    "scope": "Production k=0 finite Seek/Intro/Tail, physical-domain edits and return from explicitly admitted complete-track exceptions; current and retained source voices, own window/control ACK, real Native/FIFO preparation/adoption and sustained wet continuation under the source-bound software tests.",
+    "coverage_reference_ids": ["FINITE-DSP-CONTEXT", "E11-03"],
+    "evidence_document": "docs/finite-seek-domain-validation.md",
+    "parent_completion_claimed": false,
+    "remaining_gates": [
+      "Full P4b feed/history/music/resource matrix and complete original acceptance obligations",
+      "P5a initial None-to-Some/new-generation retention/effective-mode and ordinary warm return",
+      "P5b default/user initial loop demand before NoHint/full-track admission, lazy/preload/budgets and actual216 readiness",
+      "B5 nonzero KEY and complete37-rate acoustic matrix",
+      "Human GUI/device/hearing and all final program gates"
+    ]
   }
 }

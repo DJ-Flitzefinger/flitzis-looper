@@ -297,6 +297,7 @@ fn native_ack_paused_seek_remains_paused_and_stopped_seek_remains_noop() {
 #[test]
 fn native_ack_finite_edit_and_all_match_complete_output_with_fractional_rate_filter_and_same_stems()
 {
+    finite_wet_physical_edit_and_exception_return();
     for with_stems in [false, true] {
         let full = complete();
         let finite = full
@@ -379,6 +380,179 @@ fn native_ack_finite_edit_and_all_match_complete_output_with_fractional_rate_fil
                     .source_playback
                     .matches_exact(&voice(&reference).source_playback)
             );
+        }
+    }
+}
+
+fn wet_checkpoint_suffix(
+    actual: &mut RtMixer,
+    reference: &mut RtMixer,
+    queue: &mut NativeQueue,
+    elapsed: &mut u64,
+) {
+    assert_eq!(
+        queue.render(actual, *elapsed, 1),
+        render(reference, *elapsed, 1)
+    );
+    *elapsed += 1;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while (!voice_mut(actual).stretch.source_preparation_ready()
+        || !voice_mut(reference).stretch.source_preparation_ready())
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(voice_mut(actual).stretch.source_preparation_ready());
+    assert!(voice_mut(reference).stretch.source_preparation_ready());
+    let target = voice_mut(actual)
+        .stretch
+        .prepared_target_output_frame()
+        .unwrap();
+    assert_eq!(
+        Some(target),
+        voice_mut(reference).stretch.prepared_target_output_frame()
+    );
+    let prepared = voice_mut(actual).stretch.prepared_native_address();
+    let taps = voice_mut(actual).stretch.prepared_tap_observation();
+    let sample = voice(actual).sample.as_ref().unwrap();
+    if sample.resident_start() == 0 && sample.resident_end() == sample.frame_count() {
+        assert!(taps.is_none()); // Explicit complete ALL exception uses no finite coverage record.
+    } else {
+        let taps = taps.expect("finite physical ranges require the executed-tap proof");
+        assert_eq!(taps.missing_reads, 0);
+        assert!(taps.left_reads >= 4096);
+        assert!(taps.right_reads > 0);
+    }
+    let mut audible = false;
+    let mut step = 0;
+    while *elapsed < target + 4096 {
+        let frames =
+            [1, 127, 384, 96, 257, 512, 31][step % 7].min((target + 4096 - *elapsed) as usize);
+        crate::audio_engine::source_reader::reset_tap_observation_for_test();
+        let output = queue.render(actual, *elapsed, frames);
+        let reads = crate::audio_engine::source_reader::tap_observation_for_test();
+        assert_eq!(reads.missing_reads, 0);
+        let sample = voice(actual).sample.as_ref().unwrap();
+        assert!(
+            reads
+                .min_frame
+                .is_some_and(|frame| frame >= sample.resident_start())
+        );
+        assert!(
+            reads
+                .max_frame
+                .is_some_and(|frame| frame < sample.resident_end())
+        );
+        assert_eq!(output, render(reference, *elapsed, frames));
+        assert!(voice(actual).stretch.productive_history().is_some());
+        assert!(
+            voice(actual)
+                .source_playback
+                .matches_exact(&voice(reference).source_playback)
+        );
+        assert_eq!(
+            voice(actual).stretch.pending_fifo_frames(),
+            voice(reference).stretch.pending_fifo_frames()
+        );
+        *elapsed += frames as u64;
+        if *elapsed > target {
+            assert_eq!(voice(actual).stretch.native_state_address(), prepared);
+            audible |= output.iter().any(|sample| sample.abs() > 0.001);
+        }
+        step += 1;
+    }
+    assert!(
+        audible,
+        "finite physical edit never produced sustained Native output"
+    );
+}
+
+fn finite_wet_physical_edit_and_exception_return() {
+    for with_stems in [false, true] {
+        let full = complete();
+        let finite = full
+            .window(START, END, 1, ResidentContext::KeyLockFiniteLoop)
+            .unwrap();
+        let complete_set = with_stems.then(|| stems(&full));
+        let mut actual = fixture(
+            &finite,
+            complete_set
+                .clone()
+                .map(|set| set.window_for(&finite).unwrap()),
+            true,
+        );
+        let mut reference = fixture(&full, complete_set.clone(), true);
+        let mut queue = NativeQueue::new();
+        let mut elapsed = 0;
+        wet_checkpoint_suffix(&mut actual, &mut reference, &mut queue, &mut elapsed);
+        if with_stems {
+            let native = voice(&actual).stretch.native_state_address();
+            // Empty and nonempty masks remain real target/outgoing inputs during the same ramp.
+            for mask in [0, 15, 5, 10] {
+                for mixer in [&mut actual, &mut reference] {
+                    assert!(mixer.set_stem_enabled_mask(0, mask, 91));
+                }
+                for frames in [1, 31, 127, 257] {
+                    assert_eq!(
+                        queue.render(&mut actual, elapsed, frames),
+                        render(&mut reference, elapsed, frames)
+                    );
+                    elapsed += frames as u64;
+                    assert_eq!(voice(&actual).stretch.native_state_address(), native);
+                    assert!(voice(&actual).stretch.productive_history().is_some());
+                }
+            }
+        }
+        for (start, end, context) in [
+            (400, Some(2200), ResidentContext::KeyLockFiniteLoop),
+            (4000, Some(5500), ResidentContext::KeyLockFiniteLoop),
+            (0, None, ResidentContext::KeyLockFullTrack),
+            (4000, Some(5500), ResidentContext::KeyLockFiniteLoop),
+        ] {
+            let next = full
+                .window(
+                    start,
+                    end.unwrap_or(full.frame_count()),
+                    actual.sample_bank[0].as_ref().unwrap().window_revision() + 1,
+                    context,
+                )
+                .unwrap();
+            let next_stems = complete_set.clone().map(|mut set| {
+                set.accepted_timing = Some(accepted());
+                set.window_for(&next).unwrap()
+            });
+            let old_native = voice(&actual).stretch.native_state_address();
+            let old_fifo = voice(&actual).stretch.pending_fifo_frames();
+            let old_position = voice(&actual).source_playback.position();
+            let publication = queue.enqueue(
+                &actual,
+                next,
+                next_stems,
+                ResidentControlIntent {
+                    loop_region: Some((start, end)),
+                    ..Default::default()
+                },
+            );
+            queue.retirement.capacity = 0;
+            assert_eq!(queue.drain(&mut actual, elapsed), 0);
+            assert_eq!(publication.status(), "pending");
+            assert_eq!(voice(&actual).stretch.native_state_address(), old_native);
+            assert_eq!(voice(&actual).stretch.pending_fifo_frames(), old_fifo);
+            assert_eq!(voice(&actual).source_playback.position(), old_position);
+            queue.retirement.capacity = usize::MAX;
+            assert_eq!(queue.drain(&mut actual, elapsed), 1);
+            assert_eq!(publication.status(), "accepted");
+            reference.set_pad_loop_region(
+                0,
+                start as f64 / f64::from(RATE),
+                end.map(|end| end as f64 / f64::from(RATE)),
+            );
+            assert_eq!(actual.loop_region_frames(0), (start, end));
+            assert_eq!(actual.pad_accepted_timing[0], Some(accepted()));
+            if end.is_some() {
+                assert!(actual.sample_bank[0].as_ref().unwrap().samples.len() < full.samples.len());
+            }
+            wet_checkpoint_suffix(&mut actual, &mut reference, &mut queue, &mut elapsed);
         }
     }
 }

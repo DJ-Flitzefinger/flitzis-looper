@@ -164,6 +164,7 @@ P4b, later stages and final Human/hearing acceptance remain open.
 - [x] First vertical: stopped/current same-source NormalLoop finite FullMix/four-component WindowWork ACK, real production-k=0 non-unity native prepare/FIFO adoption and continued render against independent complete PCM/raw-native oracles
 - [x] Resident-transition vertical: finite current-source NormalLoop production-k=0 non-unity FullMix->Stems, Stems->FullMix and masks over the same already ACKed resident selected committed set; actual two-side taps/128-source-frame wet Native-FIFO/filter continuation, deferred then real preparation/adoption and outgoing/history/job final-reader retirement
 - [x] Lifecycle/source-custody vertical: finite NormalLoop production-k=0 non-unity at fixed physical geometry; actual pause/resume/rate/storage-ACK continuity, same-source accepted-period refresh/clear, active/paused old-voice fresh authority, independently ACKed future-bank preparation and guarded explicit retrigger, with later real native requests/adoptions and distinct owner final-use/held-peak proof
+- [x] Seek/physical-domain vertical: production-k=0 finite Seek/Intro/Tail with real retained range worker/control ACK, current/old-source Native/FIFO preparation/adoption and sustained wet continuation; explicit seek and changed-next-tap cuts, continuous physical edits and own finite return from complete ALL exceptions
 - [ ] Wirkliche finite DSP/KEYLOCK-Versorgung+Continuation fuer heutigen production k=0
 - [ ] Executed feed/lookahead/history/FIFO/filter/seams/crossfade/oldvoices; causality1598/33.292ms erhalten, fallback-only laesst Gate offen. Nonzero k bleibt B5
 
@@ -244,9 +245,21 @@ the existing native FIFO/cursor/filter assertions are unchanged. Final independe
 nonauthor acceptance covers only this lifecycle/source-custody subtask; no
 full P4b parent closes.
 
-Seek/intro/tail, physical-domain cuts and the remaining complete feed/filter/
-history/resource/musical/causality oracles remain required by the two open parent
-tasks. Binary64 P/integer H, 119.999..123.45 BPM, <=1-loaded-source-frame 75/1000
+The Seek/physical-domain implementation and its final source-bound software
+validation are documented in [finite-seek-domain-validation.md](../../../docs/finite-seek-domain-validation.md).
+It adds real finite prefix/loop and loop/tail provisioning without extending the
+initial finite KEYLOCK-load policy. Explicit complete exceptions remain admitted;
+their success does not prove finite provisioning. Actual next fractional taps
+and weight decide physical cuts, while accepted-period aliases keep their
+separate same-source/unchanged-marker guard. Final corrected Debug/Release,
+fresh Release Python/FFI and strict musical checks pass; distinct nonauthor
+source/test/oracle/evidence review accepts only this bounded software checkbox.
+Frozen staged-tree review remains a separate publication gate. Both full P4b
+parent tasks and the later program/Human gates remain open.
+
+The remaining complete feed/filter/history/resource/musical/causality matrix
+remains required by the two open parent tasks. Binary64 P/integer H,
+119.999..123.45 BPM, <=1-loaded-source-frame 75/1000
 cycles and the 48-kHz/rate-2/H16384/C3678/U2080 unavailable-at-T1598-frame/33.292-ms
 gate remain intact. Initial active None->Some, retention policy,
 effective-mode ACK and ordinary StemController round-trip/warm return remain P5a;

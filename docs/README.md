@@ -41,6 +41,7 @@ For focused areas:
 | `prepared-stem-publication.md` | Content identity, current accepted timing permits, artifact integrity, callback adoption and shared stem trajectory. |
 | `native-constant-timing.md` | G3b2a-i actual-pad timing, native/FIFO history, verified persistence/fresh adoption, guarded global batches and explicit publication/derived refresh; separate loop gates. |
 | `key-lock-backend.md` | Current Rubber Band Key Lock backend, timing semantics, realtime constraints, and native dependency requirements. |
+| `finite-seek-domain-validation.md` | Bounded production k=0 finite Seek/Intro/Tail, physical-edit and complete-exception return evidence; wider gates retained. |
 | `offline-analysis.md` | Diagnostic PCM/worker API, resource ownership and limits; default cutover remains gated. |
 | `beat-this-setup.md` | Explicit optional Windows CPU worker installation, locked environment and accepted model provenance. |
 | `beat-this-reference-evidence.md` | B1b reference parity/resource observations and the remaining quality/live acceptance limits. |

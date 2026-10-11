@@ -494,30 +494,6 @@ impl RtMixer {
     }
 
     fn loop_context_available(&self, id: usize, start: usize, end: Option<usize>) -> bool {
-        if self.finite_key_lock_voice_active(id) {
-            // An accepted-period projection may refresh/clear while the physical
-            // NormalLoop stays fixed. Neither old-source voices nor marker cuts
-            // can borrow this chronological alias.
-            let Some(bank) = self.sample_bank[id].as_ref() else {
-                return false;
-            };
-            let requested = effective_loop_region(start, end, bank.frame_count());
-            if requested != self.effective_loop_region(id, bank.frame_count())
-                || self
-                    .voices
-                    .iter()
-                    .filter(|voice| voice.is_playing_sample(id))
-                    .any(|voice| {
-                        voice.explicit_seek_mode != ExplicitSeekMode::Normal
-                            || !voice
-                                .sample
-                                .as_ref()
-                                .is_some_and(|sample| sample.same_source(bank))
-                    })
-            {
-                return false;
-            }
-        }
         let bank = self.sample_bank[id].as_ref();
         let available = |sample: &SampleBuffer| {
             effective_loop_region(start, end, sample.frame_count()).is_some_and(|region| {
@@ -538,6 +514,18 @@ impl RtMixer {
                     voice.sample.as_ref().is_some_and(|sample| {
                         if bank.is_some_and(|bank| sample.same_source(bank)) {
                             available(sample)
+                                && effective_loop_region(start, end, sample.frame_count())
+                                    .is_some_and(|region| {
+                                        !self.pad_key_lock_enabled[id]
+                                            || self.key_lock_voice_intent_available(
+                                                id,
+                                                voice,
+                                                sample,
+                                                self.prepared_stems[id].as_ref(),
+                                                region,
+                                                None,
+                                            )
+                                    })
                         } else {
                             voice.source_loop_region.is_some_and(|region| {
                                 resident_read_context_available(
@@ -558,6 +546,32 @@ impl RtMixer {
         start_s: f64,
         end_s: Option<f64>,
     ) -> bool {
+        if self.finite_key_lock_voice_active(id) {
+            // Accepted-period refresh/clear is a chronological alias for unchanged current
+            // geometry. Explicit physical edits use their separate prospective control proof.
+            let Some(bank) = self.sample_bank[id].as_ref() else {
+                return false;
+            };
+            let Some((start, end)) = self.loop_intent_frames(id, start_s, end_s) else {
+                return false;
+            };
+            if effective_loop_region(start, end, bank.frame_count())
+                != self.effective_loop_region(id, bank.frame_count())
+                || self
+                    .voices
+                    .iter()
+                    .filter(|voice| voice.is_playing_sample(id))
+                    .any(|voice| {
+                        voice.explicit_seek_mode != ExplicitSeekMode::Normal
+                            || !voice
+                                .sample
+                                .as_ref()
+                                .is_some_and(|sample| sample.same_source(bank))
+                    })
+            {
+                return false;
+            }
+        }
         self.loop_intent_frames(id, start_s, end_s)
             .is_some_and(|(start, end)| self.loop_context_available(id, start, end))
     }
@@ -736,13 +750,19 @@ impl RtMixer {
         stems: Option<&PreparedStemSet>,
         (selection, transition): (StemRenderSelection, StemTransition),
     ) -> bool {
-        let playback = &voice.source_playback;
         let Some(region) = voice
             .source_loop_region
             .or_else(|| self.effective_loop_region(id, sample.frame_count()))
         else {
             return false;
         };
+        // Controls can edit the effective region before the next render configures
+        // the live clock. Prove that next trajectory without advancing its state.
+        let mut playback = voice.source_playback;
+        playback.configure_domain(
+            self.timing_for_voice(voice)
+                .loop_domain(sample.frame_count(), region),
+        );
         let position = playback.position();
         normal_loop_feed_available(
             sample,
@@ -759,8 +779,160 @@ impl RtMixer {
                 selection,
                 transition,
             },
-            playback,
+            &playback,
         )
+    }
+
+    /// Prove a copied post-control trajectory and both real selection sides before effects.
+    fn key_lock_voice_intent_available(
+        &self,
+        id: usize,
+        voice: &VoiceSlot,
+        sample: &SampleBuffer,
+        stems: Option<&PreparedStemSet>,
+        region: FrameRange,
+        seek: Option<usize>,
+    ) -> bool {
+        let timing = self.timing_for_voice(voice);
+        let mut playback = voice.source_playback;
+        if let Some(target) = seek {
+            playback.seek(
+                target,
+                explicit_seek_mode_for_frame(target, region, sample.frame_count()),
+            );
+        } else {
+            playback.clear_explicit_seek();
+        }
+        playback.configure_domain(timing.loop_domain(sample.frame_count(), region));
+        let position = playback.position();
+        let frozen = voice.frozen_stems.as_ref().filter(|_| {
+            !self.sample_bank[id]
+                .as_ref()
+                .is_some_and(|bank| bank.same_source(sample))
+        });
+        normal_loop_feed_available(
+            sample,
+            stems,
+            self.sample_rate_hz as u32,
+            timing.accepted,
+            SourceReadPlan {
+                channels: self.channels,
+                sample_frames: sample.frame_count(),
+                frame_pos: position.frame,
+                loop_region: region,
+                loop_period: playback.loop_period(),
+                seek_mode: position.seek_mode,
+                selection: frozen.map_or(self.stem_render_selection(id), |view| view.selection),
+                transition: frozen.map_or(self.stem_transitions[id], |view| view.transition),
+            },
+            &playback,
+        )
+    }
+
+    fn loop_edit_cuts_voice(&self, voice: &VoiceSlot, region: FrameRange) -> bool {
+        let Some(sample) = voice.sample.as_ref() else {
+            return true;
+        };
+        let before = voice.source_playback.position();
+        let Some(previous_region) = voice
+            .source_loop_region
+            .or_else(|| self.effective_loop_region(voice.sample_id, sample.frame_count()))
+        else {
+            return true;
+        };
+        // Shared scalar and relocation admission must preserve timing-only refreshes.
+        if Self::unchanged_normal_loop(voice, Some(previous_region), region) {
+            return false;
+        }
+        let mut playback = voice.source_playback;
+        playback.clear_explicit_seek();
+        playback.configure_domain(
+            self.timing_for_voice(voice)
+                .loop_domain(sample.frame_count(), region),
+        );
+        let next = playback.position();
+        if before.frame != next.frame
+            || before.fraction.to_bits() != next.fraction.to_bits()
+            || before.seek_mode != next.seek_mode
+        {
+            return true;
+        }
+        let plan = |region: FrameRange, playback: &SourcePlayback| SourceReadPlan {
+            channels: self.channels,
+            sample_frames: sample.frame_count(),
+            frame_pos: playback.position().frame,
+            loop_region: region,
+            loop_period: playback.loop_period(),
+            seek_mode: playback.position().seek_mode,
+            selection: self.stem_render_selection(voice.sample_id),
+            transition: self.stem_transitions[voice.sample_id],
+        };
+        plan(previous_region, &voice.source_playback).fractional_taps(before.fraction)
+            != plan(region, &playback).fractional_taps(next.fraction)
+    }
+
+    fn unchanged_normal_loop(
+        voice: &VoiceSlot,
+        previous_region: Option<FrameRange>,
+        region: FrameRange,
+    ) -> bool {
+        voice.source_playback.position().seek_mode == ExplicitSeekMode::Normal
+            && voice.source_loop_region.or(previous_region) == Some(region)
+    }
+
+    /// Fixed voice scan; retirement/readiness admission precedes every physical cut.
+    fn loop_cut_available(&self, id: usize, sample: &SampleBuffer, region: FrameRange) -> bool {
+        !self.pad_key_lock_enabled[id]
+            || self
+                .voices
+                .iter()
+                .filter(|voice| {
+                    voice.is_playing_sample(id)
+                        && voice
+                            .sample
+                            .as_ref()
+                            .is_some_and(|old| old.same_source(sample))
+                })
+                .all(|voice| {
+                    !self.loop_edit_cuts_voice(voice, region)
+                        || voice.stretch.source_cut_available()
+                })
+    }
+
+    fn reserve_loop_cuts(&mut self, id: usize, sample: &SampleBuffer, region: FrameRange) -> bool {
+        let mut cuts = [false; MAX_VOICES];
+        for (index, voice) in self.voices.iter().enumerate() {
+            cuts[index] = voice.is_playing_sample(id)
+                && voice
+                    .sample
+                    .as_ref()
+                    .is_some_and(|old| old.same_source(sample))
+                && self.loop_edit_cuts_voice(voice, region);
+        }
+        if self.pad_key_lock_enabled[id] {
+            if self
+                .voices
+                .iter()
+                .enumerate()
+                .any(|(index, voice)| cuts[index] && !voice.stretch.source_cut_available())
+            {
+                return false;
+            }
+            for (index, voice) in self.voices.iter_mut().enumerate() {
+                if cuts[index] && !voice.stretch.reserve_source_cut() {
+                    return false;
+                }
+            }
+        }
+        for (index, voice) in self.voices.iter_mut().enumerate() {
+            if cuts[index] {
+                voice.stretch.reset();
+            }
+        }
+        if cuts.iter().any(|cut| *cut) {
+            self.pad_dsp_chains[id].reset();
+        }
+        true
     }
 
     /// Validate every live/paused pin against the exact source and effective projection.
@@ -971,10 +1143,17 @@ impl RtMixer {
                     voice_index: index,
                     generation: voice.generation,
                     key_lock: self.pad_key_lock_enabled[id],
-                    stems: voice
-                        .frozen_stems
+                    stems: if self.sample_bank[id]
                         .as_ref()
-                        .and_then(|view| view.set.clone()),
+                        .is_some_and(|bank| bank.same_source(sample))
+                    {
+                        self.prepared_stems[id].clone()
+                    } else {
+                        voice
+                            .frozen_stems
+                            .as_ref()
+                            .and_then(|view| view.set.clone())
+                    },
                 })
             });
             if let Some(pin) = pin {
@@ -1069,8 +1248,26 @@ impl RtMixer {
                 && self.pad_key_lock_enabled[id] == pin.key_lock
                 && sample.valid_residency(self.sample_rate_hz as u32, self.channels)
                 && pin.sample.same_source(sample)
-                && sample.resident_start() == 0
-                && sample.resident_end() == sample.frame_count()
+                && intent.seek_position_s.is_some_and(|position| {
+                    let target = self.source_frame_from_seconds(position, sample.frame_count());
+                    resident_read_context_available(
+                        sample,
+                        pin.loop_region,
+                        explicit_seek_mode_for_frame(target, pin.loop_region, sample.frame_count()),
+                        pin.key_lock,
+                    ) && self.voices.get(pin.voice_index).is_some_and(|voice| {
+                        !pin.key_lock
+                            || self.key_lock_voice_intent_available(
+                                id,
+                                voice,
+                                sample,
+                                stems.as_ref(),
+                                pin.loop_region,
+                                Some(target),
+                            )
+                    })
+                })
+                && self.seek_cut_available(id)
                 && self
                     .voices
                     .iter()
@@ -1123,7 +1320,8 @@ impl RtMixer {
             let accepted = current
                 && publication.claim_resident()
                 && publication.current()
-                && self.source_binding_current(id, binding);
+                && self.source_binding_current(id, binding)
+                && self.reserve_seek_cut(id);
             if accepted {
                 let voice = &mut self.voices[pin.voice_index];
                 if let Some(old) = voice.sample.replace(sample.clone()) {
@@ -1249,17 +1447,33 @@ impl RtMixer {
                                 // Storage ACK changes only the bank's backing. Current paused
                                 // voices preserve their position; old voices keep their own
                                 // frozen source/selection, independently of future bank ranges.
-                                intent.seek_position_s.is_none()
-                                    && (mode_only || key_lock == self.pad_key_lock_enabled[id])
+                                (mode_only || key_lock == self.pad_key_lock_enabled[id])
                                     && voice.sample.as_ref().is_some_and(|old| {
                                         if old.same_source(sample) {
-                                            intent.loop_region.is_none()
-                                                && self.normal_key_lock_voice_available(
+                                            if intent.loop_region.is_some()
+                                                || intent.seek_position_s.is_some()
+                                            {
+                                                self.key_lock_voice_intent_available(
+                                                    id,
+                                                    voice,
+                                                    sample,
+                                                    stems.as_ref(),
+                                                    region,
+                                                    intent.seek_position_s.map(|position| {
+                                                        self.source_frame_from_seconds(
+                                                            position,
+                                                            sample.frame_count(),
+                                                        )
+                                                    }),
+                                                )
+                                            } else {
+                                                self.normal_key_lock_voice_available(
                                                     id,
                                                     voice,
                                                     sample,
                                                     stems.as_ref(),
                                                 )
+                                            }
                                         } else {
                                             voice.frozen_stems.as_ref().is_some_and(|frozen| {
                                                 voice.source_loop_region.is_some()
@@ -1295,9 +1509,22 @@ impl RtMixer {
             && intent.seek_position_s.is_none_or(|position| {
                 position.is_finite()
                     && position >= 0.0
-                    && sample.resident_start() == 0
-                    && sample.resident_end() == sample.frame_count()
+                    && loop_region.is_some_and(|region| {
+                        resident_read_context_available(
+                            sample,
+                            region,
+                            explicit_seek_mode_for_frame(
+                                self.source_frame_from_seconds(position, sample.frame_count()),
+                                region,
+                                sample.frame_count(),
+                            ),
+                            key_lock,
+                        )
+                    })
+                    && self.seek_cut_available(id)
             })
+            && (intent.loop_region.is_none()
+                || loop_region.is_some_and(|region| self.loop_cut_available(id, sample, region)))
             && match (&self.prepared_stems[id], stems) {
                 (None, None) => true,
                 (Some(old), Some(next)) => {
@@ -1343,7 +1570,16 @@ impl RtMixer {
                             resident_read_context_available(
                                 sample,
                                 region,
-                                if intent.loop_region.is_some() {
+                                if let Some(position) = intent.seek_position_s {
+                                    explicit_seek_mode_for_frame(
+                                        self.source_frame_from_seconds(
+                                            position,
+                                            sample.frame_count(),
+                                        ),
+                                        region,
+                                        sample.frame_count(),
+                                    )
+                                } else if intent.loop_region.is_some() {
                                     ExplicitSeekMode::Normal
                                 } else {
                                     voice.explicit_seek_mode
@@ -1385,6 +1621,20 @@ impl RtMixer {
             retirement.retire_resident_transaction(transaction);
             return false;
         }
+        let cut_admitted = if intent.seek_position_s.is_some() {
+            self.reserve_seek_cut(id)
+        } else if intent.loop_region.is_some() {
+            loop_region.is_some_and(|region| self.reserve_loop_cuts(id, sample, region))
+        } else {
+            true
+        };
+        if !cut_admitted {
+            publication.mark_rejected();
+            self.input_runtime_ownership
+                .finish_resident_control(id, publication.expected);
+            retirement.retire_resident_transaction(transaction);
+            return false;
+        }
         for voice in &mut self.voices {
             if voice.active
                 && voice.sample_id == id
@@ -1406,6 +1656,7 @@ impl RtMixer {
         }
         self.prepared_stems[id] = stems.clone();
         if let Some((start, end)) = intent.loop_region {
+            let previous_region = self.effective_loop_region(id, sample.frame_count());
             self.pad_loop_start_frame[id] = start;
             self.pad_loop_end_frame[id] = end;
             for voice in &mut self.voices {
@@ -1416,8 +1667,13 @@ impl RtMixer {
                         .as_ref()
                         .is_some_and(|old| old.same_source(sample))
                 {
+                    let unchanged = loop_region.is_some_and(|region| {
+                        Self::unchanged_normal_loop(voice, previous_region, region)
+                    });
                     voice.source_loop_region = None;
-                    voice.clear_explicit_seek();
+                    if !unchanged {
+                        voice.clear_explicit_seek();
+                    }
                 }
             }
         }
@@ -2635,14 +2891,33 @@ impl RtMixer {
             None
         };
 
-        // Scalar marker commands clear explicit source positioning below. Keep their original
-        // finite wet guard; accepted-period refresh has its own chronological projection path.
-        if self.finite_key_lock_voice_active(id)
-            || !self.loop_context_available(id, start_frame, end_frame)
+        // Reapplying Normal markers is independent of an accepted timing refresh;
+        // its virtual clock continuity belongs to the render/timing path.
+        if start_frame == self.pad_loop_start_frame[id]
+            && end_frame == self.pad_loop_end_frame[id]
+            && self
+                .voices
+                .iter()
+                .filter(|voice| voice.is_playing_sample(id))
+                .all(|voice| voice.explicit_seek_mode == ExplicitSeekMode::Normal)
         {
             return;
         }
 
+        if !self.loop_context_available(id, start_frame, end_frame) {
+            return;
+        }
+        if let Some(sample) = self.sample_bank[id].clone()
+            && let Some(region) =
+                effective_loop_region(start_frame, end_frame, sample.frame_count())
+            && !self.reserve_loop_cuts(id, &sample, region)
+        {
+            return;
+        }
+
+        let previous_region = self.sample_bank[id]
+            .as_ref()
+            .and_then(|sample| self.effective_loop_region(id, sample.frame_count()));
         self.pad_loop_start_frame[id] = start_frame;
         self.pad_loop_end_frame[id] = end_frame;
 
@@ -2655,7 +2930,14 @@ impl RtMixer {
                     .zip(bank)
                     .is_some_and(|(sample, bank)| sample.same_source(bank))
             {
-                voice_slot.clear_explicit_seek();
+                let unchanged = voice_slot.sample.as_ref().is_some_and(|sample| {
+                    effective_loop_region(start_frame, end_frame, sample.frame_count()).is_some_and(
+                        |region| Self::unchanged_normal_loop(voice_slot, previous_region, region),
+                    )
+                });
+                if !unchanged {
+                    voice_slot.clear_explicit_seek();
+                }
             }
         }
     }
@@ -2697,14 +2979,6 @@ impl RtMixer {
             return false;
         }
 
-        // Normal-loop finite native supply does not yet authorize a discontinuous
-        // seek, even when the requested coordinate lies inside the held range.
-        if self.pad_key_lock_enabled[id]
-            && (sample.resident_start() != 0 || sample.resident_end() != sample_frames)
-        {
-            return false;
-        }
-
         let Some(loop_region) = voice
             .source_loop_region
             .or_else(|| self.effective_loop_region(id, sample_frames))
@@ -2719,6 +2993,32 @@ impl RtMixer {
             seek_mode,
             self.pad_key_lock_enabled[id],
         ) {
+            return false;
+        }
+        let stems = if self.sample_bank[id]
+            .as_ref()
+            .is_some_and(|bank| bank.same_source(sample))
+        {
+            self.prepared_stems[id].as_ref()
+        } else {
+            voice
+                .frozen_stems
+                .as_ref()
+                .and_then(|view| view.set.as_ref())
+        };
+        if self.pad_key_lock_enabled[id]
+            && !self.key_lock_voice_intent_available(
+                id,
+                voice,
+                sample,
+                stems,
+                loop_region,
+                Some(target_frame),
+            )
+        {
+            return false;
+        }
+        if !self.reserve_seek_cut(id) {
             return false;
         }
 
@@ -2738,6 +3038,33 @@ impl RtMixer {
         }
 
         did_seek
+    }
+
+    fn seek_cut_available(&self, id: usize) -> bool {
+        !self.pad_key_lock_enabled[id]
+            || self
+                .voices
+                .iter()
+                .filter(|voice| voice.is_playing_sample(id))
+                .all(|voice| voice.stretch.source_cut_available())
+    }
+
+    fn reserve_seek_cut(&mut self, id: usize) -> bool {
+        if !self.seek_cut_available(id) {
+            return false;
+        }
+        if self.pad_key_lock_enabled[id] {
+            for voice in self
+                .voices
+                .iter_mut()
+                .filter(|voice| voice.is_playing_sample(id))
+            {
+                if !voice.stretch.reserve_source_cut() {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     pub fn pad_playhead_seconds(&self, id: usize) -> Option<f64> {

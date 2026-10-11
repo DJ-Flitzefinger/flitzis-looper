@@ -80,7 +80,7 @@ loop/DSP context before claiming completion of shared-material loop residency.
 - **WHEN** an acknowledged same-source Normal-loop finite window changes only resident storage while native history is already adopted
 - **THEN** pending native preparation SHALL remain bound to its exact captured window
 - **AND** adopted history MAY retain the same effective-source permit, actual native handle, FIFO and filter chronology while its original reader pins remain held until final use
-- **AND** seek/intro/tail, physical-domain cuts and every unproved finite context SHALL retain their guards and keep the complete P4b gate open
+- **AND** unproved seek/intro/tail, physical-domain cuts and every unproved finite context SHALL retain their guards and keep the complete P4b gate open
 
 #### Scenario: An already resident selected set supplies both finite transition sides
 - **WHEN** current-source NormalLoop KEYLOCK playback at production k=0 and a non-unity ratio receives an existing native scalar mode or mask command for the identical already ACKed resident selected committed StemSet
@@ -146,6 +146,24 @@ loop/DSP context before claiming completion of shared-material loop residency.
 - **AND** no new loader, reader, worker pool, queue or speculative lifecycle framework SHALL be introduced for this bounded context
 - **AND** this lifecycle proof SHALL NOT close finite seek/intro/tail, physical-domain cuts, P5a active None-to-Some/retention/effective-mode ACK/ordinary StemController warm return or remaining complete P4b resource/musical/history/causality gates
 - **AND** binary64 P, integer H, 119.999 through 123.45 BPM, the 75/1000-cycle tolerance of at most one loaded-source frame and the 48-kHz/rate-2/H16384/C3678/U2080 unavailable-at-T boundary of 1598 frames or 33.292 ms SHALL remain unchanged
+
+#### Scenario: Finite explicit source contexts obtain their own productive ACK
+- **WHEN** a held finite source at production k=0 KEYLOCK receives an explicit seek inside the loop, before the loop or after the loop
+- **THEN** the existing capture and retained range worker SHALL bind the actual current or retained voice's complete source, physical loop, timing and accepted StemSet
+- **AND** admitted finite coverage SHALL include the physical loop and the actual prefix for Intro or remaining source extent for Tail, including both fractional taps and source-end return
+- **AND** the existing window/control ACK SHALL precede effects, and independent complete PCM and raw-native/filter oracles SHALL verify actual Native preparation, exact adoption and sustained wet continuation
+- **AND** every explicit seek, including equal-phase seek, SHALL cut generation, pending Native/FIFO history and filter state while preserving canonical rate target and smoothing intent
+- **AND** failure of coverage, ownership, cancellation or clean-handle/recycle admission SHALL preserve old usable audio before effects
+- **AND** explicitly admitted complete-track Seek/ALL exceptions SHALL remain supported without imposing a total track-duration or disk-PCM limit
+
+#### Scenario: Physical loop edits and return from complete exceptions retain only real continuity
+- **WHEN** an admitted physical loop edit or finite replacement follows Intro, Tail or an explicit complete-track exception
+- **THEN** actual copied SourcePlayback and SourceReadPlan SHALL prove the next context and both selected transition sides before adoption
+- **AND** history MAY continue only when the exact next physical read remains continuous; a real clamp or jump SHALL discard Native/FIFO/filter history using admitted clean state
+- **AND** pending preparation SHALL remain exact-source/window/timing/selection/history/checkpoint bound while already adopted continuous history retains its original readers until final use
+- **AND** an old source voice SHALL retain its own source and fresh retained-voice permits independently of a replacement bank
+- **AND** peak admission and true final-reader retirement SHALL use the existing workers, registry and recycle lanes without hidden complete backing, callback IO or a fifth live component
+- **AND** this bounded result SHALL NOT close whole P4b, P5a/P5b, nonzero KEY/B5, resource/music or Human/device/hearing gates
 
 ### Requirement: Separate aggregate residency and preparation accounting
 The system SHALL reserve unique resident backing and simultaneous pending/old

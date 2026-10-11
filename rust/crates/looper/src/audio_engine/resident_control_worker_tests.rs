@@ -7,6 +7,8 @@ mod resident_lifecycle_worker_tests;
 mod resident_native_worker_tests;
 #[path = "resident_ready_control_tests.rs"]
 mod resident_ready_control_tests;
+#[path = "resident_seek_native_worker_tests.rs"]
+mod resident_seek_native_worker_tests;
 
 use super::*;
 use crate::audio_engine::resident_relocation::{
@@ -163,10 +165,11 @@ impl Loaded {
         .unwrap();
         wait_until(Duration::from_secs(10), || !load.is_empty());
         assert_eq!(self.callback.drain(&mut load), 1);
-        assert!(matches!(
-            terminal(&self.engine, request),
-            LoaderEvent::Success { .. }
-        ));
+        let event = terminal(&self.engine, request);
+        assert!(
+            matches!(event, LoaderEvent::Success { .. }),
+            "replacement cold ACK: {event:?}"
+        );
         wait_until(Duration::from_secs(10), || {
             self.engine.cold_loading[0].load(Ordering::Acquire) == 0
         });
@@ -631,6 +634,7 @@ fn actual_worker_capture_pressure_cancel_shutdown_and_stopped_seek_preserve_effe
 
 #[test]
 fn actual_worker_resident_seek_acks_without_copying_current_or_previous_finite_pin() {
+    resident_seek_native_worker_tests::resident_seek_matrix();
     for replace in [false, true] {
         let mut loaded = Loaded::new();
         assert!(
@@ -963,6 +967,7 @@ fn actual_worker_captured_old_pin_rejects_stop_seek_aba_and_new_source_before_ac
 
 #[test]
 fn actual_worker_old_finite_pin_seek_reads_original_lease_and_keeps_replacement_bank() {
+    resident_seek_native_worker_tests::old_voice_seek_matrix();
     let mut loaded = Loaded::new();
     let old = loaded.sample();
     let old_backing = Arc::downgrade(&old.samples);
@@ -1124,6 +1129,7 @@ fn actual_worker_loop_and_all_keep_old_effective_until_ack_and_use_full_wav_orac
 
 #[test]
 fn actual_worker_nonresident_intro_tail_and_paused_seek_preserve_source_end_clamp() {
+    resident_seek_native_worker_tests::intro_tail_seek_matrix();
     let mut loaded = Loaded::new();
     assert!(
         loaded
@@ -1200,6 +1206,360 @@ fn actual_worker_nonresident_intro_tail_and_paused_seek_preserve_source_end_clam
     // The existing native source-end clamp is the exclusive full frame count;
     // the subsequent reader wraps to the loop without reading that endpoint.
     assert_eq!(end.effective_seek_seconds(), Some(256.0 / 48_000.0));
+}
+
+#[test]
+fn actual_executor_same_normal_markers_after_accepted_period_seam_keep_native_fifo_filter_history()
+{
+    use crate::audio_engine::constant_timing::{AcceptedTimingProjection, PreparedConstantTiming};
+    use crate::audio_engine::input_runtime_binding::{InputRuntimeOwnership, capture};
+    use crate::audio_engine::prepared_source::PreparedSourcePermit;
+    use crate::messages::{ResidentControlIntent, ResidentTransaction};
+
+    fn active(mixer: &RtMixer) -> &crate::audio_engine::voice_slot::VoiceSlot {
+        mixer
+            .voices
+            .iter()
+            .find(|voice| voice.is_playing_sample(0))
+            .unwrap()
+    }
+    fn active_mut(mixer: &mut RtMixer) -> &mut crate::audio_engine::voice_slot::VoiceSlot {
+        mixer
+            .voices
+            .iter_mut()
+            .find(|voice| voice.is_playing_sample(0))
+            .unwrap()
+    }
+    fn render_pair(
+        loaded: &mut Loaded,
+        complete: &mut RtMixer,
+        frame: &mut u64,
+        count: usize,
+    ) -> Vec<f32> {
+        let mut actual = vec![0.0; count * 2];
+        loaded.callback.mixer.render_rt_at_output_frame(
+            &mut actual,
+            &mut [0.0; NUM_SAMPLES],
+            *frame,
+            &mut loaded.callback.retirement,
+        );
+        let mut expected = vec![0.0; count * 2];
+        complete.render_at_output_frame(*frame, &mut expected, &mut [0.0; NUM_SAMPLES]);
+        assert_eq!(
+            actual, expected,
+            "same-marker accepted-period executor at {frame}"
+        );
+        assert!(
+            active(&loaded.callback.mixer)
+                .source_playback
+                .matches_exact(&active(complete).source_playback)
+        );
+        assert_eq!(
+            active(&loaded.callback.mixer).stretch.pending_fifo_frames(),
+            active(complete).stretch.pending_fifo_frames()
+        );
+        *frame += count as u64;
+        actual
+    }
+
+    let mut loaded = Box::new(Loaded::new());
+    let ready = loaded.prepare(WindowRequest {
+        loop_region: Some((32.0 / 48_000.0, Some(64.0 / 48_000.0))),
+        key_lock: Some(true),
+        ..Default::default()
+    });
+    loaded.adopt(&ready); // Actual finite WindowWork and its own ACK precede this executor proof.
+    let finite = loaded.sample();
+    assert_eq!((finite.resident_start(), finite.resident_end()), (32, 64));
+    assert!(finite.resident_end() < finite.frame_count());
+    let mut binding = capture(&loaded.engine, 0).unwrap().unwrap().binding;
+    // The control is independently built from the original WAV integer vector.
+    let full = SampleBuffer {
+        residency: None,
+        channels: 2,
+        samples: loaded
+            .mono
+            .iter()
+            .flat_map(|sample| [*sample; 2])
+            .collect::<Vec<_>>()
+            .into(),
+    }
+    .with_complete_source(48_000);
+    let mut complete = Box::new(RtMixer::new(2, 48_000.0));
+    let ownership = Arc::new(InputRuntimeOwnership::tracked());
+    ownership.publish_source(0, &full, 48_000, 1);
+    complete.set_input_runtime_ownership(ownership);
+    complete.load_sample(0, full.clone());
+    complete.set_pad_loop_region(0, 32.0 / 48_000.0, Some(64.0 / 48_000.0));
+    let first = AcceptedTimingProjection {
+        revision: [91; 32],
+        period_seconds: 32.25 * 16.0 / 48_000.0,
+        origin_seconds: 0.0,
+        sample_rate_hz: 48_000,
+        publication_epoch: 91,
+    };
+    let first_publication = PreparedSourcePermit::unrestricted();
+    first_publication.mark_pending().unwrap();
+    loaded
+        .producer
+        .lock()
+        .unwrap()
+        .push(ControlMessage::PublishConstantTiming {
+            id: 0,
+            timing: PreparedConstantTiming {
+                reference: finite.clone(),
+                publication: first_publication.clone(),
+                projection: first,
+            },
+        })
+        .unwrap();
+    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+    assert_eq!(first_publication.status(), "accepted");
+    let reference_publication = PreparedSourcePermit::unrestricted();
+    reference_publication.mark_pending().unwrap();
+    assert!(complete.publish_constant_timing_rt(
+        0,
+        PreparedConstantTiming {
+            reference: full.clone(),
+            publication: reference_publication,
+            projection: first,
+        },
+        &mut loaded.callback.retirement
+    ));
+    for mixer in [&mut loaded.callback.mixer, complete.as_mut()] {
+        mixer.set_speed(0.73);
+        mixer.set_pad_eq(0, -12.0, -3.0, 4.0);
+        assert!(mixer.play_sample_at_output_frame(0, 1.0, 0));
+    }
+    // WindowWork arms a tracked KEY request before launch, which warms from dry
+    // source output. Match that live ON transition in the independent complete
+    // control; an untracked stopped-pad ON instead starts with wet latency.
+    complete.set_pad_key_lock(0, true);
+    let mut frame = 0;
+    render_pair(&mut loaded, &mut complete, &mut frame, 13);
+    wait_until(Duration::from_secs(5), || {
+        active_mut(&mut loaded.callback.mixer)
+            .stretch
+            .source_preparation_ready()
+            && active_mut(&mut complete).stretch.source_preparation_ready()
+    });
+    let target = active_mut(&mut loaded.callback.mixer)
+        .stretch
+        .prepared_target_output_frame()
+        .unwrap();
+    assert_eq!(target, 4096);
+    assert_eq!(
+        Some(target),
+        active_mut(&mut complete)
+            .stretch
+            .prepared_target_output_frame()
+    );
+    let taps = active_mut(&mut loaded.callback.mixer)
+        .stretch
+        .prepared_tap_observation()
+        .unwrap();
+    assert_eq!(taps.missing_reads, 0);
+    assert_eq!(taps.left_reads, 4096 * 2);
+    assert!(taps.right_reads > 0);
+    assert!(taps.min_frame.unwrap() >= 32 && taps.max_frame.unwrap() < 64);
+    let prepared = active_mut(&mut loaded.callback.mixer)
+        .stretch
+        .prepared_native_address();
+    let mut step = 0;
+    while frame < target + 777 {
+        let count = [1, 127, 384, 96, 257, 512, 31][step % 7].min((target + 777 - frame) as usize);
+        render_pair(&mut loaded, &mut complete, &mut frame, count);
+        step += 1;
+    }
+    assert_eq!(
+        active(&loaded.callback.mixer)
+            .stretch
+            .native_state_address(),
+        prepared
+    );
+    assert_eq!(
+        active(&loaded.callback.mixer).stretch.adopted_request_id(),
+        Some(1)
+    );
+    // Arrange an actual P>H virtual seam without changing the productive source clock.
+    let playback = active(&loaded.callback.mixer).source_playback;
+    let offset = (0..4096)
+        .find(|offset| {
+            let position = playback.position_at(*offset);
+            position.frame == 64 && position.fraction > 0.0
+        })
+        .expect("fractional P/H seam in the real copied trajectory");
+    if offset > 0 {
+        render_pair(&mut loaded, &mut complete, &mut frame, offset);
+    }
+    let before = active(&loaded.callback.mixer).source_playback;
+    assert_eq!(before.position().frame, 64);
+    let native = active(&loaded.callback.mixer)
+        .stretch
+        .native_state_address();
+    let fifo = active(&loaded.callback.mixer).stretch.pending_fifo_frames();
+    let history = active(&loaded.callback.mixer)
+        .stretch
+        .productive_history()
+        .unwrap();
+    let filter = loaded
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    assert!(history.fed_output_frames > 0 && filter.fed_output_frames > 0);
+    assert_eq!(history.binding.accepted, Some(first));
+    assert_eq!(filter.binding.accepted, Some(first));
+    let refreshed = AcceptedTimingProjection {
+        revision: [92; 32],
+        period_seconds: 31.75 * 16.0 / 48_000.0,
+        publication_epoch: 92,
+        ..first
+    };
+    let publication = PreparedSourcePermit::unrestricted();
+    publication.mark_pending().unwrap();
+    loaded
+        .producer
+        .lock()
+        .unwrap()
+        .push(ControlMessage::PublishConstantTiming {
+            id: 0,
+            timing: PreparedConstantTiming {
+                reference: finite.clone(),
+                publication: publication.clone(),
+                projection: refreshed,
+            },
+        })
+        .unwrap();
+    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+    assert_eq!(publication.status(), "accepted");
+    let reference_publication = PreparedSourcePermit::unrestricted();
+    reference_publication.mark_pending().unwrap();
+    assert!(complete.publish_constant_timing_rt(
+        0,
+        PreparedConstantTiming {
+            reference: full,
+            publication: reference_publication,
+            projection: refreshed,
+        },
+        &mut loaded.callback.retirement
+    ));
+    // This exact current native binding is an executor fixture; no timing-analysis
+    // record or WindowWork timing publication is claimed by this manual control input.
+    binding.accepted = Some(refreshed);
+    let next = finite
+        .window(
+            32,
+            64,
+            finite.window_revision() + 1,
+            ResidentContext::KeyLockFiniteLoop,
+        )
+        .unwrap();
+    let publication = PreparedSourcePermit::new(
+        loaded.engine.prepared_source_epochs[0].clone(),
+        loaded.engine.prepared_source_epochs[0].load(Ordering::Acquire),
+    );
+    publication.mark_pending().unwrap();
+    loaded
+        .producer
+        .lock()
+        .unwrap()
+        .push(ControlMessage::RelocateResident(Box::new(
+            ResidentTransaction {
+                id: 0,
+                sample: next,
+                stems: None,
+                binding,
+                publication: publication.clone(),
+                expected_window_revision: finite.window_revision(),
+                intent: ResidentControlIntent {
+                    loop_region: Some((32, Some(64))),
+                    ..Default::default()
+                },
+                seek_pin: None,
+            },
+        )))
+        .unwrap();
+    assert_eq!(loaded.callback.drain(&mut loaded.consumer), 1);
+    assert_eq!(publication.status(), "accepted");
+    assert!(
+        active(&loaded.callback.mixer)
+            .source_playback
+            .matches_exact(&before)
+    );
+    assert_eq!(
+        active(&loaded.callback.mixer)
+            .stretch
+            .native_state_address(),
+        native
+    );
+    assert_eq!(
+        active(&loaded.callback.mixer).stretch.pending_fifo_frames(),
+        fifo
+    );
+    for (after, prior) in [
+        (
+            active(&loaded.callback.mixer)
+                .stretch
+                .productive_history()
+                .unwrap(),
+            history,
+        ),
+        (
+            loaded
+                .callback
+                .mixer
+                .dsp_source_history_for_test(0)
+                .unwrap(),
+            filter,
+        ),
+    ] {
+        assert_eq!(after.binding, prior.binding);
+        assert_eq!(after.domain, prior.domain);
+        assert_eq!(after.next_position.frame, prior.next_position.frame);
+        assert_eq!(
+            after.next_position.fraction.to_bits(),
+            prior.next_position.fraction.to_bits()
+        );
+        assert_eq!(after.next_position.seek_mode, prior.next_position.seek_mode);
+        assert_eq!(after.fed_output_frames, prior.fed_output_frames);
+    }
+    let mut audible = false;
+    let mut continued = 0;
+    for count in [1, 127, 384, 96, 257, 512, 31, 2048] {
+        audible |= render_pair(&mut loaded, &mut complete, &mut frame, count)
+            .iter()
+            .any(|sample| sample.abs() > 0.001);
+        continued += count as u64;
+        assert_eq!(
+            active(&loaded.callback.mixer)
+                .stretch
+                .native_state_address(),
+            native
+        );
+        assert_eq!(
+            active(&loaded.callback.mixer).stretch.adopted_request_id(),
+            Some(1)
+        );
+        assert_eq!(
+            active(&loaded.callback.mixer)
+                .stretch
+                .productive_history()
+                .unwrap()
+                .fed_output_frames,
+            history.fed_output_frames + continued
+        );
+        assert_eq!(
+            loaded
+                .callback
+                .mixer
+                .dsp_source_history_for_test(0)
+                .unwrap()
+                .fed_output_frames,
+            filter.fed_output_frames + continued
+        );
+    }
+    assert!(audible);
 }
 
 #[test]

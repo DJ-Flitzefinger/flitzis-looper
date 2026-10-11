@@ -1,7 +1,8 @@
-//! Bounded authority for the actual NormalLoop source taps supplied to native history.
+//! Bounded authority for the actual loop/intro/tail taps supplied to native history.
 //!
-//! Every phase, including both virtual seam taps, addresses a physical loop knot. This proof
-//! covers that complete finite physical range; the native preparation horizon is not a halo.
+//! Normal phases address physical loop knots; Intro additionally reads the real prefix and Tail
+//! the real suffix before returning to those knots. Coverage holds their whole physical union,
+//! including both virtual seam taps; the native preparation horizon is not a guessed halo.
 //! Source/window/history permissions remain with their existing independent owners.
 
 use super::constant_timing::AcceptedTimingProjection;
@@ -50,19 +51,42 @@ fn sample_layout_available(sample: &SampleBuffer) -> bool {
     })
 }
 
-/// Prove all possible NormalLoop tap addresses from the real held physical range.
+/// Physical union of every possible future tap in this source context.
+/// A contiguous Intro view holds the prefix through the loop end; a Tail view holds the loop
+/// start through the actual source end. Native lookahead and later smoothing cannot escape it.
+pub(crate) fn source_context_range(
+    sample_frames: usize,
+    region: FrameRange,
+    mode: ExplicitSeekMode,
+) -> Option<FrameRange> {
+    if region.start >= region.end || region.end > sample_frames {
+        return None;
+    }
+    Some(match mode {
+        ExplicitSeekMode::Normal => region,
+        ExplicitSeekMode::BeforeLoop => FrameRange {
+            start: 0,
+            end: region.end,
+        },
+        ExplicitSeekMode::AfterLoop => FrameRange {
+            start: region.start,
+            end: sample_frames,
+        },
+    })
+}
+
+/// Prove all possible source-context tap addresses from the real held physical range.
 /// A resident context tag without a valid layout and both physical bounds is insufficient.
+/// The existing name is retained for the NormalLoop preparation and selection callers.
 pub(crate) fn normal_loop_context_available(
     sample: &SampleBuffer,
     region: FrameRange,
     mode: ExplicitSeekMode,
 ) -> bool {
     sample_layout_available(sample)
-        && mode == ExplicitSeekMode::Normal
-        && region.start < region.end
-        && region.end <= sample.frame_count()
-        && sample.resident_start() <= region.start
-        && sample.resident_end() >= region.end
+        && source_context_range(sample.frame_count(), region, mode).is_some_and(|required| {
+            sample.resident_start() <= required.start && sample.resident_end() >= required.end
+        })
 }
 
 /// Check the actual copied source clock, selection and timing against all-phase finite coverage.
@@ -91,10 +115,17 @@ pub(crate) fn normal_loop_feed_available(
         return false;
     }
     let position = playback.position();
-    if position.seek_mode != ExplicitSeekMode::Normal
+    if position.seek_mode != plan.seek_mode
         || position.frame != plan.frame_pos
         || !position.fraction.is_finite()
         || !(0.0..1.0).contains(&position.fraction)
+        || match position.seek_mode {
+            ExplicitSeekMode::Normal => false,
+            ExplicitSeekMode::BeforeLoop => position.frame >= plan.loop_region.start,
+            ExplicitSeekMode::AfterLoop => {
+                position.frame < plan.loop_region.end || position.frame >= plan.sample_frames
+            }
+        }
     {
         return false;
     }
@@ -127,14 +158,19 @@ pub(crate) fn normal_loop_feed_available(
             return false;
         }
     }
-    // Use the same address calculation as actual reads, including virtual P > H positions
-    // at the physical exclusive end. All other Normal phases map inside the same knots.
+    // Use the same address calculation as actual reads, including virtual P > H positions,
+    // Intro's prefix-to-loop seam and Tail's source-end-to-loop return. Whole-context coverage
+    // proves every later feed; checking both actual taps also fences this copied checkpoint.
+    let Some(required) = source_context_range(plan.sample_frames, plan.loop_region, plan.seek_mode)
+    else {
+        return false;
+    };
     let taps = plan.fractional_taps(position.fraction);
-    taps.left >= plan.loop_region.start
-        && taps.left < plan.loop_region.end
+    taps.left >= required.start
+        && taps.left < required.end
         && taps
             .right
-            .is_none_or(|right| right >= plan.loop_region.start && right < plan.loop_region.end)
+            .is_none_or(|right| right >= required.start && right < required.end)
 }
 
 #[derive(Clone)]
@@ -243,8 +279,11 @@ mod tests {
     use crate::audio_engine::constant_timing::CurrentTimingAcknowledgements;
     use crate::audio_engine::input_runtime_binding::InputRuntimeOwnership;
     use crate::audio_engine::native_history_permit::NativeHistoryContext;
-    use crate::audio_engine::prepared_native_history::NativeHistoryRequest;
+    use crate::audio_engine::prepared_native_history::{NativeAdapterState, NativeHistoryRequest};
     use crate::audio_engine::prepared_source::PreparedSourcePermit;
+    use crate::audio_engine::rubberband_backend::{
+        RubberBandLiveShifter, pitch_scale_for_tempo_ratio,
+    };
     use crate::audio_engine::source_reader::{
         StemRenderSelection, StemTransition, full_stem_available_mask,
         reset_tap_observation_for_test, tap_observation_for_test,
@@ -353,6 +392,49 @@ mod tests {
             .unwrap()
         }
 
+        fn complete_stems(&self) -> PreparedStemSet {
+            let mut stems = self.stems.clone();
+            stems.reference_samples = self.full.samples.clone();
+            stems.stems = std::array::from_fn(|index| SampleBuffer {
+                channels: 2,
+                residency: self.full.residency.clone(),
+                samples: self
+                    .full
+                    .samples
+                    .iter()
+                    .map(|value| value * (index + 1) as f32 / 8.0)
+                    .collect::<Vec<_>>()
+                    .into(),
+            });
+            stems
+        }
+
+        fn in_context(mut self, mode: ExplicitSeekMode) -> Self {
+            let required = source_context_range(self.full.frame_count(), REGION, mode).unwrap();
+            self.sample = self
+                .full
+                .window(
+                    required.start,
+                    required.end,
+                    2,
+                    ResidentContext::KeyLockFiniteLoop,
+                )
+                .unwrap();
+            self.stems = self.complete_stems().window_for(&self.sample).unwrap();
+            let frame = match mode {
+                ExplicitSeekMode::Normal => REGION.start,
+                ExplicitSeekMode::BeforeLoop => 0,
+                ExplicitSeekMode::AfterLoop => self.full.frame_count() - 2,
+            };
+            self.playback = SourcePlayback::new(frame, mode, 0.73);
+            self.playback.configure_domain(self.plan.domain());
+            self.playback.set_target(1.371234567890123);
+            self.plan.frame_pos = frame;
+            self.plan.seek_mode = mode;
+            self.ownership.publish_window(0, &self.sample);
+            self
+        }
+
         fn request(&self) -> NativeHistoryRequest {
             NativeHistoryRequest {
                 sample: self.sample.clone(),
@@ -447,6 +529,278 @@ mod tests {
                 (0.5 / (period - 999.0)) as f32
             };
             assert_eq!(taps.right_gain, expected_gain);
+        }
+    }
+
+    #[test]
+    fn finite_intro_tail_cover_actual_feed_and_ramped_return_to_virtual_loop() {
+        for period in [999.75, 1000.0, 1000.25] {
+            for mode in [ExplicitSeekMode::BeforeLoop, ExplicitSeekMode::AfterLoop] {
+                for mask in [0, 1, 10, 15] {
+                    let mut fixture = Fixture::new(period).in_context(mode);
+                    let stem = StemRenderSelection::from_state(StemMixMode::AllStems, 17, mask);
+                    for (from, to) in [
+                        (StemRenderSelection::full_mix(), stem),
+                        (stem, StemRenderSelection::full_mix()),
+                    ] {
+                        fixture.plan.selection = to;
+                        fixture.plan.transition = StemTransition::start(from, 128);
+                        let coverage = fixture.coverage();
+                        let mut playback = fixture.playback;
+                        let mut plan = fixture.plan;
+                        let mut feed = [vec![0.0; 512], vec![0.0; 512]];
+                        let mut returned = false;
+                        let mut settled_fenced = false;
+                        let mut right_reads = 0;
+                        for _ in 0..24 {
+                            let (frames, ratio) = playback.chunk(512);
+                            assert!(normal_loop_feed_available(
+                                &fixture.sample,
+                                Some(&fixture.stems),
+                                RATE,
+                                None,
+                                plan,
+                                &playback,
+                            ));
+                            // The productive feed covers both ramp sides and its settled target.
+                            // Pending coverage keeps its original transition contract; clearing
+                            // the ramp requires a fresh request, never a relaxed adoption fence.
+                            assert_eq!(
+                                coverage.matches(
+                                    &fixture.sample,
+                                    Some(&fixture.stems),
+                                    RATE,
+                                    None,
+                                    plan,
+                                    &playback,
+                                    true,
+                                ),
+                                plan.transition.is_active()
+                            );
+                            settled_fenced |= !plan.transition.is_active();
+                            reset_tap_observation_for_test();
+                            plan.fill_fractional_buffers_checked(
+                                &fixture.sample,
+                                Some(&fixture.stems),
+                                &playback,
+                                &mut feed,
+                                frames,
+                            )
+                            .unwrap();
+                            let observed = tap_observation_for_test();
+                            assert_eq!(observed.missing_reads, 0);
+                            assert_eq!(observed.left_reads, frames * 2);
+                            assert!(observed.min_frame.unwrap() >= fixture.sample.resident_start());
+                            assert!(observed.max_frame.unwrap() < fixture.sample.resident_end());
+                            right_reads += observed.right_reads;
+                            playback.advance(frames);
+                            plan.transition.advance_fractional(frames as f64 * ratio);
+                            let position = playback.position();
+                            plan.frame_pos = position.frame;
+                            plan.seek_mode = position.seek_mode;
+                            returned |= position.seek_mode == ExplicitSeekMode::Normal;
+                        }
+                        assert!(returned);
+                        assert!(settled_fenced);
+                        assert!(right_reads > 0);
+                        assert_eq!(playback.tempo_ratio(), playback.rate_target());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn finite_intro_tail_require_prefix_end_and_both_boundary_taps() {
+        for (mode, start, end, frame, missing, right_reads) in [
+            (ExplicitSeekMode::BeforeLoop, 1, REGION.end, 0, 0, 0),
+            (
+                ExplicitSeekMode::AfterLoop,
+                REGION.start,
+                4095,
+                4094,
+                4095,
+                1,
+            ),
+        ] {
+            let fixture = Fixture::new(1000.25).in_context(mode);
+            let incomplete = fixture
+                .full
+                .window(start, end, 9, ResidentContext::KeyLockFiniteLoop)
+                .unwrap();
+            assert!(!normal_loop_context_available(&incomplete, REGION, mode));
+            let mut playback = SourcePlayback::new(frame, mode, 0.5);
+            playback.configure_domain(fixture.plan.domain());
+            playback.advance(1);
+            let position = playback.position();
+            let plan = SourceReadPlan {
+                frame_pos: position.frame,
+                seek_mode: position.seek_mode,
+                selection: StemRenderSelection::full_mix(),
+                ..fixture.plan
+            };
+            assert!(
+                NormalLoopCoverage::capture(&incomplete, None, RATE, None, plan, &playback)
+                    .is_none()
+            );
+            let mut feed = [vec![7.0], vec![7.0]];
+            reset_tap_observation_for_test();
+            assert!(
+                plan.fill_fractional_buffers_checked(&incomplete, None, &playback, &mut feed, 1)
+                    .is_err()
+            );
+            assert_eq!(feed, [vec![7.0], vec![7.0]]);
+            let observed = tap_observation_for_test();
+            assert_eq!(observed.missing_reads, 1);
+            assert_eq!(observed.min_frame, Some(missing));
+            assert_eq!(observed.right_reads, right_reads);
+        }
+    }
+
+    #[test]
+    fn finite_intro_tail_prepare_real_native_and_continue_like_independent_complete_pcm() {
+        for period in [999.75, 1000.0, 1000.25] {
+            for mode in [ExplicitSeekMode::BeforeLoop, ExplicitSeekMode::AfterLoop] {
+                for mask in [1, 10] {
+                    let mut finite = Fixture::new(period).in_context(mode);
+                    finite.plan.selection =
+                        StemRenderSelection::from_state(StemMixMode::AllStems, 17, mask);
+                    let mut complete = Fixture::new(period).in_context(mode);
+                    complete.sample = complete.full.clone();
+                    complete.stems = complete.complete_stems();
+                    complete.plan.selection = finite.plan.selection;
+                    complete.ownership.publish_window(0, &complete.sample);
+                    assert!(!Arc::ptr_eq(&finite.full.samples, &complete.full.samples));
+                    let mut expected_request = complete.request();
+                    expected_request.coverage = None;
+                    let mut actual = NativeAdapterState::new(
+                        Some(RubberBandLiveShifter::new(RATE, 2).unwrap()),
+                        2,
+                    );
+                    let mut expected = NativeAdapterState::new(
+                        Some(RubberBandLiveShifter::new(RATE, 2).unwrap()),
+                        2,
+                    );
+                    actual.prepare_source(finite.request()).unwrap();
+                    expected.prepare_source(expected_request).unwrap();
+                    assert!(actual.used);
+                    assert!(actual.active);
+                    let source = actual.source.as_ref().unwrap();
+                    let observed = source.coverage.as_ref().unwrap().prepared_taps;
+                    assert_eq!(observed.left_reads, 4096 * 2);
+                    assert!(observed.right_reads > 0);
+                    assert_eq!(observed.missing_reads, 0);
+                    assert!(observed.min_frame.unwrap() >= finite.sample.resident_start());
+                    assert!(observed.max_frame.unwrap() < finite.sample.resident_end());
+                    let mut plan = source.plan;
+                    let mut playback = source.playback;
+                    assert_eq!(plan.seek_mode, ExplicitSeekMode::Normal);
+                    assert!(playback.matches_exact(&expected.source.as_ref().unwrap().playback));
+                    let mut actual_feed = [vec![0.0; 512], vec![0.0; 512]];
+                    let mut expected_feed = actual_feed.clone();
+                    let mut actual_output = actual_feed.clone();
+                    let mut expected_output = actual_feed.clone();
+                    let mut nontrivial = false;
+                    for max_frames in [1, 127, 384, 96, 257, 512, 31].into_iter().cycle().take(64) {
+                        let (frames, ratio) = playback.chunk(max_frames);
+                        plan.fill_fractional_buffers_checked(
+                            &finite.sample,
+                            Some(&finite.stems),
+                            &playback,
+                            &mut actual_feed,
+                            frames,
+                        )
+                        .unwrap();
+                        plan.fill_fractional_buffers(
+                            &complete.sample,
+                            Some(&complete.stems),
+                            &playback,
+                            &mut expected_feed,
+                            frames,
+                        );
+                        assert_eq!(actual_feed, expected_feed);
+                        let pitch = pitch_scale_for_tempo_ratio(ratio);
+                        actual
+                            .render(&actual_feed, &mut actual_output, frames, pitch)
+                            .unwrap();
+                        expected
+                            .render(&expected_feed, &mut expected_output, frames, pitch)
+                            .unwrap();
+                        for channel in 0..2 {
+                            for frame in 0..frames {
+                                assert!(
+                                    (actual_output[channel][frame]
+                                        - expected_output[channel][frame])
+                                        .abs()
+                                        < 1.0e-7
+                                );
+                                nontrivial |= actual_output[channel][frame].abs() > 1.0e-4;
+                            }
+                            assert_eq!(
+                                actual.input_fifo[channel].len(),
+                                expected.input_fifo[channel].len()
+                            );
+                            assert_eq!(
+                                actual.output_fifo[channel].len(),
+                                expected.output_fifo[channel].len()
+                            );
+                        }
+                        playback.advance(frames);
+                        let position = playback.position();
+                        plan.frame_pos = position.frame;
+                        plan.seek_mode = position.seek_mode;
+                    }
+                    assert!(nontrivial);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn complete_intro_tail_history_retains_original_pins_when_loop_only_storage_returns() {
+        for mode in [ExplicitSeekMode::BeforeLoop, ExplicitSeekMode::AfterLoop] {
+            let mut fixture = Fixture::new(1000.25).in_context(mode);
+            fixture.sample = fixture.full.clone();
+            fixture.stems = fixture.complete_stems();
+            fixture.ownership.publish_window(0, &fixture.sample);
+            let mut request = fixture.request();
+            request.coverage = None;
+            let finite = fixture
+                .full
+                .window(
+                    REGION.start,
+                    REGION.end,
+                    8,
+                    ResidentContext::KeyLockFiniteLoop,
+                )
+                .unwrap();
+            let stems = fixture.stems.clone().window_for(&finite).unwrap();
+            let mut playback = fixture.playback;
+            for _ in 0..8 {
+                let (frames, _) = playback.chunk(512);
+                playback.advance(frames);
+            }
+            let position = playback.position();
+            assert_eq!(position.seek_mode, ExplicitSeekMode::Normal);
+            let plan = SourceReadPlan {
+                frame_pos: position.frame,
+                seek_mode: position.seek_mode,
+                ..fixture.plan
+            };
+            fixture.ownership.publish_window(0, &finite);
+            let feed = ProductiveSourceFeed {
+                sample: &finite,
+                stems: Some(&stems),
+                plan,
+                playback: &playback,
+                ..fixture.feed()
+            };
+            assert!(!request.matches_contract(&feed, 0));
+            assert!(request.matches_effective_contract(&feed, 0));
+            assert_eq!(request.sample.resident_start(), 0);
+            assert_eq!(request.sample.resident_end(), fixture.full.frame_count());
+            fixture.epoch.fetch_add(1, Ordering::AcqRel);
+            assert!(!request.matches_effective_contract(&feed, 0));
         }
     }
 

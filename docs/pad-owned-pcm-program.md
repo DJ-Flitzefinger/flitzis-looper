@@ -135,7 +135,14 @@ the existing native FIFO/cursor/filter assertions are unchanged. Final independe
 nonauthor acceptance covers only this lifecycle/source-custody subtask; no
 full P4b parent closes.
 
-The lifecycle/source-custody checkbox is accepted. Full P4b parents remain open. Seek/intro/tail,
+The finite Seek/domain implementation now extends this with actual effective-
+voice capture/range ACK, prefix/loop and loop/tail closure, Native preparation/
+adoption, explicit-seek cuts and next-tap-aware physical edits at production k=0.
+Complete exceptions and finite return use the same retained ownership lanes.
+Its [bounded report](finite-seek-domain-validation.md) retains failures and
+independent complete PCM/raw-native/filter evidence, without parent closure.
+Initial finite KEYLOCK-load/default-loop admission remains P4b/P5b integration.
+The lifecycle/source-custody checkbox is accepted. Full P4b parents remain open. Unproved seek/intro/tail,
 physical-domain cuts and the remaining complete resource/musical/history/causality
 matrix remain required, including binary64 P/integer H, 119.999..123.45 BPM,
 <=1-loaded-source-frame 75/1000 cycles and the 48-kHz/rate-2/H16384/C3678/U2080

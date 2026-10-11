@@ -47,6 +47,9 @@ impl NativeHistoryRequest {
             )
         } else {
             // A missing finite proof never becomes a successful native source request.
+            // An already adopted complete request retains its original source/history pins
+            // while a storage-only ACK may install any proved finite current context. Intro
+            // and Tail return to Normal through the same copied clock, with no native reset.
             complete_view_available(&self.sample)
                 && (complete_view_available(feed.sample)
                     || (!exact_window

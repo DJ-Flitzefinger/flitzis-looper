@@ -17,6 +17,8 @@ pub(crate) struct AlgebraicClock {
     until_step: usize,
     transition: Option<(SampleBuffer, f64)>,
     physical_region: Option<(usize, usize)>,
+    // An independently addressed one-shot prefix/tail before returning to the loop.
+    physical_segment: Option<(usize, usize)>,
 }
 
 impl AlgebraicClock {
@@ -34,6 +36,7 @@ impl AlgebraicClock {
             until_step: 0,
             transition: None,
             physical_region: None,
+            physical_segment: None,
         }
     }
 
@@ -44,12 +47,93 @@ impl AlgebraicClock {
         }
     }
 
+    pub(crate) fn seek_physical(&mut self, frame: usize, source_frames: usize) {
+        let (start, end) = self.physical_region.unwrap();
+        let frame = frame.min(source_frames);
+        self.physical_segment = if frame < start {
+            Some((frame, start))
+        } else if frame >= end && end < source_frames {
+            Some((frame, source_frames))
+        } else {
+            None
+        };
+        self.whole = if self.physical_segment.is_some() {
+            0
+        } else {
+            frame.saturating_sub(start)
+        };
+        self.fraction = 0.0;
+        self.elapsed = 0;
+    }
+
+    pub(crate) fn physical_position(&self, offset: usize) -> (usize, f64, bool) {
+        let (start, _) = self.physical_region.unwrap();
+        if let Some((origin, boundary)) = self.physical_segment {
+            let distance = self.fraction + (self.elapsed + offset) as f64 * self.ratio;
+            let remaining = (boundary - origin) as f64;
+            if distance < remaining {
+                let whole = distance.floor() as usize;
+                return (origin + whole, distance - whole as f64, true);
+            }
+            let phase = (distance - remaining).rem_euclid(self.period);
+            return (start + phase.floor() as usize, phase.fract(), false);
+        }
+        let phase = self.phase(offset);
+        (start + phase.floor() as usize, phase.fract(), false)
+    }
+
+    /// Compare independently computed next interpolation knots before a physical marker edit.
+    pub(crate) fn edit_physical(&mut self, start: usize, end: usize) -> bool {
+        let (frame, fraction, explicit) = self.physical_position(0);
+        let (old_start, old_end) = self.physical_region.unwrap();
+        let old_boundary = if explicit {
+            self.physical_segment.unwrap().1
+        } else {
+            old_end
+        };
+        let old_right = (fraction != 0.0).then_some(if frame + 1 == old_boundary {
+            old_start
+        } else {
+            frame + 1
+        });
+        let clamp = frame < start || frame >= end;
+        let next_frame = if clamp { start } else { frame };
+        let next_fraction = if clamp { 0.0 } else { fraction };
+        let next_right = (next_fraction != 0.0).then_some(if next_frame + 1 == end {
+            start
+        } else {
+            next_frame + 1
+        });
+        let cut = frame != next_frame
+            || fraction.to_bits() != next_fraction.to_bits()
+            || old_right != next_right;
+        self.physical_region = Some((start, end));
+        self.physical_segment = None;
+        self.period = (end - start) as f64;
+        self.whole = next_frame - start;
+        self.fraction = next_fraction;
+        self.elapsed = 0;
+        cut
+    }
+
     pub(crate) fn phase(&self, offset: usize) -> f64 {
         (self.whole as f64 + (self.fraction + (self.elapsed + offset) as f64 * self.ratio))
             .rem_euclid(self.period)
     }
 
     fn rebase(&mut self) {
+        if let Some((start, _)) = self.physical_region {
+            let (frame, fraction, explicit) = self.physical_position(0);
+            self.physical_segment = if explicit {
+                Some((frame, self.physical_segment.unwrap().1))
+            } else {
+                None
+            };
+            self.whole = if explicit { 0 } else { frame - start };
+            self.fraction = fraction;
+            self.elapsed = 0;
+            return;
+        }
         let phase = self.phase(0);
         self.whole = phase.floor() as usize;
         self.fraction = phase.fract();
@@ -96,10 +180,18 @@ impl AlgebraicClock {
 
     fn sample(&self, target: &SampleBuffer, offset: usize) -> f32 {
         if let Some((start, end)) = self.physical_region {
-            let phase = self.phase(offset);
-            let left = start + phase.floor() as usize;
-            let right = if left + 1 == end { start } else { left + 1 };
-            let fraction = phase.fract() as f32;
+            let (left, fraction, explicit) = self.physical_position(offset);
+            let boundary = if explicit {
+                self.physical_segment.unwrap().1
+            } else {
+                end
+            };
+            let right = if left + 1 == boundary {
+                start
+            } else {
+                left + 1
+            };
+            let fraction = fraction as f32;
             return target.samples[left]
                 + (target.samples[right] - target.samples[left]) * fraction;
         }

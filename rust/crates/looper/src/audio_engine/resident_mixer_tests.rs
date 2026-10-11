@@ -469,14 +469,12 @@ fn native_keylock_finite_context_relocation_keeps_actual_handle_fifo_history_fil
             voice(&actual).sample.as_ref().unwrap().resident_binding(),
             next.resident_binding()
         );
-        // Direct finite seek and active loop edits remain unavailable. Same-resident scalar
-        // selection ramps now have their own wet Native/FIFO/filter proof in separate tests.
+        // Locally held targets cannot authorize missing Intro prefix or Tail suffix.
+        // Missing physical bounds must likewise preserve adopted storage-only chronology.
         let selection = actual.stem_demand_for_measurement(0);
-        assert!(!actual.seek_sample_at_output_frame(
-            0,
-            (START + 37) as f64 / f64::from(RATE),
-            4103
-        ));
+        for target in [START - 1, END + 1] {
+            assert!(!actual.seek_sample_at_output_frame(0, target as f64 / f64::from(RATE), 4103));
+        }
         actual.set_pad_loop_region(
             0,
             START as f64 / f64::from(RATE),
@@ -484,8 +482,13 @@ fn native_keylock_finite_context_relocation_keeps_actual_handle_fifo_history_fil
         );
         actual.set_pad_loop_region(
             0,
-            (START + 1) as f64 / f64::from(RATE),
-            Some((END - 1) as f64 / f64::from(RATE)),
+            (START - 20) as f64 / f64::from(RATE),
+            Some(END as f64 / f64::from(RATE)),
+        );
+        actual.set_pad_loop_region(
+            0,
+            START as f64 / f64::from(RATE),
+            Some((END + 30) as f64 / f64::from(RATE)),
         );
         assert_eq!(actual.loop_region_frames(0), (START, Some(END)));
         assert_eq!(actual.stem_demand_for_measurement(0), selection);

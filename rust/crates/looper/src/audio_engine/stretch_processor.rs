@@ -111,6 +111,26 @@ impl StretchProcessor {
         true
     }
 
+    /// Admission for an intentional source cut must precede clearing usable old history.
+    pub(crate) fn source_cut_available(&self) -> bool {
+        (!self.native.used && !self.native.dirty && self.native.rubberband.is_some())
+            || self.preparation.warmed_reserve_available()
+    }
+
+    /// Move a used handle to its existing off-thread recycle lane before the fixed reset.
+    pub(crate) fn reserve_source_cut(&mut self) -> bool {
+        if !self.native.used && !self.native.dirty && self.native.rubberband.is_some() {
+            return true;
+        }
+        if !self.preparation.exchange(&mut self.native.rubberband) {
+            return false;
+        }
+        self.native.used = false;
+        self.native.dirty = false;
+        self.native.pitch_scale = 1.0;
+        true
+    }
+
     /// A pending ON warms Native while the previously effective dry feed reaches the EQ.
     pub(crate) fn retain_dry_output(&mut self, frames: usize) {
         self.copy_varispeed_output(frames.min(DEFAULT_BLOCK_SAMPLES));

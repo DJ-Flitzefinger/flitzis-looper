@@ -347,8 +347,18 @@ admission reservation; failure preserves old audio, parameters and owners.
 Headless lifecycle tests continue wet output beyond the first resumed callback through
 later real requests/adoptions and count each distinct reader/history final use
 and held peak. Existing source-reader/playback/tap authority and retirement lanes
-remain authoritative. Finite seek/intro/tail, physical-domain cuts and full P4b
-music/resource/history/causality oracles stay open. See [Key Lock coverage](key-lock-backend.md).
+remain authoritative. The finite seek/domain implementation additionally uses the
+same capture, range worker and ACK for current and retained sources. Intro holds
+the real prefix through loop end; Tail holds loop start through the actual source
+end. Both return naturally to the loop through the shared fractional tap policy.
+Every explicit seek cuts generation, Native/FIFO and filter history, including
+equal-phase seeks, while the canonical rate target/smoothing intent continues.
+Physical edits compare both next taps and their weight: only a continuous actual
+read retains chronology. A clamp or changed seam tap reserves clean Native state
+through existing recycle lanes before effects. Complete Seek/ALL exceptions and
+return to finite provisioning remain separately admitted. Whole P4b and initial
+finite KEYLOCK-load/default-loop/P5b integration, music/resources and Human gates
+remain open. See [Key Lock coverage](key-lock-backend.md).
 
 [C3 measurements](pcm-cache-measurements.md) report current cold/warm readiness,
 resource costs, exceptions and lifecycle with paired finite/full results.
