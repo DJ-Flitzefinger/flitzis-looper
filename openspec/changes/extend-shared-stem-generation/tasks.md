@@ -43,7 +43,7 @@
 
 ## 3. X11-LIVE-STEMS: separately proved new-generation adoption (L3)
 
-- [ ] 3.1 Add a bounded new-complete-set preparation/adoption transaction through
+- [x] 3.1 Add a bounded new-complete-set preparation/adoption transaction through
   existing lanes, with fresh own source/request/timing/window/voice/history
   permits and reserved native capacity. Keep current active-publication rejection
   until genuine NormalLoop new-set proof passes; same-set P5a is insufficient.

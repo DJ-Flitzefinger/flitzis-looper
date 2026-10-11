@@ -1,5 +1,5 @@
-//! P5a: first residency of an already registered immutable set. Ordinary publication
-//! remains stopped-only. Component I/O and every final PCM/file-owner drop use existing workers.
+//! Sealed same-set residency and independent new-set candidate transactions.
+//! Component I/O and every final PCM/file-owner drop use existing workers.
 use super::AudioEngine;
 use super::constant_timing::AcceptedTimingProjection;
 use super::constant_timing::CurrentTimingAcknowledgements;
@@ -79,10 +79,44 @@ impl SelectionPermit {
     }
 }
 
+/// Future selection authority. None of these fences mutates the audible predecessor.
+#[derive(Debug)]
+pub(crate) struct CandidateAuthority {
+    epoch: Arc<AtomicU64>,
+    expected: u64,
+    predecessor_intent: Arc<AtomicU64>,
+    predecessor_intent_expected: u64,
+    predecessor_selection: Arc<AtomicU64>,
+    pub(crate) predecessor_selection_expected: u64,
+    adopted: AtomicBool,
+}
+impl CandidateAuthority {
+    pub(crate) fn current(&self) -> bool {
+        self.adopted.load(Ordering::Acquire)
+            || (self.epoch.load(Ordering::Acquire) == self.expected
+                && self.predecessor_intent.load(Ordering::Acquire)
+                    == self.predecessor_intent_expected
+                && self.predecessor_selection.load(Ordering::Acquire)
+                    == self.predecessor_selection_expected)
+    }
+    pub(crate) fn adopted(&self) -> bool {
+        self.adopted.load(Ordering::Acquire)
+    }
+    /// An accepted selection remains reusable, while each operation's receipt
+    /// loses effective authority when a later ordinary mode/window intent wins.
+    pub(crate) fn receipt_current(&self) -> bool {
+        self.predecessor_intent.load(Ordering::Acquire) == self.predecessor_intent_expected
+    }
+    pub(crate) fn mark_adopted(&self) {
+        self.adopted.store(true, Ordering::Release);
+    }
+}
+
 #[pyclass(frozen)]
 pub struct CommittedStemSetTicket {
     owner: Arc<SelectionOwner>,
     publication: PreparedSourcePermit,
+    candidate: Option<Arc<CandidateAuthority>>,
 }
 #[pymethods]
 impl CommittedStemSetTicket {
@@ -99,7 +133,11 @@ impl CommittedStemSetTicket {
     pub fn is_current(&self) -> bool {
         self.owner.source_current()
             && !self.owner.revoked.load(Ordering::Acquire)
-            && if self.publication.status() == "accepted" {
+            && if let Some(candidate) = &self.candidate
+                && !candidate.adopted()
+            {
+                self.publication.current() && candidate.current()
+            } else if self.publication.status() == "accepted" {
                 self.owner.current()
             } else {
                 self.publication.current()
@@ -150,6 +188,7 @@ pub struct ResidentStemTicket {
     binding: InputPadBinding,
     launch_revision: u64,
     acknowledgements: Arc<CurrentTimingAcknowledgements>,
+    candidate: Option<Arc<CandidateAuthority>>,
 }
 #[pymethods]
 impl ResidentStemTicket {
@@ -192,8 +231,18 @@ impl ResidentStemTicket {
     }
     pub fn is_current(&self) -> bool {
         self.status.publication.current()
+            && self
+                .candidate
+                .as_ref()
+                .is_none_or(|candidate| candidate.receipt_current())
             && self.owner.source_current()
-            && (self.full_mix || self.owner.current())
+            && (self.full_mix
+                || self.owner.current()
+                || self.candidate.as_ref().is_some_and(|candidate| {
+                    !candidate.adopted()
+                        && candidate.current()
+                        && !self.owner.revoked.load(Ordering::Acquire)
+                }))
             && self
                 .owner
                 .ownership
@@ -213,11 +262,19 @@ impl ResidentStemTicket {
                 .launch_current(self.owner.id, self.launch_revision)
     }
     pub fn cancel(&self) -> bool {
+        self.withdraw()
+    }
+    /// True only when this caller actually won cancellation before callback claim.
+    pub fn withdraw(&self) -> bool {
         let cancelled = self.status.publication.cancel_unclaimed();
         if cancelled {
             self.status.effective.store(3, Ordering::Release);
         }
         cancelled
+    }
+    /// Claim remains observable after acceptance, including paused/stopped waiting.
+    pub fn claimed(&self) -> bool {
+        matches!(self.status.publication.status(), "adopting" | "accepted")
     }
 }
 
@@ -231,6 +288,7 @@ struct PendingResidency {
     stems: Option<PreparedStemSet>,
     full_mix: bool,
     admitted: Instant,
+    candidate: Option<Arc<CandidateAuthority>>,
 }
 
 #[derive(Default)]
@@ -239,6 +297,7 @@ pub(super) struct CommittedStemState {
     registration: Option<PendingRegistration>,
     registration_epoch: Arc<AtomicU64>,
     selection_epoch: Arc<AtomicU64>,
+    candidate_epoch: Arc<AtomicU64>,
     pending: Option<PendingResidency>,
     /// The real admission calculation is exercised without allocating a GiB fixture.
     #[cfg(test)]
@@ -272,8 +331,18 @@ impl CommittedStemState {
         // authority to re-promote them after a newer ordered release or cancellation.
         if self.pending.as_ref().is_some_and(|pending| {
             !pending.status.publication.current()
+                || pending
+                    .candidate
+                    .as_ref()
+                    .is_some_and(|candidate| !candidate.receipt_current())
                 || !pending.owner.source_current()
-                || (!pending.full_mix && !pending.owner.current())
+                || (!pending.full_mix
+                    && !pending.owner.current()
+                    && !pending.candidate.as_ref().is_some_and(|candidate| {
+                        !candidate.adopted()
+                            && candidate.current()
+                            && !pending.owner.revoked.load(Ordering::Acquire)
+                    }))
         }) {
             self.pending = None;
         }
@@ -289,6 +358,14 @@ impl CommittedStemState {
                     .fail("Committed stem residency superseded".into());
             }
             if pending.status.publication.status() == "accepted" {
+                if pending
+                    .candidate
+                    .as_ref()
+                    .is_some_and(|candidate| candidate.adopted())
+                    && pending.owner.current()
+                {
+                    self.accepted = Some(pending.owner.clone());
+                }
                 if pending.full_mix {
                     if matches!(pending.status.effective.load(Ordering::Acquire), 2 | 4) {
                         *accepted = None;
@@ -336,6 +413,13 @@ impl CommittedStemState {
             .as_ref()
             .is_some_and(|pending| pending.status.publication.status() == "adopting")
     }
+    fn handover_pending(&self) -> bool {
+        self.pending.as_ref().is_some_and(|pending| {
+            pending.status.publication.status() == "adopting"
+                || (pending.status.publication.status() == "accepted"
+                    && pending.status.effective.load(Ordering::Acquire) == 1)
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -350,6 +434,7 @@ pub(crate) struct StemVoicePin {
     pub(crate) accepted: Option<AcceptedTimingProjection>,
     pub(crate) plan: SourceReadPlan,
     pub(crate) playback: SourcePlayback,
+    pub(crate) predecessor: Option<SelectedStemIdentity>,
 }
 impl std::fmt::Debug for StemVoicePin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -367,6 +452,7 @@ pub(crate) struct StemVoiceCapture {
     pub(crate) status: Arc<ResidencyStatus>,
     pub(crate) launch_revision: u64,
     pub(crate) target: StemMixMode,
+    pub(crate) candidate: Option<Arc<CandidateAuthority>>,
     sender: UnsafeCell<Producer<StemVoicePin>>,
     used: AtomicBool,
 }
@@ -404,12 +490,13 @@ pub(crate) struct StemResidencyTransaction {
     pub(crate) launch_revision: u64,
     pub(crate) target: StemMixMode,
     pub(crate) mask: u8,
+    pub(crate) candidate: Option<Arc<CandidateAuthority>>,
     pub(crate) pin: StemVoicePin,
     pub(crate) stems: Option<PreparedStemSet>,
     pub(crate) retired_stems: Option<PreparedStemSet>,
     pub(crate) retired_status: Option<StemModeReceipt>,
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SelectedStemIdentity {
     pub(crate) identity: [u8; 32],
     pub(crate) source_generation: u64,
@@ -423,6 +510,7 @@ pub(crate) struct StemModeReceipt {
     pub(crate) target: StemMixMode,
     pub(crate) mask: u8,
     pub(crate) launch_revision: u64,
+    pub(crate) candidate: Option<Arc<CandidateAuthority>>,
 }
 #[derive(Debug, Clone)]
 pub(crate) enum CommittedStemRtWork {
@@ -498,6 +586,7 @@ impl AudioEngine {
             return Ok(CommittedStemSetTicket {
                 owner: previous.clone(),
                 publication: PreparedSourcePermit::accepted_fixed(),
+                candidate: None,
             });
         }
         if producer.is_full() {
@@ -546,7 +635,113 @@ impl AudioEngine {
             owner: owner.clone(),
             publication: publication.clone(),
         });
-        Ok(CommittedStemSetTicket { owner, publication })
+        Ok(CommittedStemSetTicket {
+            owner,
+            publication,
+            candidate: None,
+        })
+    }
+
+    /// Seal a future complete set without changing the installed selection or intent.
+    pub(super) fn register_pending_committed_stem_pair_with_producer(
+        &self,
+        prepared: &PreparedStemPair,
+        ticket: &PreparedSourceTicket,
+        _producer: &Arc<Mutex<Producer<ControlMessage>>>,
+    ) -> PyResult<CommittedStemSetTicket> {
+        super::resident_relocation::reconcile(self)?;
+        let binding = input_runtime_binding::capture(self, ticket.id)?
+            .filter(|binding| binding.available() && binding.current())
+            .ok_or_else(|| PyValueError::new_err("current source/timing unavailable"))?;
+        let requests = self
+            .pad_request_ids
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("request lock poisoned"))?;
+        let cache = self
+            .sample_cache
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("source cache lock poisoned"))?;
+        let sample = cache
+            .get(ticket.id)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| PyValueError::new_err("sample is not loaded"))?;
+        validate_prepared_ticket(
+            ticket,
+            ticket.id,
+            &prepared.source_version,
+            requests[ticket.id],
+            &self.prepared_source_epochs[ticket.id],
+            sample,
+        )
+        .map_err(PyValueError::new_err)?;
+        if !sample.same_window(&prepared.reference) || prepared.discarded.load(Ordering::Acquire) {
+            return Err(PyValueError::new_err(
+                "committed candidate source/window is stale",
+            ));
+        }
+        let mut owners = self
+            .resident_stem_cache
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("resident ownership lock poisoned"))?;
+        let resident = &mut owners[ticket.id];
+        if resident.ordinary_publication_pending()
+            || resident.committed.handover_pending()
+            || resident
+                .committed
+                .registration
+                .as_ref()
+                .is_some_and(|registration| {
+                    matches!(
+                        registration.publication.status(),
+                        "captured" | "pending" | "adopting"
+                    )
+                })
+        {
+            return Err(PyRuntimeError::new_err("resident handover is in progress"));
+        }
+        let state = &mut resident.committed;
+        let expected = next_epoch(&state.registration_epoch).map_err(PyRuntimeError::new_err)?;
+        let candidate_expected =
+            next_epoch(&state.candidate_epoch).map_err(PyRuntimeError::new_err)?;
+        let owner = Arc::new(SelectionOwner {
+            id: ticket.id,
+            binding: binding.binding,
+            source_generation: binding.source_generation,
+            source_version: prepared.source_version.clone(),
+            identity: prepared._identity.clone(),
+            pair: StemPairOwner {
+                root: prepared.root.clone(),
+                descriptor_reference: prepared.descriptor_reference.clone(),
+                source_lease: prepared.source_lease.clone(),
+                reader: prepared.pair_reader.clone(),
+            },
+            generation_path: prepared.wav_path.clone(),
+            epoch: state.selection_epoch.clone(),
+            expected,
+            revoked: Arc::new(AtomicBool::new(false)),
+            source_epoch: self.prepared_source_epochs[ticket.id].clone(),
+            ownership: self.input_runtime_ownership.clone(),
+        });
+        let candidate = Arc::new(CandidateAuthority {
+            epoch: state.candidate_epoch.clone(),
+            expected: candidate_expected,
+            predecessor_intent: resident.intent_epoch.clone(),
+            predecessor_intent_expected: resident.intent_epoch.load(Ordering::Acquire),
+            predecessor_selection: state.selection_epoch.clone(),
+            predecessor_selection_expected: state.selection_epoch.load(Ordering::Acquire),
+            adopted: AtomicBool::new(false),
+        });
+        // registration_epoch is only a unique selection-token allocator here. Its
+        // change cannot revoke V1's selection_epoch or any resident/native permit.
+        state.registration_epoch.store(expected, Ordering::Release);
+        state
+            .candidate_epoch
+            .store(candidate_expected, Ordering::Release);
+        Ok(CommittedStemSetTicket {
+            owner,
+            publication: PreparedSourcePermit::accepted_fixed(),
+            candidate: Some(candidate),
+        })
     }
 
     pub(super) fn request_committed_stem_residency_with_producer(
@@ -564,9 +759,19 @@ impl AudioEngine {
         if enabled_mask & !STEM_COMPONENT_MASK != 0 {
             return Err(PyValueError::new_err("invalid committed stem mask"));
         }
-        if selection.publication.status() != "accepted" || !selection.owner.current() {
+        if selection.publication.status() != "accepted" || !selection.is_current() {
             return Err(PyValueError::new_err(
                 "committed disk set lacks its current registration ACK",
+            ));
+        }
+        let candidate = selection
+            .candidate
+            .as_ref()
+            .filter(|candidate| !candidate.adopted())
+            .cloned();
+        if candidate.is_some() && target != StemMixMode::AllStems {
+            return Err(PyValueError::new_err(
+                "unadopted candidate requires all_stems intent",
             ));
         }
         super::resident_relocation::reconcile(self)?;
@@ -593,7 +798,10 @@ impl AudioEngine {
             .lock()
             .map_err(|_| PyRuntimeError::new_err("resident ownership lock poisoned"))?;
         let owner = &mut owners[id];
-        if owner.ordinary_publication_pending() || owner.committed.claimed() {
+        if owner.ordinary_publication_pending()
+            || owner.committed.claimed()
+            || (candidate.is_some() && owner.committed.handover_pending())
+        {
             return Err(PyRuntimeError::new_err("resident adoption is in progress"));
         }
         #[cfg(test)]
@@ -602,13 +810,19 @@ impl AudioEngine {
             .pcm_limit_for_test
             .unwrap_or(super::cold_jobs::PCM_LIMIT_BYTES)
             .min(super::cold_jobs::PCM_LIMIT_BYTES);
-        let expected = next_epoch(&owner.intent_epoch).map_err(PyRuntimeError::new_err)?;
-        owner.cancel_window_predecessor(self, id)?;
-        let publication = PreparedSourcePermit::new(owner.intent_epoch.clone(), expected)
-            .with_source_epoch(
-                self.prepared_source_epochs[id].clone(),
-                self.prepared_source_epochs[id].load(Ordering::Acquire),
-            );
+        let (epoch, expected) = if candidate.is_some() {
+            // An independent permit is essential: a candidate number is not an
+            // ordinary resident-control token and cannot invalidate V1 history.
+            (Arc::new(AtomicU64::new(1)), 1)
+        } else {
+            let expected = next_epoch(&owner.intent_epoch).map_err(PyRuntimeError::new_err)?;
+            owner.cancel_window_predecessor(self, id)?;
+            (owner.intent_epoch.clone(), expected)
+        };
+        let publication = PreparedSourcePermit::new(epoch, expected).with_source_epoch(
+            self.prepared_source_epochs[id].clone(),
+            self.prepared_source_epochs[id].load(Ordering::Acquire),
+        );
         let status = Arc::new(ResidencyStatus {
             publication: publication.clone(),
             effective: AtomicU8::new(0),
@@ -624,18 +838,27 @@ impl AudioEngine {
             status: status.clone(),
             launch_revision,
             target,
+            candidate: candidate.clone(),
             sender: UnsafeCell::new(sender),
             used: AtomicBool::new(false),
         });
-        owner.intent_epoch.store(expected, Ordering::Release);
-        self.input_runtime_ownership
-            .begin_resident_control(id, expected);
+        if candidate.is_none() {
+            owner.intent_epoch.store(expected, Ordering::Release);
+            self.input_runtime_ownership
+                .begin_resident_control(id, expected);
+        }
+        if let Some(previous) = &owner.committed.pending {
+            previous
+                .status
+                .fail("Committed stem request superseded".into());
+        }
         owner.committed.pending = Some(PendingResidency {
             owner: selection.owner.clone(),
             status: status.clone(),
             stems: None,
             full_mix: target == StemMixMode::FullMix,
             admitted: Instant::now(),
+            candidate: candidate.clone(),
         });
         producer_guard
             .push(ControlMessage::CommittedStemWork(Box::new(
@@ -651,6 +874,7 @@ impl AudioEngine {
             target,
             mask: enabled_mask,
             launch_revision,
+            candidate: candidate.clone(),
             assets: self.project_assets.clone(),
             history: self.cold_pcm_history.clone(),
             owners: self.resident_stem_cache.clone(),
@@ -667,6 +891,7 @@ impl AudioEngine {
             ownership: self.input_runtime_ownership.clone(),
             id,
             enqueued: false,
+            resident_control: candidate.is_none(),
         };
         self.cold_jobs
             .submit(reservation, move || {
@@ -684,6 +909,7 @@ impl AudioEngine {
             binding: binding.binding,
             launch_revision,
             acknowledgements: binding.acknowledgements.clone(),
+            candidate,
         })
     }
 }
@@ -693,14 +919,17 @@ struct ResidencyJobGuard {
     ownership: Arc<InputRuntimeOwnership>,
     id: usize,
     enqueued: bool,
+    resident_control: bool,
 }
 impl Drop for ResidencyJobGuard {
     fn drop(&mut self) {
         if !self.enqueued {
             self.status
                 .fail("Committed stem worker ended before publication".into());
-            self.ownership
-                .finish_resident_control(self.id, self.status.publication.expected);
+            if self.resident_control {
+                self.ownership
+                    .finish_resident_control(self.id, self.status.publication.expected);
+            }
         }
     }
 }
@@ -713,6 +942,7 @@ struct ResidencyWork {
     target: StemMixMode,
     mask: u8,
     launch_revision: u64,
+    candidate: Option<Arc<CandidateAuthority>>,
     assets: Arc<super::project_assets::ProjectAssets>,
     history: Arc<super::project_assets::PcmHistory>,
     owners: Arc<Mutex<Vec<super::resident_relocation::ResidentStemCache>>>,
@@ -726,7 +956,13 @@ impl ResidencyWork {
         !self.cancelled.load(Ordering::Acquire)
             && self.status.publication.current()
             && self.selection.source_current()
-            && (self.target == StemMixMode::FullMix || self.selection.current())
+            && (self.target == StemMixMode::FullMix
+                || self.selection.current()
+                || self.candidate.as_ref().is_some_and(|candidate| {
+                    !candidate.adopted()
+                        && candidate.current()
+                        && !self.selection.revoked.load(Ordering::Acquire)
+                }))
             && self
                 .selection
                 .ownership
@@ -787,7 +1023,7 @@ impl ResidencyWork {
                         .and_then(|bytes| sum.checked_add(bytes))
                 })
                 .ok_or("committed stem held PCM overflow")?;
-            let new_bytes = if pin.stems.is_some() {
+            let new_bytes = if pin.stems.is_some() && self.candidate.is_none() {
                 0
             } else {
                 pin.sample
@@ -807,7 +1043,9 @@ impl ResidencyWork {
             {
                 return Err("committed stem residency exceeds 1-GiB transient admission".into());
             }
-            let mut set = if let Some(set) = &pin.stems {
+            let mut set = if let Some(set) = &pin.stems
+                && self.candidate.is_none()
+            {
                 if *set.complete_set_identity != *self.selection.identity {
                     return Err("effective stem set differs from registered selection".into());
                 }
@@ -885,6 +1123,7 @@ impl ResidencyWork {
                             launch_revision: self.launch_revision,
                             target: self.target,
                             mask: self.mask,
+                            candidate: self.candidate.clone(),
                             pin,
                             stems,
                             retired_stems: None,

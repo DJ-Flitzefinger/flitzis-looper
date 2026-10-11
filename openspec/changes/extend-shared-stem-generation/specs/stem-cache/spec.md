@@ -66,6 +66,37 @@ effective audio with visible status; no stop/retrigger or position jump SHALL be
 used to claim successful live adoption. Old voice A SHALL retain its own frozen
 source/set/timing/history even after current bank B changes.
 
+New-set preparation SHALL retain separate candidate and actual predecessor
+authority. Registering or preparing candidate V2 SHALL NOT revoke V1's accepted
+selection, source, resident-intent or Native/history permits. Capture SHALL pin
+the actual callback selection and immutable readers; control-side disk selection
+alone SHALL NOT identify the audible predecessor. Actual adoption SHALL recheck
+both candidate and predecessor, own source/timing/window, launch/voice/history
+and reserved old-plus-new PCM/queue/retirement capacity before changing audio.
+
+V1 and V2 of the same original SHALL remain distinct complete-set owners even
+when their source hash, geometry and enabled mask match. The existing transition
+SHALL consume exactly 128 source frames through bounded current and outgoing
+readers, using the same fractional taps and actual rate trajectory. Every copied
+reader identity SHALL retain its corresponding immutable owner. Frozen voices
+and Native/FIFO/history snapshots SHALL retain the readers their captured plan
+actually uses; old history SHALL NOT be relabelled as the candidate. Realtime
+completion or lifecycle changes SHALL transfer owners through reserved off-thread
+retirement, retaining them for retry when retirement capacity is unavailable.
+
+Own component/residency acceptance, claim/transition and actual wet effectiveness
+SHALL remain separately observable. Paused adoption SHALL NOT report effective
+output before resumed source consumption; stopped readiness SHALL NOT claim
+audible output. Cancelling an unclaimed candidate SHALL leave V1 usable. A
+claimed candidate SHALL remain observable through settlement when a later disk
+candidate or intent arrives. A later candidate SHALL NOT replace an occupied
+outgoing-reader slot or borrow an earlier candidate's ACK. Newer FullMix intent
+SHALL withdraw future ALL authority so a late adoption cannot override it.
+An ordered pair-release or Delete Stems command received during a claimed
+handover SHALL retain bounded FullMix intent through the occupied ramp and
+apply it after the ramp can safely change selection; callback rejection of the
+immediate change SHALL NOT silently discard the command.
+
 #### Scenario: New set becomes effective on a running voice
 - **GIVEN** a complete current verified replacement and matching finite NormalLoop permits
 - **WHEN** that pad's own guarded new-set transaction is accepted
@@ -82,6 +113,40 @@ source/set/timing/history even after current bank B changes.
 - **WHEN** source, request, timing, window, voice/history or capacity no longer matches, or the requested domain lacks a genuine coverage proof
 - **THEN** native adoption rejects safely and the current FullMix/stem/KEYLOCK trajectory remains usable
 - **AND** neither a complete disk descriptor nor a same-set residency permission bypasses the guard
+
+#### Scenario: Same-original replacement keeps two exact readers
+- **GIVEN** active V1 and distinct verified V2 have the same source hash, geometry and mask
+- **WHEN** V2 obtains its own current adoption ACK
+- **THEN** rendering SHALL resolve V1 and V2 by their actual complete-set owners and mix both through 128 consumed source frames
+- **AND** fractional rates, smoothing and irregular callbacks SHALL preserve the same interpolation, Native/FIFO/filter and source trajectory
+
+#### Scenario: Candidate preparation fails or is cancelled
+- **GIVEN** V1 remains effective while V2 is registered or preparing
+- **WHEN** V2 fails admission, preparation or a currentness check, or is cancelled before claim
+- **THEN** V1's own control and audio authority SHALL remain usable and V2 SHALL report its own failure or withdrawal
+- **AND** retry SHALL require fresh explicit intent rather than an unbounded polling retry loop
+
+#### Scenario: Paused and stopped acceptance is not audible effectiveness
+- **WHEN** a current NormalLoop candidate is installed on a paused voice or stopped pad
+- **THEN** own residency acceptance SHALL remain distinct from effective output
+- **AND** paused transition SHALL advance only on resumed source consumption and stopped readiness SHALL report no audible success
+
+#### Scenario: Later candidate arrives during an owned handover
+- **GIVEN** V2 has been claimed and V1 remains the outgoing reader
+- **WHEN** disk candidate V3 or a new mode or mask intent arrives
+- **THEN** the bounded controller SHALL retain truthful observation of V2 and defer or safely reject interruption of the occupied handover
+- **AND** V2's delayed ACK SHALL NOT label V3 effective or overwrite V1's reader before final use
+
+#### Scenario: Retirement pressure retains the outgoing reader
+- **WHEN** a ramp, stop, unload or source replacement releases its use of V1 while retirement capacity is full
+- **THEN** the actual V1 owner SHALL remain held for bounded off-thread retry without callback destruction of its final backing
+- **AND** frozen source/history plans SHALL retain both readers for as long as their real captured plan needs them
+
+#### Scenario: Ordered deletion arrives during claimed handover
+- **GIVEN** V2 is claimed and V1 still supplies an unfinished outgoing ramp
+- **WHEN** the pad receives an ordered pair release or Delete Stems
+- **THEN** future ALL authority SHALL be withdrawn and bounded FullMix intent SHALL survive the occupied handover
+- **AND** resumed source consumption SHALL finish the owned ramp before the safe FullMix transition, with exact readers retained through their actual use and off-thread retirement
 
 ### Requirement: E11-19 Selected Stem Model Has One Current Verified Set
 The system SHALL maintain one current verified stem set per shared material and

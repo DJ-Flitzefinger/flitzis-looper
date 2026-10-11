@@ -200,6 +200,35 @@ seek/Intro/Tail/full-track-domain cases as separately bounded coverage before
 enabling them; unsupported domains remain visibly guarded. This stage cannot
 declare whole P4b/P5a accepted.
 
+### L3 candidate authority and exact reader seam
+
+New-set admission is separate from existing same-set registration/control. A
+candidate epoch and captured predecessor intent/selection fences keep V1 current
+through worker preparation. Actual callback capture includes the installed
+selection and set owner, not only control's accepted registration. Candidate
+adoption rechecks those fences and the real voice/history/window, then publishes
+V2's own selection. Candidate epochs must never masquerade as ordinary resident
+control tokens: either use captured launch/intent fences without that pending
+flag or allocate unique control ownership separately from effective intent.
+
+`SourceReadPlan` stays copied scalar data. Set-aware selection binds a comparison
+token to an actually held immutable complete-set owner. A borrowed fixed
+`StemReadSets { current, outgoing }` resolves source and exact owner through one
+read/tap/coverage implementation. The mixer holds outgoing V1 through 128 consumed
+source frames; frozen views and Native requests hold the owners their actual
+plans read. All replacements and cleanup use reserved retirement capacity.
+V3 and interrupting controls cannot overwrite an occupied outgoing slot. Existing
+KEYLOCK preparation deferral during a ramp remains; later preparation captures
+the settled actual V2, without rewriting old history metadata.
+
+Controller state is bounded per pad: exact disk candidate, retained effective/
+control selection, one pending own attempt and latest desired intent. Exact disk
+currentness governs candidate admission; separate source/content/Native authority
+governs retained V1. Claimed attempts stay observable when newer disk intent
+arrives. Component acceptance is not wet effectiveness; stopped waiting and
+paused transitioning remain explicit. Final UI and every final-reader family
+remain L4 proof obligations, rather than being inferred from this L3 mechanism.
+
 ## L4: single-current-set retirement and duplicate UI
 
 The shared material has one durable current selected set. After replacement,

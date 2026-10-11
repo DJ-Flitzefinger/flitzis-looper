@@ -5,7 +5,7 @@ use super::prepared_native_history::{
 };
 use super::productive_source_history::{ProductiveSourceBinding, ProductiveSourceHistory};
 use super::source_playback::SourcePlayback;
-use super::source_reader::SourceReadPlan;
+use super::source_reader::{SourceReadPlan, StemReadSets};
 #[cfg(test)]
 use crate::audio_engine::key_lock_preparation::create_key_lock_preparation;
 use crate::audio_engine::key_lock_preparation::{
@@ -19,6 +19,7 @@ use crate::messages::{PreparedStemSet, SampleBuffer};
 pub(crate) struct ProductiveSourceFeed<'a> {
     pub(crate) sample: &'a SampleBuffer,
     pub(crate) stems: Option<&'a PreparedStemSet>,
+    pub(crate) outgoing_stems: Option<&'a PreparedStemSet>,
     pub(crate) sample_rate_hz: u32,
     pub(crate) accepted: Option<AcceptedTimingProjection>,
     pub(crate) plan: SourceReadPlan,
@@ -267,7 +268,11 @@ impl StretchProcessor {
         output_frames: usize,
         preserve_pitch: bool,
     ) {
-        feed.stems = feed.plan.required_stems(feed.stems);
+        let readers = feed
+            .plan
+            .required_read_sets(StemReadSets::new(feed.stems, feed.outgoing_stems));
+        feed.stems = readers.current;
+        feed.outgoing_stems = readers.outgoing;
         self.wet_rendered = false;
         self.wet_source_rendered = false;
         self.wet_source_output_emitted = false;
@@ -278,9 +283,9 @@ impl StretchProcessor {
         let finite = !super::native_source_coverage::complete_view_available(feed.sample);
         if finite {
             if (preserve_pitch
-                && !super::native_source_coverage::normal_loop_feed_available(
+                && !super::native_source_coverage::normal_loop_feed_available_with_readers(
                     feed.sample,
-                    feed.stems,
+                    readers,
                     feed.sample_rate_hz,
                     feed.accepted,
                     feed.plan,
@@ -288,9 +293,9 @@ impl StretchProcessor {
                 ))
                 || feed
                     .plan
-                    .fill_fractional_buffers_checked(
+                    .fill_fractional_buffers_checked_with_readers(
                         feed.sample,
-                        feed.stems,
+                        readers,
                         feed.playback,
                         self.resampled_buffers_mut(frames),
                         frames,
@@ -363,9 +368,9 @@ impl StretchProcessor {
             .productive_history
             .map_or(0, |history| history.fed_output_frames);
         if !finite {
-            feed.plan.fill_fractional_buffers(
+            feed.plan.fill_fractional_buffers_with_readers(
                 feed.sample,
-                feed.stems,
+                readers,
                 feed.playback,
                 self.resampled_buffers_mut(frames),
                 frames,

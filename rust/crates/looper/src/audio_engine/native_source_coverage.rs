@@ -9,7 +9,7 @@ use super::constant_timing::AcceptedTimingProjection;
 use super::productive_source_history::ProductiveSourceBinding;
 use super::source_playback::SourcePlayback;
 use super::source_reader::{
-    ExplicitSeekMode, FrameRange, SourceLoopDomain, SourceReadPlan,
+    ExplicitSeekMode, FrameRange, SourceLoopDomain, SourceReadPlan, StemReadSets,
     prepared_stem_set_matches_sample,
 };
 use crate::messages::{
@@ -99,6 +99,25 @@ pub(crate) fn normal_loop_feed_available(
     plan: SourceReadPlan,
     playback: &SourcePlayback,
 ) -> bool {
+    normal_loop_feed_available_with_readers(
+        sample,
+        StemReadSets::new(stems, None),
+        sample_rate_hz,
+        accepted,
+        plan,
+        playback,
+    )
+}
+
+/// Both exact complete-set owners must cover every real side of a live handover.
+pub(crate) fn normal_loop_feed_available_with_readers(
+    sample: &SampleBuffer,
+    readers: StemReadSets<'_>,
+    sample_rate_hz: u32,
+    accepted: Option<AcceptedTimingProjection>,
+    plan: SourceReadPlan,
+    playback: &SourcePlayback,
+) -> bool {
     if !normal_loop_context_available(sample, plan.loop_region, plan.seek_mode)
         || plan.channels != sample.channels
         || plan.sample_frames != sample.frame_count()
@@ -137,7 +156,7 @@ pub(crate) fn normal_loop_feed_available(
         let Some(hash) = selection.required_stem_hash() else {
             continue;
         };
-        let Some(stems) = stems else {
+        let Some(stems) = readers.for_selection(selection) else {
             return false;
         };
         if hash == 0
@@ -460,6 +479,7 @@ mod tests {
         fn feed(&self) -> ProductiveSourceFeed<'_> {
             ProductiveSourceFeed {
                 sample: &self.sample,
+                outgoing_stems: None,
                 stems: Some(&self.stems),
                 sample_rate_hz: RATE,
                 accepted: None,
@@ -790,6 +810,7 @@ mod tests {
             fixture.ownership.publish_window(0, &finite);
             let feed = ProductiveSourceFeed {
                 sample: &finite,
+                outgoing_stems: None,
                 stems: Some(&stems),
                 plan,
                 playback: &playback,
@@ -1004,6 +1025,7 @@ mod tests {
         fixture.ownership.publish_window(0, &refreshed);
         let next = ProductiveSourceFeed {
             sample: &refreshed,
+            outgoing_stems: None,
             stems: Some(&refreshed_stems),
             ..fixture.feed()
         };

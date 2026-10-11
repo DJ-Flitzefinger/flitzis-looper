@@ -104,6 +104,8 @@ pub(crate) mod rubberband_backend;
 mod sample_loader;
 mod scalar_grid;
 pub(crate) use scalar_grid::ScalarSourceGrid;
+#[cfg(test)]
+mod l3_source_reader_tests;
 mod scheduler;
 mod source_grid;
 mod source_playback;
@@ -897,6 +899,19 @@ impl AudioEngine {
         source_ticket: &PreparedSourceTicket,
     ) -> PyResult<CommittedStemSetTicket> {
         self.register_committed_stem_pair_with_producer(
+            prepared,
+            source_ticket,
+            self.control_producer()?,
+        )
+    }
+
+    /// Seal a future complete set without revoking the actual predecessor selection.
+    pub fn register_pending_committed_stem_pair(
+        &self,
+        prepared: &PreparedStemPair,
+        source_ticket: &PreparedSourceTicket,
+    ) -> PyResult<CommittedStemSetTicket> {
+        self.register_pending_committed_stem_pair_with_producer(
             prepared,
             source_ticket,
             self.control_producer()?,

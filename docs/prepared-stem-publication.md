@@ -494,3 +494,55 @@ retry fixes without loosening new-set guards. This closes bounded L2 tasks2.1..2
 Full rates/regions/NN resources, genuinely new-set active adoption (L3), integrated
 current/pending/effective UI and all last-reader classes (L4), Bulk, whole program
 and genuine Human GUI/device/hearing acceptance remain required and open.
+
+## L3 finite NormalLoop new-set adoption — 2026-10-11
+
+A newly committed complete set can now prepare and replace a running finite
+NormalLoop selection through its own bounded transaction. The public
+`register_pending_committed_stem_pair` returns future candidate authority; its
+accepted registration does not acknowledge audio. The existing residency request
+then performs actual callback Capture, off-thread component preparation and own
+callback Adopt. Separate candidate and predecessor fences preserve V1 control,
+source and Native/history authority while V2 prepares. Adoption rechecks the actual
+callback predecessor, source/timing/window, voice/history and reserved old-plus-new
+PCM, queue and retirement capacity.
+
+Complete-set owner identity now accompanies the source hash and mask. Rendering
+resolves two exact immutable readers for 128 consumed source frames, including
+fractional taps, rate smoothing and empty masks. FullMix first adoption and selected
+V1 replacement preserve the existing voice, source fraction, Native, FIFOs and EQ.
+Old Native history keeps its actual captured input; the existing later 4096-frame
+preparation captures settled V2. Outgoing bank readers and frozen old-source voice
+readers transfer to off-thread retirement after actual use. Paused ramps consume no
+source; exhausted retirement capacity keeps the exact owner for bounded retry.
+
+The controller keeps distinct disk, control, effective and own-attempt identities
+with one latest desired intent. V1 survives candidate failure or preclaim Cancel;
+claimed V2 stays observable when V3 arrives and cannot lend V3 its ACK. Failures
+require explicit retry. Stopped same-source replacements also use candidate
+authority; stopped readiness claims no audible success. An ordered Delete Stems or
+pair FullMix release survives an occupied handover and performs its safe FullMix
+transition afterwards. A later explicit accepted ALL intent can supersede that
+release; neither path discards a reader still needed by the current ramp.
+
+Supported candidates require a current FiniteLoop/KeyLockFiniteLoop resident
+context with a proper NormalLoop region, and either no active voice or one current
+voice playing or paused. Existing ramps, FullTrack/whole-source-loop contexts,
+explicit seek/Intro/Tail, frozen old-source or multiple same-pad voices remain
+guarded pending their own productive new-set proofs. Ordinary active publication
+retains its existing `PadPlaying` guard; this candidate transaction supplies the
+separately proved path. This bounded delivery does not close additional-domain
+L3 obligations, L4 UI/all final-reader families, whole P4b/P5a, Bulk/RECORD,
+musical/resource or Human GUI/device/hearing acceptance.
+
+Evidence uses distinguishable real V1/V2 files with equal source identity, genuine
+worker/Capture/Adopt and independent complete PCM, raw Native/FIFO and uninterrupted
+EQ oracles. The public controller proof includes first adoption, replacement,
+running and paused Delete Stems, both source-frame ramps, zero-capacity retention,
+exact owner transfer through the production retirement worker and later real
+Native preparation. Candidate-specific negatives cover queue admission, old-plus-new
+peak rejection, retirement pressure, preclaim withdrawal, actual voice/history,
+source/timing/window changes and isolated stopped FullTrack rejection. Declared
+receipt doubles only prove controller state. These are software proofs without
+neural-output, device or listening acceptance. Detailed actual run profiles and
+failure corrections remain in the local test log.

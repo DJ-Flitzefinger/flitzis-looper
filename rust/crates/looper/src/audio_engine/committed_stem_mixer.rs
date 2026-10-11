@@ -1,9 +1,13 @@
-//! Callback half of the sealed same-set P5a transaction; all payloads arrive preallocated.
+//! Callback half of sealed residency and new-set candidate transactions.
 use super::*;
 use crate::audio_engine::committed_stem_residency::{
     CommittedStemRtWork, SelectedStemIdentity, SelectionPermit, StemModeReceipt,
     StemResidencyTransaction, StemVoiceCapture, StemVoicePin,
 };
+use crate::audio_engine::native_source_coverage::{
+    normal_loop_feed_available, normal_loop_feed_available_with_readers,
+};
+use crate::audio_engine::source_reader::StemReadSets;
 use std::sync::atomic::Ordering;
 
 impl RtMixer {
@@ -26,15 +30,41 @@ impl RtMixer {
                 .input_runtime_ownership
                 .launch_current(id, capture.launch_revision)
             || (capture.target != StemMixMode::FullMix
-                && !self.committed_selection_matches(id, &capture.selection))
+                && !if let Some(candidate) = &capture.candidate {
+                    candidate.current()
+                        && !candidate.adopted()
+                        && !capture.selection.revoked.load(Ordering::Acquire)
+                        && self.committed_stem_selection[id].map_or(0, |selection| selection.epoch)
+                            == candidate.predecessor_selection_expected
+                } else {
+                    self.committed_selection_matches(id, &capture.selection)
+                })
         {
             return None;
         }
         let bank = self.sample_bank[id].as_ref()?;
+        if capture.candidate.is_some()
+            && !bank.residency.as_ref().is_some_and(|view| {
+                matches!(
+                    view.context,
+                    crate::messages::ResidentContext::FiniteLoop
+                        | crate::messages::ResidentContext::KeyLockFiniteLoop
+                )
+            })
+        {
+            return None;
+        }
         let selection = self.stem_render_selection(id);
         let transition = self.stem_transitions[id];
         let stems = self.prepared_stems[id].as_ref();
-        if stems.is_some_and(|stems| *stems.complete_set_identity != capture.selection.identity) {
+        if capture.candidate.is_some()
+            && (transition.is_active() || self.outgoing_stems[id].is_some())
+        {
+            return None;
+        }
+        if capture.candidate.is_none()
+            && stems.is_some_and(|stems| *stems.complete_set_identity != capture.selection.identity)
+        {
             return None;
         }
         if capture.target == StemMixMode::AllStems
@@ -90,6 +120,9 @@ impl RtMixer {
                 )
             };
         playback.configure_domain(timing.loop_domain(sample.frame_count(), region));
+        if capture.candidate.is_some() && region.start == 0 && region.end == sample.frame_count() {
+            return None;
+        }
         let position = playback.position();
         if position.seek_mode != ExplicitSeekMode::Normal {
             return None;
@@ -132,6 +165,7 @@ impl RtMixer {
             accepted: timing.accepted,
             plan,
             playback,
+            predecessor: self.committed_stem_selection[id],
         })
     }
 
@@ -145,7 +179,27 @@ impl RtMixer {
                 .input_runtime_ownership
                 .launch_current(id, transaction.launch_revision)
             || (transaction.target != StemMixMode::FullMix
-                && !self.committed_selection_matches(id, &transaction.selection))
+                && !if let Some(candidate) = &transaction.candidate {
+                    candidate.current()
+                        && !candidate.adopted()
+                        && !transaction.selection.revoked.load(Ordering::Acquire)
+                        && self.committed_stem_selection[id] == pin.predecessor
+                        && self.committed_stem_selection[id].map_or(0, |selection| selection.epoch)
+                            == candidate.predecessor_selection_expected
+                        && !self.stem_transitions[id].is_active()
+                        && self.outgoing_stems[id].is_none()
+                        && self.sample_bank[id].as_ref().is_some_and(|bank| {
+                            bank.residency.as_ref().is_some_and(|view| {
+                                matches!(
+                                    view.context,
+                                    crate::messages::ResidentContext::FiniteLoop
+                                        | crate::messages::ResidentContext::KeyLockFiniteLoop
+                                )
+                            })
+                        })
+                } else {
+                    self.committed_selection_matches(id, &transaction.selection)
+                })
             || !pin.permit.current(&pin.sample, self.sample_rate_hz as u32)
             || self.pad_key_lock_enabled[id] != pin.key_lock
             || self.pad_accepted_timing[id] != pin.accepted
@@ -167,18 +221,14 @@ impl RtMixer {
         } {
             return false;
         }
-        let target = StemRenderSelection::from_state(
-            transaction.target,
-            if transaction.target == StemMixMode::AllStems {
-                transaction
-                    .stems
-                    .as_ref()
-                    .map_or(0, |stems| stems.source_version_hash)
-            } else {
-                0
-            },
-            transaction.mask,
-        );
+        let target = if transaction.target == StemMixMode::AllStems {
+            let Some(stems) = transaction.stems.as_ref() else {
+                return false;
+            };
+            StemRenderSelection::for_stems(stems, transaction.mask)
+        } else {
+            StemRenderSelection::full_mix()
+        };
         let ramp = if target == pin.plan.selection {
             pin.plan.transition
         } else {
@@ -211,9 +261,9 @@ impl RtMixer {
                     transition: ramp,
                     ..pin.plan
                 };
-                normal_loop_feed_available(
+                normal_loop_feed_available_with_readers(
                     &pin.sample,
-                    transaction.stems.as_ref(),
+                    StemReadSets::new(transaction.stems.as_ref(), pin.stems.as_ref()),
                     self.sample_rate_hz as u32,
                     pin.accepted,
                     plan,
@@ -258,9 +308,9 @@ impl RtMixer {
                 actual.matches_source_contract(pin.plan)
                     && playback.matches_rate_target(&pin.playback)
                     && position.seek_mode == ExplicitSeekMode::Normal
-                    && normal_loop_feed_available(
+                    && normal_loop_feed_available_with_readers(
                         &pin.sample,
-                        transaction.stems.as_ref(),
+                        StemReadSets::new(transaction.stems.as_ref(), pin.stems.as_ref()),
                         self.sample_rate_hz as u32,
                         pin.accepted,
                         SourceReadPlan {
@@ -341,8 +391,12 @@ impl RtMixer {
                     }
                 } else {
                     capture.status.reject_rt();
-                    self.input_runtime_ownership
-                        .finish_resident_control(capture.id, capture.status.publication.expected);
+                    if capture.candidate.is_none() {
+                        self.input_runtime_ownership.finish_resident_control(
+                            capture.id,
+                            capture.status.publication.expected,
+                        );
+                    }
                 }
             }
             CommittedStemRtWork::Adopt(transaction) => {
@@ -354,15 +408,21 @@ impl RtMixer {
                 if valid {
                     let previous = self.stem_render_selection(id);
                     if transaction.target == StemMixMode::AllStems {
-                        transaction.retired_stems = self.prepared_stems[id].take();
+                        let old = self.prepared_stems[id].take();
+                        if transaction.candidate.is_some()
+                            && self.sample_is_active(id)
+                            && previous.required_stem_hash().is_some()
+                        {
+                            // Candidate admission proved this fixed slot empty. The
+                            // final owner remains until the actual ramp/lifecycle ends.
+                            self.outgoing_stems[id] = old;
+                        } else {
+                            transaction.retired_stems = old;
+                        }
                         self.prepared_stems[id] = transaction.stems.take();
                         self.release_pair_components[id] = false;
                     }
                     // The same source PCM/window, voice, Native, FIFO and EQ owners are untouched.
-                    transaction
-                        .status
-                        .publication
-                        .mark_accepted_preserved_window();
                     self.stem_mix_mode[id] = transaction.target;
                     self.stem_mix_source_version_hash[id] =
                         if transaction.target == StemMixMode::AllStems {
@@ -376,6 +436,22 @@ impl RtMixer {
                     self.stem_enabled_mask[id] = transaction.mask;
                     let next = self.stem_render_selection(id);
                     self.arm_stem_transition(id, previous, next);
+                    if let Some(candidate) = &transaction.candidate {
+                        self.committed_stem_selection[id] = Some(SelectedStemIdentity {
+                            identity: transaction.selection.identity,
+                            source_generation: transaction.selection.source_generation,
+                            epoch: transaction.selection.expected,
+                        });
+                        transaction
+                            .selection
+                            .epoch
+                            .store(transaction.selection.expected, Ordering::Release);
+                        candidate.mark_adopted();
+                    }
+                    transaction
+                        .status
+                        .publication
+                        .mark_accepted_preserved_window();
                     if transaction.target == StemMixMode::FullMix {
                         self.release_pair_components[id] = true;
                     }
@@ -392,6 +468,7 @@ impl RtMixer {
                             target: transaction.target,
                             mask: transaction.mask,
                             launch_revision: transaction.launch_revision,
+                            candidate: transaction.candidate.clone(),
                         });
                     // This transaction owns one pre-reserved retired payload. Leave unrelated
                     // release requests to the ordinary render pass so they cannot consume it.
@@ -403,7 +480,7 @@ impl RtMixer {
                 } else {
                     transaction.status.reject_rt();
                 }
-                if id < NUM_SAMPLES {
+                if id < NUM_SAMPLES && transaction.candidate.is_none() {
                     self.input_runtime_ownership
                         .finish_resident_control(id, transaction.status.publication.expected);
                 }
@@ -421,6 +498,10 @@ impl RtMixer {
             return;
         }
         let current = receipt.status.publication.current()
+            && receipt
+                .candidate
+                .as_ref()
+                .is_none_or(|candidate| candidate.receipt_current())
             && self.source_binding_current(id, receipt.binding)
             && self
                 .input_runtime_ownership

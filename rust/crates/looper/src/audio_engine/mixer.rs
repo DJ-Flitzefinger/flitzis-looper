@@ -22,14 +22,15 @@ use crate::audio_engine::key_lock_preparation::{
     KeyLockPreparationError, KeyLockPreparationWorker, create_key_lock_preparation,
 };
 use crate::audio_engine::native_history_permit::{NativeHistoryContext, NativeVoiceHistoryContext};
-use crate::audio_engine::native_source_coverage::normal_loop_feed_available;
+use crate::audio_engine::native_source_coverage::normal_loop_feed_available_with_readers;
 use crate::audio_engine::productive_source_history::ProductiveSourceBinding;
 use crate::audio_engine::source_grid::SourceGrid;
 use crate::audio_engine::source_playback::SourcePlayback;
 use crate::audio_engine::source_reader::{
-    FrameRange, STEM_TRANSITION_RAMP_FRAMES, SourceReadPlan, StemRenderSelection, StemTransition,
-    effective_loop_region, explicit_seek_mode_for_frame, prepared_stem_set_for_render,
-    prepared_stem_set_matches_sample, resident_read_context_available,
+    FrameRange, STEM_TRANSITION_RAMP_FRAMES, SourceReadPlan, StemReadSets, StemRenderSelection,
+    StemTransition, effective_loop_region, explicit_seek_mode_for_frame,
+    prepared_stem_set_for_render, prepared_stem_set_matches_sample,
+    resident_read_context_available,
 };
 #[cfg(test)]
 use crate::audio_engine::source_reader::{
@@ -251,6 +252,8 @@ pub struct RtMixer {
 
     /// Prepared stem storage with NUM_SAMPLES slots.
     prepared_stems: Box<[Option<PreparedStemSet>; NUM_SAMPLES]>,
+    /// Exact predecessor readers retained through new-set source ramps.
+    outgoing_stems: Box<[Option<PreparedStemSet>; NUM_SAMPLES]>,
     committed_stem_selection:
         Box<[Option<super::committed_stem_residency::SelectedStemIdentity>; NUM_SAMPLES]>,
     committed_stem_receipts:
@@ -365,6 +368,7 @@ impl RtMixer {
             pad_playhead_frame: std::array::from_fn(|_| None),
             sample_bank: std::array::from_fn(|_| None),
             prepared_stems: Box::new(std::array::from_fn(|_| None)),
+            outgoing_stems: Box::new(std::array::from_fn(|_| None)),
             committed_stem_selection: Box::new(std::array::from_fn(|_| None)),
             committed_stem_receipts: Box::new(std::array::from_fn(|_| None)),
             stem_mix_mode: std::array::from_fn(|_| StemMixMode::FullMix),
@@ -500,6 +504,12 @@ impl RtMixer {
     }
 
     fn loop_context_available(&self, id: usize, start: usize, end: Option<usize>) -> bool {
+        if self.outgoing_stems[id].is_some()
+            && self.stem_transitions[id].is_active()
+            && (self.pad_loop_start_frame[id] != start || self.pad_loop_end_frame[id] != end)
+        {
+            return false;
+        }
         let bank = self.sample_bank[id].as_ref();
         let available = |sample: &SampleBuffer| {
             effective_loop_region(start, end, sample.frame_count()).is_some_and(|region| {
@@ -713,9 +723,9 @@ impl RtMixer {
             self.tempo_ratio_for_sample_id(id),
         );
         playback.configure_domain(timing.loop_domain(sample.frame_count(), region));
-        normal_loop_feed_available(
+        normal_loop_feed_available_with_readers(
             sample,
-            stems,
+            StemReadSets::new(stems, self.outgoing_stems[id].as_ref()),
             self.sample_rate_hz as u32,
             timing.accepted,
             SourceReadPlan {
@@ -770,9 +780,17 @@ impl RtMixer {
                 .loop_domain(sample.frame_count(), region),
         );
         let position = playback.position();
-        normal_loop_feed_available(
+        normal_loop_feed_available_with_readers(
             sample,
-            stems,
+            StemReadSets::new(
+                stems,
+                voice
+                    .frozen_stems
+                    .as_ref()
+                    .map_or(self.outgoing_stems[id].as_ref(), |view| {
+                        view.outgoing.as_ref()
+                    }),
+            ),
             self.sample_rate_hz as u32,
             self.timing_for_voice(voice).accepted,
             SourceReadPlan {
@@ -816,9 +834,14 @@ impl RtMixer {
                 .as_ref()
                 .is_some_and(|bank| bank.same_source(sample))
         });
-        normal_loop_feed_available(
+        normal_loop_feed_available_with_readers(
             sample,
-            stems,
+            StemReadSets::new(
+                stems,
+                frozen.map_or(self.outgoing_stems[id].as_ref(), |view| {
+                    view.outgoing.as_ref()
+                }),
+            ),
             self.sample_rate_hz as u32,
             timing.accepted,
             SourceReadPlan {
@@ -1066,11 +1089,17 @@ impl RtMixer {
                     voice.retire_frozen_stems(retirement);
                     voice.frozen_stems = Some(FrozenStemView {
                         set: self.prepared_stems[id].clone(),
-                        selection: StemRenderSelection::from_state(
-                            self.stem_mix_mode[id],
-                            self.stem_mix_source_version_hash[id],
-                            self.stem_enabled_mask[id],
-                        ),
+                        outgoing: self.outgoing_stems[id].clone(),
+                        selection: if self.stem_mix_mode[id] == StemMixMode::AllStems {
+                            self.prepared_stems[id].as_ref().map_or_else(
+                                StemRenderSelection::full_mix,
+                                |set| {
+                                    StemRenderSelection::for_stems(set, self.stem_enabled_mask[id])
+                                },
+                            )
+                        } else {
+                            StemRenderSelection::full_mix()
+                        },
                         transition: self.stem_transitions[id],
                     });
                 }
@@ -1081,6 +1110,10 @@ impl RtMixer {
             retirement.retire_sample(old_sample);
         }
         if let Some(old_stems) = self.prepared_stems[id].take() {
+            retirement.retire_prepared_stems(old_stems);
+        }
+
+        if let Some(old_stems) = self.outgoing_stems[id].take() {
             retirement.retire_prepared_stems(old_stems);
         }
 
@@ -1129,6 +1162,7 @@ impl RtMixer {
         let id = capture.id;
         if id >= NUM_SAMPLES
             || !capture.publication.current()
+            || (self.outgoing_stems[id].is_some() && self.stem_transitions[id].is_active())
             || !self.source_binding_current(id, capture.binding)
         {
             capture.publication.cancel_unclaimed();
@@ -1236,6 +1270,14 @@ impl RtMixer {
         output_frame: Option<u64>,
     ) -> bool {
         let id = transaction.id;
+        if id < NUM_SAMPLES
+            && self.outgoing_stems[id].is_some()
+            && self.stem_transitions[id].is_active()
+        {
+            transaction.publication.mark_rejected();
+            retirement.retire_resident_transaction(transaction);
+            return false;
+        }
         let sample = &transaction.sample;
         let stems = &transaction.stems;
         let binding = transaction.binding;
@@ -1765,6 +1807,9 @@ impl RtMixer {
             if let Some(stems) = &mut self.prepared_stems[id] {
                 stems.accepted_timing = Some(projection);
             }
+            if let Some(stems) = &mut self.outgoing_stems[id] {
+                stems.accepted_timing = Some(projection);
+            }
             self.current_timing_acknowledgements
                 .acknowledge(id, projection.publication_epoch);
             timing.publication.mark_accepted();
@@ -1783,6 +1828,9 @@ impl RtMixer {
             if let Some(stems) = &mut self.prepared_stems[id] {
                 stems.accepted_timing = None;
             }
+            if let Some(stems) = &mut self.outgoing_stems[id] {
+                stems.accepted_timing = None;
+            }
             self.current_timing_acknowledgements.clear(id);
             self.invalidate_prepared_for_pad(id);
         }
@@ -1799,8 +1847,16 @@ impl RtMixer {
         }
 
         let previous = self.stem_render_selection(id);
-        let next =
-            StemRenderSelection::from_state(mode, source_version_hash, self.stem_enabled_mask[id]);
+        let next = if mode == StemMixMode::AllStems {
+            let Some(stems) = self.prepared_stems[id].as_ref().filter(|set| {
+                source_version_hash != 0 && set.source_version_hash == source_version_hash
+            }) else {
+                return false;
+            };
+            StemRenderSelection::for_stems(stems, self.stem_enabled_mask[id])
+        } else {
+            StemRenderSelection::full_mix()
+        };
         if !self.stem_selection_context_available(id, previous, next) {
             return false;
         }
@@ -1821,6 +1877,7 @@ impl RtMixer {
                 }
 
                 self.stem_mix_mode[id] = StemMixMode::AllStems;
+                self.release_pair_components[id] = false;
                 self.stem_mix_source_version_hash[id] = source_version_hash;
                 let next = self.stem_render_selection(id);
                 self.arm_stem_transition(id, previous, next);
@@ -1834,14 +1891,46 @@ impl RtMixer {
         id: usize,
         retirement: &mut impl AudioBufferRetirement,
     ) {
-        if self.set_stem_mix_mode(id, StemMixMode::FullMix, 0) {
-            self.release_pair_components[id] = true;
-            self.retire_unused_pair_components(retirement);
+        if id >= NUM_SAMPLES {
+            return;
         }
+        // This ordered command is durable callback intent even when an occupied two-set
+        // ramp prevents immediate mutation. Retry from the bounded render pass.
+        self.release_pair_components[id] = true;
+        self.set_stem_mix_mode(id, StemMixMode::FullMix, 0);
+        self.retire_unused_pair_components(retirement);
     }
 
     fn retire_unused_pair_components(&mut self, retirement: &mut impl AudioBufferRetirement) {
+        // Frozen old-source voices own an independent ramp. Release its outgoing reader only
+        // after actual source consumption, and retain it for retry if retirement is saturated.
+        for voice in &mut self.voices {
+            let Some(view) = &mut voice.frozen_stems else {
+                continue;
+            };
+            if view.outgoing.is_some() && !view.transition.is_active() {
+                if retirement.available_retirement_slots() == 0 {
+                    return;
+                }
+                if let Some(outgoing) = view.outgoing.take() {
+                    retirement.retire_prepared_stems(outgoing);
+                }
+            }
+        }
         for id in 0..NUM_SAMPLES {
+            if self.release_pair_components[id] && self.stem_mix_mode[id] != StemMixMode::FullMix {
+                self.set_stem_mix_mode(id, StemMixMode::FullMix, 0);
+            }
+            if self.outgoing_stems[id].is_some()
+                && !(self.sample_is_active(id) && self.stem_transitions[id].is_active())
+            {
+                if retirement.available_retirement_slots() == 0 {
+                    return;
+                }
+                if let Some(outgoing) = self.outgoing_stems[id].take() {
+                    retirement.retire_prepared_stems(outgoing);
+                }
+            }
             if !self.release_pair_components[id]
                 || self.stem_mix_mode[id] != StemMixMode::FullMix
                 || (self.sample_is_active(id) && self.stem_transitions[id].is_active())
@@ -1877,11 +1966,11 @@ impl RtMixer {
             return false;
         }
         let previous = self.stem_render_selection(id);
-        let next = StemRenderSelection::from_state(
-            self.stem_mix_mode[id],
-            self.stem_mix_source_version_hash[id],
-            enabled_stem_mask,
-        );
+        let next = if self.stem_mix_mode[id] == StemMixMode::AllStems {
+            StemRenderSelection::for_stems(stems, enabled_stem_mask)
+        } else {
+            StemRenderSelection::full_mix()
+        };
         if !self.stem_selection_context_available(id, previous, next) {
             return false;
         }
@@ -1896,11 +1985,15 @@ impl RtMixer {
             return StemRenderSelection::full_mix();
         }
 
-        StemRenderSelection::from_state(
-            self.stem_mix_mode[id],
-            self.stem_mix_source_version_hash[id],
-            self.stem_enabled_mask[id],
-        )
+        if self.stem_mix_mode[id] == StemMixMode::AllStems {
+            self.prepared_stems[id]
+                .as_ref()
+                .map_or_else(StemRenderSelection::full_mix, |set| {
+                    StemRenderSelection::for_stems(set, self.stem_enabled_mask[id])
+                })
+        } else {
+            StemRenderSelection::full_mix()
+        }
     }
 
     fn arm_stem_transition(
@@ -1982,6 +2075,14 @@ impl RtMixer {
         previous: StemRenderSelection,
         next: StemRenderSelection,
     ) -> bool {
+        // A two-set handover owns its outgoing slot until actual source consumption ends.
+        // A scalar command may retry afterwards; it cannot relabel or discard that reader.
+        if previous != next
+            && self.outgoing_stems[id].is_some()
+            && self.stem_transitions[id].is_active()
+        {
+            return false;
+        }
         if previous == next || !self.pad_key_lock_enabled[id] {
             return true;
         }
@@ -2087,6 +2188,11 @@ impl RtMixer {
                         .frozen_stems
                         .as_ref()
                         .is_some_and(|view| view.set.is_some()),
+                ) + usize::from(
+                    voice
+                        .frozen_stems
+                        .as_ref()
+                        .is_some_and(|view| view.outgoing.is_some()),
                 )
             });
         needed == 0 || retirement.available_retirement_slots() >= needed
@@ -3298,6 +3404,9 @@ impl RtMixer {
         if let Some(stems) = self.prepared_stems[id].take() {
             retirement.retire_prepared_stems(stems);
         }
+        if let Some(stems) = self.outgoing_stems[id].take() {
+            retirement.retire_prepared_stems(stems);
+        }
         self.stem_enabled_mask[id] = STEM_COMPONENT_MASK;
         self.stem_transitions[id].clear();
         self.pad_phase_anchor_frame[id] = 0.0;
@@ -3479,8 +3588,8 @@ impl RtMixer {
         let pad_loop_end_frame = &self.pad_loop_end_frame;
         let pad_playhead_frame = &mut self.pad_playhead_frame;
         let prepared_stem_slots = &self.prepared_stems;
+        let outgoing_stem_slots = &self.outgoing_stems;
         let stem_mix_mode = &self.stem_mix_mode;
-        let stem_mix_source_version_hash = &self.stem_mix_source_version_hash;
         let stem_enabled_mask = &self.stem_enabled_mask;
         let stem_transitions = &mut self.stem_transitions;
         let bank_sources = &self.sample_bank;
@@ -3534,11 +3643,16 @@ impl RtMixer {
                 );
                 let current_selection = frozen.map_or_else(
                     || {
-                        StemRenderSelection::from_state(
-                            stem_mix_mode[voice.sample_id],
-                            stem_mix_source_version_hash[voice.sample_id],
-                            stem_enabled_mask[voice.sample_id],
-                        )
+                        if stem_mix_mode[voice.sample_id] == StemMixMode::AllStems {
+                            prepared_stem_set.map_or_else(StemRenderSelection::full_mix, |set| {
+                                StemRenderSelection::for_stems(
+                                    set,
+                                    stem_enabled_mask[voice.sample_id],
+                                )
+                            })
+                        } else {
+                            StemRenderSelection::full_mix()
+                        }
                     },
                     |view| view.selection,
                 );
@@ -3624,6 +3738,10 @@ impl RtMixer {
                         ProductiveSourceFeed {
                             sample: &sample,
                             stems: prepared_stem_set,
+                            outgoing_stems: frozen
+                                .map_or(outgoing_stem_slots[voice.sample_id].as_ref(), |view| {
+                                    view.outgoing.as_ref()
+                                }),
                             sample_rate_hz: sample_rate_hz as u32,
                             accepted: voice.source_timing.accepted,
                             plan: source_plan,
@@ -3718,6 +3836,9 @@ mod committed_stem_mixer;
 
 #[cfg(test)]
 mod tests {
+    mod l3_reader_lifecycle_tests {
+        include!("l3_reader_lifecycle_tests.rs");
+    }
     use std::sync::Arc;
 
     use crate::messages::{STEM_MASK_BASS, STEM_MASK_DRUMS, STEM_MASK_MELODY, STEM_MASK_VOCALS};

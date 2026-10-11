@@ -776,6 +776,7 @@ mod tests {
         );
         let feed = ProductiveSourceFeed {
             sample: &sample,
+            outgoing_stems: None,
             stems: None,
             sample_rate_hz: 48_000,
             accepted: None,
@@ -833,6 +834,7 @@ mod tests {
             let weak = Arc::downgrade(&request.sample.samples);
             let feed = ProductiveSourceFeed {
                 sample: &request.sample,
+                outgoing_stems: None,
                 stems: None,
                 sample_rate_hz: 48_000,
                 accepted: None,

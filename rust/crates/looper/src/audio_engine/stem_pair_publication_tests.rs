@@ -1528,6 +1528,19 @@ struct PairWorkerAudio {
 
 #[pymethods]
 impl PairWorkerAudio {
+    fn register_pending_committed_stem_pair(
+        &self,
+        prepared: &PreparedStemPair,
+        source_ticket: &PreparedSourceTicket,
+    ) -> PyResult<crate::audio_engine::CommittedStemSetTicket> {
+        self.engine
+            .register_pending_committed_stem_pair_with_producer(
+                prepared,
+                source_ticket,
+                &self.producer,
+            )
+    }
+
     fn register_committed_stem_pair(
         &self,
         prepared: &PreparedStemPair,

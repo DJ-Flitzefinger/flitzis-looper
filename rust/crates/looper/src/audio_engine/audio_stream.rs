@@ -360,7 +360,7 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
                 resident_control.as_ref(),
                 launch_revision,
             ) || !mixer.trigger_loop_context_available(id, start_s, end_s)
-                || (exclusive && retirement.available_retirement_slots() < 2 * MAX_VOICES)
+                || (exclusive && retirement.available_retirement_slots() < 3 * MAX_VOICES)
                 || (!exclusive
                     && !mixer
                         .voices
@@ -403,7 +403,7 @@ pub(super) fn execute_scheduled_command<S: AudioMessageSink, R: AudioBufferRetir
             volume,
             received_at_ns: _,
         } => {
-            if retirement.available_retirement_slots() < 2 * MAX_VOICES {
+            if retirement.available_retirement_slots() < 3 * MAX_VOICES {
                 return;
             }
             let Some(prepared) = mixer.prepare_play_sample_rt(id, volume, output_frame, retirement)
@@ -479,7 +479,7 @@ fn execute_global_playback_batch<S: AudioMessageSink, R: AudioBufferRetirement>(
     // Captured input time is diagnostic context; transport owns execution quantization.
     let _received_at_ns = batch.received_at_ns;
     // One fixed retirement reservation covers every old pin plus this immutable payload.
-    if retirement.available_retirement_slots() < 2 * MAX_VOICES + 1 {
+    if retirement.available_retirement_slots() < 3 * MAX_VOICES + 1 {
         return false;
     }
     let feedback_needed = if batch.start {
@@ -804,19 +804,19 @@ fn publish_pad_telemetry<S: AudioMessageSink>(
 
 fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
     match message {
-        ControlMessage::GlobalPlaybackBatch(_) => 2 * MAX_VOICES + 1,
-        ControlMessage::RelocateResident(_) => 2 * MAX_VOICES + 3,
+        ControlMessage::GlobalPlaybackBatch(_) => 3 * MAX_VOICES + 1,
+        ControlMessage::RelocateResident(_) => 3 * MAX_VOICES + 3,
         ControlMessage::CaptureResidentSeek(_) => 3,
         ControlMessage::CommittedStemWork(_) => 3,
         ControlMessage::LoadColdSample {
             replace_assignment: true,
             ..
-        } => 2 * MAX_VOICES + 4,
+        } => 3 * MAX_VOICES + 5,
         ControlMessage::LoadColdSample {
             replace_assignment: false,
             ..
-        } => MAX_VOICES + 4,
-        ControlMessage::LoadSample { .. } => MAX_VOICES + 2,
+        } => 2 * MAX_VOICES + 5,
+        ControlMessage::LoadSample { .. } => 2 * MAX_VOICES + 3,
         ControlMessage::PublishPreparedStems { .. } => 2,
         ControlMessage::SetStemPairFullMix { .. } => 3,
         ControlMessage::PublishConstantTiming { .. } | ControlMessage::RefreshAcceptedTiming(_) => {
@@ -825,14 +825,14 @@ fn control_message_retirement_slots_needed(message: &ControlMessage) -> usize {
         ControlMessage::PlaySample { .. }
         | ControlMessage::TriggerInputPad {
             exclusive: false, ..
-        } => 2,
-        ControlMessage::StopSample { .. } => 2 * MAX_VOICES,
-        ControlMessage::UnloadSample { .. } => 2 * MAX_VOICES + 2,
+        } => 3,
+        ControlMessage::StopSample { .. } => 3 * MAX_VOICES,
+        ControlMessage::UnloadSample { .. } => 3 * MAX_VOICES + 3,
         ControlMessage::StopAll()
         | ControlMessage::PlaySampleExclusive { .. }
         | ControlMessage::TriggerInputPad {
             exclusive: true, ..
-        } => 2 * MAX_VOICES,
+        } => 3 * MAX_VOICES,
         _ => 0,
     }
 }
@@ -2385,15 +2385,15 @@ mod tests {
     fn retirement_slot_estimate_covers_polyphonic_stop_paths() {
         assert_eq!(
             control_message_retirement_slots_needed(&ControlMessage::StopSample { id: 0 }),
-            2 * MAX_VOICES
+            3 * MAX_VOICES
         );
         assert_eq!(
             control_message_retirement_slots_needed(&ControlMessage::UnloadSample { id: 0 }),
-            2 * MAX_VOICES + 2
+            3 * MAX_VOICES + 3
         );
         assert_eq!(
             control_message_retirement_slots_needed(&ControlMessage::StopAll()),
-            2 * MAX_VOICES
+            3 * MAX_VOICES
         );
         assert_eq!(
             control_message_retirement_slots_needed(&ControlMessage::PlaySampleExclusive {
@@ -2401,7 +2401,7 @@ mod tests {
                 volume: 1.0,
                 received_at_ns: None
             }),
-            2 * MAX_VOICES
+            3 * MAX_VOICES
         );
     }
 

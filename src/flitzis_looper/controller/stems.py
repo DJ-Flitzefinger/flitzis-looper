@@ -194,7 +194,10 @@ class StemController(BaseController):  # noqa: PLR0904
         self._residency_errors: dict[int, str] = {}
         self._pending_full_mix_releases: set[int] = set()
         self._committed_residency = CommittedStemResidency(
-            audio, self._committed_selection_current, self._report_residency_error
+            audio,
+            self._committed_selection_current,
+            self._report_residency_error,
+            source_current=self._committed_source_current,
         )
         self._on_frame_render_callbacks.append(self._poll_generation_events)
         self._on_frame_render_callbacks.append(self._poll_stem_publications)
@@ -1785,7 +1788,10 @@ class StemController(BaseController):  # noqa: PLR0904
         self._register_committed_pair(sample_id, prepared, settlement.ticket)
         if request.residency_only or (
             request.generation_intent is not None
-            and sample_id not in self._session.active_sample_ids
+            and (
+                sample_id not in self._session.active_sample_ids
+                or self._committed_residency.pending_supported
+            )
         ):
             self._publish_all_stems_mode_if_preferred(sample_id, settlement.entry.source_version)
 
@@ -2554,6 +2560,7 @@ class StemController(BaseController):  # noqa: PLR0904
                 entry,
                 self._content_id(sample_id),
                 self._project.sample_paths[sample_id],
+                active=sample_id in self._session.active_sample_ids,
             )
         except (RuntimeError, TypeError, ValueError) as error:
             self._report_residency_error(sample_id, f"Committed stem registration failed: {error}")
@@ -2577,6 +2584,23 @@ class StemController(BaseController):  # noqa: PLR0904
             and current is not None
             and current.source_version == entry.source_version
             and current.pair == entry.pair
+        )
+
+    def _committed_source_current(
+        self,
+        sample_id: int,
+        entry: StemCacheEntry,
+        content_id: str | None,
+        source_path: str | None,
+    ) -> bool:
+        """Retain old audio control for the same content while disk selects a newer pair."""
+        current = self._project.stem_cache[sample_id]
+        return (
+            not self._shutting_down
+            and self._content_id(sample_id) == content_id
+            and self._project.sample_paths[sample_id] == source_path
+            and current is not None
+            and current.source_version == entry.source_version
         )
 
     def _report_residency_error(self, sample_id: int, message: str | None) -> None:

@@ -18,6 +18,10 @@ use crate::audio_engine::source_reader::{
 use crate::messages::StemMixMode;
 use std::collections::VecDeque;
 
+#[path = "l3_controller_productive_tests.rs"]
+mod l3_controller_productive_tests;
+#[path = "l3_native_tests.rs"]
+mod l3_native_tests;
 #[path = "offline_stem_productive_tests.rs"]
 mod offline_stem_productive_tests;
 
@@ -3211,27 +3215,27 @@ assert project.pad_stem_mix_mode[0] == 'all_stems'
                     .unwrap()
                     .extract::<String>()
                     .unwrap()
-                    == "pending"
+                    == "accepted"
         })
     });
     controller_python(
         &locals,
         r#"
-renewed_registration = controller._committed_residency._selections[0].ticket
+renewed_state = controller._committed_residency._live_selections[0]
+renewed_registration = renewed_state.disk.selection.ticket
 assert renewed_registration is not registration
-assert renewed_registration.publication_status() == 'pending'
+assert renewed_registration.publication_status() == 'accepted'
 assert audio.worker_call_count() == 2 and audio.prepared_only_on_pool_threads()
 assert project.stem_cache[0].pair == disk_selection
 "#,
     );
-    assert_eq!(playback.callback.drain(&mut h.consumer), 1);
     controller_python(
         &locals,
         r#"
 controller.on_frame_render()
 assert renewed_registration.publication_status() == 'accepted'
 assert renewed_registration.is_current() and not registration.is_current()
-resealed = controller._committed_residency._selections[0].receipt
+resealed = renewed_state.attempt.receipt
 assert resealed is not first and resealed is not next_receipt
 assert resealed.effective_mode_status() == 'waiting'
 "#,

@@ -49,6 +49,10 @@ if TYPE_CHECKING:
 class NativeProducerBridge(Protocol):
     engine: AudioEngine
 
+    def register_pending_committed_stem_pair(
+        self, prepared: PreparedStemPair, source_ticket: PreparedSourceTicket
+    ) -> CommittedStemSetTicket: ...
+
     def register_committed_stem_pair(
         self, prepared: PreparedStemPair, source_ticket: PreparedSourceTicket
     ) -> CommittedStemSetTicket: ...
@@ -119,6 +123,11 @@ class Audio:
 
     def __getattr__(self, name: str) -> object:
         return getattr(self.bridge.engine, name)
+
+    def register_pending_committed_stem_pair(
+        self, prepared: PreparedStemPair, source_ticket: PreparedSourceTicket
+    ) -> CommittedStemSetTicket:
+        return self.bridge.register_pending_committed_stem_pair(prepared, source_ticket)
 
     def register_committed_stem_pair(
         self, prepared: PreparedStemPair, source_ticket: PreparedSourceTicket

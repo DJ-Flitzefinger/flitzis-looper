@@ -319,6 +319,9 @@ pub(crate) struct StemRenderSelection {
     mode: StemMixMode,
     source_version_hash: u64,
     enabled_mask: u8,
+    /// Comparison only: every copied plan must separately retain this immutable owner.
+    /// The address is never dereferenced and cannot outlive the held complete-set identity.
+    complete_set_owner: Option<usize>,
 }
 
 impl StemRenderSelection {
@@ -331,9 +334,29 @@ impl StemRenderSelection {
             mode: StemMixMode::FullMix,
             source_version_hash: 0,
             enabled_mask: STEM_COMPONENT_MASK,
+            complete_set_owner: None,
         }
     }
 
+    pub(crate) fn for_stems(stems: &PreparedStemSet, enabled_mask: u8) -> Self {
+        Self {
+            mode: StemMixMode::AllStems,
+            source_version_hash: stems.source_version_hash,
+            enabled_mask: enabled_mask & STEM_COMPONENT_MASK,
+            complete_set_owner: Some(std::sync::Arc::as_ptr(&stems.complete_set_identity) as usize),
+        }
+    }
+
+    fn matches_stems(self, stems: &PreparedStemSet) -> bool {
+        self.mode == StemMixMode::AllStems
+            && self.source_version_hash != 0
+            && self.source_version_hash == stems.source_version_hash
+            && self.complete_set_owner.is_none_or(|owner| {
+                owner == std::sync::Arc::as_ptr(&stems.complete_set_identity) as usize
+            })
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_state(
         mode: StemMixMode,
         source_version_hash: u64,
@@ -345,8 +368,41 @@ impl StemRenderSelection {
                 mode,
                 source_version_hash,
                 enabled_mask: enabled_mask & STEM_COMPONENT_MASK,
+                complete_set_owner: None,
             },
         }
+    }
+}
+
+/// Fixed borrowed readers for the actual current and unfinished outgoing selection.
+/// A scalar selection token has authority only while its corresponding owner is held.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct StemReadSets<'a> {
+    pub(crate) current: Option<&'a PreparedStemSet>,
+    pub(crate) outgoing: Option<&'a PreparedStemSet>,
+}
+
+impl<'a> StemReadSets<'a> {
+    pub(crate) fn new(
+        current: Option<&'a PreparedStemSet>,
+        outgoing: Option<&'a PreparedStemSet>,
+    ) -> Self {
+        Self { current, outgoing }
+    }
+
+    pub(crate) fn for_selection(
+        self,
+        selection: StemRenderSelection,
+    ) -> Option<&'a PreparedStemSet> {
+        self.current
+            .filter(|stems| selection.matches_stems(stems))
+            .or_else(|| {
+                // Legacy hash-only state identifies only the corresponding current set.
+                // It must never alias a different generation in the outgoing slot.
+                self.outgoing.filter(|stems| {
+                    selection.complete_set_owner.is_some() && selection.matches_stems(stems)
+                })
+            })
     }
 }
 
@@ -527,9 +583,9 @@ pub(crate) fn render_source_sample(
     }
 }
 
-pub(crate) fn render_source_selection_sample(
+fn render_source_selection_sample_with_readers(
     sample: &SampleBuffer,
-    stems: Option<&PreparedStemSet>,
+    readers: StemReadSets<'_>,
     selection: StemRenderSelection,
     frame: usize,
     channels: usize,
@@ -538,10 +594,12 @@ pub(crate) fn render_source_selection_sample(
     match selection.mode {
         StemMixMode::FullMix => sample.sample_at_absolute(frame, channel),
         StemMixMode::AllStems => {
-            let matching_stems = stems.filter(|stems| {
-                selection.source_version_hash != 0
-                    && stems.source_version_hash == selection.source_version_hash
-            });
+            let matching_stems = readers.for_selection(selection);
+            if matching_stems.is_none() && selection.complete_set_owner.is_some() {
+                // Checked feeds reject this missing owner before mutation. An unchecked dry
+                // read must still never substitute another generation or FullMix for it.
+                return 0.0;
+            }
             render_source_sample(
                 sample,
                 matching_stems,
@@ -572,19 +630,23 @@ pub(crate) struct SourceReadPlan {
 }
 
 impl SourceReadPlan {
-    /// Pin only components which either actual side of this source-frame ramp reads.
-    /// Installing unused resident components cannot change FullMix history ownership.
-    pub(crate) fn required_stems<'a>(
-        self,
-        stems: Option<&'a PreparedStemSet>,
-    ) -> Option<&'a PreparedStemSet> {
-        (self.selection.required_stem_hash().is_some()
-            || self
-                .transition
-                .required_from_selection()
-                .is_some_and(|selection| selection.required_stem_hash().is_some()))
-        .then_some(stems)
-        .flatten()
+    /// Keep the exact readers used by either side, including an empty selected mask.
+    pub(crate) fn required_read_sets<'a>(self, readers: StemReadSets<'a>) -> StemReadSets<'a> {
+        let current = readers.for_selection(self.selection);
+        let outgoing = self
+            .transition
+            .required_from_selection()
+            .and_then(|selection| readers.for_selection(selection));
+        let used = |stems: &PreparedStemSet| {
+            current
+                .into_iter()
+                .chain(outgoing)
+                .any(|held| std::ptr::eq(stems, held))
+        };
+        StemReadSets::new(
+            readers.current.filter(|stems| used(stems)),
+            readers.outgoing.filter(|stems| used(stems)),
+        )
     }
     pub(crate) fn domain(self) -> SourceLoopDomain {
         SourceLoopDomain {
@@ -632,6 +694,23 @@ impl SourceReadPlan {
         buffers: &mut [Vec<f32>],
         output_frames: usize,
     ) {
+        self.fill_fractional_buffers_with_readers(
+            sample,
+            StemReadSets::new(stems, None),
+            playback,
+            buffers,
+            output_frames,
+        );
+    }
+
+    pub(crate) fn fill_fractional_buffers_with_readers(
+        self,
+        sample: &SampleBuffer,
+        readers: StemReadSets<'_>,
+        playback: &SourcePlayback,
+        buffers: &mut [Vec<f32>],
+        output_frames: usize,
+    ) {
         debug_assert!(self.channels > 0 && buffers.len() >= self.channels);
         debug_assert!(playback.matches_domain(self.domain()));
         debug_assert_eq!(sample.frame_count(), self.sample_frames);
@@ -651,9 +730,9 @@ impl SourceReadPlan {
             };
             let source_progress = frame as f64 * tempo_ratio;
             for (channel, buffer) in buffers.iter_mut().enumerate().take(self.channels) {
-                buffer[frame] = plan.sample_fractional(
+                buffer[frame] = plan.sample_fractional_with_readers(
                     sample,
-                    stems,
+                    readers,
                     position.fraction,
                     source_progress,
                     channel,
@@ -668,6 +747,23 @@ impl SourceReadPlan {
         self,
         sample: &SampleBuffer,
         stems: Option<&PreparedStemSet>,
+        playback: &SourcePlayback,
+        buffers: &mut [Vec<f32>],
+        output_frames: usize,
+    ) -> Result<(), super::rubberband_backend::RubberBandError> {
+        self.fill_fractional_buffers_checked_with_readers(
+            sample,
+            StemReadSets::new(stems, None),
+            playback,
+            buffers,
+            output_frames,
+        )
+    }
+
+    pub(crate) fn fill_fractional_buffers_checked_with_readers(
+        self,
+        sample: &SampleBuffer,
+        readers: StemReadSets<'_>,
         playback: &SourcePlayback,
         buffers: &mut [Vec<f32>],
         output_frames: usize,
@@ -693,13 +789,13 @@ impl SourceReadPlan {
             };
             let taps = plan.fractional_taps(position.fraction);
             for channel in 0..self.channels {
-                if !plan.tap_available(sample, stems, taps.left, channel) {
+                if !plan.tap_available_with_readers(sample, readers, taps.left, channel) {
                     #[cfg(test)]
                     observe_tap(taps.left, channel, false, false);
                     return Err(super::rubberband_backend::RubberBandError::InvalidBlockSize);
                 }
                 if let Some(right) = taps.right
-                    && !plan.tap_available(sample, stems, right, channel)
+                    && !plan.tap_available_with_readers(sample, readers, right, channel)
                 {
                     #[cfg(test)]
                     observe_tap(right, channel, true, false);
@@ -707,14 +803,20 @@ impl SourceReadPlan {
                 }
             }
         }
-        self.fill_fractional_buffers(sample, stems, playback, buffers, output_frames);
+        self.fill_fractional_buffers_with_readers(
+            sample,
+            readers,
+            playback,
+            buffers,
+            output_frames,
+        );
         Ok(())
     }
 
-    fn tap_available(
+    pub(crate) fn tap_available_with_readers(
         self,
         sample: &SampleBuffer,
-        stems: Option<&PreparedStemSet>,
+        readers: StemReadSets<'_>,
         frame: usize,
         channel: usize,
     ) -> bool {
@@ -727,13 +829,9 @@ impl SourceReadPlan {
                     .is_some_and(|index| index < buffer.samples.len())
         };
         let selection_available = |selection: StemRenderSelection| {
-            let matching = stems.filter(|set| {
-                selection.mode == StemMixMode::AllStems
-                    && selection.source_version_hash != 0
-                    && selection.source_version_hash == set.source_version_hash
-            });
+            let matching = readers.for_selection(selection);
             matching.map_or_else(
-                || held(sample),
+                || selection.complete_set_owner.is_none() && held(sample),
                 |set| {
                     set.stems
                         .iter()
@@ -780,29 +878,35 @@ impl SourceReadPlan {
             self.loop_region,
             self.seek_mode,
         );
-        self.sample_at_frame_with_progress(sample, stems, frame, transition_progress, channel)
+        self.sample_at_frame_with_progress(
+            sample,
+            StemReadSets::new(stems, None),
+            frame,
+            transition_progress,
+            channel,
+        )
     }
 
     fn sample_at_frame_with_progress(
         self,
         sample: &SampleBuffer,
-        stems: Option<&PreparedStemSet>,
+        readers: StemReadSets<'_>,
         frame: usize,
         transition_progress: f64,
         channel: usize,
     ) -> f32 {
         if self.transition.is_active() {
-            let from_sample = render_source_selection_sample(
+            let from_sample = render_source_selection_sample_with_readers(
                 sample,
-                stems,
+                readers,
                 self.transition.from,
                 frame,
                 self.channels,
                 channel,
             );
-            let to_sample = render_source_selection_sample(
+            let to_sample = render_source_selection_sample_with_readers(
                 sample,
-                stems,
+                readers,
                 self.selection,
                 frame,
                 self.channels,
@@ -811,9 +915,9 @@ impl SourceReadPlan {
             let (from_gain, to_gain) = self.transition.gains_at(transition_progress);
             from_sample * from_gain + to_sample * to_gain
         } else {
-            render_source_selection_sample(
+            render_source_selection_sample_with_readers(
                 sample,
-                stems,
+                readers,
                 self.selection,
                 frame,
                 self.channels,
@@ -824,10 +928,28 @@ impl SourceReadPlan {
 
     /// Interpolate two independently addressed source taps at the same crossfade progress.
     /// Lookahead follows loop/intro/tail policy without advancing playback or the ramp.
+    #[cfg(test)]
     pub(crate) fn sample_fractional(
         self,
         sample: &SampleBuffer,
         stems: Option<&PreparedStemSet>,
+        fraction: f64,
+        transition_progress: f64,
+        channel: usize,
+    ) -> f32 {
+        self.sample_fractional_with_readers(
+            sample,
+            StemReadSets::new(stems, None),
+            fraction,
+            transition_progress,
+            channel,
+        )
+    }
+
+    pub(crate) fn sample_fractional_with_readers(
+        self,
+        sample: &SampleBuffer,
+        readers: StemReadSets<'_>,
         fraction: f64,
         transition_progress: f64,
         channel: usize,
@@ -838,11 +960,11 @@ impl SourceReadPlan {
             taps.left,
             channel,
             false,
-            self.tap_available(sample, stems, taps.left, channel),
+            self.tap_available_with_readers(sample, readers, taps.left, channel),
         );
         let left = self.sample_at_frame_with_progress(
             sample,
-            stems,
+            readers,
             taps.left,
             transition_progress,
             channel,
@@ -855,11 +977,11 @@ impl SourceReadPlan {
             right_frame,
             channel,
             true,
-            self.tap_available(sample, stems, right_frame, channel),
+            self.tap_available_with_readers(sample, readers, right_frame, channel),
         );
         let right = self.sample_at_frame_with_progress(
             sample,
-            stems,
+            readers,
             right_frame,
             transition_progress,
             channel,

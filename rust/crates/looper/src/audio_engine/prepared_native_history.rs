@@ -656,6 +656,7 @@ pub(super) mod tests {
         let source = state.source.as_ref().unwrap();
         let feed = ProductiveSourceFeed {
             sample: &source.sample,
+            outgoing_stems: None,
             stems: source.stems.as_ref(),
             sample_rate_hz: 48_000,
             accepted: None,
@@ -1067,6 +1068,7 @@ pub(super) mod tests {
         assert!(!request.plan.matches_source_contract(changed_plan));
         let feed = ProductiveSourceFeed {
             sample: &request.sample,
+            outgoing_stems: None,
             stems: None,
             sample_rate_hz: 48_000,
             accepted: None,

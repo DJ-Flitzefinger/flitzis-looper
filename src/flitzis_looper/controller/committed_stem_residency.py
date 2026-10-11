@@ -24,6 +24,11 @@ class StemResidencyStatus:
     residency: str | None
     effective: str | None
     requested_mode: StemMixMode | None
+    disk_stem_set_identity: str | None = None
+    control_stem_set_identity: str | None = None
+    effective_stem_set_identity: str | None = None
+    attempt_stem_set_identity: str | None = None
+    desired_mode: StemMixMode | None = None
 
 
 @dataclass(slots=True)
@@ -35,6 +40,28 @@ class _CommittedSelection:
     desired: tuple[StemMixMode, int] | None = None
     receipt: ResidentStemTicket | None = None
     receipt_intent: tuple[StemMixMode, int] | None = None
+    candidate: bool = False
+
+
+@dataclass(slots=True)
+class _DiskCandidate:
+    entry: StemCacheEntry
+    content_id: str | None
+    source_path: str | None
+    prepared: PreparedStemPair
+    source_ticket: PreparedSourceTicket
+    selection: _CommittedSelection | None = None
+    registration: str = "deferred"
+
+
+@dataclass(slots=True)
+class _LiveSelection:
+    disk: _DiskCandidate
+    control: _CommittedSelection | None = None
+    effective_identity: str | None = None
+    attempt: _CommittedSelection | None = None
+    desired: tuple[StemMixMode, int] | None = None
+    blocked: bool = False
 
 
 class CommittedStemResidency:
@@ -45,11 +72,15 @@ class CommittedStemResidency:
         audio: AudioEngine,
         current: Callable[[int, StemCacheEntry, str | None, str | None], bool],
         report_error: Callable[[int, str | None], None],
+        *,
+        source_current: Callable[[int, StemCacheEntry, str | None, str | None], bool] | None = None,
     ) -> None:
         self._audio = audio
         self._current = current
+        self._source_current = source_current or current
         self._report_error = report_error
         self._selections: dict[int, _CommittedSelection] = {}
+        self._live_selections: dict[int, _LiveSelection] = {}
 
     @property
     def supported(self) -> bool:
@@ -58,9 +89,16 @@ class CommittedStemResidency:
             getattr(self._audio, "request_committed_stem_residency", None)
         )
 
+    @property
+    def pending_supported(self) -> bool:
+        """Return whether Native can register a candidate without revoking its predecessor."""
+        return self.supported and callable(
+            getattr(self._audio, "register_pending_committed_stem_pair", None)
+        )
+
     def contains(self, sample_id: int) -> bool:
         """Return whether the pad has a tracked current disk selection receipt."""
-        return sample_id in self._selections
+        return sample_id in self._selections or sample_id in self._live_selections
 
     def register(
         self,
@@ -70,6 +108,8 @@ class CommittedStemResidency:
         entry: StemCacheEntry,
         content_id: str | None,
         source_path: str | None,
+        *,
+        active: bool = False,
     ) -> None:
         """Bind a verified committed disk set; this alone grants no live selection."""
         previous = self._selections.get(sample_id)
@@ -81,6 +121,20 @@ class CommittedStemResidency:
         ):
             previous.entry = entry
             return
+        disk = _DiskCandidate(entry, content_id, source_path, prepared, source_ticket)
+        if self.pending_supported and (
+            active
+            or sample_id in self._live_selections
+            or (previous is not None and self._same_source(previous, disk))
+        ):
+            try:
+                self._register_live(sample_id, disk)
+            except RuntimeError, TypeError, ValueError:
+                live = self._live_selections.get(sample_id)
+                if live is not None:
+                    live.blocked = True
+                raise
+            return
         ticket = self._audio.register_committed_stem_pair(prepared, source_ticket)
         if previous is not None:
             self._cancel(previous)
@@ -88,6 +142,9 @@ class CommittedStemResidency:
 
     def request(self, sample_id: int, mode: StemMixMode, enabled_mask: int) -> bool:
         """Request the latest mode, waiting for registration before Native admission."""
+        live = self._live_selections.get(sample_id)
+        if live is not None:
+            return self._request_live(sample_id, live, (mode, enabled_mask))
         selection = self._selections[sample_id]
         if not self._current(
             sample_id, selection.entry, selection.content_id, selection.source_path
@@ -119,6 +176,7 @@ class CommittedStemResidency:
 
     def poll(self) -> None:
         """Observe bounded own receipts; polling never advances an audio timeline."""
+        self._poll_live_selections()
         for sample_id, selection in tuple(self._selections.items()):
             try:
                 if not self._current(
@@ -154,6 +212,9 @@ class CommittedStemResidency:
     def status(self, sample_id: int) -> StemResidencyStatus | None:
         """Return actual registration/residency/effective status without inferring ACK."""
         selection = self._selections.get(sample_id)
+        live = self._live_selections.get(sample_id)
+        if live is not None:
+            return self._live_status(live)
         if selection is None:
             return None
         receipt = selection.receipt
@@ -168,6 +229,11 @@ class CommittedStemResidency:
             receipt.residency_status() if receipt else None,
             effective,
             selection.receipt_intent[0] if selection.receipt_intent else None,
+            self._identity(selection),
+            self._identity(selection),
+            self._effective_identity(selection),
+            self._identity(selection) if receipt else None,
+            selection.desired[0] if selection.desired else None,
         )
 
     def cancel(self, sample_id: int) -> None:
@@ -175,11 +241,350 @@ class CommittedStemResidency:
         selection = self._selections.pop(sample_id, None)
         if selection is not None:
             self._cancel(selection)
+        live = self._live_selections.pop(sample_id, None)
+        if live is not None:
+            selections = (live.disk.selection, live.control, live.attempt)
+            for index, owned in enumerate(selections):
+                if owned is not None and all(owned is not other for other in selections[:index]):
+                    self._cancel(owned)
 
     def shut_down(self) -> None:
         """Withdraw all tracked requests; Native owners remain until actual last use."""
-        for sample_id in tuple(self._selections):
+        for sample_id in tuple(self._selections.keys() | self._live_selections.keys()):
             self.cancel(sample_id)
+
+    def _register_live(self, sample_id: int, disk: _DiskCandidate) -> None:
+        live = self._live_selections.get(sample_id)
+        if live is not None and not self._same_source(live.disk, disk):
+            self.cancel(sample_id)
+            live = None
+        if live is not None:
+            self._observe_live(sample_id, live)
+        if live is not None and self._reuse_live_disk(live, disk):
+            return
+        previous = self._selections.get(sample_id) if live is None else live.control
+        if previous is not None and not self._same_source(previous, disk):
+            self.cancel(sample_id)
+            previous, live = None, None
+        if live is None:
+            self._selections.pop(sample_id, None)
+            live = _LiveSelection(
+                disk, previous, self._effective_identity(previous) if previous else None
+            )
+            self._live_selections[sample_id] = live
+        else:
+            self._replace_disk(live, disk)
+        live.blocked = False
+        self._register_candidate(live)
+
+    def _reuse_live_disk(self, live: _LiveSelection, disk: _DiskCandidate) -> bool:
+        if not self._same_disk(live.disk, disk):
+            return False
+        live.disk.entry = disk.entry
+        selection = live.disk.selection
+        if selection is not None:
+            selection.entry = disk.entry
+            self._reset_failed_candidate(live)
+            if live.disk.selection is None:
+                live.disk.prepared = disk.prepared
+                live.disk.source_ticket = disk.source_ticket
+                live.blocked = False
+                self._register_candidate(live)
+        else:
+            live.disk.prepared = disk.prepared
+            live.disk.source_ticket = disk.source_ticket
+        return True
+
+    def _replace_disk(self, live: _LiveSelection, disk: _DiskCandidate) -> None:
+        previous = live.disk.selection
+        attempt = live.attempt
+        if attempt is not None and attempt.candidate and self._withdraw(attempt):
+            live.attempt = None
+        if previous is not None and previous is not live.control and previous is not live.attempt:
+            previous.ticket.cancel()
+        live.disk = disk
+
+    def _register_candidate(self, live: _LiveSelection) -> None:
+        if live.disk.selection is not None or self._busy(live.attempt):
+            return
+        disk = live.disk
+        ticket = self._audio.register_pending_committed_stem_pair(disk.prepared, disk.source_ticket)
+        disk.selection = _CommittedSelection(
+            disk.entry, disk.content_id, disk.source_path, ticket, candidate=True
+        )
+
+    def _request_live(
+        self, sample_id: int, live: _LiveSelection, intent: tuple[StemMixMode, int]
+    ) -> bool:
+        if not self._source_current(
+            sample_id, live.disk.entry, live.disk.content_id, live.disk.source_path
+        ):
+            self.cancel(sample_id)
+            return False
+        try:
+            self._observe_live(sample_id, live)
+            live.desired = intent
+            live.blocked = False
+            self._reset_failed_attempt(live)
+            self._reset_failed_candidate(live)
+            attempt = live.attempt
+            if attempt is not None and self._superseded_attempt(live, attempt, intent):
+                if not self._withdraw(attempt):
+                    return True
+                live.attempt = None
+                if attempt.candidate:
+                    attempt.ticket.cancel()
+                    if live.disk.selection is attempt:
+                        live.disk.selection = None
+                        live.disk.registration = "withdrawn"
+            return self._submit_live(sample_id, live)
+        except (RuntimeError, TypeError, ValueError) as error:
+            live.blocked = True
+            self._report_error(sample_id, f"Stem residency admission failed: {error}")
+            return False
+
+    @staticmethod
+    def _superseded_attempt(
+        live: _LiveSelection,
+        attempt: _CommittedSelection,
+        intent: tuple[StemMixMode, int],
+    ) -> bool:
+        target = live.disk.selection if intent[0] == "all_stems" else live.control
+        return attempt.receipt_intent != intent or attempt is not target
+
+    @staticmethod
+    def _reset_failed_attempt(live: _LiveSelection) -> None:
+        attempt = live.attempt
+        if (
+            attempt is not None
+            and attempt.receipt is not None
+            and (
+                not attempt.receipt.is_current()
+                or attempt.receipt.residency_status() == "rejected"
+                or attempt.receipt.effective_mode_status() == "rejected"
+            )
+        ):
+            attempt.receipt_intent = None
+            live.attempt = None
+            if attempt.candidate and not attempt.ticket.is_current():
+                attempt.ticket.cancel()
+                if live.disk.selection is attempt:
+                    live.disk.selection = None
+
+    @staticmethod
+    def _reset_failed_candidate(live: _LiveSelection) -> None:
+        selection = live.disk.selection
+        if (
+            selection is not None
+            and selection.candidate
+            and (
+                not selection.ticket.is_current()
+                or selection.ticket.publication_status() == "rejected"
+            )
+        ):
+            selection.ticket.cancel()
+            live.disk.selection = None
+
+    def _poll_live_selections(self) -> None:
+        for sample_id, live in tuple(self._live_selections.items()):
+            try:
+                if not self._source_current(
+                    sample_id, live.disk.entry, live.disk.content_id, live.disk.source_path
+                ):
+                    self.cancel(sample_id)
+                    continue
+                if not self._current(
+                    sample_id, live.disk.entry, live.disk.content_id, live.disk.source_path
+                ):
+                    live.desired = None
+                    self._withdraw_disk(live)
+                self._observe_live(sample_id, live)
+                self._submit_live(sample_id, live)
+            except (RuntimeError, TypeError, ValueError) as error:
+                live.blocked = True
+                self._report_error(sample_id, f"Stem residency status failed: {error}")
+
+    def _observe_live(self, sample_id: int, live: _LiveSelection) -> None:
+        selection = live.attempt or live.control
+        if selection is None or selection.receipt is None:
+            return
+        receipt = selection.receipt
+        if self._failed(receipt):
+            live.blocked = True
+            self._report_error(sample_id, receipt.error() or "Stem mode adoption rejected")
+            return
+        if self._effective_observed(live, selection, receipt):
+            return
+        if self._busy(selection):
+            if receipt.residency_status() == "accepted":
+                live.control = selection
+                selection.candidate = False
+            return
+        if not receipt.is_current():
+            if receipt.residency_status() == "accepted":
+                live.attempt = None
+                selection.receipt = None
+                selection.receipt_intent = None
+                live.desired = None
+            else:
+                live.blocked = True
+                self._report_error(sample_id, receipt.error() or "Stem mode adoption rejected")
+            return
+        if receipt.residency_status() != "accepted":
+            return
+        live.control = selection
+        selection.candidate = False
+        if receipt.effective_mode_status() == "effective":
+            live.effective_identity = self._effective_identity(selection)
+            self._report_error(sample_id, None)
+        live.attempt = None
+
+    @staticmethod
+    def _effective_observed(
+        live: _LiveSelection, selection: _CommittedSelection, receipt: ResidentStemTicket
+    ) -> bool:
+        return (
+            live.attempt is None
+            and receipt.effective_mode_status() == "effective"
+            and live.effective_identity == CommittedStemResidency._effective_identity(selection)
+        )
+
+    @staticmethod
+    def _failed(receipt: ResidentStemTicket) -> bool:
+        return (
+            receipt.residency_status() == "rejected"
+            or receipt.effective_mode_status() == "rejected"
+            or receipt.effective_failure_reason() == "native-preparation-failed"
+        )
+
+    def _submit_live(self, sample_id: int, live: _LiveSelection) -> bool:
+        if live.blocked or live.desired is None or self._busy(live.attempt):
+            return True
+        mode, enabled_mask = live.desired
+        if mode == "full_mix":
+            self._withdraw_disk(live)
+            selection = live.control
+        else:
+            if not self._current(
+                sample_id, live.disk.entry, live.disk.content_id, live.disk.source_path
+            ):
+                return False
+            self._register_candidate(live)
+            selection = live.disk.selection
+        if selection is None:
+            return True
+        if self._ticket_failed(selection):
+            live.blocked = True
+            self._report_error(
+                sample_id, selection.ticket.error() or "Committed stem selection rejected"
+            )
+            return False
+        if (
+            selection.ticket.publication_status() != "accepted"
+            or selection.receipt_intent == live.desired
+        ):
+            return True
+        selection.receipt = self._audio.request_committed_stem_residency(
+            selection.ticket, mode=mode, enabled_mask=enabled_mask
+        )
+        selection.receipt_intent = live.desired
+        live.attempt = selection
+        return True
+
+    @staticmethod
+    def _ticket_failed(selection: _CommittedSelection) -> bool:
+        return (
+            selection.ticket.publication_status() == "rejected" or not selection.ticket.is_current()
+        )
+
+    @staticmethod
+    def _withdraw_disk(live: _LiveSelection) -> None:
+        selection = live.disk.selection
+        if selection is None or selection is live.control:
+            return
+        if selection is live.attempt:
+            if not CommittedStemResidency._withdraw(selection):
+                return
+            live.attempt = None
+        selection.ticket.cancel()
+        live.disk.selection = None
+        live.disk.registration = "withdrawn"
+
+    @staticmethod
+    def _withdraw(selection: _CommittedSelection) -> bool:
+        receipt = selection.receipt
+        if receipt is None:
+            return True
+        return receipt.withdraw()
+
+    @staticmethod
+    def _busy(selection: _CommittedSelection | None) -> bool:
+        if selection is None or selection.receipt is None:
+            return False
+        receipt = selection.receipt
+        if not receipt.claimed() or CommittedStemResidency._failed(receipt):
+            return False
+        return not (
+            receipt.residency_status() == "accepted"
+            and receipt.effective_mode_status() in {"waiting", "effective", "rejected"}
+        )
+
+    def _live_status(self, live: _LiveSelection) -> StemResidencyStatus:
+        disk = live.disk.selection
+        observed = live.attempt or live.control
+        receipt = observed.receipt if observed else None
+        effective = None
+        if receipt is not None:
+            if receipt.effective_failure_reason() == "native-preparation-failed":
+                effective = "rejected"
+            elif receipt.is_current() or self._busy(observed):
+                effective = receipt.effective_mode_status()
+        return StemResidencyStatus(
+            disk.ticket.publication_status() if disk else live.disk.registration,
+            receipt.residency_status() if receipt else None,
+            effective,
+            observed.receipt_intent[0] if observed and observed.receipt_intent else None,
+            self._identity(live.disk),
+            self._identity(live.control),
+            live.effective_identity,
+            self._identity(observed) if receipt else None,
+            live.desired[0] if live.desired else None,
+        )
+
+    @staticmethod
+    def _identity(selection: _CommittedSelection | _DiskCandidate | None) -> str | None:
+        pair = selection.entry.pair if selection is not None else None
+        return pair.stem_set_identity if pair is not None else None
+
+    @staticmethod
+    def _effective_identity(selection: _CommittedSelection) -> str | None:
+        receipt = selection.receipt
+        if (
+            receipt is not None
+            and receipt.is_current()
+            and receipt.effective_mode_status() == "effective"
+            and selection.receipt_intent is not None
+            and selection.receipt_intent[0] == "all_stems"
+        ):
+            return CommittedStemResidency._identity(selection)
+        return None
+
+    @staticmethod
+    def _same_source(selection: _CommittedSelection | _DiskCandidate, disk: _DiskCandidate) -> bool:
+        return (
+            selection.content_id == disk.content_id
+            and selection.source_path == disk.source_path
+            and selection.entry.source_version == disk.entry.source_version
+        )
+
+    @staticmethod
+    def _same_disk(first: _DiskCandidate, second: _DiskCandidate) -> bool:
+        return (
+            first.content_id == second.content_id
+            and first.source_path == second.source_path
+            and first.entry.source_version == second.entry.source_version
+            and first.entry.pair == second.entry.pair
+        )
 
     def _submit(self, selection: _CommittedSelection) -> bool:
         status = selection.ticket.publication_status()

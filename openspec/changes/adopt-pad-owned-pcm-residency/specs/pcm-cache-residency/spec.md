@@ -1,5 +1,34 @@
 ## ADDED Requirements
 
+### Requirement: New-set handover keeps exact predecessor readers and permits
+The system SHALL keep the audible predecessor selection and its independent
+source, intent and Native/history authority valid while a distinct complete
+stem candidate prepares through the existing bounded lanes. Actual adoption
+SHALL validate both owners and the actual current voice/window/history before
+changing selection. The 128-source-frame handover SHALL resolve two immutable
+sets by exact complete-set owner as well as source identity, retain both actual
+reader owners through their last use and retire them outside realtime. Each
+additional seek/Intro/Tail/full-track domain SHALL remain guarded until its own
+new-set coverage and productive continuation proof exists.
+An ordered pair release during an occupied handover SHALL retain bounded
+FullMix intent until safe application instead of discarding a deferred command.
+
+#### Scenario: Same-original candidate cannot stand in for predecessor
+- **GIVEN** V1 and V2 have equal original source identity and enabled mask but distinct complete-set owners
+- **WHEN** V2 prepares or obtains its own new-set adoption ACK
+- **THEN** V1 SHALL remain usable before adoption and both exact readers SHALL supply the actual bounded handover afterwards
+- **AND** Native/FIFO/history snapshots SHALL retain and describe their actual old input without relabelling it as V2
+
+#### Scenario: Preclaim cancellation and retirement pressure preserve current audio
+- **WHEN** candidate work is withdrawn before claim or old-reader retirement capacity is exhausted
+- **THEN** cancellation SHALL affect only candidate authority and capacity pressure SHALL retain the actual owner for off-thread retry
+- **AND** no callback I/O, locks, GIL, heavy allocation or final-reader destruction SHALL be introduced
+
+#### Scenario: Own readiness and audible acknowledgement differ
+- **WHEN** stopped or paused new-set residency is accepted
+- **THEN** readiness SHALL NOT report audible effectiveness and paused handover SHALL wait for actual resumed source consumption
+- **AND** newer candidates SHALL retain truthful observation of a claimed predecessor attempt without borrowing its ACK
+
 ### Requirement: Shared material complete PCM and retained range readers
 The system SHALL own complete versioned FullMix PCM and all aligned complete
 stem PCM beneath each immutable material version's `.pcm-cache` while

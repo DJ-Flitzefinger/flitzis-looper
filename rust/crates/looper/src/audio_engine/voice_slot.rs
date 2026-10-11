@@ -20,6 +20,7 @@ use std::sync::{
 #[derive(Clone, Debug)]
 pub(crate) struct FrozenStemView {
     pub(crate) set: Option<PreparedStemSet>,
+    pub(crate) outgoing: Option<PreparedStemSet>,
     pub(crate) selection: StemRenderSelection,
     pub(crate) transition: StemTransition,
 }
@@ -202,10 +203,13 @@ impl VoiceSlot {
     }
 
     pub(crate) fn retire_frozen_stems(&mut self, retirement: &mut impl AudioBufferRetirement) {
-        if let Some(view) = self.frozen_stems.take()
-            && let Some(set) = view.set
-        {
-            retirement.retire_prepared_stems(set);
+        if let Some(view) = self.frozen_stems.take() {
+            if let Some(set) = view.set {
+                retirement.retire_prepared_stems(set);
+            }
+            if let Some(set) = view.outgoing {
+                retirement.retire_prepared_stems(set);
+            }
         }
     }
 
