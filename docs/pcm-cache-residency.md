@@ -33,6 +33,58 @@ this bounded J0 correction supplies no full B6 or shared-subscriber acceptance.
 
 ## Delivered cold path (C1a)
 
+### Complete-extent streaming (X11-LONG)
+
+FullMix imports retain one sealed original, stream decoder packets into complete
+`decoder.f32le`, then continuously resample that disk-backed PCM into complete
+`playback.f32le`. Rubato state survives block boundaries. Integer-ceiling extent,
+delay trimming, partial input and bounded zero-tail flushing retain the decoder
+origin and transform policy. Fresh warm reopening scans every original/decoder/
+playback byte, checks finite samples, interleaved and signed-f64-mean mono hashes,
+and exact EOF before selected residency can be published.
+
+| Productive caller | Complete storage and live demand |
+| --- | --- |
+| Public Native import with finite bounds and automatic analysis | Stream complete storage; retain the requested loop. Attempt separately admitted analysis, then return matching analysis or a visible analysis error with source success. |
+| Public Native import without analysis | Stream complete storage; read supplied finite bounds, or the complete source when bounds are absent. |
+| Ordinary UI import | `LoaderController.load_sample_async` currently supplies no resident bounds. Initial live allocation therefore still requests the complete source and can exceed its genuine RAM budget before default-loop initialization. |
+| Canonical restore / fresh warm | Fully verify sealed complete storage; restore the actual finite hint or genuine ALL demand. Saved KEYLOCK retains its existing admitted full-track fallback. |
+| Noncanonical migration | Prepare a one-frame identity seed and complete lease. Read the subscriber's captured current finite range when adopting. |
+| Complete stem preparation | Use the complete source lease, full WAV scans and bounded alignment/conversion; the metadata seed is never an analysis or playback choice. |
+| Complete pair reopening | Fully verify all five WAV/PCM leaves and the common descriptor; prepare four matching selected component views. |
+
+Explicit ALL reads retain their real live allocation/overlap admission and may
+fail for a large source. The existing KEYLOCK load fallback also reads the full
+source under its actual live budget, even when finite bounds are supplied.
+One-frame material metadata preparation grants no ALL
+residency. Warm verification scratch is 64 KiB, independent of disk extent.
+The ordinary UI/default-eight-bars integration remains open within the existing
+P4b/P5b work: the default loop is initialized after source success and cannot
+repair a failed initial whole-source allocation. Bounded complete storage and
+the proved finite Native/restore paths with KEYLOCK off do not complete that import
+UX or all of E11-03/X11-LONG. Finite KEYLOCK load integration also remains required
+within P4b/P5b; its existing full-track fallback is a current limitation.
+Stem alignment performs full global-maxima and first-threshold scans before
+retaining a four-second onset/correlation window. Previous absolute envelopes
+cross scan blocks; ordered f32 component summation, ascending lag ties, PCM16
+normalization, signed shifts, zero padding and the exact final frame are retained.
+All five aligned digests determine generation identity before publication.
+
+Small PCM16 output keeps the byte-exact 44-byte RIFF format. Large output uses
+RF64 with checked ds64 u64 geometry and actual EOF across project/model writers,
+Python readers, native stem parsing and an explicitly registered Symphonia RF64
+demuxer. The source manifest records `rf64-wave-ds64-flitzi-demux-v1`; it never
+claims RIFF provenance for RF64 input. Unknown ds64 table entries remain rejected.
+
+Demucs keeps its original CLI/model/inference path. Its PCM16 save adapter bounds
+host conversion and uses FFmpeg RF64 output; model tensor/activation memory can
+still scale with inference. BS-RoFormer and project conversion use bounded PCM16
+writers with exclusive attempt leaves, flush/reopen/full verification and captured
+identity cleanup. These storage bounds do not claim constant-memory inference.
+The callback receives prepared resident PCM only; every file/decoder/resampler/
+hash/model operation remains outside realtime. This delivery does not complete
+new active StemSet adoption, P4b/P5a, aggregate P6 resources or Human listening.
+
 The pending [pad-owned PCM program](pad-owned-pcm-program.md) extends this delivered
 foundation. It replaces obsolete legacy physical containers with canonical immutable material
 versions and equal all-bank content users, with #1..#216 only stable membership,
@@ -115,12 +167,19 @@ only exact known files and empty recognized material containers.
 
 `cold_jobs.rs` admits at most two active workers and 32 queued/reserved jobs.
 The queue bound includes reservations made before request mutation. Each active
-job admits at most 1 GiB of transient PCM, including decoder packet/workspace,
-Vec growth overlap, retained decoder PCM, FFT conversion/channel mapping, and
-Vec-to-Arc overlap. Decoder workspace admits conservative supported-codec packet
+job admits at most 1 GiB of transient PCM. Complete decoder and playback PCM are
+written to disk in bounded blocks; their total extent is not a scratch allocation.
+Admission covers decoder packet/workspace, continuous FFT resampling/channel
+mapping and the actual requested resident view, including Vec-to-Arc overlap.
+Decoder workspace admits conservative supported-codec packet
 maxima; ALAC cookie block length/rate/channels are checked before constructor
-allocation, with actual codec configuration SHA256 recorded. Automatic analyzer inputs have a separate conservative
-admission calculation within that same job budget after decoder PCM is released.
+allocation, with actual codec configuration SHA256 recorded. Automatic analyzer
+inputs have a separate conservative 512-MiB admission calculation, with the held
+selected view included in the operation peak. An inadmissible automatic analysis
+produces a source-bound `analysis_error` with the successful native source ACK;
+it does not reject an otherwise admissible selected loop. The controller displays
+that error after clearing analysis-task state. Stale timing/request/source results
+cannot replace newer timing or its errors.
 Thus the cold lane's admitted transient PCM is at most 2 GiB, excluding previous
 resident pad/voice PCM and old-source request checkpoints (including pins retained
 after unload), existing native preparation pools and non-PCM analyzer

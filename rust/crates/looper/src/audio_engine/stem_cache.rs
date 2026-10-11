@@ -9,12 +9,18 @@ use std::fs;
 use std::fs::File;
 #[cfg(test)]
 use std::io::{self, Write};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+
+pub(crate) mod streamed;
+#[cfg(test)]
+mod streamed_tests;
+pub(crate) mod wav;
 
 use crate::messages::{PreparedStemSet, STEM_BUFFER_COUNT, SampleBuffer};
 
 pub(crate) const STEM_FILE_NAMES: [&str; 5] = ["vocals", "melody", "bass", "drums", "instrumental"];
+#[cfg(test)]
 const COMPONENT_STEM_COUNT: usize = 4;
 const STEM_ALIGNMENT_MAX_SHIFT_SECONDS: f32 = 0.25;
 const STEM_ALIGNMENT_ANALYSIS_SECONDS: f32 = 4.0;
@@ -133,25 +139,84 @@ pub(super) fn prepare_stem_buffers_from_cache_at_project_root(
         return Err("source_version must not be empty".to_string());
     }
 
-    let complete = prepare_complete_stems_at_project_root(
-        reference,
-        output_sample_rate,
-        cache_dir,
-        project_root,
-    )?;
-    let complete_stems = complete.stems;
+    validate_sample_buffer(reference, output_sample_rate)?;
     let expected_frames = reference.frame_count();
+    // This legacy API explicitly requests complete resident component views.
+    // Complete immutable pair preparation uses a separate streaming reader and
+    // never makes this allocation/admission dependent on disk source extent.
+    if admitted_stem_pcm_bytes(expected_frames, reference.channels)?
+        > super::cold_jobs::PCM_LIMIT_BYTES
+    {
+        return Err("complete resident stem views exceed transient PCM admission".into());
+    }
+    let reader = super::complete_context::CompleteSourceReader::new(reference.clone(), None)?;
+    let path = project_root.join(project_stem_cache_dir(cache_dir)?);
+    let files = STEM_FILE_NAMES
+        .iter()
+        .map(|name| {
+            super::cold_store::sealed_reader(&path.join(format!("{name}.wav")))
+                .map_err(|e| e.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let complete =
+        streamed::AlignedStemStream::prepare(&reader, &files, output_sample_rate, &|| false)?;
     let mut identity = Sha256::new();
     identity.update(b"aligned-complete-stem-set-v1");
     identity.update(source_version.as_bytes());
     identity.update(output_sample_rate.to_le_bytes());
     identity.update((expected_frames as u64).to_le_bytes());
-    for stem in &complete_stems {
-        for value in stem.samples.iter() {
-            identity.update(value.to_bits().to_le_bytes());
+    struct IdentityWriter<'a>(&'a mut Sha256);
+    impl std::io::Write for IdentityWriter<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
         }
     }
-    let [vocals, melody, bass, drums, _instrumental] = complete_stems;
+    for index in 0..5 {
+        complete
+            .convert(index, &mut IdentityWriter(&mut identity), &|| false)
+            .map_err(|e| e.to_string())?;
+    }
+    struct SamplesWriter(Vec<f32>);
+    impl std::io::Write for SamplesWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if !bytes.len().is_multiple_of(4) {
+                return Err(std::io::Error::other("unaligned converted PCM block"));
+            }
+            self.0.extend(
+                bytes
+                    .chunks_exact(4)
+                    .map(|b| f32::from_le_bytes(b.try_into().unwrap())),
+            );
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let length = expected_frames
+        .checked_mul(reference.channels)
+        .ok_or("resident stem extent overflow")?;
+    let mut buffers = Vec::with_capacity(4);
+    for index in 0..4 {
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(length)
+            .map_err(|e| e.to_string())?;
+        let mut output = SamplesWriter(values);
+        complete
+            .convert(index, &mut output, &|| false)
+            .map_err(|e| e.to_string())?;
+        buffers.push(SampleBuffer {
+            residency: None,
+            channels: reference.channels,
+            samples: output.0.into_boxed_slice().into(),
+        });
+    }
+    let stems = buffers.try_into().map_err(|_| "component set incomplete")?;
     Ok(PreparedStemSet {
         complete_set_identity: std::sync::Arc::new(identity.finalize().into()),
         accepted_timing: None,
@@ -162,18 +227,20 @@ pub(super) fn prepare_stem_buffers_from_cache_at_project_root(
         channels: reference.channels,
         frame_count: expected_frames,
         available_mask: ((1_u16 << STEM_BUFFER_COUNT) - 1) as u8,
-        stems: [vocals, melody, bass, drums],
+        stems,
     })
 }
 
 /// Complete five-artifact conversion result; offset uses loaded/output-rate frames.
 /// Temporary instrumental PCM belongs here rather than in an offline-only descriptor.
+#[cfg(test)]
 pub(super) struct CompleteAlignedStems {
     pub stems: [SampleBuffer; 5],
     pub offset_frames: isize,
 }
 
 /// Execute the existing exact-geometry PCM16 conversion and one shared alignment.
+#[cfg(test)]
 pub(super) fn prepare_complete_stems_at_project_root(
     reference: &SampleBuffer,
     output_sample_rate: u32,
@@ -226,6 +293,7 @@ pub(super) fn prepare_complete_stems_at_project_root(
     })
 }
 
+#[cfg(test)]
 fn align_component_stems_to_reference(
     reference: &SampleBuffer,
     buffers: &mut [SampleBuffer],
@@ -248,6 +316,7 @@ fn align_component_stems_to_reference(
     frame_offset
 }
 
+#[cfg(test)]
 fn detected_stem_alignment_offset(
     reference: &SampleBuffer,
     buffers: &[SampleBuffer],
@@ -270,6 +339,7 @@ fn detected_stem_alignment_offset(
     )
 }
 
+#[cfg(test)]
 fn mixed_component_stem_samples(
     buffers: &[SampleBuffer],
     channels: usize,
@@ -288,6 +358,7 @@ fn mixed_component_stem_samples(
     mixed
 }
 
+#[cfg(test)]
 fn onset_signal(samples: &[f32], channels: usize, frames: usize) -> Vec<f32> {
     let mut signal = vec![0.0; frames];
     if channels == 0 {
@@ -310,6 +381,7 @@ fn onset_signal(samples: &[f32], channels: usize, frames: usize) -> Vec<f32> {
     signal
 }
 
+#[cfg(test)]
 fn best_alignment_offset(
     reference: &[f32],
     candidate: &[f32],
@@ -334,8 +406,25 @@ fn best_alignment_offset(
         return 0;
     }
 
-    let reference_window = &reference[analysis.start..analysis.end];
-    let candidate_window = &candidate[analysis.start..analysis.end];
+    alignment_offset_in_window(
+        &reference[analysis.start..analysis.end],
+        &candidate[analysis.start..analysis.end],
+        output_sample_rate,
+    )
+}
+
+/// Shared legacy correlation oracle, now also used by the bounded global scan.
+fn alignment_offset_in_window(
+    reference_window: &[f32],
+    candidate_window: &[f32],
+    output_sample_rate: u32,
+) -> isize {
+    let max_shift_frames = ((output_sample_rate as f32 * STEM_ALIGNMENT_MAX_SHIFT_SECONDS).round()
+        as usize)
+        .min(reference_window.len().saturating_sub(1));
+    if max_shift_frames == 0 {
+        return 0;
+    }
     let coarse_hop = (output_sample_rate as usize / 4_000).clamp(1, 64);
     let coarse_reference = downsample_max(reference_window, coarse_hop);
     let coarse_candidate = downsample_max(candidate_window, coarse_hop);
@@ -364,18 +453,21 @@ fn best_alignment_offset(
     best.lag
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 struct AlignmentAnalysisRange {
     start: usize,
     end: usize,
 }
 
+#[cfg(test)]
 impl AlignmentAnalysisRange {
     fn len(self) -> usize {
         self.end.saturating_sub(self.start)
     }
 }
 
+#[cfg(test)]
 fn alignment_analysis_range(
     reference: &[f32],
     output_sample_rate: u32,
@@ -457,6 +549,7 @@ fn downsample_max(signal: &[f32], hop: usize) -> Vec<f32> {
         .collect()
 }
 
+#[cfg(test)]
 fn shift_sample_buffer(buffer: &mut SampleBuffer, expected_frames: usize, frame_offset: isize) {
     let channels = buffer.channels;
     if channels == 0 || buffer.samples.len() != expected_frames.saturating_mul(channels) {
@@ -504,161 +597,54 @@ fn validate_sample_buffer(sample: &SampleBuffer, output_sample_rate: u32) -> Res
 }
 
 #[derive(Debug, Clone, Copy)]
-struct WavFormat {
-    channels: usize,
-    sample_rate_hz: u32,
-    block_align: usize,
+pub(crate) struct WavFormat {
+    pub(crate) channels: usize,
+    pub(crate) sample_rate_hz: u32,
+    pub(crate) block_align: usize,
 }
 
+#[cfg(test)]
 fn read_aligned_pcm16_wav(
     path: &Path,
     expected_sample_rate_hz: u32,
     expected_channels: usize,
     expected_frames: usize,
 ) -> Result<SampleBuffer, String> {
-    let mut reader = File::open(path).map_err(|err| format!("Failed to open WAV file: {err}"))?;
-    let bytes = read_complete_wav(&mut reader, expected_channels, expected_frames)?;
-    let (format, data) = validated_pcm16_geometry(
-        &bytes,
-        expected_sample_rate_hz,
-        expected_channels,
-        expected_frames,
-    )?;
-    let mut samples = Vec::with_capacity(data.len() / 2);
-    for chunk in data.chunks_exact(2) {
-        let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
-        samples.push(pcm16_to_float(sample));
-    }
+    let reader = File::open(path).map_err(|err| format!("Failed to open WAV file: {err}"))?;
+    let layout = wav::Pcm16Wav::inspect(&reader, &|| false).map_err(|e| e.to_string())?;
+    layout.validate_geometry(expected_sample_rate_hz, expected_channels, expected_frames)?;
+    let length = expected_frames
+        .checked_mul(expected_channels)
+        .ok_or("stem sample overflow")?;
+    let mut samples = Vec::new();
+    samples
+        .try_reserve_exact(length)
+        .map_err(|e| e.to_string())?;
+    samples.resize(length, 0.0);
+    layout
+        .read_frames(&reader, 0, &mut samples, &|| false)
+        .map_err(|e| e.to_string())?;
     Ok(SampleBuffer {
         residency: None,
-        channels: format.channels,
+        channels: expected_channels,
         samples: samples.into_boxed_slice().into(),
     })
 }
 
 /// Check the same decoder geometry on a held sealed reader without conversion/alignment.
-pub(super) fn verify_pcm16_wav_geometry(
+pub(super) fn verify_pcm16_wav_geometry_cancellable(
     reader: &mut File,
     sample_rate_hz: u32,
     channels: usize,
     frames: usize,
+    cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
-    let bytes = read_complete_wav(reader, channels, frames)?;
-    validated_pcm16_geometry(&bytes, sample_rate_hz, channels, frames)?;
+    let layout = wav::Pcm16Wav::inspect(reader, cancelled).map_err(|e| e.to_string())?;
+    layout.validate_geometry(sample_rate_hz, channels, frames)?;
     reader
         .seek(SeekFrom::Start(0))
         .map_err(|err| err.to_string())?;
     Ok(())
-}
-
-fn read_complete_wav(
-    reader: &mut File,
-    expected_channels: usize,
-    expected_frames: usize,
-) -> Result<Vec<u8>, String> {
-    let maximum_file_bytes = expected_frames
-        .checked_mul(expected_channels)
-        .and_then(|n| n.checked_mul(2))
-        .and_then(|n| n.checked_add(1024 * 1024))
-        .ok_or("stem file geometry overflow")?;
-    reader
-        .seek(SeekFrom::Start(0))
-        .map_err(|err| err.to_string())?;
-    let length = reader
-        .metadata()
-        .map_err(|err| format!("Failed to inspect WAV file: {err}"))?
-        .len();
-    if length > maximum_file_bytes as u64 {
-        return Err("stem WAV exceeds bounded input extent".into());
-    }
-    let mut bytes = vec![0; length as usize];
-    reader
-        .read_exact(&mut bytes)
-        .map_err(|err| format!("Failed to read complete WAV file: {err}"))?;
-    if reader
-        .read(&mut [0_u8; 1])
-        .map_err(|err| format!("Failed to check WAV extent: {err}"))?
-        != 0
-    {
-        return Err("stem WAV grew beyond bounded admitted extent".into());
-    }
-    Ok(bytes)
-}
-
-fn validated_pcm16_geometry(
-    bytes: &[u8],
-    expected_sample_rate_hz: u32,
-    expected_channels: usize,
-    expected_frames: usize,
-) -> Result<(WavFormat, &[u8]), String> {
-    let (format, data) = parse_pcm16_wav(bytes)?;
-
-    if format.sample_rate_hz != expected_sample_rate_hz {
-        return Err(format!(
-            "sample rate mismatch: expected {expected_sample_rate_hz}, got {}",
-            format.sample_rate_hz
-        ));
-    }
-    if format.channels != expected_channels {
-        return Err(format!(
-            "channel count mismatch: expected {expected_channels}, got {}",
-            format.channels
-        ));
-    }
-    if data.len() % format.block_align != 0 {
-        return Err("data length does not align to WAV block size".to_string());
-    }
-
-    let frames = data.len() / format.block_align;
-    if frames == 0 {
-        return Err("stem artifact must contain at least one frame".to_string());
-    }
-    if frames != expected_frames {
-        return Err(format!(
-            "frame count mismatch: expected {expected_frames}, got {frames}"
-        ));
-    }
-
-    Ok((format, data))
-}
-
-fn parse_pcm16_wav(bytes: &[u8]) -> Result<(WavFormat, &[u8]), String> {
-    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
-        return Err("expected RIFF/WAVE header".to_string());
-    }
-
-    let mut offset: usize = 12;
-    let mut format = None;
-    let mut data = None;
-
-    while offset.saturating_add(8) <= bytes.len() {
-        let chunk_id = &bytes[offset..offset + 4];
-        let chunk_size = parse_le_u32(bytes, offset + 4)
-            .ok_or_else(|| "invalid WAV chunk size".to_string())? as usize;
-        let chunk_start = offset + 8;
-        let chunk_end = chunk_start
-            .checked_add(chunk_size)
-            .ok_or_else(|| "WAV chunk size overflow".to_string())?;
-        if chunk_end > bytes.len() {
-            return Err("WAV chunk extends past end of file".to_string());
-        }
-
-        match chunk_id {
-            b"fmt " => {
-                format = Some(parse_pcm16_wav_format(&bytes[chunk_start..chunk_end])?);
-            }
-            b"data" => {
-                data = Some(&bytes[chunk_start..chunk_end]);
-            }
-            _ => {}
-        }
-
-        offset = chunk_end + (chunk_size % 2);
-    }
-
-    let format = format.ok_or_else(|| "missing fmt chunk".to_string())?;
-    let data = data.ok_or_else(|| "missing data chunk".to_string())?;
-    Ok((format, data))
 }
 
 fn parse_pcm16_wav_format(bytes: &[u8]) -> Result<WavFormat, String> {
@@ -667,8 +653,20 @@ fn parse_pcm16_wav_format(bytes: &[u8]) -> Result<WavFormat, String> {
     }
 
     let audio_format = parse_le_u16(bytes, 0).ok_or_else(|| "missing audio format".to_string())?;
-    if audio_format != 1 {
+    if audio_format != 1 && audio_format != 0xfffe {
         return Err("only PCM WAV stem artifacts are supported".to_string());
+    }
+    if audio_format == 0xfffe {
+        let pcm_guid = [
+            1, 0, 0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71,
+        ];
+        if bytes.len() < 40
+            || parse_le_u16(bytes, 16).is_none_or(|length| length < 22)
+            || parse_le_u16(bytes, 18) != Some(16)
+            || bytes[24..40] != pcm_guid
+        {
+            return Err("only 16-bit extensible PCM WAV stem artifacts are supported".into());
+        }
     }
 
     let channels = parse_le_u16(bytes, 2).ok_or_else(|| "missing channel count".to_string())?;

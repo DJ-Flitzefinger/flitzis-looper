@@ -2090,7 +2090,11 @@ impl AudioEngine {
                 || matches!(&event, LoaderEvent::Success { timing_epoch: Some(epoch), .. } if self.prepared_source_epochs[id].load(Ordering::Acquire) != *epoch);
             if stale {
                 match &mut event {
-                    LoaderEvent::Success { analysis, .. } => {
+                    LoaderEvent::Success {
+                        analysis,
+                        analysis_error,
+                        ..
+                    } => {
                         let cache = self
                             .sample_cache
                             .lock()
@@ -2106,6 +2110,7 @@ impl AudioEngine {
                             continue;
                         }
                         *analysis = None;
+                        *analysis_error = None;
                     }
                     LoaderEvent::TaskSuccess {
                         task: BackgroundTaskKind::Analysis,
@@ -2121,9 +2126,14 @@ impl AudioEngine {
             }
             if timing_stale
                 && !stale
-                && let LoaderEvent::Success { analysis, .. } = &mut event
+                && let LoaderEvent::Success {
+                    analysis,
+                    analysis_error,
+                    ..
+                } = &mut event
             {
                 *analysis = None;
+                *analysis_error = None;
             }
             break (event, timing_stale);
         };
@@ -2167,6 +2177,7 @@ impl AudioEngine {
                 detected_loop_start_s,
                 cached_path,
                 analysis,
+                analysis_error,
                 timing_epoch: _,
                 original_lease,
             } => {
@@ -2176,6 +2187,9 @@ impl AudioEngine {
                 dict.set_item("duration_s", duration_s)?;
                 dict.set_item("detected_loop_start_s", detected_loop_start_s)?;
                 dict.set_item("cached_path", cached_path)?;
+                if let Some(error) = analysis_error {
+                    dict.set_item("analysis_error", error)?;
+                }
                 if let Some(lease) = original_lease {
                     dict.set_item("original_lease", Py::new(py, lease)?)?;
                 }
@@ -3335,6 +3349,7 @@ mod tests {
                         detected_loop_start_s: suggestion,
                         cached_path: "samples/new.wav".to_owned(),
                         analysis: None,
+                        analysis_error: None,
                     })
                     .unwrap();
                 let event = engine.poll_loader_events(py).unwrap().unwrap();
@@ -3386,6 +3401,7 @@ mod tests {
                             detected_loop_start_s: None,
                             cached_path: "samples/long.wav".to_owned(),
                             analysis: None,
+                            analysis_error: None,
                         })
                         .unwrap();
                     let event = engine.poll_loader_events(py).unwrap().unwrap();
@@ -3399,6 +3415,52 @@ mod tests {
                     assert_eq!(published, duration_s);
                     assert_eq!((published * f64::from(rate)).round() as u64, frames);
                 }
+            }
+        });
+    }
+
+    #[test]
+    fn successful_source_analysis_error_is_current_timing_bound() {
+        Python::initialize();
+        Python::attach(|py| {
+            let engine = AudioEngine::new().unwrap();
+            engine.pad_request_ids.lock().unwrap()[3] = 7;
+            engine.loaded_source_generations.lock().unwrap()[3] = (7, 48_000);
+            engine.prepared_source_epochs[3].store(9, Ordering::Release);
+            for epoch in [9, 8] {
+                engine
+                    .loader_tx
+                    .send(LoaderEvent::Success {
+                        original_lease: None,
+                        timing_epoch: Some(epoch),
+                        id: 3,
+                        request_id: 7,
+                        duration_s: 2800.0,
+                        detected_loop_start_s: None,
+                        cached_path: "samples/long.wav".into(),
+                        analysis: None,
+                        analysis_error: Some("automatic analysis budget exceeded".into()),
+                    })
+                    .unwrap();
+                let event = engine.poll_loader_events(py).unwrap().unwrap();
+                let event = event.bind(py).cast::<PyDict>().unwrap();
+                assert_eq!(
+                    event
+                        .get_item("type")
+                        .unwrap()
+                        .unwrap()
+                        .extract::<String>()
+                        .unwrap(),
+                    "success"
+                );
+                assert_eq!(
+                    event.get_item("analysis_error").unwrap().is_some(),
+                    epoch == 9
+                );
+                assert_eq!(
+                    event.get_item("timing_stale").unwrap().is_some(),
+                    epoch != 9
+                );
             }
         });
     }

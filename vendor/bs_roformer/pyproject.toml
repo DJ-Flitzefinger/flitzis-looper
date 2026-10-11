@@ -19,3 +19,12 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "src/**/*.py" },
+    { file = "NOTICE.md" },
+    { file = "LICENSE-ZFTURBO" },
+    { file = "LICENSE-LUCIDRAINS" },
+]

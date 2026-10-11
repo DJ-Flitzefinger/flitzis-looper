@@ -24,12 +24,30 @@ struct PairedStemFiles {
 
 impl Reader {
     pub(super) fn protects_path(&self, path: &Path) -> bool {
-        intersects(&self.path, path)
-            || self
-                .shared_stems
-                .as_ref()
-                .and_then(|shared| shared.pair.as_ref())
-                .is_some_and(|pair| pair.protects(path))
+        let mut protected = false;
+        self.visit_protected_paths(|held| {
+            if !protected {
+                protected = intersects(held, path);
+            }
+        });
+        protected
+    }
+
+    /// Enumerate only the paths protected by the existing reader predicate.
+    /// Assignment matching intentionally has its own narrower path set below.
+    pub(super) fn visit_protected_paths(&self, mut visit: impl FnMut(&Path)) {
+        visit(&self.path);
+        if let Some(pair) = self
+            .shared_stems
+            .as_ref()
+            .and_then(|shared| shared.pair.as_ref())
+        {
+            for path in &pair.paths {
+                visit(path);
+            }
+            visit(&pair.source_lease.original_path);
+            visit(&pair.source_lease.cache_path);
+        }
     }
 
     pub(super) fn assigned_by(&self, path: &Path) -> bool {
@@ -117,12 +135,6 @@ pub(super) fn related_pair_paths(
 }
 
 impl PairedStemFiles {
-    fn protects(&self, path: &Path) -> bool {
-        self.paths.iter().any(|area| intersects(area, path))
-            || intersects(&self.source_lease.original_path, path)
-            || intersects(&self.source_lease.cache_path, path)
-    }
-
     fn assigned(&self, path: &Path) -> bool {
         self.paths.iter().any(|area| intersects(area, path))
     }
@@ -929,7 +941,9 @@ mod paired_owner_tests {
     // Real original/WAV/PCM/common files and the ordinary native registry. This
     // suite establishes file ownership, not a source or timing callback ACK.
     use super::*;
-    use crate::audio_engine::material_migration::{PreparedMigrationMaterial, prepare_material};
+    use crate::audio_engine::material_migration::{
+        PreparedMigrationMaterial, prepare_material_complete_for_test as prepare_material,
+    };
     use crate::audio_engine::prepared_source::PreparedSourcePermit;
     use crate::audio_engine::stem_cache::{STEM_FILE_NAMES, source_version_hash};
     use crate::audio_engine::stem_pair::prepare_complete_pair;
@@ -1104,6 +1118,78 @@ mod paired_owner_tests {
             assert!(registered.pcm_path.join(name).exists());
         }
         assert!(registered.descriptor_path.is_file());
+    }
+
+    #[test]
+    fn indexed_actual_cold_and_paired_readers_match_original_field_predicate() {
+        let fixture = Fixture::new();
+        let assets = ProjectAssets::isolated();
+        let registered = fixture.register(&assets, true, &fixture.canonical_version);
+        let engine = Arc::new(());
+        assets
+            .retain_cold(
+                fixture.material.lease.clone(),
+                &fixture.material.sample,
+                Arc::downgrade(&engine),
+            )
+            .unwrap();
+        let state = assets.state.lock().unwrap();
+        assert_eq!(state.readers.len(), 2);
+        let mut all_index = PathProtectionIndex::default();
+        let mut all_old_paths = Vec::new();
+        for reader in &state.readers {
+            // Reconstruct the pre-index predicate from its actual private fields,
+            // independently of the enumeration used by production and the index.
+            let mut old_paths = vec![reader.path.clone()];
+            if let Some(pair) = reader
+                .shared_stems
+                .as_ref()
+                .and_then(|shared| shared.pair.as_ref())
+            {
+                old_paths.extend(pair.paths.iter().cloned());
+                old_paths.push(pair.source_lease.original_path.clone());
+                old_paths.push(pair.source_lease.cache_path.clone());
+                assert!(!reader.assigned_by(&pair.source_lease.original_path));
+                assert!(!reader.assigned_by(&pair.source_lease.cache_path));
+            }
+            let mut index = PathProtectionIndex::default();
+            reader.visit_protected_paths(|path| index.insert(path));
+            let mut queries = vec![fixture.root.join("unrelated.wav"), fixture.root.clone()];
+            for path in &old_paths {
+                queries.push(path.join("child"));
+                queries.push(path.with_file_name("sibling"));
+                queries.extend(path.ancestors().map(Path::to_owned));
+            }
+            queries.extend([
+                fixture.material.lease.original_path.clone(),
+                fixture.material.lease.cache_path.clone(),
+                registered.pcm_path.clone(),
+                registered.descriptor_path.clone(),
+            ]);
+            for query in &queries {
+                let old = old_paths
+                    .iter()
+                    .any(|path| path.starts_with(query) || query.starts_with(path));
+                assert_eq!(reader.protects_path(query), old);
+                assert_eq!(index.intersects(query), old);
+            }
+            if reader.cold.is_some() {
+                // A plain cold reader's cache lease is not an extra project-asset
+                // path predicate; its existing cold retirement lane owns that.
+                assert!(!index.intersects(&fixture.material.lease.cache_path));
+            }
+            reader.visit_protected_paths(|path| all_index.insert(path));
+            all_old_paths.extend(old_paths);
+        }
+        for path in &all_old_paths {
+            for target in path.ancestors() {
+                let old = all_old_paths
+                    .iter()
+                    .any(|held| held.starts_with(target) || target.starts_with(held));
+                assert_eq!(all_index.intersects(target), old);
+            }
+        }
+        assert_pair_present(&fixture, &registered);
     }
 
     #[test]

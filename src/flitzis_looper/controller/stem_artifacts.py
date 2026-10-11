@@ -4,12 +4,13 @@ import math
 import struct
 import wave
 from array import array
-from contextlib import ExitStack, suppress
+from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from flitzis_looper.models import STEM_KINDS
+from flitzis_looper.pcm16_wav import Pcm16WavWriter, PcmWavReader
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -18,7 +19,7 @@ if TYPE_CHECKING:
 
 MAX_TRANSIENT_PCM_BYTES = 1024 * 1024 * 1024
 DEFAULT_BLOCK_FRAMES = 4096
-_MAX_WAV_DATA_BYTES = 0xFFFF_FFFF - 36
+_MAX_WAV_DATA_BYTES = 0xFFFF_FFFF_FFFF_FFFF - 72
 _OUTPUT_MAP = (("vocals", "vocals"), ("drums", "drums"), ("bass", "bass"), ("melody", "other"))
 
 
@@ -42,7 +43,7 @@ class AudioData:
 
 @dataclass(frozen=True, slots=True)
 class _Source:
-    reader: wave.Wave_read
+    reader: PcmWavReader
     path: Path
     sample_rate_hz: int
     channels: int
@@ -55,7 +56,7 @@ def _validate_limit(limit: int) -> None:
         raise StemArtifactError(msg)
 
 
-def _source(reader: wave.Wave_read, path: Path) -> _Source:
+def _source(reader: PcmWavReader, path: Path) -> _Source:
     channels, rate, frames = reader.getnchannels(), reader.getframerate(), reader.getnframes()
     if channels <= 0 or rate <= 0 or frames <= 0:
         msg = f"{path.name} has an invalid audio shape"
@@ -85,7 +86,7 @@ def read_pcm16_wav(
 ) -> AudioData:
     """Read PCM16 with an explicit raw-plus-binary64 PCM cap; generation streams instead."""
     _validate_limit(max_transient_pcm_bytes)
-    with wave.open(str(path), "rb") as reader:
+    with PcmWavReader(path) as reader:
         source = _source(reader, path)
         if source.frames * source.channels * 10 > max_transient_pcm_bytes:
             msg = "PCM16 reader exceeds the transient PCM limit"
@@ -215,7 +216,7 @@ def _validate_target(target: AudioShape, block_frames: int) -> None:
         msg = "target audio shape must be valid and non-empty"
         raise StemArtifactError(msg)
     if target.frame_count * target.channels * 2 > _MAX_WAV_DATA_BYTES:
-        msg = "target stem exceeds the PCM WAV data-size limit"
+        msg = "target stem exceeds the RF64 data-size limit"
         raise StemArtifactError(msg)
     if not isinstance(block_frames, int) or not 0 < block_frames <= DEFAULT_BLOCK_FRAMES:
         msg = "stem block frames must be between 1 and 4096"
@@ -229,7 +230,7 @@ def validate_target_shape(target: AudioShape) -> None:
 
 def _write_block(
     sources: dict[str, _Source],
-    writers: dict[str, wave.Wave_write],
+    writers: dict[str, Pcm16WavWriter],
     target: AudioShape,
     start: int,
     frames: int,
@@ -244,7 +245,7 @@ def _write_block(
 
 def _write_blocks(
     sources: dict[str, _Source],
-    writers: dict[str, wave.Wave_write],
+    writers: dict[str, Pcm16WavWriter],
     target: AudioShape,
     block_frames: int,
     limit: int,
@@ -262,6 +263,50 @@ def _write_blocks(
         if percent > reported_percent:
             progress(0.85 + 0.0015 * percent, "Aligning stem cache")
             reported_percent = percent
+
+
+def _open_sources(
+    stack: ExitStack, output_root: Path, max_transient_pcm_bytes: int
+) -> dict[str, _Source]:
+    sources: dict[str, _Source] = {}
+    for name, output_name in _OUTPUT_MAP:
+        path = _find_output_file(output_root, output_name)
+        try:
+            reader = stack.enter_context(PcmWavReader(path))
+        except (EOFError, wave.Error) as error:
+            msg = f"{path.name} has invalid or incomplete PCM data: {error}"
+            raise StemArtifactError(msg) from error
+        source = _source(reader, path)
+        if source.channels * 10 > max_transient_pcm_bytes:
+            msg = "source PCM frame exceeds the transient PCM limit"
+            raise StemArtifactError(msg)
+        _read_span(source, source.frames - 1, 1)
+        sources[name] = source
+    return sources
+
+
+def _verify_outputs(
+    temporary: dict[str, Path],
+    target_shape: AudioShape,
+    expected_digests: dict[str, str],
+    writers: dict[str, Pcm16WavWriter],
+    max_transient_pcm_bytes: int,
+) -> None:
+    for name, path in temporary.items():
+        with PcmWavReader(path) as reader:
+            if reader.file_identity != writers[name].file_identity:
+                msg = f"{name}.wav output file identity changed"
+                raise StemArtifactError(msg)
+            if (
+                reader.getnframes() != target_shape.frame_count
+                or reader.getnchannels() != target_shape.channels
+                or reader.getframerate() != target_shape.sample_rate_hz
+                or reader.getsampwidth() != 2
+                or reader.verify(chunk_bytes=min(64 * 1024, max_transient_pcm_bytes))
+                != expected_digests[name]
+            ):
+                msg = f"{name}.wav failed complete output verification"
+                raise StemArtifactError(msg)
 
 
 def write_project_cache_artifacts(
@@ -284,21 +329,13 @@ def write_project_cache_artifacts(
     _validate_target(target_shape, block_frames)
     cache_dir.mkdir(parents=True, exist_ok=True)
     token = uuid4().hex
-    temporary = {name: cache_dir / f"{name}.wav.{token}.tmp" for name in STEM_KINDS}
+    temporary: dict[str, Path] = {
+        name: cache_dir / f"{name}.wav.{token}.tmp" for name in STEM_KINDS
+    }
+    writers: dict[str, Pcm16WavWriter] = {}
     try:
         with ExitStack() as stack:
-            sources: dict[str, _Source] = {}
-            for name, output_name in _OUTPUT_MAP:
-                path = _find_output_file(output_root, output_name)
-                reader = stack.enter_context(wave.open(str(path), "rb"))
-                source = _source(reader, path)
-                if source.channels * 10 > max_transient_pcm_bytes:
-                    msg = "source PCM frame exceeds the transient PCM limit"
-                    raise StemArtifactError(msg)
-                # Reading the last declared complete frame detects a truncated
-                # source even when the target would use only its beginning.
-                _read_span(source, source.frames - 1, 1)
-                sources[name] = source
+            sources = _open_sources(stack, output_root, max_transient_pcm_bytes)
             _block_size(
                 sources,
                 target_shape,
@@ -306,21 +343,23 @@ def write_project_cache_artifacts(
                 min(block_frames, target_shape.frame_count),
                 max_transient_pcm_bytes,
             )
-            writers: dict[str, wave.Wave_write] = {}
             for name, path in temporary.items():
-                writer = stack.enter_context(wave.open(str(path), "wb"))
-                writer.setnchannels(target_shape.channels)
-                writer.setsampwidth(2)
-                writer.setframerate(target_shape.sample_rate_hz)
-                writer.setnframes(target_shape.frame_count)
-                writers[name] = writer
+                writers[name] = stack.enter_context(
+                    Pcm16WavWriter(
+                        path,
+                        sample_rate_hz=target_shape.sample_rate_hz,
+                        channels=target_shape.channels,
+                        frames=target_shape.frame_count,
+                    )
+                )
             _write_blocks(
                 sources, writers, target_shape, block_frames, max_transient_pcm_bytes, progress
             )
+            expected_digests = {name: writer.file_digest for name, writer in writers.items()}
+        _verify_outputs(temporary, target_shape, expected_digests, writers, max_transient_pcm_bytes)
         for name, path in temporary.items():
             path.replace(cache_dir / f"{name}.wav")
     finally:
-        for path in temporary.values():
-            with suppress(OSError):
-                path.unlink(missing_ok=True)
+        for writer in writers.values():
+            writer.discard_owned_output()
     progress(1.0, "Stem cache ready")

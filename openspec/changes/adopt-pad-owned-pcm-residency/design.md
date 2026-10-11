@@ -505,6 +505,38 @@ E11-01/02 preserve explicit global broadcast then local override, with actual cu
 
 E11-03 replaces complete arrays in stem_cache.rs::prepare_complete_stems_at_project_root and the full-extent warm gate in stem_pair.rs with retained-reader streaming passes. Full reference/mono scans first determine the exact global peak and then the first threshold crossing (including all-silent behavior). Retained positioned reads extract the existing pre-onset 0.5-second and four-second bounded region for the exact +/-0.25-second alignment oracle. A subsequent streaming output pass applies one signed loaded-frame offset, exact PCM16 normalization and edge zero padding while writing five immutable f32 derivatives and full digests. The old complete-array conversion is the independent small-fixture oracle. Warm verification streams all leaves through EOF before reuse. Use existing sealed/source/range readers and job lanes; no callback file access or new pool. Memory peaks include scratch, worker overlap, resident old/new users and process RSS separately; actual Demucs inference remains a separate measured limitation. No total-duration cap, cap raise or complete multi-GB allocation substitutes for the streaming implementation. User loop/ALL demand and aggregate budget remain authoritative.
 
+The same bounded preparation also covers upstream FullMix import: sealed original
+packets write decoder PCM, then one continuous Rubato state reads those complete
+disk frames and writes playback PCM with the unchanged delay/extent/tail policy.
+Warm verification separates full disk geometry from 64-KiB integrity scratch.
+Material preparation holds complete identity plus a bounded metadata seed;
+subscriber/reference reads retain their actual captured integer frame ranges.
+Automatic-analysis import retains the selected live view and attempts analysis
+under its separate 512-MiB conservative bound. Matching source success carries
+either real analysis or its independent visible error after native ACK. Stale
+source/timing results cannot override newer manual state; genuine ALL remains
+subject to the live allocation and overlap limits.
+
+The ordinary Python UI import still supplies no resident hint, so its initial
+live allocation requests the complete source. Default eight-bar initialization
+occurs only after source success and cannot rescue that initial admission.
+Supplying the actual default/user loop before allocation remains open within
+P4b/P5b; bounded storage and finite Native/restore proofs do not close all of
+E11-03/X11-LONG. Those finite proofs use KEYLOCK off; KEYLOCK loads still choose
+the existing full-track fallback even with finite bounds. Actual finite KEYLOCK
+load integration is also required remaining P4b/P5b work. Automatic analysis is
+still requested and is not silently disabled.
+
+Complete PCM16 storage uses RIFF for small files and checked RF64/ds64 u64 extents
+for large files through Python project/model writers, native WAV parsing and the
+registered Symphonia probe with explicit RF64 provenance. Full EOF/content checks
+are mandatory on every consumer and publication boundary. Demucs inference still
+owns its original model/tensor memory; its output adapter bounds host conversion,
+not model activation memory. Stream scratch reservations, actual allocator peaks
+and process working-set/commit/peaks are separate evidence. New active-generation
+adoption, aggregate P6 resources, Human device/hearing and full Rust-port work are
+outside this delivery.
+
 E11-08..10 separate hidden full-content identity from `samples/<Originalfilename>/` visible roots. First canonical verified name wins for equal bytes under different names; unsafe/case-colliding directories use a readable prefix plus sufficiently extended content SHA suffix. Exact supported original leaf names/bytes stay intact. Native material_paths/cold_store/project_assets plus Python material migration/persistence share one resolver and existing journal. Copy-to-new-root and atomic current-reference/config commit precede eventual old-root retirement; no rename beneath readers, no unknown deletion, no saved ACK replay or data reset. Cross-name dedup currently includes filename in cold_store identity and requires an actual bounded correction, not a documentation assertion.
 
 Concrete implementation slices, dependencies, source seams and full acceptance gates are in [the extension](../../../docs/pre-rust-extension-20261011.md). This is engineering planning only; original accepted/negative evidence remains scoped and immutable.

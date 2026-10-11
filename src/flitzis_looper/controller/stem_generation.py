@@ -278,7 +278,7 @@ class DemucsStemGenerationBackend:
         args = [
             sys.executable,
             "-m",
-            "demucs",
+            "flitzis_looper.demucs_streaming",
             "-n",
             self._model_name,
             "-o",

@@ -49,8 +49,12 @@ merge must use their effective targets, including durable masks.
 This change builds on the delivered `cache-full-pcm-and-resident-loops` and
 `bind-prepared-stem-publication` foundations. Their accepted evidence/tasks remain
 historical. Its new PCM requirements add stronger end-state obligations; its
-MODIFIED stem requirements replace the former global container and inactive-only
-first-adoption wording **when implemented**, retaining independently guarded active new-generation adoption under E11-05/19. Project persistence explicitly replaces eager restored
+stem deltas replace the former global container and supersede the historical
+combined inactive-generation contract with a separate generation/adoption
+requirement **when implemented**, retaining independently guarded active
+new-generation adoption under E11-05/19. The REMOVED/ADDED contract pairs also
+supersede the historical KEYLOCK no-op with explicit broadcasts while retaining
+BPM-lock edge coverage. Project persistence explicitly replaces eager restored
 publication. Performance UI explicitly replaces the disabled-unless-resident
 mode control. Base specs and delivered-runtime docs remain distinguishable from
 this pending target. Archive/merge must reconcile these effective deltas rather

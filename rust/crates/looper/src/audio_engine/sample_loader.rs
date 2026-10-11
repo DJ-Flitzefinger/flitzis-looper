@@ -13,7 +13,9 @@ use crate::audio_engine::errors::SampleLoadError;
 use crate::messages::SampleBuffer;
 
 mod cold;
+pub(crate) use cold::stream::{decode_audio_snapshot_streamed, prepare_playback_streamed};
 pub(crate) use cold::validate_decoder_cache_provenance;
+#[cfg(test)]
 pub(crate) use cold::{decode_audio_snapshot, prepare_playback};
 pub(crate) use cold::{decoder_cache_selector, playback_cache_transform};
 
@@ -40,6 +42,7 @@ fn clamp_progress(percent: f32) -> f32 {
     }
 }
 
+#[cfg(test)]
 fn append_decode_error_silence(
     decoded: &mut Vec<f32>,
     channels: Option<usize>,

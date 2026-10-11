@@ -11,7 +11,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -1131,17 +1131,28 @@ impl ProjectAssets {
             }
         }
         state.readers = retained;
+        if retiring.is_empty() {
+            return;
+        }
+        // Rebuild from the actual retained readers under this gate. Exact
+        // component-prefix lookups replace target-by-owner/reader scans without
+        // changing either ownership or the number of physical I/O attempts.
+        let mut protected_paths = PathProtectionIndex::default();
+        for owner in &owners {
+            protected_paths.insert(&owner.path);
+        }
+        for reader in &state.readers {
+            reader.visit_protected_paths(|path| protected_paths.insert(path));
+        }
+        let mut retiring_paths = PathProtectionIndex::default();
+        for path in &retiring {
+            retiring_paths.insert(path);
+        }
         // The bounded metadata scan selects eligible work before applying the
         // I/O budget, so permanently pinned targets cannot starve later cleanup.
         let mut eligible: Vec<_> = retiring
             .into_iter()
-            .filter(|path| {
-                !owners.iter().any(|owner| intersects(&owner.path, path))
-                    && !state
-                        .readers
-                        .iter()
-                        .any(|reader| reader.protects_path(path))
-            })
+            .filter(|path| !protected_paths.intersects(path))
             .collect();
         // Stable round-robin selection also rotates attempts that Windows keeps
         // blocked by external sharing handles; eight retries cannot starve nine.
@@ -1179,23 +1190,17 @@ impl ProjectAssets {
                 Ok(()) => {
                     let completion = (!target.pcm).then(|| target.protection.clone()).flatten();
                     state.retiring.remove(&path);
+                    retiring_paths.remove(&path);
                     state.deleted += 1;
                     if let Some(material) = super::material_paths::material_root(&path)
-                        && !owners.iter().any(|owner| intersects(&owner.path, material))
-                        && !state
-                            .readers
-                            .iter()
-                            .any(|reader| reader.protects_path(material))
-                        && !state.retiring.keys().any(|path| intersects(path, material))
+                        && !protected_paths.intersects(material)
+                        && !retiring_paths.intersects(material)
                     {
                         super::material_paths::prune_empty_material(&path);
                     }
                     if remove_empty_pad {
                         let pad = path.parent().expect("validated generation has pad parent");
-                        if !owners.iter().any(|owner| intersects(&owner.path, pad))
-                            && !state.readers.iter().any(|reader| reader.protects_path(pad))
-                            && !state.retiring.keys().any(|target| intersects(target, pad))
-                        {
+                        if !protected_paths.intersects(pad) && !retiring_paths.intersects(pad) {
                             // An empty container has no unique data. New generation
                             // admission uses this same gate; unknown/new children
                             // make remove_dir fail safely without recursion.
@@ -1214,6 +1219,7 @@ impl ProjectAssets {
                         protection.outcome.finish(Err(error.to_string()));
                     }
                     state.retiring.remove(&path);
+                    retiring_paths.remove(&path);
                     if state.errors.len() < MAX_REPORTED_ERRORS {
                         state.errors.push(format!("{}: {error}", path.display()));
                     }
@@ -1238,6 +1244,87 @@ fn remove_empty_pad_container(pad: &Path) -> io::Result<()> {
 fn intersects(left: &Path, right: &Path) -> bool {
     left.starts_with(right) || right.starts_with(left)
 }
+
+/// Every native component prefix, including prefix-only Windows drives and the
+/// empty path. Filesystem ancestors alone omit these `Path::starts_with` cases.
+fn component_prefixes(path: &Path) -> impl Iterator<Item = &Path> {
+    let mut components = path.components();
+    let mut done = false;
+    std::iter::from_fn(move || {
+        if done {
+            return None;
+        }
+        let prefix = components.as_path();
+        if components.next_back().is_none() {
+            // An exhausted Windows Components can still expose its consumed
+            // drive prefix through as_path(). Empty is nevertheless a prefix
+            // of every Path and must be emitted explicitly exactly once.
+            done = true;
+            Some(Path::new(""))
+        } else {
+            Some(prefix)
+        }
+    })
+}
+
+/// A per-collection metadata index, never a persistent owner or lifecycle lane.
+/// Counts keep common prefixes protected when another indexed path is removed.
+#[derive(Default)]
+struct PathProtectionIndex {
+    paths: HashSet<PathBuf>,
+    prefixes: HashMap<PathBuf, usize>,
+}
+
+impl PathProtectionIndex {
+    fn insert(&mut self, path: &Path) {
+        if !self.paths.insert(path.to_owned()) {
+            return;
+        }
+        for prefix in component_prefixes(path) {
+            if let Some(count) = self.prefixes.get_mut(prefix) {
+                *count += 1;
+            } else {
+                self.prefixes.insert(prefix.to_owned(), 1);
+            }
+        }
+    }
+
+    fn remove(&mut self, path: &Path) {
+        let Some(inserted) = self.paths.take(path) else {
+            return;
+        };
+        // Use the stored spelling so removal balances insertion even where
+        // different native spellings compare equal as Path components.
+        for prefix in component_prefixes(&inserted) {
+            let count = self.prefixes.get_mut(prefix).expect("indexed path prefix");
+            *count -= 1;
+            if *count == 0 {
+                self.prefixes.remove(prefix);
+            }
+        }
+    }
+
+    fn intersects(&self, path: &Path) -> bool {
+        self.intersects_observed(path, || {})
+    }
+
+    // The empty production observer is compiled away; tests count the actual
+    // lookup shape without introducing time-dependent acceptance thresholds.
+    fn intersects_observed(&self, path: &Path, mut probe: impl FnMut()) -> bool {
+        probe();
+        if self.prefixes.contains_key(path) {
+            return true;
+        }
+        component_prefixes(path).any(|prefix| {
+            probe();
+            self.paths.contains(prefix)
+        })
+    }
+}
+
+#[cfg(test)]
+#[path = "project_assets/path_protection_tests.rs"]
+mod path_protection_tests;
 
 pub(super) fn reject_links(path: &Path) -> io::Result<()> {
     for ancestor in path.ancestors() {

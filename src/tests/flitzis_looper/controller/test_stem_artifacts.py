@@ -18,8 +18,10 @@ from flitzis_looper.controller.stem_artifacts import (
 )
 from flitzis_looper.controller.stem_generation import AudioShape
 from flitzis_looper.models import STEM_KINDS
+from flitzis_looper.pcm16_wav import Pcm16WavWriter, PcmWavReader
 
 if TYPE_CHECKING:
+    from array import array
     from pathlib import Path
 
 
@@ -179,13 +181,13 @@ def test_reads_are_bounded_spans_and_small_budget_adapts_blocks(
     output = tmp_path / "output"
     _outputs(output, frames=1000)
     requested = []
-    original = wave.Wave_read.readframes
+    original = PcmWavReader.readframes
 
-    def observe(reader: wave.Wave_read, frames: int) -> bytes:
+    def observe(reader: PcmWavReader, frames: int) -> bytes:
         requested.append(frames)
         return original(reader, frames)
 
-    monkeypatch.setattr(wave.Wave_read, "readframes", observe)
+    monkeypatch.setattr(PcmWavReader, "readframes", observe)
     target = AudioShape(8000, 2, 175)
     cache = tmp_path / "cache"
     write_project_cache_artifacts(
@@ -246,7 +248,7 @@ def test_incomplete_source_set_preserves_existing_outputs_and_never_marks_comple
         AudioShape(1, 32768, 1),
         AudioShape(0xFFFF_FFFF, 2, 1),
         AudioShape(48_000, 1, 0),
-        AudioShape(48_000, 1, 0xFFFF_FFFF),
+        AudioShape(48_000, 1, 0xFFFF_FFFF_FFFF_FFFF),
     ],
 )
 def test_pathological_target_shape_rejects_before_output_creation(
@@ -289,13 +291,13 @@ def test_pcm_reader_caps_before_full_read(tmp_path: Path, monkeypatch: pytest.Mo
     path = tmp_path / "source.wav"
     _wav(path, 48_000, 2, [0] * 200)
     called = []
-    original = wave.Wave_read.readframes
+    original = PcmWavReader.readframes
 
-    def observe(reader: wave.Wave_read, frames: int) -> bytes:
+    def observe(reader: PcmWavReader, frames: int) -> bytes:
         called.append(frames)
         return original(reader, frames)
 
-    monkeypatch.setattr(wave.Wave_read, "readframes", observe)
+    monkeypatch.setattr(PcmWavReader, "readframes", observe)
     with pytest.raises(StemArtifactError, match="transient PCM limit"):
         read_pcm16_wav(path, max_transient_pcm_bytes=1000)
     assert called == []
@@ -400,13 +402,13 @@ def test_oversized_source_frame_rejects_before_pcm_read(
     output, cache = tmp_path / "output", tmp_path / "cache"
     _outputs(output, channels=1024, frames=1)
     called = []
-    original = wave.Wave_read.readframes
+    original = PcmWavReader.readframes
 
-    def observe(reader: wave.Wave_read, frames: int) -> bytes:
+    def observe(reader: PcmWavReader, frames: int) -> bytes:
         called.append(frames)
         return original(reader, frames)
 
-    monkeypatch.setattr(wave.Wave_read, "readframes", observe)
+    monkeypatch.setattr(PcmWavReader, "readframes", observe)
     with pytest.raises(StemArtifactError, match="source PCM frame"):
         write_project_cache_artifacts(
             output_root=output,
@@ -428,10 +430,10 @@ def test_failed_temporary_output_write_preserves_existing_final_files(
     cache.mkdir()
     for name in STEM_KINDS:
         (cache / f"{name}.wav").write_bytes(b"previous-generation")
-    original = wave.Wave_write.writeframesraw
+    original = Pcm16WavWriter.writeframesraw
     writes = 0
 
-    def fail(reader: wave.Wave_write, data: bytes | bytearray) -> None:
+    def fail(reader: Pcm16WavWriter, data: bytes | bytearray) -> None:
         nonlocal writes
         writes += 1
         if writes == 3:
@@ -439,7 +441,7 @@ def test_failed_temporary_output_write_preserves_existing_final_files(
             raise OSError(msg)
         original(reader, data)
 
-    monkeypatch.setattr(wave.Wave_write, "writeframesraw", fail)
+    monkeypatch.setattr(Pcm16WavWriter, "writeframesraw", fail)
     with pytest.raises(OSError, match="simulated disk output failure"):
         write_project_cache_artifacts(
             output_root=output,
@@ -451,3 +453,114 @@ def test_failed_temporary_output_write_preserves_existing_final_files(
     assert {path.name for path in cache.iterdir()} == {f"{name}.wav" for name in STEM_KINDS}
     for name in STEM_KINDS:
         assert (cache / f"{name}.wav").read_bytes() == b"previous-generation"
+
+
+@pytest.mark.parametrize("block_frames", [1, 17, 4096])
+def test_productive_rf64_model_outputs_match_frozen_riff_input_oracle(
+    tmp_path: Path, block_frames: int
+) -> None:
+    riff, rf64 = tmp_path / "riff-model", tmp_path / "rf64-model"
+    _outputs(riff, rate=11025, channels=3, frames=4117)
+    rf64.mkdir()
+    for name in ("vocals", "drums", "bass", "other"):
+        with (
+            wave.open(str(riff / "model" / "source" / f"{name}.wav"), "rb") as source,
+            Pcm16WavWriter(
+                rf64 / f"{name}.wav",
+                sample_rate_hz=source.getframerate(),
+                channels=source.getnchannels(),
+                frames=source.getnframes(),
+                force_rf64=True,
+            ) as writer,
+        ):
+            for _ in range(0, source.getnframes(), 13):
+                writer.writeframesraw(source.readframes(13))
+    target = AudioShape(16000, 2, 6193)
+    oracle, actual = tmp_path / "oracle", tmp_path / "actual"
+    _legacy_oracle(riff, oracle, target)
+    write_project_cache_artifacts(
+        output_root=rf64,
+        cache_dir=actual,
+        target_shape=target,
+        progress=lambda _p, _s: None,
+        block_frames=block_frames,
+    )
+    for name in STEM_KINDS:
+        assert (actual / f"{name}.wav").read_bytes() == (oracle / f"{name}.wav").read_bytes()
+
+
+def test_postflush_late_payload_corruption_blocks_every_private_output_promotion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output, cache = tmp_path / "output", tmp_path / "cache"
+    _outputs(output, frames=501)
+    cache.mkdir()
+    for name in STEM_KINDS:
+        (cache / f"{name}.wav").write_bytes(b"previous-generation")
+    original = Pcm16WavWriter.finish
+    affected = False
+
+    def corrupt(writer: Pcm16WavWriter) -> None:
+        nonlocal affected
+        original(writer)
+        if not affected:
+            affected = True
+            # Precise owned low-level fault: after this writer's durable flush,
+            # change its final payload byte, before the independent full scan.
+            with open(writer._handle.name, "r+b") as handle:
+                handle.seek(-1, 2)
+                before = handle.read(1)
+                handle.seek(-1, 2)
+                handle.write(bytes((before[0] ^ 0xFF,)))
+                handle.flush()
+
+    monkeypatch.setattr(Pcm16WavWriter, "finish", corrupt)
+    with pytest.raises(StemArtifactError, match="complete output verification"):
+        write_project_cache_artifacts(
+            output_root=output,
+            cache_dir=cache,
+            target_shape=AudioShape(48000, 2, 501),
+            progress=lambda _p, _s: None,
+        )
+    assert affected
+    assert {path.name for path in cache.iterdir()} == {f"{name}.wav" for name in STEM_KINDS}
+    assert all(
+        (cache / f"{name}.wav").read_bytes() == b"previous-generation" for name in STEM_KINDS
+    )
+
+
+def test_mid_conversion_payload_allocation_failure_preserves_prior_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output, cache = tmp_path / "output", tmp_path / "cache"
+    _outputs(output, frames=501)
+    cache.mkdir()
+    for name in STEM_KINDS:
+        (cache / f"{name}.wav").write_bytes(b"previous-generation")
+    original = stem_artifacts._payload
+    calls = 0
+
+    def fail(samples: array[float]) -> bytearray:
+        nonlocal calls
+        calls += 1
+        if calls == 7:
+            # Precise allocation error injection before constructing this
+            # bounded PCM16 payload, after prior blocks performed actual I/O.
+            msg = "injected bounded payload allocation failure"
+            raise MemoryError(msg)
+        return original(samples)
+
+    monkeypatch.setattr(stem_artifacts, "_payload", fail)
+    with pytest.raises(MemoryError, match="bounded payload allocation"):
+        write_project_cache_artifacts(
+            output_root=output,
+            cache_dir=cache,
+            target_shape=AudioShape(48000, 2, 501),
+            progress=lambda _p, _s: None,
+            block_frames=7,
+        )
+    assert calls == 7
+    assert {path.name for path in cache.iterdir()} == {f"{name}.wav" for name in STEM_KINDS}
+    assert all(
+        (cache / f"{name}.wav").read_bytes() == b"previous-generation" for name in STEM_KINDS
+    )

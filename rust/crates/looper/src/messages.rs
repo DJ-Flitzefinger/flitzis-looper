@@ -785,6 +785,9 @@ pub enum LoaderEvent {
         /// Pre-adoption owner reservation, promoted only by matching metadata.
         original_lease: Option<crate::audio_engine::ProjectAssetLease>,
         analysis: Option<SampleAnalysis>,
+        /// Automatic analysis failed independently of successful source adoption.
+        /// Delivered only for the matching source and timing request.
+        analysis_error: Option<String>,
     },
 
     /// Loading failed.

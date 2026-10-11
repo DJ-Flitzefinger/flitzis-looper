@@ -4,6 +4,9 @@ mod audio_engine;
 mod messages;
 mod selected_bpm;
 
+#[cfg(test)]
+mod test_memory;
+
 /// Report the profile of this loaded native module without opening an engine.
 #[pyfunction]
 fn native_build_profile() -> &'static str {

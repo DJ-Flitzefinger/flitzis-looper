@@ -411,6 +411,17 @@ The [full extension](../../../docs/pre-rust-extension-20261011.md) and [additive
 - [x] X11-PLAN: strict every affected change, exact full20+169/56/9/HC26/old38/48 retention, forward DAG/docs/diff, independent NONAUTHOR frozen source review and coherent publication at plan scope only. Accepted `027bc1cb` (reviewed tree `571b048d0426d53d8f69640045d80e3e26d32e7f`); no E11 behavior completion.
 - [x] X11-KEYLOCK: productive installed global/pad routes, both directions at nonneutral rate, own-window/native ACK and actual wet continuity/override/UI/stale/error matrix. Delivered at bounded k=0 NormalLoop software scope, including first-live/retrigger readiness and hardware-free controller/draw coverage. Accepted NormalLoop/lifecycle prerequisites only; no full P4b/B5 prerequisite or guard waiver. Human app/device/visual/hearing gates remain OPEN.
 - [ ] X11-LONG: replace complete preparation and warm-verifier total-extent gates with bounded retained-reader streaming; exact normalization/first-onset/alignment/padding and full EOF digests, >10-minute/>1-GiB real cases, reported PAD4 source when accessible, measured scratch/process/live peaks and Cancel/real disk/RAM failure.
+
+Bounded complete-storage conversion and finite Native/restore preparation are
+implemented; [the validation report](../../../docs/long-source-streaming-validation.md)
+records their actual evidence and final software gates. Ordinary UI import still
+passes no resident hint and may fail initial whole-source live admission before
+the default eight-bar loop is initialized. Finite Native/restore proofs use
+KEYLOCK off; KEYLOCK loads still request the existing full-track fallback.
+Both actual default/user-loop admission and finite KEYLOCK-load integration remain
+required P4b/P5b work, so this task and full E11-03 stay unchecked. Storage evidence does not close
+aggregate resources, model inference or Human/device gates.
+
 - [ ] X11-MATERIAL M1: readable contained roots, full-SHA cross-name dedup/unsafe-case collisions, exact original preservation and independent content settings/DSP/owners through copy/move/origin-delete.
 - [ ] X11-MATERIAL M2: existing M-ID/legacy journal/config/current-reference migration with fresh native ACK and fault/reopen/latest-intent/unknown/true-last-reader proof; no rename beneath owners or reset.
 - [ ] X11-UI, X11-LIVE-STEMS, X11-BULK and RECORD-CAPTURE/FORMAT/CONTROL: implement through their focused companion tasks, keeping separate new-generation proof and final Human gates.

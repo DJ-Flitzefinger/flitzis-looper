@@ -181,7 +181,7 @@ def test_demucs_backend_maps_other_to_melody_and_aligns_outputs(tmp_path: Path) 
 
     assert result.backend_name == "demucs"
     assert result.device == "cpu"
-    assert commands[-1][1:3] == ["-m", "demucs"]
+    assert commands[-1][1:3] == ["-m", "flitzis_looper.demucs_streaming"]
     assert commands[-1][commands[-1].index("--shifts") + 1] == str(DEFAULT_DEMUCS_SHIFTS)
     assert commands[-1][commands[-1].index("--overlap") + 1] == str(DEFAULT_DEMUCS_OVERLAP)
     assert (_read_pcm16_wav(request.cache_dir / "melody.wav")[0]) == pytest.approx(0.4, abs=1e-3)

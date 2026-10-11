@@ -656,6 +656,9 @@ class LoaderController(BaseController):
                 key_request_id=event.get("request_id") if new_assignment else None,
             )
             self._clear_analysis_task_state(sample_id)
+        analysis_error = event.get("analysis_error")
+        if isinstance(analysis_error, str):
+            self._session.sample_analysis_errors[sample_id] = analysis_error
 
         if restored_assignment and self._on_restored_sample_loaded is not None:
             self._on_restored_sample_loaded(sample_id)
@@ -663,6 +666,9 @@ class LoaderController(BaseController):
     def _reset_completed_assignment(self, sample_id: int, *, timing_stale: bool = False) -> None:
         """Reset retired track intent after native replacement, without a second unload."""
         if timing_stale:
+            # A newer timing intent does not validate the predecessor's analysis.
+            self._project.sample_analysis[sample_id] = None
+            self._clear_analysis_task_state(sample_id)
             if self._on_stems_invalidated is not None:
                 self._on_stems_invalidated(sample_id)
             return

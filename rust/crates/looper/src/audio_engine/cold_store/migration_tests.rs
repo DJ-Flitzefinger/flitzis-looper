@@ -2,7 +2,9 @@
 use super::*;
 use crate::audio_engine::cold_jobs::PCM_LIMIT_BYTES;
 use crate::audio_engine::cold_residency;
-use crate::audio_engine::material_migration::{prepare_material, prepare_pcm};
+use crate::audio_engine::material_migration::{
+    prepare_material_complete_for_test as prepare_material, prepare_pcm,
+};
 
 struct Fixture {
     _temp: tempfile::TempDir,
@@ -71,6 +73,70 @@ impl Fixture {
         transaction.bind_pcm(&sample.samples);
         (sample, transaction.into_lease())
     }
+}
+
+#[test]
+fn material_preparation_seed_and_reference_read_do_not_impose_whole_source_residency() {
+    let fixture = Fixture::new();
+    let (complete, old_lease) = fixture.legacy(48_000, 2);
+    let seed = crate::audio_engine::material_migration::prepare_material(
+        &fixture.samples,
+        &fixture.original,
+        48_000,
+        2,
+        &|| false,
+    )
+    .unwrap();
+    assert_eq!(seed.sample.frame_count(), complete.frame_count());
+    assert_eq!(seed.sample.resident_start(), 0);
+    assert_eq!(seed.sample.resident_end(), 1);
+    assert_eq!(seed.sample.samples.len(), 2);
+    assert_eq!(seed.lease.integrity.playback_read_bytes, 8);
+    assert_eq!(seed.lease.manifest.identity, old_lease.manifest.identity);
+    let requested = old_lease
+        .read_window_cancellable(
+            &complete,
+            211,
+            227,
+            9,
+            crate::messages::ResidentContext::FiniteLoop,
+            PCM_LIMIT_BYTES,
+            &|| false,
+        )
+        .unwrap();
+    let prepared = crate::audio_engine::material_migration::prepare_material_for_reference(
+        &fixture.samples,
+        &fixture.original,
+        48_000,
+        2,
+        &|| false,
+        &requested,
+    )
+    .unwrap();
+    assert_eq!(prepared.sample.frame_count(), complete.frame_count());
+    assert_eq!(prepared.sample.resident_start(), 211);
+    assert_eq!(prepared.sample.resident_end(), 227);
+    assert_eq!(
+        prepared.sample.samples.as_ref(),
+        &complete.samples[211 * 2..227 * 2]
+    );
+    assert_eq!(
+        prepared.lease.manifest.identity,
+        old_lease.manifest.identity
+    );
+    let restored = seed
+        .lease
+        .read_window_cancellable(
+            &seed.sample,
+            211,
+            227,
+            1,
+            crate::messages::ResidentContext::FiniteLoop,
+            PCM_LIMIT_BYTES,
+            &|| false,
+        )
+        .unwrap();
+    assert_eq!(restored.samples.as_ref(), requested.samples.as_ref());
 }
 
 #[test]

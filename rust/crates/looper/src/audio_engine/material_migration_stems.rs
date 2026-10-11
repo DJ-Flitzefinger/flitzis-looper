@@ -4,7 +4,7 @@ use super::cold_store::sealed_reader;
 use super::material_migration::PreparedMigrationMaterial;
 use super::material_paths::{self, AssetKind};
 use super::project_assets::{self, FileIdentity, file_identity};
-use super::stem_cache::{STEM_FILE_NAMES, prepare_stem_buffers_from_cache_at_project_root};
+use super::stem_cache::{STEM_FILE_NAMES, verify_pcm16_wav_geometry_cancellable};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
@@ -221,22 +221,24 @@ impl Drop for OwnedGeneration {
 }
 
 fn validate_geometry(
-    root: &Path,
+    _root: &Path,
     directory: &Path,
     material: &PreparedMigrationMaterial,
-    version: &str,
+    _version: &str,
     rate: u32,
+    cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
-    let reference = persisted(root, directory)?;
-    let project_root = root.parent().ok_or("samples project root missing")?;
-    let prepared = prepare_stem_buffers_from_cache_at_project_root(
-        version,
-        &material.sample,
-        rate,
-        &reference,
-        project_root,
-    )?;
-    drop(prepared);
+    for name in STEM_FILE_NAMES {
+        let mut reader = sealed_reader(&directory.join(format!("{name}.wav")))
+            .map_err(|error| error.to_string())?;
+        verify_pcm16_wav_geometry_cancellable(
+            &mut reader,
+            rate,
+            material.sample.channels,
+            material.sample.frame_count(),
+            cancelled,
+        )?;
+    }
     Ok(())
 }
 
@@ -355,13 +357,6 @@ pub(super) fn copy_stem_generation(
             .ok_or("material playback rate missing")?,
     )
     .map_err(|_| "material playback rate overflow")?;
-    if super::stem_cache::admitted_stem_pcm_bytes(
-        material.sample.frame_count(),
-        material.sample.channels,
-    )? > super::cold_jobs::PCM_LIMIT_BYTES
-    {
-        return Err("stem migration exceeds complete transient PCM admission".into());
-    }
     let maximum_wav_bytes = material
         .sample
         .frame_count()
@@ -370,7 +365,14 @@ pub(super) fn copy_stem_generation(
         .and_then(|bytes| bytes.checked_add(1024 * 1024))
         .ok_or("stem migration input geometry overflow")? as u64;
     let old_set = verify_set(&old.path, old_source_version, maximum_wav_bytes, cancelled)?;
-    validate_geometry(&root, &old.path, material, old_source_version, rate)?;
+    validate_geometry(
+        &root,
+        &old.path,
+        material,
+        old_source_version,
+        rate,
+        cancelled,
+    )?;
     check_cancelled(cancelled)?;
     let marker = json!({"schema":"stem-set-sha256-v1", "source_version":new_source_version, "stems":old_set.marker["stems"]});
     let material_root = new_original
@@ -398,7 +400,7 @@ pub(super) fn copy_stem_generation(
         if existing.marker != marker {
             return Err("canonical stem generation lineage collision".into());
         }
-        validate_geometry(&root, &ready, material, new_source_version, rate)?;
+        validate_geometry(&root, &ready, material, new_source_version, rate, cancelled)?;
         check_cancelled(cancelled)?;
         return Ok(CopiedStemGeneration {
             cache_reference: persisted(&root, &ready)?,
@@ -451,7 +453,14 @@ pub(super) fn copy_stem_generation(
             if existing.marker != marker {
                 return Ok(None);
             }
-            validate_geometry(&root, &resolved.path, material, new_source_version, rate)?;
+            validate_geometry(
+                &root,
+                &resolved.path,
+                material,
+                new_source_version,
+                rate,
+                cancelled,
+            )?;
             check_cancelled(cancelled)?;
             Ok(Some(existing))
         })();
@@ -573,7 +582,14 @@ pub(super) fn copy_stem_generation(
         return Err("committed stem generation identity changed".into());
     }
     exact_ready_files(&owned.path)?;
-    validate_geometry(&root, &owned.path, material, new_source_version, rate)?;
+    validate_geometry(
+        &root,
+        &owned.path,
+        material,
+        new_source_version,
+        rate,
+        cancelled,
+    )?;
     check_cancelled(cancelled)?;
     let reference = persisted(&root, &owned.path)?;
     owned.accepted = true;

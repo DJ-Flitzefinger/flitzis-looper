@@ -143,9 +143,14 @@ and tolerate missing files. A full admission queue SHALL preserve previous state
 - **THEN** old content, hold ownership, settings, source authority and files remain intact
 - **AND** successful removal later fences old content-bound actions before slot reuse
 
+## ADDED Requirements
+
 ### Requirement: E11-08 Readable source directories with hidden stable identity
 The system SHALL store each canonical source directly in `samples/<Originalfilename>/` with its exact original filename/encoding, stems/ and .pcm-cache/ children, while retaining stable hidden full-content identity separately from visible naming.
-The contained resolver SHALL deterministically sanitize unsafe Windows directory characters, reserved names, trailing-dot/space aliases, case-insensitive collisions and path length, using a readable prefix plus content-hash suffix when needed. It SHALL reject traversal/reparse/outside references and SHALL NOT require numbered pad folders or opaque M-ID browsing roots.
+
+#### Scenario: Remaining contract constraints hold for every operation
+- **WHEN** the system exercises this requirement
+- **THEN** The contained resolver SHALL deterministically sanitize unsafe Windows directory characters, reserved names, trailing-dot/space aliases, case-insensitive collisions and path length, using a readable prefix plus content-hash suffix when needed. It SHALL reject traversal/reparse/outside references and SHALL NOT require numbered pad folders or opaque M-ID browsing roots.
 
 #### Scenario: Different bytes have identical case-insensitive names
 - **WHEN** two different full-content hashes arrive as Take.wav and TAKE.wav, or a directory name is unsafe

@@ -25,6 +25,8 @@ pub(super) use warm::{
     WindowReadObservation, reset_window_read_observation_for_test, window_read_observation_for_test,
 };
 mod staging;
+mod streaming;
+pub(super) use streaming::{CompletedPcmArtifact, PcmArtifactWriter};
 mod warm;
 pub(super) use lifecycle::admit_original_owner;
 pub(super) use lifecycle::cleanup_admission_status;
@@ -33,6 +35,7 @@ pub(super) use lifecycle::cleanup_status;
 pub(super) use lifecycle::has_verified_retirement;
 
 /// Complete PCM in its own rate/layout domain, before any residency selection.
+#[cfg(test)]
 pub(super) struct PcmArtifactInput<'a> {
     pub samples: &'a [f32],
     pub rate_hz: u32,
@@ -68,6 +71,9 @@ pub(super) struct IntegrityMetrics {
     pub manifest_verify_bytes: u64,
     pub playback_read_bytes: u64,
     pub assignment_copy_bytes: u64,
+    /// Conservative simultaneous streaming decoder/FFT/PCM workspace admission.
+    /// This is distinct from measured process RSS/Commit/Peak and live residency.
+    pub stream_scratch_reserved_bytes: u64,
     pub warm: bool,
     pub wall_nanos: u64,
     pub cpu_nanos: Option<u64>,
@@ -479,6 +485,7 @@ fn descriptor_digest(value: &Value) -> io::Result<String> {
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
+#[cfg(test)]
 fn write_pcm(
     path: &Path,
     input: PcmArtifactInput<'_>,
@@ -714,6 +721,7 @@ impl ColdTransaction {
         &self.original_path
     }
 
+    #[cfg(test)]
     pub(super) fn write_pcm_artifacts(
         &mut self,
         decoder: PcmArtifactInput<'_>,

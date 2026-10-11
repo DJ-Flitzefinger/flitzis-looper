@@ -1,5 +1,6 @@
 //! Real writer I/O fault seams, rollback ownership and bounded retry. These are
-//! injected failures at six concrete operations, not a process/power-loss matrix.
+//! precise injected block/reserve/commit failures, not measured disk/RAM exhaustion
+//! or a process/power-loss matrix. Process and resource evidence is separate.
 #![cfg(windows)]
 
 use super::project_assets::{self, FileIdentity};
@@ -13,7 +14,10 @@ use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const POINTS: [StemPairFault; 6] = [
+const POINTS: [StemPairFault; 9] = [
+    StemPairFault::AlignmentScan,
+    StemPairFault::PcmConvert,
+    StemPairFault::PcmWrite,
     StemPairFault::PcmFlush,
     StemPairFault::StagingReopen,
     StemPairFault::PcmRename,
@@ -21,6 +25,165 @@ const POINTS: [StemPairFault; 6] = [
     StemPairFault::CommonFlush,
     StemPairFault::CommonReopen,
 ];
+
+#[test]
+fn cooperative_midphase_cancellation_after_io_returns_rolls_back_only_new_owners() {
+    use super::stem_pair::set_io_observer_for_test;
+    use std::cell::Cell;
+    use std::rc::Rc;
+    for point in [
+        StemPairFault::AlignmentScan,
+        StemPairFault::PcmConvert,
+        StemPairFault::PcmWrite,
+        StemPairFault::PcmVerify,
+        StemPairFault::PcmRename,
+        StemPairFault::CommonReopen,
+    ] {
+        let fixture = Fixture::new_with_frames(5, 16_393);
+        let wav_before = leaves(&fixture.wav_path);
+        let source_before = fs::read(&fixture.material.lease.original_path).unwrap();
+        let cancel = Rc::new(Cell::new(false));
+        let visits = Rc::new(Cell::new(0));
+        let signal = cancel.clone();
+        let observed = visits.clone();
+        set_io_observer_for_test(Some(Box::new(move |stage| {
+            if stage == point {
+                observed.set(observed.get() + 1);
+                // The checkpoint runs between operations, never by interrupting
+                // a held file operation/flush/rename or killing a worker.
+                signal.set(true);
+            }
+        })));
+        let result = prepare_complete_pair(
+            &fixture.root,
+            &fixture.material,
+            &fixture.version,
+            &fixture.wav_reference,
+            &|| cancel.get(),
+        );
+        set_io_observer_for_test(None);
+        let error = match result {
+            Err(e) => e,
+            Ok(_) => panic!("cancel at {point:?} committed"),
+        };
+        assert!(visits.get() > 0, "unexecuted checkpoint {point:?}");
+        assert!(error.contains("cancelled"), "wrong error {error}");
+        assert_eq!(children(&fixture.stem_pcm_base()), [".pairs"]);
+        assert!(children(&fixture.stem_pcm_base().join(".pairs")).is_empty());
+        assert_eq!(leaves(&fixture.wav_path), wav_before);
+        assert_eq!(
+            fs::read(&fixture.material.lease.original_path).unwrap(),
+            source_before
+        );
+        let retry = fixture.prepare().unwrap();
+        assert!(retry.created_pcm && retry.created_descriptor);
+    }
+}
+
+#[test]
+fn low_level_write_and_postwrite_verification_faults_preserve_reused_wavs_and_allow_retry() {
+    for point in [StemPairFault::PcmWrite, StemPairFault::PcmVerify] {
+        let fixture = Fixture::new_with_frames(-4, 16_393);
+        let before = leaves(&fixture.wav_path);
+        use super::stem_pair::set_io_observer_for_test;
+        use std::cell::Cell;
+        use std::rc::Rc;
+        let operations = Rc::new(Cell::new(0));
+        let seen = operations.clone();
+        set_io_observer_for_test(Some(Box::new(move |stage| {
+            if stage == point {
+                seen.set(seen.get() + 1);
+                if seen.get() == 2 {
+                    set_fault_for_test(Some(point));
+                }
+            }
+        })));
+        let result = fixture.prepare();
+        set_io_observer_for_test(None);
+        set_fault_for_test(None);
+        let error = match result {
+            Err(e) => e,
+            Ok(_) => panic!("missing {point:?}"),
+        };
+        assert_eq!(operations.get(), 2);
+        assert_injected(&error, point);
+        assert_eq!(children(&fixture.stem_pcm_base()), [".pairs"]);
+        assert!(children(&fixture.stem_pcm_base().join(".pairs")).is_empty());
+        assert_eq!(leaves(&fixture.wav_path), before);
+        let retry = fixture.prepare().unwrap();
+        assert!(retry.created_pcm && retry.created_descriptor);
+    }
+}
+
+#[test]
+fn allocation_failure_after_productive_global_scan_preserves_files_and_retries() {
+    use super::stem_cache::streamed::set_allocation_failure_for_test;
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            set_allocation_failure_for_test(None);
+        }
+    }
+    let fixture = Fixture::new_with_frames(5, 16_393);
+    let before = leaves(&fixture.wav_path);
+    let error = {
+        let _reset = Reset;
+        // Two first-pass buffers have already allocated and the full source
+        // scan/digests have returned when the second-pass reserve is injected.
+        set_allocation_failure_for_test(Some(3));
+        match fixture.prepare() {
+            Err(e) => e,
+            Ok(_) => panic!("missing reserve failure"),
+        }
+    };
+    assert!(error.contains("allocation failure before try_reserve_exact"));
+    assert_eq!(children(&fixture.stem_pcm_base()), [".pairs"]);
+    assert!(children(&fixture.stem_pcm_base().join(".pairs")).is_empty());
+    assert_eq!(leaves(&fixture.wav_path), before);
+    let retry = fixture.prepare().unwrap();
+    assert!(retry.created_pcm && retry.created_descriptor);
+}
+
+#[test]
+fn cancellation_after_common_verified_commit_keeps_the_committed_generation_and_actual_readers() {
+    use super::stem_pair::set_io_observer_for_test;
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let fixture = Fixture::new_with_frames(-4, 16_393);
+    let cancel = Rc::new(Cell::new(false));
+    let signal = cancel.clone();
+    set_io_observer_for_test(Some(Box::new(move |point| {
+        if point == StemPairFault::PairCommitted {
+            signal.set(true);
+        }
+    })));
+    let result = prepare_complete_pair(
+        &fixture.root,
+        &fixture.material,
+        &fixture.version,
+        &fixture.wav_reference,
+        &|| cancel.get(),
+    );
+    set_io_observer_for_test(None);
+    let pair = result.unwrap();
+    assert!(cancel.get());
+    assert!(pair.created_pcm && pair.created_descriptor);
+    let reference = pair.descriptor_reference.clone();
+    let descriptor = pair.descriptor.clone();
+    // A signal after the verified descriptor-last commit cannot retroactively
+    // turn committed bytes into private staging or delete underneath readers.
+    let pins = pair.clone_pins(fixture.root.parent().unwrap()).unwrap();
+    let retry = fixture.prepare().unwrap();
+    assert!(!retry.created_pcm && !retry.created_descriptor);
+    assert_eq!(retry.descriptor, descriptor);
+    drop(retry);
+    drop(pair);
+    let reopened =
+        open_verified_pair(&fixture.root, &reference, &fixture.material, &|| false).unwrap();
+    assert_eq!(reopened.descriptor, descriptor);
+    drop(reopened);
+    drop(pins);
+}
 
 struct FaultReset;
 impl FaultReset {

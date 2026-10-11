@@ -3,7 +3,7 @@
 use super::AudioEngine;
 use super::cold_jobs::PCM_LIMIT_BYTES;
 use super::complete_context::CompleteSourceReader;
-use super::material_migration::{PreparedMigrationMaterial, prepare_material};
+use super::material_migration::{PreparedMigrationMaterial, prepare_material_for_reference};
 use super::material_migration_stems::copy_stem_generation;
 use super::material_paths::{self, AssetKind};
 use super::prepared_source::{
@@ -45,6 +45,13 @@ pub struct PreparedStemPair {
 impl PreparedStemPair {
     pub(super) fn reader_lifetime_for_test(&self) -> std::sync::Weak<VerifiedStemPair> {
         Arc::downgrade(&self.pair_reader)
+    }
+
+    /// Observe the actual public preparation views without allocating another set.
+    pub(super) fn component_views_for_test(
+        &self,
+    ) -> Option<&[SampleBuffer; crate::messages::STEM_BUFFER_COUNT]> {
+        self.stems.as_ref().map(|stems| &stems.stems)
     }
 }
 
@@ -320,12 +327,13 @@ impl StemPairPreparationWork {
         let material = if lease.material_id.is_some() {
             PreparedMigrationMaterial::from_current(&root, sample.clone(), lease)?
         } else {
-            let prepared = prepare_material(
+            let prepared = prepare_material_for_reference(
                 &root,
                 &lease.original_path,
                 sample_rate_hz,
                 sample.channels,
                 &cancelled,
+                &sample,
             )?;
             prepared
                 .lease
@@ -372,15 +380,7 @@ impl StemPairPreparationWork {
                 &canonical_source,
                 &wav_reference,
                 &cancelled,
-                || {
-                    if material.sample.resident_start() == 0
-                        && material.sample.resident_end() == material.sample.frame_count()
-                    {
-                        Ok(material.sample.clone())
-                    } else {
-                        reader.materialize(PCM_LIMIT_BYTES, &cancelled)
-                    }
-                },
+                &reader,
             )?
         };
         let identity_bytes: [u8; 32] = hex_identity(&pair.descriptor.stem_set_identity)?;

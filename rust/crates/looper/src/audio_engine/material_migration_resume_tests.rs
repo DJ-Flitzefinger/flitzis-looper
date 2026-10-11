@@ -104,7 +104,7 @@ impl ResumeAudio {
     ) -> PyResult<control::MaterialMigrationPreparation> {
         let source = self.original(&source)?;
         py.detach(|| {
-            let material = material_migration::prepare_material(
+            let material = material_migration::prepare_material_complete_for_test(
                 &self.samples_root,
                 &source,
                 8_000,
@@ -344,8 +344,14 @@ fn material_migration_resume_pending_journal_in_new_process_requires_fresh_sourc
             parent_engine = Arc::downgrade(&engine);
             parent_loading = engine.cold_loading.clone();
             parent_leases = Arc::downgrade(&engine.cold_leases);
-            let material =
-                material_migration::prepare_material(&root, &legacy, 8_000, 1, &|| false).unwrap();
+            let material = material_migration::prepare_material_complete_for_test(
+                &root,
+                &legacy,
+                8_000,
+                1,
+                &|| false,
+            )
+            .unwrap();
             let metadata = material.metadata();
             let preparation = control::prepared_for_test(&engine, material, &root).unwrap();
             {

@@ -25,7 +25,10 @@ fn ready_material(engine: &AudioEngine, root: &Path) -> ReadyMaterial {
     let old_path = root.join("old.wav");
     wav(&old_path, 48_000);
     let material =
-        material_migration::prepare_material(root, &old_path, 48_000, 2, &|| false).unwrap();
+        material_migration::prepare_material_complete_for_test(root, &old_path, 48_000, 2, &|| {
+            false
+        })
+        .unwrap();
     let sample = material.sample.clone();
     let parent_assignment = material.lease.assignment_id();
     let cache_path = material.lease.cache_path.clone();
@@ -1082,8 +1085,14 @@ fn material_migration_new_process_reopens_journal_with_fresh_source_and_timing_a
     // process starts. Only verified original/cache files, journal and evidence remain.
     {
         let engine = Arc::new(AudioEngine::new().unwrap());
-        let material =
-            material_migration::prepare_material(&root, &legacy, 8_000, 1, &|| false).unwrap();
+        let material = material_migration::prepare_material_complete_for_test(
+            &root,
+            &legacy,
+            8_000,
+            1,
+            &|| false,
+        )
+        .unwrap();
         metadata = material.metadata();
         let preparation = control::prepared_for_test(&engine, material, &root).unwrap();
         let (producer, mut consumer) = rtrb::RingBuffer::new(8);
@@ -1446,3 +1455,146 @@ fn material_migration_new_process_child_reopens_journal_with_fresh_source_and_ti
 
 #[path = "material_migration_resume_tests.rs"]
 mod material_migration_resume_tests;
+
+#[test]
+fn material_migration_seed_subscriber_reads_actual_finite_range_before_own_callback_ack() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("samples");
+    fs::create_dir_all(&root).unwrap();
+    let original = root.join("old.wav");
+    let protected = wav(&original, 48_000);
+    let engine = AudioEngine::new().unwrap();
+    let previous = old(&engine)
+        .with_complete_source(48_000)
+        .window(2, 6, 3, crate::messages::ResidentContext::FiniteLoop)
+        .unwrap();
+    engine.sample_cache.lock().unwrap()[0] = Some(previous.clone());
+    engine
+        .input_runtime_ownership
+        .publish_source(0, &previous, 48_000, 7);
+    let mut callback = Callback::new(&engine, &previous);
+
+    // Use the productive metadata preparation entry point, which holds one frame
+    // and the complete sealed artifact identity, without an ALL playback demand.
+    let material =
+        material_migration::prepare_material(&root, &original, 48_000, 2, &|| false).unwrap();
+    let seed = material.sample.clone();
+    assert_eq!(
+        (
+            seed.frame_count(),
+            seed.resident_start(),
+            seed.resident_end()
+        ),
+        (7, 0, 1)
+    );
+    assert_eq!(seed.samples.len(), 2);
+    let parent_assignment = material.lease.assignment_id();
+    let expected_cache = material.lease.cache_path.clone();
+    let preparation = control::prepared_for_test(&engine, material, &root).unwrap();
+    let (producer, mut consumer) = rtrb::RingBuffer::new(4);
+    let ticket = control::adopt_for_format(
+        &engine,
+        0,
+        &preparation,
+        Arc::new(Mutex::new(producer)),
+        (2, 48_000, root.clone()),
+    )
+    .unwrap();
+    wait_until(|| consumer.peek().is_ok());
+    assert_eq!(ticket.phase().unwrap(), "pending");
+    assert!(!ticket.is_current().unwrap());
+    // Control publishes its pending cache entry before enqueueing the guarded
+    // command. The native bank and ticket authority still require their own ACK.
+    let pending = engine.sample_cache.lock().unwrap()[0].clone().unwrap();
+    assert_eq!(
+        (
+            pending.frame_count(),
+            pending.resident_start(),
+            pending.resident_end()
+        ),
+        (7, 2, 6)
+    );
+    assert!(Arc::ptr_eq(
+        &callback.mixer.bank_for_measurement()[0]
+            .as_ref()
+            .unwrap()
+            .samples,
+        &previous.samples
+    ));
+    let ControlMessage::LoadColdSample {
+        sample,
+        adoption,
+        loop_region,
+        ..
+    } = consumer.peek().unwrap()
+    else {
+        panic!("migration did not queue the productive guarded cold command");
+    };
+    assert!(Arc::ptr_eq(&sample.samples, &pending.samples));
+    assert_eq!(*loop_region, Some((2, 6)));
+    assert_eq!(adoption.load(Ordering::Acquire), 0);
+    assert_eq!(
+        engine
+            .input_runtime_ownership
+            .cold_status(0, ticket.request_id()),
+        Some(0)
+    );
+    callback.assert_old_voice(&previous);
+    assert_eq!(callback.drain(&mut consumer), 1);
+    assert!(matches!(
+        terminal(&engine, ticket.request_id()),
+        LoaderEvent::Success { .. }
+    ));
+    wait_until(|| engine.cold_loading[0].load(Ordering::Acquire) == 0);
+    assert_eq!(ticket.phase().unwrap(), "acknowledged");
+    assert!(ticket.is_current().unwrap());
+
+    let selected = engine.sample_cache.lock().unwrap()[0].clone().unwrap();
+    assert!(Arc::ptr_eq(&selected.samples, &pending.samples));
+    assert!(Arc::ptr_eq(
+        &callback.mixer.bank_for_measurement()[0]
+            .as_ref()
+            .unwrap()
+            .samples,
+        &selected.samples
+    ));
+    assert_eq!(
+        (
+            selected.frame_count(),
+            selected.resident_start(),
+            selected.resident_end()
+        ),
+        (7, 2, 6)
+    );
+    assert_eq!(
+        selected.residency.as_ref().unwrap().context,
+        crate::messages::ResidentContext::FiniteLoop
+    );
+    // This independently derives only the actual selected frames from the PCM16
+    // original; no productive decoder, seed bytes or whole-track array is used.
+    let expected: Vec<f32> = [-16_384_i16, 32_767, 0, -4_096]
+        .into_iter()
+        .flat_map(|value| [f32::from(value) / 32_768.0; 2])
+        .collect();
+    assert_eq!(selected.samples.as_ref(), expected.as_slice());
+    assert!(!Arc::ptr_eq(&selected.samples, &seed.samples));
+    let selected_identity = &selected.residency.as_ref().unwrap().source;
+    assert_eq!(
+        selected_identity.as_ref(),
+        seed.residency.as_ref().unwrap().source.as_ref()
+    );
+    let leases = engine.cold_leases.lock().unwrap();
+    let lease = leases[0].as_ref().unwrap();
+    assert_ne!(lease.assignment_id(), parent_assignment);
+    assert_eq!(lease.cache_path, expected_cache);
+    assert_eq!(
+        lease.manifest.descriptor["playback"]["pcm"]["full_frames"],
+        7
+    );
+    drop(leases);
+    assert_eq!(fs::read(&original).unwrap(), protected);
+    callback.assert_old_voice(&previous);
+    preparation.release_preparation().unwrap();
+    assert!(ticket.is_current().unwrap());
+    callback.assert_old_voice(&previous);
+}

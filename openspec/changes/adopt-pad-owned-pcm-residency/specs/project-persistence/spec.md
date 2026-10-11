@@ -268,7 +268,10 @@ timing/analysis/per-job bounds and constrain unique backing plus pending/live ov
 
 ### Requirement: E11-10 Readable-layout migration preserves current owners and intent
 The system SHALL migrate existing M-ID and legacy source/WAV/PCM references to the readable source layout through the existing verified material-wise journal/config/reference transaction and fresh native source/timing/window ACKs without data reset.
-Migration SHALL copy/verify into a new contained root while current readers exist, reserve new owners before releasing old, publish references atomically only for the captured current revision, and retire old files only at actual last assignment/voice/job/action/history/reader/native-ACK release across all banks. Unknown files/journals and external originals SHALL survive.
+
+#### Scenario: Remaining contract constraints hold for every operation
+- **WHEN** the system exercises this requirement
+- **THEN** Migration SHALL copy/verify into a new contained root while current readers exist, reserve new owners before releasing old, publish references atomically only for the captured current revision, and retire old files only at actual last assignment/voice/job/action/history/reader/native-ACK release across all banks. Unknown files/journals and external originals SHALL survive.
 
 #### Scenario: Reopen after each migration boundary
 - **WHEN** migration is interrupted before or after copy, flush, rename, config claim or native adoption

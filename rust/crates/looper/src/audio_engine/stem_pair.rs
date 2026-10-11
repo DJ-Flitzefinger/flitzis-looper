@@ -1,14 +1,13 @@
 //! Off-thread complete stem pair storage. Durable descriptions carry no pad authority.
 
 use super::cold_store::sealed_reader;
+use super::complete_context::CompleteSourceReader;
 use super::material_migration::PreparedMigrationMaterial;
 use super::material_migration_stems::verify_complete_wav_set;
 use super::material_paths::{self, AssetKind};
 use super::project_assets::{self, FileIdentity};
-use super::stem_cache::{
-    STEM_FILE_NAMES, admitted_stem_pcm_bytes, prepare_complete_stems_at_project_root,
-    verify_pcm16_wav_geometry,
-};
+use super::stem_cache::streamed::AlignedStemStream;
+use super::stem_cache::{STEM_FILE_NAMES, verify_pcm16_wav_geometry_cancellable};
 use super::stem_pair_descriptor::*;
 use crate::messages::{ResidentSourceView, SampleBuffer};
 use sha2::{Digest, Sha256};
@@ -58,12 +57,17 @@ fn observe_range_allocation(bytes: usize) {
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum StemPairFault {
+    AlignmentScan,
+    PcmConvert,
+    PcmWrite,
+    PcmVerify,
     PcmFlush,
     StagingReopen,
     PcmRename,
     ReadyReopen,
     CommonFlush,
     CommonReopen,
+    PairCommitted,
 }
 #[cfg(test)]
 thread_local! {
@@ -79,7 +83,7 @@ pub(super) fn set_fault_for_test(fault: Option<StemPairFault>) {
     TEST_FAULT.with(|current| current.set(fault));
 }
 #[cfg(test)]
-fn fail_at(point: StemPairFault) -> Result<(), String> {
+pub(super) fn fail_at(point: StemPairFault) -> Result<(), String> {
     TEST_IO_OBSERVER.with(|observer| {
         if let Some(observer) = observer.borrow().as_ref() {
             observer(point);
@@ -505,9 +509,6 @@ fn verified_wavs(
     }
     let frames = usize::try_from(content.source.frame_count).map_err(error)?;
     let channels = usize::try_from(content.source.channels).map_err(error)?;
-    if admitted_stem_pcm_bytes(frames, channels)? > super::cold_jobs::PCM_LIMIT_BYTES {
-        return Err("complete pair geometry exceeds PCM admission".into());
-    }
     let maximum = content
         .source
         .frame_count
@@ -523,11 +524,12 @@ fn verified_wavs(
             return Err("WAV pair artifact mismatch".into());
         }
         check_cancelled(cancelled)?;
-        verify_pcm16_wav_geometry(
+        verify_pcm16_wav_geometry_cancellable(
             &mut set._files[index],
             content.source.sample_rate_hz,
             channels,
             frames,
+            cancelled,
         )?;
     }
     Ok(set)
@@ -590,6 +592,8 @@ fn verify_pcm(
         check_cancelled(cancelled)?;
         let count = remaining.min(buffer.len() as u64) as usize;
         reader.read_exact(&mut buffer[..count]).map_err(error)?;
+        #[cfg(test)]
+        fail_at(StemPairFault::PcmVerify)?;
         if count % 4 != 0
             || buffer[..count].chunks_exact(4).any(|word| {
                 !f32::from_bits(u32::from_le_bytes(word.try_into().unwrap())).is_finite()
@@ -880,7 +884,7 @@ pub(super) fn prepare_complete_pair(
         source_version,
         wav_reference,
         cancelled,
-        || Ok(material.sample.clone()),
+        &CompleteSourceReader::new(material.sample.clone(), Some(material.lease.clone()))?,
     )
 }
 
@@ -893,14 +897,14 @@ pub(super) fn admitted_component_view_bytes(sample_count: usize) -> Result<usize
         .ok_or_else(|| "component transient extent overflow".into())
 }
 
-/// Warm lookup precedes full-source materialization and five-buffer conversion.
+/// Warm lookup precedes bounded complete-source/five-WAV streaming conversion.
 pub(super) fn prepare_complete_pair_with_reader(
     root: &Path,
     material: &PreparedMigrationMaterial,
     source_version: &str,
     wav_reference: &str,
     cancelled: &impl Fn() -> bool,
-    read_complete: impl FnOnce() -> Result<SampleBuffer, String>,
+    reader: &CompleteSourceReader,
 ) -> Result<VerifiedStemPair, String> {
     let (root, _root_guards) = guarded_root(root, material)?;
     let root = root.as_path();
@@ -975,24 +979,21 @@ pub(super) fn prepare_complete_pair_with_reader(
             return Ok(pair);
         }
     }
-    let complete_source = read_complete()?;
     material
         .lease
-        .verify_reference(&complete_source)
+        .verify_reference(&reader.reference)
         .map_err(error)?;
-    let complete = prepare_complete_stems_at_project_root(
-        &complete_source,
+    let complete = AlignedStemStream::prepare(
+        reader,
+        &wav_set._files[..5],
         current.sample_rate_hz,
-        wav_reference,
-        root.parent().ok_or("project root missing")?,
+        cancelled,
     )?;
     let mut artifacts = Vec::with_capacity(5);
     for index in 0..5 {
-        let samples = &complete.stems[index].samples;
-        let mut hash = Sha256::new();
-        for value in samples.iter() {
-            hash.update(value.to_bits().to_le_bytes());
-        }
+        let (pcm_sha256, pcm_bytes) = complete
+            .convert(index, &mut std::io::sink(), cancelled)
+            .map_err(error)?;
         artifacts.push(StemPairArtifact {
             name: STEM_FILE_NAMES[index].into(),
             wav_sha256: wav_set.marker["stems"][STEM_FILE_NAMES[index]]
@@ -1000,8 +1001,8 @@ pub(super) fn prepare_complete_pair_with_reader(
                 .ok_or("verified WAV digest missing")?
                 .into(),
             wav_bytes: wav_set._files[index].metadata().map_err(error)?.len(),
-            pcm_sha256: format!("{:x}", hash.finalize()),
-            pcm_bytes: (samples.len() as u64) * 4,
+            pcm_sha256,
+            pcm_bytes,
         });
     }
     let artifacts = artifacts
@@ -1058,14 +1059,24 @@ pub(super) fn prepare_complete_pair_with_reader(
             transaction
                 .files
                 .push((path, project_assets::file_identity(&file).map_err(error)?));
-            let mut chunk = Vec::with_capacity(64 * 1024);
-            for values in complete.stems[index].samples.chunks(16 * 1024) {
-                chunk.clear();
-                for value in values {
-                    chunk.extend_from_slice(&value.to_bits().to_le_bytes());
+            struct PcmWriter<'a>(&'a mut File);
+            impl Write for PcmWriter<'_> {
+                fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                    #[cfg(test)]
+                    fail_at(StemPairFault::PcmWrite).map_err(std::io::Error::other)?;
+                    self.0.write(bytes)
                 }
-                file.write_all(&chunk).map_err(error)?;
-                check_cancelled(cancelled)?;
+                fn flush(&mut self) -> std::io::Result<()> {
+                    self.0.flush()
+                }
+            }
+            let (digest, bytes) = complete
+                .convert(index, &mut PcmWriter(&mut file), cancelled)
+                .map_err(error)?;
+            if digest != content.artifacts[index].pcm_sha256
+                || bytes != content.artifacts[index].pcm_bytes
+            {
+                return Err("aligned PCM write differs from complete prepublication digest".into());
             }
             #[cfg(test)]
             fail_at(StemPairFault::PcmFlush)?;
@@ -1158,6 +1169,8 @@ pub(super) fn prepare_complete_pair_with_reader(
             }
             common.accepted = true;
             pair.created_descriptor = true;
+            #[cfg(test)]
+            fail_at(StemPairFault::PairCommitted)?;
             Ok(pair)
         }
         Err(value) => Err(value),

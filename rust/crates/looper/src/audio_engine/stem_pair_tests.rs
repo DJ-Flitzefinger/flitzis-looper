@@ -263,12 +263,24 @@ pub(super) struct Fixture {
 
 impl Fixture {
     pub fn new(offset: isize) -> Self {
+        Self::new_with_frames(offset, FRAMES)
+    }
+
+    pub(super) fn new_with_frames(offset: isize, frames: usize) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("samples");
         fs::create_dir(&root).unwrap();
         let original = root.join("old.wav");
-        fs::write(&original, wav_bytes(RATE, 1, &impulses(0))).unwrap();
-        let material = prepare_material(&root, &original, RATE, 1, &|| false).unwrap();
+        let mut source = impulses(0);
+        source.resize(frames, 0);
+        fs::write(&original, wav_bytes(RATE, 1, &source)).unwrap();
+        let mut material = prepare_material(&root, &original, RATE, 1, &|| false).unwrap();
+        // Only this small frozen oracle requests ALL. Productive preparation
+        // retains the migration seed/selected window and scans its complete lease.
+        material.sample = material
+            .lease
+            .read_complete(&material.sample, 1024 * 1024)
+            .unwrap();
         let metadata = material.metadata();
         let material_id = metadata["material_id"].as_str().unwrap();
         let version = format!(
@@ -280,9 +292,11 @@ impl Fixture {
         let wav_path = root.parent().unwrap().join(&wav_reference);
         fs::create_dir_all(&wav_path).unwrap();
         for name in STEM_FILE_NAMES {
+            let mut values = impulses(offset);
+            values.resize(frames, 0);
             fs::write(
                 wav_path.join(format!("{name}.wav")),
-                wav_bytes(RATE, 1, &impulses(offset)),
+                wav_bytes(RATE, 1, &values),
             )
             .unwrap();
         }
@@ -549,14 +563,19 @@ fn prepare_open_and_retry_select_one_generation_with_truthful_creation_flags() {
 #[test]
 fn every_pcm_leaf_including_instrumental_rejects_damage_truncation_missing_and_extra_eof() {
     for name in STEM_FILE_NAMES {
-        for fault in ["changed", "truncated", "missing", "extra"] {
-            let fixture = Fixture::new(0);
+        for fault in ["changed", "late", "truncated", "missing", "extra"] {
+            let fixture = Fixture::new_with_frames(0, 32_793);
             let proof = Proof::capture(&fixture, fixture.prepare().unwrap());
             let path = proof.pcm_path.join(format!("{name}.f32le"));
             let mut bytes = fs::read(&path).unwrap();
             match fault {
                 "changed" => {
                     bytes[0] ^= 1;
+                    fs::write(&path, &bytes).unwrap();
+                }
+                "late" => {
+                    let last = bytes.len() - 4;
+                    bytes[last] ^= 1;
                     fs::write(&path, &bytes).unwrap();
                 }
                 "truncated" => {
@@ -580,16 +599,25 @@ fn every_pcm_leaf_including_instrumental_rejects_damage_truncation_missing_and_e
 }
 
 #[test]
-fn every_wav_leaf_including_instrumental_rejects_damage_truncation_and_missing() {
+fn every_wav_leaf_including_instrumental_rejects_first_late_truncation_missing_and_extra_eof() {
     for name in STEM_FILE_NAMES {
-        for fault in ["changed", "truncated", "missing"] {
-            let fixture = Fixture::new(0);
+        for fault in ["changed", "late", "truncated", "missing", "extra"] {
+            let fixture = Fixture::new_with_frames(0, 32_793);
             let proof = Proof::capture(&fixture, fixture.prepare().unwrap());
             let path = fixture.wav_path.join(format!("{name}.wav"));
             let mut bytes = fs::read(&path).unwrap();
             match fault {
                 "changed" => {
                     bytes[44] ^= 1;
+                    fs::write(&path, &bytes).unwrap();
+                }
+                "late" => {
+                    let last = bytes.len() - 2;
+                    bytes[last] ^= 1;
+                    fs::write(&path, &bytes).unwrap();
+                }
+                "extra" => {
+                    bytes.extend_from_slice(&0_i16.to_le_bytes());
                     fs::write(&path, &bytes).unwrap();
                 }
                 "truncated" => {

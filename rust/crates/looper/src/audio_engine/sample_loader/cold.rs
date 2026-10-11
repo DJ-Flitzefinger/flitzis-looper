@@ -1,14 +1,14 @@
 //! Complete snapshot decode and bounded playback conversion, outside realtime.
 
-use super::{
-    SampleLoadProgress, SampleLoadSubtask, append_decode_error_silence, clamp_progress,
-    update_decoded_stream_config,
-};
+#[cfg(test)]
+use super::append_decode_error_silence;
+use super::{SampleLoadProgress, SampleLoadSubtask, clamp_progress, update_decoded_stream_config};
 use crate::audio_engine::analysis_pcm::fft::{
     RESAMPLE_CHUNK_FRAMES, fft_dimensions, tail_call_budget,
 };
 use crate::audio_engine::channels::map_channels;
 use crate::audio_engine::errors::SampleLoadError;
+#[cfg(test)]
 use crate::messages::SampleBuffer;
 use audioadapter_buffers::owned::InterleavedOwned;
 use rubato::{Fft, FixedSync, Indexing, Resampler};
@@ -17,6 +17,7 @@ use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+#[cfg(test)]
 use std::sync::Arc;
 use symphonia::core::{
     audio::SampleBuffer as DecoderBuffer,
@@ -27,7 +28,20 @@ use symphonia::core::{
     meta::MetadataOptions,
     probe::Hint,
 };
-use symphonia::default::{get_codecs, get_probe};
+use symphonia::default::{get_codecs, register_enabled_formats};
+
+mod rf64;
+pub(crate) mod stream;
+
+fn complete_probe() -> &'static symphonia::core::probe::Probe {
+    static PROBE: std::sync::OnceLock<symphonia::core::probe::Probe> = std::sync::OnceLock::new();
+    PROBE.get_or_init(|| {
+        let mut probe = symphonia::core::probe::Probe::default();
+        register_enabled_formats(&mut probe);
+        probe.register_all::<rf64::Rf64Reader>();
+        probe
+    })
+}
 
 const COPY_FRAMES: usize = 4096;
 const MAX_CHANNELS: usize = 32;
@@ -208,6 +222,7 @@ fn supported_decoder_codec(codec: &str) -> bool {
     .any(|known| format!("{known:?}") == codec && get_codecs().get_codec(known).is_some())
 }
 
+#[cfg(test)]
 pub(crate) struct DecodedAudio {
     pub(crate) samples: Vec<f32>,
     pub(crate) channels: usize,
@@ -257,6 +272,7 @@ fn check_cancelled(cancelled: &impl Fn() -> bool) -> Result<(), SampleLoadError>
     Ok(())
 }
 
+#[cfg(test)]
 fn bytes(samples: usize) -> Result<usize, SampleLoadError> {
     samples
         .checked_mul(size_of::<f32>())
@@ -284,6 +300,7 @@ fn validate_rate_channels(rate: u32, channels: usize) -> Result<(), SampleLoadEr
     Ok(())
 }
 
+#[cfg(test)]
 fn reserve_exact(
     samples: &mut Vec<f32>,
     length: usize,
@@ -367,6 +384,8 @@ fn probe_snapshot(
     file.seek(SeekFrom::Start(0))?;
     let container = if header_length >= 12 && &header[..4] == b"RIFF" && &header[8..12] == b"WAVE" {
         "riff-wave-v1".to_string()
+    } else if header_length >= 12 && &header[..4] == b"RF64" && &header[8..12] == b"WAVE" {
+        "rf64-wave-ds64-flitzi-demux-v1".to_string()
     } else if header_length >= 12
         && &header[..4] == b"FORM"
         && matches!(&header[8..12], b"AIFF" | b"AIFC")
@@ -399,7 +418,8 @@ fn probe_snapshot(
         enable_gapless: false,
         ..Default::default()
     };
-    let probed = get_probe().format(&hint, mss, &format_options, &MetadataOptions::default())?;
+    let probed =
+        complete_probe().format(&hint, mss, &format_options, &MetadataOptions::default())?;
     let format = probed.format;
     let track = format
         .default_track()
@@ -491,6 +511,7 @@ pub(crate) fn playback_cache_transform(
 }
 
 /// Decode the supplied immutable snapshot handle; never reopen its source path.
+#[cfg(test)]
 pub(crate) fn decode_audio_snapshot(
     file: File,
     hint_path: &Path,
@@ -681,6 +702,7 @@ pub(crate) fn decode_audio_snapshot(
 }
 
 /// Preserve complete decoder PCM while deriving complete output-format playback.
+#[cfg(test)]
 pub(crate) fn prepare_playback(
     decoded: &DecodedAudio,
     output_channels: usize,
@@ -811,6 +833,7 @@ pub(crate) fn prepare_playback(
     ))
 }
 
+#[cfg(test)]
 fn resample_bounded(
     input_samples: Vec<f32>,
     channels: usize,

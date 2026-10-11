@@ -2,10 +2,10 @@
 
 import ctypes
 import sys
-import wave
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, BinaryIO
+from uuid import uuid4
 
 import torch
 from torch import Tensor, nn
@@ -20,6 +20,7 @@ from flitzis_bs_roformer.model import (
     SAMPLE_RATE,
     SOURCES,
 )
+from flitzis_looper.pcm16_wav import Pcm16WavWriter, PcmWavReader
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -101,7 +102,7 @@ def _read_batch(
     return torch.stack(parts), locations, position
 
 
-def _write_pcm16(handle: wave.Wave_write, samples: Tensor) -> None:
+def _write_pcm16(handle: Pcm16WavWriter, samples: Tensor) -> None:
     if not bool(torch.isfinite(samples).all()):
         msg = "BS-RoFormer produced non-finite PCM"
         raise ValueError(msg)
@@ -112,7 +113,7 @@ def _write_pcm16(handle: wave.Wave_write, samples: Tensor) -> None:
 
 
 def _flush(
-    handles: list[wave.Wave_write],
+    handles: list[Pcm16WavWriter],
     result: Tensor,
     counter: Tensor,
     base: int,
@@ -135,7 +136,7 @@ def _flush(
 class _OverlapAdd:
     def __init__(
         self,
-        handles: list[wave.Wave_write],
+        handles: list[Pcm16WavWriter],
         source_frames: int,
         plan: ChunkPlan,
     ) -> None:
@@ -206,9 +207,17 @@ def _infer_batches(model: nn.Module, source: BinaryIO, writer: _OverlapAdd, devi
             writer.flush_after(position)
 
 
-def _publish_outputs(temporary: list[Path], output: Path, source_frames: int) -> None:
-    for path in temporary:
-        with wave.open(str(path), "rb") as handle:
+def _publish_outputs(
+    temporary: list[Path],
+    output: Path,
+    source_frames: int,
+    expected_outputs: list[tuple[str, tuple[int, int]]],
+) -> None:
+    for path, (expected, identity) in zip(temporary, expected_outputs, strict=True):
+        with PcmWavReader(path) as handle:
+            if handle.file_identity != identity:
+                msg = "BS-RoFormer output file identity changed"
+                raise ValueError(msg)
             shape = (
                 handle.getnframes(),
                 handle.getframerate(),
@@ -217,6 +226,9 @@ def _publish_outputs(temporary: list[Path], output: Path, source_frames: int) ->
             )
             if shape != (source_frames, SAMPLE_RATE, 2, 2):
                 msg = "BS-RoFormer output shape is incomplete"
+                raise ValueError(msg)
+            if handle.verify() != expected:
+                msg = "BS-RoFormer output failed full integrity verification"
                 raise ValueError(msg)
     for path, name in zip(temporary, SOURCES, strict=True):
         path.replace(output / f"{name}.wav")
@@ -242,18 +254,23 @@ def separate_pcm(
         msg = "Invalid BS-RoFormer inference input"
         raise ValueError(msg)
     output.mkdir(parents=True, exist_ok=True)
-    temporary = [output / f".{source}.wav.part" for source in SOURCES]
+    token = uuid4().hex
+    temporary = [output / f".{source}.{token}.wav.part" for source in SOURCES]
+    handles: list[Pcm16WavWriter] = []
     try:
         with ExitStack() as stack:
-            handles = [stack.enter_context(wave.open(str(path), "wb")) for path in temporary]
-            for handle in handles:
-                handle.setnchannels(2)
-                handle.setsampwidth(2)
-                handle.setframerate(SAMPLE_RATE)
+            for path in temporary:
+                handle = stack.enter_context(
+                    Pcm16WavWriter(
+                        path, sample_rate_hz=SAMPLE_RATE, channels=2, frames=source_frames
+                    )
+                )
+                handles.append(handle)
             source = stack.enter_context(decoded.open("rb"))
             writer = _OverlapAdd(handles, source_frames, actual_plan)
             _infer_batches(model, source, writer, device)
-        _publish_outputs(temporary, output, source_frames)
+            expected_outputs = [(handle.file_digest, handle.file_identity) for handle in handles]
+        _publish_outputs(temporary, output, source_frames, expected_outputs)
     finally:
-        for path in temporary:
-            path.unlink(missing_ok=True)
+        for handle in handles:
+            handle.discard_owned_output()

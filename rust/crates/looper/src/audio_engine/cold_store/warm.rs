@@ -55,7 +55,7 @@ fn number(value: &Value, key: &str) -> io::Result<u64> {
         .ok_or_else(|| invalid("missing warm numeric dimension"))
 }
 
-pub(super) fn dimensions(value: &Value, maximum: usize) -> io::Result<(usize, usize, u32, u64)> {
+pub(super) fn dimensions(value: &Value, _maximum: usize) -> io::Result<(usize, usize, u32, u64)> {
     let channels = usize::try_from(number(value, "channels")?)
         .map_err(|_| invalid("warm channels overflow"))?;
     let frames = usize::try_from(number(value, "full_frames")?)
@@ -69,7 +69,6 @@ pub(super) fn dimensions(value: &Value, maximum: usize) -> io::Result<(usize, us
     if !(1..=32).contains(&channels)
         || frames == 0
         || rate == 0
-        || length > maximum
         || number(value, "full_bytes")? != length as u64
         || value["format"] != "f32-le-interleaved-v1"
         || value["channel_layout"] != "interleaved-channel-index-order-v1"
@@ -81,13 +80,18 @@ pub(super) fn dimensions(value: &Value, maximum: usize) -> io::Result<(usize, us
     Ok((channels, frames, rate, length as u64))
 }
 
-fn verify_pcm(
+pub(super) fn verify_pcm(
     file: &mut File,
     descriptor: &Value,
     maximum: usize,
     cancelled: &impl Fn() -> bool,
     total: &mut u64,
 ) -> io::Result<()> {
+    if maximum < CHUNK_BYTES {
+        return Err(invalid(
+            "warm full-integrity scratch exceeds preparation budget",
+        ));
+    }
     let (channels, _, _, length) = dimensions(descriptor, maximum)?;
     if file.metadata()?.len() != length {
         return Err(invalid("warm PCM length mismatch"));

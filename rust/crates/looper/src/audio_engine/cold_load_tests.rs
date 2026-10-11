@@ -856,3 +856,7 @@ mod material_migration_control_tests;
 
 #[path = "stem_pair_publication_tests.rs"]
 mod stem_pair_publication_tests;
+
+#[cfg(windows)]
+#[path = "long_source_streaming_tests.rs"]
+mod long_source_streaming_tests;

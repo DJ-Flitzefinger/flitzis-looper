@@ -5,9 +5,11 @@ from typing import TYPE_CHECKING
 import pytest
 
 from flitzis_looper.models import SampleAnalysis
+from tests.conftest import write_mono_pcm16_wav
 from tests.flitzis_looper.conftest import current_timing_metadata
 
 if TYPE_CHECKING:
+    from pathlib import Path
     from unittest.mock import Mock
 
     from flitzis_looper.controller import AppController
@@ -67,17 +69,17 @@ def test_failed_cold_load_settles_superseded_analysis_without_changing_effective
 
 @pytest.mark.parametrize("restored", [False, True])
 @pytest.mark.parametrize("include_analysis", [False, True])
-def test_current_source_completion_preserves_newer_timing_and_analysis_request(
+def test_source_completion_preserves_timing_and_allows_analysis_only_after_loading(
     controller: AppController,
     audio_engine_mock: Mock,
+    tmp_path: Path,
     *,
     restored: bool,
     include_analysis: bool,
 ) -> None:
-    project = controller.project
-    session = controller.session
+    project, session = controller.project, controller.session
     cached_path = "samples/current.wav"
-    project.sample_paths[0] = cached_path if restored else None
+    project.sample_paths[0] = cached_path if restored else "samples/predecessor.wav"
     old_analysis = SampleAnalysis.model_validate(_legacy_analysis())
     project.sample_analysis[0] = old_analysis
     project.manual_bpm[0] = 123.456
@@ -85,40 +87,65 @@ def test_current_source_completion_preserves_newer_timing_and_analysis_request(
     project.pad_loop_auto[0] = False
     project.pad_loop_start_s[0] = 3.25
     project.pad_loop_end_s[0] = 5.75
-    session.loading_sample_ids.add(0)
-    session.pending_sample_paths[0] = cached_path
-    controller.loader._load_request_ids[0] = 7
-    controller.loader._analysis_request_ids[0] = 9
-    session.analyzing_sample_ids.add(0)
-    session.sample_analysis_progress[0] = 0.5
+    current_source = (7, "b" * 64, 48_000 * 32, 48_000)
+    audio_engine_mock.waveform_source_identity.return_value = current_source
+    audio_engine_mock.load_sample_async.return_value = 7
+    if restored:
+        cached_file = tmp_path / cached_path
+        cached_file.parent.mkdir()
+        write_mono_pcm16_wav(cached_file, 48_000)
+        controller.loader.restore_samples_from_project_state()
+    else:
+        controller.loader.load_sample_async(0, cached_path)
+    assert controller.loader._load_request_ids[0] == 7
+    assert 0 in session.loading_sample_ids
+    audio_engine_mock.analyze_sample_async.return_value = 9
+    controller.loader.analyze_sample_async(0)
+    audio_engine_mock.analyze_sample_async.assert_not_called()
+    assert 0 not in controller.loader._analysis_request_ids
     audio_engine_mock.reset_mock()
+    completed_load = {
+        "type": "success",
+        "id": 0,
+        "request_id": 7,
+        "duration_s": 32.0,
+        "cached_path": cached_path,
+        "detected_loop_start_s": 1.0,
+        "timing_stale": True,
+        "analysis": _legacy_analysis() if include_analysis else None,
+    }
     audio_engine_mock.poll_loader_events.side_effect = [
-        {
-            "type": "success",
-            "id": 0,
-            "request_id": 7,
-            "duration_s": 32.0,
-            "cached_path": cached_path,
-            "detected_loop_start_s": 1.0,
-            "timing_stale": True,
-            "analysis": _legacy_analysis() if include_analysis else None,
-        },
+        completed_load,
         None,
     ]
 
     controller.loader.poll_loader_events()
 
-    assert project.sample_paths[0] == cached_path
-    assert project.sample_durations[0] == 32.0
-    assert 0 not in session.loading_sample_ids
-    assert 0 not in session.pending_sample_paths
-    assert 0 not in controller.loader._load_request_ids
-    assert project.sample_analysis[0] is old_analysis
-    assert project.manual_bpm[0] == 123.456
-    assert project.pad_grid_anchor_s[0] == -0.125
-    assert project.pad_loop_auto[0] is False
-    assert project.pad_loop_start_s[0] == 3.25
-    assert project.pad_loop_end_s[0] == 5.75
+    assert (project.sample_paths[0], project.sample_durations[0]) == (cached_path, 32.0)
+    assert (
+        session.loading_sample_ids,
+        session.pending_sample_paths,
+        controller.loader._load_request_ids,
+    ) == (set(), {}, {})
+    if restored:
+        assert project.sample_analysis[0] is old_analysis
+    else:
+        assert project.sample_analysis[0] is None
+    assert (
+        project.manual_bpm[0],
+        project.pad_grid_anchor_s[0],
+        project.pad_loop_auto[0],
+        project.pad_loop_start_s[0],
+        project.pad_loop_end_s[0],
+    ) == (123.456, -0.125, False, 3.25, 5.75)
+    assert 0 not in controller.loader._analysis_request_ids
+    assert 0 not in session.analyzing_sample_ids
+    controller.loader.analyze_sample_async(0)
+    audio_engine_mock.analyze_sample_async.assert_called_once_with(0)
+    session.sample_analysis_progress[0] = 0.5
+    # Delayed feedback for the completed load cannot retire the later public admission.
+    audio_engine_mock.poll_loader_events.side_effect = [completed_load, None]
+    controller.loader.poll_loader_events()
     assert controller.loader._analysis_request_ids[0] == 9
     assert 0 in session.analyzing_sample_ids
     assert session.sample_analysis_progress[0] == 0.5

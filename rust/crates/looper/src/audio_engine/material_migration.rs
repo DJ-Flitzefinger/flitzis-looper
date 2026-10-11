@@ -2,15 +2,19 @@
 
 use super::cold_jobs::PCM_LIMIT_BYTES;
 use super::cold_residency::{self, ResidentLoadHint};
-use super::cold_store::{ColdTransaction, CommittedColdLease, PcmArtifactInput};
+use super::cold_store::{ColdTransaction, CommittedColdLease};
 use super::material_paths::{self, AssetKind};
-use super::sample_loader::{SampleLoadProgress, decode_audio_snapshot, prepare_playback};
+use super::sample_loader::{
+    SampleLoadProgress, decode_audio_snapshot_streamed, prepare_playback_streamed,
+};
 use crate::messages::SampleBuffer;
 use serde_json::{Value, json};
 use std::path::Path;
 use std::sync::Arc;
 
 pub(super) struct PreparedMigrationMaterial {
+    /// Complete identity plus bounded preparation view. Subscribers load their
+    /// own actual loop/ALL demand from the sealed lease before publication.
     pub sample: SampleBuffer,
     pub lease: CommittedColdLease,
     old_reference: String,
@@ -83,19 +87,24 @@ pub(super) fn prepare_pcm(
     {
         return Ok(sample);
     }
-    let decoded = decode_audio_snapshot(
+    let (decoder_path, playback_path) = transaction
+        .streamed_artifact_paths()
+        .map_err(|error| error.to_string())?;
+    let mut decoded = decode_audio_snapshot_streamed(
         transaction
             .snapshot_file()
             .map_err(|error| error.to_string())?,
         source,
+        &decoder_path,
         output_rate,
         maximum,
         cancelled,
         &mut *progress,
     )
     .map_err(|error| error.to_string())?;
-    let (sample, transform) = prepare_playback(
-        &decoded,
+    let (playback, transform) = prepare_playback_streamed(
+        &mut decoded,
+        &playback_path,
         output_channels,
         output_rate,
         maximum,
@@ -103,25 +112,13 @@ pub(super) fn prepare_pcm(
         &mut *progress,
     )
     .map_err(|error| error.to_string())?;
+    transaction.record_streaming_scratch(decoded.scratch_reserved_bytes);
     transaction
-        .write_pcm_artifacts(
-            PcmArtifactInput {
-                samples: &decoded.samples,
-                rate_hz: decoded.rate_hz,
-                channels: decoded.channels,
-                provenance: decoded.decoder.to_json(),
-            },
-            PcmArtifactInput {
-                samples: &sample.samples,
-                rate_hz: output_rate,
-                channels: sample.channels,
-                provenance: json!({"processing":"full-buffer-playback-v1"}),
-            },
-            transform.to_json(),
-            cancelled,
-        )
+        .finish_streamed_artifacts(decoded.artifact, playback, transform.to_json(), cancelled)
         .map_err(|error| error.to_string())?;
-    Ok(sample)
+    transaction
+        .read_prepared_selection(resident_hint, maximum, cancelled)
+        .map_err(|error| error.to_string())
 }
 
 fn reference(samples_root: &Path, path: &Path) -> Result<String, String> {
@@ -144,6 +141,81 @@ pub(super) fn prepare_material(
     output_channels: usize,
     cancelled: &impl Fn() -> bool,
 ) -> Result<PreparedMigrationMaterial, String> {
+    // Preparation carries complete immutable identity and one actual frame;
+    // playable subscribers separately request their saved region or explicit ALL.
+    prepare_material_selected(
+        samples_root,
+        source,
+        output_rate,
+        output_channels,
+        cancelled,
+        Some(ResidentLoadHint {
+            start_s: 0.0,
+            end_s: 1.0 / f64::from(output_rate),
+            key_lock: false,
+        }),
+    )
+}
+
+pub(super) fn prepare_material_for_reference(
+    samples_root: &Path,
+    source: &Path,
+    output_rate: u32,
+    output_channels: usize,
+    cancelled: &impl Fn() -> bool,
+    reference: &SampleBuffer,
+) -> Result<PreparedMigrationMaterial, String> {
+    if !reference.valid_residency(output_rate, output_channels) {
+        return Err("material preparation reference has invalid residency".into());
+    }
+    let hint = Some(ResidentLoadHint {
+        start_s: reference.resident_start() as f64 / f64::from(output_rate),
+        end_s: reference.resident_end() as f64 / f64::from(output_rate),
+        key_lock: false,
+    });
+    prepare_material_selected(
+        samples_root,
+        source,
+        output_rate,
+        output_channels,
+        cancelled,
+        hint,
+    )
+}
+
+/// Existing small independent fixtures explicitly demand all of their PCM.
+/// Productive preparation always uses the bounded seed/reference entry points.
+#[cfg(test)]
+pub(super) fn prepare_material_complete_for_test(
+    samples_root: &Path,
+    source: &Path,
+    output_rate: u32,
+    output_channels: usize,
+    cancelled: &impl Fn() -> bool,
+) -> Result<PreparedMigrationMaterial, String> {
+    let mut material = prepare_material(
+        samples_root,
+        source,
+        output_rate,
+        output_channels,
+        cancelled,
+    )?;
+    material.sample = material
+        .lease
+        .read_complete_cancellable(&material.sample, PCM_LIMIT_BYTES, cancelled)
+        .map_err(|error| error.to_string())?;
+    material.lease.bind_pcm(&material.sample.samples);
+    Ok(material)
+}
+
+fn prepare_material_selected(
+    samples_root: &Path,
+    source: &Path,
+    output_rate: u32,
+    output_channels: usize,
+    cancelled: &impl Fn() -> bool,
+    resident_hint: Option<ResidentLoadHint>,
+) -> Result<PreparedMigrationMaterial, String> {
     // Resolve the actual old typed original before import creates any directories.
     let old = material_paths::resolve(samples_root, source).map_err(|error| error.to_string())?;
     if !matches!(old.kind, AssetKind::Original { .. }) {
@@ -163,19 +235,20 @@ pub(super) fn prepare_material(
             output_rate,
             output_channels,
             PCM_LIMIT_BYTES,
-            None,
+            resident_hint,
             cancelled,
         )
         .map_err(|error| error.to_string())?
     {
         sample
     } else if let Some(sample) = transaction
-        .try_copy_legacy_pcm(
+        .try_copy_legacy_pcm_selected(
             samples_root,
             &old_original,
             output_rate,
             output_channels,
             PCM_LIMIT_BYTES,
+            resident_hint,
             cancelled,
         )
         .map_err(|error| error.to_string())?
@@ -188,7 +261,7 @@ pub(super) fn prepare_material(
             output_rate,
             output_channels,
             PCM_LIMIT_BYTES,
-            None,
+            resident_hint,
             cancelled,
             &mut |_| {},
         )?

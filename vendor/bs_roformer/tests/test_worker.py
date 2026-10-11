@@ -209,6 +209,19 @@ def test_invalid_prediction_never_replaces_existing_complete_outputs(
     assert all((output / f"{source}.wav").read_bytes() == data for source, data in previous.items())
 
 
+def test_failed_attempt_preserves_unknown_old_partial_file(tmp_path: Path) -> None:
+    decoded = tmp_path / "source.f32"
+    _source(decoded, 317)
+    output = tmp_path / "stems"
+    output.mkdir()
+    unknown = output / ".drums.wav.part"
+    unknown.write_bytes(b"unknown predecessor partial")
+    with pytest.raises(ValueError, match="non-finite"):
+        separate_pcm(LateNonFiniteSources(), decoded, output, 317, "cpu", ChunkPlan(64))
+    assert unknown.read_bytes() == b"unknown predecessor partial"
+    assert [path.name for path in output.iterdir()] == [unknown.name]
+
+
 @pytest.mark.parametrize("invalid", ["truncated", "nonfinite"])
 def test_invalid_decoded_source_leaves_no_outputs(tmp_path: Path, invalid: str) -> None:
     decoded = tmp_path / "source.f32"

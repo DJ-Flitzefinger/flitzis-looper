@@ -110,6 +110,31 @@ pub(super) fn admit(
     resident_hint: Option<ResidentLoadHint>,
     source_intent: &str,
 ) -> PyResult<u64> {
+    #[cfg(test)]
+    if let Some((producer, _)) = &engine.test_control_channels {
+        // An explicitly installed headless command/feedback pair exercises this
+        // real PyO3 route without constructing an App, CPAL stream or device.
+        return admit_for_format_selected_intent(
+            engine,
+            id,
+            path,
+            (
+                run_analysis,
+                restore_automatic,
+                replace_assignment,
+                resident_hint,
+            ),
+            producer.clone(),
+            (
+                2,
+                48_000,
+                std::env::current_dir()
+                    .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
+                    .join("samples"),
+            ),
+            source_intent,
+        );
+    }
     let handle = engine
         .stream_handle
         .as_ref()
@@ -322,6 +347,22 @@ pub(super) fn admit_selected_material(
         .lock()
         .map_err(|_| PyRuntimeError::new_err("sample cache lock poisoned"))?[id]
         .clone();
+    // Material preparation carries an identity seed, not an ALL playback intent.
+    // Derive its subscriber region from this request-protected source snapshot
+    // so migration preserves actual finite residency without a second cache read.
+    let resident_hint = resident_hint.or_else(|| {
+        prepared_material.as_ref()?;
+        initial_source
+            .as_ref()
+            .filter(|sample| {
+                sample.resident_start() != 0 || sample.resident_end() != sample.frame_count()
+            })
+            .map(|sample| ResidentLoadHint {
+                start_s: sample.resident_start() as f64 / f64::from(output_rate),
+                end_s: sample.resident_end() as f64 / f64::from(output_rate),
+                key_lock: false,
+            })
+    });
     let source_pin = if samples_root.exists() {
         super::project_assets::owned_path(&samples_root, &source_path)
             .ok()
@@ -531,6 +572,7 @@ impl ColdLoad {
             SampleBuffer,
             Option<crate::messages::SampleAnalysis>,
             Option<f64>,
+            Option<String>,
         ),
         String,
     > {
@@ -539,7 +581,44 @@ impl ColdLoad {
             if cancelled() {
                 return Err("material subscriber became stale".into());
             }
-            let mut sample = prepared.sample.clone();
+            // A material preparation seed grants no implicit full-track residency.
+            // The actual subscriber's saved loop/ALL demand is read under the
+            // same sealed complete lease before source queue admission.
+            let source = &prepared.sample;
+            let (start, end, context) = if let Some(hint) = self.resident_hint {
+                let range = hint.region(self.output_rate, source.frame_count())?;
+                if hint.key_lock {
+                    (
+                        0,
+                        source.frame_count(),
+                        crate::messages::ResidentContext::KeyLockFullTrack,
+                    )
+                } else {
+                    (
+                        range.start,
+                        range.end,
+                        crate::messages::ResidentContext::FiniteLoop,
+                    )
+                }
+            } else {
+                (
+                    0,
+                    source.frame_count(),
+                    crate::messages::ResidentContext::FullTrack,
+                )
+            };
+            let mut sample = prepared
+                .lease
+                .read_window_cancellable(
+                    source,
+                    start,
+                    end,
+                    1,
+                    context,
+                    PCM_LIMIT_BYTES,
+                    &cancelled,
+                )
+                .map_err(|error| error.to_string())?;
             let mut history = self
                 .pcm_history
                 .lock()
@@ -570,7 +649,7 @@ impl ColdLoad {
                 .map_err(|error| error.to_string())?;
             history[self.id].push(Arc::downgrade(&sample.samples));
             lease.bind_pcm(&sample.samples);
-            return Ok((lease, sample, None, None));
+            return Ok((lease, sample, None, None, None));
         }
 
         let mut transaction =
@@ -601,11 +680,7 @@ impl ColdLoad {
             self.output_rate,
             self.output_channels,
             PCM_LIMIT_BYTES,
-            if self.run_analysis {
-                None
-            } else {
-                self.resident_hint
-            },
+            self.resident_hint,
             &cancelled,
             &mut report,
         )?;
@@ -656,30 +731,62 @@ impl ColdLoad {
         } else {
             super::initial_loop_start::detect_initial_loop_start(&sample, self.output_rate)
         };
-        let analysis = if self.run_analysis {
-            // Account full playback, channel-conversion copy, mono, resampler and
-            // f32/f64 analyzer inputs before invoking existing bounded-input kernels.
-            super::analysis_pcm::default_analysis_peak(
-                sample.frame_count(),
-                sample.channels,
-                self.output_rate,
-                0,
-                PCM_LIMIT_BYTES,
-            )
-            .map_err(|error| {
-                format!("cold automatic analysis exceeds transient PCM byte limit: {error}")
-            })?;
+        let (analysis, analysis_error) = if self.run_analysis {
+            // Automatic analysis is still requested. Its existing complete-input
+            // kernels have a separate genuine RAM budget; they cannot force a
+            // selected loop to own complete source PCM or veto durable import.
+            let analysis_result = (|| -> Result<crate::messages::SampleAnalysis, String> {
+                let finite =
+                    sample.resident_start() != 0 || sample.resident_end() != sample.frame_count();
+                let held = if finite {
+                    sample
+                        .samples
+                        .len()
+                        .checked_mul(4)
+                        .ok_or("analysis held PCM overflow")?
+                } else {
+                    0
+                };
+                super::analysis_pcm::default_analysis_peak(
+                    sample.frame_count(),
+                    sample.channels,
+                    self.output_rate,
+                    held,
+                    super::constant_timing::MAX_PCM_BYTES,
+                )
+                .map_err(|error| {
+                    format!("automatic analysis exceeds its PCM preparation budget: {error}")
+                })?;
+                if cancelled() {
+                    return Err("cold load cancelled".into());
+                }
+                progress.emit(LoadProgressStage::Analyzing, 0.0, resampling_required, true);
+                let complete = if finite {
+                    transaction
+                        .read_prepared_selection(
+                            None,
+                            super::constant_timing::MAX_PCM_BYTES.saturating_sub(held),
+                            &cancelled,
+                        )
+                        .map_err(|error| {
+                            format!("automatic analysis PCM preparation failed: {error}")
+                        })?
+                } else {
+                    sample.clone()
+                };
+                analyze_sample(&complete, self.output_rate)
+            })();
+            // Cancel/stale source can never become a successful load carrying an
+            // incidental analysis warning. It still rolls back the transaction.
             if cancelled() {
                 return Err("cold load cancelled".into());
             }
-            progress.emit(LoadProgressStage::Analyzing, 0.0, resampling_required, true);
-            let result = analyze_sample(&sample, self.output_rate)?;
-            if cancelled() {
-                return Err("cold load cancelled".into());
+            match analysis_result {
+                Ok(result) => (Some(result), None),
+                Err(error) => (None, Some(error)),
             }
-            Some(result)
         } else {
-            None
+            (None, None)
         };
         progress.emit(
             LoadProgressStage::Publishing,
@@ -703,7 +810,13 @@ impl ColdLoad {
             history[self.id].push(Arc::downgrade(&sample.samples));
         }
         transaction.bind_pcm(&sample.samples);
-        Ok((transaction.into_lease(), sample, analysis, detected))
+        Ok((
+            transaction.into_lease(),
+            sample,
+            analysis,
+            detected,
+            analysis_error,
+        ))
     }
 
     fn run(self, producer: Arc<Mutex<Producer<ControlMessage>>>) {
@@ -804,7 +917,7 @@ impl ColdLoad {
     }
 
     fn publish(&self, producer: &Arc<Mutex<Producer<ControlMessage>>>) -> Result<(), String> {
-        let (lease, sample, analysis, detected_loop_start_s) = self.prepare()?;
+        let (lease, sample, analysis, detected_loop_start_s, analysis_error) = self.prepare()?;
         let source_digest = lease.manifest.descriptor["decoder"]["original"]["sha256"]
             .as_str()
             .ok_or("prepared original digest missing")?
@@ -972,6 +1085,7 @@ impl ColdLoad {
                 cached_path,
                 original_lease: Some(original_lease),
                 analysis,
+                analysis_error,
             })
             .map_err(|_| "native adoption metadata receiver closed")?;
         publication.adopted = true;

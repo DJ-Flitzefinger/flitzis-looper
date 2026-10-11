@@ -44,9 +44,30 @@ other owners SHALL survive cleanup.
 - **THEN** its stem intent/eligibility is revoked while FullMix remains usable
 - **AND** only its exact owned retired generation is deleted after final readers
 
+## REMOVED Requirements
+
 ### Requirement: Stem Generation And Replacement Require An Inactive Pad
+The system SHALL replace the historical combined inactivity restriction with
+separate offline generation and live new-set adoption gates.
+
+**Reason**: Direct E11-05 and E11-19 permit background generation during playback
+and require independently proved continuous active adoption.
+
+**Migration**: Use the added separate-gates requirement below. Active replacement
+remains fail-closed until its pending delivery and actual proofs are complete.
+
+#### Scenario: Generation completion grants no active adoption
+- **WHEN** an offline generation has completed
+- **THEN** only the separate new-set adoption gates SHALL govern live publication
+
+## ADDED Requirements
+
+### Requirement: Offline stem generation and live new-set adoption have separate gates
 The system SHALL separate offline generation and verified disk publication from active new-set adoption: generation MAY proceed for a playing pad under an immutable source lease, while active adoption SHALL remain fail-closed until the E11-05 and E11-19 new-generation continuity, ownership and own-native-ACK gates are implemented and proved.
-This pending target supersedes the historical heading's inactive-generation restriction. P5a first residency of an already selected committed set and same-set relocation SHALL retain their distinct guarded identities; neither SHALL authorize a new generation, new timing evidence or another user's result. Existing source/cache/set/ticket/request/geometry/window/voice/DSP/history/FIFO leases and native ACKs SHALL remain required.
+
+#### Scenario: Remaining contract constraints hold for every operation
+- **WHEN** the system exercises this requirement
+- **THEN** This pending target supersedes the historical heading's inactive-generation restriction. P5a first residency of an already selected committed set and same-set relocation SHALL retain their distinct guarded identities; neither SHALL authorize a new generation, new timing evidence or another user's result. Existing source/cache/set/ticket/request/geometry/window/voice/DSP/history/FIFO leases and native ACKs SHALL remain required.
 
 #### Scenario: Background generation while playback continues
 - **WHEN** a playing pad requests a different selected model
@@ -63,6 +84,8 @@ This pending target supersedes the historical heading's inactive-generation rest
 - **WHEN** ALL is requested during FullMix playback
 - **THEN** P5a SHALL require its same-selected-set ranges, permits and native ACK
 - **AND** E11-05/19 new-generation gates SHALL remain separate and unproved by that path
+
+## MODIFIED Requirements
 
 ### Requirement: Prepared Stem Buffers Are Aligned For Playback
 The system SHALL commit complete immutable aligned f32 playback PCM derivatives

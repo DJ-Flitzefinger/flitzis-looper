@@ -1,7 +1,9 @@
 //! Actual handle, reader and second-process oracles; no audio device is opened.
 #![cfg(windows)]
 use super::*;
-use crate::audio_engine::{material_migration::prepare_material, mixer::RtMixer};
+use crate::audio_engine::{
+    material_migration::prepare_material_complete_for_test as prepare_material, mixer::RtMixer,
+};
 use crate::messages::SampleBuffer;
 use std::{
     process::Command,

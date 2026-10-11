@@ -11259,7 +11259,8 @@
       "work": "Bounded streaming complete source/five-stem conversion, alignment and full-integrity warm verifier using existing readers/jobs.",
       "gates": [
         "Legacy full-array small-fixture oracle + actual >10-minute/>1GiB complete PCM/frame/EOF/digest/Cancel/failure/memory tests; PAD4 real source case if accessible.",
-        "Live residency follows user loop/ALL/budget. Explicit scratch/process peaks and Demucs inference separate."
+        "Live residency follows user loop/ALL/budget. Explicit scratch/process peaks and Demucs inference separate.",
+        "OPEN: ordinary UI import supplies no finite hint before initial full-source live admission, and KEYLOCK loads retain the existing full-track fallback even with finite bounds. Actual default-eight-bars/user-loop admission and finite KEYLOCK-load integration remain required P4b/P5b work. Bounded storage delivery does not complete X11-LONG."
       ]
     },
     {
@@ -11419,7 +11420,9 @@
       "delivery_owner": "X11-LONG",
       "normative_spec": "openspec/changes/adopt-pad-owned-pcm-residency/specs/pcm-cache-residency/spec.md",
       "acceptance_gate": "Actual >10-minute and >1-GiB complete PCM source; small oracle exact bit normalization/offset/padding/late first-onset four-second +/-0.25 alignment/chunk partitions; full five WAV/PCM+mono hashes/EOF/truncation/late mutation; fresh-process warm reopening; Cancel/disk/RAM error; measured scratch/worker overlap/process peak across growing lengths; actual PAD4 Boris Divider case when authorized source accessible. Demucs inference measured separately.",
-      "status": "PLANNED_ONLY_NOT_IMPLEMENTED",
+      "status": "PARTIAL_STORAGE_STREAMING_NORMAL_UI_IMPORT_OPEN",
+      "implementation_evidence": "docs/long-source-streaming-validation.md",
+      "remaining_integration": "Ordinary LoaderController import passes no resident hint and still requests complete initial live PCM before default-eight-bar initialization. KEYLOCK loads retain the existing full-track fallback even with finite bounds. P4b/P5b must supply the actual default/user selection before admission and complete finite KEYLOCK-load integration; finite Native/restore KEYLOCK-off tests do not complete these paths or full E11-03.",
       "final_coverage_receipts_required": [
         "V0",
         "H-LIVE",

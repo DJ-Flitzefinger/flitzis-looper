@@ -661,6 +661,111 @@ fn hostile_manifest_and_dimension_extents_fail_before_pcm_allocation() {
 }
 
 #[test]
+fn complete_disk_extent_above_scratch_budget_warm_verifies_all_content_then_reads_selected_loop() {
+    use crate::audio_engine::cold_residency::ResidentLoadHint;
+    let fixture = Fixture::new(48_000, 2);
+    let (sample, first) = fixture.cold(48_000, 2);
+    let source_frames = sample.frame_count();
+    let expected = sample.samples[32 * 2..64 * 2].to_vec();
+    let full_bytes = sample.samples.len() * 4;
+    let cache = first.cache_path.clone();
+    let identity = first.manifest.identity.clone();
+    drop((sample, first));
+    let budget = CHUNK_BYTES + 1024;
+    assert!(full_bytes > budget);
+    let mut transaction =
+        ColdTransaction::capture(&fixture.samples, &fixture.source, true, &|| false).unwrap();
+    let _gate = transaction.preparation_gate(48_000, 2, &|| false).unwrap();
+    let selected = transaction
+        .try_reuse_selected(
+            48_000,
+            2,
+            budget,
+            Some(ResidentLoadHint {
+                start_s: 32.0 / 48_000.0,
+                end_s: 64.0 / 48_000.0,
+                key_lock: false,
+            }),
+            &|| false,
+        )
+        .unwrap()
+        .expect("disk extent must not be charged as live allocation");
+    assert_eq!(selected.samples.as_ref(), expected);
+    assert_eq!(selected.frame_count(), source_frames);
+    assert_eq!(selected.resident_start(), 32);
+    assert_eq!(selected.resident_end(), 64);
+    assert_eq!(
+        transaction.integrity.decoder_verify_bytes,
+        full_bytes as u64
+    );
+    assert_eq!(
+        transaction.integrity.playback_verify_bytes,
+        full_bytes as u64
+    );
+    assert_eq!(transaction.integrity.playback_read_bytes, 32 * 2 * 4);
+    assert_eq!(transaction.manifest().unwrap().identity, identity);
+    transaction.commit(&|| false).unwrap();
+    let lease = transaction.into_lease();
+    assert_eq!(lease.cache_path, cache);
+    assert!(
+        lease.read_complete(&selected, budget).is_err(),
+        "explicit ALL must retain its real allocation budget"
+    );
+}
+
+#[test]
+fn finite_warm_selection_still_rejects_late_pcm_changes_truncation_and_extra_eof() {
+    use crate::audio_engine::cold_residency::ResidentLoadHint;
+    for name in ["decoder.f32le", "playback.f32le"] {
+        for mode in ["late-finite", "late-nonfinite", "truncate", "extra-eof"] {
+            let fixture = Fixture::new(48_000, 2);
+            let (sample, lease) = fixture.cold(48_000, 2);
+            let path = lease.cache_path.join(name);
+            drop((sample, lease));
+            let mut contents = fs::read(&path).unwrap();
+            let length = contents.len();
+            match mode {
+                "late-finite" => contents[length - 4] ^= 1,
+                "late-nonfinite" => contents[length - 4..].copy_from_slice(&f32::NAN.to_le_bytes()),
+                "truncate" => {
+                    contents.truncate(length - 4);
+                }
+                "extra-eof" => contents.extend_from_slice(&0_f32.to_le_bytes()),
+                _ => unreachable!(),
+            }
+            fs::write(&path, &contents).unwrap();
+            let mut transaction =
+                ColdTransaction::capture(&fixture.samples, &fixture.source, true, &|| false)
+                    .unwrap();
+            let _gate = transaction.preparation_gate(48_000, 2, &|| false).unwrap();
+            assert!(
+                transaction
+                    .try_reuse_selected(
+                        48_000,
+                        2,
+                        PCM_LIMIT_BYTES,
+                        Some(ResidentLoadHint {
+                            start_s: 32.0 / 48_000.0,
+                            end_s: 64.0 / 48_000.0,
+                            key_lock: false
+                        }),
+                        &|| false
+                    )
+                    .unwrap()
+                    .is_none(),
+                "selected loop accepted {mode} in {name}"
+            );
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                contents,
+                "unowned damaged generation was mutated"
+            );
+            assert!(fixture.source.exists());
+        }
+    }
+}
+
+#[test]
 fn full_validation_then_pcm_budget_failure_keeps_cleanup_reservation_for_valid_retry() {
     let fixture = Fixture::new(48_000, 2);
     let (pcm, lease) = fixture.cold(48_000, 2);

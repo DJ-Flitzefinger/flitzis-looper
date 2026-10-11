@@ -1,9 +1,27 @@
-## MODIFIED Requirements
+## REMOVED Requirements
 
 ### Requirement: GlobalParametersController No-Op Test Coverage
+The system SHALL replace this historical no-op contract with distinct explicit
+KEYLOCK broadcast and BPM-lock edge-case coverage.
+
+**Reason**: Direct E11-02 requires explicit same-value global KEYLOCK actions to
+visit loaded pads, superseding the historical KEYLOCK no-op scenario.
+
+**Migration**: Use the added requirement below; all BPM-lock edge coverage remains.
+
+#### Scenario: Explicit global KEYLOCK action supersedes the historical no-op
+- **WHEN** the requested global value already matches a new explicit action
+- **THEN** the added broadcast contract SHALL govern all currently loaded targets
+
+## ADDED Requirements
+
+### Requirement: Global parameter broadcasts and BPM lock edge cases have distinct test contracts
 The test suite SHALL include GlobalParametersController tests that distinguish
 explicit KEYLOCK broadcasts from BPM-lock no-op behavior and edge cases.
-Every explicit KEYLOCK action SHALL address all currently loaded pads across
+
+#### Scenario: Remaining contract constraints hold for every operation
+- **WHEN** the system exercises this requirement
+- **THEN** Every explicit KEYLOCK action SHALL address all currently loaded pads across
 banks, even when the global requested value already equals that action. Identical
 pending per-pad intent SHALL reuse its own work and deadline rather than enqueue
 duplicates. Converged per-pad state MAY avoid redundant preparation only after

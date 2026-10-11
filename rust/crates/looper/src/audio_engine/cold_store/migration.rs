@@ -15,13 +15,14 @@ impl ColdTransaction {
 
     /// A legacy locator is admitted by its own normal, complete warm verifier.
     /// Nothing is accepted by basename, historical path or a rewritten identity.
-    pub(in crate::audio_engine) fn try_copy_legacy_pcm(
+    pub(in crate::audio_engine) fn try_copy_legacy_pcm_selected(
         &mut self,
         samples_root: &Path,
         old_original: &Path,
         output_rate: u32,
         output_channels: usize,
         maximum: usize,
+        resident_hint: Option<crate::audio_engine::cold_residency::ResidentLoadHint>,
         cancelled: &impl Fn() -> bool,
     ) -> io::Result<Option<SampleBuffer>> {
         let old = material_paths::resolve(samples_root, old_original)?;
@@ -40,8 +41,13 @@ impl ColdTransaction {
             ));
         }
         let _preparation = legacy.preparation_gate(output_rate, output_channels, cancelled)?;
-        let Some(sample) =
-            legacy.try_reuse_selected(output_rate, output_channels, maximum, None, cancelled)?
+        let Some(sample) = legacy.try_reuse_selected(
+            output_rate,
+            output_channels,
+            maximum,
+            resident_hint,
+            cancelled,
+        )?
         else {
             // Absent, corrupt or decoder/device-incompatible candidates remain
             // untouched. The caller can visibly perform the ordinary decoder path.
@@ -128,6 +134,13 @@ impl ColdTransaction {
         }
         // Identical sealed bytes preserve the already-verified mono/geometry/EOF,
         // decoder policy and executed transform; commit reopens the renamed files.
+        // The returned resident allocation was read by the legacy verifier. Its
+        // selected-byte count belongs to this preparation's result even though
+        // the complete artifacts themselves were copied separately above.
+        self.integrity.playback_read_bytes = self
+            .integrity
+            .playback_read_bytes
+            .saturating_add(legacy.integrity.playback_read_bytes);
         self.manifest = Some(manifest);
         self.integrity.warm = true;
         Ok(Some(sample))

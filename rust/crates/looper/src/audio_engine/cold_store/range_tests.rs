@@ -6,7 +6,7 @@ use super::warm::{
 };
 use super::*;
 use crate::audio_engine::cold_jobs::PCM_LIMIT_BYTES;
-use crate::audio_engine::material_migration::prepare_material;
+use crate::audio_engine::material_migration::prepare_material_complete_for_test as prepare_material;
 use crate::messages::{CompleteSourceIdentity, ResidentContext, ResidentSourceView};
 
 const FRAMES: usize = 40_003;

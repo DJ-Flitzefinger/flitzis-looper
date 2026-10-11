@@ -24,7 +24,7 @@ fn decoded(samples: Vec<f32>, channels: usize, rate_hz: u32) -> DecodedAudio {
 
 /// Independent fully padded raw-FFT oracle: no partial-input calls, finite-tail
 /// helper, in-place movement, progress trim or production frame calculations.
-fn padded_reference(
+pub(super) fn padded_reference(
     samples: &[f32],
     channels: usize,
     source_rate: u32,
@@ -452,6 +452,39 @@ fn independent_codec_boundary_probe() {
             |_| {},
         )
         .unwrap();
+        let streaming = tempfile::tempdir().unwrap();
+        let mut streamed_source = super::stream::decode_audio_snapshot_streamed(
+            File::open(path).unwrap(),
+            path,
+            &streaming.path().join("decoder.f32le"),
+            rate,
+            512 * 1024 * 1024,
+            &|| false,
+            |_| {},
+        )
+        .unwrap();
+        let mut streamed_bytes = Vec::new();
+        streamed_source
+            .artifact
+            .reader
+            .read_to_end(&mut streamed_bytes)
+            .unwrap();
+        let streamed_pcm: Vec<f32> = streamed_bytes
+            .chunks_exact(4)
+            .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect();
+        assert_eq!(
+            streamed_pcm, source.samples,
+            "productive decoder differs from retained small codec oracle"
+        );
+        assert_eq!(
+            streamed_source.artifact.descriptor["provenance"],
+            source.decoder.to_json()
+        );
+        assert_eq!(
+            streamed_source.frames,
+            source.samples.len() / source.channels
+        );
         if fixture["format"] == "alac" {
             let mut forged = std::fs::read(path).unwrap();
             let atom = forged
@@ -469,6 +502,18 @@ fn independent_codec_boundary_probe() {
                 decode_audio_snapshot(
                     File::open(&forged_path).unwrap(),
                     &forged_path,
+                    rate,
+                    1024 * 1024 * 1024,
+                    &|| false,
+                    |_| {}
+                ),
+                Err(SampleLoadError::Limit(_))
+            ));
+            assert!(matches!(
+                super::stream::decode_audio_snapshot_streamed(
+                    File::open(&forged_path).unwrap(),
+                    &forged_path,
+                    &temporary.path().join("rejected-decoder.f32le"),
                     rate,
                     1024 * 1024 * 1024,
                     &|| false,
@@ -612,6 +657,32 @@ fn independent_codec_boundary_probe() {
                     .all(|(left, right)| (*left - *right).abs() < 2e-6)
             );
             assert_eq!(transform.to_json()["origin_frames"], 0);
+            let (mut disk, disk_transform) = super::stream::prepare_playback_streamed(
+                &mut streamed_source,
+                &streaming
+                    .path()
+                    .join(format!("playback-{target_rate}.f32le")),
+                source.channels,
+                target_rate,
+                512 * 1024 * 1024,
+                &|| false,
+                |_| {},
+            )
+            .unwrap();
+            let mut encoded = Vec::new();
+            disk.reader.read_to_end(&mut encoded).unwrap();
+            let disk_samples: Vec<f32> = encoded
+                .chunks_exact(4)
+                .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+                .collect();
+            assert_eq!(disk_samples.len(), oracle.len());
+            assert!(
+                disk_samples
+                    .iter()
+                    .zip(&oracle)
+                    .all(|(actual, expected)| (*actual - *expected).abs() < 2e-6)
+            );
+            assert_eq!(disk_transform.to_json(), transform.to_json());
         }
         let mut pcm_digest = Sha256::new();
         for sample in &source.samples {
@@ -620,6 +691,9 @@ fn independent_codec_boundary_probe() {
         let decoded_pcm_digest = format!("{:x}", pcm_digest.finalize());
         evidence.push(json!({"fixture":fixture,"decoder":policy,
             "decoded_pcm_sha256":decoded_pcm_digest,
+            "productive_streaming_decoder_pcm_sha256":streamed_source.artifact.descriptor["interleaved_sha256"],
+            "productive_streaming_decoder_provenance":streamed_source.artifact.descriptor["provenance"],
+            "productive_streaming_playback_rates_verified":[44100,48000,96000],
             "oversized_codec_configuration_rejected": fixture["format"] == "alac",
             "decoded_frames":source.samples.len()/source.channels,"peak_frame":peak,
             "independent_comparisons":comparisons,"playback_rates_verified":[44100,48000,96000]}));

@@ -5,7 +5,9 @@
 #![cfg(windows)]
 
 use super::*;
-use crate::audio_engine::material_migration::{PreparedMigrationMaterial, prepare_material};
+use crate::audio_engine::material_migration::{
+    PreparedMigrationMaterial, prepare_material_complete_for_test as prepare_material,
+};
 use crate::audio_engine::material_migration_control as control;
 use crate::audio_engine::material_paths;
 use crate::audio_engine::prepared_source::{PreparedSourceTicket, push_preparation_epoch_message};
@@ -689,7 +691,16 @@ fn cancellation_during_common_marker_reopen_rolls_back_only_owned_new_eligibilit
 
 #[test]
 fn real_discard_queue_saturation_preserves_creations_and_same_pair_can_retry() {
+    let observed = Instant::now();
+    eprintln!(
+        "discard queue phase: source initialization at {:?}",
+        observed.elapsed()
+    );
     let harness = Harness::new();
+    eprintln!(
+        "discard queue phase: source initialized at {:?}",
+        observed.elapsed()
+    );
     let ticket = harness.ticket(0);
     let pair = harness.prepare(0, &ticket, false, None);
     let selected = selection(&pair);
@@ -727,30 +738,56 @@ fn real_discard_queue_saturation_preserves_creations_and_same_pair_can_retry() {
         }
     }
     assert!(capacity_seen && !queued.is_empty());
+    eprintln!(
+        "discard queue phase: capacity reached at {:?}, status {:?}",
+        observed.elapsed(),
+        harness.engine.project_assets.status().unwrap()
+    );
     let failure = pair.discard().unwrap_err();
     assert!(failure.to_string().starts_with("RuntimeError:"));
     assert!(failure.to_string().contains("queue full"));
     assert_complete_selection(&harness.root, &selected);
     assert_eq!(ticket.publication_status(), "captured");
     drop(jobs);
+    eprintln!(
+        "discard queue phase: first job returns start at {:?}",
+        observed.elapsed()
+    );
     wait_until(|| {
         harness.engine.project_assets.collect_for_test();
         queued.iter().take(8).all(|path| !path.exists())
     });
+    eprintln!(
+        "discard queue phase: first job returns end at {:?}",
+        observed.elapsed()
+    );
     // The failed attempt must not mark this held producer permanently discarded.
     pair.discard().unwrap();
     assert_complete_selection(&harness.root, &selected);
     drop(pair);
+    eprintln!(
+        "discard queue phase: pair retirement start at {:?}",
+        observed.elapsed()
+    );
     wait_until(|| {
         harness.engine.project_assets.collect_for_test();
         !pcm.exists() && !common.exists()
     });
+    eprintln!(
+        "discard queue phase: pair retirement end at {:?}",
+        observed.elapsed()
+    );
     assert_eq!(fs::read(wav.join("instrumental.wav")).unwrap(), wav_bytes);
     assert!(wav.join(".complete.json").is_file());
     wait_until(|| {
         harness.engine.project_assets.collect_for_test();
         queued.iter().all(|path| !path.exists())
     });
+    eprintln!(
+        "discard queue phase: all jobs returned at {:?}, status {:?}",
+        observed.elapsed(),
+        harness.engine.project_assets.status().unwrap()
+    );
 }
 
 const PAIR_CHILD_ROOT: &str = "FLITZI_STEM_PAIR_REOPEN_ROOT";
