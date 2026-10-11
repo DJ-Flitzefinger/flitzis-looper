@@ -891,10 +891,10 @@ with an independently computed nontrivial interpolation weight and verifies both
 physical endpoint taps. The other active zero-gain pad keeps its own physical
 loop and unchanged readers/Native/demand; saved BPM intent and disk V2 reopen.
 
-These targets precede voice birth and remain constant. Live BPM changes after
-Capture, their stale rejection/retry and actual transport-time/smoothing paths
-remain separate open work, along with full task3.2 and later product/resource/
-Human gates. Production and build-only runtime inputs remain unchanged; timing
+These two targets precede voice birth and remain constant. The separate live case
+below covers one after-Capture rejection/retry and actual transport-time/smoothing
+path; full task3.2 and later product/resource/Human gates remain open.
+Production and build-only runtime inputs remain unchanged; timing
 labels do not claim BeatThis inference, device output or listening acceptance.
 
 The impacted shared-fixture regression gate passes all47 Release tests in191.01s,
@@ -906,6 +906,65 @@ without findings. Formatting, official strict validation, five relative file lin
 and whitespace pass; Clippy tests exit0 with the existing63 warnings (one
 duplicate), none in the changed tests. Prior unchanged production Release/import/
 Python checks remain reusable, without Native installation or Human App changes.
+
+### Public live BPM after an already queued replacement Adopt
+
+The additional public Python trace starts at150 BPM with the same actual accepted
+Automatic projection and finite `[17,1517)` PCM. V1 ALL1010 has already obtained
+its own productive Native/effect receipt. Genuine V2 files are committed/reopened
+and registered, and public ALL captures V2's own voice pin. The real worker queues
+its unchanged Adopt before the public displayed target changes to162 BPM.
+
+Admission changes model/display intent and queues one coupled SpeedAndMasterPeriod
+parameter plus a Bootstrap control behind Adopt. It does not consume source or
+change the running Native/FIFOs. The regular control-before-parameter callback
+order is retained: its existing three-slot retirement gate, given two slots,
+holds the actual front Adopt. The real parameter drain changes the source epoch,
+and one rendered V1 frame starts the new rate trajectory. The next callback with
+capacity dispatches the same stale Adopt and then Bootstrap. Own V2 rejects
+unclaimed; exact source/component owners, voice generation, source clock,
+Native/FIFO/history, DSP history, selection demand and transition remain V1.
+
+This trace uses the real scheduled-render wrapper from voice birth and advances
+TransportTimeline after every rendered callback. Its output frame matches the
+absolute audio frame, and the live parameter drain preserves the beat at that
+actual instant. The earlier completed source Bootstrap is not reanchored at zero.
+The accepted source timing epoch/revision and musical period remain authoritative.
+The second active zero-gain pad receives the global rate change while keeping its
+own physical loop, readers, voice and Native/demand owners.
+
+An independent declared epoch ledger derives rates from admitted periods and
+the `.05` per512 active-output-frame rule. For150→162, applied rates are
+approximately1.3000104167534732,1.3500104167534732 and1.3500112500937511 at
+frames0,512 and1024 after the first changed chunk. The last step is real; its
+pitch difference is below `.001`, so the running raw Native retains the previous
+applied pitch and both FIFOs. Complete original/component PCM, retained virtual
+phase, exact virtual-tail knots, independently split Native feed and uninterrupted
+EQ verify every output sample through irregular callbacks. The first new V1
+preparation's complete4096-frame warm interval crosses these rate epochs and is
+also independently fed; a subsequent V2 preparation starts after smoothing.
+
+Repeated controller polls retain the blocked own failed V2 attempt, exact
+ownership error, accepted current V2 registration and V1 effective identity.
+They enqueue no implicit retry and report no native-preparation-failed ACK.
+An explicit identical ALL gesture reuses that registration with a fresh own
+receipt, actual Capture/worker/Adopt,128-source-frame handover and later own
+4096-frame Native/effectiveness. Independent V1 mask0011 supplies V2 mask1010;
+the old failed receipt stays independently rejected, and only observing the
+fresh own effect clears the displayed error. Saved BPM intent and disk V2 reopen.
+
+This bounded trace does not complete the whole live-BPM/paused/stopped/mask
+matrix, full task3.2/3.3/L4, resource or Human device/listening gates. The setters
+use the same actual Native admission facade as the preceding public BPM cases;
+stream-bound Engine wrappers and BeatThis inference remain outside this proof.
+
+The focused new Release test passes in2.86s. After adding independent raw-FIFO
+and pre-parameter actual-BPM assertions, the final shared-fixture gate passes
+all48 Release tests in174.52s. One independent nonauthor final review reports
+no findings. Official strict validation, formatting, five relative file links
+and whitespace pass. Clippy tests exit0 with63 existing warnings (one duplicate),
+none in the changed tests. Unchanged production Release/import/Python checks
+are reused; no Native installation or Human App/device/listening action occurs.
 
 ### Public KEY LOCK OFF first candidate after Pause
 

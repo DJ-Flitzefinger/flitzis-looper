@@ -27,6 +27,8 @@ const CAPTURE_DEADLINE_CHILD: &str = "FLITZI_L3_CONTROLLER_CAPTURE_DEADLINE_CHIL
 const CAPTURE_DEADLINE_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_pending_capture_deadline_keeps_v1_then_fresh_own_retry";
 const PUBLIC_BPM_CHILD: &str = "FLITZI_L3_CONTROLLER_PUBLIC_BPM_CHILD";
 const PUBLIC_BPM_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_bpm_target_then_own_replacement_preserves_musical_wet_chronology";
+const LIVE_BPM_CHILD: &str = "FLITZI_L3_CONTROLLER_LIVE_BPM_CHILD";
+const LIVE_BPM_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_live_bpm_rejects_queued_v2_then_explicit_retry_keeps_wet_chronology";
 
 #[derive(Clone, Copy)]
 enum CandidateTrace {
@@ -37,6 +39,274 @@ enum CandidateTrace {
     WorkerPostPressure,
     CaptureDeadline,
     PublicBpm(f64),
+    LiveBpm,
+}
+
+fn live_bpm_then_explicit_retry(
+    engine: &AudioEngine,
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    parameters: &mut rtrb::Consumer<ControlParameterMessage>,
+    locals: &Py<PyDict>,
+    accepted: crate::audio_engine::constant_timing::AcceptedTimingProjection,
+) -> ControllerRateLedger {
+    use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
+    assert_eq!(playback.drain(consumer), 1, "actual V2 Capture at old BPM");
+    wait_until(|| consumer.peek().is_ok());
+    let queued = match consumer.peek().unwrap() {
+        ControlMessage::CommittedStemWork(work) => {
+            assert!(
+                matches!(work.as_ref(), CommittedStemRtWork::Adopt(transaction)
+                if transaction.id == 0 && transaction.mask == 0b1010 && transaction.candidate.is_some())
+            );
+            work.as_ref() as *const CommittedStemRtWork as usize
+        }
+        _ => panic!("expected actual already prepared V2 Adopt"),
+    };
+    let source = playback.callback.mixer.bank_for_measurement()[0]
+        .clone()
+        .unwrap();
+    let set = playback.callback.mixer.stems_for_measurement()[0]
+        .clone()
+        .unwrap();
+    let demand = playback.callback.mixer.stem_demand_for_measurement(0);
+    let before = voice(&playback.callback.mixer);
+    let clock = before.source_playback;
+    let generation = before.generation;
+    let native = before.stretch.native_state_address();
+    let fifo = before.stretch.pending_fifo_frames();
+    let epoch = before.stretch.source_epoch_owner().load(Ordering::Acquire);
+    let history = before.stretch.productive_history().unwrap();
+    let revision = engine.global_timing_revision.load(Ordering::Acquire);
+    assert!(playback.frame > 0 && playback.frame == playback.callback.transport.output_frame());
+    assert!(playback.callback.transport.bootstrap_reference().is_none());
+    let beat = playback.callback.transport.beat_position().unwrap();
+    let old_master = playback.callback.transport.master_period_seconds().unwrap();
+    controller_python(
+        locals,
+        r#"
+failed_bpm = candidate
+bpm_selection = live.disk.selection
+bpm_registration = bpm_selection.ticket
+bpm_error = 'Committed stem residency or mode ownership changed'
+assert failed_bpm.is_current() and not failed_bpm.claimed()
+assert failed_bpm.effective_mode_status() == 'waiting'
+assert transport.global_params.set_effective_display_bpm(162.0)
+assert project.speed == accepted_period * (162.0 / 60)
+assert session.master_period_seconds == accepted_period / project.speed
+assert abs(transport.global_params.effective_display_bpm() - 162.0) < 1e-10
+assert transport.bpm.current_timing(0) == timing_before_bpm
+assert live.attempt is bpm_selection and first.is_current()
+"#,
+    );
+    let speed = accepted.period_seconds * (162.0 / 60.0);
+    let master = accepted.period_seconds / speed;
+    let ratio = accepted.period_seconds / master;
+    assert!(engine.global_timing_revision.load(Ordering::Acquire) > revision);
+    assert!(
+        matches!(parameters.peek(), Ok(ControlParameterMessage::SetSpeedAndMasterPeriod {
+        speed: actual, period_seconds
+    }) if actual.to_bits() == speed.to_bits() && period_seconds.to_bits() == master.to_bits())
+    );
+    let unchanged = voice(&playback.callback.mixer);
+    assert!(unchanged.source_playback.matches_exact(&clock));
+    assert_eq!(unchanged.stretch.native_state_address(), native);
+    assert_eq!(unchanged.stretch.pending_fifo_frames(), fifo);
+    assert_eq!(
+        unchanged
+            .stretch
+            .source_epoch_owner()
+            .load(Ordering::Acquire),
+        epoch
+    );
+    assert_eq!(
+        playback.callback.mixer.output_bpm_for_sample_id(0),
+        Some(60.0 / old_master)
+    );
+    // The real regular callback checks controls first. Its established three-slot
+    // capacity gate retains the actual front Adopt and the following Bootstrap.
+    playback.callback.retirement.slots = 2;
+    assert_eq!(playback.drain(consumer), 0);
+    assert!(
+        matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+        if work.as_ref() as *const CommittedStemRtWork as usize == queued)
+    );
+    crate::audio_engine::audio_stream::drain_parameter_messages(
+        parameters,
+        &mut playback.callback.mixer,
+        &mut playback.callback.transport,
+    );
+    assert!(parameters.is_empty());
+    assert_eq!(playback.callback.transport.beat_position().unwrap(), beat);
+    assert_eq!(
+        playback.callback.transport.master_period_seconds(),
+        Some(master)
+    );
+    let changed = voice(&playback.callback.mixer);
+    assert!(
+        changed.source_playback.matches_exact(&clock),
+        "parameter admission consumes no source"
+    );
+    assert_eq!(changed.generation, generation);
+    assert_eq!(changed.stretch.native_state_address(), native);
+    assert_eq!(changed.stretch.pending_fifo_frames(), fifo);
+    assert!(changed.stretch.source_epoch_owner().load(Ordering::Acquire) > epoch);
+    let changed_history = changed.stretch.productive_history().unwrap();
+    assert_eq!(changed_history.binding, history.binding);
+    assert_eq!(changed_history.next_position, history.next_position);
+    assert_eq!(changed_history.fed_output_frames, history.fed_output_frames);
+    let start = playback.source_frame;
+    let mut other = ControllerRateLedger::new(
+        accepted.period_seconds * (150.0 / 60.0),
+        (LOOP_END - LOOP_START) as f64,
+    );
+    other.change(start, speed);
+    playback.rate_ledger.as_mut().unwrap().change(start, ratio);
+    playback.ratio = ratio;
+    for reference in [&mut playback.reference, &mut playback.full_mix] {
+        reference.set_speed(speed);
+        reference.set_master_period(master);
+    }
+    playback.render(1, true);
+    assert_eq!(
+        voice(&playback.callback.mixer)
+            .stretch
+            .native_state_address(),
+        native
+    );
+    assert_eq!(
+        playback.drain(consumer),
+        0,
+        "same real pressure still retains Adopt"
+    );
+    let before = voice(&playback.callback.mixer);
+    let clock = before.source_playback;
+    let fifo = before.stretch.pending_fifo_frames();
+    let history = before.stretch.productive_history().unwrap();
+    let dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    let transition = playback.callback.mixer.stem_transition_for_measurement(0);
+    playback.callback.retirement.slots = usize::MAX;
+    assert_eq!(
+        playback.drain(consumer),
+        2,
+        "unchanged stale Adopt then public Bootstrap"
+    );
+    assert!(consumer.is_empty());
+    let after = voice(&playback.callback.mixer);
+    assert!(after.source_playback.matches_exact(&clock));
+    assert_eq!(after.generation, generation);
+    assert_eq!(after.stretch.native_state_address(), native);
+    assert_eq!(after.stretch.pending_fifo_frames(), fifo);
+    let next_history = after.stretch.productive_history().unwrap();
+    assert_eq!(next_history.binding, history.binding);
+    assert_eq!(next_history.next_position, history.next_position);
+    assert_eq!(next_history.fed_output_frames, history.fed_output_frames);
+    let next_dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    assert_eq!(next_dsp.binding, dsp.binding);
+    assert_eq!(next_dsp.next_position, dsp.next_position);
+    assert_eq!(next_dsp.fed_output_frames, dsp.fed_output_frames);
+    assert!(
+        playback
+            .callback
+            .mixer
+            .stem_transition_for_measurement(0)
+            .matches_exact(transition)
+    );
+    assert_eq!(
+        playback.callback.mixer.stem_demand_for_measurement(0),
+        demand
+    );
+    assert!(Arc::ptr_eq(
+        &source.samples,
+        &playback.callback.mixer.bank_for_measurement()[0]
+            .as_ref()
+            .unwrap()
+            .samples
+    ));
+    let current_set = playback.callback.mixer.stems_for_measurement()[0]
+        .as_ref()
+        .unwrap();
+    assert!(Arc::ptr_eq(
+        &set.complete_set_identity,
+        &current_set.complete_set_identity
+    ));
+    for (old, current) in set.stems.iter().zip(&current_set.stems) {
+        assert!(Arc::ptr_eq(&old.samples, &current.samples));
+    }
+    controller_python(
+        locals,
+        r#"
+for _ in range(16):
+    controller.on_frame_render()
+    assert live.blocked and live.attempt is bpm_selection
+    assert live.control is previous_control and previous_control.receipt is first
+    assert live.disk.selection is bpm_selection and bpm_selection.ticket is bpm_registration
+    assert bpm_registration.is_current() and bpm_registration.publication_status() == 'accepted'
+    assert first.is_current() and first.effective_mode_status() == 'effective'
+    assert not failed_bpm.is_current() and not failed_bpm.claimed()
+    assert failed_bpm.residency_status() == 'rejected' and failed_bpm.effective_mode_status() == 'rejected'
+    assert failed_bpm.error() == bpm_error and failed_bpm.effective_failure_reason() is None
+    status = controller.stem_residency_status(0)
+    assert status.disk_stem_set_identity == disk_v2.stem_set_identity
+    assert status.control_stem_set_identity == disk_v1.stem_set_identity
+    assert status.effective_stem_set_identity == disk_v1.stem_set_identity
+    assert status.attempt_stem_set_identity == disk_v2.stem_set_identity
+    assert status.residency == 'rejected' and status.effective is None
+    assert session.stem_generation_errors == {0: bpm_error}
+"#,
+    );
+    assert!(consumer.is_empty(), "polling cannot retry V2");
+    let mut nontrivial = false;
+    for frames in [31, 257, 1, 777, 137] {
+        nontrivial |= playback
+            .render(frames, true)
+            .0
+            .iter()
+            .any(|sample| sample.abs() > 0.001);
+        assert_eq!(
+            voice(&playback.callback.mixer)
+                .stretch
+                .native_state_address(),
+            native
+        );
+    }
+    assert!(nontrivial && playback.source_frame - start > 1_024);
+    assert_eq!(
+        voice(&playback.callback.mixer)
+            .source_playback
+            .tempo_ratio()
+            .to_bits(),
+        ratio.to_bits()
+    );
+    // The live glide is finished before a fresh V2 attempt. Adopt V1's own new
+    // source-bound Native first, with an independently warmed complete PCM oracle.
+    playback.adopt_native(false);
+    controller_python(
+        locals,
+        r#"
+controller.on_frame_render()
+assert live.blocked and live.attempt is bpm_selection
+assert first.is_current() and first.effective_mode_status() == 'effective'
+assert controller.set_stem_mix_mode(0, 'all_stems')
+assert not live.blocked and live.attempt is bpm_selection
+candidate = bpm_selection.receipt
+assert candidate is not failed_bpm and candidate is not first
+assert candidate.is_current() and not candidate.claimed()
+assert bpm_selection.ticket is bpm_registration and bpm_registration.is_current()
+assert candidate.residency_status() in {'captured', 'pending'}
+assert candidate.effective_mode_status() == 'waiting'
+assert session.stem_generation_errors == {0: bpm_error}
+"#,
+    );
+    other
 }
 
 fn public_bpm_before_voice_birth(
@@ -2135,7 +2405,12 @@ fn round_trip(
     let worker_post_pressure = matches!(trace, CandidateTrace::WorkerPostPressure);
     let queue_pressure = admission_pressure || worker_post_pressure;
     let capture_deadline = matches!(trace, CandidateTrace::CaptureDeadline);
-    let public_bpm = matches!(trace, CandidateTrace::PublicBpm(_));
+    let live_bpm = matches!(trace, CandidateTrace::LiveBpm);
+    let public_bpm = matches!(
+        trace,
+        CandidateTrace::PublicBpm(_) | CandidateTrace::LiveBpm
+    );
+    let mut live_other_ledger = None;
     assert!(
         !public_bpm
             || (key_lock
@@ -2378,7 +2653,8 @@ persistence.flush()
             if let CandidateTrace::PublicBpm(bpm) = trace {
                 bpm
             } else {
-                unreachable!()
+                assert!(live_bpm);
+                150.0
             },
         )
     } else {
@@ -2457,6 +2733,8 @@ persistence.flush()
             components: full_stems.stems.clone(),
             ratio,
             loop_period: (LOOP_END - LOOP_START) as f64,
+            rate_ledger: None,
+            scheduled: false,
             selection: Some(0b0011),
             previous: Some(0b0011),
             ramp_start: 0,
@@ -2537,8 +2815,10 @@ owner_v2.release()
     let other_fifo = other_voice(&h.callback.mixer).stretch.pending_fifo_frames();
     let other_demand = h.callback.mixer.stem_demand_for_measurement(215);
     let oracle_timing = accepted.map(|projection| {
-        let CandidateTrace::PublicBpm(bpm) = trace else {
-            unreachable!()
+        let bpm = if let CandidateTrace::PublicBpm(bpm) = trace {
+            bpm
+        } else {
+            150.0
         };
         (
             projection,
@@ -2570,6 +2850,13 @@ owner_v2.release()
         loop_period: accepted.map_or((LOOP_END - LOOP_START) as f64, |projection| {
             projection.period_seconds * f64::from(RATE) / 16.0
         }),
+        rate_ledger: live_bpm.then(|| {
+            ControllerRateLedger::new(
+                ratio,
+                accepted.unwrap().period_seconds * f64::from(RATE) / 16.0,
+            )
+        }),
+        scheduled: live_bpm,
         selection: None,
         previous: None,
         ramp_start: 0,
@@ -2784,6 +3071,16 @@ assert previous_control.ticket.is_current()
     }
     if withdraw_preclaim {
         withdraw_queued_candidate_for_full_mix(&mut playback, &mut h.consumer, &locals, key_lock);
+    }
+    if live_bpm {
+        live_other_ledger = Some(live_bpm_then_explicit_retry(
+            &engine,
+            &mut playback,
+            &mut h.consumer,
+            &mut parameter_consumer,
+            &locals,
+            accepted.unwrap(),
+        ));
     }
     own_adoption(
         &mut playback,
@@ -3006,7 +3303,28 @@ assert bpm_reopened.project.stem_cache[0].pair == disk_v2
     assert_eq!(other.generation, other_generation);
     assert_eq!(other.stretch.native_state_address(), other_native);
     assert_eq!(other.stretch.pending_fifo_frames(), other_fifo);
-    if let CandidateTrace::PublicBpm(target_bpm) = trace {
+    if let Some(ledger) = live_other_ledger {
+        let (whole, fraction) = ledger.position(playback.source_frame);
+        let position = other.source_playback.position();
+        assert_eq!(position.frame, LOOP_START + whole);
+        assert_eq!(position.fraction.to_bits(), fraction.to_bits());
+        assert_eq!(
+            other.source_playback.tempo_ratio().to_bits(),
+            ledger.epoch(playback.source_frame - 1).rate.to_bits()
+        );
+        assert_eq!(other.source_playback.loop_period(), None);
+        controller_python(
+            &locals,
+            r#"
+assert not session.stem_generation_errors, session.stem_generation_errors
+assert not failed_bpm.is_current() and not failed_bpm.claimed()
+assert failed_bpm.residency_status() == 'rejected' and failed_bpm.error() == bpm_error
+assert failed_bpm.effective_failure_reason() is None
+assert live.control is bpm_selection and live.disk.selection is bpm_selection
+assert bpm_selection.ticket is bpm_registration and bpm_selection.receipt is candidate
+"#,
+        );
+    } else if let CandidateTrace::PublicBpm(target_bpm) = trace {
         // The other pad has no accepted timing and keeps its own physical loop.
         let other_ratio = accepted.unwrap().period_seconds * (target_bpm / 60.0);
         let distance = playback.source_frame as f64 * other_ratio;
@@ -3040,6 +3358,26 @@ assert bpm_reopened.project.stem_cache[0].pair == disk_v2
         "controller.shut_down()\ncontroller._assets.release_saved_assignments()\nowner_v1.release()\nowner_v2.release()",
     );
     std::env::set_current_dir(previous_cwd).unwrap();
+}
+
+#[test]
+fn actual_public_live_bpm_rejects_queued_v2_then_explicit_retry_keeps_wet_chronology() {
+    if std::env::var_os(LIVE_BPM_CHILD).is_some() {
+        round_trip(true, None, true, None, false, CandidateTrace::LiveBpm);
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", LIVE_BPM_TEST, "--nocapture", "--test-threads=1"])
+        .env(LIVE_BPM_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 public live BPM child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
 }
 
 #[test]

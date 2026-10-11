@@ -132,6 +132,15 @@ immediate change SHALL NOT silently discard the command.
 - **THEN** display and saved intent SHALL remain distinct from callback acknowledgement, and the accepted source timing SHALL retain its exact authority through Capture, worker preparation and Adopt
 - **AND** independent complete-PCM phase, virtual-tail interpolation, raw Native/FIFO and uninterrupted filter output SHALL verify the consumed-source-frame handover and V2's later own prepared wet effectiveness without restart
 
+#### Scenario: Public live BPM invalidates an already queued replacement Adopt
+
+- **GIVEN** productive finite NormalLoop V1 with KEY LOCK ON, accepted Automatic timing and V2's own already captured and queued Adopt
+- **WHEN** actual retirement pressure retains that Control message, the public transport controller's coupled BPM parameter command applies at the continuously advancing callback time, and a later callback dispatches the unchanged Adopt
+- **THEN** the stale unclaimed V2 transaction SHALL reject while V1's readers, voice, fractional source phase, Native/FIFO and uninterrupted filter history remain usable under the new rate trajectory
+- **AND** display admission SHALL remain distinct from actual timing authority; the musical period and source timing acknowledgement SHALL remain current, and the other active pad SHALL retain its own physical loop trajectory under the global rate change
+- **AND** receipt polling SHALL report the failed own attempt without an implicit retry or a native-preparation-failed acknowledgement
+- **AND** an explicit identical ALL gesture SHALL obtain a fresh own Capture/worker/Adopt receipt for the same accepted V2 registration and prove its source-frame handover and later own prepared wet effectiveness
+
 #### Scenario: Rate smoothing advances through an own new-set handover
 - **GIVEN** current finite NormalLoop playback with a pending rate target and a verified first or replacement complete set
 - **WHEN** its own Capture, worker preparation and Adopt complete while the same target's active-output-frame smoothing continues

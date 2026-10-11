@@ -2079,6 +2079,8 @@ struct ControllerPlayback {
     components: [SampleBuffer; 4],
     ratio: f64,
     loop_period: f64,
+    rate_ledger: Option<ControllerRateLedger>,
+    scheduled: bool,
     selection: Option<u8>,
     previous: Option<u8>,
     ramp_start: u64,
@@ -2092,6 +2094,94 @@ struct ControllerRawNative {
     input: [VecDeque<f32>; 2],
     output: [VecDeque<f32>; 2],
     used: bool,
+    pitch: f64,
+}
+
+// Test-only declared rate epochs. No SourcePlayback/SourceReadPlan supplies an
+// expected position, smoothing boundary or source distance to this ledger.
+struct ControllerRateEpoch {
+    start: u64,
+    whole: usize,
+    fraction: f64,
+    rate: f64,
+    distance: f64,
+}
+
+struct ControllerRateLedger {
+    period: f64,
+    epochs: Vec<ControllerRateEpoch>,
+}
+
+impl ControllerRateLedger {
+    fn new(rate: f64, period: f64) -> Self {
+        Self {
+            period,
+            epochs: vec![ControllerRateEpoch {
+                start: 0,
+                whole: 0,
+                fraction: 0.0,
+                rate,
+                distance: 0.0,
+            }],
+        }
+    }
+
+    fn epoch(&self, frame: u64) -> &ControllerRateEpoch {
+        self.epochs
+            .iter()
+            .rev()
+            .find(|epoch| epoch.start <= frame)
+            .unwrap()
+    }
+
+    fn position(&self, frame: u64) -> (usize, f64) {
+        let epoch = self.epoch(frame);
+        let offset = epoch.fraction + (frame - epoch.start) as f64 * epoch.rate;
+        if self.period == (LOOP_END - LOOP_START) as f64 {
+            (
+                (epoch.whole + offset.floor() as usize) % (LOOP_END - LOOP_START),
+                offset.fract(),
+            )
+        } else {
+            let phase = (epoch.whole as f64 + offset).rem_euclid(self.period);
+            (phase.floor() as usize, phase.fract())
+        }
+    }
+
+    fn distance(&self, frame: u64) -> f64 {
+        let epoch = self.epoch(frame);
+        epoch.distance + (frame - epoch.start) as f64 * epoch.rate
+    }
+
+    fn change(&mut self, frame: u64, target: f64) {
+        let mut rate = self.epoch(frame).rate;
+        let mut start = frame;
+        while rate != target {
+            let (whole, fraction) = self.position(start);
+            let distance = self.distance(start);
+            rate = if (target - rate).abs() <= 0.05 {
+                target
+            } else {
+                rate + (target - rate).clamp(-0.05, 0.05)
+            };
+            self.epochs.push(ControllerRateEpoch {
+                start,
+                whole,
+                fraction,
+                rate,
+                distance,
+            });
+            start += 512;
+        }
+    }
+
+    fn chunk(&self, frame: u64, remaining: usize) -> (usize, f64) {
+        let next = self.epochs.iter().find(|epoch| epoch.start > frame);
+        let frames = next.map_or(remaining, |epoch| {
+            remaining.min((epoch.start - frame) as usize)
+        });
+        (frames, self.epoch(frame).rate)
+    }
 }
 
 impl ControllerRawNative {
@@ -2113,6 +2203,15 @@ impl ControllerRawNative {
             input: std::array::from_fn(|_| VecDeque::new()),
             output: std::array::from_fn(|_| VecDeque::from(vec![0.0; block - 1])),
             used: false,
+            pitch: pitch_scale_for_tempo_ratio(ratio),
+        }
+    }
+
+    fn set_rate(&mut self, ratio: f64) {
+        let pitch = pitch_scale_for_tempo_ratio(ratio);
+        if (pitch - self.pitch).abs() > 0.001 {
+            self.native.set_pitch_scale(pitch).unwrap();
+            self.pitch = pitch;
         }
     }
 
@@ -2223,7 +2322,13 @@ impl ControllerPlayback {
         std::array::from_fn(|channel| {
             (start..start + frames as u64)
                 .map(|output_frame| {
-                    let phase = (output_frame as f64 * self.ratio).rem_euclid(self.loop_period);
+                    let phase = self.rate_ledger.as_ref().map_or_else(
+                        || (output_frame as f64 * self.ratio).rem_euclid(self.loop_period),
+                        |ledger| {
+                            let (whole, fraction) = ledger.position(output_frame);
+                            whole as f64 + fraction
+                        },
+                    );
                     let last =
                         (self.loop_period.ceil() as usize - 1).min(LOOP_END - LOOP_START - 1);
                     let (left, right, fraction) = if phase >= last as f64 {
@@ -2251,8 +2356,12 @@ impl ControllerPlayback {
                         let gain = if self.previous == self.selection {
                             1.0
                         } else {
-                            ((output_frame.saturating_sub(self.ramp_start) as f64 * self.ratio)
-                                / 128.0)
+                            (self.rate_ledger.as_ref().map_or_else(
+                                || output_frame.saturating_sub(self.ramp_start) as f64 * self.ratio,
+                                |ledger| {
+                                    ledger.distance(output_frame) - ledger.distance(self.ramp_start)
+                                },
+                            ) / 128.0)
                                 .min(1.0) as f32
                         };
                         if gain == 1.0 {
@@ -2270,6 +2379,7 @@ impl ControllerPlayback {
     }
 
     fn render(&mut self, frames: usize, timestamp: bool) -> (Vec<f32>, Vec<f32>) {
+        let timestamp = timestamp || self.scheduled;
         if self
             .candidate
             .as_ref()
@@ -2280,16 +2390,43 @@ impl ControllerPlayback {
             self.raw = Some(raw);
         }
         let feed = self.feed(self.source_frame, frames);
-        let raw = self
-            .raw
-            .as_mut()
-            .expect("KEYLOCK ON raw Native oracle")
-            .render_chosen(&feed);
+        let native = self.raw.as_mut().expect("KEYLOCK ON raw Native oracle");
+        let raw = if let Some(ledger) = &self.rate_ledger {
+            let mut raw = Vec::with_capacity(frames * 2);
+            let mut offset = 0;
+            while offset < frames {
+                let (count, ratio) =
+                    ledger.chunk(self.source_frame + offset as u64, frames - offset);
+                native.set_rate(ratio);
+                let chunk =
+                    std::array::from_fn(|channel| feed[channel][offset..offset + count].to_vec());
+                raw.extend(native.render_chosen(&chunk));
+                offset += count;
+            }
+            raw
+        } else {
+            native.render_chosen(&feed)
+        };
         let mut output = vec![0.0; frames * 2];
         let mut expected = vec![0.0; frames * 2];
         let mut full_mix = vec![0.0; frames * 2];
         reset_tap_observation_for_test();
-        if timestamp {
+        if self.scheduled {
+            assert_eq!(self.callback.transport.output_frame(), self.frame);
+            let callback = self.callback.as_mut();
+            crate::audio_engine::audio_stream::render_scheduled_audio(
+                &mut callback.mixer,
+                &mut callback.scheduler,
+                &mut output,
+                &mut [0.0; NUM_SAMPLES],
+                self.frame,
+                2,
+                &mut callback.transport,
+                &mut callback.feedback,
+                &mut callback.retirement,
+            );
+            callback.transport.advance_by_rendered_frames(frames);
+        } else if timestamp {
             self.callback.mixer.render_rt_at_output_frame(
                 &mut output,
                 &mut [0.0; NUM_SAMPLES],
@@ -2349,22 +2486,35 @@ impl ControllerPlayback {
         );
         self.frame += frames as u64;
         self.source_frame += frames as u64;
+        if self.scheduled {
+            assert_eq!(self.callback.transport.output_frame(), self.frame);
+            let raw = self.raw.as_ref().unwrap();
+            assert_eq!(
+                voice(&self.callback.mixer).stretch.pending_fifo_frames(),
+                (raw.input[0].len(), raw.output[0].len()),
+                "independent Native FIFO chronology",
+            );
+        }
         if self.loop_period != (LOOP_END - LOOP_START) as f64 {
-            let phase = (self.source_frame as f64 * self.ratio).rem_euclid(self.loop_period);
+            let (whole, fraction) = self.rate_ledger.as_ref().map_or_else(
+                || {
+                    let phase =
+                        (self.source_frame as f64 * self.ratio).rem_euclid(self.loop_period);
+                    (phase.floor() as usize, phase.fract())
+                },
+                |ledger| ledger.position(self.source_frame),
+            );
             let current = voice(&self.callback.mixer).source_playback;
-            assert_eq!(current.tempo_ratio().to_bits(), self.ratio.to_bits());
+            let ratio = self.rate_ledger.as_ref().map_or(self.ratio, |ledger| {
+                ledger.epoch(self.source_frame - 1).rate
+            });
+            assert_eq!(current.tempo_ratio().to_bits(), ratio.to_bits());
             assert_eq!(
                 current.loop_period().unwrap().to_bits(),
                 self.loop_period.to_bits()
             );
-            assert_eq!(
-                current.position().frame,
-                LOOP_START + phase.floor() as usize
-            );
-            assert_eq!(
-                current.position().fraction.to_bits(),
-                phase.fract().to_bits()
-            );
+            assert_eq!(current.position().frame, LOOP_START + whole);
+            assert_eq!(current.position().fraction.to_bits(), fraction.to_bits());
         }
         (output, full_mix)
     }
@@ -2472,7 +2622,6 @@ impl ControllerPlayback {
                 .max_frame
                 .is_some_and(|frame| frame < LOOP_END)
         );
-        let mut raw = ControllerRawNative::new(self.ratio, true);
         let warm_start =
             target - crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES as u64;
         if let Some(resumed_at) = self.resumed_at {
@@ -2485,7 +2634,27 @@ impl ControllerPlayback {
         let warm_source_start = warm_start
             .checked_sub(pause_offset)
             .expect("later Native preparation must start after the retained pause gap");
-        raw.render(&self.feed(warm_source_start, (target - warm_start) as usize));
+        let warm_rate = self
+            .rate_ledger
+            .as_ref()
+            .map_or(self.ratio, |ledger| ledger.epoch(warm_source_start).rate);
+        let mut raw = ControllerRawNative::new(warm_rate, true);
+        let mut offset = 0;
+        let warm_frames = (target - warm_start) as usize;
+        while offset < warm_frames {
+            let (frames, ratio) =
+                self.rate_ledger
+                    .as_ref()
+                    .map_or((warm_frames - offset, self.ratio), |ledger| {
+                        ledger.chunk(
+                            warm_source_start + offset as u64,
+                            (warm_frames - offset).min(512),
+                        )
+                    });
+            raw.set_rate(ratio);
+            raw.render(&self.feed(warm_source_start + offset as u64, frames));
+            offset += frames;
+        }
         self.candidate = Some((target, raw));
         let mut partitions = [1_usize, 127, 777, 96, 257, 512, 31].into_iter().cycle();
         while self.frame < target {
@@ -3086,6 +3255,8 @@ assert audio.worker_call_count() == 1 and audio.prepared_only_on_pool_threads()
         components: full_stems.stems.clone(),
         ratio,
         loop_period: (LOOP_END - LOOP_START) as f64,
+        rate_ledger: None,
+        scheduled: false,
         selection: stopped_start.then_some(0b1010),
         previous: stopped_start.then_some(0b1010),
         ramp_start: 0,
