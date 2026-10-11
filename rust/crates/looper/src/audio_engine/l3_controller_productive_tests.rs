@@ -19,6 +19,8 @@ const WITHDRAW_PRECLAIM_CHILD: &str = "FLITZI_L3_CONTROLLER_WITHDRAW_PRECLAIM_CH
 const WITHDRAW_PRECLAIM_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_full_mix_withdraws_queued_v2_adopt_then_all_uses_fresh_authority";
 const ADMISSION_PRESSURE_CHILD: &str = "FLITZI_L3_CONTROLLER_ADMISSION_PRESSURE_CHILD";
 const ADMISSION_PRESSURE_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_queue_full_keeps_v1_then_explicit_all_admits_own_v2";
+const WORKER_POST_PRESSURE_CHILD: &str = "FLITZI_L3_CONTROLLER_WORKER_POST_PRESSURE_CHILD";
+const WORKER_POST_PRESSURE_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_worker_adopt_queue_failure_keeps_v1_then_own_explicit_retry";
 
 #[derive(Clone, Copy)]
 enum CandidateTrace {
@@ -26,6 +28,7 @@ enum CandidateTrace {
     RepeatedSets,
     WithdrawPreclaim,
     AdmissionPressure,
+    WorkerPostPressure,
 }
 
 enum FixtureSet {
@@ -825,6 +828,7 @@ fn full_queue_then_explicit_retry(
     consumer: &mut rtrb::Consumer<ControlMessage>,
     locals: &Py<PyDict>,
     key_lock: bool,
+    worker_post: bool,
 ) {
     assert!(consumer.is_empty());
     let set = playback.callback.mixer.stems_for_measurement()[0]
@@ -851,29 +855,84 @@ fn full_queue_then_explicit_retry(
     let intent = engine.resident_stem_cache.lock().unwrap()[0]
         .intent_epoch
         .load(Ordering::Acquire);
+    controller_python(
+        locals,
+        r#"
+pressure_selection = live.disk.selection
+pressure_registration = pressure_selection.ticket
+pressure_error = ('committed stem command queue is full' if worker_post_pressure
+    else 'Stem residency admission failed: committed residency queue is full')
+assert first.is_current() and first.effective_mode_status() == 'effective'
+assert pressure_registration.is_current() and pressure_registration.publication_status() == 'accepted'
+assert pressure_selection.receipt is None and pressure_selection.receipt_intent is None
+if worker_post_pressure:
+    assert controller.set_stem_mix_mode(0, 'all_stems')
+    failed_post = pressure_selection.receipt
+    assert failed_post is not first and failed_post.is_current() and not failed_post.claimed()
+    assert failed_post.effective_mode_status() == 'waiting'
+    assert live.attempt is pressure_selection and not live.blocked
+    assert not session.stem_generation_errors, session.stem_generation_errors
+"#,
+    );
     {
         let mut queue = producer.lock().unwrap();
+        if worker_post {
+            assert!(
+                matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
+                if matches!(work.as_ref(), crate::audio_engine::committed_stem_residency::CommittedStemRtWork::Capture(capture)
+                    if capture.id == 0 && capture.target == StemMixMode::AllStems))
+            );
+            // Actual Capture can complete, but the worker cannot post Adopt while
+            // this exact Producer mutex is held. Fill its freed slot before unlock.
+            assert_eq!(
+                playback.drain(consumer),
+                1,
+                "own Capture before worker post pressure"
+            );
+            assert!(consumer.is_empty());
+        }
         // Ping uses this actual control queue; Volume uses a different queue.
         for _ in 0..8 {
             queue.push(ControlMessage::Ping()).unwrap();
         }
         assert!(queue.is_full());
     }
+    if worker_post {
+        wait_until(|| {
+            Python::attach(|py| {
+                locals
+                    .bind(py)
+                    .get_item("failed_post")
+                    .unwrap()
+                    .unwrap()
+                    .call_method0("error")
+                    .unwrap()
+                    .extract::<Option<String>>()
+                    .unwrap()
+                    .as_deref()
+                    == Some("committed stem command queue is full")
+            })
+        });
+        wait_until(|| engine.cold_jobs.counts_for_test() == (0, 0, 0));
+    }
     controller_python(
         locals,
         r#"
-pressure_selection = live.disk.selection
-pressure_registration = pressure_selection.ticket
-admission_error = 'Stem residency admission failed: committed residency queue is full'
-assert first.is_current() and first.effective_mode_status() == 'effective'
-assert pressure_registration.is_current() and pressure_registration.publication_status() == 'accepted'
-assert pressure_selection.receipt is None and pressure_selection.receipt_intent is None
-assert not controller.set_stem_mix_mode(0, 'all_stems')
+if not worker_post_pressure:
+    assert not controller.set_stem_mix_mode(0, 'all_stems')
 for _ in range(16):
     controller.on_frame_render()
     assert live.blocked and live.desired == ('all_stems', 0b1010)
-    assert live.disk.selection is pressure_selection and live.attempt is None
-    assert pressure_selection.receipt is None and pressure_selection.receipt_intent is None
+    assert live.disk.selection is pressure_selection
+    if worker_post_pressure:
+        assert live.attempt is pressure_selection and pressure_selection.receipt is failed_post
+        assert pressure_selection.receipt_intent == ('all_stems', 0b1010)
+        assert failed_post.residency_status() == 'rejected' and failed_post.effective_mode_status() == 'rejected'
+        assert not failed_post.is_current() and not failed_post.claimed()
+        assert failed_post.effective_failure_reason() is None and failed_post.error() == pressure_error
+    else:
+        assert live.attempt is None
+        assert pressure_selection.receipt is None and pressure_selection.receipt_intent is None
     assert pressure_registration.is_current() and pressure_registration.publication_status() == 'accepted'
     assert live.control is previous_control and previous_control.receipt is first
     assert previous_control.ticket.is_current() and first.is_current()
@@ -882,15 +941,20 @@ for _ in range(16):
     assert status.disk_stem_set_identity == disk_v2.stem_set_identity
     assert status.control_stem_set_identity == disk_v1.stem_set_identity
     assert status.effective_stem_set_identity == disk_v1.stem_set_identity
-    assert status.attempt_stem_set_identity == disk_v1.stem_set_identity
-    assert status.effective == 'effective' and status.desired_mode == 'all_stems'
-    assert session.stem_generation_errors == {0: admission_error}
+    assert status.attempt_stem_set_identity == (disk_v2.stem_set_identity if worker_post_pressure else disk_v1.stem_set_identity)
+    assert status.effective == (None if worker_post_pressure else 'effective')
+    assert status.residency == ('rejected' if worker_post_pressure else 'accepted')
+    assert status.desired_mode == 'all_stems'
+    assert session.stem_generation_errors == {0: pressure_error}
 assert project.stem_cache[0].pair == disk_v2 and project.pad_stem_mix_mode[0] == 'all_stems'
 "#,
     );
     assert!(matches!(consumer.peek(), Ok(ControlMessage::Ping())));
     assert_eq!(playback.drain(consumer), 8, "only the eight actual Pings");
-    assert!(consumer.is_empty(), "failed admission queued no Capture");
+    assert!(
+        consumer.is_empty(),
+        "failed operation queued no additional work"
+    );
     assert_eq!(
         engine.resident_stem_cache.lock().unwrap()[0]
             .intent_epoch
@@ -959,11 +1023,18 @@ assert project.stem_cache[0].pair == disk_v2 and project.pad_stem_mix_mode[0] ==
             r#"
 for _ in range(16):
     controller.on_frame_render()
-    assert live.blocked and live.attempt is None and live.disk.selection is pressure_selection
-    assert pressure_selection.receipt is None and pressure_selection.receipt_intent is None
+    assert live.blocked and live.disk.selection is pressure_selection
+    if worker_post_pressure:
+        assert live.attempt is pressure_selection and pressure_selection.receipt is failed_post
+        assert not failed_post.is_current() and not failed_post.claimed()
+        assert failed_post.residency_status() == 'rejected' and failed_post.error() == pressure_error
+        assert controller.stem_residency_status(0).effective is None
+    else:
+        assert live.attempt is None
+        assert pressure_selection.receipt is None and pressure_selection.receipt_intent is None
     assert first.is_current() and first.effective_mode_status() == 'effective'
     assert controller.stem_residency_status(0).effective_stem_set_identity == disk_v1.stem_set_identity
-    assert session.stem_generation_errors == {0: admission_error}
+    assert session.stem_generation_errors == {0: pressure_error}
 "#,
         );
         assert!(
@@ -987,6 +1058,9 @@ assert not live.blocked and live.attempt is pressure_selection
 assert live.disk.selection is pressure_selection and pressure_selection.ticket is pressure_registration
 candidate = pressure_selection.receipt
 assert candidate is not first and candidate.is_current() and not candidate.claimed()
+if worker_post_pressure:
+    assert candidate is not failed_post and not failed_post.is_current() and not failed_post.claimed()
+    assert failed_post.residency_status() == 'rejected' and failed_post.error() == pressure_error
 assert candidate.residency_status() in {'captured', 'pending'} and candidate.effective_mode_status() == 'waiting'
 assert pressure_selection.receipt_intent == ('all_stems', 0b1010)
 assert live.control is previous_control and first.is_current()
@@ -994,7 +1068,7 @@ status = controller.stem_residency_status(0)
 assert status.effective == 'waiting' and status.attempt_stem_set_identity == disk_v2.stem_set_identity
 assert status.control_stem_set_identity == disk_v1.stem_set_identity
 assert status.effective_stem_set_identity == disk_v1.stem_set_identity
-assert session.stem_generation_errors == {0: admission_error}
+assert session.stem_generation_errors == {0: pressure_error}
 "#,
     );
     assert!(
@@ -1595,9 +1669,11 @@ fn round_trip(
     let repeated_sets = matches!(trace, CandidateTrace::RepeatedSets);
     let withdraw_preclaim = matches!(trace, CandidateTrace::WithdrawPreclaim);
     let admission_pressure = matches!(trace, CandidateTrace::AdmissionPressure);
+    let worker_post_pressure = matches!(trace, CandidateTrace::WorkerPostPressure);
+    let queue_pressure = admission_pressure || worker_post_pressure;
     assert!(key_lock || delete_pause.is_none());
     assert!(
-        !(repeated_sets || withdraw_preclaim || admission_pressure)
+        !(repeated_sets || withdraw_preclaim || queue_pressure)
             || (selected_v1
                 && delete_pause.is_none()
                 && stopped_before_poll.is_none()
@@ -1687,8 +1763,9 @@ fn round_trip(
             .unwrap();
         locals.set_item("selected_v1", selected_v1).unwrap();
         locals.set_item("repeated_sets", repeated_sets).unwrap();
+        locals.set_item("queue_pressure", queue_pressure).unwrap();
         locals
-            .set_item("admission_pressure", admission_pressure)
+            .set_item("worker_post_pressure", worker_post_pressure)
             .unwrap();
         locals
             .set_item("withdraw_preclaim", withdraw_preclaim)
@@ -2093,7 +2170,7 @@ assert status.control_stem_set_identity == disk_v1.stem_set_identity
 assert status.effective_stem_set_identity == (disk_v1.stem_set_identity if selected_v1 else None)
 "#,
     );
-    if admission_pressure {
+    if queue_pressure {
         full_queue_then_explicit_retry(
             &engine,
             &h.producer,
@@ -2101,6 +2178,7 @@ assert status.effective_stem_set_identity == (disk_v1.stem_set_identity if selec
             &mut h.consumer,
             &locals,
             key_lock,
+            worker_post_pressure,
         );
     }
     controller_python(
@@ -2108,7 +2186,7 @@ assert status.effective_stem_set_identity == (disk_v1.stem_set_identity if selec
         r#"
 if repeated_sets:
     assert controller.set_stem_enabled_mask(0, 0)
-if not admission_pressure:
+if not queue_pressure:
     assert controller.set_stem_mix_mode(0, 'all_stems')
     assert controller._publish_all_stems_mode_if_preferred(0, fixture['source_version'])
 candidate = live.attempt.receipt
@@ -2119,7 +2197,7 @@ assert candidate.effective_mode_status() == 'waiting'
 assert previous_control.ticket.is_current()
 "#,
     );
-    if !admission_pressure {
+    if !queue_pressure {
         let current = voice(&playback.callback.mixer);
         assert!(current.source_playback.matches_exact(&initial_clock));
         assert_eq!(current.generation, initial_generation);
@@ -2193,8 +2271,8 @@ assert status.effective_stem_set_identity == (disk_v1.stem_set_identity if selec
 assert status.effective == 'transitioning'
 assert candidate.claimed() and not candidate.withdraw()
 assert not previous_control.ticket.is_current()
-if admission_pressure:
-    assert session.stem_generation_errors == {0: admission_error}
+if queue_pressure:
+    assert session.stem_generation_errors == {0: pressure_error}
 "#,
     );
     if repeated_sets {
@@ -2301,10 +2379,14 @@ assert status.control_stem_set_identity == disk_v2.stem_set_identity
 assert status.effective_stem_set_identity == disk_v2.stem_set_identity
 assert project.stem_cache[0].pair == disk_v2
 assert controller._stem_worker_pool._executor._max_workers == 2
-if admission_pressure:
+if queue_pressure:
     assert live.control is pressure_selection and live.disk.selection is pressure_selection
     assert pressure_selection.ticket is pressure_registration and pressure_selection.receipt is candidate
     assert not session.stem_generation_errors, session.stem_generation_errors
+    if worker_post_pressure:
+        assert not failed_post.is_current() and not failed_post.claimed()
+        assert failed_post.residency_status() == 'rejected' and failed_post.effective_mode_status() == 'rejected'
+        assert failed_post.error() == pressure_error and failed_post.effective_failure_reason() is None
 if withdraw_preclaim:
     assert not withdrawn.claimed() and not withdrawn.is_current()
     assert withdrawn.residency_status() == 'rejected' and withdrawn.effective_mode_status() == 'rejected'
@@ -2560,6 +2642,40 @@ fn actual_python_controller_queue_full_keeps_v1_then_explicit_all_admits_own_v2(
     assert!(
         output.status.success(),
         "L3 admission pressure child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+}
+
+#[test]
+fn actual_python_controller_worker_adopt_queue_failure_keeps_v1_then_own_explicit_retry() {
+    if std::env::var_os(WORKER_POST_PRESSURE_CHILD).is_some() {
+        for key_lock in [true, false] {
+            round_trip(
+                true,
+                None,
+                key_lock,
+                None,
+                false,
+                CandidateTrace::WorkerPostPressure,
+            );
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            WORKER_POST_PRESSURE_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(WORKER_POST_PRESSURE_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 worker post pressure child failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

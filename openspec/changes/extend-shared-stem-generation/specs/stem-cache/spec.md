@@ -159,6 +159,14 @@ immediate change SHALL NOT silently discard the command.
 - **AND** controller polling SHALL retain the desired V2 intent and visible failure without implicitly retrying admission, including after the queue drains
 - **AND** a later explicit identical ALL request SHALL be able to reuse the current V2 registration and obtain its own new Capture, worker preparation, Adopt and subsequent effectiveness; V1's ACK SHALL NOT substitute for that operation
 
+#### Scenario: Public candidate worker cannot post Adopt after successful Capture
+- **GIVEN** productive V1 playback and a distinct durably committed V2 whose public ALL request obtained its own receipt and actual callback Capture
+- **WHEN** the Native control queue remains full through the worker's bounded Adopt-post attempts
+- **THEN** that V2 receipt SHALL report its own preparation/publication failure without callback claim, V2 reader installation or effective success, and its cold-job reservation SHALL release
+- **AND** disk V2 SHALL remain committed while V1's own current receipt, control/effective identity, exact readers, source trajectory, voice, Native, FIFO and filter history remain usable
+- **AND** polling SHALL preserve the failed V2 attempt and visible error without retrying after the queue drains; the failed uncurrent receipt SHALL NOT report current effective output
+- **AND** a later explicit identical ALL request SHALL obtain a fresh own receipt through the still-current V2 registration and require its own Capture, worker preparation, Adopt and later effectiveness; the failed receipt SHALL NOT lend its ACK to the retry
+
 #### Scenario: Paused and stopped acceptance is not audible effectiveness
 - **WHEN** a current NormalLoop candidate is installed on a paused voice or stopped pad
 - **THEN** own residency acceptance SHALL remain distinct from effective output

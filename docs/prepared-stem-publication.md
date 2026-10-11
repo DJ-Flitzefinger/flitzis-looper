@@ -815,3 +815,43 @@ tuple shape; the corrected assertion retains the actual revision as well as mode
 and mask. Formatting, official strict validation and whitespace pass; Clippy tests
 exit0 with the existing63 warnings (one duplicate), none in the changed test.
 The existing relative-file links are unchanged from the preceding verified block.
+
+### Public worker Adopt-post failure after successful Capture
+
+A separate proper NormalLoop trace admits public V2 ALL successfully and obtains
+its own current waiting receipt. The fixture holds the actual Producer mutex
+while the normal callback drains exactly that Capture, then fills all eight
+freed queue slots with Pings before unlocking. The worker therefore encounters
+the real full queue on each bounded Adopt-post attempt. No production hook,
+synthetic error, alternate worker or measured millisecond assertion is used.
+
+The actual receipt reports `committed stem command queue is full`, becomes
+rejected/unclaimed/uncurrent and releases its cold-lane job reservation. Public
+polling retains this failed V2 attempt and error. Its uncurrent receipt reports
+no current effective status, while disk V2 and V1's actual own current receipt,
+control/effective identity and productive readers remain separate. This differs
+from admission failure before Capture, where no V2 residency receipt exists.
+
+The shared two-mode queue oracle preserves the existing admission assertions
+and proves exact V1 source/component Arcs, source position, generation, Native,
+FIFO, productive Native/DSP history and stem transition through actual Ping
+dispatch. Irregular continued rendering checks every sample against independent
+complete PCM and raw-Native/FIFO/EQ ON/rate0.75 or varispeed/EQ OFF/rate1.25.
+Polling after that drain never enqueues an implicit retry.
+
+A later explicit identical ALL reuses V2's still-current accepted registration
+but obtains a different own receipt and actual Capture/worker/Adopt. The existing
+128-source-frame ramp, later ON own 4096-frame Native preparation and nontrivial
+V2 effect remain required. The old failed receipt remains rejected and cannot
+lend its ACK or overwrite the successful retry's observed effect/error clearing.
+The actual 30-second Capture/reconcile deadline is a distinct unclosed path;
+this post-queue test does not accelerate or claim that deadline. Production,
+parent and build-only runtime inputs are unchanged, with no installation or
+App/device/hearing acceptance. All remaining full product gates stay open.
+
+The focused two-mode Release case passes in3.04s and all8 affected public Native
+tests pass in25.01s. One independent nonauthor final review finds no concrete
+issue. Formatting, official strict validation and whitespace pass; Clippy tests
+exit0 with the existing63 warnings (one duplicate), none in the changed test.
+The preceding production Release/import/Python checks and unchanged verified
+relative-file links remain reusable.
