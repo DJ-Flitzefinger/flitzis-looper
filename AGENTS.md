@@ -1,5 +1,26 @@
 # Agent Guidelines
 
+## Continued Local Goals And Validation
+
+- In the local workspace, follow the containing workspace's current `AGENTS.md`
+  and `codex-meta/handoff/next-step.md` for continuation and Goal activation.
+  In a managed worktree, use the original workspace path from the active handoff;
+  local memory and private audio stay outside the repository.
+- One active implementing chat owns coherent product blocks. Continue in that
+  chat while context is useful; no mandatory new chat after each block. Read task-relevant
+  context, use bounded independent helpers, and avoid duplicate audit chains.
+- During implementation, use quick compile checks and focused meaningful
+  regressions. At a product boundary run the impacted integrated checks and one
+  independent final review. Run full workspace, both-profile and long musical/
+  resource suites at their relevant integration gates or for concrete uncovered
+  risk; do not repeat them after every internal edit.
+- Reuse successful unchanged-input checks, preserve required final acceptance
+  gates, and distinguish reused results from fresh runs. Workflow/docs-only
+  edits need consistency/link/whitespace/diff checks, not audio builds/tests.
+- On Windows use `scripts/run-rust-tests.ps1` for native runtime dependencies.
+  Native installs/builds remain serial; never replace the extension held by the
+  Human App. Use `uv run --no-sync` once dependencies are synchronized.
+
 ## Build/Lint/Test Commands
 - Develop: `uv run maturin develop`
 - Build Release: `uv run maturin build --release --strip`
@@ -9,7 +30,7 @@
 - Type check: `uv run mypy src`
 - Format: `uv run ruff format src`
 - Format (only check): `uv run ruff format --check src`
-- Test single: `uv run pytest src/tests/foor/test_bar.py -v`
+- Test single (example): `uv run pytest src/tests/flitzis_looper/controller/transport/test_key_lock_transactions.py -v`
 - All tests: `uv run pytest`
 - Generate `coverage.md`: `uv run pytest --cov --cov-report markdown`
 

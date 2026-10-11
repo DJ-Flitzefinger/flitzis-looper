@@ -18,7 +18,9 @@ git branch --show-current
 git status
 ```
 
-The user handles GitHub pushes manually. Codex must not push or change remotes.
+By default the user handles GitHub pushes manually. Follow any explicit
+task-specific commit/push authorization; it never grants remote setup, force-push
+or credential changes. Workspace-local continuation rights stay in local memory.
 
 ## Setup
 
@@ -390,6 +392,24 @@ intended distribution model.
 
 ## Validation
 
+### Checks at product boundaries
+
+During implementation, use quick compile checks and focused regressions for the
+changed behavior. Stabilize those checks before starting expensive broad suites.
+At a coherent product block's end, run the impacted integrated checks, a Release
+build/import/preflight when native code or packaging changed, and an independent
+final review. Full workspace, both-profile and long musical/resource tests belong
+to the integration gates they prove or to a concrete uncovered regression risk.
+Do not repeat them after every internal edit or documentation update.
+
+Reuse successful checks only when their relevant source, runtime and dependency
+inputs are unchanged; distinguish reused results from fresh runs. Preserve every
+required final acceptance gate and the original test tolerances. Workflow/docs-only
+edits need consistency, links, whitespace and diff review rather than audio builds.
+Synchronize dependencies when setup or lockfiles require it, then use
+`uv run --no-sync` within the validation batch. Keep native installation serial
+and do not replace an extension held by a running user app.
+
 ### Offline and device validation
 
 Ordinary `uv run pytest` runs the full offline suite and skips tests that open a
@@ -462,8 +482,11 @@ That test requires the recorded `worker-T04`, `worker-T05` and `worker-R01`
 request/final-envelope files. It proves native result validation, independently
 of native long-track PCM admission and complete-job acceptance.
 
-Focused changes should run focused tests. Broader Rust/audio, persistence,
-OpenSpec, bridge, or UI-control changes should run the full sequence:
+Focused changes should run focused tests. When a full integration gate or
+concrete cross-system risk requires the whole sequence, use the commands below.
+Select the existing environment/profile deliberately; dependency synchronization
+and native installation are needed only when their inputs changed or setup is
+missing. An unchanged Release installation should remain available to the user:
 
 ```powershell
 uv sync
