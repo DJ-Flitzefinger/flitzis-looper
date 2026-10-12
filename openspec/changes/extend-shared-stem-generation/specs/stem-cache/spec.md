@@ -239,6 +239,16 @@ immediate change SHALL NOT silently discard the command.
 - **THEN** own residency acceptance SHALL remain distinct from effective output
 - **AND** paused transition SHALL advance only on resumed source consumption and stopped readiness SHALL report no audible success
 
+#### Scenario: Effective selected V1 is replaced while publicly paused
+
+- **GIVEN** a proper finite NormalLoop voice has confirmed its own selected V1 effect with KEY LOCK OFF or ON at a nonneutral rate
+- **WHEN** public Pause freezes that voice before distinct V2 preparation, durable commit, current registration and own Capture/worker/Adopt
+- **THEN** V2 SHALL remain current, claimed and accepted for residency but transitioning without audible effectiveness or consumed source-frame handover
+- **AND** timestamped paused callbacks and controller polling SHALL consume no source, Native FIFO, filter history or handover progress while retaining current V2 and outgoing V1 readers, voice generation and fractional phase
+- **AND** V1's earlier effectiveness SHALL NOT confirm V2, and paused observation SHALL NOT admit a duplicate operation
+- **AND** public Resume SHALL retain the same voice, phase and filter chronology and complete the handover through 128 actually consumed source frames
+- **AND** KEY LOCK OFF SHALL confirm V2 through its own actual varispeed and continuous-filter output; KEY LOCK ON SHALL require its own subsequent complete 4096-frame Native preparation and ready current-selection Wet output
+
 #### Scenario: Ordinary Play supersedes a stopped candidate's accepted observation
 - **GIVEN** a new complete set was installed with KEY LOCK OFF or ON and its own stopped residency acceptance but no audible effectiveness
 - **WHEN** an ordinary authorized Play changes launch authority while retaining those installed readers, before or after controller observation of that acceptance

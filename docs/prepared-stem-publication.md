@@ -1607,6 +1607,34 @@ Clippy tests exit0 with the existing63 warnings (one duplicate), none in the
 changed test. Prior unchanged production Release/import/Python checks and
 verified relative-file links remain reusable.
 
+### Public paused replacement after V1's own effect
+
+`actual_public_paused_v1_replacement_requires_own_resumed_wet_effect` and its
+`_dry_effect` counterpart first establish genuine selected V1 effectiveness,
+then publicly pause pad0 and independently tracked pad215. Distinct V2 files,
+fenced commit/reopen, current candidate registration and actual Capture/worker/Adopt
+follow while both voices remain paused. V2 is accepted, current and claimed with
+transitioning effectiveness; its 128-source-frame handover remains unconsumed.
+
+Repeated timestamped paused callbacks produce zero output and no source reads
+for these two paused voices. They preserve source fraction, voice generation,
+Native/FIFO, DSP history and transition state, while retaining the predecessor
+owner and current V2 identity. Polling neither advances audio nor borrows V1's
+effect or duplicates V2 admission. The outgoing V1/current V2 PCM are independently
+verified through the actual two-reader handover after Resume.
+
+Public Resume retains the same voices and consumed-source clocks. Independent
+complete component PCM and uninterrupted nonneutral EQ verify the handover at
+OFF/rate1.25 and ON/rate0.75. OFF uses actual varispeed and V2's own dry effective
+receipt. ON additionally requires V2's later own 4096-frame warm preparation, raw
+Native/FIFO chronology and ready Wet effect. Absolute callback time advances
+through the pause; consumed-source, raw Native and filter clocks are never reset.
+Pad215's expected phase excludes independently counted paused output frames.
+
+This adds paused selected-V1 replacement to the existing first-FullMix pause
+evidence. It does not close task3.2, further domains, productive final-reader
+retirement or Human acceptance gates.
+
 ### Real worker Capture deadline and unchanged late Capture
 
 A first KEY LOCK ON/rate0.75 proper NormalLoop deadline trace admits public V2

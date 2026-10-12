@@ -17,6 +17,10 @@ const PAUSED_FIRST_CHILD: &str = "FLITZI_L3_CONTROLLER_PAUSED_FIRST_CHILD";
 const PAUSED_FIRST_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_wet_full_mix_paused_before_first_candidate_keeps_consumed_clock";
 const PAUSED_FIRST_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_PAUSED_FIRST_OFF_CHILD";
 const PAUSED_FIRST_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_varispeed_paused_before_first_candidate_keeps_consumed_clock";
+const PAUSED_REPLACEMENT_ON_CHILD: &str = "FLITZI_L3_PUBLIC_PAUSED_REPLACEMENT_ON_CHILD";
+const PAUSED_REPLACEMENT_ON_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_paused_v1_replacement_requires_own_resumed_wet_effect";
+const PAUSED_REPLACEMENT_OFF_CHILD: &str = "FLITZI_L3_PUBLIC_PAUSED_REPLACEMENT_OFF_CHILD";
+const PAUSED_REPLACEMENT_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_paused_v1_replacement_requires_own_resumed_dry_effect";
 const REPEATED_SETS_CHILD: &str = "FLITZI_L3_CONTROLLER_REPEATED_SETS_CHILD";
 const REPEATED_SETS_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_python_controller_empty_handover_defers_v3_and_uses_latest_mask_with_own_ack";
 const WITHDRAW_PRECLAIM_CHILD: &str = "FLITZI_L3_CONTROLLER_WITHDRAW_PRECLAIM_CHILD";
@@ -98,6 +102,7 @@ enum CandidateTrace {
     SourceStemsOn,
     Unload,
     FrozenOld,
+    PausedReplacement,
 }
 
 /// Public cold admission/event polling are unchanged. The stream-bound scalar
@@ -6244,6 +6249,15 @@ fn round_trip(
     let queue_pressure = admission_pressure || worker_post_pressure;
     let capture_deadline = matches!(trace, CandidateTrace::CaptureDeadline);
     let paused_live_bpm = matches!(trace, CandidateTrace::PausedLiveBpm);
+    let paused_replacement = matches!(trace, CandidateTrace::PausedReplacement);
+    let mut paused_other_clock = None;
+    assert!(
+        !paused_replacement
+            || (selected_v1
+                && !paused_first
+                && delete_pause.is_none()
+                && stopped_before_poll.is_none())
+    );
     let live_bpm = matches!(
         trace,
         CandidateTrace::LiveBpm | CandidateTrace::PausedLiveBpm
@@ -6370,6 +6384,9 @@ fn round_trip(
         locals.set_item("selected_v1", selected_v1).unwrap();
         locals.set_item("public_bpm", public_bpm).unwrap();
         locals.set_item("live_bpm", live_bpm).unwrap();
+        locals
+            .set_item("paused_replacement", paused_replacement)
+            .unwrap();
         if public_bpm {
             locals
                 .set_item(
@@ -6844,13 +6861,20 @@ assert session.paused_sample_ids == {0, 215}
             settle_varispeed(&mut playback, &locals, "first");
         }
     }
-    if paused_live_bpm {
+    if paused_live_bpm || paused_replacement {
         let before = voice(&playback.callback.mixer);
         let clock = before.source_playback;
         let generation = before.generation;
         let native = before.stretch.native_state_address();
         let fifo = before.stretch.pending_fifo_frames();
         let other_clock = other_voice(&playback.callback.mixer).source_playback;
+        paused_other_clock = Some(other_clock);
+        if paused_replacement {
+            controller_python(
+                &locals,
+                "from flitzis_looper.controller.transport import TransportController\ntransport = TransportController(project, session, playback_audio)",
+            );
+        }
         controller_python(
             &locals,
             r#"
@@ -7266,7 +7290,7 @@ if window_change:
             paused,
         );
     } else {
-        if paused_first {
+        if paused_first || paused_replacement {
             let source_frame = playback.source_frame;
             let fifo = voice(&playback.callback.mixer)
                 .stretch
@@ -7280,8 +7304,41 @@ if window_change:
                 );
                 controller_python(
                     &locals,
-                    "controller.on_frame_render()\nassert not session.stem_generation_errors, session.stem_generation_errors",
+                    r#"
+controller.on_frame_render()
+assert not session.stem_generation_errors, session.stem_generation_errors
+if paused_replacement:
+    status = controller.stem_residency_status(0)
+    assert status.registration == 'accepted' and status.residency == 'accepted'
+    assert status.effective == 'transitioning'
+    assert status.disk_stem_set_identity == disk_v2.stem_set_identity
+    assert status.control_stem_set_identity == disk_v2.stem_set_identity
+    assert status.effective_stem_set_identity == disk_v1.stem_set_identity
+    assert candidate.claimed() and candidate.is_current()
+    assert audio.worker_call_count() == 1
+"#,
                 );
+                if paused_replacement {
+                    let other = other_voice(&playback.callback.mixer);
+                    assert!(
+                        other.paused
+                            && other
+                                .source_playback
+                                .matches_exact(&paused_other_clock.unwrap())
+                    );
+                    assert_eq!(other.generation, other_generation);
+                    assert_eq!(other.stretch.native_state_address(), other_native);
+                    assert_eq!(other.stretch.pending_fifo_frames(), other_fifo);
+                    assert!(old_owner.as_ref().unwrap().upgrade().is_some());
+                    assert!(Arc::ptr_eq(
+                        &new_owner.upgrade().unwrap(),
+                        &playback.callback.mixer.stems_for_measurement()[0]
+                            .as_ref()
+                            .unwrap()
+                            .complete_set_identity
+                    ));
+                    assert!(h.consumer.is_empty());
+                }
             }
             assert!(h.consumer.is_empty());
             controller_python(
@@ -7312,6 +7369,15 @@ assert not session.paused_sample_ids
             assert_eq!(resumed.generation, initial_generation);
             assert_eq!(resumed.stretch.native_state_address(), initial_native);
             assert_eq!(resumed.stretch.pending_fifo_frames(), fifo);
+            if paused_replacement {
+                let other = other_voice(&playback.callback.mixer);
+                assert!(
+                    !other.paused
+                        && other
+                            .source_playback
+                            .matches_exact(&paused_other_clock.unwrap())
+                );
+            }
         }
         if key_lock {
             settle_wet(&mut playback, &locals, "candidate");
@@ -7456,6 +7522,22 @@ assert bpm_selection.ticket is bpm_registration and bpm_selection.receipt is can
         assert_eq!(other.source_playback.loop_period(), None);
         assert_eq!(position.frame, LOOP_START + phase.floor() as usize);
         assert_eq!(position.fraction.to_bits(), distance.fract().to_bits());
+    } else if paused_replacement {
+        assert!(playback.frame > playback.source_frame);
+        let phase = (playback.source_frame as f64 * playback.ratio)
+            .rem_euclid((LOOP_END - LOOP_START) as f64);
+        assert_eq!(
+            other.source_playback.position().frame,
+            LOOP_START + phase.floor() as usize
+        );
+        assert_eq!(
+            other.source_playback.position().fraction.to_bits(),
+            phase.fract().to_bits()
+        );
+        assert_eq!(
+            other.source_playback.tempo_ratio().to_bits(),
+            playback.ratio.to_bits()
+        );
     } else if window_change || retriggered_at.is_some() {
         assert_eq!(
             playback.frame - playback.source_frame,
@@ -8296,6 +8378,50 @@ fn actual_python_controller_stopped_replacement_play_then_fresh_all_uses_own_dry
     assert!(
         output.status.success(),
         "L3 stopped OFF replacement child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+}
+
+#[test]
+fn actual_public_paused_v1_replacement_requires_own_resumed_wet_effect() {
+    paused_replacement_child(
+        true,
+        PAUSED_REPLACEMENT_ON_CHILD,
+        PAUSED_REPLACEMENT_ON_TEST,
+    );
+}
+
+#[test]
+fn actual_public_paused_v1_replacement_requires_own_resumed_dry_effect() {
+    paused_replacement_child(
+        false,
+        PAUSED_REPLACEMENT_OFF_CHILD,
+        PAUSED_REPLACEMENT_OFF_TEST,
+    );
+}
+
+fn paused_replacement_child(key_lock: bool, child: &str, test: &str) {
+    if std::env::var_os(child).is_some() {
+        round_trip(
+            true,
+            None,
+            key_lock,
+            None,
+            false,
+            CandidateTrace::PausedReplacement,
+        );
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
+        .env(child, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 public paused replacement child failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
