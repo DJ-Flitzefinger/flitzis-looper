@@ -291,6 +291,16 @@ immediate change SHALL NOT silently discard the command.
 - **AND** a later explicit public ALL gesture SHALL require that new selection's own Capture, component worker and Adopt acknowledgement, followed by128 consumed source frames of handover and actual dry output before its own receipt becomes effective
 - **AND** output SHALL follow independently verified new-original component PCM and the explicitly selected mask while the rejected predecessor remains unclaimed, other pads retain their own trajectory and owners, and persistence reopens the new assignment and complete pair
 
+#### Scenario: New original requires its own live stems after public KEY LOCK ON
+
+- **GIVEN** a different original has obtained its own load, finite window and public Play acknowledgements, and its own public KEY LOCK ON has separately confirmed ready, effective FullMix Wet output
+- **WHEN** that playing original's verified complete stem files enter the existing pair worker and durable selection path
+- **THEN** preparation SHALL capture fresh current ON-window source context, retain its own artifact owners and commit its own complete pair while preserving productive FullMix, voice, phase, Native/FIFO and filter chronology without admitting Capture or reporting stem effectiveness
+- **AND** a later explicit public ALL gesture SHALL require that selection's own Capture, component worker and Adopt acknowledgement; the earlier FullMix KEY LOCK acknowledgement SHALL NOT certify the stem operation
+- **AND** its receipt SHALL remain transitioning after128 consumed source frames of handover until its own later Native preparation and ready Wet output confirm the current stem selection
+- **AND** output SHALL follow independently verified complete new-original component PCM, selected mask, continuous input ramp, Native FIFO and filter chronology; the complete4096-frame preparation interval SHALL begin after its own stem adoption without borrowing predecessor or FullMix history
+- **AND** the rejected predecessor SHALL remain unclaimed, other pads SHALL retain their independent source owners and trajectory, and persistence SHALL reopen the new assignment, complete pair, ALL intent and explicit KEY LOCK ON override
+
 #### Scenario: First candidate is prepared after a productive FullMix voice was paused
 - **GIVEN** a current proper NormalLoop FullMix voice has produced genuine wet output and is paused before new-set registration and own Capture
 - **WHEN** its new complete-set candidate obtains own residency acceptance while the same voice remains paused

@@ -63,6 +63,8 @@ const SOURCE_STEMS_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_SOURCE_STEMS_OFF_CHIL
 const SOURCE_STEMS_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_all_of_replaced_source_requires_own_dry_stem_effect";
 const SOURCE_KEY_LOCK_CHILD: &str = "FLITZI_L3_CONTROLLER_SOURCE_KEY_LOCK_CHILD";
 const SOURCE_KEY_LOCK_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_keylock_on_of_replaced_source_requires_own_wet_confirmation";
+const SOURCE_STEMS_ON_CHILD: &str = "FLITZI_L3_CONTROLLER_SOURCE_STEMS_ON_CHILD";
+const SOURCE_STEMS_ON_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_all_of_replaced_source_requires_own_wet_stem_effect";
 
 #[derive(Clone, Copy)]
 enum CandidateTrace {
@@ -83,6 +85,7 @@ enum CandidateTrace {
     SourcePlay,
     SourceStemsOff,
     SourceKeyLockOn,
+    SourceStemsOn,
 }
 
 /// Public cold admission/event polling are unchanged. The stream-bound scalar
@@ -1283,6 +1286,15 @@ fn settle_varispeed(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name
 }
 
 fn settle_wet(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name: &str) {
+    settle_wet_after(playback, locals, name, None);
+}
+
+fn settle_wet_after(
+    playback: &mut ControllerPlayback,
+    locals: &Py<PyDict>,
+    name: &str,
+    minimum_warm_start: Option<u64>,
+) {
     playback.ramp(locals, name, playback.ratio);
     assert!(
         !playback
@@ -1293,7 +1305,24 @@ fn settle_wet(playback: &mut ControllerPlayback, locals: &Py<PyDict>, name: &str
     );
     // This real timestamped feed starts a fresh ordinary Native preparation.
     // adopt_native independently reconstructs its complete 4096-frame raw feed.
+    let after_ramp = playback.frame;
     playback.render(13, true);
+    if let Some(minimum) = minimum_warm_start {
+        wait_until(|| {
+            voice_mut(&mut playback.callback.mixer)
+                .stretch
+                .source_preparation_ready()
+        });
+        let target = voice_mut(&mut playback.callback.mixer)
+            .stretch
+            .prepared_target_output_frame()
+            .unwrap();
+        assert!(
+            target - crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES as u64
+                >= minimum.max(after_ramp),
+            "own complete stem warm interval starts after its Adopt and ramp"
+        );
+    }
     let (actual, full_mix) = playback.adopt_native(false);
     assert!(actual.iter().any(|value| value.abs() > 0.001));
     assert!(
@@ -2857,9 +2886,16 @@ assert source_candidate.residency_status() == 'rejected' and not source_candidat
         "independent B PCM differs from old A PCM"
     );
     let ratio = playback.ratio;
-    let reference_owners = matches!(trace, CandidateTrace::SourceKeyLockOn)
-        .then(|| std::array::from_fn(|_| Arc::new(InputRuntimeOwnership::tracked())));
-    let independent_stems = matches!(trace, CandidateTrace::SourceStemsOff).then(|| {
+    let reference_owners = matches!(
+        trace,
+        CandidateTrace::SourceKeyLockOn | CandidateTrace::SourceStemsOn
+    )
+    .then(|| std::array::from_fn(|_| Arc::new(InputRuntimeOwnership::tracked())));
+    let independent_stems = matches!(
+        trace,
+        CandidateTrace::SourceStemsOff | CandidateTrace::SourceStemsOn
+    )
+    .then(|| {
         let version = Python::attach(|py| {
             locals
                 .bind(py)
@@ -3304,16 +3340,21 @@ fn replacement_component_pcm(bytes: &[u8]) -> SampleBuffer {
     }
 }
 
-fn public_replaced_source_stems_off(
+fn public_replaced_source_stems(
     root: &Path,
     playback: &mut ControllerPlayback,
     consumer: &mut rtrb::Consumer<ControlMessage>,
     locals: &Py<PyDict>,
+    key_lock: bool,
 ) {
     use crate::audio_engine::committed_stem_residency::CommittedStemRtWork;
     assert_eq!(playback.ratio, 1.25);
-    assert!(!playback.callback.mixer.key_lock_for_measurement(0));
+    assert_eq!(
+        playback.callback.mixer.key_lock_for_measurement(0),
+        key_lock
+    );
     assert!(consumer.is_empty() && playback.selection.is_none());
+    assert_eq!(playback.raw.is_some(), key_lock);
     let finite = playback.callback.mixer.bank_for_measurement()[0]
         .clone()
         .unwrap();
@@ -3321,6 +3362,9 @@ fn public_replaced_source_stems_off(
     let generation = before.generation;
     let native = before.stretch.native_state_address();
     let fifo = before.stretch.pending_fifo_frames();
+    let full_mix_adoption = before.stretch.adopted_request_id();
+    let birth = playback.frame - playback.source_frame;
+    assert!(!key_lock || full_mix_adoption.is_some());
     let other = other_voice(&playback.callback.mixer);
     let other_source = other.sample.clone().unwrap();
     let other_generation = other.generation;
@@ -3341,12 +3385,17 @@ fn public_replaced_source_stems_off(
             .bind(py)
             .set_item("b_started", Py::new(py, started).unwrap())
             .unwrap();
+        locals
+            .bind(py)
+            .set_item("b_stem_key_lock", key_lock)
+            .unwrap();
     });
     controller_python(
         locals,
         r#"
-assert 0 not in session.active_sample_ids
-transport.playback.handle_sample_started_message(b_started)
+if not b_stem_key_lock:
+    assert 0 not in session.active_sample_ids
+    transport.playback.handle_sample_started_message(b_started)
 assert 0 in session.active_sample_ids and 0 not in session.paused_sample_ids
 assert project.stem_cache[0] is None and project.pad_stem_mix_mode[0] == 'full_mix'
 b_path = project.sample_paths[0]
@@ -3357,6 +3406,13 @@ b_source = audio.capture_prepared_source(0, b_version)
 assert b_source.same_source_request(source_now)
 assert not b_source.same_preparation_context(source_now)
 assert not b_source.same_source_request(source_v2)
+if b_stem_key_lock:
+    assert b_version == source_version_now and project.pad_key_lock[0] is True
+    assert b_source.same_preparation_context(b_on_source)
+    assert b_source.same_source_request(b_off_source)
+    assert not b_source.same_preparation_context(b_off_source)
+    status = transport.residency.key_lock_status(0)
+    assert status.requested and status.effective is True and not status.pending
 b_worker_calls = audio.worker_call_count()
 assert controller.set_stem_enabled_mask(0, 0b1010)
 assert session.pad_stem_enabled_mask[0] == 0b1010
@@ -3420,13 +3476,27 @@ assert project.stem_cache[0] is None
 "#,
     );
     let assert_continuity = |playback: &ControllerPlayback| {
+        assert_eq!(playback.frame - playback.source_frame, birth);
         let current = voice(&playback.callback.mixer);
         assert_eq!(current.generation, generation);
-        assert_eq!(current.stretch.native_state_address(), native);
-        assert_eq!(current.stretch.pending_fifo_frames(), fifo);
         assert!(current.sample.as_ref().unwrap().same_window(&finite));
-        assert!(current.stretch.productive_history().is_none());
-        assert!(!current.stretch.wet_render_ready());
+        if key_lock {
+            assert!(current.stretch.productive_history().is_some());
+        } else {
+            assert_eq!(current.stretch.native_state_address(), native);
+            assert_eq!(current.stretch.pending_fifo_frames(), fifo);
+            assert!(current.stretch.productive_history().is_none());
+            assert!(!current.stretch.wet_render_ready());
+        }
+        let phase = (playback.source_frame as f64 * playback.ratio).rem_euclid(1500.0);
+        assert_eq!(
+            current.source_playback.position().frame,
+            LOOP_START + phase.floor() as usize
+        );
+        assert_eq!(
+            current.source_playback.position().fraction.to_bits(),
+            phase.fract().to_bits()
+        );
         let other = other_voice(&playback.callback.mixer);
         let phase = (playback.frame as f64 * playback.ratio).rem_euclid(1500.0);
         assert_eq!(
@@ -3450,7 +3520,11 @@ assert project.stem_cache[0] is None
         );
     };
     for frames in [1, 31, 137] {
-        let (actual, full_mix) = render_varispeed(playback, frames);
+        let (actual, full_mix) = if key_lock {
+            playback.render(frames, true)
+        } else {
+            render_varispeed(playback, frames)
+        };
         assert_eq!(
             actual, full_mix,
             "B FullMix during own complete-pair preparation"
@@ -3506,6 +3580,7 @@ b_reopened = ProjectPersistence.from_config_path(persistence.config_path)
 assert b_reopened.load_error is None and b_reopened.project.stem_cache[0].pair == b_disk
 assert b_reopened.project.pad_stem_mix_mode[0] == 'full_mix'
 assert b_reopened.project.sample_paths[0] == b_path and b_reopened.project.pad_content[0] == b_content
+assert b_reopened.project.pad_key_lock[0] is (True if b_stem_key_lock else None)
 status = controller.stem_residency_status(0)
 assert status.disk_stem_set_identity == b_disk.stem_set_identity
 assert status.control_stem_set_identity is None and status.effective_stem_set_identity is None
@@ -3519,7 +3594,11 @@ assert source_candidate.residency_status() == 'rejected' and not source_candidat
         "disk commit and pending registration grant no Capture"
     );
     for frames in [31, 257] {
-        let (actual, full_mix) = render_varispeed(playback, frames);
+        let (actual, full_mix) = if key_lock {
+            playback.render(frames, true)
+        } else {
+            render_varispeed(playback, frames)
+        };
         assert_eq!(
             actual, full_mix,
             "disk-only B selection leaves FullMix productive"
@@ -3545,9 +3624,16 @@ assert b_live.control is None and b_live.effective_identity is None
         matches!(consumer.peek(), Ok(ControlMessage::CommittedStemWork(work))
         if matches!(work.as_ref(), CommittedStemRtWork::Capture(_)))
     );
-    own_adoption(playback, consumer, locals, "b_candidate", false);
+    own_adoption(playback, consumer, locals, "b_candidate", key_lock);
+    let stem_ack_frame = playback.frame;
     assert!(consumer.is_empty());
     assert_continuity(playback);
+    assert_eq!(
+        voice(&playback.callback.mixer)
+            .stretch
+            .native_state_address(),
+        native
+    );
     let resident = playback.callback.mixer.stems_for_measurement()[0]
         .as_ref()
         .unwrap();
@@ -3599,7 +3685,24 @@ assert source_candidate.residency_status() == 'rejected' and not source_candidat
 "#,
     );
     let ramp_start = playback.source_frame;
-    settle_varispeed(playback, locals, "b_candidate");
+    if key_lock {
+        settle_wet_after(playback, locals, "b_candidate", Some(stem_ack_frame));
+        assert_ne!(
+            voice(&playback.callback.mixer)
+                .stretch
+                .native_state_address(),
+            native
+        );
+        assert!(
+            voice(&playback.callback.mixer)
+                .stretch
+                .wet_current_source_output_ready()
+        );
+        let adopted = voice(&playback.callback.mixer).stretch.adopted_request_id();
+        assert!(adopted.is_some() && adopted != full_mix_adoption);
+    } else {
+        settle_varispeed(playback, locals, "b_candidate");
+    }
     assert!(playback.source_frame - ramp_start > 103);
     assert_continuity(playback);
     assert_eq!(
@@ -3627,11 +3730,16 @@ assert b_reopened.load_error is None and b_reopened.project.stem_cache[0].pair =
 assert b_reopened.project.stem_cache[0].source_version == b_version
 assert b_reopened.project.sample_paths[0] == b_path and b_reopened.project.pad_content[0] == b_content
 assert b_reopened.project.pad_stem_mix_mode[0] == 'all_stems'
-assert b_reopened.project.pad_key_lock[0] is None
+assert b_reopened.project.pad_key_lock[0] is (True if b_stem_key_lock else None)
+assert not b_reopened.project.key_lock and not b_reopened.project.resolve_pad_key_lock(215)
 "#,
     );
     for frames in [1, 31, 137, 511] {
-        render_varispeed(playback, frames);
+        if key_lock {
+            playback.render(frames, true);
+        } else {
+            render_varispeed(playback, frames);
+        }
         assert_continuity(playback);
         controller_python(
             locals,
@@ -5396,13 +5504,18 @@ fn round_trip(
     let retrigger = matches!(trace, CandidateTrace::Retrigger);
     let window_change = matches!(trace, CandidateTrace::WindowChange);
     let source_stems_off = matches!(trace, CandidateTrace::SourceStemsOff);
-    let source_key_lock = matches!(trace, CandidateTrace::SourceKeyLockOn);
+    let source_stems_on = matches!(trace, CandidateTrace::SourceStemsOn);
+    let source_key_lock = matches!(
+        trace,
+        CandidateTrace::SourceKeyLockOn | CandidateTrace::SourceStemsOn
+    );
     assert!(!(source_stems_off || source_key_lock) || !key_lock);
     let source_play = matches!(
         trace,
         CandidateTrace::SourcePlay
             | CandidateTrace::SourceStemsOff
             | CandidateTrace::SourceKeyLockOn
+            | CandidateTrace::SourceStemsOn
     );
     let source_replacement = matches!(
         trace,
@@ -5410,6 +5523,7 @@ fn round_trip(
             | CandidateTrace::SourcePlay
             | CandidateTrace::SourceStemsOff
             | CandidateTrace::SourceKeyLockOn
+            | CandidateTrace::SourceStemsOn
     );
     assert!(
         !(claimed_masks || preclaim_masks || retrigger || window_change || source_replacement)
@@ -6202,7 +6316,13 @@ assert previous_control.ticket.is_current()
                 trace,
             );
             if source_stems_off {
-                public_replaced_source_stems_off(&h.root, &mut playback, &mut h.consumer, &locals);
+                public_replaced_source_stems(
+                    &h.root,
+                    &mut playback,
+                    &mut h.consumer,
+                    &locals,
+                    false,
+                );
             }
             if source_key_lock {
                 public_replaced_source_key_lock_on(
@@ -6210,6 +6330,15 @@ assert previous_control.ticket.is_current()
                     &mut h.consumer,
                     &locals,
                     reference_owners.unwrap(),
+                );
+            }
+            if source_stems_on {
+                public_replaced_source_stems(
+                    &h.root,
+                    &mut playback,
+                    &mut h.consumer,
+                    &locals,
+                    true,
                 );
             }
         }
@@ -6600,6 +6729,40 @@ assert bpm_selection.ticket is bpm_registration and bpm_selection.receipt is can
         "controller.shut_down()\ncontroller._assets.release_saved_assignments()\nowner_v1.release()\nowner_v2.release()",
     );
     std::env::set_current_dir(previous_cwd).unwrap();
+}
+
+#[test]
+fn actual_public_all_of_replaced_source_requires_own_wet_stem_effect() {
+    if std::env::var_os(SOURCE_STEMS_ON_CHILD).is_some() {
+        for selected_v1 in [false, true] {
+            round_trip(
+                selected_v1,
+                None,
+                false,
+                None,
+                false,
+                CandidateTrace::SourceStemsOn,
+            );
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            SOURCE_STEMS_ON_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(SOURCE_STEMS_ON_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 replaced-source own wet stems child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
 }
 
 #[test]

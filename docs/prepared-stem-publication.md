@@ -1145,6 +1145,55 @@ this test. Format, strict affected OpenSpec, five relative file links and
 whitespace pass. Unchanged production Release/import/Python181 checks remain
 reusable without Native installation or App use.
 
+### New original adopts live stems after its own public KEY LOCK ON
+
+A separate SourceStemsOn trace combines the acknowledged B load/window/Play
+and confirmed public per-pad ON with that B original's first live stem pair.
+Its complete-PCM references predeclare independent B components before their
+own birth, retain separate tracked source owners and remain FullMix throughout
+the public ON confirmation. FullMix preparation excludes these unused stem
+readers. Their source clocks, current RawNative/FIFO and neutral EQ continue
+through the later stem operation.
+
+Only after B's own ready/effective ON does the control path capture a fresh
+current B source ticket and pass it to the existing pair worker. It must match
+that ON context and differ from the earlier OFF-window preparation. The actual
+complete pair worker, fenced
+atomic persistence and active pending registration still grant no Capture;
+every actual B FullMix sample remains independently verified. One genuine
+SampleStarted is returned to Transport before ON, without duplicating it in
+the subsequent stem path. No model inference or production guard change is
+part of this bounded proof.
+
+Public ALL1010 requires a distinct own B Capture, component worker and Adopt.
+The real Adopt preserves voice, source phase, Native/FIFO and productive
+history. Only then does the selected complete-B reference change its scalar
+mask/mode, and the algebraic component ramp feeds the existing RawNative.
+The128-source-frame ramp remains transitioning; the earlier FullMix ON ACK
+does not certify stem effectiveness. A later own Native preparation must
+reconstruct a complete independent4096-frame selected-B warm interval starting
+after this stem Adopt and ramp. Exact complete-PCM feed, Native FIFO and
+uninterrupted EQ verify every dry/Wet output, including the changed Native
+address and own adoption request. A pure FullMix reference remains separate.
+
+Disk/control/effective identities must all become this B pair only through
+its own current receipt. Persistence reopens B's pair, content, ALL intent and
+explicit ON while global and pad215 remain OFF. The old failed A candidate
+stays unclaimed; pad215 retains its independent absolute source trajectory,
+generation, readers and Native FIFO. Final-reader, model/App, resource and
+Human gates remain open.
+
+Focused Release validation passes one test with both predecessor histories in
+4.67 seconds (1m00 compile), with no failed focus. The final affected public
+suite passes30 tests in118.74 seconds (.18 compile); unchanged36 parent/Native/
+offline tests reuse the earlier59-test gate, not a fresh66-test integrated
+run. The same one independent final review closes its corrected control-ticket
+wording with no open findings. Workspace/tests Clippy exits0 in7.18 seconds,
+with the existing63 looper warnings (one duplicate) and no changed-test
+diagnostic. Format, strict affected OpenSpec, five relative file links and
+whitespace pass. Unchanged production Release/import/Python181 checks remain
+reusable without Native installation or App use.
+
 ### New original prepares and adopts its own live dry stems
 
 After actual B assignment, finite-window ACK and public Play, this bounded
