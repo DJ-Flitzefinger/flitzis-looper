@@ -61,6 +61,8 @@ const SOURCE_PLAY_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_SOURCE_PLAY_OFF_CHILD"
 const SOURCE_PLAY_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_play_of_replaced_source_requires_own_voice_after_keylock_off";
 const SOURCE_STEMS_OFF_CHILD: &str = "FLITZI_L3_CONTROLLER_SOURCE_STEMS_OFF_CHILD";
 const SOURCE_STEMS_OFF_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_all_of_replaced_source_requires_own_dry_stem_effect";
+const SOURCE_KEY_LOCK_CHILD: &str = "FLITZI_L3_CONTROLLER_SOURCE_KEY_LOCK_CHILD";
+const SOURCE_KEY_LOCK_TEST: &str = "audio_engine::cold_load::tests::stem_pair_publication_tests::committed_stem_residency_tests::l3_controller_productive_tests::actual_public_keylock_on_of_replaced_source_requires_own_wet_confirmation";
 
 #[derive(Clone, Copy)]
 enum CandidateTrace {
@@ -80,6 +82,7 @@ enum CandidateTrace {
     SourceReplacement,
     SourcePlay,
     SourceStemsOff,
+    SourceKeyLockOn,
 }
 
 /// Public cold admission/event polling are unchanged. The stream-bound scalar
@@ -2606,8 +2609,8 @@ fn public_replaced_source_play(
     expected_pcm: Vec<f32>,
     predecessor_generation: u64,
     historical_adoption: Option<u64>,
-    reference_components: bool,
-) {
+    trace: CandidateTrace,
+) -> Option<[Arc<InputRuntimeOwnership>; 2]> {
     assert!(!playback.scheduled && playback.rate_ledger.is_none());
     assert_eq!(playback.loop_period, 1500.0);
     assert_eq!(playback.loop_end, LOOP_END);
@@ -2854,7 +2857,9 @@ assert source_candidate.residency_status() == 'rejected' and not source_candidat
         "independent B PCM differs from old A PCM"
     );
     let ratio = playback.ratio;
-    let independent_stems = reference_components.then(|| {
+    let reference_owners = matches!(trace, CandidateTrace::SourceKeyLockOn)
+        .then(|| std::array::from_fn(|_| Arc::new(InputRuntimeOwnership::tracked())));
+    let independent_stems = matches!(trace, CandidateTrace::SourceStemsOff).then(|| {
         let version = Python::attach(|py| {
             locals
                 .bind(py)
@@ -2879,8 +2884,12 @@ assert source_candidate.residency_status() == 'rejected' and not source_candidat
             }),
         }
     });
-    let reference = || {
+    let reference = |index: usize| {
         let mut mixer = Box::new(RtMixer::new(2, RATE as f32));
+        if let Some(owners) = &reference_owners {
+            owners[index].publish_source(0, &independent, RATE, 1);
+            mixer.set_input_runtime_ownership(owners[index].clone());
+        }
         mixer.load_sample(0, independent.clone());
         mixer.set_loop_region_frames(0, LOOP_START, Some(LOOP_END));
         mixer.set_speed(ratio);
@@ -2894,8 +2903,8 @@ assert source_candidate.residency_status() == 'rejected' and not source_candidat
         assert!(mixer.play_sample_at_output_frame(0, 1.0, birth));
         mixer
     };
-    playback.reference = reference();
-    playback.full_mix = reference();
+    playback.reference = reference(0);
+    playback.full_mix = reference(1);
     if let Some(stems) = independent_stems {
         playback.components = stems.stems;
     }
@@ -2988,6 +2997,288 @@ assert source_play_reopened.project.pad_loop_start_s[0] == 17 / fixture['rate']
 assert source_play_reopened.project.pad_loop_end_s[0] == 1517 / fixture['rate']
 "#,
     );
+    reference_owners
+}
+
+fn public_replaced_source_key_lock_on(
+    playback: &mut ControllerPlayback,
+    consumer: &mut rtrb::Consumer<ControlMessage>,
+    locals: &Py<PyDict>,
+    reference_owners: [Arc<InputRuntimeOwnership>; 2],
+) {
+    assert_eq!(playback.ratio, 1.25);
+    assert!(consumer.is_empty() && playback.raw.is_none() && playback.selection.is_none());
+    let old_window = playback.callback.mixer.bank_for_measurement()[0]
+        .clone()
+        .unwrap();
+    let current = voice(&playback.callback.mixer);
+    let generation = current.generation;
+    let native = current.stretch.native_state_address();
+    let birth = playback.frame - playback.source_frame;
+    let other = other_voice(&playback.callback.mixer);
+    let other_source = other.sample.clone().unwrap();
+    let other_generation = other.generation;
+    let other_native = other.stretch.native_state_address();
+    let other_fifo = other.stretch.pending_fifo_frames();
+    let other_demand = playback.callback.mixer.stem_demand_for_measurement(215);
+    let started = playback
+        .callback
+        .feedback
+        .events
+        .iter()
+        .rev()
+        .find(|event| matches!(event, AudioMessage::SampleStarted { id: 0 }))
+        .expect("actual B public Play feedback")
+        .clone();
+    Python::attach(|py| {
+        locals
+            .bind(py)
+            .set_item("b_on_started", Py::new(py, started).unwrap())
+            .unwrap()
+    });
+    controller_python(
+        locals,
+        r#"
+assert 0 not in session.active_sample_ids
+transport.playback.handle_sample_started_message(b_on_started)
+assert 0 in session.active_sample_ids
+b_on_path = project.sample_paths[0]
+b_on_content = project.pad_content[0]
+b_on_workers = audio.worker_call_count()
+b_off_source = audio.capture_prepared_source(0, source_version_now)
+assert project.pad_key_lock[0] is None and not project.key_lock
+transport.pad.set_pad_key_lock(0, enabled=True)
+b_on_window = transport.residency._pending[0].ticket
+assert b_on_window is not None and b_on_window.key_lock_request_id is not None
+assert project.pad_key_lock[0] is True and not project.key_lock
+assert not project.resolve_pad_key_lock(215)
+assert project.stem_cache[0] is None and not controller._committed_residency.contains(0)
+assert source_candidate.residency_status() == 'rejected' and not source_candidate.claimed()
+status = transport.residency.key_lock_status(0)
+assert status.requested and status.pending and status.error is None
+"#,
+    );
+    wait_until(|| consumer.peek().is_ok());
+    assert!(matches!(
+        consumer.peek(),
+        Ok(ControlMessage::RelocateResident(_))
+    ));
+    playback.callback.retirement.slots = 2;
+    assert_eq!(playback.drain(consumer), 0, "own ON-window retirement hold");
+    for frames in [1, 31, 137, 257] {
+        let (actual, full_mix) = render_varispeed(playback, frames);
+        assert_eq!(actual, full_mix, "B stays dry before its own ON-window ACK");
+        assert!(!playback.callback.mixer.key_lock_for_measurement(0));
+        assert_eq!(voice(&playback.callback.mixer).generation, generation);
+        assert!(
+            voice(&playback.callback.mixer)
+                .sample
+                .as_ref()
+                .unwrap()
+                .same_window(&old_window)
+        );
+        controller_python(
+            locals,
+            r#"
+transport.on_frame_render()
+controller.on_frame_render()
+assert b_on_window.publication_status() == 'pending'
+assert transport.residency.key_lock_status(0).pending
+assert not session.stem_generation_errors
+assert audio.worker_call_count() == b_on_workers
+assert not source_candidate.claimed()
+"#,
+        );
+        assert_eq!(playback.drain(consumer), 0);
+    }
+    let before = voice(&playback.callback.mixer);
+    let clock = before.source_playback;
+    let dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    let feedback_count = playback.callback.feedback.events.len();
+    let on_ack_frame = playback.frame;
+    playback.callback.retirement.slots = usize::MAX;
+    assert_eq!(playback.drain(consumer), 1, "own B KEY LOCK ON-window ACK");
+    assert!(consumer.is_empty());
+    let on_window = playback.callback.mixer.bank_for_measurement()[0]
+        .clone()
+        .unwrap();
+    assert!(on_window.same_source(&old_window));
+    assert_ne!(on_window.window_revision(), old_window.window_revision());
+    assert_eq!(
+        (on_window.resident_start(), on_window.resident_end()),
+        (LOOP_START, LOOP_END)
+    );
+    assert_eq!(on_window.samples.as_ref(), old_window.samples.as_ref());
+    let after = voice(&playback.callback.mixer);
+    assert_eq!(after.generation, generation);
+    assert!(after.source_playback.matches_exact(&clock));
+    assert_eq!(after.stretch.native_state_address(), native);
+    assert!(after.sample.as_ref().unwrap().same_window(&on_window));
+    assert_eq!(
+        playback.callback.feedback.events.len(),
+        feedback_count,
+        "ON does not relaunch B"
+    );
+    let after_dsp = playback
+        .callback
+        .mixer
+        .dsp_source_history_for_test(0)
+        .unwrap();
+    assert_eq!(after_dsp.binding, dsp.binding);
+    assert_eq!(after_dsp.next_position, dsp.next_position);
+    assert_eq!(after_dsp.fed_output_frames, dsp.fed_output_frames);
+    assert!(playback.callback.mixer.key_lock_for_measurement(0));
+    controller_python(
+        locals,
+        r#"
+transport.on_frame_render()
+assert b_on_window.publication_status() == 'accepted' and b_on_window.is_current()
+feedback = transport.residency._mode_feedback(0)
+assert feedback['window_revision'] == b_on_window.window_revision
+assert feedback['request_id'] == b_on_window.key_lock_request_id
+assert feedback['effective'] is False and feedback['ready'] is False
+status = transport.residency.key_lock_status(0)
+assert status.requested and status.pending and status.effective is False and status.error is None
+assert transport.residency._pending[0].ticket is b_on_window
+assert project.stem_cache[0] is None and controller.stem_residency_status(0) is None
+"#,
+    );
+    for (reference, owner) in [playback.reference.as_mut(), playback.full_mix.as_mut()]
+        .into_iter()
+        .zip(&reference_owners)
+    {
+        let source = &playback.source;
+        let request = owner.next_key_lock_request(0).unwrap();
+        reference.set_pad_key_lock_request(
+            0,
+            true,
+            request,
+            InputPadBinding {
+                resident: source.resident_binding(),
+                source_address: source.source_address(),
+                sample_count: source.source_sample_count(),
+                channels: source.channels,
+                sample_rate_hz: RATE,
+                authority_revision: owner.authority[0].load(Ordering::Acquire),
+                runtime_revision: 0,
+                accepted: None,
+            },
+            1,
+        );
+        assert!(reference.key_lock_for_measurement(0));
+        assert!(voice(reference).source_playback.matches_exact(&clock));
+    }
+    playback.raw = Some(ControllerRawNative::new(playback.ratio, false));
+    playback.render(13, true);
+    controller_python(
+        locals,
+        r#"
+transport.on_frame_render()
+assert transport.residency.key_lock_status(0).pending
+assert transport.residency._pending[0].ticket is b_on_window
+assert audio.worker_call_count() == b_on_workers
+"#,
+    );
+    wait_until(|| {
+        voice_mut(&mut playback.callback.mixer)
+            .stretch
+            .source_preparation_ready()
+    });
+    let target = voice_mut(&mut playback.callback.mixer)
+        .stretch
+        .prepared_target_output_frame()
+        .unwrap();
+    assert!(
+        target - crate::audio_engine::prepared_native_history::PREPARED_HISTORY_FRAMES as u64
+            >= on_ack_frame
+    );
+    let (actual, full_mix) = playback.adopt_native(true);
+    assert_eq!(
+        actual, full_mix,
+        "own B FullMix wet output has no old stems"
+    );
+    assert!(actual.iter().any(|sample| sample.abs() > 0.001));
+    assert_eq!(voice(&playback.callback.mixer).generation, generation);
+    assert!(
+        voice(&playback.callback.mixer)
+            .stretch
+            .wet_current_source_output_ready()
+    );
+    assert!(playback.callback.mixer.stems_for_measurement()[0].is_none());
+    controller_python(
+        locals,
+        r#"
+transport.on_frame_render()
+controller.on_frame_render()
+assert transport.residency.status(0) == (None, None)
+status = transport.residency.key_lock_status(0)
+assert status.requested and status.effective is True and not status.pending
+assert not status.unconfirmed and status.error is None
+feedback = transport.residency._mode_feedback(0)
+assert feedback['window_revision'] == b_on_window.window_revision
+assert feedback['request_id'] == b_on_window.key_lock_request_id
+assert feedback['effective'] is True and feedback['ready'] is True
+b_on_source = audio.capture_prepared_source(0, source_version_now)
+assert b_on_source.same_source_request(b_off_source)
+assert not b_on_source.same_preparation_context(b_off_source)
+assert b_on_source.same_preparation_context(b_on_source)
+assert not b_on_source.same_source_request(source_v2)
+assert project.sample_paths[0] == b_on_path and project.pad_content[0] == b_on_content
+assert project.stem_cache[0] is None and controller.stem_residency_status(0) is None
+assert not source_candidate.claimed() and source_candidate.residency_status() == 'rejected'
+assert source_candidate.error() == 'Committed stem residency or mode ownership changed'
+assert source_candidate.effective_failure_reason() is None
+assert audio.worker_call_count() == b_on_workers and not session.stem_generation_errors
+persistence.flush()
+b_on_reopened = ProjectPersistence.from_config_path(persistence.config_path)
+assert b_on_reopened.load_error is None and b_on_reopened.project.pad_key_lock[0] is True
+assert not b_on_reopened.project.key_lock and not b_on_reopened.project.resolve_pad_key_lock(215)
+assert b_on_reopened.project.sample_paths[0] == b_on_path
+assert b_on_reopened.project.pad_content[0] == b_on_content
+assert b_on_reopened.project.stem_cache[0] is None
+assert b_on_reopened.project.pad_stem_mix_mode[0] == 'full_mix'
+assert b_on_reopened.project.pad_loop_start_s[0] == 17 / fixture['rate']
+assert b_on_reopened.project.pad_loop_end_s[0] == 1517 / fixture['rate']
+"#,
+    );
+    for frames in [1, 31, 137, 257, 511] {
+        let (actual, full_mix) = playback.render(frames, true);
+        assert_eq!(actual, full_mix);
+        assert_eq!(playback.frame - playback.source_frame, birth);
+        let current = voice(&playback.callback.mixer);
+        assert_eq!(current.generation, generation);
+        assert!(current.sample.as_ref().unwrap().same_window(&on_window));
+        let other = other_voice(&playback.callback.mixer);
+        let phase = (playback.frame as f64 * playback.ratio).rem_euclid(1500.0);
+        assert_eq!(
+            other.source_playback.position().frame,
+            LOOP_START + phase.floor() as usize
+        );
+        assert_eq!(
+            other.source_playback.position().fraction.to_bits(),
+            phase.fract().to_bits()
+        );
+        assert_eq!(other.generation, other_generation);
+        assert_eq!(other.stretch.native_state_address(), other_native);
+        assert_eq!(other.stretch.pending_fifo_frames(), other_fifo);
+        assert!(Arc::ptr_eq(
+            &other.sample.as_ref().unwrap().samples,
+            &other_source.samples
+        ));
+        assert_eq!(
+            playback.callback.mixer.stem_demand_for_measurement(215),
+            other_demand
+        );
+        controller_python(
+            locals,
+            "transport.on_frame_render()\ncontroller.on_frame_render()\nassert audio.worker_call_count() == b_on_workers\nassert not session.stem_generation_errors\nassert not source_candidate.claimed()\nassert transport.residency.status(0) == (None, None)",
+        );
+        assert!(consumer.is_empty());
+    }
 }
 
 fn replacement_component_pcm(bytes: &[u8]) -> SampleBuffer {
@@ -5105,16 +5396,20 @@ fn round_trip(
     let retrigger = matches!(trace, CandidateTrace::Retrigger);
     let window_change = matches!(trace, CandidateTrace::WindowChange);
     let source_stems_off = matches!(trace, CandidateTrace::SourceStemsOff);
-    assert!(!source_stems_off || !key_lock);
+    let source_key_lock = matches!(trace, CandidateTrace::SourceKeyLockOn);
+    assert!(!(source_stems_off || source_key_lock) || !key_lock);
     let source_play = matches!(
         trace,
-        CandidateTrace::SourcePlay | CandidateTrace::SourceStemsOff
+        CandidateTrace::SourcePlay
+            | CandidateTrace::SourceStemsOff
+            | CandidateTrace::SourceKeyLockOn
     );
     let source_replacement = matches!(
         trace,
         CandidateTrace::SourceReplacement
             | CandidateTrace::SourcePlay
             | CandidateTrace::SourceStemsOff
+            | CandidateTrace::SourceKeyLockOn
     );
     assert!(
         !(claimed_masks || preclaim_masks || retrigger || window_change || source_replacement)
@@ -5897,17 +6192,25 @@ assert previous_control.ticket.is_current()
                 key_lock,
             );
         if source_play {
-            public_replaced_source_play(
+            let reference_owners = public_replaced_source_play(
                 &mut playback,
                 &mut h.consumer,
                 &locals,
                 expected_source,
                 predecessor_generation,
                 historical_adoption,
-                source_stems_off,
+                trace,
             );
             if source_stems_off {
                 public_replaced_source_stems_off(&h.root, &mut playback, &mut h.consumer, &locals);
+            }
+            if source_key_lock {
+                public_replaced_source_key_lock_on(
+                    &mut playback,
+                    &mut h.consumer,
+                    &locals,
+                    reference_owners.unwrap(),
+                );
             }
         }
         controller_python(
@@ -6297,6 +6600,40 @@ assert bpm_selection.ticket is bpm_registration and bpm_selection.receipt is can
         "controller.shut_down()\ncontroller._assets.release_saved_assignments()\nowner_v1.release()\nowner_v2.release()",
     );
     std::env::set_current_dir(previous_cwd).unwrap();
+}
+
+#[test]
+fn actual_public_keylock_on_of_replaced_source_requires_own_wet_confirmation() {
+    if std::env::var_os(SOURCE_KEY_LOCK_CHILD).is_some() {
+        for selected_v1 in [false, true] {
+            round_trip(
+                selected_v1,
+                None,
+                false,
+                None,
+                false,
+                CandidateTrace::SourceKeyLockOn,
+            );
+        }
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            SOURCE_KEY_LOCK_TEST,
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(SOURCE_KEY_LOCK_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "L3 replaced-source own KEY LOCK ON child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
 }
 
 #[test]

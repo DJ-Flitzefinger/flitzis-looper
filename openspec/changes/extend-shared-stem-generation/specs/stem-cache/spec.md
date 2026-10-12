@@ -273,6 +273,15 @@ immediate change SHALL NOT silently discard the command.
 - **AND** actual output SHALL follow the new original's complete PCM, declared playback rate and fresh neutral filter chronology without old component readers, old-source stem effectiveness or predecessor wet history
 - **AND** the old rejected V2 SHALL remain rejected and unclaimed through repeated polling, and the other pad SHALL retain its independent source, voice and playback trajectory
 
+#### Scenario: Public KEY LOCK ON belongs to the playing replacement original
+
+- **GIVEN** a different original has obtained its own load, finite NormalLoop window and public Play acknowledgements and is producing FullMix with inherited KEY LOCK OFF
+- **WHEN** public per-pad KEY LOCK ON requests that current playing original while another pad remains active
+- **THEN** the existing resident preparation path SHALL acknowledge its own current-source window and KEY LOCK request without restarting the voice, source phase or filter history
+- **AND** window acknowledgement SHALL NOT alone confirm effective ON; confirmation SHALL require current-source feedback with that operation's own window revision and request ID and actual ready, effective Wet output
+- **AND** actual output SHALL follow independently verified complete new-original PCM through the dry-to-Wet transition and its own Native preparation while the rejected predecessor candidate remains unclaimed and the other pad retains its independent owners and trajectory
+- **AND** persistence SHALL retain the explicit per-pad ON override, and any subsequent stem preparation SHALL capture fresh current preparation context rather than borrow the earlier OFF-window ticket or KEY LOCK acknowledgement
+
 #### Scenario: New original requires its own live stem preparation and dry effect
 
 - **GIVEN** a different original has obtained its own load, finite NormalLoop window and explicit Play acknowledgements, is producing FullMix with KEY LOCK OFF, and the predecessor's queued stem candidate remains rejected and unclaimed

@@ -1101,6 +1101,50 @@ warnings (one duplicate), none in the changed test. Format, strict affected
 OpenSpec, five relative file links and whitespace pass. Production Release/
 import/Python181 checks remain reusable without Native installation or App use.
 
+### Public KEY LOCK ON confirms the playing replacement original
+
+After the actual B load/window/public Play trace, a separate bounded test
+returns its genuine SampleStarted to the production Transport handler and
+requests per-pad KEY LOCK ON through transport.pad.set_pad_key_lock. The
+existing cache-backed resident-control lane prepares the same17..1517 B
+extent in KeyLockFiniteLoop context with a new window revision and own mode
+request. No new facade setter, model inference or ordinary stem publication
+is used. Global OFF and pad215's independent mode remain unchanged.
+
+Two-slot retirement pressure holds the real relocation while B continues dry
+FullMix from independent complete PCM and its uninterrupted neutral filter.
+Its own window ACK changes backing and mode without a new voice, source seek,
+birth, consumed-source clock or filter reset. The matching window/request
+feedback still reports dry and not ready; actual Transport polling retains
+pending ON. This acknowledgement does not certify Wet output or a stem set.
+
+Only this ON trace gives each complete-B reference its own tracked source
+owner before B birth. At the actual ON-window ACK, each existing reference
+voice receives an independent own ON request. A fresh independent RawNative
+oracle starts at that same mode boundary while source and filter chronology
+continue. The genuine future Native preparation and independent complete
+4096-frame warmfeed must start after that mode ACK, then compare all chosen
+dry/Wet PCM, FIFO and EQ output. Public confirmation requires current B source,
+the exact own window revision and mode request, ready and effective output.
+The previous failed A-V2 cannot claim or borrow this mode acknowledgement.
+
+Persistence reopens B's explicit per-pad ON, unchanged FullMix and finite intent
+while global and the other pad remain OFF. A fresh post-confirmation B source
+ticket shares its own original request but differs from the earlier OFF-window
+preparation context. Subsequent B-stem preparation/adoption still needs separate
+authority and receipts. Production final-reader, full App/model, resource and
+Human gates remain open.
+
+Focused Release validation passes one test with both predecessor histories in
+6.07 seconds (1m35 compile). The final affected public-controller suite passes
+29 tests in150.76 seconds (.26 compile); the unchanged36 parent/Native/offline
+tests reuse the earlier59-test gate, not a fresh65-test integrated run. One
+independent final review has no open findings. Workspace/tests Clippy exits0
+in11.10 seconds with the existing63 looper warnings (one duplicate), none in
+this test. Format, strict affected OpenSpec, five relative file links and
+whitespace pass. Unchanged production Release/import/Python181 checks remain
+reusable without Native installation or App use.
+
 ### New original prepares and adopts its own live dry stems
 
 After actual B assignment, finite-window ACK and public Play, this bounded
