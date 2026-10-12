@@ -70,9 +70,13 @@ Start the app, load audio onto pads, then trigger pads from the grid:
 ## How to Install
 
 For independent Windows testing, see [Portable installation](docs/portable-windows.md).
-The portable installer includes its private runtime and supports repeatable updates.
-The current standalone personal installer uses a local bundle; the public binary
-download channel still requires a published release.
+Copy only `INSTALL-LOOPER-PORTABLE.bat` into your chosen folder and double-click it.
+It installs the current remote `main` into a private runtime and checks for updates
+when run again. Missing Git, uv, Python, Rust, vcpkg/Rubber Band and FFmpeg are
+acquired automatically; no terminal commands or project binary Release are needed.
+Missing Microsoft C++ Build Tools/Windows SDK may require Windows administrator
+approval and a restart. Initial tool downloads and compilation need substantial
+time and disk space. Completed app data and runtimes stay separate from development.
 
 The following setup is for development:
 
@@ -142,9 +146,8 @@ Windows, run Rust tests with `.\scripts\run-rust-tests.ps1` so uv's selected
 Python runtime and the Rubber Band runtime directory are added to `PATH` before
 `cargo test` launches the test executable.
 
-For later non-technical Windows distribution, the intended path is a Nuitka
-installer that bundles the required runtime DLLs. End users of that installer
-should not need vcpkg, CMake, Ninja, Rust, or Rubber Band development packages.
+The standalone Windows portable installer prepares these build dependencies
+automatically and includes required runtime DLLs in its private application.
 Rubber Band's GPL/commercial licensing model must be checked before publishing
 binary installers.
 

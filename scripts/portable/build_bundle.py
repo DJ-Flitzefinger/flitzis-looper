@@ -180,7 +180,7 @@ def source_identity(args: argparse.Namespace) -> tuple[str, bool]:
 
 def prepare_output(output: Path) -> Path:
     require(
-        not output.is_relative_to(REPO),
+        not output.resolve().is_relative_to(REPO),
         "Portable bundles and data must stay outside the repository",
     )
     owner = output / "portable-channel-owner.json"
@@ -209,7 +209,7 @@ def copy_application(staging: Path, native_wheel: Path) -> Path:
         )
         for entry in archive.infolist():
             require(
-                (app / entry.filename).resolve().is_relative_to(app),
+                (app / entry.filename).resolve().is_relative_to(app.resolve()),
                 "Native wheel contains an escaping entry",
             )
         archive.extractall(app)
@@ -220,7 +220,7 @@ def copy_application(staging: Path, native_wheel: Path) -> Path:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(REPO / relative, target)
     shutil.copyfile(REPO / "assets/models/keynet.onnx", staging / "python/keynet.onnx")
-    for name in ["bootstrap.py", "launch.ps1", "dispatch.ps1"]:
+    for name in ["bootstrap.py", "launch.ps1", "dispatch.ps1", "common.ps1", "build-path.ps1"]:
         shutil.copyfile(PORTABLE / name, staging / name)
     (staging / "START-LOOPER.bat").write_bytes(STARTER.encode("ascii"))
     return native[0]
@@ -317,10 +317,6 @@ def package_runtime(staging: Path, output: Path, release: dict[str, object]) -> 
     manifest = output / "portable-manifest.json"
     write_json(manifest, channel)
     personal = (REPO / "INSTALL-LOOPER-PORTABLE.bat").read_text(encoding="utf-8-sig")
-    personal = personal.replace(
-        "$DefaultChannel = '@PORTABLE_CHANNEL@'",
-        "$DefaultChannel = '" + manifest.as_uri().replace("'", "''") + "'",
-    )
     installer = output / "INSTALL-LOOPER-PORTABLE.bat"
     installer.write_bytes(personal.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
     emit(json.dumps({"channel": str(manifest), "installer": str(installer), **channel}, indent=2))
@@ -328,7 +324,9 @@ def package_runtime(staging: Path, output: Path, release: dict[str, object]) -> 
 
 def build(args: argparse.Namespace) -> None:
     commit, dirty = source_identity(args)
-    output = args.output.resolve()
+    # Keep an owned short build-drive path for Windows DLL loading. Resolve only
+    # for containment comparisons; resolving operational paths defeats SUBST.
+    output = args.output.absolute()
     staging = prepare_output(output)
     emit(f"Preparing private runtime: {staging}")
     shutil.copytree(
@@ -337,11 +335,38 @@ def build(args: argparse.Namespace) -> None:
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "site-packages"),
     )
     dependencies = copy_runtime_dependencies(staging / "python/Lib/site-packages")
+    shutil.copyfile(
+        PORTABLE / "sitecustomize.py", staging / "python/Lib/site-packages/sitecustomize.py"
+    )
     emit(f"Copied {len(dependencies)} non-development distributions")
     native = copy_application(staging, args.native_wheel)
     copy_external_runtime(staging, args)
     copy_licenses(staging, args.license_file)
     preflight(staging, output)
+    if args.runtime_directory:
+        destination = args.runtime_directory.absolute()
+        require(not destination.exists(), "Runtime destination must be a fresh directory")
+        require(
+            not destination.resolve().is_relative_to(REPO),
+            "Runtime must stay outside source checkout",
+        )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        staging.rename(destination)
+        write_json(
+            destination / "release-manifest.json",
+            {
+                "schema_version": 1,
+                "release_id": commit,
+                "git_commit": commit,
+                "source_dirty": dirty,
+                "native_source_commit": args.native_source_commit,
+                "native_sha256": digest(destination / native.relative_to(staging)),
+                "runtime_dependencies": dependencies,
+                "python_version": sys.version.split()[0],
+            },
+        )
+        emit(json.dumps({"runtime_directory": str(destination), "git_commit": commit}))
+        return
     fingerprint = hashlib.sha256()
     for path in sorted(staging.rglob("*")):
         if path.is_file():
@@ -373,6 +398,7 @@ def main() -> None:
     parser.add_argument("--license-file", action="append", default=[])
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--allow-dirty", action="store_true")
+    parser.add_argument("--runtime-directory", type=Path)
     build(parser.parse_args())
 
 

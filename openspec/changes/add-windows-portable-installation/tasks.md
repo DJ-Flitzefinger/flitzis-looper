@@ -1,15 +1,33 @@
-## Implementation
+## Source-main installation
 
-- [x] 1. Add the standalone BAT installer, manifest verification, owned-path
-  containment, serialized staging and atomic activation with retained runtimes.
-- [x] 2. Add a reproducible private-runtime bundle builder and portable launch/
-  import checks; isolate data, models, caches and settings from development.
-- [x] 3. Prove first install, unchanged repeat, update, relocation, corrupted or
-  escaping payload rejection and preservation of prior runtime and user data.
-- [x] 4. Deliver a real local standalone installer/bundle for Human testing.
+- [x] 1. Replace ordinary local/release-channel installation with the standalone
+  BAT bootstrap of current remote `main`; keep bundle packaging only as an
+  advanced maintainer utility.
+- [x] 2. Check/acquire verified pinned Git, uv, CPython 3.14.2, Rust 1.95.0,
+  vcpkg/Rubber Band and FFmpeg in installation-owned tools/caches; check/install
+  missing Microsoft C++ Build Tools/Windows SDK with elevation and restart
+  handling before activation.
+- [x] 3. Build an exact source snapshot into a private non-editable Release
+  runtime; retain serialized owned staging, archive containment, private
+  preflight, atomic activation and old runtimes/persistent data on failure.
+- [x] 4. Preserve simple root starters, installed-directory relocation and
+  private data/model/cache paths; avoid rebuilds for unchanged healthy `main`.
+- [x] 5. Add focused missing-tool, unchanged-main, changed-main, failure/data
+  retention and relocation regressions; run relevant checks and record their
+  actual results, strict OpenSpec validation and independent final review.
+- [x] 6. Update beginner documentation and repository maintenance rules for
+  installer/BAT/helper/test/docs adaptation in the same prerequisite/ABI/layout
+  change; explain initial downloads, compilation, disk use and shared Microsoft
+  system build components accurately.
 
-## Separate gates
+## Actual-machine gates
 
-- [ ] 5. Human portable GUI/audio/device test and any reported corrections.
-- [ ] 6. Publish a portable HTTPS binary release when explicitly authorized;
-  verify independent download on another Windows computer.
+- [ ] 7. Verify first-install bootstrap on clean compatible Windows x64 without
+  preinstalled Git/Python/Rust, including missing Microsoft toolchain and
+  applicable elevation/restart paths. Configured-machine tests do not pass this
+  gate.
+- [ ] 8. Human portable GUI/audio/device/listening test and any reported
+  corrections. Do not infer acceptance from import/preflight tests.
+
+Project binary Release publication is not a prerequisite or delivery gate for
+this source-main installer and is not authorized by this change.

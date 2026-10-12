@@ -44,6 +44,20 @@
 
 ## Dependency Management
 
+### Portable Installer Maintenance
+
+- `INSTALL-LOOPER-PORTABLE.bat` installs the current remote `main` from source.
+  It must work by double-click on Windows x64 without preinstalled Git/Python/Rust.
+- Changes to dependency locks, Python/Rust ABI, MSVC/SDK/vcpkg requirements,
+  native DLLs, repository layout, launch/data/model paths or FFmpeg must review
+  and adapt `scripts/portable`, the BAT, its tests and `docs/portable-windows.md`
+  in the same delivery. Do not leave installer compatibility to a later task.
+- Keep downloaded bootstrap tools pinned/verified, persistent data and running
+  old runtimes protected, and activation after a successful private preflight.
+  Never require a project Release/local developer bundle for ordinary installs.
+- Validate missing-tool bootstrap, unchanged-main/update/failure paths relevant
+  to the change. A developer-machine test is not clean-Windows Human acceptance.
+
 ### Python
 - Install: `uv sync`
 - Add

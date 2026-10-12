@@ -13,6 +13,17 @@ import sys
 from pathlib import Path
 
 
+def physical_path(path: Path) -> Path:
+    """Compare private origins without Windows extended-path spelling differences."""
+    value = str(path.resolve())
+    if os.name == "nt":
+        if value.startswith("\\\\?\\UNC\\"):
+            value = "\\\\" + value[8:]
+        elif value.startswith("\\\\?\\"):
+            value = value[4:]
+    return Path(value)
+
+
 def configure(root: Path, version: Path) -> list[object]:
     sys.path.insert(0, str(version / "app"))
     os.chdir(root / "data")
@@ -55,8 +66,8 @@ def private_dlls(version: Path) -> dict[str, str]:
         assert handle, f"Runtime DLL not loaded: {name}"
         buffer = ctypes.create_unicode_buffer(32768)
         assert kernel.GetModuleFileNameW(handle, buffer, len(buffer))
-        dll = Path(buffer.value).resolve()
-        assert dll.is_relative_to(version), f"Nonportable DLL resolution: {dll}"
+        dll = physical_path(Path(buffer.value))
+        assert dll.is_relative_to(physical_path(version)), f"Nonportable DLL resolution: {dll}"
         dlls[name] = str(dll)
     return dlls
 
@@ -64,13 +75,19 @@ def private_dlls(version: Path) -> dict[str, str]:
 def check_runtime(root: Path, version: Path) -> None:
     # Runtime imports must follow private-path/DLL setup, before any GUI/device opens.
     native_module = importlib.import_module("flitzis_looper_audio")
-    native = Path(native_module.flitzis_looper_audio.__file__).resolve()
-    assert native.is_relative_to(version / "app"), native
+    native = physical_path(Path(native_module.flitzis_looper_audio.__file__))
+    assert native.is_relative_to(physical_path(version / "app")), native
     assert native_module.native_build_profile() == "release"
-    assert Path(sys.executable).resolve().is_relative_to(version / "python")
+    assert physical_path(Path(sys.executable)).is_relative_to(physical_path(version / "python"))
+    customization = importlib.import_module("sitecustomize")
+    assert physical_path(Path(customization.__file__)).is_relative_to(
+        physical_path(version / "python")
+    )
     for name in ["imgui_bundle", "torch", "torchaudio", "torchcodec"]:
         module = importlib.import_module(name)
-        assert Path(module.__file__).resolve().is_relative_to(version / "python"), module
+        assert physical_path(Path(module.__file__)).is_relative_to(
+            physical_path(version / "python")
+        ), module
     assert importlib.import_module("flitzis_looper.controller.stems").StemController
     assert importlib.import_module("flitzis_looper.ui.render.sidebar_left")
     generation = importlib.import_module("flitzis_looper.controller.stem_generation")
@@ -110,7 +127,9 @@ def main() -> None:
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    version = Path(__file__).resolve().parent
+    # Preserve the starter's short operational path; use resolved paths only
+    # when proving that imports/DLLs belong to this private runtime.
+    version = Path(__file__).absolute().parent
     root = args.root.resolve()
     dll_handles = configure(root, version)
     assert dll_handles
