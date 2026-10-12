@@ -51,6 +51,7 @@ NO_MODEL_INSTALLED_MESSAGE = "no Model installed"
 FFMPEG_UNAVAILABLE_MESSAGE = "FFmpeg/ffprobe unavailable"
 TORCHCODEC_UNAVAILABLE_MESSAGE = "TorchCodec unavailable"
 FFMPEG_DIR_ENV_VAR = "FLITZIS_FFMPEG_DIR"
+MODEL_CACHE_DIR_ENV_VAR = "FLITZIS_MODEL_CACHE_DIR"
 DEMUCS_ENCODER_ENV_VAR = "FLITZIS_DEMUCS_ENCODER"
 
 
@@ -170,9 +171,11 @@ def default_demucs_model_cache_dir(
     project_root: Path | None = None,
     home_dir: Path | None = None,
 ) -> Path:
-    """Return the standard Torch Hub checkpoint directory used by Demucs."""
-    _ = os.environ if env is None else env
+    """Resolve an explicit portable cache or the standard Torch checkpoint directory."""
+    environment = os.environ if env is None else env
     root = Path.cwd() if project_root is None else project_root
+    if override := environment.get(MODEL_CACHE_DIR_ENV_VAR):
+        return _safe_model_cache_dir(Path(override), root)
     home = Path.home() if home_dir is None else home_dir
 
     candidate = home / ".cache" / "torch" / "hub" / "checkpoints"

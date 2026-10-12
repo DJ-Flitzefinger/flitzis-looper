@@ -21,6 +21,7 @@ For most code changes:
 
 For focused areas:
 
+- Independent Windows installation and testing: `portable-windows.md`.
 - UI/rendering: `ui-toolkit.md`
 - Stems/Demucs setup: `stem-generation-setup.md`
 - Key Lock/time-stretch backend: `key-lock-backend.md`

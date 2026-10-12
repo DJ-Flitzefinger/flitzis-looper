@@ -18,6 +18,7 @@ from flitzis_looper.constants import (
 from flitzis_looper.controller.stem_generation import (
     FFMPEG_DIR_ENV_VAR,
     FFMPEG_UNAVAILABLE_MESSAGE,
+    MODEL_CACHE_DIR_ENV_VAR,
     NO_MODEL_INSTALLED_MESSAGE,
     TORCHCODEC_UNAVAILABLE_MESSAGE,
     AudioShape,
@@ -64,6 +65,19 @@ def test_default_demucs_model_cache_avoids_project_root(tmp_path: Path) -> None:
 
     assert not _is_relative_to(cache_dir, project_root)
     assert not _is_relative_to(cache_dir, project_root / "samples")
+
+
+def test_explicit_portable_model_cache_survives_runtime_version_change(tmp_path: Path) -> None:
+    cache = tmp_path / "portable" / "models" / "torch" / "hub" / "checkpoints"
+    for version in ["first", "second"]:
+        assert (
+            default_demucs_model_cache_dir(
+                env={MODEL_CACHE_DIR_ENV_VAR: str(cache)},
+                project_root=tmp_path / "portable" / "data",
+                home_dir=tmp_path / "versions" / version,
+            )
+            == cache
+        )
 
 
 def test_demucs_cache_environment_points_torch_home_to_standard_root(tmp_path: Path) -> None:

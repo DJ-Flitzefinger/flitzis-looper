@@ -69,6 +69,13 @@ Start the app, load audio onto pads, then trigger pads from the grid:
 
 ## How to Install
 
+For independent Windows testing, see [Portable installation](docs/portable-windows.md).
+The portable installer includes its private runtime and supports repeatable updates.
+The current standalone personal installer uses a local bundle; the public binary
+download channel still requires a published release.
+
+The following setup is for development:
+
 Prerequisites:
 
 - Python 3.14+
