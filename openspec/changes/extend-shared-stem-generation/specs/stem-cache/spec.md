@@ -436,6 +436,16 @@ library. Retained immutable predecessors SHALL protect independently assigned co
 - **THEN** material selection names one complete B set and each requesting current pad requires its own later effective adoption ACK
 - **AND** A remains immutable and readable for actual old voice/history/job/rollback readers until they retire
 
+#### Scenario: Sidebar separates a saved replacement from its own audio confirmation
+- **GIVEN** a pad retains its own old-set audio confirmation for the current launch and a different complete current set has committed to disk
+- **WHEN** the sidebar renders before the new set's own effective confirmation, including no request, waiting, transition or failed admission/adoption
+- **THEN** it SHALL separately describe the saved new set, its pending or failed switch and the previously confirmed audio
+- **AND** it SHALL NOT present the old set's confirmation as confirmation of the saved replacement or imply that a last-confirmed description measures current transition audio
+- **WHEN** that pad receives the saved new set's own effective confirmation
+- **THEN** the sidebar SHALL show the new confirmed audio without the previous-set description
+- **AND** reopening verified saved stems without an audio confirmation SHALL remain unconfirmed and SHALL NOT require loading a separator model to render that status
+- **AND** an own effective FullMix confirmation SHALL remain visible independently of a withdrawn pending new-set registration
+
 #### Scenario: Replacement fails or is cancelled before commit
 - **WHEN** a new generation fails WAV, PCM, descriptor or config publication, or Cancel wins before commit
 - **THEN** the previous complete selected set remains usable and no mixed or partial generation becomes current

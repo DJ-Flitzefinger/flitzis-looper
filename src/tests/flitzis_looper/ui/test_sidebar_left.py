@@ -5,6 +5,7 @@ from unittest.mock import Mock
 import pytest
 from imgui_bundle import imgui
 
+from flitzis_looper.controller.committed_stem_residency import StemResidencyStatus
 from flitzis_looper.ui.context import UiContext
 from flitzis_looper.ui.render import sidebar_left
 from flitzis_looper.ui.render.bpm_entry import filtered_bpm_entry_char, sanitize_bpm_entry_text
@@ -16,6 +17,7 @@ from flitzis_looper.ui.render.sidebar_left import (
     parse_manual_bpm_entry_text,
     sanitize_eq_entry_text,
 )
+from tests.flitzis_looper.ui.test_key_lock_render import _imgui_context
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -454,3 +456,112 @@ def test_pad_bpm_entry_baseline_tracks_pad_switches_and_inactive_metadata() -> N
 
     state.sync(pad_id=1, display_text="119.999")
     assert state.text == state.initial_text == "119.999"
+
+
+@pytest.mark.parametrize(
+    ("phase", "expected"),
+    [
+        ("saved", "New stems awaiting audio switch"),
+        ("captured", "Audio: stem selection pending"),
+        ("waiting", "Audio: ALL STEMS pending"),
+        ("transitioning", "Audio: ALL STEMS pending"),
+        ("queue-failed", "Audio: stem switch rejected"),
+        ("native-failed", "Audio: stem switch rejected"),
+        ("own-effective", "Audio: ALL STEMS"),
+        ("reopen", "Stems saved; audio mode unconfirmed"),
+        ("full-mix", "Audio: FULL MIX"),
+        ("new-launch", "Audio: ALL STEMS pending"),
+    ],
+)
+def test_actual_stem_render_separates_saved_replacement_and_own_audio_confirmation(
+    controller: AppController,
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+    expected: str,
+) -> None:
+    """Render declared controller projections; this does not measure Native audio."""
+    previous = phase not in {"own-effective", "reopen", "full-mix", "new-launch"}
+    active_attempt = phase in {"captured", "waiting", "transitioning", "native-failed"}
+    status = StemResidencyStatus(
+        registration="captured"
+        if phase == "captured"
+        else "withdrawn"
+        if phase == "full-mix"
+        else "accepted",
+        residency=None if phase == "reopen" else "pending" if phase == "captured" else "accepted",
+        effective=(
+            "waiting"
+            if phase in {"captured", "waiting"}
+            else "transitioning"
+            if phase == "transitioning"
+            else "rejected"
+            if phase == "native-failed"
+            else None
+            if phase in {"reopen", "new-launch"}
+            else "effective"
+        ),
+        requested_mode=(
+            None if phase == "reopen" else "full_mix" if phase == "full-mix" else "all_stems"
+        ),
+        disk_stem_set_identity="c" * 64,
+        control_stem_set_identity="b" * 64
+        if previous or phase in {"new-launch", "full-mix"}
+        else "c" * 64,
+        effective_stem_set_identity="b" * 64
+        if previous
+        else "c" * 64
+        if phase == "own-effective"
+        else None,
+        attempt_stem_set_identity=None
+        if phase == "reopen"
+        else "c" * 64
+        if active_attempt or phase == "own-effective"
+        else "b" * 64,
+        attempt_failed=phase in {"queue-failed", "native-failed"},
+    )
+    selector = Mock(return_value=status)
+    monkeypatch.setattr(controller.stems, "stem_residency_status", selector)
+    monkeypatch.setattr(controller.stems, "stems_available", Mock(return_value=True))
+    generation = Mock(side_effect=AssertionError("render must not start a separator"))
+    monkeypatch.setattr(controller.stems, "generate_stems_async", generation)
+    controller.project.pad_stem_mix_mode[0] = (
+        "full_mix" if phase in {"reopen", "full-mix"} else "all_stems"
+    )
+    ctx = UiContext(controller)
+    native_text = imgui.text_colored
+    descriptions: list[str] = []
+    rects: list[tuple[str, float]] = []
+
+    def text(color: imgui.ImVec4Like, value: str) -> None:
+        descriptions.append(value)
+        native_text(color, value)
+        rects.append((value, imgui.get_item_rect_max().x))
+
+    monkeypatch.setattr(imgui, "text_colored", text)
+    with _imgui_context():
+        for _ in range(2):
+            descriptions.clear()
+            rects.clear()
+            imgui.new_frame()
+            imgui.set_next_window_pos((0, 0))
+            imgui.set_next_window_size((280, 350))
+            imgui.begin("Stem status render", flags=imgui.WindowFlags_.no_saved_settings)
+            wrap_right = imgui.get_cursor_screen_pos().x + 240.0
+            sidebar_left._render_stem_mix_mode(
+                ctx, sidebar_left._SidebarPadInfo(0, 240.0, is_loaded=True, is_loading=False)
+            )
+            imgui.end()
+            imgui.render()
+            assert imgui.get_draw_data().total_vtx_count > 0
+        assert expected in descriptions
+        assert ("New stems saved" in descriptions) is previous
+        assert ("Last confirmed audio: previous stems" in descriptions) is previous
+        if previous:
+            assert "Audio: ALL STEMS" not in descriptions
+        if phase in {"reopen", "new-launch"}:
+            assert "Audio: FULL MIX" not in descriptions
+            assert "Audio: ALL STEMS" not in descriptions
+        assert all(right <= wrap_right + 1.0 for label, right in rects if label != "Stem Mix")
+        assert not any("b" * 64 in label or "c" * 64 in label for label in descriptions)
+    assert selector.call_args_list == [((0,), {}), ((0,), {})]
+    generation.assert_not_called()

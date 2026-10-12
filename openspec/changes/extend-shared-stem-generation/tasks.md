@@ -62,9 +62,12 @@
 
 ## 4. X11-LIVE-STEMS: current model and actual reader retirement (L4)
 
-- [ ] 4.1 Separate committed disk selection, pending publication and actual
+- [x] 4.1 Separate committed disk selection, pending publication and actual
   effective stems in controller/UI, requiring each pad's own ACK. Prove failed
   adoption/retry retains old effective audio and model-free reopen is coherent.
+  Bounded finite NormalLoop closure combines published productive L3 own-ACK/PCM,
+  controller/reopen evidence and the saved/last-confirmed Sidebar projection;
+  see `docs/prepared-stem-publication.md`. Additional3.3/fullL4/Human remain open.
 - [ ] 4.2 Hold distinct actual assignments/jobs/subscribers/actions/versions/
   queued/unload-ACK/bank/voice/Native/FIFO/history/complete-reader owners across
   replacement; verify no leased overwrite, actual final-reader cleanup and safe

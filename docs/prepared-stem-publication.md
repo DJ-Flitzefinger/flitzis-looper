@@ -561,6 +561,40 @@ zero-allocation or whole-backend WCET measurement. Additional domains3.3, L4's
 complete lifecycle/UI obligations, whole P4b/P5a and all later product/resource/Human
 gates remain open.
 
+### Sidebar distinguishes saved replacement and last confirmed audio
+
+The sidebar uses the existing per-pad disk, attempt and effective identities.
+When a different complete set is saved while V1 remains the last confirmed set,
+it separately shows `New stems saved`, `Last confirmed audio: previous stems`
+and the switch's pending/rejected status. An old accepted V1 receipt cannot label
+the saved V2 as confirmed. Queue admission failure also uses the existing live
+selection's blocked state, projected as `attempt_failed`; this adds no Native
+authority or separate control intent. Explicit retry clears that failure through
+the original request path.
+
+When the pad's own effective V2 identity matches the saved set, the previous-set
+description disappears. Losing the current launch confirmation also clears that
+description; an own FullMix receipt can confirm FullMix independently of V2.
+In particular, withdrawing an unclaimed V2 candidate must not hide a later own
+confirmed FullMix receipt from retained V1 behind the withdrawn disk registration.
+An absent effective identity does not confirm FullMix. Verified model-free reopen
+with no own audio receipt remains `audio mode unconfirmed`. Descriptions wrap to
+the sidebar width and expose no identity hashes or inferred producer/model names.
+The last-confirmed wording describes the completed observation; it does not
+measure the instantaneous audio during a component handover.
+
+Actual ImGui rendering regressions cover saved/no-new-request, captured, waiting,
+transitioning, queue/native failure, own effective confirmation, unconfirmed reopen,
+confirmed FullMix and lost-launch-confirmation projections. Those declared control
+projections exercise the UI; productive L3 tests remain the separate evidence for
+Native PCM/ACKs.
+Together with the published productive L3 own-ACK/PCM continuity and existing
+controller failure/retry, independent-pad and model-free verified restore proofs,
+this closes task4.1 within the already supported finite NormalLoop scope. The
+independent final review found no further obligation in that bounded task. It
+does not close additional domains3.3, L4.2/L4.3, complete L4 lifecycle or Human
+GUI/device/hearing gates.
+
 ### Productive V1 replacement and actual final-reader retirement
 
 `actual_productive_replacement_waits_for_last_native_reader_and_asset_worker`

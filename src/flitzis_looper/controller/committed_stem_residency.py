@@ -29,6 +29,7 @@ class StemResidencyStatus:
     effective_stem_set_identity: str | None = None
     attempt_stem_set_identity: str | None = None
     desired_mode: StemMixMode | None = None
+    attempt_failed: bool = False
 
 
 @dataclass(slots=True)
@@ -579,6 +580,7 @@ class CommittedStemResidency:
             live.effective_identity,
             self._identity(observed) if receipt else None,
             live.desired[0] if live.desired else None,
+            live.blocked,
         )
 
     @staticmethod

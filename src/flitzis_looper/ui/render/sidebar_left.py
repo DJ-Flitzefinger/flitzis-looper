@@ -47,6 +47,7 @@ from flitzis_looper.ui.render.control_gestures import hovered_wheel_steps, item_
 from flitzis_looper.ui.render.key_lock import render_pad_key_lock_buttons
 
 if TYPE_CHECKING:
+    from flitzis_looper.controller.committed_stem_residency import StemResidencyStatus
     from flitzis_looper.input_mapping import PadEqBand
     from flitzis_looper.models import StemMixMode
     from flitzis_looper.ui.context import UiContext
@@ -975,6 +976,31 @@ def _render_stem_status(ctx: UiContext, info: _SidebarPadInfo) -> None:
     _labeled_value_row("Stems", "Unavailable", avail_x=info.avail_x)
 
 
+def _stem_audio_description(status: StemResidencyStatus, *, previous_set: bool) -> str:
+    confirmed_full_mix = (
+        status.requested_mode == "full_mix"
+        and status.residency == "accepted"
+        and status.effective == "effective"
+        and not status.attempt_failed
+    )
+    if status.registration == "rejected" and not confirmed_full_mix:
+        return "Audio: stem selection rejected"
+    if status.attempt_failed or status.effective == "rejected" or status.residency == "rejected":
+        return "Audio: stem switch rejected"
+    if status.registration != "accepted" and not confirmed_full_mix:
+        return "Audio: stem selection pending"
+    if status.requested_mode is None:
+        return "Stems saved; audio mode unconfirmed"
+    if (
+        previous_set
+        and status.requested_mode == "all_stems"
+        and status.attempt_stem_set_identity != status.disk_stem_set_identity
+    ):
+        return "New stems awaiting audio switch"
+    label = "ALL STEMS" if status.requested_mode == "all_stems" else "FULL MIX"
+    return f"Audio: {label}" if status.effective == "effective" else f"Audio: {label} pending"
+
+
 def _render_stem_mix_mode(ctx: UiContext, info: _SidebarPadInfo) -> None:
     current_mode = ctx.state.stems.stem_mix_mode(info.pad_id)
     has_stems = ctx.state.stems.stems_available(info.pad_id)
@@ -997,20 +1023,21 @@ def _render_stem_mix_mode(ctx: UiContext, info: _SidebarPadInfo) -> None:
         imgui.text_colored(TEXT_MUTED_RGBA, "All stems pending current cache")
     status = ctx.state.stems.stem_residency_status(info.pad_id)
     if status is not None:
-        if status.registration == "rejected":
-            text = "Audio: stem selection rejected"
-        elif status.registration != "accepted":
-            text = "Audio: stem selection pending"
-        elif status.effective == "rejected" or status.residency == "rejected":
-            text = "Audio: stem switch rejected"
-        elif status.requested_mode is None:
-            text = "Stems saved; audio mode unconfirmed"
-        else:
-            label = "ALL STEMS" if status.requested_mode == "all_stems" else "FULL MIX"
-            text = (
-                f"Audio: {label}" if status.effective == "effective" else f"Audio: {label} pending"
+        previous_set = bool(
+            status.disk_stem_set_identity
+            and status.effective_stem_set_identity
+            and status.disk_stem_set_identity != status.effective_stem_set_identity
+        )
+        imgui.push_text_wrap_pos(imgui.get_cursor_pos_x() + info.avail_x)
+        try:
+            if previous_set:
+                imgui.text_colored(TEXT_MUTED_RGBA, "New stems saved")
+                imgui.text_colored(TEXT_MUTED_RGBA, "Last confirmed audio: previous stems")
+            imgui.text_colored(
+                TEXT_MUTED_RGBA, _stem_audio_description(status, previous_set=previous_set)
             )
-        imgui.text_colored(TEXT_MUTED_RGBA, text)
+        finally:
+            imgui.pop_text_wrap_pos()
 
 
 def _render_generate_stems(ctx: UiContext, pad_id: int) -> None:

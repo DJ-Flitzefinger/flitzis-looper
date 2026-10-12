@@ -375,6 +375,18 @@ def test_full_mix_withdraws_unclaimed_all_and_uses_retained_v1(adoption: _Harnes
     assert status.requested_mode == "full_mix"
     assert status.effective == "waiting"
     assert status.effective_stem_set_identity == "b" * 64
+    full_mix.residency = "accepted"
+    full_mix.effective = "effective"
+    full_mix.owned_claim = True
+    adoption.helper.poll()
+    status = adoption.helper.status(0)
+    assert status is not None
+    assert status.registration == "withdrawn"
+    assert status.requested_mode == "full_mix"
+    assert status.residency == "accepted"
+    assert status.effective == "effective"
+    assert status.effective_stem_set_identity is None
+    assert not status.attempt_failed
 
 
 def test_full_mix_after_claim_waits_then_uses_adopted_v2(adoption: _Harness) -> None:
@@ -458,11 +470,15 @@ def test_candidate_failure_preserves_v1_and_requires_explicit_retry(
     status = adoption.helper.status(0)
     assert status is not None
     assert status.effective_stem_set_identity == status.control_stem_set_identity == "b" * 64
+    assert status.attempt_failed
     adoption.audio.request_error = None
     adoption.audio.receipts.clear()
     adoption.audio.receipts.append(_OwnReceipt())
     assert adoption.helper.request(0, "all_stems", 15)
     assert len(adoption.audio.admissions) == 3
+    status = adoption.helper.status(0)
+    assert status is not None
+    assert not status.attempt_failed
 
 
 def test_stopped_ready_v2_supplies_full_mix_control_without_wet_success(adoption: _Harness) -> None:

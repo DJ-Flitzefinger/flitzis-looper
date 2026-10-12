@@ -280,7 +280,7 @@ class TestUiStateComputedProperties:
         assert ui_state.stems.stem_grid_indicator_state(0) == "error"
         assert ui_state.stems.is_stem_generation_running(0) is True
         assert ui_state.stems.stem_generation_block_reason(0) == (
-            "Cannot generate stems while the pad is playing"
+            "Stem generation is already running for this pad"
         )
         assert ui_state.stems.stem_generation_status(0) == ("Writing stem cache", 0.5)
         assert ui_state.stems.stem_generation_error(0) == "failed"
