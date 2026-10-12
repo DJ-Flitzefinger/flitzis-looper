@@ -10,7 +10,7 @@ use crate::audio_engine::native_source_coverage::{
 use crate::audio_engine::source_reader::StemReadSets;
 use std::sync::atomic::Ordering;
 
-fn candidate_normal_loop_residency_available(sample: &SampleBuffer) -> bool {
+fn candidate_residency_available(sample: &SampleBuffer) -> bool {
     sample
         .residency
         .as_ref()
@@ -20,6 +20,23 @@ fn candidate_normal_loop_residency_available(sample: &SampleBuffer) -> bool {
             crate::messages::ResidentContext::FullTrack
             | crate::messages::ResidentContext::KeyLockFullTrack => complete_view_available(sample),
         })
+}
+
+fn committed_stem_mode_available(
+    mode: ExplicitSeekMode,
+    candidate: bool,
+    key_lock: bool,
+    accepted: Option<crate::audio_engine::constant_timing::AcceptedTimingProjection>,
+    sample: &SampleBuffer,
+) -> bool {
+    mode == ExplicitSeekMode::Normal
+        || (candidate
+            && key_lock
+            && accepted.is_none()
+            && mode == ExplicitSeekMode::AfterLoop
+            && sample.residency.as_ref().is_some_and(|view| {
+                view.context == crate::messages::ResidentContext::KeyLockFiniteLoop
+            }))
 }
 
 impl RtMixer {
@@ -55,7 +72,7 @@ impl RtMixer {
             return None;
         }
         let bank = self.sample_bank[id].as_ref()?;
-        if capture.candidate.is_some() && !candidate_normal_loop_residency_available(bank) {
+        if capture.candidate.is_some() && !candidate_residency_available(bank) {
             return None;
         }
         let selection = self.stem_render_selection(id);
@@ -91,7 +108,14 @@ impl RtMixer {
                 let sample = voice.sample.as_ref()?;
                 if !sample.same_window(bank)
                     || voice.frozen_stems.is_some()
-                    || voice.explicit_seek_mode != ExplicitSeekMode::Normal
+                    || (voice.paused && voice.explicit_seek_mode != ExplicitSeekMode::Normal)
+                    || !committed_stem_mode_available(
+                        voice.explicit_seek_mode,
+                        capture.candidate.is_some(),
+                        self.pad_key_lock_enabled[id],
+                        self.timing_for_voice(voice).accepted,
+                        sample,
+                    )
                 {
                     return None;
                 }
@@ -125,7 +149,13 @@ impl RtMixer {
             };
         playback.configure_domain(timing.loop_domain(sample.frame_count(), region));
         let position = playback.position();
-        if position.seek_mode != ExplicitSeekMode::Normal {
+        if !committed_stem_mode_available(
+            position.seek_mode,
+            capture.candidate.is_some(),
+            self.pad_key_lock_enabled[id],
+            timing.accepted,
+            sample,
+        ) {
             return None;
         }
         let plan = SourceReadPlan {
@@ -191,7 +221,7 @@ impl RtMixer {
                         && self.outgoing_stems[id].is_none()
                         && self.sample_bank[id]
                             .as_ref()
-                            .is_some_and(candidate_normal_loop_residency_available)
+                            .is_some_and(candidate_residency_available)
                 } else {
                     self.committed_selection_matches(id, &transaction.selection)
                 })
@@ -270,7 +300,14 @@ impl RtMixer {
                     || current_index != index
                     || voice.generation != pin.generation
                     || voice.frozen_stems.is_some()
-                    || voice.explicit_seek_mode != ExplicitSeekMode::Normal
+                    || (voice.paused && voice.explicit_seek_mode != ExplicitSeekMode::Normal)
+                    || !committed_stem_mode_available(
+                        voice.explicit_seek_mode,
+                        transaction.candidate.is_some(),
+                        pin.key_lock,
+                        pin.accepted,
+                        &pin.sample,
+                    )
                     || voice.stretch.source_epoch_owner().load(Ordering::Acquire)
                         != pin.history_epoch
                     || !voice
@@ -302,7 +339,13 @@ impl RtMixer {
                 // Addressing/rate/owners stay current; the live cursor is allowed to advance.
                 actual.matches_source_contract(pin.plan)
                     && playback.matches_rate_target(&pin.playback)
-                    && position.seek_mode == ExplicitSeekMode::Normal
+                    && committed_stem_mode_available(
+                        position.seek_mode,
+                        transaction.candidate.is_some(),
+                        pin.key_lock,
+                        pin.accepted,
+                        &pin.sample,
+                    )
                     && normal_loop_feed_available_with_readers(
                         &pin.sample,
                         StemReadSets::new(transaction.stems.as_ref(), pin.stems.as_ref()),

@@ -69,8 +69,16 @@ source/set/timing/history even after current bank B changes.
 The system SHALL permit first and replacement new-complete-set adoption on a
 physically complete resident NormalLoop `[0,N)` with KEY LOCK OFF or ON through
 the same own Capture, off-thread preparation and guarded Adopt transaction.
-Complete residency SHALL NOT authorize explicit Seek, Intro, Tail, frozen
+Complete residency alone SHALL NOT authorize explicit Seek, Intro, Tail, frozen
 old-source voices, multiple same-pad voices or another unproved playback domain.
+
+The system SHALL additionally permit first and replacement new-complete-set
+adoption on a single current running voice during its acknowledged Tail with
+KEY LOCK ON, no accepted musical timing, and a KeyLockFiniteLoop view covering the
+entire Tail-and-loop union. This candidate-only path SHALL use the same fresh
+Capture, off-thread preparation, two-reader coverage and guarded Adopt authority.
+Intro, paused Tail, KEY LOCK OFF Tail, accepted-musical Tail and ordinary same-set
+mode requests SHALL retain their existing unsupported-domain guards.
 
 New-set preparation SHALL retain separate candidate and actual predecessor
 authority. Registering or preparing candidate V2 SHALL NOT revoke V1's accepted
@@ -136,16 +144,26 @@ immediate change SHALL NOT silently discard the command.
 - **THEN** both exact reader generations SHALL physically cover the complete source and both `N-1` to `0` seam taps throughout the 128-consumed-source-frame handover
 - **AND** fractional nonunity playback, source position, actual voice, Native/FIFO and uninterrupted filter history SHALL remain continuous; later own complete Native preparation SHALL establish the new set's actual wet effectiveness with KEY LOCK ON
 - **AND** paused adoption SHALL consume no source or report audible effectiveness before Resume, and stopped readiness SHALL require its own later playback/effect observation
-- **AND** the existing source/launch/timing/window/history/capacity fences SHALL remain authoritative; this complete NormalLoop proof SHALL NOT authorize explicit Seek, Intro, Tail, frozen old-source or multiple same-pad voices
+- **AND** the existing source/launch/timing/window/history/capacity fences SHALL remain authoritative; this complete NormalLoop proof alone SHALL NOT authorize explicit Seek, Intro, Tail, frozen old-source or multiple same-pad voices
 
-#### Scenario: Acknowledged Intro or Tail seek rejects a fresh new-set candidate
+#### Scenario: Acknowledged Intro seek rejects a fresh new-set candidate
 
-- **GIVEN** productive KEY LOCK ON FullMix or selected V1 and a real acknowledged finite resident Seek into Intro or Tail
+- **GIVEN** productive KEY LOCK ON FullMix or selected V1 and a real acknowledged finite resident Seek into Intro
 - **WHEN** a distinct V2 obtains a fresh own source ticket, accepted current registration and actual candidate Capture before further source consumption
 - **THEN** the unsupported explicit seek mode SHALL reject V2 before claim without Adopt, while its own registration remains accepted and current
 - **AND** the actual KeyLockFiniteLoop union SHALL retain the old source and selected readers, rather than relying on a FullTrack rejection
 - **AND** independent complete PCM, fractional one-shot source addressing, actual Native/FIFO and uninterrupted post-seek filter history SHALL remain usable through irregular callbacks and a later own complete Native preparation
 - **AND** the authorized Seek SHALL establish its own new voice and filter chronology; candidate rejection SHALL NOT introduce another reset, retry or audible V2 acknowledgement
+
+#### Scenario: Current KEY LOCK Tail adopts first and replacement sets
+
+- **GIVEN** a single current running voice after a genuine acknowledged Seek into Tail, KEY LOCK ON without accepted musical timing, and actual FullMix or selected V1 readers covering the entire Tail-and-loop union
+- **AND** the suffix is long enough to prove actual own 4096-output-frame Native preparation and nontrivial Wet output both before and after the new-set handover while the voice is still AfterLoop
+- **WHEN** a distinct verified V2 obtains fresh own registration, Capture, off-thread preparation and guarded Adopt while ordinary productive callbacks advance the Tail
+- **THEN** both exact immutable generations SHALL cover all current and future Tail/loop taps throughout the 128-consumed-source-frame ramp; independent complete PCM SHALL establish the selected V2 feed and its distinct Wet effect
+- **AND** V2 adoption SHALL preserve the existing voice, source fraction, actual Native/FIFO and uninterrupted post-seek filter history; later Native adoption SHALL use its own advanced exact target checkpoint
+- **AND** the actual source-end-to-loop-start return SHALL preserve fractional playback, exact PCM, Native/FIFO and filter chronology without another seek, reset or retrigger
+- **AND** this candidate proof SHALL NOT authorize Intro, paused Tail, KEY LOCK OFF or accepted-musical Tail, ordinary same-set mode requests, frozen old-source voices, multiple same-pad voices or whole task3.3 acceptance
 
 #### Scenario: Current bank B cannot authorize retained old-source voice A
 

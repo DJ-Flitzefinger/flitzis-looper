@@ -530,9 +530,11 @@ release; neither path discards a reader still needed by the current ramp.
 Supported candidates require a current FiniteLoop/KeyLockFiniteLoop resident
 context or a physically complete FullTrack/KeyLockFullTrack view, a NormalLoop
 region including the complete `[0,N)` extent, and either no active voice or one
-current voice playing or paused. Existing ramps, explicit seek/Intro/Tail,
-frozen old-source or multiple same-pad voices remain
-guarded pending their own productive new-set proofs. Ordinary active publication
+current voice playing or paused. A separate candidate-only Tail path requires
+KEY LOCK ON, no accepted musical timing, the current acknowledged AfterLoop
+running voice and actual KeyLockFiniteLoop Tail-and-loop coverage. Existing
+ramps, Intro, paused Tail, Tail OFF/musical, ordinary same-set requests in Tail,
+frozen old-source or multiple same-pad voices remain guarded pending their own productive new-set proofs. Ordinary active publication
 retains its existing `PadPlaying` guard; this candidate transaction supplies the
 separately proved path. This bounded delivery does not close additional-domain
 L3 obligations, L4 UI/all final-reader families, whole P4b/P5a, Bulk/RECORD,
@@ -602,6 +604,69 @@ public run retained an obsolete same-domain Pad215 assertion. These were fixture
 corrections preserving the actual own receipts and finite checks. No production
 guard or PCM tolerance was weakened to fix them. No installed Native, Human App,
 device or listening acceptance is changed or claimed by this software delivery.
+
+### Current resident Tail new-set adoption with KEY LOCK ON — 2026-10-12
+
+The additional Native candidate domain is the current acknowledged AfterLoop
+running voice with KEY LOCK ON and no accepted musical timing. A single bounded
+mode predicate is used by Capture and Adopt alongside the existing residency and
+two-reader coverage checks. Ordinary same-set requests keep Normal-only guards;
+Intro, paused Tail, Tail OFF/musical, frozen old-source and multiple same-pad
+voices remain unsupported. Existing source/window/launch/timing/history/capacity
+ownership is retained. SourceReadPlan permits natural phase/mode progression;
+NativeHistoryRequest still requires the advanced exact playback/plan checkpoint
+at its own target. No additional seek/mode authority or realtime preparation is
+introduced.
+
+`actual_tail_first_and_replacement_keep_own_wet_history_through_normal_return`
+uses the existing genuine 16384-frame source fixture without its optional BPM
+acceptance. Loop `17..1517` and actual resident Seek `1517` establish a
+KeyLockFiniteLoop union `17..16384`. Two rate 0.73 histories start from FullMix or
+selected V1. The own Seek intentionally cuts voice/Native/FIFO/filter history.
+A later actual 4096-frame
+Native preparation establishes productive Wet while still AfterLoop before V2.
+Distinct V2 then obtains a fresh source ticket, registration, Capture and guarded
+Adopt after ordinary productive callbacks advance the live Tail.
+
+The independent complete original and V1 components were prepared before the
+actual resident window. Only the declared V2 component permutation determines
+the expected new mask. Algebraic one-shot Tail/loop knots and 128 consumed-source
+gains mix both exact selections before interpolation; no copied live plan or V2
+reader supplies expected sound. Every sample is checked against a separately fed
+raw Native/FIFO and uninterrupted nonneutral stereo EQ, plus the complete PCM
+reference. V2 Adopt retains actual generation, fraction, Native handle, FIFOs and
+productive/filter histories. A later own 4096-frame preparation proves distinct
+V2 Wet while still AfterLoop; a parallel unchanged FullMix/V1 raw adapter and EQ
+provide the counterfactual. Actual source-end→loop17 return and subsequent loops
+retain the same voice, Native/FIFO and EQ chronology without another Seek/reset.
+
+`actual_tail_unsupported_candidates_preserve_their_own_voice` keeps genuine Tail
+OFF, accepted-musical and paused Tail guards. The existing two Intro FullMix/V1
+histories retain fresh-candidate rejection and productive post-seek Native/FIFO/EQ
+output.
+This bounded Native evidence does not prove public Tail-controller gestures,
+Tail OFF/musical, Intro, every rate/pitch/lifecycle/resource combination or whole
+task3.3/P4b/P5a/P5b acceptance. Earlier finite4.2/4.3 final-reader closure remains
+NormalLoop-only; Human GUI/device/hearing and full Goal gates remain open.
+
+Validation: the final four Native focus tests pass in Release (7.13s, 58.36s
+compile), followed by a fresh complete committed-stem residency suite: 87 PASS
+in 241.82s (0.17s compile). A new production Release wheel builds in 20.88s and
+is extracted into its own separate runtime. Actual Release/API/controller/UI
+import preflight and all 154 tests in the six impacted Python controller files
+pass (58.29s) against that build-only Native and current Python. Clippy
+workspace/tests exits 0 in 7.10s with the same 37 warning kinds and no diagnostics
+in the three changed Rust files. Cargo fmt, official strict OpenSpec, current
+documentation references and diff whitespace checks pass. ONE independent
+source/test/spec/docs review reports no open findings.
+
+The initial compile-only run found three private test-field accesses; the
+fixture now uses existing readonly binding and measurement accessors without
+opening production fields. The first two focus tests passed before the scope
+was further narrowed to running Tail; the final four-test and 87-test gates use
+the completed running-only source and its three unsupported Tail contexts.
+No installed Native, Human App, device or listening acceptance is changed or
+claimed by this software delivery.
 
 ### Consolidated task3.2 closure — 2026-10-12
 
@@ -2046,13 +2111,13 @@ changed test file. Formatting, official strict validation, five relative file
 links and whitespace pass. Unchanged production Release/import/Python checks
 remain reusable, without Native installation or Human App/device changes.
 
-### Fresh candidate rejection after genuine Intro/Tail Seek
+### Fresh candidate rejection after genuine Intro Seek
 
-`actual_intro_tail_seek_rejects_fresh_candidate_without_changing_post_seek_audio`
+`actual_intro_seek_rejects_fresh_candidate_without_changing_post_seek_audio`
 uses real resident Seek Capture, worker and Relocate acknowledgement before a
-fresh distinct V2 source ticket, pair registration and candidate Capture. Four
-ON/rate0.73 cases combine Intro/Tail with FullMix or already effective selected
-V1. Intro0 and Tail1517 create actual KeyLockFiniteLoop unions0..1517 and17..4096,
+fresh distinct V2 source ticket, pair registration and candidate Capture. Two
+ON/rate0.73 cases combine Intro with FullMix or already effective selected
+V1. Intro0 creates the actual KeyLockFiniteLoop union0..1517,
 so rejection exercises the explicit seek-mode guard rather than FullTrack.
 
 The own candidate rejects before claim and produces no Adopt; its registration
@@ -2064,8 +2129,10 @@ declared seek geometry and complete channel PCM rather than a copied live clock.
 
 The real authorized Seek intentionally cuts generation, Native/FIFO and filter
 state. Continuity assertions start after that own acknowledgement and verify
-that rejecting V2 adds no cut or restart. This is a Native guard proof; additional
-domains remain disabled, and public-controller, whole task3.3, final-reader and
+that rejecting V2 adds no cut or restart. The original four-case delivery also
+rejected Tail ON; that historical rejection is superseded only by the separately
+proved current Tail-ON candidate domain above. This remains a Native Intro guard
+proof; public-controller, whole task3.3, final-reader and
 Human acceptance are not claimed by these cases.
 
 ### Fresh public adoption during an ongoing BPM glide

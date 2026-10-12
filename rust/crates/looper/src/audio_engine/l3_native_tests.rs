@@ -1333,12 +1333,72 @@ fn full_track_paused_and_stopped_adoption_waits_for_own_consumption() {
     }
 }
 
+fn acknowledge_candidate_seek(
+    p: &mut Productive,
+    target: usize,
+) -> crate::audio_engine::resident_relocation::ResidentWindowTicket {
+    let previous_frame = p.h.callback.transport.output_frame();
+    p.h.callback
+        .transport
+        .advance_by_rendered_frames((p.frame - previous_frame) as usize);
+    let seek = prepare_window_with_producer(
+        &p.h.engine,
+        0,
+        WindowRequest {
+            seek_position_s: Some(target as f64 / f64::from(RATE)),
+            ..Default::default()
+        },
+        p.h.producer.clone(),
+    )
+    .unwrap();
+    wait_until(|| {
+        if matches!(
+            p.h.consumer.peek(),
+            Ok(ControlMessage::CaptureResidentSeek(_))
+        ) {
+            assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
+        }
+        seek.publication_status() == "pending" && !p.h.consumer.is_empty()
+    });
+    assert_eq!(
+        p.h.callback.drain(&mut p.h.consumer),
+        1,
+        "actual own Seek Relocate"
+    );
+    assert_eq!(seek.publication_status(), "accepted", "{:?}", seek.error());
+    reconcile(&p.h.engine).unwrap();
+    assert!(seek.is_current());
+    assert_eq!(
+        seek.effective_seek_seconds(),
+        Some(target as f64 / f64::from(RATE))
+    );
+    seek
+}
+
+struct CandidateSeekPrepared {
+    target: u64,
+    address: usize,
+    raw: ControllerRawNative,
+    baseline: ControllerRawNative,
+}
+
 struct CandidateSeekOracle {
-    channels: [SampleBuffer; 2],
+    original: SampleBuffer,
+    components: [SampleBuffer; 4],
+    seek_target: usize,
+    selection: Option<u8>,
+    previous: Option<u8>,
+    baseline_selection: Option<u8>,
+    output_frames: u64,
+    ramp_start: u64,
     clock: crate::audio_engine::mixer::prepared_native_mixer_tests::finite_lifecycle_tests::AlgebraicClock,
     raw: ControllerRawNative,
     filter: PerPadDspChain,
-    candidate: Option<(u64, usize, ControllerRawNative)>,
+    baseline_raw: ControllerRawNative,
+    baseline_filter: PerPadDspChain,
+    new_wet: bool,
+    distinct_wet: bool,
+    candidate: Option<CandidateSeekPrepared>,
 }
 
 impl CandidateSeekOracle {
@@ -1351,31 +1411,15 @@ impl CandidateSeekOracle {
         ));
         let full = p.reference.bank_for_measurement()[0].as_ref().unwrap();
         let stems = p.reference.stems_for_measurement()[0].as_ref().unwrap();
-        let channels = std::array::from_fn(|channel| SampleBuffer {
-            channels: 1,
-            residency: None,
-            samples: (0..full.frame_count())
-                .map(|frame| {
-                    if selected_v1 {
-                        stems
-                            .stems
-                            .iter()
-                            .enumerate()
-                            .filter(|(index, _)| 0b1010 & (1 << index) != 0)
-                            .map(|(_, component)| component.samples[frame * 2 + channel])
-                            .sum()
-                    } else {
-                        full.samples[frame * 2 + channel]
-                    }
-                })
-                .collect::<Vec<f32>>()
-                .into(),
-        });
+        let original = full.clone();
+        let components = stems.stems.clone();
+        let selection = selected_v1.then_some(0b1010);
         let mut clock = AlgebraicClock::physical(LOOP_START, LOOP_END, 0.73);
         clock.seek_physical(target, full.frame_count());
         // Seek cuts the old DSP state. Apply its persistent targets to a fresh
         // stereo chain without reset(), retaining ordinary parameter smoothing.
         let mut filter = PerPadDspChain::new(0, RATE as f32, 2);
+        let mut baseline_filter = PerPadDspChain::new(0, RATE as f32, 2);
         for (slot, db) in [
             (DspParameterSlot::Slot0, -12.0_f32),
             (DspParameterSlot::Slot1, -3.0),
@@ -1386,41 +1430,123 @@ impl CandidateSeekOracle {
             } else {
                 0.5 + 0.5 * (db / 6.0)
             };
-            assert!(filter.set_parameter(
-                DspParameterId::per_pad(0, DspNodeSlot::Slot0, slot).unwrap(),
-                normalized
-            ));
+            for chain in [&mut filter, &mut baseline_filter] {
+                assert!(chain.set_parameter(
+                    DspParameterId::per_pad(0, DspNodeSlot::Slot0, slot).unwrap(),
+                    normalized
+                ));
+            }
         }
         Self {
-            channels,
+            original,
+            components,
+            seek_target: target,
+            selection,
+            previous: selection,
+            baseline_selection: selection,
+            output_frames: 0,
+            ramp_start: 0,
             clock,
             raw: ControllerRawNative::new(0.73, false),
             filter,
+            baseline_raw: ControllerRawNative::new(0.73, false),
+            baseline_filter,
+            new_wet: false,
+            distinct_wet: false,
             candidate: None,
         }
     }
 
+    fn select_candidate(&mut self, p: &mut Productive) {
+        // Only the independent complete V1 components supply expected V2 PCM.
+        // The declared permutation changes its mask, never its reader identity.
+        self.previous = self.selection;
+        self.selection = Some(reordered_mask(0b1010));
+        self.ramp_start = self.output_frames;
+        p.select_reference("all_stems", self.selection.unwrap());
+    }
+
     fn feed(&self, frames: usize) -> [Vec<f32>; 2] {
-        std::array::from_fn(|channel| self.clock.clone().dry(&self.channels[channel], frames))
+        self.feed_selection(frames, false)
+    }
+
+    fn feed_selection(&self, frames: usize, baseline: bool) -> [Vec<f32>; 2] {
+        // Independent physical one-shot knots and 128 consumed-source gains;
+        // mix each knot before interpolation, preserving the declared f32 order.
+        std::array::from_fn(|channel| {
+            (0..frames)
+                .map(|offset| {
+                    let (left, fraction, explicit) = self.clock.physical_position(offset);
+                    let boundary = if explicit {
+                        if self.seek_target < LOOP_START {
+                            LOOP_START
+                        } else {
+                            self.original.frame_count()
+                        }
+                    } else {
+                        LOOP_END
+                    };
+                    let right = if left + 1 == boundary {
+                        LOOP_START
+                    } else {
+                        left + 1
+                    };
+                    let knot = |frame: usize, mask: Option<u8>| {
+                        mask.map_or(self.original.samples[frame * 2 + channel], |mask| {
+                            self.components
+                                .iter()
+                                .enumerate()
+                                .filter(|(index, _)| mask & (1 << index) != 0)
+                                .fold(0.0, |sum, (_, component)| {
+                                    sum + component.samples[frame * 2 + channel]
+                                })
+                        })
+                    };
+                    let sample = |frame| {
+                        if baseline {
+                            return knot(frame, self.baseline_selection);
+                        }
+                        let gain = if self.previous == self.selection {
+                            1.0
+                        } else {
+                            (((self.output_frames + offset as u64 - self.ramp_start) as f64 * 0.73)
+                                .min(128.0) as f32)
+                                / 128.0
+                        };
+                        if gain == 1.0 {
+                            knot(frame, self.selection)
+                        } else {
+                            knot(frame, self.previous) * (1.0 - gain)
+                                + knot(frame, self.selection) * gain
+                        }
+                    };
+                    let value = sample(left);
+                    value + (sample(right) - value) * fraction as f32
+                })
+                .collect()
+        })
     }
 
     fn render(&mut self, p: &mut Productive, frames: usize, timestamp: bool) -> Vec<f32> {
         if self
             .candidate
             .as_ref()
-            .is_some_and(|(target, _, _)| p.frame == *target)
+            .is_some_and(|prepared| p.frame == prepared.target)
         {
-            let (_, address, raw) = self.candidate.take().unwrap();
-            self.raw = raw;
+            let prepared = self.candidate.take().unwrap();
+            self.raw = prepared.raw;
+            self.baseline_raw = prepared.baseline;
+            self.new_wet = self.selection != self.baseline_selection;
             assert_eq!(
                 voice_mut(&mut p.h.callback.mixer)
                     .stretch
                     .prepared_native_address(),
-                address
+                prepared.address
             );
         }
         let feed = self.feed(frames);
         let raw = self.raw.render(&feed);
+        let baseline = self.baseline_raw.render(&self.feed_selection(frames, true));
         let mut output = vec![0.0; frames * 2];
         let mut complete = vec![0.0; frames * 2];
         reset_tap_observation_for_test();
@@ -1457,8 +1583,13 @@ impl CandidateSeekOracle {
             "complete post-Seek candidate guard at {}",
             p.frame
         );
-        for (actual, raw) in output.chunks_exact(2).zip(raw.chunks_exact(2)) {
+        for ((actual, raw), baseline) in output
+            .chunks_exact(2)
+            .zip(raw.chunks_exact(2))
+            .zip(baseline.chunks_exact(2))
+        {
             self.filter.begin_frame();
+            self.baseline_filter.begin_frame();
             for channel in 0..2 {
                 assert_eq!(
                     actual[channel],
@@ -1466,9 +1597,18 @@ impl CandidateSeekOracle {
                     "independent post-Seek Native/EQ at {}",
                     p.frame
                 );
+                let unchanged = self
+                    .baseline_filter
+                    .process_sample(channel, baseline[channel]);
+                if self.new_wet {
+                    self.distinct_wet |= (actual[channel] - unchanged).abs() > 0.001;
+                } else if self.selection == self.baseline_selection {
+                    assert_eq!(actual[channel], unchanged);
+                }
             }
         }
         self.clock.advance(frames);
+        self.output_frames += frames as u64;
         let (frame, fraction, explicit) = self.clock.physical_position(0);
         let actual = voice(&p.h.callback.mixer);
         assert_eq!(actual.source_playback.position().frame, frame);
@@ -1499,6 +1639,8 @@ impl CandidateSeekOracle {
         let capture = p.frame;
         let mut raw = ControllerRawNative::new(0.73, true);
         raw.render(&self.feed(4096));
+        let mut baseline = ControllerRawNative::new(0.73, true);
+        baseline.render(&self.feed_selection(4096, true));
         self.render(p, 1, true);
         wait_until(|| {
             voice_mut(&mut p.h.callback.mixer)
@@ -1541,7 +1683,12 @@ impl CandidateSeekOracle {
             taps.max_frame
                 .is_some_and(|frame| frame < sample.resident_end())
         );
-        self.candidate = Some((target, address, raw));
+        self.candidate = Some(CandidateSeekPrepared {
+            target,
+            address,
+            raw,
+            baseline,
+        });
         for frames in [1_usize, 127, 777, 96, 257, 512, 31].into_iter().cycle() {
             if p.frame == target {
                 break;
@@ -1564,136 +1711,344 @@ impl CandidateSeekOracle {
 }
 
 #[test]
-fn actual_intro_tail_seek_rejects_fresh_candidate_without_changing_post_seek_audio() {
+fn actual_tail_first_and_replacement_keep_own_wet_history_through_normal_return() {
     use crate::audio_engine::source_reader::ExplicitSeekMode;
-    for target in [0, LOOP_END] {
-        for selected_v1 in [false, true] {
-            let mut p = Productive::new(true, 0.73);
-            if selected_v1 {
-                make_v1_effective(&mut p);
-            }
-            let previous_frame = p.h.callback.transport.output_frame();
-            p.h.callback
-                .transport
-                .advance_by_rendered_frames((p.frame - previous_frame) as usize);
-            let seek = prepare_window_with_producer(
-                &p.h.engine,
-                0,
-                WindowRequest {
-                    seek_position_s: Some(target as f64 / f64::from(RATE)),
-                    ..Default::default()
-                },
-                p.h.producer.clone(),
-            )
-            .unwrap();
-            wait_until(|| {
-                if matches!(
-                    p.h.consumer.peek(),
-                    Ok(ControlMessage::CaptureResidentSeek(_))
-                ) {
-                    assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
-                }
-                seek.publication_status() == "pending" && !p.h.consumer.is_empty()
-            });
-            assert_eq!(
-                p.h.callback.drain(&mut p.h.consumer),
-                1,
-                "actual own Seek Relocate"
-            );
-            assert_eq!(seek.publication_status(), "accepted", "{:?}", seek.error());
-            reconcile(&p.h.engine).unwrap();
-            assert!(seek.is_current());
-            assert_eq!(
-                seek.effective_seek_seconds(),
-                Some(target as f64 / f64::from(RATE))
-            );
-            let source = p.h.callback.mixer.bank_for_measurement()[0]
-                .clone()
-                .unwrap();
-            let extent = if target == 0 {
-                (0, LOOP_END)
-            } else {
-                (LOOP_START, p.h.material.sample.frame_count())
-            };
-            assert_eq!((source.resident_start(), source.resident_end()), extent);
-            assert_eq!(
-                source.residency.as_ref().unwrap().context,
-                crate::messages::ResidentContext::KeyLockFiniteLoop
-            );
-            let before = voice(&p.h.callback.mixer);
-            assert_eq!(
-                before.source_playback.position().seek_mode,
-                if target == 0 {
-                    ExplicitSeekMode::BeforeLoop
-                } else {
-                    ExplicitSeekMode::AfterLoop
-                }
-            );
-            assert!(before.sample.as_ref().unwrap().same_window(&source));
-            let clock = before.source_playback;
-            let generation = before.generation;
-            let native = before.stretch.native_state_address();
-            assert_eq!(before.stretch.pending_fifo_frames(), (0, 0));
-            assert!(before.stretch.productive_history().is_none());
-            assert!(p.h.callback.mixer.dsp_source_history_for_test(0).is_none());
-            let old = p.h.callback.mixer.stems_for_measurement()[0].clone();
-            let mut oracle = CandidateSeekOracle::after_ack(&mut p, target, selected_v1);
-            let (_pair, registration) = candidate(&mut p, 120 + target + usize::from(selected_v1));
-            let receipt = request_candidate(&mut p, &registration, 0b1010);
-            assert_eq!(
-                p.h.callback.drain(&mut p.h.consumer),
-                1,
-                "actual fresh candidate Capture"
-            );
-            assert_eq!(receipt.residency_status(), "rejected");
-            assert!(!receipt.claimed());
-            assert!(registration.is_current());
-            assert_eq!(registration.publication_status(), "accepted");
-            wait_until(|| p.h.engine.cold_jobs.counts_for_test() == (0, 0, 0));
-            assert!(
-                p.h.consumer.is_empty(),
-                "rejected candidate enqueues no Adopt"
-            );
-            let after = voice(&p.h.callback.mixer);
-            assert!(after.source_playback.matches_exact(&clock));
-            assert_eq!(after.generation, generation);
-            assert_eq!(after.stretch.native_state_address(), native);
-            assert_eq!(after.stretch.pending_fifo_frames(), (0, 0));
-            assert!(after.stretch.productive_history().is_none());
-            assert!(p.h.callback.mixer.dsp_source_history_for_test(0).is_none());
-            for frames in [1, 31, 137, 257, 511] {
-                oracle.render(&mut p, frames, false);
-            }
-            oracle.later_native(&mut p);
-            assert_eq!(voice(&p.h.callback.mixer).generation, generation);
-            assert!(Arc::ptr_eq(
-                &source.samples,
-                &p.h.callback.mixer.bank_for_measurement()[0]
-                    .as_ref()
-                    .unwrap()
-                    .samples
-            ));
-            match (
-                old.as_ref(),
-                p.h.callback.mixer.stems_for_measurement()[0].as_ref(),
-            ) {
-                (Some(old), Some(current)) => {
-                    assert!(Arc::ptr_eq(
-                        &old.complete_set_identity,
-                        &current.complete_set_identity
-                    ));
-                    for (old, current) in old.stems.iter().zip(&current.stems) {
-                        assert!(Arc::ptr_eq(&old.samples, &current.samples));
-                    }
-                }
-                (None, None) => {}
-                _ => panic!("rejected explicit-Seek candidate changed old reader ownership"),
-            }
-            assert_eq!(receipt.residency_status(), "rejected");
-            assert_eq!(receipt.effective_mode_status(), "rejected");
-            assert!(receipt.effective_failure_reason().is_none());
-            assert!(registration.is_current() && p.h.consumer.is_empty());
+    for selected_v1 in [false, true] {
+        let mut p = Productive::with_harness(bpm_harness(), true, 0.73, false);
+        assert!(
+            crate::audio_engine::input_runtime_binding::capture(&p.h.engine, 0)
+                .unwrap()
+                .unwrap()
+                .binding
+                .accepted
+                .is_none()
+        );
+        if selected_v1 {
+            make_v1_effective(&mut p);
         }
+        let _seek = acknowledge_candidate_seek(&mut p, LOOP_END);
+        let source = p.h.callback.mixer.bank_for_measurement()[0]
+            .clone()
+            .unwrap();
+        assert_eq!(source.frame_count(), 16_384);
+        assert_eq!(
+            (source.resident_start(), source.resident_end()),
+            (LOOP_START, 16_384)
+        );
+        assert_eq!(
+            source.residency.as_ref().unwrap().context,
+            crate::messages::ResidentContext::KeyLockFiniteLoop
+        );
+        assert_eq!(
+            voice(&p.h.callback.mixer).explicit_seek_mode,
+            ExplicitSeekMode::AfterLoop
+        );
+        let generation = voice(&p.h.callback.mixer).generation;
+        let mut oracle = CandidateSeekOracle::after_ack(&mut p, LOOP_END, selected_v1);
+        for frames in [1, 31, 137, 257, 511] {
+            oracle.render(&mut p, frames, false);
+        }
+        oracle.later_native(&mut p);
+        assert_eq!(
+            voice(&p.h.callback.mixer).explicit_seek_mode,
+            ExplicitSeekMode::AfterLoop
+        );
+        assert!(
+            voice(&p.h.callback.mixer)
+                .stretch
+                .wet_current_source_output_ready()
+        );
+        let (_pair, registration) = candidate(&mut p, 170 + usize::from(selected_v1));
+        let predecessor = p.h.callback.mixer.stems_for_measurement()[0].clone();
+        let receipt = request_candidate(&mut p, &registration, 0b1010);
+        p.capture_then_wait(&receipt);
+        oracle.render(&mut p, 31, false);
+        assert_eq!(receipt.effective_mode_status(), "waiting");
+        let before = voice(&p.h.callback.mixer);
+        let playback = before.source_playback;
+        let native = before.stretch.native_state_address();
+        let fifo = before.stretch.pending_fifo_frames();
+        let history = before.stretch.productive_history().unwrap();
+        let dsp = p.h.callback.mixer.dsp_source_history_for_test(0).unwrap();
+        assert_eq!(before.explicit_seek_mode, ExplicitSeekMode::AfterLoop);
+        assert_eq!(
+            p.h.callback.drain(&mut p.h.consumer),
+            1,
+            "own Tail V2 Adopt"
+        );
+        assert_eq!(
+            receipt.residency_status(),
+            "accepted",
+            "{:?}",
+            receipt.error()
+        );
+        assert!(receipt.claimed() && registration.is_current());
+        assert_eq!(receipt.effective_mode_status(), "transitioning");
+        let after = voice(&p.h.callback.mixer);
+        assert!(after.source_playback.matches_exact(&playback));
+        assert_eq!(after.generation, generation);
+        assert_eq!(after.stretch.native_state_address(), native);
+        assert_eq!(after.stretch.pending_fifo_frames(), fifo);
+        let after_history = after.stretch.productive_history().unwrap();
+        assert_eq!(after_history.binding, history.binding);
+        assert_eq!(after_history.next_position, history.next_position);
+        assert_eq!(after_history.domain, history.domain);
+        assert_eq!(after_history.fed_output_frames, history.fed_output_frames);
+        let after_dsp = p.h.callback.mixer.dsp_source_history_for_test(0).unwrap();
+        assert_eq!(after_dsp.binding, dsp.binding);
+        assert_eq!(after_dsp.next_position, dsp.next_position);
+        assert_eq!(after_dsp.domain, dsp.domain);
+        assert_eq!(after_dsp.fed_output_frames, dsp.fed_output_frames);
+        let resident = p.h.callback.mixer.stems_for_measurement()[0]
+            .as_ref()
+            .unwrap();
+        assert_eq!(*resident.complete_set_identity, *_pair._identity);
+        for component in &resident.stems {
+            assert_eq!(
+                (component.resident_start(), component.resident_end()),
+                (LOOP_START, 16_384)
+            );
+        }
+        if let Some(previous) = predecessor.as_ref() {
+            let outgoing =
+                p.h.callback
+                    .mixer
+                    .outgoing_stems_for_measurement(0)
+                    .unwrap();
+            assert!(Arc::ptr_eq(
+                &previous.complete_set_identity,
+                &outgoing.complete_set_identity
+            ));
+            assert_ne!(
+                *previous.complete_set_identity,
+                *resident.complete_set_identity
+            );
+        }
+        oracle.select_candidate(&mut p);
+        p.selected = registration;
+        let mut remaining = (128.0_f64 / 0.73).ceil() as usize;
+        for frames in [1_usize, 31, 17, 7].into_iter().cycle() {
+            let frames = frames.min(remaining);
+            oracle.render(&mut p, frames, false);
+            assert_eq!(
+                voice(&p.h.callback.mixer).stretch.native_state_address(),
+                native
+            );
+            remaining -= frames;
+            assert_eq!(
+                p.h.callback
+                    .mixer
+                    .stem_transition_for_measurement(0)
+                    .is_active(),
+                remaining > 0
+            );
+            assert_eq!(receipt.effective_mode_status(), "transitioning");
+            if remaining == 0 {
+                break;
+            }
+        }
+        oracle.later_native(&mut p);
+        assert_eq!(
+            voice(&p.h.callback.mixer).explicit_seek_mode,
+            ExplicitSeekMode::AfterLoop
+        );
+        assert!(
+            oracle.new_wet && oracle.distinct_wet,
+            "V2 own Wet must differ from independently retained unchanged FullMix/V1"
+        );
+        assert_eq!(
+            receipt.effective_mode_status(),
+            "effective",
+            "{:?}",
+            receipt.error()
+        );
+        let tail_native = voice(&p.h.callback.mixer).stretch.native_state_address();
+        let (frame, fraction, explicit) = oracle.clock.physical_position(0);
+        assert!(explicit);
+        let mut remaining = ((16_384.0 - frame as f64 - fraction) / 0.73).ceil() as usize;
+        for frames in [1_usize, 127, 511, 31, 777].into_iter().cycle() {
+            let frames = frames.min(remaining);
+            oracle.render(&mut p, frames, true);
+            assert_eq!(
+                voice(&p.h.callback.mixer).stretch.native_state_address(),
+                tail_native
+            );
+            remaining -= frames;
+            if remaining == 0 {
+                break;
+            }
+        }
+        assert_eq!(
+            voice(&p.h.callback.mixer).explicit_seek_mode,
+            ExplicitSeekMode::Normal
+        );
+        for frames in [1, 31, 137, 511, 257, 777, 512, 777, 1093] {
+            oracle.render(&mut p, frames, true);
+            assert_eq!(
+                voice(&p.h.callback.mixer).stretch.native_state_address(),
+                tail_native
+            );
+        }
+        assert_eq!(voice(&p.h.callback.mixer).generation, generation);
+        assert!(
+            voice(&p.h.callback.mixer)
+                .sample
+                .as_ref()
+                .unwrap()
+                .same_window(&source)
+        );
+        assert!(receipt.claimed() && receipt.is_current() && p.selected.is_current());
+        assert!(oracle.distinct_wet && p.h.consumer.is_empty());
+    }
+}
+
+#[test]
+fn actual_tail_unsupported_candidates_preserve_their_own_voice() {
+    use crate::audio_engine::source_reader::ExplicitSeekMode;
+    for context in 0..3 {
+        let musical = context == 1;
+        let paused = context == 2;
+        let mut p = if musical {
+            bpm_productive(true).0
+        } else {
+            Productive::new(paused, 0.73)
+        };
+        let _seek = acknowledge_candidate_seek(&mut p, LOOP_END);
+        if paused {
+            p.h.callback.mixer.pause_sample_at_output_frame(0, p.frame);
+            assert!(voice(&p.h.callback.mixer).paused);
+        }
+        assert_eq!(
+            voice(&p.h.callback.mixer).explicit_seek_mode,
+            ExplicitSeekMode::AfterLoop
+        );
+        assert_eq!(
+            crate::audio_engine::input_runtime_binding::capture(&p.h.engine, 0)
+                .unwrap()
+                .unwrap()
+                .binding
+                .accepted
+                .is_some(),
+            musical
+        );
+        let (_pair, registration) = candidate(&mut p, 180 + context);
+        let receipt = request_candidate(&mut p, &registration, 0b1010);
+        let before = voice(&p.h.callback.mixer);
+        let playback = before.source_playback;
+        let generation = before.generation;
+        let native = before.stretch.native_state_address();
+        let fifo = before.stretch.pending_fifo_frames();
+        assert_eq!(p.h.callback.drain(&mut p.h.consumer), 1);
+        assert_eq!(receipt.residency_status(), "rejected");
+        assert!(!receipt.claimed() && registration.is_current());
+        wait_until(|| p.h.engine.cold_jobs.counts_for_test() == (0, 0, 0));
+        assert!(p.h.consumer.is_empty());
+        let after = voice(&p.h.callback.mixer);
+        assert!(after.source_playback.matches_exact(&playback));
+        assert_eq!(after.generation, generation);
+        assert_eq!(after.paused, paused);
+        assert_eq!(after.stretch.native_state_address(), native);
+        assert_eq!(after.stretch.pending_fifo_frames(), fifo);
+        assert_eq!(receipt.effective_mode_status(), "rejected");
+    }
+}
+
+#[test]
+fn actual_intro_seek_rejects_fresh_candidate_without_changing_post_seek_audio() {
+    use crate::audio_engine::source_reader::ExplicitSeekMode;
+    let target = 0;
+    for selected_v1 in [false, true] {
+        let mut p = Productive::new(true, 0.73);
+        if selected_v1 {
+            make_v1_effective(&mut p);
+        }
+        let _seek = acknowledge_candidate_seek(&mut p, target);
+        let source = p.h.callback.mixer.bank_for_measurement()[0]
+            .clone()
+            .unwrap();
+        let extent = if target == 0 {
+            (0, LOOP_END)
+        } else {
+            (LOOP_START, p.h.material.sample.frame_count())
+        };
+        assert_eq!((source.resident_start(), source.resident_end()), extent);
+        assert_eq!(
+            source.residency.as_ref().unwrap().context,
+            crate::messages::ResidentContext::KeyLockFiniteLoop
+        );
+        let before = voice(&p.h.callback.mixer);
+        assert_eq!(
+            before.source_playback.position().seek_mode,
+            if target == 0 {
+                ExplicitSeekMode::BeforeLoop
+            } else {
+                ExplicitSeekMode::AfterLoop
+            }
+        );
+        assert!(before.sample.as_ref().unwrap().same_window(&source));
+        let clock = before.source_playback;
+        let generation = before.generation;
+        let native = before.stretch.native_state_address();
+        assert_eq!(before.stretch.pending_fifo_frames(), (0, 0));
+        assert!(before.stretch.productive_history().is_none());
+        assert!(p.h.callback.mixer.dsp_source_history_for_test(0).is_none());
+        let old = p.h.callback.mixer.stems_for_measurement()[0].clone();
+        let mut oracle = CandidateSeekOracle::after_ack(&mut p, target, selected_v1);
+        let (_pair, registration) = candidate(&mut p, 120 + target + usize::from(selected_v1));
+        let receipt = request_candidate(&mut p, &registration, 0b1010);
+        assert_eq!(
+            p.h.callback.drain(&mut p.h.consumer),
+            1,
+            "actual fresh candidate Capture"
+        );
+        assert_eq!(receipt.residency_status(), "rejected");
+        assert!(!receipt.claimed());
+        assert!(registration.is_current());
+        assert_eq!(registration.publication_status(), "accepted");
+        wait_until(|| p.h.engine.cold_jobs.counts_for_test() == (0, 0, 0));
+        assert!(
+            p.h.consumer.is_empty(),
+            "rejected candidate enqueues no Adopt"
+        );
+        let after = voice(&p.h.callback.mixer);
+        assert!(after.source_playback.matches_exact(&clock));
+        assert_eq!(after.generation, generation);
+        assert_eq!(after.stretch.native_state_address(), native);
+        assert_eq!(after.stretch.pending_fifo_frames(), (0, 0));
+        assert!(after.stretch.productive_history().is_none());
+        assert!(p.h.callback.mixer.dsp_source_history_for_test(0).is_none());
+        for frames in [1, 31, 137, 257, 511] {
+            oracle.render(&mut p, frames, false);
+        }
+        oracle.later_native(&mut p);
+        assert_eq!(voice(&p.h.callback.mixer).generation, generation);
+        assert!(Arc::ptr_eq(
+            &source.samples,
+            &p.h.callback.mixer.bank_for_measurement()[0]
+                .as_ref()
+                .unwrap()
+                .samples
+        ));
+        match (
+            old.as_ref(),
+            p.h.callback.mixer.stems_for_measurement()[0].as_ref(),
+        ) {
+            (Some(old), Some(current)) => {
+                assert!(Arc::ptr_eq(
+                    &old.complete_set_identity,
+                    &current.complete_set_identity
+                ));
+                for (old, current) in old.stems.iter().zip(&current.stems) {
+                    assert!(Arc::ptr_eq(&old.samples, &current.samples));
+                }
+            }
+            (None, None) => {}
+            _ => panic!("rejected explicit-Seek candidate changed old reader ownership"),
+        }
+        assert_eq!(receipt.residency_status(), "rejected");
+        assert_eq!(receipt.effective_mode_status(), "rejected");
+        assert!(receipt.effective_failure_reason().is_none());
+        assert!(registration.is_current() && p.h.consumer.is_empty());
     }
 }
 

@@ -197,7 +197,10 @@ impl Productive {
     }
 
     fn with_loop(key_lock: bool, ratio: f64, full_track: bool) -> Self {
-        let mut h = long_harness();
+        Self::with_harness(long_harness(), key_lock, ratio, full_track)
+    }
+
+    fn with_harness(mut h: Harness, key_lock: bool, ratio: f64, full_track: bool) -> Self {
         let loop_region = crate::audio_engine::source_reader::FrameRange {
             start: if full_track { 0 } else { LOOP_START },
             end: if full_track {
